@@ -7,15 +7,26 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_python REQUIRED)
-find_package(rclpy REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
-# Install Python modules
-ament_python_install_package(${PROJECT_NAME})
+add_executable(pct_path_adapter src/pct_path_adapter.cpp)
+ament_target_dependencies(
+  pct_path_adapter
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
 
-# Install Python executables
-install(PROGRAMS
-  pct_path_adapter.py
+install(TARGETS
+  pct_path_adapter
   DESTINATION lib/${PROJECT_NAME}
 )
 

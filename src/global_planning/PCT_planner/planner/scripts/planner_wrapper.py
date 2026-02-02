@@ -9,16 +9,24 @@ sys.path.append('../')
 from lib import a_star, ele_planner, traj_opt
 
 rsg_root = os.path.dirname(os.path.abspath(__file__)) + '/../..'
+# For on-the-fly PCD -> tomogram (optional)
+_tomography_scripts = os.path.join(rsg_root, 'tomography', 'scripts')
+if os.path.isdir(_tomography_scripts) and _tomography_scripts not in sys.path:
+    sys.path.insert(0, _tomography_scripts)
+if os.path.join(rsg_root, 'tomography') not in sys.path:
+    sys.path.insert(0, os.path.join(rsg_root, 'tomography'))
 
 
 class TomogramPlanner(object):
     def __init__(self, cfg):
         self.cfg = cfg
-
-        self.use_quintic = self.cfg.planner.use_quintic
-        self.max_heading_rate = self.cfg.planner.max_heading_rate
-
-        self.tomo_dir = rsg_root + self.cfg.wrapper.tomo_dir
+        _planner = getattr(cfg, "planner", None)
+        _wrapper = getattr(cfg, "wrapper", None)
+        self.use_quintic = getattr(_planner, "use_quintic", True)
+        self.max_heading_rate = getattr(_planner, "max_heading_rate", 10)
+        tomo_dir = getattr(_wrapper, "tomo_dir", "/rsc/tomogram/")
+        self.tomo_dir = rsg_root + tomo_dir
+        self.pcd_dir = getattr(_wrapper, "pcd_dir", None)
 
         self.resolution = None
         self.center = None
@@ -31,40 +39,73 @@ class TomogramPlanner(object):
         self.start_idx = np.zeros(3, dtype=np.float32)
         self.end_idx = np.zeros(3, dtype=np.float32)
 
-    def loadTomogram(self, tomo_file):
-        with open(self.tomo_dir + tomo_file + '.pickle', 'rb') as handle:
-            data_dict = pickle.load(handle)
-
-            tomogram = np.asarray(data_dict['data'], dtype=np.float32)
-
-            self.resolution = float(data_dict['resolution'])
-            self.center = np.asarray(data_dict['center'], dtype=np.double)
-            print("tomogram.shape:", tomogram.shape)
-            self.n_slice = tomogram.shape[1]
-            print("self.n_slice:", self.n_slice)
-            self.slice_h0 = float(data_dict['slice_h0'])
-            self.slice_dh = float(data_dict['slice_dh'])
-            self.map_dim = [tomogram.shape[2], tomogram.shape[3]]
-            self.offset = np.array([int(self.map_dim[0] / 2), int(self.map_dim[1] / 2)], dtype=np.int32)
-
-        # Extract slices (use views where possible, copy only when modifying)
+    def _initFromDataDict(self, data_dict):
+        tomogram = np.asarray(data_dict['data'], dtype=np.float32)
+        self.resolution = float(data_dict['resolution'])
+        self.center = np.asarray(data_dict['center'], dtype=np.double)
+        self.n_slice = tomogram.shape[1]
+        self.slice_h0 = float(data_dict['slice_h0'])
+        self.slice_dh = float(data_dict['slice_dh'])
+        self.map_dim = [tomogram.shape[2], tomogram.shape[3]]
+        self.offset = np.array([int(self.map_dim[0] / 2), int(self.map_dim[1] / 2)], dtype=np.int32)
+        # Keep raw layers for ROS publishing (tomogram / traversability visualization)
+        self.layers_g = tomogram[3].copy()
+        self.layers_t = tomogram[0].copy()
         trav = tomogram[0]
         trav_gx = tomogram[1]
         trav_gy = tomogram[2]
-        # Only copy slices that need modification (nan_to_num)
         elev_g = tomogram[3].copy()
         elev_g = np.nan_to_num(elev_g, nan=-100, copy=False)
         elev_c = tomogram[4].copy()
         elev_c = np.nan_to_num(elev_c, nan=1e6, copy=False)
-
         self.initPlanner(trav, trav_gx, trav_gy, elev_g, elev_c)
-        
-        # Explicitly free memory from large objects
-        del tomogram
-        del data_dict
+
+    def loadTomogram(self, tomo_file, resolution=None, slice_dh=None, ground_h=None):
+        """加载 tomogram。若传 resolution/slice_dh/ground_h 则从 PCD 建图时优先使用（如来自 ROS 参数）。"""
+        if os.path.isabs(tomo_file):
+            base = os.path.splitext(os.path.basename(tomo_file))[0]
+            search_dir = os.path.dirname(tomo_file)
+        else:
+            base = tomo_file
+            search_dir = self.tomo_dir
+        pcd_dir = self.pcd_dir if self.pcd_dir is not None else self.tomo_dir
+        pcd_search_dir = os.path.dirname(tomo_file) if os.path.isabs(tomo_file) else pcd_dir
+        pickle_path = os.path.join(search_dir, base + '.pickle')
+        pcd_path = os.path.join(pcd_search_dir, base + '.pcd')
+
+        if os.path.isfile(pickle_path):
+            with open(pickle_path, 'rb') as handle:
+                data_dict = pickle.load(handle)
+            print("tomogram.shape:", np.asarray(data_dict['data']).shape)
+            self._initFromDataDict(data_dict)
+            print(f"Tomogram loaded from {pickle_path}. Map: {self.map_dim}, Slices: {self.n_slice}")
+        elif os.path.isfile(pcd_path):
+            print(f"[PCT] No .pickle found; building tomogram from PCD: {pcd_path}")
+            try:
+                from build_tomogram import build_tomogram_from_pcd  # type: ignore[reportMissingImports]
+            except ImportError:
+                raise ImportError("PCD found but build_tomogram not available. Add PCT_planner/tomography/scripts to PYTHONPATH or install tomography deps.")
+            _w = getattr(self.cfg, "wrapper", None)
+            res = resolution if resolution is not None else getattr(_w, "tomogram_resolution", 0.2)
+            dh = slice_dh if slice_dh is not None else getattr(_w, "tomogram_slice_dh", 0.5)
+            gh = ground_h if ground_h is not None else getattr(_w, "tomogram_ground_h", 0.0)
+            data_dict = build_tomogram_from_pcd(
+                pcd_path,
+                output_pickle_path=pickle_path,
+                resolution=res,
+                slice_dh=dh,
+                ground_h=gh,
+            )
+            print("tomogram.shape:", np.asarray(data_dict['data']).shape)
+            self._initFromDataDict(data_dict)
+            print(f"[PCT] Tomogram built from PCD and cached to {pickle_path}. Map: {self.map_dim}, Slices: {self.n_slice}")
+        else:
+            raise FileNotFoundError(
+                f"Neither tomogram nor PCD found for '{tomo_file}'. "
+                f"Looked for: {pickle_path} and {pcd_path}"
+            )
         import gc
         gc.collect()
-        print(f"Tomogram loaded and memory freed. Map: {self.map_dim}, Slices: {self.n_slice}")
         
     def initPlanner(self, trav, trav_gx, trav_gy, elev_g, elev_c):
         diff_t = trav[1:] - trav[:-1]
@@ -104,7 +145,6 @@ class TomogramPlanner(object):
         """
         规划路径的方法，支持设置起始点和终点的高度。
         """
-        
         # 将起始点和终点的二维位置转换为索引
         self.start_idx[1:] = self.pos2idx(start_pos)
         self.end_idx[1:] = self.pos2idx(end_pos)
@@ -147,7 +187,6 @@ class TomogramPlanner(object):
         return traj_3d
     
     def pos2idx(self, pos):
-        # 移除打印，保持性能
         pos = pos - self.center
         idx = np.round(pos / self.resolution).astype(np.int32) + self.offset
         

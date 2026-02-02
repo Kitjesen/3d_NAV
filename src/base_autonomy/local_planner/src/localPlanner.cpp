@@ -377,6 +377,7 @@ private:
 
   void laserCloudHandler(const sensor_msgs::msg::PointCloud2::ConstSharedPtr laserCloud2)
   {
+    //只有当不启用地形分析时，才直接处理原始点云
     if (!useTerrainAnalysis_) {
       laserCloud_->clear();
       pcl::fromROSMsg(*laserCloud2, *laserCloud_);
@@ -456,16 +457,20 @@ private:
 
     if (joy->axes[4] < 0 && !twoWayDrive_) joySpeed_ = 0;
 
+    // axes[2] (LT): 控制自主/手动模式
+    // 松开 LT = 自主导航（默认）；按下 LT = 手动接管
     if (joy->axes[2] > -0.1) {
-      autonomyMode_ = false;
+      autonomyMode_ = true;   // 松开 = 自主模式（默认）✅
     } else {
-      autonomyMode_ = true;
+      autonomyMode_ = false;  // 按下 = 手动模式（接管）
     }
 
+    // axes[5] (RT): 控制是否避障
+    // 松开 RT = 启用避障（默认安全）；按下 RT = 关闭避障（强制通过）
     if (joy->axes[5] > -0.1) {
-      checkObstacle_ = true;
+      checkObstacle_ = true;   // 启用避障 ✅ 安全
     } else {
-      checkObstacle_ = false;
+      checkObstacle_ = false;  // 关闭避障 ⚠️ 强制通过
     }
   }
 

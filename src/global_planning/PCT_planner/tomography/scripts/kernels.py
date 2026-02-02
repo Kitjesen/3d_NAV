@@ -96,8 +96,8 @@ def travKernel_cpu(interval, grad_mag_sq, grad_mag_max, trav_cost,
             cost += max(0.0, 20 * (interval_free - interval.flat[i]))
             
         if grad_mag_sq.flat[i] <= step_stand_sq:
-                cost += 15 * grad_mag_sq.flat[i] / step_stand_sq
-                trav_cost.flat[i] += cost
+            cost += 15 * grad_mag_sq.flat[i] / step_stand_sq
+            trav_cost.flat[i] += cost
             continue
         else:
             if grad_mag_max.flat[i] <= step_cross_sq:
@@ -109,13 +109,12 @@ def travKernel_cpu(interval, grad_mag_sq, grad_mag_max, trav_cost,
                             continue
                         if grad_mag_sq.flat[idx] < step_stand_sq:
                             standable_grids += 1
-                            
                 if standable_grids < standable_th:
                     trav_cost.flat[i] = cost_barrier
                     continue
                 else:
-                        cost += 20 * grad_mag_max.flat[i] / step_cross_sq
-                        trav_cost.flat[i] += cost
+                    cost += 20 * grad_mag_max.flat[i] / step_cross_sq
+                    trav_cost.flat[i] += cost
             else:
                 trav_cost.flat[i] = cost_barrier
                 continue

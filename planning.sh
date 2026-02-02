@@ -103,7 +103,7 @@ case $LOC_CHOICE in
             cd $WORKSPACE_DIR
             source install/setup.bash
             export FASTRTPS_DEFAULT_PROFILES_FILE=$WORKSPACE_DIR/fastdds_no_shm.xml
-            python3 src/global_planning/PCT_planner/planner/scripts/fake_localization.py
+            python3 src/global_planning/PCT_planner/planner/scripts/test/fake_localization.py
             exec bash
         " &
         sleep 2
@@ -167,5 +167,5 @@ echo -e "  - 规划路径: ${BLUE}ros2 topic echo /pct_planner/path${NC}"
 echo -e "  - 机器人位姿: ${BLUE}ros2 topic echo /Odometry${NC}"
 echo ""
 echo -e "${YELLOW}调试工具:${NC}"
-echo -e "  - 检查地图: ${BLUE}python3 src/global_planning/PCT_planner/planner/scripts/check_map.py${NC}"
+echo -e "  - 检查地图(测试): ${BLUE}python3 src/global_planning/PCT_planner/planner/scripts/test/check_map.py [地图名]${NC}"
 echo ""

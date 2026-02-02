@@ -5,8 +5,9 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
-#command to save the map
-#    ros2 service call /pgo/save_map interface/srv/SaveMaps "{file_path: '/home/sunrise/my_map.pcd'}"
+# Save map after mapping (PGO publishes map->odom; save .pcd for Localizer in navigation):
+#   ros2 service call /pgo/save_maps interface/srv/SaveMaps "{file_path: '/path/to/your_map.pcd'}"
+# Then run navigation (system_launch) with: map_path:=/path/to/your_map  (no .pcd)
 
 
 def generate_launch_description():
@@ -59,21 +60,11 @@ def generate_launch_description():
         ]
     )
 
-    # Rviz for visualization (Optional, add your own rviz config if needed)
-    # rviz_node = Node( ...)
 
-    # --- Static Transforms ---
-    # Connect standard ROS 'map' frame to FastLIO's 'odom' frame
-    tf_map_odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='map_to_odom_publisher',
-        arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
-    )
+    # NOTE: PGO node will publish TF: map -> odom dynamically after loop closure detection
 
     return LaunchDescription([
         livox_launch,
-        tf_map_odom,
         lio_node,
         pgo_node
     ])

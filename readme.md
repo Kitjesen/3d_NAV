@@ -9,6 +9,10 @@
 
 ---
 
+
+PCT Planner 在map坐标系下工作
+
+
 ## 系统概述
 
 本工作空间包含完整的 **3D SLAM + 全局规划** 系统，基于 ROS 2 Humble：
@@ -204,7 +208,7 @@ ls -lh src/global_planning/PCT_planner/rsc/tomogram/
 
 4. **手动测试规划器**:
    ```bash
-   python3 src/global_planning/PCT_planner/planner/scripts/check_map.py
+   python3 src/global_planning/PCT_planner/planner/scripts/test/check_map.py [地图名]
    ```
 
 ---
@@ -307,7 +311,7 @@ ros2 node info /global_planner
 python3 src/global_planning/PCT_planner/tomography/scripts/visualize_tomogram.py --scene map_20240115_143000
 
 # 查看地图统计信息
-python3 src/global_planning/PCT_planner/planner/scripts/check_map.py
+python3 src/global_planning/PCT_planner/planner/scripts/test/check_map.py [地图名]
 ```
 
 ---

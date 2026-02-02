@@ -33,7 +33,6 @@
 #include "rmw/types.h"
 #include "rmw/qos_profiles.h"
 
-#include "serial/serial.h"
 
 using namespace std;
 
@@ -49,9 +48,6 @@ public:
   PathFollower() : Node("pathFollower")
   {
     // --- Parameter Declaration ---
-    declare_parameter<bool>("realRobot", realRobot_);
-    declare_parameter<string>("serialPort", serialPort_);
-    declare_parameter<int>("baudrate", baudrate_);
     declare_parameter<double>("sensorOffsetX", sensorOffsetX_);
     declare_parameter<double>("sensorOffsetY", sensorOffsetY_);
     declare_parameter<int>("pubSkipNum", pubSkipNum_);
@@ -89,9 +85,6 @@ public:
     declare_parameter<double>("joyToSpeedDelay", joyToSpeedDelay_);
 
     // --- Get Parameters ---
-    realRobot_ = get_parameter("realRobot").as_bool();
-    serialPort_ = get_parameter("serialPort").as_string();
-    baudrate_ = get_parameter("baudrate").as_int();
     sensorOffsetX_ = get_parameter("sensorOffsetX").as_double();
     sensorOffsetY_ = get_parameter("sensorOffsetY").as_double();
     pubSkipNum_ = get_parameter("pubSkipNum").as_int();
@@ -156,32 +149,12 @@ public:
       else if (joySpeed_ > 1.0) joySpeed_ = 1.0;
     }
 
-    // Serial port setup
-    if (realRobot_) {
-      motorCtrSerial_ = new serial::Serial();
-      serial::Timeout timeout(serial::Timeout::simpleTimeout(500));
-      motorCtrSerial_->setTimeout(timeout);
-      motorCtrSerial_->setPort(serialPort_.c_str());
-      motorCtrSerial_->setBaudrate(baudrate_);
-    }
-
     // Control loop timer (100Hz)
     timer_ = create_wall_timer(std::chrono::milliseconds(10), std::bind(&PathFollower::controlLoop, this));
   }
 
-  ~PathFollower()
-  {
-    if (serialOpen_ && motorCtrSerial_) {
-      motorCtrSerial_->close();
-      delete motorCtrSerial_;
-    }
-  }
-
 private:
   // --- Parameters ---
-  bool realRobot_ = false;
-  string serialPort_ = "/dev/ttyACM0";
-  int baudrate_ = 115200;
   double sensorOffsetX_ = 0;
   double sensorOffsetY_ = 0;
   int pubSkipNum_ = 1;
@@ -258,11 +231,6 @@ private:
 
   int pubSkipCount_ = 0;
   bool manualMode_ = false;
-
-  // Serial
-  bool serialOpen_ = false;
-  serial::Serial* motorCtrSerial_ = nullptr;
-  int initFrameCount_ = 0;
 
   nav_msgs::msg::Path path_;
 
@@ -341,17 +309,16 @@ private:
     joyManualLeft_ = joy->axes[3];
     joyManualYaw_ = joy->axes[0];
 
+    // axes[2] (LT): 控制自主/手动模式
+    // 松开 LT = 自主导航（默认）；按下 LT = 手动接管
     if (joy->axes[2] > -0.1) {
-      autonomyMode_ = false;
+      autonomyMode_ = true;    // 松开 = 自主模式（默认）✅
+      manualMode_ = false;     // 跟踪路径
     } else {
-      autonomyMode_ = true;
+      autonomyMode_ = false;   // 按下 = 手动模式（接管）
+      manualMode_ = true;      // 纯摇杆控制
     }
-
-    if (joy->axes[5] > -0.1) {
-      manualMode_ = false;
-    } else {
-      manualMode_ = true;
-    }
+    // axes[5] (RT) 保留作避障开关（在 Local Planner 中）
   }
 
   void speedHandler(const std_msgs::msg::Float32::ConstSharedPtr speed)
@@ -515,44 +482,7 @@ private:
         pubSpeed_->publish(cmd_vel);
         pubSkipCount_ = pubSkipNum_;
 
-        if (realRobot_) {
-          sendCmdVelSerial(cmd_vel);
-        }
       }
-    }
-  }
-
-  void sendCmdVelSerial(const geometry_msgs::msg::TwistStamped& cmd_vel)
-  {
-    if (serialOpen_) {
-      float value;
-      size_t size = sizeof(value);
-      uint8_t *serialBuffer = static_cast<uint8_t*>(alloca(3 * size + 1));
-
-      value = cmd_vel.twist.linear.x;
-      memcpy(serialBuffer, &value, size);
-      value = cmd_vel.twist.linear.y;
-      memcpy(serialBuffer + size, &value, size);
-      value = cmd_vel.twist.angular.z;
-      memcpy(serialBuffer + 2 * size, &value, size);
-      serialBuffer[3 * size] = '\n';
-
-      motorCtrSerial_->write(serialBuffer, 3 * size + 1);
-    } else {
-      if (initFrameCount_ >= 100 && initFrameCount_ % 50 == 0) {
-        try {
-          motorCtrSerial_->open();
-        } catch (serial::IOException) {
-        }
-
-        if (motorCtrSerial_->isOpen()) {
-          serialOpen_ = true;
-          RCLCPP_INFO(get_logger(), "Serial port open.");
-        } else {
-          RCLCPP_INFO(get_logger(), "Opening serial port %s...", serialPort_.c_str());
-        }
-      }
-      initFrameCount_++;
     }
   }
 };

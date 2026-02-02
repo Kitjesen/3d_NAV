@@ -8,9 +8,17 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 
-# Install Launch Files
-install(DIRECTORY launch
-  DESTINATION share/${PROJECT_NAME}
+install(FILES
+  launch/mapping_launch.py
+  launch/system_launch.py
+  DESTINATION share/${PROJECT_NAME}/launch
+)
+install(FILES launch/test/planner_only_launch.py
+  DESTINATION share/${PROJECT_NAME}/launch
+  RENAME planner_only_launch.py
+)
+install(FILES launch/test/test_planning_launch.py
+  DESTINATION share/${PROJECT_NAME}/launch/test
 )
 
 # Install Planner Code (as data to be imported by scripts)
@@ -22,9 +30,14 @@ install(DIRECTORY planner
 install(DIRECTORY rsc
   DESTINATION share/${PROJECT_NAME}
 )
+# tomography/config 供 global_planner 发布 tomogram 时加载 prototype.py（路径 share/pct_planner/tomography/config/）
+install(DIRECTORY tomography
+  DESTINATION share/${PROJECT_NAME}/tomography
+)
 
-# Install Entry Point Script
-install(PROGRAMS planner/scripts/global_planner.py
+install(PROGRAMS
+  planner/scripts/global_planner.py
+  planner/scripts/test/fake_localization.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
