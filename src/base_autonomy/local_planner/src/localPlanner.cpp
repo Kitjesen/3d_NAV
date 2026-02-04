@@ -146,28 +146,22 @@ public:
     // --- ROS Interface ---
     subOdometry_ = create_subscription<nav_msgs::msg::Odometry>(
         "/Odometry", 5, std::bind(&LocalPlanner::odometryHandler, this, std::placeholders::_1));
-
+    // Subscribe to world map cloud (odom frame) when not using terrain analysis
     subLaserCloud_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/cloud_registered", 5, std::bind(&LocalPlanner::laserCloudHandler, this, std::placeholders::_1));
-
+        "/cloud_map", 5, std::bind(&LocalPlanner::laserCloudHandler, this, std::placeholders::_1));
+    // Subscribe to terrain map (odom frame) when using terrain analysis
     subTerrainCloud_ = create_subscription<sensor_msgs::msg::PointCloud2>(
         "/terrain_map", 5, std::bind(&LocalPlanner::terrainCloudHandler, this, std::placeholders::_1));
-
     subJoystick_ = create_subscription<sensor_msgs::msg::Joy>(
         "/joy", 5, std::bind(&LocalPlanner::joystickHandler, this, std::placeholders::_1));
-
     subGoal_ = create_subscription<geometry_msgs::msg::PointStamped>(
         "/way_point", 5, std::bind(&LocalPlanner::goalHandler, this, std::placeholders::_1));
-
     subSpeed_ = create_subscription<std_msgs::msg::Float32>(
         "/speed", 5, std::bind(&LocalPlanner::speedHandler, this, std::placeholders::_1));
-
     subBoundary_ = create_subscription<geometry_msgs::msg::PolygonStamped>(
         "/navigation_boundary", 5, std::bind(&LocalPlanner::boundaryHandler, this, std::placeholders::_1));
-
     subAddedObstacles_ = create_subscription<sensor_msgs::msg::PointCloud2>(
         "/added_obstacles", 5, std::bind(&LocalPlanner::addedObstaclesHandler, this, std::placeholders::_1));
-
     subCheckObstacle_ = create_subscription<std_msgs::msg::Bool>(
         "/check_obstacle", 5, std::bind(&LocalPlanner::checkObstacleHandler, this, std::placeholders::_1));
 
@@ -359,7 +353,6 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
 
   // --- Callbacks ---
-
   void odometryHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odom)
   {
     odomTime_ = rclcpp::Time(odom->header.stamp).seconds();
@@ -460,7 +453,7 @@ private:
     // axes[2] (LT): 控制自主/手动模式
     // 松开 LT = 自主导航（默认）；按下 LT = 手动接管
     if (joy->axes[2] > -0.1) {
-      autonomyMode_ = true;   // 松开 = 自主模式（默认）✅
+      autonomyMode_ = true;   // 松开 = 自主模式（默认）
     } else {
       autonomyMode_ = false;  // 按下 = 手动模式（接管）
     }
@@ -468,12 +461,14 @@ private:
     // axes[5] (RT): 控制是否避障
     // 松开 RT = 启用避障（默认安全）；按下 RT = 关闭避障（强制通过）
     if (joy->axes[5] > -0.1) {
-      checkObstacle_ = true;   // 启用避障 ✅ 安全
+      checkObstacle_ = true;   // 启用避障
     } else {
-      checkObstacle_ = false;  // 关闭避障 ⚠️ 强制通过
+      checkObstacle_ = false;  // 关闭避障
     }
   }
 
+
+  //Find indeed in local the goal is 2d!  But after think this is enough.
   void goalHandler(const geometry_msgs::msg::PointStamped::ConstSharedPtr goal)
   {
     goalX_ = goal->point.x;
@@ -1025,7 +1020,7 @@ private:
           }
 
           path.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime_ * 1e9));
-          path.header.frame_id = "vehicle";
+          path.header.frame_id = "body";  // Use body frame (consistent with Fast-LIO2 TF)
           pubPath_->publish(path);
 
           #if PLOTPATHSET == 1
@@ -1071,7 +1066,7 @@ private:
           sensor_msgs::msg::PointCloud2 freePaths2;
           pcl::toROSMsg(*freePaths_, freePaths2);
           freePaths2.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime_ * 1e9));
-          freePaths2.header.frame_id = "vehicle";
+          freePaths2.header.frame_id = "body";  // Use body frame (consistent with Fast-LIO2 TF)
           pubFreePaths_->publish(freePaths2);
           #endif
         }
@@ -1098,7 +1093,7 @@ private:
         path.poses[0].pose.position.z = 0;
 
         path.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime_ * 1e9));
-        path.header.frame_id = "vehicle";
+        path.header.frame_id = "body";  // Use body frame (consistent with Fast-LIO2 TF)
         pubPath_->publish(path);
 
         #if PLOTPATHSET == 1
@@ -1106,7 +1101,7 @@ private:
         sensor_msgs::msg::PointCloud2 freePaths2;
         pcl::toROSMsg(*freePaths_, freePaths2);
         freePaths2.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime_ * 1e9));
-        freePaths2.header.frame_id = "vehicle";
+        freePaths2.header.frame_id = "body";  // Use body frame (consistent with Fast-LIO2 TF)
         pubFreePaths_->publish(freePaths2);
         #endif
       }

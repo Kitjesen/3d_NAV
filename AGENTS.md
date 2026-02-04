@@ -218,20 +218,27 @@ ros2 topic pub /way_point geometry_msgs/PointStamped \
 
 ```
 map (全局地图坐标系) - 固定不变的世界参考系
-    └── odom (里程计坐标系) - 由PGO或Localizer发布
-        └── body (机器人本体坐标系) - Fast-LIO2输出
-            └── lidar (激光雷达坐标系) - 传感器原始坐标系
+ └── odom (里程计坐标系) - 由PGO或Localizer发布 ← 感知和路径适配在这里
+     └── body (机器人本体坐标系) - Fast-LIO2输出 ← 局部规划和控制在这里
+         └── lidar (激光雷达坐标系) - 传感器原始坐标系
 ```
+
+**重要**: 
+- **感知层** (terrain_analysis) 在 **odom 坐标系**下工作
+- **局部规划** (local_planner) 在 **vehicle(body) 坐标系**下工作
+- **全局规划** (pct_planner) 在 **map 坐标系**下工作
 
 ### 4.2 坐标系详细说明
 
 | 坐标系 | 名称 | 定义 | 发布者 | 备注 |
 |--------|------|------|--------|------|
 | **map** | 地图坐标系 | 全局固定坐标系 | PGO/Localizer | 经过回环优化或重定位的统一坐标系 |
-| **odom** | 里程计坐标系 | 局部平滑坐标系 | PGO/Localizer | 与map的偏移量实时更新 |
-| **body** | 本体坐标系 | IMU中心 | Fast-LIO2 | 机器人本体参考点 |
+| **odom** | 里程计坐标系 | 局部平滑坐标系 | PGO/Localizer | 与map的偏移量实时更新，**感知层工作坐标系** |
+| **body** | 本体坐标系 | IMU/传感器中心 | Fast-LIO2 | **局部规划和控制坐标系**，机器人永远在原点 |
 | **lidar** | 雷达坐标系 | LiDAR传感器中心 | - | 通过外参与body关联 |
 | **sensor_at_scan** | 扫描时刻坐标系 | 历史扫描位置 | sensor_scan_generation | 用于点云对齐 |
+
+**重要**: 代码中的 `vehicleX_` 虽然名为 vehicle，但实际是**底盘中心在 odom 系的位置**（已考虑传感器偏移）
 
 ### 4.3 TF变换关系
 
@@ -285,13 +292,13 @@ local_frame: "odom"
 
 | 话题名 | 类型 | 发布者 | 订阅者 | 说明 |
 |--------|------|--------|--------|------|
-| `/cloud_registered` | PointCloud2 | fastlio2 | terrain_analysis, localizer | Body系点云 |
-| `/cloud_map` | PointCloud2 | fastlio2 | - | 世界地图点云 |
+| `/cloud_registered` | PointCloud2 | fastlio2 | sensor_scan_generation, PGO, Localizer | Body系点云 (body坐标系) |
+| `/cloud_map` | PointCloud2 | fastlio2 | terrain_analysis, terrain_analysis_ext, local_planner | 世界地图点云 (odom坐标系) ✅ |
 | `/Odometry` | Odometry | fastlio2 | 所有模块 | 里程计信息 |
-| `/terrain_map` | PointCloud2 | terrain_analysis | terrain_analysis_ext, local_planner | 地形地图 |
-| `/terrain_map_ext` | PointCloud2 | terrain_analysis_ext | local_planner | 扩展地形地图 |
-| `/path` | Path | local_planner | pathFollower | 规划路径 |
-| `/free_paths` | PointCloud2 | local_planner | RViz | 可视化可用路径 |
+| `/terrain_map` | PointCloud2 | terrain_analysis | terrain_analysis_ext, local_planner | 地形地图 (odom坐标系) ✅ |
+| `/terrain_map_ext` | PointCloud2 | terrain_analysis_ext | local_planner | 扩展地形地图 (odom坐标系) ✅ |
+| `/path` | Path | local_planner | pathFollower | 规划路径 (body坐标系) ✅ |
+| `/free_paths` | PointCloud2 | local_planner | RViz | 可视化可用路径 (body坐标系) ✅ |
 | `/pct_path` | Path | pct_planner | pct_adapters | 全局规划路径 |
 | `/way_point` | PointStamped | pct_adapters | local_planner | 当前目标航点 |
 | `/slow_down` | Int8 | local_planner | pathFollower | 减速指令 (0-3级) |

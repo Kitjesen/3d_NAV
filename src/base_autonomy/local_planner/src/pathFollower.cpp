@@ -312,13 +312,13 @@ private:
     // axes[2] (LT): 控制自主/手动模式
     // 松开 LT = 自主导航（默认）；按下 LT = 手动接管
     if (joy->axes[2] > -0.1) {
-      autonomyMode_ = true;    // 松开 = 自主模式（默认）✅
+      autonomyMode_ = true;    // 松开 = 自主模式（默认）
       manualMode_ = false;     // 跟踪路径
     } else {
       autonomyMode_ = false;   // 按下 = 手动模式（接管）
       manualMode_ = true;      // 纯摇杆控制
     }
-    // axes[5] (RT) 保留作避障开关（在 Local Planner 中）
+    // axes[5] (RT) 保留作避障开关
   }
 
   void speedHandler(const std_msgs::msg::Float32::ConstSharedPtr speed)
@@ -352,6 +352,8 @@ private:
                         + cos(vehicleYawRec_) * (vehicleY_ - vehicleYRec_);
 
       int pathSize = path_.poses.size();
+      if (pathSize == 0) return;  // 空路径，直接返回
+      
       float endDisX = path_.poses[pathSize - 1].pose.position.x - vehicleXRel;
       float endDisY = path_.poses[pathSize - 1].pose.position.y - vehicleYRel;
       float endDis = sqrt(endDisX * endDisX + endDisY * endDisY);
@@ -435,8 +437,8 @@ private:
       }
 
       float joySpeed3 = joySpeed2;
-      if (odomTime_ < slowInitTime_ + slowTime1_ && slowInitTime_ > 0 || slowDown_ == 1) joySpeed3 *= slowRate1_;
-      else if (odomTime_ < slowInitTime_ + slowTime1_ + slowTime2_ && slowInitTime_ > 0 || slowDown_ == 2) joySpeed3 *= slowRate2_;
+      if ((odomTime_ < slowInitTime_ + slowTime1_ && slowInitTime_ > 0) || slowDown_ == 1) joySpeed3 *= slowRate1_;
+      else if ((odomTime_ < slowInitTime_ + slowTime1_ + slowTime2_ && slowInitTime_ > 0) || slowDown_ == 2) joySpeed3 *= slowRate2_;
       else if (slowDown_ == 3) joySpeed3 *= slowRate3_;
 
       if ((fabs(dirDiff) < dirDiffThre_ || (dis < omniDirGoalThre_ && fabs(dirDiff) < omniDirDiffThre_)) && dis > stopDisThre_) {
@@ -458,7 +460,7 @@ private:
       pubSkipCount_--;
       if (pubSkipCount_ < 0) {
         geometry_msgs::msg::TwistStamped cmd_vel;
-        cmd_vel.header.frame_id = "vehicle";
+        cmd_vel.header.frame_id = "body";  // Use body frame (consistent with Fast-LIO2 TF)
         cmd_vel.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime_ * 1e9));
         cmd_vel.twist.linear.x = 0;
         cmd_vel.twist.linear.y = 0;

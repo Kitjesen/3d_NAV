@@ -161,9 +161,9 @@ public:
     subOdometry_ = create_subscription<nav_msgs::msg::Odometry>(
         "/Odometry", 5, std::bind(&TerrainAnalysis::odometryHandler, this, std::placeholders::_1));
 
-    // Subscriber: Registered Point Cloud (Input)
+    // Subscriber: World Map Point Cloud (Input) - in odom coordinate frame
     subLaserCloud_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/cloud_registered", 5, std::bind(&TerrainAnalysis::laserCloudHandler, this, std::placeholders::_1));
+        "/cloud_map", 5, std::bind(&TerrainAnalysis::laserCloudHandler, this, std::placeholders::_1));
 
     // Subscriber: Joystick for manual commands (e.g. reset map)
     subJoystick_ = create_subscription<sensor_msgs::msg::Joy>(
@@ -241,12 +241,16 @@ private:
     for (int i = 0; i < laserCloudSize; i++) {
       point = laserCloud_->points[i];
 
-      float pointX = point.x;
-      float pointY = point.y;
-      float pointZ = point.z;
+      // point is in body frame (from /cloud_registered)
+      // Convert to odom frame to match vehicleX_/Y_ used in main loop
+      float dx = point.x * cosVehicleYaw_ - point.y * sinVehicleYaw_;
+      float dy = point.x * sinVehicleYaw_ + point.y * cosVehicleYaw_;
+      float pointX = dx + vehicleX_;
+      float pointY = dy + vehicleY_;
+      float pointZ = point.z + vehicleZ_;
 
-      float dis = sqrt((pointX - vehicleX_) * (pointX - vehicleX_) +
-                       (pointY - vehicleY_) * (pointY - vehicleY_));
+      // Distance from robot: sqrt(dx² + dy²) = sqrt(point.x² + point.y²)
+      float dis = sqrt(point.x * point.x + point.y * point.y);
       
       // Filter points: must be within relevant height range relative to vehicle
       // and within mapping radius
@@ -415,6 +419,8 @@ private:
 
     // Merge all voxels into a single cloud for processing
     terrainCloud_->clear();
+    //set the filter more small! 
+    //实际处理的时候把网格缩小了
     for (int indX = terrainVoxelHalfWidth_ - 5; indX <= terrainVoxelHalfWidth_ + 5; indX++) {
       for (int indY = terrainVoxelHalfWidth_ - 5; indY <= terrainVoxelHalfWidth_ + 5; indY++) {
         *terrainCloud_ += *terrainVoxelCloud_[terrainVoxelWidth_ * indX + indY];
@@ -455,6 +461,7 @@ private:
     }
 
     // Calculate elevation for each planar voxel (using sorting or minimum)
+    // height map think could be used for RL (NOTE)
     if (useSorting_) {
       for (int i = 0; i < planarVoxelNum_; i++) {
         int planarPointElevSize = planarPointElev_[i].size();
@@ -589,9 +596,8 @@ private:
             if (disZ >= 0 && disZ < vehicleHeight_ && planarPointElevSize >= minBlockPointNum_ &&
                 (outOfFovPointNum >= minOutOfFovPointNum_ || disZ < obstacleHeightThre_ || dyObsPointNum < 0 ||
                  !clearDyObs_)) {
+              point.intensity = disZ; // Intensity stores height above ground
               terrainCloudElev_->push_back(point);
-              terrainCloudElev_->points[terrainCloudElevSize].intensity = disZ; // Intensity stores height above ground
-
               terrainCloudElevSize++;
             }
           }
@@ -666,7 +672,7 @@ private:
     sensor_msgs::msg::PointCloud2 terrainCloud2;
     pcl::toROSMsg(*terrainCloudElev_, terrainCloud2);
     terrainCloud2.header.stamp = rclcpp::Time(static_cast<uint64_t>(laserCloudTime_ * 1e9));
-    terrainCloud2.header.frame_id = "map";
+    terrainCloud2.header.frame_id = "odom";  // Output in odom coordinate frame
     pubLaserCloud_->publish(terrainCloud2);
   }
 

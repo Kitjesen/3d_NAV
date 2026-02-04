@@ -1,3 +1,14 @@
+/**
+ * @class TerrainAnalysisExt
+ * @brief Extended terrain analysis node for elevation mapping and connectivity checking
+ * 
+ * This node processes registered point clouds to generate an extended terrain map with:
+ * - Time-decayed terrain voxel accumulation
+ * - Ground elevation estimation
+ * - Terrain connectivity validation
+ * - Integration with local terrain maps
+ */
+ 
 #include <math.h>
 #include <time.h>
 #include <stdio.h>
@@ -35,16 +46,7 @@ using namespace std;
 
 const double PI = 3.1415926;
 
-/**
- * @class TerrainAnalysisExt
- * @brief Extended terrain analysis node for elevation mapping and connectivity checking
- * 
- * This node processes registered point clouds to generate an extended terrain map with:
- * - Time-decayed terrain voxel accumulation
- * - Ground elevation estimation
- * - Terrain connectivity validation
- * - Integration with local terrain maps
- */
+
 class TerrainAnalysisExt : public rclcpp::Node
 {
 public:
@@ -92,8 +94,9 @@ public:
     subOdometry_ = create_subscription<nav_msgs::msg::Odometry>(
         "/Odometry", 5, std::bind(&TerrainAnalysisExt::odometryHandler, this, std::placeholders::_1));
 
+    // Subscribe to world map point cloud (odom coordinate frame)
     subLaserCloud_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/cloud_registered", 5, std::bind(&TerrainAnalysisExt::laserCloudHandler, this, std::placeholders::_1));
+        "/cloud_map", 5, std::bind(&TerrainAnalysisExt::laserCloudHandler, this, std::placeholders::_1));
 
     subJoystick_ = create_subscription<sensor_msgs::msg::Joy>(
         "/joy", 5, std::bind(&TerrainAnalysisExt::joystickHandler, this, std::placeholders::_1));
@@ -580,7 +583,7 @@ private:
     sensor_msgs::msg::PointCloud2 terrainCloud2;
     pcl::toROSMsg(*terrainCloudElev_, terrainCloud2);
     terrainCloud2.header.stamp = rclcpp::Time(static_cast<uint64_t>(laserCloudTime_ * 1e9));
-    terrainCloud2.header.frame_id = "map";
+    terrainCloud2.header.frame_id = "odom";  // Output in odom coordinate frame
     pubTerrainCloud_->publish(terrainCloud2);
   }
 };

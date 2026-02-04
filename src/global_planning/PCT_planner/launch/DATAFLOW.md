@@ -1,5 +1,3 @@
-# 3D导航系统 - 数据流简版
-
 ## 总览
 ```
 激光雷达 → FASTLIO2 → /cloud_map → 地形分析 → /terrain_map → 局部规划 → /path → 路径跟踪 → /cmd_vel
@@ -15,7 +13,6 @@
 - `/path`：局部轨迹
 - `/cmd_vel`：速度指令
 
-## 简化流程（按时间）
 ```
 1) 传感器：/livox/lidar
 2) SLAM：/cloud_map + /Odometry

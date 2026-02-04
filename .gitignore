@@ -57,6 +57,30 @@ src/global_planning/PCT_planner/rsc/tomogram/*.pickle
 # IDE 文件
 .vscode/
 .idea/
+.cursor/
+.agents/
 *.swp
 *~
 .DS_Store
+
+# Flutter 相关
+client/flutter_monitor/.dart_tool/
+client/flutter_monitor/.flutter-plugins
+client/flutter_monitor/.flutter-plugins-dependencies
+client/flutter_monitor/.packages
+client/flutter_monitor/build/
+client/flutter_monitor/linux/flutter/ephemeral/
+client/flutter_monitor/web/.dart_tool/
+
+# Python 虚拟环境
+venv/
+env/
+.venv/
+*.egg-info/
+
+# gRPC 生成的文件（如果需要，可以注释掉）
+# src/remote_monitoring/build/generated/
+
+# 临时测试文件
+*.test
+*.tmp

@@ -1,0 +1,28 @@
+grpc_gateway:
+  ros__parameters:
+    # gRPC 服务器端口
+    grpc_port: 50051
+    
+    # 状态流频率
+    fast_state_hz: 30.0
+    slow_state_hz: 1.0
+    
+    # 频率统计窗口（秒）
+    rate_window_sec: 2.0
+    
+    # ROS2 话题配置
+    odom_topic: "/Odometry"
+    terrain_map_topic: "/terrain_map"
+    path_topic: "/path"
+    slow_down_topic: "/slow_down"
+    
+    # TF 坐标系
+    tf_map_frame: "map"
+    tf_odom_frame: "odom"
+    tf_body_frame: "body"
+    
+    # Safety Gate 配置
+    deadman_timeout_ms: 300.0
+    max_speed: 1.0
+    max_angular: 1.0
+    tilt_limit_deg: 30.0

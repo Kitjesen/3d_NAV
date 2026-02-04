@@ -1,6 +1,9 @@
 localPlanner:
   ros__parameters:
     omniDirGoalThre: 0.5
+    laserCloudTopic: "/cloud_registered"
+    laserCloudInBody: true
+    useTerrainAnalysis: true
 
 pathFollower:
   ros__parameters:
