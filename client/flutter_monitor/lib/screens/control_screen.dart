@@ -302,7 +302,7 @@ class _ControlScreenState extends State<ControlScreen> {
   Widget _buildJoystickSection({
     required String label,
     required IconData icon,
-    required JoystickListener listener,
+    required void Function(StickDragDetails) listener,
     required JoystickMode mode,
   }) {
     return Column(

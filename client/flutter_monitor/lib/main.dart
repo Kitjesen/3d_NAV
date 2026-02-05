@@ -34,7 +34,7 @@ class RobotMonitorApp extends StatelessWidget {
           ),
           iconTheme: IconThemeData(color: Colors.black87),
         ),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           color: Colors.white.withOpacity(0.8),
           elevation: 0,
           shape: RoundedRectangleBorder(
