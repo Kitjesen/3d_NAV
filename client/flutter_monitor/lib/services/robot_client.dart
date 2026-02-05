@@ -2,20 +2,32 @@ import 'dart:async';
 import 'package:grpc/grpc.dart';
 import '../generated/telemetry.pbgrpc.dart';
 import '../generated/system.pbgrpc.dart';
+import '../generated/control.pbgrpc.dart';
+import '../generated/data.pbgrpc.dart';
 import '../generated/common.pb.dart';
-import '../generated/google/protobuf/empty.pb.dart';
+import 'package:protobuf/well_known_types/google/protobuf/empty.pb.dart';
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart';
+import 'package:fixnum/fixnum.dart';
+import 'package:uuid/uuid.dart';
+import 'robot_client_base.dart';
 
-class RobotClient {
+class RobotClient implements RobotClientBase {
   final String host;
   final int port;
   
   late ClientChannel _channel;
   late TelemetryServiceClient _telemetryClient;
   late SystemServiceClient _systemClient;
+  late ControlServiceClient _controlClient;
+  late DataServiceClient _dataClient;
   
   bool _isConnected = false;
   StreamSubscription? _fastStateSubscription;
   StreamSubscription? _slowStateSubscription;
+  
+  // Lease token for control
+  String? _currentLeaseToken;
+  Timer? _leaseRenewalTimer;
 
   RobotClient({
     required this.host,
@@ -35,6 +47,8 @@ class RobotClient {
 
       _telemetryClient = TelemetryServiceClient(_channel);
       _systemClient = SystemServiceClient(_channel);
+      _controlClient = ControlServiceClient(_channel);
+      _dataClient = DataServiceClient(_channel);
 
       // 测试连接
       final info = await _systemClient.getRobotInfo(
@@ -84,6 +98,155 @@ class RobotClient {
     });
   }
 
+  /// 订阅事件流
+  Stream<Event> streamEvents({String lastEventId = ''}) {
+    if (!_isConnected) {
+      throw Exception('Not connected to robot');
+    }
+
+    final request = EventStreamRequest()
+      ..lastEventId = lastEventId
+      ..minSeverity = EventSeverity.EVENT_SEVERITY_INFO;
+
+    return _telemetryClient.streamEvents(request);
+  }
+
+  /// 获取租约
+  Future<bool> acquireLease() async {
+    try {
+      final request = AcquireLeaseRequest()
+        ..base = _createRequestBase();
+      
+      final response = await _controlClient.acquireLease(request);
+      if (response.base.errorCode == ErrorCode.ERROR_CODE_OK) {
+        _currentLeaseToken = response.lease.leaseToken;
+        _startLeaseRenewal(response.lease.ttl.seconds.toInt());
+        return true;
+      }
+      return false;
+    } catch (e) {
+      print('Acquire lease failed: $e');
+      return false;
+    }
+  }
+
+  /// 释放租约
+  Future<void> releaseLease() async {
+    if (_currentLeaseToken == null) return;
+    
+    try {
+      _stopLeaseRenewal();
+      final request = ReleaseLeaseRequest()
+        ..base = _createRequestBase()
+        ..leaseToken = _currentLeaseToken!;
+      
+      await _controlClient.releaseLease(request);
+      _currentLeaseToken = null;
+    } catch (e) {
+      print('Release lease failed: $e');
+    }
+  }
+
+  /// 续约逻辑
+  void _startLeaseRenewal(int ttlSeconds) {
+    _leaseRenewalTimer?.cancel();
+    // 提前续约（例如 TTL 的一半时间）
+    final renewalDuration = Duration(seconds: ttlSeconds > 2 ? ttlSeconds ~/ 2 : 1);
+    
+    _leaseRenewalTimer = Timer.periodic(renewalDuration, (_) async {
+      if (_currentLeaseToken == null) {
+        _stopLeaseRenewal();
+        return;
+      }
+
+      try {
+        final request = RenewLeaseRequest()
+          ..base = _createRequestBase()
+          ..leaseToken = _currentLeaseToken!;
+        
+        final response = await _controlClient.renewLease(request);
+        if (response.base.errorCode != ErrorCode.ERROR_CODE_OK) {
+          print('Lease renewal failed: ${response.base.errorMessage}');
+          _currentLeaseToken = null;
+          _stopLeaseRenewal();
+        }
+      } catch (e) {
+        print('Lease renewal error: $e');
+      }
+    });
+  }
+
+  void _stopLeaseRenewal() {
+    _leaseRenewalTimer?.cancel();
+    _leaseRenewalTimer = null;
+  }
+
+  /// 设置模式
+  Future<bool> setMode(RobotMode mode) async {
+    try {
+      final request = SetModeRequest()
+        ..base = _createRequestBase()
+        ..mode = mode;
+      
+      final response = await _controlClient.setMode(request);
+      return response.base.errorCode == ErrorCode.ERROR_CODE_OK;
+    } catch (e) {
+      print('Set mode failed: $e');
+      return false;
+    }
+  }
+
+  /// 急停
+  Future<bool> emergencyStop({bool hardStop = false}) async {
+    try {
+      final request = EmergencyStopRequest()
+        ..base = _createRequestBase()
+        ..hardStop = hardStop;
+      
+      final response = await _controlClient.emergencyStop(request);
+      return response.base.errorCode == ErrorCode.ERROR_CODE_OK;
+    } catch (e) {
+      print('Emergency stop failed: $e');
+      return false;
+    }
+  }
+
+  /// 遥操作流
+  Stream<TeleopFeedback> streamTeleop(Stream<Twist> velocityStream) {
+    if (_currentLeaseToken == null) {
+      throw Exception('Lease required for teleop');
+    }
+
+    final outgoingStream = velocityStream.map((twist) {
+      return TeleopCommand()
+        ..leaseToken = _currentLeaseToken!
+        ..sequence = Int64(DateTime.now().millisecondsSinceEpoch) // 简单用时间戳做序号
+        ..targetVelocity = twist
+        ..enableObstacleAvoidance = true;
+    });
+
+    return _controlClient.streamTeleop(outgoingStream);
+  }
+
+  /// 确认事件
+  Future<void> ackEvent(String eventId) async {
+    try {
+      final request = AckEventRequest()
+        ..base = _createRequestBase()
+        ..eventId = eventId;
+      
+      await _telemetryClient.ackEvent(request);
+    } catch (e) {
+      print('Ack event failed: $e');
+    }
+  }
+
+  RequestBase _createRequestBase() {
+    return RequestBase()
+      ..requestId = const Uuid().v4()
+      ..clientTimestamp = Timestamp.fromDateTime(DateTime.now());
+  }
+
   /// 获取机器人信息
   Future<RobotInfoResponse> getRobotInfo() async {
     return await _systemClient.getRobotInfo(Empty());
@@ -96,6 +259,10 @@ class RobotClient {
 
   /// 断开连接
   Future<void> disconnect() async {
+    _stopLeaseRenewal();
+    if (_currentLeaseToken != null) {
+      await releaseLease();
+    }
     await _fastStateSubscription?.cancel();
     await _slowStateSubscription?.cancel();
     await _channel.shutdown();

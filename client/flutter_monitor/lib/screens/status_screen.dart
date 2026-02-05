@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-import '../services/robot_client.dart';
+import '../services/robot_client_base.dart';
 import '../generated/telemetry.pb.dart';
+import '../widgets/glass_widgets.dart';
+import 'package:flutter/services.dart';
 
 class StatusScreen extends StatefulWidget {
-  final RobotClient client;
+  final RobotClientBase client;
 
   const StatusScreen({super.key, required this.client});
 
@@ -33,31 +35,39 @@ class _StatusScreenState extends State<StatusScreen> {
     // 订阅快速状态流（10Hz）
     _fastStateSubscription = widget.client.streamFastState(desiredHz: 10.0).listen(
       (state) {
-        setState(() {
-          _latestFastState = state;
-          _updateCount++;
-          _lastUpdateTime = DateTime.now();
-          _connectionStatus = 'Connected (${_updateCount} updates)';
-        });
+        if (mounted) {
+          setState(() {
+            _latestFastState = state;
+            _updateCount++;
+            _lastUpdateTime = DateTime.now();
+            _connectionStatus = 'Connected (${_updateCount} updates)';
+          });
+        }
       },
       onError: (error) {
-        setState(() {
-          _connectionStatus = 'Error: $error';
-        });
+        if (mounted) {
+          setState(() {
+            _connectionStatus = 'Error: $error';
+          });
+        }
       },
       onDone: () {
-        setState(() {
-          _connectionStatus = 'Stream closed';
-        });
+        if (mounted) {
+          setState(() {
+            _connectionStatus = 'Stream closed';
+          });
+        }
       },
     );
 
     // 订阅慢速状态流（1Hz）
     _slowStateSubscription = widget.client.streamSlowState().listen(
       (state) {
-        setState(() {
-          _latestSlowState = state;
-        });
+        if (mounted) {
+          setState(() {
+            _latestSlowState = state;
+          });
+        }
       },
       onError: (error) {
         print('SlowState error: $error');
@@ -69,26 +79,44 @@ class _StatusScreenState extends State<StatusScreen> {
   void dispose() {
     _fastStateSubscription?.cancel();
     _slowStateSubscription?.cancel();
-    widget.client.disconnect();
+    // widget.client.disconnect(); // Do not disconnect shared client
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Robot Status Monitor'),
+        title: const Text('Overview'),
         actions: [
           Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Center(
-              child: Chip(
-                avatar: Icon(
-                  _latestFastState != null ? Icons.check_circle : Icons.error,
-                  size: 16,
-                  color: _latestFastState != null ? Colors.green : Colors.red,
-                ),
-                label: Text(_connectionStatus),
+            padding: const EdgeInsets.only(right: 16.0),
+            child: GlassCard(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              borderRadius: 30,
+              blurSigma: 10,
+              color: _latestFastState != null ? Colors.green.withOpacity(0.1) : Colors.red.withOpacity(0.1),
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _latestFastState != null ? const Color(0xFF34C759) : const Color(0xFFFF3B30),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _latestFastState != null ? 'ONLINE' : 'OFFLINE',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -104,19 +132,25 @@ class _StatusScreenState extends State<StatusScreen> {
               },
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
+                padding: EdgeInsets.fromLTRB(16, MediaQuery.of(context).padding.top + 60, 16, 100),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildPoseCard(),
+                    _buildMainStatusCard(),
                     const SizedBox(height: 16),
-                    _buildVelocityCard(),
+                    Row(
+                      children: [
+                        Expanded(child: _buildBatteryCard()),
+                        const SizedBox(width: 16),
+                        Expanded(child: _buildSystemCard()),
+                      ],
+                    ),
                     const SizedBox(height: 16),
-                    _buildOrientationCard(),
-                    const SizedBox(height: 16),
-                    if (_latestSlowState != null) _buildTopicRatesCard(),
-                    if (_latestSlowState != null) const SizedBox(height: 16),
-                    if (_latestSlowState != null) _buildSystemResourceCard(),
+                    _buildMotionCard(),
+                    if (_latestSlowState != null) ...[
+                      const SizedBox(height: 16),
+                      _buildNetworkCard(),
+                    ],
                   ],
                 ),
               ),
@@ -124,253 +158,128 @@ class _StatusScreenState extends State<StatusScreen> {
     );
   }
 
-  Widget _buildPoseCard() {
+  Widget _buildMainStatusCard() {
     final pose = _latestFastState!.pose;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.place, color: Colors.blue),
-                const SizedBox(width: 8),
-                const Text(
-                  'Position (odom frame)',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const Divider(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildMetric('X', pose.position.x.toStringAsFixed(3), 'm'),
-                _buildMetric('Y', pose.position.y.toStringAsFixed(3), 'm'),
-                _buildMetric('Z', pose.position.z.toStringAsFixed(3), 'm'),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVelocityCard() {
-    final vel = _latestFastState!.velocity;
-    final linearSpeed = vel.linear.x; // 主要线速度
-    final angularSpeed = vel.angular.z; // 主要角速度
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.speed, color: Colors.green),
-                const SizedBox(width: 8),
-                const Text(
-                  'Velocity (body frame)',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const Divider(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildMetric('Linear', linearSpeed.toStringAsFixed(3), 'm/s'),
-                _buildMetric('Angular', angularSpeed.toStringAsFixed(3), 'rad/s'),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOrientationCard() {
-    final rpy = _latestFastState!.rpyDeg;
-    final tfOk = _latestFastState!.tfOk;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.explore, color: Colors.orange),
-                const SizedBox(width: 8),
-                const Text(
-                  'Orientation (RPY)',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const Spacer(),
-                Chip(
-                  label: Text(tfOk ? 'TF OK' : 'TF Error'),
-                  backgroundColor: tfOk ? Colors.green.shade100 : Colors.red.shade100,
-                ),
-              ],
-            ),
-            const Divider(),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildMetric('Roll', rpy.x.toStringAsFixed(1), '°'),
-                _buildMetric('Pitch', rpy.y.toStringAsFixed(1), '°'),
-                _buildMetric('Yaw', rpy.z.toStringAsFixed(1), '°'),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTopicRatesCard() {
-    final rates = _latestSlowState!.topicRates;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.bar_chart, color: Colors.purple),
-                const SizedBox(width: 8),
-                const Text(
-                  'Topic Rates',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const Divider(),
-            _buildRateRow('Odometry', rates.odomHz),
-            _buildRateRow('Terrain Map', rates.terrainMapHz),
-            _buildRateRow('Path', rates.pathHz),
-            _buildRateRow('LiDAR', rates.lidarHz),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSystemResourceCard() {
-    final resources = _latestSlowState!.resources;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.memory, color: Colors.red),
-                const SizedBox(width: 8),
-                const Text(
-                  'System Resources',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const Divider(),
-            _buildProgressRow('CPU', resources.cpuPercent, '%'),
-            _buildProgressRow('Memory', resources.memPercent, '%'),
-            _buildRateRow('CPU Temp', resources.cpuTemp, unit: '°C'),
-            _buildRateRow('Battery', resources.batteryPercent, unit: '%'),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMetric(String label, String value, String unit) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
-          ),
-        ),
-        const SizedBox(height: 4),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: [
-            Text(
-              value,
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              unit,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey[600],
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRateRow(String label, double value, {String unit = 'Hz'}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return GlassCard(
+      padding: const EdgeInsets.all(24),
+      child: Column(
         children: [
-          Text(label),
-          Text(
-            '${value.toStringAsFixed(2)} $unit',
-            style: const TextStyle(fontWeight: FontWeight.bold),
+          // Using Icon as fallback/primary if asset not loaded, but user asked for generated icons.
+          // Since I can't guarantee asset loading in preview, I'll use a large icon or the asset if I can.
+          // Let's use the asset I generated.
+          Image.asset('assets/icon_robot_model.png', height: 120, color: Colors.black87),
+          const SizedBox(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              ValueDisplay(label: 'Position X', value: pose.position.x.toStringAsFixed(2), unit: 'm'),
+              ValueDisplay(label: 'Position Y', value: pose.position.y.toStringAsFixed(2), unit: 'm'),
+              ValueDisplay(label: 'Heading', value: _latestFastState!.rpyDeg.z.toStringAsFixed(1), unit: '°'),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildProgressRow(String label, double value, String unit) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+  Widget _buildBatteryCard() {
+    final battery = _latestSlowState?.resources.batteryPercent ?? 0;
+    return GlassCard(
+      padding: const EdgeInsets.all(16),
+      child: ValueDisplay(
+        label: 'Battery',
+        value: battery.toStringAsFixed(0),
+        unit: '%',
+        icon: Icon(
+          battery > 20 ? Icons.battery_full : Icons.battery_alert,
+          color: battery > 20 ? Colors.green : Colors.red,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSystemCard() {
+    final cpu = _latestSlowState?.resources.cpuPercent ?? 0;
+    return GlassCard(
+      padding: const EdgeInsets.all(16),
+      child: ValueDisplay(
+        label: 'CPU Load',
+        value: cpu.toStringAsFixed(0),
+        unit: '%',
+        icon: const Icon(Icons.memory, color: Colors.blue),
+      ),
+    );
+  }
+
+  Widget _buildMotionCard() {
+    final linear = _latestFastState!.velocity.linear.x;
+    final angular = _latestFastState!.velocity.angular.z;
+    
+    return GlassCard(
+      padding: const EdgeInsets.all(20),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          ValueDisplay(
+            label: 'Linear Velocity',
+            value: linear.toStringAsFixed(2),
+            unit: 'm/s',
+            icon: const Icon(Icons.speed, color: Colors.orange),
+          ),
+          Container(width: 1, height: 40, color: Colors.black12),
+          ValueDisplay(
+            label: 'Angular Velocity',
+            value: angular.toStringAsFixed(2),
+            unit: 'rad/s',
+            icon: const Icon(Icons.rotate_right, color: Colors.purple),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNetworkCard() {
+    final rates = _latestSlowState!.topicRates;
+    return GlassCard(
+      padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(label),
+              const Icon(Icons.wifi, size: 20, color: Colors.black54),
+              const SizedBox(width: 8),
               Text(
-                '${value.toStringAsFixed(1)}$unit',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+                'TOPIC RATES',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black.withOpacity(0.4),
+                  letterSpacing: 1.0,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 4),
-          LinearProgressIndicator(
-            value: value / 100,
-            backgroundColor: Colors.grey[300],
-            valueColor: AlwaysStoppedAnimation<Color>(
-              value > 80 ? Colors.red : (value > 60 ? Colors.orange : Colors.green),
-            ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildMiniRate('Odom', rates.odomHz),
+              _buildMiniRate('Lidar', rates.lidarHz),
+              _buildMiniRate('Map', rates.terrainMapHz),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildMiniRate(String label, double hz) {
+    return Column(
+      children: [
+        Text(hz.toStringAsFixed(1), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        Text(label, style: const TextStyle(fontSize: 12, color: Colors.black45)),
+      ],
     );
   }
 }

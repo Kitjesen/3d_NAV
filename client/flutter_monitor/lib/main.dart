@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'services/robot_client.dart';
-import 'screens/status_screen.dart';
+import 'services/mock_robot_client.dart';
+import 'screens/home_screen.dart';
 
 void main() {
   runApp(const RobotMonitorApp());
@@ -14,10 +15,34 @@ class RobotMonitorApp extends StatelessWidget {
     return MaterialApp(
       title: 'Robot Monitor',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFF2F2F7), // iOS System Grouped Background
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF007AFF), // iOS Blue
+          surface: Colors.white,
+          background: const Color(0xFFF2F2F7),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          centerTitle: true,
+          titleTextStyle: TextStyle(
+            color: Colors.black87,
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.5,
+          ),
+          iconTheme: IconThemeData(color: Colors.black87),
+        ),
+        cardTheme: CardTheme(
+          color: Colors.white.withOpacity(0.8),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+        ),
+        fontFamily: 'SF Pro Display', // Assuming system font or fallback
       ),
-      darkTheme: ThemeData.dark(useMaterial3: true),
       home: const ConnectionScreen(),
     );
   }
@@ -61,7 +86,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       if (connected) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (context) => StatusScreen(client: client),
+            builder: (context) => HomeScreen(client: client),
           ),
         );
       } else {
@@ -76,6 +101,17 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
         _isConnecting = false;
       });
     }
+  }
+
+  Future<void> _startMock() async {
+    final client = MockRobotClient();
+    await client.connect();
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => HomeScreen(client: client),
+      ),
+    );
   }
 
   @override
@@ -151,6 +187,15 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                         : const Icon(Icons.link),
                     label: Text(_isConnecting ? 'Connecting...' : 'Connect'),
                     style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.all(16),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: _isConnecting ? null : _startMock,
+                    icon: const Icon(Icons.science),
+                    label: const Text('Mock 测试'),
+                    style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.all(16),
                     ),
                   ),
