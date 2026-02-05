@@ -8,6 +8,7 @@ import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart';
 import '../generated/common.pb.dart';
 import '../generated/control.pb.dart';
 import '../generated/telemetry.pb.dart';
+import '../generated/data.pb.dart';
 import 'robot_client_base.dart';
 
 class MockRobotClient implements RobotClientBase {
@@ -117,6 +118,23 @@ class MockRobotClient implements RobotClientBase {
         ..title = 'Mock Event ${_eventCounter}'
         ..description = 'Generated mock event for testing'
         ..timestamp = Timestamp.fromDateTime(DateTime.now());
+    });
+  }
+
+  @override
+  Stream<DataChunk> subscribeToResource(ResourceId resourceId) {
+    if (!_connected) {
+      throw Exception('Not connected (mock)');
+    }
+
+    // Mock point cloud / map data
+    // Return a simple stream that emits a dummy chunk every 2 seconds
+    return Stream.periodic(const Duration(seconds: 2), (count) {
+      return DataChunk()
+        ..header = _header()
+        ..resourceId = resourceId
+        ..data = [] // Empty dummy data
+        ..compression = CompressionType.COMPRESSION_TYPE_NONE;
     });
   }
 

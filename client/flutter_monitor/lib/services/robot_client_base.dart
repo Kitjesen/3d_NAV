@@ -1,6 +1,7 @@
 import '../generated/common.pb.dart';
 import '../generated/control.pb.dart';
 import '../generated/telemetry.pb.dart';
+import '../generated/data.pb.dart';
 
 abstract class RobotClientBase {
   Future<bool> connect();
@@ -8,6 +9,7 @@ abstract class RobotClientBase {
   Stream<FastState> streamFastState({double desiredHz = 10.0});
   Stream<SlowState> streamSlowState();
   Stream<Event> streamEvents({String lastEventId = ''});
+  Stream<DataChunk> subscribeToResource(ResourceId resourceId);
 
   Future<bool> acquireLease();
   Future<void> releaseLease();

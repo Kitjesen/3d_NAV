@@ -111,6 +111,20 @@ class RobotClient implements RobotClientBase {
     return _telemetryClient.streamEvents(request);
   }
 
+  /// 订阅资源 (地图/点云)
+  Stream<DataChunk> subscribeToResource(ResourceId resourceId) {
+    if (!_isConnected) {
+      throw Exception('Not connected to robot');
+    }
+
+    final request = SubscribeRequest()
+      ..base = _createRequestBase()
+      ..resourceId = resourceId
+      ..profile = SubscribeProfile(); // Default profile
+
+    return _dataClient.subscribe(request);
+  }
+
   /// 获取租约
   Future<bool> acquireLease() async {
     try {

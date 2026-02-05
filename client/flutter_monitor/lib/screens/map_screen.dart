@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import '../services/robot_client_base.dart';
 import '../generated/telemetry.pb.dart';
 import '../generated/common.pb.dart';
+import '../generated/data.pb.dart';
 import '../widgets/glass_widgets.dart';
 
 class MapScreen extends StatefulWidget {
@@ -18,15 +20,23 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final List<Offset> _path = [];
+  List<Offset> _globalMapPoints = [];
+  List<Offset> _localCloudPoints = [];
+  
   Pose? _currentPose;
   StreamSubscription? _subscription;
+  StreamSubscription? _mapSubscription;
+  StreamSubscription? _pclSubscription;
+  
   final TransformationController _transformController = TransformationController();
   double _currentYaw = 0.0;
+  bool _showGlobalMap = true;
 
   @override
   void initState() {
     super.initState();
     _startListening();
+    _subscribeToMaps();
     
     // Initial view
     final matrix = Matrix4.identity()
@@ -38,8 +48,59 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _subscription?.cancel();
+    _mapSubscription?.cancel();
+    _pclSubscription?.cancel();
     _transformController.dispose();
     super.dispose();
+  }
+
+  void _subscribeToMaps() {
+    // Subscribe to Global Map
+    _mapSubscription = widget.client.subscribeToResource(
+      ResourceId()..type = ResourceType.RESOURCE_TYPE_MAP
+    ).listen((chunk) {
+      if (!mounted) return;
+      _parseAndSetPoints(chunk.data, isGlobal: true);
+    });
+
+    // Subscribe to Local Cloud
+    _pclSubscription = widget.client.subscribeToResource(
+      ResourceId()..type = ResourceType.RESOURCE_TYPE_POINTCLOUD
+    ).listen((chunk) {
+      if (!mounted) return;
+      _parseAndSetPoints(chunk.data, isGlobal: false);
+    });
+  }
+
+  void _parseAndSetPoints(List<int> data, {required bool isGlobal}) {
+    // Basic parsing assuming float32 fields
+    // Global Map (XYZ): 12 bytes
+    // Local Cloud (XYZI): 16 bytes
+    final pointStep = isGlobal ? 12 : 16;
+    final points = <Offset>[];
+    
+    final byteData = Uint8List.fromList(data).buffer.asByteData();
+    final count = data.length ~/ pointStep;
+    
+    // Downsample for performance
+    final stride = isGlobal ? 10 : 2; // Show 1/10th of global, 1/2 of local
+    
+    for (var i = 0; i < count; i += stride) {
+      final offset = i * pointStep;
+      if (offset + 8 <= data.length) {
+        final x = byteData.getFloat32(offset, Endian.little);
+        final y = byteData.getFloat32(offset + 4, Endian.little);
+        points.add(Offset(x, y));
+      }
+    }
+
+    setState(() {
+      if (isGlobal) {
+        _globalMapPoints = points;
+      } else {
+        _localCloudPoints = points;
+      }
+    });
   }
 
   void _startListening() {
@@ -124,6 +185,8 @@ class _MapScreenState extends State<MapScreen> {
                     painter: TrajectoryPainter(
                       path: _path,
                       currentPose: _currentPose,
+                      globalPoints: _showGlobalMap ? _globalMapPoints : [],
+                      localPoints: _localCloudPoints,
                     ),
                     size: const Size(10000, 10000),
                   ),
@@ -136,28 +199,37 @@ class _MapScreenState extends State<MapScreen> {
           Positioned(
             left: 20,
             top: MediaQuery.of(context).padding.top + 60,
-            child: GlassCard(
-              borderRadius: 30,
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                children: [
-                  Transform.rotate(
-                    angle: -_currentYaw, // Rotate opposite to robot to show North relative to robot? 
-                    // Or if map is fixed North-up, and robot rotates, then compass should just point North (fixed).
-                    // But if we want to show Robot Heading, we rotate the arrow.
-                    // Let's assume Map is North-Up (fixed).
-                    // So a Compass usually points North. If the map is fixed, North is always Up.
-                    // If we want a "Heading Indicator", it rotates to match the robot.
-                    // Let's make a Heading Indicator.
-                    child: const Icon(Icons.navigation, color: Colors.blue, size: 32),
+            child: Column(
+              children: [
+                GlassCard(
+                  borderRadius: 30,
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    children: [
+                      Transform.rotate(
+                        angle: -_currentYaw, 
+                        child: const Icon(Icons.navigation, color: Colors.blue, size: 32),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${(_currentYaw * 180 / math.pi).toStringAsFixed(0)}°',
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${(_currentYaw * 180 / math.pi).toStringAsFixed(0)}°',
-                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 12),
+                GlassButton(
+                  onPressed: () {
+                    setState(() {
+                      _showGlobalMap = !_showGlobalMap;
+                    });
+                  },
+                  icon: Icon(_showGlobalMap ? Icons.layers : Icons.layers_clear, size: 20),
+                  label: 'MAP',
+                  backgroundColor: _showGlobalMap ? Colors.blue : Colors.grey,
+                ),
+              ],
             ),
           ),
 
@@ -212,13 +284,40 @@ class _MapScreenState extends State<MapScreen> {
 class TrajectoryPainter extends CustomPainter {
   final List<Offset> path;
   final Pose? currentPose;
+  final List<Offset> globalPoints;
+  final List<Offset> localPoints;
 
-  TrajectoryPainter({required this.path, this.currentPose});
+  TrajectoryPainter({
+    required this.path, 
+    this.currentPose,
+    this.globalPoints = const [],
+    this.localPoints = const [],
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.translate(size.width / 2, size.height / 2);
     canvas.scale(1.0, -1.0);
+
+    // Draw Global Map
+    if (globalPoints.isNotEmpty) {
+      final mapPaint = Paint()
+        ..color = Colors.black12
+        ..strokeWidth = 0.1
+        ..strokeCap = StrokeCap.round;
+      
+      canvas.drawPoints(PointMode.points, globalPoints, mapPaint);
+    }
+
+    // Draw Local Cloud
+    if (localPoints.isNotEmpty) {
+      final cloudPaint = Paint()
+        ..color = Colors.red.withOpacity(0.3)
+        ..strokeWidth = 0.05
+        ..strokeCap = StrokeCap.round;
+      
+      canvas.drawPoints(PointMode.points, localPoints, cloudPaint);
+    }
 
     final paint = Paint()
       ..color = const Color(0xFF007AFF).withOpacity(0.6)
