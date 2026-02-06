@@ -7,6 +7,8 @@ import '../services/robot_client_base.dart';
 import '../generated/common.pb.dart';
 import '../generated/control.pb.dart';
 import '../widgets/glass_widgets.dart';
+import '../widgets/camera_stream_widget.dart';
+import '../widgets/webrtc_video_widget.dart';
 
 class ControlScreen extends StatefulWidget {
   final RobotClientBase client;
@@ -165,6 +167,35 @@ class _ControlScreenState extends State<ControlScreen> {
         ),
         centerTitle: true,
         actions: [
+          // Camera indicator
+          Padding(
+            padding: const EdgeInsets.only(right: 12.0),
+            child: GlassCard(
+              borderRadius: 20,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              blurSigma: 10,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.videocam,
+                    size: 14,
+                    color: Colors.blue[700],
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'FPV',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.blue[800],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Lease toggle
           Padding(
             padding: const EdgeInsets.only(right: 24.0),
             child: GestureDetector(
@@ -198,7 +229,36 @@ class _ControlScreenState extends State<ControlScreen> {
       ),
       body: Stack(
         children: [
-          // Background gradient or elements could go here
+          // Camera Background (FPV Style) - WebRTC优先，fallback到图片流
+          Positioned.fill(
+            child: widget.client.dataServiceClient != null
+                ? WebRTCVideoWidget(
+                    client: widget.client,
+                    cameraId: 'front',
+                    autoConnect: true,
+                    fit: BoxFit.cover,
+                    // 连接失败时 fallback 到旧的图片流
+                    errorWidget: CameraStreamWidget(client: widget.client),
+                  )
+                : CameraStreamWidget(client: widget.client),
+          ),
+          
+          // Dark gradient overlay for better control visibility
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withOpacity(0.3),
+                    Colors.black.withOpacity(0.1),
+                    Colors.black.withOpacity(0.3),
+                  ],
+                ),
+              ),
+            ),
+          ),
           
           // Main Layout
           Padding(

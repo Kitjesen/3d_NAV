@@ -23,7 +23,6 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // 强制主界面竖屏
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
@@ -31,7 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _screens = [
       StatusScreen(client: widget.client),
-      const SizedBox(), // Placeholder for Control
+      const SizedBox(), // Placeholder for Control (pushed as route)
       MapScreen(client: widget.client),
       EventsScreen(client: widget.client),
     ];
@@ -39,7 +38,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onTabSelected(int index) {
     if (index == 1) {
-      // Control Tab clicked -> Push ControlScreen
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (context) => ControlScreen(client: widget.client),
@@ -59,7 +57,7 @@ class _HomeScreenState extends State<HomeScreen> {
       body: Stack(
         children: [
           IndexedStack(
-            index: _currentIndex,
+            index: _currentIndex > 1 ? _currentIndex : _currentIndex,
             children: _screens,
           ),
           _buildFloatingNavBar(context),
@@ -69,66 +67,87 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildFloatingNavBar(BuildContext context) {
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 12 + bottomPadding * 0.2),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(28),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface.withOpacity(0.7),
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.2),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
-                      blurRadius: 16,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: NavigationBar(
-                  height: 64,
-                  backgroundColor: Colors.transparent,
-                  elevation: 0,
-                  indicatorColor: Colors.white.withOpacity(0.2),
-                  labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
-                  selectedIndex: _currentIndex,
-                  onDestinationSelected: _onTabSelected,
-                  destinations: const [
-                    NavigationDestination(
-                      icon: Icon(Icons.dashboard_outlined, color: Colors.black54),
-                      selectedIcon: Icon(Icons.dashboard, color: Colors.black87),
-                      label: 'Status',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.gamepad_outlined, color: Colors.black54),
-                      selectedIcon: Icon(Icons.gamepad, color: Colors.black87),
-                      label: 'Control',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.map_outlined, color: Colors.black54),
-                      selectedIcon: Icon(Icons.map, color: Colors.black87),
-                      label: 'Map',
-                    ),
-                    NavigationDestination(
-                      icon: Icon(Icons.notifications_outlined, color: Colors.black54),
-                      selectedIcon: Icon(Icons.notifications, color: Colors.black87),
-                      label: 'Events',
-                    ),
-                  ],
-                ),
+    return Positioned(
+      left: 24,
+      right: 24,
+      bottom: MediaQuery.of(context).padding.bottom + 12,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            height: 64,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.82),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.4),
+                width: 0.5,
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.12),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildNavItem(0, Icons.dashboard_outlined, Icons.dashboard, 'Status'),
+                _buildNavItem(1, Icons.gamepad_outlined, Icons.gamepad, 'Control'),
+                _buildNavItem(2, Icons.map_outlined, Icons.map, 'Map'),
+                _buildNavItem(3, Icons.notifications_outlined, Icons.notifications, 'Events'),
+              ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label) {
+    // Control tab 永远不会 "selected"（因为它跳转到独立页面）
+    final isSelected = index != 1 && _currentIndex == index;
+    final isControl = index == 1;
+
+    return GestureDetector(
+      onTap: () => _onTabSelected(index),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: isSelected
+            ? BoxDecoration(
+                color: const Color(0xFF007AFF).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(16),
+              )
+            : null,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isSelected ? activeIcon : icon,
+              size: 24,
+              color: isSelected
+                  ? const Color(0xFF007AFF)
+                  : isControl
+                      ? const Color(0xFFAF52DE) // 紫色给 Control 按钮
+                      : Colors.black.withOpacity(0.35),
+            ),
+            if (isSelected) ...[
+              const SizedBox(height: 2),
+              Container(
+                width: 4,
+                height: 4,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF007AFF),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

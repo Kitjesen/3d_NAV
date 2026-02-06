@@ -2,9 +2,9 @@
 
 ## 实施完成状态
 
-**日期**: 2026-02-04  
-**状态**: ✅ Phase 1 完成，已构建并运行  
-**版本**: 1.0.0
+**日期**: 2026-02-05  
+**状态**: ✅ Phase 1+ 完成 (DataService Image Stream Added)  
+**版本**: 1.1.0
 
 ---
 
@@ -38,7 +38,7 @@
 - `SystemServiceImpl`: 会话管理（最小鉴权）
 - `ControlServiceImpl`: 租约 + 模式 + 急停 + 遥操作流
 - `TelemetryServiceImpl`: 三条状态流（fast/slow/event）
-- `DataServiceImpl`: 框架实现（点云/视频待 Phase 3-4）
+- `DataServiceImpl`: **[新增]** 实现了基于 gRPC 的图像流 (`Subscribe` -> `/camera/color/compressed`)
 
 **网关层**：
 - `GrpcGateway`: 统一入口，集成所有服务，单端口对外（50051）

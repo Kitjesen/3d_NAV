@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -29,10 +31,16 @@ public:
   // 标记事件已被客户端确认
   void AckEvent(const std::string &event_id);
 
+  // 阻塞等待一条新事件（event_id > last_event_id）。
+  bool WaitForEventAfter(const std::string &last_event_id, robot::v1::Event *event,
+                         std::chrono::milliseconds timeout);
+
 private:
   std::string GenerateEventId();
+  size_t NextIndexLocked(const std::string &last_event_id) const;
   
   std::mutex mutex_;
+  std::condition_variable cv_;
   std::deque<robot::v1::Event> buffer_;
   size_t max_size_;
   uint64_t next_sequence_{1};

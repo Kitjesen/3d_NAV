@@ -23,9 +23,12 @@ service DataService {
   // 文件下载（分块）
   rpc DownloadFile(DownloadFileRequest) returns (stream FileChunk);
   
-  // 视频控制（WebRTC 信令）
+  // 视频控制（WebRTC 信令）- 旧接口，保留兼容
   rpc StartCamera(StartCameraRequest) returns (StartCameraResponse);
   rpc StopCamera(StopCameraRequest) returns (StopCameraResponse);
+  
+  // WebRTC 双向信令流（新接口，支持实时视频/音频）
+  rpc WebRTCSignaling(stream WebRTCSignal) returns (stream WebRTCSignal);
 }
 
 // ==================== 资源列举 ====================
@@ -139,4 +142,48 @@ message StopCameraRequest {
 
 message StopCameraResponse {
   ResponseBase base = 1;
+}
+
+// ==================== WebRTC 信令 ====================
+
+// WebRTC 信令类型
+enum WebRTCSignalType {
+  WEBRTC_SIGNAL_TYPE_UNSPECIFIED = 0;
+  WEBRTC_SIGNAL_TYPE_OFFER = 1;       // SDP Offer
+  WEBRTC_SIGNAL_TYPE_ANSWER = 2;      // SDP Answer
+  WEBRTC_SIGNAL_TYPE_ICE_CANDIDATE = 3;  // ICE Candidate
+  WEBRTC_SIGNAL_TYPE_ICE_DONE = 4;    // ICE gathering done
+  WEBRTC_SIGNAL_TYPE_HANGUP = 5;      // 结束通话
+}
+
+// WebRTC 信令消息
+message WebRTCSignal {
+  string session_id = 1;              // 会话唯一标识
+  WebRTCSignalType type = 2;          // 信令类型
+  
+  // 信令数据（根据 type 使用不同字段）
+  string sdp = 3;                     // SDP (Offer/Answer)
+  string ice_candidate = 4;           // ICE candidate JSON
+  string ice_mid = 5;                 // ICE media stream ID
+  int32 ice_mline_index = 6;          // ICE m-line index
+  
+  // 会话配置（仅在 Offer 时使用）
+  WebRTCSessionConfig config = 7;
+}
+
+// WebRTC 会话配置
+message WebRTCSessionConfig {
+  bool video_enabled = 1;             // 启用视频
+  bool audio_enabled = 2;             // 启用音频
+  string camera_id = 3;               // 摄像头 ID ("front", "rear", "depth")
+  VideoProfile video_profile = 4;     // 视频配置
+  AudioProfile audio_profile = 5;     // 音频配置
+}
+
+// 音频配置
+message AudioProfile {
+  uint32 sample_rate = 1;             // 采样率 (48000)
+  uint32 channels = 2;                // 通道数 (1=mono, 2=stereo)
+  string codec = 3;                   // 编码器 ("opus")
+  uint32 bitrate_kbps = 4;            // 比特率
 }

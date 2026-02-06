@@ -19,6 +19,15 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GRPC REQUIRED grpc++)
 pkg_check_modules(GRPCPP REQUIRED grpc++>=1.22.0)
 
+# Find libdatachannel for WebRTC
+pkg_check_modules(DATACHANNEL libdatachannel)
+if(DATACHANNEL_FOUND)
+  message(STATUS "Found libdatachannel: ${DATACHANNEL_LIBRARIES}")
+  add_definitions(-DWEBRTC_ENABLED)
+else()
+  message(WARNING "libdatachannel not found - WebRTC features will be disabled")
+endif()
+
 # Find grpc_cpp_plugin
 find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
 message(STATUS "Using gRPC: ${GRPC_LIBRARIES}")
@@ -83,7 +92,8 @@ foreach(PROTO_FILE ${PROTO_FILES})
   )
 endforeach()
 
-add_executable(grpc_gateway
+# Source files
+set(GATEWAY_SOURCES
   src/main.cpp
   src/status_aggregator.cpp
   src/grpc_gateway.cpp
@@ -94,6 +104,15 @@ add_executable(grpc_gateway
   src/services/control_service.cpp
   src/services/telemetry_service.cpp
   src/services/data_service.cpp
+)
+
+# Add WebRTC bridge if libdatachannel is available
+if(DATACHANNEL_FOUND)
+  list(APPEND GATEWAY_SOURCES src/webrtc_bridge.cpp)
+endif()
+
+add_executable(grpc_gateway
+  ${GATEWAY_SOURCES}
   ${PROTO_SRCS}
   ${GRPC_SRCS}
 )
@@ -107,11 +126,21 @@ target_include_directories(grpc_gateway PRIVATE
   ${GRPC_INCLUDE_DIRS}
 )
 
+# Add libdatachannel include directories if available
+if(DATACHANNEL_FOUND)
+  target_include_directories(grpc_gateway PRIVATE ${DATACHANNEL_INCLUDE_DIRS})
+endif()
+
 target_link_libraries(grpc_gateway
   ${GRPC_LIBRARIES}
   ${GRPCPP_LIBRARIES}
   ${Protobuf_LIBRARIES}
 )
+
+# Link libdatachannel if available
+if(DATACHANNEL_FOUND)
+  target_link_libraries(grpc_gateway ${DATACHANNEL_LIBRARIES})
+endif()
 
 ament_target_dependencies(grpc_gateway
   rclcpp nav_msgs sensor_msgs geometry_msgs std_msgs tf2_ros

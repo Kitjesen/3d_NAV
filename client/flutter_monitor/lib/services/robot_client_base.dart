@@ -2,6 +2,7 @@ import '../generated/common.pb.dart';
 import '../generated/control.pb.dart';
 import '../generated/telemetry.pb.dart';
 import '../generated/data.pb.dart';
+import '../generated/data.pbgrpc.dart';
 
 abstract class RobotClientBase {
   Future<bool> connect();
@@ -20,4 +21,7 @@ abstract class RobotClientBase {
 
   Future<void> disconnect();
   bool get isConnected;
+  
+  /// DataServiceClient for WebRTC signaling (null if mock/unsupported)
+  DataServiceClient? get dataServiceClient => null;
 }

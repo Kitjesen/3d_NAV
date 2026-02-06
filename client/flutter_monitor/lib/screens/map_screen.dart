@@ -1,14 +1,13 @@
-import 'dart:ui';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import '../services/robot_client_base.dart';
-import '../generated/telemetry.pb.dart';
 import '../generated/common.pb.dart';
-import '../generated/data.pb.dart';
 import '../widgets/glass_widgets.dart';
+import '../widgets/robot_model_widget.dart';
 
 class MapScreen extends StatefulWidget {
   final RobotClientBase client;
@@ -32,6 +31,7 @@ class _MapScreenState extends State<MapScreen> {
   final TransformationController _transformController = TransformationController();
   double _currentYaw = 0.0;
   bool _showGlobalMap = true;
+  bool _show3DModel = true;
 
   @override
   void initState() {
@@ -167,114 +167,266 @@ class _MapScreenState extends State<MapScreen> {
       ),
       body: Stack(
         children: [
-          // Map Background
-          Positioned.fill(
-            child: GridPaper(
-              color: Colors.black12,
-              interval: 100, // 100 pixels at scale 1.0 (5m at scale 20)
-              divisions: 1,
-              subdivisions: 5,
-              child: InteractiveViewer(
-                transformationController: _transformController,
-                boundaryMargin: const EdgeInsets.all(5000),
-                minScale: 0.1,
-                maxScale: 100.0,
-                child: Container(
-                  width: 10000,
-                  height: 10000,
-                  child: CustomPaint(
-                    painter: TrajectoryPainter(
-                      path: _path,
-                      currentPose: _currentPose,
-                      globalPoints: _showGlobalMap ? _globalMapPoints : [],
-                      localPoints: _localCloudPoints,
+          // 3D Ground + Robot (full screen)
+          if (_show3DModel)
+            Positioned.fill(
+              child: RobotModelWidget(
+                currentPose: _currentPose,
+              ),
+            ),
+
+          // 2D Map Background (fallback)
+          if (!_show3DModel)
+            Positioned.fill(
+              child: GridPaper(
+                color: Colors.black12,
+                interval: 100, // 100 pixels at scale 1.0 (5m at scale 20)
+                divisions: 1,
+                subdivisions: 5,
+                child: InteractiveViewer(
+                  transformationController: _transformController,
+                  boundaryMargin: const EdgeInsets.all(5000),
+                  minScale: 0.1,
+                  maxScale: 100.0,
+                  child: Container(
+                    width: 10000,
+                    height: 10000,
+                    child: CustomPaint(
+                      painter: TrajectoryPainter(
+                        path: _path,
+                        currentPose: _currentPose,
+                        globalPoints: _showGlobalMap ? _globalMapPoints : [],
+                        localPoints: _localCloudPoints,
+                      ),
+                      size: const Size(10000, 10000),
                     ),
-                    size: const Size(10000, 10000),
                   ),
                 ),
               ),
             ),
-          ),
           
-          // Floating Compass
+          // Top Left: Robot Name Panel
           Positioned(
-            left: 20,
-            top: MediaQuery.of(context).padding.top + 60,
-            child: Column(
-              children: [
-                GlassCard(
-                  borderRadius: 30,
-                  padding: const EdgeInsets.all(8),
-                  child: Column(
-                    children: [
-                      Transform.rotate(
-                        angle: -_currentYaw, 
-                        child: const Icon(Icons.navigation, color: Colors.blue, size: 32),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${(_currentYaw * 180 / math.pi).toStringAsFixed(0)}°',
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                      ),
-                    ],
+            left: 16,
+            top: MediaQuery.of(context).padding.top + 16,
+            child: GlassCard(
+              borderRadius: 12,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: Colors.green,
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                GlassButton(
-                  onPressed: () {
-                    setState(() {
-                      _showGlobalMap = !_showGlobalMap;
-                    });
-                  },
-                  icon: Icon(_showGlobalMap ? Icons.layers : Icons.layers_clear, size: 20),
-                  label: 'MAP',
-                  backgroundColor: _showGlobalMap ? Colors.blue : Colors.grey,
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  const Text(
+                    'my_robot',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
 
-          // Floating Controls
+          // Top Right: Scene Options Panel
           Positioned(
-            right: 20,
-            bottom: 40,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FloatingActionButton.small(
-                  heroTag: 'zoom_in',
-                  backgroundColor: Colors.white.withOpacity(0.9),
-                  foregroundColor: Colors.black87,
-                  elevation: 2,
-                  onPressed: () {
-                    final matrix = _transformController.value.clone();
-                    matrix.scale(1.2);
-                    _transformController.value = matrix;
-                  },
-                  child: const Icon(Icons.add),
-                ),
-                const SizedBox(height: 12),
-                FloatingActionButton.small(
-                  heroTag: 'zoom_out',
-                  backgroundColor: Colors.white.withOpacity(0.9),
-                  foregroundColor: Colors.black87,
-                  elevation: 2,
-                  onPressed: () {
-                    final matrix = _transformController.value.clone();
-                    matrix.scale(1/1.2);
-                    _transformController.value = matrix;
-                  },
-                  child: const Icon(Icons.remove),
-                ),
-                const SizedBox(height: 24),
-                GlassButton(
-                  onPressed: _recenter,
-                  icon: const Icon(Icons.my_location, color: Colors.white),
-                  label: 'LOCATE',
-                  backgroundColor: const Color(0xFF007AFF),
-                ),
-              ],
+            right: 16,
+            top: MediaQuery.of(context).padding.top + 16,
+            child: GlassCard(
+              borderRadius: 12,
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildIconButton(
+                    icon: _show3DModel ? Icons.view_in_ar : Icons.map,
+                    tooltip: _show3DModel ? 'Switch to 2D' : 'Switch to 3D',
+                    isSelected: true,
+                    onPressed: () {
+                      setState(() {
+                        _show3DModel = !_show3DModel;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _buildIconButton(
+                    icon: Icons.layers,
+                    tooltip: 'Toggle Map Layer',
+                    isSelected: _showGlobalMap,
+                    onPressed: () {
+                      setState(() {
+                        _showGlobalMap = !_showGlobalMap;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _buildIconButton(
+                    icon: Icons.my_location,
+                    tooltip: 'Recenter',
+                    onPressed: _recenter,
+                  ),
+                  const SizedBox(height: 8),
+                  _buildIconButton(
+                    icon: Icons.settings,
+                    tooltip: 'Settings',
+                    onPressed: () {
+                      _showSettingsDialog(context);
+                    },
+                  ),
+                ],
+              ),
             ),
+          ),
+          
+          // Bottom Left: Compass (Simplified)
+          Positioned(
+            left: 16,
+            bottom: 32,
+            child: GlassCard(
+              borderRadius: 30,
+              padding: const EdgeInsets.all(12),
+              child: Transform.rotate(
+                angle: -_currentYaw, 
+                child: const Icon(Icons.navigation, color: Color(0xFF007AFF), size: 28),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIconButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    String? tooltip,
+    bool isSelected = false,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isSelected ? const Color(0xFF007AFF).withOpacity(0.1) : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: IconButton(
+        icon: Icon(icon),
+        color: isSelected ? const Color(0xFF007AFF) : Colors.black54,
+        iconSize: 20,
+        tooltip: tooltip,
+        onPressed: onPressed,
+        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+        padding: EdgeInsets.zero,
+      ),
+    );
+  }
+
+  void _showSettingsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: GlassCard(
+          borderRadius: 16,
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Settings',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    onPressed: () => Navigator.pop(context),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              const Text('Theme', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  _buildThemeOption('Light', false),
+                  const SizedBox(width: 8),
+                  _buildThemeOption('Dark', true),
+                  const SizedBox(width: 8),
+                  _buildThemeOption('System', false),
+                ],
+              ),
+              const SizedBox(height: 20),
+              const Text('Visualization', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+              const SizedBox(height: 12),
+              _buildSwitch('Show Grid', true),
+              _buildSwitch('Show Shadows', true),
+              _buildSwitch('Show Robot Name', true),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThemeOption(String label, bool isSelected) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.white : Colors.grey.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF007AFF) : Colors.transparent,
+            width: 1.5,
+          ),
+          boxShadow: isSelected ? [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            )
+          ] : null,
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+              color: isSelected ? const Color(0xFF007AFF) : Colors.black87,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSwitch(String label, bool value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 13)),
+          Switch.adaptive(
+            value: value,
+            onChanged: (v) {},
+            activeColor: const Color(0xFF007AFF),
           ),
         ],
       ),
@@ -307,7 +459,7 @@ class TrajectoryPainter extends CustomPainter {
         ..strokeWidth = 0.1
         ..strokeCap = StrokeCap.round;
       
-      canvas.drawPoints(PointMode.points, globalPoints, mapPaint);
+      canvas.drawPoints(ui.PointMode.points, globalPoints, mapPaint);
     }
 
     // Draw Local Cloud
@@ -317,7 +469,7 @@ class TrajectoryPainter extends CustomPainter {
         ..strokeWidth = 0.05
         ..strokeCap = StrokeCap.round;
       
-      canvas.drawPoints(PointMode.points, localPoints, cloudPaint);
+      canvas.drawPoints(ui.PointMode.points, localPoints, cloudPaint);
     }
 
     final paint = Paint()

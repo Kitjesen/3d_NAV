@@ -9,6 +9,7 @@ import '../generated/common.pb.dart';
 import '../generated/control.pb.dart';
 import '../generated/telemetry.pb.dart';
 import '../generated/data.pb.dart';
+import '../generated/data.pbgrpc.dart';
 import 'robot_client_base.dart';
 
 class MockRobotClient implements RobotClientBase {
@@ -127,15 +128,27 @@ class MockRobotClient implements RobotClientBase {
       throw Exception('Not connected (mock)');
     }
 
-    // Mock point cloud / map data
-    // Return a simple stream that emits a dummy chunk every 2 seconds
-    return Stream.periodic(const Duration(seconds: 2), (count) {
-      return DataChunk()
-        ..header = _header()
-        ..resourceId = resourceId
-        ..data = [] // Empty dummy data
-        ..compression = CompressionType.COMPRESSION_TYPE_NONE;
-    });
+    // Different behavior based on resource type
+    if (resourceId.type == ResourceType.RESOURCE_TYPE_CAMERA) {
+      // Camera: emit empty chunks at 30Hz (simulating video stream)
+      // The UI will show "No Camera Feed" placeholder for empty data
+      return Stream.periodic(const Duration(milliseconds: 33), (count) {
+        return DataChunk()
+          ..header = _header()
+          ..resourceId = resourceId
+          ..data = [] // Empty - no mock camera image data
+          ..compression = CompressionType.COMPRESSION_TYPE_NONE;
+      });
+    } else {
+      // Point cloud / map data: emit dummy chunks every 2 seconds
+      return Stream.periodic(const Duration(seconds: 2), (count) {
+        return DataChunk()
+          ..header = _header()
+          ..resourceId = resourceId
+          ..data = [] // Empty dummy data
+          ..compression = CompressionType.COMPRESSION_TYPE_NONE;
+      });
+    }
   }
 
   @override
@@ -209,6 +222,9 @@ class MockRobotClient implements RobotClientBase {
 
   @override
   bool get isConnected => _connected;
+
+  @override
+  DataServiceClient? get dataServiceClient => null;
 
   Header _header() {
     return Header()

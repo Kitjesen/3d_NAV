@@ -308,10 +308,11 @@ DataService 提供：
 
 ### Phase 1（Week 1–2）：主干打通
 
-* [ ] 定义 proto（System/Control/Telemetry/Data + common）
-* [ ] gRPC Gateway 跑通：fast_state、AcquireLease、StreamTeleop（空实现可）
-* [ ] Safety Gate：deadman + 限幅最小闭环
-* [ ] App：能连上、看 fast_state、发 teleop（基础 UI）
+* [x] 定义 proto（System/Control/Telemetry/Data + common）
+* [x] gRPC Gateway 跑通：fast_state、AcquireLease、StreamTeleop（空实现可）
+* [x] Safety Gate：deadman + 限幅最小闭环
+* [x] App：能连上、看 fast_state、发 teleop（基础 UI）
+* [x] **[新增]** DataService 图像流（gRPC）跑通
 
 ### Phase 2（Week 3–4）：控制与任务产品化
 
@@ -322,9 +323,9 @@ DataService 提供：
 
 ### Phase 3（Week 5–6）：视频产品化
 
-* [ ] WebRTC 推流（Jetson NVENC）
+* [ ] WebRTC 推流（Jetson NVENC）(若 gRPC 流满足需求可推迟)
 * [ ] DataService：StartCamera/StopCamera/SwitchProfile
-* [ ] 视频降级策略 + 反馈到 slow_state
+* [ ] Videos 降级策略 + 反馈到 slow_state
 
 ### Phase 4（Week 7–8）：数据面与运维能力
 

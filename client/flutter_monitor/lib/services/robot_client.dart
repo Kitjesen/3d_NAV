@@ -284,4 +284,8 @@ class RobotClient implements RobotClientBase {
   }
 
   bool get isConnected => _isConnected;
+  
+  /// DataServiceClient for WebRTC signaling
+  @override
+  DataServiceClient? get dataServiceClient => _isConnected ? _dataClient : null;
 }

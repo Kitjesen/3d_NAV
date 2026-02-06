@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <vector>
 
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
@@ -22,6 +23,12 @@ public:
   
   // 获取当前安全状态
   robot::v1::SafetyStatus GetSafetyStatus();
+
+  // 返回最近一次限幅原因，供 TeleopFeedback 透传。
+  std::vector<std::string> GetLimitReasons();
+
+  // 设置急停状态（true: 急停，false: 清除）。
+  void SetEmergencyStop(bool active);
   
   // 检查 deadman 超时
   void CheckDeadman();

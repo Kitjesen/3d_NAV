@@ -8,21 +8,36 @@ class GlassCard extends StatelessWidget {
   final double borderRadius;
   final double blurSigma;
   final Color? color;
+  final Border? border;
+  final List<BoxShadow>? boxShadow;
 
   const GlassCard({
     super.key,
     required this.child,
     this.padding,
     this.margin,
-    this.borderRadius = 20.0,
-    this.blurSigma = 16.0,
+    this.borderRadius = 16.0,
+    this.blurSigma = 20.0,
     this.color,
+    this.border,
+    this.boxShadow,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       margin: margin,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(borderRadius),
+        boxShadow: boxShadow ?? [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+            spreadRadius: 0,
+          ),
+        ],
+      ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(borderRadius),
         child: BackdropFilter(
@@ -30,19 +45,12 @@ class GlassCard extends StatelessWidget {
           child: Container(
             padding: padding,
             decoration: BoxDecoration(
-              color: (color ?? Theme.of(context).colorScheme.surface).withOpacity(0.6),
+              color: color ?? Colors.white.withOpacity(0.85), // More opaque, white default
               borderRadius: BorderRadius.circular(borderRadius),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.3),
+              border: border ?? Border.all(
+                color: Colors.white.withOpacity(0.5),
                 width: 1.0,
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
             ),
             child: child,
           ),

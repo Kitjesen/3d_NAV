@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>URDF Robot Viewer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "./libs/three.module.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from './libs/three.module.js';
+        import { OrbitControls } from './libs/OrbitControls.js';
+        import { STLLoader } from './libs/STLLoader.js';
+        import { ColladaLoader } from './libs/ColladaLoader.js';
+        import URDFLoader from './libs/URDFLoader.js';
+
+        // Global variables
+        let scene, camera, renderer, controls;
+        let robotModel, robotGroup;
+        let groundGrid;
+        const jointMap = new Map();
+        let isReady = false;
+        let urdfLoader = null;
+
+        // Initialize the 3D scene
+        function init() {
+            console.log('🚀 Starting Three.js initialization...');
+            const container = document.getElementById('container');
+            
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f2f6);
+            scene.fog = new THREE.Fog(0xf0f2f6, 8, 40);
+            console.log('✅ Scene created');
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(
+                50,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                1000
+            );
+            camera.position.set(2, 1.5, 2);
+            camera.lookAt(0, 0.3, 0);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ 
+                antialias: true,
+                alpha: true 
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
+            scene.add(ambientLight);
+
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0xdde6f2, 0.5);
+            hemiLight.position.set(0, 1, 0);
+            scene.add(hemiLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 5);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.camera.near = 0.1;
+            directionalLight.shadow.camera.far = 50;
+            directionalLight.shadow.camera.left = -5;
+            directionalLight.shadow.camera.right = 5;
+            directionalLight.shadow.camera.top = 5;
+            directionalLight.shadow.camera.bottom = -5;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+
+            const fillLight = new THREE.DirectionalLight(0x88ccff, 0.3);
+            fillLight.position.set(-5, 5, -5);
+            scene.add(fillLight);
+
+            // Ground Grid
+            createGround();
+
+            // Robot Group
+            robotGroup = new THREE.Group();
+            scene.add(robotGroup);
+
+            // Create simple robot model (fallback)
+            createSimpleRobot();
+
+            // Setup URDF loader
+            setupURDFLoader();
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.minDistance = 0.5;
+            controls.maxDistance = 10;
+            controls.target.set(0, 0.3, 0);
+            controls.update();
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+
+            // Start animation loop
+            animate();
+            console.log('✅ Animation loop started');
+
+            // Notify Flutter that scene is ready
+            isReady = true;
+            console.log('✅ Three.js initialization complete');
+            sendMessageToFlutter({
+                type: 'ready',
+                message: 'Three.js scene initialized'
+            });
+        }
+
+        function createGround() {
+            // Grid Helper
+            const gridHelper = new THREE.GridHelper(12, 24, 0x9aa6b2, 0xd7dde5);
+            gridHelper.position.y = 0;
+            scene.add(gridHelper);
+
+            // Ground Plane (for shadows)
+            const groundGeometry = new THREE.PlaneGeometry(20, 20);
+            const groundMaterial = new THREE.MeshStandardMaterial({
+                color: 0xe9eef5,
+                metalness: 0.0,
+                roughness: 1.0
+            });
+            const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+            groundMesh.rotation.x = -Math.PI / 2;
+            groundMesh.position.y = 0;
+            groundMesh.receiveShadow = true;
+            scene.add(groundMesh);
+
+            // Axes Helper (optional, subtle)
+            const axesHelper = new THREE.AxesHelper(0.5);
+            axesHelper.position.y = 0.01;
+            scene.add(axesHelper);
+        }
+
+        function createSimpleRobot() {
+            // Clear existing robot
+            robotGroup.clear();
+
+            // Body (box)
+            const bodyGeometry = new THREE.BoxGeometry(0.4, 0.2, 0.6);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x007AFF,
+                metalness: 0.3,
+                roughness: 0.6
+            });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.set(0, 0.3, 0);
+            body.castShadow = true;
+            body.receiveShadow = true;
+            robotGroup.add(body);
+
+            // Head indicator (smaller box)
+            const headGeometry = new THREE.BoxGeometry(0.15, 0.1, 0.15);
+            const headMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xFF3B30,
+                metalness: 0.4,
+                roughness: 0.5
+            });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.set(0.25, 0.35, 0);
+            head.castShadow = true;
+            robotGroup.add(head);
+
+            // Legs (4 cylinders for quadruped)
+            const legGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.25, 8);
+            const legMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x444444,
+                metalness: 0.5,
+                roughness: 0.5
+            });
+
+            const legPositions = [
+                [0.15, 0.125, 0.2],   // Front left
+                [0.15, 0.125, -0.2],  // Front right
+                [-0.15, 0.125, 0.2],  // Back left
+                [-0.15, 0.125, -0.2]  // Back right
+            ];
+
+            legPositions.forEach(pos => {
+                const leg = new THREE.Mesh(legGeometry, legMaterial);
+                leg.position.set(pos[0], pos[1], pos[2]);
+                leg.castShadow = true;
+                robotGroup.add(leg);
+            });
+
+            // Direction arrow
+            const arrowHelper = new THREE.ArrowHelper(
+                new THREE.Vector3(1, 0, 0),
+                new THREE.Vector3(0, 0.45, 0),
+                0.3,
+                0xFFCC00,
+                0.1,
+                0.05
+            );
+            robotGroup.add(arrowHelper);
+
+            robotModel = robotGroup;
+            applyShadows(robotGroup);
+        }
+
+        function applyShadows(object3d) {
+            object3d.traverse((node) => {
+                if (node.isMesh) {
+                    node.castShadow = true;
+                    node.receiveShadow = true;
+                }
+            });
+        }
+
+        function setupURDFLoader() {
+            console.log('🔧 Setting up URDF Loader...');
+            try {
+                urdfLoader = new URDFLoader();
+                console.log('✅ URDFLoader instantiated');
+                
+                // Map package://轮足狗机器人v3/ to assets/meshes/
+                const baseUrl = window.location.origin || '';
+                console.log('🌐 Base URL:', baseUrl);
+                
+                urdfLoader.packages = {
+                    "轮足狗机器人v3": `${baseUrl}/meshes/`
+                };
+                console.log('📦 Package mapping:', urdfLoader.packages);
+                
+                // Ensure URLs with non-ASCII characters are encoded
+                if (urdfLoader.manager && urdfLoader.manager.setURLModifier) {
+                    urdfLoader.manager.setURLModifier((url) => encodeURI(url));
+                }
+                
+                // Custom mesh loader for STL assets
+                urdfLoader.loadMeshCb = function (path, manager, done) {
+                    console.log('🔨 Loading mesh:', path);
+                    const loader = new STLLoader(manager);
+                    const resolvedPath = encodeURI(path);
+                    console.log('   Resolved to:', resolvedPath);
+                    
+                    fetch(resolvedPath)
+                        .then((res) => {
+                            console.log('   Fetch response:', res.status, res.statusText);
+                            return res.arrayBuffer();
+                        })
+                        .then((buffer) => {
+                            console.log('   Buffer size:', buffer.byteLength);
+                            const geometry = loader.parse(buffer);
+                            geometry.computeVertexNormals();
+                            const material = new THREE.MeshStandardMaterial({
+                                color: 0x8f9db0,
+                                metalness: 0.3,
+                                roughness: 0.6
+                            });
+                            const mesh = new THREE.Mesh(geometry, material);
+                            mesh.castShadow = true;
+                            mesh.receiveShadow = true;
+                            console.log('   ✅ Mesh loaded successfully');
+                            done(mesh);
+                        })
+                        .catch((err) => {
+                            console.error('❌ Mesh load failed:', path, err);
+                            done(null);
+                        });
+                };
+                
+                console.log('✅ URDF Loader setup complete');
+            } catch (e) {
+                console.error('❌ URDF loader init failed:', e);
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Update robot pose from Flutter
+        function updateRobotPose(x, y, z, qx, qy, qz, qw) {
+            if (!robotGroup) return;
+
+            robotGroup.position.set(x, y, z);
+            
+            // Convert quaternion to Three.js quaternion
+            const quaternion = new THREE.Quaternion(qx, qy, qz, qw);
+            robotGroup.setRotationFromQuaternion(quaternion);
+        }
+
+        // Update joint angles (for URDF models)
+        function updateJointAngles(jointsJSON) {
+            try {
+                const joints = JSON.parse(jointsJSON);
+                // Placeholder: implement joint updates if URDF is loaded
+                console.log('Joint angles:', joints);
+            } catch (e) {
+                console.error('Failed to parse joint angles:', e);
+            }
+        }
+
+        // Load URDF from URL (preferred)
+        function loadURDFFromUrl(urdfUrl) {
+            console.log('📥 Loading URDF from URL:', urdfUrl);
+            
+            if (!urdfLoader) {
+                console.log('⚠️ URDF Loader not ready, setting up...');
+                setupURDFLoader();
+            }
+            if (!urdfLoader) {
+                console.error('❌ URDF loader not available after setup');
+                sendMessageToFlutter({
+                    type: 'error',
+                    message: 'URDF loader not available'
+                });
+                return;
+            }
+
+            console.log('🔄 Starting URDF load...');
+            urdfLoader.load(
+                urdfUrl,
+                (robot) => {
+                    console.log('✅ URDF loaded successfully!', robot);
+                    robotGroup.clear();
+                    robotGroup.add(robot);
+                    robotModel = robot;
+
+                    robot.rotation.x = Math.PI / 2;
+                    applyShadows(robot);
+                    console.log('✅ Robot added to scene');
+                    sendMessageToFlutter({
+                        type: 'info',
+                        message: 'URDF loaded successfully'
+                    });
+                },
+                (progress) => {
+                    // Progress callback
+                    console.log('⏳ Loading progress:', progress);
+                },
+                (error) => {
+                    console.error('❌ URDF load error:', error);
+                    sendMessageToFlutter({
+                        type: 'error',
+                        message: 'URDF load failed, using fallback model'
+                    });
+                    createSimpleRobot();
+                }
+            );
+        }
+
+        // Load URDF from string
+        function loadURDF(urdfContent) {
+            console.log('📦 Loading URDF from string, length:', urdfContent?.length);
+            
+            if (!urdfLoader) {
+                console.log('⚠️ URDF Loader not ready, setting up...');
+                setupURDFLoader();
+            }
+            if (!urdfLoader) {
+                console.error('❌ URDF loader not available');
+                return;
+            }
+
+            try {
+                console.log('🔨 Creating Blob URL for URDF content...');
+                const blob = new Blob([urdfContent], { type: 'text/xml' });
+                const url = URL.createObjectURL(blob);
+                console.log('✅ Blob URL created:', url);
+                loadURDFFromUrl(url);
+            } catch (e) {
+                console.error('❌ URDF string load failed:', e);
+                createSimpleRobot();
+            }
+        }
+
+        // Set camera view mode
+        function setViewMode(mode) {
+            if (mode === 'top') {
+                camera.position.set(0, 5, 0);
+                camera.lookAt(0, 0, 0);
+                controls.target.set(0, 0, 0);
+            } else if (mode === 'front') {
+                camera.position.set(3, 1, 0);
+                camera.lookAt(0, 0.3, 0);
+                controls.target.set(0, 0.3, 0);
+            } else if (mode === 'side') {
+                camera.position.set(0, 1, 3);
+                camera.lookAt(0, 0.3, 0);
+                controls.target.set(0, 0.3, 0);
+            } else {
+                // Default perspective
+                camera.position.set(2, 1.5, 2);
+                camera.lookAt(0, 0.3, 0);
+                controls.target.set(0, 0.3, 0);
+            }
+            controls.update();
+        }
+
+        // Send message to Flutter
+        function sendMessageToFlutter(message) {
+            if (window.FlutterChannel) {
+                window.FlutterChannel.postMessage(JSON.stringify(message));
+            }
+        }
+
+        // Initialize on load
+        console.log('🌐 Script loaded, waiting for page load event...');
+        window.addEventListener('load', () => {
+            console.log('📄 Page load event fired, calling init()...');
+            init();
+        });
+
+        // Expose functions to Flutter
+        window.updateRobotPose = updateRobotPose;
+        window.updateJointAngles = updateJointAngles;
+        window.loadURDF = loadURDF;
+        window.loadURDFFromUrl = loadURDFFromUrl;
+        window.setViewMode = setViewMode;
+        console.log('✅ Functions exposed to window:', {
+            updateRobotPose: typeof window.updateRobotPose,
+            loadURDF: typeof window.loadURDF,
+        });
+    </script>
+</body>
+</html>

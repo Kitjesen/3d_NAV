@@ -1,8 +1,8 @@
 #include "remote_monitoring/core/event_buffer.hpp"
 
-#include <sstream>
-#include <iomanip>
 #include <chrono>
+#include <iomanip>
+#include <sstream>
 
 namespace remote_monitoring {
 namespace core {
@@ -32,6 +32,8 @@ void EventBuffer::AddEvent(robot::v1::EventType type,
   while (buffer_.size() > max_size_) {
     buffer_.pop_front();
   }
+
+  cv_.notify_all();
 }
 
 std::vector<robot::v1::Event> EventBuffer::GetEventsSince(const std::string &last_event_id) {
@@ -65,7 +67,31 @@ std::vector<robot::v1::Event> EventBuffer::GetLatestEvents(size_t count) {
 }
 
 void EventBuffer::AckEvent(const std::string &event_id) {
+  (void)event_id;
   // 可选：记录已确认的事件（用于审计）
+}
+
+bool EventBuffer::WaitForEventAfter(const std::string &last_event_id,
+                                    robot::v1::Event *event,
+                                    std::chrono::milliseconds timeout) {
+  if (event == nullptr) {
+    return false;
+  }
+
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (!cv_.wait_for(lock, timeout, [&]() {
+        return NextIndexLocked(last_event_id) != buffer_.size();
+      })) {
+    return false;
+  }
+
+  const size_t idx = NextIndexLocked(last_event_id);
+  if (idx >= buffer_.size()) {
+    return false;
+  }
+
+  *event = buffer_[idx];
+  return true;
 }
 
 std::string EventBuffer::GenerateEventId() {
@@ -76,6 +102,26 @@ std::string EventBuffer::GenerateEventId() {
   oss << std::hex << std::setfill('0') << std::setw(12) << now_ms
       << std::setw(6) << next_sequence_++;
   return oss.str();
+}
+
+size_t EventBuffer::NextIndexLocked(const std::string &last_event_id) const {
+  if (buffer_.empty()) {
+    return buffer_.size();
+  }
+
+  if (last_event_id.empty()) {
+    return 0;
+  }
+
+  for (size_t i = 0; i < buffer_.size(); ++i) {
+    if (buffer_[i].event_id() == last_event_id) {
+      const size_t next_idx = i + 1;
+      return next_idx < buffer_.size() ? next_idx : buffer_.size();
+    }
+  }
+
+  // last_event_id 已经不在 ring buffer 中时，从最早可用事件继续。
+  return 0;
 }
 
 }  // namespace core

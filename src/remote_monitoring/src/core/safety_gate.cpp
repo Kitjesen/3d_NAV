@@ -64,6 +64,23 @@ robot::v1::SafetyStatus SafetyGate::GetSafetyStatus() {
   return status;
 }
 
+std::vector<std::string> SafetyGate::GetLimitReasons() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return limit_reasons_;
+}
+
+void SafetyGate::SetEmergencyStop(bool active) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  estop_active_ = active;
+
+  if (active) {
+    geometry_msgs::msg::TwistStamped zero;
+    zero.header.stamp = node_->now();
+    zero.header.frame_id = "body";
+    pub_cmd_vel_safe_->publish(zero);
+  }
+}
+
 void SafetyGate::CheckDeadman() {
   std::lock_guard<std::mutex> lock(mutex_);
   

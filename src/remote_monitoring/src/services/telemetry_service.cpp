@@ -8,6 +8,28 @@
 namespace remote_monitoring {
 namespace services {
 
+namespace {
+
+bool ShouldEmitEvent(const robot::v1::EventStreamRequest *request,
+                     const robot::v1::Event &event) {
+  if (!request->filter_types().empty()) {
+    bool match = false;
+    for (const auto &type : request->filter_types()) {
+      if (event.type() == type) {
+        match = true;
+        break;
+      }
+    }
+    if (!match) {
+      return false;
+    }
+  }
+
+  return event.severity() >= request->min_severity();
+}
+
+} // namespace
+
 TelemetryServiceImpl::TelemetryServiceImpl(
   std::shared_ptr<StatusAggregator> aggregator,
   std::shared_ptr<core::EventBuffer> event_buffer)
@@ -59,32 +81,34 @@ grpc::Status TelemetryServiceImpl::StreamEvents(
   
   // 先回放历史事件
   const auto history = event_buffer_->GetEventsSince(request->last_event_id());
+  std::string cursor = request->last_event_id();
   for (const auto &event : history) {
-    // 过滤
-    if (!request->filter_types().empty()) {
-      bool match = false;
-      for (const auto &type : request->filter_types()) {
-        if (event.type() == type) {
-          match = true;
-          break;
-        }
-      }
-      if (!match) continue;
-    }
-    
-    if (event.severity() < request->min_severity()) {
+    cursor = event.event_id();
+    if (!ShouldEmitEvent(request, event)) {
       continue;
     }
-    
+
     if (!writer->Write(event)) {
       return grpc::Status::OK;
     }
   }
   
-  // 然后实时推送新事件（这里简化，实际需要订阅模式）
+  // 再进入实时推送：阻塞等待新事件，避免空转 sleep。
   while (!context->IsCancelled()) {
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    // TODO: 实际应该用回调/队列机制推送新事件
+    robot::v1::Event event;
+    if (!event_buffer_->WaitForEventAfter(cursor, &event,
+                                          std::chrono::milliseconds(1000))) {
+      continue;
+    }
+
+    cursor = event.event_id();
+    if (!ShouldEmitEvent(request, event)) {
+      continue;
+    }
+
+    if (!writer->Write(event)) {
+      return grpc::Status::OK;
+    }
   }
   
   return grpc::Status::OK;
