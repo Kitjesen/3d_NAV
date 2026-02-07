@@ -7,7 +7,6 @@ import '../services/robot_connection_provider.dart';
 import 'package:robot_proto/robot_proto.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_widgets.dart';
-import '../theme/app_theme.dart';
 
 class StatusScreen extends StatefulWidget {
   const StatusScreen({super.key});
@@ -17,7 +16,9 @@ class StatusScreen extends StatefulWidget {
 }
 
 class _StatusScreenState extends State<StatusScreen>
-    with AutomaticKeepAliveClientMixin, TickerProviderStateMixin {
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
+
+  // 本地缓存 — 只在 stream 回调中更新
   FastState? _latestFastState;
   SlowState? _latestSlowState;
   StreamSubscription<FastState>? _fastSub;
@@ -26,13 +27,9 @@ class _StatusScreenState extends State<StatusScreen>
   late AnimationController _breathingController;
   late Animation<double> _breathingAnimation;
 
-  // Stagger entrance
-  late AnimationController _staggerController;
-  late List<Animation<double>> _staggerSlides;
-  late List<Animation<double>> _staggerFades;
-
+  // UI 刷新节流
   DateTime _lastUiUpdate = DateTime(2000);
-  static const _uiThrottleInterval = Duration(milliseconds: 100);
+  static const _uiThrottleInterval = Duration(milliseconds: 100); // 10 FPS max
 
   @override
   bool get wantKeepAlive => true;
@@ -44,40 +41,21 @@ class _StatusScreenState extends State<StatusScreen>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
+
     _breathingAnimation = Tween<double>(begin: 0.4, end: 1.0).animate(
       CurvedAnimation(parent: _breathingController, curve: Curves.easeInOut),
     );
 
-    // Stagger entrance for 5 card groups
-    _staggerController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    );
-    _staggerSlides = List.generate(5, (i) {
-      final start = (i * 0.12).clamp(0.0, 0.7);
-      final end = (start + 0.4).clamp(0.0, 1.0);
-      return Tween<double>(begin: 40, end: 0).animate(CurvedAnimation(
-        parent: _staggerController,
-        curve: Interval(start, end, curve: Curves.easeOutCubic),
-      ));
-    });
-    _staggerFades = List.generate(5, (i) {
-      final start = (i * 0.12).clamp(0.0, 0.7);
-      final end = (start + 0.35).clamp(0.0, 1.0);
-      return Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(
-        parent: _staggerController,
-        curve: Interval(start, end, curve: Curves.easeOut),
-      ));
-    });
-
+    // 使用 Provider 的广播流
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _subscribeStreams();
-      _staggerController.forward();
     });
   }
 
   void _subscribeStreams() {
     final provider = context.read<RobotConnectionProvider>();
+
+    // 初始数据
     _latestFastState = provider.latestFastState;
     _latestSlowState = provider.latestSlowState;
 
@@ -85,6 +63,7 @@ class _StatusScreenState extends State<StatusScreen>
       _latestFastState = state;
       _throttledSetState();
     });
+
     _slowSub = provider.slowStateStream.listen((state) {
       _latestSlowState = state;
       if (mounted) setState(() {});
@@ -104,7 +83,6 @@ class _StatusScreenState extends State<StatusScreen>
     _fastSub?.cancel();
     _slowSub?.cancel();
     _breathingController.dispose();
-    _staggerController.dispose();
     super.dispose();
   }
 
@@ -132,8 +110,6 @@ class _StatusScreenState extends State<StatusScreen>
       body: _latestFastState == null
           ? _buildLoadingSkeleton()
           : RefreshIndicator(
-              color: AppColors.lime,
-              backgroundColor: AppColors.surface,
               onRefresh: () async {
                 _fastSub?.cancel();
                 _slowSub?.cancel();
@@ -225,7 +201,7 @@ class _StatusScreenState extends State<StatusScreen>
                       const SizedBox(height: 14),
                       RepaintBoundary(child: _buildTopicRatesCard()),
                     ],
-                  ),
+                  ],
                 ),
               ),
             ),
@@ -390,11 +366,10 @@ class _StatusScreenState extends State<StatusScreen>
                 ),
               ],
             ),
-            child: const Icon(Icons.smart_toy_rounded,
-                size: 36, color: AppColors.lime),
+            child: const Icon(Icons.smart_toy, size: 36, color: Colors.white),
           ),
           const SizedBox(height: 16),
-          const Text(
+          Text(
             '大算机器人',
             style: TextStyle(
               fontSize: 18,
@@ -405,7 +380,7 @@ class _StatusScreenState extends State<StatusScreen>
           const SizedBox(height: 4),
           Text(
             'Mode: ${_latestSlowState?.currentMode ?? "IDLE"}',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 12,
               color: context.subtitleColor,
               letterSpacing: 0.5,
@@ -433,7 +408,7 @@ class _StatusScreenState extends State<StatusScreen>
       children: [
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w600,
             color: context.subtitleColor,
@@ -461,8 +436,8 @@ class _StatusScreenState extends State<StatusScreen>
                   color: context.subtitleColor,
                 ),
               ),
-            ),
-          ]),
+            ],
+          ),
         ),
       ],
     );
@@ -517,7 +492,7 @@ class _StatusScreenState extends State<StatusScreen>
               const Spacer(),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
                   color: context.subtitleColor,
@@ -547,15 +522,15 @@ class _StatusScreenState extends State<StatusScreen>
                     color: context.subtitleColor,
                   ),
                 ),
-              ),
-            ]),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: TweenAnimationBuilder<double>(
               tween: Tween(begin: 0, end: progress.clamp(0.0, 1.0)),
-              duration: const Duration(milliseconds: 600),
+              duration: const Duration(milliseconds: 500),
               curve: Curves.easeOutCubic,
               builder: (context, value, _) {
                 return LinearProgressIndicator(
@@ -607,7 +582,7 @@ class _StatusScreenState extends State<StatusScreen>
                 child: const Icon(Icons.speed, size: 18, color: AppColors.accent),
               ),
               const SizedBox(width: 10),
-              const Text(
+              Text(
                 'MOTION',
                 style: TextStyle(
                   fontSize: 10,
@@ -646,7 +621,7 @@ class _StatusScreenState extends State<StatusScreen>
     final isDark = context.isDark;
     return Column(
       children: [
-        Icon(icon, size: 20, color: color.withOpacity(0.7)),
+        Icon(icon, size: 20, color: color.withOpacity(0.6)),
         const SizedBox(height: 8),
         RichText(
           textAlign: TextAlign.center,
@@ -667,13 +642,13 @@ class _StatusScreenState extends State<StatusScreen>
                   color: context.subtitleColor,
                 ),
               ),
-            ),
-          ]),
+            ],
+          ),
         ),
         const SizedBox(height: 4),
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w600,
             color: context.subtitleColor,
@@ -716,7 +691,7 @@ class _StatusScreenState extends State<StatusScreen>
                 child: const Icon(Icons.wifi, size: 18, color: AppColors.info),
               ),
               const SizedBox(width: 10),
-              const Text(
+              Text(
                 'TOPIC RATES',
                 style: TextStyle(
                   fontSize: 10,
@@ -763,7 +738,7 @@ class _StatusScreenState extends State<StatusScreen>
         const SizedBox(height: 6),
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 11,
             color: context.subtitleColor,
           ),

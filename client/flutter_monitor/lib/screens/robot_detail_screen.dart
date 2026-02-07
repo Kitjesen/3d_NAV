@@ -9,7 +9,7 @@ import 'status_screen.dart';
 import 'control_screen.dart';
 import 'map_screen.dart';
 import 'events_screen.dart';
-import 'settings_screen.dart';
+import 'app_settings_screen.dart';
 
 class RobotDetailScreen extends StatefulWidget {
   const RobotDetailScreen({super.key});
@@ -214,7 +214,7 @@ class _RobotDetailScreenState extends State<RobotDetailScreen> {
                       title: '文件管理',
                       subtitle: '模型/地图/配置',
                       color: AppColors.info,
-                      onTap: () => _pushScreen(const SettingsScreen()),
+                      onTap: () => _pushScreen(const AppSettingsScreen()),
                     ),
                     FeatureCard(
                       icon: Icons.videocam_outlined,

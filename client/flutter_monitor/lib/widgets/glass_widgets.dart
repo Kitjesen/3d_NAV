@@ -2,12 +2,12 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
-/// Dark glass card — the primary container for all content.
 class GlassCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final double borderRadius;
+  final double blurSigma;
   final Color? color;
   final Border? border;
   final List<BoxShadow>? boxShadow;
@@ -28,9 +28,7 @@ class GlassCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: margin,
-      padding: padding,
       decoration: BoxDecoration(
-        color: color ?? AppColors.surface,
         borderRadius: BorderRadius.circular(borderRadius),
         boxShadow: boxShadow ??
             [
@@ -112,7 +110,22 @@ class GlassButton extends StatelessWidget {
                 borderRadius: BorderRadius.circular(22),
               ),
             ),
-          ],
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                icon,
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -148,7 +161,7 @@ class ValueDisplay extends StatelessWidget {
         ],
         Text(
           label.toUpperCase(),
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w600,
             color: context.subtitleColor,
@@ -174,7 +187,7 @@ class ValueDisplay extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 unit,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                   color: context.subtitleColor,
