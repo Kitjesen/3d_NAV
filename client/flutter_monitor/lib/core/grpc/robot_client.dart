@@ -11,7 +11,6 @@ import 'package:protobuf/well_known_types/google/protobuf/empty.pb.dart';
 import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_monitor/core/grpc/robot_client_base.dart';
-import 'package:flutter_monitor/core/grpc/firmware_rpc_types.dart';
 
 class RobotClient implements RobotClientBase {
   final String host;
@@ -236,7 +235,7 @@ class RobotClient implements RobotClientBase {
     final outgoingStream = velocityStream.map((twist) {
       return TeleopCommand()
         ..leaseToken = _currentLeaseToken!
-        ..sequence = Int64(DateTime.now().millisecondsSinceEpoch) // 简单用时间戳做序号
+        ..sequence = Int64(DateTime.now().millisecondsSinceEpoch)
         ..targetVelocity = twist
         ..enableObstacleAvoidance = true;
     });
@@ -317,7 +316,7 @@ class RobotClient implements RobotClientBase {
     return await _controlClient.cancelTask(request);
   }
 
-  // ==================== 文件管理 (OTA) ====================
+  // ==================== 文件管理 (支持断点续传) ====================
 
   /// 上传文件到机器人
   @override
@@ -327,25 +326,34 @@ class RobotClient implements RobotClientBase {
     required String filename,
     String category = 'model',
     bool overwrite = true,
+    int resumeFromOffset = 0,
+    String sha256 = '',
     void Function(double progress)? onProgress,
   }) async {
     const chunkSize = 64 * 1024; // 64KB per chunk
     final totalSize = localBytes.length;
 
+    // 断点续传: 跳过已上传部分
+    final startOffset = resumeFromOffset.clamp(0, totalSize);
+
     final controller = StreamController<UploadFileChunk>();
     final responseFuture = _dataClient.uploadFile(controller.stream);
 
     // 发送第一个 chunk (包含 metadata)
-    int offset = 0;
-    final firstEnd = totalSize < chunkSize ? totalSize : chunkSize;
+    int offset = startOffset;
+    final firstEnd = (offset + chunkSize) < totalSize
+        ? offset + chunkSize
+        : totalSize;
     controller.add(UploadFileChunk()
       ..metadata = (UploadFileMetadata()
         ..base = _createRequestBase()
         ..remotePath = remotePath
         ..filename = filename
         ..totalSize = Int64(totalSize)
+        ..sha256 = sha256
         ..overwrite = overwrite
-        ..category = category)
+        ..category = category
+        ..resumeFromOffset = Int64(startOffset))
       ..offset = Int64(offset)
       ..data = localBytes.sublist(offset, firstEnd)
       ..isLast = (firstEnd >= totalSize));
@@ -389,29 +397,75 @@ class RobotClient implements RobotClientBase {
     return await _dataClient.deleteRemoteFile(request);
   }
 
-  /// 应用固件更新（触发机器人端刷写脚本）
-  /// TODO: 当 data.proto 添加 ApplyFirmware RPC 后，替换为真正的 gRPC 调用
+  // ==================== OTA 更新管理 ====================
+
+  /// 应用 OTA 更新
   @override
-  Future<ApplyFirmwareResponse> applyFirmware({required String firmwarePath}) async {
-    // 临时方案：上传一个触发文件来通知后端
-    // 正式方案需要 proto 添加 ApplyFirmware RPC
-    final triggerContent = 'APPLY:$firmwarePath\nTIMESTAMP:${DateTime.now().toIso8601String()}\n';
-    try {
-      await uploadFile(
-        localBytes: triggerContent.codeUnits,
-        remotePath: '/firmware/.apply_trigger',
-        filename: '.apply_trigger',
-        category: 'firmware',
-        overwrite: true,
-      );
-      return ApplyFirmwareResponse()
-        ..success = true
-        ..message = 'Apply trigger sent for: $firmwarePath';
-    } catch (e) {
-      return ApplyFirmwareResponse()
-        ..success = false
-        ..message = 'Failed to send apply trigger: $e';
+  Future<ApplyUpdateResponse> applyUpdate({
+    required OtaArtifact artifact,
+    required String stagedPath,
+    bool force = false,
+  }) async {
+    final request = ApplyUpdateRequest()
+      ..base = _createRequestBase()
+      ..artifact = artifact
+      ..stagedPath = stagedPath
+      ..force = force;
+    return await _dataClient.applyUpdate(request);
+  }
+
+  /// 查询已安装版本
+  @override
+  Future<GetInstalledVersionsResponse> getInstalledVersions({
+    OtaCategory categoryFilter = OtaCategory.OTA_CATEGORY_UNSPECIFIED,
+  }) async {
+    final request = GetInstalledVersionsRequest()
+      ..base = _createRequestBase()
+      ..categoryFilter = categoryFilter;
+    return await _dataClient.getInstalledVersions(request);
+  }
+
+  /// 回滚到上一版本
+  @override
+  Future<RollbackResponse> rollback({required String artifactName}) async {
+    final request = RollbackRequest()
+      ..base = _createRequestBase()
+      ..artifactName = artifactName;
+    return await _dataClient.rollback(request);
+  }
+
+  /// 机器人直接从 URL 下载（免手机中转）
+  @override
+  Stream<OtaProgress> downloadFromUrl({
+    required String url,
+    required String stagingPath,
+    String expectedSha256 = '',
+    int expectedSize = 0,
+    Map<String, String> headers = const {},
+  }) {
+    final request = DownloadFromUrlRequest()
+      ..base = _createRequestBase()
+      ..url = url
+      ..stagingPath = stagingPath
+      ..expectedSha256 = expectedSha256
+      ..expectedSize = Int64(expectedSize);
+
+    for (final entry in headers.entries) {
+      request.headers[entry.key] = entry.value;
     }
+
+    return _dataClient.downloadFromUrl(request);
+  }
+
+  /// 安装前预检查
+  @override
+  Future<CheckUpdateReadinessResponse> checkUpdateReadiness({
+    required List<OtaArtifact> artifacts,
+  }) async {
+    final request = CheckUpdateReadinessRequest()
+      ..base = _createRequestBase()
+      ..artifacts.addAll(artifacts);
+    return await _dataClient.checkUpdateReadiness(request);
   }
 
   /// 断开连接

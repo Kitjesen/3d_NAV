@@ -21,6 +21,9 @@ find_package(robot_proto REQUIRED)
 # ---- OpenCV (for JPEG encoding in WebRTC bridge) ----
 find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
 
+# ---- OpenSSL (for SHA256 in OTA verification) ----
+find_package(OpenSSL REQUIRED)
+
 # ---- gRPC (for reflection + runtime) ----
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GRPC REQUIRED grpc++)
@@ -102,6 +105,9 @@ endif()
 
 # Link OpenCV (for WebRTC JPEG encoding)
 target_link_libraries(grpc_gateway ${OpenCV_LIBRARIES})
+
+# Link OpenSSL (for SHA256 OTA verification)
+target_link_libraries(grpc_gateway OpenSSL::Crypto)
 
 ament_target_dependencies(grpc_gateway
   rclcpp nav_msgs sensor_msgs geometry_msgs std_msgs tf2_ros interface

@@ -1,0 +1,23 @@
+{
+  "schema_version": "1",
+  "release_version": "v0.0.0",
+  "release_date": "2026-01-01T00:00:00Z",
+  "min_system_version": "1.0.0",
+  "artifacts": [
+    {
+      "name": "policy_walk",
+      "category": "model",
+      "version": "0.0.0",
+      "filename": "policy_walk_v0.0.0.onnx",
+      "sha256": "",
+      "target_path": "/opt/robot/models/policy_walk.onnx",
+      "target_board": "dog",
+      "hw_compat": ["dog_v2", "dog_v3"],
+      "apply_action": "reload_model",
+      "requires_reboot": false,
+      "min_battery_percent": 20,
+      "changelog": "",
+      "rollback_safe": true
+    }
+  ]
+}

@@ -1,16 +1,22 @@
-import 'package:robot_proto/src/common.pb.dart';
+// Re-export OTA types from generated proto.
+// All OTA types are defined in data.proto.
 
-/// Temporary placeholder for ApplyFirmwareRequest proto message.
-/// TODO: Remove this file once data.proto is updated with the ApplyFirmware RPC
-/// and the generated Dart code is available.
-class ApplyFirmwareRequest {
-  RequestBase base = RequestBase();
-  String firmwarePath = '';
-}
-
-/// Temporary placeholder for ApplyFirmwareResponse proto message.
-class ApplyFirmwareResponse {
-  ResponseBase base = ResponseBase();
-  bool success = false;
-  String message = '';
-}
+export 'package:robot_proto/src/data.pb.dart'
+    show
+        ApplyUpdateRequest,
+        ApplyUpdateResponse,
+        GetInstalledVersionsRequest,
+        GetInstalledVersionsResponse,
+        RollbackRequest,
+        RollbackResponse,
+        DownloadFromUrlRequest,
+        OtaProgress,
+        CheckUpdateReadinessRequest,
+        CheckUpdateReadinessResponse,
+        ReadinessCheck,
+        OtaArtifact,
+        OtaCategory,
+        OtaApplyAction,
+        OtaUpdateStatus,
+        InstalledArtifact,
+        RollbackEntry;

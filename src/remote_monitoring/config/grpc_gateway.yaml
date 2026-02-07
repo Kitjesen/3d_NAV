@@ -52,6 +52,14 @@ grpc_gateway:
     
     # 固件刷写脚本路径
     apply_firmware_script: "/usr/local/bin/apply_firmware.sh"
+    
+    # ==================== OTA 更新配置 ====================
+    # 本地已安装制品 manifest 文件
+    ota_manifest_path: "/opt/robot/ota/installed_manifest.json"
+    # 旧版本备份目录（用于回滚）
+    ota_backup_dir: "/opt/robot/ota/backup"
+    # 硬件标识（用于兼容性检查）
+    hw_id: "dog_v2"
 
     # ==================== WebRTC 配置 ====================
     webrtc_enabled: false

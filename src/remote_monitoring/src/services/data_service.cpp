@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -14,6 +16,8 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <openssl/sha.h>
 
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
@@ -251,6 +255,12 @@ DataServiceImpl::DataServiceImpl(rclcpp::Node *node) : node_(node) {
   node_->declare_parameter<std::string>("data_file_root", "");
   node_->declare_parameter<std::string>("apply_firmware_script",
                                         "/usr/local/bin/apply_firmware.sh");
+  node_->declare_parameter<std::string>("ota_manifest_path",
+                                        "/opt/robot/ota/installed_manifest.json");
+  node_->declare_parameter<std::string>("ota_backup_dir",
+                                        "/opt/robot/ota/backup");
+  node_->declare_parameter<std::string>("robot_id", "robot_001");
+  node_->declare_parameter<std::string>("hw_id", "dog_v2");
   node_->declare_parameter<bool>("webrtc_enabled", false);
   node_->declare_parameter<int>("webrtc_offer_timeout_ms", 3000);
   node_->declare_parameter<std::string>("webrtc_start_command", "");
@@ -269,6 +279,17 @@ DataServiceImpl::DataServiceImpl(rclcpp::Node *node) : node_(node) {
   file_root_ = node_->get_parameter("data_file_root").as_string();
   apply_firmware_script_ =
       node_->get_parameter("apply_firmware_script").as_string();
+  ota_manifest_path_ =
+      node_->get_parameter("ota_manifest_path").as_string();
+  ota_backup_dir_ =
+      node_->get_parameter("ota_backup_dir").as_string();
+  robot_id_ = node_->get_parameter("robot_id").as_string();
+  hw_id_ = node_->get_parameter("hw_id").as_string();
+  system_version_ = node_->get_parameter("firmware_version").as_string();
+
+  // 加载已安装 manifest
+  LoadInstalledManifest();
+
   webrtc_enabled_ = node_->get_parameter("webrtc_enabled").as_bool();
   webrtc_offer_timeout_ms_ =
       node_->get_parameter("webrtc_offer_timeout_ms").as_int();
@@ -500,7 +521,7 @@ DataServiceImpl::DownloadFile(grpc::ServerContext *context,
   return grpc::Status::OK;
 }
 
-// ==================== File Upload (OTA) ====================
+// ==================== File Upload (OTA, 支持断点续传) ====================
 
 grpc::Status
 DataServiceImpl::UploadFile(grpc::ServerContext *context,
@@ -511,6 +532,7 @@ DataServiceImpl::UploadFile(grpc::ServerContext *context,
   std::string remote_path;
   uint64_t total_expected = 0;
   uint64_t bytes_received = 0;
+  uint64_t resumed_from = 0;
   bool first_chunk = true;
 
   while (reader->Read(&chunk)) {
@@ -542,40 +564,73 @@ DataServiceImpl::UploadFile(grpc::ServerContext *context,
 
       total_expected = meta.total_size();
 
-      // 检查文件是否已存在
-      if (!meta.overwrite() && FileExists(remote_path)) {
-        response->mutable_base()->set_error_code(
-            robot::v1::ERROR_CODE_INVALID_REQUEST);
-        response->set_success(false);
-        response->set_message("File already exists and overwrite=false");
-        return grpc::Status::OK;
-      }
+      // 断点续传: 检查是否从中间继续
+      resumed_from = meta.resume_from_offset();
+      if (resumed_from > 0 && FileExists(remote_path)) {
+        // 验证已有文件大小与请求的 offset 匹配
+        std::ifstream probe(remote_path, std::ios::binary | std::ios::ate);
+        uint64_t existing_size = static_cast<uint64_t>(probe.tellg());
+        probe.close();
 
-      // 确保目录存在
-      {
-        auto last_slash = remote_path.rfind('/');
-        if (last_slash != std::string::npos) {
-          std::string dir = remote_path.substr(0, last_slash);
-          std::string mkdir_cmd = "mkdir -p '" + dir + "'";
-          std::system(mkdir_cmd.c_str());
+        if (existing_size < resumed_from) {
+          // 文件比请求 offset 短，不能续传
+          response->mutable_base()->set_error_code(
+              robot::v1::ERROR_CODE_INVALID_REQUEST);
+          response->set_success(false);
+          response->set_message(
+              "Cannot resume: file size " + std::to_string(existing_size) +
+              " < requested offset " + std::to_string(resumed_from));
+          return grpc::Status::OK;
         }
+
+        // 截断到续传点并追加
+        std::filesystem::resize_file(remote_path, resumed_from);
+        output_file.open(remote_path,
+                         std::ios::binary | std::ios::app);
+        bytes_received = resumed_from;
+        RCLCPP_INFO(node_->get_logger(),
+                    "Upload RESUMED: %s from offset %lu",
+                    remote_path.c_str(),
+                    static_cast<unsigned long>(resumed_from));
+      } else {
+        // 全新上传
+        resumed_from = 0;
+
+        // 检查文件是否已存在
+        if (!meta.overwrite() && FileExists(remote_path)) {
+          response->mutable_base()->set_error_code(
+              robot::v1::ERROR_CODE_INVALID_REQUEST);
+          response->set_success(false);
+          response->set_message("File already exists and overwrite=false");
+          return grpc::Status::OK;
+        }
+
+        // 确保目录存在
+        {
+          auto last_slash = remote_path.rfind('/');
+          if (last_slash != std::string::npos) {
+            std::filesystem::create_directories(
+                remote_path.substr(0, last_slash));
+          }
+        }
+
+        output_file.open(remote_path, std::ios::binary | std::ios::trunc);
       }
 
-      // 打开输出文件
-      output_file.open(remote_path, std::ios::binary | std::ios::trunc);
       if (!output_file.is_open()) {
         response->mutable_base()->set_error_code(
             robot::v1::ERROR_CODE_INTERNAL_ERROR);
         response->set_success(false);
-        response->set_message("Failed to create file: " + remote_path);
+        response->set_message("Failed to open file: " + remote_path);
         return grpc::Status::OK;
       }
 
       RCLCPP_INFO(node_->get_logger(),
-                  "Upload started: %s (%s, %lu bytes, category=%s)",
+                  "Upload started: %s (%s, %lu bytes, category=%s, resume=%lu)",
                   meta.filename().c_str(), remote_path.c_str(),
                   static_cast<unsigned long>(total_expected),
-                  meta.category().c_str());
+                  meta.category().c_str(),
+                  static_cast<unsigned long>(resumed_from));
     }
 
     if (!output_file.is_open()) {
@@ -602,16 +657,25 @@ DataServiceImpl::UploadFile(grpc::ServerContext *context,
     output_file.close();
   }
 
+  // 上传完成后计算 SHA256
+  std::string sha256;
+  if (!remote_path.empty() && FileExists(remote_path)) {
+    sha256 = ComputeSHA256(remote_path);
+  }
+
   RCLCPP_INFO(node_->get_logger(),
-              "Upload complete: %s (%lu bytes received)",
+              "Upload complete: %s (%lu bytes, sha256=%s)",
               remote_path.c_str(),
-              static_cast<unsigned long>(bytes_received));
+              static_cast<unsigned long>(bytes_received),
+              sha256.substr(0, 16).c_str());
 
   response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_OK);
   response->set_success(true);
   response->set_remote_path(remote_path);
   response->set_bytes_received(bytes_received);
+  response->set_sha256(sha256);
   response->set_message("Upload complete");
+  response->set_resumed_from(resumed_from);
   return grpc::Status::OK;
 }
 
@@ -784,86 +848,822 @@ DataServiceImpl::DeleteRemoteFile(
 }
 
 // ==========================================================================
-// ApplyFirmware - 触发固件刷写（fork 外部脚本）
+// OTA Manager - 本地 manifest 管理
 // ==========================================================================
-grpc::Status
-DataServiceImpl::ApplyFirmware(
-    grpc::ServerContext * /*context*/,
-    const robot::v1::ApplyFirmwareRequest *request,
-    robot::v1::ApplyFirmwareResponse *response) {
 
-  const std::string firmware_path = request->firmware_path();
+bool DataServiceImpl::LoadInstalledManifest() {
+  std::lock_guard<std::mutex> lock(ota_mutex_);
 
-  // 1. 路径安全检查
-  if (firmware_path.empty()) {
-    response->mutable_base()->set_error_code(
-        robot::v1::ERROR_CODE_INVALID_REQUEST);
-    response->set_success(false);
-    response->set_message("firmware_path is required");
-    return grpc::Status::OK;
-  }
-  if (firmware_path.find("..") != std::string::npos) {
-    response->mutable_base()->set_error_code(
-        robot::v1::ERROR_CODE_INVALID_REQUEST);
-    response->set_success(false);
-    response->set_message("Path traversal not allowed");
-    return grpc::Status::OK;
+  if (!FileExists(ota_manifest_path_)) {
+    RCLCPP_INFO(node_->get_logger(),
+                "OTA manifest not found at %s, starting fresh",
+                ota_manifest_path_.c_str());
+    return true; // 首次运行，空 manifest 是正常的
   }
 
-  // 2. 检查固件文件是否存在
-  {
-    std::ifstream probe(firmware_path);
-    if (!probe.good()) {
-      response->mutable_base()->set_error_code(
-          robot::v1::ERROR_CODE_NOT_FOUND);
-      response->set_success(false);
-      response->set_message("Firmware file not found: " + firmware_path);
-      return grpc::Status::OK;
-    }
+  std::ifstream file(ota_manifest_path_);
+  if (!file.is_open()) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Failed to open OTA manifest: %s",
+                 ota_manifest_path_.c_str());
+    return false;
   }
 
-  // 3. 检查刷写脚本是否存在
-  if (apply_firmware_script_.empty()) {
-    response->mutable_base()->set_error_code(
-        robot::v1::ERROR_CODE_SERVICE_UNAVAILABLE);
-    response->set_success(false);
-    response->set_message("apply_firmware_script parameter not configured");
-    return grpc::Status::OK;
-  }
-  {
-    std::ifstream probe(apply_firmware_script_);
-    if (!probe.good()) {
-      response->mutable_base()->set_error_code(
-          robot::v1::ERROR_CODE_SERVICE_UNAVAILABLE);
-      response->set_success(false);
-      response->set_message("Apply script not found: " +
-                            apply_firmware_script_);
-      return grpc::Status::OK;
+  // 简单 JSON 解析：逐行读取 "key": "value" 格式
+  // 格式: 每个 artifact 一个 JSON 对象块，以 --- 分隔
+  // 使用简化的行格式而非完整 JSON 解析器
+  // 格式:
+  //   INSTALLED <name> <category_int> <version> <path> <sha256> <installed_at>
+  //   ROLLBACK <name> <version> <backup_path>
+  std::string line;
+  while (std::getline(file, line)) {
+    if (line.empty() || line[0] == '#') continue;
+
+    std::istringstream iss(line);
+    std::string type;
+    iss >> type;
+
+    if (type == "INSTALLED") {
+      std::string name, version, path, sha256, installed_at;
+      int category_int = 0;
+      iss >> name >> category_int >> version >> path >> sha256 >> installed_at;
+      if (!name.empty()) {
+        robot::v1::InstalledArtifact artifact;
+        artifact.set_name(name);
+        artifact.set_category(static_cast<robot::v1::OtaCategory>(category_int));
+        artifact.set_version(version);
+        artifact.set_path(path);
+        artifact.set_sha256(sha256);
+        artifact.set_installed_at(installed_at);
+        installed_artifacts_[name] = artifact;
+      }
+    } else if (type == "ROLLBACK") {
+      std::string name, version, backup_path;
+      iss >> name >> version >> backup_path;
+      if (!name.empty()) {
+        robot::v1::RollbackEntry entry;
+        entry.set_name(name);
+        entry.set_version(version);
+        entry.set_backup_path(backup_path);
+        rollback_entries_[name] = entry;
+      }
     }
   }
 
   RCLCPP_INFO(node_->get_logger(),
-              "ApplyFirmware: path=%s script=%s",
-              firmware_path.c_str(),
-              apply_firmware_script_.c_str());
+              "Loaded OTA manifest: %zu installed, %zu rollback entries",
+              installed_artifacts_.size(), rollback_entries_.size());
+  return true;
+}
 
-  // 4. Fork 脚本执行（非阻塞）
-  //    脚本接收参数: $1 = firmware_path
-  //    脚本负责: 校验 -> 刷写 -> 重启
-  const std::string command =
-      "nohup " + apply_firmware_script_ + " '" + firmware_path +
-      "' >> /tmp/apply_firmware.log 2>&1 &";
+bool DataServiceImpl::SaveInstalledManifest() {
+  // 确保目录存在
+  {
+    auto last_slash = ota_manifest_path_.rfind('/');
+    if (last_slash != std::string::npos) {
+      std::string dir = ota_manifest_path_.substr(0, last_slash);
+      std::filesystem::create_directories(dir);
+    }
+  }
 
-  std::thread([command, logger = node_->get_logger()]() {
-    RCLCPP_INFO(logger, "ApplyFirmware: executing script in background");
-    int ret = std::system(command.c_str());
-    RCLCPP_INFO(logger, "ApplyFirmware: script launch returned %d", ret);
-  }).detach();
+  std::ofstream file(ota_manifest_path_, std::ios::trunc);
+  if (!file.is_open()) {
+    RCLCPP_ERROR(node_->get_logger(),
+                 "Failed to save OTA manifest to %s",
+                 ota_manifest_path_.c_str());
+    return false;
+  }
+
+  file << "# OTA Installed Manifest - auto-generated, do not edit\n";
+  file << "# Format: INSTALLED <name> <category> <version> <path> <sha256> <installed_at>\n";
+  file << "# Format: ROLLBACK <name> <version> <backup_path>\n\n";
+
+  for (const auto &pair : installed_artifacts_) {
+    const auto &a = pair.second;
+    file << "INSTALLED " << a.name() << " "
+         << static_cast<int>(a.category()) << " "
+         << a.version() << " "
+         << a.path() << " "
+         << a.sha256() << " "
+         << a.installed_at() << "\n";
+  }
+
+  for (const auto &pair : rollback_entries_) {
+    const auto &r = pair.second;
+    file << "ROLLBACK " << r.name() << " "
+         << r.version() << " "
+         << r.backup_path() << "\n";
+  }
+
+  RCLCPP_INFO(node_->get_logger(), "Saved OTA manifest: %zu installed, %zu rollback",
+              installed_artifacts_.size(), rollback_entries_.size());
+  return true;
+}
+
+std::string DataServiceImpl::ComputeSHA256(const std::string &file_path) {
+  std::ifstream file(file_path, std::ios::binary);
+  if (!file.is_open()) return {};
+
+  SHA256_CTX sha256_ctx;
+  SHA256_Init(&sha256_ctx);
+
+  char buffer[8192];
+  while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
+    SHA256_Update(&sha256_ctx, buffer, static_cast<size_t>(file.gcount()));
+    if (file.gcount() < static_cast<std::streamsize>(sizeof(buffer))) break;
+  }
+
+  unsigned char hash[SHA256_DIGEST_LENGTH];
+  SHA256_Final(hash, &sha256_ctx);
+
+  std::ostringstream oss;
+  for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+    oss << std::hex << std::setfill('0') << std::setw(2)
+        << static_cast<int>(hash[i]);
+  }
+  return oss.str();
+}
+
+bool DataServiceImpl::BackupArtifact(const std::string &name,
+                                     const std::string &current_path,
+                                     std::string *backup_path) {
+  if (!FileExists(current_path) || !backup_path) return false;
+
+  std::filesystem::create_directories(ota_backup_dir_);
+
+  // backup 文件名: name_timestamp.bak.ext
+  auto now = std::chrono::system_clock::now();
+  auto t = std::chrono::system_clock::to_time_t(now);
+  std::ostringstream ts;
+  ts << std::put_time(std::localtime(&t), "%Y%m%d_%H%M%S");
+
+  // 提取原始扩展名
+  std::string ext;
+  auto dot_pos = current_path.rfind('.');
+  if (dot_pos != std::string::npos) {
+    ext = current_path.substr(dot_pos);
+  }
+
+  *backup_path = ota_backup_dir_ + "/" + name + "_" + ts.str() + ext;
+
+  try {
+    std::filesystem::copy_file(current_path, *backup_path,
+                               std::filesystem::copy_options::overwrite_existing);
+    RCLCPP_INFO(node_->get_logger(), "Backed up %s -> %s",
+                current_path.c_str(), backup_path->c_str());
+    return true;
+  } catch (const std::exception &e) {
+    RCLCPP_ERROR(node_->get_logger(), "Backup failed: %s", e.what());
+    return false;
+  }
+}
+
+// ==========================================================================
+// ApplyUpdate - 新 OTA 接口（替代 ApplyFirmware）
+// ==========================================================================
+grpc::Status
+DataServiceImpl::ApplyUpdate(
+    grpc::ServerContext * /*context*/,
+    const robot::v1::ApplyUpdateRequest *request,
+    robot::v1::ApplyUpdateResponse *response) {
+
+  const auto &artifact = request->artifact();
+  const std::string &staged_path = request->staged_path();
+
+  RCLCPP_INFO(node_->get_logger(),
+              "ApplyUpdate: name=%s version=%s category=%d staged=%s target=%s",
+              artifact.name().c_str(), artifact.version().c_str(),
+              static_cast<int>(artifact.category()),
+              staged_path.c_str(), artifact.target_path().c_str());
+
+  // 1. 路径安全检查
+  if (staged_path.empty() || artifact.target_path().empty()) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INVALID_REQUEST);
+    response->set_success(false);
+    response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+    response->set_message("staged_path and target_path are required");
+    return grpc::Status::OK;
+  }
+  if (staged_path.find("..") != std::string::npos ||
+      artifact.target_path().find("..") != std::string::npos) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INVALID_REQUEST);
+    response->set_success(false);
+    response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+    response->set_message("Path traversal not allowed");
+    return grpc::Status::OK;
+  }
+
+  // 2. 检查 staged 文件是否存在
+  if (!FileExists(staged_path)) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_RESOURCE_NOT_FOUND);
+    response->set_success(false);
+    response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+    response->set_message("Staged file not found: " + staged_path);
+    return grpc::Status::OK;
+  }
+
+  // 3. SHA256 校验
+  response->set_status(robot::v1::OTA_UPDATE_STATUS_VERIFYING);
+  if (!artifact.sha256().empty()) {
+    std::string actual_sha256 = ComputeSHA256(staged_path);
+    if (actual_sha256 != artifact.sha256()) {
+      response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INVALID_REQUEST);
+      response->set_success(false);
+      response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+      response->set_message("SHA256 mismatch: expected=" + artifact.sha256() +
+                            " actual=" + actual_sha256);
+      return grpc::Status::OK;
+    }
+    RCLCPP_INFO(node_->get_logger(), "SHA256 verified: %s", actual_sha256.c_str());
+  }
+
+  // 4. 兼容性检查
+  if (!request->force() && !artifact.hw_compat().empty()) {
+    bool compatible = false;
+    for (const auto &hw : artifact.hw_compat()) {
+      if (hw == "*" || hw == hw_id_) {
+        compatible = true;
+        break;
+      }
+    }
+    if (!compatible) {
+      response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INVALID_REQUEST);
+      response->set_success(false);
+      response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+      response->set_message("Hardware incompatible: robot=" + hw_id_ +
+                            " artifact requires one of: " +
+                            [&]() {
+                              std::string s;
+                              for (const auto &h : artifact.hw_compat()) {
+                                if (!s.empty()) s += ",";
+                                s += h;
+                              }
+                              return s;
+                            }());
+      return grpc::Status::OK;
+    }
+  }
+
+  // 5. 备份旧版本 (如果存在且标记为可回滚)
+  std::string previous_version;
+  {
+    std::lock_guard<std::mutex> lock(ota_mutex_);
+    auto it = installed_artifacts_.find(artifact.name());
+    if (it != installed_artifacts_.end()) {
+      previous_version = it->second.version();
+    }
+  }
+
+  response->set_status(robot::v1::OTA_UPDATE_STATUS_BACKING_UP);
+  if (artifact.rollback_safe() && FileExists(artifact.target_path())) {
+    std::string backup_path;
+    if (BackupArtifact(artifact.name(), artifact.target_path(), &backup_path)) {
+      std::lock_guard<std::mutex> lock(ota_mutex_);
+      robot::v1::RollbackEntry entry;
+      entry.set_name(artifact.name());
+      entry.set_version(previous_version);
+      entry.set_backup_path(backup_path);
+      rollback_entries_[artifact.name()] = entry;
+    }
+  }
+
+  // 6. 执行安装
+  response->set_status(robot::v1::OTA_UPDATE_STATUS_INSTALLING);
+
+  bool install_ok = false;
+  std::string install_message;
+
+  switch (artifact.apply_action()) {
+    case robot::v1::OTA_APPLY_ACTION_COPY_ONLY:
+    case robot::v1::OTA_APPLY_ACTION_RELOAD_MODEL: {
+      // 确保目标目录存在
+      auto last_slash = artifact.target_path().rfind('/');
+      if (last_slash != std::string::npos) {
+        std::filesystem::create_directories(
+            artifact.target_path().substr(0, last_slash));
+      }
+      try {
+        std::filesystem::copy_file(staged_path, artifact.target_path(),
+                                   std::filesystem::copy_options::overwrite_existing);
+        install_ok = true;
+        install_message = "Copied to " + artifact.target_path();
+      } catch (const std::exception &e) {
+        install_message = std::string("Copy failed: ") + e.what();
+      }
+      break;
+    }
+
+    case robot::v1::OTA_APPLY_ACTION_INSTALL_DEB: {
+      std::string cmd = "dpkg -i '" + staged_path + "' 2>&1";
+      int ret = std::system(cmd.c_str());
+      if (ret == 0) {
+        install_ok = true;
+        install_message = "DEB installed: " + staged_path;
+      } else {
+        // 尝试修复依赖
+        std::system("apt-get -f install -y 2>&1");
+        install_message = "DEB install returned " + std::to_string(ret);
+      }
+      break;
+    }
+
+    case robot::v1::OTA_APPLY_ACTION_FLASH_MCU: {
+      if (apply_firmware_script_.empty() || !FileExists(apply_firmware_script_)) {
+        install_message = "Flash script not found: " + apply_firmware_script_;
+      } else {
+        std::string cmd = apply_firmware_script_ + " '" + staged_path + "' 2>&1";
+        int ret = std::system(cmd.c_str());
+        install_ok = (ret == 0);
+        install_message = "Flash script returned " + std::to_string(ret);
+      }
+      break;
+    }
+
+    case robot::v1::OTA_APPLY_ACTION_INSTALL_SCRIPT: {
+      // 查找 staged_path 同目录下的 install.sh
+      auto dir = staged_path.substr(0, staged_path.rfind('/'));
+      std::string script = dir + "/install.sh";
+      if (FileExists(script)) {
+        std::string cmd = "bash '" + script + "' '" + staged_path + "' 2>&1";
+        int ret = std::system(cmd.c_str());
+        install_ok = (ret == 0);
+        install_message = "Install script returned " + std::to_string(ret);
+      } else {
+        // Fallback: 复制
+        try {
+          auto target_dir = artifact.target_path().substr(
+              0, artifact.target_path().rfind('/'));
+          std::filesystem::create_directories(target_dir);
+          std::filesystem::copy_file(staged_path, artifact.target_path(),
+                                     std::filesystem::copy_options::overwrite_existing);
+          install_ok = true;
+          install_message = "Copied (no install.sh found)";
+        } catch (const std::exception &e) {
+          install_message = std::string("Copy failed: ") + e.what();
+        }
+      }
+      break;
+    }
+
+    default: {
+      // 默认: 复制到目标路径
+      try {
+        auto target_dir = artifact.target_path().substr(
+            0, artifact.target_path().rfind('/'));
+        std::filesystem::create_directories(target_dir);
+        std::filesystem::copy_file(staged_path, artifact.target_path(),
+                                   std::filesystem::copy_options::overwrite_existing);
+        install_ok = true;
+        install_message = "Copied to " + artifact.target_path();
+      } catch (const std::exception &e) {
+        install_message = std::string("Copy failed: ") + e.what();
+      }
+      break;
+    }
+  }
+
+  if (!install_ok) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INTERNAL_ERROR);
+    response->set_success(false);
+    response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+    response->set_message(install_message);
+    return grpc::Status::OK;
+  }
+
+  // 7. 更新本地 manifest
+  {
+    std::lock_guard<std::mutex> lock(ota_mutex_);
+
+    auto now = std::chrono::system_clock::now();
+    auto t = std::chrono::system_clock::to_time_t(now);
+    std::ostringstream ts;
+    ts << std::put_time(std::gmtime(&t), "%Y-%m-%dT%H:%M:%SZ");
+
+    robot::v1::InstalledArtifact installed;
+    installed.set_name(artifact.name());
+    installed.set_category(artifact.category());
+    installed.set_version(artifact.version());
+    installed.set_path(artifact.target_path());
+    installed.set_sha256(artifact.sha256());
+    installed.set_installed_at(ts.str());
+    installed_artifacts_[artifact.name()] = installed;
+  }
+  SaveInstalledManifest();
+
+  RCLCPP_INFO(node_->get_logger(),
+              "ApplyUpdate SUCCESS: %s v%s -> %s",
+              artifact.name().c_str(), artifact.version().c_str(),
+              artifact.target_path().c_str());
 
   response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_OK);
   response->set_success(true);
-  response->set_message(
-      "Firmware apply started. The robot may reboot shortly.");
+  response->set_status(robot::v1::OTA_UPDATE_STATUS_SUCCESS);
+  response->set_message(install_message);
+  response->set_installed_path(artifact.target_path());
+  response->set_previous_version(previous_version);
+  return grpc::Status::OK;
+}
+
+// ==========================================================================
+// GetInstalledVersions
+// ==========================================================================
+grpc::Status
+DataServiceImpl::GetInstalledVersions(
+    grpc::ServerContext * /*context*/,
+    const robot::v1::GetInstalledVersionsRequest *request,
+    robot::v1::GetInstalledVersionsResponse *response) {
+
+  response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_OK);
+  response->set_robot_id(robot_id_);
+  response->set_hw_id(hw_id_);
+  response->set_system_version(system_version_);
+
+  std::lock_guard<std::mutex> lock(ota_mutex_);
+
+  auto cat_filter = request->category_filter();
+  for (const auto &pair : installed_artifacts_) {
+    if (cat_filter != robot::v1::OTA_CATEGORY_UNSPECIFIED &&
+        pair.second.category() != cat_filter) {
+      continue;
+    }
+    auto *installed = response->add_installed();
+    installed->CopyFrom(pair.second);
+  }
+
+  for (const auto &pair : rollback_entries_) {
+    auto *rb = response->add_rollback_available();
+    rb->CopyFrom(pair.second);
+  }
+
+  return grpc::Status::OK;
+}
+
+// ==========================================================================
+// Rollback
+// ==========================================================================
+grpc::Status
+DataServiceImpl::Rollback(
+    grpc::ServerContext * /*context*/,
+    const robot::v1::RollbackRequest *request,
+    robot::v1::RollbackResponse *response) {
+
+  const std::string &name = request->artifact_name();
+
+  if (name.empty()) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INVALID_REQUEST);
+    response->set_success(false);
+    response->set_message("artifact_name is required");
+    return grpc::Status::OK;
+  }
+
+  std::lock_guard<std::mutex> lock(ota_mutex_);
+
+  auto rb_it = rollback_entries_.find(name);
+  if (rb_it == rollback_entries_.end()) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_RESOURCE_NOT_FOUND);
+    response->set_success(false);
+    response->set_message("No rollback entry for: " + name);
+    return grpc::Status::OK;
+  }
+
+  const auto &entry = rb_it->second;
+  if (!FileExists(entry.backup_path())) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INTERNAL_ERROR);
+    response->set_success(false);
+    response->set_message("Backup file missing: " + entry.backup_path());
+    rollback_entries_.erase(rb_it);
+    SaveInstalledManifest();
+    return grpc::Status::OK;
+  }
+
+  // 找到当前安装路径
+  auto inst_it = installed_artifacts_.find(name);
+  if (inst_it == installed_artifacts_.end()) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INTERNAL_ERROR);
+    response->set_success(false);
+    response->set_message("No installed record for: " + name);
+    return grpc::Status::OK;
+  }
+
+  const std::string target_path = inst_it->second.path();
+
+  try {
+    std::filesystem::copy_file(entry.backup_path(), target_path,
+                               std::filesystem::copy_options::overwrite_existing);
+  } catch (const std::exception &e) {
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INTERNAL_ERROR);
+    response->set_success(false);
+    response->set_message(std::string("Rollback copy failed: ") + e.what());
+    return grpc::Status::OK;
+  }
+
+  // 更新 manifest
+  inst_it->second.set_version(entry.version());
+
+  auto now = std::chrono::system_clock::now();
+  auto t = std::chrono::system_clock::to_time_t(now);
+  std::ostringstream ts;
+  ts << std::put_time(std::gmtime(&t), "%Y-%m-%dT%H:%M:%SZ");
+  inst_it->second.set_installed_at(ts.str());
+
+  std::string restored_version = entry.version();
+  rollback_entries_.erase(rb_it);
+  SaveInstalledManifest();
+
+  RCLCPP_INFO(node_->get_logger(), "Rollback SUCCESS: %s -> v%s",
+              name.c_str(), restored_version.c_str());
+
+  response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_OK);
+  response->set_success(true);
+  response->set_message("Rolled back to version " + restored_version);
+  response->set_restored_version(restored_version);
+  return grpc::Status::OK;
+}
+
+// ==========================================================================
+// DownloadFromUrl - 机器人直接从 URL 下载（免手机中转）
+// ==========================================================================
+grpc::Status
+DataServiceImpl::DownloadFromUrl(
+    grpc::ServerContext *context,
+    const robot::v1::DownloadFromUrlRequest *request,
+    grpc::ServerWriter<robot::v1::OtaProgress> *writer) {
+
+  const std::string &url = request->url();
+  const std::string &staging_path = request->staging_path();
+
+  if (url.empty() || staging_path.empty()) {
+    robot::v1::OtaProgress p;
+    p.set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+    p.set_message("url and staging_path are required");
+    writer->Write(p);
+    return grpc::Status::OK;
+  }
+
+  if (staging_path.find("..") != std::string::npos) {
+    robot::v1::OtaProgress p;
+    p.set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+    p.set_message("Path traversal not allowed");
+    writer->Write(p);
+    return grpc::Status::OK;
+  }
+
+  // 确保 staging 目录存在
+  {
+    auto last_slash = staging_path.rfind('/');
+    if (last_slash != std::string::npos) {
+      std::filesystem::create_directories(staging_path.substr(0, last_slash));
+    }
+  }
+
+  RCLCPP_INFO(node_->get_logger(),
+              "DownloadFromUrl: %s -> %s", url.c_str(), staging_path.c_str());
+
+  // 通知客户端：下载开始
+  {
+    robot::v1::OtaProgress p;
+    p.set_status(robot::v1::OTA_UPDATE_STATUS_PENDING);
+    p.set_progress_percent(0.0f);
+    p.set_bytes_total(request->expected_size());
+    p.set_message("Starting download...");
+    writer->Write(p);
+  }
+
+  // 构建 curl 命令 (使用 -w 输出进度 JSON)
+  // curl 写入文件，同时通过 stderr 读取进度
+  std::string curl_cmd = "curl -fSL --connect-timeout 15 --max-time 3600";
+
+  // 添加自定义 HTTP 头
+  for (const auto &hdr : request->headers()) {
+    curl_cmd += " -H '" + hdr.first + ": " + hdr.second + "'";
+  }
+
+  curl_cmd += " -o '" + staging_path + "'";
+  curl_cmd += " -w '\\n__CURL_DONE__ %{http_code} %{size_download}'";
+  curl_cmd += " '" + url + "' 2>&1";
+
+  FILE *pipe = popen(curl_cmd.c_str(), "r");
+  if (!pipe) {
+    robot::v1::OtaProgress p;
+    p.set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+    p.set_message("Failed to execute curl");
+    writer->Write(p);
+    return grpc::Status::OK;
+  }
+
+  // 读取 curl 输出，定期向客户端发送进度
+  char line[1024];
+  auto last_progress_time = std::chrono::steady_clock::now();
+  uint64_t expected = request->expected_size();
+
+  while (fgets(line, sizeof(line), pipe) && !context->IsCancelled()) {
+    std::string line_str(line);
+
+    // 检查是否下载完成
+    if (line_str.find("__CURL_DONE__") != std::string::npos) {
+      break;
+    }
+
+    // 定期报告进度（每 500ms）
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now - last_progress_time)
+                       .count();
+    if (elapsed >= 500 && expected > 0) {
+      // 检查已写入的文件大小
+      uint64_t current_size = 0;
+      if (FileExists(staging_path)) {
+        std::ifstream probe(staging_path, std::ios::binary | std::ios::ate);
+        current_size = static_cast<uint64_t>(probe.tellg());
+      }
+
+      robot::v1::OtaProgress p;
+      p.set_status(robot::v1::OTA_UPDATE_STATUS_INSTALLING);
+      float pct = static_cast<float>(current_size) / static_cast<float>(expected) * 100.0f;
+      p.set_progress_percent(std::min(pct, 99.9f));
+      p.set_bytes_completed(current_size);
+      p.set_bytes_total(expected);
+      p.set_message("Downloading...");
+      writer->Write(p);
+
+      last_progress_time = now;
+    }
+  }
+
+  int ret = pclose(pipe);
+
+  if (context->IsCancelled()) {
+    // 客户端取消，清理文件
+    std::filesystem::remove(staging_path);
+    return grpc::Status(grpc::CANCELLED, "Download cancelled");
+  }
+
+  if (ret != 0) {
+    robot::v1::OtaProgress p;
+    p.set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+    p.set_message("curl failed with exit code " + std::to_string(WEXITSTATUS(ret)));
+    writer->Write(p);
+    return grpc::Status::OK;
+  }
+
+  // 下载完成，校验 SHA256
+  if (!request->expected_sha256().empty()) {
+    robot::v1::OtaProgress verifying;
+    verifying.set_status(robot::v1::OTA_UPDATE_STATUS_VERIFYING);
+    verifying.set_progress_percent(100.0f);
+    verifying.set_message("Verifying SHA256...");
+    writer->Write(verifying);
+
+    std::string actual_sha256 = ComputeSHA256(staging_path);
+    if (actual_sha256 != request->expected_sha256()) {
+      std::filesystem::remove(staging_path);
+      robot::v1::OtaProgress p;
+      p.set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+      p.set_message("SHA256 mismatch: expected=" + request->expected_sha256() +
+                     " actual=" + actual_sha256);
+      writer->Write(p);
+      return grpc::Status::OK;
+    }
+  }
+
+  // 获取文件大小
+  uint64_t final_size = 0;
+  if (FileExists(staging_path)) {
+    std::ifstream probe(staging_path, std::ios::binary | std::ios::ate);
+    final_size = static_cast<uint64_t>(probe.tellg());
+  }
+
+  RCLCPP_INFO(node_->get_logger(),
+              "DownloadFromUrl complete: %s (%lu bytes)",
+              staging_path.c_str(), static_cast<unsigned long>(final_size));
+
+  robot::v1::OtaProgress done;
+  done.set_status(robot::v1::OTA_UPDATE_STATUS_SUCCESS);
+  done.set_progress_percent(100.0f);
+  done.set_bytes_completed(final_size);
+  done.set_bytes_total(final_size);
+  done.set_message("Download complete: " + staging_path);
+  writer->Write(done);
+
+  return grpc::Status::OK;
+}
+
+// ==========================================================================
+// CheckUpdateReadiness - 安装前预检查
+// ==========================================================================
+uint64_t DataServiceImpl::GetDiskFreeBytes(const std::string &path) {
+  try {
+    auto si = std::filesystem::space(
+        std::filesystem::path(path).parent_path());
+    return si.available;
+  } catch (...) {
+    return 0;
+  }
+}
+
+int DataServiceImpl::GetBatteryPercent() {
+  // 尝试读取 Linux 电池接口
+  std::ifstream bat("/sys/class/power_supply/battery/capacity");
+  if (bat.is_open()) {
+    int pct = 0;
+    bat >> pct;
+    return pct;
+  }
+  // 无电池信息时返回 100（跳过电量检查）
+  return 100;
+}
+
+grpc::Status
+DataServiceImpl::CheckUpdateReadiness(
+    grpc::ServerContext * /*context*/,
+    const robot::v1::CheckUpdateReadinessRequest *request,
+    robot::v1::CheckUpdateReadinessResponse *response) {
+
+  response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_OK);
+  bool all_passed = true;
+
+  // 1. 磁盘空间检查
+  {
+    uint64_t total_required = 0;
+    for (const auto &art : request->artifacts()) {
+      total_required += art.size();
+    }
+    // 需要 2x 空间 (staging + 目标)
+    uint64_t need = total_required * 2;
+    uint64_t free_bytes = GetDiskFreeBytes("/opt/robot");
+    if (free_bytes == 0) {
+      free_bytes = GetDiskFreeBytes("/tmp");
+    }
+
+    auto *check = response->add_checks();
+    check->set_check_name("disk_space");
+    bool ok = free_bytes >= need;
+    check->set_passed(ok);
+    check->set_message(ok
+        ? "磁盘空间充足"
+        : "磁盘空间不足: 需要 " + std::to_string(need / 1024 / 1024) + "MB, 可用 " +
+              std::to_string(free_bytes / 1024 / 1024) + "MB");
+    check->set_detail("free=" + std::to_string(free_bytes) +
+                       " required=" + std::to_string(need));
+    if (!ok) all_passed = false;
+  }
+
+  // 2. 电量检查
+  {
+    int battery = GetBatteryPercent();
+    uint32_t min_battery = 0;
+    for (const auto &art : request->artifacts()) {
+      if (art.min_battery_percent() > min_battery) {
+        min_battery = art.min_battery_percent();
+      }
+    }
+    auto *check = response->add_checks();
+    check->set_check_name("battery");
+    bool ok = (min_battery == 0) || (battery >= static_cast<int>(min_battery));
+    check->set_passed(ok);
+    check->set_message(ok
+        ? "电量充足 (" + std::to_string(battery) + "%)"
+        : "电量不足: 当前 " + std::to_string(battery) + "%, 需要 " +
+              std::to_string(min_battery) + "%");
+    check->set_detail("battery=" + std::to_string(battery) +
+                       " required=" + std::to_string(min_battery));
+    if (!ok) all_passed = false;
+  }
+
+  // 3. 硬件兼容性检查
+  for (const auto &art : request->artifacts()) {
+    if (art.hw_compat().empty()) continue;
+    bool compatible = false;
+    for (const auto &hw : art.hw_compat()) {
+      if (hw == "*" || hw == hw_id_) {
+        compatible = true;
+        break;
+      }
+    }
+    auto *check = response->add_checks();
+    check->set_check_name("hw_compat");
+    check->set_passed(compatible);
+    check->set_message(compatible
+        ? art.name() + ": 硬件兼容"
+        : art.name() + ": 硬件不兼容 (本机=" + hw_id_ + ")");
+    check->set_detail("artifact=" + art.name() + " robot_hw=" + hw_id_);
+    if (!compatible) all_passed = false;
+  }
+
+  // 4. 网络连通性检查 (快速 DNS 验证)
+  {
+    auto *check = response->add_checks();
+    check->set_check_name("network");
+    // 简单检查: 能否解析 github.com
+    int ret = std::system("ping -c1 -W2 github.com > /dev/null 2>&1");
+    bool ok = (ret == 0);
+    check->set_passed(ok);
+    check->set_message(ok ? "网络连通" : "无法连接 github.com");
+    check->set_detail(ok ? "github.com reachable" : "github.com unreachable");
+    // 网络不通不阻塞（可能用手机中转上传）
+  }
+
+  response->set_ready(all_passed);
   return grpc::Status::OK;
 }
 

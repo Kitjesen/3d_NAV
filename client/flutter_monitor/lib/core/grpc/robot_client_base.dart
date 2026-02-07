@@ -4,7 +4,6 @@ import 'package:robot_proto/src/telemetry.pb.dart';
 import 'package:robot_proto/src/system.pb.dart';
 import 'package:robot_proto/src/data.pb.dart';
 import 'package:robot_proto/src/data.pbgrpc.dart';
-import 'package:flutter_monitor/core/grpc/firmware_rpc_types.dart';
 
 abstract class RobotClientBase {
   Future<bool> connect();
@@ -37,13 +36,14 @@ abstract class RobotClientBase {
   /// 取消任务
   Future<CancelTaskResponse> cancelTask({required String taskId});
 
-  // ==================== 文件管理 (OTA) ====================
+  // ==================== 文件管理 ====================
 
-  /// 上传文件到机器人 (模型/地图/配置)
+  /// 上传文件到机器人 (支持断点续传)
   /// [localBytes] 文件二进制内容
   /// [remotePath] 目标路径
   /// [filename] 文件名
   /// [category] 分类: "model", "map", "config", "firmware"
+  /// [resumeFromOffset] 断点续传偏移量, 0=全新上传
   /// [onProgress] 上传进度回调 (0.0 ~ 1.0)
   Future<UploadFileResponse> uploadFile({
     required List<int> localBytes,
@@ -51,6 +51,8 @@ abstract class RobotClientBase {
     required String filename,
     String category = 'model',
     bool overwrite = true,
+    int resumeFromOffset = 0,
+    String sha256 = '',
     void Function(double progress)? onProgress,
   });
 
@@ -63,8 +65,37 @@ abstract class RobotClientBase {
   /// 删除远程文件
   Future<DeleteRemoteFileResponse> deleteRemoteFile({required String remotePath});
 
-  /// 应用固件更新（触发机器人端刷写脚本）
-  Future<ApplyFirmwareResponse> applyFirmware({required String firmwarePath});
+  // ==================== OTA 更新管理 ====================
+
+  /// 应用 OTA 更新（SHA256 校验、备份、安装、回滚支持）
+  Future<ApplyUpdateResponse> applyUpdate({
+    required OtaArtifact artifact,
+    required String stagedPath,
+    bool force = false,
+  });
+
+  /// 查询已安装版本列表
+  Future<GetInstalledVersionsResponse> getInstalledVersions({
+    OtaCategory categoryFilter = OtaCategory.OTA_CATEGORY_UNSPECIFIED,
+  });
+
+  /// 回滚到上一版本
+  Future<RollbackResponse> rollback({required String artifactName});
+
+  /// 机器人直接从 URL 下载（免手机中转，适合大文件如 ONNX 模型）
+  /// 返回进度流，客户端可实时显示进度条
+  Stream<OtaProgress> downloadFromUrl({
+    required String url,
+    required String stagingPath,
+    String expectedSha256 = '',
+    int expectedSize = 0,
+    Map<String, String> headers = const {},
+  });
+
+  /// 安装前预检查（磁盘空间、电量、硬件兼容性）
+  Future<CheckUpdateReadinessResponse> checkUpdateReadiness({
+    required List<OtaArtifact> artifacts,
+  });
 
   Future<void> disconnect();
   bool get isConnected;

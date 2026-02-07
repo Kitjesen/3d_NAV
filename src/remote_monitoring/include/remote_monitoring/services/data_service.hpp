@@ -62,11 +62,33 @@ public:
                    const robot::v1::DeleteRemoteFileRequest *request,
                    robot::v1::DeleteRemoteFileResponse *response) override;
 
-  // 应用固件更新 (上传完成后调用)
+  // OTA 更新管理
   grpc::Status
-  ApplyFirmware(grpc::ServerContext *context,
-                const robot::v1::ApplyFirmwareRequest *request,
-                robot::v1::ApplyFirmwareResponse *response) override;
+  ApplyUpdate(grpc::ServerContext *context,
+              const robot::v1::ApplyUpdateRequest *request,
+              robot::v1::ApplyUpdateResponse *response) override;
+
+  grpc::Status
+  GetInstalledVersions(grpc::ServerContext *context,
+                       const robot::v1::GetInstalledVersionsRequest *request,
+                       robot::v1::GetInstalledVersionsResponse *response) override;
+
+  grpc::Status
+  Rollback(grpc::ServerContext *context,
+           const robot::v1::RollbackRequest *request,
+           robot::v1::RollbackResponse *response) override;
+
+  // 机器人直接从 URL 下载 (流式进度)
+  grpc::Status
+  DownloadFromUrl(grpc::ServerContext *context,
+                  const robot::v1::DownloadFromUrlRequest *request,
+                  grpc::ServerWriter<robot::v1::OtaProgress> *writer) override;
+
+  // 安装前预检查
+  grpc::Status
+  CheckUpdateReadiness(grpc::ServerContext *context,
+                       const robot::v1::CheckUpdateReadinessRequest *request,
+                       robot::v1::CheckUpdateReadinessResponse *response) override;
 
   grpc::Status StartCamera(grpc::ServerContext *context,
                            const robot::v1::StartCameraRequest *request,
@@ -114,8 +136,27 @@ private:
     std::vector<std::string> remote_ice_candidates;
   };
 
+  // OTA 管理私有方法
+  bool LoadInstalledManifest();
+  bool SaveInstalledManifest();
+  std::string ComputeSHA256(const std::string &file_path);
+  bool BackupArtifact(const std::string &name, const std::string &current_path,
+                      std::string *backup_path);
+  uint64_t GetDiskFreeBytes(const std::string &path);
+  int GetBatteryPercent();
+
   rclcpp::Node *node_;
   std::string apply_firmware_script_;
+  std::string ota_manifest_path_;       // 本地已安装 manifest 路径
+  std::string ota_backup_dir_;          // 备份目录
+  std::string robot_id_;
+  std::string hw_id_;
+  std::string system_version_;
+  // 已安装制品 (name -> InstalledArtifact proto)
+  std::unordered_map<std::string, robot::v1::InstalledArtifact> installed_artifacts_;
+  // 可回滚条目 (name -> RollbackEntry proto)
+  std::unordered_map<std::string, robot::v1::RollbackEntry> rollback_entries_;
+  mutable std::mutex ota_mutex_;
   std::string camera_topic_;
   std::string camera_fallback_topic_;
   std::string map_topic_;

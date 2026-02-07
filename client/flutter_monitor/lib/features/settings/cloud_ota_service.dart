@@ -10,8 +10,15 @@ class CloudAsset {
   final String contentType;
   final int downloadCount;
 
+  /// manifest 中指定的分类 (优先)
+  String? _manifestCategory;
+
+  /// manifest 中的 OTA 元数据 (如果有 manifest.json)
+  CloudOtaArtifactMeta? otaMeta;
+
   /// 从文件扩展名推断的分类
   String get category {
+    if (_manifestCategory != null) return _manifestCategory!;
     final ext = name.split('.').last.toLowerCase();
     if (['pt', 'pth', 'onnx', 'tflite', 'engine'].contains(ext)) {
       return 'model';
@@ -26,6 +33,8 @@ class CloudAsset {
     }
     return 'other';
   }
+
+  set manifestCategory(String? cat) => _manifestCategory = cat;
 
   String get formattedSize {
     if (size < 1024) return '$size B';
@@ -42,6 +51,7 @@ class CloudAsset {
     required this.downloadUrl,
     required this.contentType,
     required this.downloadCount,
+    this.otaMeta,
   });
 
   factory CloudAsset.fromJson(Map<String, dynamic> json) {
@@ -55,6 +65,95 @@ class CloudAsset {
   }
 }
 
+/// 云端 manifest.json 中每个制品的元数据
+class CloudOtaArtifactMeta {
+  final String name;
+  final String category;    // "model", "firmware", "map", "config"
+  final String version;
+  final String filename;
+  final String sha256;
+  final String targetPath;
+  final String targetBoard; // "nav" or "dog"
+  final List<String> hwCompat;
+  final String applyAction; // "copy_only", "reload_model", "install_deb", "flash_mcu", "install_script"
+  final bool requiresReboot;
+  final int minBatteryPercent;
+  final String changelog;
+  final bool rollbackSafe;
+
+  CloudOtaArtifactMeta({
+    required this.name,
+    required this.category,
+    required this.version,
+    required this.filename,
+    required this.sha256,
+    required this.targetPath,
+    this.targetBoard = 'nav',
+    this.hwCompat = const ['*'],
+    this.applyAction = 'copy_only',
+    this.requiresReboot = false,
+    this.minBatteryPercent = 0,
+    this.changelog = '',
+    this.rollbackSafe = true,
+  });
+
+  factory CloudOtaArtifactMeta.fromJson(Map<String, dynamic> json) {
+    return CloudOtaArtifactMeta(
+      name: json['name'] ?? '',
+      category: json['category'] ?? 'other',
+      version: json['version'] ?? '',
+      filename: json['filename'] ?? '',
+      sha256: json['sha256'] ?? '',
+      targetPath: json['target_path'] ?? '',
+      targetBoard: json['target_board'] ?? 'nav',
+      hwCompat: (json['hw_compat'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const ['*'],
+      applyAction: json['apply_action'] ?? 'copy_only',
+      requiresReboot: json['requires_reboot'] ?? false,
+      minBatteryPercent: json['min_battery_percent'] ?? 0,
+      changelog: json['changelog'] ?? '',
+      rollbackSafe: json['rollback_safe'] ?? true,
+    );
+  }
+}
+
+/// 云端 manifest.json 完整结构
+class CloudOtaManifest {
+  final String schemaVersion;
+  final String releaseVersion;
+  final String releaseDate;
+  final String minSystemVersion;
+  final List<CloudOtaArtifactMeta> artifacts;
+
+  CloudOtaManifest({
+    required this.schemaVersion,
+    required this.releaseVersion,
+    required this.releaseDate,
+    this.minSystemVersion = '',
+    required this.artifacts,
+  });
+
+  factory CloudOtaManifest.fromJson(Map<String, dynamic> json) {
+    final artifactList = (json['artifacts'] as List<dynamic>?)
+            ?.map((a) => CloudOtaArtifactMeta.fromJson(a as Map<String, dynamic>))
+            .toList() ??
+        [];
+    return CloudOtaManifest(
+      schemaVersion: json['schema_version'] ?? '1',
+      releaseVersion: json['release_version'] ?? '',
+      releaseDate: json['release_date'] ?? '',
+      minSystemVersion: json['min_system_version'] ?? '',
+      artifacts: artifactList,
+    );
+  }
+
+  /// 按 category 过滤
+  List<CloudOtaArtifactMeta> byCategory(String category) =>
+      artifacts.where((a) => a.category == category).toList();
+}
+
 /// GitHub Release 信息
 class CloudRelease {
   final String tagName;
@@ -65,6 +164,9 @@ class CloudRelease {
   final bool prerelease;
   final bool draft;
   final List<CloudAsset> assets;
+
+  /// 解析后的 OTA manifest（如果 Release 中包含 manifest.json）
+  CloudOtaManifest? manifest;
 
   /// 发布时间的友好显示
   String get publishedDate {
@@ -86,6 +188,9 @@ class CloudRelease {
       .where((a) => a.category != 'apk' && a.category != 'other')
       .toList();
 
+  /// 是否包含 OTA manifest
+  bool get hasManifest => manifest != null;
+
   /// 所有资产（包括 APK）
   List<CloudAsset> get allAssets => assets;
 
@@ -98,6 +203,7 @@ class CloudRelease {
     required this.prerelease,
     required this.draft,
     required this.assets,
+    this.manifest,
   });
 
   factory CloudRelease.fromJson(Map<String, dynamic> json) {
@@ -185,7 +291,7 @@ class CloudOtaService {
         'X-GitHub-Api-Version': '2022-11-28',
       };
 
-  /// 获取最新 Release
+  /// 获取最新 Release（并自动拉取 manifest.json）
   Future<CloudRelease?> fetchLatestRelease() async {
     try {
       final url = '$_apiBaseUrl/latest';
@@ -194,7 +300,9 @@ class CloudOtaService {
 
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
-        return CloudRelease.fromJson(json);
+        final release = CloudRelease.fromJson(json);
+        await _enrichReleaseWithManifest(release);
+        return release;
       } else if (response.statusCode == 404) {
         return null; // 没有 Release
       } else {
@@ -214,14 +322,51 @@ class CloudOtaService {
 
       if (response.statusCode == 200) {
         final list = jsonDecode(response.body) as List<dynamic>;
-        return list
+        final releases = list
             .map((j) => CloudRelease.fromJson(j as Map<String, dynamic>))
             .toList();
+        // 尝试为每个 release 拉取 manifest
+        for (final release in releases) {
+          await _enrichReleaseWithManifest(release);
+        }
+        return releases;
       } else {
         throw Exception('GitHub API error: ${response.statusCode}');
       }
     } catch (e) {
       rethrow;
+    }
+  }
+
+  /// 如果 Release 中包含 manifest.json，下载并解析
+  /// 同时将 manifest 中的元数据关联到对应的 CloudAsset
+  Future<void> _enrichReleaseWithManifest(CloudRelease release) async {
+    final manifestAsset = release.assets
+        .where((a) => a.name == 'manifest.json')
+        .toList();
+
+    if (manifestAsset.isEmpty) return;
+
+    try {
+      final bytes = await downloadAsset(manifestAsset.first);
+      final jsonStr = utf8.decode(bytes);
+      final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final manifest = CloudOtaManifest.fromJson(json);
+      release.manifest = manifest;
+
+      // 将 manifest 元数据关联到对应的 asset
+      for (final artifactMeta in manifest.artifacts) {
+        final matchingAssets = release.assets
+            .where((a) => a.name == artifactMeta.filename)
+            .toList();
+        for (final asset in matchingAssets) {
+          asset.otaMeta = artifactMeta;
+          asset.manifestCategory = artifactMeta.category;
+        }
+      }
+    } catch (e) {
+      // manifest 解析失败不阻塞，fallback 到文件扩展名推断
+      // ignore
     }
   }
 
