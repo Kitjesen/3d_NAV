@@ -222,55 +222,41 @@ class _EventsScreenState extends State<EventsScreen>
                 ],
               ),
             )
-          : Stack(
-              children: [
-                // Vertical Timeline Line
-                Positioned(
-                  left: 24,
-                  top: 0,
-                  bottom: 0,
-                  child: Container(
-                    width: 2,
-                    color: context.dividerColor,
-                  ),
-                ),
-                ListView.builder(
-                  padding: EdgeInsets.fromLTRB(
-                      16, MediaQuery.of(context).padding.top + 16, 16, 100),
-                  itemCount: _events.length,
-                  cacheExtent: 300,
-                  itemBuilder: (context, index) {
-                    return _EventListItem(
-                      event: _events[index],
-                      color: _getSeverityColor(_events[index].severity),
-                      severityLabel: _getSeverityLabel(_events[index].severity),
-                      onAcknowledge: () async {
-                        HapticFeedback.lightImpact();
-                        final client =
-                            context.read<RobotConnectionProvider>().client;
-                        if (client == null) return;
-                        await client.ackEvent(_events[index].eventId);
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: const Text('事件已确认'),
-                              duration: const Duration(milliseconds: 500),
-                              behavior: SnackBarBehavior.floating,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10)),
-                            ),
-                          );
-                        }
-                      },
-                    );
+          : ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+              itemCount: _events.length,
+              cacheExtent: 300,
+              itemBuilder: (context, index) {
+                return _EventListItem(
+                  event: _events[index],
+                  color: _getSeverityColor(_events[index].severity),
+                  severityLabel: _getSeverityLabel(_events[index].severity),
+                  onAcknowledge: () async {
+                    HapticFeedback.lightImpact();
+                    final client =
+                        context.read<RobotConnectionProvider>().client;
+                    if (client == null) return;
+                    await client.ackEvent(_events[index].eventId);
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: const Text('事件已确认'),
+                          duration: const Duration(milliseconds: 500),
+                          behavior: SnackBarBehavior.floating,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                      );
+                    }
                   },
-                ),
-              ],
+                );
+              },
             ),
     );
   }
 }
 
+/// Clean card-style event item with left accent strip.
 class _EventListItem extends StatelessWidget {
   final Event event;
   final Color color;
@@ -291,146 +277,116 @@ class _EventListItem extends StatelessWidget {
     final timeStr = DateFormat('HH:mm:ss').format(time);
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 18.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Timeline Dot
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            width: 14,
-            height: 14,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isDark ? AppColors.darkBackground : Colors.white,
-                width: 2.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: color.withOpacity(0.4),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.darkCard : Colors.white,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(color: context.borderColor),
+          boxShadow: [
+            isDark ? AppShadows.dark() : AppShadows.light(),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          child: IntrinsicHeight(
+            child: Row(
+              children: [
+                // Left accent strip
+                Container(
+                  width: 3,
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(12),
+                      bottomLeft: Radius.circular(12),
+                    ),
+                  ),
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
-          // Event Card
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: isDark ? AppColors.darkCard : Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: context.cardShadowColor,
-                    blurRadius: 14,
-                    offset: const Offset(0, 5),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      // Severity badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 9, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: color.withOpacity(isDark ? 0.15 : 0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          severityLabel,
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            color: color,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        timeStr,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: context.subtitleColor,
-                          fontFeatures: const [FontFeature.tabularFigures()],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    event.title.isNotEmpty
-                        ? event.title
-                        : event.type.toString(),
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : Colors.black87,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 2,
-                  ),
-                  if (event.description.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      event.description,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: context.subtitleColor,
-                        height: 1.4,
-                      ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: InkWell(
-                      onTap: onAcknowledge,
-                      borderRadius: BorderRadius.circular(20),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 7),
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? Colors.white.withOpacity(0.06)
-                              : Colors.black.withOpacity(0.04),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
+                // Content
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Top row: severity + time
+                        Row(
                           children: [
-                            Icon(Icons.check,
-                                size: 14, color: context.subtitleColor),
-                            const SizedBox(width: 4),
                             Text(
-                              'ACK',
+                              severityLabel,
                               style: TextStyle(
                                 fontSize: 10,
-                                fontWeight: FontWeight.w600,
+                                fontWeight: FontWeight.w700,
+                                color: color,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            const Spacer(),
+                            Text(
+                              timeStr,
+                              style: TextStyle(
+                                fontSize: 11,
                                 color: context.subtitleColor,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures()
+                                ],
                               ),
                             ),
                           ],
                         ),
+                        const SizedBox(height: 6),
+                        // Title
+                        Text(
+                          event.title.isNotEmpty
+                              ? event.title
+                              : event.type.toString(),
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: context.titleColor,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 2,
+                        ),
+                        if (event.description.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            event.description,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: context.subtitleColor,
+                              height: 1.4,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                // ACK button — minimal
+                InkWell(
+                  onTap: onAcknowledge,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    child: Text(
+                      'ACK',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: context.subtitleColor,
+                        letterSpacing: 0.5,
                       ),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

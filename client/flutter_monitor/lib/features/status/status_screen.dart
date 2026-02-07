@@ -406,62 +406,37 @@ class _StatusScreenState extends State<StatusScreen>
     final profile = context.watch<RobotProfileProvider>().current;
 
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.xxl),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
         color: context.cardColor,
-        borderRadius: BorderRadius.circular(AppRadius.xxl),
-        border: isDark
-            ? Border.all(
-                color: Colors.white.withOpacity(0.04),
-                width: 1,
-              )
-            : null,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: context.borderColor),
         boxShadow: [isDark ? AppShadows.dark() : AppShadows.light()],
       ),
       child: Column(
         children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [profile.themeColor, AppColors.secondary],
-              ),
-              borderRadius: BorderRadius.circular(AppRadius.xl),
-              boxShadow: [AppShadows.glow(profile.themeColor, blur: 20)],
-            ),
-            child: Icon(profile.icon, size: 36, color: Colors.white),
-          ),
-          const SizedBox(height: AppSpacing.lg),
+          // Simplified: just name + mode, no big gradient icon
           Text(
             profile.name,
             style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
               color: context.titleColor,
             ),
           ),
-          const SizedBox(height: AppSpacing.xs),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(isDark ? 0.12 : 0.08),
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-            ),
-            child: Text(
-              _latestSlowState?.currentMode ?? 'IDLE',
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: AppColors.primary,
-                letterSpacing: 0.8,
-              ),
+          const SizedBox(height: 6),
+          Text(
+            _latestSlowState?.currentMode ?? 'IDLE',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.primary,
+              letterSpacing: 0.8,
             ),
           ),
-          const SizedBox(height: AppSpacing.xl),
+          const SizedBox(height: AppSpacing.lg),
+          Divider(height: 1, color: context.dividerColor),
+          const SizedBox(height: AppSpacing.lg),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
@@ -538,13 +513,11 @@ class _StatusScreenState extends State<StatusScreen>
     final clampedProgress = progress.clamp(0.0, 1.0);
 
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.lg + 2),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
         color: context.cardColor,
         borderRadius: BorderRadius.circular(AppRadius.card),
-        border: isDark
-            ? Border.all(color: Colors.white.withOpacity(0.04), width: 1)
-            : null,
+        border: Border.all(color: context.borderColor),
         boxShadow: [isDark ? AppShadows.dark() : AppShadows.light()],
       ),
       child: Column(
@@ -552,19 +525,8 @@ class _StatusScreenState extends State<StatusScreen>
         children: [
           Row(
             children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: iconColor.withOpacity(isDark ? 0.18 : 0.1),
-                  borderRadius: BorderRadius.circular(AppRadius.icon),
-                  boxShadow: isDark
-                      ? [AppShadows.glow(iconColor, blur: 10)]
-                      : [],
-                ),
-                child: Icon(icon, size: 18, color: iconColor),
-              ),
-              const Spacer(),
+              Icon(icon, size: 16, color: iconColor),
+              const SizedBox(width: 6),
               Text(
                 label,
                 style: TextStyle(
@@ -576,14 +538,14 @@ class _StatusScreenState extends State<StatusScreen>
               ),
             ],
           ),
-          const SizedBox(height: AppSpacing.md + 2),
+          const SizedBox(height: AppSpacing.md),
           RichText(
             text: TextSpan(
               children: [
                 TextSpan(
                   text: value,
                   style: TextStyle(
-                    fontSize: 26,
+                    fontSize: 24,
                     fontWeight: FontWeight.w700,
                     color: context.titleColor,
                     letterSpacing: -0.5,
@@ -592,7 +554,7 @@ class _StatusScreenState extends State<StatusScreen>
                 TextSpan(
                   text: ' $unit',
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: 13,
                     fontWeight: FontWeight.w500,
                     color: context.subtitleColor,
                   ),
@@ -601,9 +563,9 @@ class _StatusScreenState extends State<StatusScreen>
             ),
           ),
           const SizedBox(height: AppSpacing.md),
-          // Gradient progress bar
+          // Clean progress bar — no glow
           ClipRRect(
-            borderRadius: BorderRadius.circular(AppRadius.sm),
+            borderRadius: BorderRadius.circular(2),
             child: TweenAnimationBuilder<double>(
               tween: Tween(begin: 0, end: clampedProgress),
               duration: AppDurations.slow,
@@ -611,38 +573,22 @@ class _StatusScreenState extends State<StatusScreen>
               builder: (context, animValue, _) {
                 return Stack(
                   children: [
-                    // Track
                     Container(
-                      height: 6,
+                      height: 4,
                       decoration: BoxDecoration(
                         color: isDark
                             ? Colors.white.withOpacity(0.06)
                             : Colors.black.withOpacity(0.04),
-                        borderRadius: BorderRadius.circular(AppRadius.sm),
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-                    // Fill — gradient bar
                     FractionallySizedBox(
                       widthFactor: animValue,
                       child: Container(
-                        height: 6,
+                        height: 4,
                         decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [
-                              progressColor.withOpacity(0.7),
-                              progressColor,
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
-                          boxShadow: isDark
-                              ? [
-                                  BoxShadow(
-                                    color: progressColor.withOpacity(0.35),
-                                    blurRadius: 6,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ]
-                              : [],
+                          color: progressColor,
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
                     ),
@@ -662,42 +608,26 @@ class _StatusScreenState extends State<StatusScreen>
     final angular = _latestFastState!.velocity.angular.z;
 
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.xxl),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
         color: context.cardColor,
         borderRadius: BorderRadius.circular(AppRadius.card),
-        border: isDark
-            ? Border.all(color: Colors.white.withOpacity(0.04), width: 1)
-            : null,
+        border: Border.all(color: context.borderColor),
         boxShadow: [isDark ? AppShadows.dark() : AppShadows.light()],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: AppColors.accent.withOpacity(isDark ? 0.18 : 0.1),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: const Icon(Icons.speed, size: 18, color: AppColors.accent),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                'MOTION',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: context.subtitleColor,
-                  letterSpacing: 1.0,
-                ),
-              ),
-            ],
+          Text(
+            'MOTION',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: context.subtitleColor,
+              letterSpacing: 1.0,
+            ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           Row(
             children: [
               Expanded(
@@ -767,42 +697,26 @@ class _StatusScreenState extends State<StatusScreen>
     final rates = _latestSlowState!.topicRates;
 
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.xxl),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
         color: context.cardColor,
         borderRadius: BorderRadius.circular(AppRadius.card),
-        border: isDark
-            ? Border.all(color: Colors.white.withOpacity(0.04), width: 1)
-            : null,
+        border: Border.all(color: context.borderColor),
         boxShadow: [isDark ? AppShadows.dark() : AppShadows.light()],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: AppColors.info.withOpacity(isDark ? 0.18 : 0.1),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: const Icon(Icons.wifi, size: 18, color: AppColors.info),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                'TOPIC RATES',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: context.subtitleColor,
-                  letterSpacing: 1.0,
-                ),
-              ),
-            ],
+          Text(
+            'TOPIC RATES',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: context.subtitleColor,
+              letterSpacing: 1.0,
+            ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
@@ -857,13 +771,11 @@ class _StatusScreenState extends State<StatusScreen>
     final gyro = dogClient.imuGyroscope;
 
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.xxl),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
         color: context.cardColor,
         borderRadius: BorderRadius.circular(AppRadius.card),
-        border: isDark
-            ? Border.all(color: Colors.white.withOpacity(0.04), width: 1)
-            : null,
+        border: Border.all(color: context.borderColor),
         boxShadow: [isDark ? AppShadows.dark() : AppShadows.light()],
       ),
       child: Column(
@@ -871,17 +783,6 @@ class _StatusScreenState extends State<StatusScreen>
         children: [
           Row(
             children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: AppColors.warning.withOpacity(isDark ? 0.18 : 0.1),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: const Icon(Icons.explore, size: 18,
-                    color: AppColors.warning),
-              ),
-              const SizedBox(width: 10),
               Text(
                 'DOG IMU',
                 style: TextStyle(
@@ -894,8 +795,8 @@ class _StatusScreenState extends State<StatusScreen>
               const Spacer(),
               if (dogClient.isConnected)
                 Container(
-                  width: 8,
-                  height: 8,
+                  width: 6,
+                  height: 6,
                   decoration: const BoxDecoration(
                     color: AppColors.success,
                     shape: BoxShape.circle,
@@ -1008,13 +909,11 @@ class _StatusScreenState extends State<StatusScreen>
     const jointNames = ['Hip', 'Thigh', 'Calf'];
 
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.xxl),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
         color: context.cardColor,
         borderRadius: BorderRadius.circular(AppRadius.card),
-        border: isDark
-            ? Border.all(color: Colors.white.withOpacity(0.04), width: 1)
-            : null,
+        border: Border.all(color: context.borderColor),
         boxShadow: [isDark ? AppShadows.dark() : AppShadows.light()],
       ),
       child: Column(
@@ -1022,17 +921,6 @@ class _StatusScreenState extends State<StatusScreen>
         children: [
           Row(
             children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: AppColors.secondary.withOpacity(isDark ? 0.18 : 0.1),
-                  borderRadius: BorderRadius.circular(11),
-                ),
-                child: const Icon(Icons.precision_manufacturing, size: 18,
-                    color: AppColors.secondary),
-              ),
-              const SizedBox(width: 10),
               Text(
                 'DOG JOINTS',
                 style: TextStyle(

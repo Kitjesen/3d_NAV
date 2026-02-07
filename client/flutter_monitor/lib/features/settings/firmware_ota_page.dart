@@ -53,169 +53,112 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
       appBar: AppBar(
         title: const Text('固件升级'),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+          icon: const Icon(Icons.arrow_back_ios_new, size: 18),
           onPressed: () => Navigator.pop(context),
         ),
       ),
       body: ListView(
         physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         children: [
-          // ===== 当前固件信息卡片 =====
-          _buildCurrentFirmwareCard(
-              isDark, isConnected, currentVersion, battery),
+          // ===== 设备状态 =====
+          _buildDeviceStatusSection(isDark, isConnected, currentVersion, battery),
           const SizedBox(height: 24),
 
-          // ===== 升级前检查 =====
-          if (!isConnected) _buildWarningBanner('请先连接机器人', AppColors.warning),
+          // ===== 状态提示 =====
+          if (!isConnected) _buildNotice('请先连接机器人', NoticeType.warning),
           if (isConnected && battery < 30)
-            _buildWarningBanner('电量低于 30%，建议充电后再升级', AppColors.error),
+            _buildNotice('电量低于 30%，建议充电后再升级', NoticeType.error),
           if (_statusMessage != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: _buildWarningBanner(
-                  _statusMessage!,
-                  _statusMessage!.contains('成功')
-                      ? AppColors.success
-                      : _statusMessage!.contains('失败')
-                          ? AppColors.error
-                          : AppColors.primary),
+            _buildNotice(
+              _statusMessage!,
+              _statusMessage!.contains('成功')
+                  ? NoticeType.success
+                  : _statusMessage!.contains('失败')
+                      ? NoticeType.error
+                      : NoticeType.info,
             ),
 
           // ===== 上传进度 =====
           if (_isUploading) ...[
-            _buildProgressCard(isDark, '正在上传固件...', _uploadProgress,
+            _buildProgressSection('正在上传固件...', _uploadProgress,
                 subtitle: _selectedFileName),
             const SizedBox(height: 24),
           ],
 
-          // ===== 本地文件上传按钮 =====
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton.icon(
-              onPressed: isConnected && !_isUploading && battery >= 30
-                  ? () => _selectAndUploadFirmware(context)
-                  : null,
-              icon: const Icon(Icons.upload_file),
-              label: const Text('选择固件文件并上传'),
-              style: _primaryButtonStyle(isDark),
-            ),
-          ),
+          // ===== 本地固件 =====
+          _buildSectionTitle('本地固件'),
+          const SizedBox(height: 8),
+          _buildLocalFirmwareSection(isDark, isConnected, battery),
+          const SizedBox(height: 28),
 
-          // ===== 应用固件按钮 (上传成功后出现) =====
-          if (_lastUploadedRemotePath != null && !_isUploading) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton.icon(
-                onPressed:
-                    isConnected && !_isApplying ? () => _applyFirmware() : null,
-                icon: _isApplying
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.system_update),
-                label: Text(_isApplying ? '正在触发刷写...' : '应用固件到机器人'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.warning,
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor:
-                      AppColors.warning.withOpacity(isDark ? 0.15 : 0.1),
-                  disabledForegroundColor: context.subtitleColor,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16)),
-                  elevation: 0,
-                ),
-              ),
-            ),
-          ],
+          // ===== 云端更新 =====
+          _buildSectionTitle('云端更新'),
+          const SizedBox(height: 8),
+          _buildCloudSection(isDark, isConnected, battery),
+          const SizedBox(height: 28),
 
-          const SizedBox(height: 32),
+          // ===== 升级须知 =====
+          _buildSectionTitle('升级须知'),
+          const SizedBox(height: 8),
+          _buildInfoSection(isDark),
 
-          // ===== 云端更新检查 =====
-          _buildCloudOtaSection(isDark, isConnected, battery),
-
-          // ===== 说明 =====
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 20),
-            child: Text(
-              '升级须知：\n'
-              '• 升级前确保机器人电量 >= 30%\n'
-              '• 升级过程中请勿断开连接\n'
-              '• 确保机器人处于静止状态\n'
-              '• 支持 .bin / .fw / .zip / .deb 格式固件包\n'
-              '• 上传完成后需点击"应用固件"触发刷写',
-              style: TextStyle(
-                fontSize: 12,
-                color: context.subtitleColor,
-                height: 1.6,
-              ),
-            ),
-          ),
+          const SizedBox(height: 40),
         ],
       ),
     );
   }
 
   // ================================================================
-  // 子组件
+  // 设备状态
   // ================================================================
 
-  Widget _buildCurrentFirmwareCard(
+  Widget _buildDeviceStatusSection(
       bool isDark, bool isConnected, String currentVersion, double battery) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkCard : Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: context.cardShadowColor,
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: isDark ? AppColors.borderDark : AppColors.borderLight),
       ),
-      child: Column(
+      child: Row(
         children: [
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(isDark ? 0.15 : 0.08),
-              shape: BoxShape.circle,
+          // 固件版本
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '当前固件',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: context.subtitleColor,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  currentVersion,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: context.titleColor,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ],
             ),
-            child:
-                const Icon(Icons.memory, size: 32, color: AppColors.primary),
           ),
-          const SizedBox(height: 16),
-          Text('当前固件',
-              style: TextStyle(fontSize: 13, color: context.subtitleColor)),
-          const SizedBox(height: 4),
-          Text(
-            currentVersion,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: isDark ? Colors.white : Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 16),
+          // 状态指示器
           Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              _buildStatusChip(
-                icon: Icons.power,
+              _StatusDot(
                 label: isConnected ? '已连接' : '未连接',
-                color: isConnected ? AppColors.success : AppColors.error,
+                color: isConnected ? AppColors.success : const Color(0xFF86868B),
               ),
-              const SizedBox(width: 10),
-              _buildStatusChip(
-                icon: Icons.battery_charging_full,
+              const SizedBox(width: 16),
+              _StatusDot(
                 label: '${battery.toStringAsFixed(0)}%',
                 color: battery > 30 ? AppColors.success : AppColors.error,
               ),
@@ -226,56 +169,213 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
     );
   }
 
-  Widget _buildCloudOtaSection(
-      bool isDark, bool isConnected, double battery) {
+  // ================================================================
+  // 本地固件
+  // ================================================================
+
+  Widget _buildLocalFirmwareSection(bool isDark, bool isConnected, double battery) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: isDark ? AppColors.borderDark : AppColors.borderLight),
+      ),
+      child: Column(
+        children: [
+          // 上传按钮
+          InkWell(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            onTap: isConnected && !_isUploading && battery >= 30
+                ? () => _selectAndUploadFirmware(context)
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '选择固件文件并上传',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: isConnected && battery >= 30
+                                ? context.titleColor
+                                : context.subtitleColor,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '支持 .bin / .fw / .zip / .deb 格式',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: context.subtitleColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.upload_outlined,
+                    size: 18,
+                    color: isConnected && battery >= 30
+                        ? AppColors.primary
+                        : context.subtitleColor,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // 应用固件按钮（上传成功后出现）
+          if (_lastUploadedRemotePath != null && !_isUploading) ...[
+            Divider(
+              height: 1,
+              color: isDark ? AppColors.borderDark : AppColors.borderLight,
+            ),
+            InkWell(
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(12),
+                bottomRight: Radius.circular(12),
+              ),
+              onTap: isConnected && !_isApplying ? () => _applyFirmware() : null,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _isApplying ? '正在触发刷写...' : '应用固件到机器人',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.warning,
+                        ),
+                      ),
+                    ),
+                    if (_isApplying)
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.warning,
+                        ),
+                      )
+                    else
+                      Icon(
+                        Icons.play_arrow_outlined,
+                        size: 18,
+                        color: AppColors.warning,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ================================================================
+  // 云端更新
+  // ================================================================
+
+  Widget _buildCloudSection(bool isDark, bool isConnected, double battery) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Icon(Icons.cloud_download_outlined,
-                size: 18, color: context.subtitleColor),
-            const SizedBox(width: 6),
-            Text(
-              '云端检查更新',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: isDark ? Colors.white : Colors.black87,
+        // 仓库来源 + 检查按钮
+        Container(
+          decoration: BoxDecoration(
+            color: isDark ? AppColors.darkCard : Colors.white,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(
+                color: isDark ? AppColors.borderDark : AppColors.borderLight),
+          ),
+          child: Column(
+            children: [
+              // 仓库来源
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '更新源',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: context.subtitleColor,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _cloudService.repoDisplay,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: context.titleColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      'GitHub Releases',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: context.subtitleColor,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const Spacer(),
-            Text(
-              _cloudService.repoDisplay,
-              style: TextStyle(fontSize: 11, color: context.subtitleColor),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
 
-        // 检查按钮
-        SizedBox(
-          width: double.infinity,
-          height: 44,
-          child: OutlinedButton.icon(
-            onPressed: _isCheckingCloud ? null : _checkCloudUpdate,
-            icon: _isCheckingCloud
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.refresh, size: 18),
-            label: Text(_isCheckingCloud ? '检查中...' : '检查最新版本'),
-            style: OutlinedButton.styleFrom(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-            ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 40,
+                  child: TextButton(
+                    onPressed: _isCheckingCloud ? null : _checkCloudUpdate,
+                    style: TextButton.styleFrom(
+                      backgroundColor: isDark
+                          ? Colors.white.withOpacity(0.05)
+                          : Colors.black.withOpacity(0.03),
+                      foregroundColor: context.titleColor,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: _isCheckingCloud
+                        ? SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: context.subtitleColor,
+                            ),
+                          )
+                        : const Text(
+                            '检查最新版本',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                          ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
 
         if (_cloudError != null) ...[
-          const SizedBox(height: 10),
-          _buildWarningBanner(_cloudError!, AppColors.error),
+          const SizedBox(height: 12),
+          _buildNotice(_cloudError!, NoticeType.error),
         ],
 
         // 最新版本信息
@@ -289,164 +389,188 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
 
   Widget _buildReleaseCard(bool isDark, bool isConnected, double battery) {
     final release = _latestRelease!;
-    final firmwareAssets = release.assets
-        .where((a) => a.category == 'firmware')
-        .toList();
+    final firmwareAssets =
+        release.assets.where((a) => a.category == 'firmware').toList();
 
     return Container(
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkCard : Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: context.cardShadowColor,
-            blurRadius: 14,
-            offset: const Offset(0, 5),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(
+            color: isDark ? AppColors.borderDark : AppColors.borderLight),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  release.tagName,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.primary,
-                  ),
-                ),
-              ),
-              if (release.prerelease)
+          // Header: 版本号 + 日期
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: Row(
+              children: [
+                // 版本 tag
                 Container(
-                  margin: const EdgeInsets.only(left: 6),
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: AppColors.warning.withOpacity(0.1),
+                    color: AppColors.primary.withOpacity(isDark ? 0.15 : 0.08),
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: const Text(
-                    'Pre-release',
-                    style: TextStyle(fontSize: 10, color: AppColors.warning),
+                  child: Text(
+                    release.tagName,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
                   ),
                 ),
-              const Spacer(),
-              Text(
-                release.publishedDate,
-                style: TextStyle(fontSize: 11, color: context.subtitleColor),
-              ),
-            ],
+                if (release.prerelease) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      'Pre',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.warning,
+                      ),
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                Text(
+                  release.publishedDate,
+                  style: TextStyle(fontSize: 11, color: context.subtitleColor),
+                ),
+              ],
+            ),
           ),
-          if (release.name.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Text(
-              release.name,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: isDark ? Colors.white : Colors.black87,
+
+          // Release 名称
+          if (release.name.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Text(
+                release.name,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: context.titleColor,
+                ),
               ),
             ),
-          ],
-          if (release.body.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              release.body.length > 300
-                  ? '${release.body.substring(0, 300)}...'
-                  : release.body,
-              style: TextStyle(
-                fontSize: 12,
-                color: context.subtitleColor,
-                height: 1.4,
+
+          // Release 描述
+          if (release.body.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+              child: Text(
+                release.body.length > 200
+                    ? '${release.body.substring(0, 200)}...'
+                    : release.body,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: context.subtitleColor,
+                  height: 1.5,
+                ),
               ),
             ),
-          ],
+
+          const SizedBox(height: 12),
 
           // 固件资产列表
-          if (firmwareAssets.isEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              '此版本无固件文件',
-              style: TextStyle(fontSize: 12, color: context.subtitleColor),
+          if (firmwareAssets.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Text(
+                '此版本无固件文件',
+                style: TextStyle(fontSize: 12, color: context.subtitleColor),
+              ),
+            )
+          else ...[
+            Divider(
+              height: 1,
+              color: isDark ? AppColors.borderDark : AppColors.borderLight,
             ),
-          ] else ...[
-            const SizedBox(height: 16),
-            Text(
-              '固件文件（${firmwareAssets.length}）',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: context.subtitleColor,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+              child: Text(
+                '固件文件（${firmwareAssets.length}）',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: context.subtitleColor,
+                  letterSpacing: 0.3,
+                ),
               ),
             ),
-            const SizedBox(height: 8),
-            ...firmwareAssets.map((asset) => _buildAssetTile(
+            ...firmwareAssets.map((asset) => _buildAssetRow(
                   asset,
                   isDark,
                   canUpload: isConnected && battery >= 30,
                 )),
+            const SizedBox(height: 8),
           ],
 
-          // 显示其他可部署资产
+          // 其他可部署资产
           if (release.deployableAssets.length > firmwareAssets.length) ...[
-            const SizedBox(height: 12),
-            Text(
-              '其他资源',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: context.subtitleColor,
+            Divider(
+              height: 1,
+              color: isDark ? AppColors.borderDark : AppColors.borderLight,
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+              child: Text(
+                '其他资源',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: context.subtitleColor,
+                  letterSpacing: 0.3,
+                ),
               ),
             ),
-            const SizedBox(height: 8),
             ...release.deployableAssets
                 .where((a) => a.category != 'firmware')
-                .map((asset) => _buildAssetTile(
+                .map((asset) => _buildAssetRow(
                       asset,
                       isDark,
                       canUpload: isConnected,
                     )),
+            const SizedBox(height: 8),
           ],
         ],
       ),
     );
   }
 
-  Widget _buildAssetTile(CloudAsset asset, bool isDark,
+  Widget _buildAssetRow(CloudAsset asset, bool isDark,
       {required bool canUpload}) {
     final isThisDownloading =
         _isDownloadingAsset && _downloadingAssetName == asset.name;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: isDark
-            ? Colors.white.withOpacity(0.04)
-            : Colors.black.withOpacity(0.02),
-        borderRadius: BorderRadius.circular(12),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: Column(
         children: [
           Row(
             children: [
-              Icon(
-                _categoryIcon(asset.category),
-                size: 18,
-                color: _categoryColor(asset.category),
+              // 分类小圆点
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: _categoryColor(asset.category),
+                  shape: BoxShape.circle,
+                ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -455,53 +579,66 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
                       asset.name,
                       style: TextStyle(
                         fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: isDark ? Colors.white : Colors.black87,
+                        fontWeight: FontWeight.w500,
+                        color: context.titleColor,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
-                      '${asset.formattedSize} · ${asset.category}',
+                      asset.formattedSize,
                       style: TextStyle(
-                          fontSize: 11, color: context.subtitleColor),
+                        fontSize: 11,
+                        color: context.subtitleColor,
+                      ),
                     ),
                   ],
                 ),
               ),
               const SizedBox(width: 8),
+              // 部署按钮
               SizedBox(
-                height: 32,
-                child: ElevatedButton(
+                height: 28,
+                child: TextButton(
                   onPressed: canUpload && !_isDownloadingAsset
                       ? () => _downloadAndUploadAsset(asset)
                       : null,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
+                  style: TextButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
+                    backgroundColor: isDark
+                        ? Colors.white.withOpacity(0.06)
+                        : Colors.black.withOpacity(0.04),
+                    foregroundColor: AppColors.primary,
+                    disabledForegroundColor: context.subtitleColor,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8)),
-                    elevation: 0,
-                    textStyle: const TextStyle(fontSize: 12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    textStyle: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w500),
                   ),
                   child: isThisDownloading
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
+                      ? SizedBox(
+                          width: 12,
+                          height: 12,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
+                            strokeWidth: 1.5,
+                            color: AppColors.primary,
+                          ),
+                        )
                       : const Text('部署'),
                 ),
               ),
             ],
           ),
           if (isThisDownloading) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             ClipRRect(
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
                 value: _downloadProgress,
-                minHeight: 4,
+                minHeight: 2,
+                backgroundColor: isDark
+                    ? Colors.white.withOpacity(0.06)
+                    : Colors.black.withOpacity(0.04),
               ),
             ),
           ],
@@ -510,125 +647,195 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
     );
   }
 
-  Widget _buildProgressCard(bool isDark, String title, double progress,
-      {String? subtitle}) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.darkCard : Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: context.cardShadowColor,
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Text(title,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: isDark ? Colors.white : Colors.black87,
-              )),
-          if (subtitle != null) ...[
-            const SizedBox(height: 4),
-            Text(subtitle,
-                style: TextStyle(fontSize: 12, color: context.subtitleColor)),
-          ],
-          const SizedBox(height: 16),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 8,
-              backgroundColor: isDark
-                  ? Colors.white.withOpacity(0.06)
-                  : Colors.black.withOpacity(0.05),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${(progress * 100).toStringAsFixed(0)}%',
-            style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.primary),
-          ),
-        ],
-      ),
-    );
-  }
+  // ================================================================
+  // 上传进度
+  // ================================================================
 
-  Widget _buildStatusChip(
-      {required IconData icon, required String label, required Color color}) {
+  Widget _buildProgressSection(String title, double progress,
+      {String? subtitle}) {
     final isDark = context.isDark;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color.withOpacity(isDark ? 0.12 : 0.08),
-        borderRadius: BorderRadius.circular(20),
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(
+            color: isDark ? AppColors.borderDark : AppColors.borderLight),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 5),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w600, color: color)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWarningBanner(String text, Color color) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.info_outline, size: 18, color: color),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: context.titleColor,
+                  ),
+                ),
+              ),
+              Text(
+                '${(progress * 100).toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+            ],
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              style: TextStyle(fontSize: 12, color: context.subtitleColor),
+            ),
+          ],
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 4,
+              backgroundColor: isDark
+                  ? Colors.white.withOpacity(0.06)
+                  : Colors.black.withOpacity(0.04),
+            ),
           ),
         ],
       ),
     );
   }
 
-  ButtonStyle _primaryButtonStyle(bool isDark) {
-    return ElevatedButton.styleFrom(
-      backgroundColor: AppColors.primary,
-      foregroundColor: Colors.white,
-      disabledBackgroundColor:
-          AppColors.primary.withOpacity(isDark ? 0.15 : 0.1),
-      disabledForegroundColor: context.subtitleColor,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      elevation: 0,
+  // ================================================================
+  // 升级须知
+  // ================================================================
+
+  Widget _buildInfoSection(bool isDark) {
+    final items = [
+      '确保机器人电量 >= 30%',
+      '升级过程中请勿断开连接',
+      '确保机器人处于静止状态',
+      '支持 .bin / .fw / .zip / .deb 格式',
+      '上传完成后需点击"应用固件"触发刷写',
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(
+            color: isDark ? AppColors.borderDark : AppColors.borderLight),
+      ),
+      child: Column(
+        children: items.asMap().entries.map((entry) {
+          final isLast = entry.key == items.length - 1;
+          return Padding(
+            padding: EdgeInsets.only(bottom: isLast ? 0 : 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Container(
+                    width: 4,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: context.subtitleColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    entry.value,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: context.subtitleColor,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
     );
   }
 
-  IconData _categoryIcon(String category) {
-    switch (category) {
-      case 'firmware':
-        return Icons.memory;
-      case 'model':
-        return Icons.psychology;
-      case 'map':
-        return Icons.map;
-      case 'config':
-        return Icons.settings;
-      default:
-        return Icons.insert_drive_file;
+  // ================================================================
+  // 通用组件
+  // ================================================================
+
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 2),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: context.subtitleColor,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotice(String text, NoticeType type) {
+    final Color accentColor;
+    switch (type) {
+      case NoticeType.error:
+        accentColor = AppColors.error;
+      case NoticeType.warning:
+        accentColor = AppColors.warning;
+      case NoticeType.success:
+        accentColor = AppColors.success;
+      case NoticeType.info:
+        accentColor = AppColors.primary;
     }
+
+    final isDark = context.isDark;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.darkCard : Colors.white,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          border: Border.all(
+              color: isDark ? AppColors.borderDark : AppColors.borderLight),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 3,
+              height: 28,
+              decoration: BoxDecoration(
+                color: accentColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                text,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: context.titleColor,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Color _categoryColor(String category) {
@@ -697,7 +904,7 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
       setState(() {
         _isUploading = false;
         if (response.success) {
-          _statusMessage = '固件上传成功！可点击下方按钮应用到机器人。';
+          _statusMessage = '固件上传成功，可点击下方按钮应用到机器人';
           _lastUploadedRemotePath = remotePath;
         } else {
           _statusMessage = '上传失败: ${response.message}';
@@ -728,7 +935,7 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
       setState(() {
         _isApplying = false;
         _statusMessage = response.success
-            ? '固件应用指令已发送，机器人可能即将重启。'
+            ? '固件应用指令已发送，机器人可能即将重启'
             : '应用失败: ${response.message}';
         if (response.success) _lastUploadedRemotePath = null;
       });
@@ -832,6 +1039,45 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
+    );
+  }
+}
+
+// ================================================================
+// 辅助枚举和组件
+// ================================================================
+
+enum NoticeType { error, warning, success, info }
+
+class _StatusDot extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _StatusDot({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: context.subtitleColor,
+          ),
+        ),
+      ],
     );
   }
 }

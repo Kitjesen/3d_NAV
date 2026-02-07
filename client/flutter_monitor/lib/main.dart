@@ -95,26 +95,33 @@ class _AppWithBindingsState extends State<_AppWithBindings> {
     final prefs = context.read<SettingsPreferences>();
     if (!prefs.alertInApp) return; // 用户关闭了 APP 内提醒
 
-    final Color bgColor;
-    final IconData icon;
+    final Color accentColor;
     switch (alert.level) {
       case AlertLevel.critical:
-        bgColor = AppColors.error;
-        icon = Icons.error_outline;
+        accentColor = AppColors.error;
       case AlertLevel.warning:
-        bgColor = AppColors.warning;
-        icon = Icons.warning_amber_rounded;
+        accentColor = AppColors.warning;
       case AlertLevel.info:
-        bgColor = AppColors.info;
-        icon = Icons.info_outline;
+        accentColor = AppColors.primary;
     }
+
+    final brightness = Theme.of(context).brightness;
+    final isDark = brightness == Brightness.dark;
 
     _messengerKey.currentState?.showSnackBar(
       SnackBar(
         content: Row(
           children: [
-            Icon(icon, color: Colors.white, size: 20),
-            const SizedBox(width: 10),
+            // Left accent strip
+            Container(
+              width: 3,
+              height: 36,
+              decoration: BoxDecoration(
+                color: accentColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -122,31 +129,55 @@ class _AppWithBindingsState extends State<_AppWithBindings> {
                 children: [
                   Text(
                     alert.title,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                      color: Colors.white,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: isDark ? Colors.white : const Color(0xFF1A1A1A),
                     ),
                   ),
+                  const SizedBox(height: 2),
                   Text(
                     alert.message,
-                    style: const TextStyle(fontSize: 12, color: Colors.white70),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark
+                          ? Colors.white.withOpacity(0.5)
+                          : Colors.black.withOpacity(0.45),
+                    ),
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: 8),
+            // Dismiss button
+            GestureDetector(
+              onTap: () {
+                _messengerKey.currentState?.hideCurrentSnackBar();
+              },
+              child: Icon(
+                Icons.close,
+                size: 16,
+                color: isDark
+                    ? Colors.white.withOpacity(0.35)
+                    : Colors.black.withOpacity(0.3),
+              ),
+            ),
           ],
         ),
-        backgroundColor: bgColor,
+        backgroundColor: isDark ? const Color(0xFF1C1C1E) : Colors.white,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        duration: const Duration(seconds: 4),
-        action: SnackBarAction(
-          label: '关闭',
-          textColor: Colors.white,
-          onPressed: () {},
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: isDark
+                ? Colors.white.withOpacity(0.08)
+                : const Color(0xFFE5E5E5),
+          ),
         ),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        duration: const Duration(seconds: 5),
       ),
     );
   }

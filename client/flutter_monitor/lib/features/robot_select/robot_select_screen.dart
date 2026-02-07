@@ -6,10 +6,7 @@ import 'package:flutter_monitor/app/theme.dart';
 import 'package:flutter_monitor/core/models/robot_profile.dart';
 import 'package:flutter_monitor/core/providers/robot_profile_provider.dart';
 
-/// 机器人型号选择页面
-///
-/// 以卡片沙盒形式展示所有已注册的机器人型号。
-/// 点击卡片展开详情，选择后自动返回。
+/// 机器人型号选择页面 — 毛玻璃卡片风格
 class RobotSelectScreen extends StatefulWidget {
   const RobotSelectScreen({super.key});
 
@@ -18,23 +15,48 @@ class RobotSelectScreen extends StatefulWidget {
 }
 
 class _RobotSelectScreenState extends State<RobotSelectScreen>
-    with SingleTickerProviderStateMixin {
-  String? _expandedId;
+    with TickerProviderStateMixin {
   late AnimationController _staggerController;
+  final List<AnimationController> _cardControllers = [];
+  bool _loaded = false;
 
   @override
   void initState() {
     super.initState();
     _staggerController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 600),
+      duration: const Duration(milliseconds: 400),
     )..forward();
+    // Delay to simulate load + trigger card entrance
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted) setState(() => _loaded = true);
+    });
   }
 
   @override
   void dispose() {
     _staggerController.dispose();
+    for (final c in _cardControllers) {
+      c.dispose();
+    }
     super.dispose();
+  }
+
+  AnimationController _getCardController(int index) {
+    while (_cardControllers.length <= index) {
+      final c = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 500),
+      );
+      _cardControllers.add(c);
+    }
+    if (!_cardControllers[index].isAnimating &&
+        _cardControllers[index].value == 0) {
+      Future.delayed(Duration(milliseconds: 80 * index), () {
+        if (mounted) _cardControllers[index].forward();
+      });
+    }
+    return _cardControllers[index];
   }
 
   @override
@@ -42,202 +64,386 @@ class _RobotSelectScreenState extends State<RobotSelectScreen>
     final profileProvider = context.watch<RobotProfileProvider>();
     final profiles = profileProvider.allProfiles;
     final currentId = profileProvider.current.id;
+    final isDark = context.isDark;
 
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(gradient: context.bgGradient),
-        child: SafeArea(
-          child: CustomScrollView(
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              // Header
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: Icon(Icons.arrow_back_ios_new,
-                            size: 20,
-                            color: context.titleColor),
-                        onPressed: () => Navigator.pop(context),
+      backgroundColor:
+          isDark ? AppColors.darkBackground : AppColors.lightBackground,
+      body: SafeArea(
+        child: CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            // ─── Header ───
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                child: Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Icon(Icons.arrow_back_ios_new,
+                          size: 18, color: context.titleColor),
+                    ),
+                    const SizedBox(width: 16),
+                    Text(
+                      '选择机器人',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        color: context.titleColor,
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '选择机器人',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.5,
-                                color: context.titleColor,
-                              ),
-                            ),
-                            Text(
-                              '轻触卡片查看详情，选择型号开始使用',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: context.subtitleColor,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // ─── Subtitle ───
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+                child: Text(
+                  '选择型号开始使用',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: context.subtitleColor,
                   ),
                 ),
               ),
+            ),
 
-              // Current selection indicator
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color:
-                              profileProvider.current.themeColor.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              profileProvider.current.icon,
-                              size: 14,
-                              color: profileProvider.current.themeColor,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '当前: ${profileProvider.current.name}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: profileProvider.current.themeColor,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-              // Robot Cards
+            // ─── Cards ───
+            if (_loaded)
               SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-                sliver: SliverList(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                sliver: SliverGrid(
+                  gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 0.78,
+                  ),
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
                       final profile = profiles[index];
                       final isSelected = profile.id == currentId;
-                      final isExpanded = profile.id == _expandedId;
+                      final ctrl = _getCardController(index);
 
-                      return _buildAnimatedChild(
-                        index,
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 14),
-                          child: _RobotSandboxCard(
-                            profile: profile,
-                            isSelected: isSelected,
-                            isExpanded: isExpanded,
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              setState(() {
-                                _expandedId =
-                                    isExpanded ? null : profile.id;
-                              });
-                            },
-                            onSelect: () async {
-                              HapticFeedback.mediumImpact();
-                              await profileProvider.select(profile);
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                        '已选择 ${profile.name}'),
-                                    behavior: SnackBarBehavior.floating,
-                                    duration: const Duration(seconds: 1),
-                                  ),
-                                );
-                              }
-                            },
-                          ),
+                      return AnimatedBuilder(
+                        listenable: ctrl,
+                        child: _RobotCard(
+                          profile: profile,
+                          isSelected: isSelected,
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            _showDetailSheet(context, profile, isSelected);
+                          },
                         ),
+                        builder: (context, child) {
+                          final t = CurvedAnimation(
+                            parent: ctrl,
+                            curve: Curves.easeOutCubic,
+                          ).value;
+                          return Opacity(
+                            opacity: t,
+                            child: Transform.translate(
+                              offset: Offset(0, 24 * (1 - t)),
+                              child: Transform.scale(
+                                scale: 0.92 + 0.08 * t,
+                                child: child,
+                              ),
+                            ),
+                          );
+                        },
                       );
                     },
                     childCount: profiles.length,
                   ),
                 ),
               ),
-            ],
-          ),
+
+            // Loading placeholder
+            if (!_loaded)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                sliver: SliverGrid(
+                  gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 0.78,
+                  ),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => _ShimmerCard(isDark: isDark),
+                    childCount: 4,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildAnimatedChild(int index, Widget child) {
-    final delay = index * 0.12;
-    final animation = CurvedAnimation(
-      parent: _staggerController,
-      curve: Interval(
-        delay.clamp(0.0, 0.7),
-        (delay + 0.3).clamp(0.0, 1.0),
-        curve: Curves.easeOutCubic,
-      ),
+  void _showDetailSheet(
+      BuildContext context, RobotProfile profile, bool isSelected) {
+    final isDark = context.isDark;
+    final color = profile.themeColor;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            decoration: BoxDecoration(
+              color: isDark
+                  ? const Color(0xFF1C1C1E).withOpacity(0.92)
+                  : Colors.white.withOpacity(0.92),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isDark ? AppColors.borderDark : AppColors.borderLight,
+              ),
+            ),
+            child: DraggableScrollableSheet(
+              initialChildSize: 0.52,
+              minChildSize: 0.3,
+              maxChildSize: 0.75,
+              expand: false,
+              builder: (_, scrollController) {
+                return SingleChildScrollView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Drag handle
+                      Center(
+                        child: Container(
+                          width: 36,
+                          height: 4,
+                          margin: const EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: context.subtitleColor.withOpacity(0.25),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+
+                      // Name row
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  profile.name,
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    color: context.titleColor,
+                                    letterSpacing: -0.3,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  profile.subtitle,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: context.subtitleColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (isSelected)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: color.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                '当前',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: color,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Description
+                      Text(
+                        profile.description,
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.6,
+                          color: context.subtitleColor,
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+
+                      // Specs — compact row
+                      _buildSpecChips(context, profile),
+                      const SizedBox(height: 14),
+
+                      // Network
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.04)
+                              : Colors.black.withOpacity(0.03),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            Text(
+                              '${profile.defaultHost}:${profile.defaultPort}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontFamily: 'monospace',
+                                color: context.subtitleColor,
+                              ),
+                            ),
+                            const Spacer(),
+                            Text(
+                              profile.urdfAsset != null ? '3D 模型' : '无 URDF',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: profile.urdfAsset != null
+                                    ? color
+                                    : context.subtitleColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Select button
+                      SizedBox(
+                        width: double.infinity,
+                        height: 44,
+                        child: TextButton(
+                          onPressed: profile.available
+                              ? () async {
+                                  final provider =
+                                      context.read<RobotProfileProvider>();
+                                  HapticFeedback.mediumImpact();
+                                  await provider.select(profile);
+                                  if (ctx.mounted) Navigator.pop(ctx);
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content:
+                                            Text('已选择 ${profile.name}'),
+                                        behavior: SnackBarBehavior.floating,
+                                        duration:
+                                            const Duration(seconds: 1),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(8)),
+                                      ),
+                                    );
+                                  }
+                                }
+                              : null,
+                          style: TextButton.styleFrom(
+                            backgroundColor: color,
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor:
+                                Colors.grey.withOpacity(0.15),
+                            disabledForegroundColor: Colors.grey,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          child: Text(
+                            isSelected
+                                ? '当前已选择'
+                                : (profile.available ? '选择此型号' : '敬请期待'),
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
     );
-    return FadeTransition(
-      opacity: animation,
-      child: SlideTransition(
-        position: Tween<Offset>(
-          begin: const Offset(0, 0.08),
-          end: Offset.zero,
-        ).animate(animation),
-        child: child,
-      ),
+  }
+
+  Widget _buildSpecChips(BuildContext context, RobotProfile profile) {
+    final isDark = context.isDark;
+    final specs = [
+      '${profile.jointCount} 关节',
+      '${profile.legNames.length} 腿',
+      '${profile.jointsPerLeg} DOF',
+      '${profile.maxLinearSpeed} m/s',
+      '${profile.mass} kg',
+    ];
+
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: specs.map((s) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: isDark
+                ? Colors.white.withOpacity(0.05)
+                : Colors.black.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            s,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: context.subtitleColor,
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 }
 
-/// 沙盒卡片 — 可展开的机器人型号卡片（带按压缩放）
-class _RobotSandboxCard extends StatefulWidget {
+// ================================================================
+// 毛玻璃风格机器人卡片
+// ================================================================
+
+class _RobotCard extends StatelessWidget {
   final RobotProfile profile;
   final bool isSelected;
-  final bool isExpanded;
   final VoidCallback onTap;
-  final VoidCallback onSelect;
 
-  const _RobotSandboxCard({
+  const _RobotCard({
     required this.profile,
     required this.isSelected,
-    required this.isExpanded,
     required this.onTap,
-    required this.onSelect,
   });
-
-  @override
-  State<_RobotSandboxCard> createState() => _RobotSandboxCardState();
-}
-
-class _RobotSandboxCardState extends State<_RobotSandboxCard> {
-  double _scale = 1.0;
-
-  void _onTapDown(TapDownDetails _) => setState(() => _scale = 0.97);
-  void _onTapUp(TapUpDetails _) => setState(() => _scale = 1.0);
-  void _onTapCancel() => setState(() => _scale = 1.0);
-
-  // Forward getters for readability
-  RobotProfile get profile => widget.profile;
-  bool get isSelected => widget.isSelected;
-  bool get isExpanded => widget.isExpanded;
 
   @override
   Widget build(BuildContext context) {
@@ -245,449 +451,266 @@ class _RobotSandboxCardState extends State<_RobotSandboxCard> {
     final color = profile.themeColor;
 
     return GestureDetector(
-      onTapDown: _onTapDown,
-      onTapUp: _onTapUp,
-      onTapCancel: _onTapCancel,
-      onTap: widget.onTap,
-      child: AnimatedScale(
-        scale: _scale,
-        duration: AppDurations.fast,
-        curve: Curves.easeOut,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.easeOutCubic,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppRadius.card),
-            color: context.cardColor,
-            border: Border.all(
-              color: isSelected
-                  ? color.withOpacity(isDark ? 0.5 : 0.4)
-                  : (isDark
-                      ? Colors.white.withOpacity(0.04)
-                      : Colors.transparent),
-              width: isSelected ? 2 : 1,
-            ),
-            boxShadow: [
-              if (isSelected)
-                AppShadows.glow(color, blur: 24)
-              else
-                isDark ? AppShadows.dark() : AppShadows.light(),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(AppRadius.card),
-          child: Column(
-            children: [
-              // ─── Collapsed Header (always visible) ───
-              Padding(
-                padding: const EdgeInsets.all(18),
-                child: Row(
-                  children: [
-                    // Robot icon with glow
-                    Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: profile.available
-                              ? [color, color.withOpacity(0.65)]
-                              : [Colors.grey.shade400, Colors.grey.shade500],
-                        ),
-                        borderRadius: BorderRadius.circular(AppRadius.lg),
-                        boxShadow: [
-                          AppShadows.glow(
-                              profile.available ? color : Colors.grey,
-                              blur: 14),
-                        ],
-                      ),
-                      child: Icon(profile.icon, color: Colors.white, size: 26),
-                    ),
-                    const SizedBox(width: 14),
-                    // Name + subtitle
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Text(
-                                profile.name,
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  color: context.titleColor,
-                                  letterSpacing: -0.3,
-                                ),
-                              ),
-                              if (!profile.available) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.grey.withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '即将推出',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w600,
-                                      color: context.subtitleColor,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            profile.subtitle,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: context.subtitleColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Selection checkmark / expand indicator
-                    if (isSelected)
-                      Container(
-                        width: 28,
-                        height: 28,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                        ),
-                        child:
-                            const Icon(Icons.check, color: Colors.white, size: 16),
-                      )
-                    else
-                      AnimatedRotation(
-                        turns: isExpanded ? 0.5 : 0.0,
-                        duration: const Duration(milliseconds: 300),
-                        child: Icon(
-                          Icons.keyboard_arrow_down,
-                          color: context.subtitleColor,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-
-              // ─── Quick specs row (always visible) ───
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 0, 18, 14),
-                child: Row(
-                  children: [
-                    _SpecChip(
-                      icon: Icons.precision_manufacturing,
-                      label: '${profile.jointCount}J',
-                      color: color,
-                    ),
-                    const SizedBox(width: 8),
-                    _SpecChip(
-                      icon: Icons.speed,
-                      label: '${profile.maxLinearSpeed} m/s',
-                      color: color,
-                    ),
-                    const SizedBox(width: 8),
-                    _SpecChip(
-                      icon: Icons.fitness_center,
-                      label: '${profile.mass} kg',
-                      color: color,
-                    ),
-                    const Spacer(),
-                    Text(
-                      profile.protoType,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: color.withOpacity(0.6),
-                        fontFamily: 'monospace',
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // ─── Expanded Detail Panel ───
-              AnimatedCrossFade(
-                firstChild: const SizedBox.shrink(),
-                secondChild: _buildExpandedPanel(context),
-                crossFadeState: isExpanded
-                    ? CrossFadeState.showSecond
-                    : CrossFadeState.showFirst,
-                duration: const Duration(milliseconds: 300),
-                sizeCurve: Curves.easeOutCubic,
-              ),
-            ],
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected
+                ? color.withOpacity(0.6)
+                : (isDark ? AppColors.borderDark : AppColors.borderLight),
+            width: isSelected ? 1.5 : 1,
           ),
         ),
-      ),  // AnimatedScale
-      ),  // GestureDetector
-    );
-  }
-
-  Widget _buildExpandedPanel(BuildContext context) {
-    final isDark = context.isDark;
-    final color = profile.themeColor;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark
-            ? Colors.white.withOpacity(0.03)
-            : Colors.black.withOpacity(0.02),
-      ),
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Divider
-          Container(
-            height: 1,
-            color: context.dividerColor,
-            margin: const EdgeInsets.only(bottom: 14),
-          ),
-
-          // Description
-          Text(
-            profile.description,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.5,
-              color: isDark ? Colors.white70 : Colors.black54,
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // ─── Background ───
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: isDark
+                      ? [
+                          const Color(0xFF1A1A2E),
+                          const Color(0xFF16162A),
+                          const Color(0xFF0F0F1A),
+                        ]
+                      : [
+                          const Color(0xFFF5F5FA),
+                          const Color(0xFFEEEEF5),
+                          const Color(0xFFE8E8F0),
+                        ],
+                ),
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
 
-          // Detail specs grid
-          Row(
-            children: [
-              Expanded(
-                child: _DetailItem(
-                  label: '关节数',
-                  value: '${profile.jointCount}',
-                  icon: Icons.precision_manufacturing,
-                ),
+            // ─── Frosted glass overlay ───
+            BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 0.5, sigmaY: 0.5),
+              child: Container(
+                color: isDark
+                    ? Colors.white.withOpacity(0.02)
+                    : Colors.white.withOpacity(0.4),
               ),
-              Expanded(
-                child: _DetailItem(
-                  label: '腿数',
-                  value: '${profile.legNames.length}',
-                  icon: Icons.pets,
-                ),
-              ),
-              Expanded(
-                child: _DetailItem(
-                  label: '每腿关节',
-                  value: '${profile.jointsPerLeg}',
-                  icon: Icons.settings,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _DetailItem(
-                  label: '最大线速',
-                  value: '${profile.maxLinearSpeed} m/s',
-                  icon: Icons.speed,
-                ),
-              ),
-              Expanded(
-                child: _DetailItem(
-                  label: '最大角速',
-                  value: '${profile.maxAngularSpeed} r/s',
-                  icon: Icons.rotate_right,
-                ),
-              ),
-              Expanded(
-                child: _DetailItem(
-                  label: '质量',
-                  value: '${profile.mass} kg',
-                  icon: Icons.fitness_center,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          // Network defaults
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.white.withOpacity(0.04)
-                  : Colors.black.withOpacity(0.03),
-              borderRadius: BorderRadius.circular(12),
             ),
-            child: Row(
-              children: [
-                Icon(Icons.wifi, size: 16, color: context.subtitleColor),
-                const SizedBox(width: 8),
-                Text(
-                  '${profile.defaultHost}:${profile.defaultPort}',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontFamily: 'monospace',
-                    color: isDark ? Colors.white70 : Colors.black87,
-                  ),
-                ),
-                const Spacer(),
-                if (profile.urdfAsset != null)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.view_in_ar, size: 14, color: color),
-                      const SizedBox(width: 4),
-                      Text(
-                        '3D',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: color,
-                        ),
+
+            // ─── Content ───
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Icon area
+                  Expanded(
+                    child: Center(
+                      child: Icon(
+                        profile.icon,
+                        size: 40,
+                        color: isDark
+                            ? Colors.white.withOpacity(0.35)
+                            : Colors.black.withOpacity(0.15),
                       ),
-                    ],
-                  )
-                else
+                    ),
+                  ),
+
+                  // ─── Info ───
+                  // Name
                   Text(
-                    'No URDF',
+                    profile.name,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: context.titleColor,
+                      letterSpacing: -0.2,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  // Subtitle
+                  Text(
+                    profile.subtitle,
                     style: TextStyle(
                       fontSize: 11,
                       color: context.subtitleColor,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Action button
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton(
-              onPressed: profile.available ? widget.onSelect : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: color,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey.withOpacity(0.3),
-                disabledForegroundColor: Colors.grey,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                ),
-                elevation: 0,
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    isSelected
-                        ? '当前已选择'
-                        : (profile.available ? '选择此型号' : '敬请期待'),
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  const SizedBox(height: 8),
+                  // Bottom: specs + selected indicator
+                  Row(
+                    children: [
+                      Text(
+                        '${profile.jointCount}J · ${profile.mass.toStringAsFixed(0)}kg',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: context.subtitleColor,
+                        ),
+                      ),
+                      const Spacer(),
+                      if (isSelected)
+                        Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.check,
+                              size: 12, color: Colors.white),
+                        ),
+                    ],
                   ),
                 ],
               ),
             ),
-          ),
-        ],
+
+            // ─── Unavailable overlay ───
+            if (!profile.available)
+              Container(
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.black.withOpacity(0.5)
+                      : Colors.white.withOpacity(0.6),
+                ),
+                child: Center(
+                  child: Text(
+                    '即将推出',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: context.subtitleColor,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
-// ─── Helper Widgets ───
+// ================================================================
+// 加载骨架卡片（shimmer placeholder）
+// ================================================================
 
-class _SpecChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
+class _ShimmerCard extends StatefulWidget {
+  final bool isDark;
+  const _ShimmerCard({required this.isDark});
 
-  const _SpecChip({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
+  @override
+  State<_ShimmerCard> createState() => _ShimmerCardState();
+}
+
+class _ShimmerCardState extends State<_ShimmerCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _shimmerController;
+
+  @override
+  void initState() {
+    super.initState();
+    _shimmerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _shimmerController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = context.isDark;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(isDark ? 0.12 : 0.08),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: color),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: color,
+    return AnimatedBuilder(
+      listenable: _shimmerController,
+      builder: (context, _) {
+        final shimmer = _shimmerController.value;
+        final baseColor = widget.isDark
+            ? Colors.white.withOpacity(0.04)
+            : Colors.black.withOpacity(0.04);
+        final highlightColor = widget.isDark
+            ? Colors.white.withOpacity(0.08)
+            : Colors.black.withOpacity(0.07);
+        final color =
+            Color.lerp(baseColor, highlightColor, (shimmer * 2 - 1).abs())!;
+
+        return Container(
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: widget.isDark
+                  ? AppColors.borderDark
+                  : AppColors.borderLight,
             ),
           ),
-        ],
-      ),
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Spacer(),
+              // Name placeholder
+              Container(
+                height: 14,
+                width: 80,
+                decoration: BoxDecoration(
+                  color: baseColor,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              const SizedBox(height: 6),
+              // Subtitle placeholder
+              Container(
+                height: 10,
+                width: 60,
+                decoration: BoxDecoration(
+                  color: baseColor,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Specs placeholder
+              Container(
+                height: 10,
+                width: 50,
+                decoration: BoxDecoration(
+                  color: baseColor,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
 
-class _DetailItem extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
+// ================================================================
+// AnimatedBuilder — simple alias for AnimatedWidget pattern
+// ================================================================
 
-  const _DetailItem({
-    required this.label,
-    required this.value,
-    required this.icon,
-  });
+class AnimatedBuilder extends AnimatedWidget {
+  final Widget? child;
+  final Widget Function(BuildContext context, Widget? child) builder;
+
+  const AnimatedBuilder({
+    super.key,
+    required super.listenable,
+    required this.builder,
+    this.child,
+  }) : super();
+
+  AnimationController get controller => listenable as AnimationController;
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Icon(icon, size: 18, color: context.subtitleColor),
-        const SizedBox(height: 6),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: context.titleColor,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 10,
-            color: context.subtitleColor,
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => builder(context, child);
 }

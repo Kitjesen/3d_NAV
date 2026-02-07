@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter_monitor/app/theme.dart';
 import 'package:flutter_monitor/core/storage/settings_preferences.dart';
 import 'package:flutter_monitor/core/services/alert_monitor_service.dart';
 import 'package:flutter_monitor/features/settings/alert_history_page.dart';
 import 'package:flutter_monitor/shared/widgets/feature_card.dart';
+import 'package:flutter_monitor/app/theme.dart';
 
 class AlertSettingsPage extends StatelessWidget {
   const AlertSettingsPage({super.key});
@@ -30,8 +30,6 @@ class AlertSettingsPage extends StatelessWidget {
             title: '提醒方式',
             children: [
               SettingsTile(
-                icon: Icons.notifications_active_outlined,
-                iconColor: AppColors.primary,
                 title: 'APP 内提醒',
                 subtitle: '在 APP 内显示告警横幅',
                 trailing: Switch(
@@ -40,8 +38,6 @@ class AlertSettingsPage extends StatelessWidget {
                 ),
               ),
               SettingsTile(
-                icon: Icons.circle_notifications_outlined,
-                iconColor: AppColors.secondary,
                 title: '系统通知',
                 subtitle: '允许推送系统级通知（需授权）',
                 trailing: Switch(
@@ -57,8 +53,6 @@ class AlertSettingsPage extends StatelessWidget {
             title: '告警类型',
             children: [
               SettingsTile(
-                icon: Icons.battery_alert_outlined,
-                iconColor: AppColors.error,
                 title: '电量低',
                 subtitle: '电池电量低于 20% 时告警',
                 trailing: Switch(
@@ -67,8 +61,6 @@ class AlertSettingsPage extends StatelessWidget {
                 ),
               ),
               SettingsTile(
-                icon: Icons.thermostat,
-                iconColor: AppColors.warning,
                 title: '温度过高',
                 subtitle: 'CPU 温度超过 70°C 时告警',
                 trailing: Switch(
@@ -77,8 +69,6 @@ class AlertSettingsPage extends StatelessWidget {
                 ),
               ),
               SettingsTile(
-                icon: Icons.signal_wifi_off,
-                iconColor: AppColors.error,
                 title: '通信异常',
                 subtitle: '与机器人失去连接时告警',
                 trailing: Switch(
@@ -94,11 +84,8 @@ class AlertSettingsPage extends StatelessWidget {
             title: '历史记录',
             children: [
               SettingsTile(
-                icon: Icons.history,
-                iconColor: AppColors.info,
                 title: '告警历史',
                 subtitle: '${context.watch<AlertMonitorService>().history.length} 条记录',
-                trailing: const Icon(Icons.chevron_right, size: 20),
                 onTap: () {
                   Navigator.push(
                     context,

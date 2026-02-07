@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_monitor/app/theme.dart';
 import 'package:flutter_monitor/core/storage/settings_preferences.dart';
-import 'package:flutter_monitor/core/providers/robot_connection_provider.dart';
 import 'package:flutter_monitor/shared/widgets/feature_card.dart';
 import 'package:flutter_monitor/features/settings/saved_devices_page.dart';
 import 'package:flutter_monitor/features/settings/alert_settings_page.dart';
@@ -43,8 +42,6 @@ class AppSettingsScreen extends StatelessWidget {
             title: '外观',
             children: [
               SettingsTile(
-                icon: Icons.dark_mode_outlined,
-                iconColor: AppColors.secondary,
                 title: '深色模式',
                 subtitle: _themeModeLabel(themeProvider.mode),
                 trailing: _buildThemeSelector(context, themeProvider),
@@ -57,22 +54,20 @@ class AppSettingsScreen extends StatelessWidget {
             title: '连接',
             children: [
               SettingsTile(
-                icon: Icons.wifi_outlined,
-                iconColor: AppColors.primary,
                 title: '已保存的设备',
                 subtitle: '${settingsPrefs.savedDevices.length} 个设备',
+                trailing: SettingsActionButton(
+                  label: '管理',
+                  onTap: () => _push(context, const SavedDevicesPage()),
+                ),
                 onTap: () => _push(context, const SavedDevicesPage()),
               ),
               SettingsTile(
-                icon: Icons.timer_outlined,
-                iconColor: AppColors.warning,
                 title: '连接超时',
                 subtitle: '${settingsPrefs.connectionTimeoutSec} 秒',
                 onTap: () => _showTimeoutPicker(context, settingsPrefs),
               ),
               SettingsTile(
-                icon: Icons.sync_outlined,
-                iconColor: AppColors.success,
                 title: '自动重连',
                 subtitle: settingsPrefs.autoReconnect
                     ? '断连后自动尝试重连'
@@ -90,8 +85,6 @@ class AppSettingsScreen extends StatelessWidget {
             title: '通知',
             children: [
               SettingsTile(
-                icon: Icons.vibration,
-                iconColor: AppColors.warning,
                 title: '操作震动反馈',
                 subtitle: settingsPrefs.hapticFeedback
                     ? '控制操作时触觉反馈'
@@ -102,10 +95,12 @@ class AppSettingsScreen extends StatelessWidget {
                 ),
               ),
               SettingsTile(
-                icon: Icons.warning_amber_outlined,
-                iconColor: AppColors.error,
                 title: '异常告警提醒',
                 subtitle: '电量/温度/通信异常',
+                trailing: SettingsActionButton(
+                  label: '配置',
+                  onTap: () => _push(context, const AlertSettingsPage()),
+                ),
                 onTap: () => _push(context, const AlertSettingsPage()),
               ),
             ],
@@ -116,17 +111,21 @@ class AppSettingsScreen extends StatelessWidget {
             title: '设备与固件',
             children: [
               SettingsTile(
-                icon: Icons.system_update_outlined,
-                iconColor: AppColors.primary,
                 title: '固件升级 (OTA)',
                 subtitle: '查看/上传机器人固件',
+                trailing: SettingsActionButton(
+                  label: '打开',
+                  onTap: () => _push(context, const FirmwareOtaPage()),
+                ),
                 onTap: () => _push(context, const FirmwareOtaPage()),
               ),
               SettingsTile(
-                icon: Icons.download_outlined,
-                iconColor: AppColors.success,
                 title: '导出机器人日志',
                 subtitle: '状态/事件/通信日志',
+                trailing: SettingsActionButton(
+                  label: '导出',
+                  onTap: () => _push(context, const LogExportPage()),
+                ),
                 onTap: () => _push(context, const LogExportPage()),
               ),
             ],
@@ -145,15 +144,11 @@ class AppSettingsScreen extends StatelessWidget {
             title: '关于',
             children: [
               SettingsTile(
-                icon: Icons.info_outline,
-                iconColor: AppColors.primary,
                 title: '版本信息',
                 subtitle: 'v1.0.0 (Build 1)',
                 onTap: () => _push(context, const VersionDetailPage()),
               ),
               SettingsTile(
-                icon: Icons.article_outlined,
-                iconColor: AppColors.warning,
                 title: '开源许可',
                 subtitle: '第三方库许可证',
                 onTap: () => showLicensePage(
@@ -163,8 +158,6 @@ class AppSettingsScreen extends StatelessWidget {
                 ),
               ),
               SettingsTile(
-                icon: Icons.headset_mic_outlined,
-                iconColor: AppColors.success,
                 title: '反馈与支持',
                 subtitle: '技术支持/文档/FAQ',
                 onTap: () => _push(context, const SupportPage()),
@@ -238,7 +231,7 @@ class AppSettingsScreen extends StatelessWidget {
       context: context,
       backgroundColor: isDark ? AppColors.darkCard : Colors.white,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
         return SafeArea(
@@ -423,17 +416,18 @@ class _ClearCacheTileState extends State<_ClearCacheTile> {
   @override
   Widget build(BuildContext context) {
     return SettingsTile(
-      icon: Icons.cleaning_services_outlined,
-      iconColor: AppColors.warning,
       title: '清除缓存',
       subtitle: _isClearing ? '正在清除...' : _cacheSize,
       trailing: _isClearing
           ? const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 1.5),
             )
-          : Icon(Icons.chevron_right, size: 20, color: context.subtitleColor),
+          : SettingsActionButton(
+              label: '清除',
+              onTap: _clearCache,
+            ),
       onTap: _isClearing ? null : _clearCache,
     );
   }

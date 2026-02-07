@@ -20,40 +20,40 @@ class AppSpacing {
 }
 
 class AppRadius {
-  static const double sm = 8;
-  static const double md = 12;
-  static const double lg = 16;
-  static const double xl = 20;
-  static const double xxl = 24;
+  static const double sm = 6;
+  static const double md = 8;
+  static const double lg = 12;
+  static const double xl = 16;
+  static const double xxl = 20;
 
   /// Default card radius.
-  static const double card = 20;
+  static const double card = 12;
   /// Icon container radius.
-  static const double icon = 12;
+  static const double icon = 8;
   /// Pill / badge radius.
-  static const double pill = 30;
+  static const double pill = 20;
 }
 
 class AppShadows {
-  /// Subtle card shadow (light mode).
+  /// Barely visible shadow (light mode) — Cursor/Apple style.
   static BoxShadow light({Color? color}) => BoxShadow(
-        color: color ?? Colors.black.withOpacity(0.06),
-        blurRadius: 16,
-        offset: const Offset(0, 6),
+        color: color ?? Colors.black.withOpacity(0.04),
+        blurRadius: 6,
+        offset: const Offset(0, 1),
       );
 
-  /// Deeper card shadow (dark mode — subtle).
+  /// Subtle shadow (dark mode).
   static BoxShadow dark({Color? color}) => BoxShadow(
-        color: color ?? Colors.black.withOpacity(0.35),
-        blurRadius: 20,
-        offset: const Offset(0, 8),
+        color: color ?? Colors.black.withOpacity(0.40),
+        blurRadius: 8,
+        offset: const Offset(0, 2),
       );
 
-  /// Colored glow (for accent icons / buttons).
-  static BoxShadow glow(Color color, {double blur = 16}) => BoxShadow(
-        color: color.withOpacity(0.30),
+  /// Colored glow — very subtle.
+  static BoxShadow glow(Color color, {double blur = 10}) => BoxShadow(
+        color: color.withOpacity(0.15),
         blurRadius: blur,
-        offset: const Offset(0, 4),
+        offset: const Offset(0, 1),
       );
 }
 
@@ -85,17 +85,21 @@ class AppColors {
   static const lightSurface = Colors.white;
   static const lightCard = Color(0xFFFFFFFF);
 
-  // Dark surfaces — refined tech-dark palette (OLED-friendly)
-  static const darkBackground = Color(0xFF0A0A0F);
-  static const darkSurface = Color(0xFF141418);
-  static const darkCard = Color(0xFF1C1C24);
-  static const darkElevated = Color(0xFF26262E);
+  // Dark surfaces — Apple/URDF-Studio style
+  static const darkBackground = Color(0xFF000000);
+  static const darkSurface = Color(0xFF1C1C1E);
+  static const darkCard = Color(0xFF1C1C1E);
+  static const darkElevated = Color(0xFF2C2C2E);
 
-  // Glass
-  static Color glassLight = Colors.white.withOpacity(0.82);
-  static Color glassDark = const Color(0xFF1C1C24).withOpacity(0.75);
-  static Color glassBorderLight = Colors.white.withOpacity(0.45);
-  static Color glassBorderDark = Colors.white.withOpacity(0.06);
+  // Borders — clean & subtle
+  static Color borderLight = const Color(0xFFE5E5E5);
+  static Color borderDark = const Color(0xFF38383A);
+
+  // Glass — now cleaner, less frosted
+  static Color glassLight = Colors.white.withOpacity(0.95);
+  static Color glassDark = const Color(0xFF1C1C1E).withOpacity(0.92);
+  static Color glassBorderLight = const Color(0xFFE5E5E5);
+  static Color glassBorderDark = const Color(0xFF38383A);
 
   // Gradients
   static const brandGradient = LinearGradient(
@@ -104,24 +108,22 @@ class AppColors {
     colors: [primary, secondary],
   );
 
-  /// Background gradient for dark mode.
+  /// Background gradient for dark mode — flat, no gradient noise.
   static const darkBgGradient = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
     colors: [
-      Color(0xFF08080E),
-      Color(0xFF0E0E18),
-      Color(0xFF08080E),
+      Color(0xFF000000),
+      Color(0xFF000000),
     ],
   );
 
-  /// Background gradient for light mode.
+  /// Background gradient for light mode — clean flat.
   static const lightBgGradient = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
     colors: [
       Color(0xFFF2F2F7),
-      Color(0xFFE8ECF4),
       Color(0xFFF2F2F7),
     ],
   );
@@ -204,11 +206,13 @@ final ThemeData lightTheme = ThemeData(
     color: AppColors.lightCard,
     elevation: 0,
     shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadius.card)),
+      borderRadius: BorderRadius.circular(AppRadius.card),
+      side: BorderSide(color: AppColors.borderLight),
+    ),
     margin: EdgeInsets.zero,
   ),
   dividerTheme: DividerThemeData(
-    color: Colors.black.withOpacity(0.06),
+    color: Colors.black.withOpacity(0.05),
     thickness: 0.5,
     space: 0,
   ),
@@ -218,14 +222,14 @@ final ThemeData lightTheme = ThemeData(
   ),
   switchTheme: SwitchThemeData(
     thumbColor: WidgetStateProperty.resolveWith((states) {
-      if (states.contains(WidgetState.selected)) return AppColors.primary;
+      if (states.contains(WidgetState.selected)) return Colors.white;
       return Colors.white;
     }),
     trackColor: WidgetStateProperty.resolveWith((states) {
       if (states.contains(WidgetState.selected)) {
-        return AppColors.primary.withOpacity(0.4);
+        return AppColors.primary;
       }
-      return Colors.black.withOpacity(0.1);
+      return const Color(0xFFE9E9EA);
     }),
   ),
 );
@@ -264,11 +268,13 @@ final ThemeData darkTheme = ThemeData(
     color: AppColors.darkCard,
     elevation: 0,
     shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadius.card)),
+      borderRadius: BorderRadius.circular(AppRadius.card),
+      side: BorderSide(color: AppColors.borderDark),
+    ),
     margin: EdgeInsets.zero,
   ),
   dividerTheme: DividerThemeData(
-    color: Colors.white.withOpacity(0.07),
+    color: Colors.white.withOpacity(0.06),
     thickness: 0.5,
     space: 0,
   ),
@@ -278,14 +284,14 @@ final ThemeData darkTheme = ThemeData(
   ),
   switchTheme: SwitchThemeData(
     thumbColor: WidgetStateProperty.resolveWith((states) {
-      if (states.contains(WidgetState.selected)) return AppColors.primary;
-      return Colors.grey;
+      if (states.contains(WidgetState.selected)) return Colors.white;
+      return Colors.white;
     }),
     trackColor: WidgetStateProperty.resolveWith((states) {
       if (states.contains(WidgetState.selected)) {
-        return AppColors.primary.withOpacity(0.4);
+        return const Color(0xFF0A84FF); // iOS dark blue
       }
-      return Colors.white.withOpacity(0.1);
+      return const Color(0xFF1C1C1E);
     }),
   ),
 );
@@ -303,25 +309,30 @@ extension ThemeContextExtension on BuildContext {
       isDark ? AppColors.glassBorderDark : AppColors.glassBorderLight;
   Color get cardColor => isDark ? AppColors.darkCard : Colors.white;
 
+  // ── Border color ──
+  Color get borderColor =>
+      isDark ? AppColors.borderDark : AppColors.borderLight;
+
   // ── Text colors ──
   Color get titleColor =>
-      isDark ? const Color(0xFFF0F0F5) : const Color(0xFF1A1A1A);
+      isDark ? const Color(0xFFE5E5E5) : const Color(0xFF1A1A1A);
   Color get subtitleColor =>
-      isDark ? Colors.white.withOpacity(0.48) : Colors.black.withOpacity(0.42);
+      isDark ? const Color(0xFF86868B) : const Color(0xFF86868B);
 
   // ── Decorative ──
   Color get cardShadowColor => isDark
-      ? Colors.black.withOpacity(0.35)
-      : Colors.black.withOpacity(0.06);
+      ? Colors.black.withOpacity(0.50)
+      : Colors.black.withOpacity(0.08);
   Color get dividerColor =>
-      isDark ? Colors.white.withOpacity(0.07) : Colors.black.withOpacity(0.06);
+      isDark ? const Color(0xFF38383A) : const Color(0xFFE5E5E5);
   Color get inputFillColor =>
       isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04);
 
-  // ── Convenience decorations ──
+  // ── Convenience decorations — clean card with border ──
   BoxDecoration get cardDecoration => BoxDecoration(
         color: cardColor,
         borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(color: borderColor),
         boxShadow: [
           isDark ? AppShadows.dark() : AppShadows.light(),
         ],

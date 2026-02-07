@@ -38,6 +38,11 @@ class _MainShellScreenState extends State<MainShellScreen> {
     ]);
   }
 
+  void _onTap(int index) {
+    HapticFeedback.selectionClick();
+    setState(() => _currentIndex = index);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = context.isDark;
@@ -46,79 +51,128 @@ class _MainShellScreenState extends State<MainShellScreen> {
     final isDogConnected = provider.isDogConnected;
 
     return Scaffold(
+      extendBody: true,
       body: IndexedStack(
         index: _currentIndex,
         children: _screens,
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: isDark ? AppColors.darkSurface : Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(isDark ? 0.3 : 0.06),
-              blurRadius: 20,
-              offset: const Offset(0, -4),
-            ),
-          ],
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          child: NavigationBar(
-            selectedIndex: _currentIndex,
-            onDestinationSelected: (index) {
-              HapticFeedback.selectionClick();
-              setState(() => _currentIndex = index);
-            },
-            backgroundColor: Colors.transparent,
-            surfaceTintColor: Colors.transparent,
-            elevation: 0,
-            height: 60,
-            labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
-            indicatorColor: AppColors.primary.withOpacity(isDark ? 0.15 : 0.1),
-            indicatorShape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            destinations: [
-              const NavigationDestination(
-                icon: Icon(Icons.home_outlined),
-                selectedIcon: Icon(Icons.home_rounded),
-                label: '首页',
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(40, 0, 40, 12),
+          child: Container(
+            height: 56,
+            decoration: BoxDecoration(
+              color: isDark
+                  ? const Color(0xFF1C1C1E)
+                  : Colors.white,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color: isDark
+                    ? const Color(0xFF38383A)
+                    : const Color(0xFFE5E5E5),
               ),
-              NavigationDestination(
-                icon: Badge(
-                  isLabelVisible: isConnected || isDogConnected,
-                  smallSize: 8,
-                  backgroundColor:
-                      isConnected ? AppColors.success : AppColors.warning,
-                  child: const Icon(Icons.dashboard_outlined),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(isDark ? 0.4 : 0.08),
+                  blurRadius: 20,
+                  offset: const Offset(0, 4),
                 ),
-                selectedIcon: Badge(
-                  isLabelVisible: isConnected || isDogConnected,
-                  smallSize: 8,
-                  backgroundColor:
-                      isConnected ? AppColors.success : AppColors.warning,
-                  child: const Icon(Icons.dashboard_rounded),
+              ],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _NavItem(
+                  icon: Icons.home_outlined,
+                  activeIcon: Icons.home_rounded,
+                  isActive: _currentIndex == 0,
+                  onTap: () => _onTap(0),
                 ),
-                label: '状态',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.map_outlined),
-                selectedIcon: Icon(Icons.map_rounded),
-                label: '地图',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.notifications_outlined),
-                selectedIcon: Icon(Icons.notifications_rounded),
-                label: '事件',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings_rounded),
-                label: '设置',
-              ),
-            ],
+                _NavItem(
+                  icon: Icons.dashboard_outlined,
+                  activeIcon: Icons.dashboard_rounded,
+                  isActive: _currentIndex == 1,
+                  badge: isConnected || isDogConnected,
+                  badgeColor:
+                      isConnected ? AppColors.success : AppColors.warning,
+                  onTap: () => _onTap(1),
+                ),
+                _NavItem(
+                  icon: Icons.map_outlined,
+                  activeIcon: Icons.map_rounded,
+                  isActive: _currentIndex == 2,
+                  onTap: () => _onTap(2),
+                ),
+                _NavItem(
+                  icon: Icons.notifications_none_rounded,
+                  activeIcon: Icons.notifications_rounded,
+                  isActive: _currentIndex == 3,
+                  onTap: () => _onTap(3),
+                ),
+                _NavItem(
+                  icon: Icons.settings_outlined,
+                  activeIcon: Icons.settings_rounded,
+                  isActive: _currentIndex == 4,
+                  onTap: () => _onTap(4),
+                ),
+              ],
+            ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NavItem extends StatelessWidget {
+  final IconData icon;
+  final IconData activeIcon;
+  final bool isActive;
+  final bool badge;
+  final Color? badgeColor;
+  final VoidCallback onTap;
+
+  const _NavItem({
+    required this.icon,
+    required this.activeIcon,
+    required this.isActive,
+    this.badge = false,
+    this.badgeColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 44,
+        height: 44,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Icon(
+              isActive ? activeIcon : icon,
+              size: 22,
+              color: isActive
+                  ? AppColors.primary
+                  : context.subtitleColor,
+            ),
+            if (badge)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: badgeColor ?? AppColors.success,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );

@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -61,41 +60,7 @@ class _HomeScreenState extends State<HomeScreen>
                     padding: const EdgeInsets.fromLTRB(24, 24, 24, 4),
                     child: Row(
                       children: [
-                        // Logo — tap navigates to model selector
-                        Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              Navigator.of(context).pushNamed('/robot-select');
-                            },
-                            child: Ink(
-                              width: 46,
-                              height: 46,
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    profile.themeColor,
-                                    profile.themeColor.withOpacity(0.65),
-                                  ],
-                                ),
-                                borderRadius: BorderRadius.circular(AppRadius.md),
-                                boxShadow: [
-                                  AppShadows.glow(profile.themeColor),
-                                ],
-                              ),
-                              child: Icon(
-                                profile.icon,
-                                color: Colors.white,
-                                size: 24,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 14),
+                        // Name only — no icon box
                         Expanded(
                           child: GestureDetector(
                             onTap: () =>
@@ -109,15 +74,15 @@ class _HomeScreenState extends State<HomeScreen>
                                       profile.name,
                                       style: TextStyle(
                                         fontSize: 22,
-                                        fontWeight: FontWeight.w800,
+                                        fontWeight: FontWeight.w700,
                                         letterSpacing: -0.5,
                                         color: context.titleColor,
                                       ),
                                     ),
-                                    const SizedBox(width: 6),
+                                    const SizedBox(width: 4),
                                     Icon(
-                                      Icons.unfold_more,
-                                      size: 18,
+                                      Icons.keyboard_arrow_down,
+                                      size: 20,
                                       color: context.subtitleColor,
                                     ),
                                   ],
@@ -127,35 +92,22 @@ class _HomeScreenState extends State<HomeScreen>
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: context.subtitleColor,
-                                    letterSpacing: 0.3,
                                   ),
                                 ),
                               ],
                             ),
                           ),
                         ),
-                        // Scan button with ripple
-                        Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(AppRadius.icon),
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              Navigator.of(context).pushNamed('/scan');
-                            },
-                            child: Ink(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: context.inputFillColor,
-                                borderRadius: BorderRadius.circular(AppRadius.icon),
-                              ),
-                              child: Icon(
-                                Icons.qr_code_scanner_rounded,
-                                size: 20,
-                                color: context.subtitleColor,
-                              ),
-                            ),
+                        // Scan button
+                        IconButton(
+                          onPressed: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.of(context).pushNamed('/scan');
+                          },
+                          icon: Icon(
+                            Icons.search,
+                            size: 22,
+                            color: context.subtitleColor,
                           ),
                         ),
                       ],
@@ -196,10 +148,10 @@ class _HomeScreenState extends State<HomeScreen>
                         address: _getAddress(provider),
                         connectionStatus: provider.status,
                         batteryPercent: provider
-                            .latestSlowState?.resources?.batteryPercent
+                            .latestSlowState?.resources.batteryPercent
                             .toDouble(),
                         cpuPercent: provider
-                            .latestSlowState?.resources?.cpuPercent
+                            .latestSlowState?.resources.cpuPercent
                             .toDouble(),
                         heroTag: 'robot-main',
                         onTap: () {
@@ -228,15 +180,12 @@ class _HomeScreenState extends State<HomeScreen>
                           },
                           child: Ink(
                             padding: const EdgeInsets.symmetric(
-                                vertical: 32, horizontal: 24),
+                                vertical: 28, horizontal: 24),
                             decoration: BoxDecoration(
                               color: context.cardColor,
                               borderRadius: BorderRadius.circular(AppRadius.card),
                               border: Border.all(
-                                color: AppColors.primary.withOpacity(
-                                    isDark ? 0.25 : 0.15),
-                                width: 1.5,
-                                strokeAlign: BorderSide.strokeAlignInside,
+                                color: context.borderColor,
                               ),
                               boxShadow: [
                                 isDark
@@ -246,45 +195,17 @@ class _HomeScreenState extends State<HomeScreen>
                             ),
                             child: Column(
                               children: [
-                                // Pulsing icon container
-                                TweenAnimationBuilder<double>(
-                                  tween: Tween(begin: 0.85, end: 1.0),
-                                  duration: const Duration(seconds: 2),
-                                  curve: Curves.easeInOut,
-                                  builder: (context, scale, child) {
-                                    return Transform.scale(
-                                        scale: scale, child: child);
-                                  },
-                                  child: Container(
-                                    width: 68,
-                                    height: 68,
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                        colors: [
-                                          AppColors.primary.withOpacity(
-                                              isDark ? 0.18 : 0.10),
-                                          AppColors.secondary.withOpacity(
-                                              isDark ? 0.12 : 0.06),
-                                        ],
-                                      ),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Icon(
-                                      Icons.add_rounded,
-                                      size: 32,
-                                      color: AppColors.primary
-                                          .withOpacity(isDark ? 0.9 : 0.7),
-                                    ),
-                                  ),
+                                Icon(
+                                  Icons.add,
+                                  size: 28,
+                                  color: AppColors.primary,
                                 ),
-                                const SizedBox(height: AppSpacing.lg),
+                                const SizedBox(height: AppSpacing.md),
                                 Text(
                                   '连接机器人',
                                   style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
                                     color: context.titleColor,
                                   ),
                                 ),
@@ -292,7 +213,7 @@ class _HomeScreenState extends State<HomeScreen>
                                 Text(
                                   '扫描网络或蓝牙发现设备',
                                   style: TextStyle(
-                                    fontSize: 13,
+                                    fontSize: 12,
                                     color: context.subtitleColor,
                                   ),
                                 ),
@@ -344,7 +265,7 @@ class _HomeScreenState extends State<HomeScreen>
                         const SizedBox(width: 12),
                         Expanded(
                           child: _QuickActionButton(
-                            icon: Icons.pets,
+                            icon: Icons.widgets_outlined,
                             label: '选择型号',
                             color: profile.themeColor,
                             onTap: () =>
@@ -354,7 +275,7 @@ class _HomeScreenState extends State<HomeScreen>
                         const SizedBox(width: 12),
                         Expanded(
                           child: _QuickActionButton(
-                            icon: Icons.science_outlined,
+                            icon: Icons.play_circle_outline,
                             label: '演示模式',
                             color: AppColors.warning,
                             onTap: () => _startMock(context),
@@ -366,84 +287,9 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
 
-              // ========= App Info =========
-              SliverToBoxAdapter(
-                child: _buildAnimatedChild(
-                  5,
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.xxl, 28, AppSpacing.xxl, AppSpacing.md),
-                    child: Text(
-                      'APP 信息',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: context.titleColor,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              SliverToBoxAdapter(
-                child: _buildAnimatedChild(
-                  6,
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.screenH),
-                    child: Container(
-                      padding: const EdgeInsets.all(AppSpacing.lg),
-                      decoration: context.cardDecoration,
-                      child: Column(
-                        children: [
-                          _InfoRow(
-                            icon: Icons.info_outline,
-                            label: '版本',
-                            value: 'v1.0.0',
-                          ),
-                          Divider(height: 16, color: context.dividerColor),
-                          _InfoRow(
-                            icon: Icons.router_outlined,
-                            label: '协议',
-                            value: 'gRPC + WebRTC',
-                          ),
-                          Divider(height: 16, color: context.dividerColor),
-                          _InfoRow(
-                            icon: Icons.network_check,
-                            label: '网络状态',
-                            value: isConnected ? '已连接' : '未连接',
-                            valueColor:
-                                isConnected ? AppColors.success : Colors.grey,
-                          ),
-                          Divider(height: 16, color: context.dividerColor),
-                          _InfoRow(
-                            icon: Icons.precision_manufacturing_outlined,
-                            label: '平台',
-                            value: 'ROS 2',
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-
-              // Footer
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 32),
-                  child: Center(
-                    child: Text(
-                      'gRPC · WebRTC · ROS 2 · BLE',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: context.subtitleColor,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ),
-                ),
+              // Bottom spacing for floating nav bar
+              const SliverToBoxAdapter(
+                child: SizedBox(height: 100),
               ),
             ],
           ),
@@ -520,8 +366,6 @@ class _QuickActionButtonState extends State<_QuickActionButton>
 
   @override
   Widget build(BuildContext context) {
-    final isDark = context.isDark;
-
     return GestureDetector(
       onTapDown: _onTapDown,
       onTapUp: _onTapUp,
@@ -535,32 +379,25 @@ class _QuickActionButtonState extends State<_QuickActionButton>
         duration: AppDurations.fast,
         curve: Curves.easeOut,
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
+          padding: const EdgeInsets.symmetric(vertical: 14),
           decoration: BoxDecoration(
             color: context.cardColor,
-            borderRadius: BorderRadius.circular(AppRadius.lg),
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: context.borderColor),
             boxShadow: [
-              isDark ? AppShadows.dark() : AppShadows.light(),
+              context.isDark ? AppShadows.dark() : AppShadows.light(),
             ],
           ),
           child: Column(
             children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: widget.color.withOpacity(isDark ? 0.18 : 0.1),
-                  borderRadius: BorderRadius.circular(AppRadius.icon),
-                ),
-                child: Icon(widget.icon, color: widget.color, size: 20),
-              ),
+              Icon(widget.icon, color: widget.color, size: 20),
               const SizedBox(height: AppSpacing.sm),
               Text(
                 widget.label,
                 style: TextStyle(
                   fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: isDark ? Colors.white70 : Colors.black87,
+                  fontWeight: FontWeight.w500,
+                  color: context.titleColor,
                 ),
               ),
             ],
@@ -571,45 +408,4 @@ class _QuickActionButtonState extends State<_QuickActionButton>
   }
 }
 
-// ==================== Info Row ====================
-
-class _InfoRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color? valueColor;
-
-  const _InfoRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.valueColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: context.subtitleColor),
-        const SizedBox(width: 10),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            color: context.subtitleColor,
-          ),
-        ),
-        const Spacer(),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: valueColor ?? context.titleColor,
-          ),
-        ),
-      ],
-    );
-  }
-}
 
