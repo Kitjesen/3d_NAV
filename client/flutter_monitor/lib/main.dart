@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:animations/animations.dart';
-import 'theme/app_theme.dart';
-import 'services/robot_connection_provider.dart';
-import 'services/settings_preferences.dart';
-import 'screens/splash_screen.dart';
-import 'screens/main_shell_screen.dart';
-import 'screens/scan_screen.dart';
-import 'screens/robot_detail_screen.dart';
-import 'screens/app_settings_screen.dart';
-import 'screens/control_screen.dart';
+import 'package:flutter_monitor/app/theme.dart';
+import 'package:flutter_monitor/core/providers/robot_connection_provider.dart';
+import 'package:flutter_monitor/core/storage/settings_preferences.dart';
+import 'package:flutter_monitor/features/connection/splash_screen.dart';
+import 'package:flutter_monitor/features/home/main_shell_screen.dart';
+import 'package:flutter_monitor/features/connection/scan_screen.dart';
+import 'package:flutter_monitor/features/home/robot_detail_screen.dart';
+import 'package:flutter_monitor/features/settings/app_settings_screen.dart';
+import 'package:flutter_monitor/features/control/control_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
