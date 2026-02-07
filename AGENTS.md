@@ -672,7 +672,7 @@ FROM ros:foxy
 
 ### 8.2 相关文档
 
-- `docs/plan.md` - 开发计划
+- `docs/CHANGELOG.md` - 版本历史与开发记录
 - `src/slam/interface/README.md` - 接口定义
 - `src/base_autonomy/TERRAIN_ANALYSIS_EXPLAINED.md` - 地形分析详解
 

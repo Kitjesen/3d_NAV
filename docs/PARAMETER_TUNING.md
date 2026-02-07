@@ -307,4 +307,12 @@ ros2 topic echo /planning_status
 
 ---
 
-**Last Updated**: January 2026
+## 相关文档
+
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — 故障排查
+- [BUILD_GUIDE.md](BUILD_GUIDE.md) — 编译指南
+- [ARCHITECTURE.md](ARCHITECTURE.md) — 系统架构
+
+---
+
+*Last Updated: February 2026*

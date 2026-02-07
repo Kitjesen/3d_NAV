@@ -1,8 +1,10 @@
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "release_version": "v0.0.0",
   "release_date": "2026-01-01T00:00:00Z",
   "min_system_version": "1.0.0",
+  "signature": "",
+  "public_key_id": "ota-signing-key-01",
   "artifacts": [
     {
       "name": "policy_walk",
@@ -17,7 +19,33 @@
       "requires_reboot": false,
       "min_battery_percent": 20,
       "changelog": "",
-      "rollback_safe": true
+      "rollback_safe": true,
+      "safety_level": "warm",
+      "owner_module": "brain",
+      "dependencies": [
+        {
+          "artifact_name": "nav_firmware",
+          "min_version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "name": "nav_firmware",
+      "category": "firmware",
+      "version": "0.0.0",
+      "filename": "nav_board_v0.0.0.deb",
+      "sha256": "",
+      "target_path": "/opt/robot/firmware/nav_board.deb",
+      "target_board": "nav",
+      "hw_compat": ["*"],
+      "apply_action": "install_deb",
+      "requires_reboot": true,
+      "min_battery_percent": 50,
+      "changelog": "",
+      "rollback_safe": false,
+      "safety_level": "cold",
+      "owner_module": "system",
+      "dependencies": []
     }
   ]
 }

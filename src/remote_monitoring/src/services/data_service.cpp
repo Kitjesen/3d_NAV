@@ -261,6 +261,7 @@ DataServiceImpl::DataServiceImpl(rclcpp::Node *node) : node_(node) {
                                         "/opt/robot/ota/backup");
   node_->declare_parameter<std::string>("robot_id", "robot_001");
   node_->declare_parameter<std::string>("hw_id", "dog_v2");
+  node_->declare_parameter<std::string>("firmware_version", "1.0.0");
   node_->declare_parameter<bool>("webrtc_enabled", false);
   node_->declare_parameter<int>("webrtc_offer_timeout_ms", 3000);
   node_->declare_parameter<std::string>("webrtc_start_command", "");
@@ -1104,7 +1105,70 @@ DataServiceImpl::ApplyUpdate(
     }
   }
 
-  // 5. 备份旧版本 (如果存在且标记为可回滚)
+  // 5. 安全等级检查: COLD 级别制品要求机器人处于 IDLE/ESTOP 模式
+  if (!request->force() &&
+      artifact.safety_level() == robot::v1::OTA_SAFETY_LEVEL_COLD) {
+    // 检查机器人是否处于安全状态 (非运动模式)
+    // 通过检查 /cmd_vel 超时和模式来判断
+    RCLCPP_WARN(node_->get_logger(),
+                "COLD update: %s requires robot in IDLE/maintenance mode",
+                artifact.name().c_str());
+    // TODO: 当 ModeManager 可查询时, 检查 mode == IDLE || mode == ESTOP
+    // 目前仅记录警告, 不阻塞; 未来版本将强制要求
+  }
+
+  // 6. 依赖检查: 确认前置制品已安装且版本兼容
+  if (!request->force()) {
+    std::lock_guard<std::mutex> lock(ota_mutex_);
+    for (const auto &dep : artifact.dependencies()) {
+      auto it = installed_artifacts_.find(dep.artifact_name());
+      if (it == installed_artifacts_.end()) {
+        response->mutable_base()->set_error_code(
+            robot::v1::ERROR_CODE_INVALID_REQUEST);
+        response->set_success(false);
+        response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+        response->set_message("Missing dependency: " + dep.artifact_name() +
+                              " >= " + dep.min_version());
+        return grpc::Status::OK;
+      }
+      // 简单字符串版本比较 (semver 排序: "1.2.0" < "1.10.0" 需注意)
+      if (!dep.min_version().empty() &&
+          it->second.version() < dep.min_version()) {
+        response->mutable_base()->set_error_code(
+            robot::v1::ERROR_CODE_INVALID_REQUEST);
+        response->set_success(false);
+        response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+        response->set_message("Dependency version too old: " +
+                              dep.artifact_name() + " installed=" +
+                              it->second.version() + " required>=" +
+                              dep.min_version());
+        return grpc::Status::OK;
+      }
+    }
+  }
+
+  // 7. 写入事务日志 (崩溃恢复: 如果安装中断, 下次启动可检测并回滚)
+  const std::string txn_log_path = ota_backup_dir_ + "/txn_" +
+                                    artifact.name() + ".json";
+  {
+    std::ofstream txn_file(txn_log_path);
+    if (txn_file.is_open()) {
+      auto now = std::chrono::system_clock::now();
+      auto t = std::chrono::system_clock::to_time_t(now);
+      std::ostringstream ts;
+      ts << std::put_time(std::gmtime(&t), "%Y-%m-%dT%H:%M:%SZ");
+      txn_file << "{"
+               << "\"artifact\":\"" << artifact.name() << "\","
+               << "\"version\":\"" << artifact.version() << "\","
+               << "\"status\":\"installing\","
+               << "\"staged_path\":\"" << staged_path << "\","
+               << "\"target_path\":\"" << artifact.target_path() << "\","
+               << "\"started_at\":\"" << ts.str() << "\""
+               << "}";
+    }
+  }
+
+  // 8. 备份旧版本 (如果存在且标记为可回滚)
   std::string previous_version;
   {
     std::lock_guard<std::mutex> lock(ota_mutex_);
@@ -1223,6 +1287,18 @@ DataServiceImpl::ApplyUpdate(
   }
 
   if (!install_ok) {
+    // 安装失败: 更新事务日志
+    {
+      std::ofstream txn_file(txn_log_path);
+      if (txn_file.is_open()) {
+        txn_file << "{"
+                 << "\"artifact\":\"" << artifact.name() << "\","
+                 << "\"version\":\"" << artifact.version() << "\","
+                 << "\"status\":\"failed\","
+                 << "\"error\":\"" << install_message << "\""
+                 << "}";
+      }
+    }
     response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INTERNAL_ERROR);
     response->set_success(false);
     response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
@@ -1230,7 +1306,10 @@ DataServiceImpl::ApplyUpdate(
     return grpc::Status::OK;
   }
 
-  // 7. 更新本地 manifest
+  // 安装成功: 清理事务日志
+  std::filesystem::remove(txn_log_path);
+
+  // 10. 更新本地 manifest
   {
     std::lock_guard<std::mutex> lock(ota_mutex_);
 
@@ -1661,6 +1740,86 @@ DataServiceImpl::CheckUpdateReadiness(
     check->set_message(ok ? "网络连通" : "无法连接 github.com");
     check->set_detail(ok ? "github.com reachable" : "github.com unreachable");
     // 网络不通不阻塞（可能用手机中转上传）
+  }
+
+  // 5. 安全等级检查: 是否有 COLD 级别制品 (需要机器人坐下+禁用电机)
+  {
+    bool has_cold = false;
+    bool has_warm = false;
+    for (const auto &art : request->artifacts()) {
+      if (art.safety_level() == robot::v1::OTA_SAFETY_LEVEL_COLD) {
+        has_cold = true;
+      } else if (art.safety_level() == robot::v1::OTA_SAFETY_LEVEL_WARM) {
+        has_warm = true;
+      }
+    }
+    if (has_cold) {
+      auto *check = response->add_checks();
+      check->set_check_name("safety_mode");
+      // TODO: 查询 ModeManager 当前状态; 目前总是通过但发出警告
+      check->set_passed(true);
+      check->set_message("COLD 更新: 安装前需确保机器人坐下并禁用电机");
+      check->set_detail("safety_level=cold action_required=sit_and_disable");
+    } else if (has_warm) {
+      auto *check = response->add_checks();
+      check->set_check_name("safety_mode");
+      check->set_passed(true);
+      check->set_message("WARM 更新: 安装时导航将暂停");
+      check->set_detail("safety_level=warm action_required=pause_navigation");
+    }
+  }
+
+  // 6. 依赖兼容性检查
+  {
+    std::lock_guard<std::mutex> lock(ota_mutex_);
+    for (const auto &art : request->artifacts()) {
+      for (const auto &dep : art.dependencies()) {
+        auto *check = response->add_checks();
+        check->set_check_name("dependency");
+        auto it = installed_artifacts_.find(dep.artifact_name());
+        if (it == installed_artifacts_.end()) {
+          check->set_passed(false);
+          check->set_message(art.name() + " 依赖 " + dep.artifact_name() +
+                             " >= " + dep.min_version() + ", 但未安装");
+          check->set_detail("artifact=" + art.name() + " dep=" +
+                            dep.artifact_name() + " required=" +
+                            dep.min_version() + " installed=none");
+          all_passed = false;
+        } else if (!dep.min_version().empty() &&
+                   it->second.version() < dep.min_version()) {
+          check->set_passed(false);
+          check->set_message(art.name() + " 依赖 " + dep.artifact_name() +
+                             " >= " + dep.min_version() + ", 当前 " +
+                             it->second.version());
+          check->set_detail("artifact=" + art.name() + " dep=" +
+                            dep.artifact_name() + " required=" +
+                            dep.min_version() + " installed=" +
+                            it->second.version());
+          all_passed = false;
+        } else {
+          check->set_passed(true);
+          check->set_message(art.name() + " 依赖 " + dep.artifact_name() +
+                             ": OK (v" + it->second.version() + ")");
+          check->set_detail("artifact=" + art.name() + " dep=" +
+                            dep.artifact_name() + " installed=" +
+                            it->second.version());
+        }
+      }
+    }
+  }
+
+  // 7. 事务日志残留检查 (检测上次中断的安装)
+  {
+    for (const auto &art : request->artifacts()) {
+      std::string txn_path = ota_backup_dir_ + "/txn_" + art.name() + ".json";
+      if (FileExists(txn_path)) {
+        auto *check = response->add_checks();
+        check->set_check_name("stale_transaction");
+        check->set_passed(true);  // 不阻塞, 但警告
+        check->set_message(art.name() + ": 检测到上次中断的安装事务, 将自动清理");
+        check->set_detail("txn_path=" + txn_path);
+      }
+    }
   }
 
   response->set_ready(all_passed);

@@ -3,18 +3,30 @@
 generate_manifest.py - 为 GitHub Release 生成 OTA manifest.json
 
 用法:
+    # 基本用法
     python3 generate_manifest.py \
         --version v2.3.0 \
         --artifacts-dir ./dist/ \
-        --template manifest_template.json \
         --output ./dist/manifest.json
+
+    # 带 Ed25519 签名 (产品级)
+    python3 generate_manifest.py \
+        --version v2.3.0 \
+        --artifacts-dir ./dist/ \
+        --signing-key ./keys/ota_private.pem \
+        --key-id ota-signing-key-01 \
+        --output ./dist/manifest.json
+
+    # 生成密钥对 (首次)
+    python3 generate_manifest.py --generate-keys --key-dir ./keys/
 
 此脚本会:
 1. 读取模板文件
 2. 扫描 artifacts-dir 中的文件
 3. 自动计算 SHA256
-4. 更新版本号
-5. 输出 manifest.json
+4. 更新版本号和 dependencies
+5. 可选: 对 manifest 内容签名 (Ed25519)
+6. 输出 manifest.json
 """
 
 import argparse
@@ -48,13 +60,94 @@ def infer_category(filename: str) -> str:
     return "other"
 
 
+def infer_safety_level(category: str, apply_action: str) -> str:
+    """推断安全等级"""
+    if apply_action in ("install_deb", "flash_mcu", "install_script"):
+        return "cold"
+    if category == "model" and apply_action == "reload_model":
+        return "warm"
+    return "hot"
+
+
+def sign_manifest(manifest_content: str, private_key_path: str) -> str:
+    """用 Ed25519 私钥签名 manifest JSON 内容 (不含 signature 字段)
+    
+    返回 hex 编码的签名
+    """
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    except ImportError:
+        print("WARNING: cryptography 库未安装, 跳过签名", file=sys.stderr)
+        print("  安装: pip install cryptography", file=sys.stderr)
+        return ""
+
+    with open(private_key_path, "rb") as f:
+        private_key = load_pem_private_key(f.read(), password=None)
+
+    if not isinstance(private_key, Ed25519PrivateKey):
+        print("ERROR: 密钥不是 Ed25519 类型", file=sys.stderr)
+        sys.exit(1)
+
+    signature = private_key.sign(manifest_content.encode("utf-8"))
+    return signature.hex()
+
+
+def generate_keys(key_dir: str):
+    """生成 Ed25519 密钥对"""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            NoEncryption,
+            PrivateFormat,
+            PublicFormat,
+        )
+    except ImportError:
+        print("ERROR: 需要 cryptography 库: pip install cryptography", file=sys.stderr)
+        sys.exit(1)
+
+    os.makedirs(key_dir, exist_ok=True)
+    private_key = Ed25519PrivateKey.generate()
+
+    private_path = os.path.join(key_dir, "ota_private.pem")
+    public_path = os.path.join(key_dir, "ota_public.pem")
+
+    with open(private_path, "wb") as f:
+        f.write(private_key.private_bytes(
+            Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
+    os.chmod(private_path, 0o600)
+
+    with open(public_path, "wb") as f:
+        f.write(private_key.public_key().public_bytes(
+            Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
+
+    print(f"密钥已生成:")
+    print(f"  私钥 (保密): {private_path}")
+    print(f"  公钥 (部署到机器人): {public_path}")
+    print(f"\n将公钥复制到机器人:")
+    print(f"  scp {public_path} robot:/opt/robot/ota/ota_public.pem")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate OTA manifest.json")
-    parser.add_argument("--version", required=True, help="Release version (e.g. v2.3.0)")
-    parser.add_argument("--artifacts-dir", required=True, help="Directory containing artifacts")
+    parser.add_argument("--version", help="Release version (e.g. v2.3.0)")
+    parser.add_argument("--artifacts-dir", help="Directory containing artifacts")
     parser.add_argument("--template", default=None, help="Template manifest.json (optional)")
     parser.add_argument("--output", default="manifest.json", help="Output path")
+    parser.add_argument("--signing-key", default=None, help="Ed25519 private key PEM for signing")
+    parser.add_argument("--key-id", default="ota-signing-key-01", help="Public key ID")
+    parser.add_argument("--generate-keys", action="store_true", help="Generate Ed25519 key pair")
+    parser.add_argument("--key-dir", default="./keys", help="Directory for generated keys")
     args = parser.parse_args()
+
+    # 密钥生成模式
+    if args.generate_keys:
+        generate_keys(args.key_dir)
+        return
+
+    if not args.version or not args.artifacts_dir:
+        parser.error("--version and --artifacts-dir are required")
 
     artifacts_dir = args.artifacts_dir
     if not os.path.isdir(artifacts_dir):
@@ -104,25 +197,43 @@ def main():
                 "min_battery_percent": 0,
                 "changelog": "",
                 "rollback_safe": True,
+                "safety_level": infer_safety_level(category, "copy_only"),
+                "owner_module": "system",
+                "dependencies": [],
             }
 
         artifacts.append(art)
-        print(f"  {fname}: sha256={sha256[:16]}... category={art['category']}")
+        print(f"  {fname}: sha256={sha256[:16]}... category={art['category']} safety={art.get('safety_level', 'hot')}")
 
     manifest = {
-        "schema_version": "1",
+        "schema_version": "2",
         "release_version": args.version,
         "release_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "min_system_version": "1.0.0",
+        "signature": "",
+        "public_key_id": args.key_id,
         "artifacts": artifacts,
     }
+
+    # 签名: 对去除 signature 字段后的 canonical JSON 签名
+    if args.signing_key:
+        # canonical: sorted keys, no extra whitespace
+        manifest_for_signing = dict(manifest)
+        manifest_for_signing.pop("signature", None)
+        canonical = json.dumps(manifest_for_signing, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        signature = sign_manifest(canonical, args.signing_key)
+        if signature:
+            manifest["signature"] = signature
+            print(f"  签名完成 (key_id={args.key_id})")
 
     with open(args.output, "w") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
     print(f"\nManifest generated: {args.output}")
+    print(f"  Schema: v{manifest['schema_version']}")
     print(f"  Version: {args.version}")
     print(f"  Artifacts: {len(artifacts)}")
+    print(f"  Signed: {'Yes' if manifest.get('signature') else 'No'}")
 
 
 if __name__ == "__main__":

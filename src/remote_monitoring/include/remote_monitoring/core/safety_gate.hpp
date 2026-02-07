@@ -9,6 +9,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 #include "std_msgs/msg/int8.hpp"
 
 #include "control.pb.h"
@@ -47,10 +48,12 @@ public:
 
 private:
   void OdomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr msg);
+  void TerrainMapCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg);
   robot::v1::Twist ApplyLimits(const robot::v1::Twist &target);
   
   rclcpp::Node *node_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_terrain_map_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_cmd_vel_;
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_stop_;
   
@@ -67,13 +70,32 @@ private:
   
   std::vector<std::string> limit_reasons_;
 
-  // 当前运行模式（决定 deadman 是否生效）
+  // 当前运行模式（决定 deadman 是否生效 + /cmd_vel 发布权）
   std::atomic<robot::v1::RobotMode> current_mode_{robot::v1::ROBOT_MODE_IDLE};
+
+  // ---- 近场避障 ----
+  // 从 /Odometry 提取的位姿 (odom 坐标系), 用于 terrain_map → body 转换
+  double vehicle_x_{0.0};
+  double vehicle_y_{0.0};
+  double vehicle_yaw_{0.0};
+
+  // 障碍物检测结果 (由 TerrainMapCallback 更新, ApplyLimits 读取)
+  std::atomic<bool> obstacle_stop_{false};    // 急停区有障碍
+  std::atomic<bool> obstacle_slow_{false};    // 减速区有障碍
+  std::atomic<float> nearest_obstacle_dist_{999.0f};  // 前方最近障碍距离 (m)
+
+  // 避障参数 (从 yaml 读取)
+  double obstacle_height_thre_{0.2};   // 障碍物高度阈值 (m)
+  double stop_distance_{0.8};          // 急停距离 (m)
+  double slow_distance_{2.0};          // 减速距离 (m)
+  double vehicle_width_{0.6};          // 车身宽度 (m)
+  double vehicle_width_margin_{0.1};   // 宽度安全裕度 (m)
 
   // 事件生成
   std::shared_ptr<EventBuffer> event_buffer_;
   bool deadman_event_sent_{false};   // 避免重复发送
   bool tilt_event_sent_{false};
+  bool obstacle_event_sent_{false};  // 避免障碍物事件重复发送
 };
 
 }  // namespace core

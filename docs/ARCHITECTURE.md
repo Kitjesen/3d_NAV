@@ -1,5 +1,8 @@
 # System Architecture — Multi-Board Robot Control & Navigation
 
+> 本文档描述双板硬件架构、通信协议、数据流、安全体系和模式切换。
+> 导航模块详情（SLAM、地形分析、规划器话题/参数）请参见 [AGENTS.md](../AGENTS.md)。
+
 ## Overview
 
 The system consists of **4 independent entities** across **2 hardware boards** and **2 remote clients**:
@@ -142,12 +145,17 @@ Flutter App
 GrpcGateway (ControlService)
     │ ValidateLease()
     │ SafetyGate.ProcessTeleopCommand()
+    │   ├ Mode guard: 非 TELEOP 模式 → 返回零速度, 不发布 /cmd_vel
     │   ├ Speed limit (max 1.0 m/s)
     │   ├ Angular limit (max 1.0 rad/s)
     │   ├ Tilt protection (30°)
-    │   └ E-stop check
+    │   ├ ★ 近场避障 (订阅 /terrain_map)
+    │   │   ├ 前方 < 0.8m 有障碍 → 线速度归零 (obstacle_stop)
+    │   │   ├ 前方 0.8~2.0m 有障碍 → 线性减速 (obstacle_slow)
+    │   │   └ 角速度不受影响 (允许原地转向避让)
+    │   └ E-stop check (最高优先级)
     ▼
-/cmd_vel (TwistStamped, m/s)         ← ROS2 Topic
+/cmd_vel (TwistStamped, m/s)         ← ROS2 Topic (仅 TELEOP 模式下发布)
     │
     ▼
 han_dog_bridge
@@ -258,9 +266,13 @@ Priority  Layer              Location       Mechanism              Timeout
    4      SafetyGate         Nav Board      Deadman switch         300ms
                                             Speed limit (1m/s)
                                             Tilt protection (30°)
+                                            ★ 近场避障 (terrain_map)
+                                              stop < 0.8m / slow < 2.0m
+                                            Mode guard (非 TELEOP 不发布)
                                             E-stop
    5      ModeManager        Nav Board      State machine guards   —
                                             Lease validation
+                                            TELEOP 退出时发零速度清残余
    6      HealthMonitor      Nav Board      Subsystem monitoring   —
                                             → auto ESTOP on FAULT
    7      GeofenceMonitor    Nav Board      Position boundary      —
@@ -300,6 +312,29 @@ Priority  Layer              Location       Mechanism              Timeout
          └───────────┘     (独立信号线)
 ```
 
+### 多客户端并发连接
+
+gRPC 基于 HTTP/2，**单个端口可同时服务多个客户端**。TCP 连接由四元组 `(源IP, 源端口, 目标IP, 目标端口)` 唯一标识，不同客户端的源 IP/端口不同，因此不会冲突。
+
+```
+Nav Board :50051
+    │
+    ├── Flutter App (手机 A)       ← 独立 TCP 连接，可同时监控
+    ├── Flutter App (手机 B)       ← 独立 TCP 连接，可同时监控
+    ├── grpcurl / 调试脚本         ← 独立 TCP 连接
+    └── test_integration.py        ← 独立 TCP 连接
+```
+
+**注意事项**:
+
+| 操作类型 | 多客户端行为 | 机制 |
+|---------|------------|------|
+| **监控** (StreamFastState, StreamSlowState) | 所有客户端同时收到数据流 | 各自独立 stream |
+| **数据** (Subscribe, UploadFile, OTA) | 各客户端独立操作，互不影响 | 无锁定 |
+| **控制** (StreamTeleop, SetMode) | **同一时间仅一个客户端**可操控 | `AcquireLease` 租约互斥 |
+
+**不能共用端口的唯一场景**: 在同一台机器上启动两个 gRPC Server 都 `bind` 同一端口 → 第二个会报 `Address already in use`。
+
 ## Configuration Reference
 
 ### Dog Board CMS
@@ -320,6 +355,11 @@ Priority  Layer              Location       Mechanism              Timeout
 | `deadman_timeout_ms` | `300.0` | SafetyGate deadman timeout |
 | `max_speed` | `1.0` | Max linear speed (m/s) |
 | `max_angular` | `1.0` | Max angular speed (rad/s) |
+| `obstacle_height_thre` | `0.2` | 障碍物高度阈值 (m), 与 local_planner 一致 |
+| `stop_distance` | `0.8` | 急停距离 (m): 前方此范围内有障碍→线速度归零 |
+| `slow_distance` | `2.0` | 减速距离 (m): 前方此范围内有障碍→线性减速 |
+| `vehicle_width` | `0.6` | 车身宽度 (m) |
+| `vehicle_width_margin` | `0.1` | 宽度安全裕度 (m) |
 
 ### han_dog_bridge
 
@@ -475,8 +515,14 @@ Flutter App                     Nav Board                      Dog Board
 2. User moves joystick
    │
    ├─→ StreamTeleop(velocity) ─→ SafetyGate.ProcessTeleop()
+   │                               ├─ Mode guard: 非 TELEOP → 返回零速
    │                               ├─ Speed limit check
    │                               ├─ Tilt check
+   │                               ├─ ★ 近场避障 (/terrain_map)
+   │                               │   ├─ <0.8m → obstacle_stop (线速度=0)
+   │                               │   ├─ 0.8~2m → obstacle_slow (线性减速)
+   │                               │   └─ 角速度不受影响
+   │                               ├─ E-stop check
    │                               └─ Publish /cmd_vel
    │                                    │
    │                                    ▼
@@ -490,6 +536,7 @@ Flutter App                     Nav Board                      Dog Board
    │                                                      RL Policy → Motors
    │
    ├─ TeleopFeedback(actual_vel, safety, latency)
+   │   └─ limit_reasons 包含: obstacle_stop / obstacle_slow / max_speed 等
 ```
 
 ### Dog Board Direct Mode (No Nav Board)
@@ -543,6 +590,53 @@ bash tool/regen_dart.sh
 # 3. Verify
 cd dart && dart pub get
 ```
+
+## OTA Update Architecture
+
+```
+┌──────────────────┐    HTTPS     ┌──────────────────┐     gRPC      ┌──────────────────┐
+│  GitHub Releases │◄─────────────│   Flutter App    │──────────────►│   Nav Board      │
+│                  │              │                  │               │   DataService    │
+│  manifest.json   │  直接下载    │  1. 签名验证     │               │                  │
+│  (Ed25519 签名)  │◄─ ─ ─ ─ ─ ─ │  2. 版本对比     │               │  1. 签名验证     │
+│  *.onnx / .deb   │              │  3. 依赖检查     │               │  2. 依赖检查     │
+│  *.pcd / .yaml   │              │  4. 预检查       │               │  3. 安全模式     │
+│                  │              │  5. 进度展示     │               │  4. 事务日志     │
+└──────────────────┘              └──────────────────┘               │  5. 备份→安装    │
+                                                                     └──────────────────┘
+```
+
+### OTA 生命周期
+
+1. **检查更新** — 拉取 `manifest.json` + Ed25519 签名验证 + 版本对比
+2. **预检查** — `CheckUpdateReadiness`: 磁盘/电量/硬件兼容/依赖/安全等级/网络
+3. **安全模式** — HOT: 无需停机 / WARM: 暂停导航 / COLD: sit → disable → 维护态
+4. **下载** — 方式 A: `DownloadFromUrl` 机器人直连 / 方式 B: `UploadFile` 手机中转（断点续传）
+5. **原子安装** — 事务日志 → SHA256 → 依赖检查 → 备份 → 安装 → 清理日志
+6. **崩溃恢复** — 检测未完成事务 → 自动回滚
+7. **回滚** — `Rollback` 手动从备份恢复
+
+### OTA 制品安全等级
+
+| 等级 | 类型 | apply_action | 安装时机器人状态 |
+|------|------|-------------|----------------|
+| **HOT** | 地图 / 配置 | `copy_only` | 可运行中安装 |
+| **WARM** | 模型 (ONNX) | `reload_model` | 导航暂停 |
+| **COLD** | 固件 / MCU | `install_deb` / `flash_mcu` | sit + disable + 维护态 |
+
+### OTA 系统边界
+
+| owner_module | 负责制品 | 安装方式 |
+|-------------|---------|---------|
+| brain | ONNX 模型 | 复制 + Dog Board 热加载 |
+| navigation | PCD 地图 | 复制 + Localizer 重加载 |
+| config_service | YAML 配置 | 复制 + ROS2 参数事件 |
+| system | DEB 固件 | dpkg -i + 重启 |
+| mcu | HEX/BIN | 刷写脚本 + 重启 |
+
+详见 [OTA_GUIDE.md](OTA_GUIDE.md)
+
+---
 
 ## Deployment Scenarios
 

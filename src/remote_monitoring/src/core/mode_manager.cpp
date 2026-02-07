@@ -207,6 +207,15 @@ void ModeManager::ExitState(robot::v1::RobotMode state) {
   case robot::v1::ROBOT_MODE_AUTONOMOUS:
     StopPathFollower();
     break;
+  case robot::v1::ROBOT_MODE_TELEOP:
+    // 退出 TELEOP: 通过 SafetyGate 发一次零速度, 清除残余 cmd_vel
+    if (safety_gate_) {
+      robot::v1::TeleopCommand zero_cmd;
+      safety_gate_->ProcessTeleopCommand(zero_cmd);
+      RCLCPP_INFO(node_->get_logger(),
+                  "ExitState(TELEOP): sent zero cmd_vel via SafetyGate");
+    }
+    break;
   default:
     break;
   }

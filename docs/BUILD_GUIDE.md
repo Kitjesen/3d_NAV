@@ -55,7 +55,27 @@ cmake .. -DCMAKE_INSTALL_PREFIX=../install \
 make -j$(nproc) && make install
 ```
 
-#### 1.3 Livox SDK2 (可选,仅使用Livox LiDAR时需要)
+#### 1.3 libdatachannel (WebRTC 实时视频流,推荐)
+
+```bash
+# 方式 A: 源码编译 (推荐,版本可控)
+cd ~
+git clone https://github.com/nicknsy/libdatachannel.git
+cd libdatachannel
+git submodule update --init --recursive
+cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build -j$(nproc)
+sudo cmake --install build
+
+# 方式 B: 系统包 (Ubuntu 22.04,版本可能较旧)
+# sudo apt install libdatachannel-dev
+```
+
+> **验证**: `pkg-config --modversion libdatachannel` 或 `ls /usr/local/lib/libdatachannel.so`
+>
+> **不安装的后果**: `remote_monitoring` 仍可编译，但 WebRTC 视频功能自动禁用，App 无法查看实时画面。详见 [WEBRTC_GUIDE.md](WEBRTC_GUIDE.md)
+
+#### 1.4 Livox SDK2 (可选,仅使用Livox LiDAR时需要)
 
 ```bash
 cd ~
@@ -219,6 +239,16 @@ colcon build --packages-select \
 colcon build --packages-select pct_planner
 ```
 
+### 仅远程监控 (gRPC Gateway + WebRTC)
+
+```bash
+# 前提: 已安装 libdatachannel (WebRTC) + gRPC
+colcon build --packages-select remote_monitoring \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+# 验证 WebRTC 是否启用: 编译日志应含 "Found libdatachannel"
+```
+
 ### 仅 SLAM
 
 ```bash
@@ -235,6 +265,7 @@ colcon build --packages-select fastlio2 hba pgo
 | local_planner | PCL, Eigen | ~30s |
 | terrain_analysis | PCL | ~20s |
 | pct_planner | GTSAM, pybind11 | ~1min |
+| remote_monitoring | gRPC, libdatachannel (可选) | ~1min |
 | GTSAM 4.1.1 | Boost, Eigen | ~10min |
 | fastlio2 | Sophus, Livox SDK2 | ~2min |
 
@@ -259,4 +290,12 @@ docker run -it --rm pct_planner
 
 ---
 
-**最后更新**: 2026-01
+## 相关文档
+
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — 编译/运行时故障排查
+- [PARAMETER_TUNING.md](PARAMETER_TUNING.md) — 参数调优
+- [CHANGELOG.md](CHANGELOG.md) — 变更记录
+
+---
+
+*最后更新: 2026-02-08*

@@ -49,6 +49,7 @@ dependencies:
   
   # WebRTC for real-time video/audio
   flutter_webrtc: ^0.12.6
+  permission_handler: ^11.3.0
 
   # Bluetooth
   flutter_blue_plus: ^1.35.2

@@ -62,7 +62,7 @@ grpc_gateway:
     hw_id: "dog_v2"
 
     # ==================== WebRTC 配置 ====================
-    webrtc_enabled: false
+    webrtc_enabled: true
     webrtc_offer_timeout_ms: 3000
     webrtc_start_command: ""
     webrtc_stop_command: ""
@@ -79,6 +79,13 @@ grpc_gateway:
     max_speed: 1.0
     max_angular: 1.0
     tilt_limit_deg: 30.0
+
+    # --- SafetyGate 近场避障 ---
+    obstacle_height_thre: 0.2    # 障碍物高度阈值 (m), 与 local_planner 一致
+    stop_distance: 0.8           # 急停距离 (m): 前方此范围内有障碍 → 线速度归零
+    slow_distance: 2.0           # 减速距离 (m): 前方此范围内有障碍 → 线性减速
+    vehicle_width: 0.6           # 车身宽度 (m)
+    vehicle_width_margin: 0.1    # 宽度安全裕度 (m), 实际检测半宽 = width/2 + margin
 
     # ==================== Han Dog Bridge 配置 ====================
     # 四足机器人 CMS gRPC 连接参数

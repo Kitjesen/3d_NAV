@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'package:flutter_monitor/core/grpc/robot_client_base.dart';
 import 'package:flutter_monitor/features/control/webrtc_client.dart';
@@ -73,6 +74,26 @@ class _WebRTCVideoWidgetState extends State<WebRTCVideoWidget> {
       return;
     }
 
+    // ── 运行时权限请求 (Android 6+ 必需) ──
+    // flutter_webrtc 原生层即使只接收视频, 也需要 camera/microphone 权限声明
+    try {
+      final statuses = await [
+        Permission.camera,
+        Permission.microphone,
+      ].request();
+
+      final cameraDenied = statuses[Permission.camera]?.isDenied ?? true;
+      final micDenied = statuses[Permission.microphone]?.isDenied ?? true;
+
+      if (cameraDenied || micDenied) {
+        debugPrint('WebRTC: Permissions denied — camera=$cameraDenied, mic=$micDenied');
+        // 权限被拒不一定致命 (我们只接收不发送), 继续尝试连接
+      }
+    } catch (e) {
+      debugPrint('WebRTC: Permission request failed: $e');
+      // 非致命, 继续尝试
+    }
+
     // 生成唯一 session ID
     final sessionId = 'webrtc_${DateTime.now().millisecondsSinceEpoch}';
 
@@ -118,6 +139,7 @@ class _WebRTCVideoWidgetState extends State<WebRTCVideoWidget> {
         cameraId: widget.cameraId,
       );
     } catch (e) {
+      debugPrint('WebRTC: Connection failed: $e');
       if (mounted) {
         setState(() {
           _errorMessage = e.toString();
