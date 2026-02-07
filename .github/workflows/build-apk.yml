@@ -45,6 +45,12 @@ jobs:
           channel: stable
           cache: true
 
+      # 配置 Git 凭证，使 CI 能 clone 私有仓库 (han_dog_message 等)
+      # 需要在 repo Settings → Secrets 中添加 GH_PAT (Personal Access Token, repo scope)
+      - name: Configure Git credentials for private deps
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+
       # robot_proto 用 SSH git 引用, CI 中改为 HTTPS
       - name: Patch pubspec for CI (SSH → HTTPS)
         run: |
