@@ -90,15 +90,17 @@ void HealthMonitor::EvaluateLoop() {
   RobotHealth health;
 
   // ---- SLAM (里程计频率) ----
+  // 注意：Fast-LIO2 输出频率与 LiDAR 帧率一致（通常 10Hz），
+  // 不是 IMU 频率（100-200Hz），所以阈值不应设为 100Hz。
   {
     SubsystemHealth sub;
     sub.name = "slam";
-    sub.expected_hz = 100.0;
+    sub.expected_hz = 10.0;
     sub.actual_hz = odom_rate_.hz.load();
-    if (sub.actual_hz > 50.0) {
+    if (sub.actual_hz > 5.0) {
       sub.level = HealthLevel::OK;
       sub.message = "SLAM running normally";
-    } else if (sub.actual_hz > 20.0) {
+    } else if (sub.actual_hz > 2.0) {
       sub.level = HealthLevel::DEGRADED;
       sub.message = "SLAM rate low: " + std::to_string(sub.actual_hz) + " Hz";
     } else {

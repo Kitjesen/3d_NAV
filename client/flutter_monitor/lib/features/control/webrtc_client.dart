@@ -2,6 +2,7 @@
 // WebRTC client for real-time video/audio streaming via gRPC signaling
 
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:grpc/grpc.dart';
@@ -24,12 +25,16 @@ class WebRTCClient {
   RTCPeerConnection? _peerConnection;
   MediaStream? _remoteStream;
   RTCVideoRenderer? _videoRenderer;
+  RTCDataChannel? _videoDataChannel;
   
   StreamController<WebRTCSignal>? _signalController;
   ResponseStream<WebRTCSignal>? _signalingStream;
   
   final _connectionStateController = StreamController<WebRTCConnectionState>.broadcast();
   WebRTCConnectionState _connectionState = WebRTCConnectionState.disconnected;
+  
+  // JPEG 帧流 (来自 DataChannel "video-jpeg")
+  final _frameController = StreamController<Uint8List>.broadcast();
   
   // ICE 服务器配置
   final Map<String, dynamic> _iceServers = {
@@ -60,11 +65,17 @@ class WebRTCClient {
   /// 当前连接状态
   WebRTCConnectionState get connectionState => _connectionState;
   
-  /// 远程视频流
+  /// 远程视频流 (WebRTC video track 模式)
   MediaStream? get remoteStream => _remoteStream;
   
-  /// 视频渲染器
+  /// 视频渲染器 (WebRTC video track 模式)
   RTCVideoRenderer? get videoRenderer => _videoRenderer;
+  
+  /// JPEG 帧流 (DataChannel 模式 - 用于 Image.memory 渲染)
+  Stream<Uint8List> get videoFrameStream => _frameController.stream;
+  
+  /// 是否正在通过 DataChannel 接收 JPEG 帧
+  bool get hasDataChannelVideo => _videoDataChannel != null;
   
   /// 初始化并连接
   Future<void> connect({
@@ -96,6 +107,7 @@ class WebRTCClient {
       _peerConnection!.onIceConnectionState = _onIceConnectionState;
       _peerConnection!.onTrack = _onTrack;
       _peerConnection!.onAddStream = _onAddStream;
+      _peerConnection!.onDataChannel = _onDataChannel;
       
       // 4. 创建信令流
       _signalController = StreamController<WebRTCSignal>();
@@ -305,6 +317,32 @@ class WebRTCClient {
     debugPrint('WebRTC: Video stream attached to renderer (legacy)');
   }
   
+  /// 接收到 DataChannel 回调 (服务端主动创建的 DataChannel)
+  void _onDataChannel(RTCDataChannel channel) {
+    debugPrint('WebRTC: DataChannel received: ${channel.label} (id: ${channel.id})');
+    
+    if (channel.label == 'video-jpeg') {
+      _videoDataChannel = channel;
+      
+      channel.onMessage = (RTCDataChannelMessage message) {
+        if (message.isBinary) {
+          _frameController.add(message.binary);
+        }
+      };
+      
+      channel.onDataChannelState = (RTCDataChannelState state) {
+        debugPrint('WebRTC: DataChannel video-jpeg state: $state');
+        if (state == RTCDataChannelState.RTCDataChannelClosed) {
+          _videoDataChannel = null;
+        }
+      };
+      
+      debugPrint('WebRTC: DataChannel video-jpeg ready for JPEG frames');
+    } else {
+      debugPrint('WebRTC: Ignoring DataChannel: ${channel.label}');
+    }
+  }
+  
   /// 设置连接状态
   void _setConnectionState(WebRTCConnectionState state) {
     if (_connectionState != state) {
@@ -320,6 +358,8 @@ class WebRTCClient {
     _signalController = null;
     _signalingStream = null;
     
+    _videoDataChannel = null;
+    
     _remoteStream?.getTracks().forEach((track) => track.stop());
     _remoteStream = null;
     
@@ -334,5 +374,6 @@ class WebRTCClient {
   void dispose() {
     _cleanup();
     _connectionStateController.close();
+    _frameController.close();
   }
 }

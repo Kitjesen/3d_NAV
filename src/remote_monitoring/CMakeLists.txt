@@ -18,6 +18,9 @@ find_package(interface REQUIRED)
 # ---- Proto library (from robot_proto package) ----
 find_package(robot_proto REQUIRED)
 
+# ---- OpenCV (for JPEG encoding in WebRTC bridge) ----
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
+
 # ---- gRPC (for reflection + runtime) ----
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GRPC REQUIRED grpc++)
@@ -96,6 +99,9 @@ if(X264_FOUND)
   target_include_directories(grpc_gateway PRIVATE ${X264_INCLUDE_DIRS})
   target_link_libraries(grpc_gateway ${X264_LIBRARIES})
 endif()
+
+# Link OpenCV (for WebRTC JPEG encoding)
+target_link_libraries(grpc_gateway ${OpenCV_LIBRARIES})
 
 ament_target_dependencies(grpc_gateway
   rclcpp nav_msgs sensor_msgs geometry_msgs std_msgs tf2_ros interface

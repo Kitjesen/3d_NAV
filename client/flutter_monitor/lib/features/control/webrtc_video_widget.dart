@@ -1,7 +1,8 @@
 // webrtc_video_widget.dart
-// Widget for displaying WebRTC video stream
+// Widget for displaying WebRTC video stream (supports both video track and DataChannel JPEG)
 
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -39,8 +40,11 @@ class _WebRTCVideoWidgetState extends State<WebRTCVideoWidget> {
   RTCVideoRenderer? _renderer;
   WebRTCConnectionState _connectionState = WebRTCConnectionState.disconnected;
   StreamSubscription<WebRTCConnectionState>? _stateSubscription;
+  StreamSubscription<Uint8List>? _frameSubscription;
+  Uint8List? _latestJpegFrame;
   String? _errorMessage;
   bool _isInitialized = false;
+  bool _useDataChannelVideo = false;
 
   @override
   void initState() {
@@ -52,6 +56,7 @@ class _WebRTCVideoWidgetState extends State<WebRTCVideoWidget> {
 
   @override
   void dispose() {
+    _frameSubscription?.cancel();
     _stateSubscription?.cancel();
     _webrtcClient?.dispose();
     super.dispose();
@@ -76,6 +81,17 @@ class _WebRTCVideoWidgetState extends State<WebRTCVideoWidget> {
       sessionId: sessionId,
     );
 
+    // 监听 DataChannel JPEG 帧流
+    _frameSubscription = _webrtcClient!.videoFrameStream.listen((frameData) {
+      if (mounted) {
+        setState(() {
+          _latestJpegFrame = frameData;
+          _useDataChannelVideo = true;
+          _isInitialized = true;
+        });
+      }
+    });
+
     // 监听连接状态
     _stateSubscription = _webrtcClient!.connectionStateStream.listen((state) {
       if (mounted) {
@@ -84,6 +100,11 @@ class _WebRTCVideoWidgetState extends State<WebRTCVideoWidget> {
           if (state == WebRTCConnectionState.connected) {
             _renderer = _webrtcClient!.videoRenderer;
             _isInitialized = true;
+          }
+          if (state == WebRTCConnectionState.disconnected ||
+              state == WebRTCConnectionState.failed) {
+            _useDataChannelVideo = false;
+            _latestJpegFrame = null;
           }
         });
       }
@@ -110,8 +131,12 @@ class _WebRTCVideoWidgetState extends State<WebRTCVideoWidget> {
     setState(() {
       _connectionState = WebRTCConnectionState.disconnected;
       _errorMessage = null;
+      _useDataChannelVideo = false;
+      _latestJpegFrame = null;
     });
 
+    _frameSubscription?.cancel();
+    _frameSubscription = null;
     await _webrtcClient?.disconnect();
     _webrtcClient?.dispose();
     _webrtcClient = null;
@@ -126,6 +151,23 @@ class _WebRTCVideoWidgetState extends State<WebRTCVideoWidget> {
         return widget.loadingWidget ?? _buildLoadingWidget();
 
       case WebRTCConnectionState.connected:
+        // 优先使用 DataChannel JPEG 帧渲染 (更可靠，无需 H.264)
+        if (_useDataChannelVideo && _latestJpegFrame != null) {
+          return Container(
+            color: Colors.black,
+            child: Center(
+              child: Image.memory(
+                _latestJpegFrame!,
+                fit: widget.fit,
+                gaplessPlayback: true,  // 关键：防止帧切换时闪烁
+                errorBuilder: (context, error, stackTrace) {
+                  return widget.placeholder ?? _buildPlaceholder();
+                },
+              ),
+            ),
+          );
+        }
+        // Fallback: 使用 RTCVideoView (video track 模式)
         if (_renderer != null && _isInitialized) {
           return RTCVideoView(
             _renderer!,

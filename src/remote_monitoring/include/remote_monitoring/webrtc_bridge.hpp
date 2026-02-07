@@ -71,6 +71,7 @@ private:
   std::string session_id_;
   std::shared_ptr<rtc::PeerConnection> peer_connection_;
   std::shared_ptr<rtc::Track> video_track_;
+  std::shared_ptr<rtc::DataChannel> video_data_channel_;  // JPEG over DataChannel
   
   OnLocalDescriptionCallback on_local_description_;
   OnLocalCandidateCallback on_local_candidate_;
@@ -78,6 +79,7 @@ private:
   OnGatheringStateChangeCallback on_gathering_state_change_;
   
   std::atomic<bool> connected_{false};
+  std::atomic<bool> data_channel_open_{false};
   mutable std::mutex mutex_;
 };
 

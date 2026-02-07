@@ -12,6 +12,10 @@ extern "C" {
 }
 #endif
 
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+
 namespace remote_monitoring {
 
 // ==================== WebRTCPeer Implementation ====================
@@ -77,7 +81,31 @@ bool WebRTCPeer::Initialize(const rtc::Configuration &config) {
       }
     });
     
-    // 添加视频轨道
+    // 创建 DataChannel 用于传输 JPEG 帧 (unreliable + unordered 以降低延迟)
+    rtc::DataChannelInit dc_init;
+    dc_init.reliability.unordered = true;          // 不保序，降低延迟
+    dc_init.reliability.maxRetransmits = 0;        // 不重传，丢帧优于延迟
+    
+    video_data_channel_ = peer_connection_->createDataChannel("video-jpeg", dc_init);
+    
+    video_data_channel_->onOpen([this]() {
+      data_channel_open_ = true;
+      RCLCPP_INFO(rclcpp::get_logger("WebRTCPeer"),
+                  "DataChannel 'video-jpeg' opened for session: %s", session_id_.c_str());
+    });
+    
+    video_data_channel_->onClosed([this]() {
+      data_channel_open_ = false;
+      RCLCPP_INFO(rclcpp::get_logger("WebRTCPeer"),
+                  "DataChannel 'video-jpeg' closed for session: %s", session_id_.c_str());
+    });
+    
+    video_data_channel_->onError([this](std::string error) {
+      RCLCPP_WARN(rclcpp::get_logger("WebRTCPeer"),
+                  "DataChannel error: %s (session: %s)", error.c_str(), session_id_.c_str());
+    });
+    
+    // 保留 video track 用于 SDP 协商 (让客户端知道有视频能力)
     rtc::Description::Video video_desc("video", rtc::Description::Direction::SendOnly);
     video_desc.addH264Codec(96);  // H.264 payload type 96
     video_desc.addSSRC(1, "video-stream");
@@ -85,7 +113,7 @@ bool WebRTCPeer::Initialize(const rtc::Configuration &config) {
     video_track_ = peer_connection_->addTrack(video_desc);
     
     RCLCPP_INFO(rclcpp::get_logger("WebRTCPeer"),
-                "WebRTC peer initialized successfully");
+                "WebRTC peer initialized successfully (DataChannel + video track)");
     return true;
     
   } catch (const std::exception &e) {
@@ -161,21 +189,19 @@ void WebRTCPeer::AddRemoteCandidate(const std::string &candidate, const std::str
 }
 
 void WebRTCPeer::SendVideoFrame(const uint8_t *data, size_t size, uint64_t /*timestamp_us*/) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  
-  if (!video_track_ || !connected_) {
+  // 优先通过 DataChannel 发送 JPEG 帧 (无需 H.264 编码)
+  if (!data_channel_open_ || !connected_) {
     return;
   }
   
   try {
-    // 注意：这里假设 data 已经是 H.264 编码的 NAL 单元
-    // 如果是原始帧，需要先编码
-    auto byte_ptr = reinterpret_cast<const std::byte *>(data);
-    video_track_->send(byte_ptr, size);
-    
+    if (video_data_channel_ && video_data_channel_->isOpen()) {
+      auto byte_ptr = reinterpret_cast<const std::byte *>(data);
+      video_data_channel_->send(byte_ptr, size);
+    }
   } catch (const std::exception &e) {
     RCLCPP_ERROR(rclcpp::get_logger("WebRTCPeer"),
-                 "Failed to send video frame: %s", e.what());
+                 "Failed to send video frame via DataChannel: %s", e.what());
   }
 }
 
@@ -203,6 +229,12 @@ void WebRTCPeer::Close() {
   std::lock_guard<std::mutex> lock(mutex_);
   
   connected_ = false;
+  data_channel_open_ = false;
+  
+  if (video_data_channel_) {
+    video_data_channel_->close();
+    video_data_channel_.reset();
+  }
   
   if (video_track_) {
     video_track_.reset();
@@ -424,7 +456,7 @@ void WebRTCBridge::SetOnIceGatheringDone(OnIceGatheringDoneCallback cb) {
 }
 
 void WebRTCBridge::SubscribeCameraTopic(const std::string &topic) {
-  if (current_camera_topic_ == topic && compressed_image_sub_) {
+  if (current_camera_topic_ == topic && (compressed_image_sub_ || raw_image_sub_)) {
     return;  // 已订阅
   }
   
@@ -432,30 +464,53 @@ void WebRTCBridge::SubscribeCameraTopic(const std::string &topic) {
   
   current_camera_topic_ = topic;
   
-  // 尝试订阅压缩图像 topic
+  // 构建 compressed topic 名称
   std::string compressed_topic = topic;
   if (topic.find("/compressed") == std::string::npos) {
     compressed_topic = topic + "/compressed";
   }
   
-  try {
+  // 检查是否有 compressed publisher (来自 compressed_image_transport)
+  size_t compressed_pub_count = node_->count_publishers(compressed_topic);
+  size_t raw_pub_count = node_->count_publishers(topic);
+  
+  RCLCPP_INFO(node_->get_logger(),
+              "Camera topic scan: compressed '%s' has %zu publishers, raw '%s' has %zu publishers",
+              compressed_topic.c_str(), compressed_pub_count,
+              topic.c_str(), raw_pub_count);
+  
+  if (compressed_pub_count > 0) {
+    // 优先订阅 compressed topic (JPEG 数据直接转发，省去编码步骤)
     compressed_image_sub_ = node_->create_subscription<sensor_msgs::msg::CompressedImage>(
-        compressed_topic, 10,
+        compressed_topic, rclcpp::SensorDataQoS(),
         std::bind(&WebRTCBridge::OnCompressedImageReceived, this, std::placeholders::_1));
     
     RCLCPP_INFO(node_->get_logger(),
-                "Subscribed to compressed image topic: %s", compressed_topic.c_str());
-  } catch (const std::exception &e) {
-    RCLCPP_WARN(node_->get_logger(),
-                "Failed to subscribe to compressed topic, trying raw: %s", e.what());
-    
-    // 回退到原始图像 topic
+                "Subscribed to compressed image topic: %s (direct JPEG forwarding)", 
+                compressed_topic.c_str());
+                
+  } else if (raw_pub_count > 0) {
+    // 回退到 raw topic，使用 OpenCV 编码为 JPEG
     raw_image_sub_ = node_->create_subscription<sensor_msgs::msg::Image>(
-        topic, 10,
+        topic, rclcpp::SensorDataQoS(),
         std::bind(&WebRTCBridge::OnRawImageReceived, this, std::placeholders::_1));
     
     RCLCPP_INFO(node_->get_logger(),
-                "Subscribed to raw image topic: %s", topic.c_str());
+                "Subscribed to raw image topic: %s (will encode to JPEG)", topic.c_str());
+                
+  } else {
+    // 两个都没有 publisher，同时订阅两个 (等待 publisher 出现)
+    compressed_image_sub_ = node_->create_subscription<sensor_msgs::msg::CompressedImage>(
+        compressed_topic, rclcpp::SensorDataQoS(),
+        std::bind(&WebRTCBridge::OnCompressedImageReceived, this, std::placeholders::_1));
+    
+    raw_image_sub_ = node_->create_subscription<sensor_msgs::msg::Image>(
+        topic, rclcpp::SensorDataQoS(),
+        std::bind(&WebRTCBridge::OnRawImageReceived, this, std::placeholders::_1));
+    
+    RCLCPP_WARN(node_->get_logger(),
+                "No camera publishers found yet. Subscribed to both '%s' and '%s', waiting for data...",
+                compressed_topic.c_str(), topic.c_str());
   }
 }
 
@@ -501,11 +556,23 @@ void WebRTCBridge::OnRawImageReceived(const sensor_msgs::msg::Image::SharedPtr m
     return;
   }
   
+  // 如果同时也有 compressed 订阅收到数据，优先用 compressed（避免重复编码）
+  // 这里简单判断：如果 compressed_image_sub_ 存在且有 publisher，跳过 raw
+  if (compressed_image_sub_) {
+    std::string compressed_topic = current_camera_topic_ + "/compressed";
+    if (node_->count_publishers(compressed_topic) > 0) {
+      // compressed topic 已有 publisher，取消 raw 订阅以避免重复
+      raw_image_sub_.reset();
+      RCLCPP_INFO(node_->get_logger(),
+                  "Compressed publisher appeared, switching to compressed-only mode");
+      return;
+    }
+  }
+  
   uint64_t timestamp_us = static_cast<uint64_t>(msg->header.stamp.sec) * 1000000ULL +
                           static_cast<uint64_t>(msg->header.stamp.nanosec) / 1000ULL;
   
-  // TODO: 需要先编码为 H.264
-  // 当前实现仅为占位，实际需要调用编码器
+  // 使用 OpenCV 编码 raw Image -> JPEG
   auto encoded = EncodeFrame(msg->data.data(), msg->data.size(), 
                              msg->width, msg->height);
   
@@ -537,14 +604,13 @@ bool WebRTCBridge::InitEncoder(int width, int height) {
   param.i_fps_num = 15;
   param.i_fps_den = 1;
   param.i_threads = 2;
-  param.i_keyint_max = 30;       // keyframe every 2s at 15fps
+  param.i_keyint_max = 30;
   param.i_keyint_min = 15;
-  param.b_repeat_headers = 1;    // include SPS/PPS with each keyframe
-  param.b_annexb = 1;            // Annex-B format (start codes)
+  param.b_repeat_headers = 1;
+  param.b_annexb = 1;
 
-  // Bitrate control
   param.rc.i_rc_method = X264_RC_ABR;
-  param.rc.i_bitrate = 1500;     // kbps
+  param.rc.i_bitrate = 1500;
   param.rc.i_vbv_max_bitrate = 2000;
   param.rc.i_vbv_buffer_size = 2000;
 
@@ -586,102 +652,63 @@ void WebRTCBridge::DestroyEncoder() {
 
 std::vector<uint8_t> WebRTCBridge::EncodeFrame(const uint8_t *data, size_t size,
                                                 int width, int height) {
-#ifdef X264_ENABLED
   if (!data || size == 0 || width <= 0 || height <= 0) {
     return {};
   }
 
-  // 重新初始化编码器（如果分辨率改变）
-  if (!encoder_ || encoder_width_ != width || encoder_height_ != height) {
-    if (!InitEncoder(width, height)) {
+  // DataChannel 模式：使用 OpenCV 编码为 JPEG（无需 H.264）
+  try {
+    int channels = static_cast<int>(size) / (width * height);
+    int cv_type;
+
+    switch (channels) {
+      case 1:
+        cv_type = CV_8UC1;
+        break;
+      case 3:
+        cv_type = CV_8UC3;
+        break;
+      case 4:
+        cv_type = CV_8UC4;
+        break;
+      default:
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                             "Unexpected image format: %dx%d with %zu bytes (%d channels)",
+                             width, height, size, channels);
+        return {};
+    }
+
+    cv::Mat frame(height, width, cv_type, const_cast<uint8_t*>(data));
+
+    cv::Mat bgr_frame;
+    if (channels == 3) {
+      cv::cvtColor(frame, bgr_frame, cv::COLOR_RGB2BGR);
+    } else if (channels == 4) {
+      cv::cvtColor(frame, bgr_frame, cv::COLOR_RGBA2BGR);
+    } else {
+      bgr_frame = frame;
+    }
+
+    std::vector<uint8_t> jpeg_buf;
+    std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 70};
+
+    if (!cv::imencode(".jpg", bgr_frame, jpeg_buf, params)) {
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                           "Failed to encode frame to JPEG");
       return {};
     }
-  }
 
-  // 将 RGB/BGR 数据转换为 I420 (YUV 4:2:0)
-  const int y_size = width * height;
-  const int uv_size = y_size / 4;
-  std::vector<uint8_t> yuv_buf(y_size + uv_size * 2);
+    RCLCPP_DEBUG_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                          "Encoded %dx%d frame to JPEG: %zu bytes",
+                          width, height, jpeg_buf.size());
 
-  uint8_t *y_plane = yuv_buf.data();
-  uint8_t *u_plane = y_plane + y_size;
-  uint8_t *v_plane = u_plane + uv_size;
+    return jpeg_buf;
 
-  // 判断输入格式：ROS 常用 rgb8(3ch) 或 bgr8(3ch)
-  // 这里假设 BGR8 (OpenCV default)
-  const int channels = static_cast<int>(size) / (width * height);
-  if (channels < 3) {
-    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                         "Unsupported image format: expected 3+ channels, got %d", channels);
+  } catch (const cv::Exception &e) {
+    RCLCPP_ERROR_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                          "OpenCV exception during JPEG encoding: %s", e.what());
     return {};
   }
-
-  // BGR -> I420 (简化版本，每 2x2 block 取均值)
-  for (int j = 0; j < height; j++) {
-    for (int i = 0; i < width; i++) {
-      const int idx = (j * width + i) * channels;
-      const uint8_t b = data[idx];
-      const uint8_t g = data[idx + 1];
-      const uint8_t r = data[idx + 2];
-
-      // BT.601 RGB -> YUV
-      const int y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-      y_plane[j * width + i] = static_cast<uint8_t>(std::min(std::max(y, 0), 255));
-
-      if ((j % 2 == 0) && (i % 2 == 0)) {
-        const int u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-        const int v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
-        u_plane[(j / 2) * (width / 2) + (i / 2)] =
-            static_cast<uint8_t>(std::min(std::max(u, 0), 255));
-        v_plane[(j / 2) * (width / 2) + (i / 2)] =
-            static_cast<uint8_t>(std::min(std::max(v, 0), 255));
-      }
-    }
-  }
-
-  // 设置 x264 图片
-  x264_picture_t pic_in, pic_out;
-  x264_picture_init(&pic_in);
-  pic_in.i_type = X264_TYPE_AUTO;
-  pic_in.i_pts = frame_count_++;
-  pic_in.img.i_csp = X264_CSP_I420;
-  pic_in.img.i_plane = 3;
-  pic_in.img.plane[0] = y_plane;
-  pic_in.img.plane[1] = u_plane;
-  pic_in.img.plane[2] = v_plane;
-  pic_in.img.i_stride[0] = width;
-  pic_in.img.i_stride[1] = width / 2;
-  pic_in.img.i_stride[2] = width / 2;
-
-  // 编码
-  x264_nal_t *nals = nullptr;
-  int nal_count = 0;
-  int frame_size = x264_encoder_encode(encoder_, &nals, &nal_count, &pic_in, &pic_out);
-
-  if (frame_size <= 0 || nal_count <= 0) {
-    return {};
-  }
-
-  // 合并所有 NAL 单元
-  std::vector<uint8_t> encoded;
-  encoded.reserve(static_cast<size_t>(frame_size));
-  for (int i = 0; i < nal_count; i++) {
-    encoded.insert(encoded.end(), nals[i].p_payload, nals[i].p_payload + nals[i].i_payload);
-  }
-
-  return encoded;
-
-#else
-  (void)data;
-  (void)size;
-  (void)width;
-  (void)height;
-
-  RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                       "x264 not available - raw image encoding skipped. "
-                       "Build with -DX264_ENABLED=ON and libx264-dev installed.");
-  return {};
-#endif
 }
 
 }  // namespace remote_monitoring

@@ -1,4 +1,5 @@
 #include "remote_monitoring/grpc_gateway.hpp"
+#include <grpcpp/ext/proto_server_reflection_plugin.h>
 #include "remote_monitoring/core/event_buffer.hpp"
 #include "remote_monitoring/core/geofence_monitor.hpp"
 #include "remote_monitoring/core/health_monitor.hpp"
@@ -123,6 +124,9 @@ void GrpcGateway::Stop() {
 }
 
 void GrpcGateway::Run() {
+  // 启用 gRPC reflection，让 grpcurl 等工具可以直接发现服务
+  grpc::reflection::InitProtoReflectionServerBuilderPlugin();
+
   grpc::ServerBuilder builder;
   builder.AddListeningPort("0.0.0.0:" + std::to_string(port_),
                            grpc::InsecureServerCredentials());
