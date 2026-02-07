@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:provider/provider.dart';
+import 'package:shimmer/shimmer.dart';
 import '../services/robot_connection_provider.dart';
 import 'package:robot_proto/robot_proto.dart';
+import '../theme/app_theme.dart';
 import '../widgets/glass_widgets.dart';
 
 class StatusScreen extends StatefulWidget {
@@ -86,12 +88,18 @@ class _StatusScreenState extends State<StatusScreen>
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required by AutomaticKeepAliveClientMixin
+    super.build(context);
+    final isDark = context.isDark;
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Overview'),
+        title: const Text('状态总览'),
+        leading: Navigator.canPop(context)
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+                onPressed: () => Navigator.pop(context),
+              )
+            : null,
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16.0),
@@ -103,7 +111,6 @@ class _StatusScreenState extends State<StatusScreen>
           ? _buildLoadingSkeleton()
           : RefreshIndicator(
               onRefresh: () async {
-                // 重新订阅流
                 _fastSub?.cancel();
                 _slowSub?.cancel();
                 _subscribeStreams();
@@ -111,32 +118,26 @@ class _StatusScreenState extends State<StatusScreen>
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.fromLTRB(
-                    16, MediaQuery.of(context).padding.top + 60, 16, 100),
+                    16, MediaQuery.of(context).padding.top + 16, 16, 100),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     RepaintBoundary(child: _buildRobotCard()),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     Row(
                       children: [
                         Expanded(
                           child: RepaintBoundary(
                             child: _buildMetricCard(
                               icon: Icons.battery_charging_full,
-                              iconColor: const Color(0xFF34C759),
+                              iconColor: AppColors.success,
                               label: 'BATTERY',
-                              value:
-                                  (_latestSlowState?.resources.batteryPercent ??
-                                          0)
-                                      .toStringAsFixed(0),
+                              value: (_latestSlowState?.resources.batteryPercent ?? 0)
+                                  .toStringAsFixed(0),
                               unit: '%',
-                              progress:
-                                  (_latestSlowState?.resources.batteryPercent ??
-                                          0) /
-                                      100,
+                              progress: (_latestSlowState?.resources.batteryPercent ?? 0) / 100,
                               progressColor: _getBatteryColor(
-                                  _latestSlowState?.resources.batteryPercent ??
-                                      100),
+                                  _latestSlowState?.resources.batteryPercent ?? 100),
                             ),
                           ),
                         ),
@@ -145,16 +146,13 @@ class _StatusScreenState extends State<StatusScreen>
                           child: RepaintBoundary(
                             child: _buildMetricCard(
                               icon: Icons.memory,
-                              iconColor: const Color(0xFF007AFF),
+                              iconColor: AppColors.primary,
                               label: 'CPU',
-                              value:
-                                  (_latestSlowState?.resources.cpuPercent ?? 0)
-                                      .toStringAsFixed(0),
+                              value: (_latestSlowState?.resources.cpuPercent ?? 0)
+                                  .toStringAsFixed(0),
                               unit: '%',
-                              progress:
-                                  (_latestSlowState?.resources.cpuPercent ?? 0) /
-                                      100,
-                              progressColor: const Color(0xFF007AFF),
+                              progress: (_latestSlowState?.resources.cpuPercent ?? 0) / 100,
+                              progressColor: AppColors.primary,
                             ),
                           ),
                         ),
@@ -167,16 +165,13 @@ class _StatusScreenState extends State<StatusScreen>
                           child: RepaintBoundary(
                             child: _buildMetricCard(
                               icon: Icons.thermostat,
-                              iconColor: const Color(0xFFFF9500),
+                              iconColor: AppColors.warning,
                               label: 'TEMP',
-                              value:
-                                  (_latestSlowState?.resources.cpuTemp ?? 0)
-                                      .toStringAsFixed(1),
+                              value: (_latestSlowState?.resources.cpuTemp ?? 0)
+                                  .toStringAsFixed(1),
                               unit: '°C',
                               progress: math.min(
-                                  (_latestSlowState?.resources.cpuTemp ?? 0) /
-                                      80,
-                                  1.0),
+                                  (_latestSlowState?.resources.cpuTemp ?? 0) / 80, 1.0),
                               progressColor: _getTempColor(
                                   _latestSlowState?.resources.cpuTemp ?? 0),
                             ),
@@ -189,27 +184,21 @@ class _StatusScreenState extends State<StatusScreen>
                               icon: Icons.bolt,
                               iconColor: const Color(0xFFFFCC00),
                               label: 'VOLTAGE',
-                              value: (_latestSlowState
-                                          ?.resources.batteryVoltage ??
-                                      0)
+                              value: (_latestSlowState?.resources.batteryVoltage ?? 0)
                                   .toStringAsFixed(1),
                               unit: 'V',
                               progress: math.min(
-                                  (_latestSlowState
-                                              ?.resources.batteryVoltage ??
-                                          0) /
-                                      30,
-                                  1.0),
+                                  (_latestSlowState?.resources.batteryVoltage ?? 0) / 30, 1.0),
                               progressColor: const Color(0xFFFFCC00),
                             ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     RepaintBoundary(child: _buildMotionCard()),
                     if (_latestSlowState != null) ...[
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       RepaintBoundary(child: _buildTopicRatesCard()),
                     ],
                   ],
@@ -219,28 +208,28 @@ class _StatusScreenState extends State<StatusScreen>
     );
   }
 
-  /// 加载骨架屏
   Widget _buildLoadingSkeleton() {
+    final isDark = context.isDark;
     return Padding(
       padding: EdgeInsets.fromLTRB(
-          16, MediaQuery.of(context).padding.top + 60, 16, 100),
+          16, MediaQuery.of(context).padding.top + 16, 16, 100),
       child: Column(
         children: [
           _buildSkeletonCard(height: 180),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           Row(
             children: [
-              Expanded(child: _buildSkeletonCard(height: 120)),
+              Expanded(child: _buildSkeletonCard(height: 130)),
               const SizedBox(width: 12),
-              Expanded(child: _buildSkeletonCard(height: 120)),
+              Expanded(child: _buildSkeletonCard(height: 130)),
             ],
           ),
           const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(child: _buildSkeletonCard(height: 120)),
+              Expanded(child: _buildSkeletonCard(height: 130)),
               const SizedBox(width: 12),
-              Expanded(child: _buildSkeletonCard(height: 120)),
+              Expanded(child: _buildSkeletonCard(height: 130)),
             ],
           ),
         ],
@@ -249,33 +238,30 @@ class _StatusScreenState extends State<StatusScreen>
   }
 
   Widget _buildSkeletonCard({required double height}) {
-    return Container(
-      height: height,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.6),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: const Center(
-        child: CircularProgressIndicator(
-          color: Color(0xFF007AFF),
-          strokeWidth: 2,
+    final isDark = context.isDark;
+    return Shimmer.fromColors(
+      baseColor: isDark ? Colors.white.withOpacity(0.06) : Colors.grey.shade200,
+      highlightColor: isDark ? Colors.white.withOpacity(0.12) : Colors.grey.shade100,
+      child: Container(
+        height: height,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
         ),
       ),
     );
   }
 
-  /// 动态电池颜色
   Color _getBatteryColor(double percent) {
-    if (percent > 60) return const Color(0xFF34C759);
-    if (percent > 30) return const Color(0xFFFF9500);
-    return const Color(0xFFFF3B30);
+    if (percent > 60) return AppColors.success;
+    if (percent > 30) return AppColors.warning;
+    return AppColors.error;
   }
 
-  /// 动态温度颜色
   Color _getTempColor(double temp) {
-    if (temp < 50) return const Color(0xFFFF9500);
+    if (temp < 50) return AppColors.warning;
     if (temp < 70) return const Color(0xFFFF6B00);
-    return const Color(0xFFFF3B30);
+    return AppColors.error;
   }
 
   Widget _buildStatusBadge() {
@@ -284,38 +270,39 @@ class _StatusScreenState extends State<StatusScreen>
       builder: (context, status, _) {
         final isOnline = status == ConnectionStatus.connected;
         final isReconnecting = status == ConnectionStatus.reconnecting;
+        final color = isOnline
+            ? AppColors.success
+            : isReconnecting
+                ? AppColors.warning
+                : AppColors.error;
+        final label = isOnline
+            ? 'ONLINE'
+            : isReconnecting
+                ? 'RECONNECTING'
+                : 'OFFLINE';
 
-        return GlassCard(
+        return Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          borderRadius: 30,
-          blurSigma: 10,
-          color: isOnline
-              ? const Color(0xFF34C759).withOpacity(0.1)
-              : isReconnecting
-                  ? const Color(0xFFFF9500).withOpacity(0.1)
-                  : const Color(0xFFFF3B30).withOpacity(0.1),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(30),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               AnimatedBuilder(
                 animation: _breathingAnimation,
-                builder: (context, child) {
-                  final dotColor = isOnline
-                      ? const Color(0xFF34C759)
-                      : isReconnecting
-                          ? const Color(0xFFFF9500)
-                          : const Color(0xFFFF3B30);
+                builder: (context, _) {
                   return Container(
                     width: 8,
                     height: 8,
                     decoration: BoxDecoration(
-                      color: dotColor,
+                      color: color,
                       shape: BoxShape.circle,
                       boxShadow: isOnline
                           ? [
                               BoxShadow(
-                                color: dotColor
-                                    .withOpacity(0.5 * _breathingAnimation.value),
+                                color: color.withOpacity(0.5 * _breathingAnimation.value),
                                 blurRadius: 6,
                                 spreadRadius: 1,
                               ),
@@ -327,20 +314,12 @@ class _StatusScreenState extends State<StatusScreen>
               ),
               const SizedBox(width: 8),
               Text(
-                isOnline
-                    ? 'ONLINE'
-                    : isReconnecting
-                        ? 'RECONNECTING'
-                        : 'OFFLINE',
+                label,
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.5,
-                  color: isOnline
-                      ? const Color(0xFF34C759)
-                      : isReconnecting
-                          ? const Color(0xFFFF9500)
-                          : const Color(0xFFFF3B30),
+                  color: color,
                 ),
               ),
             ],
@@ -351,9 +330,22 @@ class _StatusScreenState extends State<StatusScreen>
   }
 
   Widget _buildRobotCard() {
+    final isDark = context.isDark;
     final pose = _latestFastState!.pose;
-    return GlassCard(
-      padding: const EdgeInsets.all(20),
+
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: context.cardShadowColor,
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
       child: Column(
         children: [
           Container(
@@ -363,12 +355,12 @@ class _StatusScreenState extends State<StatusScreen>
               gradient: const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFF007AFF), Color(0xFF5856D6)],
+                colors: [AppColors.primary, AppColors.secondary],
               ),
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(22),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF007AFF).withOpacity(0.3),
+                  color: AppColors.primary.withOpacity(0.3),
                   blurRadius: 16,
                   offset: const Offset(0, 6),
                 ),
@@ -382,7 +374,7 @@ class _StatusScreenState extends State<StatusScreen>
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
-              color: Colors.black.withOpacity(0.8),
+              color: isDark ? Colors.white : Colors.black87,
             ),
           ),
           const SizedBox(height: 4),
@@ -390,7 +382,7 @@ class _StatusScreenState extends State<StatusScreen>
             'Mode: ${_latestSlowState?.currentMode ?? "IDLE"}',
             style: TextStyle(
               fontSize: 12,
-              color: Colors.black.withOpacity(0.4),
+              color: context.subtitleColor,
               letterSpacing: 0.5,
             ),
           ),
@@ -398,14 +390,11 @@ class _StatusScreenState extends State<StatusScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _buildPoseValue(
-                  'X', pose.position.x.toStringAsFixed(2), 'm'),
+              _buildPoseValue('X', pose.position.x.toStringAsFixed(2), 'm'),
               _buildDivider(),
-              _buildPoseValue(
-                  'Y', pose.position.y.toStringAsFixed(2), 'm'),
+              _buildPoseValue('Y', pose.position.y.toStringAsFixed(2), 'm'),
               _buildDivider(),
-              _buildPoseValue('YAW',
-                  _latestFastState!.rpyDeg.z.toStringAsFixed(1), '°'),
+              _buildPoseValue('YAW', _latestFastState!.rpyDeg.z.toStringAsFixed(1), '°'),
             ],
           ),
         ],
@@ -414,6 +403,7 @@ class _StatusScreenState extends State<StatusScreen>
   }
 
   Widget _buildPoseValue(String label, String value, String unit) {
+    final isDark = context.isDark;
     return Column(
       children: [
         Text(
@@ -421,7 +411,7 @@ class _StatusScreenState extends State<StatusScreen>
           style: TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w600,
-            color: Colors.black.withOpacity(0.35),
+            color: context.subtitleColor,
             letterSpacing: 1.0,
           ),
         ),
@@ -431,10 +421,10 @@ class _StatusScreenState extends State<StatusScreen>
             children: [
               TextSpan(
                 text: value,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w700,
-                  color: Colors.black87,
+                  color: isDark ? Colors.white : Colors.black87,
                   letterSpacing: -0.5,
                 ),
               ),
@@ -443,7 +433,7 @@ class _StatusScreenState extends State<StatusScreen>
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: Colors.black.withOpacity(0.4),
+                  color: context.subtitleColor,
                 ),
               ),
             ],
@@ -457,7 +447,7 @@ class _StatusScreenState extends State<StatusScreen>
     return Container(
       width: 1,
       height: 36,
-      color: Colors.black.withOpacity(0.08),
+      color: context.dividerColor,
     );
   }
 
@@ -470,19 +460,32 @@ class _StatusScreenState extends State<StatusScreen>
     required double progress,
     required Color progressColor,
   }) {
-    return GlassCard(
-      padding: const EdgeInsets.all(16),
+    final isDark = context.isDark;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: context.cardShadowColor,
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Container(
-                width: 32,
-                height: 32,
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(10),
+                  color: iconColor.withOpacity(isDark ? 0.18 : 0.1),
+                  borderRadius: BorderRadius.circular(11),
                 ),
                 child: Icon(icon, size: 18, color: iconColor),
               ),
@@ -492,7 +495,7 @@ class _StatusScreenState extends State<StatusScreen>
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black.withOpacity(0.35),
+                  color: context.subtitleColor,
                   letterSpacing: 1.0,
                 ),
               ),
@@ -504,10 +507,10 @@ class _StatusScreenState extends State<StatusScreen>
               children: [
                 TextSpan(
                   text: value,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.w700,
-                    color: Colors.black87,
+                    color: isDark ? Colors.white : Colors.black87,
                     letterSpacing: -0.5,
                   ),
                 ),
@@ -516,15 +519,15 @@ class _StatusScreenState extends State<StatusScreen>
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
-                    color: Colors.black.withOpacity(0.4),
+                    color: context.subtitleColor,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           ClipRRect(
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(6),
             child: TweenAnimationBuilder<double>(
               tween: Tween(begin: 0, end: progress.clamp(0.0, 1.0)),
               duration: const Duration(milliseconds: 500),
@@ -532,8 +535,10 @@ class _StatusScreenState extends State<StatusScreen>
               builder: (context, value, _) {
                 return LinearProgressIndicator(
                   value: value,
-                  minHeight: 4,
-                  backgroundColor: Colors.black.withOpacity(0.06),
+                  minHeight: 5,
+                  backgroundColor: isDark
+                      ? Colors.white.withOpacity(0.06)
+                      : Colors.black.withOpacity(0.05),
                   valueColor: AlwaysStoppedAnimation<Color>(progressColor),
                 );
               },
@@ -545,24 +550,36 @@ class _StatusScreenState extends State<StatusScreen>
   }
 
   Widget _buildMotionCard() {
+    final isDark = context.isDark;
     final linear = _latestFastState!.velocity.linear.x;
     final angular = _latestFastState!.velocity.angular.z;
 
-    return GlassCard(
-      padding: const EdgeInsets.all(20),
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: context.cardShadowColor,
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Container(
-                width: 32,
-                height: 32,
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFAF52DE).withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(10),
+                  color: AppColors.accent.withOpacity(isDark ? 0.18 : 0.1),
+                  borderRadius: BorderRadius.circular(11),
                 ),
-                child: const Icon(Icons.speed, size: 18, color: Color(0xFFAF52DE)),
+                child: const Icon(Icons.speed, size: 18, color: AppColors.accent),
               ),
               const SizedBox(width: 10),
               Text(
@@ -570,7 +587,7 @@ class _StatusScreenState extends State<StatusScreen>
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black.withOpacity(0.35),
+                  color: context.subtitleColor,
                   letterSpacing: 1.0,
                 ),
               ),
@@ -581,24 +598,15 @@ class _StatusScreenState extends State<StatusScreen>
             children: [
               Expanded(
                 child: _buildMotionValue(
-                  Icons.arrow_forward,
-                  'Linear',
-                  linear.toStringAsFixed(2),
-                  'm/s',
-                  const Color(0xFF007AFF),
+                  Icons.arrow_forward, 'Linear',
+                  linear.toStringAsFixed(2), 'm/s', AppColors.primary,
                 ),
               ),
-              Container(
-                  width: 1,
-                  height: 48,
-                  color: Colors.black.withOpacity(0.06)),
+              Container(width: 1, height: 48, color: context.dividerColor),
               Expanded(
                 child: _buildMotionValue(
-                  Icons.rotate_right,
-                  'Angular',
-                  angular.toStringAsFixed(2),
-                  'rad/s',
-                  const Color(0xFFAF52DE),
+                  Icons.rotate_right, 'Angular',
+                  angular.toStringAsFixed(2), 'rad/s', AppColors.accent,
                 ),
               ),
             ],
@@ -609,12 +617,8 @@ class _StatusScreenState extends State<StatusScreen>
   }
 
   Widget _buildMotionValue(
-    IconData icon,
-    String label,
-    String value,
-    String unit,
-    Color color,
-  ) {
+      IconData icon, String label, String value, String unit, Color color) {
+    final isDark = context.isDark;
     return Column(
       children: [
         Icon(icon, size: 20, color: color.withOpacity(0.6)),
@@ -625,17 +629,17 @@ class _StatusScreenState extends State<StatusScreen>
             children: [
               TextSpan(
                 text: value,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w700,
-                  color: Colors.black87,
+                  color: isDark ? Colors.white : Colors.black87,
                 ),
               ),
               TextSpan(
                 text: '\n$unit',
                 style: TextStyle(
                   fontSize: 11,
-                  color: Colors.black.withOpacity(0.4),
+                  color: context.subtitleColor,
                 ),
               ),
             ],
@@ -647,7 +651,7 @@ class _StatusScreenState extends State<StatusScreen>
           style: TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w600,
-            color: Colors.black.withOpacity(0.3),
+            color: context.subtitleColor,
             letterSpacing: 0.8,
           ),
         ),
@@ -656,23 +660,35 @@ class _StatusScreenState extends State<StatusScreen>
   }
 
   Widget _buildTopicRatesCard() {
+    final isDark = context.isDark;
     final rates = _latestSlowState!.topicRates;
-    return GlassCard(
-      padding: const EdgeInsets.all(20),
+
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: context.cardShadowColor,
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Container(
-                width: 32,
-                height: 32,
+                width: 34,
+                height: 34,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF5AC8FA).withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(10),
+                  color: AppColors.info.withOpacity(isDark ? 0.18 : 0.1),
+                  borderRadius: BorderRadius.circular(11),
                 ),
-                child:
-                    const Icon(Icons.wifi, size: 18, color: Color(0xFF5AC8FA)),
+                child: const Icon(Icons.wifi, size: 18, color: AppColors.info),
               ),
               const SizedBox(width: 10),
               Text(
@@ -680,7 +696,7 @@ class _StatusScreenState extends State<StatusScreen>
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black.withOpacity(0.35),
+                  color: context.subtitleColor,
                   letterSpacing: 1.0,
                 ),
               ),
@@ -690,10 +706,9 @@ class _StatusScreenState extends State<StatusScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildRateChip('Odom', rates.odomHz, const Color(0xFF007AFF)),
-              _buildRateChip('Lidar', rates.lidarHz, const Color(0xFF34C759)),
-              _buildRateChip(
-                  'Map', rates.terrainMapHz, const Color(0xFFFF9500)),
+              _buildRateChip('Odom', rates.odomHz, AppColors.primary),
+              _buildRateChip('Lidar', rates.lidarHz, AppColors.success),
+              _buildRateChip('Map', rates.terrainMapHz, AppColors.warning),
             ],
           ),
         ],
@@ -702,13 +717,14 @@ class _StatusScreenState extends State<StatusScreen>
   }
 
   Widget _buildRateChip(String label, double hz, Color color) {
+    final isDark = context.isDark;
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
+            color: color.withOpacity(isDark ? 0.15 : 0.08),
+            borderRadius: BorderRadius.circular(22),
           ),
           child: Text(
             '${hz.toStringAsFixed(1)} Hz',
@@ -724,7 +740,7 @@ class _StatusScreenState extends State<StatusScreen>
           label,
           style: TextStyle(
             fontSize: 11,
-            color: Colors.black.withOpacity(0.4),
+            color: context.subtitleColor,
           ),
         ),
       ],

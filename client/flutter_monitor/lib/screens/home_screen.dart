@@ -2,13 +2,10 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../theme/app_theme.dart';
 import '../services/robot_connection_provider.dart';
-import 'status_screen.dart';
-import 'control_screen.dart';
-import 'map_screen.dart';
-import 'events_screen.dart';
-import 'settings_screen.dart';
-import '../main.dart';
+import '../services/mock_robot_client.dart';
+import '../widgets/robot_card.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,8 +14,9 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  int _currentIndex = 0;
+class _HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _staggerController;
 
   @override
   void initState() {
@@ -27,282 +25,495 @@ class _HomeScreenState extends State<HomeScreen> {
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
+    _staggerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..forward();
   }
 
-  // 非 Control 的 tab 对应 IndexedStack 的映射
-  // index: 0=Status, 1=Control(push), 2=Map, 3=Events, 4=Settings
-  // IndexedStack: [Status, Map, Events, Settings]
-  int _indexedStackIndex() {
-    if (_currentIndex == 0) return 0;
-    if (_currentIndex == 2) return 1;
-    if (_currentIndex == 3) return 2;
-    if (_currentIndex == 4) return 3;
-    return 0;
-  }
-
-  void _onTabSelected(int index) {
-    if (index == 1) {
-      // Control 页面以独立路由打开
-      HapticFeedback.selectionClick();
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => const ControlScreen(),
-        ),
-      );
-    } else {
-      HapticFeedback.selectionClick();
-      setState(() {
-        _currentIndex = index;
-      });
-    }
-  }
-
-  Future<void> _handleDisconnect() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('断开连接'),
-        content: const Text('确定要断开与机器人的连接吗？'),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('断开'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true && mounted) {
-      final provider = context.read<RobotConnectionProvider>();
-      await provider.disconnect();
-      if (mounted) {
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const ConnectionScreen()),
-          (_) => false,
-        );
-      }
-    }
+  @override
+  void dispose() {
+    _staggerController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = context.isDark;
+    final provider = context.watch<RobotConnectionProvider>();
+    final isConnected = provider.isConnected;
+
     return Scaffold(
-      extendBody: true,
-      body: Stack(
-        children: [
-          // 使用 IndexedStack 保持屏幕状态
-          IndexedStack(
-            index: _indexedStackIndex(),
-            children: const [
-              StatusScreen(),
-              MapScreen(),
-              EventsScreen(),
-              SettingsScreen(),
-            ],
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? [
+                    const Color(0xFF0A0A0A),
+                    const Color(0xFF0E0E1A),
+                    const Color(0xFF0A0A0A),
+                  ]
+                : [
+                    const Color(0xFFF2F2F7),
+                    const Color(0xFFE8ECF4),
+                    const Color(0xFFF2F2F7),
+                  ],
           ),
-
-          // 连接状态横幅（重连中时显示）
-          _buildConnectionBanner(),
-
-          // 浮动导航栏
-          _buildFloatingNavBar(context),
-        ],
-      ),
-    );
-  }
-
-  /// 连接状态横幅
-  Widget _buildConnectionBanner() {
-    return Selector<RobotConnectionProvider, ConnectionStatus>(
-      selector: (_, p) => p.status,
-      builder: (context, status, _) {
-        if (status == ConnectionStatus.connected) {
-          return const SizedBox.shrink();
-        }
-
-        Color bgColor;
-        String text;
-        IconData icon;
-        switch (status) {
-          case ConnectionStatus.reconnecting:
-            bgColor = const Color(0xFFFF9500);
-            text = '正在重新连接...';
-            icon = Icons.sync;
-          case ConnectionStatus.error:
-            bgColor = const Color(0xFFFF3B30);
-            text = context.read<RobotConnectionProvider>().errorMessage ?? '连接错误';
-            icon = Icons.error_outline;
-          default:
-            bgColor = Colors.grey;
-            text = '未连接';
-            icon = Icons.cloud_off;
-        }
-
-        return Positioned(
-          top: MediaQuery.of(context).padding.top,
-          left: 0,
-          right: 0,
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: bgColor.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: bgColor.withOpacity(0.3),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Icon(icon, size: 18, color: Colors.white),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      text,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
+        ),
+        child: SafeArea(
+          child: CustomScrollView(
+            physics: const BouncingScrollPhysics(),
+            slivers: [
+              // ========= Header =========
+              SliverToBoxAdapter(
+                child: _buildAnimatedChild(
+                  0,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 4),
+                    child: Row(
+                      children: [
+                        // Logo
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [AppColors.primary, AppColors.secondary],
+                            ),
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.primary.withOpacity(0.25),
+                                blurRadius: 16,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.smart_toy_outlined,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '大算机器人',
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: -0.5,
+                                  color: isDark ? Colors.white : Colors.black87,
+                                ),
+                              ),
+                              Text(
+                                'Robot Monitor & Control',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: context.subtitleColor,
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Scan button
+                        GestureDetector(
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            Navigator.of(context).pushNamed('/scan');
+                          },
+                          child: Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: context.inputFillColor,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(
+                              Icons.qr_code_scanner_rounded,
+                              size: 20,
+                              color: context.subtitleColor,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  if (status == ConnectionStatus.reconnecting)
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildFloatingNavBar(BuildContext context) {
-    return Positioned(
-      left: 24,
-      right: 24,
-      bottom: MediaQuery.of(context).padding.bottom + 12,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-          child: Container(
-            height: 64,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.82),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.4),
-                width: 0.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.12),
-                  blurRadius: 24,
-                  offset: const Offset(0, 8),
                 ),
-              ],
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _buildNavItem(
-                    0, Icons.dashboard_outlined, Icons.dashboard, 'Status'),
-                _buildNavItem(
-                    1, Icons.gamepad_outlined, Icons.gamepad, 'Control'),
-                _buildNavItem(2, Icons.map_outlined, Icons.map, 'Map'),
-                _buildNavItem(3, Icons.notifications_outlined,
-                    Icons.notifications, 'Events'),
-                _buildNavItem(4, Icons.settings_outlined, Icons.settings, 'Settings'),
-                // 断开连接按钮
-                _buildDisconnectButton(),
-              ],
-            ),
+              ),
+
+              // ========= Connection Summary =========
+              SliverToBoxAdapter(
+                child: _buildAnimatedChild(
+                  1,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
+                    child: Text(
+                      isConnected ? '已连接设备' : '我的设备',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white : Colors.black87,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ========= Robot Card(s) =========
+              if (isConnected)
+                SliverToBoxAdapter(
+                  child: _buildAnimatedChild(
+                    2,
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                      child: RobotCard(
+                        name: '大算机器人',
+                        address: _getAddress(provider),
+                        connectionStatus: provider.status,
+                        batteryPercent: provider
+                            .latestSlowState?.resources?.batteryPercent
+                            .toDouble(),
+                        cpuPercent: provider
+                            .latestSlowState?.resources?.cpuPercent
+                            .toDouble(),
+                        heroTag: 'robot-main',
+                        onTap: () {
+                          Navigator.of(context).pushNamed('/robot-detail');
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+
+              // Empty state card when not connected
+              if (!isConnected)
+                SliverToBoxAdapter(
+                  child: _buildAnimatedChild(
+                    2,
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                      child: GestureDetector(
+                        onTap: () =>
+                            Navigator.of(context).pushNamed('/scan'),
+                        child: Container(
+                          padding: const EdgeInsets.all(28),
+                          decoration: BoxDecoration(
+                            color: isDark ? AppColors.darkCard : Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: AppColors.primary.withOpacity(0.2),
+                              width: 1.5,
+                              strokeAlign: BorderSide.strokeAlignInside,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: context.cardShadowColor,
+                                blurRadius: 20,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary.withOpacity(
+                                      isDark ? 0.12 : 0.08),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.add_rounded,
+                                  size: 32,
+                                  color: AppColors.primary.withOpacity(0.7),
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                              Text(
+                                '连接机器人',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color:
+                                      isDark ? Colors.white : Colors.black87,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '扫描网络或蓝牙发现设备',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: context.subtitleColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+              // ========= Quick Actions =========
+              SliverToBoxAdapter(
+                child: _buildAnimatedChild(
+                  3,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 28, 24, 12),
+                    child: Text(
+                      '快速操作',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white : Colors.black87,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              SliverToBoxAdapter(
+                child: _buildAnimatedChild(
+                  4,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _QuickActionButton(
+                            icon: Icons.wifi_find,
+                            label: '扫描设备',
+                            color: AppColors.primary,
+                            onTap: () =>
+                                Navigator.of(context).pushNamed('/scan'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _QuickActionButton(
+                            icon: Icons.bluetooth_searching,
+                            label: '蓝牙连接',
+                            color: AppColors.secondary,
+                            onTap: () =>
+                                Navigator.of(context).pushNamed('/scan'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _QuickActionButton(
+                            icon: Icons.science_outlined,
+                            label: '演示模式',
+                            color: AppColors.warning,
+                            onTap: () => _startMock(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              // ========= App Info =========
+              SliverToBoxAdapter(
+                child: _buildAnimatedChild(
+                  5,
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 28, 24, 12),
+                    child: Text(
+                      'APP 信息',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: isDark ? Colors.white : Colors.black87,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              SliverToBoxAdapter(
+                child: _buildAnimatedChild(
+                  6,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isDark ? AppColors.darkCard : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: context.cardShadowColor,
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          _InfoRow(
+                            icon: Icons.info_outline,
+                            label: '版本',
+                            value: 'v1.0.0',
+                          ),
+                          Divider(height: 16, color: context.dividerColor),
+                          _InfoRow(
+                            icon: Icons.router_outlined,
+                            label: '协议',
+                            value: 'gRPC + WebRTC',
+                          ),
+                          Divider(height: 16, color: context.dividerColor),
+                          _InfoRow(
+                            icon: Icons.network_check,
+                            label: '网络状态',
+                            value: isConnected ? '已连接' : '未连接',
+                            valueColor:
+                                isConnected ? AppColors.success : Colors.grey,
+                          ),
+                          Divider(height: 16, color: context.dividerColor),
+                          _InfoRow(
+                            icon: Icons.precision_manufacturing_outlined,
+                            label: '平台',
+                            value: 'ROS 2',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // Footer
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 32),
+                  child: Center(
+                    child: Text(
+                      'gRPC · WebRTC · ROS 2 · BLE',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: context.subtitleColor,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildNavItem(
-      int index, IconData icon, IconData activeIcon, String label) {
-    // Control tab 永远不会 "selected"
-    final isSelected = index != 1 && _currentIndex == index;
-    final isControl = index == 1;
+  Widget _buildAnimatedChild(int index, Widget child) {
+    final delay = index * 0.1;
+    final animation = CurvedAnimation(
+      parent: _staggerController,
+      curve: Interval(delay.clamp(0.0, 0.7), (delay + 0.3).clamp(0.0, 1.0),
+          curve: Curves.easeOutCubic),
+    );
+    return FadeTransition(
+      opacity: animation,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.08),
+          end: Offset.zero,
+        ).animate(animation),
+        child: child,
+      ),
+    );
+  }
+
+  String _getAddress(RobotConnectionProvider provider) {
+    final client = provider.client;
+    if (client == null) return '未知';
+    // Try to get host from client
+    return client.toString().contains('host')
+        ? client.toString()
+        : 'gRPC 连接';
+  }
+
+  Future<void> _startMock(BuildContext context) async {
+    HapticFeedback.lightImpact();
+    final provider = context.read<RobotConnectionProvider>();
+    final client = MockRobotClient();
+    await provider.connect(client);
+    if (mounted) {
+      Navigator.of(context).pushNamed('/robot-detail');
+    }
+  }
+}
+
+// ==================== Quick Action Button ====================
+
+class _QuickActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback? onTap;
+
+  const _QuickActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = context.isDark;
 
     return GestureDetector(
-      onTap: () => _onTabSelected(index),
-      behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: isSelected
-            ? BoxDecoration(
-                color: const Color(0xFF007AFF).withOpacity(0.12),
-                borderRadius: BorderRadius.circular(16),
-              )
-            : null,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              isSelected ? activeIcon : icon,
-              size: 22,
-              color: isSelected
-                  ? const Color(0xFF007AFF)
-                  : isControl
-                      ? const Color(0xFFAF52DE)
-                      : Colors.black.withOpacity(0.35),
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap?.call();
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.darkCard : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: context.cardShadowColor,
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
-            if (isSelected) ...[
-              const SizedBox(height: 2),
-              Container(
-                width: 4,
-                height: 4,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF007AFF),
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ],
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildDisconnectButton() {
-    return GestureDetector(
-      onTap: _handleDisconnect,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.power_settings_new,
-              size: 22,
-              color: Colors.red.withOpacity(0.6),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: color.withOpacity(isDark ? 0.18 : 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white70 : Colors.black87,
+              ),
             ),
           ],
         ),
@@ -310,3 +521,48 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+// ==================== Info Row ====================
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color? valueColor;
+
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = context.isDark;
+
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: context.subtitleColor),
+        const SizedBox(width: 10),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            color: context.subtitleColor,
+          ),
+        ),
+        const Spacer(),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: valueColor ?? (isDark ? Colors.white : Colors.black87),
+          ),
+        ),
+      ],
+    );
+  }
+}
+

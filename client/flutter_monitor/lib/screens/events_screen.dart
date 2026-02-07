@@ -6,7 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../services/robot_connection_provider.dart';
 import 'package:robot_proto/robot_proto.dart';
-import '../widgets/glass_widgets.dart';
+import '../theme/app_theme.dart';
 
 class EventsScreen extends StatefulWidget {
   const EventsScreen({super.key});
@@ -21,10 +21,8 @@ class _EventsScreenState extends State<EventsScreen>
   StreamSubscription? _subscription;
   bool _isStreaming = false;
 
-  // 事件数量上限
   static const int _maxEvents = 200;
 
-  // 重连退避
   int _retryCount = 0;
   Timer? _retryTimer;
 
@@ -58,10 +56,8 @@ class _EventsScreenState extends State<EventsScreen>
         (event) {
           if (!mounted) return;
           setState(() {
-            // 去重
             if (!_events.any((e) => e.eventId == event.eventId)) {
               _events.insert(0, event);
-              // 限制最大数量，避免内存泄漏
               if (_events.length > _maxEvents) {
                 _events.removeRange(_maxEvents, _events.length);
               }
@@ -87,7 +83,6 @@ class _EventsScreenState extends State<EventsScreen>
   void _scheduleRetry() {
     _retryTimer?.cancel();
     _retryCount++;
-    // 指数退避: 3s, 6s, 12s, max 30s
     final delay = Duration(
       seconds: (3 * (1 << (_retryCount - 1).clamp(0, 3))).clamp(3, 30),
     );
@@ -101,15 +96,15 @@ class _EventsScreenState extends State<EventsScreen>
       case EventSeverity.EVENT_SEVERITY_DEBUG:
         return Colors.grey;
       case EventSeverity.EVENT_SEVERITY_INFO:
-        return const Color(0xFF007AFF);
+        return AppColors.primary;
       case EventSeverity.EVENT_SEVERITY_WARNING:
-        return const Color(0xFFFF9500);
+        return AppColors.warning;
       case EventSeverity.EVENT_SEVERITY_ERROR:
-        return const Color(0xFFFF3B30);
+        return AppColors.error;
       case EventSeverity.EVENT_SEVERITY_CRITICAL:
-        return const Color(0xFFAF52DE);
+        return AppColors.accent;
       default:
-        return Colors.black;
+        return Colors.grey;
     }
   }
 
@@ -132,36 +127,41 @@ class _EventsScreenState extends State<EventsScreen>
 
   @override
   Widget build(BuildContext context) {
-    super.build(context); // Required by AutomaticKeepAliveClientMixin
+    super.build(context);
+    final isDark = context.isDark;
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Timeline'),
+            const Text('事件日志'),
             if (_events.isNotEmpty) ...[
               const SizedBox(width: 8),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF007AFF).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
+                  color: AppColors.primary.withOpacity(isDark ? 0.15 : 0.1),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   '${_events.length}',
                   style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF007AFF),
+                    color: AppColors.primary,
                   ),
                 ),
               ),
             ],
           ],
         ),
+        leading: Navigator.canPop(context)
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+                onPressed: () => Navigator.pop(context),
+              )
+            : null,
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -183,31 +183,38 @@ class _EventsScreenState extends State<EventsScreen>
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(Icons.history,
-                      size: 48, color: Colors.grey.withOpacity(0.3)),
+                      size: 48, color: context.subtitleColor),
                   const SizedBox(height: 16),
-                  Text('No events recorded',
-                      style: TextStyle(color: Colors.grey.withOpacity(0.5))),
+                  Text(
+                    '暂无事件记录',
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: context.subtitleColor,
+                    ),
+                  ),
                   if (!_isStreaming)
                     Padding(
-                      padding: const EdgeInsets.only(top: 8.0),
+                      padding: const EdgeInsets.only(top: 12.0),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           SizedBox(
-                            width: 12,
-                            height: 12,
+                            width: 14,
+                            height: 14,
                             child: CircularProgressIndicator(
                               strokeWidth: 1.5,
-                              color: Colors.grey.withOpacity(0.4),
+                              color: context.subtitleColor,
                             ),
                           ),
                           const SizedBox(width: 8),
                           Text(
                             _retryCount > 0
-                                ? 'Reconnecting (attempt $_retryCount)...'
-                                : 'Connecting...',
-                            style: const TextStyle(
-                                color: Colors.grey, fontSize: 12),
+                                ? '重连中 (第 $_retryCount 次)...'
+                                : '连接中...',
+                            style: TextStyle(
+                              color: context.subtitleColor,
+                              fontSize: 13,
+                            ),
                           ),
                         ],
                       ),
@@ -224,22 +231,19 @@ class _EventsScreenState extends State<EventsScreen>
                   bottom: 0,
                   child: Container(
                     width: 2,
-                    color: Colors.grey.withOpacity(0.2),
+                    color: context.dividerColor,
                   ),
                 ),
-                // Event List — 使用 ListView.builder 的虚拟滚动
                 ListView.builder(
                   padding: EdgeInsets.fromLTRB(
-                      16, MediaQuery.of(context).padding.top + 60, 16, 100),
+                      16, MediaQuery.of(context).padding.top + 16, 16, 100),
                   itemCount: _events.length,
-                  // 缓存区域限制，提升滚动性能
                   cacheExtent: 300,
                   itemBuilder: (context, index) {
                     return _EventListItem(
                       event: _events[index],
                       color: _getSeverityColor(_events[index].severity),
-                      severityLabel:
-                          _getSeverityLabel(_events[index].severity),
+                      severityLabel: _getSeverityLabel(_events[index].severity),
                       onAcknowledge: () async {
                         HapticFeedback.lightImpact();
                         final client =
@@ -248,10 +252,12 @@ class _EventsScreenState extends State<EventsScreen>
                         await client.ackEvent(_events[index].eventId);
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Event acknowledged'),
-                              duration: Duration(milliseconds: 500),
+                            SnackBar(
+                              content: const Text('事件已确认'),
+                              duration: const Duration(milliseconds: 500),
                               behavior: SnackBarBehavior.floating,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
                             ),
                           );
                         }
@@ -265,7 +271,6 @@ class _EventsScreenState extends State<EventsScreen>
   }
 }
 
-/// 独立的事件列表项 Widget，减少不必要的重建
 class _EventListItem extends StatelessWidget {
   final Event event;
   final Color color;
@@ -281,23 +286,27 @@ class _EventListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = context.isDark;
     final time = event.timestamp.toDateTime().toLocal();
     final timeStr = DateFormat('HH:mm:ss').format(time);
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 24.0),
+      padding: const EdgeInsets.only(bottom: 18.0),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Timeline Dot
           Container(
-            margin: const EdgeInsets.only(top: 6),
+            margin: const EdgeInsets.only(top: 8),
             width: 14,
             height: 14,
             decoration: BoxDecoration(
               color: color,
               shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 2.5),
+              border: Border.all(
+                color: isDark ? AppColors.darkBackground : Colors.white,
+                width: 2.5,
+              ),
               boxShadow: [
                 BoxShadow(
                   color: color.withOpacity(0.4),
@@ -310,9 +319,19 @@ class _EventListItem extends StatelessWidget {
           const SizedBox(width: 16),
           // Event Card
           Expanded(
-            child: GlassCard(
-              padding: const EdgeInsets.all(16),
-              borderRadius: 16,
+            child: Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: isDark ? AppColors.darkCard : Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: context.cardShadowColor,
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -321,10 +340,10 @@ class _EventListItem extends StatelessWidget {
                       // Severity badge
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
+                            horizontal: 9, vertical: 3),
                         decoration: BoxDecoration(
-                          color: color.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(6),
+                          color: color.withOpacity(isDark ? 0.15 : 0.1),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
                           severityLabel,
@@ -341,21 +360,21 @@ class _EventListItem extends StatelessWidget {
                         timeStr,
                         style: TextStyle(
                           fontSize: 12,
-                          color: Colors.black.withOpacity(0.4),
+                          color: context.subtitleColor,
                           fontFeatures: const [FontFeature.tabularFigures()],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   Text(
                     event.title.isNotEmpty
                         ? event.title
                         : event.type.toString(),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                      color: isDark ? Colors.white : Colors.black87,
                     ),
                     overflow: TextOverflow.ellipsis,
                     maxLines: 2,
@@ -366,7 +385,7 @@ class _EventListItem extends StatelessWidget {
                       event.description,
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.black.withOpacity(0.6),
+                        color: context.subtitleColor,
                         height: 1.4,
                       ),
                       maxLines: 3,
@@ -381,31 +400,32 @@ class _EventListItem extends StatelessWidget {
                       borderRadius: BorderRadius.circular(20),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
+                            horizontal: 14, vertical: 7),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.05),
+                          color: isDark
+                              ? Colors.white.withOpacity(0.06)
+                              : Colors.black.withOpacity(0.04),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(Icons.check,
-                                size: 14,
-                                color: Colors.black.withOpacity(0.6)),
+                                size: 14, color: context.subtitleColor),
                             const SizedBox(width: 4),
                             Text(
                               'ACK',
                               style: TextStyle(
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.black.withOpacity(0.6),
+                                color: context.subtitleColor,
                               ),
                             ),
                           ],
                         ),
                       ),
                     ),
-                  )
+                  ),
                 ],
               ),
             ),

@@ -5,503 +5,481 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>3D Robot Viewer</title>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        }
-        #container {
-            width: 100vw;
-            height: 100vh;
-            touch-action: none;
-        }
-        canvas {
-            display: block;
-        }
+        body { margin: 0; padding: 0; overflow: hidden; background: #1a1a1a; }
+        #container { width: 100vw; height: 100vh; touch-action: none; }
+        canvas { display: block; }
     </style>
 </head>
 <body>
     <div id="container"></div>
-
-    <!-- Load Three.js as global script (NOT ES6 module) -->
     <script src="./libs/three.min.js"></script>
-    
     <script>
-        console.log('🌐 Script starting...');
-        console.log('✅ THREE loaded:', typeof THREE !== 'undefined');
-        
-        // Global variables
+        // =====================================================================
+        //  Global state
+        // =====================================================================
         let scene, camera, renderer;
-        let robotGroup;
+        let robotGroup;   // world-pose driven by Flutter
+        let meshGroup;    // URDF→Three.js base rotation lives here
         let isReady = false;
         let needsRender = true;
-        
-        // Manual camera controls (replacing OrbitControls)
-        let cameraDistance = 3;
-        let cameraAngleX = Math.PI / 6;  // Elevation angle
-        let cameraAngleY = Math.PI / 4;  // Azimuth angle
+        let meshesLoaded = false;
+        let loadedMeshCount = 0;
+        let totalMeshCount = 0;
+
+        // Camera orbit
+        let cameraDistance = 1.8;
+        let cameraAngleX = Math.PI / 5;
+        let cameraAngleY = Math.PI / 4;
         let isDragging = false;
-        let lastTouchX = 0;
-        let lastTouchY = 0;
-        let lastTouchDistance = 0;
+        let lastTouchX = 0, lastTouchY = 0, lastTouchDistance = 0;
 
-        // Initialize the 3D scene
+        // Idle animation
+        let idleAnimEnabled = true;   // auto-disabled when real joint data arrives
+        let idleTime = 0;
+        let lastFrameTime = 0;
+
+        // =====================================================================
+        //  URDF Kinematic Chain  (parent → child hierarchy)
+        //  joint axis is used for rotation; sensors are fixed (no axis).
+        // =====================================================================
+        const JOINTS = [
+            // ── FR leg ─────────────────────────────────────────────────────
+            { key: 'fr_hip',   mesh: 'fr_hip_Link.STL',   origin: [0.2395, -0.064595, 0.08065],     axis: [-1,0,0], parent: 'base_link' },
+            { key: 'fr_thigh', mesh: 'fr_thigh_Link.STL', origin: [0.078, -0.0795, 0],              axis: [0,1,0],  parent: 'fr_hip' },
+            { key: 'fr_calf',  mesh: 'fr_calf_Link.STL',  origin: [-0.24954, -0.057, -0.01515],     axis: [0,1,0],  parent: 'fr_thigh' },
+            { key: 'fr_foot',  mesh: 'fr_foot_Link.STL',  origin: [0.24443, -0.061, 0.0525],        axis: [0,1,0],  parent: 'fr_calf' },
+            // ── FL leg ─────────────────────────────────────────────────────
+            { key: 'fl_hip',   mesh: 'fl_hip_Link.STL',   origin: [0.2395, 0.065405, 0.08065],      axis: [-1,0,0], parent: 'base_link' },
+            { key: 'fl_thigh', mesh: 'fl_thigh_Link.STL', origin: [0.078, 0.0795, 0],               axis: [0,-1,0], parent: 'fl_hip' },
+            { key: 'fl_calf',  mesh: 'fl_calf_Link.STL',  origin: [-0.24954, 0.057, -0.01515],      axis: [0,-1,0], parent: 'fl_thigh' },
+            { key: 'fl_foot',  mesh: 'fl_foot_Link.STL',  origin: [0.24443, 0.061, 0.0525],         axis: [0,-1,0], parent: 'fl_calf' },
+            // ── RR leg ─────────────────────────────────────────────────────
+            { key: 'rr_hip',   mesh: 'rr_hip_Link.STL',   origin: [-0.2395, -0.066245, 0.08065],    axis: [1,0,0],  parent: 'base_link' },
+            { key: 'rr_thigh', mesh: 'rr_thigh_Link.STL', origin: [-0.078, -0.079497, -0.00063],    axis: [0,1,0],  parent: 'rr_hip' },
+            { key: 'rr_calf',  mesh: 'rr_calf_Link.STL',  origin: [0.24946, -0.056867, -0.016903],  axis: [0,1,0],  parent: 'rr_thigh' },
+            { key: 'rr_foot',  mesh: 'rr_foot_Link.STL',  origin: [-0.24377, -0.061439, 0.054994],  axis: [0,1,0],  parent: 'rr_calf' },
+            // ── RL leg ─────────────────────────────────────────────────────
+            { key: 'rl_hip',   mesh: 'rl_hip_Link.STL',   origin: [-0.2395, 0.063755, 0.08065],     axis: [1,0,0],  parent: 'base_link' },
+            { key: 'rl_thigh', mesh: 'rl_thigh_Link.STL', origin: [-0.078, 0.0795, 0],              axis: [0,-1,0], parent: 'rl_hip' },
+            { key: 'rl_calf',  mesh: 'rl_calf_Link.STL',  origin: [0.24954, 0.057, -0.01515],       axis: [0,-1,0], parent: 'rl_thigh' },
+            { key: 'rl_foot',  mesh: 'rl_foot_Link.STL',  origin: [-0.24443, 0.061, 0.0525],        axis: [0,-1,0], parent: 'rl_calf' },
+        ];
+
+        // Fixed sensor mounts (no joint angle control)
+        const FIXED_LINKS = [
+            { key: 'lidar1',  mesh: 'lidar1_Link.STL',  origin: [0.39288, 0.000405, 0.057801],    rpy: [-3.1416, -0.7854, 0] },
+            { key: 'camera1', mesh: 'camera1_Link.STL',  origin: [0.41351, -0.000186, 0.11372],    rpy: [-1.9199, 0, -1.5708] },
+            { key: 'lidar2',  mesh: 'lidar2_Link.STL',   origin: [-0.29638, -0.001245, 0.19435],   rpy: [0, 0, 3.1416] },
+            { key: 'camera2', mesh: 'camera2_Link.STL',  origin: [-0.41791, -0.001243, 0.078009],  rpy: [1.5708, 1.5708, -1.5838] },
+            { key: 'lidar3',  mesh: 'lidar3_Link.STL',   origin: [0.22704, 0, 0.24578],            rpy: [0, 0.5236, 0] },
+            { key: 'camera3', mesh: 'camera3_Link.STL',  origin: [0.23265, -0.000586, 0.17525],    rpy: [-1.5708, 0, -1.5708] },
+        ];
+
+        // Joint name → index mapping (for updateJointAngles array)
+        // Order: FR(hip,thigh,calf,foot), FL(...), RR(...), RL(...)  → 16 joints
+        const JOINT_INDEX = {};
+        JOINTS.forEach((j, i) => { JOINT_INDEX[j.key] = i; });
+
+        // Runtime: THREE.Group for each joint (keyed by joint key)
+        const jointGroupMap = {};
+        // Runtime: joint axis vectors (THREE.Vector3, normalized)
+        const jointAxisMap = {};
+
+        // =====================================================================
+        //  Materials
+        // =====================================================================
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8899aa, metalness: 0.35, roughness: 0.55 });
+        const legMat  = new THREE.MeshStandardMaterial({ color: 0xc8d0d8, metalness: 0.25, roughness: 0.6 });
+        const sensorMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.5, roughness: 0.4 });
+
+        function matFor(key) {
+            if (key === 'base_link') return bodyMat;
+            if (key.startsWith('lidar') || key.startsWith('camera')) return sensorMat;
+            return legMat;
+        }
+
+        // =====================================================================
+        //  Init
+        // =====================================================================
         function init() {
-            console.log('🚀 Initializing Three.js scene...');
             const container = document.getElementById('container');
-            
-            // Scene
+
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x1a1a1a); // Dark background
-            scene.fog = new THREE.Fog(0x1a1a1a, 8, 40);
-            console.log('✅ Scene created');
+            scene.background = new THREE.Color(0x1a1a1a);
+            scene.fog = new THREE.Fog(0x1a1a1a, 10, 50);
 
-            // Camera
-            camera = new THREE.PerspectiveCamera(
-                50,
-                window.innerWidth / window.innerHeight,
-                0.1,
-                1000
-            );
-            camera.position.set(2, 1.5, 2);
-            camera.lookAt(0, 0.3, 0);
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 1000);
+            camera.position.set(1.5, 1.0, 1.5);
+            camera.lookAt(0, 0.2, 0);
 
-            // Renderer
-            renderer = new THREE.WebGLRenderer({ 
-                antialias: true,
-                alpha: true 
-            });
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.2;
             container.appendChild(renderer.domElement);
-            console.log('✅ Renderer created');
 
             // Lights
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-            scene.add(ambientLight);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+            const hemi = new THREE.HemisphereLight(0xddeeff, 0x444444, 0.5);
+            hemi.position.set(0, 10, 0);
+            scene.add(hemi);
 
-            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.4);
-            hemiLight.position.set(0, 1, 0);
-            scene.add(hemiLight);
+            const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+            sun.position.set(5, 12, 7);
+            sun.castShadow = true;
+            sun.shadow.camera.near = 0.1;
+            sun.shadow.camera.far = 40;
+            sun.shadow.camera.left = sun.shadow.camera.bottom = -4;
+            sun.shadow.camera.right = sun.shadow.camera.top = 4;
+            sun.shadow.mapSize.set(2048, 2048);
+            scene.add(sun);
 
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
-            directionalLight.position.set(5, 10, 5);
-            directionalLight.castShadow = true;
-            directionalLight.shadow.camera.near = 0.1;
-            directionalLight.shadow.camera.far = 50;
-            directionalLight.shadow.camera.left = -5;
-            directionalLight.shadow.camera.right = 5;
-            directionalLight.shadow.camera.top = 5;
-            directionalLight.shadow.camera.bottom = -5;
-            directionalLight.shadow.mapSize.width = 2048;
-            directionalLight.shadow.mapSize.height = 2048;
-            scene.add(directionalLight);
+            scene.add(new THREE.DirectionalLight(0x4488ff, 0.25).translateX(-4).translateY(4).translateZ(-4));
+            scene.add(new THREE.DirectionalLight(0xff8844, 0.15).translateY(2).translateZ(-6));
 
-            const fillLight = new THREE.DirectionalLight(0x4488ff, 0.3); // Blue fill light
-            fillLight.position.set(-5, 5, -5);
-            scene.add(fillLight);
-            console.log('✅ Lights added');
-
-            // Ground Grid
             createGround();
 
-            // Robot Group
+            // Robot group hierarchy:  scene → robotGroup → meshGroup → base_link_group → joints
             robotGroup = new THREE.Group();
             scene.add(robotGroup);
 
-            // Use simple robot model for best performance
-            createSimpleRobot();
+            meshGroup = new THREE.Group();
+            meshGroup.rotation.x = -Math.PI / 2;   // URDF Z-up → Three.js Y-up
+            robotGroup.add(meshGroup);
 
-            // Handle window resize
-            window.addEventListener('resize', onWindowResize, false);
+            buildKinematicTree();
 
-            // Setup touch/mouse controls
+            window.addEventListener('resize', onResize, false);
             setupControls();
-
-            // Start animation loop
+            lastFrameTime = performance.now();
             animate();
-            console.log('✅ Animation started');
 
-            // Notify Flutter that scene is ready
             isReady = true;
-            needsRender = true; // Request initial render
-            console.log('✅ Scene initialization complete');
-            sendMessageToFlutter({
-                type: 'ready',
-                message: 'Three.js scene initialized (simple mode)'
-            });
+            sendMessageToFlutter({ type: 'ready', message: 'Kinematic model loading...' });
         }
 
         function createGround() {
-            // Grid Helper
-            const gridHelper = new THREE.GridHelper(20, 40, 0x444444, 0x333333); // Darker grid lines
-            gridHelper.position.y = 0;
-            scene.add(gridHelper);
-
-            // Ground Plane (for shadows)
-            const groundGeometry = new THREE.PlaneGeometry(40, 40);
-            const groundMaterial = new THREE.MeshStandardMaterial({
-                color: 0x1a1a1a, // Match background
-                metalness: 0.0,
-                roughness: 1.0
-            });
-            const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-            groundMesh.rotation.x = -Math.PI / 2;
-            groundMesh.position.y = -0.01; // Slightly below grid
-            groundMesh.receiveShadow = true;
-            scene.add(groundMesh);
-
-            // Axes Helper
-            const axesHelper = new THREE.AxesHelper(0.5);
-            axesHelper.position.y = 0.01;
-            scene.add(axesHelper);
-            
-            console.log('✅ Ground created');
-        }
-
-        // STL Binary Loader (without ES6 modules)
-        function loadSTLBinary(url, callback) {
-            console.log('🔨 Loading STL:', url);
-            
-            fetch(url)
-                .then(res => {
-                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                    return res.arrayBuffer();
-                })
-                .then(buffer => {
-                    console.log('📦 STL data received:', buffer.byteLength, 'bytes');
-                    const geometry = parseSTLBinary(buffer);
-                    callback(geometry);
-                })
-                .catch(err => {
-                    console.error('❌ STL load failed:', url, err);
-                    callback(null);
-                });
-        }
-
-        function parseSTLBinary(buffer) {
-            const view = new DataView(buffer);
-            const triangleCount = view.getUint32(80, true);
-            
-            console.log('📐 Parsing STL with', triangleCount, 'triangles');
-            
-            const geometry = new THREE.BufferGeometry();
-            const vertices = [];
-            const normals = [];
-            
-            let offset = 84;
-            for (let i = 0; i < triangleCount; i++) {
-                // Normal
-                const nx = view.getFloat32(offset, true); offset += 4;
-                const ny = view.getFloat32(offset, true); offset += 4;
-                const nz = view.getFloat32(offset, true); offset += 4;
-                
-                // 3 vertices
-                for (let j = 0; j < 3; j++) {
-                    vertices.push(view.getFloat32(offset, true)); offset += 4;
-                    vertices.push(view.getFloat32(offset, true)); offset += 4;
-                    vertices.push(view.getFloat32(offset, true)); offset += 4;
-                    normals.push(nx, ny, nz);
-                }
-                
-                offset += 2; // Skip attribute bytes
-            }
-            
-            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-            geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-            geometry.computeBoundingBox();
-            
-            console.log('✅ STL parsed successfully');
-            return geometry;
-        }
-
-        function loadRealRobotMeshes() {
-            console.log('🤖 Loading real robot meshes...');
-            robotGroup.clear();
-
-            const meshFiles = [
-                'base_link.STL',
-                'fl_hip_Link.STL',
-                'fl_thigh_Link.STL',
-                'fl_calf_Link.STL',
-                'fr_hip_Link.STL',
-                'fr_thigh_Link.STL',
-                'fr_calf_Link.STL',
-                'rl_hip_Link.STL',
-                'rl_thigh_Link.STL',
-                'rl_calf_Link.STL',
-                'rr_hip_Link.STL',
-                'rr_thigh_Link.STL',
-                'rr_calf_Link.STL'
-            ];
-
-            let loadedCount = 0;
-            const targetCount = meshFiles.length;
-
-            const material = new THREE.MeshStandardMaterial({
-                color: 0x8f9db0,
-                metalness: 0.3,
-                roughness: 0.6
-            });
-
-            meshFiles.forEach(filename => {
-                const url = `./meshes/${filename}`;
-                loadSTLBinary(url, (geometry) => {
-                    loadedCount++;
-                    
-                    if (geometry) {
-                        const mesh = new THREE.Mesh(geometry, material);
-                        mesh.castShadow = true;
-                        mesh.receiveShadow = true;
-                        // Scale from mm to m (assuming STL is in mm)
-                        mesh.scale.set(0.001, 0.001, 0.001);
-                        robotGroup.add(mesh);
-                        console.log(`✅ Loaded ${filename} (${loadedCount}/${targetCount})`);
-                    } else {
-                        console.warn(`⚠️ Failed ${filename} (${loadedCount}/${targetCount})`);
-                    }
-
-                    if (loadedCount === targetCount) {
-                        console.log('🎉 All meshes loaded!');
-                        // Center the model
-                        const box = new THREE.Box3().setFromObject(robotGroup);
-                        const center = box.getCenter(new THREE.Vector3());
-                        robotGroup.position.sub(center);
-                        robotGroup.position.y = 0.3; // Lift above ground
-                    }
-                });
-            });
-        }
-
-        function createSimpleRobot() {
-            console.log('🤖 Creating simple robot model...');
-            robotGroup.clear();
-
-            // Body (box)
-            const bodyGeometry = new THREE.BoxGeometry(0.4, 0.2, 0.6);
-            const bodyMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0x007AFF,
-                metalness: 0.3,
-                roughness: 0.6
-            });
-            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-            body.position.set(0, 0.3, 0);
-            body.castShadow = true;
-            body.receiveShadow = true;
-            robotGroup.add(body);
-
-            // Head indicator (smaller box)
-            const headGeometry = new THREE.BoxGeometry(0.15, 0.1, 0.15);
-            const headMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0xFF3B30,
-                metalness: 0.4,
-                roughness: 0.5
-            });
-            const head = new THREE.Mesh(headGeometry, headMaterial);
-            head.position.set(0.25, 0.35, 0);
-            head.castShadow = true;
-            robotGroup.add(head);
-
-            // Legs (4 cylinders)
-            const legGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.25, 8);
-            const legMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0x444444,
-                metalness: 0.5,
-                roughness: 0.5
-            });
-
-            const legPositions = [
-                [0.15, 0.125, 0.2],
-                [0.15, 0.125, -0.2],
-                [-0.15, 0.125, 0.2],
-                [-0.15, 0.125, -0.2]
-            ];
-
-            legPositions.forEach(pos => {
-                const leg = new THREE.Mesh(legGeometry, legMaterial);
-                leg.position.set(pos[0], pos[1], pos[2]);
-                leg.castShadow = true;
-                robotGroup.add(leg);
-            });
-
-            // Direction arrow
-            const arrowHelper = new THREE.ArrowHelper(
-                new THREE.Vector3(1, 0, 0),
-                new THREE.Vector3(0, 0.45, 0),
-                0.3,
-                0xFFCC00,
-                0.1,
-                0.05
+            scene.add(new THREE.GridHelper(20, 40, 0x444444, 0x333333));
+            const ground = new THREE.Mesh(
+                new THREE.PlaneGeometry(40, 40),
+                new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 1.0 })
             );
-            robotGroup.add(arrowHelper);
-
-            console.log('✅ Simple robot model created');
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.002;
+            ground.receiveShadow = true;
+            scene.add(ground);
+            const axes = new THREE.AxesHelper(0.3);
+            axes.position.y = 0.005;
+            scene.add(axes);
         }
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+        // =====================================================================
+        //  Build kinematic tree  (Three.js Group hierarchy)
+        // =====================================================================
+        function buildKinematicTree() {
+            // 1. base_link group at URDF origin
+            const baseGroup = new THREE.Group();
+            jointGroupMap['base_link'] = baseGroup;
+            meshGroup.add(baseGroup);
+
+            // 2. Articulated joints (hip→thigh→calf→foot × 4 legs)
+            JOINTS.forEach(j => {
+                const g = new THREE.Group();
+                g.position.set(j.origin[0], j.origin[1], j.origin[2]);
+                jointGroupMap[j.key] = g;
+                jointAxisMap[j.key] = new THREE.Vector3(j.axis[0], j.axis[1], j.axis[2]).normalize();
+
+                const parentGroup = jointGroupMap[j.parent];
+                parentGroup.add(g);
+            });
+
+            // 3. Fixed sensor mounts (children of base_link)
+            FIXED_LINKS.forEach(f => {
+                const g = new THREE.Group();
+                g.position.set(f.origin[0], f.origin[1], f.origin[2]);
+                if (f.rpy) g.rotation.set(f.rpy[0], f.rpy[1], f.rpy[2], 'ZYX');
+                jointGroupMap[f.key] = g;
+                jointGroupMap['base_link'].add(g);
+            });
+
+            // 4. Load STL meshes into their respective groups
+            const allParts = [
+                { key: 'base_link', mesh: 'base_link.STL' },
+                ...JOINTS.map(j => ({ key: j.key, mesh: j.mesh })),
+                ...FIXED_LINKS.map(f => ({ key: f.key, mesh: f.mesh })),
+            ];
+            totalMeshCount = allParts.length;
+            loadedMeshCount = 0;
+
+            allParts.forEach(part => {
+                loadSTLBinary('./meshes/' + part.mesh, function(geometry) {
+                    loadedMeshCount++;
+                    if (geometry) {
+                        const m = new THREE.Mesh(geometry, matFor(part.key));
+                        m.castShadow = true;
+                        m.receiveShadow = true;
+                        // mesh at local origin of its joint group
+                        jointGroupMap[part.key].add(m);
+                    }
+                    if (loadedMeshCount === totalMeshCount) onAllMeshesLoaded();
+                });
+            });
         }
 
-        function setupControls() {
-            const canvas = renderer.domElement;
-            
-            // Mouse/Touch start
-            function onStart(clientX, clientY) {
-                isDragging = true;
-                lastTouchX = clientX;
-                lastTouchY = clientY;
-            }
-            
-            // Mouse/Touch move
-            function onMove(clientX, clientY) {
-                if (!isDragging) return;
-                
-                const deltaX = clientX - lastTouchX;
-                const deltaY = clientY - lastTouchY;
-                
-                cameraAngleY += deltaX * 0.01;
-                cameraAngleX = Math.max(0.1, Math.min(Math.PI - 0.1, cameraAngleX - deltaY * 0.01));
-                
-                lastTouchX = clientX;
-                lastTouchY = clientY;
-                
-                updateCameraPosition();
-            }
-            
-            // Mouse/Touch end
-            function onEnd() {
-                isDragging = false;
-            }
-            
-            // Mouse events
-            canvas.addEventListener('mousedown', (e) => {
-                e.preventDefault();
-                onStart(e.clientX, e.clientY);
-            });
-            
-            canvas.addEventListener('mousemove', (e) => {
-                if (isDragging) {
-                    e.preventDefault();
-                    onMove(e.clientX, e.clientY);
-                }
-            });
-            
-            canvas.addEventListener('mouseup', onEnd);
-            canvas.addEventListener('mouseleave', onEnd);
-            
-            // Touch events
-            canvas.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                if (e.touches.length === 1) {
-                    onStart(e.touches[0].clientX, e.touches[0].clientY);
-                } else if (e.touches.length === 2) {
-                    // Pinch to zoom
-                    const dx = e.touches[0].clientX - e.touches[1].clientX;
-                    const dy = e.touches[0].clientY - e.touches[1].clientY;
-                    lastTouchDistance = Math.sqrt(dx * dx + dy * dy);
-                }
-            });
-            
-            canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                if (e.touches.length === 1 && isDragging) {
-                    onMove(e.touches[0].clientX, e.touches[0].clientY);
-                } else if (e.touches.length === 2) {
-                    // Pinch to zoom
-                    const dx = e.touches[0].clientX - e.touches[1].clientX;
-                    const dy = e.touches[0].clientY - e.touches[1].clientY;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-                    const delta = distance - lastTouchDistance;
-                    
-                    cameraDistance = Math.max(0.5, Math.min(10, cameraDistance - delta * 0.01));
-                    lastTouchDistance = distance;
-                    
-                    updateCameraPosition();
-                }
-            });
-            
-            canvas.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                if (e.touches.length === 0) {
-                    onEnd();
-                }
-            });
-            
-            // Mouse wheel zoom
-            canvas.addEventListener('wheel', (e) => {
-                e.preventDefault();
-                cameraDistance = Math.max(0.5, Math.min(10, cameraDistance + e.deltaY * 0.001));
-                updateCameraPosition();
-            }, { passive: false });
-            
-            console.log('✅ Touch/Mouse controls enabled');
+        function onAllMeshesLoaded() {
+            meshesLoaded = true;
+
+            // Compute bounding box and lift so feet touch ground
+            const box = new THREE.Box3().setFromObject(meshGroup);
+            meshGroup.position.y = -box.min.y;
+
+            needsRender = true;
+            sendMessageToFlutter({ type: 'info', message: 'Robot loaded (' + totalMeshCount + ' parts, joints active)' });
         }
 
-        function updateCameraPosition() {
-            const x = cameraDistance * Math.sin(cameraAngleX) * Math.cos(cameraAngleY);
-            const y = cameraDistance * Math.cos(cameraAngleX);
-            const z = cameraDistance * Math.sin(cameraAngleX) * Math.sin(cameraAngleY);
-            
-            camera.position.set(x, y, z);
-            camera.lookAt(0, 0.3, 0);
+        // =====================================================================
+        //  Joint angle control
+        //  angles: Float32Array or Array of 16 values (radians)
+        //  Order: FR(hip,thigh,calf,foot), FL(...), RR(...), RL(...)
+        // =====================================================================
+        function updateJointAngles(angles) {
+            if (!meshesLoaded || !angles || angles.length < 16) return;
+            idleAnimEnabled = false;   // real data received → stop idle
+
+            for (let i = 0; i < 16; i++) {
+                const j = JOINTS[i];
+                const g = jointGroupMap[j.key];
+                const axis = jointAxisMap[j.key];
+                if (!g || !axis) continue;
+                // Reset rotation to identity then apply joint angle around axis
+                g.quaternion.setFromAxisAngle(axis, angles[i]);
+            }
             needsRender = true;
         }
 
+        // Set a single joint angle:  index 0..15, angle in radians
+        function setJointAngle(index, angle) {
+            if (index < 0 || index >= 16 || !meshesLoaded) return;
+            const j = JOINTS[index];
+            const g = jointGroupMap[j.key];
+            const axis = jointAxisMap[j.key];
+            if (!g || !axis) return;
+            g.quaternion.setFromAxisAngle(axis, angle);
+            needsRender = true;
+        }
+
+        // =====================================================================
+        //  Idle breathing / sway animation
+        //  Subtle leg motion to show the model is articulated
+        // =====================================================================
+        function tickIdleAnimation(dt) {
+            if (!idleAnimEnabled || !meshesLoaded) return;
+            idleTime += dt;
+
+            const t = idleTime;
+            const A = 0.12;   // amplitude (radians, ~7°)
+            const f = 0.6;    // frequency (Hz)
+
+            // Diagonal gait: FR+RL in phase, FL+RR anti-phase
+            const phase1 = Math.sin(2 * Math.PI * f * t) * A;
+            const phase2 = Math.sin(2 * Math.PI * f * t + Math.PI) * A;
+
+            // hip: small abduction oscillation
+            const hipA = 0.04;
+            const hipPhase = Math.sin(2 * Math.PI * f * 0.5 * t) * hipA;
+
+            // FR leg (indices 0-3)
+            applyIdleJoint('fr_hip',   hipPhase);
+            applyIdleJoint('fr_thigh', phase1);
+            applyIdleJoint('fr_calf',  -phase1 * 1.6);
+            applyIdleJoint('fr_foot',  phase1 * 0.4);
+
+            // FL leg (indices 4-7)
+            applyIdleJoint('fl_hip',   -hipPhase);
+            applyIdleJoint('fl_thigh', phase2);
+            applyIdleJoint('fl_calf',  -phase2 * 1.6);
+            applyIdleJoint('fl_foot',  phase2 * 0.4);
+
+            // RR leg (indices 8-11)
+            applyIdleJoint('rr_hip',   -hipPhase);
+            applyIdleJoint('rr_thigh', phase2);
+            applyIdleJoint('rr_calf',  -phase2 * 1.6);
+            applyIdleJoint('rr_foot',  phase2 * 0.4);
+
+            // RL leg (indices 12-15)
+            applyIdleJoint('rl_hip',   hipPhase);
+            applyIdleJoint('rl_thigh', phase1);
+            applyIdleJoint('rl_calf',  -phase1 * 1.6);
+            applyIdleJoint('rl_foot',  phase1 * 0.4);
+
+            // Subtle body sway
+            const baseG = jointGroupMap['base_link'];
+            if (baseG) {
+                baseG.rotation.x = Math.sin(2 * Math.PI * f * t) * 0.015;
+                baseG.rotation.z = Math.cos(2 * Math.PI * f * 0.5 * t) * 0.01;
+            }
+
+            needsRender = true;
+        }
+
+        function applyIdleJoint(key, angle) {
+            const g = jointGroupMap[key];
+            const axis = jointAxisMap[key];
+            if (g && axis) g.quaternion.setFromAxisAngle(axis, angle);
+        }
+
+        // =====================================================================
+        //  STL Binary Loader
+        // =====================================================================
+        function loadSTLBinary(url, callback) {
+            fetch(url)
+                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+                .then(buf => callback(parseSTLBinary(buf)))
+                .catch(e => { console.warn('STL fail:', url, e.message); callback(null); });
+        }
+
+        function parseSTLBinary(buffer) {
+            const dv = new DataView(buffer);
+            const n = dv.getUint32(80, true);
+            const verts = new Float32Array(n * 9);
+            const norms = new Float32Array(n * 9);
+            let off = 84;
+            for (let i = 0; i < n; i++) {
+                const nx = dv.getFloat32(off, true); off += 4;
+                const ny = dv.getFloat32(off, true); off += 4;
+                const nz = dv.getFloat32(off, true); off += 4;
+                for (let j = 0; j < 3; j++) {
+                    const bi = i * 9 + j * 3;
+                    verts[bi]     = dv.getFloat32(off, true); off += 4;
+                    verts[bi + 1] = dv.getFloat32(off, true); off += 4;
+                    verts[bi + 2] = dv.getFloat32(off, true); off += 4;
+                    norms[bi] = nx; norms[bi + 1] = ny; norms[bi + 2] = nz;
+                }
+                off += 2;
+            }
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+            g.setAttribute('normal',   new THREE.BufferAttribute(norms, 3));
+            return g;
+        }
+
+        // =====================================================================
+        //  Camera orbit controls
+        // =====================================================================
+        function setupControls() {
+            const c = renderer.domElement;
+            const start = (x,y) => { isDragging = true; lastTouchX = x; lastTouchY = y; };
+            const move  = (x,y) => {
+                if (!isDragging) return;
+                cameraAngleY += (x - lastTouchX) * 0.01;
+                cameraAngleX = Math.max(0.05, Math.min(Math.PI * 0.48, cameraAngleX - (y - lastTouchY) * 0.01));
+                lastTouchX = x; lastTouchY = y;
+                updateCam();
+            };
+            const end = () => { isDragging = false; };
+
+            c.addEventListener('mousedown', e => { e.preventDefault(); start(e.clientX, e.clientY); });
+            c.addEventListener('mousemove', e => { if (isDragging) { e.preventDefault(); move(e.clientX, e.clientY); } });
+            c.addEventListener('mouseup', end);
+            c.addEventListener('mouseleave', end);
+
+            c.addEventListener('touchstart', e => {
+                e.preventDefault();
+                if (e.touches.length === 1) start(e.touches[0].clientX, e.touches[0].clientY);
+                else if (e.touches.length === 2) {
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    lastTouchDistance = Math.sqrt(dx*dx + dy*dy);
+                }
+            });
+            c.addEventListener('touchmove', e => {
+                e.preventDefault();
+                if (e.touches.length === 1 && isDragging) move(e.touches[0].clientX, e.touches[0].clientY);
+                else if (e.touches.length === 2) {
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    const d = Math.sqrt(dx*dx + dy*dy);
+                    cameraDistance = Math.max(0.3, Math.min(8, cameraDistance - (d - lastTouchDistance) * 0.005));
+                    lastTouchDistance = d;
+                    updateCam();
+                }
+            });
+            c.addEventListener('touchend', e => { e.preventDefault(); if (e.touches.length === 0) end(); });
+            c.addEventListener('wheel', e => {
+                e.preventDefault();
+                cameraDistance = Math.max(0.3, Math.min(8, cameraDistance + e.deltaY * 0.001));
+                updateCam();
+            }, { passive: false });
+        }
+
+        function updateCam() {
+            camera.position.set(
+                cameraDistance * Math.sin(cameraAngleX) * Math.cos(cameraAngleY),
+                cameraDistance * Math.cos(cameraAngleX),
+                cameraDistance * Math.sin(cameraAngleX) * Math.sin(cameraAngleY)
+            );
+            camera.lookAt(0, 0.2, 0);
+            needsRender = true;
+        }
+
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            needsRender = true;
+        }
+
+        // =====================================================================
+        //  Animation loop
+        // =====================================================================
         function animate() {
             requestAnimationFrame(animate);
-            
-            // Only render when needed (on-demand rendering for better performance)
+            const now = performance.now();
+            const dt = (now - lastFrameTime) / 1000;
+            lastFrameTime = now;
+
+            tickIdleAnimation(dt);
+
             if (needsRender) {
                 renderer.render(scene, camera);
                 needsRender = false;
             }
         }
-        
-        function requestRender() {
-            needsRender = true;
-        }
 
-        // Update robot pose from Flutter
+        // =====================================================================
+        //  Flutter ↔ JS interface
+        // =====================================================================
         function updateRobotPose(x, y, z, qx, qy, qz, qw) {
             if (!robotGroup) return;
-
             robotGroup.position.set(x, y, z);
-            
-            const quaternion = new THREE.Quaternion(qx, qy, qz, qw);
-            robotGroup.setRotationFromQuaternion(quaternion);
-            
+            robotGroup.setRotationFromQuaternion(new THREE.Quaternion(qx, qy, qz, qw));
             needsRender = true;
         }
 
-        // Send message to Flutter
-        function sendMessageToFlutter(message) {
-            if (window.FlutterChannel) {
-                window.FlutterChannel.postMessage(JSON.stringify(message));
-            }
+        function enableIdleAnimation(enable) {
+            idleAnimEnabled = !!enable;
+            if (enable) idleTime = 0;
+            needsRender = true;
         }
 
-        // Expose functions to Flutter
-        window.updateRobotPose = updateRobotPose;
-        window.loadRealMeshes = loadRealRobotMeshes;
-        window.loadSimpleModel = createSimpleRobot;
-        console.log('✅ Functions exposed to window');
-
-        // Initialize on load
-        console.log('📄 Waiting for page load...');
-        if (document.readyState === 'complete') {
-            console.log('⚡ Document already loaded, initializing immediately');
-            init();
-        } else {
-            window.addEventListener('load', () => {
-                console.log('📄 Page load event fired');
-                init();
-            });
+        function sendMessageToFlutter(msg) {
+            if (window.FlutterChannel) window.FlutterChannel.postMessage(JSON.stringify(msg));
         }
+
+        // Expose API to Flutter / window
+        window.updateRobotPose     = updateRobotPose;
+        window.updateJointAngles   = updateJointAngles;
+        window.setJointAngle       = setJointAngle;
+        window.enableIdleAnimation = enableIdleAnimation;
+
+        // =====================================================================
+        //  Boot
+        // =====================================================================
+        if (document.readyState === 'complete') init();
+        else window.addEventListener('load', init);
     </script>
 </body>
 </html>

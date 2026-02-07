@@ -6,6 +6,7 @@ import 'package:flutter_joystick/flutter_joystick.dart';
 import 'package:provider/provider.dart';
 import '../services/robot_connection_provider.dart';
 import 'package:robot_proto/robot_proto.dart';
+import '../theme/app_theme.dart';
 import '../widgets/glass_widgets.dart';
 import '../widgets/camera_stream_widget.dart';
 import '../widgets/webrtc_video_widget.dart';
@@ -188,17 +189,18 @@ class _ControlScreenState extends State<ControlScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new,
-                    size: 18, color: Colors.black87),
+                icon: Icon(Icons.arrow_back_ios_new,
+                    size: 18,
+                    color: context.isDark ? Colors.white : Colors.black87),
                 onPressed: () => Navigator.of(context).pop(),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
               ),
               const SizedBox(width: 12),
-              const Text(
-                'Control Center',
+              Text(
+                '控制中心',
                 style: TextStyle(
-                  color: Colors.black87,
+                  color: context.isDark ? Colors.white : Colors.black87,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
@@ -218,14 +220,14 @@ class _ControlScreenState extends State<ControlScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.videocam, size: 14, color: Colors.blue[700]),
+                  const Icon(Icons.videocam, size: 14, color: AppColors.primary),
                   const SizedBox(width: 6),
-                  Text(
+                  const Text(
                     'FPV',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color: Colors.blue[800],
+                      color: AppColors.primary,
                     ),
                   ),
                 ],
@@ -241,15 +243,14 @@ class _ControlScreenState extends State<ControlScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 color: hasLease
-                    ? Colors.green.withOpacity(0.2)
+                    ? AppColors.success.withOpacity(0.2)
                     : Colors.grey.withOpacity(0.2),
                 child: Row(
                   children: [
                     Icon(
                       hasLease ? Icons.lock_open : Icons.lock,
                       size: 16,
-                      color:
-                          hasLease ? Colors.green[700] : Colors.grey[700],
+                      color: hasLease ? AppColors.success : Colors.grey,
                     ),
                     const SizedBox(width: 8),
                     Text(
@@ -257,9 +258,7 @@ class _ControlScreenState extends State<ControlScreen> {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: hasLease
-                            ? Colors.green[800]
-                            : Colors.grey[800],
+                        color: hasLease ? AppColors.success : Colors.grey,
                       ),
                     ),
                   ],
@@ -330,7 +329,7 @@ class _ControlScreenState extends State<ControlScreen> {
                         // Mode Selection
                         GlassCard(
                           padding: const EdgeInsets.all(4),
-                          borderRadius: 16,
+                          borderRadius: 22,
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -392,7 +391,9 @@ class _ControlScreenState extends State<ControlScreen> {
                               fontFeatures: const [
                                 FontFeature.tabularFigures()
                               ],
-                              color: Colors.black.withOpacity(0.6),
+                              color: context.isDark
+                                  ? Colors.white70
+                                  : Colors.black.withOpacity(0.6),
                             ),
                           ),
                         ),
@@ -430,14 +431,15 @@ class _ControlScreenState extends State<ControlScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 14, color: Colors.black54),
+              Icon(icon, size: 14,
+                  color: context.isDark ? Colors.white54 : Colors.black54),
               const SizedBox(width: 6),
               Text(
                 label,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black54,
+                  color: context.isDark ? Colors.white54 : Colors.black54,
                   letterSpacing: 0.5,
                 ),
               ),
@@ -537,7 +539,7 @@ class _ControlScreenState extends State<ControlScreen> {
       color: Colors.transparent,
       child: InkWell(
         onTap: () => _setMode(mode),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Text(

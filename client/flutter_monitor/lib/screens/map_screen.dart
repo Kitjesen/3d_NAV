@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../services/robot_connection_provider.dart';
 import 'package:robot_proto/robot_proto.dart';
+import '../theme/app_theme.dart';
 import '../widgets/glass_widgets.dart';
 import '../widgets/robot_model_widget.dart';
 
@@ -187,16 +188,17 @@ class _MapScreenState extends State<MapScreen>
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Trajectory'),
+        title: const Text('轨迹地图'),
         backgroundColor: Colors.transparent,
         elevation: 0,
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16.0),
             child: IconButton(
-              icon: const Icon(Icons.delete_outline, color: Colors.black54),
+              icon: Icon(Icons.delete_outline,
+                  color: context.isDark ? Colors.white54 : Colors.black54),
               onPressed: _clearPath,
-              tooltip: 'Clear Path',
+              tooltip: '清除路径',
             ),
           ),
         ],
@@ -252,13 +254,12 @@ class _MapScreenState extends State<MapScreen>
             left: 16,
             top: MediaQuery.of(context).padding.top + 16,
             child: GlassCard(
-              borderRadius: 12,
+              borderRadius: 18,
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // 使用 Selector 精确监听连接状态
                   Selector<RobotConnectionProvider, bool>(
                     selector: (_, p) => p.isConnected,
                     builder: (_, isConnected, __) {
@@ -266,19 +267,19 @@ class _MapScreenState extends State<MapScreen>
                         width: 8,
                         height: 8,
                         decoration: BoxDecoration(
-                          color: isConnected ? Colors.green : Colors.red,
+                          color: isConnected ? AppColors.success : AppColors.error,
                           shape: BoxShape.circle,
                         ),
                       );
                     },
                   ),
                   const SizedBox(width: 8),
-                  const Text(
-                    'my_robot',
+                  Text(
+                    '大算机器人',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
-                      color: Colors.black87,
+                      color: context.isDark ? Colors.white : Colors.black87,
                     ),
                   ),
                 ],
@@ -291,7 +292,7 @@ class _MapScreenState extends State<MapScreen>
             right: 16,
             top: MediaQuery.of(context).padding.top + 16,
             child: GlassCard(
-              borderRadius: 12,
+              borderRadius: 18,
               padding: const EdgeInsets.all(8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -353,7 +354,7 @@ class _MapScreenState extends State<MapScreen>
               right: 16,
               bottom: 100,
               child: GlassCard(
-                borderRadius: 12,
+                borderRadius: 18,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Text(
@@ -361,7 +362,7 @@ class _MapScreenState extends State<MapScreen>
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    color: Colors.black.withOpacity(0.4),
+                    color: context.subtitleColor,
                   ),
                 ),
               ),
@@ -377,16 +378,19 @@ class _MapScreenState extends State<MapScreen>
     String? tooltip,
     bool isSelected = false,
   }) {
+    final isDark = context.isDark;
     return Container(
       decoration: BoxDecoration(
         color: isSelected
-            ? const Color(0xFF007AFF).withOpacity(0.1)
+            ? AppColors.primary.withOpacity(isDark ? 0.18 : 0.1)
             : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: IconButton(
         icon: Icon(icon),
-        color: isSelected ? const Color(0xFF007AFF) : Colors.black54,
+        color: isSelected
+            ? AppColors.primary
+            : (isDark ? Colors.white54 : Colors.black54),
         iconSize: 20,
         tooltip: tooltip,
         onPressed: onPressed,
@@ -402,8 +406,8 @@ class _MapScreenState extends State<MapScreen>
       builder: (context) => Dialog(
         backgroundColor: Colors.transparent,
         child: GlassCard(
-          borderRadius: 16,
-          padding: const EdgeInsets.all(20),
+          borderRadius: 24,
+          padding: const EdgeInsets.all(22),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -454,21 +458,23 @@ class _MapScreenState extends State<MapScreen>
   }
 
   Widget _buildThemeOption(String label, bool isSelected) {
+    final isDark = context.isDark;
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? Colors.white : Colors.grey.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(8),
+          color: isSelected
+              ? (isDark ? AppColors.darkElevated : Colors.white)
+              : (isDark ? Colors.white.withOpacity(0.04) : Colors.grey.withOpacity(0.08)),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color:
-                isSelected ? const Color(0xFF007AFF) : Colors.transparent,
+            color: isSelected ? AppColors.primary : Colors.transparent,
             width: 1.5,
           ),
           boxShadow: isSelected
               ? [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withOpacity(0.06),
                     blurRadius: 4,
                     offset: const Offset(0, 2),
                   )
@@ -480,11 +486,10 @@ class _MapScreenState extends State<MapScreen>
             label,
             style: TextStyle(
               fontSize: 12,
-              fontWeight:
-                  isSelected ? FontWeight.w600 : FontWeight.normal,
+              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
               color: isSelected
-                  ? const Color(0xFF007AFF)
-                  : Colors.black87,
+                  ? AppColors.primary
+                  : (isDark ? Colors.white70 : Colors.black87),
             ),
           ),
         ),

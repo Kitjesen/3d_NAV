@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'robot_client_base.dart';
+import 'settings_preferences.dart';
 import 'package:robot_proto/robot_proto.dart';
 
 /// 连接状态枚举
@@ -41,6 +42,10 @@ class RobotConnectionProvider extends ChangeNotifier {
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 10;
   static const Duration _baseReconnectDelay = Duration(seconds: 2);
+
+  // — Settings reference (optional, injected after construction) —
+  SettingsPreferences? _settingsPrefs;
+  void bindSettings(SettingsPreferences prefs) => _settingsPrefs = prefs;
 
   // — Connection health —
   DateTime? _lastFastStateTime;
@@ -207,6 +212,16 @@ class RobotConnectionProvider extends ChangeNotifier {
 
   void _handleStreamError() {
     if (_status == ConnectionStatus.reconnecting) return;
+
+    // Check if auto-reconnect is enabled
+    final autoReconnect = _settingsPrefs?.autoReconnect ?? true;
+    if (!autoReconnect) {
+      _status = ConnectionStatus.error;
+      _errorMessage = '连接已断开（自动重连已关闭）';
+      _stopCentralStreams();
+      notifyListeners();
+      return;
+    }
 
     _status = ConnectionStatus.reconnecting;
     _stopCentralStreams();

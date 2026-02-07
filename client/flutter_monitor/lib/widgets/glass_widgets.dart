@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 class GlassCard extends StatelessWidget {
   final Widget child;
@@ -16,7 +17,7 @@ class GlassCard extends StatelessWidget {
     required this.child,
     this.padding,
     this.margin,
-    this.borderRadius = 16.0,
+    this.borderRadius = 22.0,
     this.blurSigma = 20.0,
     this.color,
     this.border,
@@ -29,14 +30,15 @@ class GlassCard extends StatelessWidget {
       margin: margin,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(borderRadius),
-        boxShadow: boxShadow ?? [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-            spreadRadius: 0,
-          ),
-        ],
+        boxShadow: boxShadow ??
+            [
+              BoxShadow(
+                color: context.cardShadowColor,
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+                spreadRadius: 0,
+              ),
+            ],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(borderRadius),
@@ -45,12 +47,13 @@ class GlassCard extends StatelessWidget {
           child: Container(
             padding: padding,
             decoration: BoxDecoration(
-              color: color ?? Colors.white.withOpacity(0.85), // More opaque, white default
+              color: color ?? context.glassColor,
               borderRadius: BorderRadius.circular(borderRadius),
-              border: border ?? Border.all(
-                color: Colors.white.withOpacity(0.5),
-                width: 1.0,
-              ),
+              border: border ??
+                  Border.all(
+                    color: context.glassBorder,
+                    width: 1.0,
+                  ),
             ),
             child: child,
           ),
@@ -80,27 +83,31 @@ class GlassButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            color: (backgroundColor ?? Theme.of(context).primaryColor).withOpacity(0.2),
-            blurRadius: 12,
+            color: (backgroundColor ?? Theme.of(context).primaryColor)
+                .withOpacity(0.2),
+            blurRadius: 14,
             offset: const Offset(0, 6),
           ),
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(22),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: TextButton(
             onPressed: onPressed,
             style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              backgroundColor: (backgroundColor ?? Theme.of(context).primaryColor).withOpacity(0.8),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              backgroundColor:
+                  (backgroundColor ?? Theme.of(context).primaryColor)
+                      .withOpacity(0.8),
               foregroundColor: foregroundColor ?? Colors.white,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(22),
               ),
             ),
             child: Row(
@@ -143,6 +150,8 @@ class ValueDisplay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = context.isDark;
+
     return Column(
       crossAxisAlignment: alignment,
       children: [
@@ -155,7 +164,7 @@ class ValueDisplay extends StatelessWidget {
           style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w600,
-            color: Colors.black.withOpacity(0.4),
+            color: context.subtitleColor,
             letterSpacing: 1.0,
           ),
         ),
@@ -167,11 +176,11 @@ class ValueDisplay extends StatelessWidget {
           children: [
             Text(
               value,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
                 letterSpacing: -0.5,
-                color: Colors.black87,
+                color: isDark ? Colors.white : Colors.black87,
               ),
             ),
             if (unit.isNotEmpty) ...[
@@ -181,7 +190,7 @@ class ValueDisplay extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
-                  color: Colors.black.withOpacity(0.5),
+                  color: context.subtitleColor,
                 ),
               ),
             ],

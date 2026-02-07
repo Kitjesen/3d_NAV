@@ -17,7 +17,7 @@ dependencies:
   # Robot proto definitions (generated gRPC stubs)
   robot_proto:
     git:
-      url: git@github.com:Kitjesen/Robot_Proto.git
+      url: https://github.com/Kitjesen/Robot_Proto.git
       path: dart
       ref: main
   
@@ -42,6 +42,16 @@ dependencies:
   
   # WebRTC for real-time video/audio
   flutter_webrtc: ^0.12.6
+
+  # Bluetooth
+  flutter_blue_plus: ^1.35.2
+
+  # Storage
+  path_provider: ^2.1.0
+
+  # UI Enhancements
+  shimmer: ^3.0.0
+  animations: ^2.0.11
 
 dev_dependencies:
   flutter_test:
