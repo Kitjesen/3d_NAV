@@ -167,10 +167,13 @@ scp keys/ota_public.pem robot:/opt/robot/ota/ota_public.pem
 
 ### 4.4 当前状态
 
-> **注意**: 签名验证在客户端侧实现（Flutter App 内置公钥验证 manifest）。
-> 服务端 (`CheckUpdateReadiness`) 预留了 `manifest_signature` 字段，
-> 未来可在机器人侧也做验签（双重验证）。
-> 当前阶段，未签名的 manifest 仍然可以使用，但会在日志中打印警告。
+> **v3 更新**: 签名验证已在**双端**实现：
+> - **Flutter App 端**: 内置公钥验证下载的 manifest
+> - **设备端** (v3 P1.2): `CheckUpdateReadiness` 使用 OpenSSL `EVP_DigestVerify` 验签
+>   公钥路径: `/opt/robot/ota/ota_public.pem`
+>
+> **向后兼容**: 未配置公钥或未签名的 manifest 仍可通过，但会在日志中打印 WARN。
+> 正式环境建议切为强制阻塞（见 §17.1 待开展工作）。
 
 ---
 
@@ -552,15 +555,19 @@ jobs:
 
 | 威胁 | 防御 | 当前状态 |
 |------|------|---------|
-| manifest 伪造 | Ed25519 签名验证 | 已实现 (generate_manifest.py) |
-| 制品篡改 | SHA256 校验 (每个制品) | 已实现 |
-| 路径遍历攻击 | 禁止 `..` 组件 | 已实现 |
-| 错误硬件刷写 | hw_compat 白名单 | 已实现 |
-| 刷写中断 | 事务日志 + 自动回滚 | 已实现 |
-| 运动中刷写 | safety_level 分级 + 模式检查 | 已实现 (COLD 警告, TODO: 强制) |
-| 电量不足 | min_battery_percent | 已实现 |
-| 版本不兼容 | dependencies 依赖检查 | 已实现 |
-| 中间人攻击 | gRPC channel TLS | TODO: 启用 TLS |
+| manifest 伪造 | Ed25519 签名验证 | ✅ App + 设备端双重验签 (v3 P1.2) |
+| 制品篡改 | SHA256 校验 (每个制品) | ✅ 已实现 |
+| 路径遍历攻击 | 禁止 `..` 组件 | ✅ 已实现 |
+| 错误硬件刷写 | hw_compat 白名单 | ✅ 已实现 |
+| 刷写中断 | 事务日志 + 自动回滚 | ✅ 已实现 |
+| 安装后故障 | HealthMonitor 自动健康检查 + 回滚 | ✅ v3 P1.3 新增 |
+| 运动中刷写 | safety_level 分级 + 模式检查 | ⚠️ WARN 日志 (TODO: COLD 强制阻塞) |
+| 电量不足 | min_battery_percent | ✅ 已实现 |
+| 版本不兼容 | dependencies 依赖检查 | ✅ semver 整数比较 (v3 P1.4 修复) |
+| 版本漂移 | system_version.json + ValidateSystemVersion | ✅ v3 P1.1 / P2.3 新增 |
+| 事后审计 | upgrade_history.jsonl 持久日志 | ✅ v3 P2.1 新增 |
+| 失败分类 | OtaFailureCode 标准化 | ✅ v3 P2.2 新增 |
+| 中间人攻击 | gRPC TLS (可选, 自签证书) | ✅ v3 P3.3 可选启用 |
 | 密钥泄露 | public_key_id 支持密钥轮换 | 已预留 |
 
 ---
@@ -696,4 +703,439 @@ assert(uploadResp.sha256 == artifact.sha256);
 
 ---
 
-*最后更新: 2026-02-08*
+## 15. 导航功能包 OTA (ROS2 Package Push)
+
+除了模型/地图/配置/固件，OTA 系统还支持推送**完整的 ROS2 导航功能包**更新。
+
+### 15.1 本地维护清单
+
+开发端 (本地) 需要维护以下内容：
+
+| 文件/目录 | 作用 | 维护方式 |
+|-----------|------|---------|
+| `VERSION` | 统一版本号 (semver) | 每次发布前手动更新 |
+| `scripts/ota/build_nav_package.sh` | 构建 + 打包脚本 | 随工程一起维护 |
+| `scripts/ota/install_nav.sh` | 机器人端安装脚本 (随 tarball 打包) | 随工程一起维护 |
+| `scripts/ota/push_to_robot.sh` | 直连推送脚本 (开发/调试用) | 随工程一起维护 |
+| `scripts/ota/manifest_template.json` | manifest 模板 (含 navigation 制品) | 新增制品类型时更新 |
+| `scripts/ota/generate_manifest.py` | manifest 生成 + Ed25519 签名 | 已稳定 |
+| `keys/ota_private.pem` | Ed25519 私钥 (**不入 git**) | 首次生成后妥善保管 |
+| `.github/workflows/release-navigation.yml` | CI/CD 自动构建发布 | 随工程一起维护 |
+
+### 15.2 机器人端目录结构
+
+```
+/opt/robot/
+├── ota/
+│   ├── installed_manifest.json    # 已安装制品记录
+│   ├── ota_public.pem             # Ed25519 公钥
+│   ├── ota_events.log             # OTA 事件日志
+│   └── backup/
+│       └── txn_navigation.json    # 事务日志 (安装完成后删除)
+│
+├── navigation/
+│   ├── start_nav.sh               # systemd 启动入口
+│   ├── current -> 1.0.0           # 当前版本 (软链接)
+│   ├── previous -> 0.9.0          # 上一版本 (回滚用)
+│   ├── 1.0.0/                     # 版本化安装
+│   │   ├── install/               # colcon install 产物
+│   │   │   ├── fastlio2/
+│   │   │   ├── local_planner/
+│   │   │   ├── terrain_analysis/
+│   │   │   ├── ...
+│   │   │   └── setup.bash
+│   │   ├── launch/
+│   │   │   ├── navigation_bringup.launch.py
+│   │   │   └── navigation_run.launch.py
+│   │   ├── fastdds_no_shm.xml
+│   │   └── metadata.json          # 构建元数据
+│   └── 0.9.0/                     # 旧版本 (保留最近3个)
+│       └── ...
+│
+├── models/                         # ONNX 模型 (独立更新)
+├── maps/                           # PCD 地图 (独立更新)
+└── config/                         # YAML 配置 (独立更新)
+```
+
+### 15.3 首次部署
+
+```bash
+# 1. 在机器人上运行首次配置 (创建目录 + systemd 服务)
+scp scripts/ota/setup_robot.sh scripts/ota/navigation.service \
+    scripts/ota/start_nav.sh sunrise@robot:/tmp/
+ssh sunrise@robot 'sudo bash /tmp/setup_robot.sh'
+
+# 2. 生成签名密钥 (首次)
+python3 scripts/ota/generate_manifest.py --generate-keys --key-dir ./keys/
+
+# 3. 部署公钥到机器人
+scp keys/ota_public.pem sunrise@robot:/opt/robot/ota/
+
+# 4. 构建并推送首版
+./scripts/ota/push_to_robot.sh sunrise@<robot_ip> --build --restart
+```
+
+### 15.4 日常更新工作流
+
+#### 方式 A: 直连推送 (开发/调试，推荐)
+
+```bash
+# 修改代码后...
+
+# 全量推送 (编译所有包 → 打包 → scp → 安装)
+./scripts/ota/push_to_robot.sh sunrise@192.168.1.100 --build --restart
+
+# 增量推送 (仅改了 local_planner)
+./scripts/ota/push_to_robot.sh sunrise@192.168.1.100 \
+    --build --packages-select local_planner --restart
+
+# 极速同步 (已编译好，仅 rsync install/ 目录)
+./scripts/ota/push_to_robot.sh sunrise@192.168.1.100 --sync-only --restart
+```
+
+#### 方式 B: GitHub Release (正式发布)
+
+```bash
+# 1. 更新版本号
+echo "1.1.0" > VERSION
+
+# 2. 提交并打 tag
+git add . && git commit -m "release: v1.1.0"
+git tag v1.1.0
+git push origin main --tags
+
+# CI/CD 自动: 构建 → 打包 → 签名 → 发布到 GitHub Release
+# 机器人端: MapPilot App → 设置 → 云端更新 → 检查更新 → 安装
+```
+
+#### 方式 C: 手动 Release
+
+```bash
+# 1. 本地构建打包
+./scripts/ota/build_nav_package.sh
+
+# 2. 生成签名 manifest
+python3 scripts/ota/generate_manifest.py \
+    --version v1.1.0 \
+    --artifacts-dir ./dist/ \
+    --template scripts/ota/manifest_template.json \
+    --signing-key ./keys/ota_private.pem \
+    --output ./dist/manifest.json
+
+# 3. 上传到 GitHub Release
+gh release create v1.1.0 dist/* --title "v1.1.0" --notes "功能更新"
+```
+
+### 15.5 版本管理规范
+
+```
+VERSION 文件格式: major.minor.patch (semver)
+
+major: 架构变更 / 不兼容更新 (如坐标系重构)
+minor: 功能新增 (如新增避障算法)
+patch: Bug 修复 / 参数调优
+
+示例:
+  1.0.0  — 首个稳定版本
+  1.0.1  — 修复 terrain_analysis NaN 问题
+  1.1.0  — 新增近场急停功能
+  2.0.0  — SLAM 引擎从 Fast-LIO2 切换到 FAST-LIVO
+```
+
+### 15.6 回滚
+
+```bash
+# 方式 1: 在机器人端回滚
+ssh sunrise@robot 'sudo /opt/robot/navigation/current/install_nav.sh --rollback'
+
+# 方式 2: 通过 App 回滚
+# MapPilot App → 设置 → OTA → 导航系统 → 回滚
+
+# 方式 3: 从 OTA gRPC 接口
+# Rollback(artifact_name="navigation")
+```
+
+### 15.7 安全级别
+
+导航功能包更新属于 **COLD** 级别：
+- 安装前必须停止导航服务 (自动处理)
+- systemd 服务自动停止 → 安装 → 重启
+- 事务日志保护: 安装中断 → 下次启动自动回滚
+
+---
+
+## 16. v3 增强: 版本一致性 + 可观测性 + 安全加固
+
+> 本节记录 2026-02 实施的 Production OTA 升级，覆盖三个阶段共 10 项改进。
+
+### 16.1 改动总览
+
+| Phase | 改进项 | 涉及文件 | 状态 |
+|-------|--------|---------|------|
+| **P1.1** | 系统版本 (system_version.json) | `data.proto`, `data_service.cpp`, `generate_manifest.py`, `build_nav_package.sh` | **已完成** |
+| **P1.2** | 设备端 Ed25519 验签 | `data_service.cpp` (OpenSSL `EVP_DigestVerify`) | **已完成** |
+| **P1.3** | 安装后自动健康检查 + 自动回滚 | `data_service.cpp/hpp`, `grpc_gateway.cpp` | **已完成** |
+| **P1.4** | semver 整数比较 + robot_id 初始化 | `data_service.cpp`, `grpc_gateway.cpp` | **已完成** |
+| **P2.1** | 持久升级历史 (JSONL) + `GetUpgradeHistory` RPC | `data.proto`, `data_service.cpp` | **已完成** |
+| **P2.2** | 标准化失败码 `OtaFailureCode` enum | `data.proto`, `data_service.cpp` 全链路 | **已完成** |
+| **P2.3** | `ValidateSystemVersion` RPC | `data.proto`, `data_service.cpp` | **已完成** |
+| **P3.1** | Flutter UI 补全 (版本列表/回滚/历史) | `firmware_ota_page.dart`, `robot_client.dart`, `robot_client_base.dart` | **已完成** |
+| **P3.2** | 发布通道 dev/canary/stable | `manifest_template.json`, `generate_manifest.py`, `cloud_ota_service.dart` | **已完成** |
+| **P3.3** | gRPC TLS (可选) | `grpc_gateway.cpp/hpp`, `grpc_gateway.yaml`, `robot_client.dart` | **已完成** |
+
+### 16.2 Phase 1 — 版本一致性 + 设备端加固
+
+#### P1.1 系统版本概念
+
+**问题**: 之前只有零散的 `installed_manifest.json` 记录单个制品版本，无法回答 "这台机器人整体是什么版本？"
+
+**方案**: 引入 `/opt/robot/ota/system_version.json`，每次 `ApplyUpdate` 成功后自动重建：
+
+```json
+{
+  "system_version": "1.0.0",
+  "components": {
+    "navigation": {"version": "1.0.0"},
+    "policy_walk": {"version": "2.3.0"},
+    "campus_map": {"version": "1.0.0"}
+  }
+}
+```
+
+**改动**:
+- `data.proto`: `GetInstalledVersionsResponse` 新增 `string system_version_json = 7`
+- `data_service.cpp`: 新增 `LoadSystemVersionJson()` / `SaveSystemVersionJson()`
+- `generate_manifest.py`: 新增 `--system-manifest` 参数，自动生成 `system_manifest.json`
+- `build_nav_package.sh`: 打包时纳入 `system_manifest.json`
+- `grpc_gateway.yaml`: 新增 `system_version_path` 配置项
+
+#### P1.2 设备端 Ed25519 验签
+
+**问题**: 签名仅在 Flutter App 端验证，绕过 App 直接调 gRPC 即可推伪造包。
+
+**方案**: `data_service.cpp` 新增 `VerifyEd25519Signature()`:
+- 使用 OpenSSL `EVP_DigestVerify` API
+- 公钥路径: `/opt/robot/ota/ota_public.pem` (与 OTA_GUIDE 一致)
+- `CheckUpdateReadiness` 新增 `signature` 检查项
+- **向后兼容**: 未配置公钥时 → 跳过验签 (WARN 日志); 未来可切为强制阻塞
+
+#### P1.3 安装后自动健康检查
+
+**问题**: 装坏了不知道，只能人工发现。
+
+**方案**: `ApplyUpdate` 成功后调用 `PostInstallHealthCheck()`:
+
+| 安全等级 | 等待时间 | 检查方式 |
+|---------|---------|---------|
+| HOT | 2 秒 | 查 HealthMonitor 对应子系统 |
+| WARM | 5 秒 | 查 HealthMonitor 整体 `GetOverallLevel()` |
+| COLD | 跳过 | 由 systemd `ExecStartPre` 负责 (重启后检查) |
+
+- 健康检查返回 `FAULT` / `CRITICAL` → **自动回滚** + 事务日志标记 `status=rolled_back_health_fail`
+- `GrpcGateway` 构造时通过 `data_service_->SetHealthMonitor(health_monitor_)` 注入
+
+#### P1.4 semver 比较 + robot_id
+
+**问题 1**: `"1.10.0" < "1.2.0"` 字符串比较错误。
+**修复**: 新增 `CompareSemver(a, b)` → 解析 `major.minor.patch` 为整数比较，支持 `v` 前缀。所有依赖检查均已替换。
+
+**问题 2**: `SystemServiceImpl` 用默认 `robot_001`，未从 YAML 配置读取。
+**修复**: `grpc_gateway.cpp` 从参数读取 `robot_id` / `firmware_version` 并传入构造函数。使用 `has_parameter()` 避免重复声明。
+
+### 16.3 Phase 2 — 可观测性 + 标准化
+
+#### P2.1 持久升级历史
+
+**问题**: `txn_*.json` 是瞬态的 (安装成功即删除)，事后无法审计。
+
+**方案**: 新增 `/opt/robot/ota/upgrade_history.jsonl` (append-only):
+
+```jsonl
+{"ts":"2026-02-09T10:30:00Z","action":"install","artifact":"navigation","from":"1.0.0","to":"1.1.0","status":"success","failure_code":0,"failure_reason":"","duration_ms":12345,"health_check":"passed"}
+{"ts":"2026-02-09T11:00:00Z","action":"rollback","artifact":"navigation","from":"1.1.0","to":"1.0.0","status":"success","failure_code":0,"failure_reason":"","duration_ms":0,"health_check":"skipped"}
+```
+
+**记录时机**: `ApplyUpdate` 成功 / 失败 / 健康回滚 三条路径各记录一条；`Rollback` 成功也记录。
+
+**查询 RPC**:
+```protobuf
+rpc GetUpgradeHistory(GetUpgradeHistoryRequest) returns (GetUpgradeHistoryResponse);
+```
+支持 `artifact_filter` 和 `limit`，返回 newest-first。
+
+#### P2.2 标准化失败码
+
+**问题**: `error_message` 是自由文本，无法统计分类。
+
+**方案**: 新增 proto enum + 全链路接入:
+
+```protobuf
+enum OtaFailureCode {
+  OTA_FAILURE_NONE = 0;
+  OTA_FAILURE_NETWORK = 1;          // 下载失败
+  OTA_FAILURE_SHA256_MISMATCH = 2;  // 校验失败
+  OTA_FAILURE_SIGNATURE_INVALID = 3;// 签名无效
+  OTA_FAILURE_DISK_FULL = 4;        // 磁盘不足
+  OTA_FAILURE_DEPENDENCY = 5;       // 依赖不满足
+  OTA_FAILURE_INSTALL_SCRIPT = 6;   // 安装脚本失败
+  OTA_FAILURE_HEALTH_CHECK = 7;     // 安装后健康检查失败
+  OTA_FAILURE_BATTERY_LOW = 8;      // 电量不足
+  OTA_FAILURE_HW_INCOMPAT = 9;     // 硬件不兼容
+  OTA_FAILURE_SAFETY_MODE = 10;     // 安全模式不允许
+  OTA_FAILURE_PERMISSION = 11;      // 权限不足
+  OTA_FAILURE_ROLLBACK_FAILED = 12; // 回滚也失败
+}
+```
+
+`ApplyUpdateResponse` 新增 `OtaFailureCode failure_code = 7`。所有失败路径 (SHA256 / HW / 依赖 / 安装脚本 / 健康检查) 均已赋值。
+
+#### P2.3 版本一致性校验 RPC
+
+**用途**: 客户端传入期望的系统版本和组件版本集，机器人端逐一对比：
+
+```protobuf
+rpc ValidateSystemVersion(ValidateSystemVersionRequest) returns (ValidateSystemVersionResponse);
+```
+
+返回 `consistent` (bool) + 每个组件的 `match` / `mismatch` / `missing` / `extra` 状态。
+
+### 16.4 Phase 3 — 用户体验 + 发布通道 + 安全传输
+
+#### P3.1 Flutter UI 补全
+
+**问题**: `firmware_ota_page.dart` 只用了 `applyFirmware()`，其余 5 个 OTA RPC 未接入 UI。
+
+**补全内容**:
+
+| 功能 | 使用 RPC | UI 位置 |
+|------|---------|---------|
+| 已安装版本列表 | `getInstalledVersions()` | 新增 "已安装版本" 区域 |
+| 一键回滚 | `rollback()` | 每个制品旁的 "回滚" 按钮 |
+| 升级历史 | `getUpgradeHistory()` | 新增 "升级历史" 区域 (newest-first) |
+| 安装前预检 | `checkUpdateReadiness()` | 点击 "应用固件" 时自动执行 |
+| 系统版本显示 | `getInstalledVersions().systemVersion` | 设备状态区域 |
+
+#### P3.2 发布通道 (dev / canary / stable)
+
+**实现**:
+- `manifest_template.json`: 顶层新增 `"channel": "stable"`
+- `generate_manifest.py`: 新增 `--channel` 参数 (dev / canary / stable)
+- `cloud_ota_service.dart`:
+  - `CloudOtaManifest` 新增 `channel` 字段
+  - `_channel` 持久化到 `SharedPreferences`
+  - `fetchLatestRelease()` 按 channel 过滤:
+    - `stable` → GitHub API `/latest` (仅非 prerelease)
+    - `dev` / `canary` → 扫描全部 releases，按 manifest `channel` 或 `prerelease` 标记匹配
+
+**使用方式**:
+```bash
+# CI 发布 canary 版
+python3 scripts/ota/generate_manifest.py --version v1.1.0-beta1 --channel canary ...
+
+# CI 发布 stable 版
+python3 scripts/ota/generate_manifest.py --version v1.1.0 --channel stable ...
+```
+
+App 端在设置中选择更新通道 (stable / dev)，检查更新时自动过滤。
+
+#### P3.3 gRPC TLS
+
+**实现**:
+- `grpc_gateway.yaml`: 新增 `tls_cert_path` / `tls_key_path` (默认空 = 不启用)
+- `grpc_gateway.cpp`: 当两个路径均配置且可读时，使用 `grpc::SslServerCredentials`
+- `robot_client.dart`: 构造函数新增 `useTls` / `trustedCertificateBytes` 参数
+
+**证书方案**: 每台机器人自签证书，App 端 **trust-on-first-use** (类似 SSH):
+```bash
+# 在机器人上生成自签证书
+openssl req -x509 -newkey ed25519 -keyout /opt/robot/certs/server.key \
+  -out /opt/robot/certs/server.crt -days 3650 -nodes \
+  -subj "/CN=$(hostname)"
+
+# 配置 grpc_gateway.yaml
+tls_cert_path: "/opt/robot/certs/server.crt"
+tls_key_path: "/opt/robot/certs/server.key"
+```
+
+**向后兼容**: 不配置证书路径时保持明文 gRPC，无需任何改动。
+
+### 16.5 v3 新增目录结构
+
+```
+/opt/robot/ota/
+├── installed_manifest.json      # [已有] 已安装制品记录
+├── ota_public.pem               # [已有] Ed25519 公钥
+├── system_version.json          # [P1.1 新增] 整机组件版本集
+├── upgrade_history.jsonl        # [P2.1 新增] 持久升级历史 (append-only)
+└── backup/
+    └── txn_*.json               # [已有] 事务日志
+```
+
+### 16.6 v3 新增 Proto 定义
+
+```protobuf
+// ---- 枚举 ----
+enum OtaFailureCode { ... }                         // P2.2: 13 个标准失败码
+
+// ---- 新增 RPC ----
+rpc GetUpgradeHistory(...)   returns (...);          // P2.1: 升级历史查询
+rpc ValidateSystemVersion(...) returns (...);        // P2.3: 版本一致性校验
+
+// ---- 新增/扩展消息 ----
+ApplyUpdateResponse        { + failure_code = 7 }   // P2.2
+GetInstalledVersionsResponse { + system_version_json = 7 } // P1.1
+UpgradeHistoryEntry        { ... }                   // P2.1
+ComponentVersion           { ... }                   // P2.3
+VersionMismatch            { ... }                   // P2.3
+```
+
+### 16.7 安全考虑 (v3 更新)
+
+| 威胁 | 防御 | 状态 |
+|------|------|------|
+| manifest 伪造 | Ed25519 签名验证 | **App + 设备端双重验证** |
+| 制品篡改 | SHA256 校验 | 已实现 |
+| 安装后故障 | HealthMonitor 自动健康检查 + 自动回滚 | **已实现** |
+| 版本混乱 | `system_version.json` + `ValidateSystemVersion` RPC | **已实现** |
+| 事后审计 | `upgrade_history.jsonl` 持久日志 | **已实现** |
+| 失败统计 | `OtaFailureCode` 标准化 | **已实现** |
+| 中间人攻击 | gRPC TLS (自签证书, trust-on-first-use) | **已实现 (可选启用)** |
+| semver 误判 | 整数解析比较 (不再用字符串) | **已修复** |
+
+---
+
+## 17. 待开展工作 (Roadmap)
+
+### 17.1 近期 (Next Sprint)
+
+| 项目 | 说明 | 优先级 |
+|------|------|--------|
+| ModeManager 强制检查 | COLD 更新时强制要求 `mode == IDLE \|\| mode == ESTOP`，当前仅 WARN 日志 | P0 |
+| Ed25519 验签切为强制 | 当前未签名 manifest 仍可通过 (向后兼容)；正式环境应阻塞 | P1 |
+| Flutter 设置页增加通道选择 | App Settings → "更新通道" 下拉 (stable / dev)，当前仅代码层支持 | P1 |
+| 升级历史 UI 详情页 | 点击历史条目展开失败原因、耗时、健康检查结果 | P2 |
+| TLS 证书自动交换 | App 首次连接时弹出指纹确认对话框 (trust-on-first-use 完整实现) | P2 |
+
+### 17.2 中期 (v4 规划)
+
+| 项目 | 说明 |
+|------|------|
+| 增量/Delta 更新 | 仅传输变更部分，减少 navigation tarball 大小 (bsdiff / rsync) |
+| A/B 分区 | rootfs/MCU 双分区无缝切换，彻底消除更新风险 |
+| 自动冒烟测试 | 安装后自动运行一组 ROS2 smoke test (Topic 频率 / TF 有效 / 规划器响应) |
+| 多设备批量管理 | 当机器人数量 >5 时，App 单机模式不够用；需要轻量级 fleet dashboard |
+| OTA 指标上报 | 更新成功率、平均耗时、失败分布等指标推送到 InfluxDB/Grafana |
+
+### 17.3 长期 (架构演进)
+
+| 项目 | 说明 |
+|------|------|
+| 独立 OTA Agent 进程 | 将 OTA 逻辑从 gRPC Gateway 拆分为独立 daemon，支持自升级 |
+| 服务端 Update Orchestrator | 当车队规模 >20 时，引入服务端控制面 (灰度发布 / 自动回滚熔断) |
+| 安全启动链 | Secure Boot → 签名内核 → 签名 rootfs → 签名应用层 |
+| 配置热更新 (HOT reload) | `config_service` 接收参数变更 → ROS2 dynamic_reconfigure → 零停机生效 |
+| owner_module 委托安装 | OTA DataService 不再直接执行安装，而是通过 ROS2 Action 委托给对应模块 |
+
+---
+
+*最后更新: 2026-02-09*

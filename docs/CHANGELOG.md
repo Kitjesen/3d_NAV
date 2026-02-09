@@ -26,6 +26,7 @@
 ├── ✅ OTA 更新系统 (直接下载/断点续传/回滚)
 ├── ✅ OTA v2: Ed25519 签名 + 安全等级 + 依赖管理 + 事务日志
 ├── ✅ 遥控避障: SafetyGate 近场避障 + /cmd_vel 仲裁
+├── ✅ OTA v3: 版本一致性 + 可观测性 + 安全加固 + 端到端实测通过
 ├── 🔲 colcon 构建验证
 ├── 🔲 Proto Dart 代码重新生成
 └── 🔲 Flutter App 健康/围栏/巡检 UI
@@ -42,6 +43,57 @@
 ├── 🔲 多机器人协调
 └── 🔲 仿真测试框架
 ```
+
+---
+
+## [v1.1.0] - 2026-02-09
+
+OTA v3 增强：版本一致性、可观测性、安全加固。端到端实测全流程通过。
+
+### 新增
+
+#### OTA v3 — 版本一致性 + 可观测性 + 安全加固
+
+- **P1.1 系统版本快照 (`system_version.json`)** — 每次安装/回滚后持久化全量制品版本，解决 `installed_manifest.json` 只记增量不记全局的问题
+- **P1.2 设备端 Ed25519 验签** — `VerifyEd25519Signature()` 使用 OpenSSL EVP API 在设备端验证 manifest 签名，配置 `ota_public_key_path` 指定公钥文件
+- **P1.3 安装后健康检查** — `PostInstallHealthCheck()` 集成 `HealthMonitor`，安装完成后自动检测 SLAM 系统状态，不通过则触发自动回滚；HOT/UNSPECIFIED 安全等级跳过检查以避免误判
+- **P1.4 语义版本比较 (`CompareSemver`)** — 替换原有字符串比较，正确处理 `1.9.0 < 1.10.0` 等场景
+- **P2.1 持久化升级历史 (`upgrade_history.jsonl`)** — 所有 install/rollback 事件追加到 JSONL 文件，支持 `GetUpgradeHistory` RPC 分页查询
+- **P2.2 标准化失败码 (`OtaFailureCode`)** — 枚举覆盖网络/签名/完整性/磁盘/权限/健康检查等 12 种失败原因
+- **P2.3 版本一致性 RPC (`ValidateSystemVersion`)** — App 可校验设备上各制品版本是否与 manifest 一致
+- **P3.1 Flutter UI 增强** — 安装版本列表、升级历史面板、readiness 预检集成
+- **P3.2 发布通道 (`channel`)** — manifest 新增 `channel` 字段 (stable/beta/nightly)，`CloudOtaService` 按通道过滤
+- **P3.3 gRPC TLS 可选** — `grpc_gateway.yaml` 配置 `tls_cert_path` / `tls_key_path` 即可启用 TLS
+
+### 修复
+
+- **健康检查误触发回滚** — HOT 级别更新（模型/配置文件替换）在 SLAM 未运行时健康检查必然报 FAULT，导致安装成功后立即回滚。修复: 对 HOT/UNSPECIFIED 安全等级跳过 PostInstallHealthCheck
+- **Rollback RPC 死锁** — `SaveSystemVersionJson()` 内部加锁与 `Rollback()` 外部持锁形成递归死锁。修复: 移除 `SaveSystemVersionJson()` 内部锁，由调用方保证互斥；同时将 `ApplyUpdate` 中的 `SaveInstalledManifest()` / `SaveSystemVersionJson()` 调用移入 `ota_mutex_` 锁作用域内
+
+### 变更文件
+
+| 文件 | 变更说明 |
+|------|---------|
+| `src/robot_proto/proto/data.proto` | 新增 `OtaFailureCode`, `GetUpgradeHistory`, `ValidateSystemVersion` RPC/消息 |
+| `src/remote_monitoring/src/services/data_service.cpp` | +583 行: 版本快照、验签、健康检查、升级历史、死锁修复 |
+| `src/remote_monitoring/include/.../data_service.hpp` | 新增方法声明与成员变量 |
+| `src/remote_monitoring/src/grpc_gateway.cpp` | 注入 HealthMonitor、TLS 配置 |
+| `src/remote_monitoring/config/grpc_gateway.yaml` | 新增 OTA v3 配置项 |
+| `client/flutter_monitor/.../robot_client.dart` | 实现 getUpgradeHistory / validateSystemVersion / TLS |
+| `client/flutter_monitor/.../firmware_ota_page.dart` | 安装版本列表 + 升级历史 UI |
+| `client/flutter_monitor/.../cloud_ota_service.dart` | 通道过滤 |
+| `scripts/ota/generate_manifest.py` | `--channel` / `--system-manifest` 参数 |
+| `docs/OTA_GUIDE.md` | 新增 §16 v3 增强详解 + §17 Roadmap |
+
+### 端到端测试验证
+
+在实际机器人上完成完整闭环测试:
+
+1. **Install**: `ApplyUpdate` → 模型文件 v1.0.0 → v2.0.0 替换成功
+2. **Verify**: 文件内容 "THIS IS NEW MODEL v2.0.0" 确认
+3. **State**: `installed_manifest.json` / `system_version.json` / `upgrade_history.jsonl` 正确更新
+4. **Rollback**: 一键回滚 → 文件恢复为 "THIS IS OLD MODEL v1.0.0"
+5. **History**: 升级历史包含 install + rollback 两条记录
 
 ---
 

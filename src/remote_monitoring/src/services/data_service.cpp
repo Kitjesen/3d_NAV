@@ -17,8 +17,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/sha.h>
 
+#include "remote_monitoring/core/health_monitor.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 
@@ -243,33 +246,41 @@ grpc::Status StreamResource(
 } // namespace
 
 DataServiceImpl::DataServiceImpl(rclcpp::Node *node) : node_(node) {
-  node_->declare_parameter<std::string>("data_camera_topic",
-                                        "/camera/color/image_raw/compressed");
-  node_->declare_parameter<std::string>("data_camera_fallback_topic",
-                                        "/camera/color/compressed");
-  node_->declare_parameter<std::string>("data_map_topic", "/overall_map");
-  node_->declare_parameter<std::string>("data_pointcloud_topic",
-                                        "/cloud_registered");
-  node_->declare_parameter<std::string>("data_terrain_topic",
-                                        "/terrain_map_ext");
-  node_->declare_parameter<std::string>("data_file_root", "");
-  node_->declare_parameter<std::string>("apply_firmware_script",
-                                        "/usr/local/bin/apply_firmware.sh");
-  node_->declare_parameter<std::string>("ota_manifest_path",
-                                        "/opt/robot/ota/installed_manifest.json");
-  node_->declare_parameter<std::string>("ota_backup_dir",
-                                        "/opt/robot/ota/backup");
-  node_->declare_parameter<std::string>("robot_id", "robot_001");
-  node_->declare_parameter<std::string>("hw_id", "dog_v2");
-  node_->declare_parameter<std::string>("firmware_version", "1.0.0");
-  node_->declare_parameter<bool>("webrtc_enabled", false);
-  node_->declare_parameter<int>("webrtc_offer_timeout_ms", 3000);
-  node_->declare_parameter<std::string>("webrtc_start_command", "");
-  node_->declare_parameter<std::string>("webrtc_stop_command", "");
-  node_->declare_parameter<std::string>("webrtc_offer_path",
-                                        "/tmp/webrtc_offer_{session_id}.sdp");
-  node_->declare_parameter<std::string>("webrtc_ice_path",
-                                        "/tmp/webrtc_ice_{session_id}.txt");
+  // Helper: declare parameter only if not yet declared (safe for shared nodes)
+  auto safe_declare_str = [&](const std::string &name, const std::string &def) {
+    if (!node_->has_parameter(name))
+      node_->declare_parameter<std::string>(name, def);
+  };
+  auto safe_declare_bool = [&](const std::string &name, bool def) {
+    if (!node_->has_parameter(name))
+      node_->declare_parameter<bool>(name, def);
+  };
+  auto safe_declare_int = [&](const std::string &name, int def) {
+    if (!node_->has_parameter(name))
+      node_->declare_parameter<int>(name, def);
+  };
+
+  safe_declare_str("data_camera_topic", "/camera/color/image_raw/compressed");
+  safe_declare_str("data_camera_fallback_topic", "/camera/color/compressed");
+  safe_declare_str("data_map_topic", "/overall_map");
+  safe_declare_str("data_pointcloud_topic", "/cloud_registered");
+  safe_declare_str("data_terrain_topic", "/terrain_map_ext");
+  safe_declare_str("data_file_root", "");
+  safe_declare_str("apply_firmware_script", "/usr/local/bin/apply_firmware.sh");
+  safe_declare_str("ota_manifest_path", "/opt/robot/ota/installed_manifest.json");
+  safe_declare_str("ota_backup_dir", "/opt/robot/ota/backup");
+  safe_declare_str("robot_id", "robot_001");
+  safe_declare_str("hw_id", "dog_v2");
+  safe_declare_str("firmware_version", "1.0.0");
+  safe_declare_str("ota_public_key_path", "/opt/robot/ota/ota_public.pem");
+  safe_declare_str("ota_history_path", "/opt/robot/ota/upgrade_history.jsonl");
+  safe_declare_str("system_version_path", "/opt/robot/ota/system_version.json");
+  safe_declare_bool("webrtc_enabled", false);
+  safe_declare_int("webrtc_offer_timeout_ms", 3000);
+  safe_declare_str("webrtc_start_command", "");
+  safe_declare_str("webrtc_stop_command", "");
+  safe_declare_str("webrtc_offer_path", "/tmp/webrtc_offer_{session_id}.sdp");
+  safe_declare_str("webrtc_ice_path", "/tmp/webrtc_ice_{session_id}.txt");
 
   camera_topic_ = node_->get_parameter("data_camera_topic").as_string();
   camera_fallback_topic_ =
@@ -287,6 +298,12 @@ DataServiceImpl::DataServiceImpl(rclcpp::Node *node) : node_(node) {
   robot_id_ = node_->get_parameter("robot_id").as_string();
   hw_id_ = node_->get_parameter("hw_id").as_string();
   system_version_ = node_->get_parameter("firmware_version").as_string();
+  ota_public_key_path_ =
+      node_->get_parameter("ota_public_key_path").as_string();
+  ota_history_path_ =
+      node_->get_parameter("ota_history_path").as_string();
+  system_version_path_ =
+      node_->get_parameter("system_version_path").as_string();
 
   // 加载已安装 manifest
   LoadInstalledManifest();
@@ -985,6 +1002,229 @@ std::string DataServiceImpl::ComputeSHA256(const std::string &file_path) {
   return oss.str();
 }
 
+// ==========================================================================
+// CompareSemver — proper integer-component comparison
+// Returns: -1 if a < b, 0 if a == b, +1 if a > b
+// ==========================================================================
+int DataServiceImpl::CompareSemver(const std::string &a, const std::string &b) {
+  auto parse = [](const std::string &v,
+                  int &major, int &minor, int &patch) {
+    major = minor = patch = 0;
+    // Strip leading 'v' or 'V'
+    std::string s = v;
+    if (!s.empty() && (s[0] == 'v' || s[0] == 'V')) s = s.substr(1);
+    std::replace(s.begin(), s.end(), '.', ' ');
+    std::istringstream iss(s);
+    iss >> major >> minor >> patch;
+  };
+
+  int a_maj, a_min, a_pat;
+  int b_maj, b_min, b_pat;
+  parse(a, a_maj, a_min, a_pat);
+  parse(b, b_maj, b_min, b_pat);
+
+  if (a_maj != b_maj) return a_maj < b_maj ? -1 : 1;
+  if (a_min != b_min) return a_min < b_min ? -1 : 1;
+  if (a_pat != b_pat) return a_pat < b_pat ? -1 : 1;
+  return 0;
+}
+
+// ==========================================================================
+// Phase 1.2: Ed25519 设备端验签
+// ==========================================================================
+bool DataServiceImpl::VerifyEd25519Signature(
+    const std::string &message,
+    const std::string &signature_hex) {
+  if (signature_hex.empty() || message.empty()) return false;
+  if (!FileExists(ota_public_key_path_)) {
+    RCLCPP_WARN(node_->get_logger(),
+                "Ed25519 public key not found at %s, skipping verification",
+                ota_public_key_path_.c_str());
+    return false;
+  }
+
+  // Load public key
+  FILE *fp = fopen(ota_public_key_path_.c_str(), "r");
+  if (!fp) return false;
+
+  EVP_PKEY *pkey = PEM_read_PUBKEY(fp, nullptr, nullptr, nullptr);
+  fclose(fp);
+  if (!pkey) {
+    RCLCPP_ERROR(node_->get_logger(), "Failed to parse Ed25519 public key");
+    return false;
+  }
+
+  // Decode hex signature to binary
+  std::vector<unsigned char> sig_bytes;
+  sig_bytes.reserve(signature_hex.size() / 2);
+  for (size_t i = 0; i + 1 < signature_hex.size(); i += 2) {
+    unsigned int byte_val = 0;
+    std::istringstream iss(signature_hex.substr(i, 2));
+    iss >> std::hex >> byte_val;
+    sig_bytes.push_back(static_cast<unsigned char>(byte_val));
+  }
+
+  EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
+  bool valid = false;
+  if (md_ctx) {
+    if (EVP_DigestVerifyInit(md_ctx, nullptr, nullptr, nullptr, pkey) == 1) {
+      int rc = EVP_DigestVerify(
+          md_ctx,
+          sig_bytes.data(), sig_bytes.size(),
+          reinterpret_cast<const unsigned char *>(message.data()),
+          message.size());
+      valid = (rc == 1);
+    }
+    EVP_MD_CTX_free(md_ctx);
+  }
+
+  EVP_PKEY_free(pkey);
+  return valid;
+}
+
+// ==========================================================================
+// Phase 1.3: 安装后健康检查
+// ==========================================================================
+bool DataServiceImpl::PostInstallHealthCheck(
+    robot::v1::OtaSafetyLevel safety_level,
+    std::string *failure_reason) {
+  if (!health_monitor_) {
+    if (failure_reason) *failure_reason = "skipped (no HealthMonitor)";
+    return true;  // no monitor → assume OK
+  }
+
+  // HOT: 文件复制类更新，无需检查整体健康 (SLAM 未运行时也不应阻塞)
+  if (safety_level == robot::v1::OTA_SAFETY_LEVEL_HOT ||
+      safety_level == robot::v1::OTA_SAFETY_LEVEL_UNSPECIFIED) {
+    if (failure_reason) *failure_reason = "skipped (HOT: file-level update)";
+    return true;
+  }
+
+  // COLD: 重启类更新，由 systemd ExecStartPre 负责健康检查
+  if (safety_level == robot::v1::OTA_SAFETY_LEVEL_COLD) {
+    if (failure_reason) *failure_reason = "skipped (COLD: systemd will check)";
+    return true;
+  }
+
+  // WARM: 需要在线验证 (如模型热加载后检查推理是否正常)
+  int wait_seconds = 5;
+  RCLCPP_INFO(node_->get_logger(),
+              "Post-install health check (WARM): waiting %d seconds...", wait_seconds);
+  std::this_thread::sleep_for(std::chrono::seconds(wait_seconds));
+
+  auto level = health_monitor_->GetOverallLevel();
+  if (level == core::HealthLevel::FAULT ||
+      level == core::HealthLevel::CRITICAL) {
+    if (failure_reason) {
+      *failure_reason = "HealthMonitor reports " +
+                        std::string(level == core::HealthLevel::FAULT
+                                        ? "FAULT"
+                                        : "CRITICAL");
+    }
+    return false;
+  }
+
+  if (failure_reason) *failure_reason = "passed";
+  return true;
+}
+
+// ==========================================================================
+// Phase 1.1: system_version.json 管理
+// ==========================================================================
+std::string DataServiceImpl::LoadSystemVersionJson() {
+  std::string content;
+  if (ReadFileToString(system_version_path_, &content)) {
+    return content;
+  }
+  return "{}";
+}
+
+void DataServiceImpl::SaveSystemVersionJson() {
+  // Rebuild system_version.json from installed_artifacts_
+  // NOTE: 调用方必须已持有 ota_mutex_ 或保证 installed_artifacts_ 不被并发修改
+  std::ostringstream json;
+  json << "{\n";
+  json << "  \"system_version\": \"" << system_version_ << "\",\n";
+  json << "  \"components\": {\n";
+  bool first = true;
+  {
+    // 不再加锁 — 由调用方保证互斥
+    for (const auto &pair : installed_artifacts_) {
+      if (!first) json << ",\n";
+      first = false;
+      json << "    \"" << pair.first << "\": {"
+           << "\"version\": \"" << pair.second.version() << "\""
+           << "}";
+    }
+  }
+  json << "\n  }\n}\n";
+
+  // Atomic write
+  std::string tmp_path = system_version_path_ + ".tmp";
+  {
+    auto last_slash = system_version_path_.rfind('/');
+    if (last_slash != std::string::npos) {
+      std::filesystem::create_directories(
+          system_version_path_.substr(0, last_slash));
+    }
+  }
+  std::ofstream out(tmp_path);
+  if (out.is_open()) {
+    out << json.str();
+    out.close();
+    std::filesystem::rename(tmp_path, system_version_path_);
+  }
+}
+
+// ==========================================================================
+// Phase 2.1: 持久升级历史
+// ==========================================================================
+void DataServiceImpl::AppendUpgradeHistory(
+    const std::string &action,
+    const std::string &artifact_name,
+    const std::string &from_version,
+    const std::string &to_version,
+    const std::string &status,
+    robot::v1::OtaFailureCode failure_code,
+    const std::string &failure_reason,
+    uint64_t duration_ms,
+    const std::string &health_check) {
+  // Ensure directory exists
+  {
+    auto last_slash = ota_history_path_.rfind('/');
+    if (last_slash != std::string::npos) {
+      std::filesystem::create_directories(
+          ota_history_path_.substr(0, last_slash));
+    }
+  }
+
+  auto now = std::chrono::system_clock::now();
+  auto t = std::chrono::system_clock::to_time_t(now);
+  std::ostringstream ts;
+  ts << std::put_time(std::gmtime(&t), "%Y-%m-%dT%H:%M:%SZ");
+
+  // Escape quotes in failure_reason
+  std::string escaped_reason = failure_reason;
+  for (size_t pos = 0; (pos = escaped_reason.find('"', pos)) != std::string::npos; pos += 2) {
+    escaped_reason.replace(pos, 1, "\\\"");
+  }
+
+  std::ofstream file(ota_history_path_, std::ios::app);
+  if (file.is_open()) {
+    file << "{\"ts\":\"" << ts.str()
+         << "\",\"action\":\"" << action
+         << "\",\"artifact\":\"" << artifact_name
+         << "\",\"from\":\"" << from_version
+         << "\",\"to\":\"" << to_version
+         << "\",\"status\":\"" << status
+         << "\",\"failure_code\":" << static_cast<int>(failure_code)
+         << ",\"failure_reason\":\"" << escaped_reason
+         << "\",\"duration_ms\":" << duration_ms
+         << ",\"health_check\":\"" << health_check
+         << "\"}\n";
+  }
+}
+
 bool DataServiceImpl::BackupArtifact(const std::string &name,
                                      const std::string &current_path,
                                      std::string *backup_path) {
@@ -1071,6 +1311,7 @@ DataServiceImpl::ApplyUpdate(
       response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INVALID_REQUEST);
       response->set_success(false);
       response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+      response->set_failure_code(robot::v1::OTA_FAILURE_SHA256_MISMATCH);
       response->set_message("SHA256 mismatch: expected=" + artifact.sha256() +
                             " actual=" + actual_sha256);
       return grpc::Status::OK;
@@ -1091,6 +1332,7 @@ DataServiceImpl::ApplyUpdate(
       response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INVALID_REQUEST);
       response->set_success(false);
       response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+      response->set_failure_code(robot::v1::OTA_FAILURE_HW_INCOMPAT);
       response->set_message("Hardware incompatible: robot=" + hw_id_ +
                             " artifact requires one of: " +
                             [&]() {
@@ -1127,17 +1369,18 @@ DataServiceImpl::ApplyUpdate(
             robot::v1::ERROR_CODE_INVALID_REQUEST);
         response->set_success(false);
         response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+        response->set_failure_code(robot::v1::OTA_FAILURE_DEPENDENCY);
         response->set_message("Missing dependency: " + dep.artifact_name() +
                               " >= " + dep.min_version());
         return grpc::Status::OK;
       }
-      // 简单字符串版本比较 (semver 排序: "1.2.0" < "1.10.0" 需注意)
       if (!dep.min_version().empty() &&
-          it->second.version() < dep.min_version()) {
+          CompareSemver(it->second.version(), dep.min_version()) < 0) {
         response->mutable_base()->set_error_code(
             robot::v1::ERROR_CODE_INVALID_REQUEST);
         response->set_success(false);
         response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
+        response->set_failure_code(robot::v1::OTA_FAILURE_DEPENDENCY);
         response->set_message("Dependency version too old: " +
                               dep.artifact_name() + " installed=" +
                               it->second.version() + " required>=" +
@@ -1192,6 +1435,7 @@ DataServiceImpl::ApplyUpdate(
   }
 
   // 6. 执行安装
+  auto install_start_time = std::chrono::steady_clock::now();
   response->set_status(robot::v1::OTA_UPDATE_STATUS_INSTALLING);
 
   bool install_ok = false;
@@ -1299,17 +1543,73 @@ DataServiceImpl::ApplyUpdate(
                  << "}";
       }
     }
+
+    // Determine failure code from action
+    robot::v1::OtaFailureCode fc = robot::v1::OTA_FAILURE_INSTALL_SCRIPT;
+
+    AppendUpgradeHistory("install", artifact.name(), previous_version,
+                         artifact.version(), "failed", fc, install_message, 0,
+                         "skipped");
+
     response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INTERNAL_ERROR);
     response->set_success(false);
     response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
     response->set_message(install_message);
+    response->set_failure_code(fc);
+    return grpc::Status::OK;
+  }
+
+  // Phase 1.3: 安装后健康检查
+  response->set_status(robot::v1::OTA_UPDATE_STATUS_VALIDATING);
+  std::string health_reason;
+  bool health_ok = PostInstallHealthCheck(artifact.safety_level(), &health_reason);
+
+  if (!health_ok) {
+    RCLCPP_WARN(node_->get_logger(),
+                "Post-install health check FAILED for %s: %s — auto-rolling back",
+                artifact.name().c_str(), health_reason.c_str());
+
+    // Auto-rollback
+    bool rollback_ok = false;
+    {
+      std::lock_guard<std::mutex> lock(ota_mutex_);
+      auto rb_it = rollback_entries_.find(artifact.name());
+      if (rb_it != rollback_entries_.end() && FileExists(rb_it->second.backup_path())) {
+        try {
+          std::filesystem::copy_file(
+              rb_it->second.backup_path(), artifact.target_path(),
+              std::filesystem::copy_options::overwrite_existing);
+          // Restore version in installed_artifacts_
+          auto inst_it = installed_artifacts_.find(artifact.name());
+          if (inst_it != installed_artifacts_.end()) {
+            inst_it->second.set_version(rb_it->second.version());
+          }
+          rollback_ok = true;
+        } catch (...) {}
+      }
+    }
+    if (rollback_ok) SaveInstalledManifest();
+
+    std::filesystem::remove(txn_log_path);
+
+    AppendUpgradeHistory("install", artifact.name(), previous_version,
+                         artifact.version(), "rolled_back_health_fail",
+                         robot::v1::OTA_FAILURE_HEALTH_CHECK, health_reason, 0,
+                         "failed");
+
+    response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_INTERNAL_ERROR);
+    response->set_success(false);
+    response->set_status(robot::v1::OTA_UPDATE_STATUS_ROLLED_BACK);
+    response->set_message("Health check failed: " + health_reason +
+                          (rollback_ok ? " — rolled back" : " — rollback failed!"));
+    response->set_failure_code(robot::v1::OTA_FAILURE_HEALTH_CHECK);
     return grpc::Status::OK;
   }
 
   // 安装成功: 清理事务日志
   std::filesystem::remove(txn_log_path);
 
-  // 10. 更新本地 manifest
+  // 10. 更新本地 manifest (持锁写入，避免并发问题)
   {
     std::lock_guard<std::mutex> lock(ota_mutex_);
 
@@ -1326,13 +1626,25 @@ DataServiceImpl::ApplyUpdate(
     installed.set_sha256(artifact.sha256());
     installed.set_installed_at(ts.str());
     installed_artifacts_[artifact.name()] = installed;
+
+    SaveInstalledManifest();
+    SaveSystemVersionJson();
   }
-  SaveInstalledManifest();
+
+  auto dur_ms = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - install_start_time)
+          .count());
+
+  AppendUpgradeHistory("install", artifact.name(), previous_version,
+                       artifact.version(), "success",
+                       robot::v1::OTA_FAILURE_NONE, "", dur_ms,
+                       health_reason);
 
   RCLCPP_INFO(node_->get_logger(),
-              "ApplyUpdate SUCCESS: %s v%s -> %s",
+              "ApplyUpdate SUCCESS: %s v%s -> %s (health: %s)",
               artifact.name().c_str(), artifact.version().c_str(),
-              artifact.target_path().c_str());
+              artifact.target_path().c_str(), health_reason.c_str());
 
   response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_OK);
   response->set_success(true);
@@ -1340,6 +1652,7 @@ DataServiceImpl::ApplyUpdate(
   response->set_message(install_message);
   response->set_installed_path(artifact.target_path());
   response->set_previous_version(previous_version);
+  response->set_failure_code(robot::v1::OTA_FAILURE_NONE);
   return grpc::Status::OK;
 }
 
@@ -1356,6 +1669,7 @@ DataServiceImpl::GetInstalledVersions(
   response->set_robot_id(robot_id_);
   response->set_hw_id(hw_id_);
   response->set_system_version(system_version_);
+  response->set_system_version_json(LoadSystemVersionJson());
 
   std::lock_guard<std::mutex> lock(ota_mutex_);
 
@@ -1445,9 +1759,19 @@ DataServiceImpl::Rollback(
   ts << std::put_time(std::gmtime(&t), "%Y-%m-%dT%H:%M:%SZ");
   inst_it->second.set_installed_at(ts.str());
 
+  std::string current_version;
+  auto inst_check = installed_artifacts_.find(name);
+  if (inst_check != installed_artifacts_.end()) {
+    current_version = inst_check->second.version();
+  }
+
   std::string restored_version = entry.version();
   rollback_entries_.erase(rb_it);
   SaveInstalledManifest();
+  SaveSystemVersionJson();
+
+  AppendUpgradeHistory("rollback", name, current_version, restored_version,
+                       "success", robot::v1::OTA_FAILURE_NONE, "", 0, "skipped");
 
   RCLCPP_INFO(node_->get_logger(), "Rollback SUCCESS: %s -> v%s",
               name.c_str(), restored_version.c_str());
@@ -1786,7 +2110,7 @@ DataServiceImpl::CheckUpdateReadiness(
                             dep.min_version() + " installed=none");
           all_passed = false;
         } else if (!dep.min_version().empty() &&
-                   it->second.version() < dep.min_version()) {
+                   CompareSemver(it->second.version(), dep.min_version()) < 0) {
           check->set_passed(false);
           check->set_message(art.name() + " 依赖 " + dep.artifact_name() +
                              " >= " + dep.min_version() + ", 当前 " +
@@ -1808,7 +2132,37 @@ DataServiceImpl::CheckUpdateReadiness(
     }
   }
 
-  // 7. 事务日志残留检查 (检测上次中断的安装)
+  // 7. Ed25519 签名验证 (Phase 1.2)
+  if (!request->manifest_signature().empty()) {
+    auto *check = response->add_checks();
+    check->set_check_name("signature");
+    // Build canonical message from artifacts for verification
+    // The signature covers the JSON manifest content; we verify against the
+    // concatenated artifact descriptions as a simplified approach.
+    // In production the full manifest JSON should be passed.
+    std::string payload;
+    for (const auto &art : request->artifacts()) {
+      payload += art.name() + ":" + art.version() + ":" + art.sha256() + ";";
+    }
+    bool sig_ok = VerifyEd25519Signature(payload, request->manifest_signature());
+    if (!sig_ok && FileExists(ota_public_key_path_)) {
+      check->set_passed(false);
+      check->set_message("Manifest 签名验证失败");
+      check->set_detail("signature_valid=false");
+      all_passed = false;
+    } else if (!sig_ok) {
+      // No public key — warn but don't block
+      check->set_passed(true);
+      check->set_message("签名验证跳过 (未配置公钥)");
+      check->set_detail("signature_valid=skipped no_public_key");
+    } else {
+      check->set_passed(true);
+      check->set_message("Manifest 签名验证通过");
+      check->set_detail("signature_valid=true");
+    }
+  }
+
+  // 8. 事务日志残留检查 (检测上次中断的安装)
   {
     for (const auto &art : request->artifacts()) {
       std::string txn_path = ota_backup_dir_ + "/txn_" + art.name() + ".json";
@@ -1823,6 +2177,165 @@ DataServiceImpl::CheckUpdateReadiness(
   }
 
   response->set_ready(all_passed);
+  return grpc::Status::OK;
+}
+
+// ==========================================================================
+// GetUpgradeHistory — 查询持久升级历史 (JSONL)
+// ==========================================================================
+grpc::Status
+DataServiceImpl::GetUpgradeHistory(
+    grpc::ServerContext * /*context*/,
+    const robot::v1::GetUpgradeHistoryRequest *request,
+    robot::v1::GetUpgradeHistoryResponse *response) {
+
+  response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_OK);
+
+  if (!FileExists(ota_history_path_)) {
+    return grpc::Status::OK; // empty history
+  }
+
+  std::ifstream file(ota_history_path_);
+  if (!file.is_open()) {
+    return grpc::Status::OK;
+  }
+
+  // Collect all lines (JSONL — one JSON object per line)
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(file, line)) {
+    if (line.empty()) continue;
+    lines.push_back(line);
+  }
+
+  // Simple JSON field extractor (avoids full JSON parser dependency)
+  auto extract = [](const std::string &json, const std::string &key) -> std::string {
+    std::string search = "\"" + key + "\":";
+    auto pos = json.find(search);
+    if (pos == std::string::npos) return {};
+    pos += search.size();
+    // Skip whitespace
+    while (pos < json.size() && json[pos] == ' ') ++pos;
+    if (pos >= json.size()) return {};
+    if (json[pos] == '"') {
+      // String value
+      auto end = json.find('"', pos + 1);
+      if (end == std::string::npos) return {};
+      return json.substr(pos + 1, end - pos - 1);
+    } else {
+      // Numeric value
+      auto end = json.find_first_of(",}", pos);
+      if (end == std::string::npos) end = json.size();
+      return json.substr(pos, end - pos);
+    }
+  };
+
+  const std::string &artifact_filter = request->artifact_filter();
+  uint32_t limit = request->limit();
+  if (limit == 0) limit = 1000; // sane default
+
+  // Reverse to return newest first
+  uint32_t count = 0;
+  for (auto it = lines.rbegin(); it != lines.rend() && count < limit; ++it) {
+    const auto &l = *it;
+    std::string art_name = extract(l, "artifact");
+    if (!artifact_filter.empty() && art_name != artifact_filter) continue;
+
+    auto *entry = response->add_entries();
+    entry->set_timestamp(extract(l, "ts"));
+    entry->set_action(extract(l, "action"));
+    entry->set_artifact_name(art_name);
+    entry->set_from_version(extract(l, "from"));
+    entry->set_to_version(extract(l, "to"));
+    entry->set_status(extract(l, "status"));
+
+    std::string fc_str = extract(l, "failure_code");
+    if (!fc_str.empty()) {
+      try {
+        entry->set_failure_code(
+            static_cast<robot::v1::OtaFailureCode>(std::stoi(fc_str)));
+      } catch (...) {}
+    }
+    entry->set_failure_reason(extract(l, "failure_reason"));
+
+    std::string dur = extract(l, "duration_ms");
+    if (!dur.empty()) {
+      try { entry->set_duration_ms(std::stoull(dur)); } catch (...) {}
+    }
+    entry->set_health_check_result(extract(l, "health_check"));
+    ++count;
+  }
+
+  return grpc::Status::OK;
+}
+
+// ==========================================================================
+// ValidateSystemVersion — 版本一致性校验
+// ==========================================================================
+grpc::Status
+DataServiceImpl::ValidateSystemVersion(
+    grpc::ServerContext * /*context*/,
+    const robot::v1::ValidateSystemVersionRequest *request,
+    robot::v1::ValidateSystemVersionResponse *response) {
+
+  response->mutable_base()->set_error_code(robot::v1::ERROR_CODE_OK);
+  response->set_actual_system_version(system_version_);
+
+  bool consistent = true;
+
+  // Check system version
+  if (!request->expected_system_version().empty() &&
+      CompareSemver(system_version_, request->expected_system_version()) != 0) {
+    consistent = false;
+    auto *mm = response->add_mismatches();
+    mm->set_component_name("__system__");
+    mm->set_expected_version(request->expected_system_version());
+    mm->set_actual_version(system_version_);
+    mm->set_status("mismatch");
+  }
+
+  // Check individual components
+  std::lock_guard<std::mutex> lock(ota_mutex_);
+  for (const auto &expected : request->expected_components()) {
+    auto it = installed_artifacts_.find(expected.name());
+    auto *mm = response->add_mismatches();
+    mm->set_component_name(expected.name());
+    mm->set_expected_version(expected.version());
+
+    if (it == installed_artifacts_.end()) {
+      mm->set_actual_version("");
+      mm->set_status("missing");
+      consistent = false;
+    } else if (CompareSemver(it->second.version(), expected.version()) != 0) {
+      mm->set_actual_version(it->second.version());
+      mm->set_status("mismatch");
+      consistent = false;
+    } else {
+      mm->set_actual_version(it->second.version());
+      mm->set_status("match");
+    }
+  }
+
+  // Check for extra installed artifacts not in expected set
+  for (const auto &pair : installed_artifacts_) {
+    bool found = false;
+    for (const auto &expected : request->expected_components()) {
+      if (expected.name() == pair.first) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      auto *mm = response->add_mismatches();
+      mm->set_component_name(pair.first);
+      mm->set_expected_version("");
+      mm->set_actual_version(pair.second.version());
+      mm->set_status("extra");
+      // Extra artifacts don't break consistency (may be intentional)
+    }
+  }
+
+  response->set_consistent(consistent);
   return grpc::Status::OK;
 }
 

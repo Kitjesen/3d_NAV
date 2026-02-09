@@ -65,6 +65,10 @@ private:
   std::thread thread_;
   std::atomic<bool> stop_{false};
 
+  // TLS 配置 (Phase 3.3)
+  std::string tls_cert_path_;
+  std::string tls_key_path_;
+
   // 断联降级
   void CheckDisconnection();
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_slow_down_;

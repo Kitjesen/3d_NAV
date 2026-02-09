@@ -34,6 +34,17 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
   // ---- 应用固件 ----
   bool _isApplying = false;
 
+  // ---- 已安装版本 ----
+  bool _isLoadingVersions = false;
+  List<_InstalledItem> _installedVersions = [];
+  List<_RollbackItem> _rollbackEntries = [];
+  String? _systemVersionJson;
+  String? _robotSystemVersion;
+
+  // ---- 升级历史 ----
+  bool _isLoadingHistory = false;
+  List<_HistoryItem> _historyEntries = [];
+
   @override
   void initState() {
     super.initState();
@@ -96,6 +107,18 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
           _buildSectionTitle('云端更新'),
           const SizedBox(height: 8),
           _buildCloudSection(isDark, isConnected, battery),
+          const SizedBox(height: 28),
+
+          // ===== 已安装版本 =====
+          _buildSectionTitle('已安装版本'),
+          const SizedBox(height: 8),
+          _buildInstalledVersionsSection(isDark, isConnected),
+          const SizedBox(height: 28),
+
+          // ===== 升级历史 =====
+          _buildSectionTitle('升级历史'),
+          const SizedBox(height: 8),
+          _buildHistorySection(isDark, isConnected),
           const SizedBox(height: 28),
 
           // ===== 升级须知 =====
@@ -711,6 +734,242 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
   }
 
   // ================================================================
+  // 已安装版本
+  // ================================================================
+
+  Widget _buildInstalledVersionsSection(bool isDark, bool isConnected) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(
+            color: isDark ? AppColors.borderDark : AppColors.borderLight),
+      ),
+      child: Column(
+        children: [
+          // 查询按钮
+          InkWell(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            onTap: isConnected && !_isLoadingVersions
+                ? _fetchInstalledVersions
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '查看已安装组件',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: isConnected
+                                ? context.titleColor
+                                : context.subtitleColor,
+                          ),
+                        ),
+                        if (_robotSystemVersion != null)
+                          Text(
+                            '系统版本: $_robotSystemVersion',
+                            style: TextStyle(
+                                fontSize: 12, color: context.subtitleColor),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (_isLoadingVersions)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Icon(Icons.refresh, size: 18, color: context.subtitleColor),
+                ],
+              ),
+            ),
+          ),
+          // 版本列表
+          if (_installedVersions.isNotEmpty) ...[
+            Divider(
+              height: 1,
+              color: isDark ? AppColors.borderDark : AppColors.borderLight,
+            ),
+            ..._installedVersions.map((item) => Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: _categoryColor(item.category),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.name,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: context.titleColor,
+                              ),
+                            ),
+                            Text(
+                              'v${item.version}',
+                              style: TextStyle(
+                                  fontSize: 11, color: context.subtitleColor),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // 回滚按钮（如果有回滚条目）
+                      if (_rollbackEntries
+                          .any((r) => r.name == item.name)) ...[
+                        SizedBox(
+                          height: 26,
+                          child: TextButton(
+                            onPressed: () => _performRollback(item.name),
+                            style: TextButton.styleFrom(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 10),
+                              foregroundColor: AppColors.warning,
+                              textStyle: const TextStyle(
+                                  fontSize: 11, fontWeight: FontWeight.w500),
+                            ),
+                            child: const Text('回滚'),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                )),
+            const SizedBox(height: 4),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ================================================================
+  // 升级历史
+  // ================================================================
+
+  Widget _buildHistorySection(bool isDark, bool isConnected) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkCard : Colors.white,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        border: Border.all(
+            color: isDark ? AppColors.borderDark : AppColors.borderLight),
+      ),
+      child: Column(
+        children: [
+          // 查询按钮
+          InkWell(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            onTap: isConnected && !_isLoadingHistory
+                ? _fetchUpgradeHistory
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '查看升级历史',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: isConnected
+                            ? context.titleColor
+                            : context.subtitleColor,
+                      ),
+                    ),
+                  ),
+                  if (_isLoadingHistory)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Icon(Icons.history, size: 18, color: context.subtitleColor),
+                ],
+              ),
+            ),
+          ),
+          // 历史列表
+          if (_historyEntries.isNotEmpty) ...[
+            Divider(
+              height: 1,
+              color: isDark ? AppColors.borderDark : AppColors.borderLight,
+            ),
+            ..._historyEntries.take(10).map((item) => Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: item.status == 'success'
+                              ? AppColors.success
+                              : item.status.contains('rolled_back')
+                                  ? AppColors.warning
+                                  : AppColors.error,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${item.action} ${item.artifactName}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: context.titleColor,
+                              ),
+                            ),
+                            Text(
+                              '${item.fromVersion} -> ${item.toVersion} (${item.status})',
+                              style: TextStyle(
+                                  fontSize: 11, color: context.subtitleColor),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        item.timestamp.length > 10
+                            ? item.timestamp.substring(0, 10)
+                            : item.timestamp,
+                        style: TextStyle(
+                            fontSize: 10, color: context.subtitleColor),
+                      ),
+                    ],
+                  ),
+                )),
+            const SizedBox(height: 4),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ================================================================
   // 升级须知
   // ================================================================
 
@@ -918,16 +1177,40 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
     }
   }
 
-  /// 触发机器人端固件应用（刷写脚本）
+  /// 触发机器人端固件应用
+  /// 先执行 checkUpdateReadiness，通过后再 applyFirmware (兼容旧接口)
   Future<void> _applyFirmware() async {
     if (_lastUploadedRemotePath == null) return;
     HapticFeedback.mediumImpact();
 
-    setState(() => _isApplying = true);
+    setState(() {
+      _isApplying = true;
+      _statusMessage = '正在检查安装条件...';
+    });
 
     try {
       final client = context.read<RobotConnectionProvider>().client;
       if (client == null) throw Exception('未连接');
+
+      // Phase 3.1: 先调用 checkUpdateReadiness
+      try {
+        final readiness = await client.checkUpdateReadiness(artifacts: []);
+        if (!readiness.ready) {
+          final failedChecks = readiness.checks
+              .where((c) => !c.passed)
+              .map((c) => c.message)
+              .join('; ');
+          setState(() {
+            _isApplying = false;
+            _statusMessage = '预检查未通过: $failedChecks';
+          });
+          return;
+        }
+      } catch (_) {
+        // readiness check failure is non-blocking (backward compat)
+      }
+
+      setState(() => _statusMessage = '正在应用固件...');
 
       final response =
           await client.applyFirmware(firmwarePath: _lastUploadedRemotePath!);
@@ -935,7 +1218,7 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
       setState(() {
         _isApplying = false;
         _statusMessage = response.success
-            ? '固件应用指令已发送，机器人可能即将重启'
+            ? '固件应用成功'
             : '应用失败: ${response.message}';
         if (response.success) _lastUploadedRemotePath = null;
       });
@@ -1032,6 +1315,117 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
     }
   }
 
+  /// 获取已安装版本列表
+  Future<void> _fetchInstalledVersions() async {
+    setState(() => _isLoadingVersions = true);
+    try {
+      final client = context.read<RobotConnectionProvider>().client;
+      if (client == null) throw Exception('未连接');
+
+      final response = await client.getInstalledVersions();
+      setState(() {
+        _isLoadingVersions = false;
+        _robotSystemVersion = response.systemVersion;
+        _installedVersions = response.installed
+            .map((a) => _InstalledItem(
+                  name: a.name,
+                  version: a.version,
+                  category: _categoryStr(a.category.value),
+                ))
+            .toList();
+        _rollbackEntries = response.rollbackAvailable
+            .map((r) => _RollbackItem(
+                  name: r.name,
+                  version: r.version,
+                ))
+            .toList();
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingVersions = false;
+        _statusMessage = '获取版本信息失败: $e';
+      });
+    }
+  }
+
+  /// 执行回滚
+  Future<void> _performRollback(String artifactName) async {
+    HapticFeedback.mediumImpact();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认回滚'),
+        content: Text('确定要回滚 $artifactName 到上一版本吗？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.warning),
+            child: const Text('回滚'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final client = context.read<RobotConnectionProvider>().client;
+      if (client == null) throw Exception('未连接');
+
+      final response = await client.rollback(artifactName: artifactName);
+      setState(() {
+        _statusMessage = response.success
+            ? '$artifactName 已回滚到 v${response.restoredVersion}'
+            : '回滚失败: ${response.message}';
+      });
+      // Refresh installed versions
+      if (response.success) _fetchInstalledVersions();
+    } catch (e) {
+      setState(() => _statusMessage = '回滚失败: $e');
+    }
+  }
+
+  /// 获取升级历史
+  Future<void> _fetchUpgradeHistory() async {
+    setState(() => _isLoadingHistory = true);
+    try {
+      final client = context.read<RobotConnectionProvider>().client;
+      if (client == null) throw Exception('未连接');
+
+      final response = await client.getUpgradeHistory(limit: 20);
+      setState(() {
+        _isLoadingHistory = false;
+        _historyEntries = response.entries
+            .map((e) => _HistoryItem(
+                  timestamp: e.timestamp,
+                  action: e.action,
+                  artifactName: e.artifactName,
+                  fromVersion: e.fromVersion,
+                  toVersion: e.toVersion,
+                  status: e.status,
+                ))
+            .toList();
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingHistory = false;
+        _statusMessage = '获取升级历史失败: $e';
+      });
+    }
+  }
+
+  String _categoryStr(int value) {
+    switch (value) {
+      case 1: return 'model';
+      case 2: return 'firmware';
+      case 3: return 'map';
+      case 4: return 'config';
+      default: return 'other';
+    }
+  }
+
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1048,6 +1442,39 @@ class _FirmwareOtaPageState extends State<FirmwareOtaPage> {
 // ================================================================
 
 enum NoticeType { error, warning, success, info }
+
+class _InstalledItem {
+  final String name;
+  final String version;
+  final String category;
+
+  _InstalledItem({required this.name, required this.version, required this.category});
+}
+
+class _RollbackItem {
+  final String name;
+  final String version;
+
+  _RollbackItem({required this.name, required this.version});
+}
+
+class _HistoryItem {
+  final String timestamp;
+  final String action;
+  final String artifactName;
+  final String fromVersion;
+  final String toVersion;
+  final String status;
+
+  _HistoryItem({
+    required this.timestamp,
+    required this.action,
+    required this.artifactName,
+    required this.fromVersion,
+    required this.toVersion,
+    required this.status,
+  });
+}
 
 class _StatusDot extends StatelessWidget {
   final String label;

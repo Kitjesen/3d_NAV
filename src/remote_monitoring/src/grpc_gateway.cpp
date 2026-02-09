@@ -1,5 +1,8 @@
 #include "remote_monitoring/grpc_gateway.hpp"
+#include <fstream>
+#include <sstream>
 #include <grpcpp/ext/proto_server_reflection_plugin.h>
+#include <grpcpp/security/server_credentials.h>
 #include "remote_monitoring/core/event_buffer.hpp"
 #include "remote_monitoring/core/geofence_monitor.hpp"
 #include "remote_monitoring/core/health_monitor.hpp"
@@ -19,7 +22,11 @@ namespace remote_monitoring {
 
 GrpcGateway::GrpcGateway(rclcpp::Node *node) : node_(node) {
   node_->declare_parameter<int>("grpc_port", 50051);
+  node_->declare_parameter<std::string>("tls_cert_path", "");
+  node_->declare_parameter<std::string>("tls_key_path", "");
   port_ = node_->get_parameter("grpc_port").as_int();
+  tls_cert_path_ = node_->get_parameter("tls_cert_path").as_string();
+  tls_key_path_ = node_->get_parameter("tls_key_path").as_string();
 
   // 创建核心组件 (解耦: 每个模块独立构造)
   aggregator_ = std::make_shared<StatusAggregator>(node_);
@@ -84,8 +91,16 @@ GrpcGateway::GrpcGateway(rclcpp::Node *node) : node_(node) {
   task_manager_ = std::make_shared<core::TaskManager>(node_);
   task_manager_->SetEventBuffer(event_buffer_);
 
-  // 创建服务实现
-  system_service_ = std::make_shared<services::SystemServiceImpl>(node_);
+  // 创建服务实现 (Phase 1.5: 传入配置化的 robot_id 和 firmware_version)
+  {
+    if (!node_->has_parameter("robot_id"))
+      node_->declare_parameter<std::string>("robot_id", "robot_001");
+    if (!node_->has_parameter("firmware_version"))
+      node_->declare_parameter<std::string>("firmware_version", "1.0.0");
+    std::string rid = node_->get_parameter("robot_id").as_string();
+    std::string fwv = node_->get_parameter("firmware_version").as_string();
+    system_service_ = std::make_shared<services::SystemServiceImpl>(node_, rid, fwv);
+  }
   control_service_ =
       std::make_shared<services::ControlServiceImpl>(
           lease_mgr_, safety_gate_, mode_manager_,
@@ -93,6 +108,7 @@ GrpcGateway::GrpcGateway(rclcpp::Node *node) : node_(node) {
   telemetry_service_ = std::make_shared<services::TelemetryServiceImpl>(
       aggregator_, event_buffer_);
   data_service_ = std::make_shared<services::DataServiceImpl>(node_);
+  data_service_->SetHealthMonitor(health_monitor_);
 
   // 让 StatusAggregator 可以获取真实模式
   aggregator_->SetModeProvider([this]() {
@@ -128,8 +144,40 @@ void GrpcGateway::Run() {
   grpc::reflection::InitProtoReflectionServerBuilderPlugin();
 
   grpc::ServerBuilder builder;
-  builder.AddListeningPort("0.0.0.0:" + std::to_string(port_),
-                           grpc::InsecureServerCredentials());
+
+  // Phase 3.3: TLS 支持 — 当 tls_cert_path 和 tls_key_path 都配置时启用
+  bool use_tls = !tls_cert_path_.empty() && !tls_key_path_.empty();
+  if (use_tls) {
+    std::string cert_contents, key_contents;
+    {
+      std::ifstream cert_file(tls_cert_path_);
+      std::ifstream key_file(tls_key_path_);
+      if (cert_file.is_open() && key_file.is_open()) {
+        std::ostringstream cert_ss, key_ss;
+        cert_ss << cert_file.rdbuf();
+        key_ss << key_file.rdbuf();
+        cert_contents = cert_ss.str();
+        key_contents = key_ss.str();
+      } else {
+        RCLCPP_WARN(rclcpp::get_logger("grpc_gateway"),
+                    "TLS cert/key files not readable, falling back to insecure");
+        use_tls = false;
+      }
+    }
+    if (use_tls && !cert_contents.empty() && !key_contents.empty()) {
+      grpc::SslServerCredentialsOptions ssl_opts;
+      ssl_opts.pem_key_cert_pairs.push_back({key_contents, cert_contents});
+      // No client cert required (trust-on-first-use model, like SSH)
+      ssl_opts.client_certificate_request =
+          GRPC_SSL_DONT_REQUEST_CLIENT_CERTIFICATE;
+      builder.AddListeningPort("0.0.0.0:" + std::to_string(port_),
+                               grpc::SslServerCredentials(ssl_opts));
+    }
+  }
+  if (!use_tls) {
+    builder.AddListeningPort("0.0.0.0:" + std::to_string(port_),
+                             grpc::InsecureServerCredentials());
+  }
 
   // 注册所有服务
   builder.RegisterService(system_service_.get());
@@ -139,7 +187,8 @@ void GrpcGateway::Run() {
 
   server_ = builder.BuildAndStart();
   RCLCPP_INFO(rclcpp::get_logger("grpc_gateway"),
-              "gRPC Gateway listening on :%d", port_);
+              "gRPC Gateway listening on :%d (%s)",
+              port_, use_tls ? "TLS" : "insecure");
 
   // 后台循环：Safety Gate deadman 必须高频检查（≤100ms），
   // Lease 超时和幂等缓存清理频率可以较低（1s）。

@@ -19,11 +19,20 @@
 #endif
 
 namespace remote_monitoring {
+namespace core {
+class HealthMonitor;
+}
+
 namespace services {
 
 class DataServiceImpl final : public robot::v1::DataService::Service {
 public:
   explicit DataServiceImpl(rclcpp::Node *node);
+
+  /// 注入 HealthMonitor 用于安装后健康检查 (由 GrpcGateway 调用)
+  void SetHealthMonitor(std::shared_ptr<core::HealthMonitor> monitor) {
+    health_monitor_ = std::move(monitor);
+  }
 
   grpc::Status
   ListResources(grpc::ServerContext *context,
@@ -90,6 +99,18 @@ public:
                        const robot::v1::CheckUpdateReadinessRequest *request,
                        robot::v1::CheckUpdateReadinessResponse *response) override;
 
+  // 升级历史查询
+  grpc::Status
+  GetUpgradeHistory(grpc::ServerContext *context,
+                    const robot::v1::GetUpgradeHistoryRequest *request,
+                    robot::v1::GetUpgradeHistoryResponse *response) override;
+
+  // 版本一致性校验
+  grpc::Status
+  ValidateSystemVersion(grpc::ServerContext *context,
+                        const robot::v1::ValidateSystemVersionRequest *request,
+                        robot::v1::ValidateSystemVersionResponse *response) override;
+
   grpc::Status StartCamera(grpc::ServerContext *context,
                            const robot::v1::StartCameraRequest *request,
                            robot::v1::StartCameraResponse *response) override;
@@ -145,13 +166,43 @@ private:
   uint64_t GetDiskFreeBytes(const std::string &path);
   int GetBatteryPercent();
 
+  // Phase 1.1: 系统版本管理
+  std::string LoadSystemVersionJson();
+  void SaveSystemVersionJson();
+
+  // Phase 1.2: Ed25519 设备端验签
+  bool VerifyEd25519Signature(const std::string &message_hex,
+                              const std::string &signature_hex);
+
+  // Phase 1.3: 安装后健康检查
+  bool PostInstallHealthCheck(robot::v1::OtaSafetyLevel safety_level,
+                              std::string *failure_reason);
+
+  // Phase 1.4: semver 比较 (-1, 0, +1)
+  static int CompareSemver(const std::string &a, const std::string &b);
+
+  // Phase 2.1: 持久升级历史
+  void AppendUpgradeHistory(const std::string &action,
+                            const std::string &artifact_name,
+                            const std::string &from_version,
+                            const std::string &to_version,
+                            const std::string &status,
+                            robot::v1::OtaFailureCode failure_code,
+                            const std::string &failure_reason,
+                            uint64_t duration_ms,
+                            const std::string &health_check);
+
   rclcpp::Node *node_;
   std::string apply_firmware_script_;
   std::string ota_manifest_path_;       // 本地已安装 manifest 路径
   std::string ota_backup_dir_;          // 备份目录
+  std::string ota_public_key_path_;     // Ed25519 公钥路径
+  std::string ota_history_path_;        // 升级历史日志路径
+  std::string system_version_path_;     // system_version.json 路径
   std::string robot_id_;
   std::string hw_id_;
   std::string system_version_;
+  std::shared_ptr<core::HealthMonitor> health_monitor_; // 安装后健康检查
   // 已安装制品 (name -> InstalledArtifact proto)
   std::unordered_map<std::string, robot::v1::InstalledArtifact> installed_artifacts_;
   // 可回滚条目 (name -> RollbackEntry proto)

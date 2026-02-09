@@ -95,6 +95,19 @@ abstract class RobotClientBase {
   /// 安装前预检查（磁盘空间、电量、硬件兼容性）
   Future<CheckUpdateReadinessResponse> checkUpdateReadiness({
     required List<OtaArtifact> artifacts,
+    String manifestSignature = '',
+  });
+
+  /// 查询升级历史
+  Future<GetUpgradeHistoryResponse> getUpgradeHistory({
+    String artifactFilter = '',
+    int limit = 50,
+  });
+
+  /// 版本一致性校验
+  Future<ValidateSystemVersionResponse> validateSystemVersion({
+    String expectedSystemVersion = '',
+    List<ComponentVersion> expectedComponents = const [],
   });
 
   /// 应用固件（上传完成后触发刷写脚本）

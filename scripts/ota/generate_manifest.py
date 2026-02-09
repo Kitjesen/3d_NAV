@@ -129,6 +129,28 @@ def generate_keys(key_dir: str):
     print(f"  scp {public_path} robot:/opt/robot/ota/ota_public.pem")
 
 
+def generate_system_manifest(version: str, artifacts: list, output_path: str):
+    """生成 system_manifest.json — 描述整机的完整组件版本集"""
+    components = {}
+    for art in artifacts:
+        components[art.get("name", "unknown")] = {
+            "version": art.get("version", "0.0.0"),
+        }
+        # Include git_commit if present
+        if art.get("git_commit"):
+            components[art["name"]]["git_commit"] = art["git_commit"]
+
+    system_manifest = {
+        "system_version": version.lstrip("v"),
+        "build_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "components": components,
+    }
+
+    with open(output_path, "w") as f:
+        json.dump(system_manifest, f, indent=2, ensure_ascii=False)
+    print(f"  System manifest: {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate OTA manifest.json")
     parser.add_argument("--version", help="Release version (e.g. v2.3.0)")
@@ -139,6 +161,11 @@ def main():
     parser.add_argument("--key-id", default="ota-signing-key-01", help="Public key ID")
     parser.add_argument("--generate-keys", action="store_true", help="Generate Ed25519 key pair")
     parser.add_argument("--key-dir", default="./keys", help="Directory for generated keys")
+    parser.add_argument("--channel", default="stable",
+                        choices=["dev", "canary", "stable"],
+                        help="Release channel (default: stable)")
+    parser.add_argument("--system-manifest", default=None,
+                        help="Also generate system_manifest.json at this path")
     args = parser.parse_args()
 
     # 密钥生成模式
@@ -209,6 +236,7 @@ def main():
         "schema_version": "2",
         "release_version": args.version,
         "release_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "channel": args.channel,
         "min_system_version": "1.0.0",
         "signature": "",
         "public_key_id": args.key_id,
@@ -229,9 +257,19 @@ def main():
     with open(args.output, "w") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
+    # Generate system_manifest.json if requested
+    if args.system_manifest:
+        generate_system_manifest(args.version, artifacts, args.system_manifest)
+    else:
+        # Auto-generate next to manifest.json
+        output_dir = os.path.dirname(args.output) or "."
+        sys_manifest_path = os.path.join(output_dir, "system_manifest.json")
+        generate_system_manifest(args.version, artifacts, sys_manifest_path)
+
     print(f"\nManifest generated: {args.output}")
     print(f"  Schema: v{manifest['schema_version']}")
     print(f"  Version: {args.version}")
+    print(f"  Channel: {args.channel}")
     print(f"  Artifacts: {len(artifacts)}")
     print(f"  Signed: {'Yes' if manifest.get('signature') else 'No'}")
 

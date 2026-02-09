@@ -15,6 +15,10 @@ import 'package:flutter_monitor/core/grpc/robot_client_base.dart';
 class RobotClient implements RobotClientBase {
   final String host;
   final int port;
+  final bool useTls;
+  /// Optional PEM-encoded server certificate for trust-on-first-use verification.
+  /// When null/empty, system defaults are used (or all certs trusted for self-signed).
+  final List<int>? trustedCertificateBytes;
   
   late ClientChannel _channel;
   late TelemetryServiceClient _telemetryClient;
@@ -33,16 +37,29 @@ class RobotClient implements RobotClientBase {
   RobotClient({
     required this.host,
     this.port = 50051,
+    this.useTls = false,
+    this.trustedCertificateBytes,
   });
 
   /// 连接到机器人
   Future<bool> connect() async {
     try {
+      final ChannelCredentials credentials;
+      if (useTls) {
+        credentials = ChannelCredentials.secure(
+          certificates: trustedCertificateBytes,
+          // For self-signed certs (trust-on-first-use), override authority
+          authority: host,
+        );
+      } else {
+        credentials = const ChannelCredentials.insecure();
+      }
+
       _channel = ClientChannel(
         host,
         port: port,
-        options: const ChannelOptions(
-          credentials: ChannelCredentials.insecure(),
+        options: ChannelOptions(
+          credentials: credentials,
         ),
       );
 
@@ -461,11 +478,39 @@ class RobotClient implements RobotClientBase {
   @override
   Future<CheckUpdateReadinessResponse> checkUpdateReadiness({
     required List<OtaArtifact> artifacts,
+    String manifestSignature = '',
   }) async {
     final request = CheckUpdateReadinessRequest()
       ..base = _createRequestBase()
-      ..artifacts.addAll(artifacts);
+      ..artifacts.addAll(artifacts)
+      ..manifestSignature = manifestSignature;
     return await _dataClient.checkUpdateReadiness(request);
+  }
+
+  /// 查询升级历史
+  @override
+  Future<GetUpgradeHistoryResponse> getUpgradeHistory({
+    String artifactFilter = '',
+    int limit = 50,
+  }) async {
+    final request = GetUpgradeHistoryRequest()
+      ..base = _createRequestBase()
+      ..artifactFilter = artifactFilter
+      ..limit = limit;
+    return await _dataClient.getUpgradeHistory(request);
+  }
+
+  /// 版本一致性校验
+  @override
+  Future<ValidateSystemVersionResponse> validateSystemVersion({
+    String expectedSystemVersion = '',
+    List<ComponentVersion> expectedComponents = const [],
+  }) async {
+    final request = ValidateSystemVersionRequest()
+      ..base = _createRequestBase()
+      ..expectedSystemVersion = expectedSystemVersion
+      ..expectedComponents.addAll(expectedComponents);
+    return await _dataClient.validateSystemVersion(request);
   }
 
   /// 应用固件（上传完成后触发刷写脚本）

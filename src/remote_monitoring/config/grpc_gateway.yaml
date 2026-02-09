@@ -60,6 +60,18 @@ grpc_gateway:
     ota_backup_dir: "/opt/robot/ota/backup"
     # 硬件标识（用于兼容性检查）
     hw_id: "dog_v2"
+    # Ed25519 公钥路径 (设备端验签)
+    ota_public_key_path: "/opt/robot/ota/ota_public.pem"
+    # 升级历史日志 (JSONL append-only)
+    ota_history_path: "/opt/robot/ota/upgrade_history.jsonl"
+    # 系统版本 JSON
+    system_version_path: "/opt/robot/ota/system_version.json"
+
+    # ==================== gRPC TLS 配置 ====================
+    # 留空 = 不启用 TLS (明文); 配置后启用 TLS
+    # 证书方案: 每台机器人自签证书, App 端 trust-on-first-use (类似 SSH)
+    tls_cert_path: ""   # PEM 格式服务端证书, 如 "/opt/robot/certs/server.crt"
+    tls_key_path: ""    # PEM 格式服务端私钥, 如 "/opt/robot/certs/server.key"
 
     # ==================== WebRTC 配置 ====================
     webrtc_enabled: true

@@ -124,6 +124,7 @@ class CloudOtaManifest {
   final String schemaVersion;
   final String releaseVersion;
   final String releaseDate;
+  final String channel; // "dev", "canary", "stable"
   final String minSystemVersion;
   final List<CloudOtaArtifactMeta> artifacts;
 
@@ -131,6 +132,7 @@ class CloudOtaManifest {
     required this.schemaVersion,
     required this.releaseVersion,
     required this.releaseDate,
+    this.channel = 'stable',
     this.minSystemVersion = '',
     required this.artifacts,
   });
@@ -144,6 +146,7 @@ class CloudOtaManifest {
       schemaVersion: json['schema_version'] ?? '1',
       releaseVersion: json['release_version'] ?? '',
       releaseDate: json['release_date'] ?? '',
+      channel: json['channel'] ?? 'stable',
       minSystemVersion: json['min_system_version'] ?? '',
       artifacts: artifactList,
     );
@@ -231,6 +234,7 @@ class CloudOtaService {
   static const _keyRepoName = 'cloud_ota_repo_name';
   static const _keyCustomUrl = 'cloud_ota_custom_url';
   static const _keyUseCustomUrl = 'cloud_ota_use_custom';
+  static const _keyChannel = 'cloud_ota_channel';
 
   // 默认 GitHub 仓库
   static const defaultOwner = 'Kitjesen';
@@ -240,11 +244,13 @@ class CloudOtaService {
   String _repo = defaultRepo;
   String _customUrl = '';
   bool _useCustomUrl = false;
+  String _channel = 'stable'; // "dev", "canary", "stable"
 
   String get owner => _owner;
   String get repo => _repo;
   String get customUrl => _customUrl;
   bool get useCustomUrl => _useCustomUrl;
+  String get channel => _channel;
   String get repoDisplay => _useCustomUrl ? _customUrl : '$_owner/$_repo';
 
   CloudOtaService();
@@ -256,6 +262,7 @@ class CloudOtaService {
     _repo = prefs.getString(_keyRepoName) ?? defaultRepo;
     _customUrl = prefs.getString(_keyCustomUrl) ?? '';
     _useCustomUrl = prefs.getBool(_keyUseCustomUrl) ?? false;
+    _channel = prefs.getString(_keyChannel) ?? 'stable';
   }
 
   /// 保存配置
@@ -264,17 +271,20 @@ class CloudOtaService {
     String? repo,
     String? customUrl,
     bool? useCustomUrl,
+    String? channel,
   }) async {
     if (owner != null) _owner = owner;
     if (repo != null) _repo = repo;
     if (customUrl != null) _customUrl = customUrl;
     if (useCustomUrl != null) _useCustomUrl = useCustomUrl;
+    if (channel != null) _channel = channel;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyRepoOwner, _owner);
     await prefs.setString(_keyRepoName, _repo);
     await prefs.setString(_keyCustomUrl, _customUrl);
     await prefs.setBool(_keyUseCustomUrl, _useCustomUrl);
+    await prefs.setString(_keyChannel, _channel);
   }
 
   /// 获取 API base URL
@@ -292,21 +302,42 @@ class CloudOtaService {
       };
 
   /// 获取最新 Release（并自动拉取 manifest.json）
+  /// 根据 channel 过滤:
+  ///   - "stable": 仅非 prerelease
+  ///   - "canary"/"dev": 包含 prerelease，再按 manifest channel 匹配
   Future<CloudRelease?> fetchLatestRelease() async {
     try {
-      final url = '$_apiBaseUrl/latest';
-      final response = await http.get(Uri.parse(url), headers: _headers)
-          .timeout(const Duration(seconds: 15));
+      if (_channel == 'stable') {
+        // /latest 只返回非 prerelease 的最新版
+        final url = '$_apiBaseUrl/latest';
+        final response = await http.get(Uri.parse(url), headers: _headers)
+            .timeout(const Duration(seconds: 15));
 
-      if (response.statusCode == 200) {
-        final json = jsonDecode(response.body) as Map<String, dynamic>;
-        final release = CloudRelease.fromJson(json);
-        await _enrichReleaseWithManifest(release);
-        return release;
-      } else if (response.statusCode == 404) {
-        return null; // 没有 Release
+        if (response.statusCode == 200) {
+          final json = jsonDecode(response.body) as Map<String, dynamic>;
+          final release = CloudRelease.fromJson(json);
+          await _enrichReleaseWithManifest(release);
+          return release;
+        } else if (response.statusCode == 404) {
+          return null;
+        } else {
+          throw Exception('GitHub API error: ${response.statusCode}');
+        }
       } else {
-        throw Exception('GitHub API error: ${response.statusCode}');
+        // dev/canary: 获取所有 releases，按 channel 过滤
+        final releases = await fetchReleases(count: 20);
+        for (final release in releases) {
+          // If manifest has channel, match exactly
+          if (release.manifest != null &&
+              release.manifest!.channel == _channel) {
+            return release;
+          }
+          // Fallback: prerelease = dev/canary, non-prerelease = stable
+          if (_channel == 'dev' && release.prerelease) return release;
+          if (_channel == 'canary' && release.prerelease) return release;
+        }
+        // No match for channel — fall back to latest regardless
+        return releases.isNotEmpty ? releases.first : null;
       }
     } catch (e) {
       rethrow;

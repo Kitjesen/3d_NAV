@@ -84,3 +84,10 @@ env/
 # 临时测试文件
 *.test
 *.tmp
+
+# OTA 签名密钥 (绝对不能入库!)
+keys/
+*.pem
+
+# OTA 构建产物
+dist/

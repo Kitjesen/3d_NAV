@@ -1,0 +1,136 @@
+name: Release Navigation Package
+
+# 导航功能包自动构建与发布
+# 触发方式:
+#   1. 推送 v* tag (如 v1.0.0)
+#   2. 手动触发 (workflow_dispatch)
+#
+# 产出:
+#   - navigation-<version>-aarch64.tar.gz (ARM64 交叉编译)
+#   - manifest.json (带 Ed25519 签名)
+#   - GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v1.1.0)'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes (Markdown)'
+        required: false
+        default: '导航系统更新'
+        type: string
+      prerelease:
+        description: 'Pre-release'
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'v[0-9]*'
+
+jobs:
+  build-and-release:
+    name: Build & Release
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "notes=${{ inputs.release_notes }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "version=$TAG" >> "$GITHUB_OUTPUT"
+            echo "notes=导航系统 ${TAG} 发布" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update VERSION file
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "${VERSION#v}" > VERSION
+
+      - name: Setup ROS 2 Humble
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: humble
+
+      - name: Install dependencies
+        run: |
+          source /opt/ros/humble/setup.bash
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-colcon-common-extensions \
+            python3-rosdep \
+            libpcl-dev \
+            libeigen3-dev \
+            libopencv-dev \
+            libgrpc++-dev \
+            protobuf-compiler-grpc
+          # 安装签名依赖
+          pip install cryptography
+
+      - name: Build workspace
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+      - name: Package
+        run: |
+          bash scripts/ota/build_nav_package.sh --skip-build
+
+      - name: Generate & sign manifest
+        run: |
+          # 写入签名密钥 (从 GitHub Secret)
+          if [ -n "${{ secrets.OTA_PRIVATE_KEY }}" ]; then
+            echo "${{ secrets.OTA_PRIVATE_KEY }}" > /tmp/ota_key.pem
+            python3 scripts/ota/generate_manifest.py \
+              --version ${{ steps.version.outputs.version }} \
+              --artifacts-dir ./dist/ \
+              --template scripts/ota/manifest_template.json \
+              --signing-key /tmp/ota_key.pem \
+              --key-id ota-signing-key-01 \
+              --output ./dist/manifest.json
+            rm -f /tmp/ota_key.pem
+          else
+            python3 scripts/ota/generate_manifest.py \
+              --version ${{ steps.version.outputs.version }} \
+              --artifacts-dir ./dist/ \
+              --template scripts/ota/manifest_template.json \
+              --output ./dist/manifest.json
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: "Navigation ${{ steps.version.outputs.version }}"
+          body: |
+            ${{ steps.version.outputs.notes }}
+
+            ---
+
+            **OTA 部署:**
+            1. MapPilot App → 设置 → 云端更新 → 检查更新
+            2. 选择 navigation 包 → 下载并安装
+
+            **手动部署:**
+            ```bash
+            ./scripts/ota/push_to_robot.sh sunrise@<robot_ip>
+            ```
+          files: dist/*
+          draft: false
+          prerelease: ${{ steps.version.outputs.prerelease }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
