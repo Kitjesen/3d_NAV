@@ -15,16 +15,20 @@ import 'package:flutter_monitor/core/grpc/robot_client_base.dart';
 class RobotClient implements RobotClientBase {
   final String host;
   final int port;
+  /// OTA Daemon 端口 (独立守护进程, 不依赖 ROS2)
+  final int otaPort;
   final bool useTls;
   /// Optional PEM-encoded server certificate for trust-on-first-use verification.
   /// When null/empty, system defaults are used (or all certs trusted for self-signed).
   final List<int>? trustedCertificateBytes;
   
   late ClientChannel _channel;
+  late ClientChannel _otaChannel;
   late TelemetryServiceClient _telemetryClient;
   late SystemServiceClient _systemClient;
   late ControlServiceClient _controlClient;
   late DataServiceClient _dataClient;
+  late OtaServiceClient _otaClient;
   
   bool _isConnected = false;
   StreamSubscription? _fastStateSubscription;
@@ -37,6 +41,7 @@ class RobotClient implements RobotClientBase {
   RobotClient({
     required this.host,
     this.port = 50051,
+    this.otaPort = 50052,
     this.useTls = false,
     this.trustedCertificateBytes,
   });
@@ -67,6 +72,14 @@ class RobotClient implements RobotClientBase {
       _systemClient = SystemServiceClient(_channel);
       _controlClient = ControlServiceClient(_channel);
       _dataClient = DataServiceClient(_channel);
+
+      // OTA Daemon 独立通道 (:50052)
+      _otaChannel = ClientChannel(
+        host,
+        port: otaPort,
+        options: ChannelOptions(credentials: credentials),
+      );
+      _otaClient = OtaServiceClient(_otaChannel);
 
       // 测试连接
       final info = await _systemClient.getRobotInfo(
@@ -354,7 +367,7 @@ class RobotClient implements RobotClientBase {
     final startOffset = resumeFromOffset.clamp(0, totalSize);
 
     final controller = StreamController<UploadFileChunk>();
-    final responseFuture = _dataClient.uploadFile(controller.stream);
+    final responseFuture = _otaClient.uploadFile(controller.stream);
 
     // 发送第一个 chunk (包含 metadata)
     int offset = startOffset;
@@ -402,7 +415,7 @@ class RobotClient implements RobotClientBase {
       ..base = _createRequestBase()
       ..directory = directory
       ..category = category;
-    return await _dataClient.listRemoteFiles(request);
+    return await _otaClient.listRemoteFiles(request);
   }
 
   /// 删除远程文件
@@ -411,7 +424,7 @@ class RobotClient implements RobotClientBase {
     final request = DeleteRemoteFileRequest()
       ..base = _createRequestBase()
       ..remotePath = remotePath;
-    return await _dataClient.deleteRemoteFile(request);
+    return await _otaClient.deleteRemoteFile(request);
   }
 
   // ==================== OTA 更新管理 ====================
@@ -428,7 +441,7 @@ class RobotClient implements RobotClientBase {
       ..artifact = artifact
       ..stagedPath = stagedPath
       ..force = force;
-    return await _dataClient.applyUpdate(request);
+    return await _otaClient.applyUpdate(request);
   }
 
   /// 查询已安装版本
@@ -439,7 +452,7 @@ class RobotClient implements RobotClientBase {
     final request = GetInstalledVersionsRequest()
       ..base = _createRequestBase()
       ..categoryFilter = categoryFilter;
-    return await _dataClient.getInstalledVersions(request);
+    return await _otaClient.getInstalledVersions(request);
   }
 
   /// 回滚到上一版本
@@ -448,7 +461,7 @@ class RobotClient implements RobotClientBase {
     final request = RollbackRequest()
       ..base = _createRequestBase()
       ..artifactName = artifactName;
-    return await _dataClient.rollback(request);
+    return await _otaClient.rollback(request);
   }
 
   /// 机器人直接从 URL 下载（免手机中转）
@@ -471,7 +484,7 @@ class RobotClient implements RobotClientBase {
       request.headers[entry.key] = entry.value;
     }
 
-    return _dataClient.downloadFromUrl(request);
+    return _otaClient.downloadFromUrl(request);
   }
 
   /// 安装前预检查
@@ -484,7 +497,7 @@ class RobotClient implements RobotClientBase {
       ..base = _createRequestBase()
       ..artifacts.addAll(artifacts)
       ..manifestSignature = manifestSignature;
-    return await _dataClient.checkUpdateReadiness(request);
+    return await _otaClient.checkUpdateReadiness(request);
   }
 
   /// 查询升级历史
@@ -497,7 +510,7 @@ class RobotClient implements RobotClientBase {
       ..base = _createRequestBase()
       ..artifactFilter = artifactFilter
       ..limit = limit;
-    return await _dataClient.getUpgradeHistory(request);
+    return await _otaClient.getUpgradeHistory(request);
   }
 
   /// 版本一致性校验
@@ -510,16 +523,7 @@ class RobotClient implements RobotClientBase {
       ..base = _createRequestBase()
       ..expectedSystemVersion = expectedSystemVersion
       ..expectedComponents.addAll(expectedComponents);
-    return await _dataClient.validateSystemVersion(request);
-  }
-
-  /// 应用固件（上传完成后触发刷写脚本）
-  @override
-  Future<ApplyFirmwareResponse> applyFirmware({required String firmwarePath}) async {
-    final request = ApplyFirmwareRequest()
-      ..base = _createRequestBase()
-      ..firmwarePath = firmwarePath;
-    return await _dataClient.applyFirmware(request);
+    return await _otaClient.validateSystemVersion(request);
   }
 
   /// 断开连接
@@ -531,6 +535,7 @@ class RobotClient implements RobotClientBase {
     await _fastStateSubscription?.cancel();
     await _slowStateSubscription?.cancel();
     await _channel.shutdown();
+    await _otaChannel.shutdown();
     _isConnected = false;
   }
 

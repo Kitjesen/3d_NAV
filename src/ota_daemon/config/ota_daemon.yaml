@@ -1,0 +1,44 @@
+# ──────────────── OTA Daemon 配置 ────────────────
+# 独立守护进程, 不依赖 ROS2
+# systemd: ota_daemon.service
+# 端口: 50052
+
+# 网络
+grpc_port: 50052
+bind_address: "0.0.0.0"
+
+# 设备标识
+robot_id: "robot_001"
+hw_id: "dog_v2"
+
+# OTA 状态文件
+ota_manifest_path: "/opt/robot/ota/installed_manifest.json"
+ota_backup_dir: "/opt/robot/ota/backup"
+ota_history_path: "/opt/robot/ota/upgrade_history.jsonl"
+system_version_path: "/opt/robot/ota/system_version.json"
+
+# Ed25519 公钥 (设备端验签, 留空=跳过验签)
+ota_public_key_path: ""
+
+# TLS (留空=明文)
+tls_cert_path: ""
+tls_key_path: ""
+
+# 监控的 systemd 服务列表
+managed_services:
+  - "navigation.service"
+
+# 健康检查: 安装后等待导航服务恢复的超时 (秒)
+health_check_timeout_sec: 30
+
+# 日志级别: DEBUG, INFO, WARN, ERROR
+log_level: "INFO"
+
+# 允许上传/下载的目录白名单
+allowed_directories:
+  - "/opt/robot/models"
+  - "/opt/robot/firmware"
+  - "/opt/robot/config"
+  - "/opt/robot/maps"
+  - "/opt/robot/navigation"
+  - "/tmp"

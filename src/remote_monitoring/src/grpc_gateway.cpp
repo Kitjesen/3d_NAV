@@ -108,7 +108,7 @@ GrpcGateway::GrpcGateway(rclcpp::Node *node) : node_(node) {
   telemetry_service_ = std::make_shared<services::TelemetryServiceImpl>(
       aggregator_, event_buffer_);
   data_service_ = std::make_shared<services::DataServiceImpl>(node_);
-  data_service_->SetHealthMonitor(health_monitor_);
+  // OTA 已迁移到独立的 ota_daemon (:50052), DataService 只负责数据转发
 
   // 让 StatusAggregator 可以获取真实模式
   aggregator_->SetModeProvider([this]() {
