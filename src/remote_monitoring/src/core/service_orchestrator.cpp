@@ -98,6 +98,12 @@ void ServiceOrchestrator::OrchestrateAsync(std::set<std::string> required) {
     if (required.count(svc)) {
       std::string state = QueryServiceField(svc + ".service", "ActiveState");
       if (state != "active") {
+        // 清除 failed 残留, 否则 start 可能失败
+        if (state == "failed") {
+          ManageService(svc + ".service", "reset-failed");
+          RCLCPP_WARN(node_->get_logger(),
+                      "ServiceOrchestrator: reset-failed %s.service", svc.c_str());
+        }
         RCLCPP_INFO(node_->get_logger(),
                     "ServiceOrchestrator: starting %s.service", svc.c_str());
         if (!ManageService(svc + ".service", "start")) {

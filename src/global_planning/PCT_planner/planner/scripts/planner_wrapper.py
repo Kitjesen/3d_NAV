@@ -63,11 +63,18 @@ class TomogramPlanner(object):
     def loadTomogram(self, tomo_file, resolution=None, slice_dh=None, ground_h=None):
         """加载 tomogram。若传 resolution/slice_dh/ground_h 则从 PCD 建图时优先使用（如来自 ROS 参数）。"""
         if os.path.isabs(tomo_file):
-            base = os.path.splitext(os.path.basename(tomo_file))[0]
+            basename = os.path.basename(tomo_file)
             search_dir = os.path.dirname(tomo_file)
         else:
-            base = tomo_file
+            basename = tomo_file
             search_dir = self.tomo_dir
+        # 只剥离已知扩展名 (.pickle / .pcd)，避免 splitext 误把文件名中的
+        # 小数点当扩展名 (如 "spiral0.3_2" 会被 splitext 错误分割为 "spiral0")
+        for ext in ('.pickle', '.pcd'):
+            if basename.endswith(ext):
+                basename = basename[:-len(ext)]
+                break
+        base = basename
         pcd_dir = self.pcd_dir if self.pcd_dir is not None else self.tomo_dir
         pcd_search_dir = os.path.dirname(tomo_file) if os.path.isabs(tomo_file) else pcd_dir
         pickle_path = os.path.join(search_dir, base + '.pickle')

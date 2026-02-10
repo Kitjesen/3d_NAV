@@ -74,7 +74,10 @@ def generate_launch_description():
             'tomogram_slice_dh': 0.5,
             'tomogram_ground_h': 0.0,
         }],
-        env={'PYTHONPATH': python_path}
+        # 重要: 使用 additional_env 而非 env
+        # env={} 会替换整个进程环境，导致丢失 LD_LIBRARY_PATH → librcl_action.so 找不到
+        # additional_env={} 只追加/覆盖指定变量，保留 LD_LIBRARY_PATH 等系统路径
+        additional_env={'PYTHONPATH': python_path}
     )
 
     # ── PCT 路径适配器 ──

@@ -57,6 +57,12 @@ sunrise ALL=(root) NOPASSWD: /bin/systemctl restart nav-grpc.service
 sunrise ALL=(root) NOPASSWD: /bin/systemctl start ota-daemon.service
 sunrise ALL=(root) NOPASSWD: /bin/systemctl stop ota-daemon.service
 sunrise ALL=(root) NOPASSWD: /bin/systemctl restart ota-daemon.service
+sunrise ALL=(root) NOPASSWD: /bin/systemctl reset-failed nav-lidar.service
+sunrise ALL=(root) NOPASSWD: /bin/systemctl reset-failed nav-slam.service
+sunrise ALL=(root) NOPASSWD: /bin/systemctl reset-failed nav-autonomy.service
+sunrise ALL=(root) NOPASSWD: /bin/systemctl reset-failed nav-planning.service
+sunrise ALL=(root) NOPASSWD: /bin/systemctl reset-failed nav-grpc.service
+sunrise ALL=(root) NOPASSWD: /bin/systemctl reset-failed ota-daemon.service
 EOF
 
 chmod 440 "$SUDOERS_FILE"
