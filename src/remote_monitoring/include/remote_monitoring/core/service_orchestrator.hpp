@@ -3,17 +3,25 @@
  * ServiceOrchestrator — 根据模式切换启停 systemd 服务
  *
  * 模式 → 服务映射:
- *   IDLE:       (保持 lidar+slam 用于监控, 停止 autonomy/planning)
+ *   IDLE:       空集 (进入后 grace period 倒计时, 超时自动停止所有服务)
  *   MAPPING:    nav-lidar + nav-slam
  *   AUTONOMOUS: nav-lidar + nav-slam + nav-autonomy + nav-planning
  *   TELEOP:     nav-lidar + nav-slam + nav-autonomy
  *   MANUAL:     nav-lidar + nav-slam
  *   ESTOP:      不动服务, 仅发停车指令
  *
+ * IDLE Grace Period (延迟关停):
+ *   切到 IDLE 后启动倒计时 (默认 120 秒):
+ *   - 超时前再切到其他模式 → 取消倒计时, 服务仍在运行, 零延迟切换
+ *   - 超时后仍在 IDLE   → 自动停止全部服务, 释放 CPU/内存
+ *   这避免了频繁切模式时的冷启动开销, 又防止 SLAM 长时间空转吃资源
+ *
  * 注意: nav-grpc 是自身, 不管理; ota-daemon 独立, 不管理
+ *       SIGSTOP/freeze 对 SLAM 不可用 (IMU 时间跳变导致 EKF 发散)
  */
 
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -54,6 +62,9 @@ public:
     crash_callback_ = std::move(cb);
   }
 
+  /// 设置 IDLE 模式的 grace period (秒). 0 = 立即停止.
+  void SetIdleGracePeriod(int seconds) { idle_grace_sec_ = seconds; }
+
   /// 启动后台巡检线程 (每 interval_sec 秒检查一次)
   void StartPeriodicCheck(int interval_sec = 10);
 
@@ -91,7 +102,7 @@ private:
   static std::string QueryServiceField(const std::string &service,
                                        const std::string &field);
 
-  /// 异步编排: 启动需要的, 停止不需要的
+  /// 异步编排: 启动需要的, 停止不需要的 (支持取消)
   void OrchestrateAsync(std::set<std::string> required);
 
   /// 启动单个服务 (含重试, 返回最终是否 active)
@@ -100,13 +111,29 @@ private:
   /// 后台巡检: 检查 expected 服务是否全部 active
   void PeriodicCheckLoop(int interval_sec);
 
+  // ── IDLE Grace Period 延迟关停 ──
+  /// 启动 grace period 倒计时 (到期后停止全部服务)
+  void ScheduleIdleShutdown();
+  /// 取消尚未到期的 grace period 倒计时
+  void CancelIdleShutdown();
+
   rclcpp::Node *node_;
   std::shared_ptr<EventBuffer> event_buffer_;
   std::mutex orchestrate_mutex_;
 
+  // 编排取消标志: 新模式切换时置 true, OrchestrateAsync 轮询此标志提前退出
+  std::atomic<bool> orchestrate_cancel_{false};
+
   // 巡检线程
   std::thread check_thread_;
   std::atomic<bool> check_stop_{false};
+
+  // IDLE grace period 延迟关停
+  int idle_grace_sec_{120};                    // 默认 120 秒
+  std::thread idle_shutdown_thread_;
+  std::mutex idle_shutdown_mutex_;
+  std::condition_variable idle_shutdown_cv_;
+  std::atomic<bool> idle_shutdown_cancel_{false};
 
   // 外部注入
   std::function<robot::v1::RobotMode()> mode_provider_;

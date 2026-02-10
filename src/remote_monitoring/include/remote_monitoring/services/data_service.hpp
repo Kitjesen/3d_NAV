@@ -99,6 +99,8 @@ private:
   std::string pointcloud_topic_;
   std::string terrain_topic_;
   std::string path_topic_;
+  std::string free_paths_topic_;
+  std::string pct_path_topic_;
   std::string file_root_;
   bool webrtc_enabled_{false};
   int webrtc_offer_timeout_ms_{3000};

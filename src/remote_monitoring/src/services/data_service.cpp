@@ -334,6 +334,8 @@ DataServiceImpl::DataServiceImpl(rclcpp::Node *node) : node_(node) {
   safe_declare_str("data_pointcloud_topic", "/cloud_registered");
   safe_declare_str("data_terrain_topic", "/terrain_map_ext");
   safe_declare_str("data_path_topic", "/path");
+  safe_declare_str("data_free_paths_topic", "/free_paths");
+  safe_declare_str("data_pct_path_topic", "/pct_path");
   safe_declare_str("data_file_root", "");
   // OTA 参数已迁移到 ota_daemon (:50052), 此处不再声明
   safe_declare_bool("webrtc_enabled", false);
@@ -350,6 +352,8 @@ DataServiceImpl::DataServiceImpl(rclcpp::Node *node) : node_(node) {
   pointcloud_topic_ = node_->get_parameter("data_pointcloud_topic").as_string();
   terrain_topic_ = node_->get_parameter("data_terrain_topic").as_string();
   path_topic_ = node_->get_parameter("data_path_topic").as_string();
+  free_paths_topic_ = node_->get_parameter("data_free_paths_topic").as_string();
+  pct_path_topic_ = node_->get_parameter("data_pct_path_topic").as_string();
   file_root_ = node_->get_parameter("data_file_root").as_string();
 
   webrtc_enabled_ = node_->get_parameter("webrtc_enabled").as_bool();
@@ -405,9 +409,27 @@ DataServiceImpl::ListResources(grpc::ServerContext *,
   auto *path = response->add_resources();
   path->mutable_id()->set_type(robot::v1::RESOURCE_TYPE_PATH);
   path->mutable_id()->set_name("local_path");
-  path->set_description("Nav path (poses), default topic: " + path_topic_);
+  path->set_description("Local planner selected path (body frame), topic: " +
+                         path_topic_);
   path->set_available(true);
   AddDefaultProfiles(path);
+
+  auto *free_paths = response->add_resources();
+  free_paths->mutable_id()->set_type(robot::v1::RESOURCE_TYPE_POINTCLOUD);
+  free_paths->mutable_id()->set_name("free_paths");
+  free_paths->set_description(
+      "Local planner candidate paths visualization (body frame), topic: " +
+      free_paths_topic_);
+  free_paths->set_available(true);
+  AddDefaultProfiles(free_paths);
+
+  auto *global_path = response->add_resources();
+  global_path->mutable_id()->set_type(robot::v1::RESOURCE_TYPE_PATH);
+  global_path->mutable_id()->set_name("global_path");
+  global_path->set_description(
+      "PCT global planner path (map frame), topic: " + pct_path_topic_);
+  global_path->set_available(true);
+  AddDefaultProfiles(global_path);
 
   return grpc::Status::OK;
 }
@@ -798,12 +820,18 @@ std::string DataServiceImpl::ResolveTopic(
   case robot::v1::RESOURCE_TYPE_MAP:
     return map_topic_;
   case robot::v1::RESOURCE_TYPE_POINTCLOUD:
-    // Differentiate between lidar cloud and terrain by resource name
+    // Differentiate by resource name
     if (name == "terrain" || name == "terrain_map" || name == "terrain_map_ext") {
       return terrain_topic_;
     }
+    if (name == "free_paths") {
+      return free_paths_topic_;
+    }
     return pointcloud_topic_;
   case robot::v1::RESOURCE_TYPE_PATH:
+    if (name == "global_path" || name == "pct_path") {
+      return pct_path_topic_;
+    }
     return path_topic_;
   default:
     return {};

@@ -38,7 +38,10 @@ ServiceOrchestrator::ServiceOrchestrator(rclcpp::Node *node) : node_(node) {
               kNumManagedServices);
 }
 
-ServiceOrchestrator::~ServiceOrchestrator() { StopPeriodicCheck(); }
+ServiceOrchestrator::~ServiceOrchestrator() {
+  CancelIdleShutdown();
+  StopPeriodicCheck();
+}
 
 // ================================================================
 //  后台巡检: 定期 systemctl is-active 确认服务存活
@@ -120,8 +123,8 @@ std::set<std::string> ServiceOrchestrator::GetRequiredServices(
     robot::v1::RobotMode mode) const {
   switch (mode) {
   case robot::v1::ROBOT_MODE_IDLE:
-    // IDLE: 保持 lidar+slam 用于实时监控 (点云/遥测)
-    return {"nav-lidar", "nav-slam"};
+    // IDLE: 空集 — 由 grace period 延迟关停, 不在此处保持
+    return {};
 
   case robot::v1::ROBOT_MODE_MAPPING:
     // 建图: 只需 lidar + SLAM
@@ -150,6 +153,9 @@ std::set<std::string> ServiceOrchestrator::GetRequiredServices(
 
 void ServiceOrchestrator::OnModeChange(robot::v1::RobotMode /*old_mode*/,
                                        robot::v1::RobotMode new_mode) {
+  // 1. 取消任何进行中的编排操作 (新模式优先)
+  orchestrate_cancel_.store(true);
+
   if (new_mode == robot::v1::ROBOT_MODE_ESTOP) {
     // 急停不动服务
     RCLCPP_WARN(node_->get_logger(),
@@ -157,13 +163,33 @@ void ServiceOrchestrator::OnModeChange(robot::v1::RobotMode /*old_mode*/,
     return;
   }
 
+  if (new_mode == robot::v1::ROBOT_MODE_IDLE) {
+    // ── IDLE: 先停高层服务, 基础服务走 grace period 延迟关停 ──
+    // 用 OrchestrateAsync({"nav-lidar", "nav-slam"}) 走统一编排路径:
+    //   - 会启动 lidar+slam (如果不在运行)
+    //   - 会停止 autonomy+planning (如果在运行)
+    //   - 全部经过 orchestrate_mutex_ 保护, 无竞态
+    std::thread([this]() {
+      orchestrate_cancel_.store(false);
+      OrchestrateAsync({"nav-lidar", "nav-slam"});
+    }).detach();
+
+    // 启动 grace period 倒计时 (到期停 lidar + slam)
+    ScheduleIdleShutdown();
+    return;
+  }
+
+  // ── 非 IDLE 模式: 取消 grace period, 然后按需启停 ──
+  CancelIdleShutdown();
+
   auto required = GetRequiredServices(new_mode);
-  if (required.empty() && new_mode != robot::v1::ROBOT_MODE_IDLE) {
+  if (required.empty()) {
     return;
   }
 
   // 异步执行, 不阻塞 gRPC 线程
   std::thread([this, required = std::move(required)]() {
+    orchestrate_cancel_.store(false);
     OrchestrateAsync(required);
   }).detach();
 }
@@ -193,14 +219,30 @@ bool ServiceOrchestrator::StartServiceWithRetry(const std::string &svc,
                 "ServiceOrchestrator: starting %s", unit.c_str());
     ManageService(unit, "start");
 
-    // 等待服务启动 (最多 5 秒)
+    // 等待服务启动 (最多 5 秒), 同时检测 failed 和取消
     for (int w = 0; w < 10; ++w) {
       std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+      // 被新模式切换取消
+      if (orchestrate_cancel_.load()) {
+        RCLCPP_INFO(node_->get_logger(),
+                    "ServiceOrchestrator: start of %s cancelled (mode changed)",
+                    unit.c_str());
+        return false;
+      }
+
       state = QueryServiceField(unit, "ActiveState");
       if (state == "active") {
         RCLCPP_INFO(node_->get_logger(),
                     "ServiceOrchestrator: %s → active", unit.c_str());
         return true;
+      }
+      // 启动过程中直接进入 failed → 立即退出等待, 进入重试
+      if (state == "failed") {
+        RCLCPP_WARN(node_->get_logger(),
+                    "ServiceOrchestrator: %s failed during startup",
+                    unit.c_str());
+        break;
       }
     }
   }
@@ -225,6 +267,11 @@ void ServiceOrchestrator::OrchestrateAsync(std::set<std::string> required) {
 
   // 1. 按依赖顺序启动需要的服务
   for (size_t i = 0; i < kNumManagedServices; ++i) {
+    if (orchestrate_cancel_.load()) {
+      RCLCPP_INFO(node_->get_logger(),
+                  "ServiceOrchestrator: orchestration cancelled during startup");
+      return;
+    }
     const std::string svc = kManagedServices[i];
     if (required.count(svc)) {
       StartServiceWithRetry(svc, 2);
@@ -233,6 +280,11 @@ void ServiceOrchestrator::OrchestrateAsync(std::set<std::string> required) {
 
   // 2. 按依赖反序停止不需要的服务
   for (int i = static_cast<int>(kNumManagedServices) - 1; i >= 0; --i) {
+    if (orchestrate_cancel_.load()) {
+      RCLCPP_INFO(node_->get_logger(),
+                  "ServiceOrchestrator: orchestration cancelled during shutdown");
+      return;
+    }
     const std::string svc = kManagedServices[i];
     if (!required.count(svc)) {
       std::string state = QueryServiceField(svc + ".service", "ActiveState");
@@ -246,6 +298,7 @@ void ServiceOrchestrator::OrchestrateAsync(std::set<std::string> required) {
 }
 
 void ServiceOrchestrator::EnsureBaseServices() {
+  CancelIdleShutdown();  // 明确要求启动服务, 取消任何待执行的关停
   std::thread([this]() {
     OrchestrateAsync({"nav-lidar", "nav-slam"});
   }).detach();
@@ -283,6 +336,73 @@ ServiceOrchestrator::GetAllServiceStatuses() const {
     statuses.push_back(std::move(s));
   }
   return statuses;
+}
+
+// ================================================================
+//  IDLE Grace Period — 延迟关停 lidar + slam
+// ================================================================
+
+void ServiceOrchestrator::ScheduleIdleShutdown() {
+  // 先取消之前的计时器 (如果有)
+  CancelIdleShutdown();
+
+  const int grace_sec = idle_grace_sec_;
+  if (grace_sec <= 0) {
+    // grace = 0 意味着立即停止
+    RCLCPP_INFO(node_->get_logger(),
+                "ServiceOrchestrator: IDLE grace=0, stopping all services now");
+    std::thread([this]() { OrchestrateAsync({}); }).detach();
+    return;
+  }
+
+  idle_shutdown_cancel_.store(false);
+
+  idle_shutdown_thread_ = std::thread([this, grace_sec]() {
+    RCLCPP_INFO(node_->get_logger(),
+                "ServiceOrchestrator: IDLE grace period started (%ds). "
+                "lidar+slam will stop if still IDLE.",
+                grace_sec);
+
+    // 使用 condition_variable 等待, 可被 CancelIdleShutdown 唤醒
+    {
+      std::unique_lock<std::mutex> lock(idle_shutdown_mutex_);
+      idle_shutdown_cv_.wait_for(lock, std::chrono::seconds(grace_sec), [this] {
+        return idle_shutdown_cancel_.load();
+      });
+    }
+
+    if (idle_shutdown_cancel_.load()) {
+      RCLCPP_INFO(node_->get_logger(),
+                  "ServiceOrchestrator: IDLE grace period cancelled "
+                  "(mode changed before timeout)");
+      return;
+    }
+
+    // 倒计时到了, 仍在 IDLE → 停止全部服务
+    RCLCPP_INFO(node_->get_logger(),
+                "ServiceOrchestrator: IDLE grace period expired. "
+                "Stopping lidar+slam to save resources.");
+
+    if (event_buffer_) {
+      event_buffer_->AddEvent(
+          robot::v1::EVENT_TYPE_SYSTEM_BOOT,
+          robot::v1::EVENT_SEVERITY_INFO,
+          "IDLE auto-shutdown",
+          "Grace period expired (" + std::to_string(grace_sec) +
+              "s). Stopped lidar+slam to save CPU/memory.");
+    }
+
+    OrchestrateAsync({});  // 空集 = 停止全部
+  });
+}
+
+void ServiceOrchestrator::CancelIdleShutdown() {
+  idle_shutdown_cancel_.store(true);
+  idle_shutdown_cv_.notify_all();
+
+  if (idle_shutdown_thread_.joinable()) {
+    idle_shutdown_thread_.join();
+  }
 }
 
 }  // namespace core
