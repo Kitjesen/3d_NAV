@@ -221,10 +221,14 @@ class WebRTCClient {
       },
       onDone: () {
         debugPrint('WebRTC: Signaling stream closed');
-        if (_connectionState == WebRTCConnectionState.connected ||
-            _connectionState == WebRTCConnectionState.connecting) {
-          _setConnectionState(WebRTCConnectionState.disconnected);
+        // Signaling stream closing is NORMAL after ICE completes.
+        // Only mark disconnected if we were still in connecting phase
+        // (i.e. ICE never established).
+        if (_connectionState == WebRTCConnectionState.connecting) {
+          _setConnectionState(WebRTCConnectionState.failed);
         }
+        // If already connected, keep the connection alive — media
+        // flows P2P via ICE, not through the signaling gRPC stream.
       },
     );
   }

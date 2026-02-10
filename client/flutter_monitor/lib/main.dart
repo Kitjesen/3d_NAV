@@ -111,29 +111,24 @@ class _AppWithBindingsState extends State<_AppWithBindings> {
       );
       stateLogger.bind(connProvider);
 
-      // 绑定 OtaGateway：监听连接变化，自动更新 client 引用
+      // 绑定 Gateway（延迟到下一帧，避免 build 阶段 notifyListeners 报错）
       final otaGateway = context.read<OtaGateway>();
-      otaGateway.updateClient(connProvider.client);
-      otaGateway.cloud.loadConfig();
-
-      // 绑定 MapGateway
       final mapGateway = context.read<MapGateway>();
-      mapGateway.updateClient(connProvider.client);
-
-      // 绑定 TaskGateway
       final taskGateway = context.read<TaskGateway>();
-      taskGateway.updateClient(connProvider.client);
-
-      // 绑定 FileGateway
       final fileGateway = context.read<FileGateway>();
-      fileGateway.updateClient(connProvider.client);
-
-      // 绑定 ControlGateway
       final controlGateway = context.read<ControlGateway>();
-      controlGateway.updateClients(
-        client: connProvider.client,
-        dogClient: connProvider.dogClient,
-      );
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        otaGateway.updateClient(connProvider.client);
+        otaGateway.cloud.loadConfig();
+        mapGateway.updateClient(connProvider.client);
+        taskGateway.updateClient(connProvider.client);
+        fileGateway.updateClient(connProvider.client);
+        controlGateway.updateClients(
+          client: connProvider.client,
+          dogClient: connProvider.dogClient,
+        );
+      });
 
       // 监听连接变化，自动同步所有 Gateway 的 client 引用
       connProvider.addListener(() {

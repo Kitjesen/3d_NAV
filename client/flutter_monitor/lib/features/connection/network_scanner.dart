@@ -41,8 +41,12 @@ class NetworkScanner {
   final _progressController = StreamController<double>.broadcast();
   Stream<double> get progress => _progressController.stream;
 
-  /// Get the local subnet prefix (e.g., "192.168.1")
-  Future<String?> _getLocalSubnet() async {
+  bool _disposed = false;
+
+  /// Get ALL local subnet prefixes (e.g., ["192.168.1", "192.168.66"])
+  /// Excludes common virtual adapter subnets (.1 host = likely gateway/VM host)
+  Future<List<String>> _getLocalSubnets() async {
+    final subnets = <String>[];
     try {
       final interfaces = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
@@ -53,17 +57,28 @@ class NetworkScanner {
           final ip = addr.address;
           if (ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
             final parts = ip.split('.');
-            return '${parts[0]}.${parts[1]}.${parts[2]}';
+            final subnet = '${parts[0]}.${parts[1]}.${parts[2]}';
+            if (!subnets.contains(subnet)) {
+              subnets.add(subnet);
+              debugPrint('[Scanner] Found subnet: $subnet (${iface.name} → $ip)');
+            }
           }
         }
       }
     } catch (e) {
-      debugPrint('[Scanner] Failed to get local subnet: $e');
+      debugPrint('[Scanner] Failed to get local subnets: $e');
     }
-    return null;
+    // Prioritize: non-.1 host addresses first (likely real LAN, not VM host-only)
+    return subnets;
   }
 
-  /// Scan the local subnet for gRPC robot services
+  /// Legacy single-subnet getter for backward compat
+  Future<String?> _getLocalSubnet() async {
+    final subnets = await _getLocalSubnets();
+    return subnets.isEmpty ? null : subnets.first;
+  }
+
+  /// Scan ALL local subnets for gRPC robot services
   Future<List<DiscoveredRobot>> scan({
     int port = 50051,
     Duration timeout = const Duration(seconds: 2),
@@ -72,31 +87,44 @@ class NetworkScanner {
     if (_isScanning) return [];
     _isScanning = true;
 
-    final subnet = subnetOverride ?? await _getLocalSubnet();
-    if (subnet == null) {
-      debugPrint('[Scanner] Could not determine local subnet');
+    final subnets = subnetOverride != null
+        ? [subnetOverride]
+        : await _getLocalSubnets();
+
+    if (subnets.isEmpty) {
+      debugPrint('[Scanner] Could not determine any local subnet');
       _isScanning = false;
       return [];
     }
 
-    debugPrint('[Scanner] Scanning $subnet.0/24 on port $port');
+    debugPrint('[Scanner] Scanning ${subnets.length} subnet(s) on port $port: $subnets');
     final found = <DiscoveredRobot>[];
     final futures = <Future>[];
 
-    for (int i = 1; i < 255; i++) {
-      final ip = '$subnet.$i';
-      futures.add(_probeHost(ip, port, timeout).then((robot) {
-        if (robot != null) {
-          found.add(robot);
-          _resultsController.add(robot);
-        }
-        _progressController.add(i / 254.0);
-      }));
+    final totalHosts = subnets.length * 254;
+    int probed = 0;
 
-      // Batch: 50 concurrent probes
-      if (futures.length >= 50) {
-        await Future.wait(futures);
-        futures.clear();
+    for (final subnet in subnets) {
+      debugPrint('[Scanner] Scanning $subnet.0/24 ...');
+      for (int i = 1; i < 255; i++) {
+        if (!_isScanning) break; // allow stop()
+        final ip = '$subnet.$i';
+        futures.add(_probeHost(ip, port, timeout).then((robot) {
+          if (_disposed) return;
+          if (robot != null) {
+            found.add(robot);
+            if (!_resultsController.isClosed) _resultsController.add(robot);
+            debugPrint('[Scanner] Found robot at $ip:$port');
+          }
+          probed++;
+          if (!_progressController.isClosed) _progressController.add(probed / totalHosts);
+        }));
+
+        // Batch: 50 concurrent probes
+        if (futures.length >= 50) {
+          await Future.wait(futures);
+          futures.clear();
+        }
       }
     }
 
@@ -104,9 +132,9 @@ class NetworkScanner {
       await Future.wait(futures);
     }
 
-    _progressController.add(1.0);
+    if (!_progressController.isClosed) _progressController.add(1.0);
     _isScanning = false;
-    debugPrint('[Scanner] Scan complete. Found ${found.length} robot(s)');
+    debugPrint('[Scanner] Scan complete. Found ${found.length} robot(s) across ${subnets.length} subnet(s)');
     return found;
   }
 
@@ -162,6 +190,8 @@ class NetworkScanner {
   }
 
   void dispose() {
+    _disposed = true;
+    _isScanning = false;
     _resultsController.close();
     _progressController.close();
   }
