@@ -80,6 +80,11 @@ public:
     degrade_callback_ = std::move(callback);
   }
 
+  /// 注入模式查询 (IDLE 模式下不触发 FAULT→ESTOP)
+  void SetModeProvider(std::function<int()> provider) {
+    mode_provider_ = std::move(provider);
+  }
+
   /// 获取当前健康状态 (线程安全)
   RobotHealth GetHealth() const;
 
@@ -154,6 +159,7 @@ private:
   // 回调
   std::shared_ptr<EventBuffer> event_buffer_;
   DegradeCallback degrade_callback_;
+  std::function<int()> mode_provider_;  // 返回当前 RobotMode int
 };
 
 }  // namespace core

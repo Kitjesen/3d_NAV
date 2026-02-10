@@ -282,7 +282,8 @@ bool ManageService(const std::string &service_name,
     }
   }
 
-  std::string cmd = "systemctl " + action + " " + service_name + " 2>&1";
+  // 使用 sudo: sudoers 规则允许 sunrise 用户无密码管理 nav-* 服务
+  std::string cmd = "sudo /bin/systemctl " + action + " " + service_name + " 2>&1";
   OtaLogInfo("Executing: %s", cmd.c_str());
   int ret = system(cmd.c_str());
   return ret == 0;

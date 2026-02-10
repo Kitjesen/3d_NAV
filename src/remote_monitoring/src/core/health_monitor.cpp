@@ -255,8 +255,11 @@ void HealthMonitor::EvaluateLoop() {
                               desc.empty() ? "All subsystems OK" : desc);
     }
 
-    // FAULT → 双路径停车 (冗余保证)
-    if (health.overall == HealthLevel::FAULT) {
+    // IDLE 模式 (mode=1) 下不触发 FAULT/ESTOP — 服务可能尚未启动
+    const bool is_idle = mode_provider_ && mode_provider_() == 1;
+
+    if (health.overall == HealthLevel::FAULT && !is_idle) {
+      // FAULT → 双路径停车 (冗余保证)
       // 路径 A: 直接发布 /stop (不依赖任何上层模块)
       std_msgs::msg::Int8 stop_msg;
       stop_msg.data = 2;  // Level 2: 全停
@@ -264,7 +267,8 @@ void HealthMonitor::EvaluateLoop() {
     }
 
     // 路径 B: 回调通知 ModeManager (best-effort, 可能失败)
-    if (degrade_callback_) {
+    // IDLE 模式下跳过 FAULT 回调, 避免触发 ESTOP
+    if (degrade_callback_ && !(is_idle && health.overall == HealthLevel::FAULT)) {
       std::string reason;
       for (const auto &sub : health.subsystems) {
         if (sub.level == health.overall) {

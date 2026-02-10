@@ -35,6 +35,7 @@ namespace core {
 class SafetyGate;
 class EventBuffer;
 class GeofenceMonitor;
+class ServiceOrchestrator;
 
 /// 转换守卫: 外部注入的条件查询函数
 struct TransitionGuards {
@@ -67,6 +68,10 @@ public:
 
   void SetGeofenceMonitor(std::shared_ptr<GeofenceMonitor> geofence) {
     geofence_ = std::move(geofence);
+  }
+
+  void SetServiceOrchestrator(std::shared_ptr<ServiceOrchestrator> orch) {
+    service_orchestrator_ = std::move(orch);
   }
 
   /// 注入转换守卫条件 (由 GrpcGateway 组装)
@@ -111,6 +116,7 @@ private:
   std::shared_ptr<SafetyGate> safety_gate_;
   std::shared_ptr<EventBuffer> event_buffer_;
   std::shared_ptr<GeofenceMonitor> geofence_;
+  std::shared_ptr<ServiceOrchestrator> service_orchestrator_;
 
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_stop_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_speed_;

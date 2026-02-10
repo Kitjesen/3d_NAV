@@ -11,6 +11,7 @@
 #include "remote_monitoring/core/lease_manager.hpp"
 #include "remote_monitoring/core/mode_manager.hpp"
 #include "remote_monitoring/core/safety_gate.hpp"
+#include "remote_monitoring/core/service_orchestrator.hpp"
 #include "remote_monitoring/services/control_service.hpp"
 #include "remote_monitoring/services/data_service.hpp"
 #include "remote_monitoring/services/system_service.hpp"
@@ -45,6 +46,10 @@ GrpcGateway::GrpcGateway(rclcpp::Node *node) : node_(node) {
   mode_manager_->SetEventBuffer(event_buffer_);
   mode_manager_->SetGeofenceMonitor(geofence_monitor_);
 
+  // Layer 3.5: 服务编排器 — 根据模式切换自动启停 systemd 服务
+  service_orchestrator_ = std::make_shared<core::ServiceOrchestrator>(node_);
+  mode_manager_->SetServiceOrchestrator(service_orchestrator_);
+
   // 注入转换守卫: 将各独立模块的状态查询接线到 ModeManager
   mode_manager_->SetTransitionGuards({
       .tf_ok =
@@ -78,6 +83,11 @@ GrpcGateway::GrpcGateway(rclcpp::Node *node) : node_(node) {
   // Layer 4: 健康监控 (独立模块)
   health_monitor_ = std::make_shared<core::HealthMonitor>(node_);
   health_monitor_->SetEventBuffer(event_buffer_);
+
+  // 健康监控: 注入模式查询 (IDLE 模式下不触发 ESTOP)
+  health_monitor_->SetModeProvider([this]() {
+    return static_cast<int>(mode_manager_->GetCurrentMode());
+  });
 
   // 健康监控降级回调 → ModeManager 急停 (回调为 best-effort, 不是唯一停车路径)
   health_monitor_->SetDegradeCallback(

@@ -1,0 +1,26 @@
+[Unit]
+Description=Navigation - Terrain Analysis + Local Planner
+After=nav-slam.service
+Requires=nav-slam.service
+
+[Service]
+Type=simple
+User=sunrise
+Group=sunrise
+WorkingDirectory=/home/sunrise/data/SLAM/navigation
+ExecStart=/bin/bash /home/sunrise/data/SLAM/navigation/scripts/services/nav-autonomy.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillMode=mixed
+KillSignal=SIGINT
+
+Environment=HOME=/home/sunrise
+Environment=LANG=en_US.UTF-8
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nav-autonomy
+
+[Install]
+WantedBy=multi-user.target

@@ -21,6 +21,7 @@ class GeofenceMonitor;
 class HealthMonitor;
 class ModeManager;
 class TaskManager;
+class ServiceOrchestrator;
 }
 
 namespace services {
@@ -54,6 +55,7 @@ private:
   std::shared_ptr<core::GeofenceMonitor> geofence_monitor_;
   std::shared_ptr<core::HealthMonitor> health_monitor_;
   std::shared_ptr<core::TaskManager> task_manager_;
+  std::shared_ptr<core::ServiceOrchestrator> service_orchestrator_;
   
   // 服务实现
   std::shared_ptr<services::SystemServiceImpl> system_service_;

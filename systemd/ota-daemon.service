@@ -1,0 +1,24 @@
+[Unit]
+Description=OTA Daemon (File Management & Updates)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sunrise
+Group=sunrise
+WorkingDirectory=/home/sunrise/data/SLAM/navigation
+ExecStart=/bin/bash /home/sunrise/data/SLAM/navigation/scripts/services/ota-daemon.sh
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+
+Environment=HOME=/home/sunrise
+Environment=LANG=en_US.UTF-8
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ota-daemon
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+[Unit]
+Description=Navigation - Fast-LIO2 SLAM
+After=nav-lidar.service
+Requires=nav-lidar.service
+
+[Service]
+Type=simple
+User=sunrise
+Group=sunrise
+WorkingDirectory=/home/sunrise/data/SLAM/navigation
+ExecStart=/bin/bash /home/sunrise/data/SLAM/navigation/scripts/services/nav-slam.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+KillMode=mixed
+KillSignal=SIGINT
+
+Environment=HOME=/home/sunrise
+Environment=LANG=en_US.UTF-8
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nav-slam
+
+[Install]
+WantedBy=multi-user.target

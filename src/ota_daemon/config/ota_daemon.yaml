@@ -29,7 +29,12 @@ tls_key_path: ""
 
 # ── systemd 服务管理 ──
 managed_services:
-  - "navigation.service"
+  - "nav-lidar.service"
+  - "nav-slam.service"
+  - "nav-autonomy.service"
+  - "nav-planning.service"
+  - "nav-grpc.service"
+  - "ota-daemon.service"
 
 # ── 健康检查超时 (秒) ──
 health_check_timeout_sec: 30

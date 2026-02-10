@@ -1,0 +1,26 @@
+[Unit]
+Description=Navigation - gRPC Gateway (Remote Monitoring & Control)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sunrise
+Group=sunrise
+WorkingDirectory=/home/sunrise/data/SLAM/navigation
+ExecStart=/bin/bash /home/sunrise/data/SLAM/navigation/scripts/services/nav-grpc.sh
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+KillMode=mixed
+KillSignal=SIGINT
+
+Environment=HOME=/home/sunrise
+Environment=LANG=en_US.UTF-8
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nav-grpc
+
+[Install]
+WantedBy=multi-user.target

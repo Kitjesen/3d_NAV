@@ -1,6 +1,7 @@
 #include "remote_monitoring/core/mode_manager.hpp"
 #include "remote_monitoring/core/event_buffer.hpp"
 #include "remote_monitoring/core/safety_gate.hpp"
+#include "remote_monitoring/core/service_orchestrator.hpp"
 
 namespace remote_monitoring {
 namespace core {
@@ -110,6 +111,11 @@ TransitionResult ModeManager::SwitchMode(robot::v1::RobotMode new_mode) {
   // 通知 SafetyGate
   if (safety_gate_) {
     safety_gate_->SetCurrentMode(new_mode);
+  }
+
+  // 服务编排: 根据新模式启停 systemd 服务 (异步)
+  if (service_orchestrator_) {
+    service_orchestrator_->OnModeChange(old_mode, new_mode);
   }
 
   // 进入新状态
