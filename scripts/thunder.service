@@ -1,0 +1,32 @@
+[Unit]
+Description=thunder - 3D-NAV Feishu Monitor Bot
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=thunder
+Group=thunder
+WorkingDirectory=/home/thunder/3d_NAV
+Environment="ROS_DOMAIN_ID=0"
+Environment="RMW_IMPLEMENTATION=rmw_cyclonedds_cpp"
+
+# ROS2 环境设置
+ExecStartPre=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/thunder/3d_NAV/install/setup.bash'
+
+# 启动机器人
+ExecStart=/usr/bin/python3 /home/thunder/3d_NAV/scripts/feishu_monitor_bot.py
+
+# 重启策略
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=thunder
+
+[Install]
+WantedBy=multi-user.target

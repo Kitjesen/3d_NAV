@@ -1,0 +1,128 @@
+VLingNav: Embodied Navigation with Adaptive
+Reasoning and Visual-Assisted Linguistic Memory
+Shaoan Wang1,2,∗, Yuanfei Luo1,∗, Xingyu Chen2,3,†, Aocheng Luo2,
+Dongyue Li2, Chang Liu2, Sheng Chen1,‡, Yangang Zhang1, Junzhi Yu2,†
+1ByteDance Seed,2Peking University,3Zhongguancun Academy
+∗Co-first authors,†Corresponding authors,‡Project lead
+Abstract
+Vision-Language-Action (VLA) models have shown promising potential in embodied navigation by
+unifying perception and planning while inheriting the strong generalization abilities of large Vision-
+Language Models (VLMs). However, most existing VLA models rely on reactive mappings directly
+from observations to actions, lacking the explicit reasoning capabilities and persistent memory
+required for complex, long-horizon navigation tasks. To address these challenges, we propose
+VLingNav, a VLA model for embodied navigation grounded in linguistic-driven cognition. First,
+inspired by the dual-process theory of human cognition, we introduce an adaptive chain-of-thought
+(AdaCoT) mechanism, which dynamically triggers explicit reasoning only when necessary, enabling
+the agent to fluidly switch between fast, intuitive execution and slow, deliberate planning. Second,
+to handle long-horizon spatial dependencies, we develop a visual-assisted linguistic memory module
+(VLingMem) that constructs a persistent, cross-modal semantic memory, enabling the agent to
+recall past observations to prevent repetitive exploration and infer movement trends for dynamic
+environments. For training, we construct Nav-AdaCoT-2.9M, the largest embodied navigation
+dataset with reasoning annotations to date, enriched with adaptive CoT annotations that induce a
+reasoning paradigm capable of adjusting both when to think and what to think about. Moreover,
+we incorporate an online expert-guided reinforcement learning stage, enabling the model to surpass
+pure imitation learning and to acquire more robust, self-explored navigation behaviors. Extensive
+experiments demonstrate that VLingNav achieves state-of-the-art performance across a wide range
+of embodied navigation benchmarks. Notably, VLingNav transfers to real-world robotic platforms
+in a zero-shot manner, successfully executing practical navigation tasks, including previously
+unseen and untrained tasks, and demonstrating strong cross-domain and cross-task generalization.
+Date:January 14, 2026
+Correspondence:wangshaoan@stu.pku.edu.cn,luoyuanfei@bytedance.com
+Project Page:https://wsakobe.github.io/VLingNav-web/
+1 Introduction
+Embodied navigation [ 57] is a fundamental capability for intelligent robots, enabling purposeful movement
+through previously unseen, structurally complex environments in response to human instructions. As robots
+are increasingly deployed in open-world settings from household service scenarios to industrial inspection,
+1arXiv:2601.08665v1  [cs.RO]  13 Jan 2026BenchmarkPerformance
+Real-world DeploymentNavigation Visualization
+Findthewashingmachine
+Trackthe man onthebikeSearchforthe<image_goal>Followthemaninredandlightgray
+VLingNavArchitecture
+Thereisnobedinthisroom,Ineedtoexit…(updatememory…)Icamefromleft,soIneedtoexploreright…(updatememory…)
+Icanseetheyellowbedwithpillowsinfront,soIshouldstopnow.(Finishepisode)IrememberIhaveenteredthiscorridorbefore…(updatememory…)Thereisnobedinthisroom,Ishouldrememberandexitnow…(updatememory…)Mytaskisfindtheyellowbedwithpillowswhichismorelikelyinthebedroom…(updatememory…)VLingNavMulti-taskInstructionObservation
+Stage1Pre-trainStage3OnlineRLTrainingRecipeAdaCoTVLingMemActionModel1stmemory2nd memory3rd memory
+Stage2SFTRobottrajectory
+VQAdataOfflineNav&VQAdataOnlineNavdata
+üObjectGoalNavigationüEmbodiedVisualTrackingüImageGoalNavigation
+time
+or<think_on><think>…</think><summary>…</summary><think_off>
+HM3Dv1ObjNavHM3Dv2ObjNavMP3DObjNavOVONseenOVONseensynonymsOVONunseenEVT-BenchSTTEVT-BenchDTHM3DImgNavSRSPL/TRHM3Dv1ObjNavHM3Dv2ObjNavMP3DObjNavOVONseenOVONseensynonymsOVONunseenEVT-BenchSTTEVT-BenchDTHM3DImgNav
+Figure 1 Overview of VLingNav.VLingNav is a VLA model enhanced with adaptive CoT reasoning and visual-assisted
+linguistic memory. This architecture allows the model to leverage historical visual and linguistic memory, achieving
+SOTA results on several embodied navigation benchmarks. Furthermore, VLingNav can be deployed zero-shot on
+real-world robots to perform diverse and complex navigation tasks.
+navigation systems must deliver accurate perception and decision-making while robustly generalizing to novel
+scenes and tasks. Traditional modular approaches [ 8,9,65] decompose navigation into submodules (e.g.,
+perception, mapping, planning) by leveraging mature techniques such as visual foundation models [ 32,44],
+SLAM [38,58], and path-planning algorithms [ 21]. However, these pipelines require manually defined module
+interfaces; over-reliance on hand-crafted rules compromises robustness and induces error accumulation, limiting
+adaptability in dynamically complex environments. Recent advances in large-scale vision–language–action
+(VLA) models have made compelling progress toward this goal. By unifying multimodal scene understanding
+with language-conditioned action generation, VLA-based agents substantially improve the adaptability and
+expressiveness of embodied navigation systems.
+Despitethisprogress, currentVLAmodelsarereactivesystems, oftenlackingtheexplicitreasoningmechanisms,
+memory structures, and interpretability that are important for reliable real-world deployment. Most existing
+models operate under a fixed inference budget, producing actions with a predetermined amount of computation,
+and therefore cannot increase deliberation when faced with ambiguity. In addition, these models often lack
+persistent semantic memory, relying solely on limited context windows. Without a mechanism to retain
+historical context, agents struggle to track their progress over extended trajectories, resulting in redundant
+exploration, looping behaviors, and poor adaptation to dynamic changes in the environment.
+Addressing these limitations requires rethinking VLA architectures from a linguistic perspective, moving
+beyond passive perception-action mapping toward active reasoning, memory construction, and interpretable
+decision-making. Motivated by principles from cognitive science and human problem solving, we argue
+that effective embodied navigation demands two missing capabilities: 1) adaptive reasoning, enabling the
+agent to adjust the granularity of its internal deliberation according to task complexity; and 2) linguistically
+grounded long-term memory, providing stable cross-modal semantics that support consistent and context-aware
+navigation behavior.
+Furthermore, most current VLA training paradigms rely on supervised fine-tuning (SFT) via imitation
+learning. However, this approach often limits generalization, preventing models from performing beyond
+expert demonstrations. While post-training paradigms rooted in reinforcement learning (RL) have proven
+effective for enhancing LLMs and VLMs on complex tasks [ 13,16,47], their application in embodied navigation
+2remains preliminary [ 14,31,82]. Notably, existing efforts typically focus on autoregressive RL in discrete space,
+leaving the exploration of RL for refining continuous control policies an open area for further investigation.
+In this work, we present VLingNav, a linguistic-driven VLA framework designed to endow embodied agents
+with cognitive abilities through two core components. First, inspired by the fast-and-slow thinking paradigm,
+we introduce an Adaptive Chain-of-Thought (AdaCoT) mechanism. AdaCoT dynamically triggers explicit
+reasoning only when necessary, allowing the agent to efficiently switch between fast reactive execution and
+deliberate planning depending on the situation. Second, to handle long-term spatial dependencies, we develop
+a Visual-assisted Linguistic Memory module (VLingMem). By constructing a persistent cross-modal memory,
+VLingMem enables the agent to recall past observations to prevent repetitive exploration and infer movement
+trends for dynamic tasks, thereby ensuring coherent decision-making over extended interactions.
+To support the training of such cognitively enriched VLA models, we construct Nav-AdaCoT-2.9M, the largest
+embodied navigation dataset with reasoning annotations to date, incorporating adaptive CoT annotations
+that teach the model when to think and what to think about. Beyond imitation learning, we further employ
+online expert-guided RL for post-training, enabling VLingNav to acquire self-improving navigation behaviors
+that surpass the limitations of supervised demonstrations.
+Extensive experiments across diverse embodied navigation benchmarks show that VLingNav achieves state-of-
+the-art performance, outperforming existing VLA-based agents in both success rate and efficiency metrics.
+Notably, VLingNav transfers to real-world robots in a zero-shot manner, successfully executing novel navigation
+tasks in the real world without any additional fine-tuning. These results highlight the strong generalization
+ability of linguistic-driven cognition and demonstrate the promise of integrating adaptive reasoning and
+persistent memory into VLA models for embodied navigation. The contributions are as follows:
+•We propose VLingNav, a novel framework integrating Adaptive Chain-of-Thought (AdaCoT) and
+Visual-Assisted Linguistic Memory (VLingMem). AdaCoT enables the agent to dynamically switch
+between fast execution and slow deliberation based on task complexity, while VLingMem eliminates
+redundant exploration and infers movement trends through persistent cross-modal storage.
+•We construct Nav-AdaCoT-2.9M, the largest embodied navigation dataset with reasoning annotations
+to date, enriched with adaptive CoT annotations that induce flexible reasoning patterns. We further
+introduce an online expert-guided RL post-training stage, empowering the model to surpass the
+limitations of imitation learning and acquire more robust, self-optimized navigation behaviors.
+•We conduct extensive experiments across standard embodied navigation benchmarks, demonstrating that
+VLingNav achieves state-of-the-art performance, with significant gains in long-horizon reasoning and
+success rate. Moreover, VLingNav exhibits remarkable zero-shot transfer to real-world robot platforms,
+successfully executing unseen tasks and illustrating strong cross-domain and cross-task generalization.
+2 Related Works
+2.1 Embodied Navigation Models
+As a core task in robotics, navigation has long attracted significant attention from robotics researchers [ 11].
+With the rise of embodied AI in recent years, robot navigation has gradually shifted from classical point-to-
+point navigation [ 22] to more intelligent embodied navigation. Embodied navigation includes subtasks such as
+vision-language navigation (VLN) [ 10,56,70,73,75], object goal navigation (ObjectNav) [ 42,60,62], image
+goal navigation (ImageNav) [ 25,59,63], and embodied visual tracking (EVT) [ 30,52,84], emphasizing that
+robots follow natural language instructions to perceive, reason, and plan in unseen environments.
+Embodied navigation methods can be broadly categorized into modular and end-to-end approaches. The
+modularparadigmreliesonwell-establishedcomponentssuchasoff-the-shelflargemodels[ 85,86], SLAM[ 5,38],
+vision foundation models [ 39,71], and planning algorithms [ 21]. It decomposes the navigation task into distinct
+modules (e.g., perception, localization, planning) and aligns them via manually defined interfaces. This design
+yields high interpretability and strong zero-shot transfer [ 63]. However, integrating multiple modules inevitably
+incurs information loss [ 34]; moreover, tight coupling across modules increases system fragility [ 34]. End-to-end
+3

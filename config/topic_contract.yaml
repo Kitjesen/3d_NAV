@@ -49,6 +49,17 @@ autonomy:
 control:
   goal_pose: /nav/goal_pose             # geometry_msgs/PoseStamped (导航目标)
 
+# ── 语义导航层 (VLN) ──
+# 所有语义话题在 /nav/semantic/ 命名空间下, 与几何导航零冲突。
+# 语义模块未启动时这些话题不存在, 现有系统完全不受影响。
+semantic:
+  detections_3d: /nav/semantic/detections_3d    # vision_msgs/Detection3DArray (3D 检测结果)
+  scene_graph: /nav/semantic/scene_graph        # std_msgs/String (JSON 场景图)
+  query_service: /nav/semantic/query            # 自定义 srv: string → ObjectMatch[]
+  instruction: /nav/semantic/instruction        # std_msgs/String (自然语言指令)
+  resolved_goal: /nav/semantic/resolved_goal    # geometry_msgs/PoseStamped (解析后的目标)
+  status: /nav/semantic/status                  # std_msgs/String (JSON: 阶段/目标/置信度)
+
 # ── TF 坐标系 ──
 tf:
   map_frame: map

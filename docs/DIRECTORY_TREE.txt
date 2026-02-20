@@ -1,0 +1,68 @@
+docs/
+.
+  01-getting-started
+  02-architecture
+  03-development
+  04-deployment
+  05-specialized
+  06-semantic-nav
+  07-testing
+  08-project-management
+  archive
+
+Files by directory:
+
+=== 01-getting-started/ ===
+01-getting-started/BUILD_GUIDE.md
+01-getting-started/DEPLOY.md
+01-getting-started/QUICK_START.md
+
+=== 02-architecture/ ===
+02-architecture/ALGORITHM_REFERENCE.md
+02-architecture/ARCHITECTURE.md
+02-architecture/TOPIC_CONTRACT.md
+
+=== 03-development/ ===
+03-development/API_REFERENCE.md
+03-development/CODE_REFACTOR.md
+03-development/PARAMETER_TUNING.md
+03-development/TROUBLESHOOTING.md
+
+=== 04-deployment/ ===
+04-deployment/DOCKER_GUIDE.md
+04-deployment/OTA_GUIDE.md
+04-deployment/OTA_V3_REPORT.md
+
+=== 05-specialized/ ===
+05-specialized/COMM_OPTIMIZATION.md
+05-specialized/DECOUPLING_ANALYSIS.md
+05-specialized/gateway.md
+05-specialized/PROTO_REGEN_PLAYBOOK.md
+05-specialized/WEBRTC_GUIDE.md
+
+=== 06-semantic-nav/ ===
+06-semantic-nav/PROJECT_STATUS.md
+06-semantic-nav/SEMANTIC_NAV_REPORT.md
+06-semantic-nav/SEMANTIC_NAV_STATUS.md
+06-semantic-nav/TASK_11_COMPLETION_REPORT.md
+06-semantic-nav/UPGRADE_PLAN.md
+
+=== 07-testing/ ===
+07-testing/REGRESSION_CHECKLIST_V1_3.md
+07-testing/TEST_REPORT_20260208.md
+
+=== 08-project-management/ ===
+08-project-management/CHANGELOG.md
+08-project-management/DOCS_REORGANIZATION_COMPLETE.md
+08-project-management/DOCS_REORGANIZATION_PLAN.md
+08-project-management/PRODUCT_REVIEW.md
+08-project-management/TODO.md
+
+=== archive/ ===
+archive/DELIVERY_CHECKLIST.md
+archive/FINAL_SUMMARY.md
+archive/PROGRESS_REPORT.md
+archive/WORK_SUMMARY.md
+
+=== . ===
+./README.md

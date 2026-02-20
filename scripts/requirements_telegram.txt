@@ -1,0 +1,13 @@
+# requirements.txt for Telegram Monitor Bot
+
+# Telegram Bot
+python-telegram-bot>=20.0
+
+# ROS2 (通常已安装)
+# rclpy
+
+# 数据处理
+numpy>=1.20.0
+
+# 可选：异步支持
+aiohttp>=3.8.0

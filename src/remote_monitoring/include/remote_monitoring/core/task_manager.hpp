@@ -40,9 +40,11 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "std_msgs/msg/int8.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -78,6 +80,13 @@ struct TaskParams {
 
   // ── 循迹任务参数 ──
   double tracking_tolerance{0.5}; // 循迹容差 (m)
+
+  // ── 语义导航任务参数 ──
+  std::string semantic_instruction;    // 自然语言指令
+  std::string semantic_language;       // "zh" / "en"
+  bool semantic_explore_if_unknown{true};
+  double semantic_timeout_sec{300.0};
+  double semantic_arrival_radius{1.0};
 };
 
 /// 任务执行状态 (内部)
@@ -92,6 +101,7 @@ enum class WaypointSourceInternal {
   NONE,       // 无活跃航点
   APP,        // 来自 App (StartTask)
   PLANNER,    // 来自全局规划器 (pct_path_adapter)
+  SEMANTIC,   // 来自语义规划器 (VLN semantic_planner_node)
 };
 
 /// 进度回调
@@ -164,6 +174,11 @@ private:
   void PlannerWaypointCallback(
       const geometry_msgs::msg::PointStamped::ConstSharedPtr msg);
   void PctPathCallback(const nav_msgs::msg::Path::ConstSharedPtr msg);
+  /// 语义导航: 接收 semantic_planner 解析后的目标点
+  void SemanticGoalCallback(
+      const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+  /// 语义导航: 接收 semantic_planner 状态更新
+  void SemanticStatusCallback(const std_msgs::msg::String::ConstSharedPtr msg);
   void CheckArrival();
   void AdvanceToNextWaypoint();
   void PublishCurrentWaypoint();
@@ -183,8 +198,14 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr
       sub_planner_waypoint_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_pct_path_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
+      sub_semantic_goal_;   // /nav/semantic/resolved_goal
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr
+      sub_semantic_status_;  // /nav/semantic/status
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_waypoint_;
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_stop_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr
+      pub_semantic_instruction_;  // /nav/semantic/instruction
   rclcpp::TimerBase::SharedPtr check_timer_;
 
   // tf2

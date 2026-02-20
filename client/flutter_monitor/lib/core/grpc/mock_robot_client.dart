@@ -266,6 +266,7 @@ class MockRobotClient implements RobotClientBase {
     NavigationParams? navigationParams,
     MappingParams? mappingParams,
     FollowPathParams? followPathParams,
+    SemanticNavParams? semanticNavParams,
   }) async {
     _mockTaskId = 'mock-task-${DateTime.now().millisecondsSinceEpoch}';
     _mockTaskStatus = TaskStatus.TASK_STATUS_RUNNING;

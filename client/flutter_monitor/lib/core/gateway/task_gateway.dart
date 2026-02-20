@@ -205,6 +205,34 @@ class TaskGateway extends ChangeNotifier {
     }
   }
 
+  /// 启动语义导航任务。
+  ///
+  /// 用户输入自然语言指令，通过 gRPC 发送到 semantic_planner。
+  Future<bool> startSemanticNav(
+    String instruction, {
+    String language = '',
+    bool exploreIfUnknown = true,
+    double timeoutSec = 0,
+    double arrivalRadius = 0,
+  }) async {
+    if (instruction.trim().isEmpty) {
+      _statusMessage = '请输入导航指令';
+      notifyListeners();
+      return false;
+    }
+    final params = SemanticNavParams()
+      ..instruction = instruction.trim()
+      ..language = language
+      ..exploreIfUnknown = exploreIfUnknown;
+    if (timeoutSec > 0) params.timeoutSec = timeoutSec;
+    if (arrivalRadius > 0) params.arrivalRadius = arrivalRadius;
+
+    return startTask(
+      TaskType.TASK_TYPE_SEMANTIC_NAV,
+      semanticNavParams: params,
+    );
+  }
+
   /// 启动任务
   ///
   /// 内部自动完成前置条件:
@@ -215,6 +243,7 @@ class TaskGateway extends ChangeNotifier {
     NavigationParams? navigationParams,
     MappingParams? mappingParams,
     FollowPathParams? followPathParams,
+    SemanticNavParams? semanticNavParams,
   }) async {
     final client = _client;
     if (client == null) {
@@ -253,6 +282,7 @@ class TaskGateway extends ChangeNotifier {
         navigationParams: navigationParams,
         mappingParams: mappingParams,
         followPathParams: followPathParams,
+        semanticNavParams: semanticNavParams,
       );
 
       if (resp.base.errorCode == ErrorCode.ERROR_CODE_OK) {
@@ -400,6 +430,8 @@ class TaskGateway extends ChangeNotifier {
         return '回家';
       case TaskType.TASK_TYPE_FOLLOW_PATH:
         return '循迹';
+      case TaskType.TASK_TYPE_SEMANTIC_NAV:
+        return '语义导航';
       default:
         return '';
     }

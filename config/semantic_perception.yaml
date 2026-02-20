@@ -1,0 +1,67 @@
+# ═══════════════════════════════════════════════════════════════
+# semantic_perception_node 配置
+#
+# 感知方案对比:
+#   YOLO-World (CVPR 2024)   → 默认检测器, 10+ FPS on Jetson
+#   CLIP (OpenAI, 2021)      → 跨模态匹配, 替代纯字符串查询
+#   GroundingDINO (2023)     → 可选高精度后端, ~2 FPS on Jetson
+#
+# 论文参考:
+#   LOVON:        YOLO + CLIP 二阶段 → 我们: YOLO-World + CLIP
+#   ConceptGraphs: SAM + CLIP 场景图  → 我们: instance_tracker + CLIP
+#   SG-Nav:       GroundingDINO      → 我们: 可选后端
+# ═══════════════════════════════════════════════════════════════
+
+semantic_perception_node:
+  ros__parameters:
+    # ── 检测器后端 ──
+    detector_type: "yolo_world"          # yolo_world (推荐) | grounding_dino (可选)
+
+    # ── YOLO-World 参数 (默认) ──
+    yolo_world:
+      model_size: "l"                    # s (最快) / m / l (平衡) / x (最精确)
+      confidence: 0.3                    # 检测置信度阈值
+      iou_threshold: 0.5                # NMS IoU 阈值
+      tensorrt: false                    # true = TensorRT 加速 (首次编译慢)
+
+    # ── CLIP 特征 (跨模态语义匹配) ──
+    clip:
+      enable: true                       # true = 每个检测提取 CLIP 特征
+      model: "ViT-B/32"                 # ViT-B/32 (~0.4GB) | ViT-L/14 (~1.2GB)
+
+    # ── GroundingDINO 参数 (可选后端) ──
+    grounding_dino:
+      config_path: ""                    # 空 = 自动查找 third_party/GroundingDINO
+      weights_path: ""                   # 空 = 自动查找 weights/
+      box_threshold: 0.35
+      text_threshold: 0.25
+
+    # ── 默认检测类别 (英文, 用 . 分隔) ──
+    default_classes: "door . chair . fire extinguisher . person . desk . stairs . elevator . sign . trash can . sofa"
+
+    # ── Laplacian 模糊过滤 (参考 LOVON) ──
+    laplacian_threshold: 100.0           # 低于此方差的帧视为模糊, 跳过
+
+    # ── 3D 投影 ──
+    depth_scale: 0.001                   # Orbbec depth 单位 → 米
+    max_depth: 6.0                       # 超过此深度的检测忽略 (m)
+    min_depth: 0.3                       # 过近的检测忽略 (m)
+
+    # ── 实例追踪 ──
+    iou_threshold: 0.3                   # IoU 匹配阈值
+    clip_similarity_threshold: 0.75      # CLIP 特征匹配阈值 (需 clip.enable: true)
+    merge_distance: 0.5                  # 世界坐标系中同一物体的合并距离 (m)
+
+    # ── 场景图 ──
+    scene_graph:
+      enable: true
+      publish_rate: 1.0                  # 场景图发布频率 (Hz)
+      max_objects: 200                   # 场景图最大物体数
+
+    # ── 点云到语义地图渲染 ──
+    semantic_map:
+      enable: true                       # 发布 MarkerArray 到 semantic_map_markers (RViz 叠加)
+
+    # ── 性能 ──
+    target_fps: 5.0                      # 目标处理帧率
+    skip_frames: 2                       # 每 N 帧处理一次

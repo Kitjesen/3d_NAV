@@ -1,0 +1,216 @@
+ESCA: Contextualizing Embodied Agents via
+Scene-Graph Generation
+Jiani Huang
+University of Pennsylvania
+jianih@seas.upenn.eduAmish Sethi∗
+University of Pennsylvania
+asethi04@seas.upenn.eduMatthew Kuo∗
+University of Pennsylvania
+mkuo@seas.upenn.edu
+Mayank Keoliya
+University of Pennsylvania
+mkeoliya@seas.upenn.eduNeelay Velingker
+University of Pennsylvania
+neelay@seas.upenn.eduJungHo Jung
+University of Pennsylvania
+j76jung@seas.upenn.edu
+Ser-Nam Lim
+University of Central Florida
+sernam@ucf.eduZiyang Li
+Johns Hopkins University
+ziyang@cs.jhu.eduMayur Naik
+University of Pennsylvania
+mhnaik@seas.upenn.edu
+Abstract
+Multi-modal large language models (MLLMs) are making rapid progress toward
+general-purpose embodied agents. However, existing MLLMs do not reliably
+capture fine-grained links between low-level visual features and high-level textual
+semantics, leading to weak grounding and inaccurate perception. To overcome this
+challenge, we propose ESCA, a framework that contextualizes embodied agents
+by grounding their perception in spatial-temporal scene graphs. At its core is
+SGClip, a novel, open-domain, promptable foundation model for generating scene
+graphs that is based on CLIP. SGClip is trained on 87K+ open-domain videos
+using a neurosymbolic pipeline that aligns automatically generated captions with
+scene graphs produced by the model itself, eliminating the need for human-labeled
+annotations. We demonstrate that SGClip excels in both prompt-based inference
+and task-specific fine-tuning, achieving state-of-the-art results on scene graph
+generation and action localization benchmarks. ESCA with SGClip improves per-
+ception for embodied agents based on both open-source and commercial MLLMs,
+achieving state of-the-art performance across two embodied environments. Notably,
+ESCA significantly reduces agent perception errors and enables open-source mod-
+els to surpass proprietary baselines. We release the source code for SGCLIP model
+training at https://github.com/video-fm/LASER and for the embodied agent
+athttps://github.com/video-fm/ESCA.
+1 Introduction
+Recent advances in large-scale pretraining have enabled foundation models to assist with a wide
+range of tasks, from language and vision understanding [ 2,15,52,83] to mathematical problem
+solving [ 96,18] and code generation [ 21,61,55]. However, it remains an open challenge to realize
+embodied agents that are capable of doing household chores, training alongside humans in physical
+activities, or providing care for the aging [ 39,13]. A critical first step toward this goal is equipping
+agents with fine-grained perception to ground abstract goals in physical interactions.
+*These authors contributed equally to this work
+39th Conference on Neural Information Processing Systems (NeurIPS 2025).arXiv:2510.15963v2  [cs.CV]  27 Oct 2025Embodied Agent 
+Environment I want to use a machine 
+to prepare toasted bre- 
+ad for breakfast, plea… Instruction 
+Feedback 
+…
+✔ Move succeeded 
+> no collision detected Move right by 
+0.25 units. Action ESCA  (ours) Task Planning 
+Visual Description Language Plan Executable Plan 
+target : toaster ; objects : 
+bread (326, 155), cabine …1. Move forward by 0.25… move_right (0.25 ); … 
+below on
+abovebehind
+counter bread cabi window Scene Graph SGClip 
+EB-Habitat EB-Navigat Concept 
+Extraction 
+🔥
+  InternVL 
+entities : 
+  [toast , bread ]
+attributes :
+  [yellow ]
+relations : [on]
+Entity 
+Identification 
+Reflect & Reason 
+the toaster is in front of… Transfer Protocol 
+Transfer Protocol 
+EB-Alfred EB-Manipul Figure 1: An overview of embodied agent pipeline augmented with ESCA. In each cycle, the
+agent takes in an instruction and the environmental feedback and outputs a concrete executable
+action, through a sequence of perception, reasoning, and planning. The action is then executed and
+the environment will provide the next state. Notably, ESCA contextualizes the task planner with
+grounded visual features represented as a scene graph.
+Despite progress, multi-modal large language models (MLLMs) still struggle to build spatially and
+temporally grounded world models. Their inability to reliably ground visual features with spatial-
+temporal relations creates a disconnect between conceptual semantics and pixel-level observations [ 89,
+60]. This lack of structured, fine-grained scene understanding severely limits their effectiveness in
+embodied environments. In fact, our empirical analysis shows that up to 69% of agent failures stem
+from perception errors, highlighting the need for frameworks that can bridge this gap.
+To address this challenge, we propose integrating structured scene graphs into the perception, rea-
+soning, and planning pipelines of MLLM-based embodied agents. While prior work has explored
+enhancing MLLMs with external visual grounding modules, these approaches typically rely on
+open-domain object detection models such as Grounding DINO [ 56] and YOLO [ 27]. However,
+these models are primarily designed for object identification and often overlook semantic attributes,
+inter-object relationships, and temporal consistency.
+In this work, we introduceESCA( Embodied and Scene-Graph Contextualized Agent), a framework
+designed to contextualize MLLMs through open-domain scene graph generation (Figure 1). Much
+like the bioluminescent lure of a deep-sea anglerfish, which illuminates its surroundings to reveal
+otherwise hidden prey, ESCA provides structured visual grounding that helps MLLMs make sense
+of complex and ambiguous sensory environments. A key feature of ESCA is selective grounding:
+rather than injecting full scene graphs, which may degrade performance, the MLLM first identifies
+the subset of objects, attributes, and relations most pertinent to the instruction, then determines the
+essential entities for task completion. This mechanism is supported by our transfer protocol, which
+performs probabilistic reasoning over object names, attributes, and spatial relations to construct
+prompts enriched with the most relevant scene elements. At its core is SGClip, a CLIP-based
+model that captures semantic visual features, including entity classes, physical attributes, actions,
+interactions, and inter-object relations.
+Through experiments on four challenging embodied environments, we demonstrate that ESCA
+consistently improves the performance of all evaluated MLLMs, including both open-source and
+proprietary models. By providing structured and grounded scene graphs, ESCA significantly reduces
+perception errors, laying the foundation for more reliable reasoning and planning. Beyond its
+integration with MLLM-based agents, we show that SGClip, when evaluated independently, exhibits
+strong zero-shot generalization, is promptable for task-specific scene understanding, and remains
+fine-tunable for downstream tasks such as action recognition.
+In summary, our contributions are as follows: (1) we present ESCA, a general framework for
+contextualizing MLLM-based embodied agents through selective scene graph generation; (2) we
+introduce the transfer protocol for enriching prompts with probabilistically inferred scene-specific
+information for diverse embodied benchmarks; (3) we introduce SGClip, a generalizable and fine-
+grained scene graph generation model, along with ESCA-Video-87K, an MLLM annotated dataset;
+2Concept 
+Extraction 
+Prompt    SGClip 
+below
+onabove
+counter bread cabi 🔥
+  InternVL 
+MLLM 
+Concept 
+Extraction 
+Prompt 
+Obj. Ident. 
+ STSG Pred. 
+Concept 
+Extraction 
+Prompt 🔥
+  InternVL 
+MLLM 
+Scene Graph 
+Augmented 
+Summarization 
+Prompt 
+You are a robot operating in a home.  You are 
+given the environment for performing the task: “I 
+want to use machine…”  Please extract the most 
+visually identifiable features and ignore the 
+more subtle ones. Please deduce the object names 
+with a synonym. For example, substitute "freshly 
+baked baguette"  to "loaves" … You are supposed to 
+output in JSON. You need to describe current visual state , 
+summarize interactions, environment feedback, and 
+the scene, and reason why the last action or plan 
+failed… The current scene objects are: 
+[0.48::countertop, 0.38::countertop] ; the bread 
+is on the countertop (confidence: 0.92) … The 
+target state: The bread is toasted by a toaster ; 
+In order to achieve the goal, the bread needs …
+Concept 
+Extraction Object 
+Identification Scene Graph 
+Prediction Summarization 
+& Validation 
+🔥
+  InternVL or or…
+ 🔥
+  InternVL or or… +
+Visual Description 
+Candidate toaster  loc: 
+- 2 frames before: none 
+- prev frame: [ 0, 75, …] 
+- curr frame: [ 320, 32…]
+Description:  I am gettin 
+closer to the toaster 
+but I need to also pick… 
+Figure 2: A detailed illustration of the visual description module, which involves concept extraction,
+object identification, scene graph prediction, and visual summarization. We also illustrate sample
+MLLM prompts used in a kitchen environment for the concept extraction and summarization steps.
+(4) we conduct extensive evaluations demonstrating the effectiveness and versatility of ESCA and
+SGClip across both embodied agent and scene understanding tasks.
+2 ESCA: A Framework for Embodied Agents
+2.1 Background
+Embodied Environments.Recent research on embodied agents has been accelerated by the avail-
+ability of simulated environments such as VisualAgentBench [ 57] and EmbodiedBench [ 91], which
+provide rich, multimodal task suites covering navigation, manipulation, and interaction across diverse
+scenarios. These benchmarks pose challenges that require agents to operate in both a) low-level
+action spaces such as continuous control signals over robot joints, and b) high-level action spaces
+such as programmatic instructions and skills that abstract over low-level actions.
+These tasks are typically modeled as Partially Observable Markov Decision Processes (POMDPs),
+represented as 7-tuple (S, A,Ω,T,O, L ins,R), where Sis the unobservable state space, Ais the
+task-specific action space, Ωis the visual perception space where It∈Ω is an image frame at time
+t,T:S×A→S is the state transition dynamics, O:S→Ω relates the underlying state to the
+observations, Linsis the natural language instruction for the agent, and R:S→ {0,1} is the reward
+function indicating whether the task has been completed.
+Embodied Agents and MLLM-Based Embodied Agents.A typical embodied agent interacts with
+the environment by maintaining a history of observations and actions: ht= (I 0, a0, I1, . . . , a t−1, It),
+where atis the action taken by the agent at time t. The agent selects the next action by conditioning
+on the instruction Land history htvia a policy π(at|Lins, ht). AnMLLM-based embodied agent
+realizes such a policy by leveraging a multi-modal model that processes both: a) imagery data It, and
+b) textual data, including the instructionL insand textual representations of actionsa∈A.
+Established by [ 91], recent MLLM-based agent architectures often decompose the policy evaluation
+process into structured stages inspired by cognitive reasoning workflows (Figure 1): 1)Visual
+Description: extracting and summarizing visual inputs; 2)Reflection: integrating observations with
+historical context to build situational awareness; 3)Reasoning: inferring task-relevant insights based
+on the combined context; 4)Language Plan: generating high-level plans or action sequences in
+natural language; 5)Executable Plan: translating plans into concrete actions executable by the agent.
+Challenges of MLLM-Based Embodied Agents.Despite recent progress, MLLM-based embodied
+agents remain fragile in complex environments due to compounded errors across perception, reason-
+ing, and planning [ 39,13].Perception errorsinclude hallucinated objects, misrecognized entities or
+actions, and incorrect spatial relationships.Reasoning errorsarise when agents fail to correctly infer
+spatial relations or recognize task termination states. These issues propagate intoplanning, where
+agents may skip critical steps or generate invalid plans due to inaccurate state estimation.
+2.2 TheESCAFramework
+At the core of ESCA is a simple yet effective idea: contextualizing MLLM-based agents with
+grounded, structured scene-graph information to improve visual description. Specifically, given
+3

@@ -1,0 +1,69 @@
+# =============================================================================
+# VLA Navigation Configuration
+# Architecture: VLingNav (arXiv 2601.08665) on Qwen2.5-VL-3B backbone
+# =============================================================================
+
+vla_nav_node:
+  ros__parameters:
+    # --- Model paths ---
+    model:
+      backbone: "Qwen/Qwen2.5-VL-3B-Instruct"
+      quantized_path: ""          # Path to INT4 quantized model (empty = load full)
+      device: "cuda"
+      dtype: "float16"            # float16 / bfloat16 / float32
+
+    # --- Dynamic FPS sampling (Ebbinghaus forgetting curve) ---
+    dynamic_fps:
+      fs_max: 10.0                # Maximum sampling rate (Hz)
+      stability: 5.0              # Memory stability parameter s
+      max_frames: 32              # Max frames kept in buffer
+      grid_pool_base_stride: 2    # Base grid-pooling stride for distant frames
+      grid_pool_stability: 3.0    # Grid-pooling decay parameter g
+
+    # --- AdaCoT (Adaptive Chain-of-Thought) ---
+    adacot:
+      enabled: true
+      think_token: "<THINK>"
+      no_think_token: "<NO_THINK>"
+      max_cot_tokens: 128         # Max tokens for CoT reasoning text
+      trigger_threshold: 0.5      # Probability threshold for THINK trigger
+      temperature: 0.3            # Generation temperature for CoT text
+
+    # --- VLingMem (Visual-assisted Linguistic Memory) ---
+    vlingmem:
+      enabled: true
+      max_entries: 100            # Max memory entries
+      top_k_retrieval: 5          # Number of memories retrieved per query
+      summary_max_tokens: 64      # Max tokens for CoT summary compression
+      eviction_strategy: "fifo"   # fifo / lru / importance
+
+    # --- Action Head ---
+    action_head:
+      horizon: 5                  # Predict this many future waypoints
+      max_linear_step: 0.5        # Max displacement per waypoint (meters)
+      max_angular_step: 0.785     # Max rotation per waypoint (radians, ~45 deg)
+      action_dim: 3               # (x, y, theta)
+
+    # --- Inference ---
+    inference:
+      control_hz: 3.0             # Target control frequency
+      frame_buffer_seconds: 30.0  # Keep frames for this many seconds
+      warmup_frames: 5            # Wait for this many frames before first inference
+
+    # --- ROS2 topics ---
+    topics:
+      rgb_image: "/camera/color/image_raw"
+      depth_image: "/camera/depth/image_raw"
+      camera_info: "/camera/color/camera_info"
+      instruction: "/nav/semantic/instruction"
+      waypoint_out: "/nav/semantic/goal"
+      trajectory_out: "/nav/semantic/trajectory"
+      status_out: "/nav/semantic/status"
+      cancel: "/nav/semantic/cancel"
+
+    # --- TF2 ---
+    tf:
+      camera_frame: "camera_link"
+      base_frame: "base_link"
+      world_frame: "map"
+      timeout_sec: 0.5

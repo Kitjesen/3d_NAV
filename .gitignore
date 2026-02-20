@@ -91,3 +91,7 @@ keys/
 
 # OTA 构建产物
 dist/
+
+# VLN third-party dependencies (use scripts/clone_semantic_deps.sh to restore)
+third_party/
+!third_party/.gitkeep

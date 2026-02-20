@@ -447,6 +447,7 @@ class RobotClient implements RobotClientBase {
     NavigationParams? navigationParams,
     MappingParams? mappingParams,
     FollowPathParams? followPathParams,
+    SemanticNavParams? semanticNavParams,
   }) async {
     final request = StartTaskRequest()
       ..base = _createRequestBase()
@@ -455,6 +456,7 @@ class RobotClient implements RobotClientBase {
     if (navigationParams != null) request.navigationParams = navigationParams;
     if (mappingParams != null) request.mappingParams = mappingParams;
     if (followPathParams != null) request.followPathParams = followPathParams;
+    if (semanticNavParams != null) request.semanticNavParams = semanticNavParams;
     return await _controlClient.startTask(request);
   }
 

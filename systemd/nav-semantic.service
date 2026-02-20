@@ -1,0 +1,27 @@
+[Unit]
+Description=Navigation - Semantic Perception & Planning (NaviMind)
+After=nav-slam.service nav-grpc.service
+Wants=nav-slam.service
+
+[Service]
+Type=simple
+User=sunrise
+Group=sunrise
+WorkingDirectory=/opt/nav
+ExecStart=/bin/bash /opt/nav/scripts/services/nav-semantic.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillMode=mixed
+KillSignal=SIGINT
+SuccessExitStatus=130 SIGINT
+
+Environment=HOME=/home/sunrise
+Environment=LANG=en_US.UTF-8
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nav-semantic
+
+[Install]
+WantedBy=multi-user.target

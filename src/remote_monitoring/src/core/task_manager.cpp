@@ -26,12 +26,22 @@ TaskManager::TaskManager(rclcpp::Node *node) : node_(node) {
     node_->declare_parameter<std::string>("task_waypoint_out_topic", "/nav/way_point");
   if (!node_->has_parameter("task_stop_topic"))
     node_->declare_parameter<std::string>("task_stop_topic", "/nav/stop");
+  if (!node_->has_parameter("task_semantic_goal_topic"))
+    node_->declare_parameter<std::string>("task_semantic_goal_topic",
+                                          "/nav/semantic/resolved_goal");
+  if (!node_->has_parameter("task_semantic_instruction_topic"))
+    node_->declare_parameter<std::string>("task_semantic_instruction_topic",
+                                          "/nav/semantic/instruction");
 
   const auto odom_topic = node_->get_parameter("task_odom_topic").as_string();
   const auto waypoint_in = node_->get_parameter("task_waypoint_in_topic").as_string();
   const auto global_path = node_->get_parameter("task_global_path_topic").as_string();
   const auto waypoint_out = node_->get_parameter("task_waypoint_out_topic").as_string();
   const auto stop_topic = node_->get_parameter("task_stop_topic").as_string();
+  const auto semantic_goal_topic =
+      node_->get_parameter("task_semantic_goal_topic").as_string();
+  const auto semantic_instruction_topic =
+      node_->get_parameter("task_semantic_instruction_topic").as_string();
 
   // ---- TF2 ----
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
@@ -53,11 +63,34 @@ TaskManager::TaskManager(rclcpp::Node *node) : node_(node) {
       global_path, 10,
       std::bind(&TaskManager::PctPathCallback, this, std::placeholders::_1));
 
+  // 订阅语义导航解析目标 (VLN semantic_planner → resolved goal)
+  sub_semantic_goal_ =
+      node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+          semantic_goal_topic, 10,
+          std::bind(&TaskManager::SemanticGoalCallback, this,
+                    std::placeholders::_1));
+
+  // 订阅语义导航状态 (VLN semantic_planner → status)
+  if (!node_->has_parameter("task_semantic_status_topic"))
+    node_->declare_parameter<std::string>("task_semantic_status_topic",
+                                          "/nav/semantic/status");
+  const auto semantic_status_topic =
+      node_->get_parameter("task_semantic_status_topic").as_string();
+  sub_semantic_status_ =
+      node_->create_subscription<std_msgs::msg::String>(
+          semantic_status_topic, 10,
+          std::bind(&TaskManager::SemanticStatusCallback, this,
+                    std::placeholders::_1));
+
   // ---- 发布 ----
   pub_waypoint_ = node_->create_publisher<geometry_msgs::msg::PointStamped>(
       waypoint_out, 10);
 
   pub_stop_ = node_->create_publisher<std_msgs::msg::Int8>(stop_topic, 5);
+
+  pub_semantic_instruction_ =
+      node_->create_publisher<std_msgs::msg::String>(
+          semantic_instruction_topic, 5);
 
   // ---- 定时器 ----
   check_timer_ = node_->create_wall_timer(
@@ -66,9 +99,10 @@ TaskManager::TaskManager(rclcpp::Node *node) : node_(node) {
 
   RCLCPP_INFO(node_->get_logger(),
               "TaskManager: odom=%s, waypoint_in=%s, global_path=%s, "
-              "waypoint_out=%s, stop=%s, timeout=%.0fs",
+              "waypoint_out=%s, stop=%s, semantic_goal=%s, timeout=%.0fs",
               odom_topic.c_str(), waypoint_in.c_str(), global_path.c_str(),
-              waypoint_out.c_str(), stop_topic.c_str(), waypoint_timeout_sec_);
+              waypoint_out.c_str(), stop_topic.c_str(),
+              semantic_goal_topic.c_str(), waypoint_timeout_sec_);
 }
 
 // ================================================================
@@ -148,6 +182,80 @@ void TaskManager::PctPathCallback(
 }
 
 // ================================================================
+//  语义导航目标回调
+// ================================================================
+
+void TaskManager::SemanticGoalCallback(
+    const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) {
+  // 优先级: APP > SEMANTIC > PLANNER
+  // 有 App 任务 (非语义导航) 时忽略语义目标
+  if (state_.load() != TaskState::IDLE) {
+    // 允许语义导航任务接收后续目标 (多步导航 / 重规划)
+    std::lock_guard<std::mutex> lock(task_mutex_);
+    if (task_params_.type != robot::v1::TASK_TYPE_SEMANTIC_NAV) {
+      return;
+    }
+  }
+
+  // 系统挂起时不处理
+  if (system_suspended_.load()) {
+    return;
+  }
+
+  // 提取 map 坐标系目标点, 转换为 odom 坐标系
+  const double map_x = msg->pose.position.x;
+  const double map_y = msg->pose.position.y;
+  const double map_z = msg->pose.position.z;
+
+  double odom_x, odom_y, odom_z;
+  if (!TransformToOdom(map_x, map_y, map_z, odom_x, odom_y, odom_z)) {
+    RCLCPP_WARN(node_->get_logger(),
+                "TaskManager: Semantic goal tf failed, dropping "
+                "(map: %.2f, %.2f, %.2f)",
+                map_x, map_y, map_z);
+    return;
+  }
+
+  // 构建 odom 坐标系航点并发布
+  geometry_msgs::msg::PointStamped wp;
+  wp.header.stamp = node_->get_clock()->now();
+  wp.header.frame_id = odom_frame_;
+  wp.point.x = odom_x;
+  wp.point.y = odom_y;
+  wp.point.z = odom_z;
+
+  pub_waypoint_->publish(wp);
+
+  RCLCPP_INFO(node_->get_logger(),
+              "TaskManager: Semantic goal → waypoint (map: %.2f,%.2f,%.2f → "
+              "odom: %.2f,%.2f,%.2f)",
+              map_x, map_y, map_z, odom_x, odom_y, odom_z);
+}
+
+void TaskManager::SemanticStatusCallback(
+    const std_msgs::msg::String::ConstSharedPtr msg) {
+  // 解析语义导航状态 JSON
+  // 格式: {"state": "NAVIGATING", "detail": "...", "step": 5, ...}
+
+  // 只在语义导航任务活跃时处理状态
+  std::lock_guard<std::mutex> lock(task_mutex_);
+  if (task_params_.type != robot::v1::TASK_TYPE_SEMANTIC_NAV) {
+    return;
+  }
+
+  // TODO: 解析 JSON 并填充 SemanticNavProgress
+  // 当前简单记录日志
+  RCLCPP_DEBUG(node_->get_logger(),
+               "TaskManager: Semantic status: %s", msg->data.c_str());
+
+  // 可以在这里更新进度回调
+  // if (progress_callback_) {
+  //   // 解析 state, step 等信息
+  //   // progress_callback_(task_id_, status, progress, msg->data);
+  // }
+}
+
+// ================================================================
 //  模式联动
 // ================================================================
 
@@ -214,9 +322,10 @@ std::string TaskManager::StartTask(const TaskParams &params) {
     return "";
   }
 
-  // 建图任务不需要航点
+  // 建图任务和语义导航任务不需要航点
   if (params.waypoints.empty() &&
-      params.type != robot::v1::TASK_TYPE_MAPPING) {
+      params.type != robot::v1::TASK_TYPE_MAPPING &&
+      params.type != robot::v1::TASK_TYPE_SEMANTIC_NAV) {
     RCLCPP_WARN(node_->get_logger(),
                 "TaskManager: Cannot start task — no waypoints");
     return "";
@@ -253,7 +362,25 @@ std::string TaskManager::StartTask(const TaskParams &params) {
             ", Type: " + std::to_string(static_cast<int>(params.type)));
   }
 
-  // 建图任务无航点，不发布初始 waypoint
+  // 语义导航任务: 发布自然语言指令到 /nav/semantic/instruction
+  if (params.type == robot::v1::TASK_TYPE_SEMANTIC_NAV) {
+    std_msgs::msg::String instr_msg;
+    // JSON 格式: 包含指令文本、语言、探索策略等
+    instr_msg.data = "{\"instruction\":\"" + params.semantic_instruction +
+                     "\",\"language\":\"" + params.semantic_language +
+                     "\",\"explore_if_unknown\":" +
+                     (params.semantic_explore_if_unknown ? "true" : "false") +
+                     ",\"timeout_sec\":" +
+                     std::to_string(params.semantic_timeout_sec) +
+                     ",\"arrival_radius\":" +
+                     std::to_string(params.semantic_arrival_radius) + "}";
+    pub_semantic_instruction_->publish(instr_msg);
+    RCLCPP_INFO(node_->get_logger(),
+                "TaskManager: Published semantic instruction: %s",
+                params.semantic_instruction.c_str());
+  }
+
+  // 建图任务和语义导航任务无航点，不发布初始 waypoint
   if (!params.waypoints.empty()) {
     PublishCurrentWaypoint();
   }

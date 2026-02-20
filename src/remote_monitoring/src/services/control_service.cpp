@@ -444,6 +444,21 @@ ControlServiceImpl::StartTask(grpc::ServerContext *,
     }
   }
 
+  // 语义导航参数
+  if (request->has_semantic_nav_params()) {
+    const auto &snp = request->semantic_nav_params();
+    params.semantic_instruction = snp.instruction();
+    params.semantic_language = snp.language();
+    params.semantic_explore_if_unknown = snp.explore_if_unknown();
+    if (snp.timeout_sec() > 0.0) {
+      params.semantic_timeout_sec = snp.timeout_sec();
+    }
+    if (snp.arrival_radius() > 0.0) {
+      params.semantic_arrival_radius = snp.arrival_radius();
+    }
+    has_structured_params = true;
+  }
+
   // 建图参数透传
   if (request->has_mapping_params()) {
     const auto &mp = request->mapping_params();
@@ -456,9 +471,10 @@ ControlServiceImpl::StartTask(grpc::ServerContext *,
     }
   }
 
-  // 建图任务不需要航点
+  // 建图任务和语义导航任务不需要航点
   const bool is_mapping = (request->task_type() == robot::v1::TASK_TYPE_MAPPING);
-  if (params.waypoints.empty() && !is_mapping) {
+  const bool is_semantic = (request->task_type() == robot::v1::TASK_TYPE_SEMANTIC_NAV);
+  if (params.waypoints.empty() && !is_mapping && !is_semantic) {
     response->mutable_base()->set_error_code(
         robot::v1::ERROR_CODE_INVALID_REQUEST);
     response->mutable_base()->set_error_message(

@@ -1,0 +1,153 @@
+ADANAV: ADAPTIVEREASONING WITHUNCER-
+TAINTY FORVISION-LANGUAGENAVIGATION
+Xin Ding1∗Jianyu Wei1Yifan Yang2Shiqi Jiang2Qianxi Zhang2Hao Wu3Fucheng Jia4,6
+Liang Mi6Yuxuan Yan5Weijun Wang6Yunxin Liu6Zhibo Chen1†Ting Cao6†
+1University of Science and Technology of China2Microsoft Research3Nanjing University
+4Central South University5Zhejiang University
+6Institute for AI Industry Research (AIR), Tsinghua University
+ABSTRACT
+Vision-Language Navigation (VLN) requires agents to follow natural language in-
+structions by grounding them in sequential visual observations over long horizons.
+Explicit reasoning could enhance temporal consistency and perception–action
+alignment, but reasoning at fixed steps often leads to suboptimal performance and
+unnecessary computation. To address this, we proposeAdaNav, an uncertainty-
+based adaptive reasoning framework for VLN. At its core is theUncertainty-
+Adaptive Reasoning Block(UAR), a lightweight plugin that dynamically trig-
+gers reasoning. We introduceAction Entropyas a policy prior for UAR and pro-
+gressively refine it through aHeuristics-to-RLtraining method, enabling agents
+to learn difficulty-aware reasoning policies under the strict data limitations of em-
+bodied tasks. Results show that with only6Ktraining samples, AdaNav achieves
+substantial gains over closed-source models trained onmillion-scaledata, improv-
+ing success rate by 20% on R2R val-unseen, 11.7% on RxR-CE, and 11.4% in
+real-world scenes. The code is available at AdaNav.
+1 INTRODUCTION
+As a fundamental capability for embodied agents, Vision-Language Navigation (VLN) requires
+agents to interpret natural language instructions and continuously ground them in sequential vi-
+sual observations to execute long-horizon navigation trajectories (Gu et al., 2022; Park & Kim,
+2023). Existing VLM-based methods either rely on augmenting navigation with auxiliary modali-
+ties (Krantz et al., 2021; Xu et al., 2023; Yin et al., 2024), such as depth, odometry, or topological
+maps to strengthen spatial understanding, or instead scale up training on VLN datawithoutauxiliary
+inputs to improve quality and generalization (Zheng et al., 2024; Wei et al., 2025; Yu et al., 2025).
+However, despite these advances, current methods still hindered by two major challenges of VLN:
+(1) Consistent temporal grounding: continuously capturing progress along the trajectory, tracking
+completed parts, and deciding the next action; (2) Robust perception–action mapping: grounding
+language in the current spatial context, recognizing landmarks, localizing itself, and selecting ap-
+propriate navigation actions.
+To address these challenges, explicit reasoning has been introduced to VLN (Zhou et al., 2024b;
+Wang et al., 2024; Lin et al., 2025a; Chen et al., 2024a), enabling agents to better align language,
+perception, and action over long-horizon navigation trajectories. However, current straightforward
+reasoning at each step not only incurs prohibitive computational overhead, but also results in over-
+thinking (Sui et al., 2025; Wu et al., 2025; Shen et al., 2025) that degrades navigation quality (Fig-
+ure 4 and Table 6 show higher quality with fewer reasoning steps). Ideally, VLN agents should ex-
+hibit adaptive reasoning, i.e., decidingwhen and howto reason. However, achieving such adaptivity
+and mitigating the overconfidence issue of LLMs (Sun et al., 2025; Groot & Valdenegro-Toro, 2024;
+Yoo, 2024) typically require large-scale supervised fine-tuning (SFT) with task-specific data (Wen
+et al., 2024; Lin et al., 2025b). However, embodied interaction data is costly to collect and far from
+∗xinding64@mail.ustc.edu.cn
+†Corresponding Author. tingcao@mail.tsinghua.edu.cn
+1arXiv:2509.24387v1  [cs.RO]  29 Sep 2025SFT VLN AdaNav VLNVLNUncertainty
+Turn 
+Left ∆өTurn 
+Right∆өMove 
+Forward∆dTurn 
+Right∆ө… … …VLN
+Turn 
+Left ∆өTurn 
+Left ∆өTurn 
+Right∆ө… …Reason
+Mode1… … Reason
+Mode nMLP
+SoftmaxInstruction Observation
+You are facing towards 
+a chair, turn left, walk 
+straight in the corridor 
+PriorInstruction Observation
+You are facing towards 
+a chair, turn left, walk 
+straight in the corridor 
+UAR Block
+Move 
+Forward∆d…Figure 1: AdaNav augments a base VLN model by integrating the Uncertainty-Adaptive Reasoning
+Block (UAR Block). UAR Block leverages model uncertainty to autonomously trigger reasoning
+modes and timing, enhancing consistent temporal grounding and perception–action mapping while
+significantly improving efficiency and mitigating overthinking.
+web-scale. Under such limited data conditions, it remains difficult for models to learn when and
+how to adaptively invoke reasoning.
+To avoid the data limitation, we proposeuncertainty-based adaptive reasoning for navigation
+(AdaNav), as shown in Figure 1. By definingAction Entropyas an indicator for uncertainty, AdaNav
+utilizes this as an objective and interpretable heuristic prior to decide when and how to reason, and
+then refine this prior gradually through reinforcement learning (RL) to optimize the reasoning trigger
+policy. By combining the efficiency of heuristic guidance with the optimality of RL, AdaNav do
+not involve costly labeled reasoning triggering data, but enable the agent to automatically invoke
+reasoning when necessary to maintain temporal grounding and robust perception–action mapping in
+the long-horizon navigation. See Figure 2 as an example.
+To realize AdaNav, we introduce aUncertainty-Adaptive Reasoning Block (UAR Block)and the
+Heuristic-to-RLtraining mechanism. UAR block, as a plugin for available VLN models, collects
+historical, embodied-interaction-dependent uncertainty signals and generates vectorized control sig-
+nals to dynamically trigger VLN for appropriate reasoning modes. Leveraging the interpretable
+signals from the UAR Block, the Heuristic-to-RL training first explores the action space under these
+heuristic priors (e.g., triggering reasoning when uncertainty exceeds a threshold) to guide decision-
+making at critical moments. As training progresses, the influence of these priors is gradually an-
+nealed, allowing RL to autonomously refine the UAR reasoning-trigger policy for optimal reward.
+To demonstrate the effectiveness of AdaNav, we integrate it with state-of-the-art open-source VLN
+backbones and evaluate on classic benchmarks. Remarkably,with only 6K training samples,
+AdaNav significantly surpasses closed-source models trained on million-scale data.Specifi-
+cally, our method achieves an average 20% improvement in success rate on R2R val-unseen (Krantz
+et al., 2020), and even without training on the larger and more challenging RxR-CE (Ku et al., 2020),
+AdaNav yields a 11.7% gain, demonstrating the cross-dataset generality. Additionally, AdaNav ex-
+hibits strong robustness in Sim-to-Real deployment, achieving approximately a 11.4% success rate
+improvement over 150 instructions across fourreal-world indoor scenes. As training proceeds,
+AdaNav reduces the average number of reasoning steps per trajectory to only2.5(over trajectories
+with an average length of55 steps), while the success rate increases 7% compared to reasoning at
+fixed steps. Notably, 71% of reasoning steps are concentrated on hard trajectories. These results
+indicate that training makes reasoning more difficulty-aware and mode-adaptive.
+2 RELATEDWORK
+VLN with Auxiliaries.VLN requires agents to follow free-form linguistic instructions and visual
+cues to reach a target location. Early studies relied on pre-defined waypoints for discrete naviga-
+tion (Qi et al., 2020b; Thomason et al., 2020) in the Habitat-Matterport3D simulator (Chang et al.,
+2017), while more recent works (Qi et al., 2020a; An et al., 2021; Hong et al., 2020; Tan et al.,
+2019; Wang et al., 2019) use continuous environments, namelyVLN-CE, like Habitat (Krantz et al.,
+2You are facing towards a sofa chair, turn around, walk towards the wall, turn left, walk straight in the corridor till you re ach towards a portrait 
+on a wall, turn right, walk in the corridor till you reach towards a window , turn left, step into the arch, continue walking straight and step into 
+another arch, slightly turn left, walk towards the left side of the bath tub till you reach towards a wall. You are now facing towards a wall with 
+a glass window on your left and a shower room on your right. You have reached your destination. 
+…
+… … … … …
+… … … … …
+There's a fork ahead, and at the end of the hallway to the front right, there's a cabinet with a window above it
+I turned around from the sofa chair, walked toward the wall, turned left, continued down the corridor past a portrait, then t urned right, 
+walked until I reached a window, and turned left into the arch.
+This is a bathroom, and in front of me, there's a bathtub.
+Figure 2: A visualization example of AdaNav. It autonomously invokes reasoning, e.g., summariza-
+tion and description when necessary to maintain consistent temporal grounding and robust percep-
+tion–action mapping.
+2020), enabling low-level actions (e.g., move forward, rotate) for more realistic navigation. With
+the rise of Transformers, many works introduced pre-trained methods with auxiliary modalities, e.g.,
+depth, odometry, or topological maps, for VLN (Ma et al., 2019; Wang et al., 2019). DUET (Chen
+et al., 2022) and ETPNav (An et al., 2024) build topological maps for global navigation understand-
+ing, while GridMM (Wang et al., 2023) introduced a dynamic egocentric grid memory. Although
+these methods improve spatial awareness, they inevitably limit generalization and introduce com-
+putational overhead and noise (Zhang et al., 2024b). Modern works increasingly target video-only
+general solutions for VLN without auxiliaries (Zhang et al., 2024b; Cheng et al., 2024; Zhang et al.,
+2024a).VLN-CE with only videos captured by the monocular camera is also the target of this paper.
+Vision-Language Models for Navigation.With the rapid development of Vision-Language Mod-
+els (VLMs), RT-2 (Zitkovich et al., 2023) demonstrates the potential of transferring web-scale
+knowledge from VLMs to generalizable robotic manipulation. Recent work has focused on scal-
+ing VLN training data and fine-tuning large VLMs. For example, Navid (Zhang et al., 2024b) used
+550k navigation samples to fine-tune Vicuna for navigation; NaVILA (Cheng et al., 2024) expanded
+to 3–5M samples combining real and simulated navigation data plus general VQA supervision;
+Uni-NaVid (Zhang et al., 2024a) further incorporated 3.6M multi-task trajectories from Habitat-
+Matterport3D (Chang et al., 2017; Krantz et al., 2020) and real video QA data (Azuma et al., 2022;
+Chen et al., 2024b; Li et al., 2024) for cross-task generalization. Despite these advances, VLM-based
+VLN agents still fall short in task quality, struggling with consistent temporal grounding and robust
+perception–action mapping, particularly in long-horizon trajectories and complex environments.
+Explicit Reasoning for Navigation.To mitigate these challenges, recent works introduce ex-
+plicit reasoning via off-the-shelf LLMs, where pre-defined programming rules constrain when and
+how reasoning modes—description, summarization, or error correction—are applied. For exam-
+ple, LLM-Planner (Song et al., 2023) parses instructions into sub-goals; NavGPT (Zhou et al.,
+2024b) generates step-wise textual scene descriptions and historical trajectories; NavGPT-2 (Zhou
+et al., 2024a) further integrates visual grounding; MiC (Qiao et al., 2023) organizes reasoning into a
+“summarization–planning–correction” loop; DiscussNav (Long et al., 2024b), MCGPT (Zhan et al.,
+2024), and InstructNav (Long et al., 2024a) leverage expert collaboration or memory graphs for
+error correction and historical summarization.
+3

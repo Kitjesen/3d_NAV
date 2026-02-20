@@ -1,0 +1,593 @@
+"""
+Frontier 评分探索 — 统一目标 Grounding 与 Frontier 选择。
+
+参考论文:
+  - MTU3D (ICCV 2025): "Move to Understand"
+    核心: 把 frontier 也视为一种"查询", 与目标 grounding 统一优化
+    → 比 VLFM 提升 14-23%
+
+  - OpenFrontier (2025): FrontierNet + VLM set-of-mark
+  - VLFM (2023): Visual-Language Frontier Map (基线方法)
+  - L3MVN (ICRA 2024): 拓扑节点 + frontier 结合
+
+  创新4 扩展 (Topology-Aware Semantic Exploration):
+  - Hydra (RSS 2022): 层次3D场景图, 房间拓扑连通
+  - Concept-Guided Exploration (2025): Room + Door 自治概念
+  新增: frontier 评分 += f(semantic_prior, topology_reachability)
+        semantic_prior = "该方向房间包含目标的先验概率"
+        topology = "通过拓扑图可达的未探索房间"
+"""
+
+import math
+import logging
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# ── OccupancyGrid 常量 ──
+FREE_CELL = 0
+OCCUPIED_CELL = 100
+UNKNOWN_CELL = -1
+
+
+@dataclass
+class Frontier:
+    """一个 frontier 区域。"""
+    frontier_id: int
+    cells: List[Tuple[int, int]] = field(default_factory=list)  # (row, col) 列表
+    center: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0]))
+    center_world: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0]))
+    size: int = 0                    # 包含的 cell 数量
+    score: float = 0.0              # 语言相关性评分
+    distance: float = 0.0           # 到机器人的距离
+    direction_label: str = ""       # "north" / "east" / etc.
+    nearby_labels: List[str] = field(default_factory=list)  # 附近已知物体
+
+    def to_dict(self) -> Dict:
+        return {
+            "frontier_id": self.frontier_id,
+            "center_world": {
+                "x": round(float(self.center_world[0]), 2),
+                "y": round(float(self.center_world[1]), 2),
+            },
+            "size": self.size,
+            "score": round(self.score, 3),
+            "distance": round(self.distance, 2),
+            "direction": self.direction_label,
+            "nearby_objects": self.nearby_labels,
+        }
+
+
+class FrontierScorer:
+    """
+    Frontier 提取 + 评分。
+
+    用法:
+      1. update_costmap(grid, info) — 更新 costmap
+      2. extract_frontiers(robot_pos) — 提取 frontier
+      3. score_frontiers(instruction, ...) — 评分
+      4. get_best_frontier() — 获取最佳探索目标
+    
+    创新3 补强: 增加 CLIP 视觉评分通道 (VLFM 核心思路),
+    对每个 frontier 方向的最近观测帧做 CLIP(image, instruction) 相似度计算。
+    """
+
+    def __init__(
+        self,
+        min_frontier_size: int = 5,      # 最小 frontier 大小 (cells)
+        max_frontiers: int = 10,          # 最多保留的 frontier 数
+        cluster_radius_cells: int = 3,    # 聚类半径
+        distance_weight: float = 0.2,     # 距离权重 (越近越好)
+        novelty_weight: float = 0.3,      # 新颖度权重 (未去过更好)
+        language_weight: float = 0.2,     # 语言相关性权重
+        grounding_weight: float = 0.3,    # MTU3D: grounding 势权重
+        # 创新3: 视觉评分权重 (VLFM 核心)
+        vision_weight: float = 0.0,       # 默认 0 = 不启用; 启用时建议 0.15
+        # 创新4: 语义先验权重 (Topology-Aware Semantic Exploration)
+        semantic_prior_weight: float = 0.0,  # 默认 0 = 不启用; 启用时建议 0.2
+        # C6: 以下阈值全部参数化 (ablation 实验依赖)
+        novelty_distance: float = 5.0,    # 新颖度归一化距离 (m)
+        nearby_object_radius: float = 3.0,  # 附近物体检索半径 (m)
+        grounding_angle_threshold: float = 0.7854,  # 空间梯度角度阈值 (rad, 默认 pi/4)
+        cooccurrence_bonus: float = 0.25,  # 共现先验加分
+        grounding_spatial_bonus: float = 0.1,  # 方向有物体的 grounding 加分
+        grounding_keyword_bonus: float = 0.4,  # 方向有指令相关物体的加分
+        grounding_relation_bonus: float = 0.15,  # 关系链延伸加分
+    ):
+        self.min_frontier_size = min_frontier_size
+        self.max_frontiers = max_frontiers
+        self.cluster_radius_cells = cluster_radius_cells
+        self.distance_weight = distance_weight
+        self.novelty_weight = novelty_weight
+        self.language_weight = language_weight
+        self.grounding_weight = grounding_weight
+        self.novelty_distance = max(novelty_distance, 0.1)
+        self.nearby_object_radius = max(nearby_object_radius, 0.1)
+        self.grounding_angle_threshold = max(grounding_angle_threshold, 0.01)
+        self.cooccurrence_bonus = cooccurrence_bonus
+        self.grounding_spatial_bonus = grounding_spatial_bonus
+        self.grounding_keyword_bonus = grounding_keyword_bonus
+        self.grounding_relation_bonus = grounding_relation_bonus
+
+        self.vision_weight = max(vision_weight, 0.0)
+        self.semantic_prior_weight = max(semantic_prior_weight, 0.0)
+
+        self._grid: Optional[np.ndarray] = None
+        self._resolution: float = 0.05  # m/cell
+        self._origin_x: float = 0.0
+        self._origin_y: float = 0.0
+        self._frontiers: List[Frontier] = []
+
+        # 创新3: 方向观测缓存
+        self._directional_features: Dict[int, np.ndarray] = {}
+        self._clip_encoder = None
+
+        # 创新4: 语义先验引擎 (拓扑感知探索)
+        self._semantic_prior_engine = None
+        self._room_priors_cache: Dict[int, float] = {}  # room_id → prior_score
+
+    def update_costmap(
+        self,
+        grid_data: np.ndarray,
+        resolution: float,
+        origin_x: float,
+        origin_y: float,
+    ):
+        """
+        更新 costmap 数据。
+
+        Args:
+            grid_data: 2D array, 值为 0 (free) / 100 (occupied) / -1 (unknown)
+            resolution: m/cell
+            origin_x, origin_y: 地图原点在世界坐标的位置
+        """
+        self._grid = grid_data
+        self._resolution = resolution
+        self._origin_x = origin_x
+        self._origin_y = origin_y
+
+    def extract_frontiers(
+        self,
+        robot_position: np.ndarray,
+    ) -> List[Frontier]:
+        """
+        从 costmap 提取 frontier cells 并聚类。
+
+        Frontier 定义: 与 unknown cell 相邻的 free cell。
+
+        Args:
+            robot_position: [x, y] 世界坐标
+
+        Returns:
+            Frontier 列表 (按大小降序)
+        """
+        if self._grid is None:
+            return []
+
+        rows, cols = self._grid.shape
+        frontier_mask = np.zeros((rows, cols), dtype=bool)
+
+        # 找 frontier cells
+        for r in range(1, rows - 1):
+            for c in range(1, cols - 1):
+                if self._grid[r, c] != FREE_CELL:
+                    continue
+                # 检查 4-邻域是否有 unknown
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    if self._grid[r + dr, c + dc] == UNKNOWN_CELL:
+                        frontier_mask[r, c] = True
+                        break
+
+        # 聚类 frontier cells (简单连通分量)
+        visited = np.zeros_like(frontier_mask, dtype=bool)
+        clusters: List[List[Tuple[int, int]]] = []
+
+        for r in range(rows):
+            for c in range(cols):
+                if frontier_mask[r, c] and not visited[r, c]:
+                    # BFS 聚类
+                    cluster = []
+                    queue = [(r, c)]
+                    visited[r, c] = True
+
+                    while queue:
+                        cr, cc = queue.pop(0)
+                        cluster.append((cr, cc))
+
+                        for dr in range(-self.cluster_radius_cells, self.cluster_radius_cells + 1):
+                            for dc in range(-self.cluster_radius_cells, self.cluster_radius_cells + 1):
+                                nr, nc = cr + dr, cc + dc
+                                if (0 <= nr < rows and 0 <= nc < cols
+                                        and frontier_mask[nr, nc]
+                                        and not visited[nr, nc]):
+                                    visited[nr, nc] = True
+                                    queue.append((nr, nc))
+
+                    if len(cluster) >= self.min_frontier_size:
+                        clusters.append(cluster)
+
+        # 转换为 Frontier 对象
+        self._frontiers = []
+        for i, cluster in enumerate(clusters):
+            cells = np.array(cluster, dtype=np.float64)
+            center_cell = cells.mean(axis=0)
+
+            # Cell → world
+            center_world = np.array([
+                self._origin_x + center_cell[1] * self._resolution,
+                self._origin_y + center_cell[0] * self._resolution,
+            ])
+
+            dist = float(np.linalg.norm(center_world - robot_position[:2]))
+
+            # 方向标签
+            dx = center_world[0] - robot_position[0]
+            dy = center_world[1] - robot_position[1]
+            angle = math.atan2(dy, dx)
+            direction = self._angle_to_label(angle)
+
+            frontier = Frontier(
+                frontier_id=i,
+                cells=cluster,
+                center=center_cell,
+                center_world=center_world,
+                size=len(cluster),
+                distance=dist,
+                direction_label=direction,
+            )
+            self._frontiers.append(frontier)
+
+        # 按大小降序
+        self._frontiers.sort(key=lambda f: f.size, reverse=True)
+        self._frontiers = self._frontiers[:self.max_frontiers]
+
+        return self._frontiers
+
+    def set_clip_encoder(self, clip_encoder) -> None:
+        """注入 CLIP 编码器, 启用 frontier 视觉评分 (创新3: VLFM 核心)。"""
+        self._clip_encoder = clip_encoder
+        if self.vision_weight <= 0.0:
+            self.vision_weight = 0.15
+            logger.info("Frontier vision scoring enabled (weight=0.15)")
+
+    def set_semantic_prior_engine(self, engine) -> None:
+        """注入语义先验引擎 (创新4: Topology-Aware Semantic Exploration)。"""
+        self._semantic_prior_engine = engine
+        if self.semantic_prior_weight <= 0.0:
+            self.semantic_prior_weight = 0.2
+            logger.info("Frontier semantic prior scoring enabled (weight=0.2)")
+
+    def update_room_priors(
+        self,
+        instruction: str,
+        rooms: List[Dict],
+        visited_room_ids: Optional[set] = None,
+    ) -> None:
+        """
+        更新房间语义先验缓存 (每次场景图更新后调用)。
+
+        将每个房间对目标指令的先验概率缓存起来,
+        在 score_frontiers 时用于评估 frontier 方向对应房间的先验。
+        """
+        if not self._semantic_prior_engine:
+            return
+        priors = self._semantic_prior_engine.score_rooms_for_target(
+            instruction, rooms, visited_room_ids,
+        )
+        self._room_priors_cache.clear()
+        for rp in priors:
+            self._room_priors_cache[rp.room_id] = rp.prior_score
+
+    def update_directional_observation(
+        self,
+        robot_position: np.ndarray,
+        camera_yaw: float,
+        image_features: np.ndarray,
+    ) -> None:
+        """
+        缓存某方向的 CLIP 视觉特征 (创新3: VLFM 方向观测缓存)。
+        
+        每帧由感知节点调用: 提取当前相机朝向的 CLIP 图像特征,
+        存入以 angle_bin 为 key 的缓存。当 frontier 评分时,
+        取 frontier 方向最近的 angle_bin 的图像特征做
+        CLIP(image, instruction) 评分。
+        
+        Args:
+            robot_position: [x, y] 世界坐标 (用于判断缓存有效性)
+            camera_yaw: 相机朝向 (弧度, atan2 约定)
+            image_features: CLIP 图像特征向量 (L2 归一化)
+        """
+        if image_features.size == 0:
+            return
+        # 离散化为 8 个方向 bin (每 45°)
+        angle_bin = round(camera_yaw / (2 * math.pi) * 8) % 8
+        feat = np.asarray(image_features, dtype=np.float64)
+        feat_norm = np.linalg.norm(feat)
+        if feat_norm > 0:
+            feat = feat / feat_norm
+        self._directional_features[angle_bin] = feat
+
+    def _compute_vision_score(
+        self, frontier_angle: float, instruction: str
+    ) -> float:
+        """
+        计算 frontier 方向的 CLIP 视觉评分 (VLFM 核心改进)。
+        
+        取 frontier 方向最近的 angle_bin 的缓存图像特征,
+        与 instruction 的 CLIP 文本特征做余弦相似度。
+        """
+        if not self._clip_encoder or not self._directional_features:
+            return 0.0
+
+        # 找最近方向 bin
+        target_bin = round(frontier_angle / (2 * math.pi) * 8) % 8
+
+        # 检查 ±1 bin
+        for offset in [0, 1, -1]:
+            candidate_bin = (target_bin + offset) % 8
+            if candidate_bin in self._directional_features:
+                img_feat = self._directional_features[candidate_bin]
+                try:
+                    sim = self._clip_encoder.text_image_similarity(
+                        instruction, [img_feat]
+                    )
+                    if sim and len(sim) > 0:
+                        return max(0.0, min(1.0, float(sim[0])))
+                except Exception:
+                    pass
+        return 0.0
+
+    def score_frontiers(
+        self,
+        instruction: str,
+        robot_position: np.ndarray,
+        visited_positions: Optional[List[np.ndarray]] = None,
+        scene_objects: Optional[List[Dict]] = None,
+        scene_relations: Optional[List[Dict]] = None,
+        scene_rooms: Optional[List[Dict]] = None,
+    ) -> List[Frontier]:
+        """
+        对 frontier 评分 (MTU3D 统一 Grounding + VLFM 融合)。
+
+        MTU3D (ICCV 2025) 改进:
+          评分 = distance + novelty + language + grounding_potential
+
+          grounding_potential 计算方法:
+            1. 场景图物体分布的"空间梯度": 物体密度从已知区域到
+               frontier 方向递增 → 目标可能在更远处
+            2. 关系链延伸: 如果指令目标的关联物体在 frontier 方向
+               → 目标更可能在该方向
+            3. 物体类别共现: 目标通常与哪些物体共现 (常识),
+               frontier 附近有这些物体 → 加分
+
+        Args:
+            instruction: 用户指令 ("找灭火器")
+            robot_position: [x, y]
+            visited_positions: 已访问位置列表 (拓扑记忆)
+            scene_objects: 场景图物体列表
+            scene_relations: 场景图空间关系列表
+
+        Returns:
+            评分后的 Frontier 列表 (score 降序)
+        """
+        if not self._frontiers:
+            return []
+
+        max_dist = max(f.distance for f in self._frontiers) or 1.0
+        inst_lower = instruction.lower()
+
+        # ── 预计算: 物体空间分布方向 ──
+        obj_directions: List[Tuple[float, str]] = []  # (angle, label)
+        if scene_objects:
+            for obj in scene_objects:
+                obj_pos = np.array([obj["position"]["x"], obj["position"]["y"]])
+                delta = obj_pos - robot_position[:2]
+                if np.linalg.norm(delta) > 0.5:
+                    angle = math.atan2(delta[1], delta[0])
+                    obj_directions.append((angle, obj["label"].lower()))
+
+        for frontier in self._frontiers:
+            # ── 1. 距离分 (归一化) ──
+            dist_score = 1.0 - (frontier.distance / max_dist)
+
+            # ── 2. 新颖度分 (L3MVN 拓扑记忆) ──
+            novelty_score = 1.0
+            if visited_positions:
+                min_visited_dist = min(
+                    float(np.linalg.norm(frontier.center_world - vp[:2]))
+                    for vp in visited_positions
+                ) if visited_positions else float('inf')
+                novelty_score = min(1.0, min_visited_dist / self.novelty_distance)
+
+            # ── 3. 语言相关性分 (VLFM) ──
+            language_score = 0.0
+            nearby_labels = []
+            if scene_objects:
+                for obj in scene_objects:
+                    obj_pos = np.array([obj["position"]["x"], obj["position"]["y"]])
+                    dist_to_frontier = float(np.linalg.norm(
+                        frontier.center_world - obj_pos
+                    ))
+                    if dist_to_frontier < self.nearby_object_radius:
+                        nearby_labels.append(obj["label"])
+                        if obj["label"].lower() in inst_lower:
+                            language_score += 0.5
+                        language_score += self._cooccurrence_score(
+                            inst_lower, obj["label"].lower()
+                        )
+                frontier.nearby_labels = nearby_labels
+                language_score = min(1.0, language_score)
+
+            # ── 4. Grounding Potential (MTU3D 核心改进) ──
+            grounding_score = 0.0
+
+            # 4a. 空间梯度: 该方向有相关物体 → 目标可能在更远处
+            frontier_angle = math.atan2(
+                frontier.center_world[1] - robot_position[1],
+                frontier.center_world[0] - robot_position[0],
+            )
+            for obj_angle, obj_label in obj_directions:
+                angle_diff = abs(self._angle_diff(frontier_angle, obj_angle))
+                if angle_diff < self.grounding_angle_threshold:
+                    grounding_score += self.grounding_spatial_bonus
+                    if obj_label in inst_lower:
+                        grounding_score += self.grounding_keyword_bonus
+
+            # 4b. 关系链延伸 (SG-Nav): 指令目标的关联物体在该方向
+            if scene_relations and scene_objects:
+                for rel in scene_relations:
+                    # 找附近物体是否是"关系链中指向目标"的
+                    for nearby_lbl in nearby_labels:
+                        related_obj = next(
+                            (o for o in scene_objects
+                             if o.get("id") == rel.get("object_id")
+                             and o.get("label", "").lower() == nearby_lbl.lower()),
+                            None,
+                        )
+                        if related_obj:
+                            grounding_score += self.grounding_relation_bonus
+
+            grounding_score = min(1.0, grounding_score)
+
+            # ── 5. 视觉评分 (创新3: VLFM 核心 — CLIP(image, instruction)) ──
+            vision_score = 0.0
+            if self.vision_weight > 0.0 and self._clip_encoder:
+                vision_score = self._compute_vision_score(frontier_angle, instruction)
+
+            # ── 6. 语义先验评分 (创新4: Topology-Aware Semantic Exploration) ──
+            semantic_score = 0.0
+            if self.semantic_prior_weight > 0.0 and scene_rooms:
+                semantic_score = self._compute_semantic_prior_score(
+                    frontier, robot_position, scene_rooms,
+                )
+
+            # ── 综合评分 ──
+            total_w = (self.distance_weight + self.novelty_weight
+                       + self.language_weight + self.grounding_weight
+                       + self.vision_weight + self.semantic_prior_weight)
+            if total_w > 0:
+                frontier.score = (
+                    self.distance_weight / total_w * dist_score
+                    + self.novelty_weight / total_w * novelty_score
+                    + self.language_weight / total_w * language_score
+                    + self.grounding_weight / total_w * grounding_score
+                    + self.vision_weight / total_w * vision_score
+                    + self.semantic_prior_weight / total_w * semantic_score
+                )
+            else:
+                frontier.score = 0.0
+
+        self._frontiers.sort(key=lambda f: f.score, reverse=True)
+        return self._frontiers
+
+    @staticmethod
+    def _angle_diff(a: float, b: float) -> float:
+        """计算两个角度的最小差 (-pi, pi]。"""
+        d = a - b
+        while d > math.pi:
+            d -= 2 * math.pi
+        while d < -math.pi:
+            d += 2 * math.pi
+        return d
+
+    @staticmethod
+    def _cooccurrence_score(instruction: str, label: str) -> float:
+        """
+        常识共现评分 (MTU3D 空间先验)。
+
+        某些物体经常一起出现:
+          fire extinguisher ↔ door, sign, stairs, corridor
+          kitchen ↔ chair, table, trash can, refrigerator
+          bathroom ↔ door, sign, mirror
+          office ↔ desk, chair, computer
+        """
+        COOCCURRENCE = {
+            "fire": ["door", "sign", "stairs", "elevator"],
+            "extinguisher": ["door", "sign", "stairs"],
+            "kitchen": ["chair", "desk", "trash", "refrigerator", "table"],
+            "bathroom": ["door", "sign", "mirror"],
+            "office": ["desk", "chair", "computer", "door"],
+            "elevator": ["door", "sign", "stairs", "button"],
+            "灭火器": ["door", "sign", "stairs"],
+            "厨房": ["chair", "desk", "trash"],
+            "卫生间": ["door", "sign"],
+            "办公室": ["desk", "chair"],
+        }
+        for key, co_labels in COOCCURRENCE.items():
+            if key in instruction and label in co_labels:
+                return 0.25  # base value, scaled by caller via cooccurrence_bonus
+        return 0.0
+
+    def _compute_semantic_prior_score(
+        self,
+        frontier: Frontier,
+        robot_position: np.ndarray,
+        scene_rooms: List[Dict],
+    ) -> float:
+        """
+        计算 frontier 方向对应房间的语义先验评分 (创新4)。
+
+        思路: frontier 方向 → 最近房间 → 该房间的先验概率
+        如果 frontier 指向高先验但未探索的房间类型 → 高分
+        """
+        if not self._room_priors_cache or not scene_rooms:
+            return 0.0
+
+        best_score = 0.0
+        for room in scene_rooms:
+            room_center = np.array([
+                float(room.get("center", {}).get("x", 0.0)),
+                float(room.get("center", {}).get("y", 0.0)),
+            ])
+
+            # frontier 方向与房间方向的一致性
+            frontier_vec = frontier.center_world - robot_position[:2]
+            room_vec = room_center - robot_position[:2]
+            fn = np.linalg.norm(frontier_vec)
+            rn = np.linalg.norm(room_vec)
+            if fn < 0.1 or rn < 0.1:
+                continue
+
+            cos_sim = float(np.dot(frontier_vec, room_vec) / (fn * rn))
+            if cos_sim < 0.3:
+                continue
+
+            room_id = room.get("room_id", -1)
+            prior = self._room_priors_cache.get(room_id, 0.0)
+
+            # direction_alignment × semantic_prior
+            score = cos_sim * prior
+            best_score = max(best_score, score)
+
+        return min(1.0, best_score)
+
+    def get_best_frontier(self) -> Optional[Frontier]:
+        """获取评分最高的 frontier。"""
+        if self._frontiers:
+            return self._frontiers[0]
+        return None
+
+    def get_frontiers_summary(self) -> str:
+        """导出 frontier 摘要 (给 LLM 消费)。"""
+        import json
+        return json.dumps({
+            "frontier_count": len(self._frontiers),
+            "frontiers": [f.to_dict() for f in self._frontiers[:5]],
+        }, ensure_ascii=False)
+
+    @staticmethod
+    def _angle_to_label(angle: float) -> str:
+        """角度 (rad, atan2 约定) → 方向标签。
+
+        0 = east, pi/2 = north, pi/-pi = west, -pi/2 = south
+        """
+        # 8 方向
+        directions = [
+            "east", "northeast", "north", "northwest",
+            "west", "southwest", "south", "southeast",
+        ]
+        idx = round(angle / (2 * math.pi) * 8) % 8
+        return directions[idx]

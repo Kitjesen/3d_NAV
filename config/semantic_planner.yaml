@@ -1,0 +1,137 @@
+# ═══════════════════════════════════════════════════════════════
+# semantic_planner_node 配置
+#
+# 规划方案:
+#   纯文本推理:  场景图 JSON → LLM (GPT-4o-mini) → 目标坐标
+#   视觉 grounding: 相机帧 → GPT-4o Vision → 目标是否可见
+#                    (参考 VLMnav 2024)
+#
+# LLM 调用链:
+#   1. 主 LLM 分析场景图 → 目标坐标 (SG-Nav 方案)
+#   2. 置信度低 → Vision grounding 验证 (VLMnav 方案)
+#   3. 仍然找不到 → LLM 建议探索方向
+# ═══════════════════════════════════════════════════════════════
+
+semantic_planner_node:
+  ros__parameters:
+    # ── Cloud LLM 配置 ──
+    # 支持: openai | kimi | claude | qwen
+    # 推荐: kimi (国内直连, 无需VPN, 性价比高)
+    llm:
+      backend: "kimi"                    # openai | kimi | claude | qwen
+      model: "kimi-k2.5"                # kimi-k2.5 (推荐) | moonshot-v1-8k
+      api_key_env: "MOONSHOT_API_KEY"    # 从环境变量读取 API Key
+      timeout_sec: 15.0                  # 单次 API 调用超时
+      max_retries: 2                     # 失败重试次数
+      temperature: 0.2                   # 低温度 → 稳定输出
+
+    # ── 备用 LLM (当主 LLM 失败时切换) ──
+    llm_fallback:
+      backend: "qwen"                    # 阿里云, 国内低延迟
+      model: "qwen-turbo"
+      api_key_env: "DASHSCOPE_API_KEY"
+      timeout_sec: 15.0
+      max_retries: 1
+
+    # ── 目标解析 ──
+    goal_resolution:
+      confidence_threshold: 0.6          # 低于此置信度触发探索
+      vision_threshold: 0.5              # 低于此置信度额外触发 Vision grounding
+      replan_on_failure: true            # 到达失败时重新规划
+      max_replan_attempts: 3
+      fast_path_threshold: 0.75          # 高置信度快速路径阈值
+
+    # ── 探索策略 ──
+    exploration:
+      enable: true                       # 目标未知时自动探索
+      strategy: "sg_nav"                 # sg_nav | frontier | llm
+      max_explore_steps: 20              # 最大探索步数
+      step_distance: 2.0                 # 每步探索距离 (m)
+      costmap_topic: "/nav/costmap"      # OccupancyGrid 话题
+      frontier_score_threshold: 0.2      # frontier 最低接受分
+      frontier_min_size: 5               # 最小 frontier 区块 cell 数
+      frontier_max_count: 10             # 评分前保留多少个 frontier
+      frontier_cluster_radius_cells: 3   # frontier 聚类邻域半径
+      frontier_distance_weight: 0.2      # 距离分权重
+      frontier_novelty_weight: 0.3       # 新颖度权重
+      frontier_language_weight: 0.2      # 语言相关性权重
+      frontier_grounding_weight: 0.3     # grounding potential 权重
+
+      # Frontier 评分详细参数
+      frontier_novelty_distance: 5.0     # 新颖度判定距离 (m)
+      frontier_nearby_object_radius: 3.0 # 附近物体搜索半径 (m)
+      frontier_grounding_angle_threshold: 0.7854  # 角度阈值 (45度)
+      frontier_cooccurrence_bonus: 0.25  # 共现关系加分
+      frontier_grounding_spatial_bonus: 0.1      # 空间关系加分
+      frontier_grounding_keyword_bonus: 0.4      # 关键词匹配加分
+      frontier_grounding_relation_bonus: 0.15    # 关系推理加分
+      # 创新3: Frontier CLIP 视觉评分权重 (VLFM 核心)
+      frontier_vision_weight: 0.0              # 0=禁用; 启用建议 0.15
+
+      # SG-Nav 对齐参数
+      sgnav:
+        max_subgraphs: 6                 # 每轮最多推理子图数量
+        use_llm_reasoning: true          # 子图评分是否调用 LLM
+        heuristic_weight: 0.45           # 启发式子图评分权重
+        llm_weight: 0.55                 # LLM 子图评分权重
+        frontier_base_weight: 0.55       # 原 frontier 分占比
+        room_gate_weight: 0.25           # room->group/view 层次门控权重
+        interp_decay_distance: 4.0       # 子图到frontier插值衰减距离
+        credibility_decay: 0.9           # re-perception 可信度时间衰减
+        false_positive_penalty: 0.2      # 无证据目标惩罚
+        reject_threshold: 0.25           # 低于该值拒绝当前目标
+        min_confidence_for_bypass: 0.85  # 高置信目标跳过拒绝
+        arrival_reperception: true       # 到达后 Re-perception (创新3)
+        # 创新3: 连续 Re-perception
+        continuous_reperception: true     # 导航中每 N 米触发 Re-perception
+        reperception_interval_m: 2.0     # 触发间隔 (米)
+
+    # ── 融合权重 (有 CLIP) ──
+    fusion:
+      weight_label_match: 0.35           # 标签匹配权重
+      weight_clip_sim: 0.35              # CLIP 相似度权重
+      weight_detector_score: 0.15        # 检测器分数权重
+      weight_spatial_hint: 0.15          # 空间提示权重
+      no_clip_weight_label: 0.55         # 无 CLIP 时标签权重
+      no_clip_weight_detector: 0.25      # 无 CLIP 时检测器权重
+      no_clip_weight_spatial: 0.20       # 无 CLIP 时空间权重
+      detector_count_normalize: 3        # 检测器计数归一化
+
+    # ── Vision Grounding 配置 ──
+    vision:
+      enable: true                       # 启用视觉 grounding 辅助
+      image_topic: "/camera/color/image_raw"
+      verify_threshold: 0.5              # 视觉验证置信度阈值
+
+    # ── Nav2 Action Client 配置 ──
+    nav2:
+      use_action_client: true            # 使用 Nav2 action client
+      action_name: "navigate_to_pose"    # Action 名称
+      action_timeout_sec: 120.0          # Action 超时时间
+
+    # ── 执行参数 ──
+    execution:
+      arrival_radius: 1.0                # 到达判定半径 (m)
+      monitor_hz: 1.0                    # 监控频率 (Hz)
+      look_around_hz: 10.0               # 环视频率 (Hz)
+      default_timeout: 300.0             # 默认超时时间 (s)
+
+    # ── 拓扑记忆 ──
+    topo_memory:
+      new_node_distance: 2.0             # 新节点创建距离阈值 (m)
+      max_nodes: 500                     # 最大节点数
+
+    # ── 安全约束 ──
+    safety:
+      max_goal_distance: 50.0            # 距当前位置最大目标距离 (m)
+      forbidden_zones: []                # 禁止区域列表 (未来扩展)
+
+    # ── LOVON风格隐式FSM ──
+    fsm:
+      mode: "implicit"                  # implicit | explicit
+      implicit:
+        weights_path: ""                # 可选: 训练好的 .npz 权重
+        strict: false                    # true=权重加载失败直接报错
+
+    # ── Prompt 模板路径 ──
+    prompt_template_dir: ""              # 空 = 使用内置模板, 非空 = 从目录加载

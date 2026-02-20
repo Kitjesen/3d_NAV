@@ -1,0 +1,123 @@
+OmniNav:A Unified Framework for Prospective
+Exploration and Visual-Language Navigation
+Xinda Xue1,2∗Junjun Hu1∗†BMinghua Luo1∗Shichao Xie1Jintao Chen1,2
+Zixun Xie2Kuichen Quan1Wei Guo1Mu Xu1Zedong Chu1
+1Amap, Alibaba Group2Peking University
+{xuexinda.xxd, hujunjun.hjj, luominghua.lmh, tenan.xsc, anyi.cjt, quankuichen.qkc,
+weisheng.gw, xumu.xm, chuzedong.czd}@alibaba-inc.com
+∗Equal Contribution,†Project Lead.,BCorresponding authors
+Embodiednavigationisafoundationalchallengeforintelligentrobots,demandingtheabilitytocomprehend
+visual environments, follow natural language instructions, and explore autonomously. However, existing
+modelsstruggletoprovideaunifiedsolutionacrossheterogeneousnavigationparadigms,oftenyieldinglow
+success rates and limited generalization. We present OmniNav, a unified framework that handles instruct-goal,
+object-goal,point-goalnavigation,andfrontier-basedexplorationwithinasinglearchitecture. First,weintroduce
+a lightweight, low-latency policy that predicts continuous-space waypoints (coordinates and orientations) with
+highaccuracy,outperformingaction-chunkmethodsinprecisionandsupportingreal-worlddeploymentwith
+control frequencies up to 5 Hz. Second, at the architectural level, OmniNav proposes a fast-slow system
+design: a fast module performs waypoint generation from relatively short-horizon visual context and subtasks,
+whileaslowmoduleconductsdeliberativeplanningusinglong-horizonobservationsandcandidatefrontiers
+to select the next subgoal and subtask. This collaboration improves path efficiency and maintains trajectory
+coherenceinexplorationandmemory-intensivesettings. Notably,wefindthattheprimarybottleneckliesnotin
+navigation policy learning per se, but in robust understanding of general instructionsand objects. To enhance
+generalization, we incorporate large-scale general-purpose training datasets including those used for image
+captioning and referring/grounding into a joint multi-task regimen, which substantially boosts success rates
+and robustness. Extensive experiments demonstrate state-of-the-art performance across diverse navigation
+benchmarks, and real-world deployment further validates the approach. OmniNavoffers practical insights for
+embodied navigation and points to a scalable path toward versatile, highly generalizable robotic intelligence.
+Date:Jan. 6, 2026
+Project Page:https://astra-amap.github.io/omninav.github.io/
+Github:https://github.com/amap-cvlab/OmniNav/
+1 INTRODUCTION
+Embodied navigation (Gao et al., 2024; Gu et al., 2022) has emerged as a core problem in embodied intelligence:
+enablingrobotstoperceive,understand,andexplorereal-worldenvironmentswithoutpre-builtmapswhilefollowing
+natural language instructions. To act reliably in dynamic, partially observable environments, an agent must not only
+groundinstantaneousvisualinputsbutalsomaintaincoherentspatiotemporalmemoryandperformactiveexploration.
+Applicationdemandsforreal-timeresponsivenessfurtherincreasetherequirementsforlow-latencydecision-makingand
+cross-environment generalization.
+Currentresearchlargelyrevolvesaroundthreeparadigms: point-goal(Liuetal.,2025),instruct-goal(Andersonetal.,
+2018; Ku et al., 2020), and object-goal (Yokoyama et al., 2024b). point-goal tasks are well-specified and straightforward
+toevaluate butrely onexplicitcoordinatesrarelyavailablein practice; instruction-goalalignswith humanusage but
+oftengeneralizespoorlytounseeninstructionsorenvironments;object-goalisthemostpracticalbutrequiresrobust
+target recognition coupled with efficient path planning, making it the most challenging. Many existing methods remain
+customized, relying on task-specific data, which limits cross-task transfer and the potential for mutual enhancement.
+Uni-Navid(Zhangetal.,2024a)proposedaVLM-baseddiscreteactionpredictorunifyingvision-and-languagenavigation,
+1arXiv:2509.25687v3  [cs.RO]  7 Jan 2026object-goal navigation, embodied question answering (Das et al., 2018), and following (Wang et al., 2025a), but its
+study of LLM long-horizon planning is not sufficiently developed. MTU3D (Zhu et al., 2025) advances a “move
+to understand” paradigm by coupling frontier exploration with visual localization in a single objective, yet requires
+constructing 3D object coordinates, leading to deployment complexity. Although recent Video-LLMs (Wei et al., 2025;
+Qietal.,2025;Zhangetal.,2024b)andVLAs(Sapkotaetal.,2025;Zitkovichetal.,2023;Maetal.,2024)integrate
+vision, language, and action prediction end to end, they still face bottlenecks in streaming video input, long-context
+management,andlow-latencyinference: discretizedactionmodelingsacrificesprecisionandflexibility;constrained
+LLM call frequency and frequent context resets lead to deployment difficulties; besides, in practice, the dominant
+failure mode often stems from inadequate understanding of generic instructions and open-vocabulary objects rather than
+policy learning itself. These gaps call for a unified, efficient framework that balances long/short-horizon reasoning with
+real-time responsiveness.
+We present OmniNav, a unified embodied navigation framework that concurrently covers instruct-goal, object-goal,
+point-goal,andfrontier-basedexplorationwithinasinglearchitecture. Inspiredbydual-systemtheory(Figure,2024;
+Black et al., 2025), OmniNav coordinates a fast–slow system (Black et al., 2025): a fast system reacts to comparatively
+short-horizonperceptionandcurrenttasksorsubtasks,generatinghigh-precisionwaypoints(coordinatesandorientations)
+tosupportlow-latencycontrolupto5Hz;aslowsystemdeliberatesoverlong-horizonobservationsandfrontiercues,
+leveragingaVLM’schain-of-thought(Weietal.,2022)todecomposecomplexgoalsandselectthenextsubgoaland
+subtask. Thetwo are coupledthrough acentral memorymodule thatuses akey–value (KV) cacheto provideessential
+spatiotemporal context, yielding decisions that are both locally agile and globally consistent.
+OmniNav addresses the triad of real-time operation, fast–slow collaboration, and generalization. A lightweight
+flow-matching policy (Bjorck et al., 2025) avoids the precision degradation and latency accumulation inherent to action
+discretization;fast–slowcollaborationensuresexplorationefficiencyandtrajectorycoherenceinlong-memoryscenarios;
+more importantly, training unifies large-scale generic vision–language data (captioning, referring/grounding, etc.) with
+multiplenavigationtasks,significantlystrengtheninginstructionfollowingandopen-vocabularyobjectperceptionto
+improve success rates and robustness. Our contributions are threefold:
+•A unified architecture that, under a single training framework and policy, supports multiple goal modalities (point,
+object, and instruction) as well as frontier-based exploration;
+•An end-to-end fast–slow coordination with central memory that reconciles low-latency control and high-level
+deliberation;
+•Aprincipledstrategytoincorporategenericvision–languagedataintojointtraining,systematicallyimproving
+cross-task and cross-environment generalization.
+Extensiveexperimentssetnewstate-of-the-artresultsacrossmultiplenavigationbenchmarks,withreal-robotdeployments
+further validating practicality. We contend that OmniNav charts a scalable path toward multifunctional, highly
+generalizable embodied navigation systems.
+2 RELATED WORKS
+Vision Language Models for NavigationLeveraging theirpowerfulgeneralizationcapabilities inunderstanding
+and planning, Visual Language Models (VLMs) (Chiang et al., 2023; Liu et al., 2023; Zhu et al., 2023) have been
+increasingly applied to the domain of robotic navigation, achieving notable success. Prevailing methods (Dorbala et al.,
+2022;Zhouetal.,2024b;Longetal.,2024b)typicallyemployVLMstoprocessmultimodalinstructionsanddirectly
+decode low-level actions in an autoregressive manner. However, this paradigm suffers from significant drawbacks: it is
+prone to compounding errors in sequential prediction and is often hampered by slow inference speeds. In contrast, our
+approachdrawsinspirationfromrecentadvancesinVision-Language-Action(VLA)models(Zitkovichetal.,2023;Kim
+et al., 2024; Li et al., 2024). We introduce a novel architecture that appends a flow-matching policy (Zhao et al., 2024;
+Chen et al., 2024; Zhou et al., 2024a) to a VLM backbone. This design enables our model to generate entire action
+trajectoriesnon-autoregressively,leadingtosubstantiallyimprovedpredictionaccuracyandcomputationalefficiency,
+especially when navigating unseen environments.
+Dual-System DesignDual-systemarchitectureshavebeenwidelyadoptedacrossvariousdomainstomeetdiverse
+operationaldemands. IntherealmofVision-Language-Action(VLA)models,severalworks(Bjorcketal.,2025;Bu
+et al., 2025; Ge et al., 2024; Song et al., 2025) have implemented dual-system designs to balance fast control execution
+2and intelligent planning. Inspired by this paradigm and motivated by the specific requirements of embodied navigation,
+wepropose anoveldual-systemframework. Ourframeworkconsists oftwocomplementary components. Thefirst isa
+fast system, a purely visual, end-to-end policy designed for direct deployment and is highly effective in the majority of
+navigationscenarios. Thesecondsystemisspecificallyengineeredforchallenginglong-horizontasks. Toserveasa
+long-term memory mechanism, we employ a planning strategy that combines frontier-based exploration (Zhu et al.,
+2025)withimages. Thisapproachoffersamoreconciseimplementationcomparedtoalternativememorystructures
+suchasscenegraphs(Teametal.,2025)orcomplexsemanticmaps(Longetal.,2024a). Thesealternativesmemory
+structures can also be implementations for the slow system. The idea stays the same: the slow system is responsible for
+global planning, while the fast system handles local execution. This synergistic design has proven its superiority by
+achieving State-of-the-Art performance on multiple benchmarks.
+Frontier-based NavigationRecent studies on exploration and navigation adopt different strategies for selecting
+informativetargetsinunknownenvironments. GOAT(Changetal.,2023)anditsbenchmarkGOAT-Bench(Khanna
+et al., 2024) study lifelong navigation and object search using an object-instance memory and frontier exploration.
+Similarly,MTU3D(Zhuetal.,2025)keepanobject-goalmemorybuiltfrom3Dpointcloudsandsemanticsegmentation,
+and combine this with frontier exploration. A different group of methods uses non-semantic frontier exploration (Chang
+etal.,2023;Sakamotoetal.,2024;Nayaketal.,2025),wherethenexttargetisusuallyjusttheclosestfrontier,sometimes
+adjusted by simple heuristics such as distance–heading scores. OmniNav instead uses a semantics- and reasoning-aware
+frontier selection: it links each frontier to its egocentric images, then uses explicit chain-of-thought reasoning over these
+views to decide which frontier is more informative or promising for the current task.
+3 Approach
+Figure 1The fast system canindependently handle multi-tasknavigation, using the VLMbackbone and aflow-matching policy to
+rapidly generate waypoints. Building on this, a slow thinking module is integrated to enable long-term memory and planning: it
+constructslong-rangespatialandsemanticmemoryusingfrontiersandimages,andprovidessubgoalcues. Thecollaborationbetween
+the slow and fast proceeds as follows: the slow system uses frontiers or memory to generate high-level subgoals, once a subgoal is
+determined, the fast system takes over and progressively produces low-level waypoint sequences, ultimately reaching the target.
+Multimodal Input tokenizationsTohandleallfourtasktypesthroughaunifiedinterface,text,coordinates,andvisual
+historyareconvertedintoasetofdiscretetokensconsumablebyaLarge-LanguageModel(LLM)seeFig. 1. Weuse
+Qwen2.5-VL-3B-Instruct(Baietal.,2025)asthebasemodelandextenditwithacoordinatemodality. Duringstreaming
+inference,akey–value(KV)cacheismaintainedtoreducelatency. Texttokens: Derivedfromnatural-languagetask
+descriptions,objectcategorylabels,andpoint-goalcommands,areallconvertedintoastandardizedinstructionsequence.
+3

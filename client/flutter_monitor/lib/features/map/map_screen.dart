@@ -26,6 +26,7 @@ enum TaskMode {
   navigation,
   mapping,
   patrol,
+  semanticNav,
 }
 
 extension TaskModeX on TaskMode {
@@ -33,12 +34,14 @@ extension TaskModeX on TaskMode {
     TaskMode.navigation => 'Navigation',
     TaskMode.mapping => 'Mapping',
     TaskMode.patrol => 'Patrol',
+    TaskMode.semanticNav => 'Semantic',
   };
 
   TaskType get taskType => switch (this) {
     TaskMode.navigation => TaskType.TASK_TYPE_NAVIGATION,
     TaskMode.mapping => TaskType.TASK_TYPE_MAPPING,
     TaskMode.patrol => TaskType.TASK_TYPE_INSPECTION,
+    TaskMode.semanticNav => TaskType.TASK_TYPE_SEMANTIC_NAV,
   };
 }
 
@@ -79,6 +82,7 @@ class _MapScreenState extends State<MapScreen>
   // ─── Mission Planner state ───
   TaskMode _selectedMode = TaskMode.navigation;
   final _missionNameCtrl = TextEditingController();
+  final _semanticInstructionCtrl = TextEditingController();
   double _speedLimit = 1.5;
   // TODO(protocol): Add priority to task proto (or task metadata) and pass through startTask.
   int _priority = 0; // 0=Normal, 1=High, 2=Critical
@@ -100,7 +104,8 @@ class _MapScreenState extends State<MapScreen>
   String _geofenceState = 'NO_FENCE';
   double _geofenceMargin = 0;
 
-  bool get _modeUsesGoalPoint => _selectedMode != TaskMode.mapping;
+  bool get _modeUsesGoalPoint =>
+      _selectedMode != TaskMode.mapping && _selectedMode != TaskMode.semanticNav;
   String get _goalPointLabel =>
       _selectedMode == TaskMode.patrol ? '巡检目标点' : '导航目标点';
 
@@ -133,6 +138,7 @@ class _MapScreenState extends State<MapScreen>
     _dogJointSub?.cancel();
     _transformController.dispose();
     _missionNameCtrl.dispose();
+    _semanticInstructionCtrl.dispose();
     super.dispose();
   }
 
@@ -289,6 +295,19 @@ class _MapScreenState extends State<MapScreen>
       return;
     }
 
+    if (_selectedMode == TaskMode.semanticNav &&
+        _semanticInstructionCtrl.text.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('请输入导航指令'),
+          backgroundColor: AppColors.warning,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ));
+      }
+      return;
+    }
+
     // Check for active waypoints before starting a new task
     final active = await tg.getActiveWaypoints();
     if (active != null &&
@@ -362,6 +381,13 @@ class _MapScreenState extends State<MapScreen>
         );
         okMsg = '巡检任务已启动';
         break;
+      case TaskMode.semanticNav:
+        ok = await tg.startSemanticNav(
+          _semanticInstructionCtrl.text,
+        );
+        okMsg = '语义导航任务已启动';
+        if (ok) _semanticInstructionCtrl.clear();
+        break;
     }
 
     final msg = ok ? okMsg : (tg.statusMessage ?? '启动失败');
@@ -422,6 +448,7 @@ class _MapScreenState extends State<MapScreen>
     final sourceLabel = switch (active.source) {
       WaypointSource.WAYPOINT_SOURCE_APP => 'App 任务',
       WaypointSource.WAYPOINT_SOURCE_PLANNER => '全局规划器',
+      WaypointSource.WAYPOINT_SOURCE_SEMANTIC => '语义导航',
       _ => '未知',
     };
     final result = await showDialog<bool>(
@@ -612,11 +639,21 @@ class _MapScreenState extends State<MapScreen>
           ),
           const SizedBox(height: 16),
 
+          // Semantic Navigation Instruction (visible only in semanticNav mode)
+          if (_selectedMode == TaskMode.semanticNav) ...[
+            _paramLabel('语义导航指令'),
+            const SizedBox(height: 6),
+            _buildSemanticInstructionInput(context),
+            const SizedBox(height: 16),
+          ],
+
           // Mission Name
-          _paramLabel('Mission Name'),
-          const SizedBox(height: 6),
-          _paramInput(_missionNameCtrl, 'e.g. Warehouse Alpha'),
-          const SizedBox(height: 16),
+          if (_selectedMode != TaskMode.semanticNav) ...[
+            _paramLabel('Mission Name'),
+            const SizedBox(height: 6),
+            _paramInput(_missionNameCtrl, 'e.g. Warehouse Alpha'),
+            const SizedBox(height: 16),
+          ],
 
           // Robot Selection
           _paramLabel('Robot Selection'),
@@ -665,6 +702,7 @@ class _MapScreenState extends State<MapScreen>
       (TaskMode.navigation, Icons.navigation_rounded, Color(0xFF6366F1)),
       (TaskMode.mapping, Icons.map_rounded, Color(0xFFEA580C)),
       (TaskMode.patrol, Icons.shield_rounded, Color(0xFF0EA5E9)),
+      (TaskMode.semanticNav, Icons.chat_rounded, Color(0xFF10B981)),
     ];
     return Wrap(
       spacing: 10,
@@ -710,6 +748,68 @@ class _MapScreenState extends State<MapScreen>
           borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
         ),
+      ),
+    );
+  }
+
+  Widget _buildSemanticInstructionInput(BuildContext context) {
+    final dark = context.isDark;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.3)),
+        color: dark
+            ? const Color(0xFF10B981).withValues(alpha: 0.06)
+            : const Color(0xFF10B981).withValues(alpha: 0.04),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _semanticInstructionCtrl,
+            maxLines: 3,
+            minLines: 2,
+            style: TextStyle(fontSize: 13, color: context.titleColor),
+            decoration: InputDecoration(
+              hintText: '输入自然语言指令...\n例: "去红色灭火器旁边" 或 "go to the door"',
+              hintStyle: TextStyle(color: context.hintColor, fontSize: 12),
+              contentPadding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+              border: InputBorder.none,
+              suffixIcon: IconButton(
+                icon: Icon(Icons.mic_none_rounded,
+                    size: 20, color: context.subtitleColor),
+                onPressed: () {
+                  // TODO: Voice input (future)
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: const Text('语音输入即将支持'),
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ));
+                },
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+            child: Row(
+              children: [
+                Icon(Icons.auto_awesome, size: 14,
+                    color: const Color(0xFF10B981)),
+                const SizedBox(width: 6),
+                Text('AI 语义理解',
+                    style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF10B981))),
+                const Spacer(),
+                Text('Cloud LLM',
+                    style: TextStyle(
+                        fontSize: 10, color: context.hintColor)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1171,6 +1271,7 @@ class _MapScreenState extends State<MapScreen>
       TaskType.TASK_TYPE_MAPPING => 'MAPPING',
       TaskType.TASK_TYPE_INSPECTION => 'PATROL',
       TaskType.TASK_TYPE_FOLLOW_PATH => 'FOLLOW',
+      TaskType.TASK_TYPE_SEMANTIC_NAV => 'SEMANTIC NAV',
       _ => 'TASK',
     };
     final progress = tg.progress;

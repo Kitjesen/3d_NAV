@@ -25,6 +25,10 @@ class _TaskPanelState extends State<TaskPanel> {
   final TextEditingController _mapNameCtrl = TextEditingController();
   bool _saveOnComplete = true;
 
+  // ─── Semantic nav state ───
+  final TextEditingController _semanticInstructionCtrl = TextEditingController();
+  bool _semanticExplore = true;
+
   // ─── Backend waypoint state ───
   GetActiveWaypointsResponse? _activeWpResp;
   bool _wpLoading = false;
@@ -38,6 +42,7 @@ class _TaskPanelState extends State<TaskPanel> {
   @override
   void dispose() {
     _mapNameCtrl.dispose();
+    _semanticInstructionCtrl.dispose();
     super.dispose();
   }
 
@@ -91,6 +96,20 @@ class _TaskPanelState extends State<TaskPanel> {
         if (proceed != true) return;
         await gw.clearWaypoints();
       }
+    }
+
+    if (_selectedType == TaskType.TASK_TYPE_SEMANTIC_NAV) {
+      final instruction = _semanticInstructionCtrl.text.trim();
+      if (instruction.isEmpty) {
+        _snack('请输入指令', err: true);
+        return;
+      }
+      final ok = await gw.startSemanticNav(
+        instruction,
+        exploreIfUnknown: _semanticExplore,
+      );
+      _showStatus(gw, ok);
+      return;
     }
 
     if (_selectedType == TaskType.TASK_TYPE_MAPPING) {
@@ -203,7 +222,12 @@ class _TaskPanelState extends State<TaskPanel> {
         const SizedBox(height: 6),
         _typeSelector(),
         const SizedBox(height: 24),
-        if (_selectedType == TaskType.TASK_TYPE_MAPPING) _mappingSection() else _navSection(),
+        if (_selectedType == TaskType.TASK_TYPE_SEMANTIC_NAV)
+          _semanticNavSection()
+        else if (_selectedType == TaskType.TASK_TYPE_MAPPING)
+          _mappingSection()
+        else
+          _navSection(),
         const SizedBox(height: 32),
         _startBtn(),
         const SizedBox(height: 80),
@@ -220,6 +244,7 @@ class _TaskPanelState extends State<TaskPanel> {
       (TaskType.TASK_TYPE_INSPECTION, '巡检'),
       (TaskType.TASK_TYPE_RETURN_HOME, '回家'),
       (TaskType.TASK_TYPE_FOLLOW_PATH, '循迹'),
+      (TaskType.TASK_TYPE_SEMANTIC_NAV, '语义'),
     ];
     return _card(
       child: Row(
@@ -246,6 +271,94 @@ class _TaskPanelState extends State<TaskPanel> {
           );
         }).toList(),
       ),
+    );
+  }
+
+  // ── Semantic nav config ──
+
+  static const _quickInstructions = [
+    '找灭火器', '门在哪里', '带我去会议室', '哪里有打印机',
+    '找最近的椅子', '看看垃圾桶', '去电梯', '找楼梯',
+  ];
+
+  Widget _semanticNavSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _label('自然语言指令'),
+        const SizedBox(height: 6),
+        _card(
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: TextField(
+              controller: _semanticInstructionCtrl,
+              decoration: InputDecoration(
+                hintText: '例: 看一下灭火器在哪',
+                hintStyle: TextStyle(color: context.subtitleColor.withValues(alpha: 0.5)),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                suffixIcon: _semanticInstructionCtrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: Icon(Icons.clear, size: 18, color: context.subtitleColor),
+                        onPressed: () => setState(() => _semanticInstructionCtrl.clear()),
+                      )
+                    : null,
+              ),
+              style: TextStyle(fontSize: 14, color: context.titleColor),
+              maxLines: 2,
+              textInputAction: TextInputAction.done,
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _label('快捷指令'),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: _quickInstructions.map((text) {
+            return GestureDetector(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                setState(() => _semanticInstructionCtrl.text = text);
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: context.isDark
+                      ? Colors.white.withValues(alpha: 0.06)
+                      : Colors.black.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: context.isDark
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : Colors.black.withValues(alpha: 0.06),
+                  ),
+                ),
+                child: Text(
+                  text,
+                  style: TextStyle(fontSize: 12, color: context.subtitleColor),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            SizedBox(
+              height: 28,
+              child: Switch(
+                value: _semanticExplore,
+                onChanged: (v) => setState(() => _semanticExplore = v),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('未知目标自动探索', style: TextStyle(fontSize: 13, color: context.subtitleColor)),
+          ],
+        ),
+      ],
     );
   }
 
@@ -418,6 +531,7 @@ class _TaskPanelState extends State<TaskPanel> {
       TaskType.TASK_TYPE_INSPECTION => '巡检',
       TaskType.TASK_TYPE_RETURN_HOME => '回家',
       TaskType.TASK_TYPE_FOLLOW_PATH => '循迹',
+      TaskType.TASK_TYPE_SEMANTIC_NAV => '语义导航',
       _ => '任务',
     };
 

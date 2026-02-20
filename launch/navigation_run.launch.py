@@ -21,6 +21,7 @@ import sys
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, EnvironmentVariable
 
@@ -73,6 +74,12 @@ def generate_launch_description():
     localizer_profile_arg = DeclareLaunchArgument(
         "localizer_profile", default_value="icp",
         description="定位器 profile (icp)",
+    )
+
+    # ---- 语义导航开关 (默认关闭) ----
+    enable_semantic_arg = DeclareLaunchArgument(
+        "enable_semantic", default_value="false",
+        description="是否启用语义导航 (VLN) 子系统",
     )
 
     # ---- 1. LiDAR 驱动 ----
@@ -135,6 +142,14 @@ def generate_launch_description():
         )
     )
 
+    # ---- 7. 语义导航 (可选, 默认关闭) ----
+    semantic = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(subsystems_dir, "semantic.launch.py")
+        ),
+        condition=IfCondition(LaunchConfiguration("enable_semantic")),
+    )
+
     return LaunchDescription(
         [
             max_speed_arg,
@@ -145,11 +160,13 @@ def generate_launch_description():
             slam_profile_arg,
             planner_profile_arg,
             localizer_profile_arg,
+            enable_semantic_arg,
             lidar,
             slam,
             planning,
             autonomy,
             driver,
             grpc,
+            semantic,
         ]
     )

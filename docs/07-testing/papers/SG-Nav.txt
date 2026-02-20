@@ -1,0 +1,159 @@
+SG-Nav: Online 3D Scene Graph Prompting for
+LLM-based Zero-shot Object Navigation
+Hang Yin1∗, Xiuwei Xu1∗†, Zhenyu Wu2, Zhou Jie1, Jiwen Lu1‡
+1Tsinghua University
+2Beijing University of Posts and Telecommunications
+{yinh23, xxw21}@mails.tsinghua.edu.cn
+wuzhenyu@bupt.edu.cn, {jzhou, lujiwen}@tsinghua.edu.cn
+Abstract
+In this paper, we propose a new framework for zero-shot object navigation. Existing
+zero-shot object navigation methods prompt LLM with the text of spatially closed
+objects, which lacks enough scene context for in-depth reasoning. To better
+preserve the information of environment and fully exploit the reasoning ability of
+LLM, we propose to represent the observed scene with 3D scene graph. The scene
+graph encodes the relationships between objects, groups and rooms with a LLM-
+friendly structure, for which we design a hierarchical chain-of-thought prompt to
+help LLM reason the goal location according to scene context by traversing the
+nodes and edges. Moreover, benefit from the scene graph representation, we further
+design a re-perception mechanism to empower the object navigation framework
+with the ability to correct perception error. We conduct extensive experiments on
+MP3D, HM3D and RoboTHOR environments, where SG-Nav surpasses previous
+state-of-the-art zero-shot methods by more than 10% SR on all benchmarks, while
+the decision process is explainable. To the best of our knowledge, SG-Nav is
+the first zero-shot method that achieves even higher performance than supervised
+object navigation methods on the challenging MP3D benchmark. Project page.
+1 Introduction
+Object navigation, which requires an agent to navigate to an object specified by its category in
+unknown environment [ 3], is a fundamental problem in a wide range of robotic tasks. Thanks to the
+advancements in deep learning and reinforcement learning (RL), modular-based object navigation
+approaches [ 6;32;48] have achieved impressive performance in recent years, which caches the visual
+perception results of the RGB-D observation into semantic map and learns a policy to predict actions
+according to this map. However, conventional methods rely on time-consuming training in simulation
+environment, which only works well on specific datasets and can only handle limited categories of
+goal object.
+In order to solve above limitations and enhance the generalization ability of object navigation, zero-
+shot object navigation has received increasing attention. In the zero-shot setting, the system does
+not require any training or finetuning before applied to real-world scenarios, and the goal category
+can be freely specified by text in an open-vocabulary manner. Since training data is unavailable,
+recent zero-shot object navigation methods [ 46;52] leverage large language models (LLM) [ 36;1]
+instead of RL agent to perform decision-making processes, where the extensive knowledge in LLM
+helps to address various common-sense reasoning problems in zero-shot. In these works, the LLM is
+required to select a frontier for the agent to explore the unobserved area. As LLM cannot perceive the
+∗Equal contribution.†Project lead.‡Corresponding author.
+38th Conference on Neural Information Processing Systems (NeurIPS 2024).arXiv:2410.08189v1  [cs.CV]  10 Oct 2024Sofa
+Living roomDesk SofaChairChairTable
+Living Room FurnitureQ: Where is     ?
+SofaSofaTable
+Living Room Furniture
+Subgraph related to TV
+A: Opposite to sofa.
+TV
+Conventional 
+AgentOur SG -Nav
+ AgentLiving roomRoom Level
+Group Level
+Object Level
+In living room, TV and sofa 
+are on both sides of table.
+TV
+Sofa
+Desk SofaChairChair
+Table
+TV is next to {sofa, 
+chair, table} .
+Figure 1: Different from previous zero-shot object navigation methods [ 46;52] that directly prompt
+LLM with text of nearby object categories, we construct a hierarchical 3D scene graph to represent
+the observed environment and prompts LLM to fully exploit the structure information in the graph.
+Our SG-Nav preserves fine-grained scene context and makes reasonable and explainable decisions.
+environment visually, they select the categories of objects near each frontier to prompt LLM and rate
+the possibility of each frontier. While these approaches achieve zero-shot object navigation, there
+are still some drawbacks in their design: (1) they prompt LLM with only the text of nearby object
+categories, which is less informative and lacks scene context such as spatial relationship; (2) they
+let LLM directly output the possibility for each frontier, which is an abstract task and does not fully
+utilizes the reasoning ability of the LLM. As a result, their reasoning process is not explainable and
+the performance is far from satisfactory.
+In this paper, we propose a new object navigation framework namely SG-Nav, which fully exploits
+the reasoning ability of LLM for zero-shot navigation planning with high accuracy and fast speed. As
+shown in Figure 1, different from previous LLM-based object navigation framework that prompts
+LLM with only text of object categories and directly outputs probability, SG-Nav represents the
+complicated 3D environment in an online updated hierarchical 3D scene graph and utilizes it to
+hierarchically prompt LLM for reliable and explainable decision making. Benefit from the scene
+graph representation, we further design a graph-based re-perception mechanism to empower the
+object navigation framework with the ability to correct perception error. Specifically, we first
+construct an online 3D hierarchical scene graph along with the exploration of the agent. Since there
+are many levels and nodes in the scene graph, it is challenging to build the scene graph in real
+time. To solve this problem, we propose to densely connect the newly detected nodes to previous
+nodes in an incremental manner. We design a new form of prompt to control the computational
+complexity of this dense connecting process linear to the number of new nodes, which is followed by
+a pruning process to discard less informative edges. With the 3D scene graph, we divide it into several
+subgraphs and propose a hierarchical chain-of-thought to let LLM perceive the structural information
+in each subgraph for explainable probability prediction. Then we interpolate the probability of each
+subgraph to the frontiers for decision making, which can be further explained by summarizing the
+reasoning process for the most related subgraphs. Moreover, we also notice that previous object
+navigation framework fails when detecting out a false positive goal object. So we propose a graph-
+based re-perception mechanism to judge the credibility of the observed goal object by accumulating
+relevant probability of subgraphs. The agent will give up goal object with low credibility for robust
+navigation. We conduct extensive experiments on MP3D, HM3D and RoboTHOR environments.
+Our SG-Nav achieves state-of-the-art zero-shot performance on all benchmarks, surpassing previous
+top-performance zero-shot method by more than 10% in terms of SR. SG-Nav can also explain the
+reason for its decision at each step, making it more practical in human-agent interaction scenarios.
+2 Related Works
+Object-goal Navigation: Objec-goal navigation methods can be divided into two categories: end-to-
+end RL methods [ 38;29;43;44;26;25;50] and explicit modular-based methods [ 6;32;48;11;46;
+2Observation
+RGB-D Occupancy Map
+Frontier ScoreDeterministic 
+Local Policy
+Hierarchical  Scene Graph
+Object GoalAgent Pose
+Action
+SubgraphsLLMRe-perception
+…
+Q A
+H-CoTPromptPrompt ScoreMappingAccumulate 
+CredibilityCredibility
+Judgemen t
+Interpolate
+ExplanationIn living room, 
+TV and sofa are 
+on both sides of 
+table.
+Figure 2: Pipeline of SG-Nav. We construct a hierarchical 3D scene graph as well as an occupancy
+map online. At each step, we divide the scene graph into several subgraphs, each of which is prompted
+to LLM with a hierarchical chain-of-thought for structural understanding of the scene context. We
+interpolate the probability score of each subgraph to the frontiers and select the frontier with highest
+score for exploration. This decision is also explainable by summarizing the reasoning process of
+the LLM. With the scene graph representation, we further design a re-perception mechanism, which
+helps the agent give up false positive goal object by continuous credibility judgement.
+52]. DD-PPO [ 38] implicitly encodes the visual observation into latent code and predicts low-level
+actions. Follow-up works increase the performance by better visual representation [ 29;43], auxiliary
+tasks [ 44] and data augmentation [ 26]. However, since this kind of methods implicitly encode 3D
+scene and directly predict actions, which may fail to capture fine-grained context. The end-to-end
+RL also suffers from low sampling efficiency. To solve these problems, modular-based methods
+map the visual perception results to BEV or 3D map [ 49;42;41] and update it online. The agent
+learns where to navigate with this semantic map [ 6;32;48]. In persuit of open-vocabulary object
+navigation, COWs [ 11] and ZSON [ 25] align the goal to CLIP embedding [ 30]. L3MVN [ 46] and
+ESC [ 52] further utilize large language models for zero-shot decision making. Our SG-Nav is also a
+LLM-based zero-shot framework. But differently, we propose to construct 3D scene graph instead
+of semantic map to prompt LLM with hierarchical chain-of-thought and graph-based re-perception,
+which better preserves the scene context and makes the decision more robust.
+Large Pretrained Models for Robotics: Large pretrained language models [ 1;36] and vision-
+language models [ 30;20;23;20;21] have received increasing attention in recent years, which is
+widely applied in embodied AI tasks including navigation [ 17;11;25;46;52;35;13;51], task
+planning [ 2;7;16;27;4;39;33;40], manipulation [ 22;14;15;47]. It is observed that large
+vision-language models becomes a good hand in dealing with embodied AI problems due to its
+end-to-end processing of images and language. NLMap [ 7] leverages CLIP embedding [ 30] to build
+an open-vocabulary map for task planning. V oxposer [ 15] automatically generates code to interacts
+with VLMs [ 28;18], which produces a sequence of 3D affordance maps and constraint maps to guide
+the optimization of path planning. However, it is still hard to process streaming RGB-D video for
+vision-language models. To better make use of the observed 3D scenes, recent methods [ 52;51]
+of navigation describe the scene in pure text and utilize it to prompt LLM. Our SG-Nav, instead,
+represents the 3D scene using scene graph, which preserves much more context information. The
+proposed hierarchical chain-of-thought and graph-based re-perception methods can also better exploit
+the potential of LLM for object navigation.
+3 Approach
+In this section, we first provide the definition of zero-shot object navigation and introduce the overall
+pipeline of SG-Nav. Then we describe how to construct an open-vocabulary and hierarchical 3D scene
+graph online. Finally we show how to prompt the LLM with 3D scene graph to achieve context-aware
+and robust object navigation.
+3
