@@ -1062,7 +1062,7 @@ class GoalResolver:
                 is_valid=False,
             )
 
-        result = self._parse_llm_response(response_text, sg)
+        result = self._parse_llm_response(response_text, json.loads(filtered_sg) if isinstance(filtered_sg, str) else filtered_sg)
         result.path = "slow"
 
         # 如果需要探索

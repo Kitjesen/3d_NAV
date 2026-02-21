@@ -215,9 +215,9 @@ class OpenAIClient(LLMClientBase):
                     model=model,
                     messages=messages,
                     temperature=temp,
-                    max_tokens=1024,
+                    max_tokens=4096,
                 )
-                return response.choices[0].message.content or ""
+                msg = response.choices[0].message; return msg.content or getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None) or ""
             except Exception as e:
                 err_str = str(e)
                 if "invalid temperature" in err_str and temp != 1.0:
@@ -277,7 +277,7 @@ class ClaudeClient(LLMClientBase):
             try:
                 response = await self._client.messages.create(
                     model=self.config.model,
-                    max_tokens=1024,
+                    max_tokens=4096,
                     system=system_msg,
                     messages=chat_messages,
                     temperature=temp,
