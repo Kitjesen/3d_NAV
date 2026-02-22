@@ -315,8 +315,10 @@ class SeedSelector:
             return None
 
         if len(existing_polyhedra) == 0:
-            # 第一个种子点: 选择候选点的中心
-            return candidates.mean(axis=0)
+            # 第一个种子点: 随机选择一个候选点（而不是平均值）
+            # 平均值可能落在障碍物区域
+            idx = np.random.randint(len(candidates))
+            return candidates[idx]
 
         # 构建已有多面体中心的 KD-Tree
         centers = np.array([p.center for p in existing_polyhedra])
