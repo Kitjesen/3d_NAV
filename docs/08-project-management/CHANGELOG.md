@@ -68,6 +68,89 @@
 
 ---
 
+## [v1.6.2] - 2026-02-23
+
+USS-Nav 定量实验 — 阶段 3 继续：统计分析、实验报告生成、批量评估。
+
+### 新增
+
+#### 定量实验脚本 (run_quantitative_experiments.py, 465 行)
+
+- **完整实验流程**:
+  - 多场景批量评估（10+ 场景）
+  - PCT A* vs USS-Nav 性能对比
+  - 自动场景选择和数据加载
+  - 结果保存（JSON 格式）
+
+- **StatisticalAnalyzer (统计分析器)**:
+  - 独立样本 t 检验（scipy.stats.ttest_ind）
+  - Cohen's d 效应量计算
+  - 相对差异百分比
+  - 显著性判断（p < 0.05）
+  - 统计表格生成（Markdown 格式）
+
+- **ExperimentReportGenerator (实验报告生成器)**:
+  - 完整的 Markdown 实验报告
+  - 实验配置部分（数据集、场景数、帧数、方法）
+  - 结果概览（总评估数、各方法评估数）
+  - 统计分析表格（t 统计量、p 值、Cohen's d、显著性）
+  - 详细结果（内存、更新时间、规划时间统计）
+  - 自动结论生成（基于显著性检验）
+
+#### 命令行接口
+
+```bash
+python examples/run_quantitative_experiments.py \
+    --dataset-root /path/to/hm3d \
+    --num-scenes 10 \
+    --num-frames 50 \
+    --planning-queries 10 \
+    --methods pct_astar uss_nav \
+    --output-dir experiment_results
+```
+
+#### 输出文件
+
+- `experiment_report.md`: 完整实验报告
+- `raw_results.json`: 原始评估结果
+- `statistics.json`: 统计分析结果
+- `performance_comparison.png`: 性能对比图
+
+#### 测试文件 (test_quantitative_experiments.py, 238 行)
+
+- 3 个测试函数：统计分析器、统计表格、报告生成器
+- 模拟数据生成和验证
+- 完整的报告生成流程测试
+
+### 文档
+
+- **quantitative_experiments_guide.md**: 完整使用指南
+  - 快速开始（3 种实验配置）
+  - 参数说明（7 个命令行参数）
+  - 输出说明（报告、结果、统计）
+  - 统计分析解释（t 检验、p 值、Cohen's d）
+  - 实验建议（快速测试、标准实验、完整实验）
+  - 故障排除（3 个常见问题）
+  - 示例工作流（5 步完整流程）
+
+### 变更文件
+
+| 文件 | 变更说明 |
+|------|---------|
+| `src/semantic_perception/examples/run_quantitative_experiments.py` | 新增：定量实验脚本（465 行） |
+| `src/semantic_perception/tests/test_quantitative_experiments.py` | 新增：实验测试（238 行） |
+| `docs/quantitative_experiments_guide.md` | 新增：使用指南（完整文档） |
+
+### 下一步计划
+
+**阶段 3 继续: 性能优化（预计 1 周）**
+- 根据评估结果优化瓶颈
+- 提升 USS-Nav 更新速率（目标: 60ms → 30ms）
+- 降低内存占用
+- 并行化处理
+
+---
+
 ## [v1.6.1] - 2026-02-23
 
 USS-Nav 可视化工具 — 阶段 3 开始：路径、SCG、性能可视化工具实现。
