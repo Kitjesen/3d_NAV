@@ -53,6 +53,8 @@ from tf2_ros.transform_listener import TransformListener
 from .laplacian_filter import is_blurry
 from .clip_encoder import CLIPEncoder
 from .mobileclip_encoder import MobileCLIPEncoder
+from .scg_builder import SCGBuilder, SCGConfig
+from .scg_path_planner import SCGPathPlanner
 from .projection import (
     CameraIntrinsics,
     Detection3D,
@@ -221,6 +223,16 @@ class SemanticPerceptionNode(Node):
                     f"Room LLM naming requested but {api_key_env} not set"
                 )
 
+        # ── SCG 路径规划参数 ──
+        self.declare_parameter("scg.enable", True)
+        self.declare_parameter("scg.request_topic", "/nav/scg/plan_request")
+        self.declare_parameter("scg.result_topic", "/nav/scg/plan_result")
+
+        # ── SCG 路径规划器初始化 ──
+        self._scg_enable = self.get_parameter("scg.enable").value
+        self._scg_builder = SCGBuilder(SCGConfig())
+        self._scg_planner = SCGPathPlanner(self._scg_builder)
+
         # ── TF2 (A1 修复: 精确 camera→map 变换) ──
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -288,6 +300,20 @@ class SemanticPerceptionNode(Node):
             self._costmap_callback,
             10,
         )
+
+        # SCG 路径规划: 订阅请求, 发布结果
+        if self._scg_enable:
+            scg_req_topic = self.get_parameter("scg.request_topic").value
+            scg_res_topic = self.get_parameter("scg.result_topic").value
+            self._pub_scg_result = self.create_publisher(String, scg_res_topic, 10)
+            self._sub_scg_request = self.create_subscription(
+                String, scg_req_topic,
+                self._scg_plan_request_callback,
+                10,
+            )
+            self.get_logger().info(
+                f"SCG path planning enabled: req={scg_req_topic}, res={scg_res_topic}"
+            )
 
         # 指令订阅 (开放词汇: 动态合并用户指令目标词到检测类别)
         if self._instruction_merge_enable:
