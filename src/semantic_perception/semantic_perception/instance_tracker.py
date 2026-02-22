@@ -3409,3 +3409,283 @@ class InstanceTracker:
         logger.info("Scene graph loaded from %s (%d objects, %d views)",
                      path, len(self._objects), len(self._views))
         return True
+
+    # ════════════════════════════════════════════════════════════
+    #  DovSG 增量更新扩展 (IEEE RA-L 2025 局部更新)
+    # ════════════════════════════════════════════════════════════
+
+    def update_local(
+        self,
+        detections: List[Detection3D],
+        robot_pos: np.ndarray,
+        update_radius: float = 5.0,
+    ) -> Dict:
+        """局部更新: 只处理 robot_pos 附近 update_radius 范围内的物体。
+
+        DovSG (IEEE RA-L 2025) 核心思路: 机器人视野范围内只更新受影响的
+        节点, 其余节点仅做时间衰减, 避免全量 CLIP 匹配和信念传播。
+
+        Args:
+            detections: 本帧 3D 检测列表
+            robot_pos:  机器人当前位置 [x, y, z] (world frame)
+            update_radius: 局部更新半径 (米), 只处理此范围内的已知物体
+
+        Returns:
+            diff dict: {
+                "added":   [object_id, ...],  # 新建物体
+                "updated": [object_id, ...],  # 匹配并更新的物体
+                "decayed": [object_id, ...],  # 仅做时间衰减的远处物体
+            }
+        """
+        robot_pos_arr = np.asarray(robot_pos, dtype=np.float64)
+
+        # 将现有物体按距离机器人的远近分成两组
+        local_obj_ids: set = set()
+        remote_obj_ids: set = set()
+        for oid, obj in self._objects.items():
+            dist = float(np.linalg.norm(obj.position - robot_pos_arr))
+            if dist < update_radius:
+                local_obj_ids.add(oid)
+            else:
+                remote_obj_ids.add(oid)
+
+        added_ids: List[int] = []
+        updated_ids: List[int] = []
+
+        # 只对局部物体做完整匹配 + 信念更新
+        local_candidates = {oid: self._objects[oid] for oid in local_obj_ids}
+        detected_local_ids: set = set()
+
+        for det in detections:
+            # 对局部候选集做 USS-Nav 风格匹配
+            best_obj: Optional[TrackedObject] = None
+            best_sem = -1.0
+            best_dist = self.merge_distance
+
+            det_has_points = (
+                hasattr(det, 'points') and det.points is not None
+                and len(det.points) > 0
+            )
+
+            for oid, obj in local_candidates.items():
+                dist = float(np.linalg.norm(obj.position - det.position))
+                if dist >= self.CANDIDATE_RADIUS:
+                    continue
+
+                # 优先用语义相似度匹配
+                if det.features.size > 0 and obj.features.size > 0:
+                    sem = self._cosine_similarity(det.features, obj.features)
+                    if sem > self.SEM_THRESHOLD and sem > best_sem:
+                        omega_geo = 0.0
+                        if det_has_points and len(obj.points) > 0:
+                            omega_geo = self._geometric_similarity(
+                                det.points, obj.points
+                            )
+                        else:
+                            omega_geo = max(0.0, 1.0 - dist / self.merge_distance)
+                        if omega_geo >= self.GEO_WEAK_THRESHOLD:
+                            best_sem = sem
+                            best_obj = obj
+
+                # Fallback: 同类别 + 空间距离
+                if best_obj is None and obj.label.lower() == det.label.lower():
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_obj = obj
+
+            if best_obj is not None:
+                best_obj.update(det)
+                detected_local_ids.add(best_obj.object_id)
+                updated_ids.append(best_obj.object_id)
+            else:
+                # 局部范围内的新物体: 正常添加
+                init_points = np.empty((0, 3))
+                if det_has_points:
+                    init_points = det.points.copy()
+                new_obj = TrackedObject(
+                    object_id=self._next_id,
+                    label=det.label,
+                    position=det.position.copy(),
+                    best_score=det.score,
+                    last_seen=time.time(),
+                    features=det.features.copy() if det.features.size > 0 else np.array([]),
+                    points=init_points,
+                )
+                self._enrich_from_kg(new_obj)
+                self._objects[self._next_id] = new_obj
+                local_obj_ids.add(self._next_id)
+                added_ids.append(self._next_id)
+                self._next_id += 1
+
+        # 局部物体中未被检测到的: 记录 miss (负面证据)
+        for oid in local_obj_ids - detected_local_ids - set(added_ids):
+            obj = self._objects.get(oid)
+            if obj is not None and obj.detection_count >= 2:
+                dt = time.time() - obj.last_seen
+                if dt > 5.0:
+                    obj.record_miss()
+
+        # 远处物体: 只做时间衰减 (freshness 更新), 不做 CLIP 匹配
+        decayed_ids: List[int] = []
+        now = time.time()
+        for oid in remote_obj_ids:
+            obj = self._objects.get(oid)
+            if obj is None:
+                continue
+            # 仅更新 credibility 缓存 (freshness 自然衰减)
+            obj._update_credibility()
+            decayed_ids.append(oid)
+
+        return {
+            "added": added_ids,
+            "updated": updated_ids,
+            "decayed": decayed_ids,
+        }
+
+    def remove_stale_objects(
+        self,
+        stale_timeout_sec: float = 30.0,
+        min_confidence: float = 0.1,
+    ) -> List[str]:
+        """移除长时间未见且置信度低于阈值的物体。
+
+        与私有 _prune_stale() 的区别:
+          - 可配置超时和最低可信度阈值 (双条件: 过期 AND 低置信度)
+          - 返回被移除的 object_id 字符串列表 (供调用方记录 diff)
+          - 不影响高置信度物体 (即使很久未见, 若可信度高则保留)
+
+        Args:
+            stale_timeout_sec: 超过此秒数未见的物体为过期候选
+            min_confidence:    credibility 低于此值才允许移除 (双条件)
+
+        Returns:
+            被移除的 object_id 列表 (字符串格式, 与 scene_graph JSON 一致)
+        """
+        now = time.time()
+        to_remove: List[int] = []
+
+        for oid, obj in self._objects.items():
+            elapsed = now - obj.last_seen if obj.last_seen > 0 else float('inf')
+            if elapsed > stale_timeout_sec and obj.credibility < min_confidence:
+                to_remove.append(oid)
+
+        for oid in to_remove:
+            del self._objects[oid]
+
+        removed_ids = [str(oid) for oid in to_remove]
+        if removed_ids:
+            logger.debug(
+                "remove_stale_objects: removed %d objects (timeout=%.1fs, min_conf=%.2f)",
+                len(removed_ids), stale_timeout_sec, min_confidence,
+            )
+        return removed_ids
+
+    def get_scene_graph_diff_json(self, prev_snapshot: dict) -> str:
+        """计算与上次快照的差异, 只返回变化的部分。
+
+        扩展 compute_scene_diff() 返回标准化的 diff JSON 字符串,
+        格式与 perception_node.py 中 _pub_scene_diff 发布的消息一致。
+
+        与 compute_scene_diff() 的区别:
+          - 返回 JSON 字符串 (直接可用于 ROS2 publisher)
+          - 输出字段名称对齐 scene_graph JSON ("added"/"updated"/"removed")
+          - 包含 timestamp 和摘要
+
+        Args:
+            prev_snapshot: 上次 get_scene_graph_json() 解析后的 dict
+
+        Returns:
+            JSON 字符串: {
+                "added":     [...],   # 新增物体的完整属性
+                "updated":   [...],   # 更新物体的 id + 变化字段
+                "removed":   [...],   # 消失物体的 id + 最后已知位置
+                "timestamp": float,
+                "summary":   str,
+            }
+        """
+        import json
+
+        prev_objects: Dict[int, dict] = {
+            o["id"]: o for o in prev_snapshot.get("objects", [])
+        }
+        curr_objects = self._objects
+
+        added_list: List[dict] = []
+        updated_list: List[dict] = []
+        removed_list: List[dict] = []
+
+        # 新增物体
+        for oid, obj in curr_objects.items():
+            if oid not in prev_objects:
+                added_list.append({
+                    "id": oid,
+                    "label": obj.label,
+                    "position": {
+                        "x": round(float(obj.position[0]), 3),
+                        "y": round(float(obj.position[1]), 3),
+                        "z": round(float(obj.position[2]), 3),
+                    },
+                    "score": round(obj.best_score, 3),
+                    "credibility": round(obj.credibility, 3),
+                })
+
+        # 消失的物体
+        for pid, pdata in prev_objects.items():
+            if pid not in curr_objects:
+                removed_list.append({
+                    "id": pid,
+                    "label": pdata.get("label", "unknown"),
+                    "last_position": pdata.get("position", {}),
+                })
+
+        # 位置或置信度显著变化的物体
+        MOVE_THRESHOLD = 0.3   # 米, 比 compute_scene_diff 更敏感
+        CRED_THRESHOLD = 0.15  # credibility 变化阈值
+        for oid, obj in curr_objects.items():
+            if oid not in prev_objects:
+                continue
+            pdata = prev_objects[oid]
+            ppos = pdata.get("position", {})
+            px, py, pz = ppos.get("x", 0.0), ppos.get("y", 0.0), ppos.get("z", 0.0)
+            dist = float(np.linalg.norm(
+                obj.position - np.array([px, py, pz], dtype=np.float64)
+            ))
+            prev_cred = pdata.get("belief", {}).get("credibility", 0.5)
+            cred_delta = abs(obj.credibility - prev_cred)
+
+            if dist > MOVE_THRESHOLD or cred_delta > CRED_THRESHOLD:
+                entry: dict = {"id": oid, "label": obj.label}
+                if dist > MOVE_THRESHOLD:
+                    entry["position"] = {
+                        "x": round(float(obj.position[0]), 3),
+                        "y": round(float(obj.position[1]), 3),
+                        "z": round(float(obj.position[2]), 3),
+                    }
+                    entry["displacement"] = round(dist, 3)
+                if cred_delta > CRED_THRESHOLD:
+                    entry["credibility"] = round(obj.credibility, 3)
+                    entry["prev_credibility"] = round(prev_cred, 3)
+                updated_list.append(entry)
+
+        # 自然语言摘要
+        parts: List[str] = []
+        if added_list:
+            labels = [e["label"] for e in added_list[:5]]
+            parts.append(f"{len(added_list)} added: {', '.join(labels)}")
+        if removed_list:
+            labels = [e["label"] for e in removed_list[:5]]
+            parts.append(f"{len(removed_list)} removed: {', '.join(labels)}")
+        if updated_list:
+            parts.append(f"{len(updated_list)} updated")
+        summary = " | ".join(parts) if parts else "no changes"
+
+        return json.dumps(
+            {
+                "added": added_list,
+                "updated": updated_list,
+                "removed": removed_list,
+                "timestamp": time.time(),
+                "summary": summary,
+            },
+            ensure_ascii=False,
+        )
