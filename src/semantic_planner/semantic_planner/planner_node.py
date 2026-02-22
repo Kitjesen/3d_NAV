@@ -1354,7 +1354,68 @@ class SemanticPlannerNode(Node):
                     result.target_y - self._robot_position["y"]
                 ) * scale
 
-        # 构建 PoseStamped
+        # SCG 路径规划 (若启用且机器人位置已知, 尝试生成多路径点)
+        if self._scg_enable and self._robot_position:
+            scg_waypoints = self._plan_with_scg(
+                start_pos=self._robot_position,
+                goal_pos=(result.target_x, result.target_y, result.target_z),
+            )
+            if scg_waypoints and len(scg_waypoints) > 1:
+                # SCG 成功: 逐个发布中间路径点为 PoseStamped, 最后一个为终点
+                self.get_logger().info(
+                    f"SCG navigation: publishing {len(scg_waypoints)} waypoints "
+                    f"for target '{result.target_label}'"
+                )
+                self._set_state(PlannerState.NAVIGATING)
+                for i, wp in enumerate(scg_waypoints[:-1]):
+                    # 发布中间路径点
+                    wp_pose = PoseStamped()
+                    wp_pose.header.stamp = self.get_clock().now().to_msg()
+                    wp_pose.header.frame_id = result.frame_id
+                    wp_pose.pose.position.x = wp["x"]
+                    wp_pose.pose.position.y = wp["y"]
+                    wp_pose.pose.position.z = wp["z"]
+                    # 朝向: 指向下一个路径点
+                    next_wp = scg_waypoints[i + 1]
+                    dx = next_wp["x"] - wp["x"]
+                    dy = next_wp["y"] - wp["y"]
+                    yaw = math.atan2(dy, dx)
+                    wp_pose.pose.orientation.z = math.sin(yaw / 2)
+                    wp_pose.pose.orientation.w = math.cos(yaw / 2)
+                    self._pub_goal.publish(wp_pose)
+                    time.sleep(self._scg_waypoint_interval)
+                # 最终目标点
+                final_wp = scg_waypoints[-1]
+                goal_pose = PoseStamped()
+                goal_pose.header.stamp = self.get_clock().now().to_msg()
+                goal_pose.header.frame_id = result.frame_id
+                goal_pose.pose.position.x = final_wp["x"]
+                goal_pose.pose.position.y = final_wp["y"]
+                goal_pose.pose.position.z = final_wp["z"]
+                if self._robot_position:
+                    dx = final_wp["x"] - result.target_x
+                    dy = final_wp["y"] - result.target_y
+                    yaw = math.atan2(dy, dx)
+                    goal_pose.pose.orientation.z = math.sin(yaw / 2)
+                    goal_pose.pose.orientation.w = math.cos(yaw / 2)
+                else:
+                    goal_pose.pose.orientation.w = 1.0
+                if self._use_nav2_action and self._nav2_action_client is not None:
+                    self._send_nav2_goal(goal_pose, result.target_label or "")
+                else:
+                    self._pub_goal.publish(goal_pose)
+                self.get_logger().info(
+                    f"SCG goal published: {result.target_label} via {len(scg_waypoints)} waypoints"
+                )
+                return
+            else:
+                # SCG 失败或只有单点: fallback 到原有逻辑
+                self.get_logger().warn(
+                    "SCG planning failed or returned single point, "
+                    "falling back to direct PoseStamped"
+                )
+
+        # 构建 PoseStamped (原有逻辑 / SCG fallback)
         goal_pose = PoseStamped()
         goal_pose.header.stamp = self.get_clock().now().to_msg()
         goal_pose.header.frame_id = result.frame_id  # 使用目标解析器返回的坐标系
