@@ -285,7 +285,7 @@ class SCGPathPlanner:
         Returns:
             多面体 ID 或 None
         """
-        for poly_id, poly in self.scg.polyhedra.items():
+        for poly_id, poly in self.scg.nodes.items():
             if self._point_in_polyhedron(point, poly):
                 return poly_id
         return None
@@ -371,8 +371,8 @@ class SCGPathPlanner:
         Returns:
             启发式代价
         """
-        poly = self.scg.polyhedra[poly_id]
-        goal_poly = self.scg.polyhedra[goal_id]
+        poly = self.scg.nodes[poly_id]
+        goal_poly = self.scg.nodes[goal_id]
         return np.linalg.norm(poly.center - goal_poly.center)
 
     def _generate_path_segments(
@@ -440,8 +440,8 @@ class SCGPathPlanner:
         Returns:
             连接点 [x, y, z]
         """
-        poly1 = self.scg.polyhedra[poly1_id]
-        poly2 = self.scg.polyhedra[poly2_id]
+        poly1 = self.scg.nodes[poly1_id]
+        poly2 = self.scg.nodes[poly2_id]
 
         # 检查是否有 Adjacency 边（共享面）
         edge = self._find_edge(poly1_id, poly2_id)

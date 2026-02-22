@@ -67,7 +67,7 @@ def create_test_scg():
 
     scg_builder.build_edges(occupancy_grid, grid_resolution, grid_origin)
 
-    print(f"SCG 节点数: {len(scg_builder.polyhedra)}")
+    print(f"SCG 节点数: {len(scg_builder.nodes)}")
     print(f"SCG 边数: {len(scg_builder.edges)}")
 
     return scg_builder, polyhedra
