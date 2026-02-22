@@ -141,6 +141,32 @@ def debug_polyhedron_expansion():
     # 5. 碰撞检测
     from semantic_perception.polyhedron_expansion import CollisionChecker
     collision_checker = CollisionChecker()
+
+    # 详细碰撞检测
+    bbox_min = hull_result["vertices"].min(axis=0)
+    bbox_max = hull_result["vertices"].max(axis=0)
+    samples = np.random.uniform(bbox_min, bbox_max, (config.collision_check_samples, 3))
+
+    inside_count = 0
+    collision_count = 0
+
+    for p in samples:
+        if collision_checker._point_in_convex_hull(p, hull_result["vertices"]):
+            inside_count += 1
+            if collision_checker._is_occupied(
+                p, occupancy_grid, grid_resolution, grid_origin, config.collision_threshold
+            ):
+                collision_count += 1
+
+    collision_ratio = collision_count / inside_count if inside_count > 0 else 0
+
+    print(f"\n碰撞检测详情:")
+    print(f"  采样点数: {config.collision_check_samples}")
+    print(f"  内部点数: {inside_count}")
+    print(f"  碰撞点数: {collision_count}")
+    print(f"  碰撞比例: {collision_ratio:.2%}")
+    print(f"  阈值: 30%")
+
     has_collision = collision_checker.check_collision(
         polyhedron_vertices=hull_result["vertices"],
         occupancy_grid=occupancy_grid,
@@ -150,7 +176,6 @@ def debug_polyhedron_expansion():
         threshold=config.collision_threshold,
     )
 
-    print(f"\n碰撞检测:")
     print(f"  碰撞: {has_collision}")
 
     if has_collision:
