@@ -19,6 +19,55 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from semantic_perception.end_to_end_evaluation import EndToEndEvaluator
 
 
+def create_mock_hm3d_dataset(root_dir: Path):
+    """创建模拟 HM3D 数据集。"""
+    import json
+    # 创建目录结构
+    train_dir = root_dir / "train"
+    scene_dir = train_dir / "00800-TEEsavR23oF"
+    scene_dir.mkdir(parents=True, exist_ok=True)
+
+    # 创建子目录
+    (scene_dir / "rgb").mkdir(exist_ok=True)
+    (scene_dir / "depth").mkdir(exist_ok=True)
+    (scene_dir / "semantic").mkdir(exist_ok=True)
+    (scene_dir / "poses").mkdir(exist_ok=True)
+
+    # 创建元数据
+    metadata = {
+        "scene_id": "00800-TEEsavR23oF",
+        "num_frames": 10,
+        "bounds": [[-5, -5, 0], [5, 5, 3]],
+        "floor_height": 0.0,
+        "ceiling_height": 3.0,
+    }
+    with open(scene_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f)
+
+    # 创建模拟数据
+    for i in range(10):
+        # RGB 图像
+        rgb_file = scene_dir / f"rgb/{i:06d}.png"
+        if not rgb_file.exists():
+            import cv2
+            rgb = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+            cv2.imwrite(str(rgb_file), rgb)
+
+        # 深度图
+        depth_file = scene_dir / f"depth/{i:06d}.png"
+        if not depth_file.exists():
+            import cv2
+            depth = np.random.randint(500, 5000, (480, 640), dtype=np.uint16)
+            cv2.imwrite(str(depth_file), depth)
+
+        # 位姿
+        pose_file = scene_dir / f"poses/{i:06d}.txt"
+        if not pose_file.exists():
+            pose = np.eye(4)
+            pose[:3, 3] = [i * 0.5, 0, 0]  # 沿 x 轴移动
+            np.savetxt(pose_file, pose)
+
+
 def test_end_to_end_evaluator():
     """测试端到端评估器。"""
     print("=" * 60)
@@ -29,7 +78,6 @@ def test_end_to_end_evaluator():
     temp_dir = Path(tempfile.mkdtemp())
 
     # 创建模拟 HM3D 数据集
-    from semantic_perception.tests.test_dataset_loader import create_mock_hm3d_dataset
     create_mock_hm3d_dataset(temp_dir)
 
     try:
@@ -129,7 +177,6 @@ def test_multiple_methods():
     print("=" * 60)
 
     temp_dir = Path(tempfile.mkdtemp())
-    from semantic_perception.tests.test_dataset_loader import create_mock_hm3d_dataset
     create_mock_hm3d_dataset(temp_dir)
 
     try:
