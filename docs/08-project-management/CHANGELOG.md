@@ -68,6 +68,66 @@
 
 ---
 
+## [v1.6.1] - 2026-02-23
+
+USS-Nav 可视化工具 — 阶段 3 开始：路径、SCG、性能可视化工具实现。
+
+### 新增
+
+#### 可视化工具模块 (visualization_tools.py, 604 行)
+
+- **PathVisualizer (路径可视化器)**:
+  - `plot_path_2d()`: 2D 路径可视化，支持占据栅格叠加、起点/终点标记
+  - `plot_path_3d()`: 3D 路径可视化，支持点云渲染、路径轨迹
+  - 自动下采样点云（>10k 点）以提高性能
+  - 保存/显示/关闭图像接口
+
+- **SCGVisualizer (SCG 可视化器)**:
+  - `plot_scg_2d()`: 2D SCG 可视化，多面体显示为圆形，边按类型着色
+  - `plot_scg_3d()`: 3D SCG 可视化，多面体中心点 + 连接边
+  - 三种边类型颜色编码：adjacency=绿色, connectivity=蓝色, accessibility=橙色
+  - 节点 ID 标注
+
+- **PerformanceVisualizer (性能可视化器)**:
+  - `plot_comparison()`: 多方法性能对比柱状图（内存/更新时间/规划时间）
+  - `plot_time_series()`: 时间序列性能曲线
+  - 自动计算均值和标准差误差条
+  - 静态方法支持灵活保存
+
+- **ComprehensiveVisualizer (综合可视化器)**:
+  - `visualize_all()`: 一站式接口，自动生成所有可视化
+  - 输出组织：path_2d.png, path_3d.png, scg_2d.png, scg_3d.png, performance_comparison.png
+  - 自动创建输出目录
+
+#### 测试文件 (test_visualization_tools.py, 328 行)
+
+- 6 个测试函数：2D/3D 路径、2D/3D SCG、性能对比、综合可视化
+- 测试辅助函数：螺旋路径生成、占据栅格生成、SCG 生成、评估结果生成
+- 使用 `matplotlib.use('Agg')` 非交互式后端，支持无头测试
+
+### 修复
+
+- **Polyhedron 实例化错误**: 修复 `create_test_scg()` 中缺少 `poly_id`, `faces`, `seed_point`, `sample_points` 参数
+- **ConvexHull 集成**: 使用 `scipy.spatial.ConvexHull` 自动计算面片
+- **非交互式后端**: 设置 matplotlib 'Agg' 后端，避免 GUI 依赖
+
+### 变更文件
+
+| 文件 | 变更说明 |
+|------|---------|
+| `src/semantic_perception/semantic_perception/visualization_tools.py` | 新增：完整可视化工具模块（604 行） |
+| `src/semantic_perception/tests/test_visualization_tools.py` | 新增：可视化工具测试（328 行） |
+| `src/semantic_perception/tests/test_viz_simple.py` | 新增：简化测试脚本（验证核心功能） |
+
+### 下一步计划
+
+**阶段 3 继续: 实验与可视化（预计 2-3 周）**
+- 定量实验（10+ 场景 HM3D 数据集）
+- 性能优化（提升 USS-Nav 更新速率）
+- 完整可视化报告生成
+
+---
+
 ## [v1.6.0] - 2026-02-23
 
 USS-Nav 空间表示系统 — 完整实现 USS-Nav 论文核心算法 + 数据集集成 + 评估框架。
