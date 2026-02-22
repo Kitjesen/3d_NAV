@@ -353,10 +353,10 @@ class SCGPathPlanner:
         neighbors = []
 
         for edge in self.scg.edges:
-            if edge['from_id'] == poly_id:
-                neighbors.append((edge['to_id'], edge['cost']))
-            elif edge['to_id'] == poly_id:
-                neighbors.append((edge['from_id'], edge['cost']))
+            if edge.from_id == poly_id:
+                neighbors.append((edge.to_id, edge.weight))
+            elif edge.to_id == poly_id:
+                neighbors.append((edge.from_id, edge.weight))
 
         return neighbors
 
@@ -446,7 +446,7 @@ class SCGPathPlanner:
         # 检查是否有 Adjacency 边（共享面）
         edge = self._find_edge(poly1_id, poly2_id)
 
-        if edge and edge['type'] == 'adjacency':
+        if edge and edge.edge_type.value == 'adjacency':
             # 如果有共享面，返回共享面的中心
             # 简化：返回两个中心的中点
             return 0.5 * (poly1.center + poly2.center)
@@ -454,18 +454,18 @@ class SCGPathPlanner:
             # 否则，返回两个中心的中点
             return 0.5 * (poly1.center + poly2.center)
 
-    def _find_edge(self, poly1_id: int, poly2_id: int) -> Optional[Dict]:
+    def _find_edge(self, poly1_id: int, poly2_id: int) -> Optional[any]:
         """查找两个多面体之间的边。"""
         for edge in self.scg.edges:
-            if (edge['from_id'] == poly1_id and edge['to_id'] == poly2_id) or \
-               (edge['from_id'] == poly2_id and edge['to_id'] == poly1_id):
+            if (edge.from_id == poly1_id and edge.to_id == poly2_id) or \
+               (edge.from_id == poly2_id and edge.to_id == poly1_id):
                 return edge
         return None
 
     def _get_edge_type(self, poly1_id: int, poly2_id: int) -> str:
         """获取边的类型。"""
         edge = self._find_edge(poly1_id, poly2_id)
-        return edge['type'] if edge else 'unknown'
+        return edge.edge_type.value if edge else 'unknown'
 
     def _merge_segments(self, segments: List[PathSegment]) -> np.ndarray:
         """
