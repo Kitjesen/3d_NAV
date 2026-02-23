@@ -20,10 +20,19 @@ Frontier 评分探索 — 统一目标 Grounding 与 Frontier 选择。
 
 import math
 import logging
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
+
+# 双语扩展: 用于 frontier 语言评分中的跨语言关键词匹配
+try:
+    from .chinese_tokenizer import expand_bilingual as _expand_bilingual, _ZH_TO_EN
+    _ZH_TO_EN_KEYS = frozenset(_ZH_TO_EN.keys())
+except ImportError:
+    _expand_bilingual = None
+    _ZH_TO_EN_KEYS = frozenset()
 
 logger = logging.getLogger(__name__)
 
@@ -190,11 +199,11 @@ class FrontierScorer:
                 if frontier_mask[r, c] and not visited[r, c]:
                     # BFS 聚类
                     cluster = []
-                    queue = [(r, c)]
+                    queue = deque([(r, c)])
                     visited[r, c] = True
 
                     while queue:
-                        cr, cc = queue.pop(0)
+                        cr, cc = queue.popleft()
                         cluster.append((cr, cc))
 
                         for dr in range(-self.cluster_radius_cells, self.cluster_radius_cells + 1):
@@ -379,6 +388,9 @@ class FrontierScorer:
         max_dist = max(f.distance for f in self._frontiers) or 1.0
         inst_lower = instruction.lower()
 
+        # ── 双语关键词集 (跨语言匹配) ──
+        inst_keywords = self._extract_bilingual_keywords(inst_lower)
+
         # ── 预计算: 物体空间分布方向 ──
         obj_directions: List[Tuple[float, str]] = []  # (angle, label)
         if scene_objects:
@@ -413,10 +425,13 @@ class FrontierScorer:
                     ))
                     if dist_to_frontier < self.nearby_object_radius:
                         nearby_labels.append(obj["label"])
-                        if obj["label"].lower() in inst_lower:
+                        # 跨语言匹配: "灭火器" 的关键词集含 "fire extinguisher"
+                        lbl_lower = obj["label"].lower()
+                        if any(kw in lbl_lower or lbl_lower in kw
+                               for kw in inst_keywords):
                             language_score += 0.5
                         language_score += self._cooccurrence_score(
-                            inst_lower, obj["label"].lower()
+                            inst_keywords, lbl_lower
                         )
                 frontier.nearby_labels = nearby_labels
                 language_score = min(1.0, language_score)
@@ -433,7 +448,8 @@ class FrontierScorer:
                 angle_diff = abs(self._angle_diff(frontier_angle, obj_angle))
                 if angle_diff < self.grounding_angle_threshold:
                     grounding_score += self.grounding_spatial_bonus
-                    if obj_label in inst_lower:
+                    if any(kw in obj_label or obj_label in kw
+                           for kw in inst_keywords):
                         grounding_score += self.grounding_keyword_bonus
 
             # 4b. 关系链延伸 (SG-Nav): 指令目标的关联物体在该方向
@@ -494,7 +510,7 @@ class FrontierScorer:
         return d
 
     @staticmethod
-    def _cooccurrence_score(instruction: str, label: str) -> float:
+    def _cooccurrence_score(inst_keywords: Set[str], label: str) -> float:
         """
         常识共现评分 (MTU3D 空间先验)。
 
@@ -503,22 +519,29 @@ class FrontierScorer:
           kitchen ↔ chair, table, trash can, refrigerator
           bathroom ↔ door, sign, mirror
           office ↔ desk, chair, computer
+
+        Args:
+            inst_keywords: 指令双语关键词集 (已通过 expand_bilingual 扩展)
+            label: 场景物体标签 (小写)
         """
         COOCCURRENCE = {
-            "fire": ["door", "sign", "stairs", "elevator"],
+            "fire extinguisher": ["door", "sign", "stairs", "elevator", "corridor"],
             "extinguisher": ["door", "sign", "stairs"],
-            "kitchen": ["chair", "desk", "trash", "refrigerator", "table"],
-            "bathroom": ["door", "sign", "mirror"],
-            "office": ["desk", "chair", "computer", "door"],
+            "灭火器": ["door", "sign", "stairs", "elevator"],
+            "chair": ["desk", "table", "computer"],
+            "椅子": ["desk", "table", "computer"],
+            "desk": ["chair", "computer", "monitor", "keyboard"],
+            "桌子": ["chair", "computer", "monitor"],
+            "refrigerator": ["sink", "microwave", "table", "chair"],
+            "冰箱": ["sink", "microwave", "table"],
+            "toilet": ["sink", "mirror", "door"],
+            "马桶": ["sink", "mirror", "door"],
             "elevator": ["door", "sign", "stairs", "button"],
-            "灭火器": ["door", "sign", "stairs"],
-            "厨房": ["chair", "desk", "trash"],
-            "卫生间": ["door", "sign"],
-            "办公室": ["desk", "chair"],
+            "电梯": ["door", "sign", "stairs"],
         }
         for key, co_labels in COOCCURRENCE.items():
-            if key in instruction and label in co_labels:
-                return 0.25  # base value, scaled by caller via cooccurrence_bonus
+            if key in inst_keywords and label in co_labels:
+                return 0.25
         return 0.0
 
     def _compute_semantic_prior_score(
@@ -569,6 +592,45 @@ class FrontierScorer:
         if self._frontiers:
             return self._frontiers[0]
         return None
+
+    @staticmethod
+    def _extract_bilingual_keywords(inst_lower: str) -> Set[str]:
+        """从指令提取关键词并双语扩展, 用于跨语言 frontier 评分。"""
+        import re
+        stop_en = {
+            "the", "a", "an", "to", "go", "find", "near", "with", "at",
+            "of", "please", "where", "is", "i", "want", "need", "look",
+        }
+        # 中文停用前缀/后缀 — 用于从连续中文串中剥离动词前缀
+        stop_zh_prefix = ["去", "找", "到", "在", "看", "帮", "把", "让", "给"]
+        # 提取英文 token
+        en_tokens = re.findall(r"[a-z]+", inst_lower)
+        keywords = [t for t in en_tokens if t not in stop_en and len(t) > 1]
+        # 提取中文 token: 先整段提取, 再切分并清理
+        # 用常见分隔词 (的/旁边/附近/里面...) 切割长中文串, 得到名词片段
+        zh_splitters = r"的|旁边|附近|里面|上面|下面|前面|后面|左边|右边|对面|中间|那里|那边|这里|这边|那个|这个"
+        zh_raw = re.findall(r"[\u4e00-\u9fff]+", inst_lower)
+        for zh in zh_raw:
+            # 按空间/结构词切分: "门旁边的椅子" → ["门", "椅子"]
+            parts = re.split(zh_splitters, zh)
+            for part in parts:
+                # 剥离停用前缀: "去找灭火器" → "灭火器"
+                cleaned = part
+                changed = True
+                while changed and len(cleaned) > 1:
+                    changed = False
+                    for pfx in stop_zh_prefix:
+                        if cleaned.startswith(pfx) and len(cleaned) > len(pfx):
+                            cleaned = cleaned[len(pfx):]
+                            changed = True
+                            break
+                # 单字中文: 只保留在双语字典中有映射的 (门→door, 窗→window 等)
+                if len(cleaned) > 1 or (len(cleaned) == 1 and cleaned in _ZH_TO_EN_KEYS):
+                    keywords.append(cleaned)
+        # 双语扩展
+        if _expand_bilingual is not None:
+            keywords = _expand_bilingual(keywords)
+        return set(keywords)
 
     def get_frontiers_summary(self) -> str:
         """导出 frontier 摘要 (给 LLM 消费)。"""

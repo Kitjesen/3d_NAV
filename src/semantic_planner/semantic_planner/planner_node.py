@@ -319,6 +319,10 @@ class SemanticPlannerNode(Node):
             grounding_relation_bonus=self.get_parameter("exploration.frontier_grounding_relation_bonus").value,
             vision_weight=self.get_parameter("exploration.frontier_vision_weight").value,
         )
+        # 注入语义先验引擎到 frontier 评分器 (创新4: KG 指导探索方向)
+        self._frontier_scorer.set_semantic_prior_engine(
+            self._resolver._semantic_prior_engine
+        )
         self._sgnav_reasoner = SGNavReasoner(
             max_subgraphs=self.get_parameter("exploration.sgnav.max_subgraphs").value,
             use_llm_reasoning=self._sgnav_use_llm_reasoning,
@@ -2008,6 +2012,7 @@ class SemanticPlannerNode(Node):
                 robot_position=self._robot_position,
                 step_distance=self._step_distance,
                 language=self._current_language,
+                scene_graph_json=self._latest_scene_graph,
             )
 
             if explore_result.is_valid:
@@ -2031,12 +2036,20 @@ class SemanticPlannerNode(Node):
             return None
 
         scene_objects, scene_relations = extract_frontier_scene_data(self._latest_scene_graph)
+        # 提取房间列表, 供语义先验评分使用
+        scene_rooms = None
+        try:
+            _sg = json.loads(self._latest_scene_graph)
+            scene_rooms = _sg.get("rooms")
+        except (json.JSONDecodeError, TypeError):
+            pass
         scored_frontiers = self._frontier_scorer.score_frontiers(
             instruction=self._current_instruction or "",
             robot_position=robot_xy,
             visited_positions=self._topo_memory.visited_positions,
             scene_objects=scene_objects,
             scene_relations=scene_relations,
+            scene_rooms=scene_rooms,
         )
 
         llm_chat = self._resolver._call_with_fallback if self._sgnav_use_llm_reasoning else None

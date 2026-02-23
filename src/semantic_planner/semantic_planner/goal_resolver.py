@@ -1373,18 +1373,25 @@ class GoalResolver:
 
     @staticmethod
     def _predict_adjacent_room_type(current_room_type: str) -> str:
-        """基于当前房间类型预测相邻房间类型 (空间常识)。"""
+        """
+        基于当前房间类型预测相邻房间类型 (空间常识)。
+
+        返回最高概率的相邻类型。走廊是 hub 节点, 连接多种房间;
+        功能房间通常与走廊相邻, 也可能与相近功能的房间相邻。
+        """
         adjacency_priors = {
-            "corridor": "office",
-            "office": "corridor",
+            "corridor": "office",       # 走廊两侧最常见是办公室
+            "office": "corridor",       # 办公室出门是走廊
             "kitchen": "corridor",
             "meeting_room": "corridor",
             "bathroom": "corridor",
             "stairwell": "corridor",
-            "lobby": "corridor",
+            "lobby": "corridor",        # 大厅连走廊
             "storage": "corridor",
+            "lab": "corridor",
+            "classroom": "corridor",
         }
-        return adjacency_priors.get(current_room_type, "")
+        return adjacency_priors.get(current_room_type, "corridor")
 
     async def vision_grounding(
         self,
