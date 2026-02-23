@@ -16,6 +16,7 @@
 
 import logging
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -316,14 +317,14 @@ class SemanticPriorEngine:
         # BFS from current_room to compute hop distances
         hop_dist: Dict[int, int] = {}
         if current_room_id >= 0:
-            queue = [current_room_id]
+            bfs_queue: deque = deque([current_room_id])
             hop_dist[current_room_id] = 0
-            while queue:
-                node = queue.pop(0)
+            while bfs_queue:
+                node = bfs_queue.popleft()
                 for nb in adjacency.get(node, []):
                     if nb not in hop_dist:
                         hop_dist[nb] = hop_dist[node] + 1
-                        queue.append(nb)
+                        bfs_queue.append(nb)
 
         recommendations = []
         for rp in room_priors:
