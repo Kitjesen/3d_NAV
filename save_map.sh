@@ -35,11 +35,13 @@ export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 MAP_DIR="$WORKSPACE_DIR/maps"
 PCD_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/PCD"
 TOMOGRAM_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/tomogram"
+SEMANTIC_DIR="$WORKSPACE_DIR/maps/semantic"
 
 # 创建目录
 mkdir -p "$MAP_DIR"
 mkdir -p "$PCD_DIR"
 mkdir -p "$TOMOGRAM_DIR"
+mkdir -p "$SEMANTIC_DIR"
 
 # 获取当前时间戳
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -156,6 +158,35 @@ case $SAVE_CHOICE in
         ;;
 esac
 
+# ── 保存语义数据 (房间-物体 KG, 拓扑记忆, 场景图) ──
+echo ""
+echo -e "${GREEN}保存语义地图数据...${NC}"
+SEMANTIC_SAVE_DIR="$SEMANTIC_DIR/${MAP_NAME}"
+mkdir -p "$SEMANTIC_SAVE_DIR"
+
+# 复制语义运行时数据 (如果存在)
+if [ -f "$SEMANTIC_DIR/room_object_kg.json" ]; then
+    cp "$SEMANTIC_DIR/room_object_kg.json" "$SEMANTIC_SAVE_DIR/room_object_kg.json"
+    echo -e "${GREEN}✓ 房间-物体知识图谱已保存${NC}"
+fi
+if [ -f "$SEMANTIC_DIR/topo_memory.json" ]; then
+    cp "$SEMANTIC_DIR/topo_memory.json" "$SEMANTIC_SAVE_DIR/topo_memory.json"
+    echo -e "${GREEN}✓ 拓扑记忆已保存${NC}"
+fi
+
+# 尝试通过 ROS2 服务通知 semantic_planner 保存数据
+if ros2 topic list 2>/dev/null | grep -q "/nav/semantic/scene_graph"; then
+    echo -e "${YELLOW}通知语义规划器保存数据...${NC}"
+    # 订阅并保存最新场景图
+    timeout 5s ros2 topic echo /nav/semantic/scene_graph --once > "$SEMANTIC_SAVE_DIR/scene_graph_snapshot.json" 2>/dev/null
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ 场景图快照已保存${NC}"
+    fi
+fi
+
+# 创建符号链接指向最新语义数据
+ln -sf "$SEMANTIC_SAVE_DIR" "$SEMANTIC_DIR/latest"
+
 echo ""
 echo -e "${BLUE}========================================${NC}"
 echo -e "${GREEN}✓ 地图保存完成！${NC}"
@@ -166,6 +197,7 @@ echo -e "  - 原始地图: ${BLUE}$MAP_DIR/${MAP_NAME}.pcd${NC}"
 if [[ "$SAVE_CHOICE" == "2" ]] || [[ "$SAVE_CHOICE" == "3" ]]; then
     echo -e "  - PCT 地图: ${BLUE}$TOMOGRAM_DIR/${MAP_NAME}.pickle${NC}"
 fi
+echo -e "  - 语义数据: ${BLUE}$SEMANTIC_SAVE_DIR/${NC}"
 echo ""
 echo -e "${YELLOW}下一步:${NC}"
 echo -e "  1. 使用 ${GREEN}./planning.sh${NC} 启动规划系统"

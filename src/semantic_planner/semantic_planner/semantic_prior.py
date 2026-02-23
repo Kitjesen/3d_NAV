@@ -157,12 +157,72 @@ class SemanticPriorEngine:
       - predict_target_rooms(): 给定目标描述, 预测最可能的房间类型
       - score_rooms_for_target(): 给定具体房间列表+目标, 评分
       - get_unexplored_priors(): 结合拓扑图, 推荐未探索但高先验的方向
+      - load_learned_priors(): 从持久化 KG 文件加载学习到的先验
     """
 
     def __init__(
         self,
         room_priors: Optional[Dict[str, Dict[str, float]]] = None,
+        kg_path: Optional[str] = None,
     ):
+        self._priors = room_priors or dict(ROOM_OBJECT_PRIORS)
+
+        # 如果提供了持久化 KG 路径, 加载并合并
+        if kg_path:
+            self.load_learned_priors(kg_path)
+
+        self._inverse_index = self._build_inverse_index()
+
+    def load_learned_priors(self, kg_path: str) -> bool:
+        """
+        从持久化 RoomObjectKG 文件加载学习到的先验, 合并到当前 priors。
+
+        学习到的先验优先级更高: 如果 KG 中有数据, 使用 KG 概率;
+        手写 ROOM_OBJECT_PRIORS 作为 fallback (KG 没有覆盖到的房间/物体)。
+        """
+        try:
+            from .room_object_kg import RoomObjectKG
+            kg = RoomObjectKG()
+            if not kg.load(kg_path):
+                return False
+
+            learned = kg.to_room_object_priors(min_observations=2)
+            if not learned:
+                logger.info("Learned KG is empty, using hand-coded priors only")
+                return False
+
+            # Merge: learned priors override hand-coded, but keep hand-coded as fallback
+            merged = dict(ROOM_OBJECT_PRIORS)  # start with fallback
+            for rt, objs in learned.items():
+                if rt not in merged:
+                    merged[rt] = {}
+                # Learned objects override hand-coded probabilities
+                for lbl, prob in objs.items():
+                    merged[rt][lbl] = prob
+                # Keep hand-coded objects that learned KG didn't observe
+                # (but with lower weight since they are unconfirmed)
+                if rt in ROOM_OBJECT_PRIORS:
+                    for lbl, prob in ROOM_OBJECT_PRIORS[rt].items():
+                        if lbl not in merged[rt]:
+                            merged[rt][lbl] = prob * 0.5  # discount unconfirmed
+
+            self._priors = merged
+            self._inverse_index = self._build_inverse_index()
+
+            stats = kg.get_stats()
+            logger.info(
+                "Learned priors loaded: %d room types, %d objects from %d sessions",
+                stats["room_types"], stats["unique_objects"], stats["sessions"],
+            )
+            return True
+        except Exception as e:
+            logger.warning("Failed to load learned priors from %s: %s", kg_path, e)
+            return False
+
+    def reload_priors(
+        self, room_priors: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> None:
+        """热更新先验表 (运行时替换)。"""
         self._priors = room_priors or ROOM_OBJECT_PRIORS
         self._inverse_index = self._build_inverse_index()
 

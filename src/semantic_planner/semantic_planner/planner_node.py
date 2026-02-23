@@ -227,6 +227,9 @@ class SemanticPlannerNode(Node):
         self.declare_parameter("topo_memory.new_node_distance", 2.0)
         self.declare_parameter("topo_memory.max_nodes", 500)
 
+        # 语义数据持久化目录 (mapping 时保存, navigation 时加载)
+        self.declare_parameter("semantic_data_dir", "")  # 空=不加载/保存
+
         # ── 读取参数 ──
         primary_config = LLMConfig(
             backend=self.get_parameter("llm.backend").value,
@@ -319,6 +322,11 @@ class SemanticPlannerNode(Node):
             grounding_relation_bonus=self.get_parameter("exploration.frontier_grounding_relation_bonus").value,
             vision_weight=self.get_parameter("exploration.frontier_vision_weight").value,
         )
+        # 加载持久化语义数据 (房间-物体 KG, 拓扑记忆)
+        self._semantic_data_dir = self.get_parameter("semantic_data_dir").value
+        if self._semantic_data_dir:
+            self._load_semantic_data(self._semantic_data_dir)
+
         # 注入语义先验引擎到 frontier 评分器 (创新4: KG 指导探索方向)
         self._frontier_scorer.set_semantic_prior_engine(
             self._resolver._semantic_prior_engine
@@ -615,8 +623,18 @@ class SemanticPlannerNode(Node):
         self._set_state(PlannerState.CANCELLED)
 
     def _scene_graph_callback(self, msg: String):
-        """更新最新场景图。"""
+        """更新最新场景图 + 增量更新房间-物体 KG。"""
         self._latest_scene_graph = msg.data
+
+        # 增量更新 runtime KG (每次场景图更新都提取房间-物体关系)
+        if self._semantic_data_dir and hasattr(self, '_runtime_kg'):
+            try:
+                from .room_object_kg import extract_room_objects_from_scene_graph
+                room_data = extract_room_objects_from_scene_graph(msg.data)
+                for room_type, labels, confs in room_data:
+                    self._runtime_kg.observe_room(room_type, labels, confs)
+            except Exception:
+                pass  # non-critical
 
     def _image_callback(self, msg: Image):
         """缓存最新相机帧 (用于 VLM vision grounding)。"""
@@ -2402,11 +2420,86 @@ class SemanticPlannerNode(Node):
         self._pub_status.publish(msg)
 
     # ================================================================
+    #  语义数据持久化
+    # ================================================================
+
+    def _load_semantic_data(self, data_dir: str) -> None:
+        """从目录加载持久化语义数据 (KG + 拓扑记忆)。"""
+        import os
+        from .room_object_kg import RoomObjectKG
+
+        kg_path = os.path.join(data_dir, "room_object_kg.json")
+        topo_path = os.path.join(data_dir, "topo_memory.json")
+
+        # 初始化 runtime KG (用于增量收集本次 session 的数据)
+        self._runtime_kg = RoomObjectKG()
+        if os.path.exists(kg_path):
+            self._runtime_kg.load(kg_path)
+        self._runtime_kg.start_new_session()
+
+        # 加载房间-物体 KG → 更新 SemanticPriorEngine
+        if os.path.exists(kg_path):
+            loaded = self._resolver._semantic_prior_engine.load_learned_priors(kg_path)
+            if loaded:
+                self.get_logger().info("Loaded room-object KG from %s", kg_path)
+            else:
+                self.get_logger().info("Room-object KG at %s empty or failed, using defaults", kg_path)
+        else:
+            self.get_logger().info("No room-object KG at %s, using hand-coded priors", kg_path)
+
+        # 加载拓扑记忆
+        if os.path.exists(topo_path):
+            if self._topo_memory.load_from_file(topo_path):
+                self.get_logger().info("Loaded topo memory from %s", topo_path)
+            else:
+                self.get_logger().warning("Failed to load topo memory from %s", topo_path)
+
+    def _save_semantic_data(self, data_dir: str) -> None:
+        """保存语义数据到目录 (shutdown 时调用)。"""
+        import os
+        os.makedirs(data_dir, exist_ok=True)
+
+        # 保存 runtime KG (已在场景图回调中增量更新)
+        try:
+            kg = getattr(self, '_runtime_kg', None)
+            if kg is not None:
+                kg_path = os.path.join(data_dir, "room_object_kg.json")
+
+                # 从拓扑记忆提取房间转换 → 邻接关系
+                for from_rid, to_rid in self._topo_memory.get_room_transitions():
+                    from_info = self._topo_memory._visited_rooms.get(from_rid, {})
+                    to_info = self._topo_memory._visited_rooms.get(to_rid, {})
+                    from_name = from_info.get("name", "")
+                    to_name = to_info.get("name", "")
+                    if from_name and to_name:
+                        kg.observe_adjacency(from_name, to_name)
+
+                kg.save(kg_path)
+                self.get_logger().info("Room-object KG saved to %s", kg_path)
+        except Exception as e:
+            self.get_logger().warning("Failed to save room-object KG: %s", e)
+
+        # 保存拓扑记忆
+        try:
+            topo_path = os.path.join(data_dir, "topo_memory.json")
+            self._topo_memory.save_to_file(topo_path)
+            self.get_logger().info("Topo memory saved to %s", topo_path)
+        except Exception as e:
+            self.get_logger().warning("Failed to save topo memory: %s", e)
+
+    # ================================================================
     #  生命周期
     # ================================================================
 
     def destroy_node(self):
-        """清理。"""
+        """清理 + 保存语义数据。"""
+        # 保存持久化数据
+        if self._semantic_data_dir:
+            try:
+                self._save_semantic_data(self._semantic_data_dir)
+            except Exception as e:
+                self.get_logger().warning("Failed to save semantic data on shutdown: %s", e)
+
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._async_thread.join(timeout=3.0)
         super().destroy_node()
