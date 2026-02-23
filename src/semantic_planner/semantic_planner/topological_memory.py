@@ -426,6 +426,105 @@ class TopologicalMemory:
             "path_history": self._path_history[-20:],
         }, ensure_ascii=False)
 
+    # ── 持久化 ──
+
+    def save_to_file(self, path: str) -> bool:
+        """保存拓扑记忆到 JSON 文件。"""
+        import json
+        import os
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            nodes_data = {}
+            for nid, node in self._nodes.items():
+                nodes_data[str(nid)] = {
+                    "position": node.position.tolist(),
+                    "timestamp": node.timestamp,
+                    "visit_count": node.visit_count,
+                    "last_visit": node.last_visit,
+                    "visible_labels": node.visible_labels,
+                    "neighbors": node.neighbors,
+                    "edge_distances": {str(k): v for k, v in node.edge_distances.items()},
+                    "room_id": node.room_id,
+                    "room_name": node.room_name,
+                }
+
+            visited_rooms_data = {}
+            for rid, info in self._visited_rooms.items():
+                visited_rooms_data[str(rid)] = {
+                    "name": info.get("name", ""),
+                    "first_visit": info.get("first_visit", 0.0),
+                    "visit_count": info.get("visit_count", 0),
+                    "node_ids": list(info.get("node_ids", set())),
+                }
+
+            data = {
+                "version": "1.0",
+                "nodes": nodes_data,
+                "next_id": self._next_id,
+                "current_node_id": self._current_node_id,
+                "path_history": self._path_history[-100:],
+                "visited_rooms": visited_rooms_data,
+                "room_transitions": self._room_transition_history[-50:],
+            }
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info("TopologicalMemory saved to %s (%d nodes)", path, len(self._nodes))
+            return True
+        except Exception as e:
+            logger.error("Failed to save TopologicalMemory to %s: %s", path, e)
+            return False
+
+    def load_from_file(self, path: str) -> bool:
+        """从 JSON 文件恢复拓扑记忆。"""
+        import json
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logger.warning("Failed to load TopologicalMemory from %s: %s", path, e)
+            return False
+
+        self._nodes.clear()
+        self._path_history.clear()
+        self._visited_rooms.clear()
+        self._room_transition_history.clear()
+
+        for nid_str, ndata in data.get("nodes", {}).items():
+            nid = int(nid_str)
+            node = TopoNode(
+                node_id=nid,
+                position=np.array(ndata["position"]),
+                timestamp=ndata.get("timestamp", 0.0),
+                visit_count=ndata.get("visit_count", 1),
+                last_visit=ndata.get("last_visit", 0.0),
+                visible_labels=ndata.get("visible_labels", []),
+                neighbors=ndata.get("neighbors", []),
+                edge_distances={int(k): v for k, v in ndata.get("edge_distances", {}).items()},
+                room_id=ndata.get("room_id", -1),
+                room_name=ndata.get("room_name", ""),
+            )
+            self._nodes[nid] = node
+
+        self._next_id = data.get("next_id", max(self._nodes.keys(), default=-1) + 1)
+        self._current_node_id = data.get("current_node_id", -1)
+        self._path_history = data.get("path_history", [])
+
+        for rid_str, rdata in data.get("visited_rooms", {}).items():
+            rid = int(rid_str)
+            self._visited_rooms[rid] = {
+                "name": rdata.get("name", ""),
+                "first_visit": rdata.get("first_visit", 0.0),
+                "visit_count": rdata.get("visit_count", 0),
+                "node_ids": set(rdata.get("node_ids", [])),
+            }
+
+        self._room_transition_history = [
+            tuple(t) for t in data.get("room_transitions", [])
+        ]
+
+        logger.info("TopologicalMemory loaded from %s (%d nodes)", path, len(self._nodes))
+        return True
+
     # ── 内部方法 ──
 
     def _find_nearest_node(self, pos_2d: np.ndarray) -> Tuple[Optional[TopoNode], float]:

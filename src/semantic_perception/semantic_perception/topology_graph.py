@@ -910,6 +910,37 @@ class TopologySemGraph:
         tsg._current_room_id = data.get("current_room_id", -1)
         return tsg
 
+    def save_to_file(self, path: str) -> bool:
+        """保存拓扑图到 JSON 文件。"""
+        import json as _json
+        import os
+        try:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            data = self.to_dict()
+            with open(path, 'w', encoding='utf-8') as f:
+                _json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.info("TopologySemGraph saved to %s (%d nodes, %d edges)",
+                        path, len(self._nodes), len(self._edges))
+            return True
+        except Exception as e:
+            logger.error("Failed to save TopologySemGraph to %s: %s", path, e)
+            return False
+
+    @classmethod
+    def load_from_file(cls, path: str) -> "Optional[TopologySemGraph]":
+        """从 JSON 文件恢复拓扑图。"""
+        import json as _json
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = _json.load(f)
+            tsg = cls.from_dict(data)
+            logger.info("TopologySemGraph loaded from %s (%d nodes, %d edges)",
+                        path, len(tsg._nodes), len(tsg._edges))
+            return tsg
+        except (FileNotFoundError, _json.JSONDecodeError) as e:
+            logger.warning("Failed to load TopologySemGraph from %s: %s", path, e)
+            return None
+
     # ── 查询 ──────────────────────────────────────────────────
 
     @property

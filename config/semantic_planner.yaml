@@ -133,5 +133,10 @@ semantic_planner_node:
         weights_path: ""                # 可选: 训练好的 .npz 权重
         strict: false                    # true=权重加载失败直接报错
 
+    # ── 语义数据持久化 ──
+    # 建图时自动保存, 导航时自动加载 (房间-物体 KG + 拓扑记忆)
+    # 空 = 不持久化; 设为目录路径 = 启用 (如 "maps/semantic")
+    semantic_data_dir: "maps/semantic"   # 建议与 save_map.sh 的 SEMANTIC_DIR 一致
+
     # ── Prompt 模板路径 ──
     prompt_template_dir: ""              # 空 = 使用内置模板, 非空 = 从目录加载
