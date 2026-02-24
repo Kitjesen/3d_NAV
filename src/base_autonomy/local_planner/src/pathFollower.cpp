@@ -36,7 +36,7 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
+const double PI = M_PI;  // 使用系统精确值，避免截断误差
 
 /**
  * @class PathFollower
@@ -459,16 +459,18 @@ private:
       float pathDir = atan2(disY, disX);
 
       float dirDiff = vehicleYaw_ - vehicleYawRec_ - pathDir;
-      // 一次归一化到 (-π, π] 即可 (两个 [-π,π] 量之差在 [-2π, 2π] 内)
-      if (dirDiff > PI) dirDiff -= 2 * PI;
-      else if (dirDiff < -PI) dirDiff += 2 * PI;
+      // while 循环归一化，防止快速旋转后差值超出 ±2π
+      while (dirDiff > PI) dirDiff -= 2 * PI;
+      while (dirDiff < -PI) dirDiff += 2 * PI;
 
       if (twoWayDrive_) {
+        // 加迟滞带（±0.1 rad），防止在 π/2 附近来回切换方向
+        static constexpr float kTwoWayHysteresis = 0.1f;
         double time = now().seconds();
-        if (fabs(dirDiff) > PI / 2 && navFwd_ && time - switchTime_ > switchTimeThre_) {
+        if (fabs(dirDiff) > PI / 2 + kTwoWayHysteresis && navFwd_ && time - switchTime_ > switchTimeThre_) {
           navFwd_ = false;
           switchTime_ = time;
-        } else if (fabs(dirDiff) < PI / 2 && !navFwd_ && time - switchTime_ > switchTimeThre_) {
+        } else if (fabs(dirDiff) < PI / 2 - kTwoWayHysteresis && !navFwd_ && time - switchTime_ > switchTimeThre_) {
           navFwd_ = true;
           switchTime_ = time;
         }
@@ -542,6 +544,9 @@ private:
           cmd_vel.twist.linear.x = maxSpeed_ * joyManualFwd_;
           if (omniDirGoalThre_ > 0) cmd_vel.twist.linear.y = maxSpeed_ / 2.0 * joyManualLeft_;
           cmd_vel.twist.angular.z = maxYawRate_ * PI / 180.0 * joyManualYaw_;
+          // 手动模式同样需要遵守安全停车指令，防止越过硬件保护
+          if (safetyStop_ >= 1) { cmd_vel.twist.linear.x = 0; cmd_vel.twist.linear.y = 0; }
+          if (safetyStop_ >= 2) cmd_vel.twist.angular.z = 0;
         }
 
         pubSpeed_->publish(cmd_vel);

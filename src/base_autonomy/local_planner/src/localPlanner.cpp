@@ -40,7 +40,7 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
+const double PI = M_PI;  // 使用系统精确值，避免截断误差
 
 #define PLOTPATHSET 1
 
@@ -1014,8 +1014,9 @@ private:
               float x2 = cos(rotAng) * x + sin(rotAng) * y;
               float y2 = -sin(rotAng) * x + cos(rotAng) * y;
 
-              float scaleY = x2 / gridVoxelOffsetX_ + searchRadius_ / gridVoxelOffsetY_ 
+              float scaleY = x2 / gridVoxelOffsetX_ + searchRadius_ / gridVoxelOffsetY_
                              * (gridVoxelOffsetX_ - x2) / gridVoxelOffsetX_;
+              if (std::fabs(scaleY) < 1e-6f) continue;  // 防止 y2/scaleY 除零
 
               int indX = int((gridVoxelOffsetX_ + gridVoxelSize_ / 2 - x2) / gridVoxelSize_);
               int indY = int((gridVoxelOffsetY_ + gridVoxelSize_ / 2 - y2 / scaleY) / gridVoxelSize_);
