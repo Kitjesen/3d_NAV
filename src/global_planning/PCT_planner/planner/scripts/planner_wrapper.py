@@ -221,6 +221,30 @@ class TomogramPlanner(object):
         
         return float(slice_idx)
 
+    def get_surface_height(self, pos: np.ndarray) -> float:
+        """查询 XY 位置的地形表面高度（tomogram 最低有效层）。
+
+        用于将 2D 目标（z=0）自动贴合到 tomogram 实际地形表面，
+        解决在有坡度地形上使用 RViz "2D Nav Goal" 时目标高度错误问题。
+
+        Args:
+            pos: 世界坐标 [x, y] (np.ndarray, float32)
+        Returns:
+            地形表面高度 (m)，查询失败时返回 slice_h0 或 0.0
+        """
+        if self.layers_g is None or self.resolution is None or self.center is None:
+            return float(self.slice_h0) if self.slice_h0 is not None else 0.0
+        # 使用 pos2idx 得到与规划器一致的格网索引 (已 clamp)
+        idx = self.pos2idx(pos)
+        ai = int(np.clip(idx[0], 0, self.layers_g.shape[1] - 1))
+        bi = int(np.clip(idx[1], 0, self.layers_g.shape[2] - 1))
+        heights = self.layers_g[:, ai, bi]   # (n_slices,)
+        valid_mask = ~np.isnan(heights)
+        if not valid_mask.any():
+            return float(self.slice_h0) if self.slice_h0 is not None else 0.0
+        # 最低有效层 = 地形表面
+        return float(heights[valid_mask][0])
+
     # 兼容旧接口，将其指向新函数
     def height2idx(self, height):
         return self.pos2slice(height)
