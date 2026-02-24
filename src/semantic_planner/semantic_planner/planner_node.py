@@ -67,7 +67,7 @@ from rclpy.action.client import ClientGoalHandle
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, OccupancyGrid
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
 
 # B5: Nav2 NavigateToPose action
@@ -94,6 +94,7 @@ from .implicit_fsm_policy import (
     ImplicitFSMPolicy,
     ImplicitFSMObservation,
 )
+from .person_tracker import PersonTracker
 
 
 class PlannerState(Enum):
@@ -157,6 +158,9 @@ class SemanticPlannerNode(Node):
         self.declare_parameter("exploration.max_explore_steps", 20)
         self.declare_parameter("exploration.step_distance", 2.0)
         self.declare_parameter("exploration.costmap_topic", "/nav/costmap")
+        self.declare_parameter("exploration.terrain_topic", "/nav/terrain_map")
+        self.declare_parameter("exploration.terrain_grid_resolution", 0.2)  # m/cell
+        self.declare_parameter("exploration.terrain_grid_half_size", 15.0)  # meters
         self.declare_parameter("exploration.frontier_score_threshold", 0.2)
         self.declare_parameter("exploration.frontier_min_size", 5)
         self.declare_parameter("exploration.frontier_max_count", 10)
@@ -399,6 +403,12 @@ class SemanticPlannerNode(Node):
         self._follow_timeout: float = 300.0
         self._follow_start_time: float = 0.0
 
+        # PersonTracker: 实时人体位置追踪 (EMA 平滑 + 速度预测)
+        self._person_tracker = PersonTracker(
+            follow_distance=1.5,
+            lost_timeout=3.0,
+        )
+
         # B5: Nav2 NavigateToPose action client
         self._use_nav2_action = self.get_parameter("nav2.use_action_client").value
         self._nav2_action_timeout = self.get_parameter("nav2.action_timeout_sec").value
@@ -475,12 +485,30 @@ class SemanticPlannerNode(Node):
         )
 
         self._sub_costmap = None
+        self._sub_terrain = None
+        self._terrain_grid_resolution = 0.2
+        self._terrain_grid_half_size = 15.0
         if self._exploration_strategy in ("frontier", "sg_nav"):
             costmap_topic = self.get_parameter("exploration.costmap_topic").value
             self._sub_costmap = self.create_subscription(
                 OccupancyGrid, costmap_topic, self._costmap_callback, 1
             )
-            self.get_logger().info(f"Frontier exploration enabled, costmap={costmap_topic}")
+            # 订阅 terrain_map PointCloud2, 转为 costmap 供 frontier_scorer 使用
+            terrain_topic = self.get_parameter("exploration.terrain_topic").value
+            self._terrain_grid_resolution = self.get_parameter(
+                "exploration.terrain_grid_resolution"
+            ).value
+            self._terrain_grid_half_size = self.get_parameter(
+                "exploration.terrain_grid_half_size"
+            ).value
+            self._sub_terrain = self.create_subscription(
+                PointCloud2, terrain_topic, self._terrain_to_costmap_callback, 1
+            )
+            self.get_logger().info(
+                f"Frontier exploration enabled, costmap={costmap_topic}, "
+                f"terrain={terrain_topic} (grid res={self._terrain_grid_resolution}m, "
+                f"half_size={self._terrain_grid_half_size}m)"
+            )
 
         # F1: 任务取消话题
         self._sub_cancel = self.create_subscription(
@@ -667,6 +695,14 @@ class SemanticPlannerNode(Node):
         except Exception:
             pass  # 静默降级
 
+        # 更新 PersonTracker (跟随模式下实时追踪目标人体)
+        if self._follow_mode:
+            try:
+                _sg = json.loads(self._latest_scene_graph or "{}")
+                self._person_tracker.update(_sg.get("objects", []))
+            except Exception:
+                pass
+
     def _image_callback(self, msg: Image):
         """缓存最新相机帧 (用于 VLM vision grounding)。"""
         try:
@@ -720,6 +756,125 @@ class SemanticPlannerNode(Node):
             )
         except Exception as e:
             self.get_logger().warn(f"Costmap parse failed: {e}")
+
+    def _terrain_to_costmap_callback(self, msg: PointCloud2):
+        """将 terrain_map PointCloud2 转为 2D 占据栅格, 供 frontier_scorer 使用。
+
+        terrain_analysis 发布的 PointCloud2 包含障碍物点 (PointXYZI, odom 坐标系)。
+        以机器人当前位置为中心, 构建局部 2D 栅格:
+          - 有障碍物点的格子 → OCCUPIED (100)
+          - 在观测范围内无障碍物的格子 → FREE (0)
+          - 超出观测范围的格子 → UNKNOWN (-1)
+        """
+        try:
+            if self._robot_position is None:
+                return
+
+            robot_x = self._robot_position["x"]
+            robot_y = self._robot_position["y"]
+            res = self._terrain_grid_resolution
+            half = self._terrain_grid_half_size
+            grid_size = int(2 * half / res)
+            if grid_size <= 0:
+                return
+
+            origin_x = robot_x - half
+            origin_y = robot_y - half
+
+            # 解析 PointCloud2 → numpy xyz 数组
+            points = self._parse_pointcloud2_xyz(msg)
+            if points is None or len(points) == 0:
+                return
+
+            # 构建栅格: 默认 UNKNOWN
+            grid = np.full((grid_size, grid_size), -1, dtype=np.int16)
+
+            px = points[:, 0]
+            py = points[:, 1]
+
+            # 将世界坐标转为栅格坐标
+            col = ((px - origin_x) / res).astype(np.int32)
+            row = ((py - origin_y) / res).astype(np.int32)
+
+            # 过滤越界点
+            valid = (row >= 0) & (row < grid_size) & (col >= 0) & (col < grid_size)
+            row = row[valid]
+            col = col[valid]
+
+            if len(row) == 0:
+                return
+
+            # 观测范围 (有数据的区域) 标记为 FREE
+            row_min = max(0, int(row.min()))
+            row_max = min(grid_size - 1, int(row.max()))
+            col_min = max(0, int(col.min()))
+            col_max = min(grid_size - 1, int(col.max()))
+            grid[row_min:row_max + 1, col_min:col_max + 1] = 0  # FREE
+
+            # 标记障碍物格子
+            grid[row, col] = 100  # OCCUPIED
+
+            self._frontier_scorer.update_costmap(
+                grid_data=grid,
+                resolution=res,
+                origin_x=origin_x,
+                origin_y=origin_y,
+            )
+        except Exception as e:
+            self.get_logger().warn(f"Terrain->costmap conversion failed: {e}")
+
+    @staticmethod
+    def _parse_pointcloud2_xyz(msg: PointCloud2) -> Optional[np.ndarray]:
+        """从 PointCloud2 消息提取 xyz 坐标数组。
+
+        支持 PointXYZI (x,y,z,intensity) 和 PointXYZ (x,y,z) 格式。
+        返回 (N, 3) float32 数组, 或 None。
+        """
+        import struct
+
+        if msg.width * msg.height == 0:
+            return None
+
+        field_map = {f.name: f for f in msg.fields}
+        if "x" not in field_map or "y" not in field_map or "z" not in field_map:
+            return None
+
+        x_off = field_map["x"].offset
+        y_off = field_map["y"].offset
+        z_off = field_map["z"].offset
+        point_step = msg.point_step
+        n_points = msg.width * msg.height
+        data = bytes(msg.data)
+
+        if len(data) < n_points * point_step:
+            return None
+
+        # 快速路径: 字段紧密排列 (x=0, y=4, z=8)
+        if x_off == 0 and y_off == 4 and z_off == 8 and point_step >= 12:
+            if point_step == 12:
+                xyz = np.frombuffer(data, dtype=np.float32).reshape(-1, 3)
+            else:
+                # 有填充字节 (如 PointXYZI, point_step=16 或 32)
+                xyz = np.zeros((n_points, 3), dtype=np.float32)
+                buf_array = np.frombuffer(data, dtype=np.uint8).reshape(
+                    n_points, point_step
+                )
+                for i, off in enumerate([x_off, y_off, z_off]):
+                    xyz[:, i] = np.frombuffer(
+                        buf_array[:, off:off + 4].tobytes(), dtype=np.float32
+                    )
+        else:
+            # 通用慢速路径
+            xyz = np.zeros((n_points, 3), dtype=np.float32)
+            for i in range(n_points):
+                base = i * point_step
+                xyz[i, 0] = struct.unpack_from('f', data, base + x_off)[0]
+                xyz[i, 1] = struct.unpack_from('f', data, base + y_off)[0]
+                xyz[i, 2] = struct.unpack_from('f', data, base + z_off)[0]
+
+        # 过滤 NaN/Inf
+        valid = np.isfinite(xyz).all(axis=1)
+        return xyz[valid]
 
     # ================================================================
     #  任务分解 (SayCan, 异步)
@@ -1025,7 +1180,7 @@ class SemanticPlannerNode(Node):
         if self._current_plan:
             active = self._current_plan.active_subgoal
 
-            # ── 跟随模式: 到达 ≠ 结束, 重新解析目标继续导航 ──
+            # ── 跟随模式: 到达 ≠ 结束, 使用 PersonTracker 实时跟随 ──
             if (self._follow_mode and active
                     and active.action in (SubGoalAction.NAVIGATE, SubGoalAction.FOLLOW)):
                 elapsed = time.time() - self._follow_start_time
@@ -1035,13 +1190,37 @@ class SemanticPlannerNode(Node):
                     )
                     self._follow_mode = False
                 else:
-                    self.get_logger().info(
-                        "🏃 Follow mode: arrived near target, re-resolving "
-                        "(%.0fs / %.0fs)", elapsed, self._follow_timeout,
-                    )
-                    # 不 advance, 不 complete — 重新解析同一目标
-                    self._set_state(PlannerState.RESOLVING)
-                    self._schedule_async(self._resolve_goal())
+                    # 优先使用 PersonTracker 实时航点
+                    robot_pos = [
+                        self._robot_position.get("x", 0) if self._robot_position else 0,
+                        self._robot_position.get("y", 0) if self._robot_position else 0,
+                        0.0,
+                    ]
+                    waypoint = self._person_tracker.get_follow_waypoint(robot_pos)
+                    if waypoint:
+                        self.get_logger().info(
+                            "Follow mode: tracker waypoint (%.1f, %.1f) "
+                            "(%.0fs / %.0fs)",
+                            waypoint["x"], waypoint["y"],
+                            elapsed, self._follow_timeout,
+                        )
+                        cmd = self._action_executor.generate_navigate_command(
+                            waypoint, self._robot_position,
+                        )
+                        self._publish_goal_from_command(cmd)
+                        self._set_state(PlannerState.NAVIGATING)
+                    elif self._person_tracker.is_lost():
+                        self.get_logger().warn(
+                            "Follow mode: PersonTracker lost target, "
+                            "falling back to resolve (%.0fs / %.0fs)",
+                            elapsed, self._follow_timeout,
+                        )
+                        self._set_state(PlannerState.RESOLVING)
+                        self._schedule_async(self._resolve_goal())
+                    else:
+                        # tracker 有人但 waypoint 计算失败, fallback
+                        self._set_state(PlannerState.RESOLVING)
+                        self._schedule_async(self._resolve_goal())
                     return
 
             if active:
@@ -1095,19 +1274,39 @@ class SemanticPlannerNode(Node):
         if self._current_plan:
             active = self._current_plan.active_subgoal
 
-            # ── 跟随模式: 失败不放弃, 继续搜索 ──
+            # ── 跟随模式: 失败不放弃, PersonTracker 继续追踪 ──
             if (self._follow_mode and active
                     and active.action in (SubGoalAction.NAVIGATE, SubGoalAction.FOLLOW)):
                 elapsed = time.time() - self._follow_start_time
                 if elapsed < self._follow_timeout:
-                    self.get_logger().warn(
-                        "🏃 Follow mode: target lost (%s), "
-                        "re-resolving (%.0fs / %.0fs)",
-                        reason, elapsed, self._follow_timeout,
-                    )
-                    active.retry_count = 0  # 跟随模式重置重试计数
-                    self._set_state(PlannerState.RESOLVING)
-                    self._schedule_async(self._resolve_goal())
+                    # 尝试用 PersonTracker 恢复
+                    robot_pos = [
+                        self._robot_position.get("x", 0) if self._robot_position else 0,
+                        self._robot_position.get("y", 0) if self._robot_position else 0,
+                        0.0,
+                    ]
+                    waypoint = self._person_tracker.get_follow_waypoint(robot_pos)
+                    if waypoint and not self._person_tracker.is_lost():
+                        self.get_logger().warn(
+                            "Follow mode: nav failed (%s), but tracker has target "
+                            "at (%.1f, %.1f) -- re-navigating",
+                            reason, waypoint["x"], waypoint["y"],
+                        )
+                        active.retry_count = 0
+                        cmd = self._action_executor.generate_navigate_command(
+                            waypoint, self._robot_position,
+                        )
+                        self._publish_goal_from_command(cmd)
+                        self._set_state(PlannerState.NAVIGATING)
+                    else:
+                        self.get_logger().warn(
+                            "Follow mode: target lost (%s), "
+                            "re-resolving (%.0fs / %.0fs)",
+                            reason, elapsed, self._follow_timeout,
+                        )
+                        active.retry_count = 0
+                        self._set_state(PlannerState.RESOLVING)
+                        self._schedule_async(self._resolve_goal())
                     return
                 else:
                     self.get_logger().info(
