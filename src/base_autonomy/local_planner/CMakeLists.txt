@@ -82,6 +82,12 @@ install(DIRECTORY
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
+
+  # ── Algorithm Unit Tests (pure math, no ROS2 / hardware required) ──
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_local_planner_algorithms
+    test/test_algorithms.cpp
+  )
 endif()
 
 ament_package()
