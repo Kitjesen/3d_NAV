@@ -57,7 +57,7 @@ semantic:
   scene_graph: /nav/semantic/scene_graph        # std_msgs/String (JSON 场景图)
   query_service: /nav/semantic/query            # 自定义 srv: string → ObjectMatch[]
   instruction: /nav/semantic/instruction        # std_msgs/String (自然语言指令)
-  resolved_goal: /nav/semantic/resolved_goal    # geometry_msgs/PoseStamped (解析后的目标)
+  resolved_goal: /nav/goal_pose                 # geometry_msgs/PoseStamped (解析后的目标，直连 PCT Planner)
   status: /nav/semantic/status                  # std_msgs/String (JSON: 阶段/目标/置信度)
 
 # ── TF 坐标系 ──
