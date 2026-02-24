@@ -109,3 +109,13 @@ det_*.png
 
 # API keys / credentials — never commit
 generate_paper_figures*.py
+
+# Model weights (large binary files — use release-models.yml to distribute)
+*.pt
+*.pth
+*.onnx
+*.engine
+*.bin
+
+# Per-run test output
+src/semantic_perception/test_results/
