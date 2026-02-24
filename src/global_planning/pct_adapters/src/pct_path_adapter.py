@@ -15,10 +15,13 @@ Logic:
   while allowing the Local Planner to handle micro-movements for obstacle avoidance.
 """
 
+import json
+
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Path, Odometry
 from geometry_msgs.msg import PointStamped, Point
+from std_msgs.msg import String
 import time
 import math
 import numpy as np
@@ -60,6 +63,15 @@ class PCTPathAdapter(Node):
             '/planner_waypoint',
             10
         )
+
+        # 航点到达事件 → TaskManager / App 可订阅进度
+        # 格式: {"event": "waypoint_reached"|"goal_reached"|"path_received",
+        #         "index": N, "total": M}
+        self.status_pub = self.create_publisher(
+            String,
+            '/nav/planner_status',
+            10
+        )
         
         # --- Parameters ---
         self.declare_parameter('waypoint_distance', 0.5)  # Spacing between waypoints (meters)
@@ -74,6 +86,7 @@ class PCTPathAdapter(Node):
         self.robot_pos = None
         self.path_received = False
         self.odom_frame = None
+        self.goal_reached_reported = False  # 避免重复发布 goal_reached
         
         # TF Listener
         self.tf_buffer = Buffer()
@@ -94,15 +107,18 @@ class PCTPathAdapter(Node):
         """Receive and process new global path"""
         if len(msg.poses) == 0:
             return
-            
+
         self.get_logger().info(f'Received new Global Path with {len(msg.poses)} points')
-        
+
         # Downsample path to create manageable waypoints
         self.current_path = self.downsample_path(msg)
         self.current_waypoint_idx = 0
         self.path_received = True
-        
-        self.get_logger().info(f'Path processed into {len(self.current_path)} waypoints')
+        self.goal_reached_reported = False
+
+        total = len(self.current_path)
+        self.get_logger().info(f'Path processed into {total} waypoints')
+        self._publish_status('path_received', 0, total)
         
     def downsample_path(self, path):
         """
@@ -192,13 +208,21 @@ class PCTPathAdapter(Node):
         dist_to_target = self.get_distance(self.robot_pos, target_pose_odom)
         
         # Logic: If close enough AND not the last point, switch to next point
+        total = len(self.current_path)
         if dist_to_target < self.arrival_threshold:
-            if self.current_waypoint_idx < len(self.current_path) - 1:
-                self.get_logger().info(f'Reached Waypoint {self.current_waypoint_idx}. Proceeding to next.')
+            if self.current_waypoint_idx < total - 1:
+                self.get_logger().info(
+                    f'Reached Waypoint {self.current_waypoint_idx}. Proceeding to next.')
+                self._publish_status('waypoint_reached', self.current_waypoint_idx, total)
                 self.current_waypoint_idx += 1
-                return # Give one cycle to update
+                return  # Give one cycle to update
             else:
-                self.get_logger().info('Goal Reached!', throttle_duration_sec=5.0)
+                if not self.goal_reached_reported:
+                    self.get_logger().info('Goal Reached!')
+                    self._publish_status('goal_reached', self.current_waypoint_idx, total)
+                    self.goal_reached_reported = True
+                else:
+                    self.get_logger().info('Goal Reached!', throttle_duration_sec=5.0)
                 # Keep publishing the last point
                 
         # Publish current target to Local Planner (in ODOM frame)
@@ -208,6 +232,14 @@ class PCTPathAdapter(Node):
         waypoint_msg.point = target_pose_odom
         
         self.waypoint_pub.publish(waypoint_msg)
+
+    def _publish_status(self, event: str, index: int, total: int) -> None:
+        """发布规划器状态事件到 /nav/planner_status"""
+        payload = json.dumps({'event': event, 'index': index, 'total': total})
+        msg = String()
+        msg.data = payload
+        self.status_pub.publish(msg)
+
 
 def main(args=None):
     rclpy.init(args=args)

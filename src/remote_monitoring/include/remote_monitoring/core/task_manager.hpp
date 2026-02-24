@@ -186,6 +186,8 @@ private:
       const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
   /// 语义导航: 接收 semantic_planner 状态更新
   void SemanticStatusCallback(const std_msgs::msg::String::ConstSharedPtr msg);
+  /// 全局规划器: 接收 pct_path_adapter 发布的航点到达事件
+  void PlannerStatusCallback(const std_msgs::msg::String::ConstSharedPtr msg);
   void CheckArrival();
   void AdvanceToNextWaypoint();
   void PublishCurrentWaypoint();
@@ -209,6 +211,8 @@ private:
       sub_semantic_goal_;   // /nav/semantic/resolved_goal
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr
       sub_semantic_status_;  // /nav/semantic/status
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr
+      sub_planner_status_;   // /nav/planner_status (pct_path_adapter 到达事件)
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_waypoint_;
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_stop_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr
@@ -236,11 +240,13 @@ private:
   double waypoint_timeout_sec_{300.0};  // 单个航点超时 (秒), 0=禁用
   std::chrono::steady_clock::time_point waypoint_start_time_;
 
-  // 规划器转发
+  // 规划器转发 + 进度追踪
   mutable std::mutex planner_mutex_;
   bool planner_active_{false};
   bool planner_suppressed_{false};
   geometry_msgs::msg::PointStamped last_planner_waypoint_;
+  int planner_waypoint_index_{0};   // 当前航点索引 (来自 pct_path_adapter 事件)
+  int planner_waypoint_total_{0};   // 路径总航点数
 
   // 机器人位置 (odom 坐标系)
   std::mutex odom_mutex_;

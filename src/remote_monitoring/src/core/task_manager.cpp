@@ -87,6 +87,18 @@ TaskManager::TaskManager(rclcpp::Node *node) : node_(node) {
           std::bind(&TaskManager::SemanticStatusCallback, this,
                     std::placeholders::_1));
 
+  // 订阅全局规划器状态 (pct_path_adapter 航点到达事件)
+  if (!node_->has_parameter("task_planner_status_topic"))
+    node_->declare_parameter<std::string>("task_planner_status_topic",
+                                          "/nav/planner_status");
+  const auto planner_status_topic =
+      node_->get_parameter("task_planner_status_topic").as_string();
+  sub_planner_status_ =
+      node_->create_subscription<std_msgs::msg::String>(
+          planner_status_topic, 10,
+          std::bind(&TaskManager::PlannerStatusCallback, this,
+                    std::placeholders::_1));
+
   // ---- 发布 ----
   pub_waypoint_ = node_->create_publisher<geometry_msgs::msg::PointStamped>(
       waypoint_out, 10);
@@ -258,12 +270,70 @@ void TaskManager::SemanticStatusCallback(
   // 当前简单记录日志
   RCLCPP_DEBUG(node_->get_logger(),
                "TaskManager: Semantic status: %s", msg->data.c_str());
+}
 
-  // 可以在这里更新进度回调
-  // if (progress_callback_) {
-  //   // 解析 state, step 等信息
-  //   // progress_callback_(task_id_, status, progress, msg->data);
-  // }
+void TaskManager::PlannerStatusCallback(
+    const std_msgs::msg::String::ConstSharedPtr msg) {
+  // 解析 pct_path_adapter 发布的到达事件 JSON
+  // 格式: {"event": "waypoint_reached"|"goal_reached"|"path_received",
+  //         "index": N, "total": M}
+
+  // App 任务活跃时不处理规划器事件 (App 任务优先)
+  if (state_.load() != TaskState::IDLE) {
+    return;
+  }
+
+  // 简单 JSON 字段提取 (避免引入第三方 JSON 库)
+  auto extract_int = [&](const std::string &key) -> int {
+    const std::string needle = "\"" + key + "\":";
+    const auto pos = msg->data.find(needle);
+    if (pos == std::string::npos) return -1;
+    return std::stoi(msg->data.substr(pos + needle.size()));
+  };
+  auto extract_str = [&](const std::string &key) -> std::string {
+    const std::string needle = "\"" + key + "\":\"";
+    const auto pos = msg->data.find(needle);
+    if (pos == std::string::npos) return "";
+    const auto start = pos + needle.size();
+    const auto end = msg->data.find('"', start);
+    return msg->data.substr(start, end - start);
+  };
+
+  const std::string event = extract_str("event");
+  const int index = extract_int("index");
+  const int total = extract_int("total");
+
+  {
+    std::lock_guard<std::mutex> lock(planner_mutex_);
+    if (total > 0) {
+      planner_waypoint_total_ = total;
+    }
+    if (index >= 0) {
+      planner_waypoint_index_ = index;
+    }
+  }
+
+  if (event == "path_received") {
+    RCLCPP_INFO(node_->get_logger(),
+                "TaskManager: PCT path received (%d waypoints)", total);
+  } else if (event == "waypoint_reached") {
+    RCLCPP_INFO(node_->get_logger(),
+                "TaskManager: PCT waypoint %d/%d reached", index + 1, total);
+    if (progress_callback_) {
+      const float pct = (total > 0)
+          ? 100.0f * static_cast<float>(index + 1) / static_cast<float>(total)
+          : 0.0f;
+      progress_callback_("pct_planner", robot::v1::TASK_STATUS_RUNNING, pct,
+                         "Waypoint " + std::to_string(index + 1) + "/" +
+                             std::to_string(total));
+    }
+  } else if (event == "goal_reached") {
+    RCLCPP_INFO(node_->get_logger(), "TaskManager: PCT goal reached");
+    if (progress_callback_) {
+      progress_callback_("pct_planner", robot::v1::TASK_STATUS_COMPLETED,
+                         100.0f, "Goal reached");
+    }
+  }
 }
 
 // ================================================================
@@ -611,18 +681,23 @@ robot::v1::GetActiveWaypointsResponse TaskManager::GetActiveWaypoints() const {
     }
 
   } else if (source == WaypointSourceInternal::PLANNER) {
-    // 规划器: 返回当前单个航点
+    // 规划器: 返回当前航点 + 进度 (来自 pct_path_adapter 到达事件)
     std::lock_guard<std::mutex> lock(planner_mutex_);
     resp.set_source(robot::v1::WAYPOINT_SOURCE_PLANNER);
-    resp.set_current_index(0);
-    resp.set_total_count(1);
+
+    const int idx   = planner_waypoint_index_;
+    const int total = (planner_waypoint_total_ > 0) ? planner_waypoint_total_ : 1;
+    resp.set_current_index(static_cast<uint32_t>(idx));
+    resp.set_total_count(static_cast<uint32_t>(total));
+    resp.set_progress_percent(
+        100.0f * static_cast<float>(idx) / static_cast<float>(total));
 
     auto *wp = resp.add_waypoints();
     wp->mutable_position()->set_x(last_planner_waypoint_.point.x);
     wp->mutable_position()->set_y(last_planner_waypoint_.point.y);
     wp->mutable_position()->set_z(last_planner_waypoint_.point.z);
     wp->set_is_current(true);
-    wp->set_index(0);
+    wp->set_index(static_cast<uint32_t>(idx));
 
   } else {
     resp.set_source(robot::v1::WAYPOINT_SOURCE_NONE);
