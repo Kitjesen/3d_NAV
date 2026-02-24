@@ -162,6 +162,10 @@ class FrontierScorer:
         # P2: 房间-物体知识图谱 (SEEK-style P(target|room))
         self._room_object_kg = None
 
+        # L3MVN: frontier 描述缓存 (避免每轮重复调用 predict_room_type_from_labels)
+        # key = 排序后标签逗号拼接, value = 已生成描述; 上限 256 条
+        self._frontier_desc_cache: Dict[str, str] = {}
+
     def update_costmap(
         self,
         grid_data: np.ndarray,
@@ -877,9 +881,18 @@ class FrontierScorer:
         return set(keywords)
 
     def _generate_frontier_description(self, frontier: Frontier) -> str:
-        """为 frontier 生成自然语言描述（L3MVN/OmniNav 风格）。"""
+        """为 frontier 生成自然语言描述（L3MVN/OmniNav 风格）。
+
+        结果按标签集合缓存：相同标签组合直接返回缓存，避免重复调用
+        predict_room_type_from_labels（每次约 5-20ms）。
+        """
         labels = getattr(frontier, 'nearby_labels', []) or []
         unique_labels = list(dict.fromkeys(labels))[:6]  # 最多6个去重标签
+
+        # 缓存 key: 排序后标签集合（描述只依赖标签内容，不依赖原始顺序）
+        cache_key = ",".join(sorted(unique_labels))
+        if cache_key in self._frontier_desc_cache:
+            return self._frontier_desc_cache[cache_key]
 
         room_type = "未知区域"
         if unique_labels and self._semantic_prior_engine is not None:
@@ -897,10 +910,17 @@ class FrontierScorer:
                 pass
 
         if unique_labels:
-            label_str = "、".join(unique_labels)
-            return f"可见对象：{label_str}，推测区域：{room_type}"
+            desc = f"可见对象：{'、'.join(unique_labels)}，推测区域：{room_type}"
         else:
-            return f"未知区域（尚无可见对象），推测：{room_type}"
+            desc = f"未知区域（尚无可见对象），推测：{room_type}"
+
+        # 写入缓存；超过 256 条时清除最旧的一半（防内存无限增长）
+        if len(self._frontier_desc_cache) >= 256:
+            stale_keys = list(self._frontier_desc_cache.keys())[:128]
+            for k in stale_keys:
+                del self._frontier_desc_cache[k]
+        self._frontier_desc_cache[cache_key] = desc
+        return desc
 
     def get_frontiers_summary(self) -> str:
         """导出 frontier 摘要 (给 LLM 消费)。"""
