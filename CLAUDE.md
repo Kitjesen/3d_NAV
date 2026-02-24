@@ -46,7 +46,12 @@ cd src/semantic_planner && python -m pytest test/test_goal_resolver.py -v
 
 # Or via make
 make mapping          # ros2 launch launch/navigation_bringup.launch.py
-make navigation       # ros2 launch launch/navigation_run.launch.py
+make navigation       # ros2 launch launch/navigation_run.launch.py (requires pre-built map)
+
+# Exploration mode — no pre-built map, USS-Nav style zero-shot object navigation
+ros2 launch launch/navigation_explore.launch.py
+ros2 launch launch/navigation_explore.launch.py target:="找到餐桌"
+ros2 launch launch/navigation_explore.launch.py slam_profile:=stub  # no hardware
 
 # Code quality
 make format           # clang-format on src/**/*.cpp/hpp (Google style, 100 col)
@@ -167,6 +172,7 @@ export DASHSCOPE_API_KEY="sk-..."     # Qwen (China fallback)
 | File | Purpose |
 |---|---|
 | `config/semantic_planner.yaml` | LLM backend, goal resolution, exploration, fusion weights, SG-Nav params |
+| `config/semantic_exploration.yaml` | Exploration mode overrides (SCG auto-expand, GCM, frontier strategy, mock LLM) |
 | `config/semantic_perception.yaml` | Perception module configuration |
 | `config/robot_config.yaml` | Robot geometry, speed limits, safety params, driver config (single source of truth) |
 | `config/topic_contract.yaml` | Standard ROS2 topic names (all `/nav/` prefixed) |
@@ -175,10 +181,19 @@ export DASHSCOPE_API_KEY="sk-..."     # Qwen (China fallback)
 
 ## Launch System
 
+Three operation modes, each a separate launch entry point:
+
+| Mode | Launch file | Map required |
+|---|---|:---:|
+| Mapping | `navigation_bringup.launch.py` | — |
+| Navigation | `navigation_run.launch.py` | ✅ pre-built |
+| Exploration | `navigation_explore.launch.py` | ❌ (USS-Nav style) |
+
 ```
 launch/
 ├── navigation_bringup.launch.py   # Mapping mode (SLAM + sensors, manual)
 ├── navigation_run.launch.py       # Navigation mode (loads existing map)
+├── navigation_explore.launch.py   # Exploration mode (unknown env, SCG + Frontier)
 ├── _robot_config.py               # Reads config/robot_config.yaml
 ├── subsystems/                    # Individual subsystem launch files
 │   ├── lidar.launch.py
