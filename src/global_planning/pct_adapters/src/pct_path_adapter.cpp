@@ -8,6 +8,7 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -38,6 +39,13 @@ public:
     // 避免与 App 下发的航点冲突
     waypoint_pub_ = create_publisher<geometry_msgs::msg::PointStamped>(
       "/planner_waypoint",
+      10);
+
+    // 航点到达事件 → TaskManager / App 可订阅进度
+    // 格式: {"event": "waypoint_reached"|"goal_reached"|"path_received",
+    //         "index": N, "total": M}
+    status_pub_ = create_publisher<std_msgs::msg::String>(
+      "/nav/planner_status",
       10);
 
     declare_parameter<double>("waypoint_distance", 0.5);
@@ -83,11 +91,13 @@ private:
     current_path_ = downsample_path(*msg);
     current_waypoint_idx_ = 0;
     path_received_ = true;
+    goal_reached_reported_ = false;
 
     RCLCPP_INFO(
       get_logger(),
       "Path processed into %zu waypoints",
       current_path_.size());
+    publish_status("path_received", 0, current_path_.size());
   }
 
   std::vector<geometry_msgs::msg::PoseStamped> downsample_path(
@@ -173,20 +183,26 @@ private:
     }
 
     const double dist_to_target = get_distance(robot_pos_, target_pose_odom);
+    const size_t total = current_path_.size();
     if (dist_to_target < arrival_threshold_) {
-      if (current_waypoint_idx_ < current_path_.size() - 1) {
+      if (current_waypoint_idx_ < total - 1) {
         RCLCPP_INFO(
           get_logger(),
           "Reached Waypoint %zu. Proceeding to next.",
           current_waypoint_idx_);
+        publish_status("waypoint_reached", static_cast<int>(current_waypoint_idx_),
+                       static_cast<int>(total));
         current_waypoint_idx_++;
         return;
       } else {
-        RCLCPP_INFO_THROTTLE(
-          get_logger(),
-          *get_clock(),
-          5000,
-          "Goal Reached!");
+        if (!goal_reached_reported_) {
+          RCLCPP_INFO(get_logger(), "Goal Reached!");
+          publish_status("goal_reached", static_cast<int>(current_waypoint_idx_),
+                         static_cast<int>(total));
+          goal_reached_reported_ = true;
+        } else {
+          RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "Goal Reached!");
+        }
       }
     }
 
@@ -197,9 +213,19 @@ private:
     waypoint_pub_->publish(waypoint_msg);
   }
 
+  void publish_status(const std::string & event, int index, int total)
+  {
+    std_msgs::msg::String msg;
+    msg.data = "{\"event\":\"" + event + "\","
+               "\"index\":" + std::to_string(index) + ","
+               "\"total\":" + std::to_string(total) + "}";
+    status_pub_->publish(msg);
+  }
+
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr waypoint_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -210,6 +236,7 @@ private:
   geometry_msgs::msg::Point robot_pos_;
   bool path_received_;
   bool robot_pos_received_;
+  bool goal_reached_reported_{false};
   std::string odom_frame_;
 
   double waypoint_distance_;
