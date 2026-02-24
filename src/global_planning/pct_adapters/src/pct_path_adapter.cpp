@@ -106,7 +106,9 @@ private:
       const auto & pose = path.poses[i];
       const double dx = pose.pose.position.x - last_pose.pose.position.x;
       const double dy = pose.pose.position.y - last_pose.pose.position.y;
-      const double dist = std::hypot(dx, dy);
+      const double dz = pose.pose.position.z - last_pose.pose.position.z;
+      // 使用 3D 距离: 坡度路径上 2D 距离会低估实际路长，导致航点稀疏
+      const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
       if (dist >= waypoint_distance_) {
         downsampled.push_back(pose);
         last_pose = pose;

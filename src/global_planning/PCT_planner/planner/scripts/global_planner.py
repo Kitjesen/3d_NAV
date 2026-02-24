@@ -260,7 +260,16 @@ class GlobalPlanner(Node):
         y = msg.pose.position.y
         z = msg.pose.position.z
         if z == 0.0:
-            z = self.default_goal_height
+            # 2D 工具 (RViz "2D Nav Goal", gRPC 未设 z) 发来 z=0
+            # 自动从 tomogram 查找目标 XY 的地形表面高度，解决坡度地形规划失败问题
+            terrain_z = self.planner.get_surface_height(np.array([x, y], dtype=np.float32))
+            if terrain_z != 0.0:
+                z = terrain_z
+                self.get_logger().info(
+                    f"2D goal auto-terrain: ({x:.1f}, {y:.1f}) → z={z:.2f}m"
+                )
+            else:
+                z = self.default_goal_height
         self._handle_goal(x, y, z, "goal_pose")
     
     def goal_point_callback(self, msg):

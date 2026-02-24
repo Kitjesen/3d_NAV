@@ -18,6 +18,10 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from _robot_config import robot_cfg
 
 
 def generate_launch_description():
@@ -43,6 +47,9 @@ def generate_launch_description():
         f"{os.environ.get('PYTHONPATH', '')}"
     )
 
+    # 从 robot_config.yaml 读取 PCT 规划器参数
+    _pct = lambda k, d=None: robot_cfg('pct_planner', k, d)
+
     pct_planner = Node(
         package="pct_planner",
         executable="global_planner.py",
@@ -51,9 +58,12 @@ def generate_launch_description():
         parameters=[
             {
                 "map_file": map_path,
-                "tomogram_resolution": 0.2,
-                "tomogram_slice_dh": 0.5,
-                "tomogram_ground_h": 0.0,
+                "default_goal_height":    _pct('default_goal_height', 0.0),
+                "tomogram_resolution":    _pct('tomogram_resolution', 0.2),
+                "tomogram_slice_dh":      _pct('tomogram_slice_dh', 0.5),
+                "tomogram_ground_h":      _pct('tomogram_ground_h', 0.0),
+                "publish_map_pointcloud": _pct('publish_map_pointcloud', True),
+                "publish_tomogram":       _pct('publish_tomogram', True),
             }
         ],
         additional_env={"PYTHONPATH": python_path},
