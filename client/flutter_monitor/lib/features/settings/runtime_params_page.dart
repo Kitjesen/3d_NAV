@@ -14,11 +14,17 @@ import 'package:flutter_monitor/core/locale/param_strings.dart' as S;
 //  三种输入控件: Slider / Stepper / TextField
 //  基础参数 + 可折叠「高级」区
 //  右上角语言切换按钮 🌐
+//  右上角搜索按钮 — 全局搜索 130+ 参数
 // ═══════════════════════════════════════════════════════════════
 
-class RuntimeParamsPage extends StatelessWidget {
+class RuntimeParamsPage extends StatefulWidget {
   const RuntimeParamsPage({super.key});
 
+  @override
+  State<RuntimeParamsPage> createState() => _RuntimeParamsPageState();
+}
+
+class _RuntimeParamsPageState extends State<RuntimeParamsPage> {
   static const _tabIcons = <String, IconData>{
     'common': Icons.speed_rounded,
     'safety': Icons.security_rounded,
@@ -29,6 +35,16 @@ class RuntimeParamsPage extends StatelessWidget {
     'perception': Icons.radar_rounded,
     'system': Icons.settings_rounded,
   };
+
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  bool _showSearch = false;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,6 +58,18 @@ class RuntimeParamsPage extends StatelessWidget {
         appBar: AppBar(
           title: Text(locale.tr('运行参数', 'Runtime Config')),
           actions: [
+            // ── Search toggle ──
+            IconButton(
+              icon: Icon(_showSearch ? Icons.search_off_rounded : Icons.search_rounded),
+              tooltip: locale.tr('搜索参数', 'Search params'),
+              onPressed: () => setState(() {
+                _showSearch = !_showSearch;
+                if (!_showSearch) {
+                  _searchQuery = '';
+                  _searchController.clear();
+                }
+              }),
+            ),
             // ── Language toggle ──
             _LanguageToggle(locale: locale),
             // Sync indicator
@@ -76,41 +104,80 @@ class RuntimeParamsPage extends StatelessWidget {
               ],
             ),
           ],
-          bottom: TabBar(
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            labelPadding: const EdgeInsets.symmetric(horizontal: 14),
-            indicatorSize: TabBarIndicatorSize.label,
-            tabs: [
-              for (final g in allParamGroups)
-                Tab(
-                  height: 56,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(_tabIcons[g.key] ?? Icons.tune, size: 18),
-                      const SizedBox(width: 6),
-                      Text(
-                        S.groupLabel(g.key, g.label, isEn: isEn),
-                        style: const TextStyle(fontSize: 13),
+          bottom: _showSearch && _searchQuery.isNotEmpty
+              ? null
+              : TabBar(
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  indicatorSize: TabBarIndicatorSize.label,
+                  tabs: [
+                    for (final g in allParamGroups)
+                      Tab(
+                        height: 56,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(_tabIcons[g.key] ?? Icons.tune, size: 18),
+                            const SizedBox(width: 6),
+                            Text(
+                              S.groupLabel(g.key, g.label, isEn: isEn),
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
+                  ],
                 ),
-            ],
-          ),
         ),
         body: Column(
           children: [
             _StatusBanner(gw: gw, locale: locale),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  for (final group in allParamGroups)
-                    _GroupView(group: group, gw: gw, isEn: isEn, locale: locale),
-                ],
+            // ── Search bar ──
+            if (_showSearch)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: TextField(
+                  controller: _searchController,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    hintText: locale.tr('搜索参数名称…', 'Search parameter name…'),
+                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear_rounded, size: 18),
+                            onPressed: () => setState(() {
+                              _searchQuery = '';
+                              _searchController.clear();
+                            }),
+                          )
+                        : null,
+                    isDense: true,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    filled: true,
+                  ),
+                  onChanged: (v) => setState(() => _searchQuery = v.trim().toLowerCase()),
+                ),
               ),
-            ),
+            // ── Body: search results or tabbed view ──
+            if (_showSearch && _searchQuery.isNotEmpty)
+              Expanded(
+                child: _SearchResultsView(
+                  query: _searchQuery,
+                  gw: gw,
+                  locale: locale,
+                  isEn: isEn,
+                ),
+              )
+            else
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    for (final group in allParamGroups)
+                      _GroupView(group: group, gw: gw, isEn: isEn, locale: locale),
+                  ],
+                ),
+              ),
           ],
         ),
         floatingActionButton: gw.isDirty
@@ -174,6 +241,168 @@ class RuntimeParamsPage extends StatelessWidget {
       content: Text(locale.tr('配置 JSON 已复制到剪贴板', 'Config JSON copied to clipboard')),
       behavior: SnackBarBehavior.floating,
     ));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Search Results View — flat filtered list across all groups
+// ═══════════════════════════════════════════════════════════════
+
+class _SearchResultsView extends StatelessWidget {
+  final String query;
+  final RuntimeConfigGateway gw;
+  final LocaleProvider locale;
+  final bool isEn;
+
+  const _SearchResultsView({
+    required this.query,
+    required this.gw,
+    required this.locale,
+    required this.isEn,
+  });
+
+  bool _matchesParam(ParamConstraint p) {
+    final q = query;
+    return p.fieldName.contains(q) ||
+        p.displayName.toLowerCase().contains(q) ||
+        (S.paramNameEn[p.fieldName] ?? '').toLowerCase().contains(q);
+  }
+
+  bool _matchesToggle(BoolParam t) {
+    final q = query;
+    return t.fieldName.contains(q) ||
+        t.displayName.toLowerCase().contains(q) ||
+        (S.toggleNameEn[t.fieldName] ?? '').toLowerCase().contains(q);
+  }
+
+  double _getDouble(String fieldName) {
+    final v = gw.getParamValue(fieldName);
+    if (v is num) return v.toDouble();
+    return 0.0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final matchingParams = <(ParamGroup, ParamConstraint)>[];
+    final matchingToggles = <(ParamGroup, BoolParam)>[];
+
+    for (final group in allParamGroups) {
+      for (final p in group.params) {
+        if (_matchesParam(p)) matchingParams.add((group, p));
+      }
+      for (final t in group.toggles) {
+        if (_matchesToggle(t)) matchingToggles.add((group, t));
+      }
+    }
+
+    if (matchingParams.isEmpty && matchingToggles.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.search_off_rounded, size: 48, color: context.hintColor),
+            const SizedBox(height: 12),
+            Text(
+              isEn ? 'No results for "$query"' : '未找到 "$query"',
+              style: TextStyle(fontSize: 14, color: context.subtitleColor),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
+      children: [
+        if (matchingParams.isNotEmpty) ...[
+          for (int i = 0; i < matchingParams.length; i++) ...[
+            _buildGroupChip(context, matchingParams[i].$1),
+            _buildParamTile(context, matchingParams[i].$2),
+            if (i < matchingParams.length - 1 || matchingToggles.isNotEmpty)
+              Divider(height: 0.5, indent: 16, endIndent: 16, color: context.dividerColor),
+          ],
+        ],
+        if (matchingToggles.isNotEmpty) ...[
+          for (int i = 0; i < matchingToggles.length; i++) ...[
+            _buildGroupChip(context, matchingToggles[i].$1),
+            _buildToggleTile(context, matchingToggles[i].$2),
+            if (i < matchingToggles.length - 1)
+              Divider(height: 0.5, indent: 16, endIndent: 16, color: context.dividerColor),
+          ],
+        ],
+      ],
+    );
+  }
+
+  Widget _buildGroupChip(BuildContext context, ParamGroup group) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 10, bottom: 2, left: 4),
+      child: Wrap(children: [
+        Chip(
+          avatar: Icon(
+            _RuntimeParamsPageState._tabIcons[group.key] ?? Icons.tune,
+            size: 14,
+            color: AppColors.primary,
+          ),
+          label: Text(
+            S.groupLabel(group.key, group.label, isEn: isEn),
+            style: const TextStyle(fontSize: 11),
+          ),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          side: BorderSide(color: AppColors.primary.withValues(alpha: 0.25)),
+          backgroundColor: AppColors.primary.withValues(alpha: 0.06),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildParamTile(BuildContext context, ParamConstraint c) {
+    final value = _getDouble(c.fieldName);
+    return Container(
+      decoration: context.cardDecoration,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: switch (c.inputType) {
+          ParamInputType.slider => _SliderParamTile(
+              constraint: c,
+              value: value,
+              isEn: isEn,
+              locale: locale,
+              onChanged: (v) => gw.updateParam(c.fieldName, v),
+            ),
+          ParamInputType.stepper => _StepperParamTile(
+              constraint: c,
+              value: value,
+              isEn: isEn,
+              locale: locale,
+              onChanged: (v) => gw.updateParam(c.fieldName, v),
+            ),
+          ParamInputType.field => _FieldParamTile(
+              constraint: c,
+              value: value,
+              isEn: isEn,
+              onChanged: (v) => gw.updateParam(c.fieldName, v),
+            ),
+        },
+      ),
+    );
+  }
+
+  Widget _buildToggleTile(BuildContext context, BoolParam t) {
+    return Container(
+      decoration: context.cardDecoration,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: _ToggleTile(
+          param: t,
+          value: gw.getParamValue(t.fieldName) as bool? ?? false,
+          onChanged: (v) => gw.updateParam(t.fieldName, v),
+          isEn: isEn,
+        ),
+      ),
+    );
   }
 }
 
