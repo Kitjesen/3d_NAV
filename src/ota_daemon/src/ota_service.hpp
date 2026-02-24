@@ -8,6 +8,8 @@
 #include "data.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 
+#include "reporter.hpp"
+
 namespace ota {
 
 // ──────────────── 配置 ────────────────
@@ -47,6 +49,9 @@ struct OtaDaemonConfig {
   int dog_board_port = 13145;
   std::string dog_reload_script;   // Post-copy script for RELOAD_MODEL
   int dog_timeout_sec = 5;
+
+  // ── infra/ota Server 上报配置 ──
+  OtaReporterConfig reporter;
 
   // ── 制品路径映射 (接收方决定安装位置) ──
   // category → 默认目录
@@ -157,6 +162,9 @@ private:
 
   // 配置
   OtaDaemonConfig config_;
+
+  // infra/ota Server 上报器
+  OtaReporter reporter_;
 
   // OTA 状态 (guarded by ota_mutex_)
   mutable std::mutex ota_mutex_;

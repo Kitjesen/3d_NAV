@@ -11,11 +11,11 @@
 #   sudo ./install_nav.sh --dry-run      # 仅检查，不安装
 #
 # 安装路径:
-#   /opt/robot/navigation/              — 导航系统根目录
-#   /opt/robot/navigation/install/      — colcon install 产物
-#   /opt/robot/navigation/current -> v1.0.0  — 指向当前版本的软链接
-#   /opt/robot/navigation/v1.0.0/       — 版本化安装目录
-#   /opt/robot/navigation/previous -> v0.9.0 — 指向上一版本 (回滚用)
+#   /opt/lingtu/nav/                    — 导航系统根目录
+#   /opt/lingtu/nav/install/            — colcon install 产物
+#   /opt/lingtu/nav/current -> v1.0.0  — 指向当前版本的软链接
+#   /opt/lingtu/nav/v1.0.0/             — 版本化安装目录
+#   /opt/lingtu/nav/previous -> v0.9.0 — 指向上一版本 (回滚用)
 # ============================================================================
 set -euo pipefail
 
@@ -27,8 +27,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ---- 配置 ----
-NAV_ROOT="/opt/robot/navigation"
-OTA_DIR="/opt/robot/ota"
+NAV_ROOT="/opt/lingtu/nav"
+OTA_DIR="/opt/lingtu/nav/ota"
 BACKUP_DIR="${OTA_DIR}/backup"
 SERVICE_NAME="navigation.service"  # systemd 服务名
 MAX_VERSIONS=3  # 最多保留多少个旧版本

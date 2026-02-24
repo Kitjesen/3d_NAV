@@ -401,6 +401,8 @@ grpc::Status OtaServiceImpl::ApplyUpdate(
                          artifact.version(), "failed",
                          robot::v1::OTA_FAILURE_INSTALL_SCRIPT,
                          install_msg, 0, "skipped");
+    reporter_.Report(artifact.name(), previous_version, artifact.version(),
+                     "failure", install_msg);
     response->set_success(false);
     response->set_status(robot::v1::OTA_UPDATE_STATUS_FAILED);
     response->set_message(install_msg);
@@ -437,6 +439,8 @@ grpc::Status OtaServiceImpl::ApplyUpdate(
                          artifact.version(), "rolled_back_health_fail",
                          robot::v1::OTA_FAILURE_HEALTH_CHECK,
                          health_reason, 0, "failed");
+    reporter_.Report(artifact.name(), previous_version, artifact.version(),
+                     "rolled_back", "health check failed: " + health_reason);
     response->set_success(false);
     response->set_status(robot::v1::OTA_UPDATE_STATUS_ROLLED_BACK);
     response->set_message("Health check failed: " + health_reason);
@@ -468,6 +472,8 @@ grpc::Status OtaServiceImpl::ApplyUpdate(
                        artifact.version(), "success",
                        robot::v1::OTA_FAILURE_NONE, "", dur_ms,
                        health_reason);
+  reporter_.Report(artifact.name(), previous_version, artifact.version(),
+                   "success");
 
   if (artifact.safety_level() == robot::v1::OTA_SAFETY_LEVEL_COLD) {
     OtaLogInfo("COLD update complete, restarting navigation.service...");

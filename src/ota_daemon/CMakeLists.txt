@@ -95,6 +95,7 @@ add_executable(ota_daemon
   src/ota_update.cpp
   src/ota_device.cpp
   src/utils.cpp
+  src/reporter.cpp
 )
 
 target_include_directories(ota_daemon PRIVATE

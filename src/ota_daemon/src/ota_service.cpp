@@ -23,6 +23,8 @@ namespace ota {
 
 OtaServiceImpl::OtaServiceImpl(const OtaDaemonConfig &config)
     : config_(config), system_version_("1.0.0") {
+  // 初始化 infra/ota Server 上报器
+  reporter_.Configure(config_.reporter);
   // 确保目录存在
   MakeDirs(config_.ota_backup_dir);
   MakeDirs(config_.staging_dir);
