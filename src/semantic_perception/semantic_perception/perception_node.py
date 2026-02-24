@@ -237,11 +237,46 @@ class SemanticPerceptionNode(Node):
         self.declare_parameter("scg.enable", True)
         self.declare_parameter("scg.request_topic", "/nav/scg/plan_request")
         self.declare_parameter("scg.result_topic", "/nav/scg/plan_result")
+        # 探索模式: 自动多面体扩展 (USS-Nav Algorithm 1)
+        self.declare_parameter("scg.auto_expand", False)
+        self.declare_parameter("scg.expand_every_n_frames", 10)
+        self.declare_parameter("scg.min_new_polyhedra", 2)
+        # 全局覆盖掩码 (GCM): 追踪探索进度
+        self.declare_parameter("gcm.enable", False)
+        self.declare_parameter("gcm.resolution", 0.5)
 
         # ── SCG 路径规划器初始化 ──
         self._scg_enable = self.get_parameter("scg.enable").value
         self._scg_builder = SCGBuilder(SCGConfig())
         self._scg_planner = SCGPathPlanner(self._scg_builder)
+
+        # ── SCG 自动扩展初始化 ──
+        self._scg_auto_expand = self.get_parameter("scg.auto_expand").value
+        self._scg_expand_interval = self.get_parameter("scg.expand_every_n_frames").value
+        self._expand_frame_counter = 0
+        self._expander = None
+        self._gcm = None
+        self._gcm_enable = self.get_parameter("gcm.enable").value
+
+        if self._scg_auto_expand:
+            try:
+                from .polyhedron_expansion import PolyhedronExpander, PolyhedronExpansionConfig
+                self._expander = PolyhedronExpander(PolyhedronExpansionConfig())
+                self.get_logger().info("SCG auto-expand enabled (USS-Nav Algorithm 1)")
+            except Exception as e:
+                self.get_logger().warning(f"PolyhedronExpander unavailable, auto_expand disabled: {e}")
+                self._scg_auto_expand = False
+
+        if self._gcm_enable:
+            try:
+                from .global_coverage_mask import GlobalCoverageMask
+                self._gcm = GlobalCoverageMask(
+                    resolution=self.get_parameter("gcm.resolution").value
+                )
+                self.get_logger().info("Global Coverage Mask (GCM) enabled")
+            except Exception as e:
+                self.get_logger().warning(f"GlobalCoverageMask unavailable: {e}")
+                self._gcm_enable = False
 
         # ── TF2 (A1 修复: 精确 camera→map 变换) ──
         self._tf_buffer = Buffer()
@@ -507,25 +542,66 @@ class SemanticPerceptionNode(Node):
         """缓存最新 costmap (A5: 为 FrontierScorer 提供数据)。"""
         self._latest_costmap = msg
 
-        # 触发 SCG 边构建 (当 costmap 更新时同步更新 SCG 连通性)
+        # 解析 costmap 为 3D 栅格 (供 SCG 使用)
+        width = int(msg.info.width)
+        height = int(msg.info.height)
+        if width <= 0 or height <= 0 or len(msg.data) != width * height:
+            return
+
+        grid = np.asarray(msg.data, dtype=np.float32).reshape((height, width))
+        # 归一化到 [0,1]: nav_msgs/OccupancyGrid 值域是 0-100, -1=未知
+        grid = np.where(grid < 0, 1.0, grid / 100.0)
+        # 扩展为 3D (z 轴单层)
+        grid_3d = grid[:, :, np.newaxis]
+        res = float(msg.info.resolution)
+        ox = float(msg.info.origin.position.x)
+        oy = float(msg.info.origin.position.y)
+        origin = np.array([ox, oy, 0.0])
+
+        # 触发 SCG 边构建 (当 SCG 有节点时更新连通性)
         if self._scg_enable and len(self._scg_builder.nodes) > 0:
             try:
-                import numpy as np
-                width = int(msg.info.width)
-                height = int(msg.info.height)
-                if width > 0 and height > 0 and len(msg.data) == width * height:
-                    grid = np.asarray(msg.data, dtype=np.float32).reshape((height, width))
-                    # 归一化到 [0,1]: nav_msgs/OccupancyGrid 值域是 0-100, -1=未知
-                    grid = np.where(grid < 0, 1.0, grid / 100.0)
-                    # 扩展为 3D (z 轴单层)
-                    grid_3d = grid[:, :, np.newaxis]
-                    res = float(msg.info.resolution)
-                    ox = float(msg.info.origin.position.x)
-                    oy = float(msg.info.origin.position.y)
-                    origin = np.array([ox, oy, 0.0])
-                    self._scg_builder.build_edges(grid_3d, res, origin)
+                self._scg_builder.build_edges(grid_3d, res, origin)
             except Exception as e:
-                self.get_logger().debug(f"SCG edge build on costmap update failed: {e}")
+                self.get_logger().debug(f"SCG edge build failed: {e}")
+
+        # 探索模式: 自动多面体扩展 (USS-Nav Algorithm 1)
+        if self._scg_auto_expand and self._expander is not None:
+            self._expand_frame_counter += 1
+            if self._expand_frame_counter % self._scg_expand_interval == 0:
+                self._run_scg_expansion(grid_3d, res, origin)
+
+    def _run_scg_expansion(self, occ_grid: np.ndarray, resolution: float, origin: np.ndarray):
+        """
+        从当前局部栅格扩展多面体并更新 SCG (USS-Nav Algorithm 1)。
+
+        每 scg.expand_every_n_frames 帧调用一次，在探索模式下持续构建
+        Spatial Connectivity Graph 拓扑骨架。
+        """
+        try:
+            new_polyhedra = self._expander.expand(occ_grid, resolution, origin)
+            min_new = self.get_parameter("scg.min_new_polyhedra").value
+            if len(new_polyhedra) < min_new:
+                return
+
+            for poly in new_polyhedra:
+                self._scg_builder.add_polyhedron(poly)
+
+            # 更新全局覆盖掩码
+            if self._gcm_enable and self._gcm is not None:
+                for poly in new_polyhedra:
+                    self._gcm.update_from_polyhedron(poly)
+
+            # 重建 SCG 边 (新节点加入后连通性变化)
+            self._scg_builder.build_edges(occ_grid, resolution, origin)
+
+            self.get_logger().debug(
+                "SCG expanded: +%d polyhedra, total=%d nodes",
+                len(new_polyhedra),
+                len(self._scg_builder.nodes),
+            )
+        except Exception as e:
+            self.get_logger().warning(f"SCG expansion failed: {e}")
 
     def _scg_plan_request_callback(self, msg: String):
         """
