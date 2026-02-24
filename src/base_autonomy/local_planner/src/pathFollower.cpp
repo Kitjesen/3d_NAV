@@ -264,6 +264,9 @@ private:
   float vehicleRollRec_ = 0;
   float vehiclePitchRec_ = 0;
   float vehicleYawRec_ = 0;
+  // P5: cos/sin(vehicleYawRec_) 缓存（路径开始时设一次，控制循环 100Hz 复用）
+  float cosVehicleYawRec_ = 1.0f;
+  float sinVehicleYawRec_ = 0.0f;
 
   float vehicleYawRate_ = 0;
   float vehicleSpeed_ = 0;
@@ -305,8 +308,10 @@ private:
     vehicleRoll_ = roll;
     vehiclePitch_ = pitch;
     vehicleYaw_ = yaw;
-    vehicleX_ = odomIn->pose.pose.position.x - cos(yaw) * sensorOffsetX_ + sin(yaw) * sensorOffsetY_;
-    vehicleY_ = odomIn->pose.pose.position.y - sin(yaw) * sensorOffsetX_ - cos(yaw) * sensorOffsetY_;
+    // P6: cos/sin(yaw) 各用两次，缓存一次避免重复计算
+    const double cosYaw = std::cos(yaw), sinYaw = std::sin(yaw);
+    vehicleX_ = odomIn->pose.pose.position.x - cosYaw * sensorOffsetX_ + sinYaw * sensorOffsetY_;
+    vehicleY_ = odomIn->pose.pose.position.y - sinYaw * sensorOffsetX_ - cosYaw * sensorOffsetY_;
     vehicleZ_ = odomIn->pose.pose.position.z;
 
     if ((fabs(roll) > inclThre_ * PI / 180.0 || fabs(pitch) > inclThre_ * PI / 180.0) && useInclToStop_) {
@@ -335,6 +340,8 @@ private:
     vehicleRollRec_ = vehicleRoll_;
     vehiclePitchRec_ = vehiclePitch_;
     vehicleYawRec_ = vehicleYaw_;
+    cosVehicleYawRec_ = static_cast<float>(std::cos(vehicleYaw_));  // P5
+    sinVehicleYawRec_ = static_cast<float>(std::sin(vehicleYaw_));
 
     pathPointID_ = 0;
     pathInit_ = true;
@@ -410,10 +417,10 @@ private:
   void controlLoop()
   {
     if (pathInit_) {
-      float vehicleXRel = cos(vehicleYawRec_) * (vehicleX_ - vehicleXRec_) 
-                        + sin(vehicleYawRec_) * (vehicleY_ - vehicleYRec_);
-      float vehicleYRel = -sin(vehicleYawRec_) * (vehicleX_ - vehicleXRec_) 
-                        + cos(vehicleYawRec_) * (vehicleY_ - vehicleYRec_);
+      // P5: 使用缓存的 cos/sin(vehicleYawRec_)，消除控制循环内 4 次 trig 调用
+      float dx = vehicleX_ - vehicleXRec_, dy = vehicleY_ - vehicleYRec_;
+      float vehicleXRel =  cosVehicleYawRec_ * dx + sinVehicleYawRec_ * dy;
+      float vehicleYRel = -sinVehicleYawRec_ * dx + cosVehicleYawRec_ * dy;
 
       int pathSize = path_.poses.size();
       if (pathSize == 0) return;  // 空路径，直接返回
