@@ -308,12 +308,22 @@ class GlobalPlanner(Node):
                     self.publish_status("SUCCESS")
                 else:
                     self.get_logger().error(f"✗ Plan Failed: No path found ({duration_ms:.1f}ms)")
+                    # 发布空路径，通知适配器清除过期路径，停止追踪
+                    empty_path = Path()
+                    empty_path.header.stamp = self.get_clock().now().to_msg()
+                    empty_path.header.frame_id = self.map_frame
+                    self.path_pub.publish(empty_path)
                     self.publish_status("FAILED")
-                    
+
             except Exception as e:
                 self.get_logger().error(f"Planner Core Internal Error: {e}")
                 import traceback
                 traceback.print_exc()
+                # 同样发布空路径，确保适配器停止
+                empty_path = Path()
+                empty_path.header.stamp = self.get_clock().now().to_msg()
+                empty_path.header.frame_id = self.map_frame
+                self.path_pub.publish(empty_path)
                 self.publish_status("ERROR")
     
     def publish_status(self, status: str):
