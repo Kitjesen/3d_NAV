@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mappilot-sdk"
+version = "1.5.0"
+description = "MapPilot autonomous navigation SDK — ROS2-free Python interface"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+# Full inference stack (needs GPU/model files)
+inference = [
+    "torch>=2.0",
+    "transformers>=4.30",
+    "open-clip-torch>=2.20",
+]
+# LLM slow path
+llm = [
+    "openai>=1.0",
+    "httpx>=0.23",
+]
+# All extras
+all = ["mappilot-sdk[inference,llm]"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mappilot_sdk*"]
