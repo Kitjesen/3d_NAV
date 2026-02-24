@@ -876,10 +876,16 @@ class SemanticPerceptionNode(Node):
         elif self._clip_encoder is not None:
             # Legacy: 图像裁剪编码 (慢, 仅 YOLO-World fallback)
             try:
-                bboxes = [d.bbox for d in detections_2d]
-                clip_features = self._clip_encoder.encode_image_crops(bgr, bboxes)
-                for det, feat in zip(detections_2d, clip_features):
-                    det.features = feat
+                for det in detections_2d:
+                    seg_mask = det.mask if hasattr(det, 'mask') else None
+                    if (seg_mask is not None
+                            and hasattr(self._clip_encoder, 'encode_three_source')):
+                        det.features = self._clip_encoder.encode_three_source(
+                            bgr, det.bbox, mask=seg_mask
+                        )
+                    else:
+                        feats = self._clip_encoder.encode_image_crops(bgr, [det.bbox])
+                        det.features = feats[0] if feats else np.array([])
             except Exception as e:
                 self.get_logger().warn(f"CLIP encoding failed: {e}")
 

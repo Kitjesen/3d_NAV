@@ -16,6 +16,12 @@ Frontier 评分探索 — 统一目标 Grounding 与 Frontier 选择。
   新增: frontier 评分 += f(semantic_prior, topology_reachability)
         semantic_prior = "该方向房间包含目标的先验概率"
         topology = "通过拓扑图可达的未探索房间"
+
+  USS-Nav 扩展 (arXiv 2602.00708):
+  - TSP 优化 frontier 访问顺序
+  - 信息增益 IG = frontier 周围未知格子数量
+  - 代价矩阵: cost(i,j) = 1/IG_j + path_dist(i→j)
+  - 贪心 nearest-neighbor TSP → 取序列第一个 frontier
 """
 
 import math
@@ -54,6 +60,7 @@ class Frontier:
     distance: float = 0.0           # 到机器人的距离
     direction_label: str = ""       # "north" / "east" / etc.
     nearby_labels: List[str] = field(default_factory=list)  # 附近已知物体
+    description: str = ""             # 自然语言描述 (L3MVN/OmniNav 风格)
 
     def to_dict(self) -> Dict:
         return {
@@ -97,6 +104,10 @@ class FrontierScorer:
         vision_weight: float = 0.0,       # 默认 0 = 不启用; 启用时建议 0.15
         # 创新4: 语义先验权重 (Topology-Aware Semantic Exploration)
         semantic_prior_weight: float = 0.0,  # 默认 0 = 不启用; 启用时建议 0.2
+        # USS-Nav TSP: 贪心 nearest-neighbor 重排序
+        tsp_reorder: bool = True,         # 是否启用 TSP 后处理重排序
+        tsp_frontier_limit: int = 20,     # frontier 数量超过此值时跳过 TSP
+        tsp_ig_radius_cells: int = 10,    # 信息增益估算半径 (cells)
         # C6: 以下阈值全部参数化 (ablation 实验依赖)
         novelty_distance: float = 5.0,    # 新颖度归一化距离 (m)
         nearby_object_radius: float = 3.0,  # 附近物体检索半径 (m)
@@ -123,6 +134,10 @@ class FrontierScorer:
 
         self.vision_weight = max(vision_weight, 0.0)
         self.semantic_prior_weight = max(semantic_prior_weight, 0.0)
+
+        self.tsp_reorder = tsp_reorder
+        self.tsp_frontier_limit = max(tsp_frontier_limit, 2)
+        self.tsp_ig_radius_cells = max(tsp_ig_radius_cells, 1)
 
         self._grid: Optional[np.ndarray] = None
         self._resolution: float = 0.05  # m/cell
@@ -567,6 +582,17 @@ class FrontierScorer:
                 frontier.score *= (1.0 - failure_penalty)
 
         self._frontiers.sort(key=lambda f: f.score, reverse=True)
+
+        # USS-Nav TSP 后处理: 用 IG + 路径距离重排序访问顺序
+        if self.tsp_reorder and len(self._frontiers) >= 2:
+            self._frontiers = self._tsp_sort_frontiers(
+                self._frontiers, robot_position,
+            )
+
+        # 为每个 frontier 生成自然语言描述 (L3MVN/OmniNav 风格)
+        for frontier in self._frontiers:
+            frontier.description = self._generate_frontier_description(frontier)
+
         return self._frontiers
 
     @staticmethod
@@ -625,37 +651,50 @@ class FrontierScorer:
 
         思路: frontier 方向 → 最近房间 → 该房间的先验概率
         如果 frontier 指向高先验但未探索的房间类型 → 高分
+
+        当 scene_rooms 为空时 (早期探索), 退化为基于 frontier 附近物体的
+        CLIP 房间类型预测: nearby_labels → predict_room_type → 先验匹配。
         """
-        if not self._room_priors_cache or not scene_rooms:
-            return 0.0
+        # 正常路径: 有房间信息时基于 room_priors_cache
+        if self._room_priors_cache and scene_rooms:
+            best_score = 0.0
+            for room in scene_rooms:
+                room_center = np.array([
+                    float(room.get("center", {}).get("x", 0.0)),
+                    float(room.get("center", {}).get("y", 0.0)),
+                ])
 
-        best_score = 0.0
-        for room in scene_rooms:
-            room_center = np.array([
-                float(room.get("center", {}).get("x", 0.0)),
-                float(room.get("center", {}).get("y", 0.0)),
-            ])
+                frontier_vec = frontier.center_world - robot_position[:2]
+                room_vec = room_center - robot_position[:2]
+                fn = np.linalg.norm(frontier_vec)
+                rn = np.linalg.norm(room_vec)
+                if fn < 0.1 or rn < 0.1:
+                    continue
 
-            # frontier 方向与房间方向的一致性
-            frontier_vec = frontier.center_world - robot_position[:2]
-            room_vec = room_center - robot_position[:2]
-            fn = np.linalg.norm(frontier_vec)
-            rn = np.linalg.norm(room_vec)
-            if fn < 0.1 or rn < 0.1:
-                continue
+                cos_sim = float(np.dot(frontier_vec, room_vec) / (fn * rn))
+                if cos_sim < 0.3:
+                    continue
 
-            cos_sim = float(np.dot(frontier_vec, room_vec) / (fn * rn))
-            if cos_sim < 0.3:
-                continue
+                room_id = room.get("room_id", -1)
+                prior = self._room_priors_cache.get(room_id, 0.0)
 
-            room_id = room.get("room_id", -1)
-            prior = self._room_priors_cache.get(room_id, 0.0)
+                score = cos_sim * prior
+                best_score = max(best_score, score)
 
-            # direction_alignment × semantic_prior
-            score = cos_sim * prior
-            best_score = max(best_score, score)
+            return min(1.0, best_score)
 
-        return min(1.0, best_score)
+        # 退化路径: 无房间信息时, 用 frontier 附近物体预测房间类型
+        if (self._semantic_prior_engine and frontier.nearby_labels
+                and hasattr(self._semantic_prior_engine, 'predict_room_type_from_labels')):
+            room_scores = self._semantic_prior_engine.predict_room_type_from_labels(
+                frontier.nearby_labels,
+            )
+            if room_scores:
+                # 取最高匹配房间类型的分数 (已排序)
+                top_score = next(iter(room_scores.values()), 0.0)
+                return min(1.0, top_score)
+
+        return 0.0
 
     def _compute_kg_room_score(
         self,
@@ -702,8 +741,98 @@ class FrontierScorer:
 
         return min(1.0, best_score)
 
+    # ── USS-Nav TSP 方法 ──────────────────────────────────────────
+
+    def _estimate_information_gain(self, frontier: Frontier) -> float:
+        """
+        估算 frontier 的信息增益 (USS-Nav: IG_i)。
+
+        统计 frontier 中心附近 tsp_ig_radius_cells 范围内的 unknown cell 数量。
+        如果没有 costmap, 退化为 frontier.size 作为近似。
+        """
+        if self._grid is None:
+            return max(float(frontier.size), 1.0)
+
+        rows, cols = self._grid.shape
+        center_r = int(round(frontier.center[0]))
+        center_c = int(round(frontier.center[1]))
+        r = self.tsp_ig_radius_cells
+
+        r_lo = max(0, center_r - r)
+        r_hi = min(rows, center_r + r + 1)
+        c_lo = max(0, center_c - r)
+        c_hi = min(cols, center_c + r + 1)
+
+        patch = self._grid[r_lo:r_hi, c_lo:c_hi]
+        unknown_count = int(np.count_nonzero(patch == UNKNOWN_CELL))
+        return max(float(unknown_count), 1.0)
+
+    def _tsp_sort_frontiers(
+        self,
+        frontiers: List[Frontier],
+        robot_position: np.ndarray,
+    ) -> List[Frontier]:
+        """
+        USS-Nav 贪心 nearest-neighbor TSP 重排序。
+
+        代价矩阵: cost(i, j) = 1/IG_j + euclidean_dist(i, j)
+        从 robot 出发, 每步选最低代价的未访问 frontier。
+        frontier 数量 > tsp_frontier_limit 时跳过 TSP, 保持原排序。
+
+        Args:
+            frontiers: SEEK 评分后的 frontier 列表
+            robot_position: [x, y] 世界坐标
+
+        Returns:
+            TSP 重排序后的 frontier 列表
+        """
+        n = len(frontiers)
+        if n < 2 or n > self.tsp_frontier_limit:
+            return frontiers
+
+        # 预计算每个 frontier 的信息增益
+        ig = [self._estimate_information_gain(f) for f in frontiers]
+
+        # 预计算 frontier 中心坐标矩阵
+        centers = np.array([f.center_world for f in frontiers])  # (n, 2)
+        robot_xy = robot_position[:2]
+
+        # 贪心 nearest-neighbor TSP
+        visited = [False] * n
+        order: List[int] = []
+        current_pos = robot_xy
+
+        for _ in range(n):
+            best_idx = -1
+            best_cost = float('inf')
+            for j in range(n):
+                if visited[j]:
+                    continue
+                dist = float(np.linalg.norm(current_pos - centers[j]))
+                cost = 1.0 / ig[j] + dist
+                if cost < best_cost:
+                    best_cost = cost
+                    best_idx = j
+            if best_idx < 0:
+                break
+            visited[best_idx] = True
+            order.append(best_idx)
+            current_pos = centers[best_idx]
+
+        result = [frontiers[i] for i in order]
+
+        if logger.isEnabledFor(logging.DEBUG):
+            ids = [f.frontier_id for f in result]
+            igs = [ig[i] for i in order]
+            logger.debug(
+                "TSP reorder: %s (IG=%s)", ids,
+                [round(g, 1) for g in igs],
+            )
+
+        return result
+
     def get_best_frontier(self) -> Optional[Frontier]:
-        """获取评分最高的 frontier。"""
+        """获取评分最高的 frontier (TSP 重排序后为访问序列第一个)。"""
         if self._frontiers:
             return self._frontiers[0]
         return None
@@ -746,6 +875,32 @@ class FrontierScorer:
         if _expand_bilingual is not None:
             keywords = _expand_bilingual(keywords)
         return set(keywords)
+
+    def _generate_frontier_description(self, frontier: Frontier) -> str:
+        """为 frontier 生成自然语言描述（L3MVN/OmniNav 风格）。"""
+        labels = getattr(frontier, 'nearby_labels', []) or []
+        unique_labels = list(dict.fromkeys(labels))[:6]  # 最多6个去重标签
+
+        room_type = "未知区域"
+        if unique_labels and self._semantic_prior_engine is not None:
+            try:
+                if hasattr(self._semantic_prior_engine, 'predict_room_type_from_labels'):
+                    room_probs = self._semantic_prior_engine.predict_room_type_from_labels(
+                        unique_labels,
+                    )
+                    if room_probs:
+                        best_room = max(room_probs, key=room_probs.get)
+                        confidence = room_probs[best_room]
+                        if confidence > 0.3:
+                            room_type = best_room
+            except Exception:
+                pass
+
+        if unique_labels:
+            label_str = "、".join(unique_labels)
+            return f"可见对象：{label_str}，推测区域：{room_type}"
+        else:
+            return f"未知区域（尚无可见对象），推测：{room_type}"
 
     def get_frontiers_summary(self) -> str:
         """导出 frontier 摘要 (给 LLM 消费)。"""

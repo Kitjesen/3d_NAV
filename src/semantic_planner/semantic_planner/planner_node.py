@@ -84,6 +84,7 @@ from .task_decomposer import (
     SubGoalAction, SubGoalStatus,
 )
 from .topological_memory import TopologicalMemory
+from .episodic_memory import EpisodicMemory
 from .action_executor import ActionExecutor, ActionCommand
 from .frontier_scorer import FrontierScorer
 from .exploration_strategy import generate_frontier_goal, extract_frontier_scene_data
@@ -174,6 +175,8 @@ class SemanticPlannerNode(Node):
         self.declare_parameter("exploration.frontier_grounding_relation_bonus", 0.15)
         # 创新3: Frontier 视觉评分权重 (VLFM 核心)
         self.declare_parameter("exploration.frontier_vision_weight", 0.0)
+        # 创新4: 语义先验权重 (Topology-Aware Semantic Exploration)
+        self.declare_parameter("exploration.frontier_semantic_prior_weight", 0.2)
 
         # SG-Nav 对齐参数
         self.declare_parameter("exploration.sgnav.max_subgraphs", 6)
@@ -191,6 +194,8 @@ class SemanticPlannerNode(Node):
         # 创新3: 连续 Re-perception (导航中每 N 米触发)
         self.declare_parameter("exploration.sgnav.continuous_reperception", True)
         self.declare_parameter("exploration.sgnav.reperception_interval_m", 2.0)
+        self.declare_parameter("exploration.sgnav.reperception_n_max", 10)
+        self.declare_parameter("exploration.sgnav.reperception_s_thresh", 0.8)
 
         # LOVON 风格隐式 FSM: s_{t+1} = f_theta(obs_t, s_t, instruction)
         self.declare_parameter("fsm.mode", "implicit")            # explicit | implicit
@@ -303,6 +308,10 @@ class SemanticPlannerNode(Node):
             new_node_distance=self.get_parameter("topo_memory.new_node_distance").value,
             max_nodes=self.get_parameter("topo_memory.max_nodes").value,
         )
+        # 若 CLIP 编码器已初始化，注入拓扑记忆
+        if hasattr(self, '_clip_encoder') and self._clip_encoder is not None:
+            self._topo_memory.set_clip_encoder(self._clip_encoder)
+        self._episodic_memory = EpisodicMemory(clip_encoder=None)
         self._frontier_scorer = FrontierScorer(
             min_frontier_size=self.get_parameter("exploration.frontier_min_size").value,
             max_frontiers=self.get_parameter("exploration.frontier_max_count").value,
@@ -321,6 +330,7 @@ class SemanticPlannerNode(Node):
             grounding_keyword_bonus=self.get_parameter("exploration.frontier_grounding_keyword_bonus").value,
             grounding_relation_bonus=self.get_parameter("exploration.frontier_grounding_relation_bonus").value,
             vision_weight=self.get_parameter("exploration.frontier_vision_weight").value,
+            semantic_prior_weight=self.get_parameter("exploration.frontier_semantic_prior_weight").value,
         )
         # 加载持久化语义数据 (房间-物体 KG, 拓扑记忆)
         self._semantic_data_dir = self.get_parameter("semantic_data_dir").value
@@ -331,6 +341,9 @@ class SemanticPlannerNode(Node):
         self._frontier_scorer.set_semantic_prior_engine(
             self._resolver._semantic_prior_engine
         )
+        # 注入 CLIP 编码器到语义先验引擎 (CLIP text-text 房间类型预测)
+        if hasattr(self, '_clip_encoder') and self._clip_encoder is not None:
+            self._resolver._semantic_prior_engine.set_clip_encoder(self._clip_encoder)
         self._sgnav_reasoner = SGNavReasoner(
             max_subgraphs=self.get_parameter("exploration.sgnav.max_subgraphs").value,
             use_llm_reasoning=self._sgnav_use_llm_reasoning,
@@ -356,6 +369,12 @@ class SemanticPlannerNode(Node):
             ).value,
             min_confidence_for_bypass=self.get_parameter(
                 "exploration.sgnav.min_confidence_for_bypass"
+            ).value,
+            reperception_n_max=self.get_parameter(
+                "exploration.sgnav.reperception_n_max"
+            ).value,
+            reperception_s_thresh=self.get_parameter(
+                "exploration.sgnav.reperception_s_thresh"
             ).value,
         )
         self._implicit_fsm = ImplicitFSMPolicy(
@@ -624,7 +643,7 @@ class SemanticPlannerNode(Node):
         self._set_state(PlannerState.CANCELLED)
 
     def _scene_graph_callback(self, msg: String):
-        """更新最新场景图 + 增量更新房间-物体 KG。"""
+        """更新最新场景图 + 增量更新房间-物体 KG + 情节记忆。"""
         self._latest_scene_graph = msg.data
 
         # 增量更新 runtime KG (每次场景图更新都提取房间-物体关系)
@@ -636,6 +655,17 @@ class SemanticPlannerNode(Node):
                     self._runtime_kg.observe_room(room_type, labels, confs)
             except Exception:
                 pass  # non-critical
+
+        # 更新情节记忆
+        try:
+            scene_data = json.loads(msg.data) if isinstance(msg.data, str) else msg.data
+            _labels = [obj.get('label', '') for obj in scene_data.get('objects', [])]
+            rp = self._robot_position
+            if rp:
+                _pos = np.array([rp['x'], rp['y'], rp.get('z', 0.0)])
+                self._episodic_memory.add(position=_pos, labels=_labels)
+        except Exception:
+            pass  # 静默降级
 
     def _image_callback(self, msg: Image):
         """缓存最新相机帧 (用于 VLM vision grounding)。"""
@@ -1104,17 +1134,51 @@ class SemanticPlannerNode(Node):
                 and self._replan_count < self._max_replan_attempts
             )
             if can_replan:
+                # ── LERa 恢复: Look → Explain → Replan ──
+                current_labels = []
+                try:
+                    sg = json.loads(self._latest_scene_graph)
+                    current_labels = [
+                        o.get("label", "") for o in sg.get("objects", [])
+                    ]
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    pass
+
+                lera_action = self._action_executor.lera_recover(
+                    failed_action=(
+                        f"{failed_subgoal.action.value}({failed_subgoal.target})"
+                        if failed_subgoal else "unknown"
+                    ),
+                    current_labels=current_labels,
+                    original_goal=self._current_instruction or "",
+                    failure_count=(
+                        failed_subgoal.retry_count if failed_subgoal else 1
+                    ),
+                )
                 self.get_logger().warn(
-                    f"Subgoal retries exhausted, triggering replanning "
+                    f"[LERa] recovery={lera_action}, triggering replanning "
                     f"({self._replan_count + 1}/{self._max_replan_attempts})"
                 )
+
+                if lera_action == "abort":
+                    self.get_logger().warn("[LERa] aborting navigation")
+                    self._set_state(PlannerState.FAILED)
+                    return
+
                 self._set_state(PlannerState.REPLANNING)
-                self._schedule_async(self._llm_replan(reason, failed_subgoal))
+                self._schedule_async(
+                    self._llm_replan(reason, failed_subgoal, lera_action)
+                )
                 return
 
         self._execute_next_subgoal()
 
-    async def _llm_replan(self, reason: str, failed_subgoal: Optional[SubGoal]):
+    async def _llm_replan(
+        self,
+        reason: str,
+        failed_subgoal: Optional[SubGoal],
+        lera_action: str = "",
+    ):
         """基于执行反馈的 LLM 重规划。"""
         try:
             self._replan_count += 1
@@ -1136,10 +1200,20 @@ class SemanticPlannerNode(Node):
                     f"retry={failed_subgoal.retry_count}/{failed_subgoal.max_retries}"
                 )
 
+            # LERa 恢复策略提示
+            lera_hint = ""
+            if lera_action == "expand_search":
+                lera_hint = "\n[LERa] Suggested strategy: expand search area, try different directions.\n"
+            elif lera_action == "requery_goal":
+                lera_hint = "\n[LERa] Suggested strategy: re-interpret the goal, it may be ambiguous.\n"
+            elif lera_action == "retry_different_path":
+                lera_hint = "\n[LERa] Suggested strategy: try a different approach path.\n"
+
             ctx = f"[Execution history]\n{self._execution_context}\n\n" if self._execution_context else ""
             feedback_summary = (
                 f"{scene_summary}\n"
                 f"{ctx}"
+                f"{lera_hint}"
                 f"[Execution Feedback]\n"
                 f"Failed subgoal: {failed_desc}\n"
                 f"Failure reason: {reason or 'unknown'}\n"
@@ -1978,20 +2052,45 @@ class SemanticPlannerNode(Node):
         return label, float(np.clip(conf, 0.0, 1.0)), xyn, whn
 
     async def _handle_explore_result(self, result: GoalResult):
-        """处理探索结果 (F7: Fast+Slow 都失败时有 fallback)。"""
+        """处理探索结果 (F7: Fast+Slow 都失败时有 fallback)。
+
+        架构说明 (USS-Nav style):
+          实时探索: FrontierScorer (15Hz 级别, 几何+语义先验+TSP)
+          目标确认: SGNavReasoner._sgnav_reperception_check() (按需触发)
+          SG-Nav 子图 H-CoT: 仅在 Slow Path 目标推理时调用, 不在探索循环里
+        """
         if not self._explore_enabled or not self._current_explore_if_unknown:
             self.get_logger().info("Exploration disabled, failing")
             self._set_state(PlannerState.FAILED)
             return
 
+        # ── 探索终止判断: 步数 + 语义信号 ──
+        # 除步数限制外, 增加 frontier 新颖性耗尽和房间覆盖度检查
+        fail_reason = ""
         if self._explore_count >= self._max_explore_steps:
-            self.get_logger().info("Max exploration steps reached")
+            fail_reason = "max_steps"
+        else:
+            # 所有 frontier 评分过低 → 环境已充分探索
+            cached_frontiers = getattr(self._frontier_scorer, "_frontiers", [])
+            if cached_frontiers and all(
+                f.score < 0.15 for f in cached_frontiers
+            ):
+                fail_reason = "all_explored"
+
+        if fail_reason:
+            self.get_logger().info(
+                "Exploration terminated: %s (steps=%d/%d)",
+                fail_reason, self._explore_count, self._max_explore_steps,
+            )
             # F7: 超限后不直接 FAIL, 尝试 BACKTRACK 回起点
             backtrack_pos = self._topo_memory.get_backtrack_position(
                 steps_back=self._explore_count
             )
             if backtrack_pos is not None:
-                self.get_logger().info("Max explore reached, backtracking to start")
+                self.get_logger().info(
+                    "Exploration done (%s), backtracking to start",
+                    fail_reason,
+                )
                 cmd = self._action_executor.generate_backtrack_command(backtrack_pos)
                 self._publish_goal_from_command(cmd)
                 self._set_state(PlannerState.BACKTRACKING)
@@ -2295,6 +2394,31 @@ class SemanticPlannerNode(Node):
             except (json.JSONDecodeError, TypeError, KeyError) as e:
                 self.get_logger().debug(f"Scene graph parse in monitor: {e}")
 
+            # 从场景图提取当前所在房间
+            _current_room_id = -1
+            _current_room_name = ""
+            try:
+                _rooms = sg.get("rooms", [])
+                if _rooms and self._robot_position:
+                    _rx = self._robot_position.get("x", 0.0)
+                    _ry = self._robot_position.get("y", 0.0)
+                    _best_dist = float("inf")
+                    for _room in _rooms:
+                        _rc = _room.get("center", {})
+                        _dx = float(_rc.get("x", 0)) - _rx
+                        _dy = float(_rc.get("y", 0)) - _ry
+                        _d = (_dx * _dx + _dy * _dy) ** 0.5
+                        if _d < _best_dist:
+                            _best_dist = _d
+                            _current_room_id = int(_room.get("room_id", -1))
+                            _current_room_name = str(_room.get("name", ""))
+                    # 只在合理范围内（8m）才认为在该房间
+                    if _best_dist > 8.0:
+                        _current_room_id = -1
+                        _current_room_name = ""
+            except Exception:
+                pass
+
             self._topo_memory.update_position(
                 position=np.array([
                     self._robot_position["x"],
@@ -2302,10 +2426,11 @@ class SemanticPlannerNode(Node):
                     self._robot_position.get("z", 0.0),
                 ]),
                 visible_labels=visible_labels,
-                # D7: 结构化截断 — 只保留附近物体的标签
                 scene_snapshot=json.dumps(
                     {"nearby_labels": visible_labels[:5]}, ensure_ascii=False
                 ),
+                room_id=_current_room_id,
+                room_name=_current_room_name,
             )
 
         # ── 超时检测 ──

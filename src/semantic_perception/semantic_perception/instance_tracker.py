@@ -223,6 +223,27 @@ class RoomNode:
     group_ids: List[int] = field(default_factory=list)
     semantic_labels: List[str] = field(default_factory=list)
     llm_named: bool = False        # 是否由 LLM 命名
+    view_embeddings: List[np.ndarray] = field(default_factory=list)  # HOV-SG K视角嵌入
+
+    def add_view_embedding(self, embed: np.ndarray) -> None:
+        """添加观察视角嵌入，FIFO保留最多10个。"""
+        norm = np.linalg.norm(embed)
+        if norm <= 0:
+            return
+        e = embed / norm
+        if len(self.view_embeddings) >= 10:
+            self.view_embeddings.pop(0)
+        self.view_embeddings.append(e)
+
+    def query_similarity(self, query_embed: np.ndarray) -> float:
+        """HOV-SG式 max cosine similarity over K view embeddings。"""
+        if not self.view_embeddings:
+            return 0.0
+        q_norm = np.linalg.norm(query_embed)
+        if q_norm <= 0:
+            return 0.0
+        q = query_embed / q_norm
+        return max(float(np.dot(q, v)) for v in self.view_embeddings)
 
 
 @dataclass
@@ -343,6 +364,7 @@ class ViewNode:
     room_id: int = -1
     object_ids: List[int] = field(default_factory=list)
     key_labels: List[str] = field(default_factory=list)
+    clip_feature: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -385,6 +407,7 @@ class TrackedObject:
     is_kg_expected: bool = False   # 此物体是否为当前房间类型的 KG 期望物体
     safety_nav_threshold: float = 0.25   # 导航避障用的安全阈值 (动态设置)
     safety_interact_threshold: float = 0.40  # 交互操作用的安全阈值
+    feature_history: List[np.ndarray] = field(default_factory=list)  # HOV-SG DBSCAN精化历史
 
     def update(self, det: Detection3D, alpha: float = 0.3) -> None:
         """用新检测更新位置、置信度、点云和信念状态 (USS-Nav + BA-HSG)。"""
@@ -413,6 +436,13 @@ class TrackedObject:
 
         if det.features.size > 0:
             self.features = self._fuse_feature(det.features)
+            # HOV-SG: 追加到特征历史 (FIFO max 20)
+            self.feature_history.append(self.features.copy())
+            if len(self.feature_history) > 20:
+                self.feature_history.pop(0)
+            # 每5次检测触发DBSCAN精化
+            if self.detection_count % 5 == 0:
+                self._try_refine_features()
         self._update_extent(det)
         self._update_credibility()
 
@@ -473,6 +503,26 @@ class TrackedObject:
         if fused_norm > 0:
             fused = fused / fused_norm
         return fused
+
+    def _try_refine_features(self) -> None:
+        """多帧特征DBSCAN精化（HOV-SG风格，防EMA噪声漂移）。"""
+        if len(self.feature_history) < 5:
+            return
+        try:
+            from sklearn.cluster import DBSCAN
+            X = np.stack(self.feature_history)
+            labels = DBSCAN(eps=0.3, min_samples=2, metric="cosine").fit_predict(X)
+            valid = labels[labels >= 0]
+            if len(valid) == 0:
+                return
+            best_label = int(np.bincount(valid).argmax())
+            cluster_feats = X[labels == best_label]
+            refined = cluster_feats.mean(axis=0)
+            norm = np.linalg.norm(refined)
+            if norm > 0:
+                self.features = refined / norm
+        except Exception:
+            pass  # 静默降级
 
     def _update_extent(self, det: Detection3D) -> None:
         """从 2D bbox 和深度估算 3D 包围盒半径。"""
@@ -626,6 +676,11 @@ class InstanceTracker:
         self._room_name_cache: Dict[int, str] = {}       # region_id -> LLM name
         self._region_stability: Dict[int, Tuple[frozenset, float]] = {}  # region_id -> (obj_id_set, stable_since)
 
+        # Region ID 稳定化映射 — 基于中心坐标复用 ID，防止 DBSCAN 每次重新编号
+        self._stable_region_centers: Dict[int, np.ndarray] = {}  # stable_id → center_xy
+        self._next_stable_region_id: int = 0
+        self._REGION_STABLE_MATCH_DIST: float = 1.5  # 1.5m 内认为是同一 region
+
         # 知识图谱 (ConceptBot / OpenFunGraph 增强)
         self._knowledge_graph = knowledge_graph
 
@@ -639,12 +694,6 @@ class InstanceTracker:
         self._bp_messages_log: List[BeliefMessage] = []  # 调试用: 最近一轮的消息
         self._bp_iteration_count = 0                      # 统计: 总 BP 迭代次数
         self._bp_convergence_history: List[float] = []    # 统计: 每轮最大 Δ
-
-        # ── Neuro-Symbolic Belief GCN (KG-BELIEF) ──
-        self._belief_model = None  # Optional[BeliefPredictor]
-
-        # ── Neuro-Symbolic Belief GCN (论文核心: 训练式信念推理) ──
-        self._belief_model = None  # Optional[BeliefPredictor]
 
         # ── Neuro-Symbolic Belief GCN (KG-BELIEF) ──
         self._belief_model = None  # Optional[BeliefPredictor]
@@ -1082,6 +1131,25 @@ class InstanceTracker:
 
         return relations
 
+    def _get_stable_region_id(self, center: np.ndarray) -> int:
+        """为 region 分配稳定 ID（基于中心坐标匹配，防止 DBSCAN 每次重新编号）。"""
+        best_id = -1
+        best_dist = float('inf')
+        for sid, scenter in self._stable_region_centers.items():
+            d = float(np.linalg.norm(center - scenter))
+            if d < best_dist:
+                best_dist = d
+                best_id = sid
+        if best_dist <= self._REGION_STABLE_MATCH_DIST and best_id >= 0:
+            # 更新中心（EMA 平滑）
+            self._stable_region_centers[best_id] = 0.8 * self._stable_region_centers[best_id] + 0.2 * center
+            return best_id
+        # 新 region
+        new_id = self._next_stable_region_id
+        self._next_stable_region_id += 1
+        self._stable_region_centers[new_id] = center.copy()
+        return new_id
+
     def compute_regions(self) -> List[Region]:
         """
         将物体按空间位置聚类为区域 (SG-Nav 的"房间级"层次)。
@@ -1140,9 +1208,10 @@ class InstanceTracker:
                 cluster_to_objs.setdefault(cl_int, []).append(idx)
 
         regions: List[Region] = []
-        for region_id, obj_indices in enumerate(cluster_to_objs.values()):
+        for obj_indices in cluster_to_objs.values():
             obj_ids = [objs[i].object_id for i in obj_indices]
             center = positions_2d[obj_indices].mean(axis=0)
+            region_id = self._get_stable_region_id(center)
 
             for i in obj_indices:
                 objs[i].region_id = region_id
@@ -1262,17 +1331,22 @@ class InstanceTracker:
                     # 触发异步 LLM 命名 (fire-and-forget, 结果下次 compute 时可用)
                     self._trigger_room_llm_naming(r.region_id, labels)
 
-            rooms.append(
-                RoomNode(
-                    room_id=r.region_id,
-                    name=room_name,
-                    center=r.center.copy(),
-                    object_ids=list(r.object_ids),
-                    group_ids=room_to_groups.get(r.region_id, []),
-                    semantic_labels=labels,
-                    llm_named=is_llm_named,
-                )
+            room_node = RoomNode(
+                room_id=r.region_id,
+                name=room_name,
+                center=r.center.copy(),
+                object_ids=list(r.object_ids),
+                group_ids=room_to_groups.get(r.region_id, []),
+                semantic_labels=labels,
+                llm_named=is_llm_named,
             )
+            # HOV-SG: 从ViewNode CLIP特征填充房间视角嵌入
+            for vnode in self._views.values():
+                if (vnode.room_id == r.region_id
+                        and vnode.clip_feature is not None
+                        and len(vnode.clip_feature) > 0):
+                    room_node.add_view_embedding(vnode.clip_feature)
+            rooms.append(room_node)
         return rooms
 
     _LLM_NAMING_MAX_CONCURRENT = 3
@@ -2348,6 +2422,10 @@ class InstanceTracker:
                 },
                 "object_ids": rm.object_ids,
                 "group_ids": rm.group_ids,
+                "clip_feature": (
+                    np.mean(np.stack(rm.view_embeddings), axis=0).tolist()
+                    if rm.view_embeddings else None
+                ),
             }
             for rm in rooms
         ]

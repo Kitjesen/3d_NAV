@@ -67,6 +67,8 @@ semantic_planner_node:
       frontier_grounding_relation_bonus: 0.15    # 关系推理加分
       # 创新3: Frontier CLIP 视觉评分权重 (VLFM 核心)
       frontier_vision_weight: 0.0              # 0=禁用; 启用建议 0.15
+      # 创新4: 语义先验权重 (Topology-Aware Semantic Exploration)
+      frontier_semantic_prior_weight: 0.2      # 0=禁用; 启用建议 0.2
 
       # SG-Nav 对齐参数
       sgnav:
@@ -85,6 +87,9 @@ semantic_planner_node:
         # 创新3: 连续 Re-perception
         continuous_reperception: true     # 导航中每 N 米触发 Re-perception
         reperception_interval_m: 2.0     # 触发间隔 (米)
+        # SG-Nav §3.4: 多视角累积重感知
+        reperception_n_max: 10           # 多视角观测窗口大小 (最多保留 N 次观测)
+        reperception_s_thresh: 0.8       # 累积置信度阈值, >=此值接受目标
 
     # ── 融合权重 (有 CLIP) ──
     fusion:

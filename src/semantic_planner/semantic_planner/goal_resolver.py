@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from .adacot import AdaCoTRouter, AdaCoTConfig, AdaCoTDecision
 from .llm_client import LLMClientBase, LLMError, LLMConfig, create_llm_client
 from .prompt_templates import (
     build_goal_resolution_prompt,
@@ -67,6 +68,9 @@ class GoalResult:
     path: str = ""                 # "fast" | "slow" — 标记走了哪条路径
     candidate_id: int = -1         # BA-HSG: 候选物体 ID
     frame_id: str = "map"          # 坐标帧 (默认 map, 与 planner_node 一致)
+    hint_room: str = ""                            # OmniNav: 目标所在推测房间名
+    hint_room_center: Optional[List[float]] = None # OmniNav: 房间中心坐标 [x,y,z]
+    score_entropy: float = 0.0                     # AdaNav: Fast Path 得分熵
 
 
 @dataclass
@@ -251,6 +255,29 @@ class GoalResolver:
         self._tsg: Optional["TopologySemGraph"] = None
         if TopologySemGraph is not None:
             self._tsg = TopologySemGraph()
+
+        # AdaCoT: 动态快慢路径路由 (VLingNav 2026)
+        self._adacot = AdaCoTRouter()
+
+    # ================================================================
+    #  AdaNav: 得分熵计算
+    # ================================================================
+
+    def _compute_score_entropy(self, scores: List[float]) -> float:
+        """计算候选得分归一化后的香农熵（AdaNav 不确定度指标）。
+
+        高熵表示候选得分均匀分布（歧义高），低熵表示某个候选明显胜出。
+        """
+        if not scores or len(scores) < 2:
+            return 0.0
+        arr = np.array(scores, dtype=float)
+        arr = arr - arr.min()
+        total = arr.sum()
+        if total < 1e-9:
+            return math.log(len(scores))  # 均匀分布 → 最大熵
+        probs = arr / total
+        probs = np.clip(probs, 1e-9, 1.0)
+        return float(-np.sum(probs * np.log(probs)))
 
     # ================================================================
     #  Fast Path — System 1 (VLingNav / OmniNav)
@@ -456,6 +483,10 @@ class GoalResolver:
         scored.sort(key=lambda x: x[1], reverse=True)
         best_obj, best_score, best_reason = scored[0]
 
+        # AdaNav: 计算候选得分熵
+        candidate_scores = [sc for _, sc, _ in scored]
+        score_entropy = self._compute_score_entropy(candidate_scores)
+
         # ── B7: CLIP 属性消歧 (区分 "red chair" vs "blue chair") ──
         # 当存在多个同类型高分候选时, 用 CLIP 做精细排序
         if clip_encoder is not None and len(scored) >= 2:
@@ -507,6 +538,51 @@ class GoalResolver:
                 best_score, self._fast_path_threshold,
                 best_obj.get("label", "?"), best_reason,
             )
+
+            # ── Phantom 节点探索目标 (Belief Scene Graphs) ──
+            # Fast Path miss 时, 检查 KG 推断的 phantom (blind) 节点。
+            # 如果存在高概率 phantom 与指令匹配, 引导探索前往确认。
+            phantom_nodes = sg.get("phantom_nodes", [])
+            if phantom_nodes and keywords:
+                phantom_scored = []
+                for pn in phantom_nodes:
+                    p_label = pn.get("label", "").lower()
+                    p_exist = pn.get("P_exist", 0.0)
+                    # 匹配指令关键词
+                    label_match = any(
+                        kw in p_label or p_label in kw for kw in keywords
+                    )
+                    if label_match and p_exist > 0.3:
+                        phantom_scored.append((pn, p_exist))
+
+                if phantom_scored:
+                    phantom_scored.sort(key=lambda x: x[1], reverse=True)
+                    best_pn, best_p_exist = phantom_scored[0]
+                    pn_pos = best_pn.get("position", {})
+                    pn_x = pn_pos.get("x", 0.0)
+                    pn_y = pn_pos.get("y", 0.0)
+                    logger.info(
+                        "Phantom node hit: '%s' P_exist=%.2f at (%.2f, %.2f), "
+                        "room=%s",
+                        best_pn.get("label", "?"), best_p_exist,
+                        pn_x, pn_y, best_pn.get("room_type", "?"),
+                    )
+                    return GoalResult(
+                        action="explore",
+                        target_x=pn_x,
+                        target_y=pn_y,
+                        target_label=f"phantom:{best_pn.get('label', '')}",
+                        confidence=best_p_exist * 0.7,
+                        reasoning=(
+                            f"Phantom node: expected {best_pn.get('label', '?')} "
+                            f"in {best_pn.get('room_type', '?')} "
+                            f"(P_exist={best_p_exist:.2f})"
+                        ),
+                        is_valid=True,
+                        path="fast",
+                        frame_id=sg.get("frame_id", "map"),
+                    )
+
             return None  # 不够确定, 交给 LLM
 
         # ── BA-HSG: 初始化多假设目标信念 ──
@@ -579,6 +655,7 @@ class GoalResolver:
             path="fast",
             candidate_id=best_obj.get("id", -1),
             frame_id=target_frame,
+            score_entropy=score_entropy,
         )
 
     @staticmethod
@@ -625,12 +702,38 @@ class GoalResolver:
         top_k: int = 2,
     ) -> Optional[set]:
         """
-        GAP: Room CLIP 筛选 (FSR-VLN 路线 A)。
-        用 instruction↔Room 相似度取 top-k 房间，返回其 object_ids 集合。
+        GAP: Room CLIP 筛选 (FSR-VLN 路线 A + HOV-SG view embeddings)。
+        优先用 rooms JSON 中的 clip_feature（HOV-SG view embeddings 均值）做
+        文本-图像相似度匹配；无特征时 fallback 到 label 文本匹配。
         无 clip/rooms 时返回 None（不做筛选）。
         """
         if clip_encoder is None:
             return None
+
+        # ── 路线1: HOV-SG — rooms JSON 中的 clip_feature ──
+        rooms_data = scene_graph.get("rooms", [])
+        rooms_with_clip = [r for r in rooms_data if r.get("clip_feature") is not None]
+        if len(rooms_with_clip) >= 2:
+            try:
+                query_feat = clip_encoder.encode_text([instruction])
+                if query_feat.size > 0:
+                    q = query_feat[0]
+                    scored = []
+                    for r in rooms_with_clip:
+                        rf = np.array(r["clip_feature"])
+                        norm = np.linalg.norm(rf)
+                        sim = float(np.dot(q, rf / norm)) if norm > 0 else 0.0
+                        scored.append((r, sim))
+                    scored.sort(key=lambda x: x[1], reverse=True)
+                    allowed = set()
+                    for r, _ in scored[:top_k]:
+                        allowed.update(r.get("object_ids", []))
+                    if allowed:
+                        return allowed
+            except Exception:
+                pass
+
+        # ── 路线2: fallback — subgraphs label 文本匹配（原有逻辑）──
         subgraphs = scene_graph.get("subgraphs", [])
         rooms = [s for s in subgraphs if s.get("level") == "room"]
         if len(rooms) < 2:
@@ -1072,12 +1175,13 @@ class GoalResolver:
         clip_encoder=None,
     ) -> GoalResult:
         """
-        完整解析 (Fast → Slow 双进程)。
+        完整解析 (AdaCoT 动态路由 + Fast/Slow 双进程)。
 
         流程:
-          1. 先尝试 Fast Path (VLingNav System 1)
-          2. Fast 失败 → 选择性 Grounding 过滤场景图 (ESCA)
-          3. 过滤后的场景图 → LLM 推理 (Slow Path)
+          0. AdaCoT 预判: 指令复杂度 + 场景图状态 → FAST / SLOW / AUTO
+          1. FAST → 仅 Fast Path, 成功直返; 失败 fallback Slow
+          2. SLOW → 跳过 Fast, 直走 Slow Path
+          3. AUTO → 传统 Fast → Slow 流程
 
         Args:
             instruction: 用户自然语言指令
@@ -1090,19 +1194,45 @@ class GoalResolver:
         Returns:
             GoalResult
         """
-        # ── Step 1: Fast Path (VLingNav) ──
-        fast_result = self.fast_resolve(
-            instruction, scene_graph_json, robot_position, clip_encoder
-        )
-        if fast_result is not None:
-            return fast_result
+        # ── Step 0: AdaCoT 路径预判 (VLingNav 2026) ──
+        try:
+            sg_dict = json.loads(scene_graph_json) if scene_graph_json else None
+        except (json.JSONDecodeError, TypeError):
+            sg_dict = None
 
-        # ── Step 2: 选择性 Grounding (ESCA + D1 CLIP 排序) ──
+        adacot_decision = self._adacot.decide(
+            instruction, scene_graph=sg_dict,
+        )
+
+        # ── FAST 路径: 仅尝试 Fast Path ──
+        if adacot_decision != AdaCoTDecision.SLOW:
+            fast_result = self.fast_resolve(
+                instruction, scene_graph_json, robot_position, clip_encoder
+            )
+            if fast_result is not None:
+                # AdaNav: 高熵 + 低置信度 → 强制 Slow Path 验证
+                if (fast_result.score_entropy > 1.5
+                        and fast_result.confidence < 0.85):
+                    logger.info(
+                        "[AdaNav] high entropy=%.2f, confidence=%.2f → "
+                        "deferring to Slow Path for verification",
+                        fast_result.score_entropy, fast_result.confidence,
+                    )
+                else:
+                    return fast_result
+
+            # AdaCoT 推荐 FAST 但匹配失败 → 仍需 fallback 到 Slow
+            if adacot_decision == AdaCoTDecision.FAST:
+                logger.info(
+                    "AdaCoT recommended FAST but no match, falling through to Slow"
+                )
+
+        # ── SLOW 路径: 选择性 Grounding + LLM 推理 ──
+        # (AdaCoT.SLOW 直接到这里; AdaCoT.AUTO / FAST-miss 也到这里)
         filtered_sg = self._selective_grounding(
             instruction, scene_graph_json, clip_encoder=clip_encoder
         )
 
-        # ── Step 3: Slow Path (LLM) ──
         messages = build_goal_resolution_prompt(
             instruction, filtered_sg, robot_position, language
         )
@@ -1131,6 +1261,21 @@ class GoalResolver:
             self._explored_directions.append(
                 {"x": result.target_x, "y": result.target_y}
             )
+
+        # OmniNav: 从 regions 查找目标所在房间, 生成层次子目标提示
+        try:
+            if sg_dict:
+                regions = sg_dict.get('regions', [])
+                target_id = result.candidate_id
+                for region in regions:
+                    if target_id in region.get('object_ids', []):
+                        result.hint_room = region.get('name', '')
+                        center = region.get('center', None)
+                        if center:
+                            result.hint_room_center = list(center)
+                        break
+        except Exception:
+            pass  # 不影响主流程
 
         return result
 

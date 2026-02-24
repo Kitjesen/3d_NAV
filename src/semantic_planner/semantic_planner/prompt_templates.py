@@ -464,55 +464,116 @@ def build_sgnav_subgraph_prompt(
     instruction: str,
     subgraphs: List[Dict],
     language: str = "zh",
+    explored_summaries: Optional[List[str]] = None,
+    frontier_descriptions: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
     """
-    SG-Nav 风格子图评分 prompt。
+    SG-Nav 风格子图评分 prompt — H-CoT 4 步链式思考。
 
-    输入多个 room/group 子图摘要, 让 LLM 输出每个子图与目标指令的相关概率。
+    参考 SG-Nav (NeurIPS 2024) 的分层思维链:
+      Step 1: 预测距离 — 估算机器人到每个子图的距离/可达性
+      Step 2: 生成澄清问题 — 针对指令歧义, 提出需要确认的问题
+      Step 3: 基于子图回答 — 利用子图内容回答 Step 2 的问题
+      Step 4: 综合打分 — 结合以上三步, 输出每个子图的最终相关概率
+
+    输入多个 room/group 子图摘要, 让 LLM 按 4 步推理后输出评分。
     """
     if language == "zh":
-        system = """你是一个机器人导航推理器。请根据指令与子图摘要，对每个子图给出“目标相关概率”。
+        system = """你是一个机器人导航推理器。请根据指令与子图摘要，通过 4 步层次链式思考 (H-CoT) 对每个子图评分。
 
-要求:
-1) 优先利用层次信息 (room/group/object) 与空间关系
-2) score 范围 [0,1]
-3) 仅输出 JSON
+## 推理步骤 (必须严格按顺序)
 
-输出格式:
+### Step 1: 预测距离
+对每个子图, 根据其 center 坐标与物体数量, 估算机器人到达该子图的相对难度 (近/中/远)。考虑子图之间的空间分布。
+
+### Step 2: 生成澄清问题
+分析指令, 提出 1-2 个有助于区分子图的关键问题。例如:
+- "目标更可能在室内还是走廊?"
+- "指令中的'旁边'是指哪个参照物?"
+
+### Step 3: 基于子图回答
+对每个子图, 利用其 object_labels 和 relation_count 回答 Step 2 的问题。
+
+### Step 4: 综合打分
+结合 Step 1 (距离) + Step 2-3 (语义匹配) 的结论, 为每个子图给出最终 score。
+
+## 输出格式 (严格 JSON)
 {
+  "step1_distances": [
+    {"subgraph_id": "room_0", "proximity": "near/mid/far"}
+  ],
+  "step2_questions": ["问题1", "问题2"],
+  "step3_answers": [
+    {"subgraph_id": "room_0", "answer": "..."}
+  ],
   "subgraph_scores": [
-    {"subgraph_id": "room_0", "score": 0.82, "reason": "..."}
+    {"subgraph_id": "room_0", "score": 0.82, "reason": "综合 Step 1-3 的理由"}
   ],
   "global_reasoning": "简短总结"
-}"""
+}
+
+## 规则
+- score 范围 [0,1]
+- 仅输出 JSON, 不要额外文字"""
 
         user = (
             f"## 指令\n{instruction}\n\n"
             f"## 子图摘要\n```json\n{json.dumps(subgraphs, ensure_ascii=False)}\n```\n\n"
-            f"请输出每个子图的相关概率。"
+            f"请按 4 步 H-CoT 推理后输出每个子图的相关概率。"
         )
     else:
         system = """You are a robot navigation reasoner. Given an instruction and hierarchical subgraph summaries,
-estimate the relevance probability of each subgraph to finding the target.
+evaluate each subgraph using 4-step Hierarchical Chain-of-Thought (H-CoT).
 
-Requirements:
-1) Use room/group/object hierarchy and relations when possible
-2) score in [0,1]
-3) Output JSON only
+## Reasoning Steps (follow strictly in order)
 
-Output:
+### Step 1: Predict Distance
+For each subgraph, estimate relative traversal difficulty (near/mid/far) based on center coordinates and object count. Consider spatial distribution across subgraphs.
+
+### Step 2: Generate Clarifying Questions
+Analyze the instruction and formulate 1-2 key questions that help distinguish subgraphs. For example:
+- "Is the target more likely indoors or in a corridor?"
+- "What reference object does 'next to' refer to?"
+
+### Step 3: Answer from Subgraph
+For each subgraph, use its object_labels and relation_count to answer the Step 2 questions.
+
+### Step 4: Synthesize Scores
+Combine Step 1 (distance) + Step 2-3 (semantic match) conclusions to produce a final score for each subgraph.
+
+## Output Format (strict JSON)
 {
+  "step1_distances": [
+    {"subgraph_id": "room_0", "proximity": "near/mid/far"}
+  ],
+  "step2_questions": ["question1", "question2"],
+  "step3_answers": [
+    {"subgraph_id": "room_0", "answer": "..."}
+  ],
   "subgraph_scores": [
-    {"subgraph_id": "room_0", "score": 0.82, "reason": "..."}
+    {"subgraph_id": "room_0", "score": 0.82, "reason": "reasoning from Steps 1-3"}
   ],
   "global_reasoning": "brief summary"
-}"""
+}
+
+## Rules
+- score in [0,1]
+- Output JSON only, no extra text"""
 
         user = (
             f"## Instruction\n{instruction}\n\n"
             f"## Subgraph Summaries\n```json\n{json.dumps(subgraphs)}\n```\n\n"
-            "Return relevance probability for each subgraph."
+            "Reason through the 4-step H-CoT, then return relevance probability for each subgraph."
         )
+
+    # 追加已探索区域摘要和可探索方向描述 (VLingMem + L3MVN/OmniNav)
+    if explored_summaries:
+        summary_text = "\n".join(explored_summaries[:5])  # 最多5条
+        user += f"\n\n【已探索区域记录】\n{summary_text}"
+
+    if frontier_descriptions:
+        desc_text = "\n".join([f"- {d}" for d in frontier_descriptions[:4]])
+        user += f"\n\n【当前可探索方向】\n{desc_text}"
 
     return [
         {"role": "system", "content": system},

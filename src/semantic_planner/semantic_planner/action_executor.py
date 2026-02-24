@@ -265,3 +265,81 @@ class ActionExecutor:
     def reset(self):
         self._status = ActionStatus.IDLE
         self._start_time = 0.0
+
+    # ── LERa 三步失败恢复: Look → Explain → Replan ──
+
+    def lera_recover(
+        self,
+        failed_action: str,
+        current_labels: List[str],
+        original_goal: str,
+        failure_count: int = 1,
+        llm_client=None,
+    ) -> str:
+        """
+        LERa 三步失败恢复：Look → Explain → Replan。
+
+        Look:    收集当前可见对象标签作为场景描述
+        Explain: LLM 分析失败原因
+        Replan:  LLM 输出恢复策略
+
+        Args:
+            failed_action: 失败的动作描述
+            current_labels: 当前可见对象标签列表
+            original_goal: 原始导航目标
+            failure_count: 已连续失败次数
+            llm_client: 可选的 LLM 客户端（需有 chat() 方法）
+
+        Returns:
+            恢复策略: "retry_different_path" | "expand_search" |
+                      "requery_goal" | "abort"
+        """
+        # Look：场景描述
+        label_str = "、".join(current_labels[:8]) if current_labels else "无可见对象"
+        scene_desc = f"当前附近可见对象：{label_str}"
+
+        # Explain + Replan：一次 LLM 调用
+        prompt = (
+            "机器人导航动作失败，请分析原因并给出恢复方案。\n\n"
+            f"失败动作：{failed_action}\n"
+            f"{scene_desc}\n"
+            f"导航目标：{original_goal}\n"
+            f"已失败次数：{failure_count}\n\n"
+            "请输出 JSON（只输出 JSON，不要其他文字）：\n"
+            '{"reason": "失败原因一句话", '
+            '"action": "retry_different_path|expand_search|requery_goal|abort", '
+            '"params": {}}\n\n'
+            "选择规则：\n"
+            "- retry_different_path：路径被阻挡，但目标可能正确\n"
+            "- expand_search：目标不在预期位置，需扩大搜索\n"
+            "- requery_goal：目标描述可能有歧义\n"
+            "- abort：连续失败>2次且无合理恢复方案"
+        )
+
+        valid_actions = ("retry_different_path", "expand_search", "requery_goal", "abort")
+
+        if llm_client is not None:
+            try:
+                import json
+                import re
+
+                response = llm_client.chat(prompt, max_tokens=200)
+                match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+                if match:
+                    data = json.loads(match.group())
+                    action = data.get('action', '')
+                    if action in valid_actions:
+                        logger.info(
+                            "[LERa] LLM recovery: reason=%s action=%s",
+                            data.get('reason', '?'), action,
+                        )
+                        return action
+            except Exception as e:
+                logger.warning("[LERa] LLM call failed, using fallback: %s", e)
+
+        # Fallback：基于失败次数的简单规则
+        if failure_count >= 3:
+            return "abort"
+        elif failure_count >= 2:
+            return "expand_search"
+        return "retry_different_path"

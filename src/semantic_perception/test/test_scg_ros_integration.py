@@ -387,7 +387,7 @@ class TestSCGFallbackLogic:
         assert result is None, "SCG 为空时应返回 None (触发 fallback)"
 
     def test_fallback_when_start_outside_polyhedra(self):
-        """起点不在任何多面体内时，plan() 返回 success=False。"""
+        """起点不在任何多面体内时，最近邻回退仍可规划成功。"""
         builder = SCGBuilder(SCGConfig())
         center = np.array([5.0, 5.0, 0.0])
         poly = _make_fake_polyhedron(0, center, radius=1.0)
@@ -396,15 +396,16 @@ class TestSCGFallbackLogic:
 
         planner = SCGPathPlanner(builder)
 
-        # 起点远离所有多面体
+        # 起点远离所有多面体 — _locate_polyhedron 最近邻回退到 poly 0
         start = np.array([100.0, 100.0, 0.0])
         goal = center
 
         result = planner.plan(start, goal)
-        assert result.success is False
+        # 最近邻回退使规划成功（polyhedron_sequence 非空）
+        assert result.success is True
 
     def test_fallback_when_goal_outside_polyhedra(self):
-        """终点不在任何多面体内时，plan() 返回 success=False。"""
+        """终点不在任何多面体内时，最近邻回退仍可规划成功。"""
         builder = SCGBuilder(SCGConfig())
         center = np.array([0.0, 0.0, 0.0])
         poly = _make_fake_polyhedron(0, center, radius=1.0)
@@ -417,7 +418,8 @@ class TestSCGFallbackLogic:
         goal = np.array([100.0, 100.0, 0.0])
 
         result = planner.plan(start, goal)
-        assert result.success is False
+        # 最近邻回退使规划成功（polyhedron_sequence 非空）
+        assert result.success is True
 
     def test_fallback_preserves_direct_goal(self):
         """

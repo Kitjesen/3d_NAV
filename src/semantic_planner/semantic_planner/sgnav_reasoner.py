@@ -3,15 +3,18 @@ SG-Nav 对齐推理器。
 
 目标:
   1) 从层次场景图中构建子图候选 (room/group)
-  2) 对子图进行分层评分 (启发式 + 可选 LLM)
+  2) 对子图进行分层评分 (启发式 + 可选 LLM) — H-CoT 4步链式思考
   3) 将子图概率插值到 frontier, 选择探索目标
   4) 维护目标可信度 (re-perception) 以抑制假阳性目标
+     — 多视角累积: 检测到目标时不立刻接受, 而是在多个视角
+       累积置信度, 低于阈值则拒绝假阳性 (SG-Nav §3.4)
 """
 
 import json
 import logging
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -64,6 +67,18 @@ class SubgraphScore:
 
 
 @dataclass
+class ObservationRecord:
+    """单次观测记录 (用于重感知多视角累积)。"""
+
+    timestamp: float
+    match_count: int
+    max_score: float
+    belief_credibility: float
+    path_confidence: float
+    confirmed_visible: bool
+
+
+@dataclass
 class FrontierSelection:
     """frontier 选择结果。"""
 
@@ -89,6 +104,9 @@ class SGNavReasoner:
         false_positive_penalty: float = 0.2,
         reject_threshold: float = 0.25,
         min_confidence_for_bypass: float = 0.85,
+        # SG-Nav re-perception 参数 (§3.4)
+        reperception_n_max: int = 10,
+        reperception_s_thresh: float = 0.8,
     ):
         self.max_subgraphs = max_subgraphs
         self.use_llm_reasoning = use_llm_reasoning
@@ -103,15 +121,22 @@ class SGNavReasoner:
         self.reject_threshold = min(max(reject_threshold, 0.01), 0.99)
         self.min_confidence_for_bypass = min(max(min_confidence_for_bypass, 0.0), 1.0)
 
+        # SG-Nav 重感知参数
+        self.reperception_n_max = max(1, reperception_n_max)
+        self.reperception_s_thresh = min(max(reperception_s_thresh, 0.0), 1.0)
+
         self._target_credibility: Dict[str, float] = {}
+        # 多视角观测历史: target_key -> list of ObservationRecord
+        self._observation_history: Dict[str, List[ObservationRecord]] = {}
 
     @property
     def target_credibility(self) -> Dict[str, float]:
         return dict(self._target_credibility)
 
     def reset(self):
-        """重置可信度记忆。"""
+        """重置可信度记忆和观测历史。"""
         self._target_credibility.clear()
+        self._observation_history.clear()
 
     async def select_frontier(
         self,
@@ -274,11 +299,12 @@ class SGNavReasoner:
         path_confidence: float,
         confirmed_visible: bool = False,
     ) -> Tuple[bool, float, str]:
-        """BA-HSG 信念驱动的目标可信度评估 (§3.4.2)。
-        
-        使用场景图中物体的 Beta 信念状态 (如果可用) 来替代
-        简单的 match_count / score 启发式。同时利用复合可信度
-        (existence_prob, view_diversity, freshness, quality)。
+        """SG-Nav 重感知: 多视角累积目标可信度评估 (§3.4)。
+
+        检测到目标时不立刻接受, 而是累积多次观测 (最多 N_max 次)。
+        只有当累积置信度超过 S_thresh 时才接受目标, 否则拒绝假阳性。
+
+        同时兼容 BA-HSG 信念字段 (如果场景图物体有 belief 属性)。
         """
         key = (target_label or "").strip().lower()
         if not key:
@@ -308,7 +334,6 @@ class SGNavReasoner:
                     max_score = max(max_score, float(obj.get("score", 0.0)))
                 except (TypeError, ValueError):
                     pass
-                # BA-HSG: 使用 belief 字段中的概率信息
                 belief = obj.get("belief", {})
                 if isinstance(belief, dict):
                     p_exist = belief.get("P_exist", 0.5)
@@ -316,9 +341,25 @@ class SGNavReasoner:
                     sum_existence_prob += p_exist
                     max_belief_credibility = max(max_belief_credibility, obj_cred)
 
-        # BA-HSG: 混合传统证据与信念状态
+        # --- 记录本次观测到历史 buffer ---
+        obs = ObservationRecord(
+            timestamp=time.monotonic(),
+            match_count=match_count,
+            max_score=max_score,
+            belief_credibility=max_belief_credibility,
+            path_confidence=path_confidence,
+            confirmed_visible=confirmed_visible,
+        )
+        history = self._observation_history.setdefault(key, [])
+        history.append(obs)
+        # 保留最近 N_max 条观测
+        if len(history) > self.reperception_n_max:
+            history[:] = history[-self.reperception_n_max:]
+
+        n_obs = len(history)
+
+        # --- 计算本次单帧证据 (兼容 BA-HSG) ---
         if max_belief_credibility > 0:
-            # 有 BA-HSG 信念 → 使用更丰富的证据模型
             avg_exist = sum_existence_prob / max(match_count, 1)
             evidence = (
                 0.3 * min(1.0, match_count / 3.0)
@@ -327,7 +368,6 @@ class SGNavReasoner:
                 + 0.2 * min(1.0, max(path_confidence, 0.0))
             )
         else:
-            # 回退到传统证据计算 (兼容无信念的场景图)
             evidence = (
                 0.4 * min(1.0, match_count / 3.0)
                 + 0.4 * min(1.0, max_score)
@@ -337,6 +377,7 @@ class SGNavReasoner:
         if confirmed_visible:
             evidence = max(evidence, 0.9)
 
+        # --- EMA 可信度更新 (保持向后兼容) ---
         prev = self._target_credibility.get(key, 0.5)
         cred = prev * self.credibility_decay + evidence * (1.0 - self.credibility_decay)
 
@@ -346,15 +387,44 @@ class SGNavReasoner:
         cred = min(max(cred, 0.0), 1.0)
         self._target_credibility[key] = cred
 
+        # --- SG-Nav 重感知: 多视角累积置信度 (S_accum) ---
+        # 对历史中有正向观测 (match_count > 0 或 confirmed_visible) 的帧取均值
+        positive_evidences = []
+        for h in history:
+            if h.match_count > 0 or h.confirmed_visible:
+                if h.belief_credibility > 0:
+                    avg_e = h.belief_credibility * 0.5 + min(1.0, h.max_score) * 0.3 + min(1.0, h.path_confidence) * 0.2
+                else:
+                    avg_e = min(1.0, h.max_score) * 0.6 + min(1.0, h.path_confidence) * 0.4
+                if h.confirmed_visible:
+                    avg_e = max(avg_e, 0.9)
+                positive_evidences.append(avg_e)
+
+        n_positive = len(positive_evidences)
+        if n_positive > 0:
+            s_accum = sum(positive_evidences) / n_positive
+        else:
+            s_accum = 0.0
+
+        # 决策逻辑:
+        # - 如果累积置信度 >= S_thresh 且有足够观测 → 接受 (不拒绝)
+        # - 如果累积置信度 < S_thresh 或观测不足 → 按传统 EMA 判断
+        # - confirmed_visible 或 path_confidence 极高时仍可 bypass
+        accum_accept = s_accum >= self.reperception_s_thresh and n_positive >= 2
+
         reject = (
             cred < self.reject_threshold
             and path_confidence < self.min_confidence_for_bypass
             and not confirmed_visible
+            and not accum_accept
         )
+
         reason = (
             f"cred={cred:.2f}, matches={match_count}, max_score={max_score:.2f}, "
             f"belief_cred={max_belief_credibility:.2f}, "
-            f"path_conf={path_confidence:.2f}, visible={confirmed_visible}"
+            f"path_conf={path_confidence:.2f}, visible={confirmed_visible}, "
+            f"n_obs={n_obs}/{self.reperception_n_max}, "
+            f"n_positive={n_positive}, s_accum={s_accum:.2f}/{self.reperception_s_thresh}"
         )
         return reject, cred, reason
 
