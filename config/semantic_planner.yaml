@@ -108,12 +108,6 @@ semantic_planner_node:
       image_topic: "/camera/color/image_raw"
       verify_threshold: 0.5              # 视觉验证置信度阈值
 
-    # ── Nav2 Action Client 配置 ──
-    nav2:
-      use_action_client: true            # 使用 Nav2 action client
-      action_name: "navigate_to_pose"    # Action 名称
-      action_timeout_sec: 120.0          # Action 超时时间
-
     # ── 执行参数 ──
     execution:
       arrival_radius: 1.0                # 到达判定半径 (m)

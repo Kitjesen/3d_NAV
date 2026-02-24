@@ -726,11 +726,26 @@ class SemanticPlannerNode(Node):
             self.get_logger().debug(f"Image encoding failed (non-critical): {e}")
 
     def _odom_callback(self, msg: Odometry):
-        """更新机器人位置。"""
+        """更新机器人位置，并基于 odometry 累计行驶距离触发 continuous_reperception。"""
         p = msg.pose.pose.position
-        self._robot_position = {
-            "x": p.x, "y": p.y, "z": p.z,
-        }
+        prev = self._robot_position
+        self._robot_position = {"x": p.x, "y": p.y, "z": p.z}
+
+        # ── Odometry 驱动的连续 Re-perception（替代 Nav2 feedback）──
+        if (
+            prev is not None
+            and self._continuous_reperception
+            and self._state == PlannerState.NAVIGATING
+            and self._current_goal
+            and self._is_semantic_target(self._current_goal.target_label)
+        ):
+            dx = p.x - prev["x"]
+            dy = p.y - prev["y"]
+            self._nav_accumulated_dist += math.sqrt(dx * dx + dy * dy)
+            dist_since = self._nav_accumulated_dist - self._last_reperception_dist
+            if dist_since >= self._reperception_interval_m:
+                self._last_reperception_dist = self._nav_accumulated_dist
+                self._trigger_continuous_reperception()
 
     def _costmap_callback(self, msg: OccupancyGrid):
         """缓存占据栅格, 供 Frontier 评分探索使用。"""
@@ -1959,13 +1974,7 @@ class SemanticPlannerNode(Node):
                         "Continuous re-perception rejected target, "
                         "cancelling navigation"
                     )
-                    # 取消当前 Nav2 goal
-                    if self._nav2_goal_handle is not None and self._nav2_goal_active:
-                        try:
-                            self._nav2_goal_handle.cancel_goal_async()
-                        except Exception:
-                            pass
-                    # 转探索
+                    # 转探索（不依赖 Nav2，直接状态机跳转）
                     self._subgoal_failed(
                         "Continuous re-perception: target no longer credible"
                     )
