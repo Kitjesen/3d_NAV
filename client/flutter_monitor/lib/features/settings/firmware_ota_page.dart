@@ -239,6 +239,7 @@ class _LocalFirmwareSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     return Container(
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkCard : Colors.white,
@@ -263,7 +264,7 @@ class _LocalFirmwareSection extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('选择固件文件并上传',
+                        Text(locale.tr('选择固件文件并上传', 'Select firmware file to upload'),
                             style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w500,
@@ -273,7 +274,7 @@ class _LocalFirmwareSection extends StatelessWidget {
                                     ? context.titleColor
                                     : context.subtitleColor)),
                         const SizedBox(height: 2),
-                        Text('支持 .bin / .fw / .zip / .deb 格式',
+                        Text(locale.tr('支持 .bin / .fw / .zip / .deb 格式', 'Supports .bin / .fw / .zip / .deb formats'),
                             style: TextStyle(fontSize: 12, color: context.subtitleColor)),
                       ],
                     ),
@@ -304,7 +305,7 @@ class _LocalFirmwareSection extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                          ota.activeDeployment?.phase == DeployPhase.failed ? '重试部署' : '应用固件到机器人',
+                          ota.activeDeployment?.phase == DeployPhase.failed ? locale.tr('重试部署', 'Retry Deploy') : locale.tr('应用固件到机器人', 'Apply Firmware'),
                           style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
@@ -343,6 +344,7 @@ class _CloudSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -363,7 +365,7 @@ class _CloudSection extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('更新源',
+                          Text(locale.tr('更新源', 'Update Source'),
                               style: TextStyle(fontSize: 12, color: context.subtitleColor)),
                           const SizedBox(height: 2),
                           Text(ota.cloud.repoDisplay,
@@ -399,8 +401,8 @@ class _CloudSection extends StatelessWidget {
                             height: 16,
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: context.subtitleColor))
-                        : const Text('检查最新版本',
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                        : Text(locale.tr('检查最新版本', 'Check Latest Version'),
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
                   ),
                 ),
               ),
@@ -442,6 +444,7 @@ class _ReleaseCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     final release = ota.latestRelease!;
     final firmwareAssets =
         release.assets.where((a) => a.category == 'firmware').toList();
@@ -516,7 +519,7 @@ class _ReleaseCard extends StatelessWidget {
           if (firmwareAssets.isEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-              child: Text('此版本无固件文件',
+              child: Text(locale.tr('此版本无固件文件', 'No firmware files in this release'),
                   style: TextStyle(fontSize: 12, color: context.subtitleColor)),
             )
           else ...[
@@ -525,7 +528,7 @@ class _ReleaseCard extends StatelessWidget {
                 color: isDark ? AppColors.borderDark : AppColors.borderLight),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-              child: Text('固件文件（${firmwareAssets.length}）',
+              child: Text(locale.tr('固件文件（${firmwareAssets.length}）', 'Firmware (${firmwareAssets.length})'),
                   style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -546,7 +549,7 @@ class _ReleaseCard extends StatelessWidget {
                 color: isDark ? AppColors.borderDark : AppColors.borderLight),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-              child: Text('其他资源',
+              child: Text(locale.tr('其他资源', 'Other Resources'),
                   style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -586,6 +589,7 @@ class _AssetRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     final isThisDeploying = ota.activeDeployment?.isBusy == true &&
         ota.activeDeployment?.cloudAsset?.name == asset.name;
     final anyBusy = ota.activeDeployment?.isBusy == true;
@@ -646,7 +650,7 @@ class _AssetRow extends StatelessWidget {
                       height: 12,
                       child: CircularProgressIndicator(
                           strokeWidth: 1.5, color: AppColors.primary))
-                  : Text(firmwareBlockedByTask ? '需空闲' : '部署'),
+                  : Text(firmwareBlockedByTask ? locale.tr('需空闲', 'Busy') : locale.tr('部署', 'Deploy')),
             ),
           ),
         ],
@@ -670,7 +674,7 @@ class _AssetRow extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                   child: Text(
-                    '选择部署方式',
+                    locale.tr('选择部署方式', 'Select Deploy Method'),
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
@@ -681,8 +685,8 @@ class _AssetRow extends StatelessWidget {
                 const SizedBox(height: 8),
                 ListTile(
                   leading: const Icon(Icons.phone_android, color: AppColors.primary),
-                  title: const Text('通过手机中转'),
-                  subtitle: const Text('手机下载 → 上传到机器人（适合小文件）'),
+                  title: Text(locale.tr('通过手机中转', 'Via Phone Relay')),
+                  subtitle: Text(locale.tr('手机下载 → 上传到机器人（适合小文件）', 'Phone downloads then uploads to robot (for small files)')),
                   onTap: () {
                     Navigator.pop(ctx);
                     ota.deployFromCloud(asset);
@@ -690,8 +694,8 @@ class _AssetRow extends StatelessWidget {
                 ),
                 ListTile(
                   leading: const Icon(Icons.cloud_download, color: AppColors.success),
-                  title: const Text('机器人直接下载'),
-                  subtitle: const Text('机器人从 URL 直接拉取（适合大文件，省手机内存）'),
+                  title: Text(locale.tr('机器人直接下载', 'Robot Direct Download')),
+                  subtitle: Text(locale.tr('机器人从 URL 直接拉取（适合大文件，省手机内存）', 'Robot pulls from URL directly (for large files, saves phone memory)')),
                   onTap: () {
                     Navigator.pop(ctx);
                     ota.deployDirectFromUrl(asset);
@@ -723,6 +727,7 @@ class _InstalledVersionsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     return Container(
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkCard : Colors.white,
@@ -744,7 +749,7 @@ class _InstalledVersionsSection extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('查看已安装组件',
+                        Text(locale.tr('查看已安装组件', 'View Installed Components'),
                             style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w500,
@@ -752,7 +757,7 @@ class _InstalledVersionsSection extends StatelessWidget {
                                     ? context.titleColor
                                     : context.subtitleColor)),
                         if (ota.robotSystemVersion != null)
-                          Text('系统版本: ${ota.robotSystemVersion}',
+                          Text(locale.tr('系统版本: ${ota.robotSystemVersion}', 'System: ${ota.robotSystemVersion}'),
                               style:
                                   TextStyle(fontSize: 12, color: context.subtitleColor)),
                       ],
@@ -811,7 +816,7 @@ class _InstalledVersionsSection extends StatelessWidget {
                               textStyle: const TextStyle(
                                   fontSize: 11, fontWeight: FontWeight.w500),
                             ),
-                            child: const Text('回滚'),
+                            child: Text(locale.tr('回滚', 'Rollback')),
                           ),
                         ),
                     ],
@@ -825,19 +830,20 @@ class _InstalledVersionsSection extends StatelessWidget {
   }
 
   Future<void> _confirmRollback(BuildContext context, String artifactName) async {
+    final locale = context.read<LocaleProvider>();
     HapticFeedback.mediumImpact();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('确认回滚'),
-        content: Text('确定要回滚 $artifactName 到上一版本吗？'),
+        title: Text(locale.tr('确认回滚', 'Confirm Rollback')),
+        content: Text(locale.tr('确定要回滚 $artifactName 到上一版本吗？', 'Rollback $artifactName to previous version?')),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+              onPressed: () => Navigator.pop(ctx, false), child: Text(locale.tr('取消', 'Cancel'))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: AppColors.warning),
-            child: const Text('回滚'),
+            child: Text(locale.tr('回滚', 'Rollback')),
           ),
         ],
       ),
@@ -866,6 +872,7 @@ class _HistorySection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     return Container(
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkCard : Colors.white,
@@ -884,7 +891,7 @@ class _HistorySection extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text('查看升级历史',
+                    child: Text(locale.tr('查看升级历史', 'View Upgrade History'),
                         style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w500,
@@ -1052,12 +1059,12 @@ const _stepperIcons = <DeployPhase, IconData>{
   DeployPhase.validating: Icons.fact_check_outlined,
 };
 
-const _stepperLabels = <DeployPhase, String>{
-  DeployPhase.downloading: '下载',
-  DeployPhase.uploading: '上传',
-  DeployPhase.checking: '预检',
-  DeployPhase.applying: '安装',
-  DeployPhase.validating: '验证',
+Map<DeployPhase, String> _stepperLabels(LocaleProvider locale) => {
+  DeployPhase.downloading: locale.tr('下载', 'Download'),
+  DeployPhase.uploading: locale.tr('上传', 'Upload'),
+  DeployPhase.checking: locale.tr('预检', 'Check'),
+  DeployPhase.applying: locale.tr('安装', 'Install'),
+  DeployPhase.validating: locale.tr('验证', 'Verify'),
 };
 
 class _DeploymentProgressSection extends StatelessWidget {
@@ -1083,6 +1090,7 @@ class _DeploymentProgressSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     final isFailed = deployment.phase == DeployPhase.failed;
     final isCompleted = deployment.phase == DeployPhase.completed;
     final Color accentColor = isFailed
@@ -1321,7 +1329,7 @@ class _DeploymentProgressSection extends StatelessWidget {
                 if (deployment.canRetry) ...[
                   Expanded(
                     child: _ActionButton(
-                      label: '重试部署',
+                      label: locale.tr('重试部署', 'Retry Deploy'),
                       icon: Icons.refresh,
                       color: AppColors.primary,
                       isDark: isDark,
@@ -1336,7 +1344,7 @@ class _DeploymentProgressSection extends StatelessWidget {
                 if (deployment.canRollback) ...[
                   Expanded(
                     child: _ActionButton(
-                      label: '回滚',
+                      label: locale.tr('回滚', 'Rollback'),
                       icon: Icons.undo,
                       color: AppColors.warning,
                       isDark: isDark,
@@ -1350,7 +1358,7 @@ class _DeploymentProgressSection extends StatelessWidget {
                 ],
                 Expanded(
                   child: _ActionButton(
-                    label: isCompleted ? '完成' : '关闭',
+                    label: isCompleted ? locale.tr('完成', 'Done') : locale.tr('关闭', 'Close'),
                     icon: isCompleted ? Icons.done : Icons.close,
                     color: context.subtitleColor,
                     isDark: isDark,
@@ -1369,7 +1377,7 @@ class _DeploymentProgressSection extends StatelessWidget {
               child: TextButton.icon(
                 onPressed: () => ota.cancelDeploy(),
                 icon: Icon(Icons.close, size: 14, color: context.subtitleColor),
-                label: Text('取消',
+                label: Text(locale.tr('取消', 'Cancel'),
                     style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
@@ -1407,6 +1415,7 @@ class _StepDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     final bool isDone = isCompleted || index < activeIndex;
     final bool isActive = isCurrent && !isCompleted && !isFailed;
     final bool isBroken = isFailed && index == activeIndex;
@@ -1455,7 +1464,7 @@ class _StepDot extends StatelessWidget {
         const SizedBox(height: 4),
         // Label
         Text(
-          _stepperLabels[phase] ?? '',
+          _stepperLabels(locale)[phase] ?? '',
           style: TextStyle(
             fontSize: 10,
             fontWeight: isActive || isDone ? FontWeight.w600 : FontWeight.w400,
@@ -1528,12 +1537,13 @@ class _InfoSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.watch<LocaleProvider>();
     final items = [
-      '确保机器人电量 >= 30%',
-      '升级过程中请勿断开连接',
-      '确保机器人处于静止状态',
-      '支持 .bin / .fw / .zip / .deb 格式',
-      '上传完成后需点击"应用固件"触发刷写',
+      locale.tr('确保机器人电量 >= 30%', 'Ensure battery >= 30%'),
+      locale.tr('升级过程中请勿断开连接', 'Do not disconnect during upgrade'),
+      locale.tr('确保机器人处于静止状态', 'Ensure robot is stationary'),
+      locale.tr('支持 .bin / .fw / .zip / .deb 格式', 'Supports .bin / .fw / .zip / .deb formats'),
+      locale.tr('上传完成后需点击"应用固件"触发刷写', 'Tap "Apply Firmware" after upload to flash'),
     ];
 
     return Container(
