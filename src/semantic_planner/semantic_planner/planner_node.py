@@ -1285,6 +1285,33 @@ class SemanticPlannerNode(Node):
             if self._fsm_mode == "implicit":
                 result = self._apply_implicit_fsm_transition(result)
 
+            # OmniNav 层次子目标: Slow Path 返回房间提示时，先导航到房间中心
+            if (
+                result.action == "navigate"
+                and result.hint_room_center
+                and self._robot_position
+            ):
+                rc = result.hint_room_center
+                rx = self._robot_position.get("x", 0.0)
+                ry = self._robot_position.get("y", 0.0)
+                dist_room = math.hypot(rc[0] - rx, rc[1] - ry)
+                dist_final = math.hypot(
+                    (result.target_x or 0.0) - rx,
+                    (result.target_y or 0.0) - ry,
+                )
+                # 仅当房间中心在途中（比终点近 1m 以上）时才绕道
+                if dist_room > 1.5 and dist_room < dist_final - 1.0:
+                    self.get_logger().info(
+                        f"OmniNav: room hint '{result.hint_room}' — "
+                        f"navigating to room center ({rc[0]:.1f},{rc[1]:.1f}) "
+                        f"first (dist={dist_room:.1f}m, final={dist_final:.1f}m)"
+                    )
+                    result.target_x = float(rc[0])
+                    result.target_y = float(rc[1])
+                    if len(rc) > 2:
+                        result.target_z = float(rc[2])
+                    result.hint_room_center = None  # 消费掉，下次 resolve 再找最终目标
+
             self._current_goal = result
 
             path_emoji = "⚡" if result.path == "fast" else "🧠"
@@ -2173,6 +2200,13 @@ class SemanticPlannerNode(Node):
             scene_rooms=scene_rooms,
         )
 
+        # 收集 L3MVN 前沿描述 + VLingMem 已探索摘要 + 情节记忆 (供 SG-Nav LLM prompt)
+        frontier_descs = [f.description for f in scored_frontiers if getattr(f, "description", "")]
+        explored = self._topo_memory.get_explored_summaries()
+        ep_summary = self._episodic_memory.get_summary()
+        if ep_summary:
+            explored = [f"[情节记忆] {ep_summary}"] + explored
+
         llm_chat = self._resolver._call_with_fallback if self._sgnav_use_llm_reasoning else None
         selection: Optional[FrontierSelection] = await self._sgnav_reasoner.select_frontier(
             instruction=self._current_instruction or "",
@@ -2181,6 +2215,8 @@ class SemanticPlannerNode(Node):
             frontiers=scored_frontiers,
             language=self._current_language,
             llm_chat=llm_chat,
+            frontier_descriptions=frontier_descs or None,
+            explored_summaries=explored or None,
         )
 
         if selection is None:
