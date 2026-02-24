@@ -81,12 +81,17 @@ class GlobalPlanner(Node):
         cfg.planner.max_heading_rate = self.max_heading_rate
 
         self.planner = TomogramPlanner(cfg)
-        self.planner.loadTomogram(
-            self.tomo_file,
-            resolution=cfg.wrapper.tomogram_resolution,
-            slice_dh=cfg.wrapper.tomogram_slice_dh,
-            ground_h=cfg.wrapper.tomogram_ground_h,
-        )
+        try:
+            self.planner.loadTomogram(
+                self.tomo_file,
+                resolution=cfg.wrapper.tomogram_resolution,
+                slice_dh=cfg.wrapper.tomogram_slice_dh,
+                ground_h=cfg.wrapper.tomogram_ground_h,
+            )
+        except Exception as e:
+            self.get_logger().error(f"Failed to load map from {self.tomo_file}: {e}")
+            self.get_logger().error("Navigation unavailable - please provide a valid map file")
+            return
         
         # 4. 发布
         from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
