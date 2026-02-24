@@ -42,6 +42,22 @@ using namespace std;
 
 const double PI = M_PI;  // 使用系统精确值，避免截断误差
 
+// RotLUT: 36 个固定旋转角的 sin/cos 查找表（仅初始化一次）
+// 消除三重循环中层的 n×36 次重复 sin/cos 调用
+namespace {
+struct RotLUT {
+  float s[36], c[36];
+  RotLUT() {
+    for (int i = 0; i < 36; i++) {
+      double a = (10.0 * i - 180.0) * M_PI / 180.0;
+      s[i] = static_cast<float>(std::sin(a));
+      c[i] = static_cast<float>(std::cos(a));
+    }
+  }
+};
+const RotLUT kRotLUT;
+}  // namespace
+
 #define PLOTPATHSET 1
 
 class LocalPlanner : public rclcpp::Node
@@ -250,7 +266,8 @@ public:
     }
     #endif
     for (int i = 0; i < gridVoxelNum_; i++) {
-        correspondences_[i].resize(0);
+        correspondences_[i].clear();
+        correspondences_[i].reserve(8);  // P4: 预分配，避免 push_back 触发多次重新分配
     }
     
     laserDwzFilter_.setLeafSize(laserVoxelSize_, laserVoxelSize_, laserVoxelSize_);
@@ -437,6 +454,8 @@ private:
       pcl::PointXYZI point;
       laserCloudCrop_->clear();
       int laserCloudSize = laserCloud_->points.size();
+      // O8: 平方距离比较消除 sqrt（雷达回调可能处理 10K+ 点/帧）
+      const float adjRangeSqLaser = adjacentRange_ * adjacentRange_;
       for (int i = 0; i < laserCloudSize; i++) {
         point = laserCloud_->points[i];
 
@@ -444,8 +463,8 @@ private:
         float pointY = point.y;
         float pointZ = point.z;
 
-        float dis = sqrt((pointX - vehicleX_) * (pointX - vehicleX_) + (pointY - vehicleY_) * (pointY - vehicleY_));
-        if (dis < adjacentRange_) {
+        float dx = pointX - vehicleX_, dy = pointY - vehicleY_;
+        if (dx * dx + dy * dy < adjRangeSqLaser) {
           point.x = pointX;
           point.y = pointY;
           point.z = pointZ;
@@ -470,6 +489,8 @@ private:
       pcl::PointXYZI point;
       terrainCloudCrop_->clear();
       int terrainCloudSize = terrainCloud_->points.size();
+      // O8: 平方距离比较（地形回调同样处理大量点）
+      const float adjRangeSqTerrain = adjacentRange_ * adjacentRange_;
       for (int i = 0; i < terrainCloudSize; i++) {
         point = terrainCloud_->points[i];
 
@@ -477,8 +498,8 @@ private:
         float pointY = point.y;
         float pointZ = point.z;
 
-        float dis = sqrt((pointX - vehicleX_) * (pointX - vehicleX_) + (pointY - vehicleY_) * (pointY - vehicleY_));
-        if (dis < adjacentRange_ && (point.intensity > obstacleHeightThre_ || (point.intensity > groundHeightThre_ && useCost_))) {
+        float dx = pointX - vehicleX_, dy = pointY - vehicleY_;
+        if (dx * dx + dy * dy < adjRangeSqTerrain && (point.intensity > obstacleHeightThre_ || (point.intensity > groundHeightThre_ && useCost_))) {
           point.x = pointX;
           point.y = pointY;
           point.z = pointZ;
@@ -503,11 +524,12 @@ private:
       pcl::PointXYZI point;
       terrainCloudExtCrop_->clear();
       int cloudSize = terrainCloudExt_->points.size();
+      // O8: 平方距离比较（扩展地形回调）
+      const float adjRangeSqExt = adjacentRange_ * adjacentRange_;
       for (int i = 0; i < cloudSize; i++) {
         point = terrainCloudExt_->points[i];
-        float dis = sqrt((point.x - vehicleX_) * (point.x - vehicleX_) +
-                         (point.y - vehicleY_) * (point.y - vehicleY_));
-        if (dis < adjacentRange_ &&
+        float dx = point.x - vehicleX_, dy = point.y - vehicleY_;
+        if (dx * dx + dy * dy < adjRangeSqExt &&
             (point.intensity > obstacleHeightThre_ ||
              (point.intensity > groundHeightThre_ && useCost_))) {
           terrainCloudExtCrop_->push_back(point);
@@ -844,54 +866,33 @@ private:
       float sinVehicleYaw = sin(vehicleYaw_);
       float cosVehicleYaw = cos(vehicleYaw_);
 
-      pcl::PointXYZI point;
       plannerCloudCrop_->clear();
-      int plannerCloudSize = plannerCloud_->points.size();
-      for (int i = 0; i < plannerCloudSize; i++) {
-        float pointX1 = plannerCloud_->points[i].x - vehicleX_;
-        float pointY1 = plannerCloud_->points[i].y - vehicleY_;
-        float pointZ1 = plannerCloud_->points[i].z - vehicleZ_;
+      // O11: 预分配上界防止 push_back 触发多次 realloc（三个源云之和）
+      plannerCloudCrop_->reserve(plannerCloud_->size() +
+                                  boundaryCloud_->size() +
+                                  addedObstacles_->size());
 
-        point.x = pointX1 * cosVehicleYaw + pointY1 * sinVehicleYaw;
-        point.y = -pointX1 * sinVehicleYaw + pointY1 * cosVehicleYaw;
-        point.z = pointZ1;
-        point.intensity = plannerCloud_->points[i].intensity;
-
-        float dis = sqrt(point.x * point.x + point.y * point.y);
-        if (dis < adjacentRange_ && ((point.z > minRelZ_ && point.z < maxRelZ_) || useTerrainAnalysis_)) {
-          plannerCloudCrop_->push_back(point);
+      // O3+O6: 三段重复过滤代码合并为 lambda，去除 sqrt（平方比较）
+      const float adjacentRangeSq = adjacentRange_ * adjacentRange_;
+      auto appendCroppedCloud = [&](const pcl::PointCloud<pcl::PointXYZI>::Ptr& src,
+                                    bool checkZ) {
+        pcl::PointXYZI p;
+        for (const auto& pt : src->points) {
+          float dx = pt.x - vehicleX_;
+          float dy = pt.y - vehicleY_;
+          float dz = pt.z - vehicleZ_;
+          if (dx * dx + dy * dy >= adjacentRangeSq) continue;
+          if (checkZ && !((dz > minRelZ_ && dz < maxRelZ_) || useTerrainAnalysis_)) continue;
+          p.x = dx * cosVehicleYaw + dy * sinVehicleYaw;
+          p.y = -dx * sinVehicleYaw + dy * cosVehicleYaw;
+          p.z = dz;
+          p.intensity = pt.intensity;
+          plannerCloudCrop_->push_back(p);
         }
-      }
-
-      int boundaryCloudSize = boundaryCloud_->points.size();
-      for (int i = 0; i < boundaryCloudSize; i++) {
-        point.x = ((boundaryCloud_->points[i].x - vehicleX_) * cosVehicleYaw 
-                + (boundaryCloud_->points[i].y - vehicleY_) * sinVehicleYaw);
-        point.y = (-(boundaryCloud_->points[i].x - vehicleX_) * sinVehicleYaw 
-                + (boundaryCloud_->points[i].y - vehicleY_) * cosVehicleYaw);
-        point.z = boundaryCloud_->points[i].z;
-        point.intensity = boundaryCloud_->points[i].intensity;
-
-        float dis = sqrt(point.x * point.x + point.y * point.y);
-        if (dis < adjacentRange_) {
-          plannerCloudCrop_->push_back(point);
-        }
-      }
-
-      int addedObstaclesSize = addedObstacles_->points.size();
-      for (int i = 0; i < addedObstaclesSize; i++) {
-        point.x = ((addedObstacles_->points[i].x - vehicleX_) * cosVehicleYaw 
-                + (addedObstacles_->points[i].y - vehicleY_) * sinVehicleYaw);
-        point.y = (-(addedObstacles_->points[i].x - vehicleX_) * sinVehicleYaw 
-                + (addedObstacles_->points[i].y - vehicleY_) * cosVehicleYaw);
-        point.z = addedObstacles_->points[i].z;
-        point.intensity = addedObstacles_->points[i].intensity;
-
-        float dis = sqrt(point.x * point.x + point.y * point.y);
-        if (dis < adjacentRange_) {
-          plannerCloudCrop_->push_back(point);
-        }
-      }
+      };
+      appendCroppedCloud(plannerCloud_,    true);   // 主点云：含 z 范围过滤
+      appendCroppedCloud(boundaryCloud_,   false);  // 边界云：无 z 过滤
+      appendCroppedCloud(addedObstacles_,  false);  // 添加障碍：无 z 过滤
 
       // Near-field emergency stop: if any obstacle is within nearFieldStopDis_
       // and above obstacleHeightThre_, immediately publish /stop
@@ -977,49 +978,88 @@ private:
       if (pathScaleBySpeed_) pathScale_ = defPathScale * joySpeed_;
       if (pathScale_ < minPathScale_) pathScale_ = minPathScale_;
 
+      // O2: joyDir_ 在整帧内不变，预计算 36 个方向差（每帧一次替代 n×36 次）
+      float angDiffList[36];
+      for (int d = 0; d < 36; d++) {
+        float a = std::fabs(joyDir_ - (10.0f * d - 180.0f));
+        angDiffList[d] = (a > 180.0f) ? 360.0f - a : a;
+      }
+
+      // O5: 体素网格坐标变换常量（gridVoxelSize_ 整帧不变）
+      const float kInvGridVoxelSize = 1.0f / gridVoxelSize_;
+      const float kOffsetXHalf     = gridVoxelOffsetX_ + gridVoxelSize_ * 0.5f;
+      const float kOffsetYHalf     = gridVoxelOffsetY_ + gridVoxelSize_ * 0.5f;
+      const float kScaleYCoefA     = searchRadius_ / gridVoxelOffsetY_;
+      const float kScaleYCoefB     = 1.0f / gridVoxelOffsetX_;
+
+      // O10: vehicle geometry 常量（参数启动后不变），提升到 while 循环外
+      const float kDiameter  = sqrtf(vehicleLength_ / 2.0f * vehicleLength_ / 2.0f +
+                                     vehicleWidth_  / 2.0f * vehicleWidth_  / 2.0f);
+      const float kAngOffset = std::atan2(vehicleWidth_, vehicleLength_) * 180.0f / PI;
+
       while (pathScale_ >= minPathScale_ && pathRange >= minPathRange_) {
-        for (int i = 0; i < 36 * pathNum_; i++) {
-          clearPathList_[i] = 0;
-          pathPenaltyList_[i] = 0;
-        }
-        for (int i = 0; i < 36 * groupNum_; i++) {
-          clearPathPerGroupScore_[i] = 0;
-          clearPathPerGroupNum_[i] = 0;
-          pathPenaltyPerGroupScore_[i] = 0;
-        }
+        // O4: memset 比 for 循环清零快 2-3×（~12.6K 元素）
+        memset(clearPathList_,            0, sizeof(int)   * 36 * pathNum_);
+        memset(pathPenaltyList_,          0, sizeof(float) * 36 * pathNum_);
+        memset(clearPathPerGroupScore_,   0, sizeof(float) * 36 * groupNum_);
+        memset(clearPathPerGroupNum_,     0, sizeof(int)   * 36 * groupNum_);
+        memset(pathPenaltyPerGroupScore_, 0, sizeof(float) * 36 * groupNum_);
 
         float minObsAngCW = -180.0;
         float minObsAngCCW = 180.0;
-        float diameter = sqrt(vehicleLength_ / 2.0 * vehicleLength_ / 2.0 + vehicleWidth_ / 2.0 * vehicleWidth_ / 2.0);
-        float angOffset = atan2(vehicleWidth_, vehicleLength_) * 180.0 / PI;
+        // diameter 和 angOffset 已提升（见 O10）
+        const float diameter  = kDiameter;
+        const float angOffset = kAngOffset;
         int plannerCloudCropSize = plannerCloudCrop_->points.size();
+
+        // O13: 方向有效性预计算——当前条件只依赖 rotDir/joyDir_/dirThre_
+        // 无需在 N×36 内层循环中重复评估（N=1000 时节省 36K 次条件判断/帧）
+        bool rotDirValid[36];
+        {
+          const bool toVehicle = dirToVehicle_;
+          const float absJoyDir = fabs(joyDir_);
+          const bool joyLe90 = absJoyDir <= 90.0f;
+          const bool joyGt90 = absJoyDir > 90.0f;
+          for (int d = 0; d < 36; d++) {
+            float rotAngDegD = 10.0f * d - 180.0f;
+            float rotDegD    = 10.0f * d;
+            bool skip = (angDiffList[d] > dirThre_ && !toVehicle) ||
+                        (fabs(rotAngDegD) > dirThre_ && joyLe90 && toVehicle) ||
+                        ((rotDegD > dirThre_ && 360.0f - rotDegD > dirThre_) && joyGt90 && toVehicle);
+            rotDirValid[d] = !skip;
+          }
+        }
+
+        // O3: 平方阈值（pathScale_ 在 while 循环内可变，需在循环体内计算）
+        const float kPathRangeScaleSq = (pathRange / pathScale_) * (pathRange / pathScale_);
+        const float kDiameterScaleSq  = (diameter  / pathScale_) * (diameter  / pathScale_);
+        const float kGoalClearScaleSq = ((relativeGoalDis + goalClearRange_) / pathScale_)
+                                       * ((relativeGoalDis + goalClearRange_) / pathScale_);
+        const float kRelGoalScaledSq  = (relativeGoalDis / pathScale_) * (relativeGoalDis / pathScale_);
+        const float kHalfLenScale = vehicleLength_ / pathScale_ / 2.0f;
+        const float kHalfWidScale = vehicleWidth_  / pathScale_ / 2.0f;
+
         for (int i = 0; i < plannerCloudCropSize; i++) {
           float x = plannerCloudCrop_->points[i].x / pathScale_;
           float y = plannerCloudCrop_->points[i].y / pathScale_;
           float h = plannerCloudCrop_->points[i].intensity;
-          float dis = sqrt(x * x + y * y);
+          float disSq = x * x + y * y;  // O3: 平方距离，不再 sqrt
 
-          if (dis < pathRange / pathScale_ && (dis <= (relativeGoalDis + goalClearRange_) / pathScale_ || !pathCropByGoal_) && checkObstacle_) {
+          if (disSq < kPathRangeScaleSq && (disSq <= kGoalClearScaleSq || !pathCropByGoal_) && checkObstacle_) {
             for (int rotDir = 0; rotDir < 36; rotDir++) {
-              float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
-              float angDiff = fabs(joyDir_ - (10.0 * rotDir - 180.0));
-              if (angDiff > 180.0) {
-                angDiff = 360.0 - angDiff;
-              }
-              if ((angDiff > dirThre_ && !dirToVehicle_) || (fabs(10.0 * rotDir - 180.0) > dirThre_ && fabs(joyDir_) <= 90.0 && dirToVehicle_) ||
-                  ((10.0 * rotDir > dirThre_ && 360.0 - 10.0 * rotDir > dirThre_) && fabs(joyDir_) > 90.0 && dirToVehicle_)) {
-                continue;
-              }
+              // O13: 方向有效性已预计算（rotDirValid[36]），直接查表
+              if (!rotDirValid[rotDir]) continue;
 
-              float x2 = cos(rotAng) * x + sin(rotAng) * y;
-              float y2 = -sin(rotAng) * x + cos(rotAng) * y;
+              // O1: 使用 RotLUT 替代 cos(rotAng)/sin(rotAng)（预计算，无运行时三角）
+              float x2 = kRotLUT.c[rotDir] * x + kRotLUT.s[rotDir] * y;
+              float y2 = -kRotLUT.s[rotDir] * x + kRotLUT.c[rotDir] * y;
 
-              float scaleY = x2 / gridVoxelOffsetX_ + searchRadius_ / gridVoxelOffsetY_
-                             * (gridVoxelOffsetX_ - x2) / gridVoxelOffsetX_;
+              // O5: 使用预计算常量替代内层重复除法
+              float scaleY = x2 * kScaleYCoefB + kScaleYCoefA * (gridVoxelOffsetX_ - x2) * kScaleYCoefB;
               if (std::fabs(scaleY) < 1e-6f) continue;  // 防止 y2/scaleY 除零
 
-              int indX = int((gridVoxelOffsetX_ + gridVoxelSize_ / 2 - x2) / gridVoxelSize_);
-              int indY = int((gridVoxelOffsetY_ + gridVoxelSize_ / 2 - y2 / scaleY) / gridVoxelSize_);
+              int indX = static_cast<int>((kOffsetXHalf - x2) * kInvGridVoxelSize);
+              int indY = static_cast<int>((kOffsetYHalf - y2 / scaleY) * kInvGridVoxelSize);
               if (indX >= 0 && indX < gridVoxelNumX_ && indY >= 0 && indY < gridVoxelNumY_) {
                 int ind = gridVoxelNumY_ * indX + indY;
                 int blockedPathByVoxelNum = correspondences_[ind].size();
@@ -1036,7 +1076,8 @@ private:
             }
           }
 
-          if (dis < diameter / pathScale_ && (fabs(x) > vehicleLength_ / pathScale_ / 2.0 || fabs(y) > vehicleWidth_ / pathScale_ / 2.0) && 
+          // O3: 平方距离比较（旋转障碍物检测）
+          if (disSq < kDiameterScaleSq && (fabs(x) > kHalfLenScale || fabs(y) > kHalfWidScale) &&
               (h > obstacleHeightThre_ || !useTerrainAnalysis_) && checkRotObstacle_) {
             float angObs = atan2(y, x) * 180.0 / PI;
             if (angObs > 0) {
@@ -1054,17 +1095,18 @@ private:
 
         for (int i = 0; i < 36 * pathNum_; i++) {
           int rotDir = int(i / pathNum_);
-          float angDiff = fabs(joyDir_ - (10.0 * rotDir - 180.0));
-          if (angDiff > 180.0) {
-            angDiff = 360.0 - angDiff;
-          }
-          if ((angDiff > dirThre_ && !dirToVehicle_) || (fabs(10.0 * rotDir - 180.0) > dirThre_ && fabs(joyDir_) <= 90.0 && dirToVehicle_) ||
-              ((10.0 * rotDir > dirThre_ && 360.0 - 10.0 * rotDir > dirThre_) && fabs(joyDir_) > 90.0 && dirToVehicle_)) {
+          // O12: angDiffList 复用（与主规划循环共享预计算值），消除重复 fabs+归一化
+          float angDiff = angDiffList[rotDir];
+          float rotAngDeg = 10.0f * rotDir - 180.0f;  // 仅算一次
+          float rotDeg    = 10.0f * rotDir;
+          if ((angDiff > dirThre_ && !dirToVehicle_) || (fabs(rotAngDeg) > dirThre_ && fabs(joyDir_) <= 90.0 && dirToVehicle_) ||
+              ((rotDeg > dirThre_ && 360.0f - rotDeg > dirThre_) && fabs(joyDir_) > 90.0 && dirToVehicle_)) {
             continue;
           }
 
+          const int pathIdx = i % pathNum_;  // 减少重复取模
           if (clearPathList_[i] < pointPerPathThre_) {
-            float dirDiff = fabs(joyDir_ - endDirPathList_[i % pathNum_] - (10.0 * rotDir - 180.0));
+            float dirDiff = fabs(joyDir_ - endDirPathList_[pathIdx] - rotAngDeg);
             if (dirDiff > 360.0) {
               dirDiff -= 360.0;
             }
@@ -1075,14 +1117,18 @@ private:
             float rotDirW;
             if (rotDir < 18) rotDirW = fabs(fabs(rotDir - 9) + 1);
             else rotDirW = fabs(fabs(rotDir - 27) + 1);
-            float groupDirW = 4  - fabs(pathList_[i % pathNum_] - 3);
+            float groupDirW = 4  - fabs(pathList_[pathIdx] - 3);
             float dw = std::fabs(dirWeight_ * dirDiff);  // 防御负参数导致 NaN
-            float score = (1 - std::sqrt(std::sqrt(dw))) * rotDirW * rotDirW * rotDirW * rotDirW;
-            if (relativeGoalDis < omniDirGoalThre_) score = (1 - std::sqrt(std::sqrt(dw))) * groupDirW * groupDirW;
+            // O9: sqrtf (float) 替代 std::sqrt (double)；dw^0.25 缓存一次；rotDirW^4 = (rotDirW^2)^2
+            float sqrtSqrtDw = sqrtf(sqrtf(dw));
+            float rotDirW2 = rotDirW * rotDirW;
+            float score = (1.0f - sqrtSqrtDw) * rotDirW2 * rotDirW2;
+            if (relativeGoalDis < omniDirGoalThre_) score = (1.0f - sqrtSqrtDw) * groupDirW * groupDirW;
             if (score > 0) {
-              clearPathPerGroupScore_[groupNum_ * rotDir + pathList_[i % pathNum_]] += score;
-              clearPathPerGroupNum_[groupNum_ * rotDir + pathList_[i % pathNum_]]++;
-              pathPenaltyPerGroupScore_[groupNum_ * rotDir + pathList_[i % pathNum_]] += pathPenaltyList_[i];
+              int groupIdx = groupNum_ * rotDir + pathList_[pathIdx];
+              clearPathPerGroupScore_[groupIdx]     += score;
+              clearPathPerGroupNum_[groupIdx]++;
+              pathPenaltyPerGroupScore_[groupIdx] += pathPenaltyList_[i];
             }
           }
         }
@@ -1094,10 +1140,11 @@ private:
           float maxScore = 0;
           for (int i = 0; i < 36 * groupNum_; i++) {
             int rotDir = int(i / groupNum_);
-            float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
-            float rotDeg = 10.0 * rotDir;
-            if (rotDeg > 180.0) rotDeg -= 360.0;
-            if (maxScore < clearPathPerGroupScore_[i] && ((rotAng * 180.0 / PI > minObsAngCW && rotAng * 180.0 / PI < minObsAngCCW) || 
+            // O14: rotAng*180/PI = 10*rotDir-180，消除无用 deg→rad→deg 往返转换
+            float rotAngDeg = 10.0f * rotDir - 180.0f;
+            float rotDeg    = 10.0f * rotDir;
+            if (rotDeg > 180.0f) rotDeg -= 360.0f;
+            if (maxScore < clearPathPerGroupScore_[i] && ((rotAngDeg > minObsAngCW && rotAngDeg < minObsAngCCW) ||
                 (rotDeg > minObsAngCW && rotDeg < minObsAngCCW && twoWayDrive_) || !checkRotObstacle_)) {
               maxScore = clearPathPerGroupScore_[i];
               selectedGroupID = i;
@@ -1123,7 +1170,8 @@ private:
         nav_msgs::msg::Path path;
         if (selectedGroupID >= 0) {
           int rotDir = int(selectedGroupID / groupNum_);
-          float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
+          // O1: RotLUT 消除路径输出段 2 次 trig（每规划周期一次）
+          const float rc = kRotLUT.c[rotDir], rs = kRotLUT.s[rotDir];
 
           selectedGroupID = selectedGroupID % groupNum_;
           int selectedPathLength = startPaths_[selectedGroupID]->points.size();
@@ -1132,11 +1180,12 @@ private:
             float x = startPaths_[selectedGroupID]->points[i].x;
             float y = startPaths_[selectedGroupID]->points[i].y;
             float z = startPaths_[selectedGroupID]->points[i].z;
-            float dis = sqrt(x * x + y * y);
+            // O3: 平方距离比较，消除 sqrt
+            float disSq = x * x + y * y;
 
-            if (dis <= pathRange / pathScale_ && dis <= relativeGoalDis / pathScale_) {
-              path.poses[i].pose.position.x = pathScale_ * (cos(rotAng) * x - sin(rotAng) * y);
-              path.poses[i].pose.position.y = pathScale_ * (sin(rotAng) * x + cos(rotAng) * y);
+            if (disSq <= kPathRangeScaleSq && disSq <= kRelGoalScaledSq) {
+              path.poses[i].pose.position.x = pathScale_ * (rc * x - rs * y);
+              path.poses[i].pose.position.y = pathScale_ * (rs * x + rc * y);
               path.poses[i].pose.position.z = pathScale_ * z;
             } else {
               path.poses.resize(i);
@@ -1150,23 +1199,24 @@ private:
 
           #if PLOTPATHSET == 1
           freePaths_->clear();
+          freePaths_->reserve(36 * pathNum_);  // O11: 预分配防止多次 realloc
           for (int i = 0; i < 36 * pathNum_; i++) {
             int rotDir = int(i / pathNum_);
-            float rotAng = (10.0 * rotDir - 180.0) * PI / 180;
-            float rotDeg = 10.0 * rotDir;
-            if (rotDeg > 180.0) rotDeg -= 360.0;
-            float angDiff = fabs(joyDir_ - (10.0 * rotDir - 180.0));
-            if (angDiff > 180.0) {
-              angDiff = 360.0 - angDiff;
-            }
-            if ((angDiff > dirThre_ && !dirToVehicle_) || (fabs(10.0 * rotDir - 180.0) > dirThre_ && fabs(joyDir_) <= 90.0 && dirToVehicle_) ||
-                ((10.0 * rotDir > dirThre_ && 360.0 - 10.0 * rotDir > dirThre_) && fabs(joyDir_) > 90.0 && dirToVehicle_) || 
-                !((rotAng * 180.0 / PI > minObsAngCW && rotAng * 180.0 / PI < minObsAngCCW) || 
+            // O1+O2+O14: RotLUT + angDiffList 复用，消除可视化循环内全部 trig
+            float rotAngDeg = 10.0f * rotDir - 180.0f;
+            float rotDegRaw = 10.0f * rotDir;   // wrap 前（用于 dirThre_ 比较）
+            float rotDeg    = rotDegRaw;
+            if (rotDeg > 180.0f) rotDeg -= 360.0f;
+            float angDiff = angDiffList[rotDir];
+            if ((angDiff > dirThre_ && !dirToVehicle_) || (fabs(rotAngDeg) > dirThre_ && fabs(joyDir_) <= 90.0 && dirToVehicle_) ||
+                ((rotDegRaw > dirThre_ && 360.0f - rotDegRaw > dirThre_) && fabs(joyDir_) > 90.0 && dirToVehicle_) ||
+                !((rotAngDeg > minObsAngCW && rotAngDeg < minObsAngCCW) ||
                 (rotDeg > minObsAngCW && rotDeg < minObsAngCCW && twoWayDrive_) || !checkRotObstacle_)) {
               continue;
             }
 
             if (clearPathList_[i] < pointPerPathThre_) {
+              const float rc = kRotLUT.c[rotDir], rs = kRotLUT.s[rotDir];
               int freePathLength = paths_[i % pathNum_]->points.size();
               for (int j = 0; j < freePathLength; j++) {
                 pcl::PointXYZI point = paths_[i % pathNum_]->points[j];
@@ -1175,10 +1225,11 @@ private:
                 float y = point.y;
                 float z = point.z;
 
-                float dis = sqrt(x * x + y * y);
-                if (dis <= pathRange / pathScale_ && (dis <= (relativeGoalDis + goalClearRange_) / pathScale_ || !pathCropByGoal_)) {
-                  point.x = pathScale_ * (cos(rotAng) * x - sin(rotAng) * y);
-                  point.y = pathScale_ * (sin(rotAng) * x + cos(rotAng) * y);
+                // O3: 平方距离比较，消除可视化循环内 sqrt
+                float disSq = x * x + y * y;
+                if (disSq <= kPathRangeScaleSq && (disSq <= kGoalClearScaleSq || !pathCropByGoal_)) {
+                  point.x = pathScale_ * (rc * x - rs * y);
+                  point.y = pathScale_ * (rs * x + rc * y);
                   point.z = pathScale_ * z;
                   point.intensity = 1.0;
 
