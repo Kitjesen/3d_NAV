@@ -95,8 +95,20 @@ class _RuntimeParamsPageState extends State<RuntimeParamsPage> {
                 if (v == 'reset') _showResetDialog(context, gw, locale);
                 if (v == 'revert') gw.revertToServer();
                 if (v == 'export') _exportConfig(context, gw, locale);
+                if (v == 'preset') _showPresetDialog(context, gw, locale);
               },
               itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: 'preset',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.tune_rounded, size: 18),
+                      const SizedBox(width: 8),
+                      Text(locale.tr('参数预设方案', 'Param Presets')),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
                 PopupMenuItem(value: 'reset', child: Text(locale.tr('恢复默认值', 'Reset to Defaults'))),
                 if (gw.serverConfig != null)
                   PopupMenuItem(value: 'revert', child: Text(locale.tr('回退到服务端值', 'Revert to Server'))),
@@ -242,6 +254,146 @@ class _RuntimeParamsPageState extends State<RuntimeParamsPage> {
       behavior: SnackBarBehavior.floating,
     ));
   }
+
+  // ── 参数预设方案 ─────────────────────────────────────────────
+
+  static const _presets = <_PresetScheme>[
+    _PresetScheme(
+      key: 'indoor',
+      labelZh: '室内',
+      labelEn: 'Indoor',
+      descZh: '走廊/室内楼层：低速、高安全裕度、短停止距离',
+      descEn: 'Corridor/indoor: low speed, high safety margin, short stop distance',
+      icon: Icons.home_rounded,
+      overrides: {
+        'maxSpeed': 0.4,
+        'autonomySpeed': 0.35,
+        'cruiseSpeed': 0.3,
+        'stopDistance': 1.2,
+        'slowDistance': 2.5,
+        'tiltLimitDeg': 15.0,
+        'safetyMargin': 0.5,
+        'adjacentRange': 3.0,
+        'lookAheadDis': 0.3,
+        'maxLookAheadDis': 1.0,
+      },
+    ),
+    _PresetScheme(
+      key: 'outdoor',
+      labelZh: '室外',
+      labelEn: 'Outdoor',
+      descZh: '开阔室外/草坪：标准速度、平衡安全距离',
+      descEn: 'Open outdoor/lawn: standard speed, balanced safety',
+      icon: Icons.park_rounded,
+      overrides: {
+        'maxSpeed': 0.875,
+        'autonomySpeed': 0.875,
+        'cruiseSpeed': 0.8,
+        'stopDistance': 0.8,
+        'slowDistance': 2.0,
+        'tiltLimitDeg': 30.0,
+        'safetyMargin': 0.3,
+        'adjacentRange': 4.5,
+        'lookAheadDis': 0.5,
+        'maxLookAheadDis': 2.0,
+      },
+    ),
+    _PresetScheme(
+      key: 'slow_patrol',
+      labelZh: '低速巡检',
+      labelEn: 'Slow Patrol',
+      descZh: '精细检查/展示场景：极低速、大安全裕度、长前视距',
+      descEn: 'Fine inspection/demo: very low speed, large safety margin, long lookahead',
+      icon: Icons.policy_rounded,
+      overrides: {
+        'maxSpeed': 0.3,
+        'autonomySpeed': 0.25,
+        'cruiseSpeed': 0.2,
+        'stopDistance': 1.0,
+        'slowDistance': 3.0,
+        'tiltLimitDeg': 20.0,
+        'safetyMargin': 0.4,
+        'adjacentRange': 4.0,
+        'lookAheadDis': 0.6,
+        'maxLookAheadDis': 2.5,
+        'lookaheadDist': 1.5,
+      },
+    ),
+  ];
+
+  void _showPresetDialog(BuildContext context, RuntimeConfigGateway gw, LocaleProvider locale) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(locale.tr('选择参数预设方案', 'Select Param Preset')),
+        content: SizedBox(
+          width: 340,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                locale.tr(
+                  '预设方案仅覆盖关键速度/安全参数，其余参数保持当前值。应用后仍需手动推送到机器人。',
+                  'Presets only override key speed/safety parameters; others stay unchanged. Push to robot after applying.',
+                ),
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              for (final preset in _presets)
+                Card(
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  child: ListTile(
+                    leading: Icon(preset.icon, color: Theme.of(ctx).colorScheme.primary),
+                    title: Text(locale.isEn ? preset.labelEn : preset.labelZh,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Text(
+                      locale.isEn ? preset.descEn : preset.descZh,
+                      style: Theme.of(ctx).textTheme.bodySmall,
+                    ),
+                    onTap: () {
+                      gw.applyPreset(preset.overrides);
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(locale.tr(
+                          '已应用「${preset.labelZh}」方案，共 ${preset.overrides.length} 个参数',
+                          'Applied "${preset.labelEn}" preset (${preset.overrides.length} params)',
+                        )),
+                        behavior: SnackBarBehavior.floating,
+                      ));
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(locale.tr('取消', 'Cancel'))),
+        ],
+      ),
+    );
+  }
+}
+
+// ── 预设方案描述 ──────────────────────────────────────────────
+
+class _PresetScheme {
+  final String key;
+  final String labelZh;
+  final String labelEn;
+  final String descZh;
+  final String descEn;
+  final IconData icon;
+  final Map<String, dynamic> overrides;
+
+  const _PresetScheme({
+    required this.key,
+    required this.labelZh,
+    required this.labelEn,
+    required this.descZh,
+    required this.descEn,
+    required this.icon,
+    required this.overrides,
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════

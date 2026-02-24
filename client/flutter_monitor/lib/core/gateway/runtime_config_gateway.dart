@@ -236,6 +236,20 @@ class RuntimeConfigGateway extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 应用参数预设方案 (仅覆盖指定字段, 其余保持当前值)
+  void applyPreset(Map<String, dynamic> overrides) {
+    final json = _config.toJson();
+    for (final entry in overrides.entries) {
+      if (json.containsKey(entry.key)) {
+        json[entry.key] = entry.value;
+      }
+    }
+    _config = RuntimeConfig.fromJson(json);
+    _dirty = true;
+    _saveLocal();
+    notifyListeners();
+  }
+
   /// 从服务端重新加载 (丢弃本地修改)
   Future<void> revertToServer() async {
     if (_serverConfig != null) {
