@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -222,14 +224,48 @@ class ThemeProvider extends ChangeNotifier {
 }
 
 // ============================================================
+// Platform-aware CJK font configuration
+// ============================================================
+
+/// Primary font family for CJK text, platform-aware.
+String get _fontFamily {
+  if (kIsWeb) return 'sans-serif';
+  if (Platform.isWindows) return 'Microsoft YaHei';
+  if (Platform.isMacOS) return '.AppleSystemUIFont';
+  if (Platform.isIOS) return '.AppleSystemUIFont';
+  if (Platform.isAndroid) return 'Roboto';
+  if (Platform.isLinux) return 'Noto Sans CJK SC';
+  return 'sans-serif';
+}
+
+/// Fallback fonts ensuring CJK characters render on all platforms.
+List<String> get _fontFamilyFallback {
+  if (kIsWeb) return const [];
+  if (Platform.isAndroid) {
+    return const ['Noto Sans CJK SC', 'Noto Sans SC'];
+  }
+  if (Platform.isIOS) {
+    return const ['PingFang SC', 'Heiti SC'];
+  }
+  if (Platform.isMacOS) {
+    return const ['PingFang SC', 'Heiti SC'];
+  }
+  if (Platform.isLinux) {
+    return const ['WenQuanYi Micro Hei', 'Noto Sans CJK SC'];
+  }
+  // Windows — Microsoft YaHei is already primary
+  return const ['Microsoft YaHei UI', 'SimHei'];
+}
+
+// ============================================================
 // Light theme
 // ============================================================
 
-final ThemeData lightTheme = ThemeData(
+final ThemeData lightTheme = _applyFontFallback(ThemeData(
   useMaterial3: true,
   brightness: Brightness.light,
   scaffoldBackgroundColor: AppColors.lightBackground,
-  fontFamily: 'Microsoft YaHei',
+  fontFamily: _fontFamily,
   colorScheme: ColorScheme.fromSeed(
     seedColor: AppColors.primary,
     primary: AppColors.primary,
@@ -343,17 +379,17 @@ final ThemeData lightTheme = ThemeData(
     ),
     side: BorderSide.none,
   ),
-);
+));
 
 // ============================================================
 // Dark theme
 // ============================================================
 
-final ThemeData darkTheme = ThemeData(
+final ThemeData darkTheme = _applyFontFallback(ThemeData(
   useMaterial3: true,
   brightness: Brightness.dark,
   scaffoldBackgroundColor: AppColors.darkBackground,
-  fontFamily: 'Microsoft YaHei',
+  fontFamily: _fontFamily,
   colorScheme: ColorScheme.fromSeed(
     seedColor: AppColors.primary,
     primary: AppColors.primaryLight,
@@ -459,7 +495,35 @@ final ThemeData darkTheme = ThemeData(
     ),
     side: BorderSide.none,
   ),
-);
+));
+
+/// Applies [_fontFamilyFallback] to every TextStyle in the theme's textTheme.
+ThemeData _applyFontFallback(ThemeData base) {
+  if (_fontFamilyFallback.isEmpty) return base;
+  final fallback = _fontFamilyFallback;
+  TextStyle patch(TextStyle? s) =>
+      (s ?? const TextStyle()).copyWith(fontFamilyFallback: fallback);
+  final tt = base.textTheme;
+  return base.copyWith(
+    textTheme: tt.copyWith(
+      displayLarge: patch(tt.displayLarge),
+      displayMedium: patch(tt.displayMedium),
+      displaySmall: patch(tt.displaySmall),
+      headlineLarge: patch(tt.headlineLarge),
+      headlineMedium: patch(tt.headlineMedium),
+      headlineSmall: patch(tt.headlineSmall),
+      titleLarge: patch(tt.titleLarge),
+      titleMedium: patch(tt.titleMedium),
+      titleSmall: patch(tt.titleSmall),
+      bodyLarge: patch(tt.bodyLarge),
+      bodyMedium: patch(tt.bodyMedium),
+      bodySmall: patch(tt.bodySmall),
+      labelLarge: patch(tt.labelLarge),
+      labelMedium: patch(tt.labelMedium),
+      labelSmall: patch(tt.labelSmall),
+    ),
+  );
+}
 
 // ============================================================
 // Theme helper extensions
