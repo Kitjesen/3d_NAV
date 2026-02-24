@@ -438,30 +438,34 @@ private:
       }
       
       pathPointID_ = (lastPathPointID_ > 2) ? (lastPathPointID_ - 2) : 0;
-      
-      float disX, disY, dis;
+
+      // P2: 循环内保留目标点坐标，避免循环后重复计算
+      float disX = 0, disY = 0;
+      const float lookAheadSq = lookAheadDis_ * lookAheadDis_;
       while (pathPointID_ < pathSize - 1) {
         disX = path_.poses[pathPointID_].pose.position.x - vehicleXRel;
         disY = path_.poses[pathPointID_].pose.position.y - vehicleYRel;
-        dis = sqrt(disX * disX + disY * disY);
-        if (dis < lookAheadDis_) {
-          pathPointID_++;
-        } else {
+        if (disX * disX + disY * disY >= lookAheadSq) {
           break;
         }
+        pathPointID_++;
       }
-      
+      // 确保最后一个点也被取到（pathSize-1 时退出循环）
+      if (pathPointID_ >= pathSize - 1) {
+        disX = path_.poses[pathSize - 1].pose.position.x - vehicleXRel;
+        disY = path_.poses[pathSize - 1].pose.position.y - vehicleYRel;
+      }
+
       lastPathPointID_ = pathPointID_;
 
-      disX = path_.poses[pathPointID_].pose.position.x - vehicleXRel;
-      disY = path_.poses[pathPointID_].pose.position.y - vehicleYRel;
-      dis = sqrt(disX * disX + disY * disY);
+      float dis = std::sqrt(disX * disX + disY * disY);  // 只算一次
       float pathDir = atan2(disY, disX);
 
       float dirDiff = vehicleYaw_ - vehicleYawRec_ - pathDir;
-      // while 循环归一化，防止快速旋转后差值超出 ±2π
-      while (dirDiff > PI) dirDiff -= 2 * PI;
-      while (dirDiff < -PI) dirDiff += 2 * PI;
+      // P1: fmod 替代 while 循环归一化（无分支循环，单次计算）
+      dirDiff = std::fmod(dirDiff + PI, 2.0 * PI);
+      if (dirDiff < 0) dirDiff += 2.0 * PI;
+      dirDiff -= PI;
 
       if (twoWayDrive_) {
         // 加迟滞带（±0.1 rad），防止在 π/2 附近来回切换方向
@@ -506,13 +510,17 @@ private:
       else if ((odomTime_ < slowInitTime_ + slowTime1_ + slowTime2_ && slowInitTime_ > 0) || slowDown_ == 2) joySpeed3 *= slowRate2_;
       else if (slowDown_ == 3) joySpeed3 *= slowRate3_;
 
-      if ((fabs(dirDiff) < dirDiffThre_ || (dis < omniDirGoalThre_ && fabs(dirDiff) < omniDirDiffThre_)) && dis > stopDisThre_) {
-        if (vehicleSpeed_ < joySpeed3) vehicleSpeed_ += maxAccel_ / 100.0;
-        else if (vehicleSpeed_ > joySpeed3) vehicleSpeed_ -= maxAccel_ / 100.0;
-      } else {
-        if (vehicleSpeed_ > 0) vehicleSpeed_ -= maxAccel_ / 100.0;
-        else if (vehicleSpeed_ < 0) vehicleSpeed_ += maxAccel_ / 100.0;
-      }
+      // P3: 速度控制简化——提取 stepToward lambda 消除重复分支
+      auto stepToward = [&](float cur, float tgt) {
+        float step = maxAccel_ / 100.0f;
+        return (cur < tgt) ? std::min(cur + step, tgt)
+             : (cur > tgt) ? std::max(cur - step, tgt) : cur;
+      };
+      bool canAccel = (fabs(dirDiff) < dirDiffThre_ ||
+                       (dis < omniDirGoalThre_ && fabs(dirDiff) < omniDirDiffThre_))
+                      && dis > stopDisThre_;
+      vehicleSpeed_ = canAccel ? stepToward(vehicleSpeed_, joySpeed3)
+                               : stepToward(vehicleSpeed_, 0.0f);
 
       if (odomTime_ < stopInitTime_ + stopTime_ && stopInitTime_ > 0) {
         vehicleSpeed_ = 0;
