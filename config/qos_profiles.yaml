@@ -143,6 +143,65 @@ profiles:
       视频流丢帧无关紧要。depth=1 + lifespan 确保不积压。
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # 语义感知层: 场景图 (1-2 Hz, 2-10 KB/帧)
+  # 论文依据:
+  #   Hydra (MIT SPARK, TRO 2022): fast/slow 双频架构 — 几何层 20-30Hz,
+  #     语义层 1-2Hz; TRANSIENT_LOCAL 让晚到节点立即获取当前状态。
+  #   KeySG (arXiv 2510.01049, 2025): 仅在关键帧变化时触发场景图更新。
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  semantic_scene_graph:
+    topics:
+      - /nav/semantic/scene_graph
+      - /nav/semantic/scene_diff
+    qos:
+      reliability: RELIABLE        # 场景图不可丢：1Hz 丢一帧 = 1s 状态空白
+      durability: TRANSIENT_LOCAL  # 晚启动的 planner/gRPC 立即拿到最新快照
+      history: KEEP_LAST
+      depth: 2                     # 1Hz 发布: 缓 2 帧够用，防旧数据积压
+      lifespan: 5000ms             # 5s 后自动过期，避免重启后收到陈旧场景图
+    rationale: >
+      TRANSIENT_LOCAL 是关键: semantic_planner、goal_resolver、远程监控 gRPC
+      均可能比 perception_node 晚启动数秒，若用 VOLATILE 这些节点首次
+      接收场景图要等到下一个 1Hz 周期。depth=2 防止 1Hz 发布时队列积压
+      10 条旧数据（默认 depth=10 会导致 planner 消费 10s 前的场景图）。
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # 语义检测结果: 限流到 2 Hz (感知节点侧限速)
+  # 论文依据:
+  #   LOST-3DSG (arXiv 2601.02905, 2026): 避免存储 15Hz 高频密集特征,
+  #     仅保留语义摘要以减少带宽和内存; 2Hz 已满足 1Hz planner 需求。
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  semantic_detections:
+    topics:
+      - /nav/semantic/detections_3d
+    qos:
+      reliability: BEST_EFFORT     # 检测帧允许偶尔丢包，planner 消费最新即可
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 2                     # 2Hz 发布: 缓 2 帧防单帧延迟
+      lifespan: 1000ms             # 超过 1s 的检测结果无意义
+    rationale: >
+      perception_node 以 2Hz 限速发布（相比原 15Hz 减少 87% 带宽）。
+      planner_node 以 1Hz 消费, depth=2 防止队列堆积旧检测。
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  # 语义导航指令 / 目标 / 状态: 事件驱动
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  semantic_nav_events:
+    topics:
+      - /nav/semantic/instruction
+      - /nav/semantic/resolved_goal
+      - /nav/semantic/status
+    qos:
+      reliability: RELIABLE
+      durability: TRANSIENT_LOCAL  # 新启动的执行节点立即获取当前任务状态
+      history: KEEP_LAST
+      depth: 1
+    rationale: >
+      指令和目标点是事件驱动的，必须保证送达。TRANSIENT_LOCAL 确保
+      晚加入的节点（如 action_executor 重启后）立即获取当前任务状态。
+
+  # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   # TF (tf2_ros): 使用 ROS 2 默认 QoS
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   tf:
@@ -165,6 +224,8 @@ bandwidth_budget:
   cmd_vel_50hz_100B: "~5 KB/s"
   path_1hz_10KB: "~10 KB/s"
   image_30hz_50KB: "~1.5 MB/s"
+  scene_graph_1hz_5KB: "~5 KB/s"       # JSON 场景图 (200 物体)
+  detections_2hz_2KB: "~4 KB/s"        # 限流后 (原 15Hz: ~45 KB/s)
   total_estimate: "~12 MB/s"
   note: >
     CycloneDDS 默认使用 UDP 组播。同主机 loopback 不走物理网卡,

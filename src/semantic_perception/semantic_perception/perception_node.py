@@ -159,6 +159,9 @@ class SemanticPerceptionNode(Node):
         self._last_process_time = 0.0
         self._min_interval = 1.0 / max(self._target_fps, 0.1)
         self._warned_no_camera_info = False
+        # 检测结果限流: 2Hz（LOST-3DSG 启发 — 避免高频密集特征传输）
+        self._last_det_publish_time = 0.0
+        self._det_publish_interval = 0.5  # 500ms = 2 Hz
         self._warned_no_tf = False
         self._tf_fail_count = 0
         self._tf_total_count = 0
@@ -1002,58 +1005,77 @@ class SemanticPerceptionNode(Node):
             ],
         }, ensure_ascii=False)
 
-        msg = String()
-        msg.data = det_json
-        self._pub_detections.publish(msg)
+        # 2Hz 限速: planner 消费率 1Hz，每 0.5s 发一次已足够
+        # 消除 15Hz→2Hz 带宽差异 (-87%)，防止 planner 积压旧检测结果
+        _now = time.time()
+        if _now - self._last_det_publish_time >= self._det_publish_interval:
+            msg = String()
+            msg.data = det_json
+            self._pub_detections.publish(msg)
+            self._last_det_publish_time = _now
 
     def _publish_scene_graph(self):
-        """定时发布场景图 + DovSG diff + 语义地图 MarkerArray。"""
+        """定时发布场景图 + DovSG diff + 语义地图 MarkerArray。
+
+        优化 (LOST-3DSG / Hydra 启发):
+          - JSON 只解析一次，解析结果在本次调用中复用
+          - MarkerArray 直接使用已解析的 dict，无需第三次 json.loads
+          - diff 发布路径也复用同一 sg_data
+        """
         if not self._tracker.objects:
             if self._pub_semantic_markers:
                 self._publish_empty_semantic_markers()
             return
 
-        msg = String()
         sg_json = self._tracker.get_scene_graph_json()
+
+        # 一次解析，全程复用 ─────────────────────────────
+        try:
+            sg_data = json.loads(sg_json)
+        except Exception as e:
+            self.get_logger().error("Scene graph JSON parse failed: %s", e)
+            return
 
         # DovSG 动态场景图: 计算与上次快照的差异
         if self._prev_scene_snapshot:
             try:
                 diff = self._tracker.compute_scene_diff(self._prev_scene_snapshot)
                 if diff["total_events"] > 0:
-                    sg_data = json.loads(sg_json)
                     sg_data["scene_diff"] = diff
                     sg_json = json.dumps(sg_data, ensure_ascii=False)
                     diff_msg = String()
                     diff_msg.data = json.dumps(diff, ensure_ascii=False)
                     self._pub_scene_diff.publish(diff_msg)
-                    self.get_logger().info(
-                        "Scene diff: %s", diff["summary"],
-                    )
+                    self.get_logger().info("Scene diff: %s", diff["summary"])
             except Exception as e:
                 self.get_logger().debug("Scene diff failed: %s", e)
 
-        # 缓存快照用于下次 diff
-        try:
-            self._prev_scene_snapshot = json.loads(sg_json)
-        except Exception:
-            pass
+        # 缓存快照用于下次 diff（浅拷贝即可，diff 只对比 id 和 label）
+        self._prev_scene_snapshot = sg_data
 
+        msg = String()
         msg.data = sg_json
         self._pub_scene_graph.publish(msg)
 
+        # 直接传入已解析的 dict，避免第三次 json.loads
         if self._pub_semantic_markers:
-            self._publish_semantic_map_markers(msg.data)
+            self._publish_semantic_map_markers(sg_data)
 
-    def _publish_semantic_map_markers(self, scene_graph_json: str):
+    def _publish_semantic_map_markers(self, scene_graph_data):
         """
         从场景图发布 MarkerArray，用于 RViz/地图上叠加语义物体。
 
         点云到语义地图渲染: 将 3D 检测物体以球体+文本标签形式渲染到地图上，
         可与 /cloud_map 点云叠加显示。
+
+        Args:
+            scene_graph_data: 已解析的场景图 dict，或 JSON 字符串（兼容旧调用）
         """
         try:
-            sg = json.loads(scene_graph_json)
+            if isinstance(scene_graph_data, str):
+                sg = json.loads(scene_graph_data)  # 兼容旧调用路径
+            else:
+                sg = scene_graph_data  # 直接使用已解析 dict，零额外开销
             objects = sg.get("objects", [])
             if not isinstance(objects, list):
                 return

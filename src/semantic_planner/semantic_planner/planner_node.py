@@ -467,6 +467,11 @@ class SemanticPlannerNode(Node):
         self._latest_image_base64: Optional[str] = None
         self._vision_enabled = self.get_parameter("vision.enable").value
 
+        # 场景图解析缓存: 避免在同一回调内对同一 JSON 字符串多次 json.loads
+        # (KeySG / Hydra 启发: 只在数据真正变化时才触发全量解析)
+        self._latest_scene_graph_parsed: Optional[dict] = None
+        self._latest_scene_graph_hash: int = 0
+
         # 异步事件循环 (在单独线程中运行 LLM 调用)
         self._loop = asyncio.new_event_loop()
         self._async_thread = threading.Thread(
@@ -475,14 +480,17 @@ class SemanticPlannerNode(Node):
         self._async_thread.start()
 
         # ── 订阅 ──
+        # depth=1: instruction 是事件驱动，只关心最新一条指令
         self._sub_instruction = self.create_subscription(
-            String, "instruction", self._instruction_callback, 10
+            String, "instruction", self._instruction_callback, 1
         )
+        # depth=2: scene_graph 1Hz 发布，depth=10 会积压 10s 旧数据
+        # 通过哈希缓存跳过重复解析，进一步降低无效 CPU 开销
         self._sub_scene_graph = self.create_subscription(
-            String, "scene_graph", self._scene_graph_callback, 10
+            String, "scene_graph", self._scene_graph_callback, 2
         )
         self._sub_odom = self.create_subscription(
-            Odometry, "odometry", self._odom_callback, 10
+            Odometry, "odometry", self._odom_callback, 5
         )
 
         self._sub_costmap = None
@@ -819,8 +827,35 @@ class SemanticPlannerNode(Node):
         self._execute_next_subgoal()
 
     def _scene_graph_callback(self, msg: String):
-        """更新最新场景图 + 增量更新房间-物体 KG + 情节记忆。"""
+        """更新最新场景图 + 增量更新房间-物体 KG + 情节记忆。
+
+        优化 (KeySG / Hydra 启发):
+          - 通过 hash 检测场景图是否真正变化，未变化则跳过全量解析
+          - JSON 只解析一次，结果缓存到 _latest_scene_graph_parsed
+          - PersonTracker 直接复用已解析的 dict，消除第二次 json.loads
+        """
         self._latest_scene_graph = msg.data
+
+        # 哈希检测: 内容未变化时跳过解析（Hydra keyframe-skip 思路）
+        new_hash = hash(msg.data)
+        if new_hash == self._latest_scene_graph_hash and self._latest_scene_graph_parsed is not None:
+            # 场景图无变化，仅 PersonTracker 需要实时更新（跟随模式）
+            if self._follow_mode:
+                try:
+                    self._person_tracker.update(
+                        self._latest_scene_graph_parsed.get("objects", [])
+                    )
+                except Exception:
+                    pass
+            return
+
+        # 一次解析，缓存结果
+        try:
+            scene_data = json.loads(msg.data)
+            self._latest_scene_graph_parsed = scene_data
+            self._latest_scene_graph_hash = new_hash
+        except Exception:
+            scene_data = self._latest_scene_graph_parsed or {}
 
         # 增量更新 runtime KG (每次场景图更新都提取房间-物体关系)
         if self._semantic_data_dir and hasattr(self, '_runtime_kg'):
@@ -832,9 +867,8 @@ class SemanticPlannerNode(Node):
             except Exception:
                 pass  # non-critical
 
-        # 更新情节记忆
+        # 更新情节记忆（复用已解析的 scene_data）
         try:
-            scene_data = json.loads(msg.data) if isinstance(msg.data, str) else msg.data
             _labels = [obj.get('label', '') for obj in scene_data.get('objects', [])]
             rp = self._robot_position
             if rp:
@@ -843,11 +877,10 @@ class SemanticPlannerNode(Node):
         except Exception:
             pass  # 静默降级
 
-        # 更新 PersonTracker (跟随模式下实时追踪目标人体)
+        # 更新 PersonTracker（复用已解析 dict，消除第二次 json.loads）
         if self._follow_mode:
             try:
-                _sg = json.loads(self._latest_scene_graph or "{}")
-                self._person_tracker.update(_sg.get("objects", []))
+                self._person_tracker.update(scene_data.get("objects", []))
             except Exception:
                 pass
 
