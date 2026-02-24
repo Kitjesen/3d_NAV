@@ -88,6 +88,13 @@ if(BUILD_TESTING)
   ament_add_gtest(test_local_planner_algorithms
     test/test_algorithms.cpp
   )
+
+  # ── Performance & Correctness Regression Tests ──
+  # 验证所有优化（O1-O6, P1-P3）不改变数值结果，并量化加速比
+  ament_add_gtest(test_planner_perf
+    test/test_planner_perf.cpp
+  )
+  target_compile_options(test_planner_perf PRIVATE -O2)  # 基准测试需要优化级别
 endif()
 
 ament_package()
