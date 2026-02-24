@@ -71,6 +71,7 @@ def generate_launch_description():
             ("resolved_goal", "/nav/goal_pose"),          # 直接路由到 PCT Planner 标准输入
             ("status", "/nav/semantic/status"),
             ("odometry", "/nav/odometry"),
+            ("costmap_out", "/nav/costmap"),              # 发布给 perception_node SCG 使用
         ],
     )
 
