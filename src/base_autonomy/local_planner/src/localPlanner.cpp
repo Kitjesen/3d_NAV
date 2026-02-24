@@ -454,6 +454,8 @@ private:
       pcl::PointXYZI point;
       laserCloudCrop_->clear();
       int laserCloudSize = laserCloud_->points.size();
+      // O8: 平方距离比较消除 sqrt（雷达回调可能处理 10K+ 点/帧）
+      const float adjRangeSqLaser = adjacentRange_ * adjacentRange_;
       for (int i = 0; i < laserCloudSize; i++) {
         point = laserCloud_->points[i];
 
@@ -461,8 +463,8 @@ private:
         float pointY = point.y;
         float pointZ = point.z;
 
-        float dis = sqrt((pointX - vehicleX_) * (pointX - vehicleX_) + (pointY - vehicleY_) * (pointY - vehicleY_));
-        if (dis < adjacentRange_) {
+        float dx = pointX - vehicleX_, dy = pointY - vehicleY_;
+        if (dx * dx + dy * dy < adjRangeSqLaser) {
           point.x = pointX;
           point.y = pointY;
           point.z = pointZ;
@@ -487,6 +489,8 @@ private:
       pcl::PointXYZI point;
       terrainCloudCrop_->clear();
       int terrainCloudSize = terrainCloud_->points.size();
+      // O8: 平方距离比较（地形回调同样处理大量点）
+      const float adjRangeSqTerrain = adjacentRange_ * adjacentRange_;
       for (int i = 0; i < terrainCloudSize; i++) {
         point = terrainCloud_->points[i];
 
@@ -494,8 +498,8 @@ private:
         float pointY = point.y;
         float pointZ = point.z;
 
-        float dis = sqrt((pointX - vehicleX_) * (pointX - vehicleX_) + (pointY - vehicleY_) * (pointY - vehicleY_));
-        if (dis < adjacentRange_ && (point.intensity > obstacleHeightThre_ || (point.intensity > groundHeightThre_ && useCost_))) {
+        float dx = pointX - vehicleX_, dy = pointY - vehicleY_;
+        if (dx * dx + dy * dy < adjRangeSqTerrain && (point.intensity > obstacleHeightThre_ || (point.intensity > groundHeightThre_ && useCost_))) {
           point.x = pointX;
           point.y = pointY;
           point.z = pointZ;
@@ -520,11 +524,12 @@ private:
       pcl::PointXYZI point;
       terrainCloudExtCrop_->clear();
       int cloudSize = terrainCloudExt_->points.size();
+      // O8: 平方距离比较（扩展地形回调）
+      const float adjRangeSqExt = adjacentRange_ * adjacentRange_;
       for (int i = 0; i < cloudSize; i++) {
         point = terrainCloudExt_->points[i];
-        float dis = sqrt((point.x - vehicleX_) * (point.x - vehicleX_) +
-                         (point.y - vehicleY_) * (point.y - vehicleY_));
-        if (dis < adjacentRange_ &&
+        float dx = point.x - vehicleX_, dy = point.y - vehicleY_;
+        if (dx * dx + dy * dy < adjRangeSqExt &&
             (point.intensity > obstacleHeightThre_ ||
              (point.intensity > groundHeightThre_ && useCost_))) {
           terrainCloudExtCrop_->push_back(point);
@@ -983,6 +988,11 @@ private:
       const float kScaleYCoefA     = searchRadius_ / gridVoxelOffsetY_;
       const float kScaleYCoefB     = 1.0f / gridVoxelOffsetX_;
 
+      // O10: vehicle geometry 常量（参数启动后不变），提升到 while 循环外
+      const float kDiameter  = sqrtf(vehicleLength_ / 2.0f * vehicleLength_ / 2.0f +
+                                     vehicleWidth_  / 2.0f * vehicleWidth_  / 2.0f);
+      const float kAngOffset = std::atan2(vehicleWidth_, vehicleLength_) * 180.0f / PI;
+
       while (pathScale_ >= minPathScale_ && pathRange >= minPathRange_) {
         // O4: memset 比 for 循环清零快 2-3×（~12.6K 元素）
         memset(clearPathList_,            0, sizeof(int)   * 36 * pathNum_);
@@ -993,8 +1003,9 @@ private:
 
         float minObsAngCW = -180.0;
         float minObsAngCCW = 180.0;
-        float diameter = sqrt(vehicleLength_ / 2.0 * vehicleLength_ / 2.0 + vehicleWidth_ / 2.0 * vehicleWidth_ / 2.0);
-        float angOffset = atan2(vehicleWidth_, vehicleLength_) * 180.0 / PI;
+        // diameter 和 angOffset 已提升（见 O10）
+        const float diameter  = kDiameter;
+        const float angOffset = kAngOffset;
         int plannerCloudCropSize = plannerCloudCrop_->points.size();
 
         // O3: 平方阈值（pathScale_ 在 while 循环内可变，需在循环体内计算）
@@ -1090,8 +1101,11 @@ private:
             else rotDirW = fabs(fabs(rotDir - 27) + 1);
             float groupDirW = 4  - fabs(pathList_[i % pathNum_] - 3);
             float dw = std::fabs(dirWeight_ * dirDiff);  // 防御负参数导致 NaN
-            float score = (1 - std::sqrt(std::sqrt(dw))) * rotDirW * rotDirW * rotDirW * rotDirW;
-            if (relativeGoalDis < omniDirGoalThre_) score = (1 - std::sqrt(std::sqrt(dw))) * groupDirW * groupDirW;
+            // O9: sqrtf (float) 替代 std::sqrt (double)；dw^0.25 缓存一次；rotDirW^4 = (rotDirW^2)^2
+            float sqrtSqrtDw = sqrtf(sqrtf(dw));
+            float rotDirW2 = rotDirW * rotDirW;
+            float score = (1.0f - sqrtSqrtDw) * rotDirW2 * rotDirW2;
+            if (relativeGoalDis < omniDirGoalThre_) score = (1.0f - sqrtSqrtDw) * groupDirW * groupDirW;
             if (score > 0) {
               clearPathPerGroupScore_[groupNum_ * rotDir + pathList_[i % pathNum_]] += score;
               clearPathPerGroupNum_[groupNum_ * rotDir + pathList_[i % pathNum_]]++;
