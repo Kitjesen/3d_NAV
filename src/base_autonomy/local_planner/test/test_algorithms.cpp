@@ -109,15 +109,17 @@ inline void applyStopSignal(int val, StopState& state)
   }
 }
 
-// ─── 双向驱动切换 ───
+// ─── 双向驱动切换（含迟滞带，与修复后的 pathFollower.cpp 一致） ───
+static constexpr float kTwoWayHysteresis = 0.1f;  // ±0.1 rad
+
 inline bool shouldSwitchDirection(bool currentFwd, float dirDiff,
                                   double elapsed, double switchThreshold = 1.0)
 {
-  if (currentFwd && std::fabs(dirDiff) > static_cast<float>(PI / 2.0)
+  if (currentFwd && std::fabs(dirDiff) > static_cast<float>(PI / 2.0) + kTwoWayHysteresis
       && elapsed > switchThreshold) {
     return true;
   }
-  if (!currentFwd && std::fabs(dirDiff) < static_cast<float>(PI / 2.0)
+  if (!currentFwd && std::fabs(dirDiff) < static_cast<float>(PI / 2.0) - kTwoWayHysteresis
       && elapsed > switchThreshold) {
     return true;
   }
@@ -410,9 +412,33 @@ TEST_F(TwoWayDriveTest, NoSwitchWhenAlreadyAligned) {
 }
 
 TEST_F(TwoWayDriveTest, ExactlyHalfPiBoundaryStaysForward) {
-  // 方向差 == π/2: fabs > π/2 为 false，不切换
+  // 方向差 == π/2: 低于迟滞上边界 (π/2 + 0.1)，不切换
   bool sw = shouldSwitchDirection(true, static_cast<float>(PI / 2.0), 2.0, 1.0);
-  EXPECT_FALSE(sw) << "恰好 π/2 时不应触发切换 (> 判断)";
+  EXPECT_FALSE(sw) << "π/2 在迟滞带内，不应触发切换";
+}
+
+TEST_F(TwoWayDriveTest, HysteresisUpperBoundNotSwitched) {
+  // 方向差 = π/2 + 0.09 < π/2 + 0.1（迟滞上边界），不应切换
+  bool sw = shouldSwitchDirection(true, static_cast<float>(PI / 2.0 + 0.09), 2.0, 1.0);
+  EXPECT_FALSE(sw) << "迟滞带内不应切换";
+}
+
+TEST_F(TwoWayDriveTest, HysteresisUpperBoundJustTriggered) {
+  // 方向差 = π/2 + 0.11 > π/2 + 0.1（超出迟滞上边界），应切换
+  bool sw = shouldSwitchDirection(true, static_cast<float>(PI / 2.0 + 0.11), 2.0, 1.0);
+  EXPECT_TRUE(sw) << "超出迟滞上边界应触发切换";
+}
+
+TEST_F(TwoWayDriveTest, HysteresisLowerBoundNotSwitched) {
+  // 后退中，方向差 = π/2 - 0.09 > π/2 - 0.1（迟滞下边界），不切回前进
+  bool sw = shouldSwitchDirection(false, static_cast<float>(PI / 2.0 - 0.09), 2.0, 1.0);
+  EXPECT_FALSE(sw) << "迟滞带内不应切换回前进";
+}
+
+TEST_F(TwoWayDriveTest, HysteresisLowerBoundJustTriggered) {
+  // 后退中，方向差 = π/2 - 0.11 < π/2 - 0.1，应切回前进
+  bool sw = shouldSwitchDirection(false, static_cast<float>(PI / 2.0 - 0.11), 2.0, 1.0);
+  EXPECT_TRUE(sw) << "低于迟滞下边界应切换回前进";
 }
 
 
@@ -495,6 +521,54 @@ TEST_F(NearFieldStopTest, WiderVehicleWiderTriggerZone) {
   float wideVehicle = 1.0f;
   // py = 0.55m, vehicleWidth=1.0 → 阈值为 0.6m → 0.55 < 0.6 → 触发
   EXPECT_TRUE(nearFieldStop(0.3f, 0.55f, wideVehicle));
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+//  测试: 手动模式安全停车（pathFollower.cpp 修复后逻辑）
+// ══════════════════════════════════════════════════════════════════════
+
+struct CmdVel { float linear_x = 0, linear_y = 0, angular_z = 0; };
+
+// 模拟修复后的手动模式（安全停车在手动模式下同样生效）
+inline CmdVel manualModeCmd(float joyFwd, float joyLeft, float joyYaw,
+                             float maxSpeed, float maxYawRate,
+                             bool omniDir, int safetyStop)
+{
+  CmdVel cmd;
+  cmd.linear_x = maxSpeed * joyFwd;
+  if (omniDir) cmd.linear_y = maxSpeed / 2.0f * joyLeft;
+  cmd.angular_z = maxYawRate * static_cast<float>(PI) / 180.0f * joyYaw;
+  if (safetyStop >= 1) { cmd.linear_x = 0; cmd.linear_y = 0; }
+  if (safetyStop >= 2) cmd.angular_z = 0;
+  return cmd;
+}
+
+class ManualModeSafetyTest : public ::testing::Test {};
+
+TEST_F(ManualModeSafetyTest, NoStopAllowsMovement) {
+  auto cmd = manualModeCmd(1.0f, 0.5f, 0.3f, 1.0f, 90.0f, true, 0);
+  EXPECT_NEAR(cmd.linear_x, 1.0f, 1e-5f);
+  EXPECT_GT(std::fabs(cmd.angular_z), 0.f);
+}
+
+TEST_F(ManualModeSafetyTest, Level1StopsLinear) {
+  auto cmd = manualModeCmd(1.0f, 0.5f, 0.3f, 1.0f, 90.0f, true, 1);
+  EXPECT_EQ(cmd.linear_x, 0.f);
+  EXPECT_EQ(cmd.linear_y, 0.f);
+  EXPECT_GT(std::fabs(cmd.angular_z), 0.f);  // 旋转仍允许
+}
+
+TEST_F(ManualModeSafetyTest, Level2StopsAll) {
+  auto cmd = manualModeCmd(1.0f, 0.5f, 0.3f, 1.0f, 90.0f, true, 2);
+  EXPECT_EQ(cmd.linear_x, 0.f);
+  EXPECT_EQ(cmd.linear_y, 0.f);
+  EXPECT_EQ(cmd.angular_z, 0.f);
+}
+
+TEST_F(ManualModeSafetyTest, NonOmniDirNoLateralOutput) {
+  auto cmd = manualModeCmd(1.0f, 0.5f, 0.3f, 1.0f, 90.0f, false, 0);
+  EXPECT_NEAR(cmd.linear_y, 0.f, 1e-6f);
 }
 
 
