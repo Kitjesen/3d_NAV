@@ -6,7 +6,8 @@
       "WebFetch(domain:arxiv.org)",
       "WebFetch(domain:paperswithcode.com)",
       "WebFetch(domain:eval.ai)",
-      "WebFetch(domain:embodied-ai.org)"
+      "WebFetch(domain:embodied-ai.org)",
+      "WebSearch"
     ]
   }
 }

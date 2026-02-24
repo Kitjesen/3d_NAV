@@ -95,3 +95,17 @@ dist/
 # VLN third-party dependencies (use scripts/clone_semantic_deps.sh to restore)
 third_party/
 !third_party/.gitkeep
+
+# Generated test/paper output (do not commit)
+paper_figures/
+pipeline_videos/
+functional_test_output/
+test_results/
+det_*.jpg
+det_*.png
+
+# pytest cache
+.pytest_cache/
+
+# API keys / credentials — never commit
+generate_paper_figures*.py
