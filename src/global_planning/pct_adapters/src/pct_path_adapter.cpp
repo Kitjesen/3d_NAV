@@ -54,6 +54,10 @@ public:
     waypoint_distance_ = get_parameter("waypoint_distance").as_double();
     arrival_threshold_ = get_parameter("arrival_threshold").as_double();
 
+    declare_parameter<double>("stuck_timeout_sec", 30.0);
+    stuck_timeout_sec_ = get_parameter("stuck_timeout_sec").as_double();
+    last_progress_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
@@ -92,6 +96,7 @@ private:
     current_waypoint_idx_ = 0;
     path_received_ = true;
     goal_reached_reported_ = false;
+    last_progress_time_ = now();
 
     RCLCPP_INFO(
       get_logger(),
@@ -176,6 +181,21 @@ private:
       return;
     }
 
+    // Stuck detection
+    if (!goal_reached_reported_ && last_progress_time_.nanoseconds() > 0) {
+      const double elapsed = (now() - last_progress_time_).seconds();
+      if (elapsed > stuck_timeout_sec_) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Robot appears stuck at waypoint %zu for %.1fs",
+          current_waypoint_idx_, elapsed);
+        publish_status(
+          "stuck",
+          static_cast<int>(current_waypoint_idx_),
+          static_cast<int>(current_path_.size()));
+      }
+    }
+
     const auto & target_pose_map = current_path_[current_waypoint_idx_].pose.position;
     geometry_msgs::msg::Point target_pose_odom;
     if (!transform_point(target_pose_map, target_pose_odom)) {
@@ -192,6 +212,7 @@ private:
           current_waypoint_idx_);
         publish_status("waypoint_reached", static_cast<int>(current_waypoint_idx_),
                        static_cast<int>(total));
+        last_progress_time_ = now();
         current_waypoint_idx_++;
         return;
       } else {
@@ -204,6 +225,11 @@ private:
           RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 5000, "Goal Reached!");
         }
       }
+    }
+
+    // Don't keep sending waypoint after goal is reached — local planner should settle
+    if (goal_reached_reported_) {
+      return;
     }
 
     geometry_msgs::msg::PointStamped waypoint_msg;
@@ -241,6 +267,8 @@ private:
 
   double waypoint_distance_;
   double arrival_threshold_;
+  double stuck_timeout_sec_;
+  rclcpp::Time last_progress_time_;
 };
 
 int main(int argc, char ** argv)
