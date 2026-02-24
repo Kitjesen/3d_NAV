@@ -527,6 +527,7 @@ class SemanticPlannerNode(Node):
         # A8 修复: 使用相对话题名, 由 launch 文件 remap
         self._pub_cmd_vel = self.create_publisher(Twist, "cmd_vel", 10)
         self._pub_status = self.create_publisher(String, "status", 10)
+        self._pub_costmap = self.create_publisher(OccupancyGrid, "costmap_out", 1)  # 供 perception_node SCG 使用
         self._look_around_timer = None
 
         # SCG 路径规划: 发布请求, 订阅结果
@@ -835,6 +836,19 @@ class SemanticPlannerNode(Node):
                 origin_x=origin_x,
                 origin_y=origin_y,
             )
+
+            # 同时发布 OccupancyGrid，供 perception_node SCG 路径规划器使用
+            occ = OccupancyGrid()
+            occ.header = msg.header
+            occ.header.frame_id = "map"
+            occ.info.resolution = res
+            occ.info.width = grid_size
+            occ.info.height = grid_size
+            occ.info.origin.position.x = origin_x
+            occ.info.origin.position.y = origin_y
+            occ.data = grid.flatten().astype(int).tolist()
+            self._pub_costmap.publish(occ)
+
         except Exception as e:
             self.get_logger().warn(f"Terrain->costmap conversion failed: {e}")
 
