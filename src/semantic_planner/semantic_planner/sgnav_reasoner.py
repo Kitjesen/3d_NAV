@@ -146,6 +146,8 @@ class SGNavReasoner:
         frontiers: List[Frontier],
         language: str = "zh",
         llm_chat: Optional[Callable[[List[Dict[str, str]]], Awaitable[Optional[str]]]] = None,
+        frontier_descriptions: Optional[List[str]] = None,
+        explored_summaries: Optional[List[str]] = None,
     ) -> Optional[FrontierSelection]:
         """执行 SG-Nav 风格 frontier 选择。"""
         if not frontiers:
@@ -157,6 +159,8 @@ class SGNavReasoner:
             robot_position=robot_position,
             language=language,
             llm_chat=llm_chat,
+            frontier_descriptions=frontier_descriptions,
+            explored_summaries=explored_summaries,
         )
 
         best: Optional[Frontier] = None
@@ -194,6 +198,8 @@ class SGNavReasoner:
         robot_position: Dict[str, float],
         language: str = "zh",
         llm_chat: Optional[Callable[[List[Dict[str, str]]], Awaitable[Optional[str]]]] = None,
+        frontier_descriptions: Optional[List[str]] = None,
+        explored_summaries: Optional[List[str]] = None,
     ) -> List[SubgraphScore]:
         """对子图执行评分 (heuristic + optional LLM)。"""
         candidates = self._extract_subgraphs(scene_graph_json)
@@ -213,6 +219,8 @@ class SGNavReasoner:
                 candidates=candidates,
                 language=language,
                 llm_chat=llm_chat,
+                frontier_descriptions=frontier_descriptions,
+                explored_summaries=explored_summaries,
             )
 
         outputs: List[SubgraphScore] = []
@@ -613,11 +621,15 @@ class SGNavReasoner:
         candidates: List[SubgraphCandidate],
         language: str,
         llm_chat: Callable[[List[Dict[str, str]]], Awaitable[Optional[str]]],
+        frontier_descriptions: Optional[List[str]] = None,
+        explored_summaries: Optional[List[str]] = None,
     ) -> Dict[str, float]:
         messages = build_sgnav_subgraph_prompt(
             instruction=instruction,
             subgraphs=[c.to_prompt_dict() for c in candidates],
             language=language,
+            frontier_descriptions=frontier_descriptions,
+            explored_summaries=explored_summaries,
         )
 
         try:
