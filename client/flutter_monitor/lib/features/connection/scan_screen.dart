@@ -142,7 +142,7 @@ class _ScanScreenState extends State<ScanScreen>
             backgroundColor: AppColors.primary.withValues(alpha: 0.1),
           )),
           const SizedBox(height: 24),
-          Text('Connecting...', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: ctx.titleColor)),
+          Text(ctx.read<LocaleProvider>().tr('连接中...', 'Connecting...'), style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: ctx.titleColor)),
           const SizedBox(height: 6),
           Text('$host:$port', style: TextStyle(fontSize: 13, color: ctx.subtitleColor, fontFamily: 'monospace')),
         ]),
@@ -162,15 +162,15 @@ class _ScanScreenState extends State<ScanScreen>
         if (!provider.isConnected) {
           Navigator.of(context).pushReplacementNamed('/robot-detail');
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Dog Board 已连接')));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.read<LocaleProvider>().tr('Dog Board 已连接', 'Dog Board connected'))));
         }
         setState(() => _isDogConnecting = false);
       } else {
-        setState(() { _errorMessage = provider.dogClient?.errorMessage ?? '无法连接到机器狗'; _isDogConnecting = false; });
+        setState(() { _errorMessage = provider.dogClient?.errorMessage ?? context.read<LocaleProvider>().tr('无法连接到机器狗', 'Cannot connect to dog'); _isDogConnecting = false; });
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _errorMessage = 'Dog Board 连接错误: $e'; _isDogConnecting = false; });
+      setState(() { _errorMessage = '${context.read<LocaleProvider>().tr('Dog Board 连接错误', 'Dog Board connection error')}: $e'; _isDogConnecting = false; });
     }
   }
 
@@ -189,7 +189,7 @@ class _ScanScreenState extends State<ScanScreen>
   @override
   Widget build(BuildContext context) {
     final dark = context.isDark;
-    final locale = context.watch<LocaleProvider>();
+    context.watch<LocaleProvider>(); // rebuild on locale change
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(gradient: context.bgGradient),
@@ -223,6 +223,7 @@ class _ScanScreenState extends State<ScanScreen>
   //  HEADER — Title + status badge + action icons
   // ═══════════════════════════════════════════════════════════
   Widget _buildHeader(BuildContext context) {
+    final locale = context.read<LocaleProvider>();
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 12, 16, 0),
       child: Row(
@@ -238,7 +239,7 @@ class _ScanScreenState extends State<ScanScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(children: [
-                Text('Robot Connection Manager', style: TextStyle(
+                Text(locale.tr('机器人连接管理', 'Robot Connection Manager'), style: TextStyle(
                   fontSize: 20, fontWeight: FontWeight.w800, color: context.titleColor, letterSpacing: -0.3,
                 )),
                 const SizedBox(width: 10),
@@ -249,12 +250,12 @@ class _ScanScreenState extends State<ScanScreen>
                       color: context.isDark ? Colors.white.withValues(alpha: 0.08) : const Color(0xFFF3F4F6),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Text('Scanning', style: TextStyle(
+                    child: Text(locale.tr('扫描中', 'Scanning'), style: TextStyle(
                       fontSize: 11, fontWeight: FontWeight.w600, color: context.subtitleColor,
                     )),
                   ),
               ]),
-              Text('Searching for devices', style: TextStyle(
+              Text(locale.tr('正在搜索设备', 'Searching for devices'), style: TextStyle(
                 fontSize: 13, color: AppColors.primary,
               )),
             ],
@@ -280,6 +281,7 @@ class _ScanScreenState extends State<ScanScreen>
   //  TAB BAR — Network / Bluetooth / Manual
   // ═══════════════════════════════════════════════════════════
   Widget _buildTabBar(BuildContext context) {
+    final locale = context.read<LocaleProvider>();
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 24),
       child: TabBar(
@@ -293,10 +295,10 @@ class _ScanScreenState extends State<ScanScreen>
         dividerColor: context.borderColor,
         labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         unselectedLabelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w400),
-        tabs: const [
-          Tab(text: 'Network'),
-          Tab(text: 'Bluetooth'),
-          Tab(text: 'Manual'),
+        tabs: [
+          Tab(text: locale.tr('网络', 'Network')),
+          Tab(text: locale.tr('蓝牙', 'Bluetooth')),
+          Tab(text: locale.tr('手动', 'Manual')),
         ],
       ),
     );
@@ -306,6 +308,7 @@ class _ScanScreenState extends State<ScanScreen>
   //  NETWORK TAB
   // ═══════════════════════════════════════════════════════════
   Widget _buildNetworkTab() {
+    final locale = context.read<LocaleProvider>();
     return Column(
       children: [
         const SizedBox(height: 16),
@@ -316,7 +319,7 @@ class _ScanScreenState extends State<ScanScreen>
               Container(width: 8, height: 8, decoration: const BoxDecoration(
                 color: AppColors.success, shape: BoxShape.circle)),
               const SizedBox(width: 8),
-              Text('SCANNING LOCAL NETWORK...', style: TextStyle(
+              Text(locale.tr('正在扫描局域网...', 'SCANNING LOCAL NETWORK...'), style: TextStyle(
                 fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.success, letterSpacing: 1)),
               const Spacer(),
               GestureDetector(
@@ -324,7 +327,7 @@ class _ScanScreenState extends State<ScanScreen>
                 child: Row(children: [
                   Icon(Icons.refresh_rounded, size: 14, color: AppColors.primary),
                   const SizedBox(width: 4),
-                  Text('Refresh', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.primary)),
+                  Text(locale.tr('刷新', 'Refresh'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.primary)),
                 ]),
               ),
             ]),
@@ -343,7 +346,9 @@ class _ScanScreenState extends State<ScanScreen>
         ),
         Expanded(
           child: _networkDevices.isEmpty && !_isNetworkScanning
-              ? _buildEmptyState(Icons.wifi_find_rounded, '未发现设备', '请确保机器人在同一网络')
+              ? _buildEmptyState(Icons.wifi_find_rounded,
+                    locale.tr('未发现设备', 'No devices found'),
+                    locale.tr('请确保机器人在同一网络', 'Make sure the robot is on the same network'))
               : ListView.builder(
                   padding: const EdgeInsets.all(24),
                   itemCount: _networkDevices.length + (_isNetworkScanning ? 2 : 0),
@@ -356,9 +361,9 @@ class _ScanScreenState extends State<ScanScreen>
                       iconColor: AppColors.primary,
                       title: robot.displayName,
                       subtitle: robot.address,
-                      signalLabel: 'Strong Signal',
+                      signalLabel: locale.tr('信号强', 'Strong Signal'),
                       signalColor: AppColors.success,
-                      actionLabel: 'Connect',
+                      actionLabel: locale.tr('连接', 'Connect'),
                       actionFilled: i == 0,
                       onAction: () => _connectToRobot(robot.ip, robot.port),
                     );
@@ -371,7 +376,7 @@ class _ScanScreenState extends State<ScanScreen>
           child: TextButton.icon(
             onPressed: () {},
             icon: Icon(Icons.help_outline_rounded, size: 14, color: AppColors.primary),
-            label: Text('Troubleshoot connection issues',
+            label: Text(locale.tr('排查连接问题', 'Troubleshoot connection issues'),
               style: TextStyle(fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.w500)),
           ),
         ),
@@ -435,6 +440,7 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Widget _buildBleDeviceList(BuildContext context, BluetoothService ble, bool isScanning) {
+    final locale = context.read<LocaleProvider>();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -442,7 +448,7 @@ class _ScanScreenState extends State<ScanScreen>
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
           child: Row(children: [
-            Text('Available Devices (${ble.discoveredDevices.length})', style: TextStyle(
+            Text(locale.tr('可用设备 (${ble.discoveredDevices.length})', 'Available Devices (${ble.discoveredDevices.length})'), style: TextStyle(
               fontSize: 16, fontWeight: FontWeight.w700, color: context.titleColor)),
             const Spacer(),
             GestureDetector(
@@ -450,7 +456,7 @@ class _ScanScreenState extends State<ScanScreen>
               child: Row(children: [
                 Icon(Icons.refresh_rounded, size: 14, color: AppColors.primary),
                 const SizedBox(width: 4),
-                Text('Rescan', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.primary)),
+                Text(locale.tr('重新扫描', 'Rescan'), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.primary)),
               ]),
             ),
           ]),
@@ -474,7 +480,7 @@ class _ScanScreenState extends State<ScanScreen>
         // Device list
         Expanded(
           child: ble.discoveredDevices.isEmpty && !isScanning
-              ? Center(child: Text('No devices found', style: TextStyle(color: context.subtitleColor)))
+              ? Center(child: Text(locale.tr('未发现设备', 'No devices found'), style: TextStyle(color: context.subtitleColor)))
               : ListView.builder(
                   padding: const EdgeInsets.all(24),
                   itemCount: ble.discoveredDevices.length,
@@ -488,9 +494,9 @@ class _ScanScreenState extends State<ScanScreen>
                       iconColor: AppColors.primary,
                       title: d.displayName,
                       subtitle: 'MAC: ${d.id}${d.hasRobotService ? ' · Robot Service' : ''}',
-                      signalLabel: strong ? 'STRONG SIGNAL' : weak ? 'WEAK SIGNAL' : 'MEDIUM',
+                      signalLabel: strong ? locale.tr('信号强', 'STRONG SIGNAL') : weak ? locale.tr('信号弱', 'WEAK SIGNAL') : locale.tr('中等', 'MEDIUM'),
                       signalColor: strong ? AppColors.success : weak ? AppColors.error : AppColors.warning,
-                      actionLabel: 'Connect',
+                      actionLabel: locale.tr('连接', 'Connect'),
                       actionIcon: Icons.link_rounded,
                       onAction: () async {
                         HapticFeedback.lightImpact();
@@ -510,12 +516,12 @@ class _ScanScreenState extends State<ScanScreen>
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
           child: Column(children: [
-            Text("Don't see your device?", style: TextStyle(fontSize: 12, color: context.subtitleColor)),
+            Text(locale.tr('找不到设备？', "Don't see your device?"), style: TextStyle(fontSize: 12, color: context.subtitleColor)),
             const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: () {},
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Manually Enter MAC Address'),
+              label: Text(locale.tr('手动输入 MAC 地址', 'Manually Enter MAC Address')),
               style: OutlinedButton.styleFrom(
                 foregroundColor: context.titleColor,
                 side: BorderSide(color: context.borderColor),
@@ -530,6 +536,7 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Widget _buildBleBottomBar(BuildContext context, BluetoothService ble, bool isScanning) {
+    final locale = context.read<LocaleProvider>();
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
       decoration: BoxDecoration(
@@ -541,21 +548,21 @@ class _ScanScreenState extends State<ScanScreen>
           Row(children: [
             Icon(Icons.info_outline_rounded, size: 14, color: context.hintColor),
             const SizedBox(width: 6),
-            Text('Bluetooth 5.0 Low Energy required', style: TextStyle(
+            Text(locale.tr('需要蓝牙 5.0 低功耗', 'Bluetooth 5.0 Low Energy required'), style: TextStyle(
               fontSize: 11, color: context.hintColor)),
           ]),
           const Spacer(),
           // Cancel
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: TextStyle(color: context.subtitleColor, fontWeight: FontWeight.w500)),
+            child: Text(locale.tr('取消', 'Cancel'), style: TextStyle(color: context.subtitleColor, fontWeight: FontWeight.w500)),
           ),
           const SizedBox(width: 8),
           // Done/Scan button
           ElevatedButton.icon(
             onPressed: isScanning ? null : () => ble.startScan(),
             icon: Icon(isScanning ? Icons.hourglass_top_rounded : Icons.refresh_rounded, size: 16),
-            label: Text(isScanning ? 'Scanning...' : 'Scan Again'),
+            label: Text(isScanning ? locale.tr('扫描中...', 'Scanning...') : locale.tr('重新扫描', 'Scan Again')),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
@@ -573,6 +580,7 @@ class _ScanScreenState extends State<ScanScreen>
   // ═══════════════════════════════════════════════════════════
   Widget _buildManualTab() {
     final dark = context.isDark;
+    final locale = context.read<LocaleProvider>();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Center(
@@ -607,34 +615,34 @@ class _ScanScreenState extends State<ScanScreen>
                     ),
                     const SizedBox(width: 14),
                     Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('Manual Input', style: TextStyle(
+                      Text(locale.tr('手动输入', 'Manual Input'), style: TextStyle(
                         fontSize: 18, fontWeight: FontWeight.w700, color: context.titleColor)),
-                      Text('Enter robot network parameters directly', style: TextStyle(
+                      Text(locale.tr('直接输入机器人网络参数', 'Enter robot network parameters directly'), style: TextStyle(
                         fontSize: 12, color: context.subtitleColor)),
                     ]),
                   ]),
                   const SizedBox(height: 28),
 
                   // Robot IP Address
-                  _formLabel('Robot IP Address'),
+                  _formLabel(locale.tr('机器人 IP 地址', 'Robot IP Address')),
                   const SizedBox(height: 8),
                   _buildIpField(context),
                   const SizedBox(height: 4),
-                  Text('Static IP recommended for stable connection', style: TextStyle(
+                  Text(locale.tr('建议使用静态 IP 以保持稳定连接', 'Static IP recommended for stable connection'), style: TextStyle(
                     fontSize: 11, color: context.hintColor)),
                   const SizedBox(height: 20),
 
                   // Port + Protocol row
                   Row(children: [
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      _formLabel('Port'),
+                      _formLabel(locale.tr('端口', 'Port')),
                       const SizedBox(height: 8),
                       _buildFormField(_portController, Icons.tag_rounded, '50051',
                         keyboardType: TextInputType.number),
                     ])),
                     const SizedBox(width: 16),
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      _formLabel('Protocol'),
+                      _formLabel(locale.tr('协议', 'Protocol')),
                       const SizedBox(height: 8),
                       _buildProtocolDropdown(context),
                     ])),
@@ -657,9 +665,9 @@ class _ScanScreenState extends State<ScanScreen>
                       )),
                       const SizedBox(width: 12),
                       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Use Secure Connection (SSL/TLS)', style: TextStyle(
+                        Text(locale.tr('使用安全连接 (SSL/TLS)', 'Use Secure Connection (SSL/TLS)'), style: TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600, color: context.titleColor)),
-                        Text('Required for remote cloud operations', style: TextStyle(
+                        Text(locale.tr('远程云操作时需要', 'Required for remote cloud operations'), style: TextStyle(
                           fontSize: 11, color: context.subtitleColor)),
                       ])),
                     ]),
@@ -703,7 +711,7 @@ class _ScanScreenState extends State<ScanScreen>
                             ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white))
                             : const Icon(Icons.link_rounded, size: 18),
-                        label: Text(_isConnecting ? 'Connecting...' : 'Link Device'),
+                        label: Text(_isConnecting ? locale.tr('连接中...', 'Connecting...') : locale.tr('连接设备', 'Link Device')),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.transparent,
                           shadowColor: Colors.transparent,
@@ -718,7 +726,7 @@ class _ScanScreenState extends State<ScanScreen>
                   // Cancel Setup
                   Center(child: TextButton(
                     onPressed: () => Navigator.pop(context),
-                    child: Text('Cancel Setup', style: TextStyle(
+                    child: Text(locale.tr('取消设置', 'Cancel Setup'), style: TextStyle(
                       fontSize: 13, color: context.subtitleColor, fontWeight: FontWeight.w500)),
                   )),
                 ]),
@@ -752,9 +760,9 @@ class _ScanScreenState extends State<ScanScreen>
                   _tabController.animateTo(0);
                 },
                 child: Text.rich(TextSpan(children: [
-                  TextSpan(text: "Can't find your robot IP? ", style: TextStyle(
+                  TextSpan(text: locale.tr('找不到机器人 IP？', "Can't find your robot IP? "), style: TextStyle(
                     fontSize: 12, color: context.subtitleColor)),
-                  TextSpan(text: 'Scan Network', style: TextStyle(
+                  TextSpan(text: locale.tr('扫描网络', 'Scan Network'), style: TextStyle(
                     fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.w600)),
                 ])),
               )),
@@ -765,7 +773,7 @@ class _ScanScreenState extends State<ScanScreen>
               Center(child: OutlinedButton.icon(
                 onPressed: _isConnecting ? null : _startMock,
                 icon: const Icon(Icons.science_outlined, size: 16),
-                label: const Text('Mock 演示模式', style: TextStyle(fontSize: 12)),
+                label: Text(locale.tr('Mock 演示模式', 'Mock Demo Mode'), style: const TextStyle(fontSize: 12)),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 ),
@@ -778,6 +786,7 @@ class _ScanScreenState extends State<ScanScreen>
   }
 
   Widget _buildDogBoardSection(BuildContext context) {
+    final locale = context.read<LocaleProvider>();
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -796,9 +805,9 @@ class _ScanScreenState extends State<ScanScreen>
           ),
           const SizedBox(width: 12),
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Dog Board 直连', style: TextStyle(
+            Text(locale.tr('Dog Board 直连', 'Dog Board Direct'), style: TextStyle(
               fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
-            Text('绕过导航板直接连接 CMS', style: TextStyle(
+            Text(locale.tr('绕过导航板直接连接 CMS', 'Bypass Nav Board, connect CMS directly'), style: TextStyle(
               fontSize: 12, color: AppColors.textSecondary)),
           ]),
         ]),
@@ -814,7 +823,7 @@ class _ScanScreenState extends State<ScanScreen>
             _connectToDogDirect(host, port);
           },
           icon: Icon(_isDogConnecting ? Icons.hourglass_top_rounded : Icons.link_rounded, size: 16),
-          label: Text(_isDogConnecting ? '连接中...' : '直连 Dog Board'),
+          label: Text(_isDogConnecting ? locale.tr('连接中...', 'Connecting...') : locale.tr('直连 Dog Board', 'Connect Dog Board')),
           style: OutlinedButton.styleFrom(
             foregroundColor: AppColors.warning,
             side: BorderSide(color: AppColors.warning.withValues(alpha: 0.5)),
@@ -890,6 +899,7 @@ class _ScanScreenState extends State<ScanScreen>
   //  BOTTOM BAR — global actions
   // ═══════════════════════════════════════════════════════════
   Widget _buildBottomBar(BuildContext context, bool dark) {
+    final locale = context.read<LocaleProvider>();
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
       child: Row(children: [
@@ -897,18 +907,18 @@ class _ScanScreenState extends State<ScanScreen>
         TextButton.icon(
           onPressed: () => Navigator.pop(context),
           icon: Icon(Icons.arrow_back_rounded, size: 16, color: context.subtitleColor),
-          label: Text('Cancel', style: TextStyle(color: context.subtitleColor)),
+          label: Text(locale.tr('取消', 'Cancel'), style: TextStyle(color: context.subtitleColor)),
         ),
         const Spacer(),
         TextButton(
           onPressed: () {},
-          child: Text('Troubleshoot', style: TextStyle(color: context.subtitleColor, fontWeight: FontWeight.w500)),
+          child: Text(locale.tr('排查问题', 'Troubleshoot'), style: TextStyle(color: context.subtitleColor, fontWeight: FontWeight.w500)),
         ),
         const SizedBox(width: 8),
         ElevatedButton.icon(
           onPressed: _startNetworkScan,
           icon: const Icon(Icons.refresh_rounded, size: 16),
-          label: const Text('Scan Again'),
+          label: Text(locale.tr('重新扫描', 'Scan Again')),
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.primary,
             foregroundColor: Colors.white,

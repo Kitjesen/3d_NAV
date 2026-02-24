@@ -12,6 +12,7 @@ import 'package:flutter_monitor/features/control/camera_stream_widget.dart';
 import 'package:flutter_monitor/features/control/webrtc_video_widget.dart';
 import 'package:flutter_monitor/core/grpc/dog_direct_client.dart';
 import 'package:flutter_monitor/core/providers/robot_profile_provider.dart';
+import 'package:flutter_monitor/core/locale/locale_provider.dart';
 
 class ControlScreen extends StatefulWidget {
   const ControlScreen({super.key});
@@ -79,7 +80,7 @@ class _ControlScreenState extends State<ControlScreen> {
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(gw.statusMessage ?? '无法获取控制权'),
+          content: Text(gw.statusMessage ?? context.read<LocaleProvider>().tr('无法获取控制权', 'Cannot acquire control')),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -106,7 +107,7 @@ class _ControlScreenState extends State<ControlScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('紧急停止已触发'),
+          content: Text(context.read<LocaleProvider>().tr('紧急停止已触发', 'Emergency stop triggered')),
           backgroundColor: Colors.red.shade700,
           behavior: SnackBarBehavior.floating,
         ),
@@ -119,7 +120,7 @@ class _ControlScreenState extends State<ControlScreen> {
     final (ok, err) = await context.read<ControlGateway>().dogEnable();
     if (mounted && !ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('使能失败: ${err ?? ""}'), behavior: SnackBarBehavior.floating),
+        SnackBar(content: Text('${context.read<LocaleProvider>().tr('使能失败', 'Enable failed')}: ${err ?? ""}'), behavior: SnackBarBehavior.floating),
       );
     }
   }
@@ -134,7 +135,7 @@ class _ControlScreenState extends State<ControlScreen> {
     final (ok, err) = await context.read<ControlGateway>().dogStandUp();
     if (mounted && !ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('站立失败: ${err ?? ""}'), behavior: SnackBarBehavior.floating),
+        SnackBar(content: Text('${context.read<LocaleProvider>().tr('站立失败', 'Stand up failed')}: ${err ?? ""}'), behavior: SnackBarBehavior.floating),
       );
     }
   }
@@ -146,6 +147,7 @@ class _ControlScreenState extends State<ControlScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<LocaleProvider>(); // rebuild on locale change
     // 使用 select 代替 watch，避免摇杆速度更新触发全树重建。
     // 只在 hasLease / useDogDirect / dogClient 变化时重建。
     final gw = context.read<ControlGateway>();
@@ -179,7 +181,7 @@ class _ControlScreenState extends State<ControlScreen> {
               ),
               const SizedBox(width: 12),
               Text(
-                '控制中心',
+                context.read<LocaleProvider>().tr('控制中心', 'Control Center'),
                 style: TextStyle(
                   color: context.isDark ? Colors.white : Colors.black87,
                   fontSize: 16,

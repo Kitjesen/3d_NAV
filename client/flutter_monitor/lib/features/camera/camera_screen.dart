@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:flutter_monitor/app/theme.dart';
 import 'package:flutter_monitor/core/providers/robot_connection_provider.dart';
 import 'package:flutter_monitor/features/control/webrtc_video_widget.dart';
+import 'package:flutter_monitor/core/locale/locale_provider.dart';
 
 /// Dedicated fullscreen camera view with camera switching, connection
 /// indicator, and gesture controls.
@@ -118,6 +119,7 @@ class _CameraScreenState extends State<CameraScreen>
 
   @override
   Widget build(BuildContext context) {
+    context.watch<LocaleProvider>(); // rebuild on locale change
     final conn = context.watch<RobotConnectionProvider>();
     final client = conn.client;
     final isConnected = client != null;
@@ -169,6 +171,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Widget _buildTopBar(BuildContext context, bool isConnected) {
+    final locale = context.read<LocaleProvider>();
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -188,7 +191,7 @@ class _CameraScreenState extends State<CameraScreen>
                 onPressed: () => Navigator.of(context).pop(),
                 icon: const Icon(Icons.arrow_back_ios_new,
                     color: Colors.white, size: 20),
-                tooltip: '返回',
+                tooltip: locale.tr('返回', 'Back'),
               ),
               const SizedBox(width: 4),
               // Camera label
@@ -225,6 +228,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Widget _buildBottomBar(BuildContext context, bool isConnected) {
+    final locale = context.read<LocaleProvider>();
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -243,14 +247,14 @@ class _CameraScreenState extends State<CameraScreen>
               // Camera switch
               _ControlButton(
                 icon: Icons.cameraswitch_outlined,
-                label: '切换',
+                label: locale.tr('切换', 'Switch'),
                 onTap: _toggleCamera,
               ),
               // Reconnect button (only if disconnected)
               if (!isConnected)
                 _ControlButton(
                   icon: Icons.refresh,
-                  label: '重连',
+                  label: locale.tr('重连', 'Reconnect'),
                   highlight: true,
                   onTap: () {
                     HapticFeedback.mediumImpact();
@@ -263,7 +267,7 @@ class _CameraScreenState extends State<CameraScreen>
               // Fullscreen
               _ControlButton(
                 icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                label: _isFullscreen ? '退出全屏' : '全屏',
+                label: _isFullscreen ? locale.tr('退出全屏', 'Exit Fullscreen') : locale.tr('全屏', 'Fullscreen'),
                 onTap: _toggleFullscreen,
               ),
             ],
@@ -274,6 +278,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Widget _buildDisconnectedView() {
+    final locale = context.read<LocaleProvider>();
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -293,7 +298,7 @@ class _CameraScreenState extends State<CameraScreen>
           ),
           const SizedBox(height: 20),
           Text(
-            '未连接到机器人',
+            locale.tr('未连接到机器人', 'Not connected to robot'),
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.6),
               fontSize: 16,
@@ -302,7 +307,7 @@ class _CameraScreenState extends State<CameraScreen>
           ),
           const SizedBox(height: 8),
           Text(
-            '请先在扫描页面连接后再查看相机',
+            locale.tr('请先在扫描页面连接后再查看相机', 'Please connect on the scan page first'),
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.3),
               fontSize: 13,
@@ -325,8 +330,9 @@ class _ConnectionBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = context.read<LocaleProvider>();
     final color = isConnected ? AppColors.success : AppColors.error;
-    final label = isConnected ? '已连接' : '断开';
+    final label = isConnected ? locale.tr('已连接', 'Connected') : locale.tr('断开', 'Disconnected');
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -387,23 +393,17 @@ class _CameraView extends StatelessWidget {
   Widget _buildPlaceholder() {
     return Container(
       color: Colors.black,
-      child: Center(
+      child: const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               Icons.videocam_off,
               size: 44,
-              color: Colors.white.withValues(alpha: 0.15),
+              color: Color(0x26FFFFFF),
             ),
-            const SizedBox(height: 10),
-            Text(
-              '等待视频流...',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.3),
-                fontSize: 14,
-              ),
-            ),
+            SizedBox(height: 10),
+            _CameraStatusText(zhText: '等待视频流...', enText: 'Waiting for video stream...'),
           ],
         ),
       ),
@@ -426,13 +426,7 @@ class _CameraView extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            Text(
-              '正在连接相机...',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.5),
-                fontSize: 14,
-              ),
-            ),
+            const _CameraStatusText(zhText: '正在连接相机...', enText: 'Connecting camera...'),
           ],
         ),
       ),
@@ -491,6 +485,25 @@ class _ControlButton extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Helper widget for i18n text in non-State contexts
+class _CameraStatusText extends StatelessWidget {
+  final String zhText;
+  final String enText;
+  const _CameraStatusText({required this.zhText, required this.enText});
+
+  @override
+  Widget build(BuildContext context) {
+    final locale = context.read<LocaleProvider>();
+    return Text(
+      locale.tr(zhText, enText),
+      style: TextStyle(
+        color: Colors.white.withValues(alpha: 0.3),
+        fontSize: 14,
       ),
     );
   }
