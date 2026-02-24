@@ -1012,6 +1012,24 @@ private:
         const float angOffset = kAngOffset;
         int plannerCloudCropSize = plannerCloudCrop_->points.size();
 
+        // O13: 方向有效性预计算——当前条件只依赖 rotDir/joyDir_/dirThre_
+        // 无需在 N×36 内层循环中重复评估（N=1000 时节省 36K 次条件判断/帧）
+        bool rotDirValid[36];
+        {
+          const bool toVehicle = dirToVehicle_;
+          const float absJoyDir = fabs(joyDir_);
+          const bool joyLe90 = absJoyDir <= 90.0f;
+          const bool joyGt90 = absJoyDir > 90.0f;
+          for (int d = 0; d < 36; d++) {
+            float rotAngDegD = 10.0f * d - 180.0f;
+            float rotDegD    = 10.0f * d;
+            bool skip = (angDiffList[d] > dirThre_ && !toVehicle) ||
+                        (fabs(rotAngDegD) > dirThre_ && joyLe90 && toVehicle) ||
+                        ((rotDegD > dirThre_ && 360.0f - rotDegD > dirThre_) && joyGt90 && toVehicle);
+            rotDirValid[d] = !skip;
+          }
+        }
+
         // O3: 平方阈值（pathScale_ 在 while 循环内可变，需在循环体内计算）
         const float kPathRangeScaleSq = (pathRange / pathScale_) * (pathRange / pathScale_);
         const float kDiameterScaleSq  = (diameter  / pathScale_) * (diameter  / pathScale_);
@@ -1029,13 +1047,8 @@ private:
 
           if (disSq < kPathRangeScaleSq && (disSq <= kGoalClearScaleSq || !pathCropByGoal_) && checkObstacle_) {
             for (int rotDir = 0; rotDir < 36; rotDir++) {
-              // O2: 使用预计算的方向差，跳过与 joyDir_ 无关方向
-              const float angDiff = angDiffList[rotDir];
-              if ((angDiff > dirThre_ && !dirToVehicle_) ||
-                  (fabs(10.0 * rotDir - 180.0) > dirThre_ && fabs(joyDir_) <= 90.0 && dirToVehicle_) ||
-                  ((10.0 * rotDir > dirThre_ && 360.0 - 10.0 * rotDir > dirThre_) && fabs(joyDir_) > 90.0 && dirToVehicle_)) {
-                continue;
-              }
+              // O13: 方向有效性已预计算（rotDirValid[36]），直接查表
+              if (!rotDirValid[rotDir]) continue;
 
               // O1: 使用 RotLUT 替代 cos(rotAng)/sin(rotAng)（预计算，无运行时三角）
               float x2 = kRotLUT.c[rotDir] * x + kRotLUT.s[rotDir] * y;
