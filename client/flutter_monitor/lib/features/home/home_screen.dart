@@ -253,7 +253,7 @@ class _HomeScreenState extends State<HomeScreen>
         ),
         child: const Text('ONLINE', style: TextStyle(
           fontSize: 11, fontWeight: FontWeight.w700,
-          color: Color(0xFF15803D), letterSpacing: 0.5,
+          color: AppColors.success, letterSpacing: 0.5,
         )),
       );
 
@@ -364,7 +364,7 @@ class _HomeScreenState extends State<HomeScreen>
             Text(
               online ? locale.tr('运行中', 'Operational') : locale.tr('离线', 'Offline'),
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                  color: online ? const Color(0xFF15803D) : context.hintColor),
+                  color: online ? AppColors.success : context.hintColor),
             ),
           ]),
           const SizedBox(height: 8),
@@ -393,12 +393,17 @@ class _HomeScreenState extends State<HomeScreen>
           ? Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: const Color(0xFFE0E7FF),
+                color: context.isDark
+                    ? AppColors.primary.withValues(alpha: 0.2)
+                    : const Color(0xFFE0E7FF),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: Text(locale.tr('手动', 'MANUAL'), style: const TextStyle(
+              child: Text(locale.tr('手动', 'MANUAL'), style: TextStyle(
                 fontSize: 10, fontWeight: FontWeight.w700,
-                color: Color(0xFF4338CA), letterSpacing: 0.3,
+                color: context.isDark
+                    ? const Color(0xFFA5B4FC)
+                    : const Color(0xFF4338CA),
+                letterSpacing: 0.3,
               )),
             )
           : null,
@@ -956,7 +961,7 @@ class _KpiPill extends StatelessWidget {
             Container(
               width: 48, height: 48,
               decoration: BoxDecoration(
-                color: iconBg,
+                color: dark ? iconBg.withValues(alpha: 0.2) : iconBg,
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Icon(icon, size: 26, color: iconColor),
