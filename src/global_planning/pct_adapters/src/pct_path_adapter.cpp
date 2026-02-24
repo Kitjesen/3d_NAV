@@ -42,11 +42,9 @@ public:
 
     declare_parameter<double>("waypoint_distance", 0.5);
     declare_parameter<double>("arrival_threshold", 0.5);
-    declare_parameter<double>("lookahead_dist", 1.0);
 
     waypoint_distance_ = get_parameter("waypoint_distance").as_double();
     arrival_threshold_ = get_parameter("arrival_threshold").as_double();
-    lookahead_dist_ = get_parameter("lookahead_dist").as_double();
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -67,6 +65,13 @@ private:
   void path_callback(const nav_msgs::msg::Path::SharedPtr msg)
   {
     if (msg->poses.empty()) {
+      // 空路径 = 规划失败信号，清除旧路径避免继续追踪过期航点
+      if (path_received_) {
+        RCLCPP_WARN(get_logger(), "Received empty path (planning failed/cleared). Stopping waypoint tracking.");
+        current_path_.clear();
+        current_waypoint_idx_ = 0;
+        path_received_ = false;
+      }
       return;
     }
 
@@ -207,7 +212,6 @@ private:
 
   double waypoint_distance_;
   double arrival_threshold_;
-  double lookahead_dist_;
 };
 
 int main(int argc, char ** argv)

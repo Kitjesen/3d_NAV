@@ -1,6 +1,6 @@
-LT 按下-1  松开 1 axes[2]..要一直按着 LT（axes[2]）才会保持自主模式；一松手就变成手动。
-扳机释放（axes[2] > -0.1）→ autonomyMode_ = false → 手动模式
-扳机按下（axes[2] < -0.1）→ autonomyMode_ = true → 自主模式
+LT (axes[2]): 松开 = +1, 按下 = -1
+松开 LT（axes[2] > -0.1）→ autonomyMode_ = true  → 自主模式（默认，死人开关）
+按下 LT（axes[2] < -0.1）→ autonomyMode_ = false → 手动接管模式
 
 
 axes[5] (RT): 控制是否避障
