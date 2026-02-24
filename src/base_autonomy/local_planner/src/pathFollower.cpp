@@ -36,7 +36,7 @@
 
 using namespace std;
 
-const double PI = 3.1415926;
+const double PI = M_PI;  // 使用系统精确值，避免截断误差
 
 /**
  * @class PathFollower
@@ -264,6 +264,9 @@ private:
   float vehicleRollRec_ = 0;
   float vehiclePitchRec_ = 0;
   float vehicleYawRec_ = 0;
+  // P5: cos/sin(vehicleYawRec_) 缓存（路径开始时设一次，控制循环 100Hz 复用）
+  float cosVehicleYawRec_ = 1.0f;
+  float sinVehicleYawRec_ = 0.0f;
 
   float vehicleYawRate_ = 0;
   float vehicleSpeed_ = 0;
@@ -305,8 +308,10 @@ private:
     vehicleRoll_ = roll;
     vehiclePitch_ = pitch;
     vehicleYaw_ = yaw;
-    vehicleX_ = odomIn->pose.pose.position.x - cos(yaw) * sensorOffsetX_ + sin(yaw) * sensorOffsetY_;
-    vehicleY_ = odomIn->pose.pose.position.y - sin(yaw) * sensorOffsetX_ - cos(yaw) * sensorOffsetY_;
+    // P6: cos/sin(yaw) 各用两次，缓存一次避免重复计算
+    const double cosYaw = std::cos(yaw), sinYaw = std::sin(yaw);
+    vehicleX_ = odomIn->pose.pose.position.x - cosYaw * sensorOffsetX_ + sinYaw * sensorOffsetY_;
+    vehicleY_ = odomIn->pose.pose.position.y - sinYaw * sensorOffsetX_ - cosYaw * sensorOffsetY_;
     vehicleZ_ = odomIn->pose.pose.position.z;
 
     if ((fabs(roll) > inclThre_ * PI / 180.0 || fabs(pitch) > inclThre_ * PI / 180.0) && useInclToStop_) {
@@ -335,6 +340,8 @@ private:
     vehicleRollRec_ = vehicleRoll_;
     vehiclePitchRec_ = vehiclePitch_;
     vehicleYawRec_ = vehicleYaw_;
+    cosVehicleYawRec_ = static_cast<float>(std::cos(vehicleYaw_));  // P5
+    sinVehicleYawRec_ = static_cast<float>(std::sin(vehicleYaw_));
 
     pathPointID_ = 0;
     pathInit_ = true;
@@ -410,10 +417,10 @@ private:
   void controlLoop()
   {
     if (pathInit_) {
-      float vehicleXRel = cos(vehicleYawRec_) * (vehicleX_ - vehicleXRec_) 
-                        + sin(vehicleYawRec_) * (vehicleY_ - vehicleYRec_);
-      float vehicleYRel = -sin(vehicleYawRec_) * (vehicleX_ - vehicleXRec_) 
-                        + cos(vehicleYawRec_) * (vehicleY_ - vehicleYRec_);
+      // P5: 使用缓存的 cos/sin(vehicleYawRec_)，消除控制循环内 4 次 trig 调用
+      float dx = vehicleX_ - vehicleXRec_, dy = vehicleY_ - vehicleYRec_;
+      float vehicleXRel =  cosVehicleYawRec_ * dx + sinVehicleYawRec_ * dy;
+      float vehicleYRel = -sinVehicleYawRec_ * dx + cosVehicleYawRec_ * dy;
 
       int pathSize = path_.poses.size();
       if (pathSize == 0) return;  // 空路径，直接返回
@@ -438,37 +445,43 @@ private:
       }
       
       pathPointID_ = (lastPathPointID_ > 2) ? (lastPathPointID_ - 2) : 0;
-      
-      float disX, disY, dis;
+
+      // P2: 循环内保留目标点坐标，避免循环后重复计算
+      float disX = 0, disY = 0;
+      const float lookAheadSq = lookAheadDis_ * lookAheadDis_;
       while (pathPointID_ < pathSize - 1) {
         disX = path_.poses[pathPointID_].pose.position.x - vehicleXRel;
         disY = path_.poses[pathPointID_].pose.position.y - vehicleYRel;
-        dis = sqrt(disX * disX + disY * disY);
-        if (dis < lookAheadDis_) {
-          pathPointID_++;
-        } else {
+        if (disX * disX + disY * disY >= lookAheadSq) {
           break;
         }
+        pathPointID_++;
       }
-      
+      // 确保最后一个点也被取到（pathSize-1 时退出循环）
+      if (pathPointID_ >= pathSize - 1) {
+        disX = path_.poses[pathSize - 1].pose.position.x - vehicleXRel;
+        disY = path_.poses[pathSize - 1].pose.position.y - vehicleYRel;
+      }
+
       lastPathPointID_ = pathPointID_;
 
-      disX = path_.poses[pathPointID_].pose.position.x - vehicleXRel;
-      disY = path_.poses[pathPointID_].pose.position.y - vehicleYRel;
-      dis = sqrt(disX * disX + disY * disY);
+      float dis = std::sqrt(disX * disX + disY * disY);  // 只算一次
       float pathDir = atan2(disY, disX);
 
       float dirDiff = vehicleYaw_ - vehicleYawRec_ - pathDir;
-      // 一次归一化到 (-π, π] 即可 (两个 [-π,π] 量之差在 [-2π, 2π] 内)
-      if (dirDiff > PI) dirDiff -= 2 * PI;
-      else if (dirDiff < -PI) dirDiff += 2 * PI;
+      // P1: fmod 替代 while 循环归一化（无分支循环，单次计算）
+      dirDiff = std::fmod(dirDiff + PI, 2.0 * PI);
+      if (dirDiff < 0) dirDiff += 2.0 * PI;
+      dirDiff -= PI;
 
       if (twoWayDrive_) {
+        // 加迟滞带（±0.1 rad），防止在 π/2 附近来回切换方向
+        static constexpr float kTwoWayHysteresis = 0.1f;
         double time = now().seconds();
-        if (fabs(dirDiff) > PI / 2 && navFwd_ && time - switchTime_ > switchTimeThre_) {
+        if (fabs(dirDiff) > PI / 2 + kTwoWayHysteresis && navFwd_ && time - switchTime_ > switchTimeThre_) {
           navFwd_ = false;
           switchTime_ = time;
-        } else if (fabs(dirDiff) < PI / 2 && !navFwd_ && time - switchTime_ > switchTimeThre_) {
+        } else if (fabs(dirDiff) < PI / 2 - kTwoWayHysteresis && !navFwd_ && time - switchTime_ > switchTimeThre_) {
           navFwd_ = true;
           switchTime_ = time;
         }
@@ -504,13 +517,17 @@ private:
       else if ((odomTime_ < slowInitTime_ + slowTime1_ + slowTime2_ && slowInitTime_ > 0) || slowDown_ == 2) joySpeed3 *= slowRate2_;
       else if (slowDown_ == 3) joySpeed3 *= slowRate3_;
 
-      if ((fabs(dirDiff) < dirDiffThre_ || (dis < omniDirGoalThre_ && fabs(dirDiff) < omniDirDiffThre_)) && dis > stopDisThre_) {
-        if (vehicleSpeed_ < joySpeed3) vehicleSpeed_ += maxAccel_ / 100.0;
-        else if (vehicleSpeed_ > joySpeed3) vehicleSpeed_ -= maxAccel_ / 100.0;
-      } else {
-        if (vehicleSpeed_ > 0) vehicleSpeed_ -= maxAccel_ / 100.0;
-        else if (vehicleSpeed_ < 0) vehicleSpeed_ += maxAccel_ / 100.0;
-      }
+      // P3: 速度控制简化——提取 stepToward lambda 消除重复分支
+      auto stepToward = [&](float cur, float tgt) {
+        float step = maxAccel_ / 100.0f;
+        return (cur < tgt) ? std::min(cur + step, tgt)
+             : (cur > tgt) ? std::max(cur - step, tgt) : cur;
+      };
+      bool canAccel = (fabs(dirDiff) < dirDiffThre_ ||
+                       (dis < omniDirGoalThre_ && fabs(dirDiff) < omniDirDiffThre_))
+                      && dis > stopDisThre_;
+      vehicleSpeed_ = canAccel ? stepToward(vehicleSpeed_, joySpeed3)
+                               : stepToward(vehicleSpeed_, 0.0f);
 
       if (odomTime_ < stopInitTime_ + stopTime_ && stopInitTime_ > 0) {
         vehicleSpeed_ = 0;
@@ -542,6 +559,9 @@ private:
           cmd_vel.twist.linear.x = maxSpeed_ * joyManualFwd_;
           if (omniDirGoalThre_ > 0) cmd_vel.twist.linear.y = maxSpeed_ / 2.0 * joyManualLeft_;
           cmd_vel.twist.angular.z = maxYawRate_ * PI / 180.0 * joyManualYaw_;
+          // 手动模式同样需要遵守安全停车指令，防止越过硬件保护
+          if (safetyStop_ >= 1) { cmd_vel.twist.linear.x = 0; cmd_vel.twist.linear.y = 0; }
+          if (safetyStop_ >= 2) cmd_vel.twist.angular.z = 0;
         }
 
         pubSpeed_->publish(cmd_vel);
