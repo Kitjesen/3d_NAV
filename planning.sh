@@ -37,18 +37,44 @@ echo -e "  - Workspace: $WORKSPACE_DIR"
 echo -e "  - FastDDS: 禁用共享内存"
 echo ""
 
-# 检查地图文件
+# 检查地图文件，自动选取最新 tomogram
 TOMOGRAM_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/tomogram"
-if [ ! -d "$TOMOGRAM_DIR" ] || [ -z "$(ls -A $TOMOGRAM_DIR/*.pickle 2>/dev/null)" ]; then
-    echo -e "${RED}警告: 未找到地图文件！${NC}"
-    echo -e "${YELLOW}请先运行建图系统生成地图，或手动放置 .pickle 地图文件到:${NC}"
-    echo -e "  $TOMOGRAM_DIR"
-    echo ""
-    read -p "是否继续启动（可能无法规划）? [y/N]: " CONTINUE
-    if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}已取消启动${NC}"
-        exit 1
+PCD_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/pcd"
+LATEST_MAP=""
+
+if [ -d "$TOMOGRAM_DIR" ]; then
+    LATEST_PICKLE=$(ls -t "$TOMOGRAM_DIR"/*.pickle 2>/dev/null | head -1)
+    if [ -n "$LATEST_PICKLE" ]; then
+        # 去掉 .pickle 扩展名，作为 map_file 参数
+        LATEST_MAP="${LATEST_PICKLE%.pickle}"
+        echo -e "${GREEN}✓ 检测到地图: $(basename $LATEST_MAP)${NC}"
     fi
+fi
+
+if [ -z "$LATEST_MAP" ]; then
+    # 没有 pickle，检查是否有 PCD（planner_wrapper 支持自动建图）
+    LATEST_PCD=$(ls -t "$PCD_DIR"/*.pcd 2>/dev/null | head -1)
+    if [ -n "$LATEST_PCD" ]; then
+        LATEST_MAP="${LATEST_PCD%.pcd}"
+        echo -e "${YELLOW}⚠ 未找到 .pickle，使用 PCD 自动生成 tomogram: $(basename $LATEST_MAP)${NC}"
+        echo -e "${YELLOW}  首次启动时需要几分钟生成 tomogram...${NC}"
+    else
+        echo -e "${RED}警告: 未找到地图文件！${NC}"
+        echo -e "${YELLOW}请先运行 ${GREEN}./mapping.sh${YELLOW} + ${GREEN}./save_map.sh${YELLOW} 建图，或手动放置文件到:${NC}"
+        echo -e "  .pickle → $TOMOGRAM_DIR"
+        echo -e "  .pcd    → $PCD_DIR"
+        echo ""
+        read -p "是否继续启动（可能无法规划）? [y/N]: " CONTINUE
+        if [[ ! "$CONTINUE" =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+fi
+
+# 用环境变量传递地图路径（launch 文件读取 NAV_MAP_PATH）
+if [ -n "$LATEST_MAP" ]; then
+    export NAV_MAP_PATH="$LATEST_MAP"
+    echo -e "${GREEN}NAV_MAP_PATH=${NAV_MAP_PATH}${NC}"
 fi
 
 # 定位模式选择
@@ -124,13 +150,14 @@ case $LOC_CHOICE in
         ;;
 esac
 
-# 启动 PCT 全局规划器
+# 启动 PCT 全局规划器 (通过 ROS2 launch, 确保话题 remap 和参数正确传递)
 echo -e "${GREEN}[5/6] 启动 PCT 全局规划器...${NC}"
 gnome-terminal --tab --title="PCT Global Planner" -- bash -c "
     cd $WORKSPACE_DIR
     source install/setup.bash
     export FASTRTPS_DEFAULT_PROFILES_FILE=$WORKSPACE_DIR/fastdds_no_shm.xml
-    python3 src/global_planning/PCT_planner/planner/scripts/global_planner.py
+    export NAV_MAP_PATH='$NAV_MAP_PATH'
+    ros2 launch launch/profiles/planner_pct.launch.py
     exec bash
 " &
 sleep 2
@@ -162,9 +189,11 @@ echo -e "  4. 规划器会自动计算并发布路径"
 echo -e "  5. 按 Ctrl+C 可在各终端窗口中停止对应节点"
 echo ""
 echo -e "${YELLOW}话题查看:${NC}"
-echo -e "  - 地图点云: ${BLUE}ros2 topic echo /pct_planner/tomogram${NC}"
-echo -e "  - 规划路径: ${BLUE}ros2 topic echo /pct_planner/path${NC}"
-echo -e "  - 机器人位姿: ${BLUE}ros2 topic echo /Odometry${NC}"
+echo -e "  - 地图点云: ${BLUE}ros2 topic echo /map_pointcloud${NC}"
+echo -e "  - Tomogram: ${BLUE}ros2 topic echo /tomogram${NC}"
+echo -e "  - 规划路径: ${BLUE}ros2 topic echo /nav/global_path${NC}"
+echo -e "  - 机器人位姿: ${BLUE}ros2 topic echo /nav/odometry${NC}"
+echo -e "  - 规划状态: ${BLUE}ros2 topic echo /nav/planner_status${NC}"
 echo ""
 echo -e "${YELLOW}调试工具:${NC}"
 echo -e "  - 检查地图(测试): ${BLUE}python3 src/global_planning/PCT_planner/planner/scripts/test/check_map.py [地图名]${NC}"

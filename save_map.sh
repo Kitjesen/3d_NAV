@@ -33,7 +33,7 @@ export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 # 地图保存目录
 MAP_DIR="$WORKSPACE_DIR/maps"
-PCD_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/PCD"
+PCD_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/pcd"
 TOMOGRAM_DIR="$WORKSPACE_DIR/src/global_planning/PCT_planner/rsc/tomogram"
 SEMANTIC_DIR="$WORKSPACE_DIR/maps/semantic"
 
@@ -63,22 +63,20 @@ case $SAVE_CHOICE in
         echo -e "${GREEN}[1/1] 保存 PGO 地图点云...${NC}"
         echo -e "${YELLOW}正在调用 PGO 保存服务...${NC}"
         
-        # 调用 PGO 保存服务 (假设服务名为 /pgo/save_map)
-        # 注意: 实际服务名可能不同，需要根据你的 PGO 实现调整
-        if ros2 service list | grep -q "/pgo/save_map"; then
-            ros2 service call /pgo/save_map std_srvs/srv/Trigger
+        # 调用 PGO 保存服务 (interface/srv/SaveMaps, 服务名: /pgo/save_maps)
+        if ros2 service list 2>/dev/null | grep -q "/pgo/save_maps"; then
+            echo -e "${YELLOW}调用 /pgo/save_maps 服务...${NC}"
+            ros2 service call /pgo/save_maps interface/srv/SaveMaps \
+                "{file_path: '$MAP_DIR/$MAP_NAME', save_patches: false}"
         else
-            echo -e "${YELLOW}警告: /pgo/save_map 服务不可用${NC}"
-            echo -e "${YELLOW}尝试订阅并保存 /pgo/map 话题...${NC}"
-            
-            # 保存点云话题
-            timeout 10s ros2 topic echo /pgo/map --once | tee "$MAP_DIR/${MAP_NAME}_raw.txt" > /dev/null
-            
-            # 如果有 pcl_ros 工具，可以使用以下命令保存 PCD
-            if command -v ros2 &> /dev/null; then
-                echo -e "${GREEN}保存点云到 PCD 格式...${NC}"
-                timeout 10s ros2 run pcl_ros pointcloud_to_pcd input:=/pgo/map _prefix:="$MAP_DIR/${MAP_NAME}" &
-                sleep 10
+            echo -e "${YELLOW}警告: /pgo/save_maps 服务不可用，尝试 FastLIO2 /save_map 服务...${NC}"
+            if ros2 service list 2>/dev/null | grep -q "^/save_map$"; then
+                ros2 service call /save_map interface/srv/SaveMaps \
+                    "{file_path: '$MAP_DIR/$MAP_NAME', save_patches: false}"
+            else
+                echo -e "${RED}错误: 未找到地图保存服务，请确认 SLAM 节点正在运行${NC}"
+                echo -e "${YELLOW}可用服务: $(ros2 service list 2>/dev/null | head -20)${NC}"
+                exit 1
             fi
         fi
         
@@ -89,13 +87,15 @@ case $SAVE_CHOICE in
         echo ""
         echo -e "${GREEN}[1/3] 保存 PGO 地图点云...${NC}"
         
-        # 保存 PGO 地图
-        if ros2 service list | grep -q "/pgo/save_map"; then
-            ros2 service call /pgo/save_map std_srvs/srv/Trigger
+        # 保存 PGO 地图 (interface/srv/SaveMaps, 服务名: /pgo/save_maps)
+        if ros2 service list 2>/dev/null | grep -q "/pgo/save_maps"; then
+            echo -e "${YELLOW}调用 /pgo/save_maps 服务...${NC}"
+            ros2 service call /pgo/save_maps interface/srv/SaveMaps \
+                "{file_path: '$MAP_DIR/$MAP_NAME', save_patches: false}"
         else
-            echo -e "${YELLOW}使用话题保存方式...${NC}"
-            timeout 10s ros2 run pcl_ros pointcloud_to_pcd input:=/pgo/map _prefix:="$MAP_DIR/${MAP_NAME}" &
-            sleep 10
+            echo -e "${YELLOW}警告: PGO 服务不可用，尝试 FastLIO2 /save_map ...${NC}"
+            ros2 service call /save_map interface/srv/SaveMaps \
+                "{file_path: '$MAP_DIR/$MAP_NAME', save_patches: false}"
         fi
         
         # 复制到 PCT PCD 目录
@@ -200,9 +200,13 @@ fi
 echo -e "  - 语义数据: ${BLUE}$SEMANTIC_SAVE_DIR/${NC}"
 echo ""
 echo -e "${YELLOW}下一步:${NC}"
-echo -e "  1. 使用 ${GREEN}./planning.sh${NC} 启动规划系统"
-echo -e "  2. 在规划脚本中会自动加载最新的地图"
+echo -e "  1. 设置地图路径环境变量:"
+echo -e "     ${GREEN}export NAV_MAP_PATH=\"$TOMOGRAM_DIR/${MAP_NAME}\"${NC}"
+echo -e "  2. 启动完整导航栈 (推荐):"
+echo -e "     ${GREEN}make navigation${NC}  或  ${GREEN}ros2 launch launch/navigation_run.launch.py${NC}"
+echo -e "  3. 单独测试 PCT 规划器:"
+echo -e "     ${GREEN}./planning.sh${NC}  (会自动检测最新地图)"
 echo ""
-echo -e "${YELLOW}可视化地图:${NC}"
+echo -e "${YELLOW}可视化 Tomogram:${NC}"
 echo -e "  ${BLUE}python3 src/global_planning/PCT_planner/tomography/scripts/visualize_tomogram.py --scene ${MAP_NAME}${NC}"
 echo ""
