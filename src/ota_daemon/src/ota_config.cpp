@@ -48,6 +48,15 @@ OtaDaemonConfig LoadConfig(const std::string &yaml_path) {
       if (dog["reload_script"]) cfg.dog_reload_script = dog["reload_script"].as<std::string>();
       if (dog["timeout_sec"]) cfg.dog_timeout_sec = dog["timeout_sec"].as<int>();
     }
+
+    // infra/ota Server 上报配置
+    if (root["reporter"]) {
+      auto r = root["reporter"];
+      if (r["enabled"])        cfg.reporter.enabled        = r["enabled"].as<bool>();
+      if (r["server_url"])     cfg.reporter.server_url     = r["server_url"].as<std::string>();
+      if (r["device_id_file"]) cfg.reporter.device_id_file = r["device_id_file"].as<std::string>();
+      if (r["api_key_file"])   cfg.reporter.api_key_file   = r["api_key_file"].as<std::string>();
+    }
   } catch (const std::exception &e) {
     OtaLogError("Failed to parse config %s: %s", yaml_path.c_str(), e.what());
   }

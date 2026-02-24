@@ -8,17 +8,17 @@ grpc_port: 50052
 bind_address: "0.0.0.0"
 
 # ── 设备标识 ──
-robot_id: "robot_001"
-hw_id: "dog_v2"
+robot_id: ""        # 留空则从 device_id_file 读取（与 Python Agent 共享）
+hw_id: "jetson-orin-nx-16"
 
-# ── OTA 状态文件 (daemon 专用目录, 与导航栈分离) ──
-ota_manifest_path: "/opt/robot/ota/installed_manifest.json"
-ota_backup_dir: "/opt/robot/ota/backup"
-ota_history_path: "/opt/robot/ota/upgrade_history.jsonl"
-system_version_path: "/opt/robot/ota/system_version.json"
+# ── OTA 状态文件 (与 Python Agent 共享同一 base_dir) ──
+ota_manifest_path: "/opt/lingtu/nav/ota/installed_manifest.json"
+ota_backup_dir: "/opt/lingtu/nav/ota/backup"
+ota_history_path: "/opt/lingtu/nav/ota/upgrade_history.jsonl"
+system_version_path: "/opt/lingtu/nav/ota/system_version.json"
 
 # ── 下载暂存 (替代 /tmp, 受 systemd ReadWritePaths 保护) ──
-staging_dir: "/opt/robot/ota/staging"
+staging_dir: "/opt/lingtu/nav/ota/staging"
 
 # ── Ed25519 公钥 (设备端验签, 留空=跳过) ──
 ota_public_key_path: ""
@@ -53,8 +53,17 @@ dog_board:
   # 连接超时 (秒)
   timeout_sec: 5
 
+# ── infra/ota Server 上报配置 ──
+# 每次 ApplyUpdate 成功/失败后向 OTA Server 发送报告
+# 使设备管理界面能实时看到 daemon 执行的部署（而不只是 Agent 的拉取部署）
+reporter:
+  enabled: true
+  server_url: "https://ota.inovxio.com/api"    # 替换为实际地址
+  # 与 Python Agent 共享同一个 device_id 文件（单一设备身份）
+  device_id_file: "/opt/lingtu/nav/ota/device_id"
+  api_key_file: "/opt/lingtu/nav/ota/api_key"   # 可选，留空则不带认证头
+
 # ── 目录白名单 (仅允许上传/安装到以下路径) ──
-# 对齐实际机器人文件布局, 不再使用虚假的 /opt/robot/models
 allowed_directories:
   # 模型 (步态/感知/规划)
   - "/home/sunrise/models"
@@ -63,9 +72,9 @@ allowed_directories:
   - "/home/sunrise/data/SLAM/navigation/maps"
   - "/home/sunrise/data/SLAM/navigation/src/global_planning"
   # 固件 (deb/bin 等需要 root 安装的)
-  - "/opt/robot/firmware"
+  - "/opt/lingtu/nav/firmware"
   # OTA 暂存
-  - "/opt/robot/ota/staging"
+  - "/opt/lingtu/nav/ota/staging"
 
 # ── 制品路径映射 ──
 # 详见 artifact_paths.yaml (同目录, 自动加载)
