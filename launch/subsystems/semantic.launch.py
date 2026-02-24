@@ -68,7 +68,7 @@ def generate_launch_description():
         remappings=[
             ("instruction", "/nav/semantic/instruction"),
             ("scene_graph", "/nav/semantic/scene_graph"),
-            ("resolved_goal", "/nav/semantic/resolved_goal"),
+            ("resolved_goal", "/nav/goal_pose"),          # 直接路由到 PCT Planner 标准输入
             ("status", "/nav/semantic/status"),
             ("odometry", "/nav/odometry"),
         ],

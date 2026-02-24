@@ -4,7 +4,7 @@
 将 PCT 原生话题 remap 到标准接口契约 (/nav/*):
   /pct_path          → /nav/global_path
   /pct_planner/status → /nav/planner_status
-  /planner_waypoint  → /nav/waypoint
+  /planner_waypoint  → /nav/way_point
 """
 
 from launch import LaunchDescription
@@ -78,7 +78,7 @@ def generate_launch_description():
             ("/pct_path",   "/nav/global_path"),
             ("/Odometry",   "/nav/odometry"),
             # 输出: remap 到标准接口
-            ("/planner_waypoint", "/nav/waypoint"),
+            ("/planner_waypoint", "/nav/way_point"),   # 修正：与 autonomy.launch.py 订阅名一致
         ],
     )
 
