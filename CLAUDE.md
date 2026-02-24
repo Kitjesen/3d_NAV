@@ -108,31 +108,47 @@ Livox LiDAR → SLAM (Fast-LIO2 + PGO) → Terrain Analysis → Planning → Dog
 
 **Fast Path** (System 1, ~0.17ms): Direct scene graph matching — keyword + spatial reasoning, confidence fusion (label 35%, CLIP 35%, detector 15%, spatial 15%). Target: >70% hit rate, threshold 0.75.
 
-**Slow Path** (System 2, ~2s): LLM reasoning with ESCA selective grounding — filters 200 objects → ~15 objects (92.5% token reduction), then calls LLM.
+**Slow Path** (System 2, ~2s): LLM reasoning with ESCA selective grounding — filters 200 objects → ~15 objects (92.5% token reduction), then calls LLM. Returns OmniNav hierarchical room hint (`hint_room`, `hint_room_center`) when target region is known.
+
+**AdaNav Entropy Trigger**: After Fast Path scoring, Shannon entropy over candidate scores is computed. If `score_entropy > 1.5` and `confidence < 0.85`, forced escalation to Slow Path (per AdaNav UAR Block principle).
+
+**LERa Failure Recovery** (`action_executor.lera_recover()`): 3-step Look-Explain-Replan on subgoal failure. After 2nd consecutive failure: LLM decides `retry_different_path | expand_search | requery_goal | abort`. Pure rule-based fallback if no LLM available.
+
+**Episodic Memory** (`episodic_memory.EpisodicMemory`): ReMEmbR-style spatiotemporal memory (500-record FIFO). Records (position, labels, room_type, timestamp) on each scene graph update. Queryable by text (keyword score) or proximity. Output formatted for LLM context.
+
+**HOV-SG Perception Upgrades**: Three-source CLIP fusion (`encode_three_source`: f_g global + f_l crop + f_m masked crop), DBSCAN feature refinement on TrackedObject history (every 5 detections), RoomNode view_embeddings K=10 FIFO for `query_similarity()`.
+
+**Frontier Descriptions** (`frontier_scorer._generate_frontier_description()`): L3MVN-style natural language descriptions per frontier using nearby object labels + `predict_room_type_from_labels()`. Passed to LLM prompt as 【当前可探索方向】.
+
+**VLingMem Region Summaries** (`topological_memory.update_region_summary()`): Per-node region description (labels + room type) stored in `TopoNode.region_summary`. `get_explored_summaries()` returns all explored-node summaries for LLM prompt as 【已探索区域记录】.
+
+**FSR-VLN Viewpoint Edges** (`topological_memory._viewpoint_edges`): Jaccard-weighted edges between TopoNodes sharing object labels (≤4m) or proximity (≤2m). Used for 1-hop score boosting in `query_by_text()`.
 
 ### Key Files in `src/semantic_planner/semantic_planner/`
 
-- `goal_resolver.py` — Fast-Slow core logic (1,783 LOC)
-- `planner_node.py` — ROS2 node (2,415 LOC)
-- `frontier_scorer.py` — MTU3D frontier grounding potential
-- `topological_memory.py` — Spatial memory graph
+- `goal_resolver.py` — Fast-Slow core logic; AdaNav entropy trigger (entropy>1.5 → force Slow Path); OmniNav hierarchical room-hint subgoal
+- `planner_node.py` — ROS2 node; LERa failure recovery integration; EpisodicMemory integration
+- `frontier_scorer.py` — MTU3D frontier grounding potential; L3MVN-style natural language frontier descriptions; TSP frontier ordering
+- `topological_memory.py` — Spatial memory graph; FSR-VLN viewpoint edges (Jaccard-weighted); VLingMem region summaries
+- `adacot.py` — AdaCoT adaptive reasoning router (7-dim rule + entropy; FAST/SLOW/AUTO decision)
+- `episodic_memory.py` — ReMEmbR-style spatiotemporal episodic memory (500-record FIFO, keyword/spatial retrieval)
 - `task_decomposer.py` — SayCan-style task decomposition
-- `sgnav_reasoner.py` — SGNav scene graph reasoner
+- `sgnav_reasoner.py` — SGNav scene graph reasoner; multi-view ObservationRecord accumulation
 - `implicit_fsm_policy.py` — Implicit FSM navigation policy (LOVON-style)
 - `exploration_strategy.py` — Frontier exploration strategy
 - `voi_scheduler.py` — Value of information scheduling
-- `action_executor.py` — Action primitive execution
+- `action_executor.py` — Action primitive execution; LERa 3-step failure recovery (retry/expand/requery/abort)
 - `llm_client.py` — Multi-backend LLM client (575 LOC)
 - `chinese_tokenizer.py` — jieba integration (335 LOC)
-- `prompt_templates.py` — LLM prompt templates
-- `semantic_prior.py` — Semantic priors for navigation
+- `prompt_templates.py` — LLM prompt templates; H-CoT 4-step; explored_summaries + frontier_descriptions params
+- `semantic_prior.py` — Semantic priors for navigation; room CLIP descriptions; predict_room_type_from_labels()
 
 ### Key Files in `src/semantic_perception/semantic_perception/`
 
-- `perception_node.py` — ROS2 perception node
-- `instance_tracker.py` — Scene graph builder (critical)
+- `perception_node.py` — ROS2 perception node; calls encode_three_source() when seg mask available
+- `instance_tracker.py` — Scene graph builder (critical); HOV-SG RoomNode view_embeddings (K=10); DBSCAN feature refinement; ViewNode clip_feature
 - `yolo_world_detector.py` — YOLO-World object detection
-- `clip_encoder.py` — CLIP feature encoder
+- `clip_encoder.py` — CLIP feature encoder; HOV-SG encode_three_source() (f_g+f_l+f_m, weights 0.25/0.50/0.25)
 - `scg_builder.py` / `scg_builder_optimized.py` — Scene graph construction
 - `topology_graph.py` — Topological graph from scene data
 - `laplacian_filter.py` — Point cloud filtering
@@ -226,7 +242,7 @@ launch/
 
 | Location | Tests | Coverage |
 |---|---|---|
-| `src/semantic_planner/test/` | 12 test files (goal_resolver, fast_slow_benchmark, action_executor, frontier_scorer, implicit_fsm, sgnav_reasoner, slow_path_llm, task_decomposer, topological_memory, exploration_strategy, fast_resolve, slow_path_real_llm) | ~90% |
+| `src/semantic_planner/test/` | 13 test files (goal_resolver, fast_slow_benchmark, action_executor, frontier_scorer, implicit_fsm, sgnav_reasoner, slow_path_llm, task_decomposer, topological_memory, exploration_strategy, fast_resolve, slow_path_real_llm, **episodic_memory**) | ~90% |
 | `src/semantic_perception/test/` | 6 test files (clip_encoder, incremental_update, laplacian_filter, parallel_comparison, scg_ros_integration, yolo_world_detector) | ~40% |
 
 ### Integration & Benchmark Tests

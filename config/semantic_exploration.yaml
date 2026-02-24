@@ -4,7 +4,7 @@
 # 与 semantic_planner.yaml 的关键差异:
 #   - SCG auto_expand: true  (打通 SCG 管道, 每10帧自动扩展多面体)
 #   - GCM enable: true       (全局覆盖掩码追踪探索进度)
-#   - exploration.strategy: frontier (使用 FrontierScorer)
+#   - exploration.strategy: frontier  (FrontierScorer 实时探索, SG-Nav 限定目标确认)
 #   - exploration.max_explore_steps: 50 (探索步数更多)
 #   - llm.backend: mock      (默认不需要 API key, 可按需改为 kimi/openai)
 #
@@ -109,7 +109,9 @@ semantic_planner_node:
     # ── 探索策略 (★ 核心参数) ──
     exploration:
       enable: true
-      strategy: "frontier"          # frontier = FrontierScorer (已完整实现)
+      strategy: "frontier"          # frontier = FrontierScorer 实时探索 (USS-Nav style)
+                                    # SG-Nav 子图推理仅在目标确认阶段按需触发
+                                    # 如需 SG-Nav 全程探索 (慢, <1Hz), 改为 "sg_nav"
       max_explore_steps: 50         # 探索模式步数更多
       step_distance: 2.0
       costmap_topic: "/nav/costmap"
@@ -131,9 +133,9 @@ semantic_planner_node:
       frontier_grounding_spatial_bonus: 0.1
       frontier_grounding_keyword_bonus: 0.4
       frontier_grounding_relation_bonus: 0.15
-      frontier_vision_weight: 0.0
+      frontier_vision_weight: 0.15
 
-      # SG-Nav (不使用 sg_nav 策略, 保留参数结构)
+      # SG-Nav 参数 (sg_nav 策略已启用)
       sgnav:
         max_subgraphs: 6
         use_llm_reasoning: false     # mock 模式下关闭 LLM 推理
@@ -149,6 +151,8 @@ semantic_planner_node:
         arrival_reperception: true
         continuous_reperception: true
         reperception_interval_m: 2.0
+        reperception_n_max: 10
+        reperception_s_thresh: 0.8
 
     # ── 融合权重 ──
     fusion:

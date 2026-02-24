@@ -144,5 +144,119 @@ class TestStatusManagement(unittest.TestCase):
         self.assertFalse(executor.check_timeout())
 
 
+class TestLeraRecover(unittest.TestCase):
+    """LERa 三步失败恢复测试。"""
+
+    def test_first_failure_retries_path(self):
+        executor = ActionExecutor()
+        result = executor.lera_recover(
+            failed_action="NAVIGATE(kitchen)",
+            current_labels=["chair", "table"],
+            original_goal="找到厨房",
+            failure_count=1,
+        )
+        self.assertEqual(result, "retry_different_path")
+
+    def test_second_failure_expands_search(self):
+        executor = ActionExecutor()
+        result = executor.lera_recover(
+            failed_action="NAVIGATE(kitchen)",
+            current_labels=["chair"],
+            original_goal="找到厨房",
+            failure_count=2,
+        )
+        self.assertEqual(result, "expand_search")
+
+    def test_third_failure_aborts(self):
+        executor = ActionExecutor()
+        result = executor.lera_recover(
+            failed_action="NAVIGATE(kitchen)",
+            current_labels=[],
+            original_goal="找到厨房",
+            failure_count=3,
+        )
+        self.assertEqual(result, "abort")
+
+    def test_empty_labels_still_works(self):
+        executor = ActionExecutor()
+        result = executor.lera_recover(
+            failed_action="FIND(cup)",
+            current_labels=[],
+            original_goal="find the red cup",
+            failure_count=1,
+        )
+        self.assertIn(result, (
+            "retry_different_path", "expand_search", "requery_goal", "abort",
+        ))
+
+    def test_llm_client_valid_response(self):
+        """Mock LLM returns valid JSON → use LLM action."""
+
+        class MockLLM:
+            def chat(self, prompt, max_tokens=200):
+                return '{"reason": "路径被阻挡", "action": "expand_search", "params": {}}'
+
+        executor = ActionExecutor()
+        result = executor.lera_recover(
+            failed_action="NAVIGATE(kitchen)",
+            current_labels=["door", "wall"],
+            original_goal="go to kitchen",
+            failure_count=1,
+            llm_client=MockLLM(),
+        )
+        self.assertEqual(result, "expand_search")
+
+    def test_llm_client_invalid_json_falls_back(self):
+        """Mock LLM returns garbage → fallback to rule-based."""
+
+        class MockLLM:
+            def chat(self, prompt, max_tokens=200):
+                return "I don't understand"
+
+        executor = ActionExecutor()
+        result = executor.lera_recover(
+            failed_action="NAVIGATE(kitchen)",
+            current_labels=["chair"],
+            original_goal="go to kitchen",
+            failure_count=1,
+            llm_client=MockLLM(),
+        )
+        self.assertEqual(result, "retry_different_path")
+
+    def test_llm_client_exception_falls_back(self):
+        """Mock LLM raises exception → fallback to rule-based."""
+
+        class MockLLM:
+            def chat(self, prompt, max_tokens=200):
+                raise ConnectionError("LLM unavailable")
+
+        executor = ActionExecutor()
+        result = executor.lera_recover(
+            failed_action="NAVIGATE(kitchen)",
+            current_labels=[],
+            original_goal="go to kitchen",
+            failure_count=2,
+            llm_client=MockLLM(),
+        )
+        self.assertEqual(result, "expand_search")
+
+    def test_llm_client_invalid_action_falls_back(self):
+        """Mock LLM returns invalid action → fallback."""
+
+        class MockLLM:
+            def chat(self, prompt, max_tokens=200):
+                return '{"reason": "test", "action": "dance", "params": {}}'
+
+        executor = ActionExecutor()
+        result = executor.lera_recover(
+            failed_action="NAVIGATE(kitchen)",
+            current_labels=["chair"],
+            original_goal="go to kitchen",
+            failure_count=1,
+            llm_client=MockLLM(),
+        )
+        self.assertEqual(result, "retry_different_path")
+
+
 if __name__ == "__main__":
     unittest.main()

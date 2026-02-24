@@ -95,6 +95,24 @@ ZH_ROOM_MAP = {
     "教室": "classroom",
 }
 
+# CLIP text-text 房间类型描述 (用于从可见物体标签预测房间类型, 无需 KG)
+ROOM_CLIP_DESCRIPTIONS = {
+    "kitchen": "a kitchen with stove refrigerator counter cooking area",
+    "bedroom": "a bedroom with bed pillow mattress wardrobe",
+    "living_room": "a living room with sofa couch TV television coffee table",
+    "bathroom": "a bathroom with toilet sink shower bathtub mirror",
+    "office": "an office with desk computer monitor chair shelves books",
+    "corridor": "a corridor hallway narrow passage door",
+    "dining_room": "a dining room with dining table chairs eating area",
+    "garage": "a garage with car parking tools",
+    "meeting_room": "a meeting room with table chairs projector whiteboard screen",
+    "stairwell": "a stairwell with stairs railing handrail emergency exit",
+    "lobby": "a lobby with reception sofa elevator door sign",
+    "storage": "a storage room with shelf cabinet box rack",
+    "lab": "a laboratory with equipment computer desk monitor",
+    "classroom": "a classroom with desk chair blackboard projector",
+}
+
 # 中文→英文物体类型映射 (常用)
 ZH_OBJECT_MAP = {
     "灭火器": "fire extinguisher", "门": "door", "椅子": "chair",
@@ -172,6 +190,88 @@ class SemanticPriorEngine:
             self.load_learned_priors(kg_path)
 
         self._inverse_index = self._build_inverse_index()
+
+        # CLIP 编码器 (用于 predict_room_type_from_labels)
+        self._clip_encoder = None
+        self._room_desc_keys: List[str] = []
+        self._room_desc_texts: List[str] = []
+
+    def set_clip_encoder(self, clip_encoder) -> None:
+        """注入 CLIP 编码器, 启用基于 CLIP text-text 相似度的房间类型预测。"""
+        self._clip_encoder = clip_encoder
+        self._room_desc_keys = list(ROOM_CLIP_DESCRIPTIONS.keys())
+        self._room_desc_texts = list(ROOM_CLIP_DESCRIPTIONS.values())
+        logger.info("SemanticPriorEngine: CLIP encoder set, room type prediction enabled")
+
+    def predict_room_type_from_labels(
+        self, visible_labels: List[str],
+    ) -> Dict[str, float]:
+        """
+        从当前可见物体标签预测房间类型 (纯 CLIP text-text, 不依赖 KG)。
+
+        将 visible_labels 拼成一段描述文本, 与每个 ROOM_CLIP_DESCRIPTIONS
+        做 CLIP text-text 相似度, 返回 {room_type: score}。
+
+        如果没有 CLIP 编码器, 退化为基于先验表的关键词匹配。
+
+        Args:
+            visible_labels: 当前视野中可见的物体标签列表
+
+        Returns:
+            {room_type: similarity_score} 按分数降序
+        """
+        if not visible_labels:
+            return {}
+
+        # 构造可见物体描述文本
+        label_text = "a room with " + " ".join(
+            lbl.lower() for lbl in visible_labels[:20]
+        )
+
+        # 优先使用 CLIP text-text 相似度
+        if self._clip_encoder and self._room_desc_texts:
+            try:
+                sims = self._clip_encoder.text_text_similarity(
+                    label_text, self._room_desc_texts,
+                )
+                if sims and len(sims) == len(self._room_desc_keys):
+                    result = {
+                        self._room_desc_keys[i]: max(0.0, float(sims[i]))
+                        for i in range(len(sims))
+                    }
+                    # 按分数降序排列
+                    return dict(sorted(
+                        result.items(), key=lambda x: x[1], reverse=True,
+                    ))
+            except Exception as e:
+                logger.debug("CLIP room prediction failed, falling back: %s", e)
+
+        # 退化方案: 基于先验表的关键词匹配
+        return self._predict_room_type_keyword(visible_labels)
+
+    def _predict_room_type_keyword(
+        self, visible_labels: List[str],
+    ) -> Dict[str, float]:
+        """退化方案: 用先验表统计可见物体与各房间的匹配度。"""
+        scores: Dict[str, float] = {}
+        labels_lower = [lbl.lower() for lbl in visible_labels]
+
+        for room_type, objects in self._priors.items():
+            matched = 0
+            total_prior = 0.0
+            for lbl in labels_lower:
+                for obj_label, prob in objects.items():
+                    if lbl in obj_label or obj_label in lbl:
+                        matched += 1
+                        total_prior += prob
+                        break
+            if matched > 0:
+                # 归一化: 匹配数量 × 平均先验概率
+                scores[room_type] = total_prior / max(len(objects), 1)
+
+        return dict(sorted(
+            scores.items(), key=lambda x: x[1], reverse=True,
+        ))
 
     def load_learned_priors(self, kg_path: str) -> bool:
         """

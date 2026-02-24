@@ -17,6 +17,7 @@ import time
 import math
 import logging
 from dataclasses import dataclass, field
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -45,6 +46,10 @@ class TopoNode:
     # 创新4: 房间关联
     room_id: int = -1                   # 所属房间 ID
     room_name: str = ""                 # 所属房间名称
+
+    # VLingMem 区域摘要
+    region_summary: str = ""
+    explored: bool = False
 
     def to_dict(self) -> Dict:
         d = {
@@ -92,6 +97,12 @@ class TopologicalMemory:
         self._visited_rooms: Dict[int, Dict] = {}  # room_id → {name, first_visit, visit_count, node_ids}
         self._room_transition_history: List[Tuple[int, int]] = []  # (from_room, to_room) 序列
 
+        # FSR-VLN viewpoint edges: node_id → [(neighbor_id, weight), ...]
+        self._viewpoint_edges: Dict[int, List[Tuple[int, float]]] = defaultdict(list)
+
+        # CLIP 编码器（可选，由外部注入）
+        self._clip_encoder = None
+
     @property
     def nodes(self) -> Dict[int, TopoNode]:
         return self._nodes
@@ -104,6 +115,10 @@ class TopologicalMemory:
     def visited_positions(self) -> List[np.ndarray]:
         """所有已访问位置。"""
         return [n.position for n in self._nodes.values()]
+
+    def set_clip_encoder(self, clip_encoder) -> None:
+        """注入 CLIP 编码器，用于 query_by_text 的语义匹配。"""
+        self._clip_encoder = clip_encoder
 
     def update_position(
         self,
@@ -204,40 +219,80 @@ class TopologicalMemory:
                 self._update_room_coverage(room_id, room_name, new_node.node_id)
 
             self._prune_if_needed()
+            self._connect_viewpoint_edges(new_node.node_id)
             return new_node
 
     def query_by_text(self, query: str, top_k: int = 3) -> List[TopoNode]:
         """
-        文本查询匹配拓扑节点 (CLIP-Nav 方案)。
+        文本查询匹配拓扑节点（CLIP-Nav 方案）。
 
-        匹配策略:
-          1. 标签匹配: 查询文本与节点可见物体标签对比
-          2. (如果有 CLIP) 文本-图像相似度
+        匹配策略（优先级降序）:
+          1. CLIP 文本-图像语义相似度（若节点有 clip_feature 且 clip_encoder 可用）
+          2. 标签关键词匹配
+          3. 场景快照包含匹配
 
         Args:
-            query: "有红色沙发的房间" / "entrance area"
+            query: 查询文本，如 "有红色沙发的房间" / "entrance area"
             top_k: 返回最多 N 个节点
 
         Returns:
-            匹配的节点列表 (按相关度降序)
+            匹配的节点列表（按相关度降序）
         """
         query_lower = query.lower()
         scored_nodes: List[Tuple[TopoNode, float]] = []
 
+        # 预计算 CLIP 查询向量（批量，只算一次）
+        query_clip_feat = None
+        if self._clip_encoder is not None:
+            try:
+                q_feats = self._clip_encoder.encode_text([query])
+                if q_feats is not None and q_feats.size > 0:
+                    query_clip_feat = q_feats[0]
+            except Exception:
+                pass
+
+        # Phase 1: 计算每个节点的原始分数
+        raw_scores: Dict[int, float] = {}
+
         for node in self._nodes.values():
             score = 0.0
 
-            # 标签匹配
+            # ── 源1: CLIP 文本-图像相似度（最高权重）──
+            if query_clip_feat is not None and node.clip_feature.size > 0:
+                try:
+                    import numpy as _np
+                    nf = node.clip_feature
+                    nf_norm = _np.linalg.norm(nf)
+                    if nf_norm > 0:
+                        clip_sim = float(_np.dot(query_clip_feat, nf / nf_norm))
+                        # CLIP 相似度映射到 [0, 3]，与关键词分数量纲对齐
+                        score += max(0.0, clip_sim) * 3.0
+                except Exception:
+                    pass
+
+            # ── 源2: 标签关键词匹配 ──
             for label in node.visible_labels:
                 if label.lower() in query_lower or query_lower in label.lower():
                     score += 1.0
 
-            # 场景快照匹配
-            if query_lower in node.scene_snapshot.lower():
+            # ── 源3: 场景快照包含匹配 ──
+            if node.scene_snapshot and query_lower in node.scene_snapshot.lower():
                 score += 0.5
 
             if score > 0:
-                scored_nodes.append((node, score))
+                raw_scores[node.node_id] = score
+
+        # Phase 2: 1-hop viewpoint neighbor boost (FSR-VLN Fast Path 图检索)
+        boosted_scores: Dict[int, float] = {}
+        for node_id, score in raw_scores.items():
+            boosted = score
+            for neighbor_id, edge_w in self.get_viewpoint_neighbors(node_id):
+                neighbor_score = raw_scores.get(neighbor_id, 0)
+                boosted = max(boosted, score + 0.3 * edge_w * neighbor_score)
+            boosted_scores[node_id] = boosted
+
+        for node_id, score in boosted_scores.items():
+            scored_nodes.append((self._nodes[node_id], score))
 
         scored_nodes.sort(key=lambda x: x[1], reverse=True)
         return [node for node, _ in scored_nodes[:top_k]]
@@ -352,6 +407,25 @@ class TopologicalMemory:
         info["node_ids"].add(node_id)
         if room_name and room_name != info.get("name", ""):
             info["name"] = room_name
+
+    def update_region_summary(self, node_id: int, visible_labels: List[str], room_type: str = "") -> None:
+        """更新指定节点的区域摘要（VLingMem 风格）。"""
+        node = self._nodes.get(node_id)
+        if node is None:
+            return
+        label_str = "、".join(list(dict.fromkeys(visible_labels))[:8]) if visible_labels else "无"
+        room_str = f"推测为{room_type}" if room_type and room_type != "未知区域" else "区域类型未知"
+        status = "已充分探索" if node.explored else "部分探索"
+        node.region_summary = f"包含对象：{label_str}，{room_str}，{status}"
+
+    def get_explored_summaries(self) -> List[str]:
+        """返回所有已探索区域的摘要（VLingMem 风格）。"""
+        summaries = []
+        for nid, node in self._nodes.items():
+            if node.region_summary:
+                pos_str = f"({node.position[0]:.1f},{node.position[1]:.1f})" if hasattr(node, 'position') else ""
+                summaries.append(f"节点{nid}{pos_str}：{node.region_summary}")
+        return summaries
 
     def get_exploration_summary(self) -> Dict:
         """
@@ -524,6 +598,41 @@ class TopologicalMemory:
 
         logger.info("TopologicalMemory loaded from %s (%d nodes)", path, len(self._nodes))
         return True
+
+    # ── Viewpoint edges (FSR-VLN) ──
+
+    def _connect_viewpoint_edges(self, new_node_id: int) -> None:
+        """为新节点建立 viewpoint 互联边 (FSR-VLN HMSG Viewpoint 层)。"""
+        new_node = self._nodes[new_node_id]
+        new_labels = set(new_node.visible_labels)
+
+        for nid, node in self._nodes.items():
+            if nid == new_node_id:
+                continue
+            dist = float(np.linalg.norm(new_node.position[:2] - node.position[:2]))
+            other_labels = set(node.visible_labels)
+
+            # 建边条件: 距离<4m 且有共同可见标签, 或距离<2m
+            shared = new_labels & other_labels
+            if dist < 4.0 and len(shared) > 0:
+                pass  # 建边
+            elif dist < 2.0:
+                pass  # 物理相邻, 建边
+            else:
+                continue
+
+            # 边权重 = Jaccard similarity, 最小 0.1
+            union = new_labels | other_labels
+            jaccard = len(shared) / len(union) if len(union) > 0 else 0.0
+            weight = max(jaccard, 0.1)
+
+            self._viewpoint_edges[new_node_id].append((nid, weight))
+            self._viewpoint_edges[nid].append((new_node_id, weight))
+
+    def get_viewpoint_neighbors(self, node_id: int) -> List[Tuple[int, float]]:
+        """返回 viewpoint 邻居 [(neighbor_id, weight), ...]，按 weight 降序。"""
+        neighbors = self._viewpoint_edges.get(node_id, [])
+        return sorted(neighbors, key=lambda x: x[1], reverse=True)
 
     # ── 内部方法 ──
 

@@ -444,6 +444,79 @@ class CLIPEncoder:
 
         return similarities
 
+    def _encode_single_image(self, rgb_bgr: np.ndarray) -> np.ndarray:
+        """编码单张完整图像（BGRorRGB→224x224→CLIP）。HOV-SG f_g 全局特征。"""
+        if self._model is None:
+            return np.array([])
+        try:
+            import torch
+            from PIL import Image
+            # BGR→RGB if needed (assume BGR input like cv2)
+            rgb = rgb_bgr[:, :, ::-1].copy()
+            pil_img = Image.fromarray(rgb)
+            tensor = self._preprocess(pil_img).unsqueeze(0).to(self._device)
+            with torch.no_grad():
+                feat = self._model.encode_image(tensor)
+                feat = feat / feat.norm(dim=-1, keepdim=True)
+                return feat.cpu().numpy()[0]
+        except Exception as e:
+            logger.debug("_encode_single_image failed: %s", e)
+            return np.array([])
+
+    def encode_three_source(
+        self,
+        rgb_frame: np.ndarray,
+        bbox: np.ndarray,
+        mask: Optional[np.ndarray] = None,
+        w_g: float = 0.25,
+        w_l: float = 0.50,
+        w_m: float = 0.25,
+    ) -> np.ndarray:
+        """
+        HOV-SG 三源 CLIP 融合 (f_g + f_l + f_m)。
+
+        f_g: 全帧特征（全局上下文，+41% mIOU 消融实验来源）
+        f_l: 裁剪区域（含背景）— 最重要（w_l=0.50）
+        f_m: 背景置零裁剪（去除显著背景干扰）
+
+        Returns: 归一化融合特征向量，或空数组（模型未加载）。
+        """
+        if self._model is None:
+            return np.array([])
+
+        f_g = self._encode_single_image(rgb_frame)
+        f_l = self.encode_image_crops(rgb_frame, [bbox])[0]
+
+        if mask is not None:
+            masked = rgb_frame.copy()
+            masked[~mask] = 0
+            f_m = self.encode_image_crops(masked, [bbox])[0]
+        else:
+            f_m = f_l  # fallback: 同 f_l
+
+        # 处理空数组 — 有效分量相加
+        parts = []
+        weights_sum = 0.0
+        if f_g.size > 0:
+            parts.append(w_g * f_g)
+            weights_sum += w_g
+        if f_l.size > 0:
+            parts.append(w_l * f_l)
+            weights_sum += w_l
+        if f_m.size > 0 and mask is not None:
+            parts.append(w_m * f_m)
+            weights_sum += w_m
+
+        if not parts:
+            return np.array([])
+
+        fused = sum(parts)
+        if weights_sum > 0:
+            fused = fused / weights_sum
+
+        norm = np.linalg.norm(fused)
+        return fused / norm if norm > 0 else fused
+
     def get_statistics(self) -> Dict[str, float]:
         """
         获取性能统计信息
