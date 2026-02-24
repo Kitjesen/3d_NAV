@@ -52,9 +52,9 @@
 
 ### App 体验
 - ✅ 运行参数页：参数搜索功能（130+ 参数快速定位）
-- 🔲 运行参数页：参数预设方案（室内/室外/低速巡检一键切换）
+- ✅ 运行参数页：参数预设方案（室内/室外/低速巡检一键切换）
 - 🔲 离线模式优化（无连接时 graceful 降级 + 缓存最后状态）
-- 🔲 深色模式审查（确保所有页面在 dark theme 下视觉一致）
+- ✅ 深色模式审查（确保所有页面在 dark theme 下视觉一致）
 
 ---
 
@@ -109,3 +109,11 @@
 11. ~~断联降级策略可配置化~~
     **已完成** — grpc_gateway.yaml 新增 4 参数 (disconnect_warn_sec/speed/stop_sec/action)，
     CheckDisconnection() 完全由配置驱动，支持 "idle" 或 "stop" 两种停车动作。
+
+12. ~~运行参数页：参数预设方案~~
+    **已完成** — 3 套预设（室内/室外/低速巡检）覆盖 10 个核心参数，
+    RuntimeConfigGateway.applyPreset() + 弹窗选择卡片，支持批量覆盖并立即推送。
+
+13. ~~深色模式审查~~
+    **已完成** — 修复 home_screen.dart 3 处硬编码浅色：运行状态文字 → AppColors.success，
+    MANUAL 徽章 → isDark 自适应（背景/文字），KPI 图标背景 → 深色下降至 20% 透明度。
