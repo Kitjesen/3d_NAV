@@ -88,6 +88,13 @@ else
     echo "⚠️  test_network_failure.py 不存在，跳过"
 fi
 
+# 5. 规划流水线 Stub 集成测试 (无硬件)
+if [ -f "tests/integration/test_planning_stub.sh" ]; then
+    run_test "规划流水线 Stub 集成测试" "tests/integration/test_planning_stub.sh"
+else
+    echo "⚠️  test_planning_stub.sh 不存在，跳过"
+fi
+
 # 总结
 echo "=========================================="
 echo "  测试结果汇总"
