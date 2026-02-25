@@ -39,6 +39,13 @@ make benchmark        # Performance benchmarks (tests/benchmark/run_all.sh)
 # Run a single test file directly
 cd src/semantic_planner && python -m pytest test/test_goal_resolver.py -v
 
+# Planning pipeline tests (no ROS2 required)
+# Linux/Robot: python3 tests/planning/test_pct_adapter_logic.py
+python tests/planning/test_pct_adapter_logic.py    # Unit tests: waypoint tracking, stuck detection, goal_reached
+
+# Planning pipeline stub integration test (requires ROS2 build)
+bash tests/integration/test_planning_stub.sh       # Stub mode: no hardware, uses static TF
+
 # System launch (scripts in repo root)
 ./mapping.sh          # Mapping mode (SLAM + sensors, manual drive)
 ./save_map.sh         # Save current map after mapping
@@ -244,12 +251,14 @@ launch/
 |---|---|---|
 | `src/semantic_planner/test/` | 13 test files (goal_resolver, fast_slow_benchmark, action_executor, frontier_scorer, implicit_fsm, sgnav_reasoner, slow_path_llm, task_decomposer, topological_memory, exploration_strategy, fast_resolve, slow_path_real_llm, **episodic_memory**) | ~90% |
 | `src/semantic_perception/test/` | 6 test files (clip_encoder, incremental_update, laplacian_filter, parallel_comparison, scg_ros_integration, yolo_world_detector) | ~40% |
+| `tests/planning/` | `test_pct_adapter_logic.py` — 20 pure Python unit tests: path downsampling (3D distance), waypoint progression, stuck detection (mock time), goal_reached event, no-hardware | ~85% |
 
 ### Integration & Benchmark Tests
 
 | Location | Files |
 |---|---|
-| `tests/integration/` | run_all.sh, test_full_stack.sh, test_grpc_endpoints.py, test_network_failure.py, test_topic_hz.py |
+| `tests/integration/` | run_all.sh, test_full_stack.sh, test_grpc_endpoints.py, test_network_failure.py, test_topic_hz.py, **test_planning_stub.sh** (stub模式规划流水线), **test_planning_pipeline.py** (ROS2注入假里程计/路径/地形) |
+| `tests/planning/` | **test_pct_adapter_logic.py** — 纯Python，无需ROS2 |
 | `tests/benchmark/` | run_all.sh, benchmark_grpc.sh, benchmark_planner.sh, benchmark_slam.sh |
 | `tests/` (root) | test_belief_system.py, test_chinese_tokenizer.py, test_goal_resolver.py, test_laplacian_filter.py, test_offline_pipeline.py, test_topology_graph.py |
 
@@ -292,6 +301,14 @@ All standard topics use `/nav/` prefix. Defined in `config/topic_contract.yaml`.
 | `/nav/goal_pose` | PoseStamped | Navigation goal |
 | `/nav/slow_down` | std_msgs/Int8 | Slow-down level (0=normal, 1-3=slow) |
 | `/nav/stop` | std_msgs/Int8 | Stop signal (0=clear, 2=full stop) |
+| `/nav/map_clearing` | std_msgs/Float32 | terrain_analysis 地形清除半径（可选） |
+| `/nav/cloud_clearing` | std_msgs/Float32 | terrain_analysis_ext 点云清除半径（可选） |
+| `/nav/navigation_boundary` | geometry_msgs/PolygonStamped | 导航边界多边形（可选） |
+| `/nav/added_obstacles` | sensor_msgs/PointCloud2 | 动态附加障碍物（可选） |
+| `/nav/check_obstacle` | std_msgs/Bool | 障碍物检测开关（可选） |
+| `/nav/localization_quality` | std_msgs/Float32 | ICP 匹配质量分数 |
+| `/nav/relocalize` | interface/srv/Relocalize | 重定位服务 |
+| `/nav/relocalize_check` | interface/srv/IsValid | 检查重定位是否完成 |
 | `/nav/semantic/scene_graph` | String (JSON) | ConceptGraphs scene graph |
 | `/nav/semantic/detections_3d` | Detection3DArray | 3D object detections |
 | `/nav/semantic/instruction` | String | Natural language navigation instruction |
@@ -310,6 +327,19 @@ If changing topic names, update `config/topic_contract.yaml` and `docs/02-archit
 |---|---|---|
 | `/cloud_map` | `/nav/map_cloud` | terrain_analysis / terrain_analysis_ext / local_planner 订阅 |
 | `/cloud_registered` | `/nav/registered_cloud` | sensor_scan_generation 订阅（机体坐标系，与上面不同） |
+| `/map_clearing` | `/nav/map_clearing` | terrain_analysis 地形清除（**可选**，无发布者时静默等待） |
+| `/cloud_clearing` | `/nav/cloud_clearing` | terrain_analysis_ext 点云清除（**可选**） |
+| `/navigation_boundary` | `/nav/navigation_boundary` | local_planner 边界约束（**可选**） |
+| `/added_obstacles` | `/nav/added_obstacles` | local_planner 动态障碍（**可选**） |
+| `/check_obstacle` | `/nav/check_obstacle` | local_planner 障碍检测开关（**可选**） |
+
+**localizer_icp.launch.py** 关键 remap（带 namespace="localizer"，相对名需显式映射）:
+
+| 内部话题 | 标准接口 |
+|---|---|
+| `map_cloud` | `/nav/map_cloud` |
+| `relocalize` | `/nav/relocalize` |
+| `relocalize_check` | `/nav/relocalize_check` |
 
 ## Deployment
 
