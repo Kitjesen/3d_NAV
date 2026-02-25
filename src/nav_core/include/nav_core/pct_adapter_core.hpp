@@ -103,6 +103,7 @@ public:
     if (path_.empty() || goalReached_) return r;
 
     // ── Stuck detection + 两级重规划 (pct_path_adapter.cpp:198-232) ──
+    // 注意: 与原始 C++ 一致, stuck 检测不阻断后续的航点搜索和到达检测
     if (lastProgressTime_ > 0) {
       double elapsed = currentTime - lastProgressTime_;
       if (elapsed > p_.stuckTimeoutSec) {
@@ -113,12 +114,10 @@ public:
             lastProgressTime_ = currentTime;
             r.event = WaypointEvent::kReplanning;
             r.currentIndex = currentIdx_;
-            return r;
           }
         } else {
           r.event = WaypointEvent::kStuckFinal;
           r.currentIndex = currentIdx_;
-          return r;
         }
       }
     }

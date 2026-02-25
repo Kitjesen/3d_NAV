@@ -1,3 +1,9 @@
+/**
+ * pathFollower.cpp — ROS2 Thin Shell
+ *
+ * 核心算法: nav_core::computeControl (path_follower_core.hpp)
+ * 本文件只负责: ROS2 通信 (pub/sub/参数) + 类型转换
+ */
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +39,7 @@
 #include "rmw/types.h"
 #include "rmw/qos_profiles.h"
 
+#include "nav_core/path_follower_core.hpp"
 
 using namespace std;
 
@@ -146,6 +153,9 @@ public:
 
     pubSpeed_ = create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 5);
 
+    // --- Sync params to nav_core ---
+    syncCoreParams();
+
     // --- Initialization ---
     if (autonomyMode_) {
       joySpeed_ = autonomySpeed_ / maxSpeed_;
@@ -237,6 +247,7 @@ private:
         RCLCPP_WARN(get_logger(), "Unknown dynamic param: %s", name.c_str());
       }
     }
+    syncCoreParams();
     return result;
   }
 
@@ -286,6 +297,32 @@ private:
   bool manualMode_ = false;
 
   nav_msgs::msg::Path path_;
+
+  // ── nav_core 算法 (替代 controlLoop 中的手动数学) ──
+  nav_core::PathFollowerParams coreParams_;
+  nav_core::PathFollowerState  coreState_;
+
+  void syncCoreParams() {
+    coreParams_.sensorOffsetX    = sensorOffsetX_;
+    coreParams_.sensorOffsetY    = sensorOffsetY_;
+    coreParams_.baseLookAheadDis = baseLookAheadDis_;
+    coreParams_.lookAheadRatio   = lookAheadRatio_;
+    coreParams_.minLookAheadDis  = minLookAheadDis_;
+    coreParams_.maxLookAheadDis  = maxLookAheadDis_;
+    coreParams_.yawRateGain      = yawRateGain_;
+    coreParams_.stopYawRateGain  = stopYawRateGain_;
+    coreParams_.maxYawRate       = maxYawRate_;
+    coreParams_.maxSpeed         = maxSpeed_;
+    coreParams_.maxAccel         = maxAccel_;
+    coreParams_.switchTimeThre   = switchTimeThre_;
+    coreParams_.dirDiffThre      = dirDiffThre_;
+    coreParams_.omniDirGoalThre  = omniDirGoalThre_;
+    coreParams_.omniDirDiffThre  = omniDirDiffThre_;
+    coreParams_.stopDisThre      = stopDisThre_;
+    coreParams_.slowDwnDisThre   = slowDwnDisThre_;
+    coreParams_.twoWayDrive      = twoWayDrive_;
+    coreParams_.noRotAtGoal      = noRotAtGoal_;
+  }
 
   // ROS Handles
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subOdom_;
@@ -413,160 +450,81 @@ private:
     slowDown_ = slow->data;
   }
 
-  // --- Control Loop ---
+  // --- Control Loop (Thin Shell — 核心算法在 nav_core::computeControl) ---
   void controlLoop()
   {
     if (pathInit_) {
-      // P5: 使用缓存的 cos/sin(vehicleYawRec_)，消除控制循环内 4 次 trig 调用
+      int pathSize = path_.poses.size();
+      if (pathSize == 0) return;
+
+      // ── 1. 坐标变换: 机器人在路径参考帧中的位置 ──
       float dx = vehicleX_ - vehicleXRec_, dy = vehicleY_ - vehicleYRec_;
       float vehicleXRel =  cosVehicleYawRec_ * dx + sinVehicleYawRec_ * dy;
       float vehicleYRel = -sinVehicleYawRec_ * dx + cosVehicleYawRec_ * dy;
 
-      int pathSize = path_.poses.size();
-      if (pathSize == 0) return;  // 空路径，直接返回
-      
-      float endDisX = path_.poses[pathSize - 1].pose.position.x - vehicleXRel;
-      float endDisY = path_.poses[pathSize - 1].pose.position.y - vehicleYRel;
-      float endDis = sqrt(endDisX * endDisX + endDisY * endDisY);
-
-      // ===== Adaptive Lookahead Distance =====
-      float currentSpeed = fabs(vehicleSpeed_);
-      float adaptiveLookAhead = baseLookAheadDis_ + lookAheadRatio_ * currentSpeed;
-      
-      if (adaptiveLookAhead < minLookAheadDis_) adaptiveLookAhead = minLookAheadDis_;
-      else if (adaptiveLookAhead > maxLookAheadDis_) adaptiveLookAhead = maxLookAheadDis_;
-      
-      lookAheadDis_ = adaptiveLookAhead;
-
-      // ===== Optimized Path Point Search =====
-      if (pathSize != lastPathSize_) {
-        lastPathPointID_ = 0;
-        lastPathSize_ = pathSize;
-      }
-      
-      pathPointID_ = (lastPathPointID_ > 2) ? (lastPathPointID_ - 2) : 0;
-
-      // P2: 循环内保留目标点坐标，避免循环后重复计算
-      float disX = 0, disY = 0;
-      const float lookAheadSq = lookAheadDis_ * lookAheadDis_;
-      while (pathPointID_ < pathSize - 1) {
-        disX = path_.poses[pathPointID_].pose.position.x - vehicleXRel;
-        disY = path_.poses[pathPointID_].pose.position.y - vehicleYRel;
-        if (disX * disX + disY * disY >= lookAheadSq) {
-          break;
-        }
-        pathPointID_++;
-      }
-      // 确保最后一个点也被取到（pathSize-1 时退出循环）
-      if (pathPointID_ >= pathSize - 1) {
-        disX = path_.poses[pathSize - 1].pose.position.x - vehicleXRel;
-        disY = path_.poses[pathSize - 1].pose.position.y - vehicleYRel;
+      // ── 2. ROS2 Path → nav_core Vec3 ──
+      std::vector<nav_core::Vec3> pathPoints(pathSize);
+      for (int i = 0; i < pathSize; i++) {
+        pathPoints[i].x = path_.poses[i].pose.position.x;
+        pathPoints[i].y = path_.poses[i].pose.position.y;
+        pathPoints[i].z = path_.poses[i].pose.position.z;
       }
 
-      lastPathPointID_ = pathPointID_;
+      // ── 3. 计算 slowFactor (ROS2 Shell 处理减速/停车时间逻辑) ──
+      double slowFactor = 1.0;
+      if ((odomTime_ < slowInitTime_ + slowTime1_ && slowInitTime_ > 0) || slowDown_ == 1)
+        slowFactor = slowRate1_;
+      else if ((odomTime_ < slowInitTime_ + slowTime1_ + slowTime2_ && slowInitTime_ > 0) || slowDown_ == 2)
+        slowFactor = slowRate2_;
+      else if (slowDown_ == 3)
+        slowFactor = slowRate3_;
 
-      float dis = std::sqrt(disX * disX + disY * disY);  // 只算一次
-      float pathDir = atan2(disY, disX);
+      // ── 4. 调用核心算法 ──
+      nav_core::Vec3 vehicleRel{vehicleXRel, vehicleYRel, 0};
+      double yawDiff = vehicleYaw_ - vehicleYawRec_;
 
-      float dirDiff = vehicleYaw_ - vehicleYawRec_ - pathDir;
-      // P1: fmod 替代 while 循环归一化（无分支循环，单次计算）
-      dirDiff = std::fmod(dirDiff + PI, 2.0 * PI);
-      if (dirDiff < 0) dirDiff += 2.0 * PI;
-      dirDiff -= PI;
+      auto out = nav_core::computeControl(
+        vehicleRel, yawDiff, pathPoints,
+        joySpeed_, odomTime_, slowFactor, safetyStop_,
+        coreParams_, coreState_);
 
-      if (twoWayDrive_) {
-        // 加迟滞带（±0.1 rad），防止在 π/2 附近来回切换方向
-        static constexpr float kTwoWayHysteresis = 0.1f;
-        double time = now().seconds();
-        if (fabs(dirDiff) > PI / 2 + kTwoWayHysteresis && navFwd_ && time - switchTime_ > switchTimeThre_) {
-          navFwd_ = false;
-          switchTime_ = time;
-        } else if (fabs(dirDiff) < PI / 2 - kTwoWayHysteresis && !navFwd_ && time - switchTime_ > switchTimeThre_) {
-          navFwd_ = true;
-          switchTime_ = time;
-        }
-      }
-
-      float joySpeed2 = maxSpeed_ * joySpeed_;
-      if (!navFwd_) {
-        dirDiff += PI;
-        if (dirDiff > PI) dirDiff -= 2 * PI;
-        joySpeed2 *= -1;
-      }
-
-      if (fabs(vehicleSpeed_) < 2.0 * maxAccel_ / 100.0) vehicleYawRate_ = -stopYawRateGain_ * dirDiff;
-      else vehicleYawRate_ = -yawRateGain_ * dirDiff;
-
-      if (vehicleYawRate_ > maxYawRate_ * PI / 180.0) vehicleYawRate_ = maxYawRate_ * PI / 180.0;
-      else if (vehicleYawRate_ < -maxYawRate_ * PI / 180.0) vehicleYawRate_ = -maxYawRate_ * PI / 180.0;
-
-      if (joySpeed2 == 0 && !autonomyMode_) {
-        vehicleYawRate_ = maxYawRate_ * joyYaw_ * PI / 180.0;
-      } else if (pathSize <= 1 || (dis < stopDisThre_ && noRotAtGoal_)) {
-        vehicleYawRate_ = 0;
-      }
-
-      if (pathSize <= 1) {
-        joySpeed2 = 0;
-      } else if (endDis / slowDwnDisThre_ < joySpeed_) {
-        joySpeed2 *= endDis / slowDwnDisThre_;
-      }
-
-      float joySpeed3 = joySpeed2;
-      if ((odomTime_ < slowInitTime_ + slowTime1_ && slowInitTime_ > 0) || slowDown_ == 1) joySpeed3 *= slowRate1_;
-      else if ((odomTime_ < slowInitTime_ + slowTime1_ + slowTime2_ && slowInitTime_ > 0) || slowDown_ == 2) joySpeed3 *= slowRate2_;
-      else if (slowDown_ == 3) joySpeed3 *= slowRate3_;
-
-      // P3: 速度控制简化——提取 stepToward lambda 消除重复分支
-      auto stepToward = [&](float cur, float tgt) {
-        float step = maxAccel_ / 100.0f;
-        return (cur < tgt) ? std::min(cur + step, tgt)
-             : (cur > tgt) ? std::max(cur - step, tgt) : cur;
-      };
-      bool canAccel = (fabs(dirDiff) < dirDiffThre_ ||
-                       (dis < omniDirGoalThre_ && fabs(dirDiff) < omniDirDiffThre_))
-                      && dis > stopDisThre_;
-      vehicleSpeed_ = canAccel ? stepToward(vehicleSpeed_, joySpeed3)
-                               : stepToward(vehicleSpeed_, 0.0f);
-
+      // ── 5. ROS2 Shell 后处理 ──
+      // 倾斜停车
       if (odomTime_ < stopInitTime_ + stopTime_ && stopInitTime_ > 0) {
-        vehicleSpeed_ = 0;
-        vehicleYawRate_ = 0;
+        coreState_.vehicleSpeed = 0;
+        out.cmd.wz = 0;
       }
 
-      if (safetyStop_ >= 1) vehicleSpeed_ = 0;
-      if (safetyStop_ >= 2) vehicleYawRate_ = 0;
+      // 非自主模式 + 零速: 手动 yaw 控制
+      if (joySpeed_ == 0 && !autonomyMode_) {
+        out.cmd.wz = maxYawRate_ * joyYaw_ * PI / 180.0;
+      }
 
+      // 同步 vehicleSpeed_ 供其他回调使用
+      vehicleSpeed_ = coreState_.vehicleSpeed;
+      vehicleYawRate_ = out.cmd.wz;
+      navFwd_ = coreState_.navFwd;
+
+      // ── 6. 发布 ──
       pubSkipCount_--;
       if (pubSkipCount_ < 0) {
         geometry_msgs::msg::TwistStamped cmd_vel;
-        cmd_vel.header.frame_id = "body";  // Use body frame (consistent with Fast-LIO2 TF)
+        cmd_vel.header.frame_id = "body";
         cmd_vel.header.stamp = rclcpp::Time(static_cast<uint64_t>(odomTime_ * 1e9));
-        cmd_vel.twist.linear.x = 0;
-        cmd_vel.twist.linear.y = 0;
-        cmd_vel.twist.angular.z = vehicleYawRate_;
-
-        if (fabs(vehicleSpeed_) > maxAccel_ / 100.0) {
-          if (omniDirGoalThre_ > 0) {
-            cmd_vel.twist.linear.x = cos(dirDiff) * vehicleSpeed_;
-            cmd_vel.twist.linear.y = -sin(dirDiff) * vehicleSpeed_;
-          } else {
-            cmd_vel.twist.linear.x = vehicleSpeed_;
-          }
-        }
+        cmd_vel.twist.linear.x = out.cmd.vx;
+        cmd_vel.twist.linear.y = out.cmd.vy;
+        cmd_vel.twist.angular.z = out.cmd.wz;
 
         if (manualMode_) {
           cmd_vel.twist.linear.x = maxSpeed_ * joyManualFwd_;
           if (omniDirGoalThre_ > 0) cmd_vel.twist.linear.y = maxSpeed_ / 2.0 * joyManualLeft_;
           cmd_vel.twist.angular.z = maxYawRate_ * PI / 180.0 * joyManualYaw_;
-          // 手动模式同样需要遵守安全停车指令，防止越过硬件保护
           if (safetyStop_ >= 1) { cmd_vel.twist.linear.x = 0; cmd_vel.twist.linear.y = 0; }
           if (safetyStop_ >= 2) cmd_vel.twist.angular.z = 0;
         }
 
         pubSpeed_->publish(cmd_vel);
         pubSkipCount_ = pubSkipNum_;
-
       }
     }
   }
