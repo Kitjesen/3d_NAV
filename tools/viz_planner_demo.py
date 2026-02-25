@@ -91,6 +91,79 @@ DT       = 1.0 / FPS
 SIM_TIME = 22.0    # 总仿真时间 (s)
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 场景预设库
+# ═══════════════════════════════════════════════════════════════════════════
+
+SCENES = {
+    # 场景1: 默认 — 动态障碍物从下方横穿
+    "default": dict(
+        name="动态障碍物穿越",
+        desc="动态障碍从下方穿越路径，机器人实时绕行",
+        static_obs=[
+            (3.5, 2.5, 0.7), (3.5, 9.5, 0.7),
+            (7.0, 4.0, 0.9), (7.0, 8.0, 0.6),
+            (11.0, 3.0, 0.7), (11.0, 9.0, 0.8),
+            (5.5, 3.5, 0.5),
+            (14.0, 5.0, 0.6), (14.0, 7.5, 0.5),
+        ],
+        global_path=[
+            (0.5, 6.0), (2.0, 6.0), (4.5, 5.5), (6.0, 6.0),
+            (8.5, 6.0), (10.0, 6.0), (12.5, 6.0),
+            (13.5, 6.2), (15.5, 6.0), (17.0, 6.0),
+        ],
+        dyn_traj=[(9.0, 1.0), (9.0, 11.0)],
+        dyn_r=0.55, dyn_spd=2.2, sim_time=22.0,
+    ),
+    # 场景2: 窄走廊 — 两侧障碍密集，路径被大量红色路径封锁
+    "corridor": dict(
+        name="窄走廊穿行",
+        desc="两侧障碍形成走廊，大量候选路径被阻（红色），机器人低速贴边穿行",
+        static_obs=[
+            (3.5, 8.0, 0.55), (6.0, 7.8, 0.55), (8.5, 8.0, 0.55),
+            (11.0, 7.8, 0.55), (13.5, 8.0, 0.55), (16.0, 7.8, 0.55),
+            (3.5, 4.0, 0.55), (6.0, 4.2, 0.55), (8.5, 4.0, 0.55),
+            (11.0, 4.2, 0.55), (13.5, 4.0, 0.55), (16.0, 4.2, 0.55),
+            (2.0, 3.0, 0.6), (2.0, 9.0, 0.6),
+        ],
+        global_path=[
+            (0.5, 6.0), (2.5, 6.0), (5.0, 6.0), (7.5, 6.0),
+            (10.0, 6.0), (12.5, 6.0), (15.0, 6.0), (17.0, 6.0),
+        ],
+        dyn_traj=[(5.0, 10.5), (5.0, 1.5)],
+        dyn_r=0.4, dyn_spd=1.5, sim_time=20.0,
+    ),
+    # 场景3: 对向动态障碍 — 迎面驶来，机器人侧移让道
+    "headon": dict(
+        name="对向障碍物迎面",
+        desc="动态障碍从正前方迎面驶来，机器人必须侧偏让道后回归路径",
+        static_obs=[
+            (4.0, 2.5, 0.7), (4.0, 9.5, 0.7),
+            (9.0, 2.0, 0.8), (9.0, 10.0, 0.8),
+            (14.0, 2.5, 0.6), (14.0, 9.5, 0.6),
+        ],
+        global_path=[
+            (0.5, 6.0), (2.5, 6.0), (5.0, 6.0), (7.5, 6.0),
+            (10.0, 6.0), (12.5, 6.0), (15.0, 6.0), (17.0, 6.0),
+        ],
+        dyn_traj=[(16.5, 6.0), (1.0, 6.0)],
+        dyn_r=0.65, dyn_spd=1.6, sim_time=20.0,
+    ),
+}
+
+
+def _apply_scene(name: str):
+    """将场景参数写入全局变量"""
+    global STATIC_OBS, GLOBAL_PATH, DYN_OBS_TRAJ, DYN_OBS_R, DYN_OBS_SPD, SIM_TIME
+    s = SCENES[name]
+    STATIC_OBS   = s['static_obs']
+    GLOBAL_PATH  = s['global_path']
+    DYN_OBS_TRAJ = s['dyn_traj']
+    DYN_OBS_R    = s['dyn_r']
+    DYN_OBS_SPD  = s['dyn_spd']
+    SIM_TIME     = s['sim_time']
+    return s['name'], s['desc']
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 候选路径生成 (对应 localPlanner readPaths / startPaths)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -166,7 +239,6 @@ class Robot:
         self.mode = "FOLLOWING"
         self.reached = False
         self.trail = [(self.x, self.y)]
-        self._escape_frames = 0
 
     # ── 动态障碍物位置 ────────────────────────────────────────────────────
 
@@ -221,49 +293,43 @@ class Robot:
         if best[1] > 0:
             # 正常：有可通行路径
             self.best_path = best[0]
-            self._escape_frames = 0
             self.mode = ("AVOIDING"
                          if any(math.hypot(ox - self.x, oy - self.y) < ADJACENT_RANGE
                                 for ox, oy, _ in all_obs)
                          else "FOLLOWING")
         else:
-            # 降级 1: 放宽安全裕量（50% margin）再评分
-            relaxed = []
-            for pts_body in CANDIDATE_BODY:
-                pts_w = _body_to_world(pts_body, self.x, self.y, self.yaw)
-                s = _score_path(pts_w, nearby, goal_dir, (self.x, self.y),
-                                margin_scale=0.5)
-                relaxed.append((pts_w, s))
-            self.scored_paths = relaxed          # 用放宽版覆盖显示
-            best_r = max(relaxed, key=lambda x: x[1])
-            if best_r[1] > 0:
-                self.best_path = best_r[0]
-            else:
-                self.best_path = []             # 降级 2/3: follow 里处理旋转/后退
+            # ── 对应真实 localPlanner 的 pathScale 收缩循环 ──────────────
+            # C++ 行为：先缩小 pathScale（路径脚印变窄），再缩 pathRange，
+            # 仍无解则发布零点路径 → pathFollower joy_speed2=0 → 停车
+            found = False
+            for scale in [0.7, 0.5, 0.35]:       # 对应多次 pathScale -= step
+                relaxed = []
+                for pts_body in CANDIDATE_BODY:
+                    pts_w = _body_to_world(pts_body, self.x, self.y, self.yaw)
+                    s = _score_path(pts_w, nearby, goal_dir, (self.x, self.y),
+                                    margin_scale=scale)
+                    relaxed.append((pts_w, s))
+                best_r = max(relaxed, key=lambda x: x[1])
+                if best_r[1] > 0:
+                    self.scored_paths = relaxed   # 用收缩版路径显示
+                    self.best_path = best_r[0]
+                    found = True
+                    break
 
-            self._escape_frames += 1
-            self.mode = "ESCAPING"
+            if not found:
+                # 真实行为：pathFound=false → 发布零点路径 → 停车
+                self.best_path = []
+
+            self.mode = "BLOCKED" if not found else "AVOIDING"
 
     # ── pathFollower: Pure Pursuit ────────────────────────────────────────
 
     def _follow(self):
         if not self.best_path:
-            # ── 逃脱模式 ───────────────────────────────────────────────────
-            gx, gy = GLOBAL_PATH[min(self.wp_idx, len(GLOBAL_PATH) - 1)]
-            goal_dir = math.atan2(gy - self.y, gx - self.x)
-            dir_diff = math.atan2(math.sin(goal_dir - self.yaw),
-                                   math.cos(goal_dir - self.yaw))
-            max_wr = MAX_YAW_RATE * math.pi / 180
-
-            if self._escape_frames < int(FPS * 1.5):
-                # 阶段1: 减速 + 原地转向目标方向
-                self.wyaw  = max(-max_wr, min(max_wr, YAW_RATE_GAIN * dir_diff))
-                self.speed = max(self.speed - MAX_ACCEL * DT * 2, 0.0)
-            else:
-                # 阶段2: 缓慢后退
-                self.wyaw  = max(-max_wr * 0.5, min(max_wr * 0.5,
-                                                      YAW_RATE_GAIN * dir_diff))
-                self.speed = max(self.speed - MAX_ACCEL * DT, -0.3)
+            # ── 对应真实 pathFollower 收到 path_size=1 时的行为 ──────────
+            # C++ 行为: joy_speed2 = 0.0，机器人制动停车，不做任何转向
+            self.speed = max(self.speed - MAX_ACCEL * DT * 2, 0.0)
+            self.wyaw  = 0.0
             return
 
         # 终点距离
@@ -541,14 +607,17 @@ def _colormap_score(s):
     return (r, g, 0.1)
 
 
-def make_animation(save_path=None):
+def make_animation(save_path=None, scene_name=None):
     robot  = Robot()
     n_frames = int(SIM_TIME * FPS)
+
+    if scene_name is None:
+        scene_name = '局部避障规划演示'
 
     fig, ax, ax_info = make_figure()
     arts = build_artists(ax, ax_info)
 
-    title_obj = ax.set_title('MapPilot — 局部避障规划演示  t=0.00s',
+    title_obj = ax.set_title(f'MapPilot — {scene_name}  t=0.00s',
                                color='#c9d1d9', fontsize=11, pad=6)
 
     def update(frame):
@@ -649,14 +718,13 @@ def make_animation(save_path=None):
             arts['status_msg'].set_text('● 到达目标！')
             arts['status_msg'].set_color('#ffd700')
             arts['status_detail'].set_text('导航完成。\n机器人已停在目标点。')
-        elif robot.mode == 'ESCAPING':
-            phase = '后退' if robot._escape_frames >= int(FPS * 1.5) else '原地转向'
-            arts['status_msg'].set_text('[!] 逃脱模式')
+        elif robot.mode == 'BLOCKED':
+            arts['status_msg'].set_text('[X] 全路径受阻 → 停车')
             arts['status_msg'].set_color('#ff9900')
             arts['status_detail'].set_text(
-                f'所有路径受阻 ({robot._escape_frames}帧)\n'
-                f'降级策略: {phase}\n'
-                f'尝试放宽安全裕量重规划')
+                f'pathScale 收缩后仍无解\n'
+                f'C++真实行为: 发布零点路径\n'
+                f'pathFollower joy_speed2=0 → 停车')
         elif robot.mode == 'AVOIDING':
             arts['status_msg'].set_text('[!] 障碍物规避')
             arts['status_msg'].set_color('#ff6e6e')
@@ -673,10 +741,10 @@ def make_animation(save_path=None):
                 f'前视距={LOOK_AHEAD:.1f}m  偏航增益={YAW_RATE_GAIN}')
 
         # 标题
-        mode_color = {'AVOIDING': '#ff6e6e', 'ESCAPING': '#ff9900'}.get(
+        mode_color = {'AVOIDING': '#ff6e6e', 'BLOCKED': '#ff9900'}.get(
             robot.mode, '#c9d1d9')
         title_obj.set_text(
-            f'MapPilot — 局部避障规划演示   t = {t:.2f} s  |  '
+            f'MapPilot — {scene_name}   t = {t:.2f} s  |  '
             f'速度: {robot.speed*100:.0f} cm/s  |  模式: {robot.mode}')
         title_obj.set_color(mode_color)
 
@@ -702,5 +770,22 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MapPilot 规划避障动画演示')
     parser.add_argument('--save', metavar='FILE',
                         help='保存为 GIF/MP4 文件 (例: demo.gif)')
+    parser.add_argument('--scenario', metavar='NAME',
+                        choices=list(SCENES.keys()), default='default',
+                        help=f'场景选择: {", ".join(SCENES.keys())} (默认: default)')
+    parser.add_argument('--all', action='store_true',
+                        help='批量生成所有场景 GIF (保存到 tools/)')
     args = parser.parse_args()
-    make_animation(save_path=args.save)
+
+    if args.all:
+        import os
+        out_dir = os.path.dirname(os.path.abspath(__file__))
+        for sname in SCENES.keys():
+            scene_title, scene_desc = _apply_scene(sname)
+            out = os.path.join(out_dir, f'planner_demo_{sname}.gif')
+            print(f'\n[{sname}] {scene_title} — {scene_desc}')
+            make_animation(save_path=out, scene_name=scene_title)
+    else:
+        scene_title, scene_desc = _apply_scene(args.scenario)
+        print(f'场景: {scene_title} — {scene_desc}')
+        make_animation(save_path=args.save, scene_name=scene_title)
