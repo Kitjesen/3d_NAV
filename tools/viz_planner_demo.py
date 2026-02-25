@@ -151,6 +151,34 @@ SCENES = {
         dyn_traj=[(15.0, 1.0), (15.0, 11.0)],
         dyn_r=0.4, dyn_spd=1.0, sim_time=28.0,
     ),
+    # 场景5: 全局重规划 — 路径封堵 → pct_adapter stuck → 重新规划绕行
+    "replan": dict(
+        name="全局重规划演示",
+        desc="路径封堵 → stuck 10s → pct_adapter 触发 PCT 重规划 → 绕行到达",
+        static_obs=[
+            # 正面封堵墙 (x≈6, y=4.5~7.5)
+            (6.2, 4.5, 0.7), (6.2, 5.6, 0.65), (6.2, 6.7, 0.7), (6.2, 7.8, 0.65),
+            # 散落障碍
+            (3.5, 2.5, 0.6), (3.5, 9.5, 0.6),
+            (10.0, 3.5, 0.7), (10.0, 8.5, 0.7),
+            (14.0, 5.5, 0.5), (14.0, 7.0, 0.5),
+        ],
+        global_path=[
+            (0.5, 6.0), (2.5, 6.0), (4.5, 6.0), (7.5, 6.0),
+            (10.0, 6.0), (12.5, 6.0), (15.0, 6.0), (17.0, 6.0),
+        ],
+        # 绕行路径: stuck 后 PCT 重规划生成的新全局路径 (从 x≈5 绕行南侧)
+        detour_path=[
+            (5.0, 6.0),   # 接近当前位置 (由 _try_replan 动态替换前缀)
+            (5.5, 4.0), (6.0, 2.5), (7.5, 2.0), (9.0, 2.5),
+            (10.5, 3.5), (12.0, 5.0), (13.5, 6.0),
+            (15.0, 6.0), (17.0, 6.0),
+        ],
+        dyn_traj=[(15.0, 1.0), (15.0, 11.0)],
+        dyn_r=0.35, dyn_spd=0.8, sim_time=40.0,
+        replan_stuck_sec=10.0,  # pct_adapter stuck 阈值
+        max_replan=2,           # 最多重规划次数
+    ),
     # 场景3: 对向动态障碍 — 迎面驶来，机器人侧移让道
     "headon": dict(
         name="对向障碍物迎面",
@@ -171,7 +199,7 @@ SCENES = {
 
 
 def _apply_scene(name: str):
-    """将场景参数写入全局变量"""
+    """将场景参数写入全局变量，返回 (场景名, 描述, 场景配置dict)"""
     global STATIC_OBS, GLOBAL_PATH, DYN_OBS_TRAJ, DYN_OBS_R, DYN_OBS_SPD, SIM_TIME
     s = SCENES[name]
     STATIC_OBS   = s['static_obs']
@@ -180,7 +208,7 @@ def _apply_scene(name: str):
     DYN_OBS_R    = s['dyn_r']
     DYN_OBS_SPD  = s['dyn_spd']
     SIM_TIME     = s['sim_time']
-    return s['name'], s['desc']
+    return s['name'], s['desc'], s
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 候选路径生成 (对应 localPlanner readPaths / startPaths)
@@ -248,7 +276,7 @@ def _score_path(pts_world, obstacles, goal_dir, robot_xy, margin_scale=1.0):
 # ═══════════════════════════════════════════════════════════════════════════
 
 class Robot:
-    def __init__(self):
+    def __init__(self, scene_cfg=None):
         self.x, self.y, self.yaw = ROBOT_START
         self.speed  = 0.0
         self.wyaw   = 0.0          # yaw rate
@@ -262,6 +290,17 @@ class Robot:
         self._blocked_start  = None  # 首次阻塞时刻 (仿真时间 t)
         self._recovery_state = 0     # 0=normal/等待, 1=rotating, 2=backing_up
         self._recovery_start = None  # 当前恢复阶段开始时刻
+        self._recovery_cycles = 0    # 恢复循环计数
+        self._recovery_max   = 3     # 最大恢复循环次数
+        # ── pct_adapter 重规划状态 (对应 pct_path_adapter.cpp 修改) ──────
+        self._scene_cfg = scene_cfg or {}
+        self._stuck_start = None     # pct_adapter stuck 开始时刻
+        self._replan_count = 0       # 已重规划次数
+        self._replan_max = self._scene_cfg.get('max_replan', 0)
+        self._replan_stuck_sec = self._scene_cfg.get('replan_stuck_sec', 10.0)
+        self._replan_event = None    # 'replanning' | 'stuck_final' | None
+        self._replan_countdown = 0.0 # 重规划倒计时显示
+        self.global_path = list(GLOBAL_PATH)  # 可动态更新
 
     # ── 动态障碍物位置 ────────────────────────────────────────────────────
 
@@ -287,11 +326,23 @@ class Robot:
     # ── PCT Adapter: 航点推进 ──────────────────────────────────────────────
 
     def _update_waypoint(self):
-        if self.wp_idx >= len(GLOBAL_PATH):
+        if self.wp_idx >= len(self.global_path):
             return
-        gx, gy = GLOBAL_PATH[self.wp_idx]
+        # 航点跳跃: 跳到最近的前方航点 (恢复/重规划后避免回退)
+        best_idx = self.wp_idx
+        best_dist = float('inf')
+        for i in range(self.wp_idx, len(self.global_path)):
+            d = math.hypot(self.global_path[i][0] - self.x,
+                           self.global_path[i][1] - self.y)
+            if d < best_dist:
+                best_dist = d
+                best_idx = i
+        if best_idx > self.wp_idx:
+            self.wp_idx = best_idx
+        # 正常到达推进
+        gx, gy = self.global_path[self.wp_idx]
         if math.hypot(gx - self.x, gy - self.y) < WAYPOINT_THRE:
-            self.wp_idx = min(self.wp_idx + 1, len(GLOBAL_PATH) - 1)
+            self.wp_idx = min(self.wp_idx + 1, len(self.global_path) - 1)
 
     # ── localPlanner: 候选路径评分 ────────────────────────────────────────
 
@@ -299,7 +350,7 @@ class Robot:
         nearby = self._nearby_obstacles(all_obs)
 
         # 目标方向 (当前全局航点)
-        gx, gy = GLOBAL_PATH[min(self.wp_idx, len(GLOBAL_PATH) - 1)]
+        gx, gy = self.global_path[min(self.wp_idx, len(self.global_path) - 1)]
         goal_dir = math.atan2(gy - self.y, gx - self.x)
 
         scored = []
@@ -316,8 +367,9 @@ class Robot:
         if best[1] > 0:
             # ── 有可通行路径：重置恢复状态 ────────────────────────────────
             self.best_path = best[0]
-            self._blocked_start  = None
-            self._recovery_state = 0
+            self._blocked_start   = None
+            self._recovery_state  = 0
+            self._recovery_cycles = 0
             self.mode = ("AVOIDING"
                          if any(math.hypot(ox - self.x, oy - self.y) < ADJACENT_RANGE
                                 for ox, oy, _ in all_obs)
@@ -336,8 +388,9 @@ class Robot:
                 if best_r[1] > 0:
                     self.scored_paths = relaxed
                     self.best_path = best_r[0]
-                    self._blocked_start  = None
-                    self._recovery_state = 0
+                    self._blocked_start   = None
+                    self._recovery_state  = 0
+                    self._recovery_cycles = 0
                     found = True
                     self.mode = "AVOIDING"
                     break
@@ -352,7 +405,8 @@ class Robot:
                 BLOCKED_THRE = 2.0
                 ROTATE_TIME  = 2.5
                 BACKUP_TIME  = 1.5
-                if self._recovery_state == 0 and blocked_dur >= BLOCKED_THRE:
+                if (self._recovery_state == 0 and blocked_dur >= BLOCKED_THRE
+                        and self._recovery_cycles < self._recovery_max):
                     self._recovery_state = 1
                     self._recovery_start = t
                 elif (self._recovery_state == 1 and
@@ -363,8 +417,9 @@ class Robot:
                 elif (self._recovery_state == 2 and
                       self._recovery_start is not None and
                       t - self._recovery_start >= BACKUP_TIME):
-                    self._recovery_state = 0
-                    self._blocked_start  = t  # 重新计时
+                    self._recovery_state  = 0
+                    self._blocked_start   = t  # 重新计时
+                    self._recovery_cycles += 1
 
                 # 生成恢复路径 (body → world)
                 if self._recovery_state == 1:
@@ -386,6 +441,58 @@ class Robot:
                     # 等待计时：零点路径 → 停车
                     self.best_path = []
                     self.mode = "BLOCKED"
+
+    # ── pct_adapter: stuck 检测 + 全局重规划 ──────────────────────────────
+
+    def _check_stuck_replan(self, t):
+        """模拟 pct_adapter stuck 检测 + 自动重发 goal_pose 触发 PCT 重规划"""
+        if self._replan_max <= 0:
+            return  # 场景未启用重规划
+
+        self._replan_event = None
+        is_stuck = self.mode in ("BLOCKED", "ROTATING", "BACKING_UP")
+
+        if is_stuck:
+            if self._stuck_start is None:
+                self._stuck_start = t
+            stuck_dur = t - self._stuck_start
+            self._replan_countdown = max(0.0, self._replan_stuck_sec - stuck_dur)
+
+            if stuck_dur >= self._replan_stuck_sec:
+                if self._replan_count < self._replan_max:
+                    self._try_replan(t)
+                else:
+                    self._replan_event = "stuck_final"
+        else:
+            self._stuck_start = None
+            self._replan_countdown = 0.0
+
+    def _try_replan(self, t):
+        """触发重规划: 用 detour_path 替换全局路径 (模拟 PCT Planner 重新规划)"""
+        detour = self._scene_cfg.get('detour_path')
+        if not detour:
+            return
+
+        self._replan_count += 1
+        self._stuck_start = None  # 重置 stuck 计时
+        self._replan_event = "replanning"
+
+        # 从当前位置构造新路径: 当前位置 + detour 后续点
+        new_path = [(self.x, self.y)]
+        for px, py in detour:
+            if px > self.x - 0.5:  # 只取在机器人前方的点
+                new_path.append((px, py))
+        # 确保终点一致
+        if new_path[-1] != detour[-1]:
+            new_path.append(detour[-1])
+
+        self.global_path = new_path
+        self.wp_idx = 1  # 重置航点到新路径第2个点
+
+        # 重置恢复状态 (收到新路径 → 重新开始)
+        self._blocked_start   = None
+        self._recovery_state  = 0
+        self._recovery_cycles = 0
 
     # ── pathFollower: Pure Pursuit ────────────────────────────────────────
 
@@ -450,6 +557,7 @@ class Robot:
         all_obs = self._all_obstacles(t)
         self._update_waypoint()
         self._local_plan(all_obs, t)
+        self._check_stuck_replan(t)  # pct_adapter stuck → 触发全局重规划
         self._follow()
 
         # 运动学积分
@@ -459,7 +567,7 @@ class Robot:
         self.trail.append((self.x, self.y))
 
         # 到达终点
-        gx, gy = GLOBAL_PATH[-1]
+        gx, gy = self.global_path[-1]
         if math.hypot(gx - self.x, gy - self.y) < STOP_DIS:
             self.reached = True
             self.speed   = 0.0
@@ -681,8 +789,8 @@ def _colormap_score(s):
     return (r, g, 0.1)
 
 
-def make_animation(save_path=None, scene_name=None):
-    robot  = Robot()
+def make_animation(save_path=None, scene_name=None, scene_cfg=None):
+    robot  = Robot(scene_cfg=scene_cfg)
     n_frames = int(SIM_TIME * FPS)
 
     if scene_name is None:
@@ -725,9 +833,20 @@ def make_animation(save_path=None, scene_name=None):
         else:
             arts['best_path'].set_data([], [])
 
+        # ── 全局路径动态更新 (重规划后路径改变) ─────────────────────────
+        gpath = robot.global_path
+        gpx = [p[0] for p in gpath]
+        gpy = [p[1] for p in gpath]
+        arts['global_path'].set_data(gpx, gpy)
+        arts['global_pts'].set_offsets(list(zip(gpx, gpy)))
+        # 重规划后路径颜色变化: 蓝 → 青色
+        if robot._replan_count > 0:
+            arts['global_path'].set_color('#00ccff')
+            arts['global_pts'].set_facecolor('#00ccff')
+
         # ── 当前航点 ──────────────────────────────────────────────────────
-        wi = min(robot.wp_idx, len(GLOBAL_PATH) - 1)
-        arts['waypoint'].set_offsets([[GLOBAL_PATH[wi][0], GLOBAL_PATH[wi][1]]])
+        wi = min(robot.wp_idx, len(gpath) - 1)
+        arts['waypoint'].set_offsets([[gpath[wi][0], gpath[wi][1]]])
 
         # ── 机器人轨迹 ────────────────────────────────────────────────────
         if len(robot.trail) > 1:
@@ -761,7 +880,7 @@ def make_animation(save_path=None, scene_name=None):
         arts['i_mode'].set_color(_mc.get(robot.mode, '#3fb950'))
         arts['i_speed'].set_text(f'{robot.speed * 100:.0f} cm/s')
         arts['i_yaw'].set_text(f'{math.degrees(robot.wyaw):.1f} °/s')
-        arts['i_wayp'].set_text(f'{wi + 1} / {len(GLOBAL_PATH)}')
+        arts['i_wayp'].set_text(f'{wi + 1} / {len(gpath)}')
 
         # 附近障碍物数量
         all_obs = robot._all_obstacles(t)
@@ -791,29 +910,54 @@ def make_animation(save_path=None, scene_name=None):
         if robot.reached:
             arts['status_msg'].set_text('● 到达目标！')
             arts['status_msg'].set_color('#ffd700')
-            arts['status_detail'].set_text('导航完成。\n机器人已停在目标点。')
+            replan_note = (f'\n(经 {robot._replan_count} 次全局重规划)'
+                           if robot._replan_count > 0 else '')
+            arts['status_detail'].set_text(f'导航完成。\n机器人已停在目标点。{replan_note}')
+        elif robot._replan_event == 'replanning':
+            arts['status_msg'].set_text('[>>] 全局重规划！')
+            arts['status_msg'].set_color('#00ccff')
+            arts['status_detail'].set_text(
+                f'pct_adapter stuck → 重发 goal_pose\n'
+                f'PCT Planner 重新规划路径\n'
+                f'重规划 {robot._replan_count}/{robot._replan_max}')
+        elif robot._replan_event == 'stuck_final':
+            arts['status_msg'].set_text('[!!] stuck_final 上报')
+            arts['status_msg'].set_color('#ff0000')
+            arts['status_detail'].set_text(
+                f'几何层重规划 {robot._replan_max} 次仍失败\n'
+                f'上报 stuck_final 事件\n'
+                f'等待语义层 LERa 接管')
         elif robot.mode == 'BLOCKED':
             dur = (t - robot._blocked_start) if robot._blocked_start else 0
+            replan_info = ''
+            if robot._replan_max > 0 and robot._replan_countdown > 0:
+                replan_info = f'\nstuck 倒计时: {robot._replan_countdown:.1f}s → 重规划'
             arts['status_msg'].set_text('[X] 路径受阻 → 等待恢复')
             arts['status_msg'].set_color('#ff9900')
             arts['status_detail'].set_text(
                 f'pathScale 收缩仍无解\n'
                 f'停车等待 {dur:.1f}s / 2.0s\n'
-                f'即将进入旋转恢复阶段')
+                f'即将进入旋转恢复阶段{replan_info}')
         elif robot.mode == 'ROTATING':
+            replan_info = ''
+            if robot._replan_max > 0 and robot._replan_countdown > 0:
+                replan_info = f'\nstuck 倒计时: {robot._replan_countdown:.1f}s → 重规划'
             arts['status_msg'].set_text('[~] 恢复: 旋转转向')
             arts['status_msg'].set_color('#ff7700')
             arts['status_detail'].set_text(
                 f'C++: recoveryState=1\n'
                 f'发布弧形路径朝向目标\n'
-                f'pathFollower 跟踪执行')
+                f'pathFollower 跟踪执行{replan_info}')
         elif robot.mode == 'BACKING_UP':
+            replan_info = ''
+            if robot._replan_max > 0 and robot._replan_countdown > 0:
+                replan_info = f'\nstuck 倒计时: {robot._replan_countdown:.1f}s → 重规划'
             arts['status_msg'].set_text('[<<] 恢复: 后退')
             arts['status_msg'].set_color('#ff4400')
             arts['status_detail'].set_text(
                 f'C++: recoveryState=2\n'
                 f'发布 body -X 后退路径\n'
-                f'twoWayDrive → 负速执行')
+                f'twoWayDrive → 负速执行{replan_info}')
         elif robot.mode == 'AVOIDING':
             arts['status_msg'].set_text('[!] 障碍物规避')
             arts['status_msg'].set_color('#ff6e6e')
@@ -875,11 +1019,11 @@ if __name__ == '__main__':
         import os
         out_dir = os.path.dirname(os.path.abspath(__file__))
         for sname in SCENES.keys():
-            scene_title, scene_desc = _apply_scene(sname)
+            scene_title, scene_desc, scene_cfg = _apply_scene(sname)
             out = os.path.join(out_dir, f'planner_demo_{sname}.gif')
             print(f'\n[{sname}] {scene_title} — {scene_desc}')
-            make_animation(save_path=out, scene_name=scene_title)
+            make_animation(save_path=out, scene_name=scene_title, scene_cfg=scene_cfg)
     else:
-        scene_title, scene_desc = _apply_scene(args.scenario)
+        scene_title, scene_desc, scene_cfg = _apply_scene(args.scenario)
         print(f'场景: {scene_title} — {scene_desc}')
-        make_animation(save_path=args.save, scene_name=scene_title)
+        make_animation(save_path=args.save, scene_name=scene_title, scene_cfg=scene_cfg)

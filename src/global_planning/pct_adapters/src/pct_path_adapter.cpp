@@ -5,6 +5,7 @@
 
 #include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -54,9 +55,17 @@ public:
     waypoint_distance_ = get_parameter("waypoint_distance").as_double();
     arrival_threshold_ = get_parameter("arrival_threshold").as_double();
 
-    declare_parameter<double>("stuck_timeout_sec", 30.0);
+    declare_parameter<double>("stuck_timeout_sec", 10.0);
     stuck_timeout_sec_ = get_parameter("stuck_timeout_sec").as_double();
     last_progress_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+
+    // ── 第1级重规划: stuck 时自动重发 goal_pose 触发 PCT 重新规划 ──
+    declare_parameter<int>("max_replan_count", 2);
+    declare_parameter<double>("replan_cooldown_sec", 5.0);
+    max_replan_count_ = get_parameter("max_replan_count").as_int();
+    replan_cooldown_sec_ = get_parameter("replan_cooldown_sec").as_double();
+    replan_goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
+      "/nav/goal_pose", 10);
 
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -77,12 +86,15 @@ private:
   void path_callback(const nav_msgs::msg::Path::SharedPtr msg)
   {
     if (msg->poses.empty()) {
-      // 空路径 = 规划失败信号，清除旧路径避免继续追踪过期航点
+      // 空路径 = 规划失败信号
       if (path_received_) {
-        RCLCPP_WARN(get_logger(), "Received empty path (planning failed/cleared). Stopping waypoint tracking.");
-        current_path_.clear();
-        current_waypoint_idx_ = 0;
-        path_received_ = false;
+        RCLCPP_WARN(get_logger(),
+          "Received empty path (planning failed). "
+          "Keeping stuck detection active (replan_count=%d/%d).",
+          replan_count_, max_replan_count_);
+        // 不清除 current_path_ 和 path_received_:
+        // 保留旧路径目标供重规划使用，stuck 检测继续运行
+        // replan_count_ 不重置，让系统继续升级到 stuck_final
       }
       return;
     }
@@ -97,6 +109,7 @@ private:
     path_received_ = true;
     goal_reached_reported_ = false;
     last_progress_time_ = now();
+    replan_count_ = 0;  // 新路径 → 重置重规划计数
 
     RCLCPP_INFO(
       get_logger(),
@@ -181,18 +194,64 @@ private:
       return;
     }
 
-    // Stuck detection
+    // ── Stuck detection + 两级自动重规划 ──
     if (!goal_reached_reported_ && last_progress_time_.nanoseconds() > 0) {
       const double elapsed = (now() - last_progress_time_).seconds();
       if (elapsed > stuck_timeout_sec_) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 5000,
-          "Robot appears stuck at waypoint %zu for %.1fs",
-          current_waypoint_idx_, elapsed);
-        publish_status(
-          "stuck",
-          static_cast<int>(current_waypoint_idx_),
-          static_cast<int>(current_path_.size()));
+        const double now_sec = now().seconds();
+        if (replan_count_ < max_replan_count_) {
+          // 第1级: 几何层自动重规划 — 重发 goal_pose 让 PCT Planner 从当前位置重新规划
+          if (now_sec - last_replan_time_ > replan_cooldown_sec_) {
+            replan_count_++;
+            last_replan_time_ = now_sec;
+
+            auto goal_msg = geometry_msgs::msg::PoseStamped();
+            goal_msg.header.stamp = now();
+            goal_msg.header.frame_id = "map";
+            goal_msg.pose = current_path_.back().pose;
+            replan_goal_pub_->publish(goal_msg);
+
+            last_progress_time_ = now();  // 重置 stuck 计时
+
+            RCLCPP_WARN(get_logger(),
+              "[Replan L1] 几何层重规划 %d/%d, 从当前位置重新规划到目标",
+              replan_count_, max_replan_count_);
+            publish_status("replanning",
+              static_cast<int>(current_waypoint_idx_),
+              static_cast<int>(current_path_.size()));
+          }
+        } else {
+          // 第2级: 几何层重规划耗尽 → 发布 stuck_final 让语义层接管
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+            "[Replan] 几何层重规划 %d 次仍失败, 上报 stuck_final",
+            replan_count_);
+          publish_status("stuck_final",
+            static_cast<int>(current_waypoint_idx_),
+            static_cast<int>(current_path_.size()));
+        }
+      }
+    }
+
+    // ── 航点跳跃: 如果机器人更接近后续航点 (恢复/重规划后可能跳过) ──
+    const size_t total = current_path_.size();
+    {
+      size_t best_idx = current_waypoint_idx_;
+      double best_dist = std::numeric_limits<double>::max();
+      for (size_t i = current_waypoint_idx_; i < total; ++i) {
+        geometry_msgs::msg::Point pt_odom;
+        if (!transform_point(current_path_[i].pose.position, pt_odom)) continue;
+        const double d = get_distance(robot_pos_, pt_odom);
+        if (d < best_dist) {
+          best_dist = d;
+          best_idx = i;
+        }
+      }
+      if (best_idx > current_waypoint_idx_) {
+        RCLCPP_INFO(get_logger(),
+          "Skipping waypoints %zu → %zu (closer after recovery/replan)",
+          current_waypoint_idx_, best_idx);
+        current_waypoint_idx_ = best_idx;
+        last_progress_time_ = now();
       }
     }
 
@@ -203,7 +262,6 @@ private:
     }
 
     const double dist_to_target = get_distance(robot_pos_, target_pose_odom);
-    const size_t total = current_path_.size();
     if (dist_to_target < arrival_threshold_) {
       if (current_waypoint_idx_ < total - 1) {
         RCLCPP_INFO(
@@ -269,6 +327,13 @@ private:
   double arrival_threshold_;
   double stuck_timeout_sec_;
   rclcpp::Time last_progress_time_;
+
+  // ── 第1级重规划 ──
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr replan_goal_pub_;
+  int    replan_count_       = 0;
+  int    max_replan_count_   = 2;
+  double replan_cooldown_sec_ = 5.0;
+  double last_replan_time_   = -1.0;
 };
 
 int main(int argc, char ** argv)

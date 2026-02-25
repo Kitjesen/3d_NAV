@@ -524,6 +524,12 @@ class SemanticPlannerNode(Node):
             String, "/nav/semantic/cancel", self._cancel_callback, 10
         )
 
+        # 几何层 stuck_final 信号 → 触发语义层重规划
+        self._sub_planner_status = self.create_subscription(
+            String, "/nav/planner_status",
+            self._planner_status_callback, 10
+        )
+
         # FOLLOW_PERSON: 接收来自 task_manager 的跟随指令 (JSON)
         # 消息格式: {"target_label": "person", "follow_distance": 1.5,
         #            "timeout_sec": 300, "min_distance": 0.8, "max_distance": 5.0}
@@ -738,6 +744,39 @@ class SemanticPlannerNode(Node):
         self._follow_mode = False
         self._action_executor.reset()
         self._set_state(PlannerState.CANCELLED)
+
+    def _planner_status_callback(self, msg: String):
+        """响应 pct_adapter 的 stuck / stuck_final 信号, 触发语义层重规划。"""
+        try:
+            data = json.loads(msg.data)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        event = data.get("event", "")
+        if event == "stuck_final":
+            self.get_logger().warn(
+                "[Geometric Stuck Final] 几何层重规划耗尽, 触发语义重规划"
+            )
+            self._handle_geometric_stuck(data)
+
+    def _handle_geometric_stuck(self, data: dict):
+        """几何层 stuck_final → 调用 _subgoal_failed 触发 LERa 重规划。"""
+        # 仅在 NAVIGATING / EXPLORING 等执行态时响应
+        executing_states = {
+            PlannerState.NAVIGATING,
+            PlannerState.EXPLORING,
+            PlannerState.APPROACHING,
+        }
+        if self._state not in executing_states:
+            self.get_logger().info(
+                f"[Geometric Stuck] 忽略 stuck_final, 当前状态: {self._state.value}"
+            )
+            return
+        reason = (
+            f"Path geometrically blocked at waypoint "
+            f"{data.get('index', '?')}/{data.get('total', '?')}"
+        )
+        self._subgoal_failed(reason)
 
     def _follow_person_cmd_callback(self, msg: String):
         """

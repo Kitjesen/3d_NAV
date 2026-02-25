@@ -382,6 +382,8 @@ private:
   double recoveryBlockedThre_ = 2.0;  // 触发恢复前的持续阻塞时间 (s)
   double recoveryRotateTime_  = 2.5;  // 旋转阶段持续时间 (s)
   double recoveryBackupTime_  = 1.5;  // 后退阶段持续时间 (s)
+  int    recoveryCycleCount_  = 0;    // 恢复循环次数
+  int    recoveryMaxCycles_   = 3;    // 最大恢复循环次数，超过后停止恢复
 
   bool newLaserCloud_ = false;
   bool newTerrainCloud_ = false;
@@ -1273,8 +1275,9 @@ private:
           }
         } else {
           // 找到路径 → 重置恢复状态
-          recoveryState_    = 0;
-          blockedStartTime_ = -1.0;
+          recoveryState_      = 0;
+          blockedStartTime_   = -1.0;
+          recoveryCycleCount_ = 0;
           pathFound = true;
           break;
         }
@@ -1290,10 +1293,18 @@ private:
         const double blockedDur = odomTime_ - blockedStartTime_;
 
         if (recoveryState_ == 0 && blockedDur >= recoveryBlockedThre_) {
-          recoveryState_      = 1;
-          recoveryPhaseStart_ = odomTime_;
-          RCLCPP_WARN(get_logger(),
-            "[Recovery] 路径全部受阻 %.1fs → 进入旋转恢复", blockedDur);
+          if (recoveryCycleCount_ >= recoveryMaxCycles_) {
+            // 恢复次数耗尽 → 仅停车，等待 pct_adapter 全局重规划
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+              "[Recovery] 恢复循环 %d 次仍失败, 停车等待全局重规划",
+              recoveryCycleCount_);
+          } else {
+            recoveryState_      = 1;
+            recoveryPhaseStart_ = odomTime_;
+            RCLCPP_WARN(get_logger(),
+              "[Recovery] 路径全部受阻 %.1fs → 进入旋转恢复 (cycle %d/%d)",
+              blockedDur, recoveryCycleCount_ + 1, recoveryMaxCycles_);
+          }
         } else if (recoveryState_ == 1 &&
                    odomTime_ - recoveryPhaseStart_ >= recoveryRotateTime_) {
           recoveryState_      = 2;
@@ -1303,7 +1314,10 @@ private:
                    odomTime_ - recoveryPhaseStart_ >= recoveryBackupTime_) {
           recoveryState_    = 0;
           blockedStartTime_ = odomTime_;  // 重新计时
-          RCLCPP_WARN(get_logger(), "[Recovery] 后退完成 → 重置恢复计时");
+          recoveryCycleCount_++;
+          RCLCPP_WARN(get_logger(),
+            "[Recovery] 后退完成 → 恢复循环 %d/%d",
+            recoveryCycleCount_, recoveryMaxCycles_);
         }
 
         // ── 构建恢复路径 (body frame) ──────────────────────────────────
@@ -1319,21 +1333,79 @@ private:
           while (relAngle < -static_cast<float>(M_PI)) relAngle += 2.0f * static_cast<float>(M_PI);
           const float turnDir = (relAngle >= 0.0f) ? 1.0f : -1.0f;
 
-          for (int i = 1; i <= 6; ++i) {
-            const float arc = turnDir * static_cast<float>(i) * 0.25f;
-            geometry_msgs::msg::PoseStamped p;
-            p.pose.position.x = 0.15f * static_cast<float>(i) * cosf(arc);
-            p.pose.position.y = 0.15f * static_cast<float>(i) * sinf(arc);
-            recPath.poses.push_back(p);
+          // 碰撞预检: 检查旋转方向是否有近距障碍物
+          bool rotateSafe = true;
+          if (plannerCloudCrop_ && !plannerCloudCrop_->empty()) {
+            for (const auto& pt : *plannerCloudCrop_) {
+              const float dx = pt.x, dy = pt.y;
+              const float dist = sqrtf(dx * dx + dy * dy);
+              // 检查旋转弧形扫掠区域 (半径 0.9m 内, 旋转方向侧)
+              if (dist < 0.9f && dist > 0.1f) {
+                const float ptAngle = atan2f(dy, dx);
+                if (turnDir > 0 ? (ptAngle > 0 && ptAngle < 1.5f)
+                                : (ptAngle < 0 && ptAngle > -1.5f)) {
+                  if (pt.intensity > obstacleHeightThre_ * 0.5f || !useTerrainAnalysis_) {
+                    rotateSafe = false;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+
+          if (rotateSafe) {
+            for (int i = 1; i <= 6; ++i) {
+              const float arc = turnDir * static_cast<float>(i) * 0.25f;
+              geometry_msgs::msg::PoseStamped p;
+              p.pose.position.x = 0.15f * static_cast<float>(i) * cosf(arc);
+              p.pose.position.y = 0.15f * static_cast<float>(i) * sinf(arc);
+              recPath.poses.push_back(p);
+            }
+          } else {
+            // 旋转方向有障碍 → 尝试反向旋转
+            const float altDir = -turnDir;
+            for (int i = 1; i <= 6; ++i) {
+              const float arc = altDir * static_cast<float>(i) * 0.25f;
+              geometry_msgs::msg::PoseStamped p;
+              p.pose.position.x = 0.15f * static_cast<float>(i) * cosf(arc);
+              p.pose.position.y = 0.15f * static_cast<float>(i) * sinf(arc);
+              recPath.poses.push_back(p);
+            }
+            RCLCPP_WARN(get_logger(),
+              "[Recovery] 旋转方向有障碍, 反向旋转");
           }
 
         } else if (recoveryState_ == 2) {
-          // 后退阶段：沿 body -X 后退，pathFollower twoWayDrive_ 负速执行
-          for (int i = 1; i <= 5; ++i) {
-            geometry_msgs::msg::PoseStamped p;
-            p.pose.position.x = -0.2f * static_cast<float>(i);
-            p.pose.position.y = 0.0f;
-            recPath.poses.push_back(p);
+          // 后退阶段：检查后方是否有障碍物
+          bool backupSafe = true;
+          if (plannerCloudCrop_ && !plannerCloudCrop_->empty()) {
+            for (const auto& pt : *plannerCloudCrop_) {
+              // body -X 方向, 1.0m 范围内, ±0.3m 宽度
+              if (pt.x < -0.1f && pt.x > -1.2f &&
+                  fabsf(pt.y) < 0.35f) {
+                if (pt.intensity > obstacleHeightThre_ * 0.5f || !useTerrainAnalysis_) {
+                  backupSafe = false;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (backupSafe) {
+            for (int i = 1; i <= 5; ++i) {
+              geometry_msgs::msg::PoseStamped p;
+              p.pose.position.x = -0.2f * static_cast<float>(i);
+              p.pose.position.y = 0.0f;
+              recPath.poses.push_back(p);
+            }
+          } else {
+            // 后方有障碍 → 跳过后退，直接完成本轮恢复
+            RCLCPP_WARN(get_logger(),
+              "[Recovery] 后方有障碍, 跳过后退");
+            recoveryState_    = 0;
+            blockedStartTime_ = odomTime_;
+            recoveryCycleCount_++;
+            recPath.poses.resize(1);  // 零点路径，停车
           }
 
         } else {
