@@ -38,6 +38,8 @@
 #include "rmw/types.h"
 #include "rmw/qos_profiles.h"
 
+#include "nav_core/local_planner_core.hpp"
+
 using namespace std;
 
 const double PI = M_PI;  // 使用系统精确值，避免截断误差
@@ -160,6 +162,7 @@ public:
     goalX_ = get_parameter("goalX").as_double();
     goalY_ = get_parameter("goalY").as_double();
     slopeWeight_ = get_parameter("slopeWeight").as_double();
+    syncScoreParams();
 
     // --- Dynamic Parameter Callback ---
     param_cb_handle_ = add_on_set_parameters_callback(
@@ -202,6 +205,7 @@ public:
               RCLCPP_WARN(get_logger(), "Unknown dynamic param: %s", n.c_str());
             }
           }
+          syncScoreParams();
           return result;
         });
 
@@ -297,6 +301,13 @@ public:
   }
 
 private:
+  // nav_core 评分参数同步
+  void syncScoreParams() {
+    scoreParams_.dirWeight       = dirWeight_;
+    scoreParams_.slopeWeight     = slopeWeight_;
+    scoreParams_.omniDirGoalThre = omniDirGoalThre_;
+  }
+
   // --- Dynamic Parameter Callback Handle ---
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
@@ -345,6 +356,7 @@ private:
   double freezeAng_ = 90.0;
   double freezeTime_ = 2.0;
   double omniDirGoalThre_ = 1.0;
+  nav_core::PathScoreParams scoreParams_;  // nav_core 评分参数 (从 ROS2 参数同步)
   double goalClearRange_ = 0.5;
   double goalBehindRange_ = 0.8;
   double goalX_ = 0;
@@ -1120,29 +1132,14 @@ private:
 
           const int pathIdx = i % pathNum_;  // 减少重复取模
           if (clearPathList_[i] < pointPerPathThre_) {
-            float dirDiff = fabs(joyDir_ - endDirPathList_[pathIdx] - rotAngDeg);
-            if (dirDiff > 360.0) {
-              dirDiff -= 360.0;
-            }
-            if (dirDiff > 180.0) {
-              dirDiff = 360.0 - dirDiff;
-            }
-
-            float rotDirW;
-            if (rotDir < 18) rotDirW = fabs(fabs(rotDir - 9) + 1);
-            else rotDirW = fabs(fabs(rotDir - 27) + 1);
-            float groupDirW = 4  - fabs(pathList_[pathIdx] - 3);
-            float dw = std::fabs(dirWeight_ * dirDiff);  // 防御负参数导致 NaN
-            // O9: sqrtf (float) 替代 std::sqrt (double)；dw^0.25 缓存一次；rotDirW^4 = (rotDirW^2)^2
-            float sqrtSqrtDw = sqrtf(sqrtf(dw));
-            float rotDirW2 = rotDirW * rotDirW;
-            // 地形坡度惩罚: pathPenaltyList_ 存储路径上最大地形高度代价 (intensity)
-            // slopeWeight_ > 0 时, 高代价路径评分下降, 规划器倾向选择平坦方向
-            float terrainFactor = (slopeWeight_ > 0.0f)
-                ? std::max(0.0f, 1.0f - slopeWeight_ * pathPenaltyList_[i])
-                : 1.0f;
-            float score = (1.0f - sqrtSqrtDw) * rotDirW2 * rotDirW2 * terrainFactor;
-            if (relativeGoalDis < omniDirGoalThre_) score = (1.0f - sqrtSqrtDw) * groupDirW * groupDirW * terrainFactor;
+            // nav_core: 角度差归一化 + 评分公式 (消除重复实现)
+            float dirDiff = static_cast<float>(nav_core::angDiffDeg(
+                joyDir_, endDirPathList_[pathIdx] + rotAngDeg));
+            float rotDirW = static_cast<float>(nav_core::computeRotDirW(rotDir));
+            float groupDirW = static_cast<float>(nav_core::computeGroupDirW(pathList_[pathIdx]));
+            float score = static_cast<float>(nav_core::scorePath(
+                dirDiff, rotDirW, groupDirW,
+                pathPenaltyList_[i], relativeGoalDis, scoreParams_));
             if (score > 0) {
               int groupIdx = groupNum_ * rotDir + pathList_[pathIdx];
               clearPathPerGroupScore_[groupIdx]     += score;

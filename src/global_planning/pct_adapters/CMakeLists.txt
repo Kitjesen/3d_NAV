@@ -14,6 +14,7 @@ find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(nav_core REQUIRED)
 
 add_executable(pct_path_adapter src/pct_path_adapter.cpp)
 ament_target_dependencies(
@@ -25,6 +26,7 @@ ament_target_dependencies(
   tf2
   tf2_ros
   tf2_geometry_msgs
+  nav_core
 )
 
 install(TARGETS
