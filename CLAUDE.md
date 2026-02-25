@@ -86,7 +86,7 @@ Livox LiDAR → SLAM (Fast-LIO2 + PGO) → Terrain Analysis → Planning → Dog
 | Package | Sub-packages | Role |
 |---|---|---|
 | `slam/` | fastlio2, pgo, localizer, hba, interface | Fast-LIO2 frontend, PGO loop closure, ICP relocalization (38 C++/Py files) |
-| `base_autonomy/` | local_planner, terrain_analysis, terrain_analysis_ext, sensor_scan_generation, visualization_tools | Local planner + terrain analysis (ground estimation, traversability) |
+| `base_autonomy/` | local_planner, terrain_analysis, terrain_analysis_ext, sensor_scan_generation, visualization_tools | Local planner + terrain analysis (ground estimation, traversability). local_planner 支持 `slopeWeight` 参数（默认 0=关闭，建议 3~6）让地形代价影响路径选择得分 |
 | `global_planning/` | PCT_planner, pct_adapters, NeuPAN | PCT Planner (tomography-based global path planning, pybind11 wrapper) |
 | `remote_monitoring/` | — | gRPC gateway (port 50051) — telemetry, control, OTA, WebRTC bridge (C++, 44 files) |
 | `drivers/` | livox_ros_driver2, robot_driver | Livox LiDAR driver + quadruped robot serial interface |
@@ -286,8 +286,12 @@ All standard topics use `/nav/` prefix. Defined in `config/topic_contract.yaml`.
 | `/nav/terrain_map` | PointCloud2 | Base terrain analysis |
 | `/nav/terrain_map_ext` | PointCloud2 | Extended terrain analysis |
 | `/nav/global_path` | nav_msgs/Path | Global planned path |
+| `/nav/local_path` | nav_msgs/Path | Local planned path (from local_planner) |
+| `/nav/way_point` | geometry_msgs/PointStamped | Waypoint input to local_planner |
 | `/nav/cmd_vel` | TwistStamped | Velocity commands to robot |
 | `/nav/goal_pose` | PoseStamped | Navigation goal |
+| `/nav/slow_down` | std_msgs/Int8 | Slow-down level (0=normal, 1-3=slow) |
+| `/nav/stop` | std_msgs/Int8 | Stop signal (0=clear, 2=full stop) |
 | `/nav/semantic/scene_graph` | String (JSON) | ConceptGraphs scene graph |
 | `/nav/semantic/detections_3d` | Detection3DArray | 3D object detections |
 | `/nav/semantic/instruction` | String | Natural language navigation instruction |
@@ -297,6 +301,15 @@ All standard topics use `/nav/` prefix. Defined in `config/topic_contract.yaml`.
 TF frames: `map` → `odom` → `body`
 
 If changing topic names, update `config/topic_contract.yaml` and `docs/02-architecture/TOPIC_CONTRACT.md`.
+
+### base_autonomy Topic Remap 约定
+
+**重要**: `terrain_analysis`、`terrain_analysis_ext`、`local_planner` 的 C++ 源码内部订阅 `/cloud_map`（odom 坐标系，来自 SLAM），在 `launch/subsystems/autonomy.launch.py` 中通过 remap 对接到 `/nav/map_cloud`。**不要**将其误写为 `/cloud_registered`。
+
+| 内部话题 | 标准接口 | 用途 |
+|---|---|---|
+| `/cloud_map` | `/nav/map_cloud` | terrain_analysis / terrain_analysis_ext / local_planner 订阅 |
+| `/cloud_registered` | `/nav/registered_cloud` | sensor_scan_generation 订阅（机体坐标系，与上面不同） |
 
 ## Deployment
 
