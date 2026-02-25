@@ -77,14 +77,21 @@ cmd_save() {
 
     # Step 1: 保存 PCD
     echo -e "${GREEN}[1/3] 调用 SLAM 保存服务...${NC}"
+    # 服务查找顺序：
+    #   /nav/save_map       — slam_fastlio2.launch.py remap 后的标准接口（首选）
+    #   /pgo/save_maps      — PGO 节点直接暴露（有回环优化时更准）
+    #   /fastlio2/save_map  — namespace 下的 Fast-LIO2 原始服务
     local SVC
-    if ros2 service list 2>/dev/null | grep -q "^/pgo/save_maps$"; then
+    if ros2 service list 2>/dev/null | grep -q "^/nav/save_map$"; then
+        SVC="/nav/save_map"
+    elif ros2 service list 2>/dev/null | grep -q "^/pgo/save_maps$"; then
         SVC="/pgo/save_maps"
-    elif ros2 service list 2>/dev/null | grep -q "^/save_map$"; then
-        SVC="/save_map"
+    elif ros2 service list 2>/dev/null | grep -q "^/fastlio2/save_map$"; then
+        SVC="/fastlio2/save_map"
     else
-        echo -e "${RED}错误: 未找到地图保存服务（/pgo/save_maps 或 /save_map）${NC}"
-        echo -e "${YELLOW}请确认建图节点正在运行${NC}"
+        echo -e "${RED}错误: 未找到地图保存服务${NC}"
+        echo -e "${YELLOW}已查找: /nav/save_map, /pgo/save_maps, /fastlio2/save_map${NC}"
+        echo -e "${YELLOW}请确认 ./lingtu.sh map 的节点仍在运行${NC}"
         exit 1
     fi
     ros2 service call "$SVC" interface/srv/SaveMaps \
@@ -162,16 +169,28 @@ cmd_status() {
     fi
     echo ""
 
-    # 关键话题
-    echo -e "${YELLOW}── 关键话题（需要 ROS2 节点运行中）──${NC}"
-    local TOPICS=("/nav/odometry" "/nav/map_cloud" "/nav/terrain_map" "/nav/way_point" "/nav/local_path" "/nav/cmd_vel")
-    for t in "${TOPICS[@]}"; do
-        if timeout 2s ros2 topic info "$t" &>/dev/null; then
-            echo -e "  ${GREEN}✓${NC} $t"
+    # 关键话题（按层分组）
+    echo -e "${YELLOW}── 话题状态 ──${NC}"
+    _check_topic() {
+        if timeout 2s ros2 topic info "$1" &>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} $1"
         else
-            echo -e "  ${RED}✗${NC} $t"
+            echo -e "  ${RED}✗${NC} $1"
         fi
-    done
+    }
+    echo -e "  ${BLUE}[SLAM]${NC}"
+    _check_topic "/nav/odometry"
+    _check_topic "/nav/map_cloud"
+    echo -e "  ${BLUE}[定位]${NC}"
+    _check_topic "/nav/localization_quality"
+    echo -e "  ${BLUE}[全局规划]${NC}"
+    _check_topic "/nav/global_path"
+    _check_topic "/nav/planner_status"
+    echo -e "  ${BLUE}[局部规划]${NC}"
+    _check_topic "/nav/terrain_map"
+    _check_topic "/nav/way_point"
+    _check_topic "/nav/local_path"
+    _check_topic "/nav/cmd_vel"
     echo ""
 
     # TF
