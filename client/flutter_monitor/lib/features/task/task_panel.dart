@@ -244,6 +244,36 @@ class _TaskPanelState extends State<TaskPanel> with SingleTickerProviderStateMix
   Future<void> _cancel() async {
     HapticFeedback.mediumImpact();
     final gw = context.read<TaskGateway>();
+    final locale = context.read<LocaleProvider>();
+
+    // Build progress description for dialog
+    final wpResp = _activeWpResp;
+    final completed = wpResp != null ? wpResp.currentIndex : (gw.progress * _waypoints.length).floor();
+    final total = wpResp != null ? wpResp.totalCount : _waypoints.length;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(locale.tr('确认取消任务？', 'Cancel task?')),
+        content: Text(locale.tr(
+          '已完成 $completed/$total 个航点，取消后进度不保留。',
+          '$completed/$total waypoints completed. Progress will be lost.',
+        )),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(locale.tr('继续任务', 'Continue task')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            child: Text(locale.tr('确认取消', 'Confirm cancel')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     final ok = await gw.cancelTask();
     _showStatus(gw, ok);
   }
