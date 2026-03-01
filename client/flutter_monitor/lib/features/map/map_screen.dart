@@ -1321,6 +1321,9 @@ class _MapScreenState extends State<MapScreen>
         if (_geofenceState == 'WARNING' || _geofenceState == 'VIOLATION')
           _buildGeofenceAlertBanner(),
 
+        // Low battery warning banner
+        _buildLowBatteryBanner(context),
+
         // Map legend + scale ruler (bottom-left, 2D mode only)
         if (!_show3DModel)
           Positioned(
@@ -1632,6 +1635,19 @@ class _MapScreenState extends State<MapScreen>
               } : _startSelectedTask,
             ),
 
+      // Emergency stop (visible when task is running)
+      if (isRunning) ...[
+        const SizedBox(height: 6),
+        _MapFab(
+          icon: Icons.emergency_rounded,
+          tooltip: locale.tr('急停', 'E-Stop'),
+          color: Colors.red,
+          onPressed: () async {
+            HapticFeedback.heavyImpact();
+            await cg.emergencyStop();
+          },
+        ),
+      ],
       const SizedBox(height: 6),
       _MapFab(icon: Icons.folder_outlined, tooltip: locale.tr('地图管理', 'Map manager'),
         onPressed: () => Navigator.of(context).pushNamed('/map-manager')),
@@ -1897,6 +1913,51 @@ class _MapScreenState extends State<MapScreen>
           ),
         ),
       ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  LOW BATTERY WARNING BANNER
+  // ═══════════════════════════════════════════════════════════
+  Widget _buildLowBatteryBanner(BuildContext context) {
+    final provider = context.read<RobotConnectionProvider>();
+    return StreamBuilder<SlowState>(
+      stream: provider.slowStateStream,
+      initialData: provider.latestSlowState,
+      builder: (context, snapshot) {
+        final battery = snapshot.data?.resources.batteryPercent;
+        if (battery == null || battery >= 15) return const SizedBox.shrink();
+        final locale = context.read<LocaleProvider>();
+        return Positioned(
+          top: 44, left: 16, right: 16,
+          child: SafeArea(
+            child: Material(
+              elevation: 4,
+              borderRadius: BorderRadius.circular(10),
+              color: AppColors.warning.withValues(alpha: 0.92),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: Row(children: [
+                  const Icon(Icons.battery_alert_rounded,
+                    color: Colors.white, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(
+                    locale.tr(
+                      '\u26A0 电量不足 (${battery.toStringAsFixed(0)}%) \u2014 请及时充电或返回',
+                      '\u26A0 Low battery (${battery.toStringAsFixed(0)}%) \u2014 charge or return soon',
+                    ),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  )),
+                ]),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
