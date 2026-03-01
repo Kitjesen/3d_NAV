@@ -10,6 +10,7 @@
 #pragma once
 
 #include "nav_core/types.hpp"
+#include "nav_core/validation.hpp"
 #include <cmath>
 #include <string>
 #include <vector>
@@ -78,7 +79,9 @@ public:
 
   // 收到新路径时调用
   WaypointResult setPath(const Path& rawPath, double currentTime) {
-    path_ = downsamplePath(rawPath, p_.waypointDistance);
+    // Filter out NaN/Inf poses before processing
+    Path cleanPath = filterInvalidPoses(rawPath);
+    path_ = downsamplePath(cleanPath, p_.waypointDistance);
     currentIdx_ = 0;
     goalReached_ = false;
     lastProgressTime_ = currentTime;
@@ -101,6 +104,9 @@ public:
     WaypointResult r;
     r.totalWaypoints = path_.size();
     if (path_.empty() || goalReached_) return r;
+
+    // NaN/Inf guard: invalid robot position -> skip update
+    if (!isValidPosition(robotPos)) return r;
 
     // ── Stuck detection + 两级重规划 (pct_path_adapter.cpp:198-232) ──
     // 注意: 与原始 C++ 一致, stuck 检测不阻断后续的航点搜索和到达检测
