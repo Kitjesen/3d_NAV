@@ -119,6 +119,14 @@ class RobotConnectionProvider extends ChangeNotifier {
   /// Robot capabilities (null until fetched).
   CapabilitiesResponse? get capabilities => _capabilities;
 
+  /// Supported task types reported by GetCapabilities.
+  /// Empty list means "show all" (backward compatible with older firmware).
+  List<TaskType> get supportedTaskTypes {
+    final tasks = _capabilities?.supportedTasks;
+    if (tasks == null || tasks.isEmpty) return [];
+    return tasks.toList();
+  }
+
   /// Available resources (cameras, pointclouds, etc.). Null until fetched.
   ListResourcesResponse? get resources => _resources;
 
