@@ -23,6 +23,10 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
   SlowState? _latest;
   FastState? _latestFast;
 
+  // ── 运行时间计数器 ──
+  Timer? _uptimeTimer;
+  final DateTime _sessionStart = DateTime.now();
+
   @override
   void initState() {
     super.initState();
@@ -35,12 +39,17 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
     _fastSub = conn.fastStateStream.listen((fs) {
       if (mounted) setState(() => _latestFast = fs);
     });
+    // 每分钟刷新运行时间
+    _uptimeTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     _sub?.cancel();
     _fastSub?.cancel();
+    _uptimeTimer?.cancel();
     super.dispose();
   }
 
@@ -76,6 +85,10 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
 
                 // ── 磁盘使用量 ──
                 _diskUsageCard(dark),
+                const SizedBox(height: 16),
+
+                // ── 运行时间 ──
+                _uptimeCard(dark),
                 const SizedBox(height: 16),
 
                 // ── 定位质量 ──
@@ -888,6 +901,50 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
           _DiskUsageLoader(dark: dark, cardBuilder: _card),
         ],
       ),
+    ));
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Uptime Counter
+  // ═══════════════════════════════════════════════════════
+
+  Widget _uptimeCard(bool dark) {
+    final sessionDuration = DateTime.now().difference(_sessionStart);
+    final hours = sessionDuration.inHours;
+    final minutes = sessionDuration.inMinutes % 60;
+    final seconds = sessionDuration.inSeconds % 60;
+    final sessionStr = '${hours.toString().padLeft(2, '0')}:'
+        '${minutes.toString().padLeft(2, '0')}:'
+        '${seconds.toString().padLeft(2, '0')}';
+
+    return _card(dark, child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(children: [
+        Icon(Icons.timer_outlined, size: 22, color: AppColors.info),
+        const SizedBox(width: 14),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('运行时间', style: TextStyle(
+              fontSize: 14, fontWeight: FontWeight.w600, color: context.titleColor)),
+            const SizedBox(height: 2),
+            Text('本次会话: $sessionStr',
+              style: TextStyle(fontSize: 12, color: context.subtitleColor)),
+          ],
+        )),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.info.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(sessionStr,
+            style: TextStyle(
+              fontSize: 16, fontWeight: FontWeight.w700,
+              fontFeatures: const [FontFeature.tabularFigures()],
+              color: AppColors.info)),
+        ),
+      ]),
     ));
   }
 
