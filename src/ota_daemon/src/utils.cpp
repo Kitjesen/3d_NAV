@@ -250,7 +250,14 @@ SystemdStatus GetServiceStatus(const std::string &service_name) {
       "systemctl show -p ActiveEnterTimestampMonotonic --value " +
       service_name + " 2>/dev/null");
   if (!ts.empty()) {
-    uint64_t enter_us = std::stoull(ts);
+    uint64_t enter_us = 0;
+    try {
+      enter_us = std::stoull(ts);
+    } catch (const std::invalid_argument &) {
+      OtaLogWarn("GetServiceStatus: invalid ActiveEnterTimestampMonotonic: %s", ts.c_str());
+    } catch (const std::out_of_range &) {
+      OtaLogWarn("GetServiceStatus: ActiveEnterTimestampMonotonic out of range: %s", ts.c_str());
+    }
     // Get current monotonic time
     struct timespec tp;
     clock_gettime(CLOCK_MONOTONIC, &tp);
@@ -262,7 +269,15 @@ SystemdStatus GetServiceStatus(const std::string &service_name) {
 
   std::string nrestarts = ExecCommand(
       "systemctl show -p NRestarts --value " + service_name + " 2>/dev/null");
-  if (!nrestarts.empty()) s.restart_count = std::stoul(nrestarts);
+  if (!nrestarts.empty()) {
+    try {
+      s.restart_count = std::stoul(nrestarts);
+    } catch (const std::invalid_argument &) {
+      OtaLogWarn("GetServiceStatus: invalid NRestarts value: %s", nrestarts.c_str());
+    } catch (const std::out_of_range &) {
+      OtaLogWarn("GetServiceStatus: NRestarts out of range: %s", nrestarts.c_str());
+    }
+  }
 
   return s;
 }
