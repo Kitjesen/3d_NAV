@@ -241,9 +241,28 @@ grpc::Status OtaServiceImpl::DownloadFromUrl(
     writer->Write(p);
   }
 
+  // Validate that a header key or value contains only safe characters.
+  // Allows: letters, digits, hyphen, underscore, dot, colon, space.
+  // Any header that does not conform is silently dropped with a warning to
+  // prevent shell injection through attacker-controlled HTTP response headers.
+  auto isHeaderSafe = [](const std::string &s) -> bool {
+    for (unsigned char c : s) {
+      if (!std::isalnum(c) && c != '-' && c != '_' && c != '.' &&
+          c != ':' && c != ' ') {
+        return false;
+      }
+    }
+    return true;
+  };
+
   // Build curl command
   std::string cmd = "curl -fSL --connect-timeout 15 --max-time 3600";
   for (const auto &[key, val] : request->headers()) {
+    if (!isHeaderSafe(key) || !isHeaderSafe(val)) {
+      OtaLogWarn("DownloadFromUrl: dropping unsafe header key='%s'",
+                 key.c_str());
+      continue;
+    }
     cmd += " -H '" + key + ": " + val + "'";
   }
   cmd += " -o '" + staging_path + "'";
