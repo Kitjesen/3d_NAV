@@ -26,6 +26,9 @@ class _ControlScreenState extends State<ControlScreen> {
   // ─── Joystick deadzone (0% ~ 30%, default 10%) ───
   double _deadzone = 0.10;
 
+  // ─── Max speed limit (0.1 ~ 2.0 m/s, default 1.0) ───
+  double _maxSpeedLimit = 1.0;
+
   /// Apply deadzone: values within deadzone radius return 0, otherwise rescale.
   double _applyDeadzone(double value) {
     if (value.abs() <= _deadzone) return 0.0;
@@ -65,9 +68,10 @@ class _ControlScreenState extends State<ControlScreen> {
     } else {
       if (!gw.hasLease) return;
       final profile = context.read<RobotProfileProvider>().current;
+      final speedScale = _maxSpeedLimit / (profile.maxLinearSpeed > 0 ? profile.maxLinearSpeed : 1.0);
       gw.sendVelocity(
-        dy * profile.maxLinearSpeed,
-        dx * profile.maxLinearSpeed,
+        dy * profile.maxLinearSpeed * speedScale,
+        dx * profile.maxLinearSpeed * speedScale,
         gw.angularZ,
       );
     }
@@ -730,10 +734,50 @@ class _ControlScreenState extends State<ControlScreen> {
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
+              // ─── Speed limit slider ───
+              const SizedBox(height: 4),
+              _buildSpeedLimitSlider(),
             ],
           ),
         );
       },
+    );
+  }
+
+  // ─── Speed limit slider widget ───
+
+  Widget _buildSpeedLimitSlider() {
+    final labelColor = context.isDark ? Colors.white54 : Colors.black54;
+    return Row(
+      children: [
+        Icon(Icons.speed, size: 12, color: labelColor),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 2,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+              activeTrackColor: AppColors.warning,
+              inactiveTrackColor: Colors.white24,
+              thumbColor: AppColors.warning,
+            ),
+            child: Slider(
+              value: _maxSpeedLimit,
+              min: 0.1,
+              max: 2.0,
+              onChanged: (v) => setState(() => _maxSpeedLimit = v),
+            ),
+          ),
+        ),
+        Text(
+          _maxSpeedLimit.toStringAsFixed(1),
+          style: TextStyle(
+            fontSize: 9,
+            color: labelColor,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
     );
   }
 
