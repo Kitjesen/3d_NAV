@@ -130,6 +130,9 @@ class _MapScreenState extends State<MapScreen>
   Offset? _measureStart; // world coordinates
   Offset? _measureEnd;   // world coordinates
 
+  // ─── Rotation lock ───
+  bool _rotationLocked = false;
+
   // ─── Active waypoints (from backend) ───
   List<ActiveWaypoint> _activeWaypoints = [];
   WaypointSource _waypointSource = WaypointSource.WAYPOINT_SOURCE_NONE;
@@ -1334,6 +1337,8 @@ class _MapScreenState extends State<MapScreen>
                   transformationController: _transformController,
                   boundaryMargin: const EdgeInsets.all(5000),
                   minScale: 0.1, maxScale: 100.0,
+                  panEnabled: !_rotationLocked,
+                  scaleEnabled: !_rotationLocked,
                   child: SizedBox(
                     width: 10000, height: 10000,
                     child: RepaintBoundary(child: CustomPaint(
@@ -1612,6 +1617,17 @@ class _MapScreenState extends State<MapScreen>
             setState(() => _showFrontiers = !_showFrontiers);
           },
           tooltip: 'Frontier markers',
+        ),
+        const SizedBox(height: 4),
+        // Rotation / pan lock
+        _mapCtrlBtn(
+          _rotationLocked ? Icons.screen_lock_rotation : Icons.screen_rotation,
+          color: _rotationLocked ? AppColors.warning : null,
+          onTap: () {
+            HapticFeedback.selectionClick();
+            setState(() => _rotationLocked = !_rotationLocked);
+          },
+          tooltip: _rotationLocked ? 'Unlock view' : 'Lock view',
         ),
         const SizedBox(height: 4),
         // Compass / recenter
