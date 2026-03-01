@@ -20,7 +20,7 @@ class MapGoalPicker extends StatefulWidget {
 
 class _MapGoalPickerState extends State<MapGoalPicker> {
   final List<Offset> _path = [];
-  List<Offset> _globalMapPoints = [];
+  List<List<Offset>> _globalMapBuckets = List.generate(5, (_) => []);
 
   Pose? _currentPose;
   StreamSubscription<FastState>? _fastSub;
@@ -112,20 +112,34 @@ class _MapGoalPickerState extends State<MapGoalPicker> {
 
   void _parseMapChunk(List<int> data) {
     if (data.length < 12) return;
-    final byteData = ByteData.sublistView(Uint8List.fromList(data));
+    final bd = ByteData.sublistView(Uint8List.fromList(data));
     final pts = <Offset>[];
-    // Assume float32 x,y,z triplets
+    final zs = <double>[];
     for (int i = 0; i + 11 < data.length; i += 12) {
-      final x = byteData.getFloat32(i, Endian.little);
-      final y = byteData.getFloat32(i + 4, Endian.little);
-      pts.add(Offset(x, y));
+      final x = bd.getFloat32(i, Endian.little);
+      final y = bd.getFloat32(i + 4, Endian.little);
+      final z = bd.getFloat32(i + 8, Endian.little);
+      if (x.isFinite && y.isFinite && z.isFinite) {
+        pts.add(Offset(x, y));
+        zs.add(z);
+      }
     }
-    if (pts.isNotEmpty) {
-      setState(() {
-        _globalMapPoints = pts;
-        _mapDataVersion++;
-      });
+    if (pts.isEmpty) return;
+    var zMin = double.maxFinite, zMax = double.negativeInfinity;
+    for (final z in zs) {
+      if (z < zMin) zMin = z;
+      if (z > zMax) zMax = z;
     }
+    final range = (zMax - zMin).clamp(0.01, double.infinity);
+    final buckets = List.generate(5, (_) => <Offset>[]);
+    for (var i = 0; i < pts.length; i++) {
+      final t = ((zs[i] - zMin) / range).clamp(0.0, 1.0);
+      buckets[(t * 4.99).floor().clamp(0, 4)].add(pts[i]);
+    }
+    setState(() {
+      _globalMapBuckets = buckets;
+      _mapDataVersion++;
+    });
   }
 
   void _handleMapTap(TapDownDetails details) {
@@ -201,8 +215,7 @@ class _MapGoalPickerState extends State<MapGoalPicker> {
                 painter: TrajectoryPainter(
                   path: _path,
                   currentPose: _currentPose,
-                  globalPoints: _globalMapPoints,
-                  localPoints: const [],
+                  globalBuckets: _globalMapBuckets,
                   navGoalPoint: _selectedPoint,
                   dataVersion: _mapDataVersion,
                 ),

@@ -67,8 +67,8 @@ class _MapScreenState extends State<MapScreen>
     with AutomaticKeepAliveClientMixin {
   // ─── Existing data ───
   final List<Offset> _path = [];
-  List<Offset> _globalMapPoints = [];
-  List<Offset> _localCloudPoints = [];
+  List<List<Offset>> _globalMapBuckets = List.generate(5, (_) => []);
+  List<List<Offset>> _localCloudBuckets = List.generate(5, (_) => []);
 
   // ─── Global path & occupancy grid ───
   List<Offset> _globalPathPoints = [];
@@ -212,24 +212,41 @@ class _MapScreenState extends State<MapScreen>
   void _parseAndSetPoints(List<int> data, {required bool isGlobal}) {
     if (data.isEmpty) return;
     final pointStep = isGlobal ? 12 : 16;
-    final points = <Offset>[];
-    final byteData = Uint8List.fromList(data).buffer.asByteData();
+    final bd = Uint8List.fromList(data).buffer.asByteData();
     final count = data.length ~/ pointStep;
     final stride = isGlobal ? 10 : 2;
+    final pts = <Offset>[];
+    final zs = <double>[];
     for (var i = 0; i < count; i += stride) {
-      final offset = i * pointStep;
-      if (offset + 8 <= data.length) {
-        final x = byteData.getFloat32(offset, Endian.little);
-        final y = byteData.getFloat32(offset + 4, Endian.little);
-        if (x.isFinite && y.isFinite) points.add(Offset(x, y));
+      final off = i * pointStep;
+      if (off + 12 <= data.length) {
+        final x = bd.getFloat32(off, Endian.little);
+        final y = bd.getFloat32(off + 4, Endian.little);
+        final z = bd.getFloat32(off + 8, Endian.little);
+        if (x.isFinite && y.isFinite && z.isFinite) {
+          pts.add(Offset(x, y));
+          zs.add(z);
+        }
       }
+    }
+    // Z-range for viridis bucketing
+    var zMin = double.maxFinite, zMax = double.negativeInfinity;
+    for (final z in zs) {
+      if (z < zMin) zMin = z;
+      if (z > zMax) zMax = z;
+    }
+    final range = (zMax - zMin).clamp(0.01, double.infinity);
+    final buckets = List.generate(5, (_) => <Offset>[]);
+    for (var i = 0; i < pts.length; i++) {
+      final t = ((zs[i] - zMin) / range).clamp(0.0, 1.0);
+      buckets[(t * 4.99).floor().clamp(0, 4)].add(pts[i]);
     }
     setState(() {
       _mapDataVersion++;
       if (isGlobal) {
-        _globalMapPoints = points;
+        _globalMapBuckets = buckets;
       } else {
-        _localCloudPoints = points;
+        _localCloudBuckets = buckets;
       }
     });
   }
@@ -1227,8 +1244,10 @@ class _MapScreenState extends State<MapScreen>
                     child: RepaintBoundary(child: CustomPaint(
                       painter: TrajectoryPainter(
                         path: _path, currentPose: _currentPose,
-                        globalPoints: _showGlobalMap ? _globalMapPoints : const [],
-                        localPoints: _localCloudPoints,
+                        globalBuckets: _showGlobalMap
+                            ? _globalMapBuckets
+                            : const [[], [], [], [], []],
+                        localBuckets: _localCloudBuckets,
                         navGoalPoint: _navGoalPoint,
                         dataVersion: _mapDataVersion,
                         globalPathPoints: _showGlobalPath ? _globalPathPoints : const [],
@@ -1263,6 +1282,23 @@ class _MapScreenState extends State<MapScreen>
         if (_geofenceState == 'WARNING' || _geofenceState == 'VIOLATION')
           _buildGeofenceAlertBanner(),
 
+        // Map legend + scale ruler (bottom-left, 2D mode only)
+        if (!_show3DModel)
+          Positioned(
+            left: 16, bottom: 16,
+            child: IgnorePointer(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildMapLegend(),
+                  const SizedBox(height: 6),
+                  _buildScaleRuler(),
+                ],
+              ),
+            ),
+          ),
+
         // Desktop map controls (right side)
         if (!context.isMobile)
           Positioned(
@@ -1278,6 +1314,101 @@ class _MapScreenState extends State<MapScreen>
           ),
       ],
     );
+  }
+
+  // ─── Map legend ───────────────────────────────────────────
+  Widget _buildMapLegend() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.60),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: DefaultTextStyle(
+        style: const TextStyle(color: Colors.white70, fontSize: 9, height: 1.6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Viridis Z-height gradient indicator
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              for (final c in [0xFF440154, 0xFF31688E, 0xFF35B779, 0xFF90D743, 0xFFFDE725])
+                Container(
+                  width: 8, height: 8,
+                  margin: const EdgeInsets.only(right: 1),
+                  decoration: BoxDecoration(color: Color(c), shape: BoxShape.circle),
+                ),
+              const SizedBox(width: 4),
+              const Text('Z高度'),
+            ]),
+            _legendRow(const Color(0x5500AA44), '空闲'),
+            _legendRow(const Color(0x44888888), '未知'),
+            _legendRow(const Color(0xCC993333), '障碍'),
+            _legendRow(const Color(0xFF7C3AED), '路径'),
+            _legendRow(const Color(0xFFFF3B30), '机器人'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Row _legendRow(Color color, String label) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 8, height: 8,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      ),
+      const SizedBox(width: 4),
+      Text(label),
+    ],
+  );
+
+  // ─── Scale ruler ─────────────────────────────────────────
+  Widget _buildScaleRuler() {
+    return AnimatedBuilder(
+      animation: _transformController,
+      builder: (_, __) {
+        final scale = _transformController.value.getMaxScaleOnAxis();
+        final rawM = 80.0 / scale.clamp(0.1, 10000.0);
+        final niceM = _niceDistance(rawM);
+        final rulerPx = (niceM * scale).clamp(10.0, 200.0);
+        final label = niceM >= 1.0 ? '${niceM.round()}m' : '${(niceM * 100).round()}cm';
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.60),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: rulerPx, height: 10,
+                child: Stack(
+                  children: [
+                    Positioned(left: 0, right: 0, top: 4, child: Container(height: 2, color: Colors.white70)),
+                    Positioned(left: 0, top: 0, child: Container(width: 2, height: 10, color: Colors.white70)),
+                    Positioned(right: 0, top: 0, child: Container(width: 2, height: 10, color: Colors.white70)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(label, style: const TextStyle(color: Colors.white70, fontSize: 9)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  double _niceDistance(double meters) {
+    const nice = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0];
+    for (final v in nice) {
+      if (v >= meters) return v;
+    }
+    return 500.0;
   }
 
   Widget _buildMapControls(BuildContext context) {
@@ -2093,8 +2224,8 @@ class _ActiveWaypointPainter extends CustomPainter {
 class TrajectoryPainter extends CustomPainter {
   final List<Offset> path;
   final Pose? currentPose;
-  final List<Offset> globalPoints;
-  final List<Offset> localPoints;
+  final List<List<Offset>> globalBuckets;  // 5 viridis Z-buckets
+  final List<List<Offset>> localBuckets;   // 5 viridis Z-buckets
   final Offset? navGoalPoint;
   final int dataVersion;
   final List<Offset> globalPathPoints;
@@ -2103,11 +2234,21 @@ class TrajectoryPainter extends CustomPainter {
   final double? _poseX;
   final double? _poseY;
 
-  // ── 缓存 Paint 对象，避免每帧 10+ 次堆分配 ──
-  static final _globalMapPaint = Paint()
-    ..color = Colors.black12..strokeWidth = 0.1..strokeCap = StrokeCap.round;
-  static final _localCloudPaint = Paint()
-    ..color = Colors.red.withValues(alpha: 0.3)..strokeWidth = 0.05..strokeCap = StrokeCap.round;
+  // ── viridis 5-bucket paints for point clouds ──
+  static final _viridisGlobal = [
+    Paint()..color = const Color(0xFF440154)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = const Color(0xFF31688E)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = const Color(0xFF35B779)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = const Color(0xFF90D743)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = const Color(0xFFFDE725)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+  ];
+  static final _viridisLocal = [
+    Paint()..color = const Color(0x88440154)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = const Color(0x8831688E)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = const Color(0x8835B779)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = const Color(0x8890D743)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = const Color(0x88FDE725)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+  ];
   static final _trajectoryPaint = Paint()
     ..color = const Color(0xFF007AFF).withValues(alpha: 0.6)
     ..strokeWidth = 0.1..style = PaintingStyle.stroke
@@ -2141,7 +2282,8 @@ class TrajectoryPainter extends CustomPainter {
 
   TrajectoryPainter({
     required this.path, this.currentPose,
-    this.globalPoints = const [], this.localPoints = const [],
+    this.globalBuckets = const [[], [], [], [], []],
+    this.localBuckets = const [[], [], [], [], []],
     this.navGoalPoint, this.dataVersion = 0,
     this.globalPathPoints = const [], this.occupancyGrid,
   })  : _pathLength = path.length,
@@ -2153,35 +2295,40 @@ class TrajectoryPainter extends CustomPainter {
     canvas.translate(size.width / 2, size.height / 2);
     canvas.scale(1.0, -1.0);
 
-    // ── 占用栅格（底层，最先绘制）──
+    // ── 占用栅格（底层，最先绘制）── 三色: 空闲绿/未知灰/障碍红
     final g = occupancyGrid;
     if (g != null) {
+      final cellSz = g.resolution * 1.05;
       for (var row = 0; row < g.height; row++) {
         for (var col = 0; col < g.width; col++) {
           final val = g.data[row * g.width + col];
-          if (val < 50) continue; // 跳过空闲/未知格
+          if (val == 0) continue; // 完全空闲 — 跳过提升性能
           final wx = g.originX + (col + 0.5) * g.resolution;
           final wy = g.originY + (row + 0.5) * g.resolution;
-          final opacity = (val / 255.0).clamp(0.25, 0.75);
-          _gridPaint.color = Color.fromRGBO(255, 55, 55, opacity);
+          if (val < 50) {
+            _gridPaint.color = const Color(0x3300AA44); // 低占用 — 绿
+          } else if (val < 128) {
+            _gridPaint.color = const Color(0x33888888); // 不确定 — 灰
+          } else {
+            final opacity = ((val - 128) / 127.0 * 0.5 + 0.25).clamp(0.25, 0.75);
+            _gridPaint.color = Color.fromRGBO(180, 30, 30, opacity); // 障碍 — 深红
+          }
           canvas.drawRect(
-            Rect.fromCenter(
-              center: Offset(wx, wy),
-              width: g.resolution * 1.05,
-              height: g.resolution * 1.05,
-            ),
+            Rect.fromCenter(center: Offset(wx, wy), width: cellSz, height: cellSz),
             _gridPaint,
           );
         }
       }
     }
 
-    // ── 地图点云 ──
-    if (globalPoints.isNotEmpty) {
-      canvas.drawPoints(ui.PointMode.points, globalPoints, _globalMapPaint);
-    }
-    if (localPoints.isNotEmpty) {
-      canvas.drawPoints(ui.PointMode.points, localPoints, _localCloudPaint);
+    // ── 地图点云 — viridis Z 分段着色 ──
+    for (var b = 0; b < 5; b++) {
+      if (globalBuckets[b].isNotEmpty) {
+        canvas.drawPoints(ui.PointMode.points, globalBuckets[b], _viridisGlobal[b]);
+      }
+      if (localBuckets[b].isNotEmpty) {
+        canvas.drawPoints(ui.PointMode.points, localBuckets[b], _viridisLocal[b]);
+      }
     }
 
     // ── 全局路径（紫色线） ──
@@ -2247,7 +2394,9 @@ class TrajectoryPainter extends CustomPainter {
       dataVersion != old.dataVersion || _pathLength != old._pathLength ||
       _poseX != old._poseX || _poseY != old._poseY || navGoalPoint != old.navGoalPoint ||
       globalPathPoints.length != old.globalPathPoints.length ||
-      occupancyGrid != old.occupancyGrid;
+      occupancyGrid != old.occupancyGrid ||
+      !identical(globalBuckets, old.globalBuckets) ||
+      !identical(localBuckets, old.localBuckets);
 }
 
 // ═══════════════════════════════════════════════════════════════
