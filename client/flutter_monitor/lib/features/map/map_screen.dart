@@ -133,6 +133,9 @@ class _MapScreenState extends State<MapScreen>
   // ─── Rotation lock ───
   bool _rotationLocked = false;
 
+  // ─── Position history trail (60s @ 10Hz = 600 points) ───
+  final List<Offset> _positionHistory = [];
+
   // ─── Active waypoints (from backend) ───
   List<ActiveWaypoint> _activeWaypoints = [];
   WaypointSource _waypointSource = WaypointSource.WAYPOINT_SOURCE_NONE;
@@ -396,6 +399,11 @@ class _MapScreenState extends State<MapScreen>
         if (_path.isEmpty || (_path.last - point).distance > 0.05) {
           _path.add(point);
           if (_path.length > 5000) _path.removeRange(0, 1000);
+        }
+        // Position history trail (max 600 points)
+        if (_positionHistory.isEmpty || (_positionHistory.last - point).distance > 0.05) {
+          _positionHistory.add(point);
+          if (_positionHistory.length > 600) _positionHistory.removeAt(0);
         }
       });
     });
@@ -1354,6 +1362,7 @@ class _MapScreenState extends State<MapScreen>
                         occupancyGrid: _showOccupancyGrid ? _occupancyGrid : null,
                         frontierMarkers: _showFrontiers ? _frontierMarkers : const [],
                         longPressMarkers: _longPressMarkers,
+                        positionHistory: _positionHistory,
                       ),
                       size: const Size(10000, 10000),
                     )),
@@ -2482,6 +2491,7 @@ class TrajectoryPainter extends CustomPainter {
   final _OccupancyGrid? occupancyGrid;
   final List<_FrontierMarker> frontierMarkers;
   final List<Offset> longPressMarkers;
+  final List<Offset> positionHistory;
   final int _pathLength;
   final double? _poseX;
   final double? _poseY;
@@ -2551,6 +2561,7 @@ class TrajectoryPainter extends CustomPainter {
     this.globalPathPoints = const [], this.occupancyGrid,
     this.frontierMarkers = const [],
     this.longPressMarkers = const [],
+    this.positionHistory = const [],
   })  : _pathLength = path.length,
         _poseX = currentPose?.position.x,
         _poseY = currentPose?.position.y;
@@ -2635,6 +2646,19 @@ class TrajectoryPainter extends CustomPainter {
       );
     }
 
+    // ── 位置历史轨迹（青色渐隐尾迹） ──
+    if (positionHistory.length >= 2) {
+      final total = positionHistory.length;
+      for (var i = 1; i < total; i++) {
+        final alpha = (i / total) * 0.5; // linear fade: older → more transparent
+        final paint = Paint()
+          ..color = Colors.cyan.withValues(alpha: alpha)
+          ..strokeWidth = 0.08
+          ..strokeCap = StrokeCap.round;
+        canvas.drawLine(positionHistory[i - 1], positionHistory[i], paint);
+      }
+    }
+
     // ── 历史轨迹（蓝色线） ──
     if (path.isNotEmpty) {
       final p = Path()..moveTo(path.first.dx, path.first.dy);
@@ -2717,6 +2741,7 @@ class TrajectoryPainter extends CustomPainter {
       occupancyGrid != old.occupancyGrid ||
       frontierMarkers.length != old.frontierMarkers.length ||
       longPressMarkers.length != old.longPressMarkers.length ||
+      positionHistory.length != old.positionHistory.length ||
       !identical(globalBuckets, old.globalBuckets) ||
       !identical(localBuckets, old.localBuckets);
 }
