@@ -69,6 +69,7 @@ def generate_launch_description():
                 'tomogram_file':  map_path,
                 'obstacle_thr':   robot_cfg('pct_planner', 'obstacle_thr',  49.9),
                 'republish_hz':   robot_cfg('pct_planner', 'republish_hz',  1.0),
+                'smooth_min_dist': robot_cfg('pct_planner', 'smooth_min_dist', 3),
             }
         ],
         additional_env={'PYTHONPATH': scripts_dir},

@@ -67,6 +67,7 @@ semantic:
   instruction: /nav/semantic/instruction        # std_msgs/String (自然语言指令)
   resolved_goal: /nav/goal_pose                 # geometry_msgs/PoseStamped (解析后的目标，直连 PCT Planner)
   status: /nav/semantic/status                  # std_msgs/String (JSON: 阶段/目标/置信度)
+  costmap: /nav/costmap                          # nav_msgs/OccupancyGrid (optional, planner→perception SCG 内部接口)
 
 # ── TF 坐标系 ──
 tf:

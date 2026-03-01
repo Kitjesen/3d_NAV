@@ -20,6 +20,7 @@
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int8.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 
@@ -162,6 +163,7 @@ public:
         "/slow_down", 5, std::bind(&PathFollower::slowDownHandler, this, std::placeholders::_1));
 
     pubSpeed_ = create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 5);
+    pubGoalStatus_ = create_publisher<std_msgs::msg::String>("/nav/planner_status", 10);
 
     // --- Sync params to nav_core ---
     syncCoreParams();
@@ -347,7 +349,9 @@ private:
   rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr subStop_;
   rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr subSlowDown_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pubSpeed_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pubGoalStatus_;
   rclcpp::TimerBase::SharedPtr timer_;
+  bool goalReachedPublished_ = false;
 
   // --- Callbacks ---
   void odomHandler(const nav_msgs::msg::Odometry::ConstSharedPtr odomIn)
@@ -397,6 +401,7 @@ private:
 
     pathPointID_ = 0;
     pathInit_ = true;
+    goalReachedPublished_ = false;
   }
 
   void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
@@ -540,6 +545,19 @@ private:
 
         pubSpeed_->publish(cmd_vel);
         pubSkipCount_ = pubSkipNum_;
+      }
+
+      // ── 7. 目标到达检测 ──
+      if (!goalReachedPublished_ && pathSize > 0) {
+        float goalDx = path_.poses.back().pose.position.x - vehicleX_;
+        float goalDy = path_.poses.back().pose.position.y - vehicleY_;
+        float goalDist = std::sqrt(goalDx * goalDx + goalDy * goalDy);
+        if (goalDist < stopDisThre_) {
+          std_msgs::msg::String status_msg;
+          status_msg.data = "GOAL_REACHED";
+          pubGoalStatus_->publish(status_msg);
+          goalReachedPublished_ = true;
+        }
       }
     }
   }
