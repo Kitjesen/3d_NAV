@@ -1,3 +1,4 @@
+import 'dart:math' show sqrt;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -343,6 +344,7 @@ class _ControlScreenState extends State<ControlScreen> {
                   icon: Icons.open_with,
                   listener: _onLeftJoystickChange,
                   mode: JoystickMode.all,
+                  speedBar: _buildSpeedBar(gw),
                 ),
 
                 // Center Controls
@@ -352,6 +354,9 @@ class _ControlScreenState extends State<ControlScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
+                        // Telemetry HUD
+                        _buildTelemetryHud(provider, gw),
+                        const SizedBox(height: 10),
                         // Mode Selection / Dog Control
                         if (useDogDirect)
                           _buildDogControlButtons(dogClientRef)
@@ -452,6 +457,7 @@ class _ControlScreenState extends State<ControlScreen> {
     required IconData icon,
     required void Function(StickDragDetails) listener,
     required JoystickMode mode,
+    Widget? speedBar,
   }) {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -477,7 +483,8 @@ class _ControlScreenState extends State<ControlScreen> {
             ],
           ),
         ),
-        const SizedBox(height: 20),
+        if (speedBar != null) ...[const SizedBox(height: 8), speedBar],
+        const SizedBox(height: 12),
         Joystick(
           mode: mode,
           listener: listener,
@@ -614,6 +621,103 @@ class _ControlScreenState extends State<ControlScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  // ─── Telemetry HUD ───
+
+  Widget _buildTelemetryHud(RobotConnectionProvider provider, ControlGateway gw) {
+    return GlassCard(
+      borderRadius: 12,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      blurSigma: 12,
+      child: StreamBuilder<SlowState>(
+        stream: provider.slowStateStream,
+        initialData: provider.latestSlowState,
+        builder: (context, snapshot) {
+          final slow = snapshot.data;
+          final battery = slow?.resources.batteryPercent;
+          final rtt = provider.connectionRttMs;
+          return ValueListenableBuilder<({double vx, double vy, double wz})>(
+            valueListenable: gw.velocityNotifier,
+            builder: (context, vel, _) {
+              final speed = sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _hudItem(Icons.battery_std_rounded,
+                      battery != null ? '${battery.toStringAsFixed(0)}%' : '--'),
+                  const SizedBox(width: 14),
+                  _hudItem(Icons.network_check_rounded,
+                      rtt != null ? '${rtt.toStringAsFixed(0)}ms' : '--'),
+                  const SizedBox(width: 14),
+                  _hudItem(Icons.speed_rounded, '${speed.toStringAsFixed(1)}m/s'),
+                ],
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _hudItem(IconData icon, String value) {
+    final color = Colors.white.withValues(alpha: 0.75);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Text(value, style: TextStyle(
+          fontSize: 11, color: color,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        )),
+      ],
+    );
+  }
+
+  // ─── Speed bar (above translation joystick) ───
+
+  Widget _buildSpeedBar(ControlGateway gw) {
+    final profile = context.read<RobotProfileProvider>().current;
+    final maxSpeed = profile.maxLinearSpeed > 0 ? profile.maxLinearSpeed : 1.0;
+    return ValueListenableBuilder<({double vx, double vy, double wz})>(
+      valueListenable: gw.velocityNotifier,
+      builder: (context, vel, _) {
+        final speed = sqrt(vel.vx * vel.vx + vel.vy * vel.vy);
+        final fraction = (speed / maxSpeed).clamp(0.0, 1.0);
+        final barColor = fraction < 0.5
+            ? AppColors.success
+            : fraction < 0.8
+                ? AppColors.warning
+                : AppColors.error;
+        return SizedBox(
+          width: 180,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: fraction,
+                  backgroundColor: Colors.white.withValues(alpha: 0.15),
+                  valueColor: AlwaysStoppedAnimation(barColor.withValues(alpha: 0.85)),
+                  minHeight: 3,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '${speed.toStringAsFixed(1)} m/s',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: barColor.withValues(alpha: 0.9),
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
