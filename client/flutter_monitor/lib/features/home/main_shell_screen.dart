@@ -410,23 +410,10 @@ class _MainShellScreenState extends State<MainShellScreen> {
                 Positioned(
                   right: 0,
                   bottom: 0,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isConnected
-                          ? switch (context.read<RobotConnectionProvider>().connectionQuality) {
-                              'good'     => AppColors.success,
-                              'slow'     => AppColors.connecting,
-                              'unstable' => AppColors.warning,
-                              _          => AppColors.success,
-                            }
-                          : isDogConnected
-                              ? AppColors.connecting
-                              : AppColors.offline,
-                      border: Border.all(color: Colors.white, width: 2.5),
-                    ),
+                  child: _ConnectionStatusDot(
+                    isConnected: isConnected,
+                    isDogConnected: isDogConnected,
+                    quality: connQuality,
                   ),
                 ),
               ],
@@ -469,7 +456,15 @@ class _MainShellScreenState extends State<MainShellScreen> {
                          (i == _eventsTabIndex && _unreadErrors > 0),
                   badgeColor: i == _eventsTabIndex
                       ? AppColors.error
-                      : (isConnected ? AppColors.online : AppColors.connecting),
+                      : i == 1
+                          ? switch (connQuality) {
+                              'good' => AppColors.online,
+                              'slow' => AppColors.connecting,
+                              'unstable' => AppColors.warning,
+                              _ => isConnected ? AppColors.online : AppColors.connecting,
+                            }
+                          : (isConnected ? AppColors.online : AppColors.connecting),
+                  blink: i == 1 && !isConnected && !isDogConnected,
                   onTap: () => _onTap(i),
                 ),
             ],
@@ -589,13 +584,14 @@ class _SideNavItem extends StatelessWidget {
 //  Bottom nav item (mobile)
 // ─────────────────────────────────────────────────────────────────
 
-class _BottomNavItem extends StatelessWidget {
+class _BottomNavItem extends StatefulWidget {
   final IconData icon;
   final IconData activeIcon;
   final String label;
   final bool isActive;
   final bool badge;
   final Color? badgeColor;
+  final bool blink;
   final VoidCallback onTap;
 
   const _BottomNavItem({
@@ -605,13 +601,51 @@ class _BottomNavItem extends StatelessWidget {
     required this.isActive,
     this.badge = false,
     this.badgeColor,
+    this.blink = false,
     required this.onTap,
   });
 
   @override
+  State<_BottomNavItem> createState() => _BottomNavItemState();
+}
+
+class _BottomNavItemState extends State<_BottomNavItem>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _blinkCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _blinkCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    if (widget.blink) _blinkCtrl.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(_BottomNavItem old) {
+    super.didUpdateWidget(old);
+    if (widget.blink != old.blink) {
+      if (widget.blink) {
+        _blinkCtrl.repeat(reverse: true);
+      } else {
+        _blinkCtrl.stop();
+        _blinkCtrl.value = 1.0;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _blinkCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: widget.onTap,
       behavior: HitTestBehavior.opaque,
       child: SizedBox(
         width: 56,
@@ -626,28 +660,35 @@ class _BottomNavItem extends StatelessWidget {
                   duration: AppDurations.fast,
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
-                    color: isActive
+                    color: widget.isActive
                         ? AppColors.primary.withValues(alpha: 0.1)
                         : Colors.transparent,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
-                    isActive ? activeIcon : icon,
+                    widget.isActive ? widget.activeIcon : widget.icon,
                     size: 22,
-                    color: isActive ? AppColors.primary : context.subtitleColor,
+                    color: widget.isActive ? AppColors.primary : context.subtitleColor,
                   ),
                 ),
-                if (badge)
+                if (widget.badge)
                   Positioned(
                     top: 0,
                     right: 4,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: badgeColor ?? AppColors.online,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: context.cardColor, width: 1.5),
+                    child: AnimatedBuilder(
+                      animation: _blinkCtrl,
+                      builder: (context, child) => Opacity(
+                        opacity: widget.blink ? _blinkCtrl.value : 1.0,
+                        child: child,
+                      ),
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: widget.badgeColor ?? AppColors.online,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: context.cardColor, width: 1.5),
+                        ),
                       ),
                     ),
                   ),
@@ -655,16 +696,132 @@ class _BottomNavItem extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              label,
+              widget.label,
               style: TextStyle(
                 fontSize: 10,
-                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-                color: isActive ? AppColors.primary : context.hintColor,
+                fontWeight: widget.isActive ? FontWeight.w600 : FontWeight.w400,
+                color: widget.isActive ? AppColors.primary : context.hintColor,
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  Connection status dot — animated blink for disconnected
+// ─────────────────────────────────────────────────────────────────
+
+class _ConnectionStatusDot extends StatefulWidget {
+  final bool isConnected;
+  final bool isDogConnected;
+  final String quality;
+
+  const _ConnectionStatusDot({
+    required this.isConnected,
+    required this.isDogConnected,
+    required this.quality,
+  });
+
+  @override
+  State<_ConnectionStatusDot> createState() => _ConnectionStatusDotState();
+}
+
+class _ConnectionStatusDotState extends State<_ConnectionStatusDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _blinkController;
+
+  @override
+  void initState() {
+    super.initState();
+    _blinkController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    _updateAnimation();
+  }
+
+  @override
+  void didUpdateWidget(_ConnectionStatusDot old) {
+    super.didUpdateWidget(old);
+    if (old.isConnected != widget.isConnected ||
+        old.isDogConnected != widget.isDogConnected ||
+        old.quality != widget.quality) {
+      _updateAnimation();
+    }
+  }
+
+  void _updateAnimation() {
+    final shouldBlink = !widget.isConnected && !widget.isDogConnected;
+    if (shouldBlink) {
+      _blinkController.repeat(reverse: true);
+    } else {
+      _blinkController.stop();
+      _blinkController.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _blinkController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Color dotColor;
+    final bool showExclamation;
+
+    if (widget.isConnected) {
+      showExclamation = widget.quality == 'unstable';
+      dotColor = switch (widget.quality) {
+        'good' => AppColors.success,
+        'slow' => AppColors.connecting,
+        'unstable' => AppColors.warning,
+        _ => AppColors.success,
+      };
+    } else if (widget.isDogConnected) {
+      dotColor = AppColors.connecting;
+      showExclamation = false;
+    } else {
+      dotColor = AppColors.offline;
+      showExclamation = false;
+    }
+
+    return AnimatedBuilder(
+      animation: _blinkController,
+      builder: (context, child) {
+        final opacity = widget.isConnected || widget.isDogConnected
+            ? 1.0
+            : _blinkController.value;
+        return Opacity(
+          opacity: opacity,
+          child: Container(
+            width: 14,
+            height: 14,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: dotColor,
+              border: Border.all(color: Colors.white, width: 2.5),
+            ),
+            child: showExclamation
+                ? const Center(
+                    child: Text(
+                      '!',
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                        height: 1,
+                      ),
+                    ),
+                  )
+                : null,
+          ),
+        );
+      },
     );
   }
 }
