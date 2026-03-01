@@ -18,10 +18,11 @@ sensor:
 
 # ── SLAM 层 ──
 slam:
-  odometry: /nav/odometry               # nav_msgs/Odometry (里程计)
+  odometry: /nav/odometry               # nav_msgs/Odometry — 唯一发布者: Fast-LIO2 (含位置+姿态)
   registered_cloud: /nav/registered_cloud  # sensor_msgs/PointCloud2 (机体坐标系)
   map_cloud: /nav/map_cloud             # sensor_msgs/PointCloud2 (世界坐标系)
   save_map_service: /nav/save_map       # interface/srv/SaveMaps
+  dog_odometry: /nav/dog_odometry       # nav_msgs/Odometry — han_dog_bridge IMU 姿态反馈 (仅姿态+角速度，无位置)
 
 # ── 定位层 ──
 localization:
@@ -32,7 +33,8 @@ localization:
 # ── 全局规划层 ──
 planning:
   global_path: /nav/global_path         # nav_msgs/Path (全局路径)
-  planner_status: /nav/planner_status   # std_msgs/String (JSON 规划器事件)
+  planner_status: /nav/planner_status   # std_msgs/String 纯字符串: "IDLE"/"PLANNING"/"SUCCESS"/"FAILED" (global_planner 发布)
+  adapter_status: /nav/adapter_status   # std_msgs/String JSON: {"event":...,"index":N,"total":N} (pct_path_adapter 发布)
 
 # ── 自主导航层 ──
 autonomy:

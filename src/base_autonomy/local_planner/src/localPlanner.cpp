@@ -106,6 +106,10 @@ public:
     declare_parameter<double>("autonomySpeed", autonomySpeed_);
     declare_parameter<double>("joyToSpeedDelay", joyToSpeedDelay_);
     declare_parameter<double>("joyToCheckObstacleDelay", joyToCheckObstacleDelay_);
+    declare_parameter<int>("joy_axis_fwd",       joy_axis_fwd_);
+    declare_parameter<int>("joy_axis_left",      joy_axis_left_);
+    declare_parameter<int>("joy_axis_autonomy",  joy_axis_autonomy_);
+    declare_parameter<int>("joy_axis_obstacle",  joy_axis_obstacle_);
     declare_parameter<double>("freezeAng", freezeAng_);
     declare_parameter<double>("freezeTime", freezeTime_);
     declare_parameter<double>("omniDirGoalThre", omniDirGoalThre_);
@@ -154,6 +158,10 @@ public:
     autonomySpeed_ = get_parameter("autonomySpeed").as_double();
     joyToSpeedDelay_ = get_parameter("joyToSpeedDelay").as_double();
     joyToCheckObstacleDelay_ = get_parameter("joyToCheckObstacleDelay").as_double();
+    joy_axis_fwd_      = get_parameter("joy_axis_fwd").as_int();
+    joy_axis_left_     = get_parameter("joy_axis_left").as_int();
+    joy_axis_autonomy_ = get_parameter("joy_axis_autonomy").as_int();
+    joy_axis_obstacle_ = get_parameter("joy_axis_obstacle").as_int();
     freezeAng_ = get_parameter("freezeAng").as_double();
     freezeTime_ = get_parameter("freezeTime").as_double();
     omniDirGoalThre_ = get_parameter("omniDirGoalThre").as_double();
@@ -353,6 +361,10 @@ private:
   double autonomySpeed_ = 1.0;
   double joyToSpeedDelay_ = 2.0;
   double joyToCheckObstacleDelay_ = 5.0;
+  int joy_axis_fwd_      = 4;
+  int joy_axis_left_     = 3;
+  int joy_axis_autonomy_ = 2;
+  int joy_axis_obstacle_ = 5;
   double freezeAng_ = 90.0;
   double freezeTime_ = 2.0;
   double omniDirGoalThre_ = 1.0;
@@ -569,29 +581,29 @@ private:
   void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
   {
     joyTime_ = now().seconds();
-    joySpeedRaw_ = sqrt(joy->axes[3] * joy->axes[3] + joy->axes[4] * joy->axes[4]);
+    joySpeedRaw_ = sqrt(joy->axes[joy_axis_left_] * joy->axes[joy_axis_left_] + joy->axes[joy_axis_fwd_] * joy->axes[joy_axis_fwd_]);
     joySpeed_ = joySpeedRaw_;
     if (joySpeed_ > 1.0) joySpeed_ = 1.0;
-    if (joy->axes[4] == 0) joySpeed_ = 0;
+    if (joy->axes[joy_axis_fwd_] == 0) joySpeed_ = 0;
 
     if (joySpeed_ > 0) {
-      joyDir_ = atan2(joy->axes[3], joy->axes[4]) * 180 / PI;
-      if (joy->axes[4] < 0) joyDir_ *= -1;
+      joyDir_ = atan2(joy->axes[joy_axis_left_], joy->axes[joy_axis_fwd_]) * 180 / PI;
+      if (joy->axes[joy_axis_fwd_] < 0) joyDir_ *= -1;
     }
 
-    if (joy->axes[4] < 0 && !twoWayDrive_) joySpeed_ = 0;
+    if (joy->axes[joy_axis_fwd_] < 0 && !twoWayDrive_) joySpeed_ = 0;
 
-    // axes[2] (LT): 控制自主/手动模式
+    // joy_axis_autonomy_ (LT): 控制自主/手动模式
     // 松开 LT = 自主导航（默认）；按下 LT = 手动接管
-    if (joy->axes[2] > -0.1) {
+    if (joy->axes[joy_axis_autonomy_] > -0.1) {
       autonomyMode_ = true;   // 松开 = 自主模式（默认）
     } else {
       autonomyMode_ = false;  // 按下 = 手动模式（接管）
     }
 
-    // axes[5] (RT): 控制是否避障
+    // joy_axis_obstacle_ (RT): 控制是否避障
     // 松开 RT = 启用避障（默认安全）；按下 RT = 关闭避障（强制通过）
-    if (joy->axes[5] > -0.1) {
+    if (joy->axes[joy_axis_obstacle_] > -0.1) {
       checkObstacle_ = true;   // 启用避障
     } else {
       checkObstacle_ = false;  // 关闭避障

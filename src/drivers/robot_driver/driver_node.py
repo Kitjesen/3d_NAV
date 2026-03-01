@@ -14,11 +14,15 @@ driver 自身的 watchdog 仍能在 cmd_vel_timeout_ms 内将机器人停车。
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu
 from geometry_msgs.msg import TwistStamped
 from std_msgs.msg import Bool
 from tf_transformations import quaternion_from_euler
 from math import sin, cos
+
+try:
+    import serial
+except ImportError:
+    serial = None
 
 
 class GenericRobotDriver(Node):
@@ -38,8 +42,7 @@ class GenericRobotDriver(Node):
         )
 
         # --- Publishers ---
-        self.odom_pub = self.create_publisher(Odometry, '/wheel_odom', 10)
-        self.imu_pub = self.create_publisher(Imu, '/imu/data_raw', 10)
+        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.watchdog_pub = self.create_publisher(Bool, '/driver/watchdog_active', 10)
 
         # --- Subscribers ---
@@ -118,14 +121,27 @@ class GenericRobotDriver(Node):
     # ================================================================
 
     def connect_hardware(self):
-        """[IMPLEMENT] 初始化串口/TCP/CAN 连接."""
+        """初始化串口连接，失败则降级到模拟模式."""
         port = self.get_parameter('robot_port').value
         baud = self.get_parameter('baudrate').value
-        self.get_logger().info(f'Connecting to hardware on {port} at {baud}...')
+        self._serial = None
+        if serial is not None:
+            try:
+                self._serial = serial.Serial(port, baud, timeout=0.1)
+                self.get_logger().info(f'Serial connected: {port}@{baud}')
+            except Exception as e:
+                self.get_logger().warn(f'Serial not available ({e}), running in sim mode')
+        else:
+            self.get_logger().warn('pyserial not installed, running in sim mode')
 
     def send_to_motors(self, vx, vy, wz):
-        """[IMPLEMENT] 将 m/s, rad/s 转换为电机指令."""
-        pass
+        """将 m/s, rad/s 通过串口发送为电机指令."""
+        if self._serial and self._serial.is_open:
+            try:
+                cmd = f"{vx:.3f},{vy:.3f},{wz:.3f}\n".encode()
+                self._serial.write(cmd)
+            except Exception as e:
+                self.get_logger().warn(f'Serial write error: {e}')
 
     def hardware_loop(self):
         """主控制循环: 看门狗检查 → 发送指令 → 读取反馈."""

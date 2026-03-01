@@ -99,6 +99,11 @@ class HanDogBridge(Node):
         self._channel: Optional[grpc_aio.Channel] = None
         self._stub: Optional[dog_msg.CmsStub] = None
 
+        # 位置积分 (cmd_vel + IMU yaw → 世界坐标)
+        self._pos_x = 0.0
+        self._pos_y = 0.0
+        self._last_odom_time = None
+
         # 最新 IMU 数据缓存 (用于合成 Odometry)
         self._latest_quaternion = (0.0, 0.0, 0.0, 1.0)  # x, y, z, w
         self._latest_gyro = (0.0, 0.0, 0.0)
@@ -211,11 +216,25 @@ class HanDogBridge(Node):
     # ================================================================
 
     def _publish_odometry(self):
-        """从 IMU 数据合成并发布 /Odometry."""
+        """从 IMU 数据合成并发布 /Odometry (cmd_vel + IMU yaw 积分位置)."""
         odom = Odometry()
         odom.header.stamp = self.get_clock().now().to_msg()
         odom.header.frame_id = 'odom'
         odom.child_frame_id = 'body'
+
+        # 位置积分: cmd_vel 在 IMU yaw 方向上积分
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        if self._last_odom_time is not None:
+            dt = now_sec - self._last_odom_time
+            qx, qy, qz, qw = self._latest_quaternion
+            yaw = math.atan2(2.0 * (qw * qz + qx * qy),
+                             1.0 - 2.0 * (qy * qy + qz * qz))
+            self._pos_x += (self._cmd_vx * math.cos(yaw) - self._cmd_vy * math.sin(yaw)) * dt
+            self._pos_y += (self._cmd_vx * math.sin(yaw) + self._cmd_vy * math.cos(yaw)) * dt
+        self._last_odom_time = now_sec
+
+        odom.pose.pose.position.x = self._pos_x
+        odom.pose.pose.position.y = self._pos_y
 
         # 姿态 (来自 dog IMU)
         qx, qy, qz, qw = self._latest_quaternion
@@ -233,6 +252,26 @@ class HanDogBridge(Node):
         # 线速度 (使用当前指令作为估计)
         odom.twist.twist.linear.x = self._cmd_vx
         odom.twist.twist.linear.y = self._cmd_vy
+
+        # pose covariance: [x, y, z, roll, pitch, yaw] 对角
+        p_cov = [0.0] * 36
+        p_cov[0]  = 0.10   # x
+        p_cov[7]  = 0.10   # y
+        p_cov[14] = 0.30   # z (不精确)
+        p_cov[21] = 0.05   # roll
+        p_cov[28] = 0.05   # pitch
+        p_cov[35] = 0.05   # yaw
+        odom.pose.covariance = p_cov
+
+        # twist covariance: [vx, vy, vz, wx, wy, wz] 对角
+        t_cov = [0.0] * 36
+        t_cov[0]  = 0.20   # vx (cmd_vel 估算，不精确)
+        t_cov[7]  = 0.20   # vy
+        t_cov[14] = 0.10   # vz
+        t_cov[21] = 0.01   # wx (IMU 精确)
+        t_cov[28] = 0.01   # wy
+        t_cov[35] = 0.01   # wz
+        odom.twist.covariance = t_cov
 
         self.odom_pub.publish(odom)
 

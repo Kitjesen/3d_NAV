@@ -212,7 +212,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr
       sub_semantic_status_;  // /nav/semantic/status
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr
-      sub_planner_status_;   // /nav/planner_status (pct_path_adapter 到达事件)
+      sub_planner_status_;   // /nav/adapter_status (pct_path_adapter 航点跟踪事件)
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_waypoint_;
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr pub_stop_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr

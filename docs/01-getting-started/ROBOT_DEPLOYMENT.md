@@ -60,9 +60,9 @@ make health
 
 ## 遥控原理
 
-### 当前实现：Flutter App 虚拟摇杆
+系统支持**两种遥控方式**，可同时使用：
 
-系统**没有物理手柄节点**，遥控完全通过手机 App 的虚拟摇杆实现：
+### 方式 A：Flutter App 虚拟摇杆（主要方式）
 
 ```
 Flutter 客户端 (手机/平板)
@@ -94,20 +94,53 @@ SafetyGate
 # GitHub Releases → Windows_Flutter_Monitor.zip
 ```
 
-### 如需接入物理手柄（可选）
+### 方式 B：物理手柄（内置支持）
+
+`pathFollower` 和 `localPlanner` **原生订阅 `/joy`**，无需中间转换节点：
+
+```
+物理手柄 (/dev/input/js0)
+        ↓
+    joy_node  (ros-humble-joy)
+        ↓
+    /joy  (sensor_msgs/Joy)
+    ┌───┴──────────────────────────────────────────────────┐
+    │ pathFollower (直接订阅 /joy → /nav/cmd_vel)           │
+    │   axes[4]   → vx  前进/后退                           │
+    │   axes[3]   → vy  横移(全向) / yaw(差速)              │
+    │   axes[0]   → wz  转向                                │
+    │   axes[2] LT → <-0.1: 进入自主模式                    │
+    │   axes[5] RT → <-0.1: 关闭障碍物检测                  │
+    └──────────────────────────────────────────────────────┘
+    ┌──────────────────────────────────────────────────────┐
+    │ localPlanner (直接订阅 /joy)                          │
+    │   axes[2] LT → 自主/手动切换                          │
+    │   axes[5] RT → 障碍物避障开关                         │
+    │   axes[3]/[4] → joyDir_ 路径方向评分                  │
+    └──────────────────────────────────────────────────────┘
+        ↓
+    /nav/cmd_vel (TwistStamped)
+```
+
+**启动物理手柄**（仅需 `ros-humble-joy`，无需 `teleop_twist_joy`）：
 
 ```bash
-# 额外安装
-sudo apt install ros-humble-joy ros-humble-teleop-twist-joy
+# 安装
+sudo apt install ros-humble-joy
 
-# 启动手柄节点（单独终端）
-ros2 launch teleop_twist_joy teleop-launch.py \
-  joy_config:=xbox \
-  publish_stamped_twist:=true
+# 启动（system_launch.py 已内置，单独启动用）
+ros2 run joy joy_node --ros-args -p device_id:=0
 
-# remap 到标准接口
-ros2 run topic_tools relay /cmd_vel /nav/cmd_vel
+# 验证手柄输入
+ros2 topic echo /joy
 ```
+
+> **Xbox/PS4 摇杆轴映射**:
+> - `axes[0]` — 左摇杆水平 → wz 转向
+> - `axes[3]` — 右摇杆水平 → lateral/yaw
+> - `axes[4]` — 右摇杆垂直 → vx 前进
+> - `axes[2]` — LT 扳机 → <-0.1 切换自主模式
+> - `axes[5]` — RT 扳机 → <-0.1 禁用障碍物检测
 
 ---
 
@@ -194,7 +227,7 @@ LiDAR → Fast-LIO2 ────────────────────
                                        │                │
                               /nav/cmd_vel ←─────────────┘
                                        │
-                                han_dog_bridge
+                                han_dog_bridge → /nav/dog_odometry (IMU 里程计)
                                        │
                                gRPC :13145
                                        │
@@ -317,6 +350,12 @@ ros2 topic hz /nav/terrain_map
 # 实时查看规划状态
 ros2 topic echo /nav/planner_status
 
+# 查看四足机器人 IMU 里程计
+ros2 topic echo /nav/dog_odometry
+
+# 查看路径适配器状态（航点推进事件）
+ros2 topic echo /nav/adapter_status
+
 # 紧急停车
 ros2 topic pub --once /nav/stop std_msgs/Int8 "{'data': 2}"
 ```
@@ -333,6 +372,7 @@ ros2 topic pub --once /nav/stop std_msgs/Int8 "{'data': 2}"
 | 导航不走 | safetyStop_ 被触发 | 发布 `stop=0` 清除, 检查障碍物 |
 | 全局规划失败 | Tomogram 未加载 | 确认 NAV_MAP_PATH 指向 .pickle |
 | 语义导航无响应 | LLM API 超时 | 检查 API Key 和网络, 切换 backend |
+| 里程计抖动/位置乱跳 | /nav/odometry 双发布者 | 确认只有 Fast-LIO2 发布到 /nav/odometry，han_dog 应发到 /nav/dog_odometry |
 
 ---
 

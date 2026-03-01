@@ -70,6 +70,21 @@ def _g2w(ix, iy, cx, cy, res, ox, oy):
     return (ix - ox) * res + cx, (iy - oy) * res + cy
 
 
+def _downsample_path(cells, min_dist_cells=3):
+    """等距降采样：保证相邻保留点距离 >= min_dist_cells 格。"""
+    if len(cells) <= 2:
+        return cells
+    kept = [cells[0]]
+    for c in cells[1:]:
+        dx = c[0] - kept[-1][0]
+        dy = c[1] - kept[-1][1]
+        if (dx*dx + dy*dy) >= min_dist_cells * min_dist_cells:
+            kept.append(c)
+    if kept[-1] != cells[-1]:
+        kept.append(cells[-1])
+    return kept
+
+
 def _astar(trav, start, goal, obs_thr):
     """8-connected A* on traversability grid.
 
@@ -110,10 +125,12 @@ class PctPlannerAstar(Node):
         self.declare_parameter('tomogram_file', '')
         self.declare_parameter('obstacle_thr',  49.9)
         self.declare_parameter('republish_hz',  1.0)
+        self.declare_parameter('smooth_min_dist', 3)
 
         tomo_file    = self.get_parameter('tomogram_file').value
         self._obs    = self.get_parameter('obstacle_thr').value
         repub_hz     = self.get_parameter('republish_hz').value
+        self._smooth_min_dist = self.get_parameter('smooth_min_dist').value
 
         if not tomo_file or not os.path.isfile(tomo_file):
             self.get_logger().error(
@@ -198,6 +215,9 @@ class PctPlannerAstar(Node):
                 self._publish_status('FAILED')
             else:
                 self._publish_status('SUCCESS')
+
+            if cells and len(cells) > 2:
+                cells = _downsample_path(cells, min_dist_cells=self._smooth_min_dist)
 
             path_msg = Path()
             path_msg.header.stamp    = self.get_clock().now().to_msg()

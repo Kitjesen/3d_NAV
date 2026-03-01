@@ -87,12 +87,12 @@ TaskManager::TaskManager(rclcpp::Node *node) : node_(node) {
           std::bind(&TaskManager::SemanticStatusCallback, this,
                     std::placeholders::_1));
 
-  // 订阅全局规划器状态 (pct_path_adapter 航点到达事件)
-  if (!node_->has_parameter("task_planner_status_topic"))
-    node_->declare_parameter<std::string>("task_planner_status_topic",
-                                          "/nav/planner_status");
+  // 订阅 pct_path_adapter 航点跟踪状态 (JSON: {"event":"...","index":N,"total":N})
+  if (!node_->has_parameter("task_adapter_status_topic"))
+    node_->declare_parameter<std::string>("task_adapter_status_topic",
+                                          "/nav/adapter_status");
   const auto planner_status_topic =
-      node_->get_parameter("task_planner_status_topic").as_string();
+      node_->get_parameter("task_adapter_status_topic").as_string();
   sub_planner_status_ =
       node_->create_subscription<std_msgs::msg::String>(
           planner_status_topic, 10,

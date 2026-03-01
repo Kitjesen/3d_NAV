@@ -90,6 +90,11 @@ public:
     declare_parameter<bool>("autonomyMode", autonomyMode_);
     declare_parameter<double>("autonomySpeed", autonomySpeed_);
     declare_parameter<double>("joyToSpeedDelay", joyToSpeedDelay_);
+    declare_parameter<int>("joy_axis_fwd",       4);
+    declare_parameter<int>("joy_axis_left",      3);
+    declare_parameter<int>("joy_axis_yaw",       0);
+    declare_parameter<int>("joy_axis_autonomy",  2);
+    declare_parameter<int>("joy_axis_obstacle",  5);
 
     // --- Get Parameters ---
     sensorOffsetX_ = get_parameter("sensorOffsetX").as_double();
@@ -127,6 +132,11 @@ public:
     autonomyMode_ = get_parameter("autonomyMode").as_bool();
     autonomySpeed_ = get_parameter("autonomySpeed").as_double();
     joyToSpeedDelay_ = get_parameter("joyToSpeedDelay").as_double();
+    joy_axis_fwd_      = get_parameter("joy_axis_fwd").as_int();
+    joy_axis_left_     = get_parameter("joy_axis_left").as_int();
+    joy_axis_yaw_      = get_parameter("joy_axis_yaw").as_int();
+    joy_axis_autonomy_ = get_parameter("joy_axis_autonomy").as_int();
+    joy_axis_obstacle_ = get_parameter("joy_axis_obstacle").as_int();
 
     // --- Dynamic Parameter Callback ---
     param_cb_handle_ = add_on_set_parameters_callback(
@@ -204,6 +214,11 @@ private:
   bool autonomyMode_ = false;
   double autonomySpeed_ = 1.0;
   double joyToSpeedDelay_ = 2.0;
+  int joy_axis_fwd_      = 4;
+  int joy_axis_left_     = 3;
+  int joy_axis_yaw_      = 0;
+  int joy_axis_autonomy_ = 2;
+  int joy_axis_obstacle_ = 5;
 
   // --- Dynamic Parameter Callback ---
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
@@ -387,32 +402,32 @@ private:
   void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
   {
     joyTime_ = now().seconds();
-    joySpeedRaw_ = sqrt(joy->axes[3] * joy->axes[3] + joy->axes[4] * joy->axes[4]);
+    joySpeedRaw_ = sqrt(joy->axes[joy_axis_left_] * joy->axes[joy_axis_left_] + joy->axes[joy_axis_fwd_] * joy->axes[joy_axis_fwd_]);
     joySpeed_ = joySpeedRaw_;
     if (joySpeed_ > 1.0) joySpeed_ = 1.0;
-    if (joy->axes[4] == 0) joySpeed_ = 0;
-    joyYaw_ = joy->axes[3];
+    if (joy->axes[joy_axis_fwd_] == 0) joySpeed_ = 0;
+    joyYaw_ = joy->axes[joy_axis_left_];
     if (joySpeed_ == 0 && noRotAtStop_) joyYaw_ = 0;
 
-    if (joy->axes[4] < 0 && !twoWayDrive_) {
+    if (joy->axes[joy_axis_fwd_] < 0 && !twoWayDrive_) {
       joySpeed_ = 0;
       joyYaw_ = 0;
     }
 
-    joyManualFwd_ = joy->axes[4];
-    joyManualLeft_ = joy->axes[3];
-    joyManualYaw_ = joy->axes[0];
+    joyManualFwd_ = joy->axes[joy_axis_fwd_];
+    joyManualLeft_ = joy->axes[joy_axis_left_];
+    joyManualYaw_ = joy->axes[joy_axis_yaw_];
 
-    // axes[2] (LT): 控制自主/手动模式
+    // joy_axis_autonomy_ (LT): 控制自主/手动模式
     // 松开 LT = 自主导航（默认）；按下 LT = 手动接管
-    if (joy->axes[2] > -0.1) {
+    if (joy->axes[joy_axis_autonomy_] > -0.1) {
       autonomyMode_ = true;    // 松开 = 自主模式（默认）
       manualMode_ = false;     // 跟踪路径
     } else {
       autonomyMode_ = false;   // 按下 = 手动模式（接管）
       manualMode_ = true;      // 纯摇杆控制
     }
-    // axes[5] (RT) 保留作避障开关
+    // joy_axis_obstacle_ (RT) 保留作避障开关
   }
 
   void speedHandler(const std_msgs::msg::Float32::ConstSharedPtr speed)

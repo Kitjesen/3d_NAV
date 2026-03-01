@@ -43,8 +43,10 @@ public:
     waypoint_pub_ = create_publisher<geometry_msgs::msg::PointStamped>(
       "/planner_waypoint", 10);
 
+    // 航点跟踪状态 (JSON 格式: {"event":"...","index":N,"total":N})
+    // 使用专用话题，避免与全局规划器的 /nav/planner_status (纯字符串) 冲突
     status_pub_ = create_publisher<std_msgs::msg::String>(
-      "/nav/planner_status", 10);
+      "/nav/adapter_status", 10);
 
     // ── 参数 → WaypointTrackerParams ──
     declare_parameter<double>("waypoint_distance", 0.5);
