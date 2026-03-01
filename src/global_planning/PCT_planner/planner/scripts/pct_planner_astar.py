@@ -85,6 +85,22 @@ def _downsample_path(cells, min_dist_cells=3):
     return kept
 
 
+def _find_nearest_free(trav, ci, cj, obs_thr, radius=5):
+    """在 radius 格范围内找最近可行格，返回 (ni, nj) 或原点。"""
+    if trav[ci, cj] < obs_thr:
+        return ci, cj
+    best, best_dist = (ci, cj), float('inf')
+    for di in range(-radius, radius + 1):
+        for dj in range(-radius, radius + 1):
+            ni, nj = ci + di, cj + dj
+            if 0 <= ni < trav.shape[0] and 0 <= nj < trav.shape[1]:
+                if trav[ni, nj] < obs_thr:
+                    d = di * di + dj * dj
+                    if d < best_dist:
+                        best, best_dist = (ni, nj), d
+    return best
+
+
 def _astar(trav, start, goal, obs_thr):
     """8-connected A* on traversability grid.
 
@@ -205,6 +221,14 @@ class PctPlannerAstar(Node):
                           self._res, self._ox, self._oy, self._nx, self._ny)
             gi, gj = _w2g(gx, gy, self._cx, self._cy,
                           self._res, self._ox, self._oy, self._nx, self._ny)
+
+            # 起终点障碍物修正: 若落在障碍格则搜索最近可行格
+            si, sj = _find_nearest_free(self._trav, si, sj, self._obs, radius=3)
+            gi, gj = _find_nearest_free(self._trav, gi, gj, self._obs, radius=5)
+            if self._trav[gi, gj] >= self._obs:
+                self.get_logger().warn('Goal unreachable even after nearest-free search')
+                self._publish_status('FAILED')
+                return
 
             cells = _astar(self._trav, (si, sj), (gi, gj), self._obs)
             if cells is None:

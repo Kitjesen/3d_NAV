@@ -61,6 +61,7 @@ class HanDogBridge(Node):
         self.declare_parameter('auto_enable', True)         # 启动时自动 Enable
         self.declare_parameter('auto_standup', True)        # 启动时自动 StandUp
         self.declare_parameter('reconnect_interval', 3.0)   # 重连间隔 (秒)
+        self.declare_parameter('odom_pub_rate', 10.0)        # Hz, 里程计发布频率
 
         self._dog_host = self.get_parameter('dog_host').value
         self._dog_port = self.get_parameter('dog_port').value
@@ -71,6 +72,9 @@ class HanDogBridge(Node):
         self._auto_enable = self.get_parameter('auto_enable').value
         self._auto_standup = self.get_parameter('auto_standup').value
         self._reconnect_interval = self.get_parameter('reconnect_interval').value
+        odom_pub_rate = self.get_parameter('odom_pub_rate').value
+        self._odom_skip = max(1, int(self._control_rate / odom_pub_rate))
+        self._odom_pub_counter = 0
 
         # ─── ROS2 发布者 ───
         self.odom_pub = self.create_publisher(Odometry, '/Odometry', 10)
@@ -188,8 +192,11 @@ class HanDogBridge(Node):
         wd_msg.data = self._watchdog_triggered
         self.watchdog_pub.publish(wd_msg)
 
-        # 发布合成的里程计 (基于 IMU)
-        self._publish_odometry()
+        # 按 odom_pub_rate 降频发布里程计
+        self._odom_pub_counter += 1
+        if self._odom_pub_counter >= self._odom_skip:
+            self._odom_pub_counter = 0
+            self._publish_odometry()
 
         # 发布机器人状态
         self._publish_robot_state()

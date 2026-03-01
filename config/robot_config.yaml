@@ -134,8 +134,6 @@ local_planner:
   path_range_step: 0.5        # m
   path_range_by_speed: true
   path_crop_by_goal: true
-  joy_to_speed_delay: 2.0     # s
-  joy_to_check_obstacle_delay: 5.0  # s
   freeze_ang: 90.0            # °
   freeze_time: 2.0            # s
   goal_clear_range: 0.5       # m
