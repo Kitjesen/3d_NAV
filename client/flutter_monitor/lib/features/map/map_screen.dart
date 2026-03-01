@@ -136,6 +136,17 @@ class _MapScreenState extends State<MapScreen>
   // ─── Position history trail (60s @ 10Hz = 600 points) ───
   final List<Offset> _positionHistory = [];
 
+  // ─── Layer visibility panel ───
+  bool _showLayerPanel = false;
+  final Map<String, bool> _layerVisibility = {
+    'occupancy': true,
+    'pointcloud': true,
+    'path': true,
+    'waypoints': true,
+    'trail': true,
+    'frontiers': true,
+  };
+
   // ─── Active waypoints (from backend) ───
   List<ActiveWaypoint> _activeWaypoints = [];
   WaypointSource _waypointSource = WaypointSource.WAYPOINT_SOURCE_NONE;
@@ -1352,17 +1363,24 @@ class _MapScreenState extends State<MapScreen>
                     child: RepaintBoundary(child: CustomPaint(
                       painter: TrajectoryPainter(
                         path: _path, currentPose: _currentPose,
-                        globalBuckets: _showGlobalMap
+                        globalBuckets: (_showGlobalMap && _layerVisibility['pointcloud']!)
                             ? _globalMapBuckets
                             : const [[], [], [], [], []],
-                        localBuckets: _localCloudBuckets,
+                        localBuckets: _layerVisibility['pointcloud']!
+                            ? _localCloudBuckets
+                            : const [[], [], [], [], []],
                         navGoalPoint: _navGoalPoint,
                         dataVersion: _mapDataVersion,
-                        globalPathPoints: _showGlobalPath ? _globalPathPoints : const [],
-                        occupancyGrid: _showOccupancyGrid ? _occupancyGrid : null,
-                        frontierMarkers: _showFrontiers ? _frontierMarkers : const [],
-                        longPressMarkers: _longPressMarkers,
-                        positionHistory: _positionHistory,
+                        globalPathPoints: (_showGlobalPath && _layerVisibility['path']!)
+                            ? _globalPathPoints : const [],
+                        occupancyGrid: (_showOccupancyGrid && _layerVisibility['occupancy']!)
+                            ? _occupancyGrid : null,
+                        frontierMarkers: (_showFrontiers && _layerVisibility['frontiers']!)
+                            ? _frontierMarkers : const [],
+                        longPressMarkers: _layerVisibility['waypoints']!
+                            ? _longPressMarkers : const [],
+                        positionHistory: _layerVisibility['trail']!
+                            ? _positionHistory : const [],
                       ),
                       size: const Size(10000, 10000),
                     )),
@@ -1380,7 +1398,7 @@ class _MapScreenState extends State<MapScreen>
         if (_isSettingGoal) _buildGoalSettingBanner(context),
 
         // Active waypoints overlay (while task runs)
-        if (_activeWaypoints.isNotEmpty && !_show3DModel)
+        if (_activeWaypoints.isNotEmpty && !_show3DModel && _layerVisibility['waypoints']!)
           Positioned.fill(child: IgnorePointer(child: CustomPaint(
             painter: _ActiveWaypointPainter(
               waypoints: _activeWaypoints,
@@ -1466,6 +1484,45 @@ class _MapScreenState extends State<MapScreen>
           Positioned(
             right: 16, top: 16,
             child: _buildMapControls(context),
+          ),
+
+        // Layer panel toggle + popup (top-right, below controls)
+        if (!_show3DModel)
+          Positioned(
+            right: context.isMobile ? 12 : 60, top: context.isMobile
+                ? MediaQuery.of(context).padding.top + 12
+                : 16,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GestureDetector(
+                  onTap: () => setState(() => _showLayerPanel = !_showLayerPanel),
+                  child: Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      color: _showLayerPanel
+                          ? AppColors.primary.withValues(alpha: 0.15)
+                          : Colors.black.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _showLayerPanel
+                            ? AppColors.primary.withValues(alpha: 0.5)
+                            : Colors.white.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Icon(Icons.layers,
+                      size: 18,
+                      color: _showLayerPanel ? AppColors.primary : Colors.white70,
+                    ),
+                  ),
+                ),
+                if (_showLayerPanel) ...[
+                  const SizedBox(height: 6),
+                  _buildLayerPanel(),
+                ],
+              ],
+            ),
           ),
 
         // Desktop FABs
@@ -1655,6 +1712,62 @@ class _MapScreenState extends State<MapScreen>
           ),
         ),
       ]),
+    );
+  }
+
+  Widget _buildLayerPanel() {
+    final locale = context.read<LocaleProvider>();
+    final layers = <(String, String, IconData)>[
+      ('occupancy', locale.tr('占用栅格', 'Occupancy grid'), Icons.grid_on_rounded),
+      ('pointcloud', locale.tr('点云', 'Point cloud'), Icons.blur_on),
+      ('path', locale.tr('路径', 'Path'), Icons.route_rounded),
+      ('waypoints', locale.tr('航点', 'Waypoints'), Icons.place_rounded),
+      ('trail', locale.tr('轨迹', 'Trail'), Icons.timeline_rounded),
+      ('frontiers', locale.tr('探索前沿', 'Frontiers'), Icons.explore_rounded),
+    ];
+    return Container(
+      width: 180,
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final layer in layers)
+            GestureDetector(
+              onTap: () => setState(() =>
+                _layerVisibility[layer.$1] = !_layerVisibility[layer.$1]!),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                child: Row(
+                  children: [
+                    Icon(layer.$3, size: 14,
+                      color: _layerVisibility[layer.$1]!
+                          ? Colors.white : Colors.white38),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(layer.$2, style: TextStyle(
+                      fontSize: 12,
+                      color: _layerVisibility[layer.$1]!
+                          ? Colors.white : Colors.white38,
+                    ))),
+                    SizedBox(
+                      width: 32, height: 20,
+                      child: Switch(
+                        value: _layerVisibility[layer.$1]!,
+                        onChanged: (v) => setState(() =>
+                          _layerVisibility[layer.$1] = v),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
