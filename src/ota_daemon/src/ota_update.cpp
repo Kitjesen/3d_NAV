@@ -599,8 +599,11 @@ grpc::Status OtaServiceImpl::Rollback(
   SaveSystemVersionJson();
 
   AppendUpgradeHistory("rollback", name, current_ver, restored_ver,
-                       "success", robot::v1::OTA_FAILURE_NONE, "", 0,
-                       "skipped");
+                       "success", robot::v1::OTA_FAILURE_NONE,
+                       "user_requested", 0, "skipped");
+
+  reporter_.Report(name, current_ver, restored_ver,
+                   "rollback", "user_requested");
 
   OtaLogInfo("Rollback SUCCESS: %s -> v%s", name.c_str(),
            restored_ver.c_str());
