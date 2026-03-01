@@ -59,6 +59,7 @@ class TaskGateway extends ChangeNotifier {
   TaskType get activeTaskType => _activeTaskType;
   double get progress => _progress;
   TaskStatus get taskStatus => _taskStatus;
+  bool get isFailed => _taskStatus == TaskStatus.TASK_STATUS_FAILED;
   String? get statusMessage => _statusMessage;
 
   /// 清除状态消息
