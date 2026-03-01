@@ -6,6 +6,72 @@ Format: [Semantic Versioning](https://semver.org/) — `MAJOR.MINOR.PATCH`
 
 ---
 
+## [1.7.0] — 2026-03-02 (产品迭代 50轮 — 全面质量升级)
+
+### Flutter 客户端 — 地图 (Iter 7-12)
+- **测距工具** — 双击起点/终点，虚线+距离标注
+- **坐标十字准星** — 地图中心实时世界坐标显示
+- **旋转锁定** — FAB 开关，锁定后禁止旋转手势
+- **航点编号标签** — 每个航点旁白字黑描边序号
+- **路径历史轨迹** — 60秒 600点 FIFO，青色渐隐尾迹
+- **图层开关面板** — 6层独立显隐（栅格/点云/路径/航点/轨迹/前沿）
+
+### Flutter 客户端 — 控制屏 (Iter 25-28)
+- **摇杆死区** — 0~30% 可配置，死区内输出归零
+- **最大速度限速** — 0.1~2.0 m/s 滑块，实时缩放 cmd_vel
+- **一键返航** — 蓝色 FAB + 确认对话框，发送 (0,0,0) 目标
+- **双击急停手势** — 双击任意区域急停 + 红色全屏闪烁 + 重触觉反馈
+
+### Flutter 客户端 — 任务面板 (Iter 29-32)
+- **拖拽排序航点** — ReorderableListView + drag handle
+- **任务时长预估** — 路径距离 / 0.5m/s + 每航点5s
+- **环形进度动画** — 蓝/绿/橙三色渐变 + 完成勾号动画
+- **取消任务确认** — 显示已完成/总航点数，二次确认
+
+### Flutter 客户端 — 状态页 (Iter 33-36)
+- **CPU/内存/温度圆形仪表** — 270度弧形 CustomPaint，阈值告警
+- **磁盘使用量条形图** — 已用/总容量(GB)，OTA daemon 数据源
+- **运行时间计数器** — 会话时长 HH:MM:SS，每分钟刷新
+- **网络延迟折线图** — RTT + 质量等级 + 30次采样 sparkline
+
+### Flutter 客户端 — 连接管理 (Iter 37-40)
+- **断线指数退避重连** — 2/4/8/...30秒，顶部 ReconnectBanner 倒计时
+- **RTT历史统计** — 60次采样 FIFO，均值/最低/最高/质量标签
+- **地理围栏警告** — <2m 橙色横幅，<0.5m 红色告警
+- **连接状态图标动画** — 不稳定黄色感叹号，断线红色闪烁
+
+### Flutter 客户端 — 设置 (Iter 3-6)
+- **事件导出** — AppBar 分享按钮，格式化列表复制到剪贴板
+- **CRITICAL 声音提醒** — SystemSound.alert + 前台检测
+- **关于页面** — 版本号/构建号/gRPC端口/GitHub/许可证
+- **缓存管理** — 统计数量(模板/任务/设备) + clearNonCriticalData
+
+### Flutter 客户端 — 通用 UX (Iter 41-44)
+- **下拉刷新** — 事件列表 + 健康状态页
+- **骨架屏** — shimmer 扫光动画，3秒超时降级
+- **HapticUtils** — 统一触觉反馈：轻/中/重/成功/警告/选中
+- **EmptyState widget** — icon+title+subtitle+action，用于事件/航点空态
+
+### DevOps & CI (Iter 19-24)
+- **Flutter CI 质量门** — `flutter analyze --fatal-warnings` + `flutter test` 阻断构建
+- **nav_core ARM64 交叉编译** — CI 自动检查 aarch64-linux-gnu 编译
+- **一键机器人部署** — `scripts/ota/deploy_to_robot.sh` rsync + 服务重启
+- **Docker 健康检查** — 检测 /nav/odometry 话题，start_period=60s
+- **Systemd Watchdog** — nav-slam/planning/grpc WatchdogSec=30
+- **配置备份脚本** — `scripts/backup_config.sh`，保留最近5份
+
+### C++ 质量 (Iter 13-18, 45-48)
+- **边界测试** — PathFollower/LocalPlanner/PctAdapter 空路径/NaN/极值/状态机
+- **性能基准** — 三核心组件 1000次循环 < 100ms，74/74 通过
+- **输入验证宏** — `validation.hpp`: isValidPosition/isValidPath/filterInvalidPoses
+- **验证测试** — 11个 gtest，NaN/Inf/空路径全覆盖
+- **A* 超时保护** — astar_timeout_sec=5.0 参数，超时发布 FAILED
+- **路径自相交检测** — CCW+线段相交算法，发现时记录警告
+- **OTA 活跃任务检查** — CheckUpdateReadiness 检测 nav-planning 状态
+- **OTA 回滚日志** — 回滚事件写入历史 + 上报 infra/ota server
+
+---
+
 ## [1.6.0] — 2026-03-01 (产品迭代 10轮 + OTA修复 + 运维升级)
 
 ### Flutter 客户端 — 功能补全
