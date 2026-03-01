@@ -14,6 +14,7 @@ import 'package:flutter_monitor/features/status/status_screen.dart';
 import 'package:flutter_monitor/features/map/map_screen.dart';
 import 'package:flutter_monitor/features/events/events_screen.dart';
 import 'package:flutter_monitor/features/settings/app_settings_screen.dart';
+import 'package:flutter_monitor/shared/widgets/low_battery_banner.dart';
 
 /// Adaptive main navigation: mobile→bottom nav, tablet/desktop→sidebar
 class MainShellScreen extends StatefulWidget {
@@ -131,9 +132,16 @@ class _MainShellScreenState extends State<MainShellScreen> {
       },
         child: Scaffold(
         extendBody: !useSide,
-        body: useSide
-            ? _buildDesktopShell(context, isConnected, isDogConnected, locale)
-            : IndexedStack(index: _currentIndex, children: _screens),
+        body: Column(
+          children: [
+            const LowBatteryBanner(),
+            Expanded(
+              child: useSide
+                  ? _buildDesktopShell(context, isConnected, isDogConnected, locale)
+                  : IndexedStack(index: _currentIndex, children: _screens),
+            ),
+          ],
+        ),
         bottomNavigationBar: useSide
             ? null
             : _buildBottomNav(context, isConnected, isDogConnected, locale),
