@@ -27,6 +27,25 @@ class _EventsScreenState extends State<EventsScreen>
   int _retryCount = 0;
   Timer? _retryTimer;
 
+  // ─── Filter + search state ───
+  EventSeverity? _filterSeverity; // null = ALL
+  String _searchQuery = '';
+  final _searchCtrl = TextEditingController();
+
+  List<Event> get _filteredEvents {
+    var list = _events;
+    if (_filterSeverity != null) {
+      list = list.where((e) => e.severity == _filterSeverity).toList();
+    }
+    if (_searchQuery.isNotEmpty) {
+      final q = _searchQuery.toLowerCase();
+      list = list.where((e) =>
+        e.title.toLowerCase().contains(q) ||
+        e.description.toLowerCase().contains(q)).toList();
+    }
+    return list;
+  }
+
   @override
   bool get wantKeepAlive => true;
 
@@ -42,6 +61,7 @@ class _EventsScreenState extends State<EventsScreen>
   void dispose() {
     _subscription?.cancel();
     _retryTimer?.cancel();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -157,97 +177,175 @@ class _EventsScreenState extends State<EventsScreen>
               )
             : null,
         actions: [
+          if (_events.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.delete_sweep_outlined, size: 20),
+              tooltip: locale.tr('清除全部', 'Clear all'),
+              onPressed: () {
+                HapticFeedback.lightImpact();
+                setState(() {
+                  _events.clear();
+                  _filterSeverity = null;
+                  _searchQuery = '';
+                  _searchCtrl.clear();
+                });
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
               HapticFeedback.lightImpact();
               _subscription?.cancel();
-              setState(() {
-                _events.clear();
-                _retryCount = 0;
-              });
+              setState(() { _events.clear(); _retryCount = 0; });
               _startListening();
             },
-          )
+          ),
         ],
       ),
-      body: _events.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.history,
-                      size: 48, color: context.subtitleColor),
-                  const SizedBox(height: 16),
-                  Text(
-                    locale.tr('暂无事件记录', 'No events recorded'),
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: context.subtitleColor,
-                    ),
-                  ),
-                  if (!_isStreaming)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12.0),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1.5,
-                              color: context.subtitleColor,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _retryCount > 0
-                                ? locale.tr('重连中 (第 $_retryCount 次)...', 'Reconnecting (attempt $_retryCount)...')
-                                : locale.tr('连接中...', 'Connecting...'),
-                            style: TextStyle(
-                              color: context.subtitleColor,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-              itemCount: _events.length,
-              cacheExtent: 300,
-              itemBuilder: (context, index) {
-                return _EventListItem(
-                  event: _events[index],
-                  color: _getSeverityColor(_events[index].severity),
-                  severityLabel: _getSeverityLabel(_events[index].severity),
-                  onAcknowledge: () async {
-                    HapticFeedback.lightImpact();
-                    final client =
-                        context.read<RobotConnectionProvider>().client;
-                    if (client == null) return;
-                    await client.ackEvent(_events[index].eventId);
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(locale.tr('事件已确认', 'Event acknowledged')),
-                          duration: const Duration(milliseconds: 500),
-                          behavior: SnackBarBehavior.floating,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)),
-                        ),
-                      );
-                    }
-                  },
-                );
-              },
-            ),
+      body: Column(
+        children: [
+          // ── Filter chips ──
+          if (_events.isNotEmpty) _buildFilterBar(context, locale),
+          // ── Events list ──
+          Expanded(child: _buildEventsList(context, locale)),
+        ],
+      ),
     );
   }
+
+  Widget _buildFilterBar(BuildContext context, LocaleProvider locale) {
+    const chips = [
+      (null, 'ALL'),
+      (EventSeverity.EVENT_SEVERITY_INFO, 'INFO'),
+      (EventSeverity.EVENT_SEVERITY_WARNING, 'WARN'),
+      (EventSeverity.EVENT_SEVERITY_ERROR, 'ERROR'),
+      (EventSeverity.EVENT_SEVERITY_CRITICAL, 'CRIT'),
+    ];
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: chips.map((c) {
+                final selected = _filterSeverity == c.$1;
+                final chipColor = c.$1 == null ? AppColors.primary : _getSeverityColor(c.$1!);
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: FilterChip(
+                    label: Text(c.$2, style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w600,
+                      color: selected ? Colors.white : chipColor,
+                    )),
+                    selected: selected,
+                    onSelected: (_) => setState(() => _filterSeverity = c.$1),
+                    selectedColor: chipColor.withValues(alpha: 0.85),
+                    backgroundColor: chipColor.withValues(alpha: 0.1),
+                    checkmarkColor: Colors.white,
+                    side: BorderSide(color: chipColor.withValues(alpha: 0.3)),
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _searchCtrl,
+            onChanged: (v) => setState(() => _searchQuery = v),
+            style: const TextStyle(fontSize: 13),
+            decoration: InputDecoration(
+              hintText: locale.tr('搜索消息/来源...', 'Search message/source...'),
+              hintStyle: TextStyle(fontSize: 13, color: context.hintColor),
+              prefixIcon: const Icon(Icons.search, size: 18),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear, size: 16),
+                      onPressed: () => setState(() { _searchQuery = ''; _searchCtrl.clear(); }),
+                    )
+                  : null,
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(vertical: 8),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+              filled: true,
+              fillColor: context.isDark
+                  ? Colors.white.withValues(alpha: 0.06)
+                  : Colors.black.withValues(alpha: 0.05),
+            ),
+          ),
+          const SizedBox(height: 4),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEventsList(BuildContext context, LocaleProvider locale) {
+    final filtered = _filteredEvents;
+    if (_events.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.history, size: 48, color: context.subtitleColor),
+            const SizedBox(height: 16),
+            Text(locale.tr('暂无事件记录', 'No events recorded'),
+              style: TextStyle(fontSize: 15, color: context.subtitleColor)),
+            if (!_isStreaming)
+              Padding(
+                padding: const EdgeInsets.only(top: 12.0),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 1.5, color: context.subtitleColor)),
+                  const SizedBox(width: 8),
+                  Text(
+                    _retryCount > 0
+                        ? locale.tr('重连中 (第 $_retryCount 次)...', 'Reconnecting (attempt $_retryCount)...')
+                        : locale.tr('连接中...', 'Connecting...'),
+                    style: TextStyle(color: context.subtitleColor, fontSize: 13),
+                  ),
+                ]),
+              ),
+          ],
+        ),
+      );
+    }
+    if (filtered.isEmpty) {
+      return Center(child: Text(locale.tr('无匹配事件', 'No matching events'),
+        style: TextStyle(fontSize: 14, color: context.subtitleColor)));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+      itemCount: filtered.length,
+      cacheExtent: 300,
+      itemBuilder: (context, index) {
+        return _EventListItem(
+          event: filtered[index],
+          color: _getSeverityColor(filtered[index].severity),
+          severityLabel: _getSeverityLabel(filtered[index].severity),
+          onAcknowledge: () async {
+            HapticFeedback.lightImpact();
+            final client = context.read<RobotConnectionProvider>().client;
+            if (client == null) return;
+            await client.ackEvent(filtered[index].eventId);
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(locale.tr('事件已确认', 'Event acknowledged')),
+                duration: const Duration(milliseconds: 500),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ));
+            }
+          },
+        );
+      },
+    );
+  }
+
 }
 
 /// Clean card-style event item with left accent strip.

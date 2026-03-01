@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:robot_proto/robot_proto.dart';
 import 'package:flutter_monitor/app/theme.dart';
 import 'package:flutter_monitor/app/responsive.dart';
 import 'package:flutter_monitor/core/providers/robot_connection_provider.dart';
+import 'package:flutter_monitor/core/grpc/robot_client_base.dart';
 import 'package:flutter_monitor/core/locale/locale_provider.dart';
 import 'package:flutter_monitor/features/home/home_screen.dart';
 import 'package:flutter_monitor/features/status/status_screen.dart';
@@ -21,6 +24,11 @@ class MainShellScreen extends StatefulWidget {
 
 class _MainShellScreenState extends State<MainShellScreen> {
   int _currentIndex = 0;
+
+  // ─── Unread error badge ───
+  int _unreadErrors = 0;
+  StreamSubscription? _eventBadgeSub;
+  static const _eventsTabIndex = 3;
 
   final List<Widget> _screens = const [
     HomeScreen(),
@@ -55,11 +63,49 @@ class _MainShellScreenState extends State<MainShellScreen> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = context.read<RobotConnectionProvider>();
+      _subscribeEventBadge(provider);
+      provider.addListener(_onProviderChange);
+    });
+  }
+
+  RobotClientBase? _lastBadgeClient;
+
+  void _onProviderChange() {
+    _subscribeEventBadge(context.read<RobotConnectionProvider>());
+  }
+
+  void _subscribeEventBadge(RobotConnectionProvider provider) {
+    final client = provider.client;
+    if (client == _lastBadgeClient) return;
+    _lastBadgeClient = client;
+    _eventBadgeSub?.cancel();
+    _eventBadgeSub = null;
+    if (client == null) return;
+    _eventBadgeSub = client.streamEvents().listen((event) {
+      if (!mounted) return;
+      if (_currentIndex != _eventsTabIndex &&
+          (event.severity == EventSeverity.EVENT_SEVERITY_ERROR ||
+           event.severity == EventSeverity.EVENT_SEVERITY_CRITICAL)) {
+        setState(() => _unreadErrors++);
+      }
+    }, onError: (_) {});
+  }
+
+  @override
+  void dispose() {
+    _eventBadgeSub?.cancel();
+    context.read<RobotConnectionProvider>().removeListener(_onProviderChange);
+    super.dispose();
   }
 
   void _onTap(int index) {
     HapticFeedback.selectionClick();
-    setState(() => _currentIndex = index);
+    setState(() {
+      _currentIndex = index;
+      if (index == _eventsTabIndex) _unreadErrors = 0;
+    });
   }
 
   @override
@@ -267,6 +313,8 @@ class _MainShellScreenState extends State<MainShellScreen> {
                         activeIcon: items[i].activeIcon,
                         label: items[i].label,
                         isActive: _currentIndex == i,
+                        badge: i == _eventsTabIndex && _unreadErrors > 0,
+                        badgeColor: AppColors.error,
                         onTap: () => _onTap(i),
                       ),
                       SizedBox(height: i < items.length - 1 ? 20 : 0),
@@ -407,8 +455,11 @@ class _MainShellScreenState extends State<MainShellScreen> {
                   activeIcon: items[i].activeIcon,
                   label: items[i].label,
                   isActive: _currentIndex == i,
-                  badge: i == 1 && (isConnected || isDogConnected),
-                  badgeColor: isConnected ? AppColors.online : AppColors.connecting,
+                  badge: (i == 1 && (isConnected || isDogConnected)) ||
+                         (i == _eventsTabIndex && _unreadErrors > 0),
+                  badgeColor: i == _eventsTabIndex
+                      ? AppColors.error
+                      : (isConnected ? AppColors.online : AppColors.connecting),
                   onTap: () => _onTap(i),
                 ),
             ],
@@ -454,6 +505,8 @@ class _SideNavItem extends StatelessWidget {
   final IconData activeIcon;
   final String label;
   final bool isActive;
+  final bool badge;
+  final Color? badgeColor;
   final VoidCallback onTap;
 
   const _SideNavItem({
@@ -461,6 +514,8 @@ class _SideNavItem extends StatelessWidget {
     required this.activeIcon,
     required this.label,
     required this.isActive,
+    this.badge = false,
+    this.badgeColor,
     required this.onTap,
   });
 
@@ -472,30 +527,48 @@ class _SideNavItem extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       child: Tooltip(
         message: label,
-        child: AnimatedContainer(
-          duration: AppDurations.fast,
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: isActive
-                ? (dark ? Colors.white.withValues(alpha: 0.12) : Colors.white.withValues(alpha: 0.8))
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: isActive
-                ? [BoxShadow(
-                    color: Colors.black.withValues(alpha: dark ? 0.15 : 0.08),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2),
-                  )]
-                : null,
-          ),
-          child: Icon(
-            isActive ? activeIcon : icon,
-            size: 24,
-            color: isActive
-                ? AppColors.primary
-                : (dark ? AppColors.textSecondaryDark : AppColors.textSecondary),
-          ),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            AnimatedContainer(
+              duration: AppDurations.fast,
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: isActive
+                    ? (dark ? Colors.white.withValues(alpha: 0.12) : Colors.white.withValues(alpha: 0.8))
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: isActive
+                    ? [BoxShadow(
+                        color: Colors.black.withValues(alpha: dark ? 0.15 : 0.08),
+                        blurRadius: 10,
+                        offset: const Offset(0, 2),
+                      )]
+                    : null,
+              ),
+              child: Icon(
+                isActive ? activeIcon : icon,
+                size: 24,
+                color: isActive
+                    ? AppColors.primary
+                    : (dark ? AppColors.textSecondaryDark : AppColors.textSecondary),
+              ),
+            ),
+            if (badge)
+              Positioned(
+                top: 4,
+                right: 4,
+                child: Container(
+                  width: 8, height: 8,
+                  decoration: BoxDecoration(
+                    color: badgeColor ?? AppColors.error,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: dark ? AppColors.darkCard : Colors.white, width: 1.5),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
