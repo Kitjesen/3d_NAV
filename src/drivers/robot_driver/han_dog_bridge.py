@@ -32,6 +32,7 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped
 from std_msgs.msg import Bool, Int8
@@ -62,6 +63,7 @@ class HanDogBridge(Node):
         self.declare_parameter('auto_standup', True)        # 启动时自动 StandUp
         self.declare_parameter('reconnect_interval', 3.0)   # 重连间隔 (秒)
         self.declare_parameter('odom_pub_rate', 10.0)        # Hz, 里程计发布频率
+        self.declare_parameter('slam_reset_interval', 5.0)
 
         self._dog_host = self.get_parameter('dog_host').value
         self._dog_port = self.get_parameter('dog_port').value
@@ -75,6 +77,8 @@ class HanDogBridge(Node):
         odom_pub_rate = self.get_parameter('odom_pub_rate').value
         self._odom_skip = max(1, int(self._control_rate / odom_pub_rate))
         self._odom_pub_counter = 0
+        self._slam_reset_interval = self.get_parameter('slam_reset_interval').value
+        self._last_slam_reset_time = self.get_clock().now()
 
         # ─── ROS2 发布者 ───
         self.odom_pub = self.create_publisher(Odometry, '/Odometry', 10)
@@ -87,6 +91,13 @@ class HanDogBridge(Node):
         # 控制信号: 0=normal, 1=soft_stop, 2=hard_stop
         self.stop_sub = self.create_subscription(
             Int8, '/stop', self._stop_callback, 10)
+        # SLAM 里程计: 定期重置航位推算原点，防止积分漂移
+        be = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1)
+        self.slam_odom_sub = self.create_subscription(
+            Odometry, '/nav/odometry', self._on_slam_odom, be)
 
         # ─── 内部状态 ───
         self._cmd_vx = 0.0
@@ -153,6 +164,17 @@ class HanDogBridge(Node):
                 self._cmd_vx, self._cmd_vy, self._cmd_wz)
             asyncio.run_coroutine_threadsafe(
                 self._send_walk(walk_vec), self._loop)
+
+    def _on_slam_odom(self, msg: Odometry):
+        """定期用 SLAM 位置重置航位推算，防止积分漂移。"""
+        now = self.get_clock().now()
+        dt = (now - self._last_slam_reset_time).nanoseconds / 1e9
+        if dt >= self._slam_reset_interval:
+            self._pos_x = msg.pose.pose.position.x
+            self._pos_y = msg.pose.pose.position.y
+            self._last_slam_reset_time = now
+            self.get_logger().debug(
+                f'SLAM reset pos: ({self._pos_x:.3f}, {self._pos_y:.3f})')
 
     def _stop_callback(self, msg: Int8):
         """收到 /stop 信号."""

@@ -37,7 +37,7 @@ from rclpy.qos import (DurabilityPolicy, QoSProfile, ReliabilityPolicy,
 
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 
 
 # ── A* helpers ────────────────────────────────────────────────────────────────
@@ -83,6 +83,36 @@ def _downsample_path(cells, min_dist_cells=3):
     if kept[-1] != cells[-1]:
         kept.append(cells[-1])
     return kept
+
+
+def _catmull_rom_smooth(cells, n_interp: int = 3):
+    """Catmull-Rom 样条平滑：在每对相邻格点间插入 n_interp 个中间点。
+
+    使用重复端点（clamp-end）处理首尾，使路径从起点出发到终点结束。
+    返回 list of (ix, iy) float 元组（坐标为浮点，供 _g2w 使用）。
+    """
+    if len(cells) < 2:
+        return cells
+    # 构造控制点序列：首尾重复
+    pts = [cells[0]] + list(cells) + [cells[-1]]
+    result = []
+    for i in range(1, len(pts) - 2):
+        p0 = np.array(pts[i - 1], dtype=float)
+        p1 = np.array(pts[i],     dtype=float)
+        p2 = np.array(pts[i + 1], dtype=float)
+        p3 = np.array(pts[i + 2], dtype=float)
+        if i == 1:
+            result.append(tuple(p1))
+        for k in range(1, n_interp + 1):
+            t = k / (n_interp + 1)
+            t2, t3 = t * t, t * t * t
+            pt = 0.5 * ((2 * p1)
+                        + (-p0 + p2) * t
+                        + (2*p0 - 5*p1 + 4*p2 - p3) * t2
+                        + (-p0 + 3*p1 - 3*p2 + p3) * t3)
+            result.append((float(pt[0]), float(pt[1])))
+        result.append(tuple(p2))
+    return result
 
 
 def _find_nearest_free(trav, ci, cj, obs_thr, radius=5):
@@ -142,11 +172,17 @@ class PctPlannerAstar(Node):
         self.declare_parameter('obstacle_thr',  49.9)
         self.declare_parameter('republish_hz',  1.0)
         self.declare_parameter('smooth_min_dist', 3)
+        self.declare_parameter('loc_quality_min', 0.3)
+        self.declare_parameter('smooth_method', 'catmull_rom')
+        self.declare_parameter('smooth_interp',  3)
 
         tomo_file    = self.get_parameter('tomogram_file').value
         self._obs    = self.get_parameter('obstacle_thr').value
         repub_hz     = self.get_parameter('republish_hz').value
         self._smooth_min_dist = self.get_parameter('smooth_min_dist').value
+        self._loc_quality_min = self.get_parameter('loc_quality_min').value
+        self._smooth_method = self.get_parameter('smooth_method').value
+        self._smooth_interp  = self.get_parameter('smooth_interp').value
 
         if not tomo_file or not os.path.isfile(tomo_file):
             self.get_logger().error(
@@ -169,6 +205,7 @@ class PctPlannerAstar(Node):
         self._ry = 0.0
         self._plan_lock = threading.Lock()
         self._last_path: Path | None = None
+        self._loc_quality = 1.0  # 默认允许，无信号时不阻塞
 
         # QoS
         be = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -188,6 +225,9 @@ class PctPlannerAstar(Node):
         self.create_subscription(
             PoseStamped, '/nav/goal_pose', self._on_goal, 10,
             callback_group=self._cbg)
+        self.create_subscription(
+            Float32, '/nav/localization_quality', self._on_loc_quality, be,
+            callback_group=self._cbg)
 
         # Re-publish timer (keep pct_path_adapter fed)
         self.create_timer(1.0 / repub_hz, self._republish)
@@ -202,10 +242,18 @@ class PctPlannerAstar(Node):
         self._rx = msg.pose.pose.position.x
         self._ry = msg.pose.pose.position.y
 
+    def _on_loc_quality(self, msg: Float32):
+        self._loc_quality = msg.data
+
     def _on_goal(self, msg: PoseStamped):
         gx = msg.pose.position.x
         gy = msg.pose.position.y
         self.get_logger().info(f'Goal received: ({gx:.2f}, {gy:.2f})')
+        if self._loc_quality < self._loc_quality_min:
+            self.get_logger().warn(
+                f'Localization quality {self._loc_quality:.3f} < {self._loc_quality_min:.3f}, rejecting goal')
+            self._publish_status('FAILED')
+            return
         if self._plan_lock.locked():
             self.get_logger().warn('Planner busy, dropping goal')
             return
@@ -242,6 +290,8 @@ class PctPlannerAstar(Node):
 
             if cells and len(cells) > 2:
                 cells = _downsample_path(cells, min_dist_cells=self._smooth_min_dist)
+                if self._smooth_method == 'catmull_rom' and len(cells) >= 2:
+                    cells = _catmull_rom_smooth(cells, n_interp=self._smooth_interp)
 
             path_msg = Path()
             path_msg.header.stamp    = self.get_clock().now().to_msg()
