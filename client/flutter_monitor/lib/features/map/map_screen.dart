@@ -122,6 +122,9 @@ class _MapScreenState extends State<MapScreen>
   // ─── Waypoints ───
   final List<_Waypoint> _waypoints = [];
 
+  // ─── Long-press waypoints (temporary markers on map) ───
+  final List<Offset> _longPressMarkers = [];
+
   // ─── Active waypoints (from backend) ───
   List<ActiveWaypoint> _activeWaypoints = [];
   WaypointSource _waypointSource = WaypointSource.WAYPOINT_SOURCE_NONE;
@@ -426,6 +429,29 @@ class _MapScreenState extends State<MapScreen>
         _isSettingGoal = false;
       }
     });
+  }
+
+  void _handleMapLongPress(LongPressStartDetails details) {
+    if (_show3DModel) return;
+    final matrix = _transformController.value.clone();
+    final inv = Matrix4.tryInvert(matrix);
+    if (inv == null) return;
+    final sp = details.localPosition;
+    final mx = inv[0] * sp.dx + inv[4] * sp.dy + inv[12];
+    final my = inv[1] * sp.dx + inv[5] * sp.dy + inv[13];
+    HapticFeedback.heavyImpact();
+    final worldPoint = Offset(mx, -my);
+    setState(() => _longPressMarkers.add(worldPoint));
+    final locale = context.read<LocaleProvider>();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(locale.tr(
+        '长按添加航点: (${worldPoint.dx.toStringAsFixed(2)}, ${worldPoint.dy.toStringAsFixed(2)})',
+        'Long-press waypoint: (${worldPoint.dx.toStringAsFixed(2)}, ${worldPoint.dy.toStringAsFixed(2)})',
+      )),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      duration: const Duration(seconds: 2),
+    ));
   }
 
   Future<void> _startSelectedTask() async {
@@ -1271,6 +1297,7 @@ class _MapScreenState extends State<MapScreen>
               onTapDown: (_isSettingGoal && _modeUsesGoalPoint)
                   ? _handleMapTap
                   : null,
+              onLongPressStart: _handleMapLongPress,
               child: GridPaper(
                 color: Colors.black12, interval: 100, divisions: 1, subdivisions: 5,
                 child: InteractiveViewer(
@@ -1291,6 +1318,7 @@ class _MapScreenState extends State<MapScreen>
                         globalPathPoints: _showGlobalPath ? _globalPathPoints : const [],
                         occupancyGrid: _showOccupancyGrid ? _occupancyGrid : null,
                         frontierMarkers: _showFrontiers ? _frontierMarkers : const [],
+                        longPressMarkers: _longPressMarkers,
                       ),
                       size: const Size(10000, 10000),
                     )),
@@ -1361,33 +1389,34 @@ class _MapScreenState extends State<MapScreen>
   // ─── Map legend ───────────────────────────────────────────
   Widget _buildMapLegend() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      width: 120,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.60),
-        borderRadius: BorderRadius.circular(8),
+        color: Colors.black.withValues(alpha: 0.70),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: DefaultTextStyle(
-        style: const TextStyle(color: Colors.white70, fontSize: 9, height: 1.6),
+        style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.6),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Viridis Z-height gradient indicator
+            // Z-height gradient indicator (blue→cyan→green→yellow→red)
             Row(mainAxisSize: MainAxisSize.min, children: [
-              for (final c in [0xFF440154, 0xFF31688E, 0xFF35B779, 0xFF90D743, 0xFFFDE725])
+              for (final c in [Colors.blue, Colors.cyan, Colors.green, Colors.yellow, Colors.red])
                 Container(
                   width: 8, height: 8,
                   margin: const EdgeInsets.only(right: 1),
-                  decoration: BoxDecoration(color: Color(c), shape: BoxShape.circle),
+                  decoration: BoxDecoration(color: c, shape: BoxShape.circle),
                 ),
               const SizedBox(width: 4),
               const Text('Z高度'),
             ]),
-            _legendRow(const Color(0x5500AA44), '空闲'),
-            _legendRow(const Color(0x44888888), '未知'),
-            _legendRow(const Color(0xCC993333), '障碍'),
+            _legendRow(const Color(0xFF00AA44), '自由'),
+            _legendRow(const Color(0xFF888888), '未知'),
+            _legendRow(const Color(0xFFCC2222), '障碍'),
             _legendRow(const Color(0xFF7C3AED), '路径'),
-            _legendRow(const Color(0xFFFF3B30), '机器人'),
+            _legendRow(const Color(0xFFFF6B00), '机器人'),
           ],
         ),
       ),
@@ -1398,10 +1427,10 @@ class _MapScreenState extends State<MapScreen>
     mainAxisSize: MainAxisSize.min,
     children: [
       Container(
-        width: 8, height: 8,
+        width: 10, height: 10,
         decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       ),
-      const SizedBox(width: 4),
+      const SizedBox(width: 6),
       Text(label),
     ],
   );
@@ -2334,31 +2363,32 @@ class _ActiveWaypointPainter extends CustomPainter {
 class TrajectoryPainter extends CustomPainter {
   final List<Offset> path;
   final Pose? currentPose;
-  final List<List<Offset>> globalBuckets;  // 5 viridis Z-buckets
-  final List<List<Offset>> localBuckets;   // 5 viridis Z-buckets
+  final List<List<Offset>> globalBuckets;  // 5 Z-buckets (blue→cyan→green→yellow→red)
+  final List<List<Offset>> localBuckets;   // 5 Z-buckets (blue→cyan→green→yellow→red)
   final Offset? navGoalPoint;
   final int dataVersion;
   final List<Offset> globalPathPoints;
   final _OccupancyGrid? occupancyGrid;
   final List<_FrontierMarker> frontierMarkers;
+  final List<Offset> longPressMarkers;
   final int _pathLength;
   final double? _poseX;
   final double? _poseY;
 
-  // ── viridis 5-bucket paints for point clouds ──
+  // ── Z-height 5-bucket paints for point clouds (blue→cyan→green→yellow→red) ──
   static final _viridisGlobal = [
-    Paint()..color = const Color(0xFF440154)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
-    Paint()..color = const Color(0xFF31688E)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
-    Paint()..color = const Color(0xFF35B779)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
-    Paint()..color = const Color(0xFF90D743)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
-    Paint()..color = const Color(0xFFFDE725)..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.blue..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.cyan..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.green..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.yellow..strokeWidth = 0.12..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.red..strokeWidth = 0.12..strokeCap = StrokeCap.round,
   ];
   static final _viridisLocal = [
-    Paint()..color = const Color(0x88440154)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
-    Paint()..color = const Color(0x8831688E)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
-    Paint()..color = const Color(0x8835B779)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
-    Paint()..color = const Color(0x8890D743)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
-    Paint()..color = const Color(0x88FDE725)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.blue.withValues(alpha: 0.53)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.cyan.withValues(alpha: 0.53)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.green.withValues(alpha: 0.53)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.yellow.withValues(alpha: 0.53)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
+    Paint()..color = Colors.red.withValues(alpha: 0.53)..strokeWidth = 0.06..strokeCap = StrokeCap.round,
   ];
   static final _trajectoryPaint = Paint()
     ..color = const Color(0xFF007AFF).withValues(alpha: 0.6)
@@ -2390,6 +2420,17 @@ class TrajectoryPainter extends CustomPainter {
     ..strokeWidth = 0.06;
   // 占用栅格
   final _gridPaint = Paint()..style = PaintingStyle.fill;
+  // 长按航点标记（橙色）
+  static final _longPressStrokePaint = Paint()
+    ..color = const Color(0xFFFF6B00)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 0.08;
+  static final _longPressFillPaint = Paint()
+    ..color = const Color(0x44FF6B00)
+    ..style = PaintingStyle.fill;
+  static final _longPressDotPaint = Paint()
+    ..color = const Color(0xFFFF6B00)
+    ..style = PaintingStyle.fill;
 
   TrajectoryPainter({
     required this.path, this.currentPose,
@@ -2398,6 +2439,7 @@ class TrajectoryPainter extends CustomPainter {
     this.navGoalPoint, this.dataVersion = 0,
     this.globalPathPoints = const [], this.occupancyGrid,
     this.frontierMarkers = const [],
+    this.longPressMarkers = const [],
   })  : _pathLength = path.length,
         _poseX = currentPose?.position.x,
         _poseY = currentPose?.position.y;
@@ -2418,12 +2460,11 @@ class TrajectoryPainter extends CustomPainter {
           final wx = g.originX + (col + 0.5) * g.resolution;
           final wy = g.originY + (row + 0.5) * g.resolution;
           if (val < 50) {
-            _gridPaint.color = const Color(0x3300AA44); // 低占用 — 绿
+            _gridPaint.color = const Color(0x3300AA44); // 自由空间 — 绿
           } else if (val < 128) {
-            _gridPaint.color = const Color(0x33888888); // 不确定 — 灰
+            _gridPaint.color = const Color(0x55888888); // 未知 — 灰
           } else {
-            final opacity = ((val - 128) / 127.0 * 0.5 + 0.25).clamp(0.25, 0.75);
-            _gridPaint.color = Color.fromRGBO(180, 30, 30, opacity); // 障碍 — 深红
+            _gridPaint.color = const Color(0xAACC2222); // 障碍 — 深红
           }
           canvas.drawRect(
             Rect.fromCenter(center: Offset(wx, wy), width: cellSz, height: cellSz),
@@ -2517,6 +2558,13 @@ class TrajectoryPainter extends CustomPainter {
       canvas.restore();
     }
 
+    // ── 长按航点标记（橙色圆圈） ──
+    for (final pt in longPressMarkers) {
+      canvas.drawCircle(pt, 0.35, _longPressFillPaint);
+      canvas.drawCircle(pt, 0.35, _longPressStrokePaint);
+      canvas.drawCircle(pt, 0.1, _longPressDotPaint);
+    }
+
     // ── 坐标轴 ──
     canvas.drawLine(const Offset(-1, 0), const Offset(1, 0), _axisPaint);
     canvas.drawLine(const Offset(0, -1), const Offset(0, 1), _axisPaint);
@@ -2529,6 +2577,7 @@ class TrajectoryPainter extends CustomPainter {
       globalPathPoints.length != old.globalPathPoints.length ||
       occupancyGrid != old.occupancyGrid ||
       frontierMarkers.length != old.frontierMarkers.length ||
+      longPressMarkers.length != old.longPressMarkers.length ||
       !identical(globalBuckets, old.globalBuckets) ||
       !identical(localBuckets, old.localBuckets);
 }
