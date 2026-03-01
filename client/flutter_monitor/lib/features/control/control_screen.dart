@@ -23,7 +23,12 @@ class ControlScreen extends StatefulWidget {
   State<ControlScreen> createState() => _ControlScreenState();
 }
 
-class _ControlScreenState extends State<ControlScreen> {
+class _ControlScreenState extends State<ControlScreen>
+    with SingleTickerProviderStateMixin {
+  // ─── Double-tap e-stop red flash ───
+  late final AnimationController _flashController;
+  late final Animation<double> _flashOpacity;
+
   // ─── Joystick deadzone (0% ~ 30%, default 10%) ───
   double _deadzone = 0.10;
 
@@ -40,6 +45,13 @@ class _ControlScreenState extends State<ControlScreen> {
   @override
   void initState() {
     super.initState();
+    _flashController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _flashOpacity = Tween<double>(begin: 0.6, end: 0.0).animate(
+      CurvedAnimation(parent: _flashController, curve: Curves.easeOut),
+    );
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -50,6 +62,7 @@ class _ControlScreenState extends State<ControlScreen> {
 
   @override
   void dispose() {
+    _flashController.dispose();
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
@@ -197,6 +210,21 @@ class _ControlScreenState extends State<ControlScreen> {
         content: Text(ok
             ? context.read<LocaleProvider>().tr('正在返航...', 'Returning home...')
             : context.read<LocaleProvider>().tr('返航指令发送失败', 'Failed to send return home')),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  // ─── Double-tap e-stop with red flash ───
+
+  Future<void> _doubleTapEmergencyStop() async {
+    HapticFeedback.heavyImpact();
+    _flashController.forward(from: 0.0);
+    await context.read<ControlGateway>().emergencyStop();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(context.read<LocaleProvider>().tr('紧急停止已触发', 'Emergency stop triggered')),
+        backgroundColor: Colors.red.shade700,
         behavior: SnackBarBehavior.floating,
       ));
     }
@@ -362,9 +390,13 @@ class _ControlScreenState extends State<ControlScreen> {
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      body: Stack(
-        children: [
-          // Camera Background (FPV Style)
+      body: GestureDetector(
+        // ─── Double-tap anywhere for e-stop ───
+        behavior: HitTestBehavior.translucent,
+        onDoubleTap: _doubleTapEmergencyStop,
+        child: Stack(
+          children: [
+            // Camera Background (FPV Style)
           Positioned.fill(
             child: client?.dataServiceClient != null
                 ? WebRTCVideoWidget(
@@ -514,7 +546,22 @@ class _ControlScreenState extends State<ControlScreen> {
               ],
             ),
           ),
+
+          // ─── Red flash overlay for double-tap e-stop ───
+          AnimatedBuilder(
+            animation: _flashOpacity,
+            builder: (context, _) => _flashOpacity.value > 0
+                ? Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        color: Colors.red.withValues(alpha: _flashOpacity.value),
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
         ],
+        ),
       ),
     );
   }
