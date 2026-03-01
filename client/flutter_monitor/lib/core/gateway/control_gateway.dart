@@ -149,8 +149,9 @@ class ControlGateway extends ChangeNotifier {
     final client = _client;
     if (client == null) return;
 
-    _velocityController?.close();
+    final old = _velocityController;
     _velocityController = StreamController<Twist>.broadcast();
+    old?.close();
     _isTeleopActive = true;
 
     try {
@@ -176,8 +177,9 @@ class ControlGateway extends ChangeNotifier {
   void _stopTeleop() {
     _teleopSubscription?.cancel();
     _teleopSubscription = null;
-    _velocityController?.close();
+    final old = _velocityController;
     _velocityController = null;
+    old?.close();
     _isTeleopActive = false;
   }
 
@@ -195,13 +197,16 @@ class ControlGateway extends ChangeNotifier {
       _lastTwistSend = now;
       if (_useDogDirect) {
         _dogClient?.walk(_linearX, _linearY, _angularZ);
-      } else if (_velocityController != null) {
-        final twist = Twist()
-          ..linear = (Vector3()
-            ..x = _linearX
-            ..y = _linearY)
-          ..angular = (Vector3()..z = _angularZ);
-        _velocityController!.add(twist);
+      } else {
+        final controller = _velocityController;
+        if (controller != null && !controller.isClosed) {
+          final twist = Twist()
+            ..linear = (Vector3()
+              ..x = _linearX
+              ..y = _linearY)
+            ..angular = (Vector3()..z = _angularZ);
+          controller.add(twist);
+        }
       }
     }
 
@@ -259,6 +264,22 @@ class ControlGateway extends ChangeNotifier {
     _currentMode = RobotMode.ROBOT_MODE_ESTOP;
     _statusMessage = '紧急停止已触发';
     notifyListeners();
+  }
+
+  /// 解除紧急停止 — 通过 setMode(IDLE) 恢复
+  ///
+  /// [reason] 解除原因，用于日志记录。
+  Future<(bool, String)> clearEmergencyStop({required String reason}) async {
+    if (_currentMode != RobotMode.ROBOT_MODE_ESTOP) {
+      return (false, '当前未处于急停状态');
+    }
+    AppLogger.control.info('ClearEmergencyStop: reason="$reason"');
+    final (ok, msg) = await setMode(RobotMode.ROBOT_MODE_IDLE);
+    if (ok) {
+      _statusMessage = '急停已解除: $reason';
+      notifyListeners();
+    }
+    return (ok, msg);
   }
 
   // ================================================================

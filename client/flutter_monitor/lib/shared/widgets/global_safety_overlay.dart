@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:robot_proto/robot_proto.dart';
 import 'package:flutter_monitor/app/theme.dart';
 import 'package:flutter_monitor/core/providers/robot_connection_provider.dart';
 import 'package:flutter_monitor/core/gateway/control_gateway.dart';
@@ -194,6 +195,26 @@ class _EmergencyStopFABState extends State<_EmergencyStopFAB>
     if (mounted) setState(() => _triggered = false);
   }
 
+  Future<void> _onClearEmergencyStop() async {
+    HapticFeedback.mediumImpact();
+
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => const _ClearEstopDialog(),
+    );
+    if (reason == null || !mounted) return;
+
+    final controlGateway = context.read<ControlGateway>();
+    final (ok, msg) = await controlGateway.clearEmergencyStop(reason: reason);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok ? '急停已解除' : msg),
+        backgroundColor: ok ? AppColors.success : AppColors.error,
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isConnected = context.select<RobotConnectionProvider, bool>(
@@ -202,6 +223,55 @@ class _EmergencyStopFABState extends State<_EmergencyStopFAB>
 
     // Don't show if not connected
     if (!isConnected) return const SizedBox.shrink();
+
+    final isEstop = context.select<ControlGateway, bool>(
+      (g) => g.currentMode == RobotMode.ROBOT_MODE_ESTOP,
+    );
+
+    // In ESTOP mode: show amber "clear" button instead of red "stop" button
+    if (isEstop) {
+      return Positioned(
+        right: 16,
+        bottom: 90,
+        child: ScaleTransition(
+          scale: _pulseAnimation,
+          child: GestureDetector(
+            onTap: _onClearEmergencyStop,
+            child: Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: AppColors.warning.withValues(alpha: 0.9),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.warning.withValues(alpha: 0.4),
+                    blurRadius: 12,
+                  ),
+                ],
+              ),
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.lock_open, color: Colors.white, size: 18),
+                    Text(
+                      'CLEAR',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 7,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return Positioned(
       right: 16,
@@ -249,6 +319,73 @@ class _EmergencyStopFABState extends State<_EmergencyStopFAB>
           ),
         ),
       ),
+    );
+  }
+}
+
+// ============================================================
+// E-stop Clear Confirmation Dialog
+// ============================================================
+
+class _ClearEstopDialog extends StatefulWidget {
+  const _ClearEstopDialog();
+
+  @override
+  State<_ClearEstopDialog> createState() => _ClearEstopDialogState();
+}
+
+class _ClearEstopDialogState extends State<_ClearEstopDialog> {
+  static const _reasons = [
+    '检查完毕',
+    '误触急停',
+    '障碍已清除',
+    '其他',
+  ];
+
+  String? _selectedReason;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('确认危险已消除？'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '解除急停后机器人将恢复运动能力，请确认周围环境安全。',
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            value: _selectedReason,
+            decoration: const InputDecoration(
+              labelText: '解除原因',
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+            items: _reasons
+                .map((r) => DropdownMenuItem(value: r, child: Text(r)))
+                .toList(),
+            onChanged: (v) => setState(() => _selectedReason = v),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _selectedReason != null
+              ? () => Navigator.of(context).pop(_selectedReason)
+              : null,
+          style: FilledButton.styleFrom(
+            backgroundColor: AppColors.warning,
+          ),
+          child: const Text('确认解除'),
+        ),
+      ],
     );
   }
 }
