@@ -177,6 +177,12 @@ class _EventsScreenState extends State<EventsScreen>
               )
             : null,
         actions: [
+          if (_filteredEvents.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.share_outlined, size: 20),
+              tooltip: locale.tr('导出事件', 'Export events'),
+              onPressed: () => _exportEvents(context, locale),
+            ),
           if (_events.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined, size: 20),
@@ -209,6 +215,37 @@ class _EventsScreenState extends State<EventsScreen>
           // ── Events list ──
           Expanded(child: _buildEventsList(context, locale)),
         ],
+      ),
+    );
+  }
+
+  void _exportEvents(BuildContext context, LocaleProvider locale) {
+    HapticFeedback.lightImpact();
+    final events = _filteredEvents;
+    if (events.isEmpty) return;
+
+    final buffer = StringBuffer();
+    buffer.writeln(locale.tr('事件日志导出', 'Event Log Export'));
+    buffer.writeln('${'=' * 50}');
+    for (final event in events) {
+      final time = event.timestamp.toDateTime().toLocal();
+      final timeStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(time);
+      final level = _getSeverityLabel(event.severity);
+      final title = event.title.isNotEmpty ? event.title : event.type.toString();
+      final desc = event.description;
+      buffer.writeln('$timeStr | $level | $title${desc.isNotEmpty ? ' | $desc' : ''}');
+    }
+
+    Clipboard.setData(ClipboardData(text: buffer.toString()));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(locale.tr(
+          '${events.length} 条事件已复制到剪贴板',
+          '${events.length} events copied to clipboard',
+        )),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
