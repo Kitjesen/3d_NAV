@@ -13,6 +13,7 @@ import 'package:flutter_monitor/features/settings/firmware_ota_page.dart';
 import 'package:flutter_monitor/features/settings/log_export_page.dart';
 import 'package:flutter_monitor/features/settings/support_page.dart';
 import 'package:flutter_monitor/features/settings/version_detail_page.dart';
+import 'package:flutter_monitor/features/settings/about_page.dart';
 import 'package:flutter_monitor/features/settings/cloud_config_page.dart';
 import 'package:flutter_monitor/features/settings/device_info_page.dart';
 import 'package:flutter_monitor/features/settings/runtime_params_page.dart';
@@ -315,20 +316,9 @@ class AppSettingsScreen extends StatelessWidget {
               ),
               SettingsTile(
                 icon: Icons.info_outlined,
-                title: locale.tr('版本信息', 'Version Info'),
-                subtitle: 'v$kAppVersion'
-                    '${const String.fromEnvironment('BUILD_NUMBER').isNotEmpty ? ' (${const String.fromEnvironment('BUILD_NUMBER')})' : ''}',
-                onTap: () => _push(context, const VersionDetailPage()),
-              ),
-              SettingsTile(
-                icon: Icons.article_outlined,
-                title: locale.tr('开源许可', 'Open Source Licenses'),
-                subtitle: locale.tr('第三方库许可证', 'Third-party library licenses'),
-                onTap: () => showLicensePage(
-                  context: context,
-                  applicationName: locale.tr('大算 3D NAV', 'Dasuan 3D NAV'),
-                  applicationVersion: 'v$kAppVersion',
-                ),
+                title: locale.tr('关于', 'About'),
+                subtitle: locale.tr('版本、许可证、GitHub', 'Version, licenses, GitHub'),
+                onTap: () => _push(context, const AboutPage()),
               ),
               SettingsTile(
                 icon: Icons.help_outline,
