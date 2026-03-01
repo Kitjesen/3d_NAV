@@ -6,6 +6,26 @@ Format: [Semantic Versioning](https://semver.org/) — `MAJOR.MINOR.PATCH`
 
 ---
 
+## [1.7.1] — 2026-03-02 (生产级安全与稳定性修复)
+
+### 安全修复 (CRITICAL)
+
+- **Ed25519 签名验证漏洞** — `ota_update.cpp`: `VerifyEd25519` 错误地将 `manifest_signature` 同时作为 message 和 signature 传入（自验签名），任意伪造 OTA 包均可通过验证。修复：message 参数改为 `manifest_content`
+- **死代码导致监控定时器失效** — `planner_node.py`: `_follow_person_pub`、`_monitor_timer` 等初始化代码位于 `return` 语句之后，永远不会执行。任务超时/卡死检测完全失效，FOLLOW_PERSON 模式触发 AttributeError 崩溃。修复：将初始化移至 `__init__`
+- **stoull/stoul/stoi 无保护** — `ota_update.cpp`/`utils.cpp` 共 4 处对外部字符串直接调用数字转换函数，空字符串或非数字内容导致 gRPC daemon 崩溃。修复：全部包裹 try/catch
+
+### 安全修复 (HIGH)
+
+- **popen shell 命令注入** — `ota_file_ops.cpp`: HTTP 响应头 key/value 直接拼入 shell 命令字符串后 popen 执行，攻击者控制服务器可注入任意命令。修复：添加 `isHeaderSafe()` 白名单校验（仅允许 `[A-Za-z0-9_.-: ]`）
+- **非原子文件写入** — `ota_file_ops.cpp`: 直接写入最终目标路径，SHA256 校验失败后磁盘残留损坏文件，下次断点续传误判。修复：写入 `.tmp` 临时文件，校验通过后 `rename`，失败则删除
+- **MakeDirs shell 注入** — `utils.cpp`: `system("mkdir -p '" + path + "'")` 路径含单引号可逃逸 shell。修复：改用 `std::filesystem::create_directories`
+- **JSON 解析 npos 减法崩溃** — `ota_update.cpp`: `find_first_of` 返回 `npos` 后直接 `npos - start` 产生极大值，`substr` 抛出 `std::out_of_range`。修复：添加 `npos` 判断后截到行尾
+- **asyncio.get_event_loop() 线程不安全** — `llm_client.py`: Python 3.10+ 非主线程异步上下文中已废弃，可能返回错误 loop。修复：改为 `asyncio.get_running_loop()`
+- **bind() 重复注册观察者** — `alert_monitor_service.dart`: 每次重连调用 `bind()` 都叠加 WidgetsBindingObserver 和 ChangeNotifier listener，导致事件处理多次触发。修复：添加 `_unbindInternal()` 先清理再重注册
+- **OTA 递归状态机** — `ota_gateway.dart`: `_advanceDeployment()` 五级互相递归，下载期间取消无效，调用栈持续增长。修复：改为 `while (!_cancelled)` 迭代循环，每阶段结束立即检查取消标志
+
+---
+
 ## [1.7.0] — 2026-03-02 (产品迭代 50轮 — 全面质量升级)
 
 ### Flutter 客户端 — 地图 (Iter 7-12)
