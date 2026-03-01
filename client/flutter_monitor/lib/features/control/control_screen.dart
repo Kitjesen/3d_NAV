@@ -6,6 +6,7 @@ import 'package:flutter_joystick/flutter_joystick.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_monitor/core/providers/robot_connection_provider.dart';
 import 'package:flutter_monitor/core/gateway/control_gateway.dart';
+import 'package:flutter_monitor/core/gateway/task_gateway.dart';
 import 'package:robot_proto/robot_proto.dart';
 import 'package:flutter_monitor/app/theme.dart';
 import 'package:flutter_monitor/shared/widgets/glass_widgets.dart';
@@ -163,6 +164,44 @@ class _ControlScreenState extends State<ControlScreen> {
     await context.read<ControlGateway>().dogSitDown();
   }
 
+  // ─── Return home ───
+
+  Future<void> _returnHome() async {
+    final locale = context.read<LocaleProvider>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(locale.tr('确认返航', 'Return Home')),
+        content: Text(locale.tr(
+          '确认返回起点？当前任务将取消',
+          'Return to origin? Current task will be cancelled.',
+        )),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(locale.tr('取消', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(locale.tr('确认', 'Confirm')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    HapticFeedback.mediumImpact();
+    final taskGw = context.read<TaskGateway>();
+    final ok = await taskGw.startSingleGoalNavigation(x: 0, y: 0, z: 0, yaw: 0, label: 'Home');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok
+            ? context.read<LocaleProvider>().tr('正在返航...', 'Returning home...')
+            : context.read<LocaleProvider>().tr('返航指令发送失败', 'Failed to send return home')),
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     context.watch<LocaleProvider>(); // rebuild on locale change
@@ -312,6 +351,17 @@ class _ControlScreenState extends State<ControlScreen> {
           ),
         ],
       ),
+      // ─── Return home FAB ───
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 80),
+        child: FloatingActionButton(
+          heroTag: 'returnHome',
+          onPressed: _returnHome,
+          backgroundColor: Colors.blue,
+          child: const Icon(Icons.home_rounded, color: Colors.white),
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Stack(
         children: [
           // Camera Background (FPV Style)
