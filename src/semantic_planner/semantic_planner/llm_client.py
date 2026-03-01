@@ -322,7 +322,7 @@ class QwenClient(LLMClientBase):
         for attempt in range(self.config.max_retries + 1):
             try:
                 # DashScope SDK 是同步的, 在线程池中运行
-                result = await asyncio.get_event_loop().run_in_executor(
+                result = await asyncio.get_running_loop().run_in_executor(
                     None, self._sync_call, messages, temp
                 )
                 return result
