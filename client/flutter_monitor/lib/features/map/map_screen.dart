@@ -1455,8 +1455,9 @@ class _MapScreenState extends State<MapScreen>
             )),
           ),
 
-        // Geofence alert banner
-        if (_geofenceState == 'WARNING' || _geofenceState == 'VIOLATION')
+        // Geofence alert banner — WARNING/VIOLATION or proximity-based
+        if (_geofenceState == 'WARNING' || _geofenceState == 'VIOLATION' ||
+            (_geofenceState != 'NO_FENCE' && _geofenceMargin > 0 && _geofenceMargin < 2.0))
           _buildGeofenceAlertBanner(),
 
         // Low battery warning banner
@@ -2139,11 +2140,38 @@ class _MapScreenState extends State<MapScreen>
   Widget _buildGeofenceAlertBanner() {
     final locale = context.read<LocaleProvider>();
     final isViolation = _geofenceState == 'VIOLATION';
-    final color = isViolation ? AppColors.error : AppColors.warning;
-    final label = isViolation
-        ? locale.tr('围栏越界', 'Geofence violation')
-        : locale.tr('围栏警告', 'Geofence warning');
-    final marginText = _geofenceMargin > 0
+    final isWarning = _geofenceState == 'WARNING';
+    // Proximity-based severity: <0.5m red, <2m orange
+    final isCriticalProximity = _geofenceMargin > 0 && _geofenceMargin < 0.5;
+    final isApproaching = _geofenceMargin > 0 && _geofenceMargin < 2.0;
+
+    final Color color;
+    final String label;
+    final IconData icon;
+
+    if (isViolation || isCriticalProximity) {
+      color = AppColors.error;
+      label = isCriticalProximity && !isViolation
+          ? locale.tr(
+              '警告：即将越界！(${_geofenceMargin.toStringAsFixed(1)}m)',
+              'WARNING: About to breach! (${_geofenceMargin.toStringAsFixed(1)}m)')
+          : locale.tr('围栏越界', 'Geofence violation');
+      icon = Icons.error_outline;
+    } else if (isWarning || isApproaching) {
+      color = AppColors.warning;
+      label = isApproaching && !isWarning
+          ? locale.tr(
+              '接近边界，请减速 (${_geofenceMargin.toStringAsFixed(1)}m)',
+              'Approaching boundary, slow down (${_geofenceMargin.toStringAsFixed(1)}m)')
+          : locale.tr('围栏警告', 'Geofence warning');
+      icon = Icons.warning_amber_rounded;
+    } else {
+      color = AppColors.warning;
+      label = locale.tr('围栏警告', 'Geofence warning');
+      icon = Icons.warning_amber_rounded;
+    }
+
+    final marginText = (!isApproaching && !isCriticalProximity && _geofenceMargin > 0)
         ? locale.tr('  (余量: ${_geofenceMargin.toStringAsFixed(1)}m)',
                      '  (margin: ${_geofenceMargin.toStringAsFixed(1)}m)')
         : '';
@@ -2158,10 +2186,7 @@ class _MapScreenState extends State<MapScreen>
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             child: Row(children: [
-              Icon(
-                isViolation ? Icons.error_outline : Icons.warning_amber_rounded,
-                color: Colors.white, size: 20,
-              ),
+              Icon(icon, color: Colors.white, size: 20),
               const SizedBox(width: 8),
               Expanded(child: Text(
                 '$label$marginText',
