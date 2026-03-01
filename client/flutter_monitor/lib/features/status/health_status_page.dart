@@ -27,6 +27,10 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
   Timer? _uptimeTimer;
   final DateTime _sessionStart = DateTime.now();
 
+  // ── RTT 历史 (最近 30 次) ──
+  final List<double> _rttHistory = [];
+  static const int _rttMaxSamples = 30;
+
   @override
   void initState() {
     super.initState();
@@ -43,6 +47,18 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
     _uptimeTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
+    // 采集 RTT 历史
+    conn.addListener(_collectRtt);
+  }
+
+  void _collectRtt() {
+    final rtt = context.read<RobotConnectionProvider>().connectionRttMs;
+    if (rtt != null && rtt > 0) {
+      _rttHistory.add(rtt);
+      if (_rttHistory.length > _rttMaxSamples) {
+        _rttHistory.removeAt(0);
+      }
+    }
   }
 
   @override
@@ -50,6 +66,9 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
     _sub?.cancel();
     _fastSub?.cancel();
     _uptimeTimer?.cancel();
+    try {
+      context.read<RobotConnectionProvider>().removeListener(_collectRtt);
+    } catch (_) {}
     super.dispose();
   }
 
@@ -89,6 +108,10 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
 
                 // ── 运行时间 ──
                 _uptimeCard(dark),
+                const SizedBox(height: 16),
+
+                // ── 网络延迟 ──
+                _networkLatencyCard(dark),
                 const SizedBox(height: 16),
 
                 // ── 定位质量 ──
@@ -949,6 +972,91 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
   }
 
   // ═══════════════════════════════════════════════════════
+  //  Network Latency + RTT Sparkline
+  // ═══════════════════════════════════════════════════════
+
+  Widget _networkLatencyCard(bool dark) {
+    final conn = context.watch<RobotConnectionProvider>();
+    final rtt = conn.connectionRttMs;
+    final quality = conn.connectionQuality;
+
+    final (rttColor, qualityLabel) = switch (quality) {
+      'good' => (AppColors.success, '优秀'),
+      'slow' => (AppColors.warning, '良好'),
+      'unstable' => (AppColors.error, '不稳定'),
+      _ => (context.subtitleColor, '未知'),
+    };
+
+    return _card(dark, child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.wifi_rounded, size: 20, color: rttColor),
+            const SizedBox(width: 10),
+            Text('网络', style: TextStyle(
+              fontSize: 14, fontWeight: FontWeight.w600, color: context.titleColor)),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: rttColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(qualityLabel, style: TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w600, color: rttColor)),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          // RTT value
+          Row(children: [
+            Icon(Icons.swap_vert, size: 16, color: context.subtitleColor),
+            const SizedBox(width: 6),
+            Text('RTT 延迟', style: TextStyle(
+              fontSize: 12, color: context.subtitleColor)),
+            const Spacer(),
+            Text(
+              rtt != null ? '${rtt.toStringAsFixed(1)} ms' : '-- ms',
+              style: TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w700,
+                fontFeatures: const [FontFeature.tabularFigures()],
+                color: rttColor),
+            ),
+          ]),
+          // RTT sparkline
+          if (_rttHistory.length >= 2) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 40,
+              width: double.infinity,
+              child: CustomPaint(
+                painter: _RttSparklinePainter(
+                  values: _rttHistory,
+                  lineColor: rttColor,
+                  fillColor: rttColor.withValues(alpha: 0.08),
+                  isDark: dark,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('最近 ${_rttHistory.length} 次',
+                  style: TextStyle(fontSize: 10, color: context.subtitleColor)),
+                Text('范围: ${_rttHistory.reduce(math.min).toStringAsFixed(0)}'
+                    ' - ${_rttHistory.reduce(math.max).toStringAsFixed(0)} ms',
+                  style: TextStyle(fontSize: 10, color: context.subtitleColor)),
+              ],
+            ),
+          ],
+        ],
+      ),
+    ));
+  }
+
+  // ═══════════════════════════════════════════════════════
   //  Helpers
   // ═══════════════════════════════════════════════════════
 
@@ -1119,4 +1227,71 @@ class _DiskUsageLoaderState extends State<_DiskUsageLoader> {
       ],
     );
   }
+}
+
+/// Sparkline chart for RTT history values.
+class _RttSparklinePainter extends CustomPainter {
+  final List<double> values;
+  final Color lineColor;
+  final Color fillColor;
+  final bool isDark;
+
+  _RttSparklinePainter({
+    required this.values,
+    required this.lineColor,
+    required this.fillColor,
+    required this.isDark,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.length < 2) return;
+
+    final minV = values.reduce(math.min);
+    final maxV = values.reduce(math.max);
+    final range = maxV - minV;
+    final effectiveRange = range < 1 ? 1.0 : range;
+
+    final points = <Offset>[];
+    for (var i = 0; i < values.length; i++) {
+      final x = i / (values.length - 1) * size.width;
+      final y = size.height -
+          ((values[i] - minV) / effectiveRange) * size.height * 0.9 -
+          size.height * 0.05;
+      points.add(Offset(x, y));
+    }
+
+    // Fill area under line
+    final fillPath = Path()
+      ..moveTo(0, size.height)
+      ..lineTo(points.first.dx, points.first.dy);
+    for (final p in points.skip(1)) {
+      fillPath.lineTo(p.dx, p.dy);
+    }
+    fillPath
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(fillPath, Paint()..color = fillColor);
+
+    // Line
+    final linePaint = Paint()
+      ..color = lineColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5
+      ..strokeJoin = StrokeJoin.round;
+
+    final linePath = Path()..moveTo(points.first.dx, points.first.dy);
+    for (final p in points.skip(1)) {
+      linePath.lineTo(p.dx, p.dy);
+    }
+    canvas.drawPath(linePath, linePaint);
+
+    // Latest point dot
+    if (points.isNotEmpty) {
+      canvas.drawCircle(points.last, 3, Paint()..color = lineColor);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RttSparklinePainter old) => true;
 }
