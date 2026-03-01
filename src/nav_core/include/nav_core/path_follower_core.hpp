@@ -11,6 +11,7 @@
 #pragma once
 
 #include "nav_core/types.hpp"
+#include "nav_core/validation.hpp"
 #include <cmath>
 #include <vector>
 
@@ -87,6 +88,13 @@ inline PathFollowerOutput computeControl(
     PathFollowerState& state)
 {
   PathFollowerOutput out;
+
+  // NaN/Inf guard: invalid position -> zero velocity
+  if (!std::isfinite(vehicleRel.x) || !std::isfinite(vehicleRel.y) ||
+      !std::isfinite(vehicleYawDiff)) {
+    return out;
+  }
+
   const int pathSize = static_cast<int>(pathPoints.size());
   if (pathSize == 0) return out;
 
