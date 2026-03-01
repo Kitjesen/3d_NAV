@@ -210,6 +210,10 @@ class _LocalFirmwareSection extends StatelessWidget {
   Future<void> _selectAndUpload(BuildContext context) async {
     HapticFeedback.mediumImpact();
 
+    // Pre-flight check before file selection
+    final proceed = await _showPreflightDialog(context, ota);
+    if (!proceed || !context.mounted) return;
+
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
       withData: true,
@@ -658,13 +662,18 @@ class _AssetRow extends StatelessWidget {
     );
   }
 
-  void _showDeployMethodDialog(BuildContext context, OtaGateway ota, CloudAsset asset) {
+  Future<void> _showDeployMethodDialog(BuildContext context, OtaGateway ota, CloudAsset asset) async {
+    // Pre-flight check before deploy method selection
+    final proceed = await _showPreflightDialog(context, ota);
+    if (!proceed || !context.mounted) return;
+
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
+        final locale = ctx.read<LocaleProvider>();
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -708,6 +717,118 @@ class _AssetRow extends StatelessWidget {
       },
     );
   }
+}
+
+// ================================================================
+// 升级预检对话框
+// ================================================================
+
+/// Shows a pre-flight readiness dialog before deploy.
+///
+/// Returns `true` if the user confirms (all-pass or "ignore warnings"),
+/// `false` if the user cancels or there are hard errors.
+Future<bool> _showPreflightDialog(BuildContext context, OtaGateway ota) async {
+  final locale = context.read<LocaleProvider>();
+
+  // Show a loading dialog while checking
+  final result = await showDialog<PreflightResult>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) {
+      // Start check immediately
+      ota.preflightCheck().then((r) {
+        if (ctx.mounted) Navigator.pop(ctx, r);
+      });
+      return AlertDialog(
+        content: Row(
+          children: [
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 16),
+            Text(locale.tr('正在执行升级前检查...', 'Running pre-flight checks...')),
+          ],
+        ),
+      );
+    },
+  );
+
+  if (result == null) return false;
+
+  // If all checks pass, proceed without extra dialog
+  if (result.ready && !result.hasWarning && !result.hasError) return true;
+
+  // Show results dialog
+  if (!context.mounted) return false;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) {
+      final isDark = ctx.isDark;
+      return AlertDialog(
+        title: Text(locale.tr('升级前检查', 'Pre-flight Check')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: result.checks.map((check) {
+            final IconData icon;
+            final Color color;
+            if (check.passed) {
+              icon = Icons.check_circle;
+              color = AppColors.success;
+            } else if (check.severity == PreflightSeverity.warning) {
+              icon = Icons.warning_amber_rounded;
+              color = AppColors.warning;
+            } else {
+              icon = Icons.cancel;
+              color = AppColors.error;
+            }
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Icon(icon, size: 18, color: color),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      check.message,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: check.passed
+                            ? (isDark ? Colors.white70 : Colors.black87)
+                            : color,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(locale.tr('取消', 'Cancel')),
+          ),
+          TextButton(
+            onPressed: result.hasError ? null : () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(
+              foregroundColor: result.hasError
+                  ? null
+                  : result.hasWarning
+                      ? AppColors.warning
+                      : AppColors.primary,
+            ),
+            child: Text(result.hasWarning
+                ? locale.tr('忽略警告并继续', 'Ignore Warnings & Continue')
+                : locale.tr('继续', 'Continue')),
+          ),
+        ],
+      );
+    },
+  );
+
+  return confirmed == true;
 }
 
 // ================================================================

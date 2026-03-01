@@ -134,6 +134,40 @@ class HistoryEntry {
 }
 
 // ================================================================
+// Pre-flight 数据模型
+// ================================================================
+
+enum PreflightSeverity { ok, warning, error }
+
+class PreflightCheckItem {
+  final String name;
+  final String message;
+  final bool passed;
+  final PreflightSeverity severity;
+
+  PreflightCheckItem({
+    required this.name,
+    required this.message,
+    required this.passed,
+    required this.severity,
+  });
+}
+
+class PreflightResult {
+  final bool ready;
+  final List<PreflightCheckItem> checks;
+
+  PreflightResult({required this.ready, required this.checks});
+
+  /// True if any check is ERROR severity (hard-block, cannot proceed).
+  bool get hasError => checks.any((c) => c.severity == PreflightSeverity.error);
+
+  /// True if any check is WARNING severity (can proceed with override).
+  bool get hasWarning =>
+      checks.any((c) => c.severity == PreflightSeverity.warning);
+}
+
+// ================================================================
 // OtaGateway — OTA 业务逻辑 + 状态管理（从 Widget 解耦）
 // ================================================================
 
@@ -212,6 +246,70 @@ class OtaGateway extends ChangeNotifier {
   void clearStatusMessage() {
     _statusMessage = null;
     notifyListeners();
+  }
+
+  // ================================================================
+  // Pre-flight Readiness Check (独立预检 — 部署前 UI 对话框用)
+  // ================================================================
+
+  /// Standalone pre-flight check: queries the robot for readiness
+  /// (disk space, battery, hw compat, active tasks).
+  ///
+  /// Returns the list of [ReadinessCheck] results for display in a dialog.
+  /// If the robot does not implement the RPC, returns a mock "all-pass" list
+  /// so older firmware is not blocked.
+  Future<PreflightResult> preflightCheck() async {
+    final client = _client;
+    if (client == null) {
+      return PreflightResult(
+        ready: false,
+        checks: [
+          _mockCheck('connection', '未连接机器人', false, PreflightSeverity.error),
+        ],
+      );
+    }
+
+    try {
+      final response = await client.checkUpdateReadiness(artifacts: []);
+      final checks = response.checks
+          .map((c) => PreflightCheckItem(
+                name: c.checkName,
+                message: c.message,
+                passed: c.passed,
+                severity: c.passed
+                    ? PreflightSeverity.ok
+                    : PreflightSeverity.error,
+              ))
+          .toList();
+      return PreflightResult(ready: response.ready, checks: checks);
+    } catch (e) {
+      if (e.toString().contains('UNIMPLEMENTED') ||
+          e.toString().contains('Unimplemented')) {
+        // ota_daemon not yet implementing readiness — return mock pass
+        return PreflightResult(ready: true, checks: _mockPassChecks());
+      }
+      return PreflightResult(
+        ready: false,
+        checks: [
+          _mockCheck('rpc', '预检查请求失败: $e', false, PreflightSeverity.error),
+        ],
+      );
+    }
+  }
+
+  static PreflightCheckItem _mockCheck(
+      String name, String msg, bool passed, PreflightSeverity severity) {
+    return PreflightCheckItem(
+        name: name, message: msg, passed: passed, severity: severity);
+  }
+
+  static List<PreflightCheckItem> _mockPassChecks() {
+    return [
+      _mockCheck('disk_space', '磁盘空间充足', true, PreflightSeverity.ok),
+      _mockCheck('battery', '电量充足', true, PreflightSeverity.ok),
+      _mockCheck('hw_compat', '硬件兼容', true, PreflightSeverity.ok),
+      _mockCheck('active_tasks', '无活跃任务', true, PreflightSeverity.ok),
+    ];
   }
 
   // ================================================================
