@@ -50,11 +50,16 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Dart analyze
-        run: flutter analyze --no-fatal-infos
+      - name: Dart analyze (quality gate)
+        run: flutter analyze --fatal-warnings
 
-      - name: Run tests
-        run: flutter test --coverage
+      - name: Run tests (quality gate)
+        run: |
+          if [ -d "test" ]; then
+            flutter test --coverage
+          else
+            echo "No test/ directory found, skipping tests"
+          fi
 
       - name: Upload coverage
         if: always()
