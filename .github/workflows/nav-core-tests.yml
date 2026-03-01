@@ -1,0 +1,24 @@
+name: nav-core standalone tests
+
+on:
+  push:
+    paths:
+      - 'src/nav_core/**'
+  pull_request:
+    paths:
+      - 'src/nav_core/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (standalone mode, no ROS2)
+        run: cmake -B src/nav_core/build -S src/nav_core -DSTANDALONE=ON
+
+      - name: Build
+        run: cmake --build src/nav_core/build --parallel 4
+
+      - name: Run tests
+        run: ctest --test-dir src/nav_core/build --output-on-failure

@@ -316,3 +316,32 @@ ros2 topic echo /planning_status
 ---
 
 *Last Updated: February 2026*
+
+---
+
+## slopeWeight — 坡度代价调参
+
+### 参数位置
+`config/robot_config.yaml` → `local_planner.dir_weight` 同级（实际参数名为 `slopeWeight`）
+
+在 `launch/subsystems/autonomy.launch.py` 中通过 `robot_cfg` 读取并传给 localPlanner 节点。
+
+### 推荐值
+
+| 值 | 效果 |
+|---|---|
+| `0` (默认) | 关闭坡度代价，路径选择纯方向最优 |
+| `3` | 轻度坡度惩罚，轻微避开陡坡 |
+| `6` | 重度坡度惩罚，强烈偏好平坦路径 |
+| `>10` | 过于保守，可能无法找到可行路径 |
+
+### 与 dir_weight 配合
+- `dir_weight` 控制方向对齐代价（默认 `0.02`），影响全局路径跟随度
+- `slopeWeight` 独立叠加坡度代价项
+- 两者乘积效应: 室内平坦场景保持 `slopeWeight=0`；户外复杂地形建议 `slopeWeight=3~6`
+
+### 示例
+```bash
+# 临时覆盖（不改 yaml）:
+ros2 param set /local_planner slopeWeight 4.0
+```

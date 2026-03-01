@@ -347,6 +347,14 @@ else
     WARN_COUNT=$((WARN_COUNT + 1))
 fi
 
+echo ""
+echo "=== 8. Nav State Aggregation ==="
+if ros2 topic list 2>/dev/null | grep -q "/nav/nav_state"; then
+  echo "  /nav/nav_state: ACTIVE"
+else
+  echo "  WARN: /nav/nav_state 未发布 (nav_state 聚合节点未运行，非必须)"
+fi
+
 # 14. 总结
 echo ""
 echo "=========================================="

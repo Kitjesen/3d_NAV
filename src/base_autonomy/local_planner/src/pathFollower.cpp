@@ -96,6 +96,8 @@ public:
     declare_parameter<int>("joy_axis_yaw",       0);
     declare_parameter<int>("joy_axis_autonomy",  2);
     declare_parameter<int>("joy_axis_obstacle",  5);
+    declare_parameter<double>("stuck_timeout",   10.0);
+    declare_parameter<double>("stuck_dist_thre",  0.15);
 
     // --- Get Parameters ---
     sensorOffsetX_ = get_parameter("sensorOffsetX").as_double();
@@ -138,6 +140,8 @@ public:
     joy_axis_yaw_      = get_parameter("joy_axis_yaw").as_int();
     joy_axis_autonomy_ = get_parameter("joy_axis_autonomy").as_int();
     joy_axis_obstacle_ = get_parameter("joy_axis_obstacle").as_int();
+    stuckTimeout_  = get_parameter("stuck_timeout").as_double();
+    stuckDistThre_ = get_parameter("stuck_dist_thre").as_double();
 
     // --- Dynamic Parameter Callback ---
     param_cb_handle_ = add_on_set_parameters_callback(
@@ -221,6 +225,10 @@ private:
   int joy_axis_yaw_      = 0;
   int joy_axis_autonomy_ = 2;
   int joy_axis_obstacle_ = 5;
+
+  // --- Stuck Detection Parameters ---
+  double stuckTimeout_   = 10.0;
+  double stuckDistThre_  = 0.15;
 
   // --- Dynamic Parameter Callback ---
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
@@ -313,6 +321,12 @@ private:
   int pubSkipCount_ = 0;
   bool manualMode_ = false;
 
+  // --- Stuck Detection State ---
+  rclcpp::Time stuckCheckTime_;
+  double stuckCheckX_    = 0.0;
+  double stuckCheckY_    = 0.0;
+  bool stuckCheckInit_   = false;
+
   nav_msgs::msg::Path path_;
 
   // ── nav_core 算法 (替代 controlLoop 中的手动数学) ──
@@ -370,6 +384,33 @@ private:
     vehicleY_ = odomIn->pose.pose.position.y - sinYaw * sensorOffsetX_ - cosYaw * sensorOffsetY_;
     vehicleZ_ = odomIn->pose.pose.position.z;
 
+    // Stuck detection
+    if (!stuckCheckInit_) {
+      stuckCheckTime_ = now();
+      stuckCheckX_    = vehicleX_;
+      stuckCheckY_    = vehicleY_;
+      stuckCheckInit_ = true;
+    } else {
+      double elapsed = (now() - stuckCheckTime_).seconds();
+      if (elapsed >= stuckTimeout_) {
+        double dx = vehicleX_ - stuckCheckX_;
+        double dy = vehicleY_ - stuckCheckY_;
+        double moved = std::sqrt(dx*dx + dy*dy);
+        // 有活动路径 + 未急停 + 移动距离过小 → STUCK
+        if (path_.poses.size() > 0 && safetyStop_ == 0 && moved < stuckDistThre_) {
+          auto msg = std_msgs::msg::String();
+          msg.data = "STUCK";
+          pubGoalStatus_->publish(msg);
+          RCLCPP_WARN(get_logger(),
+            "Stuck detected: moved %.3fm in %.1fs (thre=%.3fm)", moved, elapsed, stuckDistThre_);
+        }
+        // 重置检查点
+        stuckCheckTime_ = now();
+        stuckCheckX_    = vehicleX_;
+        stuckCheckY_    = vehicleY_;
+      }
+    }
+
     if ((fabs(roll) > inclThre_ * PI / 180.0 || fabs(pitch) > inclThre_ * PI / 180.0) && useInclToStop_) {
       stopInitTime_ = rclcpp::Time(odomIn->header.stamp).seconds();
     }
@@ -402,6 +443,7 @@ private:
     pathPointID_ = 0;
     pathInit_ = true;
     goalReachedPublished_ = false;
+    stuckCheckInit_ = false;  // 路径更新时重置 stuck 计时器
   }
 
   void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)

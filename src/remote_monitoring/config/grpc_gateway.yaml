@@ -32,6 +32,7 @@ grpc_gateway:
     way_point_topic: "/nav/way_point"
     global_path_topic: "/nav/global_path"
     lidar_topic: "/nav/registered_cloud"
+    # TODO R25: 添加 /nav/dog_odometry 和 /nav/adapter_status 到 telemetry 订阅
 
     # ==================== SystemService 服务 ====================
     save_map_service: "/nav/save_map"

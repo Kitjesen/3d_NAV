@@ -50,6 +50,7 @@ driver:
   auto_enable: true
   auto_standup: true
   reconnect_interval: 3.0     # 秒
+  slam_reset_interval: 5.0    # SLAM 位置重置间隔 (秒)，防止航位推算漂移
 
 # ── LiDAR 传感器 ──
 lidar:
@@ -89,6 +90,8 @@ path_follower:
   use_incl_to_stop: false
   no_rot_at_stop: false
   no_rot_at_goal: true
+  stuck_timeout: 10.0         # 卡死超时时间 (s)
+  stuck_dist_thre: 0.15       # 超时期间最小移动距离 (m)
 
 # ── 地形分析高级 (terrainAnalysis) ──
 terrain:
@@ -156,6 +159,9 @@ pct_planner:
   publish_map_pointcloud: true # 发布 /map_pointcloud 供 RViz2 3D 点击使用
   publish_tomogram: true       # 发布 /tomogram 可视化
   smooth_min_dist: 3             # 路径平滑最小格距 (格数)
+  loc_quality_min: 0.3           # ICP定位质量最低阈值，低于此值拒绝规划
+  smooth_method: catmull_rom   # 路径平滑方式: catmull_rom / downsample
+  smooth_interp: 3             # Catmull-Rom 每段插值点数
 
 # ── 健康监控 ──
 health:
