@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_monitor/app/theme.dart';
 import 'package:flutter_monitor/core/providers/robot_connection_provider.dart';
 import 'package:flutter_monitor/core/gateway/system_gateway.dart';
+import 'package:flutter_monitor/core/gateway/task_gateway.dart';
 import 'package:robot_proto/robot_proto.dart';
 
 /// 健康状态页面 — 显示子系统健康、定位质量和围栏状态
@@ -81,6 +83,10 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
 
                 // ── 系统服务 ──
                 _buildServiceDiagCard(dark),
+                const SizedBox(height: 16),
+
+                // ── 语义导航 ──
+                _buildSemanticNavCard(dark),
                 const SizedBox(height: 16),
 
                 // ── 子系统列表 ──
@@ -603,6 +609,177 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
         ));
       }
     });
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Semantic Navigation Card
+  // ═══════════════════════════════════════════════════════
+
+  Widget _buildSemanticNavCard(bool dark) {
+    final gw = context.watch<TaskGateway>();
+    final isSemantic = gw.activeTaskType == TaskType.TASK_TYPE_SEMANTIC_NAV && gw.isRunning;
+
+    // 尝试从 SlowState.activeTask.paramsJson 解析语义指令
+    String? semanticGoal;
+    if (isSemantic) {
+      final paramsJson = _latest?.activeTask.paramsJson ?? '';
+      if (paramsJson.isNotEmpty) {
+        try {
+          final params = jsonDecode(paramsJson) as Map<String, dynamic>;
+          semanticGoal = params['instruction'] as String?;
+        } catch (_) {}
+      }
+    }
+
+    // 从 taskStatus 推断阶段文字
+    final (stageLabel, stageColor) = isSemantic
+        ? switch (gw.taskStatus) {
+            TaskStatus.TASK_STATUS_PENDING => ('准备中', context.subtitleColor),
+            TaskStatus.TASK_STATUS_RUNNING => (
+                gw.progress > 0.8 ? '接近目标' : '导航中',
+                Colors.blue,
+              ),
+            TaskStatus.TASK_STATUS_PAUSED => ('已暂停', AppColors.warning),
+            TaskStatus.TASK_STATUS_COMPLETED => ('已到达', AppColors.success),
+            TaskStatus.TASK_STATUS_FAILED => ('任务失败', AppColors.error),
+            TaskStatus.TASK_STATUS_CANCELLED => ('已取消', context.subtitleColor),
+            _ => ('定位目标中', Colors.blue),
+          }
+        : ('语义导航未启动', context.subtitleColor);
+
+    // 置信度 = 任务进度 (0.0-1.0)
+    final confidence = isSemantic ? gw.progress.clamp(0.0, 1.0) : 0.0;
+    final confColor = confidence < 0.6
+        ? AppColors.error
+        : confidence < 0.8
+            ? AppColors.warning
+            : AppColors.success;
+
+    // 推理路径: 暂无 proto 字段，根据进度推断简化展示
+    // progress < 0.3 → 可能在 Slow Path (LLM 推理阶段)
+    // progress >= 0.3 → Fast Path (直接匹配后导航)
+    final pathType = !isSemantic
+        ? 'unknown'
+        : confidence < 0.3
+            ? 'slow'
+            : 'fast';
+
+    return _card(dark, child: Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        leading: Icon(Icons.psychology_rounded, size: 20,
+          color: isSemantic ? Colors.blue : context.subtitleColor),
+        title: Text('语义导航', style: TextStyle(
+          fontSize: 14, fontWeight: FontWeight.w600,
+          color: context.titleColor)),
+        subtitle: Text(stageLabel, style: TextStyle(
+          fontSize: 12, color: stageColor)),
+        initiallyExpanded: isSemantic,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── 当前目标 ──
+                Row(children: [
+                  Icon(Icons.flag_rounded, size: 14, color: context.subtitleColor),
+                  const SizedBox(width: 6),
+                  Text('当前目标', style: TextStyle(
+                    fontSize: 12, color: context.subtitleColor)),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(
+                    isSemantic ? (semanticGoal ?? '--') : '--',
+                    style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w500,
+                      color: context.titleColor),
+                    overflow: TextOverflow.ellipsis,
+                  )),
+                ]),
+                const SizedBox(height: 10),
+
+                // ── 推理路径 ──
+                Row(children: [
+                  Icon(Icons.route_rounded, size: 14, color: context.subtitleColor),
+                  const SizedBox(width: 6),
+                  Text('推理路径', style: TextStyle(
+                    fontSize: 12, color: context.subtitleColor)),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: switch (pathType) {
+                        'fast' => AppColors.success.withValues(alpha: 0.13),
+                        'slow' => Colors.blue.withValues(alpha: 0.13),
+                        _ => context.subtitleColor.withValues(alpha: 0.10),
+                      },
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      switch (pathType) {
+                        'fast' => 'Fast Path',
+                        'slow' => 'Slow Path',
+                        _ => '--',
+                      },
+                      style: TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w600,
+                        color: switch (pathType) {
+                          'fast' => AppColors.success,
+                          'slow' => Colors.blue,
+                          _ => context.subtitleColor,
+                        },
+                      ),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+
+                // ── 目标置信度 ──
+                Row(children: [
+                  Icon(Icons.analytics_outlined, size: 14, color: context.subtitleColor),
+                  const SizedBox(width: 6),
+                  Text('目标置信度', style: TextStyle(
+                    fontSize: 12, color: context.subtitleColor)),
+                  const Spacer(),
+                  Text(
+                    isSemantic
+                        ? '${(confidence * 100).toStringAsFixed(0)}%'
+                        : '--',
+                    style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600,
+                      color: isSemantic ? confColor : context.subtitleColor)),
+                ]),
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: confidence,
+                    backgroundColor: dark
+                        ? Colors.white.withValues(alpha: 0.06)
+                        : Colors.black.withValues(alpha: 0.04),
+                    valueColor: AlwaysStoppedAnimation(
+                      isSemantic ? confColor : context.subtitleColor.withValues(alpha: 0.3)),
+                    minHeight: 4,
+                  ),
+                ),
+
+                // ── 状态消息 ──
+                if (isSemantic && gw.statusMessage != null) ...[
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    Icon(Icons.info_outline, size: 14, color: context.subtitleColor),
+                    const SizedBox(width: 6),
+                    Expanded(child: Text(gw.statusMessage!,
+                      style: TextStyle(fontSize: 11, color: context.subtitleColor),
+                      maxLines: 2, overflow: TextOverflow.ellipsis)),
+                  ]),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    ));
   }
 
   // ═══════════════════════════════════════════════════════
