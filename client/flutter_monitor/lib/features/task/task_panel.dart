@@ -38,6 +38,10 @@ class _TaskPanelState extends State<TaskPanel> {
   GetActiveWaypointsResponse? _activeWpResp;
   bool _wpLoading = false;
 
+  // ─── ETA tracking ───
+  DateTime? _taskStartTime;
+  bool _wasRunning = false;
+
   @override
   void initState() {
     super.initState();
@@ -223,6 +227,13 @@ class _TaskPanelState extends State<TaskPanel> {
     final locale = context.watch<LocaleProvider>();
     final gw = context.watch<TaskGateway>();
 
+    // Track task start time for ETA computation
+    if (gw.isRunning && !_wasRunning) {
+      _taskStartTime = DateTime.now();
+      _activeWpResp = null;
+    }
+    _wasRunning = gw.isRunning;
+
     return Scaffold(
       backgroundColor: context.isDark ? AppColors.darkBackground : AppColors.lightBackground,
       appBar: AppBar(
@@ -243,9 +254,13 @@ class _TaskPanelState extends State<TaskPanel> {
   // ════════════════════════════════════════════
 
   Widget _setupView(LocaleProvider locale) {
+    final gw = context.read<TaskGateway>();
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       children: [
+        // ── Failure banner ──
+        if (gw.isFailed) _buildFailureBanner(gw, locale),
+        if (gw.isFailed) const SizedBox(height: 16),
         _label(locale.tr('任务类型', 'Task type')),
         const SizedBox(height: 6),
         _typeSelector(locale),
@@ -647,7 +662,7 @@ class _TaskPanelState extends State<TaskPanel> {
               style: TextStyle(fontSize: 12, color: context.subtitleColor),
             ),
           const SizedBox(height: 24),
-          // Progress
+          // Progress + ETA
           _card(
             child: Padding(
               padding: const EdgeInsets.all(14),
@@ -657,7 +672,14 @@ class _TaskPanelState extends State<TaskPanel> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(locale.tr('进度', 'Progress'), style: TextStyle(fontSize: 13, color: context.subtitleColor)),
-                      Text('${(gw.progress * 100).toStringAsFixed(0)}%', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: context.titleColor)),
+                      Row(children: [
+                        Text('${(gw.progress * 100).toStringAsFixed(0)}%',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: context.titleColor)),
+                        if (_etaString != null) ...[
+                          const SizedBox(width: 8),
+                          Text(_etaString!, style: TextStyle(fontSize: 12, color: context.subtitleColor)),
+                        ],
+                      ]),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -666,7 +688,7 @@ class _TaskPanelState extends State<TaskPanel> {
                     child: LinearProgressIndicator(
                       value: gw.progress,
                       backgroundColor: context.isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.04),
-                      valueColor: AlwaysStoppedAnimation(context.isDark ? Colors.white.withValues(alpha: 0.5) : Colors.black.withValues(alpha: 0.3)),
+                      valueColor: AlwaysStoppedAnimation(AppColors.primary.withValues(alpha: 0.7)),
                       minHeight: 4,
                     ),
                   ),
@@ -675,8 +697,8 @@ class _TaskPanelState extends State<TaskPanel> {
             ),
           ),
           const SizedBox(height: 16),
-          // Backend waypoint info
-          _backendWaypointCard(),
+          // Waypoint checklist
+          _waypointChecklistCard(locale),
           const Spacer(flex: 3),
           // Controls
           Row(
@@ -772,6 +794,138 @@ class _TaskPanelState extends State<TaskPanel> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // ════════════════════════════════════════════
+  //  ETA + Waypoint checklist + Failure banner
+  // ════════════════════════════════════════════
+
+  /// Estimated time remaining as a human-readable string (e.g. "~2分钟")
+  String? get _etaString {
+    final gw = context.read<TaskGateway>();
+    if (_taskStartTime == null || gw.progress <= 0.01 || gw.progress >= 1.0) return null;
+    final elapsed = DateTime.now().difference(_taskStartTime!).inSeconds;
+    final totalEst = elapsed / gw.progress;
+    final remaining = (totalEst * (1 - gw.progress)).round();
+    if (remaining <= 0) return null;
+    if (remaining < 60) return '~${remaining}秒';
+    return '~${(remaining / 60).ceil()}分钟';
+  }
+
+  Widget _waypointChecklistCard(LocaleProvider locale) {
+    final resp = _activeWpResp;
+    if (resp == null || resp.totalCount == 0) {
+      // No backend data — show local waypoints if available
+      if (_waypoints.isEmpty) return const SizedBox.shrink();
+      return _buildLocalChecklistCard(locale);
+    }
+    return _buildBackendChecklistCard(resp, locale);
+  }
+
+  Widget _buildLocalChecklistCard(LocaleProvider locale) {
+    final gw = context.read<TaskGateway>();
+    // Estimate current index from progress
+    final currentIdx = (gw.progress * _waypoints.length).floor().clamp(0, _waypoints.length - 1);
+    return _card(child: Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(locale.tr('航点清单', 'Waypoints'), style: TextStyle(fontSize: 13, color: context.subtitleColor)),
+          const SizedBox(height: 8),
+          for (int i = 0; i < _waypoints.length; i++)
+            _checklistRow(i, i < currentIdx, i == currentIdx),
+        ],
+      ),
+    ));
+  }
+
+  Widget _buildBackendChecklistCard(GetActiveWaypointsResponse resp, LocaleProvider locale) {
+    return _card(child: Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(locale.tr('航点清单', 'Waypoints'), style: TextStyle(fontSize: 13, color: context.subtitleColor)),
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 16),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                onPressed: _fetchActiveWaypoints,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          for (int i = 0; i < resp.totalCount; i++)
+            _checklistRow(i, i < resp.currentIndex, i == resp.currentIndex),
+        ],
+      ),
+    ));
+  }
+
+  Widget _checklistRow(int idx, bool done, bool current) {
+    final icon = done
+        ? const Icon(Icons.check_circle_rounded, size: 16, color: AppColors.success)
+        : current
+            ? const Icon(Icons.arrow_right_alt_rounded, size: 16, color: AppColors.primary)
+            : Icon(Icons.circle_outlined, size: 16, color: context.subtitleColor.withValues(alpha: 0.5));
+    final label = _waypoints.length > idx
+        ? 'WP${idx + 1}: ${_waypoints[idx].label.isNotEmpty ? _waypoints[idx].label : "(${_waypoints[idx].position.x.toStringAsFixed(1)}, ${_waypoints[idx].position.y.toStringAsFixed(1)})"}'
+        : 'WP${idx + 1}';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(children: [
+        icon,
+        const SizedBox(width: 8),
+        Expanded(child: Text(label, style: TextStyle(
+          fontSize: 13,
+          color: done ? context.subtitleColor : current ? context.titleColor : context.subtitleColor.withValues(alpha: 0.7),
+          fontWeight: current ? FontWeight.w600 : FontWeight.w400,
+          decoration: done ? TextDecoration.lineThrough : null,
+        ))),
+      ]),
+    );
+  }
+
+  Widget _buildFailureBanner(TaskGateway gw, LocaleProvider locale) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(locale.tr('任务失败', 'Task failed'), style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.error,
+                )),
+                if (gw.statusMessage != null)
+                  Text(gw.statusMessage!, style: TextStyle(fontSize: 12, color: context.subtitleColor)),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _start,
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.error,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            ),
+            child: Text(locale.tr('重试', 'Retry'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ],
       ),
     );
   }
