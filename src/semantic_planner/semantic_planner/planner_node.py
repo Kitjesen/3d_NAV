@@ -45,7 +45,7 @@ semantic_planner_node — 语义规划 ROS2 节点 (论文级完整版)
 
 发布:
   - resolved_goal (geometry_msgs/PoseStamped)
-  - cmd_vel       (geometry_msgs/Twist, 相对话题名)
+  - cmd_vel       (geometry_msgs/TwistStamped, 相对话题名)
   - status        (std_msgs/String, JSON)
 """
 
@@ -66,7 +66,7 @@ from rclpy.action import ActionClient
 from rclpy.action.client import ClientGoalHandle
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
@@ -524,9 +524,9 @@ class SemanticPlannerNode(Node):
             String, "/nav/semantic/cancel", self._cancel_callback, 10
         )
 
-        # 几何层 stuck_final 信号 → 触发语义层重规划
-        self._sub_planner_status = self.create_subscription(
-            String, "/nav/planner_status",
+        # 几何层 stuck_final 信号 → 触发语义层重规划 (pct_path_adapter JSON 事件)
+        self._sub_adapter_status = self.create_subscription(
+            String, "/nav/adapter_status",
             self._planner_status_callback, 10
         )
 
@@ -549,10 +549,20 @@ class SemanticPlannerNode(Node):
         # ── 发布 ──
         self._pub_goal = self.create_publisher(PoseStamped, "resolved_goal", 10)
         # A8 修复: 使用相对话题名, 由 launch 文件 remap
-        self._pub_cmd_vel = self.create_publisher(Twist, "cmd_vel", 10)
+        self._pub_cmd_vel = self.create_publisher(TwistStamped, "cmd_vel", 10)
         self._pub_status = self.create_publisher(String, "status", 10)
         self._pub_costmap = self.create_publisher(OccupancyGrid, "costmap_out", 1)  # 供 perception_node SCG 使用
         self._look_around_timer = None
+
+    def _make_twist_stamped(self, linear_x=0.0, linear_y=0.0, angular_z=0.0):
+        """构造 TwistStamped 消息 (frame_id='body', stamp=当前时间)."""
+        msg = TwistStamped()
+        msg.header.frame_id = "body"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.twist.linear.x = linear_x
+        msg.twist.linear.y = linear_y
+        msg.twist.angular.z = angular_z
+        return msg
 
         # FOLLOW_PERSON: 发布跟随参数到 /nav/semantic/follow_person (best-effort)
         _be_qos = QoSProfile(
@@ -724,8 +734,7 @@ class SemanticPlannerNode(Node):
             self._nav2_goal_active = False
 
         # 停止运动
-        stop = Twist()
-        self._pub_cmd_vel.publish(stop)
+        self._pub_cmd_vel.publish(self._make_twist_stamped())
 
         # 停止旋转定时器
         if self._look_around_timer is not None:
@@ -795,8 +804,7 @@ class SemanticPlannerNode(Node):
             if self._follow_mode:
                 self.get_logger().info("Follow person: stop command received")
                 self._follow_mode = False
-                stop = Twist()
-                self._pub_cmd_vel.publish(stop)
+                self._pub_cmd_vel.publish(self._make_twist_stamped())
                 self._set_state(PlannerState.IDLE)
             return
 
@@ -1392,19 +1400,17 @@ class SemanticPlannerNode(Node):
         )
 
     def _publish_look_around_twist(self):
-        """发布 LOOK_AROUND 旋转 Twist。"""
+        """发布 LOOK_AROUND 旋转 TwistStamped。"""
         if self._state != PlannerState.LOOKING_AROUND:
             return
-        twist = Twist()
-        twist.angular.z = (
+        az = (
             self._current_action_cmd.angular_z if self._current_action_cmd else 0.0
         )
-        self._pub_cmd_vel.publish(twist)
+        self._pub_cmd_vel.publish(self._make_twist_stamped(angular_z=az))
 
     def _finish_look_around(self):
         """停止旋转, 完成 LOOK_AROUND 子目标。"""
-        stop = Twist()
-        self._pub_cmd_vel.publish(stop)
+        self._pub_cmd_vel.publish(self._make_twist_stamped())
 
         if self._look_around_timer is not None:
             self._look_around_timer.cancel()

@@ -69,7 +69,7 @@ def generate_launch_description():
     )
     planner_profile_arg = DeclareLaunchArgument(
         "planner_profile", default_value="pct",
-        description="全局规划器 profile (pct, stub)",
+        description="全局规划器 profile: pct / pct_py / stub",
     )
     localizer_profile_arg = DeclareLaunchArgument(
         "localizer_profile", default_value="icp",

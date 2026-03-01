@@ -69,7 +69,7 @@ class PCTPathAdapter(Node):
         #         "index": N, "total": M}
         self.status_pub = self.create_publisher(
             String,
-            '/nav/planner_status',
+            '/nav/adapter_status',
             10
         )
         

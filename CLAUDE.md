@@ -63,7 +63,7 @@ ros2 launch launch/navigation_explore.launch.py slam_profile:=stub  # no hardwar
 # Code quality
 make format           # clang-format on src/**/*.cpp/hpp (Google style, 100 col)
 make lint             # clang-tidy (bugprone, performance, modernize checks)
-make health           # 12-point system health check (~30s)
+make health           # 13-point system health check (~30s)
 make check            # Composite: build + test + health
 
 # Other
@@ -309,6 +309,9 @@ All standard topics use `/nav/` prefix. Defined in `config/topic_contract.yaml`.
 | `/nav/localization_quality` | std_msgs/Float32 | ICP 匹配质量分数 |
 | `/nav/relocalize` | interface/srv/Relocalize | 重定位服务 |
 | `/nav/relocalize_check` | interface/srv/IsValid | 检查重定位是否完成 |
+| `/nav/dog_odometry` | nav_msgs/Odometry | han_dog_bridge IMU 里程计（含位置积分，50→10Hz） |
+| `/nav/adapter_status` | std_msgs/String (JSON) | pct_path_adapter 航点跟踪事件 `{"event":"...","index":N,"total":N}` |
+| `/nav/planner_status` | std_msgs/String | 全局规划器状态：`IDLE`/`PLANNING`/`SUCCESS`/`FAILED`/`GOAL_REACHED` |
 | `/nav/semantic/scene_graph` | String (JSON) | ConceptGraphs scene graph |
 | `/nav/semantic/detections_3d` | Detection3DArray | 3D object detections |
 | `/nav/semantic/instruction` | String | Natural language navigation instruction |
@@ -391,7 +394,7 @@ If changing topic names, update `config/topic_contract.yaml` and `docs/02-archit
 | `install_semantic_deps.sh` | Install semantic navigation Python packages |
 | `setup_semantic.sh` | Configure semantic system |
 | `proto_gen.sh` | Regenerate Protocol Buffer definitions |
-| `health_check.sh` | 12-point system health verification |
+| `health_check.sh` | 13-point system health verification |
 | `install_services.sh` | Install systemd service files |
 | `sync_versions.sh` | Synchronize VERSION across packages |
 | `test_services.sh` | Verify systemd services |

@@ -173,6 +173,10 @@ def generate_launch_description():
                 "autonomySpeed": LaunchConfiguration("autonomySpeed"),
                 "joyToSpeedDelay": 2.0,
                 "joyToCheckObstacleDelay": 5.0,
+                "joy_axis_fwd":      4,
+                "joy_axis_left":     3,
+                "joy_axis_autonomy": 2,
+                "joy_axis_obstacle": 5,
                 "freezeAng": 90.0,
                 "freezeTime": 2.0,
                 "omniDirGoalThre": 1.0,
@@ -242,6 +246,11 @@ def generate_launch_description():
                 "autonomyMode": LaunchConfiguration("autonomyMode"),
                 "autonomySpeed": LaunchConfiguration("autonomySpeed"),
                 "joyToSpeedDelay": 2.0,
+                "joy_axis_fwd":      4,
+                "joy_axis_left":     3,
+                "joy_axis_yaw":      0,
+                "joy_axis_autonomy": 2,
+                "joy_axis_obstacle": 5,
             }
         ],
         remappings=[

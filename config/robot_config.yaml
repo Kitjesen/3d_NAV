@@ -67,6 +67,11 @@ control:
   max_yaw_rate: 45.0          # deg/s
   max_accel: 1.0              # m/s^2
 
+# ── 自主导航延迟参数 ──
+autonomy:
+  joy_to_speed_delay: 2.0        # 手柄输入后多久开始用 speed topic 控速 (s)
+  joy_to_check_obstacle_delay: 5.0  # 手柄输入后多久恢复避障检测 (s)
+
 # ── 路径跟随高级 (pathFollower) ──
 path_follower:
   switch_time_thre: 1.0       # 方向切换延迟 (s)
@@ -152,6 +157,7 @@ pct_planner:
   tomogram_ground_h: 0.0      # 建图基准地面高度 (m)
   publish_map_pointcloud: true # 发布 /map_pointcloud 供 RViz2 3D 点击使用
   publish_tomogram: true       # 发布 /tomogram 可视化
+  smooth_min_dist: 3             # 路径平滑最小格距 (格数)
 
 # ── 健康监控 ──
 health:

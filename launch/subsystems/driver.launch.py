@@ -50,6 +50,7 @@ def generate_launch_description():
         ],
         remappings=[
             ("/cmd_vel", "/nav/cmd_vel"),
+            ("/odom", "/nav/odometry"),
         ],
         condition=LaunchConfigurationEquals("driver_mode", "generic"),
     )
@@ -72,9 +73,12 @@ def generate_launch_description():
             {"reconnect_interval": robot_cfg('driver', 'reconnect_interval')},
         ],
         remappings=[
-            ("/cmd_vel", "/nav/cmd_vel"),
-            ("/stop",    "/nav/stop"),
-            ("/Odometry", "/nav/odometry"),
+            ("/cmd_vel",  "/nav/cmd_vel"),
+            ("/stop",     "/nav/stop"),
+            # /Odometry → /nav/dog_odometry: 不覆盖 Fast-LIO2 的 SLAM 里程计
+            # 导航栈的位置定位由 SLAM (/nav/odometry) 提供
+            # dog IMU 姿态数据通过 /robot_state 话题供监控使用
+            ("/Odometry", "/nav/dog_odometry"),
         ],
         condition=LaunchConfigurationEquals("driver_mode", "dog"),
     )
