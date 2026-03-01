@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_monitor/app/theme.dart';
@@ -67,6 +68,10 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
               children: [
                 // ── 综合健康 ──
                 _overallCard(dark, health),
+                const SizedBox(height: 16),
+
+                // ── 系统资源 (CPU/内存/温度圆形仪表) ──
+                _systemResourceCard(dark),
                 const SizedBox(height: 16),
 
                 // ── 定位质量 ──
@@ -783,6 +788,83 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
   }
 
   // ═══════════════════════════════════════════════════════
+  //  System Resource Gauges (CPU / Memory / Temp)
+  // ═══════════════════════════════════════════════════════
+
+  Widget _systemResourceCard(bool dark) {
+    final res = _latest?.resources;
+    final cpu = res?.cpuPercent ?? 0.0;
+    final mem = res?.memPercent ?? 0.0;
+    final temp = res?.cpuTemp ?? 0.0;
+    final hasData = res != null && (cpu > 0 || mem > 0 || temp > 0);
+
+    return _card(dark, child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.monitor_heart_outlined, size: 20, color: context.subtitleColor),
+            const SizedBox(width: 10),
+            Text('系统资源', style: TextStyle(
+              fontSize: 14, fontWeight: FontWeight.w600, color: context.titleColor)),
+          ]),
+          const SizedBox(height: 16),
+          if (!hasData)
+            Center(child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text('无数据', style: TextStyle(
+                fontSize: 12, color: context.subtitleColor)),
+            ))
+          else
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _circularGauge('CPU', cpu, 100, '%',
+                  cpu > 80 ? AppColors.error : cpu > 60 ? AppColors.warning : AppColors.success),
+                _circularGauge('内存', mem, 100, '%',
+                  mem > 85 ? AppColors.error : mem > 70 ? AppColors.warning : AppColors.info),
+                _circularGauge('温度', temp, 100, '°C',
+                  temp > 75 ? AppColors.error : temp > 55 ? AppColors.warning : AppColors.success),
+              ],
+            ),
+        ],
+      ),
+    ));
+  }
+
+  Widget _circularGauge(String label, double value, double max, String unit, Color color) {
+    final ratio = (value / max).clamp(0.0, 1.0);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 64, height: 64,
+          child: CustomPaint(
+            painter: _ArcGaugePainter(
+              ratio: ratio,
+              color: color,
+              bgColor: color.withValues(alpha: 0.12),
+              strokeWidth: 6,
+            ),
+            child: Center(child: Text(
+              value.toStringAsFixed(0),
+              style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700,
+                color: context.titleColor),
+            )),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(label, style: TextStyle(
+          fontSize: 11, fontWeight: FontWeight.w500, color: context.subtitleColor)),
+        Text('${value.toStringAsFixed(1)}$unit', style: TextStyle(
+          fontSize: 10, color: color, fontWeight: FontWeight.w600)),
+      ],
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
   //  Helpers
   // ═══════════════════════════════════════════════════════
 
@@ -812,4 +894,54 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
         style: TextStyle(fontSize: 13, color: context.subtitleColor))),
     );
   }
+}
+
+/// 270-degree arc gauge painter for system resource metrics.
+class _ArcGaugePainter extends CustomPainter {
+  final double ratio;
+  final Color color;
+  final Color bgColor;
+  final double strokeWidth;
+
+  _ArcGaugePainter({
+    required this.ratio,
+    required this.color,
+    required this.bgColor,
+    required this.strokeWidth,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (math.min(size.width, size.height) - strokeWidth) / 2;
+    const startAngle = -math.pi * 0.75;
+    const sweepTotal = math.pi * 1.5;
+
+    final bgPaint = Paint()
+      ..color = bgColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round;
+
+    final fgPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      startAngle, sweepTotal, false, bgPaint,
+    );
+    if (ratio > 0) {
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        startAngle, sweepTotal * ratio, false, fgPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ArcGaugePainter old) =>
+      old.ratio != ratio || old.color != color;
 }
