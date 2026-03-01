@@ -667,11 +667,25 @@ grpc::Status OtaServiceImpl::GetUpgradeHistory(
 
     std::string fc_str = extract("failure_code");
     if (!fc_str.empty()) {
-      entry->set_failure_code(
-          static_cast<robot::v1::OtaFailureCode>(std::stoi(fc_str)));
+      try {
+        entry->set_failure_code(
+            static_cast<robot::v1::OtaFailureCode>(std::stoi(fc_str)));
+      } catch (const std::invalid_argument &) {
+        OtaLogWarn("GetUpgradeHistory: invalid failure_code: %s", fc_str.c_str());
+      } catch (const std::out_of_range &) {
+        OtaLogWarn("GetUpgradeHistory: failure_code out of range: %s", fc_str.c_str());
+      }
     }
     std::string dur_str = extract("duration_ms");
-    if (!dur_str.empty()) entry->set_duration_ms(std::stoull(dur_str));
+    if (!dur_str.empty()) {
+      try {
+        entry->set_duration_ms(std::stoull(dur_str));
+      } catch (const std::invalid_argument &) {
+        OtaLogWarn("GetUpgradeHistory: invalid duration_ms: %s", dur_str.c_str());
+      } catch (const std::out_of_range &) {
+        OtaLogWarn("GetUpgradeHistory: duration_ms out of range: %s", dur_str.c_str());
+      }
+    }
   }
 
   return grpc::Status::OK;
