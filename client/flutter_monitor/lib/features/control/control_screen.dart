@@ -23,6 +23,16 @@ class ControlScreen extends StatefulWidget {
 }
 
 class _ControlScreenState extends State<ControlScreen> {
+  // ─── Joystick deadzone (0% ~ 30%, default 10%) ───
+  double _deadzone = 0.10;
+
+  /// Apply deadzone: values within deadzone radius return 0, otherwise rescale.
+  double _applyDeadzone(double value) {
+    if (value.abs() <= _deadzone) return 0.0;
+    final sign = value > 0 ? 1.0 : -1.0;
+    return sign * (value.abs() - _deadzone) / (1.0 - _deadzone);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -48,14 +58,16 @@ class _ControlScreenState extends State<ControlScreen> {
 
   void _onLeftJoystickChange(StickDragDetails details) {
     final gw = context.read<ControlGateway>();
+    final dx = _applyDeadzone(details.x);
+    final dy = _applyDeadzone(-details.y);
     if (gw.useDogDirect) {
-      gw.sendVelocity(-details.y, details.x, gw.angularZ);
+      gw.sendVelocity(dy, dx, gw.angularZ);
     } else {
       if (!gw.hasLease) return;
       final profile = context.read<RobotProfileProvider>().current;
       gw.sendVelocity(
-        -details.y * profile.maxLinearSpeed,
-        details.x * profile.maxLinearSpeed,
+        dy * profile.maxLinearSpeed,
+        dx * profile.maxLinearSpeed,
         gw.angularZ,
       );
     }
@@ -63,12 +75,13 @@ class _ControlScreenState extends State<ControlScreen> {
 
   void _onRightJoystickChange(StickDragDetails details) {
     final gw = context.read<ControlGateway>();
+    final dx = _applyDeadzone(-details.x);
     if (gw.useDogDirect) {
-      gw.sendVelocity(gw.linearX, gw.linearY, -details.x);
+      gw.sendVelocity(gw.linearX, gw.linearY, dx);
     } else {
       if (!gw.hasLease) return;
       final profile = context.read<RobotProfileProvider>().current;
-      gw.sendVelocity(gw.linearX, gw.linearY, -details.x * profile.maxAngularSpeed);
+      gw.sendVelocity(gw.linearX, gw.linearY, dx * profile.maxAngularSpeed);
     }
   }
 
@@ -541,6 +554,9 @@ class _ControlScreenState extends State<ControlScreen> {
             ),
           ),
         ),
+        // ─── Deadzone slider (below each joystick) ───
+        const SizedBox(height: 8),
+        _buildDeadzoneSlider(),
       ],
     );
   }
@@ -718,6 +734,46 @@ class _ControlScreenState extends State<ControlScreen> {
           ),
         );
       },
+    );
+  }
+
+  // ─── Deadzone slider widget ───
+
+  Widget _buildDeadzoneSlider() {
+    final labelColor = context.isDark ? Colors.white54 : Colors.black54;
+    return SizedBox(
+      width: 180,
+      child: Row(
+        children: [
+          Icon(Icons.adjust, size: 12, color: labelColor),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 2,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                activeTrackColor: Colors.white70,
+                inactiveTrackColor: Colors.white24,
+                thumbColor: Colors.white,
+              ),
+              child: Slider(
+                value: _deadzone,
+                min: 0.0,
+                max: 0.30,
+                onChanged: (v) => setState(() => _deadzone = v),
+              ),
+            ),
+          ),
+          Text(
+            '${(_deadzone * 100).toStringAsFixed(0)}%',
+            style: TextStyle(
+              fontSize: 9,
+              color: labelColor,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
