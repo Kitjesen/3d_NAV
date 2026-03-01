@@ -118,7 +118,7 @@ grpc::Status OtaServiceImpl::CheckUpdateReadiness(
       c->set_message("Signature check skipped (no signature or key)");
     } else {
       bool ok = VerifyEd25519(config_.ota_public_key_path,
-                               request->manifest_signature(),
+                               request->manifest_content(),
                                request->manifest_signature());
       c->set_passed(ok);
       c->set_message(ok ? "Signature valid" : "Signature invalid");
@@ -648,6 +648,7 @@ grpc::Status OtaServiceImpl::GetUpgradeHistory(
         if (pos == std::string::npos) return "";
         auto start = pos + needle.size();
         auto end = lines[i].find_first_of(",}", start);
+        if (end == std::string::npos) end = lines[i].size();
         return lines[i].substr(start, end - start);
       }
       auto start = pos + needle.size();
