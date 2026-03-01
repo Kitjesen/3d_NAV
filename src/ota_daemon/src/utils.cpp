@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <ifaddrs.h>
@@ -323,8 +324,13 @@ bool FileExists(const std::string &path) {
 }
 
 bool MakeDirs(const std::string &path) {
-  std::string cmd = "mkdir -p '" + path + "'";
-  return system(cmd.c_str()) == 0;
+  std::error_code ec;
+  std::filesystem::create_directories(path, ec);
+  if (ec) {
+    OtaLogWarn("MakeDirs: failed to create '%s': %s", path.c_str(),
+               ec.message().c_str());
+  }
+  return !ec;
 }
 
 std::string ReadFileToString(const std::string &path) {
