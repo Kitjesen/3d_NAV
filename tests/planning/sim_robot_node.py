@@ -216,9 +216,10 @@ class SimRobotNode(Node):
         self.vx = self.vy = self.wz = 0.0
         self.z    = 0.0   # 机器人当前Z高度 (3D模式下更新)
         self.vz   = 0.0   # Z轴速度 (m/s)
-        self._mode_3d  = False  # True=PCT 3D路径跟踪, False=PCT 2D控制
-        self._3d_path  = []     # 3D路点列表 [(x,y,z), ...]（来自PCT 3D A*）
-        self._gz       = 0.0    # 3D目标Z高度
+        self._mode_3d    = False  # True=PCT 3D路径跟踪, False=PCT 2D控制
+        self._3d_path    = []     # 3D路点列表 [(x,y,z), ...]（来自PCT 3D A*）
+        self._gz         = 0.0    # 3D目标Z高度
+        self._3d_waiting = False  # True=等待 PCT 3D A* 规划结果（避免 tick 误判到达）
         self.cmd_count = 0
         self.traj = []
         self.goal_reached = False
@@ -443,6 +444,9 @@ class SimRobotNode(Node):
         注意: sim_robot_node 自身也发布此话题, 需过滤自身消息."""
         gx = msg.pose.position.x
         gy = msg.pose.position.y
+        # 3D 模式下忽略: _activate_3d_nav 已直接发布带 Z 的目标给 PCT, 不需要 _set_new_goal
+        if self._mode_3d:
+            return
         # 忽略自身重发 (坐标与当前目标几乎一致)
         if math.hypot(gx - self.gx, gy - self.gy) < 0.3:
             return
@@ -469,9 +473,10 @@ class SimRobotNode(Node):
 
         self._user_goal_set = True
         self.goal_reached   = False
-        self._gz      = gz
-        self._mode_3d = (gz > 0.1)   # Z>0.1m → 3D跟踪; 否则回退 2D
-        self._3d_path = []
+        self._gz        = gz
+        self._mode_3d   = (gz > 0.1)   # Z>0.1m → 3D跟踪; 否则回退 2D
+        self._3d_path   = []
+        self._3d_waiting = True   # 等待 PCT 规划器响应, 避免 tick 误判 "路径为空=到达"
         if self.t_start is None:
             self.t_start = time.time()
         self.phase = 'running'
@@ -514,6 +519,7 @@ class SimRobotNode(Node):
                 [ps.pose.position.x, ps.pose.position.y, ps.pose.position.z]
                 for ps in msg.poses
             ]
+            self._3d_waiting = False   # 路径已收到, tick 可正常判断到达
             self.get_logger().info(
                 f'[3D] 收到 PCT 3D 路径: {n}点  Z范围={z_range:.2f}m  '
                 f'→ _follow_3d 激活')
@@ -653,15 +659,12 @@ class SimRobotNode(Node):
         elif self.phase == 'running':
             # ── 3D 模式: 由 PCT 3D A* 提供路径, _follow_3d 跟踪, 绕过 pathFollower ──
             if self._mode_3d:
+                # 等待 PCT 规划器响应 (_3d_waiting=True 时不判断到达)
+                if self._3d_waiting:
+                    self._integrate()
+                    return
                 self._follow_3d()
                 self._integrate()
-                dist_3d = math.sqrt(
-                    (self.x - self._3d_path[0][0])**2 +
-                    (self.y - self._3d_path[0][1])**2 +
-                    (self.z - self._gz)**2
-                ) if self._3d_path else math.sqrt(
-                    (self.x - self.gx)**2 + (self.y - self.gy)**2 + (self.z - self._gz)**2
-                )
                 if not self._3d_path:
                     self.get_logger().info(
                         f'[3D] *** 3D目标到达! 终点=({self.x:.2f},{self.y:.2f},{self.z:.2f}) ***')
