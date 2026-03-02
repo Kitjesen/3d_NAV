@@ -95,7 +95,7 @@ def generate_launch_description():
             'tomogram_file':   map_path,
             'obstacle_thr':    49.9,
             # 降低重发频率, 防止 pct_adapter 每秒重置航点索引 (10s 内机器人能走完一个航点段)
-            'republish_hz':    0.1,
+            'republish_hz':    0.02,  # 50s 间隔, 不干扰 25s 导航循环 (防止重发引起路径闪烁)
             # 增大航点间距 → 每段 ~1.6m, 全程 ~6-7 航点 (减少快速索引跳跃)
             'smooth_min_dist': 8,
         }],
@@ -308,7 +308,7 @@ def generate_launch_description():
         parameters=[{'robot_description': _robot_description}],
     )
 
-    # ── foxglove_bridge (浏览器可视化: ws://robot_ip:8765) ────────────────────
+    # ── foxglove_bridge (备用 Web 可视化: ws://robot_ip:8765) ────────────────
     foxglove_node = Node(
         package='foxglove_bridge',
         executable='foxglove_bridge',
@@ -322,19 +322,32 @@ def generate_launch_description():
         }],
     )
 
-    return LaunchDescription([
-        # 参数
-        map_path_arg,
-        goal_x_arg,
-        goal_y_arg,
-        start_x_arg,
-        start_y_arg,
-        # 节点 (按依赖顺序排列, ROS2 launch 并行启动)
+    # ── RViz2 (显示屏本地可视化) ───────────────────────────────────────────────
+    # 通过环境变量 USE_RVIZ=1 启用; 需要 DISPLAY 或 WAYLAND_DISPLAY 已设置
+    _use_rviz = os.environ.get('USE_RVIZ', '0') == '1'
+    _rviz_cfg = os.path.join(os.path.dirname(__file__), 'sim_nav.rviz')
+
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=['-d', _rviz_cfg] if os.path.exists(_rviz_cfg) else [],
+    ) if _use_rviz else None
+
+    nodes = [
         sim_robot,              # 最先: 提供 odometry + terrain + /robot_description
         robot_state_pub_node,   # URDF TF (base_link → wheels)
         pct_planner_node,       # 全局规划
         pct_adapter_node,       # 航点适配
         local_planner_node,     # 局部规划
         path_follower_node,     # 速度控制
-        foxglove_node,          # Web 可视化
+        foxglove_node,          # Web 备用可视化
+    ]
+    if rviz_node is not None:
+        nodes.append(rviz_node)
+
+    return LaunchDescription([
+        map_path_arg, goal_x_arg, goal_y_arg, start_x_arg, start_y_arg,
+        *nodes,
     ])
