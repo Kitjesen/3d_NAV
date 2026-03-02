@@ -133,6 +133,7 @@ class _DeviceInfoPageState extends State<DeviceInfoPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, size: 20),
+            tooltip: 'Refresh',
             onPressed: _fetchDeviceInfo,
           ),
         ],

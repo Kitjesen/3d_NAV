@@ -161,6 +161,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
             ? [
                 IconButton(
                   icon: Icon(Icons.refresh_rounded, size: 20, color: context.subtitleColor),
+                  tooltip: 'Refresh',
                   onPressed: () => context.read<FileGateway>().listFiles(),
                 ),
               ]
@@ -272,6 +273,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                       ),
                       IconButton(
                         icon: const Icon(Icons.close, size: 14),
+                        tooltip: 'Dismiss',
                         onPressed: () => gw.clearError(),
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(),

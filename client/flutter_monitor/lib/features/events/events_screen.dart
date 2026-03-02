@@ -207,6 +207,7 @@ class _EventsScreenState extends State<EventsScreen>
             ),
           IconButton(
             icon: const Icon(Icons.refresh),
+            tooltip: locale.tr('重新加载', 'Reload'),
             onPressed: () {
               HapticFeedback.lightImpact();
               _subscription?.cancel();

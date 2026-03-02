@@ -261,6 +261,7 @@ class _ControlScreenState extends State<ControlScreen>
                     size: 18,
                     color: context.isDark ? Colors.white : Colors.black87),
                 onPressed: () => Navigator.of(context).pop(),
+                tooltip: context.read<LocaleProvider>().tr('返回', 'Back'),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
               ),

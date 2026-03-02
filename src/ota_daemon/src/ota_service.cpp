@@ -10,7 +10,6 @@
 #include "ota_service.hpp"
 #include "utils.hpp"
 
-#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>

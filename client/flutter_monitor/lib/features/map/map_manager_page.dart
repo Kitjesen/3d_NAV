@@ -304,7 +304,7 @@ class _MapManagerPageState extends State<MapManagerPage> {
       appBar: AppBar(
         title: Text(locale.tr('地图管理', 'Map Manager')),
         leading: IconButton(icon: const Icon(Icons.arrow_back_ios_new, size: 17), onPressed: () => Navigator.pop(context)),
-        actions: [IconButton(icon: const Icon(Icons.refresh, size: 18), onPressed: () => gateway.refreshMaps())],
+        actions: [IconButton(icon: const Icon(Icons.refresh, size: 18), tooltip: locale.tr('刷新', 'Refresh'), onPressed: () => gateway.refreshMaps())],
       ),
       body: gateway.isLoading
           ? const Center(child: CircularProgressIndicator.adaptive())

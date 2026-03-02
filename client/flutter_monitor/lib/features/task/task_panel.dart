@@ -473,6 +473,7 @@ class _TaskPanelState extends State<TaskPanel> with SingleTickerProviderStateMix
                 suffixIcon: _semanticInstructionCtrl.text.isNotEmpty
                     ? IconButton(
                         icon: Icon(Icons.clear, size: 18, color: context.subtitleColor),
+                        tooltip: locale.tr('清除', 'Clear'),
                         onPressed: () => setState(() => _semanticInstructionCtrl.clear()),
                       )
                     : null,
@@ -557,6 +558,7 @@ class _TaskPanelState extends State<TaskPanel> with SingleTickerProviderStateMix
                 suffixIcon: _followPersonTargetCtrl.text.isNotEmpty
                     ? IconButton(
                         icon: Icon(Icons.clear, size: 18, color: context.subtitleColor),
+                        tooltip: locale.tr('清除', 'Clear'),
                         onPressed: () => setState(() => _followPersonTargetCtrl.clear()),
                       )
                     : null,
@@ -1120,6 +1122,7 @@ class _TaskPanelState extends State<TaskPanel> with SingleTickerProviderStateMix
               Text(locale.tr('航点清单', 'Waypoints'), style: TextStyle(fontSize: 13, color: context.subtitleColor)),
               IconButton(
                 icon: const Icon(Icons.refresh, size: 16),
+                tooltip: locale.tr('刷新航点', 'Refresh waypoints'),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
                 onPressed: _fetchActiveWaypoints,

@@ -461,6 +461,7 @@ class _BleControlScreenState extends State<BleControlScreen> {
                     size: 20,
                     color: context.subtitleColor,
                   ),
+                  tooltip: _passwordVisible ? '隐藏密码' : '显示密码',
                   onPressed: () =>
                       setState(() => _passwordVisible = !_passwordVisible),
                 ),
