@@ -474,6 +474,7 @@ class SemanticPlannerNode(Node):
 
         # 异步事件循环 (在单独线程中运行 LLM 调用)
         self._loop = asyncio.new_event_loop()
+        self._pending_futures: set = set()  # 防止 asyncio.Task 被 GC 回收
         self._async_thread = threading.Thread(
             target=self._run_async_loop, daemon=True
         )
@@ -612,8 +613,10 @@ class SemanticPlannerNode(Node):
         self._loop.run_forever()
 
     def _schedule_async(self, coro):
-        """在异步线程中调度协程。"""
-        asyncio.run_coroutine_threadsafe(coro, self._loop)
+        """在异步线程中调度协程。保存 Future 引用防止 GC 回收。"""
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        self._pending_futures.add(future)
+        future.add_done_callback(self._pending_futures.discard)
 
     # ================================================================
     #  Callbacks
@@ -938,8 +941,9 @@ class SemanticPlannerNode(Node):
             import base64
             from cv_bridge import CvBridge
 
-            bridge = CvBridge()
-            bgr = bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            if not hasattr(self, '_cv_bridge'):
+                self._cv_bridge = CvBridge()
+            bgr = self._cv_bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
 
             # 压缩为 JPEG base64 (降低分辨率以节省 API 费用)
             h, w = bgr.shape[:2]
@@ -1489,6 +1493,10 @@ class SemanticPlannerNode(Node):
                         if self._execution_context
                         else summary
                     )
+                    # 限制执行上下文大小，避免无限增长导致 LLM token 超限
+                    if len(self._execution_context) > 4000:
+                        lines = self._execution_context.split("\n")
+                        self._execution_context = "\n".join(lines[-20:])
                     self.get_logger().debug(f"Execution context: {summary[:80]}...")
             self._current_plan.advance()
             self._action_executor.reset()
