@@ -207,7 +207,7 @@ grpc::Status OtaServiceImpl::DeleteRemoteFile(
 grpc::Status OtaServiceImpl::DownloadFromUrl(
     grpc::ServerContext *ctx, const robot::v1::DownloadFromUrlRequest *request,
     grpc::ServerWriter<robot::v1::OtaProgress> *writer) {
-
+  try {
   const std::string &url = request->url();
   const std::string &staging_path = request->staging_path();
 
@@ -353,6 +353,11 @@ grpc::Status OtaServiceImpl::DownloadFromUrl(
   done.set_message("Download complete: " + staging_path);
   writer->Write(done);
   return grpc::Status::OK;
+  } catch (const std::exception &e) {
+    OtaLogError("[DownloadFromUrl] exception: %s", e.what());
+    return grpc::Status(grpc::INTERNAL,
+                        std::string("DownloadFromUrl exception: ") + e.what());
+  }
 }
 
 } // namespace ota

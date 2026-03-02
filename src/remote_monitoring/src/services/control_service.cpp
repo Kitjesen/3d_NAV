@@ -298,42 +298,46 @@ grpc::Status ControlServiceImpl::StreamTeleop(
     grpc::ServerContext *context,
     grpc::ServerReaderWriter<robot::v1::TeleopFeedback,
                              robot::v1::TeleopCommand> *stream) {
+  try {
+    robot::v1::TeleopCommand cmd;
+    robot::v1::TeleopFeedback feedback;  // 循环外声明，Clear() 复用内部缓冲
 
-  robot::v1::TeleopCommand cmd;
-  robot::v1::TeleopFeedback feedback;  // 循环外声明，Clear() 复用内部缓冲
+    while (!context->IsCancelled() && stream->Read(&cmd)) {
+      // 验证租约
+      if (!lease_mgr_->ValidateLease(cmd.lease_token())) {
+        feedback.Clear();
+        feedback.mutable_timestamp()->CopyFrom(cmd.timestamp());
+        feedback.set_command_sequence(cmd.sequence());
+        feedback.add_limit_reasons("invalid_lease");
+        feedback.mutable_safety_status()->set_safety_message("Invalid lease");
+        FillControlLatency(cmd.timestamp(), feedback.mutable_control_latency());
+        stream->Write(feedback);
+        return grpc::Status(grpc::PERMISSION_DENIED, "Lease required");
+      }
 
-  while (!context->IsCancelled() && stream->Read(&cmd)) {
-    // 验证租约
-    if (!lease_mgr_->ValidateLease(cmd.lease_token())) {
+      // 单次加锁完成处理 + 状态 + 原因 (消除 3× lock/unlock)
+      auto result = safety_gate_->ProcessTeleopFull(cmd);
+
       feedback.Clear();
       feedback.mutable_timestamp()->CopyFrom(cmd.timestamp());
       feedback.set_command_sequence(cmd.sequence());
-      feedback.add_limit_reasons("invalid_lease");
-      feedback.mutable_safety_status()->set_safety_message("Invalid lease");
+      *feedback.mutable_actual_velocity() = std::move(result.velocity);
+      *feedback.mutable_safety_status() = std::move(result.safety_status);
+      for (auto &reason : result.limit_reasons) {
+        feedback.add_limit_reasons(std::move(reason));
+      }
       FillControlLatency(cmd.timestamp(), feedback.mutable_control_latency());
-      stream->Write(feedback);
-      return grpc::Status(grpc::PERMISSION_DENIED, "Lease required");
+
+      if (!stream->Write(feedback)) {
+        break;
+      }
     }
 
-    // 单次加锁完成处理 + 状态 + 原因 (消除 3× lock/unlock)
-    auto result = safety_gate_->ProcessTeleopFull(cmd);
-
-    feedback.Clear();
-    feedback.mutable_timestamp()->CopyFrom(cmd.timestamp());
-    feedback.set_command_sequence(cmd.sequence());
-    *feedback.mutable_actual_velocity() = std::move(result.velocity);
-    *feedback.mutable_safety_status() = std::move(result.safety_status);
-    for (auto &reason : result.limit_reasons) {
-      feedback.add_limit_reasons(std::move(reason));
-    }
-    FillControlLatency(cmd.timestamp(), feedback.mutable_control_latency());
-
-    if (!stream->Write(feedback)) {
-      break;
-    }
+    return grpc::Status::OK;
+  } catch (const std::exception &e) {
+    return grpc::Status(grpc::INTERNAL,
+                        std::string("StreamTeleop exception: ") + e.what());
   }
-
-  return grpc::Status::OK;
 }
 
 grpc::Status

@@ -358,6 +358,12 @@ void GrpcGateway::Run() {
                              2 * 1024 * 1024);          // 2 MB stream window
   builder.AddChannelArgument(GRPC_ARG_HTTP2_BDP_PROBE, 1);  // 自动探测带宽
 
+  // Keep-alive: 检测死连接，防止 NAT/防火墙静默断开
+  builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIME_MS, 30000);
+  builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 10000);
+  builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
+  builder.AddChannelArgument(GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS, 10000);
+
   // 注册所有服务
   builder.RegisterService(system_service_.get());
   builder.RegisterService(control_service_.get());
