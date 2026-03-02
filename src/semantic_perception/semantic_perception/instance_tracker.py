@@ -698,6 +698,11 @@ class InstanceTracker:
         # ── Neuro-Symbolic Belief GCN (KG-BELIEF) ──
         self._belief_model = None  # Optional[BeliefPredictor]
 
+        # ── CLIP 嵌入索引缓存 (build_embedding_index) ──
+        self._embedding_index: Optional[np.ndarray] = None
+        self._embedding_ids: List[int] = []
+        self._embedding_dirty: bool = True  # 物体增删后需重建
+
     @property
     def objects(self) -> Dict[int, TrackedObject]:
         return self._objects
@@ -749,6 +754,7 @@ class InstanceTracker:
                 self._enrich_from_kg(obj)
                 self._objects[self._next_id] = obj
                 self._next_id += 1
+                self._embedding_dirty = True
                 matched.append(obj)
 
         # BA-HSG: 负面证据 — 在视域内的已知物体未被检测到 → miss
@@ -975,6 +981,8 @@ class InstanceTracker:
         ]
         for oid in stale_ids:
             del self._objects[oid]
+        if stale_ids:
+            self._embedding_dirty = True
 
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -3249,7 +3257,11 @@ class InstanceTracker:
 
         将所有有 CLIP 特征的物体组织为矩阵,
         支持批量余弦相似度查询。
+        带脏标记: 仅在物体增删后重建，跳过不必要的 np.stack 开销。
         """
+        if not self._embedding_dirty and self._embedding_index is not None:
+            return True
+
         objects_with_features = [
             obj for obj in self._objects.values()
             if obj.features.size > 0
@@ -3257,6 +3269,7 @@ class InstanceTracker:
         if not objects_with_features:
             self._embedding_index = None
             self._embedding_ids = []
+            self._embedding_dirty = False
             return False
 
         features = np.stack([obj.features for obj in objects_with_features])
@@ -3264,6 +3277,7 @@ class InstanceTracker:
         norms = np.where(norms > 0, norms, 1.0)
         self._embedding_index = features / norms
         self._embedding_ids = [obj.object_id for obj in objects_with_features]
+        self._embedding_dirty = False
         return True
 
     def query_by_embedding(
