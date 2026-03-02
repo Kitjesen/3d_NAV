@@ -96,14 +96,17 @@ ros2 run tf2_ros static_transform_publisher \
 TF_PID=$!
 
 # ── 等待节点启动 ──────────────────────────────────────────────────────────────
-echo -e "${BLUE}[4/4] 等待节点启动 (8s)...${NC}"
-for i in $(seq 1 8); do
+echo -e "${BLUE}[4/4] 等待节点启动 (15s)...${NC}"
+for i in $(seq 1 15); do
     echo -n "."
     sleep 1
 done
 echo ""
 
 # ── 快速节点存活检查 (P2 fix: 预检失败时快速退出) ────────────────────────────
+# 重启 ROS2 daemon 以避免 stale daemon 导致 ros2 node list 失败
+ros2 daemon stop 2>/dev/null; ros2 daemon start 2>/dev/null
+sleep 1
 echo ""
 echo -e "${YELLOW}── 节点存活预检 ──${NC}"
 PRECHECK_FAIL=0
