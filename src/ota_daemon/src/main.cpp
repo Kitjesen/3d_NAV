@@ -106,6 +106,12 @@ int main(int argc, char *argv[]) {
   builder.SetMaxReceiveMessageSize(256 * 1024 * 1024);  // 256MB (大模型文件)
   builder.SetMaxSendMessageSize(64 * 1024 * 1024);
 
+  // Keep-alive: 检测死连接，OTA 下载期间防止 NAT 超时
+  builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIME_MS, 30000);
+  builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 10000);
+  builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
+  builder.AddChannelArgument(GRPC_ARG_HTTP2_MIN_RECV_PING_INTERVAL_WITHOUT_DATA_MS, 10000);
+
   g_server = builder.BuildAndStart();
   if (!g_server) {
     ota::OtaLogError("[main] Failed to start gRPC server on %s", listen_addr.c_str());

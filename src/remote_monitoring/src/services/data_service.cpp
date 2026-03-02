@@ -1212,12 +1212,12 @@ grpc::Status DataServiceImpl::WebRTCSignaling(
     grpc::ServerContext *context,
     grpc::ServerReaderWriter<robot::v1::WebRTCSignal,
                              robot::v1::WebRTCSignal> *stream) {
-  
+  try {
   std::string session_id;
   std::shared_ptr<WebRTCSession> session;
-  
+
   RCLCPP_INFO(node_->get_logger(), "WebRTC signaling stream opened");
-  
+
   // 启动发送线程：将 outgoing_signals 队列中的消息发送到客户端
   std::atomic_bool writer_running{true};
   std::thread writer_thread([&]() {
@@ -1226,14 +1226,14 @@ grpc::Status DataServiceImpl::WebRTCSignaling(
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
       }
-      
+
       robot::v1::WebRTCSignal outgoing;
       bool has_signal = false;
-      
+
       {
         std::unique_lock<std::mutex> lock(session->mutex);
         if (session->cv.wait_for(lock, std::chrono::milliseconds(100), [&]() {
-              return !session->outgoing_signals.empty() || 
+              return !session->outgoing_signals.empty() ||
                      !session->active.load() ||
                      context->IsCancelled();
             })) {
@@ -1244,10 +1244,10 @@ grpc::Status DataServiceImpl::WebRTCSignaling(
           }
         }
       }
-      
+
       if (has_signal) {
         if (!stream->Write(outgoing)) {
-          RCLCPP_WARN(node_->get_logger(), 
+          RCLCPP_WARN(node_->get_logger(),
                       "Failed to write WebRTC signal to client");
           break;
         }
@@ -1255,13 +1255,13 @@ grpc::Status DataServiceImpl::WebRTCSignaling(
                      "Sent WebRTC signal type %d to client",
                      static_cast<int>(outgoing.type()));
       }
-      
+
       if (!session->active.load()) {
         break;
       }
     }
   });
-  
+
   // 主循环：读取客户端发送的信令消息
   robot::v1::WebRTCSignal incoming;
   bool hangup_received = false;
@@ -1340,8 +1340,12 @@ grpc::Status DataServiceImpl::WebRTCSignaling(
   
   RCLCPP_INFO(node_->get_logger(), "WebRTC signaling stream closed for session %s",
               session_id.c_str());
-  
+
   return grpc::Status::OK;
+  } catch (const std::exception &e) {
+    return grpc::Status(grpc::INTERNAL,
+                        std::string("WebRTCSignaling exception: ") + e.what());
+  }
 }
 
 } // namespace services
