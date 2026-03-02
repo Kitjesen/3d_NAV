@@ -1,0 +1,308 @@
+"""
+Building2_9 全栈导航仿真启动文件 (ROS2 SITL)
+
+无需硬件 / LiDAR / SLAM. 节点拓扑:
+
+  sim_robot_node.py      → /nav/odometry, /nav/map_cloud, /nav/terrain_map(+ext), /nav/stop
+  pct_planner_astar.py   → /nav/global_path      (building2_9.pickle A* 规划)
+  pct_path_adapter (C++) → /nav/way_point         (航点序列 + /nav/adapter_status)
+  localPlanner     (C++) → /nav/local_path        (局部避障路径)
+  pathFollower     (C++) → /nav/cmd_vel           (速度指令 + /nav/planner_status)
+  sim_robot_node.py      ← /nav/cmd_vel           (积分运动学 → 更新位姿)
+
+用法:
+  # 基本用法 (Corridor_E: (-5.5,7.3) → (5.0,7.3))
+  ros2 launch tests/planning/sim_navigation.launch.py
+
+  # 指定地图和目标
+  ros2 launch tests/planning/sim_navigation.launch.py \\
+    map_path:=/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/rsc/pcd/building2_9.pickle \\
+    goal_x:=5.0 goal_y:=-8.0
+
+  # Corridor_SE 场景 (长对角线)
+  ros2 launch tests/planning/sim_navigation.launch.py goal_y:=-8.0
+
+注意: 启动前请停止其他导航节点:
+  pkill -f 'pct_planner_astar\\|pct_path_adapter\\|localPlanner\\|pathFollower\\|sim_robot'
+"""
+
+import os
+import sys
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
+
+# ── building2_9.pickle 默认路径 (安装目录优先, 回退到源码目录) ────────────────
+def _default_pickle():
+    try:
+        share = get_package_share_directory('pct_planner')
+        p = os.path.join(share, 'rsc', 'pcd', 'building2_9.pickle')
+        if os.path.exists(p):
+            return p
+    except Exception:
+        pass
+    # 回退: 从 launch 文件位置推算源码路径
+    tests_dir = os.path.dirname(__file__)           # tests/planning/
+    src_root  = os.path.join(tests_dir, '..', '..', 'src')
+    return os.path.normpath(os.path.join(
+        src_root, 'global_planning', 'PCT_planner',
+        'rsc', 'pcd', 'building2_9.pickle',
+    ))
+
+
+def generate_launch_description():
+    pickle_default = _default_pickle()
+
+    # ── 启动参数声明 ──────────────────────────────────────────────────────────
+    map_path_arg = DeclareLaunchArgument(
+        'map_path',
+        default_value=pickle_default,
+        description='building2_9.pickle 番茄图路径',
+    )
+    goal_x_arg = DeclareLaunchArgument('goal_x',   default_value='5.0',
+                                        description='目标 X (m)')
+    goal_y_arg = DeclareLaunchArgument('goal_y',   default_value='7.3',
+                                        description='目标 Y (m)  (Corridor_E 默认)')
+    start_x_arg = DeclareLaunchArgument('start_x', default_value='-5.5',
+                                         description='起点 X (m)')
+    start_y_arg = DeclareLaunchArgument('start_y', default_value='7.3',
+                                         description='起点 Y (m)')
+
+    map_path = LaunchConfiguration('map_path')
+    goal_x   = LaunchConfiguration('goal_x')
+    goal_y   = LaunchConfiguration('goal_y')
+    start_x  = LaunchConfiguration('start_x')
+    start_y  = LaunchConfiguration('start_y')
+
+    # ── pct_planner_astar.py (Python A* 全局规划器) ───────────────────────────
+    pct_share   = get_package_share_directory('pct_planner')
+    scripts_dir = os.path.join(pct_share, 'planner', 'scripts')
+
+    # 必须把 scripts_dir 追加到现有 PYTHONPATH 前面 (不能替换, 否则 rclpy 不可见)
+    _existing_pypath = os.environ.get('PYTHONPATH', '')
+    _full_pypath = f"{scripts_dir}:{_existing_pypath}" if _existing_pypath else scripts_dir
+
+    pct_planner_node = Node(
+        package='pct_planner',
+        executable='pct_planner_astar.py',
+        name='pct_planner_astar',
+        output='screen',
+        parameters=[{
+            'tomogram_file':   map_path,
+            'obstacle_thr':    49.9,
+            # 降低重发频率, 防止 pct_adapter 每秒重置航点索引 (10s 内机器人能走完一个航点段)
+            'republish_hz':    0.1,
+            # 增大航点间距 → 每段 ~1.6m, 全程 ~6-7 航点 (减少快速索引跳跃)
+            'smooth_min_dist': 8,
+        }],
+        additional_env={'PYTHONPATH': _full_pypath},
+    )
+
+    # ── pct_path_adapter (C++ 航点适配器) ────────────────────────────────────
+    # 注: yaml 未安装到 share 目录, 直接内联参数
+    pct_adapter_node = Node(
+        package='pct_adapters',
+        executable='pct_path_adapter',
+        name='pct_path_adapter',
+        output='screen',
+        parameters=[{
+            # 降采样间距 (m): 与 smooth_min_dist=8×0.2=1.6m 对应
+            'waypoint_distance':  1.5,
+            # 到达半径 (m): 0.8m 防止立即跳过还未到达的航点
+            'arrival_threshold':  0.8,
+            # 卡顿检测超时 (s): 仿真中适当放宽
+            'stuck_timeout_sec':  60.0,
+            # 前视距离 (m)
+            'lookahead_dist':     2.0,
+        }],
+        remappings=[
+            ('/pct_path',         '/nav/global_path'),
+            ('/Odometry',         '/nav/odometry'),
+            ('/planner_waypoint', '/nav/way_point'),
+        ],
+    )
+
+    # ── localPlanner (C++ 局部规划器) ─────────────────────────────────────────
+    local_planner_share = get_package_share_directory('local_planner')
+    path_folder = os.path.join(local_planner_share, 'paths')
+
+    local_planner_node = Node(
+        package='local_planner',
+        executable='localPlanner',
+        name='localPlanner',
+        output='screen',
+        parameters=[{
+            'pathFolder':            path_folder,
+            # 机器人几何 (四足标准值)
+            'vehicleLength':         0.65,
+            'vehicleWidth':          0.30,
+            'sensorOffsetX':         0.0,
+            'sensorOffsetY':         0.0,
+            'twoWayDrive':           False,
+            # 地形参数
+            'laserVoxelSize':        0.05,
+            'terrainVoxelSize':      0.2,
+            'useTerrainAnalysis':    True,
+            'checkObstacle':         True,
+            'checkRotObstacle':      False,
+            'adjacentRange':         3.5,
+            'obstacleHeightThre':    0.2,
+            'groundHeightThre':      0.1,
+            'costHeightThre1':       0.15,
+            'costHeightThre2':       0.1,
+            'useCost':               False,
+            'slopeWeight':           0.0,
+            # 路径评分
+            'slowPathNumThre':       5,
+            'slowGroupNumThre':      1,
+            'pointPerPathThre':      2,
+            'minRelZ':              -0.5,
+            'maxRelZ':               0.25,
+            'dirWeight':             0.02,
+            'dirThre':               90.0,
+            'dirToVehicle':          False,
+            'pathScale':             1.0,
+            'minPathScale':          0.75,
+            'pathScaleStep':         0.25,
+            # 速度
+            'maxSpeed':              1.0,
+            'pathScaleBySpeed':      True,
+            'minPathRange':          1.0,
+            'pathRangeStep':         0.5,
+            'pathRangeBySpeed':      True,
+            'pathCropByGoal':        True,
+            # 自主模式
+            'autonomyMode':          True,
+            'autonomySpeed':         0.8,
+            'joyToSpeedDelay':       2.0,
+            'joyToCheckObstacleDelay': 5.0,
+            # 手柄轴 (仿真中无手柄, 保留默认值)
+            'joy_axis_fwd':          4,
+            'joy_axis_left':         3,
+            'joy_axis_autonomy':     2,
+            'joy_axis_obstacle':     5,
+            # 目标处理
+            'freezeAng':             90.0,
+            'freezeTime':            2.0,
+            'omniDirGoalThre':       1.0,
+            'goalClearRange':        0.5,
+            'goalBehindRange':       0.8,
+            'goalX':                 0.0,
+            'goalY':                 0.0,
+        }],
+        remappings=[
+            ('/Odometry',    '/nav/odometry'),
+            ('/cloud_map',   '/nav/map_cloud'),
+            ('/terrain_map', '/nav/terrain_map'),
+            ('/terrain_map_ext', '/nav/terrain_map_ext'),
+            ('/way_point',   '/nav/way_point'),
+            ('/speed',       '/nav/speed'),
+            ('/path',        '/nav/local_path'),
+            ('/stop',        '/nav/stop'),
+            ('/slow_down',   '/nav/slow_down'),
+            ('/navigation_boundary', '/nav/navigation_boundary'),
+            ('/added_obstacles',     '/nav/added_obstacles'),
+            ('/check_obstacle',      '/nav/check_obstacle'),
+        ],
+    )
+
+    # ── pathFollower (C++ Pure Pursuit 路径跟踪器) ────────────────────────────
+    path_follower_node = Node(
+        package='local_planner',
+        executable='pathFollower',
+        name='pathFollower',
+        output='screen',
+        parameters=[{
+            'sensorOffsetX':    0.0,
+            'sensorOffsetY':    0.0,
+            'pubSkipNum':       1,
+            # 禁用双向行驶, 防止前后振荡 (建筑走廊向前导航不需要倒车)
+            'twoWayDrive':      False,
+            # Pure Pursuit 参数
+            'lookAheadDis':     0.5,
+            'baseLookAheadDis': 0.3,
+            'lookAheadRatio':   0.5,
+            'minLookAheadDis':  0.2,
+            'maxLookAheadDis':  2.0,
+            # 控制增益
+            'yawRateGain':      3.5,
+            'stopYawRateGain':  3.5,
+            'maxYawRate':       45.0,
+            'maxSpeed':         1.0,
+            'maxAccel':         0.5,
+            # 切换 / 停止
+            'switchTimeThre':   1.0,
+            # 方向差阈值放宽 (0.5 rad ≈ 28.6°): 减少不必要的行驶方向切换
+            'dirDiffThre':      0.5,
+            'omniDirGoalThre':  1.0,
+            'omniDirDiffThre':  1.5,
+            'stopDisThre':      0.2,
+            'slowDwnDisThre':   1.0,
+            # 坡度/倾斜保护 (仿真中关闭)
+            'useInclRateToSlow': False,
+            'inclRateThre':      120.0,
+            'slowRate1':         0.25,
+            'slowRate2':         0.5,
+            'slowRate3':         0.75,
+            'slowTime1':         2.0,
+            'slowTime2':         2.0,
+            'useInclToStop':     False,
+            'inclThre':          45.0,
+            'stopTime':          5.0,
+            'noRotAtStop':       False,
+            'noRotAtGoal':       True,
+            # 自主模式
+            'autonomyMode':      True,
+            'autonomySpeed':     0.8,
+            'joyToSpeedDelay':   2.0,
+            'joy_axis_fwd':      4,
+            'joy_axis_left':     3,
+            'joy_axis_yaw':      0,
+            'joy_axis_autonomy': 2,
+            'joy_axis_obstacle': 5,
+        }],
+        remappings=[
+            ('/Odometry',  '/nav/odometry'),
+            ('/path',      '/nav/local_path'),
+            ('/speed',     '/nav/speed'),
+            ('/stop',      '/nav/stop'),
+            ('/slow_down', '/nav/slow_down'),
+            ('/cmd_vel',   '/nav/cmd_vel'),
+        ],
+    )
+
+    # ── sim_robot_node.py (Python 仿真机器人节点) ─────────────────────────────
+    # 使用 ExecuteProcess 启动独立 Python 脚本 (非 colcon 包内)
+    sim_script = os.path.join(os.path.dirname(__file__), 'sim_robot_node.py')
+
+    sim_robot = ExecuteProcess(
+        cmd=['python3', sim_script],
+        output='screen',
+        # 通过环境变量传入 launch 参数 (LaunchConfiguration 支持 Substitution)
+        additional_env={
+            'SIM_GOAL_X':       goal_x,
+            'SIM_GOAL_Y':       goal_y,
+            'SIM_START_X':      start_x,
+            'SIM_START_Y':      start_y,
+            'PYTHONUNBUFFERED': '1',
+        },
+    )
+
+    return LaunchDescription([
+        # 参数
+        map_path_arg,
+        goal_x_arg,
+        goal_y_arg,
+        start_x_arg,
+        start_y_arg,
+        # 节点 (按依赖顺序排列, ROS2 launch 并行启动)
+        sim_robot,          # 最先: 提供 odometry + terrain
+        pct_planner_node,   # 全局规划
+        pct_adapter_node,   # 航点适配
+        local_planner_node, # 局部规划
+        path_follower_node, # 速度控制
+    ])

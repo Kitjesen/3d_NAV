@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""
+Building2_9 闭环仿真节点 (ROS2 SITL)
+
+全栈测试: PCT A* 全局规划 → pct_path_adapter → localPlanner → pathFollower → cmd_vel 积分
+地图:     building2_9.pickle (真实建筑番茄图, 17×18m, 97×94 grid @ 0.2m/voxel)
+
+该节点承担 "虚拟机器人" 角色:
+  - 发布平坦合成点云 → /nav/map_cloud + /nav/terrain_map + /nav/terrain_map_ext
+    (替代真实 LiDAR + terrain_analysis, 避免建筑墙体被误判为近场障碍物触发 E-stop)
+  - 接收 /nav/cmd_vel → 积分二维运动学 → 更新位姿
+  - 持续发布 /nav/stop = 0 (清除 pathFollower safetyStop_ 旗标)
+  - 预热 WARMUP_S 秒后发送 /nav/goal_pose 触发 PCT 规划
+  - 到达目标或超时后保存 /tmp/sim_result.json + /tmp/sim_traj.png
+
+配置 (通过环境变量, 由 sim_navigation.launch.py 注入):
+  SIM_GOAL_X  目标 X (m), 默认  5.0
+  SIM_GOAL_Y  目标 Y (m), 默认  7.3  (Corridor_E 场景)
+  SIM_START_X 起点 X (m), 默认 -5.5
+  SIM_START_Y 起点 Y (m), 默认  7.3
+
+building2_9 世界坐标范围: X∈[-7.95, 10.85] m, Y∈[-10.09, 9.31] m
+"""
+import math
+import os
+import json
+import time
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
+import numpy as np
+
+from geometry_msgs.msg import TwistStamped, TransformStamped, PoseStamped
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import PointCloud2, PointField
+from std_msgs.msg import Int8, String
+from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+
+# ── 默认参数 (被环境变量覆盖) ──────────────────────────────────────────────────
+_DEF_START_X   = float(os.environ.get('SIM_START_X',   '-5.5'))
+_DEF_START_Y   = float(os.environ.get('SIM_START_Y',    '7.3'))
+_DEF_START_YAW = 0.0   # rad
+_DEF_GOAL_X    = float(os.environ.get('SIM_GOAL_X',    '5.0'))
+_DEF_GOAL_Y    = float(os.environ.get('SIM_GOAL_Y',    '7.3'))
+
+# ── 仿真参数 ───────────────────────────────────────────────────────────────────
+GOAL_THRESH = 0.5    # m, 到达判定距离
+MAX_SECS    = 180.0  # s, 超时时间
+DT          = 0.05   # s, 主循环周期 (20 Hz)
+TERRAIN_R   = 10.0   # m, 合成平坦地形半径
+TERRAIN_S   =  0.4   # m, 格栅间距
+WARMUP_S    =  4.0   # s, 预热时间 (≥ joyToSpeedDelay=2.0s)
+GOAL_RESEND_S = 15.0 # s, 重新发送目标的间隔
+
+
+def _flat_cloud(cx: float, cy: float, stamp=None) -> PointCloud2:
+    """以 (cx, cy) 为中心生成合成平坦 XYZI=0 点云 (odom 坐标系)。"""
+    r = int(TERRAIN_R / TERRAIN_S)
+    pts = []
+    for ix in range(-r, r + 1):
+        for iy in range(-r, r + 1):
+            pts.append([cx + ix * TERRAIN_S, cy + iy * TERRAIN_S, 0.0, 0.0])
+    arr = np.array(pts, dtype=np.float32)
+
+    msg = PointCloud2()
+    msg.header.frame_id = 'odom'
+    if stamp is not None:
+        msg.header.stamp = stamp
+    msg.height = 1
+    msg.width = len(arr)
+    msg.is_dense = True
+    msg.is_bigendian = False
+    msg.fields = [
+        PointField(name='x',         offset=0,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='y',         offset=4,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='z',         offset=8,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
+    ]
+    msg.point_step = 16
+    msg.row_step   = 16 * len(arr)
+    msg.data       = arr.tobytes()
+    return msg
+
+
+class SimRobotNode(Node):
+    def __init__(self):
+        super().__init__('sim_robot_node')
+
+        # ── 机器人状态 ──
+        self.x   = _DEF_START_X
+        self.y   = _DEF_START_Y
+        self.yaw = _DEF_START_YAW
+        self.gx  = _DEF_GOAL_X
+        self.gy  = _DEF_GOAL_Y
+
+        self.vx = self.vy = self.wz = 0.0
+        self.cmd_count = 0
+        self.traj = []
+        self.goal_reached = False
+        self.t_start = None
+        self.phase = 'warmup'   # warmup → running → done → saved
+
+        # ── TF ──
+        self.static_br = StaticTransformBroadcaster(self)
+        self.tf_br     = TransformBroadcaster(self)
+        self._pub_static_tf()
+
+        # ── Publishers ──
+        self.pub_odom    = self.create_publisher(Odometry,    '/nav/odometry',       10)
+        self.pub_cloud   = self.create_publisher(PointCloud2, '/nav/map_cloud',       10)
+        self.pub_terrain = self.create_publisher(PointCloud2, '/nav/terrain_map',     10)
+        self.pub_te      = self.create_publisher(PointCloud2, '/nav/terrain_map_ext', 10)
+        self.pub_goal    = self.create_publisher(PoseStamped, '/nav/goal_pose',       10)
+        self.pub_stop    = self.create_publisher(Int8,        '/nav/stop',            10)
+
+        # ── Subscribers ──
+        # pathFollower 以 BEST_EFFORT 50 Hz 发布 cmd_vel
+        be = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=10)
+        self.create_subscription(TwistStamped, '/nav/cmd_vel',        self._on_cmd,        be)
+        # 航点跟踪事件 (JSON)
+        self.create_subscription(String,       '/nav/adapter_status', self._on_adapter,    10)
+        # 全局规划器状态 (pathFollower 发布 GOAL_REACHED/STUCK 等)
+        self.create_subscription(String,       '/nav/planner_status', self._on_planner,    10)
+
+        # ── 20 Hz 主循环 ──
+        self.create_timer(DT, self._tick)
+
+        self.get_logger().info(
+            f'[sim] 仿真节点启动. '
+            f'起点=({self.x:.2f},{self.y:.2f}) '
+            f'目标=({self.gx:.2f},{self.gy:.2f}) '
+            f'预热={WARMUP_S:.1f}s 超时={MAX_SECS:.0f}s')
+
+    # ── TF 发布 ──────────────────────────────────────────────────────────────
+
+    def _pub_static_tf(self):
+        """发布 map → odom 静态恒等变换 (仿真中无 SLAM 漂移)。"""
+        tf = TransformStamped()
+        tf.header.stamp    = self.get_clock().now().to_msg()
+        tf.header.frame_id = 'map'
+        tf.child_frame_id  = 'odom'
+        tf.transform.rotation.w = 1.0
+        self.static_br.sendTransform(tf)
+
+    def _pub_odom_tf(self, now):
+        """发布 odom → body TF + /nav/odometry。"""
+        tf = TransformStamped()
+        tf.header.stamp    = now
+        tf.header.frame_id = 'odom'
+        tf.child_frame_id  = 'body'
+        tf.transform.translation.x = self.x
+        tf.transform.translation.y = self.y
+        tf.transform.rotation.z    = math.sin(self.yaw / 2)
+        tf.transform.rotation.w    = math.cos(self.yaw / 2)
+        self.tf_br.sendTransform(tf)
+
+        od = Odometry()
+        od.header.stamp    = now
+        od.header.frame_id = 'odom'
+        od.child_frame_id  = 'body'
+        od.pose.pose.position.x    = self.x
+        od.pose.pose.position.y    = self.y
+        od.pose.pose.orientation.z = math.sin(self.yaw / 2)
+        od.pose.pose.orientation.w = math.cos(self.yaw / 2)
+        od.twist.twist.linear.x    = self.vx
+        od.twist.twist.linear.y    = self.vy
+        od.twist.twist.angular.z   = self.wz
+        self.pub_odom.publish(od)
+
+    # ── 回调 ──────────────────────────────────────────────────────────────────
+
+    def _on_cmd(self, msg: TwistStamped):
+        self.vx = msg.twist.linear.x
+        self.vy = msg.twist.linear.y
+        self.wz = msg.twist.angular.z
+        self.cmd_count += 1
+
+    def _on_adapter(self, msg: String):
+        self.get_logger().info(f'[adapter] {msg.data}')
+
+    def _on_planner(self, msg: String):
+        status = msg.data.strip()
+        self.get_logger().info(f'[planner] {status}')
+        if status == 'GOAL_REACHED' and self.phase == 'running':
+            self.goal_reached = True
+            self.get_logger().info('*** GOAL_REACHED (from pathFollower) ***')
+            self.phase = 'done'
+
+    # ── 运动学积分 ────────────────────────────────────────────────────────────
+
+    def _integrate(self):
+        c, s = math.cos(self.yaw), math.sin(self.yaw)
+        self.x   += (c * self.vx - s * self.vy) * DT
+        self.y   += (s * self.vx + c * self.vy) * DT
+        self.yaw += self.wz * DT
+        self.yaw  = (self.yaw + math.pi) % (2 * math.pi) - math.pi
+
+    # ── 主循环 ────────────────────────────────────────────────────────────────
+
+    def _tick(self):
+        if self.phase == 'saved':
+            return
+        if self.phase == 'done':
+            self._finish()
+            return
+
+        if self.t_start is None:
+            self.t_start = time.time()
+        elapsed = time.time() - self.t_start
+        now     = self.get_clock().now().to_msg()
+
+        # ── 始终发布: 里程计 + TF + 合成平坦地形 + stop=0 ──
+        self._pub_odom_tf(now)
+
+        terrain = _flat_cloud(self.x, self.y, stamp=now)
+        self.pub_cloud.publish(terrain)
+        self.pub_terrain.publish(terrain)
+        self.pub_te.publish(terrain)
+
+        stop_msg = Int8()
+        stop_msg.data = 0
+        self.pub_stop.publish(stop_msg)
+
+        # ── 预热阶段 ──
+        if self.phase == 'warmup':
+            if elapsed >= WARMUP_S:
+                self.phase = 'running'
+                self._pub_goal(now)
+                self.get_logger().info(
+                    f'== RUNNING: 目标已发送, PCT 规划器开始规划 ==')
+
+        # ── 运行阶段 ──
+        elif self.phase == 'running':
+            # 每 GOAL_RESEND_S 秒重新发送目标 (防规划器重启后丢失)
+            if elapsed > WARMUP_S:
+                slot_now  = int((elapsed - WARMUP_S) / GOAL_RESEND_S)
+                slot_prev = int((elapsed - WARMUP_S - DT) / GOAL_RESEND_S)
+                if slot_now > slot_prev:
+                    self._pub_goal(now)
+
+            self._integrate()
+
+            # 以约 2 Hz 记录轨迹和日志
+            if int(elapsed * 2) > int((elapsed - DT) * 2):
+                dist = math.hypot(self.x - self.gx, self.y - self.gy)
+                self.get_logger().info(
+                    f't={elapsed:6.1f}s  '
+                    f'pos=({self.x:.3f},{self.y:.3f})  '
+                    f'yaw={math.degrees(self.yaw):6.1f}°  '
+                    f'v=({self.vx:.2f},{self.vy:.2f})  ω={self.wz:.3f}  '
+                    f'dist={dist:.2f}m  cmds={self.cmd_count}')
+                self.traj.append({
+                    't':    round(elapsed, 2),
+                    'x':    round(self.x, 3),
+                    'y':    round(self.y, 3),
+                    'yaw':  round(math.degrees(self.yaw), 1),
+                    'vx':   round(self.vx, 3),
+                    'vy':   round(self.vy, 3),
+                    'wz':   round(self.wz, 3),
+                    'dist': round(dist, 3),
+                })
+
+                if dist < GOAL_THRESH:
+                    self.goal_reached = True
+                    self.get_logger().info(
+                        f'*** GOAL REACHED (距离)  t={elapsed:.1f}s  dist={dist:.3f}m ***')
+                    self.phase = 'done'
+                    return
+
+            if elapsed > MAX_SECS:
+                dist = math.hypot(self.x - self.gx, self.y - self.gy)
+                self.get_logger().warn(
+                    f'TIMEOUT {elapsed:.0f}s  final_dist={dist:.2f}m')
+                self.phase = 'done'
+                return
+
+        if self.phase == 'done':
+            self._finish()
+
+    def _pub_goal(self, now):
+        msg = PoseStamped()
+        msg.header.stamp    = now
+        msg.header.frame_id = 'map'
+        msg.pose.position.x = self.gx
+        msg.pose.position.y = self.gy
+        msg.pose.orientation.w = 1.0
+        self.pub_goal.publish(msg)
+        self.get_logger().info(f'[goal] 目标已发布: ({self.gx:.2f}, {self.gy:.2f})')
+
+    # ── 保存结果 ──────────────────────────────────────────────────────────────
+
+    def _finish(self):
+        self.phase = 'saved'
+        result = {
+            'goal_reached':  self.goal_reached,
+            'start':         [_DEF_START_X, _DEF_START_Y],
+            'goal':          [self.gx, self.gy],
+            'final_pos':     [round(self.x, 3), round(self.y, 3)],
+            'final_yaw_deg': round(math.degrees(self.yaw), 1),
+            'cmd_count':     self.cmd_count,
+            'trajectory':    self.traj,
+        }
+        json_path = '/tmp/sim_result.json'
+        with open(json_path, 'w') as f:
+            json.dump(result, f, indent=2)
+        self.get_logger().info(f'结果已保存: {json_path}')
+        self._plot(result)
+
+    def _plot(self, result):
+        try:
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+
+            traj = result['trajectory']
+            if not traj:
+                self.get_logger().warn('轨迹为空, 跳过绘图')
+                return
+
+            ts  = [p['t']    for p in traj]
+            xs  = [p['x']    for p in traj]
+            ys  = [p['y']    for p in traj]
+            ds  = [p['dist'] for p in traj]
+            vxs = [p['vx']   for p in traj]
+            wzs = [p['wz']   for p in traj]
+
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+            # 面板 1: XY 轨迹
+            ax = axes[0]
+            ax.plot(xs, ys, 'b-', lw=2, label='机器人轨迹')
+            ax.plot(xs[0],  ys[0],  'go',  ms=12, label=f'起点 ({xs[0]:.1f},{ys[0]:.1f})')
+            ax.plot(self.gx, self.gy, 'r*', ms=18, label=f'目标 ({self.gx:.1f},{self.gy:.1f})')
+            ax.plot(xs[-1], ys[-1], 'bs', ms=10,
+                    label=f'终点 ({xs[-1]:.2f},{ys[-1]:.2f})')
+            status = '✓ 到达目标' if result['goal_reached'] else f'✗ 超时 (dist={ds[-1]:.2f}m)'
+            ax.set_title(f'Building2_9 SITL — {status}', fontsize=11)
+            ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
+            ax.legend(fontsize=8); ax.set_aspect('equal'); ax.grid(True, alpha=0.3)
+
+            # 面板 2: 时间序列指标
+            ax2 = axes[1]
+            ax2.plot(ts, ds,  'r-',  lw=2,   label='到目标距离 (m)')
+            ax2.plot(ts, vxs, 'b-',  lw=1.5, label='vx (m/s)')
+            ax2.plot(ts, wzs, 'g--', lw=1.2, label='ωz (rad/s)')
+            ax2.axhline(GOAL_THRESH, color='r', ls=':', alpha=0.5,
+                        label=f'到达阈值 {GOAL_THRESH}m')
+            ax2.set_xlabel('时间 (s)'); ax2.set_title('导航指标')
+            ax2.legend(fontsize=8); ax2.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            png_path = '/tmp/sim_traj.png'
+            plt.savefig(png_path, dpi=130, bbox_inches='tight')
+            self.get_logger().info(f'轨迹图已保存: {png_path}')
+        except Exception as e:
+            self.get_logger().error(f'绘图失败: {e}')
+
+
+def main():
+    rclpy.init()
+    node = SimRobotNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        print('[sim] 用户中断')
+    finally:
+        if node.phase not in ('done', 'saved') and node.traj:
+            node._finish()
+        node.destroy_node()
+        rclpy.shutdown()
+    print('[sim] 完成.')
+
+
+if __name__ == '__main__':
+    main()
