@@ -764,7 +764,7 @@ class _MapScreenState extends State<MapScreen>
     final online = context.select<RobotConnectionProvider, bool>((p) => p.isConnected);
 
     // Sync waypoint polling lifecycle outside of build tree
-    final isRunning = context.watch<TaskGateway>().isRunning;
+    final isRunning = context.select<TaskGateway, bool>((tg) => tg.isRunning);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _syncWaypointPolling(isRunning);

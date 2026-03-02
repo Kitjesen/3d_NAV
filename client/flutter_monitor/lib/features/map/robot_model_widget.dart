@@ -52,7 +52,9 @@ class _RobotModelWidgetState extends State<RobotModelWidget> {
   @override
   void initState() {
     super.initState();
-    _startLocalServer().then((_) => _initializeWebView());
+    _startLocalServer().then((_) {
+      if (mounted) _initializeWebView();
+    });
   }
 
   @override

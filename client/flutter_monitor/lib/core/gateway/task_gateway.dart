@@ -395,6 +395,7 @@ class TaskGateway extends ChangeNotifier {
       if (_activeTaskId == null || _client == null) return;
       try {
         final r = await _client!.getTaskStatus(taskId: _activeTaskId!);
+        final prevProgress = _progress;
         _progress = r.task.progressPercent;
         final prevStatus = _taskStatus;
         _taskStatus = r.task.status;
@@ -418,7 +419,9 @@ class TaskGateway extends ChangeNotifier {
           }
         }
         _pollFailCount = 0; // 成功时重置
-        notifyListeners();
+        if (prevStatus != _taskStatus || prevProgress != _progress) {
+          notifyListeners();
+        }
       } catch (e) {
         _pollFailCount++;
         if (_pollFailCount == _pollWarnThreshold) {
