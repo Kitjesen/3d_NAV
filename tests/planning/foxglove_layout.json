@@ -1,0 +1,56 @@
+{
+  "configById": {
+    "3d-panel": {
+      "cameraState": {
+        "distance": 25,
+        "perspective": false,
+        "phi": 90,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 0,
+        "fov": 45
+      },
+      "followTf": "base_link",
+      "layers": {},
+      "publish": {"type": "point"},
+      "topics": {
+        "/nav/map_cloud": {"visible": true, "pointSize": 2, "colorField": "intensity"},
+        "/nav/global_path": {"visible": true, "type": "line", "color": "#ff3333"},
+        "/nav/local_path": {"visible": true, "type": "line", "color": "#33ff33"},
+        "/nav/odometry": {"visible": true, "displayType": "arrow"},
+        "/robot_description": {"visible": true}
+      }
+    }
+  },
+  "layout": {
+    "first": "3d-panel",
+    "second": {
+      "first": "plot-panel",
+      "second": "log-panel",
+      "direction": "row",
+      "splitPercentage": 50
+    },
+    "direction": "column",
+    "splitPercentage": 70
+  },
+  "savedProps": {
+    "3d-panel": {
+      "type": "3d",
+      "title": "导航可视化"
+    },
+    "plot-panel": {
+      "type": "plot",
+      "title": "速度监控",
+      "paths": [
+        {"value": "/nav/cmd_vel.twist.linear.x", "label": "vx (m/s)"},
+        {"value": "/nav/cmd_vel.twist.angular.z", "label": "wz (rad/s)"}
+      ]
+    },
+    "log-panel": {
+      "type": "log",
+      "title": "规划状态",
+      "topics": ["/nav/planner_status", "/nav/adapter_status"]
+    }
+  }
+}

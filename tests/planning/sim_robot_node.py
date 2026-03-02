@@ -28,12 +28,12 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 import numpy as np
 
 from geometry_msgs.msg import TwistStamped, TransformStamped, PoseStamped
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs.msg import JointState, PointCloud2, PointField
 from std_msgs.msg import Int8, String
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
@@ -43,6 +43,13 @@ _DEF_START_Y   = float(os.environ.get('SIM_START_Y',    '7.3'))
 _DEF_START_YAW = 0.0   # rad
 _DEF_GOAL_X    = float(os.environ.get('SIM_GOAL_X',    '5.0'))
 _DEF_GOAL_Y    = float(os.environ.get('SIM_GOAL_Y',    '7.3'))
+
+# ── 小车 URDF 路径 ─────────────────────────────────────────────────────────────
+_URDF_PATH = os.path.join(os.path.dirname(__file__), 'simple_car.urdf')
+
+# ── 差速驱动参数 (与 simple_car.urdf 一致) ────────────────────────────────────
+WHEEL_RADIUS = 0.07   # m
+WHEEL_BASE   = 0.34   # m (两轮间距, left +0.17 right -0.17)
 
 # ── 仿真参数 ───────────────────────────────────────────────────────────────────
 GOAL_THRESH = 0.5    # m, 到达判定距离
@@ -101,6 +108,10 @@ class SimRobotNode(Node):
         self.t_start = None
         self.phase = 'warmup'   # warmup → running → done → saved
 
+        # ── 车轮角度 (for JointState + RViz 车轮滚动) ──
+        self._left_wheel_angle  = 0.0
+        self._right_wheel_angle = 0.0
+
         # ── TF ──
         self.static_br = StaticTransformBroadcaster(self)
         self.tf_br     = TransformBroadcaster(self)
@@ -113,6 +124,17 @@ class SimRobotNode(Node):
         self.pub_te      = self.create_publisher(PointCloud2, '/nav/terrain_map_ext', 10)
         self.pub_goal    = self.create_publisher(PoseStamped, '/nav/goal_pose',       10)
         self.pub_stop    = self.create_publisher(Int8,        '/nav/stop',            10)
+
+        # robot_state_publisher 需要 /joint_states (轮子关节)
+        self.pub_joints = self.create_publisher(JointState, '/joint_states', 10)
+
+        # /robot_description latched (TRANSIENT_LOCAL): RViz/Foxglove 随时可读取 URDF
+        latched = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.pub_desc = self.create_publisher(String, '/robot_description', latched)
+        self._publish_robot_description()
 
         # ── Subscribers ──
         # pathFollower 以 BEST_EFFORT 50 Hz 发布 cmd_vel
@@ -134,14 +156,40 @@ class SimRobotNode(Node):
 
     # ── TF 发布 ──────────────────────────────────────────────────────────────
 
+    def _publish_robot_description(self):
+        """将 simple_car.urdf 发布到 /robot_description (latched)。"""
+        if os.path.exists(_URDF_PATH):
+            with open(_URDF_PATH) as f:
+                content = f.read()
+        else:
+            self.get_logger().warn(f'URDF not found: {_URDF_PATH}')
+            content = ''
+        msg = String()
+        msg.data = content
+        self.pub_desc.publish(msg)
+        self.get_logger().info(f'[sim] /robot_description published ({len(content)} chars)')
+
     def _pub_static_tf(self):
-        """发布 map → odom 静态恒等变换 (仿真中无 SLAM 漂移)。"""
-        tf = TransformStamped()
-        tf.header.stamp    = self.get_clock().now().to_msg()
-        tf.header.frame_id = 'map'
-        tf.child_frame_id  = 'odom'
-        tf.transform.rotation.w = 1.0
-        self.static_br.sendTransform(tf)
+        """发布静态 TF:  map→odom  +  body→base_link (URDF 根坐标系)。"""
+        tfs = []
+
+        # map → odom (仿真中无 SLAM 漂移, 恒等变换)
+        t1 = TransformStamped()
+        t1.header.stamp    = self.get_clock().now().to_msg()
+        t1.header.frame_id = 'map'
+        t1.child_frame_id  = 'odom'
+        t1.transform.rotation.w = 1.0
+        tfs.append(t1)
+
+        # body → base_link (恒等变换, 让 robot_state_publisher 的 URDF TF 链接到导航坐标系)
+        t2 = TransformStamped()
+        t2.header.stamp    = t1.header.stamp
+        t2.header.frame_id = 'body'
+        t2.child_frame_id  = 'base_link'
+        t2.transform.rotation.w = 1.0
+        tfs.append(t2)
+
+        self.static_br.sendTransform(tfs)
 
     def _pub_odom_tf(self, now):
         """发布 odom → body TF + /nav/odometry。"""
@@ -195,6 +243,20 @@ class SimRobotNode(Node):
         self.y   += (s * self.vx + c * self.vy) * DT
         self.yaw += self.wz * DT
         self.yaw  = (self.yaw + math.pi) % (2 * math.pi) - math.pi
+
+        # 差速驱动车轮角度积分
+        v_left  = self.vx - self.wz * WHEEL_BASE / 2.0
+        v_right = self.vx + self.wz * WHEEL_BASE / 2.0
+        self._left_wheel_angle  += v_left  / WHEEL_RADIUS * DT
+        self._right_wheel_angle += v_right / WHEEL_RADIUS * DT
+
+        # 发布 JointState (robot_state_publisher 需要)
+        js = JointState()
+        js.header.stamp = self.get_clock().now().to_msg()
+        js.name     = ['left_wheel_joint', 'right_wheel_joint']
+        js.position = [self._left_wheel_angle, self._right_wheel_angle]
+        js.velocity = [v_left / WHEEL_RADIUS, v_right / WHEEL_RADIUS]
+        self.pub_joints.publish(js)
 
     # ── 主循环 ────────────────────────────────────────────────────────────────
 
