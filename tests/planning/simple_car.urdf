@@ -51,7 +51,7 @@
     <parent link="base_link"/>
     <child link="left_wheel"/>
     <origin xyz="0.0 0.17 -0.07" rpy="1.5708 0 0"/>
-    <axis xyz="0 1 0"/>
+    <axis xyz="0 0 -1"/>
   </joint>
 
   <!-- ======== right_wheel ======== -->
@@ -81,7 +81,7 @@
     <parent link="base_link"/>
     <child link="right_wheel"/>
     <origin xyz="0.0 -0.17 -0.07" rpy="1.5708 0 0"/>
-    <axis xyz="0 1 0"/>
+    <axis xyz="0 0 -1"/>
   </joint>
 
   <!-- ======== front_caster ======== -->

@@ -46,17 +46,22 @@ from std_msgs.msg import Float32, String
 def _load_tomogram(path: str):
     """Load building2_9.pickle format tomogram.
 
-    Returns (trav, res, cx, cy, nx, ny, ox, oy)
-    where trav[i,j] < obstacle_thr means traversable.
+    Returns (trav, trav_3d, res, cx, cy, nx, ny, ox, oy, n_slices, slice_h0, slice_dh)
+    where trav[i,j] < obstacle_thr means traversable (ground floor),
+    trav_3d[k,i,j] is traversability for slice k.
     """
     with open(path, 'rb') as f:
         d = pickle.load(f)
-    trav = d['data'][0, 0]          # ground-floor traversability (nx, ny)
-    res  = float(d['resolution'])
-    cx   = float(d['center'][0])
-    cy   = float(d['center'][1])
-    nx, ny = trav.shape
-    return trav, res, cx, cy, nx, ny, nx // 2, ny // 2
+    trav_3d = np.asarray(d['data'][0], dtype=np.float32)  # (n_slices, nx, ny)
+    trav    = trav_3d[0]                                   # ground-floor (nx, ny)
+    res     = float(d['resolution'])
+    cx      = float(d['center'][0])
+    cy      = float(d['center'][1])
+    n_slices, nx, ny = trav_3d.shape
+    slice_h0 = float(d.get('slice_h0', 0.5))
+    slice_dh = float(d.get('slice_dh', 0.5))
+    return (trav, trav_3d, res, cx, cy, nx, ny, nx // 2, ny // 2,
+            n_slices, slice_h0, slice_dh)
 
 
 def _w2g(wx, wy, cx, cy, res, ox, oy, nx, ny):
@@ -163,6 +168,66 @@ def _check_path_self_intersection(cells):
     return count
 
 
+def _astar_3d(trav_3d, start, goal, obs_thr, timeout_sec=10.0):
+    """26-connected 3D A* on multi-slice traversability grid.
+
+    start/goal: (iz, ix, iy)  —  iz is slice index, ix/iy are grid coords
+    Returns list of (iz, ix, iy) from start to goal, or None if unreachable.
+    Vertical movement costs 2.5× to prefer staying on a floor where possible.
+    """
+    n_slices, nx, ny = trav_3d.shape
+    deadline = time.monotonic() + timeout_sec
+
+    def h(a, b):
+        return (abs(a[0] - b[0]) * 2.5 +
+                abs(a[1] - b[1]) + abs(a[2] - b[2]))
+
+    open_q   = [(h(start, goal), 0.0, start)]
+    g_score  = {start: 0.0}
+    came_from = {}
+
+    while open_q:
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f'3D A* timeout after {timeout_sec}s '
+                f'(visited {len(g_score)} nodes)')
+        _, g, cur = heapq.heappop(open_q)
+        if g > g_score.get(cur, float('inf')) + 1e-9:
+            continue  # stale entry
+        if cur == goal:
+            path = []
+            node = cur
+            while node in came_from:
+                path.append(node)
+                node = came_from[node]
+            path.append(start)
+            path.reverse()
+            return path
+        iz, ix, iy = cur
+        for dz in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dz == dx == dy == 0:
+                        continue
+                    nz, ni, nj = iz + dz, ix + dx, iy + dy
+                    if not (0 <= nz < n_slices and 0 <= ni < nx and 0 <= nj < ny):
+                        continue
+                    if trav_3d[nz, ni, nj] >= obs_thr:
+                        continue
+                    nb = (nz, ni, nj)
+                    n_changed = (abs(dz) > 0) + (abs(dx) > 0) + (abs(dy) > 0)
+                    step = (1.732 if n_changed == 3 else
+                            1.414 if n_changed == 2 else 1.0)
+                    if dz != 0:
+                        step *= 2.5  # vertical movement penalty
+                    ng = g + step
+                    if ng < g_score.get(nb, float('inf')):
+                        g_score[nb] = ng
+                        came_from[nb] = cur
+                        heapq.heappush(open_q, (ng + h(nb, goal), ng, nb))
+    return None
+
+
 def _astar(trav, start, goal, obs_thr, timeout_sec=5.0):
     """8-connected A* on traversability grid.
 
@@ -232,17 +297,21 @@ class PctPlannerAstar(Node):
 
         # Load tomogram
         self.get_logger().info(f'Loading tomogram: {tomo_file}')
-        (self._trav, self._res, self._cx, self._cy,
-         self._nx, self._ny, self._ox, self._oy) = _load_tomogram(tomo_file)
+        (self._trav, self._trav_3d, self._res, self._cx, self._cy,
+         self._nx, self._ny, self._ox, self._oy,
+         self._n_slices, self._slice_h0, self._slice_dh) = _load_tomogram(tomo_file)
         free_count = int((self._trav < self._obs).sum())
         self.get_logger().info(
             f'Tomogram ready: {self._trav.shape}, res={self._res}m, '
             f'center=({self._cx:.3f},{self._cy:.3f}), '
-            f'free={free_count} cells / {self._nx * self._ny}')
+            f'free={free_count} cells / {self._nx * self._ny}, '
+            f'slices={self._n_slices} h0={self._slice_h0}m dh={self._slice_dh}m '
+            f'Z=[{self._slice_h0:.1f},{self._slice_h0+(self._n_slices-1)*self._slice_dh:.1f}]m')
 
         # Robot state
         self._rx = 0.0
         self._ry = 0.0
+        self._rz = 0.0   # robot Z (from odometry, 3D mode)
         self._plan_lock = threading.Lock()
         self._last_path: Path | None = None
         self._loc_quality = 1.0  # 默认允许，无信号时不阻塞
@@ -281,6 +350,7 @@ class PctPlannerAstar(Node):
     def _on_odom(self, msg: Odometry):
         self._rx = msg.pose.pose.position.x
         self._ry = msg.pose.pose.position.y
+        self._rz = msg.pose.pose.position.z
 
     def _on_loc_quality(self, msg: Float32):
         self._loc_quality = msg.data
@@ -288,7 +358,8 @@ class PctPlannerAstar(Node):
     def _on_goal(self, msg: PoseStamped):
         gx = msg.pose.position.x
         gy = msg.pose.position.y
-        self.get_logger().info(f'Goal received: ({gx:.2f}, {gy:.2f})')
+        gz = msg.pose.position.z   # 0.0 = 2D goal; >0.1 = 3D goal with Z
+        self.get_logger().info(f'Goal received: ({gx:.2f}, {gy:.2f}, z={gz:.2f})')
         if self._loc_quality < self._loc_quality_min:
             self.get_logger().warn(
                 f'Localization quality {self._loc_quality:.3f} < {self._loc_quality_min:.3f}, rejecting goal')
@@ -297,11 +368,19 @@ class PctPlannerAstar(Node):
         if self._plan_lock.locked():
             self.get_logger().warn('Planner busy, dropping goal')
             return
-        self._plan_and_publish(gx, gy)
+        self._plan_and_publish(gx, gy, gz)
 
     # ── planning ──────────────────────────────────────────────────────────────
 
-    def _plan_and_publish(self, gx: float, gy: float):
+    def _plan_and_publish(self, gx: float, gy: float, gz: float = 0.0):
+        """根据 gz 决定使用 2D 或 3D A*。"""
+        if gz > 0.1 and self._n_slices > 1:
+            self._plan_3d(gx, gy, gz)
+        else:
+            self._plan_2d(gx, gy)
+
+    def _plan_2d(self, gx: float, gy: float):
+        """原有 2D A* 规划（ground-floor）。"""
         with self._plan_lock:
             self._publish_status('PLANNING')
             sx, sy = self._rx, self._ry
@@ -310,7 +389,7 @@ class PctPlannerAstar(Node):
             gi, gj = _w2g(gx, gy, self._cx, self._cy,
                           self._res, self._ox, self._oy, self._nx, self._ny)
 
-            # 起终点障碍物修正: 若落在障碍格则搜索最近可行格
+            # 起终点障碍物修正
             si, sj = _find_nearest_free(self._trav, si, sj, self._obs, radius=3)
             gi, gj = _find_nearest_free(self._trav, gi, gj, self._obs, radius=5)
             if self._trav[gi, gj] >= self._obs:
@@ -339,7 +418,6 @@ class PctPlannerAstar(Node):
                 if self._smooth_method == 'catmull_rom' and len(cells) >= 2:
                     cells = _catmull_rom_smooth(cells, n_interp=self._smooth_interp)
 
-            # Self-intersection check (warning only, does not block)
             n_intersections = _check_path_self_intersection(cells)
             if n_intersections > 0:
                 self.get_logger().warn(
@@ -365,6 +443,81 @@ class PctPlannerAstar(Node):
             self.get_logger().info(
                 f'A* path published: {len(cells)} cells  '
                 f'({sx:.2f},{sy:.2f})→({gx:.2f},{gy:.2f})')
+
+    def _plan_3d(self, gx: float, gy: float, gz: float):
+        """3D A* 规划，使用 tomogram 全部 slices。"""
+        with self._plan_lock:
+            self._publish_status('PLANNING')
+            sx, sy, sz = self._rx, self._ry, self._rz
+
+            # 世界坐标 → 栅格坐标
+            si, sj = _w2g(sx, sy, self._cx, self._cy,
+                          self._res, self._ox, self._oy, self._nx, self._ny)
+            gi, gj = _w2g(gx, gy, self._cx, self._cy,
+                          self._res, self._ox, self._oy, self._nx, self._ny)
+
+            # Z → slice index (clamp to valid range)
+            iz_s = int(np.clip(
+                round((sz - self._slice_h0) / self._slice_dh), 0, self._n_slices - 1))
+            iz_g = int(np.clip(
+                round((gz - self._slice_h0) / self._slice_dh), 0, self._n_slices - 1))
+
+            self.get_logger().info(
+                f'[3D] A* start=({sx:.2f},{sy:.2f},{sz:.2f}) iz={iz_s} '
+                f'goal=({gx:.2f},{gy:.2f},{gz:.2f}) iz={iz_g}')
+
+            # 起终点障碍修正（在目标 slice 上寻找最近自由格）
+            if self._trav_3d[iz_s, si, sj] >= self._obs:
+                si, sj = _find_nearest_free(
+                    self._trav_3d[iz_s], si, sj, self._obs, radius=5)
+            if self._trav_3d[iz_g, gi, gj] >= self._obs:
+                gi, gj = _find_nearest_free(
+                    self._trav_3d[iz_g], gi, gj, self._obs, radius=8)
+            if self._trav_3d[iz_g, gi, gj] >= self._obs:
+                self.get_logger().warn('[3D] Goal slice unreachable, falling back to 2D')
+                self._plan_2d(gx, gy)
+                return
+
+            try:
+                cells_3d = _astar_3d(
+                    self._trav_3d,
+                    (iz_s, si, sj), (iz_g, gi, gj),
+                    self._obs,
+                    timeout_sec=self._astar_timeout * 2)
+            except TimeoutError as e:
+                self.get_logger().error(f'[3D] A* timeout: {e}')
+                self._publish_status('FAILED')
+                return
+
+            if cells_3d is None:
+                self.get_logger().warn('[3D] No 3D path found, falling back to 2D')
+                self._plan_2d(gx, gy)
+                return
+
+            self._publish_status('SUCCESS')
+
+            # 构建带真实 Z 坐标的路径
+            path_msg = Path()
+            path_msg.header.stamp    = self.get_clock().now().to_msg()
+            path_msg.header.frame_id = 'map'
+            for iz, ci, cj in cells_3d:
+                wx, wy = _g2w(ci, cj, self._cx, self._cy, self._res,
+                              self._ox, self._oy)
+                wz = self._slice_h0 + iz * self._slice_dh
+                ps = PoseStamped()
+                ps.header.frame_id = 'map'
+                ps.pose.position.x = wx
+                ps.pose.position.y = wy
+                ps.pose.position.z = wz   # ← 真实 3D 高度
+                ps.pose.orientation.w = 1.0
+                path_msg.poses.append(ps)
+
+            self._last_path = path_msg
+            self._pub_path.publish(path_msg)
+            self.get_logger().info(
+                f'[3D] A* path: {len(cells_3d)} cells '
+                f'({sx:.2f},{sy:.2f},{sz:.2f})→({gx:.2f},{gy:.2f},{gz:.2f}), '
+                f'slices iz={iz_s}→{iz_g}')
 
     def _republish(self):
         if self._last_path is not None:

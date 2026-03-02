@@ -32,11 +32,12 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 import numpy as np
 
-from geometry_msgs.msg import TwistStamped, TransformStamped, PoseStamped
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TwistStamped, TransformStamped, PoseStamped, PointStamped
+from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import JointState, PointCloud2, PointField
 from std_msgs.msg import Int8, String
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+from visualization_msgs.msg import Marker
 
 # ── 默认参数 (被环境变量覆盖) ──────────────────────────────────────────────────
 _DEF_START_X   = float(os.environ.get('SIM_START_X',   '-5.5'))
@@ -59,8 +60,12 @@ DT          = 0.05   # s, 主循环周期 (20 Hz)
 TERRAIN_R   = 10.0   # m, 合成平坦地形半径
 TERRAIN_S   =  0.4   # m, 格栅间距
 WARMUP_S    =  4.0   # s, 预热时间 (≥ joyToSpeedDelay=2.0s)
-GOAL_RESEND_S = 15.0 # s, 重新发送目标的间隔
+GOAL_RESEND_S = 3600.0 # s, 禁用中途重发 (规划器已有路径, 无需重发导致重规划闪烁)
 LOOP_PAUSE_S  =  5.0 # s, 到达目标后暂停再重置 (演示循环)
+
+# building2_9 世界坐标边界 (地图有效区域)
+MAP_X_MIN, MAP_X_MAX = -7.5,  10.5
+MAP_Y_MIN, MAP_Y_MAX = -9.5,   9.0
 
 
 # ── 建筑点云 PCD 默认路径 (按优先级查找) ─────────────────────────────────────
@@ -209,11 +214,17 @@ class SimRobotNode(Node):
         self.gy  = _DEF_GOAL_Y
 
         self.vx = self.vy = self.wz = 0.0
+        self.z    = 0.0   # 机器人当前Z高度 (3D模式下更新)
+        self.vz   = 0.0   # Z轴速度 (m/s)
+        self._mode_3d  = False  # True=PCT 3D路径跟踪, False=PCT 2D控制
+        self._3d_path  = []     # 3D路点列表 [(x,y,z), ...]（来自PCT 3D A*）
+        self._gz       = 0.0    # 3D目标Z高度
         self.cmd_count = 0
         self.traj = []
         self.goal_reached = False
         self.t_start = None
-        self.phase = 'warmup'   # warmup → running → done → saved
+        self.phase = 'warmup'   # warmup → running → pausing → (reset)
+        self._user_goal_set = False   # 用户手动设置过目标后, loop reset 不覆盖目标
 
         # ── 车轮角度 (for JointState + RViz 车轮滚动) ──
         self._left_wheel_angle  = 0.0
@@ -234,6 +245,8 @@ class SimRobotNode(Node):
 
         # robot_state_publisher 需要 /joint_states (轮子关节)
         self.pub_joints = self.create_publisher(JointState, '/joint_states', 10)
+        # 机器人位置大球标记 (黄色, Z=0.5m, 直径0.6m, 在建筑点云上方清晰可见)
+        self.pub_marker = self.create_publisher(Marker, '/nav/robot_marker', 10)
 
         # /robot_description latched (TRANSIENT_LOCAL): RViz/Foxglove 随时可读取 URDF
         latched = QoSProfile(
@@ -241,21 +254,29 @@ class SimRobotNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self.pub_desc  = self.create_publisher(String,       '/robot_description',  latched)
-        # /nav/building_cloud: 真实建筑 3D 点云 (latched, 仅用于可视化)
-        self.pub_bldg  = self.create_publisher(PointCloud2,  '/nav/building_cloud', latched)
+        # /nav/building_cloud: 真实建筑 3D 点云 (非 latched, 每 3s 重发确保 RViz 始终可见)
+        # 注: latched 的时间戳会过期导致 RViz2 message filter 丢弃, 改为定时重发
+        self.pub_bldg  = self.create_publisher(PointCloud2,  '/nav/building_cloud', 10)
+        self._bldg_last_pub  = 0.0   # 上次建筑点云发布的 wall-clock 时间
         self._publish_robot_description()
         self._publish_building_cloud()
 
         # ── Subscribers ──
         # pathFollower 以 BEST_EFFORT 50 Hz 发布 cmd_vel
         be = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=10)
-        self.create_subscription(TwistStamped, '/nav/cmd_vel',        self._on_cmd,        be)
+        self.create_subscription(TwistStamped, '/nav/cmd_vel',        self._on_cmd,           be)
         # 航点跟踪事件 (JSON)
-        self.create_subscription(String,       '/nav/adapter_status', self._on_adapter,    10)
+        self.create_subscription(String,       '/nav/adapter_status', self._on_adapter,        10)
         # 全局规划器状态 (pathFollower 发布 GOAL_REACHED/STUCK 等)
-        self.create_subscription(String,       '/nav/planner_status', self._on_planner,    10)
-        # 手动目标点: RViz2 "2D Nav Goal" 或 ros2 topic pub 均可触发
-        self.create_subscription(PoseStamped, '/nav/goal_pose',       self._on_external_goal, 10)
+        self.create_subscription(String,       '/nav/planner_status', self._on_planner,        10)
+        # 手动目标 — PoseStamped (RViz2 "2D Nav Goal" → /nav/goal_pose)
+        self.create_subscription(PoseStamped,  '/nav/goal_pose',      self._on_goal_pose,      10)
+        # 手动目标 — PointStamped (RViz2 "Publish Point" → /clicked_point, 支持真 XYZ)
+        self.create_subscription(PointStamped, '/clicked_point',      self._on_clicked_point,  10)
+        # PCT 规划器输出 (含 3D Z 坐标, TRANSIENT_LOCAL latched)
+        _latch_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL, depth=1)
+        self.create_subscription(Path, '/nav/global_path', self._on_global_path, _latch_qos)
 
         # ── 20 Hz 主循环 ──
         self.create_timer(DT, self._tick)
@@ -282,24 +303,31 @@ class SimRobotNode(Node):
         self.get_logger().info(f'[sim] /robot_description published ({len(content)} chars)')
 
     def _publish_building_cloud(self):
-        """加载 building2_9.pcd → 发布真实建筑 3D 点云到 /nav/building_cloud (latched)。"""
-        pcd_path = _find_pcd()
-        if pcd_path is None:
-            self.get_logger().warn('[sim] building2_9.pcd not found — 3D cloud skipped')
+        """发布真实建筑 3D 点云到 /nav/building_cloud (latched)。
+        首次调用从 PCD 文件加载并缓存, 后续直接复用缓存。"""
+        if not hasattr(self, '_bldg_pts_cache'):
+            pcd_path = _find_pcd()
+            if pcd_path is None:
+                self.get_logger().warn('[sim] building2_9.pcd not found — 3D cloud skipped')
+                self._bldg_pts_cache = None
+                return
+            pts = _load_pcd_binary(pcd_path, max_pts=80000)
+            if pts is None or len(pts) == 0:
+                self.get_logger().warn(f'[sim] PCD load failed: {pcd_path}')
+                self._bldg_pts_cache = None
+                return
+            self._bldg_pts_cache = pts
+            self.get_logger().info(f'[sim] PCD cached: {len(pts)} pts from {pcd_path}')
+
+        if self._bldg_pts_cache is None:
             return
 
-        pts = _load_pcd_binary(pcd_path, max_pts=80000)
-        if pts is None or len(pts) == 0:
-            self.get_logger().warn(f'[sim] PCD load failed: {pcd_path}')
-            return
-
-        # stamp=0 → RViz 按静态数据处理，不受 TF 时间戳约束
-        from builtin_interfaces.msg import Time as RosTime
-        static_stamp = RosTime(sec=0, nanosec=0)
-        msg = _make_xyzi_cloud(pts, frame_id='map', stamp=static_stamp)
+        # 使用当前时钟时间戳 — RViz2 message filter 需要能在 TF cache 中查到该时刻
+        msg = _make_xyzi_cloud(self._bldg_pts_cache, frame_id='map',
+                               stamp=self.get_clock().now().to_msg())
         self.pub_bldg.publish(msg)
-        self.get_logger().info(
-            f'[sim] Building cloud: {len(pts)} pts published from {pcd_path}')
+        self._bldg_last_pub = time.time()
+        self.get_logger().info(f'[sim] Building cloud republished: {len(self._bldg_pts_cache)} pts')
 
     def _pub_static_tf(self):
         """发布静态 TF:  map→odom  +  body→base_link (URDF 根坐标系)。"""
@@ -331,6 +359,7 @@ class SimRobotNode(Node):
         tf.child_frame_id  = 'body'
         tf.transform.translation.x = self.x
         tf.transform.translation.y = self.y
+        tf.transform.translation.z = self.z
         tf.transform.rotation.z    = math.sin(self.yaw / 2)
         tf.transform.rotation.w    = math.cos(self.yaw / 2)
         self.tf_br.sendTransform(tf)
@@ -341,6 +370,7 @@ class SimRobotNode(Node):
         od.child_frame_id  = 'body'
         od.pose.pose.position.x    = self.x
         od.pose.pose.position.y    = self.y
+        od.pose.pose.position.z    = self.z
         od.pose.pose.orientation.z = math.sin(self.yaw / 2)
         od.pose.pose.orientation.w = math.cos(self.yaw / 2)
         od.twist.twist.linear.x    = self.vx
@@ -348,9 +378,50 @@ class SimRobotNode(Node):
         od.twist.twist.angular.z   = self.wz
         self.pub_odom.publish(od)
 
+        # 机器人位置大球 (Z=0.5m 悬空, 在建筑点云上方可见)
+        self._pub_robot_marker(now)
+
+    def _pub_robot_marker(self, now):
+        """发布黄色大球 Marker 标记机器人实时位置 (建筑点云上方清晰可见)。"""
+        m = Marker()
+        m.header.frame_id = 'odom'
+        m.header.stamp    = now
+        m.ns              = 'robot'
+        m.id              = 0
+        m.type            = Marker.SPHERE
+        m.action          = Marker.ADD
+        m.pose.position.x = self.x
+        m.pose.position.y = self.y
+        m.pose.position.z = max(0.3, self.z + 0.6)   # 跟随机器人真实Z高度
+        m.pose.orientation.w = 1.0
+        m.scale.x = m.scale.y = m.scale.z = 0.7   # 直径 0.7m, 远处也清晰可见
+        m.color.r = 1.0; m.color.g = 0.9; m.color.b = 0.0; m.color.a = 1.0  # 亮黄色
+        self.pub_marker.publish(m)
+
+        # 朝向箭头 (蓝色, 从球心延伸 1m)
+        arr = Marker()
+        arr.header.frame_id = 'odom'
+        arr.header.stamp    = now
+        arr.ns              = 'robot_dir'
+        arr.id              = 1
+        arr.type            = Marker.ARROW
+        arr.action          = Marker.ADD
+        arr.pose.position.x = self.x
+        arr.pose.position.y = self.y
+        arr.pose.position.z = max(0.3, self.z + 0.6)
+        arr.pose.orientation.z = math.sin(self.yaw / 2)
+        arr.pose.orientation.w = math.cos(self.yaw / 2)
+        arr.scale.x = 1.2   # 箭头长度
+        arr.scale.y = 0.15  # 箭头宽度
+        arr.scale.z = 0.15
+        arr.color.r = 0.0; arr.color.g = 0.5; arr.color.b = 1.0; arr.color.a = 1.0  # 蓝色
+        self.pub_marker.publish(arr)
+
     # ── 回调 ──────────────────────────────────────────────────────────────────
 
     def _on_cmd(self, msg: TwistStamped):
+        if self._mode_3d:
+            return   # 3D模式: 由 _follow_3d() 直接控制速度, 忽略 pathFollower cmd_vel
         self.vx = msg.twist.linear.x
         self.vy = msg.twist.linear.y
         self.wz = msg.twist.angular.z
@@ -367,31 +438,142 @@ class SimRobotNode(Node):
             self.get_logger().info('*** GOAL_REACHED (from pathFollower) ***')
             self.phase = 'done'
 
-    def _on_external_goal(self, msg: PoseStamped):
-        """
-        接收外部手动目标点 (RViz2 "2D Nav Goal" 或 ros2 topic pub).
-
-        注意: 该回调会被 sim_robot_node 自身发布的 /nav/goal_pose 触发.
-        只有当目标坐标与当前设定目标明显不同 (>0.5m) 时才视为外部覆盖.
-        """
-        new_gx = msg.pose.position.x
-        new_gy = msg.pose.position.y
-        dist_change = math.hypot(new_gx - self.gx, new_gy - self.gy)
-        if dist_change < 0.3:   # 忽略自身 re-publish 引起的微小差异
+    def _on_goal_pose(self, msg: PoseStamped):
+        """RViz2 '2D Nav Goal' 或 ros2 topic pub → /nav/goal_pose.
+        注意: sim_robot_node 自身也发布此话题, 需过滤自身消息."""
+        gx = msg.pose.position.x
+        gy = msg.pose.position.y
+        # 忽略自身重发 (坐标与当前目标几乎一致)
+        if math.hypot(gx - self.gx, gy - self.gy) < 0.3:
             return
-        self.gx = new_gx
-        self.gy = new_gy
+        self._set_new_goal(gx, gy, source='goal_pose')
+
+    def _on_clicked_point(self, msg: PointStamped):
+        """RViz2 'Publish Point' 工具 → /clicked_point (真实 3D XYZ).
+        在 RViz2 三维视图里点击建筑点云任意位置 → 触发真实 3D A* 路径规划。"""
+        gx = msg.point.x
+        gy = msg.point.y
+        gz = msg.point.z
         self.get_logger().info(
-            f'[goal] 外部目标更新: ({self.gx:.2f},{self.gy:.2f})  '
-            f'来自 frame={msg.header.frame_id}')
-        # 中断当前导航，重新从 running 阶段触发规划
-        if self.phase in ('pausing',):
-            self._reset_for_loop()
-        elif self.phase in ('running', 'warmup'):
-            self.goal_reached = False
-            now = self.get_clock().now().to_msg()
-            self._pub_goal(now)
-            self.get_logger().info(f'[goal] 已立即转发新目标给规划器')
+            f'[3D] 收到点击目标: ({gx:.2f}, {gy:.2f}, {gz:.2f}m)')
+        self._activate_3d_nav(gx, gy, gz)
+
+    def _activate_3d_nav(self, gx: float, gy: float, gz: float):
+        """激活 PCT 3D A* 导航模式: 将目标（含 Z）发送给 pct_planner_astar。
+        规划器检测 goal.pose.position.z > 0.1 → 调用 _plan_3d() → 发布含真实 Z 的全局路径。
+        sim_robot 通过 /nav/global_path 订阅接收路径, 再由 _follow_3d() 跟踪。"""
+        if not (MAP_X_MIN <= gx <= MAP_X_MAX and MAP_Y_MIN <= gy <= MAP_Y_MAX):
+            self.get_logger().warn(
+                f'[3D] 目标 ({gx:.2f},{gy:.2f}) 超出地图范围 — 已忽略')
+            return
+
+        self._user_goal_set = True
+        self.goal_reached   = False
+        self._gz      = gz
+        self._mode_3d = (gz > 0.1)   # Z>0.1m → 3D跟踪; 否则回退 2D
+        self._3d_path = []
+        if self.t_start is None:
+            self.t_start = time.time()
+        self.phase = 'running'
+
+        # 发送带 Z 的目标给 PCT 规划器 → 触发 _plan_3d()
+        now = self.get_clock().now().to_msg()
+        msg_goal = PoseStamped()
+        msg_goal.header.stamp    = now
+        msg_goal.header.frame_id = 'map'
+        msg_goal.pose.position.x = gx
+        msg_goal.pose.position.y = gy
+        msg_goal.pose.position.z = gz    # PCT 规划器检测 Z>0.1 → 执行 3D A*
+        msg_goal.pose.orientation.w = 1.0
+        self.pub_goal.publish(msg_goal)
+        self.get_logger().info(
+            f'[3D] 目标已发送给 PCT 规划器: ({gx:.2f},{gy:.2f},{gz:.2f}m)')
+
+        # 红色目标球 Marker (id=2)
+        gm = Marker()
+        gm.header.frame_id = 'map'; gm.header.stamp = now
+        gm.ns   = 'goal_3d'; gm.id = 2
+        gm.type = Marker.SPHERE; gm.action = Marker.ADD
+        gm.pose.position.x = gx; gm.pose.position.y = gy
+        gm.pose.position.z = gz + 0.3
+        gm.pose.orientation.w = 1.0
+        gm.scale.x = gm.scale.y = gm.scale.z = 0.6
+        gm.color.r = 1.0; gm.color.g = 0.2; gm.color.b = 0.2; gm.color.a = 0.9
+        self.pub_marker.publish(gm)
+
+    def _on_global_path(self, msg: Path):
+        """接收 PCT 规划器发布的全局路径 (含真实 Z).
+        若路径存在 Z 变化 (>0.2m) → 判定为 3D 路径, 填充 _3d_path 供 _follow_3d() 跟踪。"""
+        if not msg.poses:
+            return
+        z_vals = [ps.pose.position.z for ps in msg.poses]
+        z_range = max(z_vals) - min(z_vals)
+        n = len(msg.poses)
+        if self._mode_3d and z_range > 0.2:
+            self._3d_path = [
+                [ps.pose.position.x, ps.pose.position.y, ps.pose.position.z]
+                for ps in msg.poses
+            ]
+            self.get_logger().info(
+                f'[3D] 收到 PCT 3D 路径: {n}点  Z范围={z_range:.2f}m  '
+                f'→ _follow_3d 激活')
+
+    def _follow_3d(self):
+        """3D 路径跟踪控制器。
+        XY: 比例转向 + 速度控制（抑制大偏航时前进速度）
+        Z:  比例控制垂直速度"""
+        if not self._3d_path:
+            self.vx = self.vy = self.wz = self.vz = 0.0
+            self._mode_3d = False
+            return
+
+        wx, wy, wz = self._3d_path[0][0], self._3d_path[0][1], self._3d_path[0][2]
+        dx = wx - self.x; dy = wy - self.y; dz = wz - self.z
+        dist_xy = math.hypot(dx, dy)
+        dist_3d = math.sqrt(dist_xy * dist_xy + dz * dz)
+
+        # 到达当前路点
+        if dist_3d < 0.4:
+            self._3d_path.pop(0)
+            return
+
+        # XY 控制
+        target_yaw = math.atan2(dy, dx)
+        yaw_err = (target_yaw - self.yaw + math.pi) % (2 * math.pi) - math.pi
+        self.wz = max(-1.5, min(1.5, 3.0 * yaw_err))
+        # 大偏航时减速，对准方向后全速
+        speed_factor = max(0.0, 1.0 - abs(yaw_err) / 1.2)
+        self.vx = min(0.8, dist_xy) * speed_factor
+        self.vy = 0.0
+
+        # Z 控制（垂直速度）
+        self.vz = max(-0.5, min(0.5, 2.0 * dz))
+
+    def _set_new_goal(self, gx: float, gy: float, source: str = '?'):
+        """验证并设置新目标, 立即触发 PCT 重规划."""
+        # 地图范围校验
+        if not (MAP_X_MIN <= gx <= MAP_X_MAX and MAP_Y_MIN <= gy <= MAP_Y_MAX):
+            self.get_logger().warn(
+                f'[goal] 目标 ({gx:.2f},{gy:.2f}) 超出地图范围 '
+                f'X∈[{MAP_X_MIN},{MAP_X_MAX}] Y∈[{MAP_Y_MIN},{MAP_Y_MAX}] — 已忽略')
+            return
+        old_gx, old_gy = self.gx, self.gy
+        self.gx = gx
+        self.gy = gy
+        self._user_goal_set = True   # 用户手动设置过目标, loop reset 不覆盖
+        self.get_logger().info(
+            f'[goal] 新目标 [{source}]: ({gx:.2f},{gy:.2f})  '
+            f'(原={old_gx:.2f},{old_gy:.2f})')
+
+        # 无论当前处于哪个阶段, 立即进入 running 并触发重规划
+        self.goal_reached = False
+        self.vx = self.vy = self.wz = 0.0    # 清速度防惯性漂移
+        if self.t_start is None:
+            self.t_start = time.time()
+        self.phase = 'running'
+        now = self.get_clock().now().to_msg()
+        self._pub_goal(now)
+        self.get_logger().info(f'[goal] 已发送新目标给 PCT 规划器, 重新规划中...')
 
     # ── 运动学积分 ────────────────────────────────────────────────────────────
 
@@ -401,6 +583,7 @@ class SimRobotNode(Node):
         self.y   += (s * self.vx + c * self.vy) * DT
         self.yaw += self.wz * DT
         self.yaw  = (self.yaw + math.pi) % (2 * math.pi) - math.pi
+        self.z   += self.vz * DT          # Z 轴积分 (3D 模式)
 
         # 差速驱动车轮角度积分
         v_left  = self.vx - self.wz * WHEEL_BASE / 2.0
@@ -420,6 +603,10 @@ class SimRobotNode(Node):
 
     def _tick(self):
         now = self.get_clock().now().to_msg()
+
+        # ── 建筑点云: 每 3s 重发 (所有阶段均适用, 确保 RViz 随时连接都能看到) ──
+        if time.time() - self._bldg_last_pub >= 3.0:
+            self._publish_building_cloud()
 
         # ── pausing 阶段: 持续发布 TF + 地形 (不 sleep, 避免阻塞 executor) ──
         if self.phase == 'pausing':
@@ -443,9 +630,6 @@ class SimRobotNode(Node):
         elapsed = time.time() - self.t_start
 
         # ── 始终发布: 里程计 + TF + 合成平坦地形 + stop=0 ──
-        # 每 30s 补发一次建筑点云 (确保 RViz 晚连接也能收到)
-        if int(elapsed / 30) > int((elapsed - DT) / 30):
-            self._publish_building_cloud()
         self._pub_odom_tf(now)
 
         terrain = _flat_cloud(self.x, self.y, stamp=now)
@@ -467,6 +651,23 @@ class SimRobotNode(Node):
 
         # ── 运行阶段 ──
         elif self.phase == 'running':
+            # ── 3D 模式: 由 PCT 3D A* 提供路径, _follow_3d 跟踪, 绕过 pathFollower ──
+            if self._mode_3d:
+                self._follow_3d()
+                self._integrate()
+                dist_3d = math.sqrt(
+                    (self.x - self._3d_path[0][0])**2 +
+                    (self.y - self._3d_path[0][1])**2 +
+                    (self.z - self._gz)**2
+                ) if self._3d_path else math.sqrt(
+                    (self.x - self.gx)**2 + (self.y - self.gy)**2 + (self.z - self._gz)**2
+                )
+                if not self._3d_path:
+                    self.get_logger().info(
+                        f'[3D] *** 3D目标到达! 终点=({self.x:.2f},{self.y:.2f},{self.z:.2f}) ***')
+                    self.goal_reached = True
+                    self.phase = 'done'
+                return
             # 每 GOAL_RESEND_S 秒重新发送目标 (防规划器重启后丢失)
             if elapsed > WARMUP_S:
                 slot_now  = int((elapsed - WARMUP_S) / GOAL_RESEND_S)
@@ -545,7 +746,7 @@ class SimRobotNode(Node):
         self._plot(result)
 
     def _reset_for_loop(self):
-        """重置机器人状态，重新开始导航演示。"""
+        """重置机器人位置到起点，保留用户手动设置的目标。"""
         self.x   = _DEF_START_X
         self.y   = _DEF_START_Y
         self.yaw = _DEF_START_YAW
@@ -556,9 +757,15 @@ class SimRobotNode(Node):
         self.t_start = None
         self._left_wheel_angle  = 0.0
         self._right_wheel_angle = 0.0
+        # 只有用户没有手动设置过目标时才回归默认目标
+        if not self._user_goal_set:
+            self.gx = _DEF_GOAL_X
+            self.gy = _DEF_GOAL_Y
         self.phase = 'warmup'
         self.get_logger().info(
-            f'[sim] == 循环重置: 起点=({self.x},{self.y}) 目标=({self.gx},{self.gy}) ==')
+            f'[sim] == 循环重置: 起点=({self.x},{self.y}) 目标=({self.gx:.2f},{self.gy:.2f}) ==')
+        # 重新发布建筑点云, 确保刚连接的 RViz 实例也能看到
+        self._publish_building_cloud()
 
     def _plot(self, result):
         try:

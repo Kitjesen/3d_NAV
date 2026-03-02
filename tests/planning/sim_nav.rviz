@@ -5,13 +5,7 @@ Panels:
     Property Tree Widget:
       Expanded: ~
       Splitter Ratio: 0.5
-    Tree Height: 600
-  - Class: rviz_common/Selection
-    Name: Selection
-  - Class: rviz_common/Tool Properties
-    Name: Tool Properties
-    Expanded:
-      - /2D Goal Pose1
+    Tree Height: 700
   - Class: rviz_common/Views
     Name: Views
 
@@ -22,7 +16,7 @@ Visualization Manager:
       Name: Grid
       Enabled: true
       Cell Size: 1
-      Color: 160; 160; 164
+      Color: 100; 100; 100
       Plane Cell Count: 30
       Plane: XY
 
@@ -31,9 +25,9 @@ Visualization Manager:
       Enabled: true
       Topic:
         Value: /nav/building_cloud
-        Depth: 1
+        Depth: 5
         QoS Profile: default
-        Durability Policy: Transient Local
+        Durability Policy: Volatile
         Reliability Policy: Reliable
       Alpha: 1
       Autocompute Intensity Bounds: true
@@ -83,10 +77,6 @@ Visualization Manager:
         Value: /robot_description
         Durability Policy: Transient Local
 
-    - Class: rviz_default_plugins/TF
-      Name: TF
-      Enabled: false
-
     - Class: rviz_default_plugins/Pose
       Name: GoalPose
       Enabled: true
@@ -94,14 +84,34 @@ Visualization Manager:
         Value: /nav/goal_pose
         Depth: 5
       Color: 255; 60; 60
-      Shaft Length: 0.8
-      Head Length: 0.3
-      Head Radius: 0.15
+      Shaft Length: 1.0
+      Head Length: 0.4
+      Head Radius: 0.2
+
+    - Class: rviz_default_plugins/PointStamped
+      Name: ClickedPoint
+      Enabled: true
+      Topic:
+        Value: /clicked_point
+        Depth: 5
+      Color: 255; 200; 0
+      Radius: 0.2
+
+    - Class: rviz_default_plugins/Marker
+      Name: RobotMarker
+      Enabled: true
+      Topic:
+        Value: /nav/robot_marker
+        Depth: 5
+
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
 
   Enabled: true
   Fixed Frame: map
   Global Options:
-    Background Color: 30; 30; 30
+    Background Color: 25; 25; 35
     Frame Rate: 30
 
   Tools:
@@ -127,8 +137,8 @@ Visualization Manager:
     Current:
       Class: rviz_default_plugins/Orbit
       Name: 3D View
-      Distance: 20
-      Pitch: 0.6
+      Distance: 12
+      Pitch: 0.45
       Yaw: 1.2
       Focal Point:
         X: 0
