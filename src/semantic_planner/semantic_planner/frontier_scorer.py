@@ -47,6 +47,28 @@ FREE_CELL = 0
 OCCUPIED_CELL = 100
 UNKNOWN_CELL = -1
 
+# ── 共现先验表 (模块级常量, 避免每次 score_frontiers 重建) ──
+_COOCCURRENCE = {
+    "fire extinguisher": ["door", "sign", "stairs", "elevator", "corridor"],
+    "extinguisher": ["door", "sign", "stairs"],
+    "灭火器": ["door", "sign", "stairs", "elevator"],
+    "chair": ["desk", "table", "computer"],
+    "椅子": ["desk", "table", "computer"],
+    "desk": ["chair", "computer", "monitor", "keyboard"],
+    "桌子": ["chair", "computer", "monitor"],
+    "refrigerator": ["sink", "microwave", "table", "chair"],
+    "冰箱": ["sink", "microwave", "table"],
+    "toilet": ["sink", "mirror", "door"],
+    "马桶": ["sink", "mirror", "door"],
+    "elevator": ["door", "sign", "stairs", "button"],
+    "电梯": ["door", "sign", "stairs"],
+}
+# 预计算反向索引: co_label → set(keys) — 用于 O(1) 查找
+_COOCCURRENCE_REVERSE: Dict[str, Set[str]] = {}
+for _key, _co_labels in _COOCCURRENCE.items():
+    for _cl in _co_labels:
+        _COOCCURRENCE_REVERSE.setdefault(_cl, set()).add(_key)
+
 
 @dataclass
 class Frontier:
@@ -165,6 +187,9 @@ class FrontierScorer:
         # L3MVN: frontier 描述缓存 (避免每轮重复调用 predict_room_type_from_labels)
         # key = 排序后标签逗号拼接, value = 已生成描述; 上限 256 条
         self._frontier_desc_cache: Dict[str, str] = {}
+
+        # 双语关键词缓存: 同一指令多次评分时避免重复提取
+        self._bilingual_kw_cache: Dict[str, Set[str]] = {}
 
     def update_costmap(
         self,
@@ -476,8 +501,15 @@ class FrontierScorer:
         max_dist = max(f.distance for f in self._frontiers) or 1.0
         inst_lower = instruction.lower()
 
-        # ── 双语关键词集 (跨语言匹配) ──
-        inst_keywords = self._extract_bilingual_keywords(inst_lower)
+        # ── 双语关键词集 (跨语言匹配, 带缓存) ──
+        if inst_lower in self._bilingual_kw_cache:
+            inst_keywords = self._bilingual_kw_cache[inst_lower]
+        else:
+            inst_keywords = self._extract_bilingual_keywords(inst_lower)
+            # 缓存上限 64 条，LRU 简化为清空
+            if len(self._bilingual_kw_cache) >= 64:
+                self._bilingual_kw_cache.clear()
+            self._bilingual_kw_cache[inst_lower] = inst_keywords
 
         # ── 预计算: 物体空间分布方向 ──
         obj_directions: List[Tuple[float, str]] = []  # (angle, label)
@@ -629,34 +661,17 @@ class FrontierScorer:
         """
         常识共现评分 (MTU3D 空间先验)。
 
-        某些物体经常一起出现:
-          fire extinguisher ↔ door, sign, stairs, corridor
-          kitchen ↔ chair, table, trash can, refrigerator
-          bathroom ↔ door, sign, mirror
-          office ↔ desk, chair, computer
+        使用模块级 _COOCCURRENCE_REVERSE 反向索引实现 O(1) 查找,
+        避免每次调用遍历整个共现表。
 
         Args:
             inst_keywords: 指令双语关键词集 (已通过 expand_bilingual 扩展)
             label: 场景物体标签 (小写)
         """
-        COOCCURRENCE = {
-            "fire extinguisher": ["door", "sign", "stairs", "elevator", "corridor"],
-            "extinguisher": ["door", "sign", "stairs"],
-            "灭火器": ["door", "sign", "stairs", "elevator"],
-            "chair": ["desk", "table", "computer"],
-            "椅子": ["desk", "table", "computer"],
-            "desk": ["chair", "computer", "monitor", "keyboard"],
-            "桌子": ["chair", "computer", "monitor"],
-            "refrigerator": ["sink", "microwave", "table", "chair"],
-            "冰箱": ["sink", "microwave", "table"],
-            "toilet": ["sink", "mirror", "door"],
-            "马桶": ["sink", "mirror", "door"],
-            "elevator": ["door", "sign", "stairs", "button"],
-            "电梯": ["door", "sign", "stairs"],
-        }
-        for key, co_labels in COOCCURRENCE.items():
-            if key in inst_keywords and label in co_labels:
-                return 0.25
+        # 反向索引: label → 哪些关键词以 label 为共现标签
+        keys_for_label = _COOCCURRENCE_REVERSE.get(label)
+        if keys_for_label and keys_for_label & inst_keywords:
+            return 0.25
         return 0.0
 
     def _compute_semantic_prior_score(
