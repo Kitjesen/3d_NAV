@@ -33,6 +33,9 @@ try:
 except ImportError:
     HAS_TORCH = False
 
+# Alias for backward compatibility with tests that import _TORCH_AVAILABLE
+_TORCH_AVAILABLE = HAS_TORCH
+
 logger = logging.getLogger(__name__)
 
 # ════════════════════════════════════════════════════════════
