@@ -97,6 +97,7 @@ class _RobotDetailScreenState extends State<RobotDetailScreen> {
                       Icons.power_settings_new,
                       color: AppColors.error.withValues(alpha:0.7),
                     ),
+                    tooltip: '断开连接',
                     onPressed: _handleDisconnect,
                   ),
                 ],

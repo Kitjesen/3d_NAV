@@ -1081,6 +1081,7 @@ class _MapScreenState extends State<MapScreen>
               suffixIcon: IconButton(
                 icon: Icon(Icons.mic_none_rounded,
                     size: 20, color: context.subtitleColor),
+                tooltip: locale.tr('语音输入', 'Voice input'),
                 onPressed: () {
                   // TODO: Voice input (future)
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
