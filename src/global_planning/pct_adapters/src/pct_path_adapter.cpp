@@ -54,6 +54,8 @@ public:
     declare_parameter<double>("stuck_timeout_sec", 10.0);
     declare_parameter<int>("max_replan_count", 2);
     declare_parameter<double>("replan_cooldown_sec", 5.0);
+    declare_parameter<int>("max_index_jump", 3);
+    declare_parameter<double>("max_first_waypoint_dist", 10.0);
 
     nav_core::WaypointTrackerParams tp;
     tp.waypointDistance   = get_parameter("waypoint_distance").as_double();
@@ -62,6 +64,9 @@ public:
     tp.maxReplanCount     = get_parameter("max_replan_count").as_int();
     tp.replanCooldownSec  = get_parameter("replan_cooldown_sec").as_double();
     tracker_ = nav_core::WaypointTracker(tp);
+
+    maxIndexJump_ = get_parameter("max_index_jump").as_int();
+    maxFirstWaypointDist_ = get_parameter("max_first_waypoint_dist").as_double();
 
     // 第1级重规划: 重发 goal_pose 触发 PCT 重新规划
     replan_goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -100,14 +105,27 @@ private:
   }
 
   void path_callback(const nav_msgs::msg::Path::SharedPtr msg) {
+    // R9-2: 零长路径保护 — 发布 FAILED 状态
     if (msg->poses.empty()) {
-      if (!tracker_.path().empty()) {
-        RCLCPP_WARN(get_logger(),
-          "Received empty path (planning failed). "
-          "Keeping stuck detection active (replan_count=%d).",
-          tracker_.replanCount());
-      }
+      RCLCPP_WARN(get_logger(),
+        "Received empty path (planning failed), publishing FAILED status.");
+      publish_status("failed", 0, 0);
       return;
+    }
+
+    // R9-3: 第一个航点距离校验 — 拒绝错误坐标系的路径
+    if (robot_pos_received_) {
+      double dx = msg->poses[0].pose.position.x - robot_pos_.x;
+      double dy = msg->poses[0].pose.position.y - robot_pos_.y;
+      double firstDist = std::sqrt(dx * dx + dy * dy);
+      if (firstDist > maxFirstWaypointDist_) {
+        RCLCPP_WARN(get_logger(),
+          "First waypoint is %.1fm from robot (limit=%.1fm), "
+          "rejecting path (possible frame mismatch).",
+          firstDist, maxFirstWaypointDist_);
+        publish_status("failed", 0, 0);
+        return;
+      }
     }
 
     RCLCPP_INFO(get_logger(),
@@ -116,8 +134,16 @@ private:
     auto navPath = rosPathToNavCore(*msg);
     tracker_.setPath(navPath, now().seconds());
 
+    // R9-4: 路径完整性日志 — 打印总长度和航点数
+    double totalLen = 0.0;
+    for (size_t i = 1; i < navPath.size(); ++i) {
+      double ddx = navPath[i].position.x - navPath[i - 1].position.x;
+      double ddy = navPath[i].position.y - navPath[i - 1].position.y;
+      totalLen += std::sqrt(ddx * ddx + ddy * ddy);
+    }
     RCLCPP_INFO(get_logger(),
-      "Path processed into %zu waypoints", tracker_.path().size());
+      "Path accepted: %zu waypoints, total length %.1fm",
+      tracker_.path().size(), totalLen);
     publish_status("path_received", 0, tracker_.path().size());
   }
 
@@ -189,8 +215,16 @@ private:
     if (!transform_robot_to_map(robotMap)) return;
 
     // 2. 调用核心算法
+    size_t prevIdx = tracker_.currentIndex();
     double currentTime = now().seconds();
     auto result = tracker_.update(robotMap, {}, currentTime);
+
+    // R9-1: 航点跳跃保护 — 防止短暂 TF 丢失导致跳过中间航点
+    if (result.currentIndex > prevIdx + static_cast<size_t>(maxIndexJump_)) {
+      RCLCPP_WARN(get_logger(),
+        "Waypoint index jumped %zu→%zu (limit=%d), possible TF glitch",
+        prevIdx, result.currentIndex, maxIndexJump_);
+    }
 
     // 3. 处理事件
     switch (result.event) {
@@ -280,6 +314,10 @@ private:
 
   // ── 核心算法 (替代 ~15 个手动成员变量) ──
   nav_core::WaypointTracker tracker_;
+
+  // ── 边界保护参数 ──
+  int maxIndexJump_ = 3;
+  double maxFirstWaypointDist_ = 10.0;
 
   // ── ROS2 独有状态 ──
   geometry_msgs::msg::Point robot_pos_;
