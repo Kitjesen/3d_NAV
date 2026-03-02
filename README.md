@@ -1,162 +1,178 @@
-# 灵途 MapPilot
+# MapPilot (灵途)
 
-[![ROS2](https://img.shields.io/badge/ROS2-Humble-blue?logo=ros)](https://docs.ros.org/en/humble/)
-[![Platform](https://img.shields.io/badge/Platform-Jetson_Orin-green?logo=nvidia)](https://developer.nvidia.com/embedded/jetson-orin)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04-orange?logo=ubuntu)](https://ubuntu.com/)
+[![ROS2](https://img.shields.io/badge/ROS2-Humble-blue)](https://docs.ros.org/en/humble/)
+[![Platform](https://img.shields.io/badge/Platform-Jetson_Orin_NX_16GB-green)](https://developer.nvidia.com/embedded/jetson-orin)
+[![License](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
 
-> 🐕 让四足机器人在野外自己走
-
-<p align="center">
-  <img src="docs/assets/demo.gif" width="600" alt="MapPilot Demo"/>
-</p>
+Autonomous navigation system for quadruped robots in outdoor and off-road environments. Runs on ROS 2 Humble. Supports SLAM-based mapping, terrain-aware path planning, and semantic navigation via natural language instructions.
 
 ---
 
-我们在做一个野外自主导航系统，跑在 ROS 2 Humble 上。主要解决的问题是：机器人怎么在没有 GPS、没有预设地图的野外环境里，自己建图、定位、规划路径、避开障碍物。
+## Hardware
 
-## ✨ 功能特性
+| Component | Specification | Required |
+|-----------|--------------|----------|
+| LiDAR | Livox MID-360 | Yes |
+| RGB-D Camera | Orbbec Gemini 330 | No |
+| Compute | Jetson Orin NX 16GB | Recommended |
+| OS | Ubuntu 22.04 | Yes |
 
-**🗺️ 建图定位**
-- Fast-LIO2 做实时 SLAM，MID-360 激光雷达输入
-- PGO 回环检测，长时间跑不会漂
-- ICP 重定位，关机重启能接着用之前的地图
+Dual-board architecture: Nav Board runs navigation software (SLAM, planning, perception, gRPC); Dog Board runs the motion control RL policy and motor drivers. They communicate over Ethernet — Nav Board sends velocity commands, Dog Board executes them.
 
-**👁️ 感知**
-- 地形分析，知道哪能走哪不能走
-- 障碍物检测，动态的静态的都行
-- 可穿越性评估，草地、碎石、坡度都考虑
-- YOLO-E 实例分割 + Mobile-CLIP 语义编码，15Hz on Jetson Orin NX
-
-**🧭 规划**
-- PCT 全局规划，基于地形代价
-- base_autonomy 局部规划，实时避障
-- SCG（空间连通图）拓扑路径规划，无需预建地图
-
-**🗣️ 语义导航**
-- 自然语言指令导航（"找到餐桌"）
-- Fast-Slow 双路径：关键词快速匹配（~0.17ms）+ LLM 慢路径推理（~2s）
-- ConceptGraphs 场景图，动态增量更新
-- Frontier 探索 + 知识图谱房间预测，未知环境零样本导航
-
-**📱 远程监控**
-- gRPC 服务端（端口 50051）
-- Flutter App，手机上看状态、发指令
-
-## 🔧 硬件要求
-
-| 组件 | 型号 | 必需 |
-|------|------|:----:|
-| 激光雷达 | Livox MID-360 | ✅ |
-| 深度相机 | Orbbec Gemini 330 | ❌ |
-| 系统 | Ubuntu 22.04 | ✅ |
-| 内存 | 8GB+ | ✅ |
-
-我们在 Jetson Orin NX 16GB 上跑，也在普通 x86 机器上测试过。
-
-## 🚀 快速开始
+## Build
 
 ```bash
-# 编译
 source /opt/ros/humble/setup.bash
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
+```
 
-# 模式一：建图（手柄遥控，实时建 SLAM 地图）
+Full build including OTA daemon and PCT planner C++ core:
+
+```bash
+./build_all.sh
+```
+
+## Operation Modes
+
+**Mapping** — Drive the robot manually while SLAM builds a map.
+
+```bash
 ./mapping.sh
-./save_map.sh   # 跑一圈后保存地图
+./save_map.sh   # Save map when done
+```
 
-# 模式二：导航（加载已有地图，自主导航到目标点）
+**Navigation** — Load an existing map and navigate autonomously to a goal.
+
+```bash
 ./planning.sh
+```
 
-# 模式三：探索（无需预建地图，未知环境语义导航）
+**Exploration** — Navigate in an unknown environment without a pre-built map. Supports natural language goal specification.
+
+```bash
 ros2 launch launch/navigation_explore.launch.py
 ros2 launch launch/navigation_explore.launch.py target:="找到餐桌"
 ```
 
-建图时手动遥控走一遍，系统自动构建地图。导航模式给目标点自己走过去。探索模式直接说目标，机器人边建图边找。
+## Architecture
 
-## 📁 项目结构
+```
+Livox LiDAR --> Fast-LIO2 (SLAM) --> Terrain Analysis --> PCT Planner --> Dog Board
+                      |                                         |
+                 ICP Localizer                          Local Planner
+                      |
+            Orbbec RGB-D Camera
+                      |
+              YOLO-World + CLIP
+                      |
+           ConceptGraphs Scene Graph
+                      |
+         Semantic Planner (Fast-Slow)  <-- Natural language instruction
+                      |
+               gRPC Gateway (50051) --> Flutter Client
+```
+
+**SLAM**: Fast-LIO2 frontend with pose graph optimization (PGO) loop closure. ICP-based relocalization against a saved map.
+
+**Terrain Analysis**: Point cloud ground estimation, traversability scoring, slope-weighted cost generation.
+
+**Global Planning**: PCT planner (tomography-based) with A\* search. Catmull-Rom path smoothing. Waypoint tracking with stuck detection and progressive recovery.
+
+**Semantic Navigation**: Fast path (~0.17 ms) uses keyword and spatial matching against the scene graph. Slow path (~2 s) uses LLM reasoning with ESCA selective grounding. AdaNav entropy trigger escalates from fast to slow when confidence is low. LERa failure recovery handles repeated subgoal failures.
+
+**Remote Monitoring**: gRPC server on port 50051. Flutter client (Android, Windows, iOS) for telemetry, manual control, and OTA updates.
+
+## Source Layout
 
 ```
 src/
-├── slam/                  # SLAM 相关
-│   ├── fastlio2/          # Fast-LIO2 前端
-│   ├── pgo/               # 位姿图优化
-│   └── localizer/         # ICP 重定位
-├── base_autonomy/         # 局部规划 + 地形分析
-├── global_planning/       # PCT 全局规划器
-├── semantic_perception/   # 语义感知：YOLO-E + CLIP + 场景图
-├── semantic_planner/      # 语义规划：Fast-Slow + 探索策略 + LLM
-├── remote_monitoring/     # gRPC 服务（端口 50051）
-└── drivers/               # 底盘驱动
+  slam/                    Fast-LIO2, PGO, ICP localizer
+  base_autonomy/           Terrain analysis, local planner
+  global_planning/         PCT planner, path adapter
+  semantic_perception/     YOLO-World, CLIP, ConceptGraphs scene graph
+  semantic_planner/        Fast-Slow planner, frontier exploration, LLM client
+  remote_monitoring/       gRPC gateway, OTA service, WebRTC bridge
+  nav_core/                Header-only C++ core (platform-independent)
+  ota_daemon/              OTA update daemon (independent CMake build)
+  drivers/                 Livox LiDAR driver, quadruped serial interface
 
 client/
-└── flutter_monitor/       # 手机 App 📱
+  flutter_monitor/         Flutter cross-platform client application
 
-config/                    # 参数配置
-launch/                    # 启动文件（三种模式）
+config/                    YAML configuration files
+launch/                    ROS 2 launch files (mapping, navigation, exploration)
+systemd/                   Systemd service units for bare-metal deployment
+scripts/                   Build, deploy, health check, OTA utilities
 ```
 
-## 🏗️ 系统架构
+## Configuration
 
+Key configuration files:
+
+| File | Purpose |
+|------|---------|
+| `config/robot_config.yaml` | Robot geometry, speed limits, safety parameters |
+| `config/semantic_planner.yaml` | LLM backend, goal resolution, frontier scoring weights |
+| `config/topic_contract.yaml` | ROS 2 topic name definitions |
+| `config/semantic_exploration.yaml` | Exploration mode overrides |
+
+LLM backends (set via environment variable):
+
+```bash
+export MOONSHOT_API_KEY="..."       # Kimi — default, China-accessible
+export DASHSCOPE_API_KEY="..."      # Qwen — fallback
+export OPENAI_API_KEY="sk-..."      # OpenAI
+export ANTHROPIC_API_KEY="sk-ant-..." # Claude
 ```
-激光雷达 → SLAM → 地形分析 → PCT 规划 → 底盘控制
-                ↓                  ↑
-          深度相机 → YOLO-E        SCG 拓扑规划（探索模式）
-                ↓
-          场景图（ConceptGraphs）
-                ↓
-        语义规划器（Fast-Slow）← 自然语言指令
-                ↓
-          手机 App ← gRPC ← 状态上报
+
+## Testing
+
+```bash
+make test                          # All colcon unit tests
+make test-integration              # Integration tests (requires ROS 2 build)
+
+# Planning unit tests — no ROS 2 required
+python tests/planning/test_pct_adapter_logic.py
+
+# Single test file
+cd src/semantic_planner && python -m pytest test/test_goal_resolver.py -v
 ```
 
-我们用双板架构：
-- **Nav Board** 🧠: 导航算法（SLAM、规划、感知、语义）
-- **Dog Board** 🦿: 运动控制（强化学习策略、电机驱动）
+## Deployment
 
-两块板子通过以太网通信，Nav Board 发速度指令，Dog Board 执行。
+**Docker**
 
-## 📚 文档
+```bash
+make docker-build
+make docker-run     # docker-compose up -d
+```
 
-| 文档 | 说明 |
-|------|------|
-| [📐 ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构详解 |
-| [🔨 BUILD_GUIDE.md](docs/BUILD_GUIDE.md) | 编译和部署 |
-| [⚙️ PARAMETER_TUNING.md](docs/PARAMETER_TUNING.md) | 参数调优指南 |
-| [🔧 TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | 常见问题 |
-| [🤖 AGENTS.md](AGENTS.md) | AI Agent 开发指引 |
+**Bare-metal (systemd)**
 
-## ❓ FAQ
+```bash
+make install        # Install systemd service units
+```
 
-<details>
-<summary><b>建图时点云漂移严重</b></summary>
+Seven service units: `nav-lidar`, `nav-slam`, `nav-autonomy`, `nav-planning`, `nav-grpc`, `nav-semantic`, `ota-daemon`.
 
-检查 IMU 标定，Fast-LIO2 对 IMU 外参很敏感。另外确保激光雷达没有遮挡。
+**OTA**
 
-</details>
+```bash
+scripts/ota/build_nav_package.sh   # Build update package
+scripts/ota/deploy_to_robot.sh     # One-click deploy to robot
+```
 
-<details>
-<summary><b>重定位失败</b></summary>
+## Documentation
 
-初始位置要和建图时的某个位置大致对应。如果环境变化太大（比如多了很多障碍物），可能需要重新建图。
+| Document | Description |
+|----------|-------------|
+| `AGENTS.md` | ROS 2 topic and node map, startup sequence |
+| `docs/02-architecture/` | System architecture, topic contract |
+| `docs/03-development/` | API reference, parameter tuning, troubleshooting |
+| `docs/04-deployment/` | Docker and OTA deployment guides |
+| `docs/06-semantic-nav/` | Semantic navigation design and implementation |
 
-</details>
+## License
 
-<details>
-<summary><b>规划的路径绕远路</b></summary>
-
-调整 `config/global_planning.yaml` 里的代价权重，或者检查地形分析的参数。
-
-</details>
-
-## 📄 License
-
-[MIT](LICENSE) © 2026
-
----
-
-<p align="center">
-  Made with ❤️ for robotics
-</p>
+MIT License. See [LICENSE](LICENSE).
