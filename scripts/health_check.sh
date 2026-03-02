@@ -1,5 +1,5 @@
 #!/bin/bash
-# MapPilot 系统健康检查
+# MapPilot 系统健康检查 (17 项)
 # 用途: 快速诊断系统状态，检测潜在问题
 # 使用: bash scripts/health_check.sh
 
@@ -347,15 +347,105 @@ else
     WARN_COUNT=$((WARN_COUNT + 1))
 fi
 
+# 14. OTA daemon 密钥存在性检查
 echo ""
-echo "=== 8. Nav State Aggregation ==="
-if ros2 topic list 2>/dev/null | grep -q "/nav/nav_state"; then
-  echo "  /nav/nav_state: ACTIVE"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "14. OTA 密钥检查"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+OTA_PUBKEY="/opt/lingtu/nav/ota/server.pub"
+if [ -f "$OTA_PUBKEY" ]; then
+    check_pass "OTA 签名公钥存在: $OTA_PUBKEY"
 else
-  echo "  WARN: /nav/nav_state 未发布 (nav_state 聚合节点未运行，非必须)"
+    check_warn "OTA 签名公钥不存在: $OTA_PUBKEY — 无法验证 OTA 签名"
+    WARN_COUNT=$((WARN_COUNT + 1))
 fi
 
-# 14. 总结
+# 15. Python 关键依赖版本检查
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "15. Python 关键依赖检查"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if command -v python3 &> /dev/null; then
+    # torch >= 2.0
+    if python3 -c "import torch; exit(0 if tuple(int(x) for x in torch.__version__.split('.')[:2]) >= (2,0) else 1)" 2>/dev/null; then
+        TORCH_VER=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null)
+        check_pass "PyTorch $TORCH_VER (>= 2.0)"
+    elif python3 -c "import torch" 2>/dev/null; then
+        TORCH_VER=$(python3 -c "import torch; print(torch.__version__)" 2>/dev/null)
+        check_warn "PyTorch $TORCH_VER — 需要 >= 2.0"
+        WARN_COUNT=$((WARN_COUNT + 1))
+    else
+        check_warn "PyTorch 未安装"
+        WARN_COUNT=$((WARN_COUNT + 1))
+    fi
+    # numpy
+    if python3 -c "import numpy" 2>/dev/null; then
+        NP_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null)
+        check_pass "NumPy $NP_VER"
+    else
+        check_warn "NumPy 未安装"
+        WARN_COUNT=$((WARN_COUNT + 1))
+    fi
+    # open_clip / clip
+    if python3 -c "import open_clip" 2>/dev/null; then
+        check_pass "open_clip 已安装"
+    else
+        check_warn "open_clip 未安装（语义导航需要）"
+        WARN_COUNT=$((WARN_COUNT + 1))
+    fi
+else
+    check_warn "python3 不可用"
+    WARN_COUNT=$((WARN_COUNT + 1))
+fi
+
+# 16. 磁盘 inode 使用率检查
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "16. 磁盘 inode 使用率检查"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if command -v df &> /dev/null; then
+    INODE_USAGE=$(df -i / 2>/dev/null | tail -1 | awk '{print $5}' | sed 's/%//')
+    if [ -n "$INODE_USAGE" ] && [ "$INODE_USAGE" -lt 80 ] 2>/dev/null; then
+        check_pass "inode 使用率: ${INODE_USAGE}%"
+    elif [ -n "$INODE_USAGE" ] && [ "$INODE_USAGE" -lt 95 ] 2>/dev/null; then
+        check_warn "inode 使用率: ${INODE_USAGE}% — ROS2 日志目录可能耗尽 inode"
+        WARN_COUNT=$((WARN_COUNT + 1))
+    elif [ -n "$INODE_USAGE" ] 2>/dev/null; then
+        check_fail "inode 使用率: ${INODE_USAGE}% — inode 即将耗尽！"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    else
+        check_info "无法获取 inode 使用率（可能不支持）"
+    fi
+else
+    check_info "df 命令不可用，跳过 inode 检查"
+fi
+
+# 17. gRPC 端口占用检查
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "17. gRPC 端口占用检查"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+for PORT in 50051 50052; do
+    if command -v ss &> /dev/null; then
+        LISTENER=$(ss -tlnp 2>/dev/null | grep ":${PORT} " | head -1)
+        if [ -n "$LISTENER" ]; then
+            PROC=$(echo "$LISTENER" | grep -oP 'users:\(\("\K[^"]+' 2>/dev/null || echo "unknown")
+            check_pass "端口 $PORT 已监听 (进程: $PROC)"
+        else
+            check_info "端口 $PORT 未被监听（gRPC 服务未运行）"
+        fi
+    elif command -v netstat &> /dev/null; then
+        if netstat -tlnp 2>/dev/null | grep -q ":${PORT} "; then
+            check_pass "端口 $PORT 已监听"
+        else
+            check_info "端口 $PORT 未被监听（gRPC 服务未运行）"
+        fi
+    else
+        check_info "ss/netstat 不可用，跳过端口 $PORT 检查"
+    fi
+done
+
+# 总结
 echo ""
 echo "=========================================="
 echo "  健康检查完成"
