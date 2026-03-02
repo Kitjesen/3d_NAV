@@ -292,6 +292,36 @@ def generate_launch_description():
         },
     )
 
+    # ── robot_state_publisher (URDF TF + 车轮旋转) ───────────────────────────
+    _urdf_path = os.path.join(os.path.dirname(__file__), 'simple_car.urdf')
+    try:
+        with open(_urdf_path) as _f:
+            _robot_description = _f.read()
+    except FileNotFoundError:
+        _robot_description = ''
+
+    robot_state_pub_node = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='robot_state_publisher',
+        output='screen',
+        parameters=[{'robot_description': _robot_description}],
+    )
+
+    # ── foxglove_bridge (浏览器可视化: ws://robot_ip:8765) ────────────────────
+    foxglove_node = Node(
+        package='foxglove_bridge',
+        executable='foxglove_bridge',
+        name='foxglove_bridge',
+        output='screen',
+        parameters=[{
+            'port': 8765,
+            'address': '0.0.0.0',
+            'tls': False,
+            'send_buffer_limit': 10000000,
+        }],
+    )
+
     return LaunchDescription([
         # 参数
         map_path_arg,
@@ -300,9 +330,11 @@ def generate_launch_description():
         start_x_arg,
         start_y_arg,
         # 节点 (按依赖顺序排列, ROS2 launch 并行启动)
-        sim_robot,          # 最先: 提供 odometry + terrain
-        pct_planner_node,   # 全局规划
-        pct_adapter_node,   # 航点适配
-        local_planner_node, # 局部规划
-        path_follower_node, # 速度控制
+        sim_robot,              # 最先: 提供 odometry + terrain + /robot_description
+        robot_state_pub_node,   # URDF TF (base_link → wheels)
+        pct_planner_node,       # 全局规划
+        pct_adapter_node,       # 航点适配
+        local_planner_node,     # 局部规划
+        path_follower_node,     # 速度控制
+        foxglove_node,          # Web 可视化
     ])

@@ -1,0 +1,39 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Plane Cell Count: 20
+      Cell Size: 1
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Description Topic: /robot_description
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+    - Class: rviz_default_plugins/Path
+      Name: GlobalPath
+      Topic: /nav/global_path
+      Color: 255; 50; 50
+      Line Width: 0.05
+    - Class: rviz_default_plugins/Path
+      Name: LocalPath
+      Topic: /nav/local_path
+      Color: 50; 200; 50
+      Line Width: 0.03
+    - Class: rviz_default_plugins/PointCloud2
+      Name: MapCloud
+      Topic: /nav/map_cloud
+      Color Transformer: FlatColor
+      Color: 200; 200; 200
+      Size (m): 0.05
+  Fixed Frame: map
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Scale: 30
