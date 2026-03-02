@@ -60,6 +60,7 @@ TERRAIN_R   = 10.0   # m, 合成平坦地形半径
 TERRAIN_S   =  0.4   # m, 格栅间距
 WARMUP_S    =  4.0   # s, 预热时间 (≥ joyToSpeedDelay=2.0s)
 GOAL_RESEND_S = 15.0 # s, 重新发送目标的间隔
+LOOP_PAUSE_S  =  5.0 # s, 到达目标后暂停再重置 (演示循环)
 
 
 # ── 建筑点云 PCD 默认路径 (按优先级查找) ─────────────────────────────────────
@@ -253,6 +254,8 @@ class SimRobotNode(Node):
         self.create_subscription(String,       '/nav/adapter_status', self._on_adapter,    10)
         # 全局规划器状态 (pathFollower 发布 GOAL_REACHED/STUCK 等)
         self.create_subscription(String,       '/nav/planner_status', self._on_planner,    10)
+        # 手动目标点: RViz2 "2D Nav Goal" 或 ros2 topic pub 均可触发
+        self.create_subscription(PoseStamped, '/nav/goal_pose',       self._on_external_goal, 10)
 
         # ── 20 Hz 主循环 ──
         self.create_timer(DT, self._tick)
@@ -290,8 +293,10 @@ class SimRobotNode(Node):
             self.get_logger().warn(f'[sim] PCD load failed: {pcd_path}')
             return
 
-        msg = _make_xyzi_cloud(pts, frame_id='map',
-                                stamp=self.get_clock().now().to_msg())
+        # stamp=0 → RViz 按静态数据处理，不受 TF 时间戳约束
+        from builtin_interfaces.msg import Time as RosTime
+        static_stamp = RosTime(sec=0, nanosec=0)
+        msg = _make_xyzi_cloud(pts, frame_id='map', stamp=static_stamp)
         self.pub_bldg.publish(msg)
         self.get_logger().info(
             f'[sim] Building cloud: {len(pts)} pts published from {pcd_path}')
@@ -362,6 +367,32 @@ class SimRobotNode(Node):
             self.get_logger().info('*** GOAL_REACHED (from pathFollower) ***')
             self.phase = 'done'
 
+    def _on_external_goal(self, msg: PoseStamped):
+        """
+        接收外部手动目标点 (RViz2 "2D Nav Goal" 或 ros2 topic pub).
+
+        注意: 该回调会被 sim_robot_node 自身发布的 /nav/goal_pose 触发.
+        只有当目标坐标与当前设定目标明显不同 (>0.5m) 时才视为外部覆盖.
+        """
+        new_gx = msg.pose.position.x
+        new_gy = msg.pose.position.y
+        dist_change = math.hypot(new_gx - self.gx, new_gy - self.gy)
+        if dist_change < 0.3:   # 忽略自身 re-publish 引起的微小差异
+            return
+        self.gx = new_gx
+        self.gy = new_gy
+        self.get_logger().info(
+            f'[goal] 外部目标更新: ({self.gx:.2f},{self.gy:.2f})  '
+            f'来自 frame={msg.header.frame_id}')
+        # 中断当前导航，重新从 running 阶段触发规划
+        if self.phase in ('pausing',):
+            self._reset_for_loop()
+        elif self.phase in ('running', 'warmup'):
+            self.goal_reached = False
+            now = self.get_clock().now().to_msg()
+            self._pub_goal(now)
+            self.get_logger().info(f'[goal] 已立即转发新目标给规划器')
+
     # ── 运动学积分 ────────────────────────────────────────────────────────────
 
     def _integrate(self):
@@ -388,8 +419,21 @@ class SimRobotNode(Node):
     # ── 主循环 ────────────────────────────────────────────────────────────────
 
     def _tick(self):
-        if self.phase == 'saved':
+        now = self.get_clock().now().to_msg()
+
+        # ── pausing 阶段: 持续发布 TF + 地形 (不 sleep, 避免阻塞 executor) ──
+        if self.phase == 'pausing':
+            self._pub_odom_tf(now)
+            terrain = _flat_cloud(self.x, self.y, stamp=now)
+            self.pub_cloud.publish(terrain)
+            self.pub_terrain.publish(terrain)
+            self.pub_te.publish(terrain)
+            stop_msg = Int8(); stop_msg.data = 0
+            self.pub_stop.publish(stop_msg)
+            if time.time() - self._pause_start >= LOOP_PAUSE_S:
+                self._reset_for_loop()
             return
+
         if self.phase == 'done':
             self._finish()
             return
@@ -397,9 +441,11 @@ class SimRobotNode(Node):
         if self.t_start is None:
             self.t_start = time.time()
         elapsed = time.time() - self.t_start
-        now     = self.get_clock().now().to_msg()
 
         # ── 始终发布: 里程计 + TF + 合成平坦地形 + stop=0 ──
+        # 每 30s 补发一次建筑点云 (确保 RViz 晚连接也能收到)
+        if int(elapsed / 30) > int((elapsed - DT) / 30):
+            self._publish_building_cloud()
         self._pub_odom_tf(now)
 
         terrain = _flat_cloud(self.x, self.y, stamp=now)
@@ -480,7 +526,9 @@ class SimRobotNode(Node):
     # ── 保存结果 ──────────────────────────────────────────────────────────────
 
     def _finish(self):
-        self.phase = 'saved'
+        """保存结果后切换到 pausing 阶段 (非阻塞, 不 sleep)。"""
+        self.phase = 'pausing'
+        self._pause_start = time.time()
         result = {
             'goal_reached':  self.goal_reached,
             'start':         [_DEF_START_X, _DEF_START_Y],
@@ -493,8 +541,24 @@ class SimRobotNode(Node):
         json_path = '/tmp/sim_result.json'
         with open(json_path, 'w') as f:
             json.dump(result, f, indent=2)
-        self.get_logger().info(f'结果已保存: {json_path}')
+        self.get_logger().info(f'结果已保存: {json_path}  ({LOOP_PAUSE_S:.0f}s 后重置...)')
         self._plot(result)
+
+    def _reset_for_loop(self):
+        """重置机器人状态，重新开始导航演示。"""
+        self.x   = _DEF_START_X
+        self.y   = _DEF_START_Y
+        self.yaw = _DEF_START_YAW
+        self.vx = self.vy = self.wz = 0.0
+        self.cmd_count = 0
+        self.traj = []
+        self.goal_reached = False
+        self.t_start = None
+        self._left_wheel_angle  = 0.0
+        self._right_wheel_angle = 0.0
+        self.phase = 'warmup'
+        self.get_logger().info(
+            f'[sim] == 循环重置: 起点=({self.x},{self.y}) 目标=({self.gx},{self.gy}) ==')
 
     def _plot(self, result):
         try:
