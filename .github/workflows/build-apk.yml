@@ -47,6 +47,15 @@ jobs:
         run: |
           sed -i 's|git@github.com:Kitjesen/Robot_Proto.git|https://github.com/Kitjesen/Robot_Proto.git|g' pubspec.yaml
 
+      - name: Cache pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ hashFiles('client/flutter_monitor/pubspec.lock') }}
+          restore-keys: |
+            pub-${{ runner.os }}-
+
       - name: Install dependencies
         run: flutter pub get
 
