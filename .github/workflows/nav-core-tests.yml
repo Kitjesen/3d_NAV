@@ -14,14 +14,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure (standalone mode, no ROS2)
-        run: cmake -B src/nav_core/build -S src/nav_core -DSTANDALONE=ON
+      - name: Install coverage tools
+        run: sudo apt-get update && sudo apt-get install -y gcovr
+
+      - name: Configure (standalone mode, no ROS2, with coverage)
+        run: cmake -B src/nav_core/build -S src/nav_core -DSTANDALONE=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="--coverage" -DCMAKE_C_FLAGS="--coverage"
 
       - name: Build
         run: cmake --build src/nav_core/build --parallel 4
 
       - name: Run tests
         run: ctest --test-dir src/nav_core/build --output-on-failure
+
+      - name: Generate coverage report
+        run: |
+          gcovr --root src/nav_core \
+            --filter 'src/nav_core/include/' \
+            --filter 'src/nav_core/src/' \
+            --exclude '.*test.*' \
+            --print-summary \
+            --xml src/nav_core/build/coverage.xml
+          # Extract line coverage percentage for summary
+          LINE_COV=$(gcovr --root src/nav_core \
+            --filter 'src/nav_core/include/' \
+            --filter 'src/nav_core/src/' \
+            --exclude '.*test.*' \
+            --print-summary 2>&1 | grep 'lines:' | awk '{print $2}')
+          echo "### nav-core Test Coverage: ${LINE_COV}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nav-core-coverage
+          path: src/nav_core/build/coverage.xml
+          retention-days: 14
 
   cross-compile-arm64:
     name: Cross-compile ARM64

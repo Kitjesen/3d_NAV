@@ -93,12 +93,27 @@ jobs:
         run: |
           source /opt/ros/humble/setup.bash
           source install/setup.bash
-          colcon test --packages-select remote_monitoring --return-code-on-test-failure
+          colcon test --return-code-on-test-failure
           colcon test-result --verbose
 
       - name: Package
         run: |
           bash scripts/ota/build_nav_package.sh --skip-build
+
+      - name: Check artifact size
+        run: |
+          TARBALL=$(ls dist/navigation-*.tar.gz 2>/dev/null | head -1)
+          if [ -z "$TARBALL" ]; then
+            echo "ERROR: No tarball found in dist/"
+            exit 1
+          fi
+          SIZE_MB=$(du -m "$TARBALL" | awk '{print $1}')
+          echo "Artifact: $TARBALL — ${SIZE_MB} MB"
+          if [ "$SIZE_MB" -gt 500 ]; then
+            echo "ERROR: Artifact exceeds 500 MB limit (${SIZE_MB} MB). Check for accidentally packaged large files."
+            exit 1
+          fi
+          echo "Artifact size OK (${SIZE_MB} MB <= 500 MB)"
 
       - name: Generate & sign manifest
         run: |
