@@ -754,6 +754,11 @@ class SimRobotNode(Node):
         self.y   = _DEF_START_Y
         self.yaw = _DEF_START_YAW
         self.vx = self.vy = self.wz = 0.0
+        self.z = 0.0    # 重置 Z 高度到地面 (3D 模式结束后归零)
+        self.vz = 0.0
+        self._mode_3d    = False
+        self._3d_path    = []
+        self._3d_waiting = False
         self.cmd_count = 0
         self.traj = []
         self.goal_reached = False
