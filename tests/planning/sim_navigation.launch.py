@@ -63,16 +63,20 @@ def generate_launch_description():
         default_value=pickle_default,
         description='building2_9.pickle 番茄图路径',
     )
-    goal_x_arg = DeclareLaunchArgument('goal_x',   default_value='5.0',
+    # 起终点: 起点(-5.5,7.3) 恰在楼梯间 (Z=0.5→3.0m 全段可通行, trav=21.4)
+    # 终点(2.0,-3.0) 在上层走廊 Z=2.0m (trav=0.0)
+    # 3D A* 路径: 地面层出发 → 经楼梯间上至 Z=1.0m 走廊层 → 到达目标 Z=2.0m
+    # Z=1.0m 走廊层: 4123格连通, 起终点均可达
+    goal_x_arg = DeclareLaunchArgument('goal_x',   default_value='2.0',
                                         description='目标 X (m)')
-    goal_y_arg = DeclareLaunchArgument('goal_y',   default_value='7.3',
-                                        description='目标 Y (m)  (Corridor_E 默认)')
-    goal_z_arg = DeclareLaunchArgument('goal_z',   default_value='0.0',
-                                        description='目标 Z (m)  (>0.1 → 3D 跨楼层规划)')
+    goal_y_arg = DeclareLaunchArgument('goal_y',   default_value='-3.0',
+                                        description='目标 Y (m)')
+    goal_z_arg = DeclareLaunchArgument('goal_z',   default_value='2.0',
+                                        description='目标 Z (m)  (2.0=上层楼面, 3D楼梯间规划)')
     start_x_arg = DeclareLaunchArgument('start_x', default_value='-5.5',
-                                         description='起点 X (m)')
+                                         description='起点 X (m)  (楼梯间入口)')
     start_y_arg = DeclareLaunchArgument('start_y', default_value='7.3',
-                                         description='起点 Y (m)')
+                                         description='起点 Y (m)  (楼梯间入口)')
 
     map_path = LaunchConfiguration('map_path')
     goal_x   = LaunchConfiguration('goal_x')
@@ -96,7 +100,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'tomogram_file':   map_path,
-            'obstacle_thr':    50.1,  # 50.0 = 走廊隔断格 (恰好在边界), 需 >50 才能连通走廊
+            'obstacle_thr':    49.9,  # 正确值: 50.0格是墙壁边界, 不可通行; 3D A*经楼梯间绕过
             # 降低重发频率, 防止 pct_adapter 每秒重置航点索引 (10s 内机器人能走完一个航点段)
             'republish_hz':    0.02,  # 50s 间隔, 不干扰 25s 导航循环 (防止重发引起路径闪烁)
             # 增大航点间距 → 每段 ~1.6m, 全程 ~6-7 航点 (减少快速索引跳跃)
