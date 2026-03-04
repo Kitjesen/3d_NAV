@@ -16,6 +16,7 @@ Building2_9 闭环仿真节点 (ROS2 SITL)
 配置 (通过环境变量, 由 sim_navigation.launch.py 注入):
   SIM_GOAL_X  目标 X (m), 默认  5.0
   SIM_GOAL_Y  目标 Y (m), 默认  7.3  (Corridor_E 场景)
+  SIM_GOAL_Z  目标 Z (m), 默认  0.0  (>0.1 触发 3D 跨楼层规划)
   SIM_START_X 起点 X (m), 默认 -5.5
   SIM_START_Y 起点 Y (m), 默认  7.3
 
@@ -45,6 +46,7 @@ _DEF_START_Y   = float(os.environ.get('SIM_START_Y',    '7.3'))
 _DEF_START_YAW = 0.0   # rad
 _DEF_GOAL_X    = float(os.environ.get('SIM_GOAL_X',    '5.0'))
 _DEF_GOAL_Y    = float(os.environ.get('SIM_GOAL_Y',    '7.3'))
+_DEF_GOAL_Z    = float(os.environ.get('SIM_GOAL_Z',    '0.0'))  # >0.1 → 3D跨楼层规划
 
 # ── 小车 URDF 路径 ─────────────────────────────────────────────────────────────
 _URDF_PATH = os.path.join(os.path.dirname(__file__), 'simple_car.urdf')
@@ -63,9 +65,12 @@ WARMUP_S    =  4.0   # s, 预热时间 (≥ joyToSpeedDelay=2.0s)
 GOAL_RESEND_S = 3600.0 # s, 禁用中途重发 (规划器已有路径, 无需重发导致重规划闪烁)
 LOOP_PAUSE_S  =  5.0 # s, 到达目标后暂停再重置 (演示循环)
 
-# building2_9 世界坐标边界 (地图有效区域)
-MAP_X_MIN, MAP_X_MAX = -7.5,  10.5
-MAP_Y_MIN, MAP_Y_MAX = -9.5,   9.0
+# 世界坐标边界 (通过环境变量覆盖，支持不同地图)
+# 工厂场景: SIM_MAP_X_MIN=-5 SIM_MAP_X_MAX=85 SIM_MAP_Y_MIN=-5 SIM_MAP_Y_MAX=60
+MAP_X_MIN = float(os.environ.get('SIM_MAP_X_MIN', '-7.5'))
+MAP_X_MAX = float(os.environ.get('SIM_MAP_X_MAX',  '10.5'))
+MAP_Y_MIN = float(os.environ.get('SIM_MAP_Y_MIN', '-9.5'))
+MAP_Y_MAX = float(os.environ.get('SIM_MAP_Y_MAX',   '9.0'))
 
 
 # ── 建筑点云 PCD 默认路径 (按优先级查找) ─────────────────────────────────────
@@ -173,13 +178,14 @@ def _make_xyzi_cloud(pts: np.ndarray, frame_id: str, stamp=None) -> PointCloud2:
     return msg
 
 
-def _flat_cloud(cx: float, cy: float, stamp=None) -> PointCloud2:
-    """以 (cx, cy) 为中心生成合成平坦 XYZI=0 点云 (odom 坐标系)。"""
+def _flat_cloud(cx: float, cy: float, cz: float = 0.0, stamp=None) -> PointCloud2:
+    """以 (cx, cy, cz) 为中心生成合成平坦 XYZI 点云 (odom 坐标系).
+    cz 跟随机器人当前楼层 Z 高度, 防止多楼层场景 localPlanner 将其他楼层地面误判为障碍."""
     r = int(TERRAIN_R / TERRAIN_S)
     pts = []
     for ix in range(-r, r + 1):
         for iy in range(-r, r + 1):
-            pts.append([cx + ix * TERRAIN_S, cy + iy * TERRAIN_S, 0.0, 0.0])
+            pts.append([cx + ix * TERRAIN_S, cy + iy * TERRAIN_S, cz, cz])
     arr = np.array(pts, dtype=np.float32)
 
     msg = PointCloud2()
@@ -617,7 +623,7 @@ class SimRobotNode(Node):
         # ── pausing 阶段: 持续发布 TF + 地形 (不 sleep, 避免阻塞 executor) ──
         if self.phase == 'pausing':
             self._pub_odom_tf(now)
-            terrain = _flat_cloud(self.x, self.y, stamp=now)
+            terrain = _flat_cloud(self.x, self.y, self.z, stamp=now)
             self.pub_cloud.publish(terrain)
             self.pub_terrain.publish(terrain)
             self.pub_te.publish(terrain)
@@ -638,7 +644,7 @@ class SimRobotNode(Node):
         # ── 始终发布: 里程计 + TF + 合成平坦地形 + stop=0 ──
         self._pub_odom_tf(now)
 
-        terrain = _flat_cloud(self.x, self.y, stamp=now)
+        terrain = _flat_cloud(self.x, self.y, self.z, stamp=now)
         self.pub_cloud.publish(terrain)
         self.pub_terrain.publish(terrain)
         self.pub_te.publish(terrain)
@@ -651,9 +657,15 @@ class SimRobotNode(Node):
         if self.phase == 'warmup':
             if elapsed >= WARMUP_S:
                 self.phase = 'running'
-                self._pub_goal(now)
-                self.get_logger().info(
-                    f'== RUNNING: 目标已发送, PCT 规划器开始规划 ==')
+                if _DEF_GOAL_Z > 0.1:
+                    # 3D 跨楼层: 触发 3D A* 规划
+                    self._activate_3d_nav(self.gx, self.gy, _DEF_GOAL_Z)
+                    self.get_logger().info(
+                        f'== RUNNING [3D]: 目标=({self.gx:.2f},{self.gy:.2f},Z={_DEF_GOAL_Z:.1f}m) ==')
+                else:
+                    self._pub_goal(now)
+                    self.get_logger().info(
+                        f'== RUNNING: 目标已发送, PCT 规划器开始规划 ==')
 
         # ── 运行阶段 ──
         elif self.phase == 'running':
@@ -665,6 +677,24 @@ class SimRobotNode(Node):
                     return
                 self._follow_3d()
                 self._integrate()
+                # 以约 2 Hz 记录 3D 轨迹
+                if int(elapsed * 2) > int((elapsed - DT) * 2):
+                    dist_xy = math.hypot(self.x - self.gx, self.y - self.gy)
+                    self.get_logger().info(
+                        f'[3D] t={elapsed:6.1f}s  '
+                        f'pos=({self.x:.2f},{self.y:.2f},Z={self.z:.2f})  '
+                        f'dist_xy={dist_xy:.2f}m  wps={len(self._3d_path)}')
+                    self.traj.append({
+                        't':    round(elapsed, 2),
+                        'x':    round(self.x, 3),
+                        'y':    round(self.y, 3),
+                        'z':    round(self.z, 3),
+                        'yaw':  round(math.degrees(self.yaw), 1),
+                        'vx':   round(self.vx, 3),
+                        'vy':   round(self.vy, 3),
+                        'wz':   round(self.wz, 3),
+                        'dist': round(dist_xy, 3),
+                    })
                 if not self._3d_path:
                     self.get_logger().info(
                         f'[3D] *** 3D目标到达! 终点=({self.x:.2f},{self.y:.2f},{self.z:.2f}) ***')
@@ -803,7 +833,8 @@ class SimRobotNode(Node):
             ax.plot(xs[-1], ys[-1], 'bs', ms=10,
                     label=f'终点 ({xs[-1]:.2f},{ys[-1]:.2f})')
             status = '✓ 到达目标' if result['goal_reached'] else f'✗ 超时 (dist={ds[-1]:.2f}m)'
-            ax.set_title(f'Building2_9 SITL — {status}', fontsize=11)
+            _scene = os.environ.get('SIM_SCENE_NAME', 'Building2_9')
+            ax.set_title(f'{_scene} SITL — {status}', fontsize=11)
             ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
             ax.legend(fontsize=8); ax.set_aspect('equal'); ax.grid(True, alpha=0.3)
 
