@@ -1,0 +1,24 @@
+<!-- spiral0.3_2 terrain ¡ª paste into your .world file -->
+<model name="spiral_terrain">
+  <static>true</static>
+  <link name="terrain_link">
+    <collision name="collision">
+      <geometry>
+        <heightmap>
+          <uri>file://spiral_heightmap.png</uri>
+          <size>82.60 41.80 0.400</size>
+          <pos>-20.600 -11.800 -0.200</pos>
+        </heightmap>
+      </geometry>
+    </collision>
+    <visual name="visual">
+      <geometry>
+        <heightmap>
+          <uri>file://spiral_heightmap.png</uri>
+          <size>82.60 41.80 0.400</size>
+          <pos>-20.600 -11.800 -0.200</pos>
+        </heightmap>
+      </geometry>
+    </visual>
+  </link>
+</model>
