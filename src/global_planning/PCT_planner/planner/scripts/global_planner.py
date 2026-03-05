@@ -291,7 +291,16 @@ class GlobalPlanner(Node):
         if not success:
             self.publish_status("NO_LOCALIZATION")
             return
-        
+
+        # 机器人物理 Z 可能低于 tomogram 最低切片 (slice_h0), 导致 plan() 找不到起点格栅
+        # 例: building2_9 slice_h0=0.5, 但真实机器人地面 z≈0.0 → snap 到最低有效切片
+        if self.tomogram_ground_h > 0.0 and start_height < self.tomogram_ground_h:
+            self.get_logger().info(
+                f"start_h {start_height:.2f} < tomogram_ground_h {self.tomogram_ground_h:.2f}, "
+                f"snapping to ground slice"
+            )
+            start_height = self.tomogram_ground_h
+
         self.last_plan_time = current_time
         self.get_logger().info(f"Goal received ({source}): ({x:.2f}, {y:.2f}, {z:.2f})")
         self.pct_plan(start_pos, start_height, np.array([x, y], dtype=np.float32), z)
