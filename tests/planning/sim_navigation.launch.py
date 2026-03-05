@@ -30,7 +30,7 @@ import os
 import sys
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -318,6 +318,9 @@ def generate_launch_description():
             'SIM_MAP_Y_MAX':    map_y_max,
             'SIM_PCD_PATH':     pcd_path,
             'SIM_SCENE_NAME':   scene_name,
+            # 延长预热: 确保 TF map→body 在 global_planner 收到 goal 前已就绪
+            # global_planner 用 TF 查起点; TF 未就绪时起点为 (0,0,0) → 规划失败
+            'SIM_WARMUP_S':     '10',
             'PYTHONUNBUFFERED': '1',
         },
     )
@@ -365,10 +368,23 @@ def generate_launch_description():
         arguments=['-d', _rviz_cfg] if os.path.exists(_rviz_cfg) else [],
     ) if _use_rviz else None
 
+    # ── 启动时清除 TRANSIENT_LOCAL 路径 latch（防止上次 session 残留路径污染新 run）─
+    clear_latch = ExecuteProcess(
+        cmd=[
+            'ros2', 'topic', 'pub', '--once',
+            '--qos-durability', 'transient_local',
+            '/nav/global_path', 'nav_msgs/msg/Path', '{}',
+        ],
+        output='screen',
+        name='clear_path_latch',
+    )
+
     nodes = [
-        sim_robot,              # 最先: 提供 odometry + terrain + /robot_description
+        clear_latch,            # 先清残留 latch
+        sim_robot,              # 提供 odometry + terrain + /robot_description
         robot_state_pub_node,   # URDF TF (base_link → wheels)
-        global_planner_proc,    # 全局规划 (ele_planner.so, 与 RViz demo 同一套)
+        # 全局规划器延迟 2s 启动, 确保 sim_robot_node 先发布 TF
+        TimerAction(period=2.0, actions=[global_planner_proc]),
         pct_adapter_node,       # 航点适配
         local_planner_node,     # 局部规划
         path_follower_node,     # 速度控制

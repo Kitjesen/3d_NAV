@@ -61,7 +61,7 @@ MAX_SECS    = 180.0  # s, 超时时间
 DT          = 0.05   # s, 主循环周期 (20 Hz)
 TERRAIN_R   = 10.0   # m, 合成平坦地形半径
 TERRAIN_S   =  0.4   # m, 格栅间距
-WARMUP_S    =  4.0   # s, 预热时间 (≥ joyToSpeedDelay=2.0s)
+WARMUP_S    = float(os.environ.get('SIM_WARMUP_S', '6.0'))  # s, 预热 (≥ joyToSpeedDelay=2.0s)
 GOAL_RESEND_S = 3600.0 # s, 禁用中途重发 (规划器已有路径, 无需重发导致重规划闪烁)
 LOOP_PAUSE_S  =  5.0 # s, 到达目标后暂停再重置 (演示循环)
 
