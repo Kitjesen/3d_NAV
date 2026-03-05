@@ -116,6 +116,8 @@ def generate_launch_description():
             '--ros-args',
             # map_file 参数: 指向当前地图 pickle
             '-p', ['map_file:=', map_path],
+            # building2_9 slice_h0=0.5: snap start_h 到地面切片 (真实机器人 z≈0.0 < 0.5)
+            '-p', 'tomogram_ground_h:=0.5',
             # goal_pose remap: sim_robot_node 发布到 /nav/goal_pose
             '-r', '/goal_pose:=/nav/goal_pose',
             # pct_path → /nav/global_path: pct_adapter 内部订阅 /pct_path (已 remap 到此)
@@ -312,9 +314,7 @@ def generate_launch_description():
             'SIM_GOAL_Z':       goal_z,
             'SIM_START_X':      start_x,
             'SIM_START_Y':      start_y,
-            # building2_9 tomogram slice_h0=0.5: 机器人发布 TF z=0.5 匹配地图地面层
-            # global_planner.py 用 TF z 做 start_h → z=0.0 低于所有切片导致规划失败
-            'SIM_START_Z':      '0.5',
+            'SIM_START_Z':      '0.0',  # 机器人物理高度 (地面); global_planner snap 到 tomogram_ground_h
             'SIM_MAP_X_MIN':    map_x_min,
             'SIM_MAP_X_MAX':    map_x_max,
             'SIM_MAP_Y_MIN':    map_y_min,
