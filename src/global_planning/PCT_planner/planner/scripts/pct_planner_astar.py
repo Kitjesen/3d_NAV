@@ -624,6 +624,9 @@ class PctPlannerAstar(Node):
                 f'slices iz={iz_s}→{iz_g}')
 
     def _republish(self):
+        # Only republish for late-joining subscribers; pct_path_adapter resets
+        # its waypoint tracker on every new path message, so frequent republish
+        # causes the robot to oscillate back to earlier waypoints.
         if self._last_path is not None:
             self._last_path.header.stamp = self.get_clock().now().to_msg()
             self._pub_path.publish(self._last_path)
