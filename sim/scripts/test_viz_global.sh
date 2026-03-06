@@ -76,7 +76,7 @@ python3 ${PLANNER_SCRIPT} \
     -r /nav/planner_status:=/nav/planner_status \
     -p tomogram_file:="${MAP_FILE}.pickle" \
     -p obstacle_thr:=49.9 \
-    -p republish_hz:=0.02 \
+    -p republish_hz:=1.0 \
     > /tmp/global_planner.log 2>&1 &
 GP_PID=$!
 sleep 3

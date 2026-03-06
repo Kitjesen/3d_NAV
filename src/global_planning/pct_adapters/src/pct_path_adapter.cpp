@@ -128,11 +128,30 @@ private:
       }
     }
 
+    // 路径去重: 全局规划器可能定期重发同一条路径 (TRANSIENT_LOCAL republish)
+    // 每次 setPath 会重置 tracker 的航点索引 → 机器人回退到先前航点 → 振荡卡死
+    // 比较路径长度+终点坐标, 相同则跳过
+    if (!tracker_.path().empty() && !tracker_.goalReached() &&
+        msg->poses.size() == lastPathSize_) {
+      const auto & lastPose = msg->poses.back().pose.position;
+      if (std::abs(lastPose.x - lastPathEndX_) < 0.01 &&
+          std::abs(lastPose.y - lastPathEndY_) < 0.01) {
+        return;  // 同一路径重发, 跳过以保持 tracker 状态
+      }
+    }
+
     RCLCPP_INFO(get_logger(),
       "Received new Global Path with %zu points", msg->poses.size());
 
     auto navPath = rosPathToNavCore(*msg);
     tracker_.setPath(navPath, now().seconds());
+
+    // 记录路径签名用于去重
+    lastPathSize_ = msg->poses.size();
+    if (!msg->poses.empty()) {
+      lastPathEndX_ = msg->poses.back().pose.position.x;
+      lastPathEndY_ = msg->poses.back().pose.position.y;
+    }
 
     // R9-4: 路径完整性日志 — 打印总长度和航点数
     double totalLen = 0.0;
@@ -318,6 +337,11 @@ private:
   // ── 边界保护参数 ──
   int maxIndexJump_ = 3;
   double maxFirstWaypointDist_ = 10.0;
+
+  // ── 路径去重 ──
+  size_t lastPathSize_ = 0;
+  double lastPathEndX_ = 0.0;
+  double lastPathEndY_ = 0.0;
 
   // ── ROS2 独有状态 ──
   geometry_msgs::msg::Point robot_pos_;
