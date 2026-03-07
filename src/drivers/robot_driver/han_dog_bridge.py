@@ -128,7 +128,7 @@ class HanDogBridge(Node):
         self._latest_gyro = (0.0, 0.0, 0.0)
         self._imu_stamp = None
 
-        # 最新关节数据缓存 (16 DOF: 4 legs × 4 joints)
+        # 最新关节数据缓存 (16 DOF, proto Matrix4 顺序: 12 hip/thigh/calf + 4 foot)
         self._latest_joint_pos = [0.0] * 16
         self._latest_joint_vel = [0.0] * 16
         self._latest_joint_eff = [0.0] * 16
@@ -313,7 +313,7 @@ class HanDogBridge(Node):
         state = RobotState()
         state.header.stamp = self.get_clock().now().to_msg()
 
-        # 关节数据 (16 DOF: 4 legs × 4 joints)
+        # 关节数据 (16 DOF, 顺序同 proto common.proto Matrix4)
         state.joint_positions = self._latest_joint_pos[:16]
         state.joint_velocities = self._latest_joint_vel[:16]
         state.joint_efforts = self._latest_joint_eff[:16]
@@ -459,7 +459,9 @@ class HanDogBridge(Node):
         async for joint in self._stub.ListenJoint(dog_msg.Empty()):
             if joint.HasField('all_joints'):
                 aj = joint.all_joints
-                # 16 DOF: 4 legs × 4 joints (hip, thigh, calf, foot)
+                # 16 DOF (proto Matrix4 顺序):
+                # [0-2] FR(hip,thigh,calf), [3-5] FL, [6-8] RR, [9-11] RL,
+                # [12-15] FR_foot, FL_foot, RR_foot, RL_foot
                 pos = list(aj.position.values) if aj.position.values else [0.0] * 16
                 vel = list(aj.velocity.values) if aj.velocity.values else [0.0] * 16
                 tor = list(aj.torque.values) if aj.torque.values else [0.0] * 16

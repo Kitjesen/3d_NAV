@@ -1,8 +1,9 @@
 # RobotState.msg - 机器人综合状态
 std_msgs/Header header
 
-# 关节角度 (16 DOF: 4 legs × 4 joints: hip, thigh, calf, foot)
-# 顺序: FR(hip,thigh,calf,foot), FL(...), RR(...), RL(...)
+# 关节角度 (16 DOF: 与 brainstem CMS proto Matrix4 顺序一致)
+# 顺序: FR(hip,thigh,calf), FL(hip,thigh,calf), RR(hip,thigh,calf), RL(hip,thigh,calf),
+#       FR_foot, FL_foot, RR_foot, RL_foot
 float32[16] joint_positions    # 关节位置 (rad)
 float32[16] joint_velocities   # 关节速度 (rad/s)
 float32[16] joint_efforts      # 关节力矩 (N*m)
