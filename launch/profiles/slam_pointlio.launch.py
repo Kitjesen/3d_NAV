@@ -12,9 +12,9 @@ Point-LIO 内部使用的话题 (相对名, 通过 namespace 解析):
 与 Fast-LIO2 的差异:
   - 里程计话题名: aft_mapped_to_init (而非 Odometry)
   - 话题为相对名 (而非 Fast-LIO2 的绝对名)
-  - Frame ID: camera_init/aft_mapped (而非 odom/body)
+  - Frame ID: 已 patch 为 odom/body (源码级修改)
   - 参数通过 ROS2 params 加载 (而非 yaml-cpp config_path)
-  - 无 save_map 服务 (使用 pcd_save_en 参数)
+  - save_map 服务已适配 (与 Fast-LIO2 接口一致)
 """
 
 from launch import LaunchDescription
@@ -53,6 +53,8 @@ def generate_launch_description():
             # ── 输入: yaml 中配置的话题名 → 标准接口 ──
             ("livox/imu",             "/nav/imu"),
             ("livox/lidar",           "/nav/lidar_scan"),
+            # ── 服务: 相对名, 通过 namespace 变为 /pointlio/save_map → 标准接口 ──
+            ("save_map",              "/nav/save_map"),
         ],
     )
 

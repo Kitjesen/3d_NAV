@@ -10,6 +10,7 @@
 
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include "interface/srv/save_maps.hpp"
 
 #include "li_initialization.h"
 
@@ -191,11 +192,11 @@ void publish_frame_world(
     pubLaserCloudFullRes->publish(laserCloudmsg);
 
     //--------------------------save map-----------------------------------
-    // 1. make sure you have enough memories
-    // 2. noted that pcd save will influence the real-time performances
-    if (pcd_save_en) {
-      *pcl_wait_save += *feats_down_world;
+    // Always accumulate map points for save_map service.
+    *pcl_wait_save += *feats_down_world;
 
+    // Periodic PCD file saving (optional, controlled by pcd_save_en).
+    if (pcd_save_en) {
       static int scan_wait_num = 0;
       scan_wait_num++;
       if (!pcl_wait_save->empty() && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval) {
@@ -390,6 +391,24 @@ int main(int argc, char ** argv)
     nh->create_publisher<nav_msgs::msg::Odometry>("aft_mapped_to_init", 20);
   auto pub_path = nh->create_publisher<nav_msgs::msg::Path>("path", 20);
   auto tf_broadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(nh);
+
+  /*** save_map service — compatible with Fast-LIO2 interface ***/
+  auto save_map_srv = nh->create_service<interface::srv::SaveMaps>(
+    "save_map",
+    [&nh](const std::shared_ptr<interface::srv::SaveMaps::Request> request,
+          std::shared_ptr<interface::srv::SaveMaps::Response> response) {
+      if (pcl_wait_save->empty()) {
+        response->success = false;
+        response->message = "No map data accumulated yet";
+        return;
+      }
+      RCLCPP_INFO(nh->get_logger(), "Saving map (%zu points) to %s",
+                  pcl_wait_save->size(), request->file_path.c_str());
+      pcl::PCDWriter pcd_writer;
+      pcd_writer.writeBinary(request->file_path, *pcl_wait_save);
+      response->success = true;
+      response->message = "Map saved successfully";
+    });
 
   //------------------------------------------------------------------------------------------------------
   signal(SIGINT, SigHandle);

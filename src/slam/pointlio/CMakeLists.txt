@@ -50,6 +50,7 @@ find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
+find_package(interface REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(glog REQUIRED)
 find_package(OpenMP QUIET)
@@ -94,6 +95,7 @@ ament_target_dependencies(pointlio_node
   pcl_conversions
   tf2_ros
   livox_ros_driver2
+  interface
 )
 
 target_link_libraries(pointlio_node ${PCL_LIBRARIES} ${PYTHON_LIBRARIES})
