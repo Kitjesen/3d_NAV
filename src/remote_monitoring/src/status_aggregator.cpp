@@ -74,6 +74,14 @@ StatusAggregator::StatusAggregator(rclcpp::Node *node)
               "Subscribed to RobotState on '%s' for joint angles + battery",
               robot_state_topic.c_str());
 
+  // 导航状态 (R8): adapter_status + planner_status
+  sub_adapter_status_ = node_->create_subscription<std_msgs::msg::String>(
+    "/nav/adapter_status", 10,
+    std::bind(&StatusAggregator::AdapterStatusCallback, this, std::placeholders::_1));
+  sub_planner_status_ = node_->create_subscription<std_msgs::msg::String>(
+    "/nav/planner_status", 10,
+    std::bind(&StatusAggregator::PlannerStatusCallback, this, std::placeholders::_1));
+
   // 模拟电池初始化
   battery_sim_start_ = std::chrono::steady_clock::now();
 
@@ -128,6 +136,51 @@ void StatusAggregator::RobotStateCallback(
     RCLCPP_INFO(node_->get_logger(),
                 "RobotState received, switching to real battery data");
   }
+}
+
+void StatusAggregator::AdapterStatusCallback(
+    const std_msgs::msg::String::ConstSharedPtr msg) {
+  if (!msg) return;
+  // Parse JSON: {"event":"...","index":N,"total":N}
+  const auto &data = msg->data;
+  std::lock_guard<std::mutex> lock(slow_mutex_);
+  nav_adapter_status_ = data;
+
+  // Extract event, index, total from simple JSON
+  auto extract_str = [&](const std::string &key) -> std::string {
+    auto pos = data.find("\"" + key + "\":\"");
+    if (pos == std::string::npos) return "";
+    pos += key.size() + 4;
+    auto end = data.find('"', pos);
+    return (end != std::string::npos) ? data.substr(pos, end - pos) : "";
+  };
+  auto extract_int = [&](const std::string &key) -> int {
+    auto pos = data.find("\"" + key + "\":");
+    if (pos == std::string::npos) return 0;
+    pos += key.size() + 3;
+    return std::atoi(data.c_str() + pos);
+  };
+
+  const auto event = extract_str("event");
+  nav_waypoint_index_.store(extract_int("index"), std::memory_order_relaxed);
+  nav_waypoint_total_.store(extract_int("total"), std::memory_order_relaxed);
+
+  if (event == "replanning") {
+    nav_replan_count_.fetch_add(1, std::memory_order_relaxed);
+  } else if (event == "stuck_final") {
+    nav_stuck_count_.fetch_add(1, std::memory_order_relaxed);
+  } else if (event == "goal_reached") {
+    // Reset counters on goal reached
+    nav_stuck_count_.store(0, std::memory_order_relaxed);
+    nav_replan_count_.store(0, std::memory_order_relaxed);
+  }
+}
+
+void StatusAggregator::PlannerStatusCallback(
+    const std_msgs::msg::String::ConstSharedPtr msg) {
+  if (!msg) return;
+  std::lock_guard<std::mutex> lock(slow_mutex_);
+  nav_planner_status_ = msg->data;
 }
 
 void StatusAggregator::update_rates() {
@@ -415,6 +468,27 @@ void StatusAggregator::update_slow_state() {
     }
   }
   
+  // 导航性能指标 (R8)
+  {
+    auto *nav = scratch_slow_state_.mutable_navigation();
+    nav->set_slow_down_level(slow_down_level_.load(std::memory_order_relaxed));
+    nav->set_stuck_count(nav_stuck_count_.load(std::memory_order_relaxed));
+    nav->set_replan_count(nav_replan_count_.load(std::memory_order_relaxed));
+    nav->set_waypoint_index(nav_waypoint_index_.load(std::memory_order_relaxed));
+    nav->set_waypoint_total(nav_waypoint_total_.load(std::memory_order_relaxed));
+    // slow_mutex_ is already held by update_slow_state() caller context?
+    // No — update_slow_state() is called from timer, doesn't hold slow_mutex_
+    // until the Swap at the end. But nav_adapter_status_ is written under slow_mutex_.
+    // We need a separate brief lock.
+    {
+      // Already in single-threaded timer callback — nav_planner_status_ and
+      // nav_adapter_status_ are written from subscription callbacks on same
+      // executor thread, so no race. But be safe:
+      nav->set_global_planner_status(nav_planner_status_);
+      nav->set_adapter_status(nav_adapter_status_);
+    }
+  }
+
   // 运行参数 (JSON)
   if (config_provider_) {
     auto [config_json, version] = config_provider_();

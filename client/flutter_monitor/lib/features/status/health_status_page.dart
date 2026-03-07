@@ -439,6 +439,51 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
               ),
           ]),
 
+          // ── 航点进度 ──
+          if (nav != null && nav.waypointTotal > 0) ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              Text('航点进度', style: TextStyle(fontSize: 12, color: context.subtitleColor)),
+              const Spacer(),
+              Text('${nav.waypointIndex} / ${nav.waypointTotal}',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                  color: context.titleColor)),
+            ]),
+            const SizedBox(height: 4),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(
+                value: nav.waypointTotal > 0
+                    ? (nav.waypointIndex / nav.waypointTotal).clamp(0.0, 1.0) : 0.0,
+                backgroundColor: dark
+                    ? Colors.white.withValues(alpha: 0.06)
+                    : Colors.black.withValues(alpha: 0.04),
+                valueColor: AlwaysStoppedAnimation(AppColors.primary.withValues(alpha: 0.7)),
+                minHeight: 5,
+              ),
+            ),
+          ],
+
+          // ── 卡死 / 重规划计数 ──
+          if (nav != null && (nav.stuckCount > 0 || nav.replanCount > 0)) ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              if (nav.stuckCount > 0) ...[
+                Icon(Icons.warning_amber_rounded, size: 14, color: AppColors.error),
+                const SizedBox(width: 4),
+                Text('卡死 ${nav.stuckCount}',
+                  style: TextStyle(fontSize: 11, color: AppColors.error, fontWeight: FontWeight.w600)),
+                const SizedBox(width: 12),
+              ],
+              if (nav.replanCount > 0) ...[
+                Icon(Icons.refresh, size: 14, color: AppColors.warning),
+                const SizedBox(width: 4),
+                Text('重规划 ${nav.replanCount}',
+                  style: TextStyle(fontSize: 11, color: AppColors.warning, fontWeight: FontWeight.w600)),
+              ],
+            ]),
+          ],
+
           // ── 话题频率 ──
           if (rates != null) ...[
             const SizedBox(height: 10),
