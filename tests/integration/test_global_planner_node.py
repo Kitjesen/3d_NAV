@@ -17,7 +17,7 @@
       -r /goal_pose:=/nav/goal_pose \
       -r /pct_path:=/nav/global_path \
       -r /pct_planner/status:=/nav/planner_status \
-      -p map_file:=/tmp/sim_maps/building_nav.pickle
+      -p tomogram_file:=/tmp/sim_maps/building_nav.pickle
 
 运行本测试:
   python3 tests/integration/test_global_planner_node.py
