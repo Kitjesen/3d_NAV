@@ -12,6 +12,7 @@
 #include "nav_msgs/msg/path.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "std_msgs/msg/int8.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 
@@ -89,6 +90,8 @@ private:
   void PathCallback(const nav_msgs::msg::Path::ConstSharedPtr msg);
   void SlowDownCallback(const std_msgs::msg::Int8::ConstSharedPtr msg);
   void RobotStateCallback(const interface::msg::RobotState::ConstSharedPtr msg);
+  void AdapterStatusCallback(const std_msgs::msg::String::ConstSharedPtr msg);
+  void PlannerStatusCallback(const std_msgs::msg::String::ConstSharedPtr msg);
   
   void update_rates();
   void update_fast_state();
@@ -122,7 +125,9 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_path_;
   rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_slow_down_;
   rclcpp::Subscription<interface::msg::RobotState>::SharedPtr sub_robot_state_;
-  
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_adapter_status_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_planner_status_;
+
   rclcpp::TimerBase::SharedPtr rate_timer_;
   rclcpp::TimerBase::SharedPtr fast_state_timer_;
   rclcpp::TimerBase::SharedPtr slow_state_timer_;
@@ -168,6 +173,14 @@ private:
   std::shared_ptr<core::GeofenceMonitor> geofence_monitor_;
   std::shared_ptr<core::LocalizationScorer> localization_scorer_;
   std::shared_ptr<core::FlightRecorder> flight_recorder_;
+
+  // 导航性能指标 (R8) — 从 /nav/adapter_status + /nav/planner_status 收集
+  std::atomic<int32_t> nav_stuck_count_{0};
+  std::atomic<int32_t> nav_replan_count_{0};
+  std::atomic<int32_t> nav_waypoint_index_{0};
+  std::atomic<int32_t> nav_waypoint_total_{0};
+  std::string nav_adapter_status_;  // guarded by slow_mutex_
+  std::string nav_planner_status_;  // guarded by slow_mutex_
 
   // CPU 使用率计算所需的上一次采样值 (由后台线程写入)
   uint64_t prev_cpu_total_{0};
