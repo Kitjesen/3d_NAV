@@ -3,6 +3,7 @@
 
 通过 slam_profile 参数选择具体算法实现:
   fastlio2 (默认) — Fast-LIO2
+  pointlio         — Point-LIO
   stub             — 无硬件测试桩
 
 输出 (标准接口契约):
@@ -46,7 +47,7 @@ def generate_launch_description():
     profile_arg = DeclareLaunchArgument(
         "slam_profile",
         default_value="fastlio2",
-        description="SLAM 算法 profile (fastlio2, stub, ...)",
+        description="SLAM 算法 profile (fastlio2, pointlio, stub, ...)",
     )
 
     return LaunchDescription([
