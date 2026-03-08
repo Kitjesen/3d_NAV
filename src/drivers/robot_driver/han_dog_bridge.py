@@ -313,10 +313,12 @@ class HanDogBridge(Node):
         state = RobotState()
         state.header.stamp = self.get_clock().now().to_msg()
 
-        # 关节数据 (16 DOF, 顺序同 proto common.proto Matrix4)
-        state.joint_positions = self._latest_joint_pos[:16]
-        state.joint_velocities = self._latest_joint_vel[:16]
-        state.joint_efforts = self._latest_joint_eff[:16]
+        # 关节数据: proto Matrix4 有 16 DOF (12 hip/thigh/calf + 4 ankle),
+        # 但 interface::msg::RobotState 在当前机器人固件上只定义了 12 个关节槽
+        # (ankle 关节力矩不用于 MapPilot 导航), 只取前 12 个
+        state.joint_positions = self._latest_joint_pos[:12]
+        state.joint_velocities = self._latest_joint_vel[:12]
+        state.joint_efforts = self._latest_joint_eff[:12]
 
         # 足端力 (暂无数据, 填零)
         state.foot_forces = [0.0, 0.0, 0.0, 0.0]
