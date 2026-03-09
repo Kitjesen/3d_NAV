@@ -50,7 +50,7 @@ def generate_launch_description():
     )
     slam_profile_arg = DeclareLaunchArgument(
         "slam_profile", default_value="fastlio2",
-        description="SLAM 算法 profile (fastlio2, stub)",
+        description="SLAM 算法 profile (fastlio2, pointlio, stub)",
     )
 
     # ---- 1. LiDAR 驱动 ----

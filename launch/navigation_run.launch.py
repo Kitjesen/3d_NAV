@@ -65,7 +65,7 @@ def generate_launch_description():
     # ---- 算法 Profile 参数 ----
     slam_profile_arg = DeclareLaunchArgument(
         "slam_profile", default_value="fastlio2",
-        description="SLAM 算法 profile (fastlio2, stub)",
+        description="SLAM 算法 profile (fastlio2, pointlio, stub)",
     )
     planner_profile_arg = DeclareLaunchArgument(
         "planner_profile", default_value="pct",
