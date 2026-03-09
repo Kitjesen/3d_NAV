@@ -49,7 +49,7 @@
             # (e.g., via LI-Init). The IMU timestamp is shifted by subtracting this
             # value to align with the LiDAR timeline.
             # Mid-360 built-in IMU is hardware-synced, so offset is near zero.
-            time_lag_imu_to_lidar: 0.0     # [Point-LIO specific] seconds
+            time_diff_lidar_to_imu: 0.0    # [Point-LIO specific] seconds
 
         # =====================================================================
         # preprocess -- LiDAR type & point cloud preprocessing
