@@ -92,4 +92,21 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription([map_path_arg, pct_planner, pct_adapter])
+    # ---- Mission Arc (任务生命周期状态机) ----
+    mission_arc = Node(
+        package="pct_adapters",
+        executable="mission_arc.py",
+        name="mission_arc",
+        output="screen",
+        parameters=[
+            {
+                "max_replan_count": 3,
+                "recovery_timeout_sec": 8.0,
+                "planning_timeout_sec": 30.0,
+                "mission_timeout_sec": 600.0,
+                "publish_hz": 2.0,
+            }
+        ],
+    )
+
+    return LaunchDescription([map_path_arg, pct_planner, pct_adapter, mission_arc])
