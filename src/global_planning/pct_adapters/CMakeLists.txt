@@ -34,6 +34,10 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Python mission_arc 节点
+install(PROGRAMS src/mission_arc.py
+  DESTINATION lib/${PROJECT_NAME})
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
