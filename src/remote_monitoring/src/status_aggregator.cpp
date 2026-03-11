@@ -1,4 +1,5 @@
 #include "remote_monitoring/status_aggregator.hpp"
+#include "remote_monitoring/core/event_buffer.hpp"
 #include "remote_monitoring/core/flight_recorder.hpp"
 #include "remote_monitoring/core/geofence_monitor.hpp"
 #include "remote_monitoring/core/health_monitor.hpp"
@@ -81,6 +82,11 @@ StatusAggregator::StatusAggregator(rclcpp::Node *node)
   sub_planner_status_ = node_->create_subscription<std_msgs::msg::String>(
     "/nav/planner_status", 10,
     std::bind(&StatusAggregator::PlannerStatusCallback, this, std::placeholders::_1));
+
+  // Mission Arc 状态
+  sub_mission_status_ = node_->create_subscription<std_msgs::msg::String>(
+    "/nav/mission_status", 10,
+    std::bind(&StatusAggregator::MissionStatusCallback, this, std::placeholders::_1));
 
   // 模拟电池初始化
   battery_sim_start_ = std::chrono::steady_clock::now();
@@ -181,6 +187,144 @@ void StatusAggregator::PlannerStatusCallback(
   if (!msg) return;
   std::lock_guard<std::mutex> lock(slow_mutex_);
   nav_planner_status_ = msg->data;
+}
+
+void StatusAggregator::MissionStatusCallback(
+    const std_msgs::msg::String::ConstSharedPtr msg) {
+  if (!msg) return;
+  const auto &data = msg->data;
+
+  // 简易 JSON 解析 (mission_status 是 mission_arc.py 输出的标准 JSON)
+  auto extract_str = [&](const std::string &key) -> std::string {
+    const auto needle = "\"" + key + "\": \"";
+    auto pos = data.find(needle);
+    if (pos == std::string::npos) {
+      // 尝试无空格格式
+      const auto needle2 = "\"" + key + "\":\"";
+      pos = data.find(needle2);
+      if (pos == std::string::npos) return "";
+      pos += needle2.size();
+    } else {
+      pos += needle.size();
+    }
+    auto end = data.find('"', pos);
+    return (end != std::string::npos) ? data.substr(pos, end - pos) : "";
+  };
+  auto extract_float = [&](const std::string &key) -> float {
+    const auto needle = "\"" + key + "\":";
+    auto pos = data.find(needle);
+    if (pos == std::string::npos) {
+      const auto needle2 = "\"" + key + "\": ";
+      pos = data.find(needle2);
+      if (pos == std::string::npos) return 0.0f;
+      pos += needle2.size();
+    } else {
+      pos += needle.size();
+    }
+    // 跳过空格
+    while (pos < data.size() && data[pos] == ' ') pos++;
+    return std::strtof(data.c_str() + pos, nullptr);
+  };
+  auto extract_int = [&](const std::string &key) -> int32_t {
+    const auto needle = "\"" + key + "\":";
+    auto pos = data.find(needle);
+    if (pos == std::string::npos) {
+      const auto needle2 = "\"" + key + "\": ";
+      pos = data.find(needle2);
+      if (pos == std::string::npos) return 0;
+      pos += needle2.size();
+    } else {
+      pos += needle.size();
+    }
+    while (pos < data.size() && data[pos] == ' ') pos++;
+    return std::atoi(data.c_str() + pos);
+  };
+  auto extract_bool = [&](const std::string &key) -> bool {
+    const auto needle = "\"" + key + "\":";
+    auto pos = data.find(needle);
+    if (pos == std::string::npos) {
+      const auto needle2 = "\"" + key + "\": ";
+      pos = data.find(needle2);
+      if (pos == std::string::npos) return false;
+      pos += needle2.size();
+    } else {
+      pos += needle.size();
+    }
+    while (pos < data.size() && data[pos] == ' ') pos++;
+    return (pos < data.size() && data[pos] == 't');
+  };
+
+  std::lock_guard<std::mutex> lock(slow_mutex_);
+
+  const auto new_state = extract_str("state");
+  if (new_state.empty()) return;
+
+  mission_prev_state_ = mission_state_;
+  mission_state_ = new_state;
+  mission_elapsed_sec_ = extract_float("elapsed_sec");
+  mission_replan_count_ = extract_int("replan_count");
+  mission_estop_ = extract_bool("estop");
+  mission_distance_to_goal_ = extract_float("distance_to_goal");
+  mission_failure_reason_ = extract_str("failure_reason");
+
+  // 解析嵌套 goal 对象
+  if (data.find("\"goal\"") != std::string::npos) {
+    mission_has_goal_ = true;
+    // goal 在嵌套 JSON 中: "goal": {"x": 10.0, "y": 5.0, ...}
+    auto goal_pos = data.find("\"goal\"");
+    auto brace = data.find('{', goal_pos);
+    if (brace != std::string::npos) {
+      auto sub = data.substr(brace);
+      auto end_brace = sub.find('}');
+      if (end_brace != std::string::npos) {
+        auto goal_json = sub.substr(0, end_brace + 1);
+        // 从 goal_json 里提取 x, y
+        auto xp = goal_json.find("\"x\":");
+        if (xp != std::string::npos) {
+          xp += 4;
+          while (xp < goal_json.size() && goal_json[xp] == ' ') xp++;
+          mission_goal_x_ = std::strtof(goal_json.c_str() + xp, nullptr);
+        }
+        auto yp = goal_json.find("\"y\":");
+        if (yp != std::string::npos) {
+          yp += 4;
+          while (yp < goal_json.size() && goal_json[yp] == ' ') yp++;
+          mission_goal_y_ = std::strtof(goal_json.c_str() + yp, nullptr);
+        }
+      }
+    }
+  }
+
+  // 解析嵌套 progress 对象
+  if (data.find("\"progress\"") != std::string::npos) {
+    mission_wp_completed_ = extract_int("waypoints_completed");
+    mission_wp_total_ = extract_int("waypoints_total");
+    mission_progress_pct_ = extract_float("percent");
+  }
+
+  // 状态转换时发射事件
+  if (mission_prev_state_ != mission_state_ && event_buffer_) {
+    auto severity = robot::v1::EVENT_SEVERITY_INFO;
+    if (mission_state_ == "FAILED") {
+      severity = robot::v1::EVENT_SEVERITY_ERROR;
+    } else if (mission_state_ == "RECOVERING" || mission_state_ == "REPLANNING") {
+      severity = robot::v1::EVENT_SEVERITY_WARNING;
+    }
+
+    std::string desc = "Mission: " + mission_prev_state_ + " → " + mission_state_;
+    if (mission_state_ == "FAILED" && !mission_failure_reason_.empty()) {
+      desc += " (" + mission_failure_reason_ + ")";
+    }
+    if (mission_state_ == "COMPLETE") {
+      desc += " (elapsed: " + std::to_string(static_cast<int>(mission_elapsed_sec_)) + "s)";
+    }
+
+    event_buffer_->AddEvent(
+        robot::v1::EVENT_TYPE_MISSION_STATE_CHANGED,
+        severity,
+        "Mission " + mission_state_,
+        desc);
+  }
 }
 
 void StatusAggregator::update_rates() {
@@ -486,6 +630,27 @@ void StatusAggregator::update_slow_state() {
       // executor thread, so no race. But be safe:
       nav->set_global_planner_status(nav_planner_status_);
       nav->set_adapter_status(nav_adapter_status_);
+    }
+
+    // Mission Arc 状态
+    auto *mission = nav->mutable_mission();
+    mission->set_state(mission_state_);
+    mission->set_elapsed_sec(mission_elapsed_sec_);
+    mission->set_replan_count(mission_replan_count_);
+    mission->set_estop(mission_estop_);
+    mission->set_distance_to_goal(mission_distance_to_goal_);
+    if (mission_has_goal_) {
+      mission->set_has_goal(true);
+      mission->mutable_goal()->set_x(mission_goal_x_);
+      mission->mutable_goal()->set_y(mission_goal_y_);
+    }
+    if (mission_wp_total_ > 0) {
+      mission->set_waypoints_completed(mission_wp_completed_);
+      mission->set_waypoints_total(mission_wp_total_);
+      mission->set_progress_percent(mission_progress_pct_);
+    }
+    if (!mission_failure_reason_.empty()) {
+      mission->set_failure_reason(mission_failure_reason_);
     }
   }
 
