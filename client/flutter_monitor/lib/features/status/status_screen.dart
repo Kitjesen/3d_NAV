@@ -1622,9 +1622,135 @@ class _StatusScreenState extends State<StatusScreen>
             const SizedBox(height: 6),
             _buildNavRow(Icons.speed, _locale.tr('减速等级', 'Slowdown'), '${nav.slowDownLevel}'),
           ],
+          // ── Mission Arc 状态 ──
+          if (nav.hasMission && nav.mission.state.isNotEmpty && nav.mission.state != 'IDLE') ...[
+            const Divider(height: 20),
+            _buildMissionSection(nav.mission),
+          ],
         ],
       ),
     );
+  }
+
+  Widget _buildMissionSection(dynamic mission) {
+    final state = mission.state as String;
+    final Color stateColor;
+    final IconData stateIcon;
+
+    switch (state) {
+      case 'PLANNING':
+        stateColor = AppColors.info;
+        stateIcon = Icons.explore;
+      case 'EXECUTING':
+        stateColor = AppColors.primary;
+        stateIcon = Icons.navigation;
+      case 'RECOVERING':
+        stateColor = AppColors.warning;
+        stateIcon = Icons.healing;
+      case 'REPLANNING':
+        stateColor = AppColors.warning;
+        stateIcon = Icons.refresh;
+      case 'COMPLETE':
+        stateColor = AppColors.success;
+        stateIcon = Icons.check_circle;
+      case 'FAILED':
+        stateColor = AppColors.error;
+        stateIcon = Icons.error;
+      default:
+        stateColor = context.subtitleColor;
+        stateIcon = Icons.circle;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 状态行
+        Row(children: [
+          Icon(stateIcon, size: 14, color: stateColor),
+          const SizedBox(width: 6),
+          Text(
+            _locale.tr('任务', 'Mission'),
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+                color: context.subtitleColor, letterSpacing: 1.0),
+          ),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: stateColor.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(state,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: stateColor)),
+          ),
+        ]),
+
+        // 进度条 (EXECUTING / RECOVERING / REPLANNING)
+        if (mission.waypointsTotal > 0 && state != 'COMPLETE' && state != 'FAILED') ...[
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: (mission.progressPercent / 100.0).clamp(0.0, 1.0),
+              backgroundColor: context.isDark
+                  ? Colors.white.withValues(alpha: 0.06)
+                  : Colors.black.withValues(alpha: 0.04),
+              valueColor: AlwaysStoppedAnimation(stateColor.withValues(alpha: 0.7)),
+              minHeight: 5,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(children: [
+            Text('${mission.waypointsCompleted}/${mission.waypointsTotal} '
+                '${_locale.tr("航点", "wp")}',
+                style: TextStyle(fontSize: 11, color: context.subtitleColor)),
+            const Spacer(),
+            Text('${mission.progressPercent.toStringAsFixed(0)}%',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: stateColor)),
+          ]),
+        ],
+
+        // 距离 + 时间
+        if (mission.hasGoal) ...[
+          const SizedBox(height: 6),
+          Row(children: [
+            _buildMissionChip(Icons.place, '${mission.distanceToGoal.toStringAsFixed(1)}m'),
+            const SizedBox(width: 8),
+            _buildMissionChip(Icons.timer, '${mission.elapsedSec.toStringAsFixed(0)}s'),
+            if (mission.replanCount > 0) ...[
+              const SizedBox(width: 8),
+              _buildMissionChip(Icons.refresh, '${mission.replanCount}x',
+                  color: AppColors.warning),
+            ],
+          ]),
+        ],
+
+        // 失败原因
+        if (state == 'FAILED' && mission.failureReason.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.error.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(mission.failureReason,
+                style: TextStyle(fontSize: 11, color: AppColors.error),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildMissionChip(IconData icon, String text, {Color? color}) {
+    final c = color ?? context.subtitleColor;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(icon, size: 12, color: c),
+      const SizedBox(width: 3),
+      Text(text, style: TextStyle(fontSize: 11, color: c, fontWeight: FontWeight.w500)),
+    ]);
   }
 
   Widget _buildNavRow(IconData icon, String label, String value) {

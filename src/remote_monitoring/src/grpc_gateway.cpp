@@ -201,6 +201,7 @@ GrpcGateway::GrpcGateway(rclcpp::Node *node) : node_(node) {
   aggregator_->SetGeofenceMonitor(geofence_monitor_);
   aggregator_->SetLocalizationScorer(localization_scorer_);
   aggregator_->SetFlightRecorder(flight_recorder_);
+  aggregator_->SetEventBuffer(event_buffer_);
 
   // 注入运行参数提供者 (用于 SlowState.config_json 推送)
   aggregator_->SetConfigProvider([this]() -> std::pair<std::string, uint64_t> {

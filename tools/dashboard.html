@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>灵途控制面板</title>
+<style>
+:root{--bg:#fff;--bg2:#f7f8fa;--card:#fff;--border:#e8eaed;--border-light:#f1f3f5;--text:#1a1a2e;--dim:#6b7280;--dim2:#9ca3af;--accent:#f97316;--accent-hover:#ea6c0b;--accent-bg:rgba(249,115,22,.06);--green:#16a34a;--green-bg:rgba(22,163,74,.06);--red:#dc2626;--red-bg:rgba(220,38,38,.06);--red-border:rgba(220,38,38,.25);--yellow:#ca8a04;--yellow-bg:rgba(202,138,4,.06);--blue:#2563eb;--blue-bg:rgba(37,99,235,.06);--shadow:0 1px 2px rgba(0,0,0,.04);--radius:8px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Helvetica Neue','PingFang SC','Noto Sans SC','Microsoft YaHei',sans-serif;background:var(--bg2);color:var(--text);font-size:14px;line-height:1.6}
+::selection{background:rgba(249,115,22,.15)}
+
+.layout{display:grid;grid-template-columns:200px 1fr;min-height:100vh}
+
+/* ── Sidebar ── */
+.sidebar{background:var(--bg);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto}
+.sb-head{padding:16px 16px 14px;border-bottom:1px solid var(--border)}
+.sb-head h1{font-size:14px;font-weight:600;display:flex;align-items:center;gap:7px}
+.sb-head .logo{width:18px;height:18px;background:var(--accent);border-radius:4px;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.sb-head .conn{font-size:11px;color:var(--dim);margin-top:5px;display:flex;align-items:center;gap:5px}
+.dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.dot.ok{background:var(--green)}.dot.err{background:var(--red)}.dot.warn{background:var(--yellow)}.dot.off{background:var(--dim2)}
+.dot.active{background:var(--green)}.dot.inactive{background:var(--dim2)}.dot.unknown{background:var(--yellow)}
+.sb-nav{flex:1;padding:6px 0}
+.nav-cat{font-size:10px;font-weight:600;color:var(--dim2);letter-spacing:.6px;padding:14px 16px 4px}
+.nav-item{display:flex;align-items:center;gap:8px;padding:7px 16px;color:var(--dim);font-size:12.5px;cursor:pointer;border-right:2px solid transparent;transition:all .1s}
+.nav-item:hover{background:var(--bg2);color:var(--text)}
+.nav-item.active{color:var(--accent);background:var(--accent-bg);border-right-color:var(--accent);font-weight:500}
+.nav-item .ico{width:16px;text-align:center;font-size:12px}
+.sb-foot{padding:12px 16px;border-top:1px solid var(--border);font-size:10px;color:var(--dim2);line-height:1.5}
+
+/* ── Content ── */
+.content{padding:24px 32px;overflow-y:auto;max-height:100vh}
+.page{display:none}.page.active{display:block}
+.page-title{font-size:18px;font-weight:600;margin-bottom:2px}
+.page-desc{font-size:12px;color:var(--dim);margin-bottom:20px}
+
+/* ── Cards ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:14px;box-shadow:var(--shadow)}
+.card-h{padding:12px 16px;font-weight:600;font-size:12px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border-light);color:var(--dim)}
+.card-h .badge{font-size:10px;color:var(--dim2);background:var(--bg2);padding:1px 7px;border-radius:8px;margin-left:auto}
+.card-b{padding:14px 16px}
+
+/* ── Buttons ── */
+.btn{padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer;font-size:11.5px;font-weight:500;transition:all .1s;font-family:inherit}
+.btn:hover{background:var(--bg2)}.btn:active{transform:scale(.98)}
+.btn-sm{padding:3px 9px;font-size:10.5px}
+.btn-accent{background:var(--accent);border-color:var(--accent);color:#fff}.btn-accent:hover{background:var(--accent-hover)}
+.btn-danger{color:var(--red);border-color:var(--red-border);background:var(--red-bg)}.btn-danger:hover{background:rgba(220,38,38,.12)}
+.btn-success{color:var(--green);border-color:rgba(22,163,74,.25);background:var(--green-bg)}.btn-success:hover{background:rgba(22,163,74,.12)}
+.btn-warn{color:var(--yellow);border-color:rgba(202,138,4,.25);background:var(--yellow-bg)}.btn-warn:hover{background:rgba(202,138,4,.12)}
+
+/* ── Status Bar ── */
+.status-bar{display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+.status-chip{display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;box-shadow:var(--shadow)}
+.status-chip .val{font-weight:600}
+.status-chip.alert{border-color:var(--red-border);background:var(--red-bg)}
+
+/* ── Health Summary ── */
+.health-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.h-tile{padding:14px;border:1px solid var(--border);border-radius:var(--radius);text-align:center}
+.h-tile .h-val{font-size:20px;font-weight:700;margin-bottom:2px}
+.h-tile .h-label{font-size:11px;color:var(--dim);font-weight:500}
+.h-tile.good{border-color:rgba(22,163,74,.2)}.h-tile.good .h-val{color:var(--green)}
+.h-tile.warn{border-color:rgba(202,138,4,.2)}.h-tile.warn .h-val{color:var(--yellow)}
+.h-tile.bad{border-color:var(--red-border)}.h-tile.bad .h-val{color:var(--red)}
+.h-tile.neutral .h-val{color:var(--text)}
+
+/* ── E-STOP zone ── */
+.estop-zone{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:14px;box-shadow:var(--shadow)}
+.estop-btn{padding:10px 24px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid;transition:all .12s;font-family:inherit;letter-spacing:.3px}
+.estop-btn:active{transform:scale(.96)}
+.estop-btn.stop{background:#dc2626;border-color:#b91c1c;color:#fff;box-shadow:0 2px 8px rgba(220,38,38,.25)}
+.estop-btn.stop:hover{background:#b91c1c}
+.estop-btn.resume{background:var(--green-bg);border-color:rgba(22,163,74,.3);color:var(--green)}
+.estop-btn.resume:hover{background:rgba(22,163,74,.15)}
+.estop-sep{width:1px;height:32px;background:var(--border)}
+.estop-status{font-size:12px;color:var(--dim);flex:1}
+.estop-status .big{font-size:14px;font-weight:600;color:var(--text)}
+
+/* ── Action Groups ── */
+.action-group{margin-bottom:14px}
+.action-group-title{font-size:11px;font-weight:600;color:var(--dim2);letter-spacing:.4px;margin-bottom:8px;padding-left:2px}
+.action-row{display:flex;gap:8px;flex-wrap:wrap}
+.act-btn{display:flex;align-items:center;gap:6px;padding:8px 14px;border:1px solid var(--border);border-radius:6px;background:var(--card);cursor:pointer;font-size:12px;font-weight:500;transition:all .12s;color:var(--text)}
+.act-btn:hover{border-color:var(--accent-hover);background:var(--accent-bg)}
+.act-btn:active{transform:scale(.97)}
+.act-btn .act-ico{font-size:14px}
+
+/* ── Service grid ── */
+.svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.svc-item{border:1px solid var(--border);border-radius:6px;padding:12px;transition:all .12s}
+.svc-item:hover{border-color:var(--accent-bg);box-shadow:0 0 0 2px var(--accent-bg)}
+.svc-name{font-weight:600;font-size:12px;margin-bottom:4px}
+.svc-st{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dim)}
+.svc-actions{display:flex;gap:3px;margin-top:8px}
+
+/* ── Topics ── */
+.topic-row{display:grid;grid-template-columns:1fr 60px 50px;align-items:center;padding:7px 14px;font-size:12px;border-bottom:1px solid var(--border-light)}
+.topic-row:last-child{border-bottom:none}
+.topic-row:hover{background:var(--bg2)}
+.topic-name{font-family:'SF Mono',Consolas,monospace;font-size:11.5px;color:var(--blue)}
+.t-on{color:var(--green);font-weight:600;font-size:11px}.t-off{color:var(--dim2);font-size:11px}
+
+/* ── Maps ── */
+.map-row{display:grid;grid-template-columns:1fr 70px 130px 50px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border-light);font-size:12px}
+.map-row:last-child{border-bottom:none}
+.map-row:hover{background:var(--bg2)}
+.map-path{font-family:monospace;font-size:11.5px;color:var(--blue);word-break:break-all}
+
+/* ── Nav ── */
+.nav-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.form-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.form-row label{width:65px;font-size:11.5px;color:var(--dim);font-weight:500;flex-shrink:0}
+.form-row input,.form-row textarea{flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;outline:none;color:var(--text)}
+.form-row input:focus,.form-row textarea:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-bg)}
+.form-row textarea{resize:vertical;min-height:56px}
+
+/* ── Health page ── */
+.health-row{display:grid;grid-template-columns:20px 1fr auto;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border-light);font-size:12.5px}
+.health-row:last-child{border-bottom:none}
+.health-detail{font-size:11px;color:var(--dim);font-family:monospace}
+.h-ok{color:var(--green)}.h-fail{color:var(--red)}
+
+/* ── Logs ── */
+.log-box{background:#fafbfc;border:1px solid var(--border);border-radius:6px;padding:12px;font-family:'SF Mono',Consolas,monospace;font-size:11px;line-height:1.7;max-height:500px;overflow-y:auto;white-space:pre-wrap;color:var(--dim)}
+
+/* ── Node tags ── */
+.node-list{display:flex;flex-wrap:wrap;gap:5px}
+.node-tag{font-size:10.5px;padding:2px 8px;border-radius:4px;background:var(--blue-bg);color:var(--blue);font-family:monospace;border:1px solid rgba(37,99,235,.12)}
+
+/* ── Recent Events ── */
+.event-row{display:flex;gap:10px;align-items:flex-start;padding:8px 14px;border-bottom:1px solid var(--border-light);font-size:12px}
+.event-row:last-child{border-bottom:none}
+.event-time{font-size:10.5px;color:var(--dim2);font-family:monospace;white-space:nowrap;min-width:55px}
+.event-dot{width:6px;height:6px;border-radius:50%;margin-top:6px;flex-shrink:0}
+.event-msg{flex:1;color:var(--text)}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;max-width:340px;font-size:12px;z-index:300;box-shadow:0 4px 16px rgba(0,0,0,.08);opacity:0;transform:translateY(6px);transition:all .2s;pointer-events:none}
+.toast.show{opacity:1;transform:translateY(0);pointer-events:auto}
+.toast.ok{border-left:3px solid var(--green)}.toast.err{border-left:3px solid var(--red)}
+.toast-title{font-weight:600;font-size:11px;margin-bottom:1px}.toast-msg{color:var(--dim);font-size:10.5px;font-family:monospace;max-height:60px;overflow:auto}
+
+/* ── Confirm Modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:200;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .15s}
+.modal-overlay.show{opacity:1;pointer-events:auto}
+.modal{background:var(--card);border-radius:12px;padding:24px;max-width:380px;width:90%;box-shadow:0 12px 40px rgba(0,0,0,.15)}
+.modal h3{font-size:15px;margin-bottom:6px}.modal p{font-size:13px;color:var(--dim);margin-bottom:18px;line-height:1.5}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}
+
+.loading{display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .5s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+@media(max-width:800px){.layout{grid-template-columns:1fr}.sidebar{display:none}.nav-grid{grid-template-columns:1fr}.health-tiles{grid-template-columns:repeat(3,1fr)}}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<aside class="sidebar">
+  <div class="sb-head">
+    <h1><span class="logo">L</span> 灵途</h1>
+    <div class="conn"><span class="dot err" id="connDot"></span><span id="connText">连接中...</span></div>
+  </div>
+  <div class="sb-nav">
+    <div class="nav-cat">监控</div>
+    <div class="nav-item active" onclick="showPage('overview')" id="nav-overview"><span class="ico">&#9632;</span>总览</div>
+    <div class="nav-item" onclick="showPage('health')" id="nav-health"><span class="ico">&#9829;</span>健康检查</div>
+    <div class="nav-item" onclick="showPage('topics')" id="nav-topics"><span class="ico">&#8644;</span>话题</div>
+    <div class="nav-cat">控制</div>
+    <div class="nav-item" onclick="showPage('services')" id="nav-services"><span class="ico">&#9881;</span>服务</div>
+    <div class="nav-item" onclick="showPage('navigation')" id="nav-navigation"><span class="ico">&#10148;</span>导航</div>
+    <div class="nav-cat">数据</div>
+    <div class="nav-item" onclick="showPage('maps')" id="nav-maps"><span class="ico">&#9635;</span>地图</div>
+    <div class="nav-item" onclick="showPage('logs')" id="nav-logs"><span class="ico">&#9776;</span>日志</div>
+  </div>
+  <div class="sb-foot">192.168.66.190<br><span style="color:var(--accent)">Ctrl+Shift+E</span> 紧急停止</div>
+</aside>
+
+<main class="content">
+
+  <!-- ═══════════════ 总览 ═══════════════ -->
+  <div class="page active" id="page-overview">
+    <div class="page-title">总览</div>
+    <div class="page-desc">机器人状态与系统控制</div>
+
+    <div class="status-bar" id="statusBar">
+      <div class="status-chip"><span class="dot err" id="sb-conn"></span><span class="val" id="sb-conn-text">连接中</span></div>
+      <div class="status-chip"><span class="val" id="sb-services">-</span> 个服务</div>
+      <div class="status-chip"><span class="val" id="sb-uptime">-</span></div>
+    </div>
+
+    <div class="card">
+      <div class="card-h">机器人健康</div>
+      <div class="card-b">
+        <div class="health-tiles" id="healthTiles">
+          <div class="h-tile neutral"><div class="h-val" id="ht-temp">-</div><div class="h-label">CPU 温度</div></div>
+          <div class="h-tile neutral"><div class="h-val" id="ht-mem">-</div><div class="h-label">内存</div></div>
+          <div class="h-tile neutral"><div class="h-val" id="ht-disk">-</div><div class="h-label">磁盘使用</div></div>
+          <div class="h-tile neutral"><div class="h-val" id="ht-svc">-</div><div class="h-label">在线服务</div></div>
+          <div class="h-tile neutral"><div class="h-val" id="ht-nodes">-</div><div class="h-label">ROS2 节点</div></div>
+          <div class="h-tile neutral"><div class="h-val" id="ht-cpu">-</div><div class="h-label">CPU 核心</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="estop-zone">
+      <button class="estop-btn stop" onclick="confirmAction('紧急停止','发送紧急停止信号？机器人将立即停止运动。', ()=>apiPost('/api/nav/estop',{}))">&#9724; 紧急停止</button>
+      <button class="estop-btn resume" onclick="confirmAction('恢复运动','清除停止信号并恢复运动？', ()=>apiPost('/api/nav/clear_stop',{}))">&#9654; 恢复</button>
+      <div class="estop-sep"></div>
+      <div class="estop-status"><div class="big" id="estopState">正常</div><div>紧急状态</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-h">操作</div>
+      <div class="card-b">
+        <div class="action-group">
+          <div class="action-group-title">系统控制</div>
+          <div class="action-row">
+            <div class="act-btn" onclick="confirmAction('启动服务','按依赖顺序启动全部导航服务？', startStack)"><span class="act-ico" style="color:var(--green)">&#9654;</span> 启动服务</div>
+            <div class="act-btn" onclick="confirmAction('停止服务','停止全部导航服务？', stopStack)"><span class="act-ico" style="color:var(--red)">&#9632;</span> 停止服务</div>
+            <div class="act-btn" onclick="confirmAction('重启 SLAM','重启 SLAM 服务？', ()=>apiServiceAction('nav-slam','restart'))"><span class="act-ico">&#8635;</span> 重启 SLAM</div>
+          </div>
+        </div>
+        <div class="action-group" style="margin-bottom:0">
+          <div class="action-group-title">工具</div>
+          <div class="action-row">
+            <div class="act-btn" onclick="apiPost('/api/maps/save',{})"><span class="act-ico">&#128190;</span> 保存地图</div>
+            <div class="act-btn" onclick="showPage('health');loadHealth()"><span class="act-ico">&#9829;</span> 健康检查</div>
+            <div class="act-btn" onclick="refreshAll()"><span class="act-ico">&#8634;</span> 刷新数据</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h">服务 <span class="badge" id="svcCount">-</span></div>
+      <div class="card-b"><div class="svc-grid" id="svcGrid"><span style="color:var(--dim)">加载中...</span></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-h">最近事件 <span class="badge" id="eventCount">0</span></div>
+      <div class="card-b" style="padding:0">
+        <div id="eventList"><div style="padding:14px 16px;color:var(--dim);font-size:12px">暂无事件，操作记录将显示在这里。</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 健康检查 ═══════════════ -->
+  <div class="page" id="page-health">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div><div class="page-title">健康检查</div><div class="page-desc" style="margin-bottom:0">系统诊断与节点检查</div></div>
+      <button class="btn btn-accent" onclick="loadHealth()" style="margin-left:auto">开始检查</button>
+    </div>
+    <div class="card">
+      <div class="card-h">诊断结果</div>
+      <div class="card-b" style="padding:0"><div id="healthGrid"><div style="padding:14px 16px;color:var(--dim);font-size:12px">点击「开始检查」运行诊断。</div></div></div>
+    </div>
+    <div class="card" id="nodesCard" style="display:none">
+      <div class="card-h">活跃 ROS2 节点 <span class="badge" id="nodeCount">-</span></div>
+      <div class="card-b"><div class="node-list" id="nodeList"></div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 服务管理 ═══════════════ -->
+  <div class="page" id="page-services">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div><div class="page-title">服务管理</div><div class="page-desc" style="margin-bottom:0">管理导航系统服务</div></div>
+      <button class="btn btn-accent" onclick="loadServicesFull()" style="margin-left:auto">刷新</button>
+    </div>
+    <div class="svc-grid" id="svcGridFull"></div>
+  </div>
+
+  <!-- ═══════════════ 话题 ═══════════════ -->
+  <div class="page" id="page-topics">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div><div class="page-title">话题监控</div><div class="page-desc" style="margin-bottom:0">ROS2 话题状态与消息查看</div></div>
+      <button class="btn btn-accent" onclick="loadTopics()" style="margin-left:auto">刷新</button>
+    </div>
+    <div class="card">
+      <div class="card-h">监控话题 <span class="badge" id="topicCount">-</span></div>
+      <div class="card-b" style="padding:0"><div id="topicList"><div style="padding:14px 16px;color:var(--dim);font-size:12px">加载中...</div></div></div>
+    </div>
+    <div class="card" id="topicEchoCard" style="display:none">
+      <div class="card-h">消息查看: <span id="echoTopicName" style="font-family:monospace;color:var(--blue);font-weight:400"></span></div>
+      <div class="card-b" style="padding:0"><div class="log-box" id="topicEchoBox" style="border:none;border-radius:0"></div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 导航控制 ═══════════════ -->
+  <div class="page" id="page-navigation">
+    <div class="page-title">导航控制</div>
+    <div class="page-desc">发送目标点与监控规划状态</div>
+
+    <div class="estop-zone" style="margin-bottom:18px">
+      <button class="estop-btn stop" onclick="confirmAction('紧急停止','发送紧急停止信号？',()=>apiPost('/api/nav/estop',{}))">&#9724; 紧急停止</button>
+      <button class="estop-btn resume" onclick="confirmAction('恢复运动','清除停止信号？',()=>apiPost('/api/nav/clear_stop',{}))">&#9654; 恢复</button>
+      <div class="estop-sep"></div>
+      <button class="btn btn-warn" onclick="confirmAction('取消导航','取消当前导航任务？',()=>apiPost('/api/nav/cancel',{}))">&#10006; 取消导航</button>
+    </div>
+
+    <div class="nav-grid">
+      <div class="card">
+        <div class="card-h">坐标目标</div>
+        <div class="card-b">
+          <div class="form-row"><label>X (米)</label><input type="number" id="goalX" value="5.0" step="0.5"></div>
+          <div class="form-row"><label>Y (米)</label><input type="number" id="goalY" value="0.0" step="0.5"></div>
+          <div class="form-row"><label>Z (米)</label><input type="number" id="goalZ" value="0.0" step="0.1"></div>
+          <button class="btn btn-accent" onclick="sendGoal()" style="margin-top:6px;width:100%">发送目标</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h">语义导航</div>
+        <div class="card-b">
+          <div class="form-row"><label>指令</label><textarea id="semInstr" placeholder="例如「导航到工厂大门」"></textarea></div>
+          <button class="btn btn-accent" onclick="sendSemantic()" style="margin-top:6px;width:100%">发送指令</button>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="card-h">规划器状态 <button class="btn btn-sm" onclick="loadNavStatus()" style="margin-left:auto">刷新</button></div>
+      <div class="card-b" style="padding:0"><div class="log-box" id="navStatusBox" style="border:none;border-radius:0;max-height:160px">点击刷新查看状态。</div></div>
+    </div>
+    <div class="card" style="margin-top:14px" id="missionCard">
+      <div class="card-h">&#9881; 任务状态 (Mission Arc) <span class="badge" id="missionStateBadge">IDLE</span></div>
+      <div class="card-b">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px" id="missionInfo">
+          <div>状态: <strong id="mState">IDLE</strong></div>
+          <div>进度: <strong id="mProgress">-</strong></div>
+          <div>距离: <strong id="mDist">-</strong></div>
+          <div>时间: <strong id="mElapsed">-</strong></div>
+          <div>重规划: <strong id="mReplan">0</strong></div>
+        </div>
+        <div id="mProgressBar" style="margin-top:8px;display:none">
+          <div style="background:var(--bg2);border-radius:3px;overflow:hidden;height:6px">
+            <div id="mBar" style="height:100%;background:var(--accent);transition:width .3s;width:0%"></div>
+          </div>
+        </div>
+        <div id="mFailure" style="margin-top:8px;padding:8px;background:var(--red-bg);border-radius:4px;font-size:11px;color:var(--red);display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 地图管理 ═══════════════ -->
+  <div class="page" id="page-maps">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div><div class="page-title">地图管理</div><div class="page-desc" style="margin-bottom:0">管理 SLAM 地图</div></div>
+      <button class="btn" onclick="loadMaps()" style="margin-left:auto">刷新</button>
+      <button class="btn btn-accent" onclick="apiPost('/api/maps/save',{})">保存当前地图</button>
+    </div>
+    <div class="card">
+      <div class="card-h">可用地图 <span class="badge" id="mapCount">-</span></div>
+      <div class="card-b" style="padding:0">
+        <div class="map-row" style="font-weight:600;font-size:11px;color:var(--dim2);border-bottom:1px solid var(--border)"><div>路径</div><div>大小</div><div>修改时间</div><div></div></div>
+        <div id="mapList"><div style="padding:14px 16px;color:var(--dim);font-size:12px">加载中...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 日志 ═══════════════ -->
+  <div class="page" id="page-logs">
+    <div class="page-title">日志查看</div>
+    <div class="page-desc">查看服务日志</div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
+      <select id="logService" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);outline:none;font-family:inherit">
+        <option value="all">全部</option>
+        <option value="nav-slam">nav-slam</option>
+        <option value="nav-planning">nav-planning</option>
+        <option value="nav-autonomy">nav-autonomy</option>
+        <option value="nav-driver">nav-driver</option>
+        <option value="nav-grpc">nav-grpc</option>
+        <option value="nav-lidar">nav-lidar</option>
+        <option value="nav-semantic">nav-semantic</option>
+        <option value="ota-daemon">ota-daemon</option>
+      </select>
+      <select id="logLines" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);outline:none;font-family:inherit">
+        <option value="30">30 行</option><option value="50" selected>50 行</option><option value="100">100 行</option><option value="200">200 行</option>
+      </select>
+      <button class="btn btn-accent" onclick="loadLogs()">加载</button>
+    </div>
+    <div class="card"><div class="card-b" style="padding:0"><div class="log-box" id="logBox" style="border:none;border-radius:var(--radius);max-height:600px">选择服务后点击加载。</div></div></div>
+  </div>
+
+</main>
+</div>
+
+<!-- 确认弹窗 -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <h3 id="modalTitle">确认</h3>
+    <p id="modalMsg">确定执行此操作？</p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn btn-accent" id="modalConfirm" onclick="execModal()">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"><div class="toast-title" id="toastTitle"></div><div class="toast-msg" id="toastMsg"></div></div>
+
+<script>
+let _modalFn = null;
+const events = [];
+
+const STATUS_MAP = {active:'运行中',inactive:'已停止',failed:'失败',unknown:'未知'};
+function statusText(s){return STATUS_MAP[s]||s}
+
+// ── 页面切换 ──
+function showPage(n){document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));document.querySelectorAll('.nav-item').forEach(a=>a.classList.remove('active'));document.getElementById('page-'+n).classList.add('active');document.getElementById('nav-'+n).classList.add('active');({services:loadServicesFull,topics:loadTopics,maps:loadMaps})[n]?.()}
+
+// ── 确认弹窗 ──
+function confirmAction(title,msg,fn){_modalFn=fn;document.getElementById('modalTitle').textContent=title;document.getElementById('modalMsg').textContent=msg;document.getElementById('modalOverlay').classList.add('show')}
+function closeModal(){document.getElementById('modalOverlay').classList.remove('show');_modalFn=null}
+function execModal(){if(_modalFn)_modalFn();closeModal()}
+
+// ── 提示 ──
+function showToast(t,m,ok){const el=document.getElementById('toast');document.getElementById('toastTitle').textContent=t;document.getElementById('toastMsg').textContent=typeof m==='object'?JSON.stringify(m):(m||'');el.className='toast show '+(ok?'ok':'err');clearTimeout(el._t);el._t=setTimeout(()=>el.className='toast',3500)}
+
+// ── 事件日志 ──
+function addEvent(msg,type){
+  events.unshift({time:new Date().toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'}),msg,type:type||'info'});
+  if(events.length>20)events.pop();
+  renderEvents();
+}
+function renderEvents(){
+  document.getElementById('eventCount').textContent=events.length;
+  document.getElementById('eventList').innerHTML=events.length===0
+    ?'<div style="padding:14px 16px;color:var(--dim);font-size:12px">暂无事件。</div>'
+    :events.map(e=>{
+      const c=e.type==='error'?'var(--red)':e.type==='success'?'var(--green)':e.type==='warn'?'var(--yellow)':'var(--blue)';
+      return `<div class="event-row"><div class="event-time">${e.time}</div><div class="event-dot" style="background:${c}"></div><div class="event-msg">${e.msg}</div></div>`;
+    }).join('');
+}
+
+// ── API ──
+async function apiGet(u){try{return await(await fetch(u)).json()}catch(e){showToast('错误',e.message,false);return null}}
+async function apiPost(u,b){
+  try{
+    const d=await(await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})).json();
+    const name=u.split('/').pop();
+    const ok=d.ok!==false;
+    showToast(ok?'成功':'失败',d.output||d.error||'完成',ok);
+    addEvent(`${name}: ${d.output||d.error||'完成'}`,ok?'success':'error');
+    return d;
+  }catch(e){showToast('错误',e.message,false);addEvent('接口错误: '+e.message,'error');return null}
+}
+async function apiDelete(u){try{const d=await(await fetch(u,{method:'DELETE'})).json();showToast('已删除',d.output||'完成',d.ok!==false);addEvent('已删除: '+u.split('/').pop(),'info');return d}catch(e){showToast('错误',e.message,false);return null}}
+
+// ── 系统信息 → 健康卡片 ──
+async function loadSystemInfo(){
+  const d=await apiGet('/api/system');
+  if(!d)return;
+  const setTile=(id,val,cls)=>{const el=document.getElementById(id);if(el)el.textContent=val;if(cls)el.closest('.h-tile').className='h-tile '+cls};
+  setTile('ht-temp',d.temp||'-',parseInt(d.temp)>70?'warn':parseInt(d.temp)>80?'bad':'good');
+  setTile('ht-cpu',(d.cpu||'-')+' 核','neutral');
+  if(d.disk){const pct=d.disk.split(' ').pop();setTile('ht-disk',pct||d.disk,parseInt(pct)>85?'bad':parseInt(pct)>70?'warn':'good')}
+  if(d.mem)setTile('ht-mem',d.mem||'-','neutral');
+  if(d.uptime)document.getElementById('sb-uptime').textContent='运行 '+d.uptime;
+}
+
+// ── 服务 ──
+function svcCard(s,full){
+  const on=s.status==='active';const dot=on?'active':s.status==='inactive'?'inactive':'unknown';
+  const stText=statusText(s.status);
+  const btns=full?`<div class="svc-actions">${on
+    ?`<button class="btn btn-sm btn-danger" onclick="confirmAction('停止 ${s.name}','停止此服务？',()=>apiServiceAction('${s.name}','stop'))">停止</button><button class="btn btn-sm btn-warn" onclick="confirmAction('重启 ${s.name}','重启此服务？',()=>apiServiceAction('${s.name}','restart'))">重启</button>`
+    :`<button class="btn btn-sm btn-success" onclick="apiServiceAction('${s.name}','start')">启动</button>`
+  }<button class="btn btn-sm" onclick="showPage('logs');document.getElementById('logService').value='${s.name}';loadLogs()">日志</button></div>`:'';
+  return `<div class="svc-item"><div class="svc-name">${s.name}</div><div class="svc-st"><span class="dot ${dot}"></span>${stText}</div>${btns}</div>`;
+}
+async function loadServices(){
+  const d=await apiGet('/api/services');if(!d)return;
+  const a=d.services.filter(s=>s.status==='active').length;
+  document.getElementById('svcCount').textContent=`${a}/${d.services.length} 运行中`;
+  document.getElementById('sb-services').textContent=`${a}/${d.services.length}`;
+  document.getElementById('ht-svc').textContent=`${a}/${d.services.length}`;
+  const tile=document.getElementById('ht-svc').closest('.h-tile');
+  tile.className='h-tile '+(a===d.services.length?'good':a>0?'warn':'bad');
+  document.getElementById('svcGrid').innerHTML=d.services.map(s=>svcCard(s,false)).join('');
+}
+async function loadServicesFull(){const d=await apiGet('/api/services');if(d)document.getElementById('svcGridFull').innerHTML=d.services.map(s=>svcCard(s,true)).join('')}
+async function apiServiceAction(n,a){await apiPost('/api/services/action',{service:n,action:a});setTimeout(()=>{loadServices();loadServicesFull()},1200)}
+
+// ── 导航栈 ──
+async function startStack(){
+  showToast('导航栈','正在启动服务...',true);addEvent('正在启动导航栈...','info');
+  const d=await apiPost('/api/stack/start',{});
+  if(d?.results){const s=d.results.map(r=>r.service+': '+statusText(r.status)).join(', ');addEvent('导航栈已启动: '+s,d.results.every(r=>r.status==='active')?'success':'warn')}
+  setTimeout(loadServices,1000);
+}
+async function stopStack(){
+  showToast('导航栈','正在停止服务...',true);addEvent('正在停止导航栈...','info');
+  const d=await apiPost('/api/stack/stop',{});
+  if(d?.results)addEvent('导航栈已停止','success');
+  setTimeout(loadServices,1000);
+}
+
+// ── 话题 ──
+async function loadTopics(){
+  const d=await apiGet('/api/topics/hz');if(!d)return;
+  document.getElementById('topicCount').textContent=d.topics.length;
+  const active=d.topics.filter(t=>t.active).length;
+  document.getElementById('ht-nodes').textContent=active;
+  const tile=document.getElementById('ht-nodes').closest('.h-tile');
+  tile.className='h-tile '+(active>5?'good':active>0?'warn':'bad');
+  document.getElementById('topicList').innerHTML=d.topics.map(t=>
+    `<div class="topic-row"><div class="topic-name">${t.topic}</div><div class="${t.active?'t-on':'t-off'}">${t.active?'活跃':'空闲'}</div><div><button class="btn btn-sm" onclick="echoTopic('${t.topic}')">查看</button></div></div>`
+  ).join('');
+}
+async function echoTopic(t){document.getElementById('topicEchoCard').style.display='';document.getElementById('echoTopicName').textContent=t;document.getElementById('topicEchoBox').textContent='获取中...';const d=await apiGet('/api/topics/echo/'+t.substring(1));if(d)document.getElementById('topicEchoBox').textContent=d.message}
+
+// ── 地图 ──
+async function loadMaps(){
+  const d=await apiGet('/api/maps');if(!d)return;
+  document.getElementById('mapCount').textContent=d.maps.length;
+  document.getElementById('mapList').innerHTML=d.maps.length===0
+    ?'<div style="padding:14px 16px;color:var(--dim);font-size:12px">暂无地图。</div>'
+    :d.maps.map(m=>`<div class="map-row"><div class="map-path">${m.name}</div><div style="color:var(--dim);font-size:11px">${m.size}</div><div style="color:var(--dim);font-size:11px">${m.modified}</div><div><button class="btn btn-sm btn-danger" onclick="confirmAction('删除地图','确定删除 ${m.name}？',()=>{apiDelete('/api/maps/${encodeURIComponent(m.name)}');setTimeout(loadMaps,500)})">删除</button></div></div>`).join('');
+}
+
+// ── 导航 ──
+async function sendGoal(){await apiPost('/api/nav/goal',{x:+document.getElementById('goalX').value,y:+document.getElementById('goalY').value,z:+document.getElementById('goalZ').value})}
+async function sendSemantic(){const i=document.getElementById('semInstr').value.trim();if(i)await apiPost('/api/nav/semantic',{instruction:i})}
+async function loadNavStatus(){
+  const d=await apiGet('/api/nav/status');
+  if(d){
+    let txt='规划器: '+d.planner_status+'\n适配器: '+d.adapter_status;
+    if(d.mission){
+      txt+='\n\n任务: '+d.mission.state;
+      if(d.mission.progress)txt+=' ('+d.mission.progress.percent.toFixed(0)+'%)';
+      if(d.mission.distance_to_goal)txt+='  距离: '+d.mission.distance_to_goal.toFixed(1)+'m';
+      if(d.mission.failure_reason)txt+='\n失败原因: '+d.mission.failure_reason;
+    }
+    document.getElementById('navStatusBox').textContent=txt;
+    if(d.mission)updateMissionCard(d.mission);
+  }
+}
+function updateMissionCard(m){
+  const s=m.state||'IDLE';
+  document.getElementById('mState').textContent=s;
+  document.getElementById('missionStateBadge').textContent=s;
+  const colors={IDLE:'var(--dim)',PLANNING:'var(--blue)',EXECUTING:'var(--accent)',RECOVERING:'var(--yellow)',REPLANNING:'var(--yellow)',COMPLETE:'var(--green)',FAILED:'var(--red)'};
+  document.getElementById('mState').style.color=colors[s]||'var(--dim)';
+  document.getElementById('missionStateBadge').style.color=colors[s]||'var(--dim2)';
+  document.getElementById('mReplan').textContent=m.replan_count||0;
+  if(m.distance_to_goal)document.getElementById('mDist').textContent=m.distance_to_goal.toFixed(1)+'m';
+  if(m.elapsed_sec)document.getElementById('mElapsed').textContent=m.elapsed_sec.toFixed(0)+'s';
+  const pb=document.getElementById('mProgressBar');
+  if(m.progress&&m.progress.waypoints_total>0){
+    pb.style.display='';
+    document.getElementById('mBar').style.width=m.progress.percent.toFixed(0)+'%';
+    document.getElementById('mProgress').textContent=m.progress.waypoints_completed+'/'+m.progress.waypoints_total;
+  }else{pb.style.display='none';document.getElementById('mProgress').textContent='-'}
+  const fe=document.getElementById('mFailure');
+  if(s==='FAILED'&&m.failure_reason){fe.style.display='';fe.textContent=m.failure_reason}else{fe.style.display='none'}
+}
+
+// ── 健康检查 ──
+async function loadHealth(){
+  const el=document.getElementById('healthGrid');
+  el.innerHTML='<div style="padding:14px 16px;color:var(--dim)"><span class="loading"></span> 正在运行诊断...</div>';
+  const d=await apiGet('/api/health');if(!d)return;
+  el.innerHTML=d.checks.map(c=>`<div class="health-row"><div class="${c.ok?'h-ok':'h-fail'}">${c.ok?'&#10004;':'&#10006;'}</div><div>${c.name}</div><div class="health-detail">${c.detail||''}</div></div>`).join('');
+  if(d.nodes?.length){document.getElementById('nodesCard').style.display='';document.getElementById('nodeCount').textContent=d.nodes.length;document.getElementById('nodeList').innerHTML=d.nodes.map(n=>`<span class="node-tag">${n}</span>`).join('')}
+  addEvent(`健康检查: ${d.checks.filter(c=>c.ok).length}/${d.checks.length} 项通过`,d.ok?'success':'warn');
+}
+
+// ── 日志 ──
+async function loadLogs(){document.getElementById('logBox').textContent='加载中...';const d=await apiGet(`/api/logs/${document.getElementById('logService').value}?lines=${document.getElementById('logLines').value}`);if(d){const b=document.getElementById('logBox');b.textContent=d.logs||'(空)';b.scrollTop=b.scrollHeight}}
+
+// ── WebSocket ──
+function connectWS(){
+  const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+  ws.onmessage=(e)=>{
+    const d=JSON.parse(e.data);
+    if(d.type==='status'){
+      const c=d.connected;
+      document.getElementById('connDot').className='dot '+(c?'ok':'err');
+      document.getElementById('connText').textContent=c?'已连接':'未连接';
+      document.getElementById('sb-conn').className='dot '+(c?'ok':'err');
+      document.getElementById('sb-conn-text').textContent=c?'已连接':'未连接';
+      if(d.services){
+        const svcs=Object.entries(d.services).map(([name,status])=>({name,status}));
+        const a=svcs.filter(s=>s.status==='active').length;
+        document.getElementById('svcCount').textContent=`${a}/${svcs.length} 运行中`;
+        document.getElementById('sb-services').textContent=`${a}/${svcs.length}`;
+        document.getElementById('ht-svc').textContent=`${a}/${svcs.length}`;
+        document.getElementById('svcGrid').innerHTML=svcs.map(s=>svcCard(s,false)).join('');
+      }
+    }
+  };
+  ws.onclose=()=>{document.getElementById('connDot').className='dot err';document.getElementById('connText').textContent='未连接';setTimeout(connectWS,3000)};
+  ws.onerror=()=>ws.close();
+}
+
+function refreshAll(){loadSystemInfo();loadServices();showToast('刷新','数据已重新加载',true);addEvent('手动刷新','info')}
+
+document.addEventListener('DOMContentLoaded',()=>{loadSystemInfo();loadServices();connectWS();renderEvents()});
+document.addEventListener('keydown',(e)=>{if(e.ctrlKey&&e.shiftKey&&e.key==='E'){e.preventDefault();confirmAction('紧急停止','发送紧急停止信号？',()=>apiPost('/api/nav/estop',{}))}});
+</script>
+</body>
+</html>

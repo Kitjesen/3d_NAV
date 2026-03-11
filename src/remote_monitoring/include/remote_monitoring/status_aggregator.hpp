@@ -39,6 +39,7 @@ private:
 using ModeProvider = std::function<robot::v1::RobotMode()>;
 
 namespace core {
+class EventBuffer;
 class HealthMonitor;
 class GeofenceMonitor;
 class LocalizationScorer;
@@ -77,6 +78,9 @@ public:
   void SetFlightRecorder(std::shared_ptr<core::FlightRecorder> recorder) {
     flight_recorder_ = std::move(recorder);
   }
+  void SetEventBuffer(std::shared_ptr<core::EventBuffer> buffer) {
+    event_buffer_ = std::move(buffer);
+  }
 
   /// 设置运行参数提供者 (由 GrpcGateway 注入, 从 SystemService 读取)
   using ConfigProvider = std::function<std::pair<std::string, uint64_t>()>;
@@ -92,6 +96,7 @@ private:
   void RobotStateCallback(const interface::msg::RobotState::ConstSharedPtr msg);
   void AdapterStatusCallback(const std_msgs::msg::String::ConstSharedPtr msg);
   void PlannerStatusCallback(const std_msgs::msg::String::ConstSharedPtr msg);
+  void MissionStatusCallback(const std_msgs::msg::String::ConstSharedPtr msg);
   
   void update_rates();
   void update_fast_state();
@@ -127,6 +132,7 @@ private:
   rclcpp::Subscription<interface::msg::RobotState>::SharedPtr sub_robot_state_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_adapter_status_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_planner_status_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_mission_status_;
 
   rclcpp::TimerBase::SharedPtr rate_timer_;
   rclcpp::TimerBase::SharedPtr fast_state_timer_;
@@ -168,6 +174,9 @@ private:
   // 配置提供者 (返回 JSON + version)
   ConfigProvider config_provider_;
 
+  // 事件缓冲 (用于 Mission Arc 状态转换事件)
+  std::shared_ptr<core::EventBuffer> event_buffer_;
+
   // 健康和围栏监控 (用于 SlowState 扩展)
   std::shared_ptr<core::HealthMonitor> health_monitor_;
   std::shared_ptr<core::GeofenceMonitor> geofence_monitor_;
@@ -181,6 +190,21 @@ private:
   std::atomic<int32_t> nav_waypoint_total_{0};
   std::string nav_adapter_status_;  // guarded by slow_mutex_
   std::string nav_planner_status_;  // guarded by slow_mutex_
+
+  // Mission Arc 状态 — 从 /nav/mission_status JSON 解析
+  std::string mission_state_{"IDLE"};        // guarded by slow_mutex_
+  std::string mission_prev_state_{"IDLE"};   // 用于事件发射
+  float mission_elapsed_sec_{0.0f};
+  int32_t mission_replan_count_{0};
+  bool mission_estop_{false};
+  float mission_goal_x_{0.0f};
+  float mission_goal_y_{0.0f};
+  bool mission_has_goal_{false};
+  float mission_distance_to_goal_{0.0f};
+  int32_t mission_wp_completed_{0};
+  int32_t mission_wp_total_{0};
+  float mission_progress_pct_{0.0f};
+  std::string mission_failure_reason_;       // guarded by slow_mutex_
 
   // CPU 使用率计算所需的上一次采样值 (由后台线程写入)
   uint64_t prev_cpu_total_{0};

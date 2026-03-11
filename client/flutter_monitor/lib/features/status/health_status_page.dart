@@ -464,6 +464,40 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
             ),
           ],
 
+          // ── Mission Arc 状态 ──
+          if (nav != null && nav.hasMission && nav.mission.state.isNotEmpty && nav.mission.state != 'IDLE') ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              Text('任务状态', style: TextStyle(fontSize: 12, color: context.subtitleColor)),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _missionStateColor(nav.mission.state).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(nav.mission.state,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                    color: _missionStateColor(nav.mission.state))),
+              ),
+            ]),
+            if (nav.mission.hasGoal) ...[
+              const SizedBox(height: 4),
+              Row(children: [
+                Text('目标距离', style: TextStyle(fontSize: 11, color: context.subtitleColor)),
+                const Spacer(),
+                Text('${nav.mission.distanceToGoal.toStringAsFixed(1)}m',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: context.titleColor)),
+              ]),
+            ],
+            if (nav.mission.state == 'FAILED' && nav.mission.failureReason.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(nav.mission.failureReason,
+                style: TextStyle(fontSize: 10, color: AppColors.error),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+            ],
+          ],
+
           // ── 卡死 / 重规划计数 ──
           if (nav != null && (nav.stuckCount > 0 || nav.replanCount > 0)) ...[
             const SizedBox(height: 10),
@@ -525,6 +559,18 @@ class _HealthStatusPageState extends State<HealthStatusPage> {
           textAlign: TextAlign.right,
           style: TextStyle(fontSize: 11, color: context.subtitleColor))),
     ]);
+  }
+
+  Color _missionStateColor(String state) {
+    switch (state) {
+      case 'PLANNING': return AppColors.info;
+      case 'EXECUTING': return AppColors.primary;
+      case 'RECOVERING': return AppColors.warning;
+      case 'REPLANNING': return AppColors.warning;
+      case 'COMPLETE': return AppColors.success;
+      case 'FAILED': return AppColors.error;
+      default: return AppColors.info;
+    }
   }
 
   Widget _subsystemCard(bool dark, SubsystemHealth s) {
