@@ -2,7 +2,7 @@
 语义导航子系统 — semantic perception + semantic planner
 
 启动节点:
-  1. semantic_perception_node  — GroundingDINO 检测 + ConceptGraphs 场景图
+  1. semantic_perception_node  — YOLO-World 检测 + ConceptGraphs 场景图
   2. semantic_planner_node     — Cloud LLM 语义规划器
 
 依赖:
@@ -12,6 +12,7 @@
 
 用法:
   不直接启动 — 通过 navigation_run.launch.py enable_semantic:=true 启用
+  探索模式通过 navigation_explore.launch.py 启动, 传递 initial_instruction 和 llm_backend
 """
 
 import os
@@ -38,6 +39,16 @@ def generate_launch_description():
         default_value=os.path.join(config_dir, "semantic_planner.yaml"),
         description="语义规划器配置文件路径",
     )
+    initial_instruction_arg = DeclareLaunchArgument(
+        "initial_instruction",
+        default_value="",
+        description="启动后自动发送的语义指令 (空=不自动发送)",
+    )
+    llm_backend_arg = DeclareLaunchArgument(
+        "llm_backend",
+        default_value="",
+        description="覆盖 LLM 后端 (空=使用yaml配置, mock/kimi/openai/claude)",
+    )
 
     # ── 语义感知节点 ──
     perception_node = Node(
@@ -49,7 +60,7 @@ def generate_launch_description():
         remappings=[
             # 将标准 Orbbec 话题映射到节点内部名称
             ("color_image", "/camera/color/image_raw"),
-            ("depth_image", "/camera/depth/image_rect_raw"),
+            ("depth_image", "/camera/depth/image_raw"),
             ("camera_info", "/camera/color/camera_info"),
             ("odometry", "/nav/odometry"),
             # 输出话题
@@ -59,16 +70,24 @@ def generate_launch_description():
     )
 
     # ── 语义规划节点 ──
+    # initial_instruction 和 llm.backend 作为参数覆盖 yaml 中的默认值
+    # 空字符串参数不会覆盖 (planner_node 内部检查非空才生效)
     planner_node = Node(
         package="semantic_planner",
         executable="semantic_planner_node",
         name="semantic_planner_node",
         output="screen",
-        parameters=[LaunchConfiguration("planner_config")],
+        parameters=[
+            LaunchConfiguration("planner_config"),
+            {
+                "initial_instruction": LaunchConfiguration("initial_instruction"),
+                "llm.backend": LaunchConfiguration("llm_backend"),
+            },
+        ],
         remappings=[
             ("instruction", "/nav/semantic/instruction"),
             ("scene_graph", "/nav/semantic/scene_graph"),
-            ("resolved_goal", "/nav/goal_pose"),          # 直接路由到 PCT Planner 标准输入
+            ("resolved_goal", "/nav/goal_pose"),          # 直接路由到局部规划标准输入
             ("status", "/nav/semantic/status"),
             ("odometry", "/nav/odometry"),
             ("cmd_vel", "/nav/cmd_vel"),                  # TwistStamped → 标准速度指令
@@ -80,6 +99,8 @@ def generate_launch_description():
         [
             perception_config_arg,
             planner_config_arg,
+            initial_instruction_arg,
+            llm_backend_arg,
             perception_node,
             planner_node,
         ]

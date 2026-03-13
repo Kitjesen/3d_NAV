@@ -31,6 +31,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from semantic_common import sanitize_position, safe_json_dumps
+from semantic_common.sanitize import safe_json_dump
+
 from .projection import Detection3D
 
 logger = logging.getLogger(__name__)
@@ -386,6 +389,11 @@ class TrackedObject:
     safety_nav_threshold: float = 0.25   # 导航避障用的安全阈值 (动态设置)
     safety_interact_threshold: float = 0.40  # 交互操作用的安全阈值
 
+    # ── 来源标签 (observed vs kg_prior) ──
+    source: str = "observed"           # "observed" | "kg_prior" | "loaded"
+    last_observed_time: float = 0.0    # 最后一次被真实相机检测到的时间
+    is_simulated: bool = False         # 标记是否为模拟/先验数据
+
     def update(self, det: Detection3D, alpha: float = 0.3) -> None:
         """用新检测更新位置、置信度、点云和信念状态 (USS-Nav + BA-HSG)。"""
         # USS-Nav: 融合点云 → 更新质心位置
@@ -624,6 +632,7 @@ class InstanceTracker:
         # Room LLM 命名状态 (创新1: 在线增量场景图补强)
         self._room_llm_namer: Optional[Callable] = None  # async (labels) -> str
         self._room_name_cache: Dict[int, str] = {}       # region_id -> LLM name
+        self._llm_pending_tasks: Dict[int, asyncio.Task] = {}  # region_id -> pending LLM task
         self._region_stability: Dict[int, Tuple[frozenset, float]] = {}  # region_id -> (obj_id_set, stable_since)
 
         # 知识图谱 (ConceptBot / OpenFunGraph 增强)
@@ -631,6 +640,7 @@ class InstanceTracker:
 
         # 楼层层 (SPADE / HOV-SG)
         self._cached_floors: List[FloorNode] = []
+        self._cached_regions: list = []
 
         # ── Loopy Belief Propagation 状态 ──
         self._room_type_posteriors: Dict[int, RoomTypePosterior] = {}
@@ -639,12 +649,7 @@ class InstanceTracker:
         self._bp_messages_log: List[BeliefMessage] = []  # 调试用: 最近一轮的消息
         self._bp_iteration_count = 0                      # 统计: 总 BP 迭代次数
         self._bp_convergence_history: List[float] = []    # 统计: 每轮最大 Δ
-
-        # ── Neuro-Symbolic Belief GCN (KG-BELIEF) ──
-        self._belief_model = None  # Optional[BeliefPredictor]
-
-        # ── Neuro-Symbolic Belief GCN (论文核心: 训练式信念推理) ──
-        self._belief_model = None  # Optional[BeliefPredictor]
+        self._last_bp_time: float = 0.0                   # BP 节流: 最多 1Hz
 
         # ── Neuro-Symbolic Belief GCN (KG-BELIEF) ──
         self._belief_model = None  # Optional[BeliefPredictor]
@@ -722,8 +727,11 @@ class InstanceTracker:
             )
             self._objects = {o.object_id: o for o in sorted_objs[:self.max_objects]}
 
-        # BA-HSG: 图扩散传播 (每次更新后执行)
-        self.propagate_beliefs()
+        # BA-HSG: 图扩散传播 (节流: 最多 1Hz, 避免 O(n²) 每帧开销)
+        now = time.time()
+        if now - self._last_bp_time >= 1.0:
+            self.propagate_beliefs()
+            self._last_bp_time = now
 
         return matched
 
@@ -1277,7 +1285,6 @@ class InstanceTracker:
 
     _LLM_NAMING_MAX_CONCURRENT = 3
     _LLM_NAMING_TIMEOUT_S = 15.0
-    _llm_pending_tasks: Dict[int, asyncio.Task] = {}
 
     def _trigger_room_llm_naming(self, region_id: int, labels: List[str]) -> None:
         """异步调用 LLM 为 Room 命名 (限并发 + 超时 + task 追踪)。"""
@@ -1763,6 +1770,8 @@ class InstanceTracker:
                 prev_beliefs[oid] = obj.existence_prob
 
             self._bp_convergence_history.append(max_delta)
+            if len(self._bp_convergence_history) > 100:
+                del self._bp_convergence_history[:-100]
             self._bp_iteration_count += 1
 
             if max_delta < BP_CONVERGENCE_EPS:
@@ -2256,8 +2265,6 @@ class InstanceTracker:
           - regions: 空间区域 (聚类的物体组)
           - summary: 自然语言摘要 (帮助 LLM 理解)
         """
-        import json
-
         # 先计算 region, 以更新 object.region_id
         regions = self.compute_regions()
 
@@ -2303,19 +2310,24 @@ class InstanceTracker:
         # objects (此时 region_id 已更新)
         objects_list = []
         for obj in self._objects.values():
+            sp = sanitize_position(obj.position)
+            obj_pos = {
+                "x": round(sp[0], 3),
+                "y": round(sp[1], 3),
+                "z": round(sp[2], 3),
+            }
             entry = {
                 "id": obj.object_id,
                 "label": obj.label,
-                "position": {
-                    "x": round(float(obj.position[0]), 3),
-                    "y": round(float(obj.position[1]), 3),
-                    "z": round(float(obj.position[2]), 3),
-                },
+                "position": obj_pos,
                 "score": round(obj.best_score, 3),
                 "detection_count": obj.detection_count,
                 "region_id": obj.region_id,
                 "floor_level": obj.floor_level,
                 "belief": obj.to_belief_dict(),
+                "source": obj.source,
+                "last_observed_time": round(obj.last_observed_time, 2),
+                "is_simulated": obj.is_simulated,
             }
             if obj.kg_concept_id:
                 entry["kg"] = {
@@ -2506,32 +2518,30 @@ class InstanceTracker:
                     f"⚠️ {len(dangerous_phantoms)} dangerous phantom objects predicted"
                 )
 
-        return json.dumps(
-            {
-                "timestamp": time.time(),
-                "frame_id": "map",
-                "graph_level": "hierarchical",
-                "graph_version": "3.0",
-                "object_count": len(objects_list),
-                "objects": objects_list,
-                "relations": relations_list,
-                "regions": regions_list,
-                "floors": floors_list,
-                "rooms": rooms_list,
-                "groups": groups_list,
-                "views": views_list,
-                "hierarchy_edges": hierarchy_edges,
-                "topology_edges": topology_edges,
-                "frontier_nodes": frontier_nodes,
-                "subgraphs": subgraphs,
-                "kg_stats": kg_stats,
-                "phantom_nodes": phantom_list,
-                "room_type_posteriors": room_posteriors_list,
-                "belief_propagation": bp_diag,
-                "summary": " | ".join(summary_parts),
-            },
-            ensure_ascii=False,
-        )
+        scene_graph_dict = {
+            "timestamp": time.time(),
+            "frame_id": "map",
+            "graph_level": "hierarchical",
+            "graph_version": "3.0",
+            "object_count": len(objects_list),
+            "objects": objects_list,
+            "relations": relations_list,
+            "regions": regions_list,
+            "floors": floors_list,
+            "rooms": rooms_list,
+            "groups": groups_list,
+            "views": views_list,
+            "hierarchy_edges": hierarchy_edges,
+            "topology_edges": topology_edges,
+            "frontier_nodes": frontier_nodes,
+            "subgraphs": subgraphs,
+            "kg_stats": kg_stats,
+            "phantom_nodes": phantom_list,
+            "room_type_posteriors": room_posteriors_list,
+            "belief_propagation": bp_diag,
+            "summary": " | ".join(summary_parts),
+        }
+        return safe_json_dumps(scene_graph_dict)
 
     # ════════════════════════════════════════════════════════════
     #  KG 知识增强 (ConceptBot OPE / OpenFunGraph)
@@ -2662,24 +2672,26 @@ class InstanceTracker:
 
         z_values = np.array([float(obj.position[2]) for obj in objs])
         z_sorted_indices = np.argsort(z_values)
+        sorted_list = z_sorted_indices.tolist()
 
         floors: List[FloorNode] = []
         current_floor_objs: List[int] = []
-        current_z_min = z_values[z_sorted_indices[0]]
+        current_z_min = z_values[sorted_list[0]]
         current_z_sum = 0.0
 
-        for idx in z_sorted_indices:
+        for rank, idx in enumerate(sorted_list):
             z = z_values[idx]
             obj = objs[idx]
 
             if z - current_z_min > FLOOR_HEIGHT - FLOOR_MERGE_TOLERANCE and current_floor_objs:
                 center_z = current_z_sum / len(current_floor_objs)
+                # rank >= 1 is guaranteed here since current_floor_objs is non-empty
+                prev_idx = sorted_list[rank - 1]
+                z_max = z_values[prev_idx]
                 floors.append(FloorNode(
                     floor_id=len(floors),
                     floor_level=len(floors),
-                    z_range=(current_z_min, z_values[z_sorted_indices[
-                        z_sorted_indices.tolist().index(idx) - 1
-                    ]] if idx > 0 else current_z_min),
+                    z_range=(current_z_min, z_max),
                     object_ids=list(current_floor_objs),
                     center_z=center_z,
                 ))
@@ -3346,9 +3358,7 @@ class InstanceTracker:
                 "key_labels": view.key_labels,
             }
 
-        import json
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        safe_json_dump(data, path)
         logger.info("Scene graph saved to %s (%d objects, %d views)",
                      path, len(self._objects), len(self._views))
 
