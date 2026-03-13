@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from semantic_common import safe_json_loads, sanitize_position
+
 from .adacot import AdaCoTRouter, AdaCoTConfig, AdaCoTDecision
 from .llm_client import LLMClientBase, LLMError, LLMConfig, create_llm_client
 from .prompt_templates import (
@@ -314,9 +316,8 @@ class GoalResolver:
         Returns:
             GoalResult or None (None = 需要 Slow Path)
         """
-        try:
-            sg = json.loads(scene_graph_json)
-        except (json.JSONDecodeError, TypeError):
+        sg = safe_json_loads(scene_graph_json, default=None)
+        if sg is None:
             return None
 
         objects = sg.get("objects", [])
@@ -469,11 +470,23 @@ class GoalResolver:
                     + 0.20 * spatial_score
                 )
 
+            # ── 来源可信度折扣 ──
+            # observed (真实相机检测) 全权信任
+            # kg_prior (知识图谱先验) 大幅折扣 — 坐标不可靠, 只做搜索提示
+            # loaded (历史加载) 中等折扣
+            obj_source = obj.get("source", "observed")
+            if obj_source == "kg_prior":
+                fused_score *= 0.4
+            elif obj_source == "loaded":
+                fused_score *= 0.7
+
             clip_tag = f"clip={clip_score:.2f}" if has_real_clip else "clip=N/A"
+            src_tag = f"src={obj_source}" if obj_source != "observed" else ""
             reason = (
                 f"label={label_score:.1f}, {clip_tag}, "
                 f"det={detector_score:.2f}, spatial={spatial_score:.1f} → fused={fused_score:.2f}"
-            )
+                f" {src_tag}"
+            ).strip()
             scored.append((obj, fused_score, reason))
 
         if not scored:
@@ -642,6 +655,28 @@ class GoalResolver:
 
         # 从场景图获取坐标系，默认为 map
         target_frame = sg.get("frame_id", "map")
+
+        # ── 来源降级: KG 先验只做搜索区域, 不做精确导航目标 ──
+        best_source = best_obj.get("source", "observed")
+        if best_source == "kg_prior":
+            logger.info(
+                "Fast path KG-prior: '%s' → action=explore (搜索区域, 非精确目标)",
+                best_obj.get("label", "?"),
+            )
+            return GoalResult(
+                action="explore",
+                target_x=px,
+                target_y=py,
+                target_z=pz,
+                target_label=best_obj.get("label", ""),
+                confidence=best_score,
+                reasoning=f"Fast path KG-prior: {best_reason} (explore region)",
+                is_valid=True,
+                path="fast",
+                candidate_id=best_obj.get("id", -1),
+                frame_id=target_frame,
+                score_entropy=score_entropy,
+            )
 
         return GoalResult(
             action="navigate",
@@ -1198,10 +1233,14 @@ class GoalResolver:
             GoalResult
         """
         # ── Step 0: AdaCoT 路径预判 (VLingNav 2026) ──
-        try:
-            sg_dict = json.loads(scene_graph_json) if scene_graph_json else None
-        except (json.JSONDecodeError, TypeError):
-            sg_dict = None
+        sg_dict = safe_json_loads(scene_graph_json, default=None) if scene_graph_json else None
+
+        if not sg_dict or (not sg_dict.get("objects") and not sg_dict.get("rooms")):
+            logger.info(
+                "Scene graph empty (objects=%d, rooms=%d), fast path will skip to exploration",
+                len(sg_dict.get("objects", [])) if sg_dict else 0,
+                len(sg_dict.get("rooms", [])) if sg_dict else 0,
+            )
 
         adacot_decision = self._adacot.decide(
             instruction, scene_graph=sg_dict,
@@ -1248,7 +1287,7 @@ class GoalResolver:
                 is_valid=False,
             )
 
-        result = self._parse_llm_response(response_text, json.loads(filtered_sg) if isinstance(filtered_sg, str) else filtered_sg)
+        result = self._parse_llm_response(response_text, safe_json_loads(filtered_sg, default={}) if isinstance(filtered_sg, str) else filtered_sg)
         result.path = "slow"
 
         # 如果需要探索
@@ -1315,51 +1354,52 @@ class GoalResolver:
         semantic_priors = None
 
         if scene_graph_json:
-            try:
-                sg = json.loads(scene_graph_json)
-                rooms = sg.get("rooms", [])
-                topology_edges = sg.get("topology_edges", [])
+            sg = safe_json_loads(scene_graph_json, default={})
+            if sg:
+                try:
+                    rooms = sg.get("rooms", [])
+                    topology_edges = sg.get("topology_edges", [])
 
-                if rooms:
-                    priors = self._semantic_prior_engine.get_unexplored_priors(
-                        target_instruction=instruction,
-                        rooms=rooms,
-                        topology_edges=topology_edges,
-                        visited_room_ids=self._visited_room_ids,
-                        current_room_id=self._get_current_room_id(
-                            robot_position, rooms
-                        ),
-                    )
-                    if priors:
-                        semantic_priors = priors[:5]
-
-                if topology_edges:
-                    topo_parts = []
-                    room_names = {
-                        r.get("room_id", -1): r.get("name", "?")
-                        for r in rooms
-                    }
-                    for te in topology_edges[:8]:
-                        fr = te.get("from_room", -1)
-                        to = te.get("to_room", -1)
-                        fn = room_names.get(fr, f"room_{fr}")
-                        tn = room_names.get(to, f"room_{to}")
-                        visited_f = "✓" if fr in self._visited_room_ids else "?"
-                        visited_t = "✓" if to in self._visited_room_ids else "?"
-                        topo_parts.append(
-                            f"{fn}[{visited_f}] ↔ {tn}[{visited_t}] ({te.get('type', '?')})"
+                    if rooms:
+                        priors = self._semantic_prior_engine.get_unexplored_priors(
+                            target_instruction=instruction,
+                            rooms=rooms,
+                            topology_edges=topology_edges,
+                            visited_room_ids=self._visited_room_ids,
+                            current_room_id=self._get_current_room_id(
+                                robot_position, rooms
+                            ),
                         )
-                    topology_context = "\n".join(topo_parts)
+                        if priors:
+                            semantic_priors = priors[:5]
 
-                # 补充 TSG 拓扑摘要到 LLM 上下文
-                if self._tsg:
-                    tsg_context = self._tsg.to_prompt_context(language)
-                    if tsg_context:
-                        topology_context = (
-                            (topology_context or "") + "\n" + tsg_context
-                        ).strip()
-            except (json.JSONDecodeError, TypeError, KeyError):
-                pass
+                    if topology_edges:
+                        topo_parts = []
+                        room_names = {
+                            r.get("room_id", -1): r.get("name", "?")
+                            for r in rooms
+                        }
+                        for te in topology_edges[:8]:
+                            fr = te.get("from_room", -1)
+                            to = te.get("to_room", -1)
+                            fn = room_names.get(fr, f"room_{fr}")
+                            tn = room_names.get(to, f"room_{to}")
+                            visited_f = "✓" if fr in self._visited_room_ids else "?"
+                            visited_t = "✓" if to in self._visited_room_ids else "?"
+                            topo_parts.append(
+                                f"{fn}[{visited_f}] ↔ {tn}[{visited_t}] ({te.get('type', '?')})"
+                            )
+                        topology_context = "\n".join(topo_parts)
+
+                    # 补充 TSG 拓扑摘要到 LLM 上下文
+                    if self._tsg:
+                        tsg_context = self._tsg.to_prompt_context(language)
+                        if tsg_context:
+                            topology_context = (
+                                (topology_context or "") + "\n" + tsg_context
+                            ).strip()
+                except (TypeError, KeyError):
+                    pass
 
         messages = build_exploration_prompt(
             instruction, self._explored_directions, robot_position, language,
@@ -1389,6 +1429,15 @@ class GoalResolver:
             if norm > 0:
                 dx = dx / norm * step_distance
                 dy = dy / norm * step_distance
+            else:
+                # LLM returned robot's own position — pick random direction
+                import random
+                angle = random.uniform(0, 2 * np.pi)
+                dx = np.cos(angle) * step_distance
+                dy = np.sin(angle) * step_distance
+                logger.warning(
+                    "LLM exploration returned robot's own position, using random direction"
+                )
 
             self._explore_step_count += 1
             self._explored_directions.append({
@@ -1429,9 +1478,8 @@ class GoalResolver:
         if self._tsg is None or not scene_graph_json:
             return None
 
-        try:
-            sg = json.loads(scene_graph_json)
-        except (json.JSONDecodeError, TypeError):
+        sg = safe_json_loads(scene_graph_json, default=None)
+        if sg is None:
             return None
 
         # 同步 TSG
@@ -1662,9 +1710,8 @@ class GoalResolver:
         Returns:
             过滤后的场景图 JSON
         """
-        try:
-            sg = json.loads(scene_graph_json)
-        except (json.JSONDecodeError, TypeError):
+        sg = safe_json_loads(scene_graph_json, default=None)
+        if sg is None:
             return scene_graph_json
 
         objects = sg.get("objects", [])
@@ -1882,7 +1929,7 @@ class GoalResolver:
 
         return None
 
-    def _parse_llm_response(self, response_text: str, scene_graph: Optional[dict] = None) -> GoalResult:
+    def _parse_llm_response(self, response_text, scene_graph: Optional[dict] = None) -> GoalResult:
         """解析 LLM JSON 响应。"""
         try:
             data = self._extract_json(response_text)
@@ -1895,11 +1942,18 @@ class GoalResolver:
             if scene_graph is not None:
                 frame_id = scene_graph.get("frame_id", "map")
 
+            # LLM 可能返回 NaN/Inf 坐标，用 sanitize_position 防御
+            pos = sanitize_position([
+                target.get("x", 0),
+                target.get("y", 0),
+                target.get("z", 0),
+            ])
+
             return GoalResult(
                 action=action,
-                target_x=float(target.get("x", 0)),
-                target_y=float(target.get("y", 0)),
-                target_z=float(target.get("z", 0)),
+                target_x=pos[0],
+                target_y=pos[1],
+                target_z=pos[2],
                 target_label=data.get("target_label", ""),
                 confidence=float(data.get("confidence", 0)),
                 reasoning=data.get("reasoning", ""),
@@ -1915,8 +1969,12 @@ class GoalResolver:
             )
 
     @staticmethod
-    def _extract_json(text: str) -> dict:
+    def _extract_json(text) -> dict:
         """从 LLM 输出中提取 JSON (处理 markdown 代码块 + 截断修复)。"""
+        # BUG FIX: LLM client 可能已经返回 dict，不需要再 json.loads
+        if isinstance(text, dict):
+            return text
+
         candidates = []
 
         # 尝试找 JSON 代码块
