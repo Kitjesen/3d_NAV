@@ -1,0 +1,14 @@
+{"t":0,"agent":"a7668ad","agent_type":"feature-dev:code-reviewer","event":"agent_start","parent_mode":"none"}
+{"t":0,"agent":"ac5d19d","agent_type":"feature-dev:code-reviewer","event":"agent_start","parent_mode":"none"}
+{"t":0,"agent":"ab3b2e4","agent_type":"feature-dev:code-reviewer","event":"agent_start","parent_mode":"none"}
+{"t":0,"agent":"ab3b2e4","agent_type":"feature-dev:code-reviewer","event":"agent_stop","success":true,"duration_ms":70710}
+{"t":0,"agent":"a7668ad","agent_type":"feature-dev:code-reviewer","event":"agent_stop","success":true,"duration_ms":95057}
+{"t":0,"agent":"ac5d19d","agent_type":"feature-dev:code-reviewer","event":"agent_stop","success":true,"duration_ms":123478}
+{"t":0,"agent":"a52f2bb","agent_type":"executor","event":"agent_start","parent_mode":"none"}
+{"t":0,"agent":"a52f2bb","agent_type":"executor","event":"agent_stop","success":true,"duration_ms":188676}
+{"t":0,"agent":"a582ed7","agent_type":"Explore","event":"agent_start","parent_mode":"none"}
+{"t":0,"agent":"aa78ff9","agent_type":"Explore","event":"agent_start","parent_mode":"none"}
+{"t":0,"agent":"a85cdbf","agent_type":"Explore","event":"agent_start","parent_mode":"none"}
+{"t":0,"agent":"aa78ff9","agent_type":"Explore","event":"agent_stop","success":true,"duration_ms":87243}
+{"t":0,"agent":"a582ed7","agent_type":"Explore","event":"agent_stop","success":true,"duration_ms":100566}
+{"t":0,"agent":"a85cdbf","agent_type":"Explore","event":"agent_stop","success":true,"duration_ms":174663}

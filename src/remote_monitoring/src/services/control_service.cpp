@@ -439,9 +439,14 @@ ControlServiceImpl::StartTask(grpc::ServerContext *,
         core::Waypoint wp;
         std::istringstream point_stream(token);
         std::string val;
-        if (std::getline(point_stream, val, ',')) wp.x = std::stod(val);
-        if (std::getline(point_stream, val, ',')) wp.y = std::stod(val);
-        if (std::getline(point_stream, val, ',')) wp.z = std::stod(val);
+        try {
+          if (std::getline(point_stream, val, ',')) wp.x = std::stod(val);
+          if (std::getline(point_stream, val, ',')) wp.y = std::stod(val);
+          if (std::getline(point_stream, val, ',')) wp.z = std::stod(val);
+        } catch (const std::exception &) {
+          // Malformed waypoint in params_json, skip
+          continue;
+        }
         if (std::getline(point_stream, val, ',')) wp.label = val;
         params.waypoints.push_back(wp);
       }

@@ -16,11 +16,14 @@
 import time
 import math
 import logging
+import threading
 from dataclasses import dataclass, field
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+
+from semantic_common import safe_json_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +89,7 @@ class TopologicalMemory:
     ):
         self.new_node_distance = new_node_distance
         self.max_nodes = max_nodes
+        self._lock = threading.Lock()
 
         self._nodes: Dict[int, TopoNode] = {}
         self._next_id = 0
@@ -105,16 +109,19 @@ class TopologicalMemory:
 
     @property
     def nodes(self) -> Dict[int, TopoNode]:
-        return self._nodes
+        with self._lock:
+            return dict(self._nodes)
 
     @property
     def current_node(self) -> Optional[TopoNode]:
-        return self._nodes.get(self._current_node_id)
+        with self._lock:
+            return self._nodes.get(self._current_node_id)
 
     @property
     def visited_positions(self) -> List[np.ndarray]:
         """所有已访问位置。"""
-        return [n.position for n in self._nodes.values()]
+        with self._lock:
+            return [n.position.copy() for n in self._nodes.values()]
 
     def set_clip_encoder(self, clip_encoder) -> None:
         """注入 CLIP 编码器，用于 query_by_text 的语义匹配。"""
@@ -145,6 +152,22 @@ class TopologicalMemory:
         """
         pos = np.array(position[:2], dtype=np.float64)  # 2D
 
+        with self._lock:
+            return self._update_position_locked(pos, position, visible_labels,
+                                                 scene_snapshot, clip_feature,
+                                                 room_id, room_name)
+
+    def _update_position_locked(
+        self,
+        pos: np.ndarray,
+        position: np.ndarray,
+        visible_labels: Optional[List[str]],
+        scene_snapshot: str,
+        clip_feature: Optional[np.ndarray],
+        room_id: int,
+        room_name: str,
+    ) -> Optional[TopoNode]:
+        """update_position 内部实现（已持有 _lock）。"""
         # 检查是否需要创建新节点
         nearest, nearest_dist = self._find_nearest_node(pos)
 
@@ -176,6 +199,8 @@ class TopologicalMemory:
                         )
                 self._current_node_id = nearest.node_id
                 self._path_history.append(nearest.node_id)
+                if len(self._path_history) > 1000:
+                    self._path_history = self._path_history[-500:]
 
             # 更新房间覆盖
             if room_id >= 0:
@@ -212,6 +237,8 @@ class TopologicalMemory:
 
             self._current_node_id = self._next_id
             self._path_history.append(self._next_id)
+            if len(self._path_history) > 1000:
+                self._path_history = self._path_history[-500:]
             self._next_id += 1
             self._last_position = pos
 
@@ -239,9 +266,8 @@ class TopologicalMemory:
             匹配的节点列表（按相关度降序）
         """
         query_lower = query.lower()
-        scored_nodes: List[Tuple[TopoNode, float]] = []
 
-        # 预计算 CLIP 查询向量（批量，只算一次）
+        # CLIP 编码在锁外进行（可能耗时）
         query_clip_feat = None
         if self._clip_encoder is not None:
             try:
@@ -251,10 +277,17 @@ class TopologicalMemory:
             except (ValueError, TypeError, AttributeError) as e:
                 logger.debug("CLIP text encoding for topo query failed: %s", e)
 
+        # 持锁快照节点数据，减少锁持有时间
+        with self._lock:
+            nodes_snapshot = dict(self._nodes)
+            vp_edges_snapshot = {k: list(v) for k, v in self._viewpoint_edges.items()}
+
+        scored_nodes: List[Tuple[TopoNode, float]] = []
+
         # Phase 1: 计算每个节点的原始分数
         raw_scores: Dict[int, float] = {}
 
-        for node in self._nodes.values():
+        for node in nodes_snapshot.values():
             score = 0.0
 
             # ── 源1: CLIP 文本-图像相似度（最高权重）──
@@ -286,13 +319,17 @@ class TopologicalMemory:
         boosted_scores: Dict[int, float] = {}
         for node_id, score in raw_scores.items():
             boosted = score
-            for neighbor_id, edge_w in self.get_viewpoint_neighbors(node_id):
+            for neighbor_id, edge_w in sorted(
+                vp_edges_snapshot.get(node_id, []), key=lambda x: x[1], reverse=True
+            ):
+                if neighbor_id not in nodes_snapshot:
+                    continue  # 已被 prune 的节点，跳过
                 neighbor_score = raw_scores.get(neighbor_id, 0)
                 boosted = max(boosted, score + 0.3 * edge_w * neighbor_score)
             boosted_scores[node_id] = boosted
 
         for node_id, score in boosted_scores.items():
-            scored_nodes.append((self._nodes[node_id], score))
+            scored_nodes.append((nodes_snapshot[node_id], score))
 
         scored_nodes.sort(key=lambda x: x[1], reverse=True)
         return [node for node, _ in scored_nodes[:top_k]]
@@ -361,12 +398,12 @@ class TopologicalMemory:
         Returns:
             之前位置的 [x, y, z] 或 None
         """
-        if len(self._path_history) <= steps_back:
-            return None
-
-        target_id = self._path_history[-(steps_back + 1)]
-        node = self._nodes.get(target_id)
-        return node.position.copy() if node else None
+        with self._lock:
+            if len(self._path_history) <= steps_back:
+                return None
+            target_id = self._path_history[-(steps_back + 1)]
+            node = self._nodes.get(target_id)
+            return node.position.copy() if node else None
 
     @property
     def visited_room_ids(self) -> set:
@@ -410,7 +447,8 @@ class TopologicalMemory:
 
     def update_region_summary(self, node_id: int, visible_labels: List[str], room_type: str = "") -> None:
         """更新指定节点的区域摘要（VLingMem 风格）。"""
-        node = self._nodes.get(node_id)
+        with self._lock:
+            node = self._nodes.get(node_id)
         if node is None:
             return
         label_str = "、".join(list(dict.fromkeys(visible_labels))[:8]) if visible_labels else "无"
@@ -420,8 +458,10 @@ class TopologicalMemory:
 
     def get_explored_summaries(self) -> List[str]:
         """返回所有已探索区域的摘要（VLingMem 风格）。"""
+        with self._lock:
+            nodes_snap = list(self._nodes.items())
         summaries = []
-        for nid, node in self._nodes.items():
+        for nid, node in nodes_snap:
             if node.region_summary:
                 pos_str = f"({node.position[0]:.1f},{node.position[1]:.1f})" if hasattr(node, 'position') else ""
                 summaries.append(f"节点{nid}{pos_str}：{node.region_summary}")
@@ -440,21 +480,23 @@ class TopologicalMemory:
               "recently_visited": [...]
             }
         """
-        if not self._nodes:
-            return {"total_nodes": 0, "total_visits": 0, "coverage_estimate": 0.0}
+        with self._lock:
+            if not self._nodes:
+                return {"total_nodes": 0, "total_visits": 0, "coverage_estimate": 0.0}
+            nodes_snap = list(self._nodes.values())
+            recent_ids = self._path_history[-5:]
+            recent = [
+                self._nodes[nid].to_dict()
+                for nid in recent_ids
+                if nid in self._nodes
+            ]
+            room_count = len(self._visited_rooms)
+            trans_count = len(self._room_transition_history)
 
-        total_visits = sum(n.visit_count for n in self._nodes.values())
-
-        # 最近访问的节点
-        recent_ids = self._path_history[-5:]
-        recent = [
-            self._nodes[nid].to_dict()
-            for nid in recent_ids
-            if nid in self._nodes
-        ]
+        total_visits = sum(n.visit_count for n in nodes_snap)
 
         # 覆盖范围估计 (凸包面积的近似)
-        positions = np.array([n.position[:2] for n in self._nodes.values()])
+        positions = np.array([n.position[:2] for n in nodes_snap])
         if len(positions) >= 3:
             from scipy.spatial import ConvexHull
             try:
@@ -466,25 +508,24 @@ class TopologicalMemory:
         else:
             coverage = 0.0
 
-        room_cov = self.get_room_coverage()
-
         return {
-            "total_nodes": len(self._nodes),
+            "total_nodes": len(nodes_snap),
             "total_visits": total_visits,
             "coverage_area_m2": round(coverage, 1),
             "recently_visited": recent,
-            "rooms_visited": len(self._visited_rooms),
-            "room_coverage": room_cov[:10],
-            "room_transitions": len(self._room_transition_history),
+            "rooms_visited": room_count,
+            "room_transitions": trans_count,
         }
 
     def get_graph_json(self) -> str:
         """导出拓扑图为 JSON。"""
-        import json
-        nodes = [n.to_dict() for n in self._nodes.values()]
+        with self._lock:
+            nodes_snap = list(self._nodes.values())
+            path_snap = list(self._path_history[-20:])
+        nodes = [n.to_dict() for n in nodes_snap]
         edges = []
         seen = set()
-        for node in self._nodes.values():
+        for node in nodes_snap:
             for neighbor_id in node.neighbors:
                 key = (min(node.node_id, neighbor_id), max(node.node_id, neighbor_id))
                 if key not in seen:
@@ -495,22 +536,31 @@ class TopologicalMemory:
                         "distance": round(node.edge_distances.get(neighbor_id, 0), 2),
                     })
 
-        return json.dumps({
+        return safe_json_dumps({
             "nodes": nodes,
             "edges": edges,
-            "path_history": self._path_history[-20:],
-        }, ensure_ascii=False)
+            "path_history": path_snap,
+        })
 
     # ── 持久化 ──
 
     def save_to_file(self, path: str) -> bool:
         """保存拓扑记忆到 JSON 文件。"""
-        import json
         import os
+        from semantic_common.sanitize import safe_json_dump as _safe_dump
+
+        with self._lock:
+            nodes_copy = dict(self._nodes)
+            rooms_copy = dict(self._visited_rooms)
+            path_hist = list(self._path_history[-100:])
+            next_id = self._next_id
+            cur_id = self._current_node_id
+            room_trans = list(self._room_transition_history[-50:])
+
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             nodes_data = {}
-            for nid, node in self._nodes.items():
+            for nid, node in nodes_copy.items():
                 nodes_data[str(nid)] = {
                     "position": node.position.tolist(),
                     "timestamp": node.timestamp,
@@ -521,10 +571,12 @@ class TopologicalMemory:
                     "edge_distances": {str(k): v for k, v in node.edge_distances.items()},
                     "room_id": node.room_id,
                     "room_name": node.room_name,
+                    "region_summary": node.region_summary,
+                    "explored": node.explored,
                 }
 
             visited_rooms_data = {}
-            for rid, info in self._visited_rooms.items():
+            for rid, info in rooms_copy.items():
                 visited_rooms_data[str(rid)] = {
                     "name": info.get("name", ""),
                     "first_visit": info.get("first_visit", 0.0),
@@ -535,15 +587,14 @@ class TopologicalMemory:
             data = {
                 "version": "1.0",
                 "nodes": nodes_data,
-                "next_id": self._next_id,
-                "current_node_id": self._current_node_id,
-                "path_history": self._path_history[-100:],
+                "next_id": next_id,
+                "current_node_id": cur_id,
+                "path_history": path_hist,
                 "visited_rooms": visited_rooms_data,
-                "room_transitions": self._room_transition_history[-50:],
+                "room_transitions": room_trans,
             }
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info("TopologicalMemory saved to %s (%d nodes)", path, len(self._nodes))
+            _safe_dump(data, path)
+            logger.info("TopologicalMemory saved to %s (%d nodes)", path, len(nodes_copy))
             return True
         except Exception as e:
             logger.error("Failed to save TopologicalMemory to %s: %s", path, e)
@@ -559,13 +610,15 @@ class TopologicalMemory:
             logger.warning("Failed to load TopologicalMemory from %s: %s", path, e)
             return False
 
-        self._nodes.clear()
-        self._path_history.clear()
-        self._visited_rooms.clear()
-        self._room_transition_history.clear()
-
+        # 先解析数据（无需锁），再持锁写入
+        new_nodes: Dict[int, TopoNode] = {}
         for nid_str, ndata in data.get("nodes", {}).items():
-            nid = int(nid_str)
+            try:
+                nid = int(nid_str)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(ndata, dict):
+                continue
             node = TopoNode(
                 node_id=nid,
                 position=np.array(ndata["position"]),
@@ -577,27 +630,35 @@ class TopologicalMemory:
                 edge_distances={int(k): v for k, v in ndata.get("edge_distances", {}).items()},
                 room_id=ndata.get("room_id", -1),
                 room_name=ndata.get("room_name", ""),
+                region_summary=ndata.get("region_summary", ""),
+                explored=ndata.get("explored", False),
             )
-            self._nodes[nid] = node
+            new_nodes[nid] = node
 
-        self._next_id = data.get("next_id", max(self._nodes.keys(), default=-1) + 1)
-        self._current_node_id = data.get("current_node_id", -1)
-        self._path_history = data.get("path_history", [])
-
+        new_rooms: Dict[int, Dict] = {}
         for rid_str, rdata in data.get("visited_rooms", {}).items():
             rid = int(rid_str)
-            self._visited_rooms[rid] = {
+            new_rooms[rid] = {
                 "name": rdata.get("name", ""),
                 "first_visit": rdata.get("first_visit", 0.0),
                 "visit_count": rdata.get("visit_count", 0),
                 "node_ids": set(rdata.get("node_ids", [])),
             }
 
-        self._room_transition_history = [
-            tuple(t) for t in data.get("room_transitions", [])
-        ]
+        with self._lock:
+            self._nodes.clear()
+            self._nodes.update(new_nodes)
+            self._path_history = data.get("path_history", [])
+            self._visited_rooms.clear()
+            self._visited_rooms.update(new_rooms)
+            self._room_transition_history = [
+                tuple(t) for t in data.get("room_transitions", [])
+            ]
+            self._next_id = data.get("next_id", max(self._nodes.keys(), default=-1) + 1)
+            self._current_node_id = data.get("current_node_id", -1)
+            self._viewpoint_edges.clear()
 
-        logger.info("TopologicalMemory loaded from %s (%d nodes)", path, len(self._nodes))
+        logger.info("TopologicalMemory loaded from %s (%d nodes)", path, len(new_nodes))
         return True
 
     # ── Viewpoint edges (FSR-VLN) ──
@@ -629,6 +690,13 @@ class TopologicalMemory:
 
             self._viewpoint_edges[new_node_id].append((nid, weight))
             self._viewpoint_edges[nid].append((new_node_id, weight))
+
+        # Cap viewpoint edges per node to avoid unbounded growth
+        _MAX_VP_EDGES = 20
+        vpe = self._viewpoint_edges[new_node_id]
+        if len(vpe) > _MAX_VP_EDGES:
+            vpe.sort(key=lambda x: x[1], reverse=True)
+            self._viewpoint_edges[new_node_id] = vpe[:_MAX_VP_EDGES]
 
     def get_viewpoint_neighbors(self, node_id: int) -> List[Tuple[int, float]]:
         """返回 viewpoint 邻居 [(neighbor_id, weight), ...]，按 weight 降序。"""
@@ -672,8 +740,11 @@ class TopologicalMemory:
         """如果节点超过上限, 移除最旧最少访问的。"""
         while len(self._nodes) > self.max_nodes:
             # 找访问次数最少的 (排除当前节点)
+            candidates = [nid for nid in self._nodes if nid != self._current_node_id]
+            if not candidates:
+                break  # Only current node remains, cannot prune
             worst_id = min(
-                (nid for nid in self._nodes if nid != self._current_node_id),
+                candidates,
                 key=lambda nid: (self._nodes[nid].visit_count, self._nodes[nid].last_visit),
             )
             # 移除边引用
@@ -684,4 +755,8 @@ class TopologicalMemory:
                     if worst_id in nb.neighbors:
                         nb.neighbors.remove(worst_id)
                     nb.edge_distances.pop(worst_id, None)
+            # 清理 viewpoint edges 中的悬挂引用
+            self._viewpoint_edges.pop(worst_id, None)
+            for nb_list in self._viewpoint_edges.values():
+                nb_list[:] = [(nid, w) for nid, w in nb_list if nid != worst_id]
             del self._nodes[worst_id]

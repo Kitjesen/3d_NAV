@@ -579,3 +579,137 @@ Combine Step 1 (distance) + Step 2-3 (semantic match) conclusions to produce a f
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
+
+
+# ================================================================
+#  意图解析 (Intent Classification) — Fast-Slow 双通道
+# ================================================================
+
+def build_intent_classification_prompt(
+    instruction: str,
+    robot_state: str = "IDLE",
+    available_routes: str = "",
+    available_pois: str = "",
+) -> str:
+    """
+    构建意图分类的 LLM prompt — 当规则解析 (Fast Path) 失败时的 Slow Path 回退。
+
+    当 task_decomposer.decompose_with_rules() 返回 None (无法确定意图) 时,
+    将用户指令发给 LLM 做结构化意图分类, 返回 JSON 格式的意图 + 槽位。
+
+    Args:
+        instruction: 用户自然语言指令
+        robot_state: 当前机器人状态 (IDLE / NAVIGATING / PATROLLING 等)
+        available_routes: 已保存的巡逻路线列表 (逗号分隔)
+        available_pois: 已保存的兴趣点列表 (逗号分隔)
+
+    Returns:
+        构建好的 prompt 字符串
+    """
+    return f"""你是一个机器人语音助手的意图解析器。用户对机器人下达了指令，请分析用户意图。
+
+## 可用意图类型
+
+| 意图 | 说明 | 需要的参数 |
+|------|------|-----------|
+| NAVIGATE | 导航到某个地点或物体 | target: 目标描述 |
+| PATROL | 巡逻/巡检 | route: 路线名称 (可选) |
+| SAVE_MAP | 保存当前地图 | 无 |
+| SAVE_POI | 保存/标记当前位置为兴趣点 | name: 位置名称 |
+| SET_SPEED | 调整速度 | value: 速度值 (m/s, 0.1~3.0) |
+| RETURN_HOME | 返回出发点/充电桩 | 无 |
+| STOP | 停止/取消当前任务 | 无 |
+| PAUSE | 暂停任务 | 无 |
+| RESUME | 恢复暂停的任务 | 无 |
+| EXPLORE | 自由探索环境 | 无 |
+| FIND | 寻找特定目标 | target: 目标描述 |
+| FOLLOW | 跟随目标 | target: 跟随对象描述 |
+| QUERY | 查询状态/信息 | query: 查询内容 |
+
+## 当前机器人状态
+{robot_state}
+
+## 已保存的巡逻路线
+{available_routes or '无'}
+
+## 已保存的兴趣点
+{available_pois or '无'}
+
+## 用户指令
+「{instruction}」
+
+## 输出要求
+
+返回 JSON，格式：
+```json
+{{
+  "intents": [
+    {{
+      "action": "意图类型",
+      "target": "目标 (如适用)",
+      "params": {{}},
+      "confidence": 0.95
+    }}
+  ],
+  "response": "对用户的回复 (简短中文)",
+  "is_compound": false
+}}
+```
+
+如果是复合指令 (如 "巡逻完了回充电桩")，intents 数组包含多个按执行顺序排列的意图。
+
+规则：
+1. 只返回 JSON，不加其他文字
+2. confidence 范围 0-1
+3. 如果指令不明确，confidence 设低并在 response 中要求用户澄清
+4. "去那边看看" 在没有明确目标时应该是 EXPLORE，不是 NAVIGATE
+5. 涉及安全的操作 (STOP) 优先级最高
+"""
+
+
+def build_compound_decomposition_prompt(
+    instruction: str,
+    robot_state: str = "IDLE",
+) -> str:
+    """
+    构建复合指令分解的 LLM prompt — 将复合语句拆解为按顺序执行的子任务。
+
+    当 task_decomposer 检测到复杂度标记 (然后/接着/先..再..) 但无法通过
+    规则单独完成分解时, 调用此 prompt 让 LLM 做结构化拆解。
+
+    Args:
+        instruction: 用户自然语言指令 (含复合动作)
+        robot_state: 当前机器人状态 (IDLE / NAVIGATING / PATROLLING 等)
+
+    Returns:
+        构建好的 prompt 字符串
+    """
+    return f"""你是机器人任务分解器。将复合指令拆解为按顺序执行的子任务。
+
+## 用户指令
+「{instruction}」
+
+## 当前状态
+{robot_state}
+
+## 可用动作
+NAVIGATE(target), PATROL(route), SAVE_MAP, SAVE_POI(name), SET_SPEED(value),
+RETURN_HOME, STOP, PAUSE, RESUME, EXPLORE, FIND(target), FOLLOW(target)
+
+## 输出 JSON
+```json
+{{
+  "steps": [
+    {{"action": "动作", "target": "目标", "params": {{}}}},
+    ...
+  ],
+  "response": "确认回复"
+}}
+```
+
+规则：
+1. 只返回 JSON
+2. 步骤按执行顺序
+3. "巡逻完了回充电桩" → [{{"action":"PATROL"}}, {{"action":"RETURN_HOME"}}]
+4. "先保存地图再去大门" → [{{"action":"SAVE_MAP"}}, {{"action":"NAVIGATE","target":"大门"}}]
+"""

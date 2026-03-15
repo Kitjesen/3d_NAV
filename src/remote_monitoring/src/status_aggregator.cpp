@@ -640,7 +640,6 @@ void StatusAggregator::update_slow_state() {
     mission->set_estop(mission_estop_);
     mission->set_distance_to_goal(mission_distance_to_goal_);
     if (mission_has_goal_) {
-      mission->set_has_goal(true);
       mission->mutable_goal()->set_x(mission_goal_x_);
       mission->mutable_goal()->set_y(mission_goal_y_);
     }

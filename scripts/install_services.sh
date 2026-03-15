@@ -48,6 +48,8 @@ SERVICES=(
     nav-autonomy
     nav-planning
     nav-grpc
+    nav-semantic
+    nav-driver
     ota-daemon
 )
 

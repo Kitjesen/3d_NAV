@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include "remote_monitoring/core/flight_recorder.hpp"
 
 using remote_monitoring::core::FlightRecorder;

@@ -8,6 +8,11 @@ Cloud LLM 客户端抽象层。
   - Alibaba Qwen (通义千问, 通过 DashScope SDK)
 
 所有客户端都使用异步接口, 便于在 ROS2 回调中不阻塞。
+
+Note: semantic_common.retry_async is available for simple retry patterns.
+The retry logic here is intentionally custom because it differentiates
+status codes (429 rate-limit, 5xx server error, timeout) with different
+backoff strategies and error messages per backend.
 """
 
 import asyncio
@@ -46,6 +51,11 @@ class LLMClientBase(ABC):
                 "Set it before making LLM calls.",
                 config.api_key_env,
             )
+        elif len(self._api_key) < 10:
+            logger.warning(
+                "%s appears invalid (too short: %d chars), %s backend may fail",
+                config.api_key_env, len(self._api_key), config.backend,
+            )
 
     @abstractmethod
     async def chat(
@@ -72,6 +82,10 @@ class LLMClientBase(ABC):
     def is_available(self) -> bool:
         """检查 API Key 是否配置。"""
         ...
+
+    async def close(self):
+        """Close underlying HTTP resources. Override in subclasses that hold clients."""
+        pass
 
 
 class LLMError(Exception):
@@ -155,14 +169,39 @@ class OpenAIClient(LLMClientBase):
                     temp = 1.0
                     continue
                 if attempt < self.config.max_retries:
-                    wait = 2 ** attempt
-                    logger.warning(
-                        "OpenAI API attempt %d failed (%s): %s, retrying in %ds",
-                        attempt + 1, type(e).__name__, e, wait,
-                    )
-                    await asyncio.sleep(wait)
+                    err_lower = err_str.lower()
+                    status_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+                    if status_code == 429 or (status_code is None and ("429" in err_str or "rate" in err_lower)):
+                        wait = min(2 ** (attempt + 1), 30.0)
+                        logger.warning(
+                            "Rate limited (429), waiting %.1fs before retry %d/%d",
+                            wait, attempt + 1, self.config.max_retries,
+                        )
+                        await asyncio.sleep(wait)
+                    elif status_code in (500, 502, 503) or (status_code is None and any(s in err_str for s in ("500", "502", "503"))):
+                        wait = 2 ** attempt
+                        logger.warning(
+                            "Server error on attempt %d: %s, retrying in %ds",
+                            attempt + 1, e, wait,
+                        )
+                        await asyncio.sleep(wait)
+                    elif "timeout" in err_lower or "timed out" in err_lower:
+                        logger.warning(
+                            "OpenAI timeout on attempt %d, retrying immediately",
+                            attempt + 1,
+                        )
+                    else:
+                        wait = 2 ** attempt
+                        logger.warning(
+                            "OpenAI API attempt %d failed (%s): %s, retrying in %ds",
+                            attempt + 1, type(e).__name__, e, wait,
+                        )
+                        await asyncio.sleep(wait)
                 else:
                     raise LLMError(f"OpenAI API failed after {attempt + 1} attempts: {e}") from e
+
+        # Should not reach here, but guard against falling through with empty content
+        return ""
 
     async def chat_with_image(
         self,
@@ -242,6 +281,15 @@ class OpenAIClient(LLMClientBase):
                 else:
                     raise LLMError(f"OpenAI Vision failed: {e}") from e
 
+    async def close(self):
+        """Close underlying HTTP client to release connections."""
+        if self._client is not None:
+            try:
+                await self._client.close()
+            except Exception:
+                pass
+            self._client = None
+
     def is_available(self) -> bool:
         return bool(self._api_key)
 
@@ -261,10 +309,13 @@ class ClaudeClient(LLMClientBase):
         if self._client is None:
             try:
                 from anthropic import AsyncAnthropic
-                self._client = AsyncAnthropic(
+                kwargs = dict(
                     api_key=self._api_key,
                     timeout=self.config.timeout_sec,
                 )
+                if self.config.base_url:
+                    kwargs["base_url"] = self.config.base_url
+                self._client = AsyncAnthropic(**kwargs)
             except ImportError:
                 raise LLMError(
                     "anthropic package not installed. Run: pip install anthropic"
@@ -307,14 +358,49 @@ class ClaudeClient(LLMClientBase):
                 raise
             except Exception as e:
                 if attempt < self.config.max_retries:
-                    wait = 2 ** attempt
-                    logger.warning(
-                        "Claude API attempt %d failed (%s): %s, retrying in %ds",
-                        attempt + 1, type(e).__name__, e, wait,
-                    )
-                    await asyncio.sleep(wait)
+                    err_str = str(e)
+                    err_lower = err_str.lower()
+                    status_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+                    if status_code == 429 or (status_code is None and ("429" in err_str or "rate" in err_lower)):
+                        wait = min(2 ** (attempt + 1), 30.0)
+                        logger.warning(
+                            "Claude rate limited (429), waiting %.1fs before retry %d/%d",
+                            wait, attempt + 1, self.config.max_retries,
+                        )
+                        await asyncio.sleep(wait)
+                    elif status_code in (500, 502, 503) or (status_code is None and any(s in err_str for s in ("500", "502", "503"))):
+                        wait = 2 ** attempt
+                        logger.warning(
+                            "Claude server error on attempt %d: %s, retrying in %ds",
+                            attempt + 1, e, wait,
+                        )
+                        await asyncio.sleep(wait)
+                    elif "timeout" in err_lower or "timed out" in err_lower:
+                        logger.warning(
+                            "Claude timeout on attempt %d, retrying immediately",
+                            attempt + 1,
+                        )
+                    else:
+                        wait = 2 ** attempt
+                        logger.warning(
+                            "Claude API attempt %d failed (%s): %s, retrying in %ds",
+                            attempt + 1, type(e).__name__, e, wait,
+                        )
+                        await asyncio.sleep(wait)
                 else:
                     raise LLMError(f"Claude API failed after {attempt + 1} attempts: {e}") from e
+
+        # Should not reach here, but guard against falling through
+        return ""
+
+    async def close(self):
+        """Close underlying HTTP client to release connections."""
+        if self._client is not None:
+            try:
+                await self._client.close()
+            except Exception:
+                pass
+            self._client = None
 
     def is_available(self) -> bool:
         return bool(self._api_key)
@@ -340,24 +426,63 @@ class QwenClient(LLMClientBase):
         for attempt in range(self.config.max_retries + 1):
             try:
                 # DashScope SDK 是同步的, 在线程池中运行
-                result = await asyncio.get_running_loop().run_in_executor(
-                    None, self._sync_call, messages, temp
+                # 用 wait_for 强制超时（Generation.call timeout 参数可能被忽略）
+                result = await asyncio.wait_for(
+                    asyncio.get_running_loop().run_in_executor(
+                        None, self._sync_call, messages, temp
+                    ),
+                    timeout=self.config.timeout_sec,
                 )
                 return result
+            except asyncio.TimeoutError:
+                if attempt < self.config.max_retries:
+                    logger.warning(
+                        "Qwen timeout on attempt %d/%d, retrying...",
+                        attempt + 1, self.config.max_retries,
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                raise LLMError(f"Qwen API call timed out after {self.config.timeout_sec}s")
             except (KeyboardInterrupt, SystemExit):
                 raise
             except LLMError:
                 raise
             except Exception as e:
                 if attempt < self.config.max_retries:
-                    wait = 2 ** attempt
-                    logger.warning(
-                        "Qwen API attempt %d failed (%s): %s, retrying in %ds",
-                        attempt + 1, type(e).__name__, e, wait,
-                    )
-                    await asyncio.sleep(wait)
+                    err_str = str(e)
+                    err_lower = err_str.lower()
+                    status_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+                    if status_code == 429 or (status_code is None and ("429" in err_str or "rate" in err_lower)):
+                        wait = min(2 ** (attempt + 1), 30.0)
+                        logger.warning(
+                            "Qwen rate limited (429), waiting %.1fs before retry %d/%d",
+                            wait, attempt + 1, self.config.max_retries,
+                        )
+                        await asyncio.sleep(wait)
+                    elif status_code in (500, 502, 503) or (status_code is None and any(s in err_str for s in ("500", "502", "503"))):
+                        wait = 2 ** attempt
+                        logger.warning(
+                            "Qwen server error on attempt %d: %s, retrying in %ds",
+                            attempt + 1, e, wait,
+                        )
+                        await asyncio.sleep(wait)
+                    elif "timeout" in err_lower or "timed out" in err_lower:
+                        logger.warning(
+                            "Qwen timeout on attempt %d, retrying immediately",
+                            attempt + 1,
+                        )
+                    else:
+                        wait = 2 ** attempt
+                        logger.warning(
+                            "Qwen API attempt %d failed (%s): %s, retrying in %ds",
+                            attempt + 1, type(e).__name__, e, wait,
+                        )
+                        await asyncio.sleep(wait)
                 else:
                     raise LLMError(f"Qwen API failed after {attempt + 1} attempts: {e}") from e
+
+        # Should not reach here, but guard against falling through
+        return ""
 
     def _sync_call(self, messages: List[Dict[str, str]], temperature: float) -> str:
         """同步调用 DashScope API。"""
@@ -369,12 +494,13 @@ class QwenClient(LLMClientBase):
                 "dashscope package not installed. Run: pip install dashscope"
             )
 
-        dashscope.api_key = self._api_key
         response = Generation.call(
             model=self.config.model,
             messages=messages,
             temperature=temperature,
             result_format="message",
+            timeout=self.config.timeout_sec,
+            api_key=self._api_key,  # 参数传递，避免写全局变量的线程竞争
         )
 
         if response.status_code == 200:
@@ -396,20 +522,38 @@ class MoonshotClient(OpenAIClient):
     """Moonshot Kimi API 客户端 (kimi-k2.5 / moonshot-v1-8k)。
 
     Kimi 使用 OpenAI 兼容接口, 只需设置 base_url 和 API key。
-    默认 base_url: https://api.moonshot.cn/v1
-    默认 model: moonshot-v1-8k (可切换 kimi-k2.5)
+    默认 base_url: https://api.kimi.com/coding/v1
+    默认 model: kimi-k2.5
     """
 
-    _DEFAULT_BASE_URL = "https://api.moonshot.cn/v1"
+    _DEFAULT_BASE_URL = "https://api.kimi.com/coding/v1"
 
     def __init__(self, config: LLMConfig):
+        import copy
+        config = copy.copy(config)  # 不修改调用者的 config 实例
         if not config.base_url:
             config.base_url = self._DEFAULT_BASE_URL
         if config.api_key_env == "OPENAI_API_KEY":
             config.api_key_env = "MOONSHOT_API_KEY"
         if config.model in ("gpt-4o-mini", "gpt-4o"):
-            config.model = "moonshot-v1-8k"
+            config.model = "kimi-k2.5"
         super().__init__(config)
+
+    def _ensure_client(self):
+        if self._client is None:
+            try:
+                from openai import AsyncOpenAI
+                kwargs = {
+                    "api_key": self._api_key,
+                    "timeout": self.config.timeout_sec,
+                    "base_url": self.config.base_url or self._DEFAULT_BASE_URL,
+                    "default_headers": {"User-Agent": "claude-code/1.0"},
+                }
+                self._client = AsyncOpenAI(**kwargs)
+            except ImportError:
+                raise LLMError(
+                    "openai package not installed. Run: pip install openai"
+                )
 
     async def chat_with_image(self, *args, **kwargs) -> str:
         raise LLMError("Moonshot Kimi does not support vision input yet")
@@ -479,7 +623,7 @@ class MockLLMClient(LLMClientBase):
                     objects = sg.get("objects", [])
                     if objects:
                         break
-        except (json.JSONDecodeError, TypeError, KeyError):
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError):
             pass  # Mock client: scene graph parsing is best-effort
 
         # 2. 确定目标物体

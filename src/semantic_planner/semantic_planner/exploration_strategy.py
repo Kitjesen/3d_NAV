@@ -81,7 +81,14 @@ def generate_frontier_goal(
     score_threshold: float = 0.2,
 ) -> Optional[GoalResult]:
     """基于 Frontier 评分器生成探索目标。"""
-    robot_xy = np.array([robot_position["x"], robot_position["y"]], dtype=np.float64)
+    try:
+        rx = float(robot_position.get("x", 0.0))
+        ry = float(robot_position.get("y", 0.0))
+    except (TypeError, ValueError):
+        return None
+    if not (np.isfinite(rx) and np.isfinite(ry)):
+        return None
+    robot_xy = np.array([rx, ry], dtype=np.float64)
 
     frontiers = frontier_scorer.extract_frontiers(robot_xy)
     if not frontiers:

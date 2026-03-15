@@ -1,9 +1,9 @@
 # MapPilot (灵途) 文档中心
 
-**项目**: MapPilot — 四足机器人户外自主导航系统
-**平台**: Jetson Orin NX 16GB | ROS2 Humble | Ubuntu 22.04
-**版本**: 1.5.0
-**最后更新**: 2026-02-24
+**项目**: MapPilot (灵途) — 四足机器人户外自主导航系统
+**平台**: RDK X5 (S100P) / Jetson Orin NX 16GB | ROS2 Humble | Ubuntu 22.04
+**版本**: 1.8.0
+**最后更新**: 2026-03-15
 
 ---
 
@@ -22,7 +22,9 @@
 ### [02-architecture](./02-architecture/) — 架构设计
 系统架构、算法原理和通信协议。
 
-- **[ARCHITECTURE.md](./02-architecture/ARCHITECTURE.md)** — 系统架构文档
+- **[SYSTEM_OVERVIEW.md](./02-architecture/SYSTEM_OVERVIEW.md)** — **系统架构全景**（7层+3环、感知/规划/基础设施、数据流全景）
+- **[ARCHITECTURE.md](./02-architecture/ARCHITECTURE.md)** — 双板硬件架构（通信协议、安全体系、模式切换）
+- **[TASK_ORCHESTRATION.md](./02-architecture/TASK_ORCHESTRATION.md)** — 多Agent任务编排（Askme→orchestrator→LingTu完整链路）
 - **[ALGORITHM_REFERENCE.md](./02-architecture/ALGORITHM_REFERENCE.md)** — 核心算法参考
 - **[TOPIC_CONTRACT.md](./02-architecture/TOPIC_CONTRACT.md)** — ROS2话题契约
 - **[geometry_enhanced_topology_design.md](./02-architecture/geometry_enhanced_topology_design.md)** — 几何增强拓扑设计
@@ -93,27 +95,40 @@ WebRTC、网关、通信优化等专项技术文档。
 - **[PROJECT_QA.md](./06-semantic-nav/PROJECT_QA.md)** — 项目问答
 
 **核心技术**:
-- Fast-Slow双进程 (VLingNav 2026) | ESCA选择性Grounding (NeurIPS 2025)
-- MTU3D Frontier评分 (ICCV 2025) | ConceptGraphs场景图 (ICRA 2024)
-- LOVON动作原语 (2024) | AdaNav熵触发 | ReMEmbR情景记忆
+- Fast-Slow 双进程 (VLingNav 2026) | ESCA 选择性 Grounding (NeurIPS 2025)
+- MTU3D Frontier 评分 (ICCV 2025) | ConceptGraphs 场景图 (ICRA 2024)
+- SPADE 拓扑探索 (IROS 2025) | DovSG 动态场景图 (RA-L 2025)
+- FSR-VLN Jaccard 拓扑边 | AdaNav 熵触发 | ReMEmbR 情景记忆
+- BA-HSG 信念图 + VoI 调度 | TSG 信息增益探索 | LERa 失败恢复
 
 ---
 
 ### [07-testing](./07-testing/) — 测试
-测试报告、性能基准和回归检查清单。
+测试报告、性能基准、SLAM 振动鲁棒性和 ROS2 节点集成测试。
+
+**SLAM 振动鲁棒性测试** (2026-03)
+- **[SLAM_VIBRATION_TEST_REPORT.md](./07-testing/SLAM_VIBRATION_TEST_REPORT.md)** — Point-LIO vs Fast-LIO2 四足振动鲁棒性测试报告
+- **gen_figures.py** / **gen_outdoor_figures.py** — SLAM 测试图表生成脚本
+- **gen_slam_ppt.py** — SLAM 振动测试 PPT 生成
+
+**ROS2 节点集成测试** (T1-T8, 2026-03, 全部 PASS)
+- T1 terrain_analysis | T2 localPlanner | T3 pathFollower
+- T4 global_planner | T5 pct_path_adapter | T6 全链路闭环
+- T7 安全信号 | T8 han_dog_bridge (含 mock CMS + 真实 brainstem)
+- 详见 `tests/integration/` 和 `tests/README.md`
 
 **测试报告**
 - **[FINAL_TEST_REPORT.md](./07-testing/FINAL_TEST_REPORT.md)** — 最终测试报告
 - **[TEST_REPORT_20260208.md](./07-testing/TEST_REPORT_20260208.md)** — 测试报告 (2026-02-08)
-- **[FAST_SLOW_PERFORMANCE_REPORT.md](./07-testing/FAST_SLOW_PERFORMANCE_REPORT.md)** — Fast-Slow性能报告
-- **[SLOW_PATH_LLM_TEST_REPORT.md](./07-testing/SLOW_PATH_LLM_TEST_REPORT.md)** — Slow Path LLM测试报告
+- **[FAST_SLOW_PERFORMANCE_REPORT.md](./07-testing/FAST_SLOW_PERFORMANCE_REPORT.md)** — Fast-Slow 性能报告
+- **[SLOW_PATH_LLM_TEST_REPORT.md](./07-testing/SLOW_PATH_LLM_TEST_REPORT.md)** — Slow Path LLM 测试报告
 - **[CODE_REVIEW_SPATIAL_REASONING.md](./07-testing/CODE_REVIEW_SPATIAL_REASONING.md)** — 空间推理代码审查
 - **[server_test_report.md](./07-testing/server_test_report.md)** — 服务器测试报告
 - **[testing_metrics_summary.md](./07-testing/testing_metrics_summary.md)** — 测试指标汇总
 - **[FINAL_HONEST_SUMMARY.md](./07-testing/FINAL_HONEST_SUMMARY.md)** — 诚实评估总结
 
 **计划与清单**
-- **[REGRESSION_CHECKLIST_V1_3.md](./07-testing/REGRESSION_CHECKLIST_V1_3.md)** — V1.3回归测试清单
+- **[REGRESSION_CHECKLIST_V1_3.md](./07-testing/REGRESSION_CHECKLIST_V1_3.md)** — V1.3 回归测试清单
 - **[TEST_SUPPLEMENT_PLAN.md](./07-testing/TEST_SUPPLEMENT_PLAN.md)** — 测试补充计划
 - **[quantitative_experiments_guide.md](./07-testing/quantitative_experiments_guide.md)** — 量化实验指南
 
@@ -197,8 +212,12 @@ IEEE论文草稿、文献综述、创新评估。
 ---
 
 ### [presentations](./presentations/) — 演示材料
-- **HSG-Nav_Presentation.pptx** — HSG-Nav技术演示
-- **NaviMind_Pitch_Deck.pptx** — NaviMind商业路演
+- **HSG-Nav_Presentation.pptx** — HSG-Nav 技术演示
+- **NaviMind_Pitch_Deck.pptx** — NaviMind 商业路演
+
+**研究 PPT** (外部目录)
+- **`D:\inovxio\docs\ppt\LingTu_Navigation_Research_2026.pptx`** — LingTu 研究汇报 (19 页, 含 TSG/Memory/VoI 技术深度)
+- 生成脚本: `docs/07-testing/gen_lingtu_research_ppt.py`
 
 ---
 
@@ -217,7 +236,7 @@ IEEE论文草稿、文献综述、创新评估。
 
 | 角色 | 入口 |
 |---|---|
-| 新用户 | [快速启动](./01-getting-started/QUICK_START.md) → [系统架构](./02-architecture/ARCHITECTURE.md) |
+| 新用户 | [快速启动](./01-getting-started/QUICK_START.md) → [架构全景](./02-architecture/SYSTEM_OVERVIEW.md) → [硬件架构](./02-architecture/ARCHITECTURE.md) |
 | 开发者 | [API参考](./03-development/API_REFERENCE.md) → [算法参考](./02-architecture/ALGORITHM_REFERENCE.md) → [故障排查](./03-development/TROUBLESHOOTING.md) |
 | 运维 | [部署指南](./01-getting-started/DEPLOY.md) → [Docker](./04-deployment/DOCKER_GUIDE.md) → [OTA](./04-deployment/OTA_GUIDE.md) |
 | 研究 | [Fast-Slow实现](./06-semantic-nav/FAST_SLOW_IMPLEMENTATION.md) → [论文草稿](./09-paper/IEEE_Paper_Complete.md) |
@@ -226,7 +245,8 @@ IEEE论文草稿、文献综述、创新评估。
 
 ## 项目状态
 
-**当前版本**: 1.5.0
-**核心功能**: 几何导航 ✅ | 语义导航 ✅ | Flutter控制端 ✅
+**当前版本**: 1.8.0
+**核心功能**: 几何导航 ✅ | 语义导航 ✅ | Flutter 控制端 ✅ | gRPC Gateway ✅ | SLAM 双算法 (Fast-LIO2 + Point-LIO) ✅
+**集成测试**: T1-T8 全部 PASS (terrain → localPlanner → pathFollower → global → adapter → 全链路 → 安全 → 驱动)
 **论文状态**: 见 [09-paper/README.md](./09-paper/README.md)
 **详细状态**: [06-semantic-nav/PROJECT_STATUS.md](./06-semantic-nav/PROJECT_STATUS.md)

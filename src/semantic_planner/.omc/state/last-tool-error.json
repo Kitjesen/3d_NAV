@@ -1,0 +1,7 @@
+{
+  "tool_name": "Read",
+  "tool_input_preview": "{\"file_path\":\"D:\\\\inovxio\\\\brain\\\\lingtu\\\\src\\\\semantic_planner\\\\semantic_planner\"}",
+  "error": "EISDIR: illegal operation on a directory, read 'D:\\inovxio\\brain\\lingtu\\src\\semantic_planner\\semantic_planner'",
+  "timestamp": "2026-03-15T06:41:55.226Z",
+  "retry_count": 1
+}

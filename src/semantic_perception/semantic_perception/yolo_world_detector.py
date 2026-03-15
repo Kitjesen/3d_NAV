@@ -28,6 +28,12 @@ import time
 from typing import Dict, List, Optional
 import numpy as np
 
+try:
+    import torch
+except ImportError:
+    torch = None
+
+from semantic_common.robustness import _try_empty_cuda_cache
 from .detector_base import DetectorBase, Detection2D
 
 logger = logging.getLogger(__name__)
@@ -106,6 +112,9 @@ class YOLOWorldDetector(DetectorBase):
                 "ultralytics not installed. Run: pip install ultralytics"
             )
             raise
+        except Exception as e:
+            logger.error(f"YOLO model load failed: {e}")
+            raise
 
     def _export_tensorrt(self, model_name: str):
         """
@@ -115,7 +124,7 @@ class YOLOWorldDetector(DetectorBase):
             model_name: 模型名称
         """
         try:
-            logger.info("Exporting to TensorRT (first time may take minutes)...")
+            logger.warning("TensorRT export starting (may take 5-10 minutes on first run)...")
 
             # 导出参数
             export_kwargs = {
@@ -133,9 +142,10 @@ class YOLOWorldDetector(DetectorBase):
             self._model.export(**export_kwargs)
 
             # 加载引擎
+            from ultralytics import YOLO as _YOLO
             engine_path = model_name.replace(".pt", ".engine")
             self._tensorrt_engine_path = engine_path
-            self._model = YOLO(engine_path)
+            self._model = _YOLO(engine_path)
 
             logger.info("TensorRT engine loaded: %s", engine_path)
 
@@ -162,6 +172,10 @@ class YOLOWorldDetector(DetectorBase):
         if self._model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
+        if rgb.ndim != 3 or rgb.shape[2] != 3:
+            logger.error(f"detect(): invalid image shape {rgb.shape}, expected (H,W,3)")
+            return []
+
         start_time = time.time()
 
         # 解析类别列表
@@ -187,7 +201,12 @@ class YOLOWorldDetector(DetectorBase):
                 device=self.device,
             )
         except Exception as e:
-            logger.error("Detection failed: %s", e)
+            error_msg = str(e).lower()
+            if "cuda" in error_msg or "out of memory" in error_msg:
+                logger.error("CUDA error during detection: %s", e)
+                _try_empty_cuda_cache()
+            else:
+                logger.error("Detection failed: %s", e)
             return []
 
         # 解析结果
@@ -274,7 +293,12 @@ class YOLOWorldDetector(DetectorBase):
                 device=self.device,
             )
         except Exception as e:
-            logger.error("Batch detection failed: %s", e)
+            error_msg = str(e).lower()
+            if "cuda" in error_msg or "out of memory" in error_msg:
+                logger.error("Batch detection CUDA OOM: %s", e)
+                _try_empty_cuda_cache()
+            else:
+                logger.error("Batch detection failed: %s", e)
             return [[] for _ in rgb_batch]
 
         # 解析每张图像的结果
@@ -336,4 +360,5 @@ class YOLOWorldDetector(DetectorBase):
         """释放资源"""
         self._model = None
         self._current_classes = None
+        _try_empty_cuda_cache()
         logger.info("YOLO-World detector shut down")

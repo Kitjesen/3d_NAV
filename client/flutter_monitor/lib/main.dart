@@ -38,6 +38,7 @@ import 'package:flutter_monitor/features/settings/runtime_params_page.dart';
 import 'package:flutter_monitor/core/services/notification_service.dart';
 import 'package:flutter_monitor/core/services/app_logger.dart';
 import 'package:flutter_monitor/core/locale/locale_provider.dart';
+import 'package:flutter_monitor/core/services/voice_service.dart';
 import 'package:flutter_monitor/shared/widgets/global_safety_overlay.dart';
 import 'package:flutter_monitor/shared/widgets/error_boundary.dart';
 
@@ -83,6 +84,7 @@ class RobotMonitorApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => SystemGateway()),
         ChangeNotifierProvider(create: (_) => LocaleProvider()),
         ChangeNotifierProvider(create: (_) => FileGateway()),
+        ChangeNotifierProvider(create: (_) => VoiceService()),
         ChangeNotifierProvider(create: (_) => AlertMonitorService()),
         ChangeNotifierProvider(create: (_) => StateLoggerService()),
       ],
@@ -152,6 +154,9 @@ class _AppWithBindingsState extends State<_AppWithBindings>
       final controlGateway = context.read<ControlGateway>();
       final runtimeConfigGateway = context.read<RuntimeConfigGateway>();
       final systemGateway = context.read<SystemGateway>();
+
+      // 初始化语音服务 (异步，后台完成)
+      context.read<VoiceService>().initialize();
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
         otaGateway.updateClient(connProvider.client);

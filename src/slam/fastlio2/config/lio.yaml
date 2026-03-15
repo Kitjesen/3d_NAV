@@ -4,6 +4,15 @@ body_frame: body
 world_frame: odom
 print_time_cost: false
 
+# LiDAR type: 1=Livox(CustomMsg), 2=Velodyne VLP-16(PointCloud2), 3=Ouster(PointCloud2)
+lidar_type: 1
+# Number of scan lines (4 for Mid-360, 6 for Avia, 16 for VLP-16, 64 for Ouster)
+scan_line: 4
+# Timestamp unit: 0=SEC, 1=MS, 2=US, 3=NS
+timestamp_unit: 3
+# IMU acceleration scale: 10.0 for Livox (outputs ~1g), 1.0 for standard IMU (m/s²)
+acc_scale: 10.0
+
 lidar_filter_num: 6
 lidar_min_range: 0.5
 lidar_max_range: 30.0

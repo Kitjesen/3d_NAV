@@ -1,51 +1,522 @@
 <!-- ============================================================
-  MapPilot Robot MJCF — 占位文件
+  NOVA Dog MJCF — 从 dog_arm.urdf 自动转换 + 手动修正
 
-  填入方式：
-    把自研底盘的 URDF 转成 MJCF：
-      python -m mujoco.scripts.converturdf your_robot.urdf robot.xml
+  来源: D:\inovxio\products\quadruped_ws\dog_arm\urdf\dog_arm.urdf
+  转换: MuJoCo 3.5.0 from_xml_path + 手动修正
+  修正内容:
+    1. 添加 freejoint (URDF 转换不生成)
+    2. 添加 position actuator + PD 参数 (URDF effort=0)
+    3. 添加 visual mesh 资源引用
+    4. 恢复 lidar2_Link (导航 LiDAR raycaster 原点)
+    5. 设置接触/摩擦参数
 
-    或直接在此处按 MuJoCo MJCF 格式定义。
+  关节布局 (24 joints):
+    Arm:  arm_joint_1~6, gripper_left/right
+    Legs: fr/fl/rr/rl × (hip, thigh, calf, foot)
 
-  必须保留的 body 名称（bridge 依赖）：
-    base_link    — 机体主体（发布 odometry / TF）
-    lidar_link   — Livox MID-360 安装位（LiDAR raycaster 原点）
-
-  Actuator 接口：
-    自研底层运动控制器接管 ctrl[]，bridge 透传速度目标。
-    具体关节和 actuator 由自研 URDF 决定。
-
-  参考：
-    https://mujoco.readthedocs.io/en/stable/modeling.html
-    https://github.com/unitreerobotics/unitree_mujoco/tree/main/config
+  Dart↔MuJoCo 轴向: 全部取反 (SolidWorks vs 电机约定)
 ============================================================ -->
 
-<mujoco model="mappilot_robot">
-  <compiler angle="radian" autolimits="true"/>
+<mujoco model="nova_dog">
+  <compiler angle="radian" meshdir="../assets/meshes/" autolimits="true"/>
 
-  <!-- ── 占位机体（等待替换为自研 MJCF）──────────────────────── -->
+  <option gravity="0 0 -9.81" timestep="0.002">
+    <flag warmstart="enable"/>
+  </option>
+
+  <default>
+    <joint damping="1.0" armature="0.01"/>
+    <geom friction="1 0.5 0.5" condim="3" conaffinity="1" contype="1"/>
+    <motor ctrllimited="true"/>
+    <!-- 腿关节 PD 参数: kp×6 + kv=5 (12s稳定，43%@vx=0.5，59%@vx=1.0)
+         部署 inferKp=[65,95,120], 训练约 kp×6, kv≈5
+         验证: vx=0.5→43%稳定12s; vx=1.0→59%; kp×5/kv=3在7.1s崩溃 -->
+    <default class="leg_hip">
+      <joint damping="0"/>
+      <position kp="390" kv="5"/>
+    </default>
+    <default class="leg_thigh">
+      <joint damping="0"/>
+      <position kp="570" kv="5"/>
+    </default>
+    <default class="leg_calf">
+      <joint damping="0"/>
+      <position kp="720" kv="5"/>
+    </default>
+    <default class="leg_foot">
+      <joint damping="0"/>
+      <position kp="0" kv="1"/>
+    </default>
+    <default class="arm_joint">
+      <joint damping="3.0"/>
+      <position kp="200" kv="8"/>
+    </default>
+  </default>
+
+  <asset>
+    <!-- 视觉 mesh -->
+    <mesh name="base_link" file="base_link.STL"/>
+    <mesh name="arm_mesh_0" file="arm_mesh_0.STL"/>
+    <mesh name="arm_mesh_1" file="arm_mesh_1.STL"/>
+    <mesh name="arm_mesh_2" file="arm_mesh_2.STL"/>
+    <mesh name="arm_mesh_3" file="arm_mesh_3.STL"/>
+    <mesh name="arm_mesh_4" file="arm_mesh_4.STL"/>
+    <mesh name="arm_mesh_5" file="arm_mesh_5.STL"/>
+    <mesh name="arm_mesh_6" file="arm_mesh_6.STL"/>
+    <mesh name="arm_mesh_7_1" file="arm_mesh_7_1.STL"/>
+    <mesh name="arm_mesh_7_2" file="arm_mesh_7_2.STL"/>
+    <mesh name="fr_hip_Link" file="fr_hip_Link.STL"/>
+    <mesh name="fr_thigh_Link" file="fr_thigh_Link.STL"/>
+    <mesh name="fr_calf_Link" file="fr_calf_Link.STL"/>
+    <mesh name="fr_foot_Link" file="fr_foot_Link.STL"/>
+    <mesh name="fl_hip_Link" file="fl_hip_Link.STL"/>
+    <mesh name="fl_thigh_Link" file="fl_thigh_Link.STL"/>
+    <mesh name="fl_calf_Link" file="fl_calf_Link.STL"/>
+    <mesh name="fl_foot_Link" file="fl_foot_Link.STL"/>
+    <mesh name="rr_hip_Link" file="rr_hip_Link.STL"/>
+    <mesh name="rr_thigh_Link" file="rr_thigh_Link.STL"/>
+    <mesh name="rr_calf_Link" file="rr_calf_Link.STL"/>
+    <mesh name="rr_foot_Link" file="rr_foot_Link.STL"/>
+    <mesh name="rl_hip_Link" file="rl_hip_Link.STL"/>
+    <mesh name="rl_thigh_Link" file="rl_thigh_Link.STL"/>
+    <mesh name="rl_calf_Link" file="rl_calf_Link.STL"/>
+    <mesh name="rl_foot_Link" file="rl_foot_Link.STL"/>
+    <mesh name="lidar2_Link" file="lidar2_Link.STL"/>
+  </asset>
+
   <worldbody>
-    <body name="base_link" pos="0 0 0.5">
+    <!-- ── 机器人自由基体 ─────────────────────────────────────── -->
+    <body name="base_link" pos="0 0 0.45">
       <freejoint name="root"/>
+      <inertial pos="-0.00111 0.00718 0.07632" mass="18.69147"
+                diaginertia="0.24077 0.63159 0.58481"/>
 
-      <!-- TODO: 替换为自研底盘几何 -->
-      <geom name="chassis" type="box" size="0.4 0.3 0.12"
-            rgba=".2 .4 .8 1" mass="25" conaffinity="1"/>
+      <!-- 躯体碰撞 -->
+      <geom name="chassis_main" size="0.205 0.129 0.0775" pos="0 0.00124 0.07541"
+            type="box" rgba="0.75 0.75 0.75 1" group="0"/>
+      <geom name="chassis_r" size="0.025 0.135 0.07" pos="0.23 0 0.07"
+            type="box" rgba="0.75 0.75 0.75 1" group="0"/>
+      <geom name="chassis_l" size="0.025 0.135 0.07" pos="-0.23 0 0.07"
+            type="box" rgba="0.75 0.75 0.75 1" group="0"/>
+      <geom name="chassis_fr" size="0.08 0.06 0.072" pos="0.335 0 0.08"
+            type="box" rgba="0.75 0.75 0.75 1" group="0"/>
+      <geom name="chassis_rl" size="0.0825 0.05 0.075" pos="-0.3375 0 0.08"
+            type="box" rgba="0.75 0.75 0.75 1" group="0"/>
 
-      <!-- Livox MID-360 安装位（不要改名，bridge 依赖）-->
-      <body name="lidar_link" pos="0 0 0.32">
-        <geom name="lidar_housing" type="cylinder" size="0.06 0.05"
-              rgba="0 .8 .8 1" mass="0.5" conaffinity="0"/>
+      <!-- 躯体视觉 (group=2, 不参与碰撞) -->
+      <geom name="base_visual" type="mesh" mesh="base_link"
+            rgba="0.75 0.75 0.75 1" group="2" contype="0" conaffinity="0"/>
+
+      <!-- ── Livox Mid-360 安装位 (导航 LiDAR, bridge 依赖此名) ── -->
+      <body name="lidar_link" pos="-0.29638 -0.0012453 0.19435" quat="-3.67321e-06 0 0 1">
+        <geom name="lidar_housing" type="mesh" mesh="lidar2_Link"
+              rgba="0.2 0.8 0.8 1" contype="0" conaffinity="0" group="2"/>
+        <geom name="lidar_col" type="box" size="0.0384 0.0384 0.04005"
+              pos="0 0 -0.00945" rgba="0.2 0.8 0.8 0.3" group="0"/>
       </body>
 
-      <inertial pos="0 0 0" mass="25" diaginertia="0.8 1.2 1.2"/>
-    </body>
+      <!-- ════════════════════════════════════════════════════════ -->
+      <!--  机械臂 (6 DOF + 夹爪)                                 -->
+      <!-- ════════════════════════════════════════════════════════ -->
+      <body name="arm_link_0" pos="0.08 0 0.158">
+        <inertial pos="0 0 0.031" mass="1.22"
+                  diaginertia="0.00081006 0.00036678 0.0011734"/>
+        <geom name="arm0_vis" type="mesh" mesh="arm_mesh_0"
+              rgba="0.75 0.75 0.75 1" group="2" contype="0" conaffinity="0"/>
+        <geom name="arm0_col" size="0.05 0.031" pos="0 0 0.035"
+              type="cylinder" rgba="0.75 0.75 0.75 1" group="0"/>
+
+        <body name="arm_link_1" pos="0 0 0.1281">
+          <inertial pos="-0.00051492 -0.00324 -0.005"
+                    quat="0.707769 -0.00371747 -0.00372778 0.706425"
+                    mass="1.177" diaginertia="0.000375591 0.000232766 0.000177704"/>
+          <joint name="arm_joint_1" class="arm_joint" axis="0 0 1" range="-3.14 3.14"/>
+          <geom name="arm1_vis" type="mesh" mesh="arm_mesh_1"
+                rgba="0.75 0.75 0.75 1" group="2" contype="0" conaffinity="0"/>
+          <geom name="arm1_col" size="0.058 0.05" quat="0.707105 0.707108 0 0"
+                type="cylinder" rgba="0.75 0.75 0.75 1" group="0"/>
+
+          <body name="arm_link_2" quat="0.000669153 -0.000669155 -0.707108 0.707105">
+            <inertial pos="0.276 -0.0116 0"
+                      quat="0.500681 0.501204 0.49889 0.499221"
+                      mass="1.315" diaginertia="0.00611318 0.0059544 0.000656142"/>
+            <joint name="arm_joint_2" class="arm_joint" axis="0 0 1" range="-3.14 0.75"/>
+            <geom name="arm2_vis" type="mesh" mesh="arm_mesh_2"
+                  rgba="0.75 0.75 0.75 1" group="2" contype="0" conaffinity="0"/>
+            <geom name="arm2_col1" size="0.04 0.152" pos="0.198 -0.03 0"
+                  quat="0.71357 -0.0279926 0.699442 0.028558"
+                  type="cylinder" rgba="0.75 0.75 0.75 1" group="0"/>
+            <geom name="arm2_col2" size="0.045 0.04" pos="0.37425 0 0"
+                  quat="0.161782 0 0 -0.986826"
+                  type="cylinder" rgba="0.75 0.75 0.75 1" group="0"/>
+
+            <body name="arm_link_3" pos="0.37425 0 0" quat="0.161782 0 0 -0.986826">
+              <inertial pos="0.204 0.0195 0.00036064"
+                        quat="0.493197 0.495016 0.504643 0.507002"
+                        mass="0.86" diaginertia="0.00375607 0.003688 0.000541805"/>
+              <joint name="arm_joint_3" class="arm_joint" axis="0 0 1" range="0 3.14"/>
+              <geom name="arm3_vis" type="mesh" mesh="arm_mesh_3"
+                    rgba="0.75 0.75 0.75 1" group="2" contype="0" conaffinity="0"/>
+              <geom name="arm3_col1" size="0.035 0.125" pos="0.17 0.04 0"
+                    quat="0.702553 0.0801124 0.702555 -0.0801127"
+                    type="cylinder" rgba="0.75 0.75 0.75 1" group="0"/>
+              <geom name="arm3_col2" size="0.03 0.039" pos="0.30395 0.00032772 0"
+                    quat="0.986361 0 0 -0.164598"
+                    type="cylinder" rgba="0.75 0.75 0.75 1" group="0"/>
+
+              <body name="arm_link_4" pos="0.30395 0.00032772 0" quat="0.986361 0 0 -0.164598">
+                <inertial pos="0.0675 0.0574 -0.0038986"
+                          quat="0.368124 0.410354 0.58452 0.595341"
+                          mass="0.407" diaginertia="4.66977e-05 4.38361e-05 2.20092e-05"/>
+                <joint name="arm_joint_4" class="arm_joint" axis="0 0 1" range="-1.5 1.5"/>
+                <geom name="arm4_vis" type="mesh" mesh="arm_mesh_4"
+                      rgba="0.75 0.75 0.75 1" group="2" contype="0" conaffinity="0"/>
+                <geom name="arm4_col" size="0.031 0.03" pos="0.080376 0.0718417 -0.0020003"
+                      quat="0.501889 -0.499055 -0.500943 -0.498104"
+                      type="cylinder" rgba="0.75 0.75 0.75 1" group="0"/>
+
+                <body name="arm_link_5" pos="0.080376 0.0018417 -0.0020003"
+                      quat="0.501889 -0.499055 -0.500943 -0.498104">
+                  <inertial pos="0.00043477 0.0038 0.0027"
+                            quat="0.707715 0.00946112 -0.00947909 0.706371"
+                            mass="0.35" diaginertia="1.57595e-05 1.1674e-05 1.08905e-05"/>
+                  <joint name="arm_joint_5" class="arm_joint" axis="0 0 1" range="-1.5 1.5"/>
+                  <geom name="arm5_vis" type="mesh" mesh="arm_mesh_5"
+                        rgba="0.75 0.75 0.75 1" group="2" contype="0" conaffinity="0"/>
+                  <geom name="arm5_col" size="0.035 0.028" pos="0 0.001 0"
+                        quat="0.707105 0.707108 0 0"
+                        type="cylinder" rgba="0.75 0.75 0.75 1" group="0"/>
+
+                  <body name="arm_link_6" pos="0.0020919 0.029927 0"
+                        quat="0.707105 -0.707108 0.000671965 -0.000671962">
+                    <inertial pos="-0.001629 -1.2741e-06 0.044"
+                              quat="0.0116054 0.707025 -0.0114992 0.707"
+                              mass="0.32342" diaginertia="0.00014443 0.00013389 1.18708e-05"/>
+                    <joint name="arm_joint_6" class="arm_joint" axis="0 0 1" range="-3.14 3.14"/>
+                    <geom name="arm6_vis" type="mesh" mesh="arm_mesh_6"
+                          rgba="1 1 1 1" group="2" contype="0" conaffinity="0"/>
+                    <geom name="arm6_col1" size="0.0825 0.021 0.006" pos="0 0 0.062"
+                          quat="0.999688 0 0 -0.0249974" type="box" rgba="1 1 1 1" group="0"/>
+                    <geom name="arm6_col2" size="0.025 0.028" pos="0 0 0.038"
+                          type="cylinder" rgba="1 1 1 1" group="0"/>
+
+                    <!-- 左夹爪 -->
+                    <body name="arm_gripper_left" pos="-0.0016279 0 0.064947"
+                          quat="0.999706 0 0 -0.0242341">
+                      <inertial pos="0.015576 0.0075042 0.027703"
+                                quat="0.818156 0.562577 -0.118669 0.00677282"
+                                mass="0.019078" diaginertia="7.22578e-06 5.26552e-06 3.9822e-06"/>
+                      <joint name="arm_gripper_left_joint" axis="-1 0 0" type="slide"
+                             range="-0.043 0"/>
+                      <geom name="gripper_l" type="mesh" mesh="arm_mesh_7_1"
+                            rgba="0.31 0.31 0.31 1"/>
+                    </body>
+                    <!-- 右夹爪 -->
+                    <body name="arm_gripper_right" pos="-0.0016279 0 0.064947"
+                          quat="0.999706 0 0 -0.0242341">
+                      <inertial pos="-0.015696 0.010047 0.027253"
+                                quat="0.766199 0.631928 0.114039 -0.0245308"
+                                mass="0.019828" diaginertia="8.97659e-06 7.00181e-06 4.1092e-06"/>
+                      <joint name="arm_gripper_right_joint" axis="-1 0 0" type="slide"
+                             range="0 0.043"/>
+                      <geom name="gripper_r" type="mesh" mesh="arm_mesh_7_2"
+                            rgba="0.33 0.33 0.33 1"/>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ════════════════════════════════════════════════════════ -->
+      <!--  前右腿 (FR)                                            -->
+      <!-- ════════════════════════════════════════════════════════ -->
+      <body name="fr_hip_Link" pos="0.2395 -0.064595 0.08065">
+        <inertial pos="0.07152 -0.05064 0.00083"
+                  quat="0.626329 0.617527 0.336122 0.336742"
+                  mass="1.66356" diaginertia="0.0168527 0.0160417 0.00261558"/>
+        <joint name="fr_hip_joint" class="leg_hip" axis="-1 0 0" range="-0.41 0.41"/>
+        <geom name="fr_hip_vis" type="mesh" mesh="fr_hip_Link"
+              rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+        <geom name="fr_hip_col" size="0.06 0.024" pos="0.07752 -0.05564 0.00083"
+              quat="0.707105 0.707108 0 0" type="cylinder"
+              rgba="0.9 0.92 0.93 1" group="0"/>
+
+        <body name="fr_thigh_Link" pos="0.078 -0.0795 0">
+          <inertial pos="-0.19518 -0.02859 -0.01131"
+                    quat="0.481494 0.451865 0.516848 0.544838"
+                    mass="2.41" diaginertia="0.12237 0.120525 0.00343429"/>
+          <joint name="fr_thigh_joint" class="leg_thigh" axis="0 1 0" range="-3.14 0"/>
+          <geom name="fr_thigh_vis" type="mesh" mesh="fr_thigh_Link"
+                rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+          <geom name="fr_thigh_col1" size="0.064 0.015" pos="0 -0.0195 0"
+                quat="0.707105 0.707108 0 0" type="cylinder"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+          <geom name="fr_thigh_col2" size="0.09 0.015 0.03" pos="-0.125 -0.02059 -0.01001"
+                quat="0.997888 0 -0.0649542 0" type="box"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+          <geom name="fr_thigh_col3" size="0.0655 0.028" pos="-0.2485 -0.032 -0.0135"
+                quat="0.707105 0.707108 0 0" type="cylinder"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+
+          <body name="fr_calf_Link" pos="-0.24954 -0.057 -0.01515">
+            <inertial pos="0.17379 -0.02903 0.03734"
+                      quat="0.576479 0.481443 0.405075 0.521344"
+                      mass="1.89384" diaginertia="0.0857584 0.084918 0.00239355"/>
+            <joint name="fr_calf_joint" class="leg_calf" axis="0 1 0" range="0 3.14"/>
+            <geom name="fr_calf_vis" type="mesh" mesh="fr_calf_Link"
+                  rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+            <geom name="fr_calf_col1" size="0.0635 0.015" pos="0 -0.02653 0"
+                  quat="0.707105 0.707108 0 0" type="cylinder"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+            <geom name="fr_calf_col2" size="0.09 0.02 0.0225" pos="0.14 -0.02903 0.0305"
+                  quat="0.991445 0 -0.130526 0" type="box"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+            <geom name="fr_calf_col3" size="0.06 0.0275" pos="0.249 -0.02903 0.0531"
+                  quat="0.707105 0.707108 0 0" type="cylinder"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+
+            <body name="fr_foot_Link" pos="0.24443 -0.061 0.0525">
+              <inertial pos="0 -0.01336 0" quat="0.707107 0 0 0.707107"
+                        mass="0.32377" diaginertia="0.00121 0.00071 0.00071"/>
+              <joint name="fr_foot_joint" class="leg_foot" axis="0 1 0" limited="false"/>
+              <geom name="fr_foot_vis" type="mesh" mesh="fr_foot_Link"
+                    rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+              <geom name="fr_foot_col" size="0.03" pos="0 -0.017 0"
+                    type="sphere" rgba="0.9 0.92 0.93 0.5" group="0"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ════════════════════════════════════════════════════════ -->
+      <!--  前左腿 (FL)                                            -->
+      <!-- ════════════════════════════════════════════════════════ -->
+      <body name="fl_hip_Link" pos="0.2395 0.065405 0.08065">
+        <inertial pos="0.07132 0.05064 0.00088"
+                  quat="0.34195 0.329 0.622752 0.622101"
+                  mass="1.66356" diaginertia="0.0168353 0.0159606 0.00259407"/>
+        <joint name="fl_hip_joint" class="leg_hip" axis="-1 0 0" range="-0.41 0.41"/>
+        <geom name="fl_hip_vis" type="mesh" mesh="fl_hip_Link"
+              rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+        <geom name="fl_hip_col" size="0.06 0.024" pos="0.07752 0.05564 0.00083"
+              quat="0.707105 0.707108 0 0" type="cylinder"
+              rgba="0.9 0.92 0.93 1" group="0"/>
+
+        <body name="fl_thigh_Link" pos="0.078 0.0795 0">
+          <inertial pos="-0.19482 0.02859 -0.01176"
+                    quat="0.542469 0.519007 0.447927 0.48551"
+                    mass="2.41" diaginertia="0.121966 0.120079 0.00347509"/>
+          <joint name="fl_thigh_joint" class="leg_thigh" axis="0 -1 0" range="0 3.14"/>
+          <geom name="fl_thigh_vis" type="mesh" mesh="fl_thigh_Link"
+                rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+          <geom name="fl_thigh_col1" size="0.064 0.015" pos="0 0.0195 0"
+                quat="0.707105 0.707108 0 0" type="cylinder"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+          <geom name="fl_thigh_col2" size="0.09 0.015 0.03" pos="-0.125 0.02059 -0.01001"
+                quat="0.997888 0 -0.0649542 0" type="box"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+          <geom name="fl_thigh_col3" size="0.0655 0.028" pos="-0.2485 0.032 -0.0135"
+                quat="0.707105 0.707108 0 0" type="cylinder"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+
+          <body name="fl_calf_Link" pos="-0.24954 0.057 -0.01515">
+            <inertial pos="0.17384 0.02903 0.03735"
+                      quat="0.52142 0.405052 0.481468 0.576405"
+                      mass="1.89384" diaginertia="0.0858075 0.0849699 0.00239256"/>
+            <joint name="fl_calf_joint" class="leg_calf" axis="0 -1 0" range="-3.14 0"/>
+            <geom name="fl_calf_vis" type="mesh" mesh="fl_calf_Link"
+                  rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+            <geom name="fl_calf_col1" size="0.0635 0.015" pos="0 0.02653 0"
+                  quat="0.707105 0.707108 0 0" type="cylinder"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+            <geom name="fl_calf_col2" size="0.09 0.02 0.0225" pos="0.14 0.02903 0.0305"
+                  quat="0.991445 0 -0.130526 0" type="box"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+            <geom name="fl_calf_col3" size="0.06 0.0275" pos="0.249 0.02903 0.0531"
+                  quat="0.707105 0.707108 0 0" type="cylinder"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+
+            <body name="fl_foot_Link" pos="0.24443 0.061 0.0525">
+              <inertial pos="0 0.01336 0" quat="0.707107 0 0 0.707107"
+                        mass="0.32377" diaginertia="0.00121 0.00071 0.00071"/>
+              <joint name="fl_foot_joint" class="leg_foot" axis="0 -1 0" limited="false"/>
+              <geom name="fl_foot_vis" type="mesh" mesh="fl_foot_Link"
+                    rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+              <geom name="fl_foot_col" size="0.03" pos="0 0.017 0"
+                    type="sphere" rgba="0.9 0.92 0.93 0.5" group="0"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ════════════════════════════════════════════════════════ -->
+      <!--  后右腿 (RR)                                            -->
+      <!-- ════════════════════════════════════════════════════════ -->
+      <body name="rr_hip_Link" pos="-0.2395 -0.066245 0.08065">
+        <inertial pos="-0.07082 -0.05065 0.00038"
+                  quat="0.326741 0.342856 0.620276 0.625258"
+                  mass="1.66356" diaginertia="0.0166991 0.0158598 0.00257107"/>
+        <joint name="rr_hip_joint" class="leg_hip" axis="1 0 0" range="-0.41 0.41"/>
+        <geom name="rr_hip_vis" type="mesh" mesh="rr_hip_Link"
+              rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+        <geom name="rr_hip_col" size="0.06 0.024" pos="-0.07752 -0.05564 0.00083"
+              quat="0.707105 0.707108 0 0" type="cylinder"
+              rgba="0.9 0.92 0.93 1" group="0"/>
+
+        <body name="rr_thigh_Link" pos="-0.078 -0.079497 -0.00063243">
+          <inertial pos="0.19475 -0.02849 -0.01303"
+                    quat="0.514671 0.546677 0.484044 0.449398"
+                    mass="2.41" diaginertia="0.121971 0.120083 0.00347624"/>
+          <joint name="rr_thigh_joint" class="leg_thigh" axis="0 0.999968 0.00795509"
+                 range="0 3.14"/>
+          <geom name="rr_thigh_vis" type="mesh" mesh="rr_thigh_Link"
+                rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+          <geom name="rr_thigh_col1" size="0.064 0.015" pos="0 -0.0195 0"
+                quat="0.707105 0.707108 0 0" type="cylinder"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+          <geom name="rr_thigh_col2" size="0.09 0.015 0.03" pos="0.125 -0.02059 -0.01001"
+                quat="0.997888 0 0.0649542 0" type="box"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+          <geom name="rr_thigh_col3" size="0.0655 0.028" pos="0.2485 -0.032 -0.0135"
+                quat="0.707105 0.707108 0 0" type="cylinder"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+
+          <body name="rr_calf_Link" pos="0.24946 -0.056867 -0.016903">
+            <inertial pos="-0.17337 -0.02935 0.03924"
+                      quat="0.398595 0.526947 0.576038 0.481279"
+                      mass="1.89384" diaginertia="0.0858068 0.0849678 0.0023954"/>
+            <joint name="rr_calf_joint" class="leg_calf" axis="0 0.999968 0.00795509"
+                   range="-6.28 0"/>
+            <geom name="rr_calf_vis" type="mesh" mesh="rr_calf_Link"
+                  rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+            <geom name="rr_calf_col1" size="0.0635 0.015" pos="0 -0.02653 0"
+                  quat="0.707105 0.707108 0 0" type="cylinder"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+            <geom name="rr_calf_col2" size="0.09 0.02 0.0225" pos="-0.14 -0.02903 0.0305"
+                  quat="0.991445 0 0.130526 0" type="box"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+            <geom name="rr_calf_col3" size="0.06 0.0275" pos="-0.249 -0.02903 0.0531"
+                  quat="0.707105 0.707108 0 0" type="cylinder"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+
+            <body name="rr_foot_Link" pos="-0.24377 -0.061439 0.054994">
+              <inertial pos="0 -0.01336 -0.00011" quat="0.707107 0 0 0.707107"
+                        mass="0.32377" diaginertia="0.00121 0.00071 0.00071"/>
+              <joint name="rr_foot_joint" class="leg_foot" axis="0 0.999968 0.00795509"
+                     limited="false"/>
+              <geom name="rr_foot_vis" type="mesh" mesh="rr_foot_Link"
+                    rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+              <geom name="rr_foot_col" size="0.03" pos="0 -0.017 0"
+                    type="sphere" rgba="0.9 0.92 0.93 0.5" group="0"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <!-- ════════════════════════════════════════════════════════ -->
+      <!--  后左腿 (RL)                                            -->
+      <!-- ════════════════════════════════════════════════════════ -->
+      <body name="rl_hip_Link" pos="-0.2395 0.063755 0.08065">
+        <inertial pos="-0.07136 0.05064 -0.00087"
+                  quat="0.622182 0.622765 0.328978 0.341799"
+                  mass="1.66356" diaginertia="0.0168545 0.0159706 0.00259488"/>
+        <joint name="rl_hip_joint" class="leg_hip" axis="1 0 0" range="-0.41 0.41"/>
+        <geom name="rl_hip_vis" type="mesh" mesh="rl_hip_Link"
+              rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+        <geom name="rl_hip_col" size="0.06 0.024" pos="-0.07752 0.05564 0.00083"
+              quat="0.707105 0.707108 0 0" type="cylinder"
+              rgba="0.9 0.92 0.93 1" group="0"/>
+
+        <body name="rl_thigh_Link" pos="-0.078 0.0795 0">
+          <inertial pos="0.19518 0.02859 -0.01131"
+                    quat="0.451865 0.481494 0.544838 0.516848"
+                    mass="2.41" diaginertia="0.12237 0.120525 0.00343429"/>
+          <joint name="rl_thigh_joint" class="leg_thigh" axis="0 -1 0" range="-3.14 0"/>
+          <geom name="rl_thigh_vis" type="mesh" mesh="rl_thigh_Link"
+                rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+          <geom name="rl_thigh_col1" size="0.064 0.015" pos="0 0.0195 0"
+                quat="0.707105 0.707108 0 0" type="cylinder"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+          <geom name="rl_thigh_col2" size="0.09 0.015 0.03" pos="0.125 0.02059 -0.01001"
+                quat="0.997888 0 0.0649542 0" type="box"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+          <geom name="rl_thigh_col3" size="0.0655 0.028" pos="0.2485 0.032 -0.0135"
+                quat="0.707105 0.707108 0 0" type="cylinder"
+                rgba="0.9 0.92 0.93 1" group="0"/>
+
+          <body name="rl_calf_Link" pos="0.24954 0.057 -0.01515">
+            <inertial pos="-0.17385 0.02903 0.03733"
+                      quat="0.479036 0.579585 0.51781 0.408019"
+                      mass="1.89384" diaginertia="0.0858096 0.0849754 0.00239501"/>
+            <joint name="rl_calf_joint" class="leg_calf" axis="0 -1 0" range="0 6.28"/>
+            <geom name="rl_calf_vis" type="mesh" mesh="rl_calf_Link"
+                  rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+            <geom name="rl_calf_col1" size="0.0635 0.015" pos="0 0.02653 0"
+                  quat="0.707105 0.707108 0 0" type="cylinder"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+            <geom name="rl_calf_col2" size="0.09 0.02 0.0225" pos="-0.14 0.02903 0.0305"
+                  quat="0.991445 0 0.130526 0" type="box"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+            <geom name="rl_calf_col3" size="0.06 0.0275" pos="-0.249 0.02903 0.0531"
+                  quat="0.707105 0.707108 0 0" type="cylinder"
+                  rgba="0.9 0.92 0.93 1" group="0"/>
+
+            <body name="rl_foot_Link" pos="-0.24443 0.061 0.0525">
+              <inertial pos="0 0.01336 0" quat="0.707107 0 0 0.707107"
+                        mass="0.32377" diaginertia="0.00121 0.00071 0.00071"/>
+              <joint name="rl_foot_joint" class="leg_foot" axis="0 -1 0" limited="false"/>
+              <geom name="rl_foot_vis" type="mesh" mesh="rl_foot_Link"
+                    rgba="0.9 0.92 0.93 1" group="2" contype="0" conaffinity="0"/>
+              <geom name="rl_foot_col" size="0.03" pos="0 0.017 0"
+                    type="sphere" rgba="0.9 0.92 0.93 0.5" group="0"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+    </body><!-- end base_link -->
   </worldbody>
 
-  <!-- ── Actuators（TODO: 按自研底层接口填写）────────────────────
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!--  Actuators — 位置控制 (PD), kp/kv 来自 brainstem profile  -->
+  <!-- ══════════════════════════════════════════════════════════ -->
   <actuator>
-    ...
+    <!-- 机械臂 -->
+    <position name="arm1_pos" joint="arm_joint_1" class="arm_joint" ctrlrange="-3.14 3.14"/>
+    <position name="arm2_pos" joint="arm_joint_2" class="arm_joint" ctrlrange="-3.14 0.75"/>
+    <position name="arm3_pos" joint="arm_joint_3" class="arm_joint" ctrlrange="0 3.14"/>
+    <position name="arm4_pos" joint="arm_joint_4" class="arm_joint" ctrlrange="-1.5 1.5"/>
+    <position name="arm5_pos" joint="arm_joint_5" class="arm_joint" ctrlrange="-1.5 1.5"/>
+    <position name="arm6_pos" joint="arm_joint_6" class="arm_joint" ctrlrange="-3.14 3.14"/>
+    <position name="gripper_l_pos" joint="arm_gripper_left_joint" kp="50" ctrlrange="-0.043 0"/>
+    <position name="gripper_r_pos" joint="arm_gripper_right_joint" kp="50" ctrlrange="0 0.043"/>
+
+    <!-- FR 腿 -->
+    <position name="fr_hip_pos" joint="fr_hip_joint" class="leg_hip" ctrlrange="-0.41 0.41"/>
+    <position name="fr_thigh_pos" joint="fr_thigh_joint" class="leg_thigh" ctrlrange="-3.14 0"/>
+    <position name="fr_calf_pos" joint="fr_calf_joint" class="leg_calf" ctrlrange="0 3.14"/>
+    <position name="fr_foot_pos" joint="fr_foot_joint" class="leg_foot" ctrlrange="-3.14 3.14"/>
+
+    <!-- FL 腿 -->
+    <position name="fl_hip_pos" joint="fl_hip_joint" class="leg_hip" ctrlrange="-0.41 0.41"/>
+    <position name="fl_thigh_pos" joint="fl_thigh_joint" class="leg_thigh" ctrlrange="0 3.14"/>
+    <position name="fl_calf_pos" joint="fl_calf_joint" class="leg_calf" ctrlrange="-3.14 0"/>
+    <position name="fl_foot_pos" joint="fl_foot_joint" class="leg_foot" ctrlrange="-3.14 3.14"/>
+
+    <!-- RR 腿 -->
+    <position name="rr_hip_pos" joint="rr_hip_joint" class="leg_hip" ctrlrange="-0.41 0.41"/>
+    <position name="rr_thigh_pos" joint="rr_thigh_joint" class="leg_thigh" ctrlrange="0 3.14"/>
+    <position name="rr_calf_pos" joint="rr_calf_joint" class="leg_calf" ctrlrange="-6.28 0"/>
+    <position name="rr_foot_pos" joint="rr_foot_joint" class="leg_foot" ctrlrange="-3.14 3.14"/>
+
+    <!-- RL 腿 -->
+    <position name="rl_hip_pos" joint="rl_hip_joint" class="leg_hip" ctrlrange="-0.41 0.41"/>
+    <position name="rl_thigh_pos" joint="rl_thigh_joint" class="leg_thigh" ctrlrange="-3.14 0"/>
+    <position name="rl_calf_pos" joint="rl_calf_joint" class="leg_calf" ctrlrange="0 6.28"/>
+    <position name="rl_foot_pos" joint="rl_foot_joint" class="leg_foot" ctrlrange="-3.14 3.14"/>
   </actuator>
-  ────────────────────────────────────────────────────────────── -->
 
 </mujoco>

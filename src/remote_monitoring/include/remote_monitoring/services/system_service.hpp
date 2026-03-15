@@ -100,7 +100,7 @@ private:
   /// 检查路径是否在允许的地图目录内 (防止目录遍历)
   bool IsPathUnderMapDir(const std::string &path) const;
   /// 确保写操作有租约保护
-  bool RequireLease(robot::v1::BaseResponse *base);
+  bool RequireLease(robot::v1::ResponseBase *base);
 
   std::shared_ptr<core::LeaseManager> lease_mgr_;
   std::shared_ptr<core::TaskManager> task_mgr_;

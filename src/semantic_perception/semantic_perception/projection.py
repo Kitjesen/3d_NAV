@@ -84,6 +84,8 @@ def project_to_3d(
     intrinsics: CameraIntrinsics,
 ) -> np.ndarray:
     """单点 2D → 3D 投影 (相机坐标系)。"""
+    if intrinsics.fx == 0.0 or intrinsics.fy == 0.0:
+        return np.array([0.0, 0.0, depth_m])
     x = (pixel_u - intrinsics.cx) * depth_m / intrinsics.fx
     y = (pixel_v - intrinsics.cy) * depth_m / intrinsics.fy
     z = depth_m
@@ -136,13 +138,26 @@ def mask_to_pointcloud(
     if mask is None or depth_image is None:
         return None
 
+    if mask.shape != depth_image.shape[:2]:
+        # Mask/depth size mismatch — cannot safely resize without cv2
+        return None
+
     vs, us = np.where(mask)
+    if len(vs) < POINTCLOUD_MIN_POINTS:
+        return None
+
+    # Clip to depth image bounds
+    h, w = depth_image.shape[:2]
+    valid_bounds = (vs < h) & (us < w)
+    vs, us = vs[valid_bounds], us[valid_bounds]
     if len(vs) < POINTCLOUD_MIN_POINTS:
         return None
 
     depths = depth_image[vs, us].astype(np.float64) * depth_scale
 
-    valid = (depths > min_depth) & (depths < max_depth)
+    # Filter NaN and inf
+    finite_mask = np.isfinite(depths)
+    valid = finite_mask & (depths > min_depth) & (depths < max_depth)
     vs, us, depths = vs[valid], us[valid], depths[valid]
 
     if len(depths) < POINTCLOUD_MIN_POINTS:
@@ -153,9 +168,13 @@ def mask_to_pointcloud(
         indices = np.random.choice(len(depths), max_points * 4, replace=False)
         vs, us, depths = vs[indices], us[indices], depths[indices]
 
+    # Guard against zero focal lengths
+    fx = intrinsics.fx if intrinsics.fx != 0.0 else 1.0
+    fy = intrinsics.fy if intrinsics.fy != 0.0 else 1.0
+
     # 批量反投影: pixel (u,v,d) → camera 3D (vectorized)
-    x_cam = (us.astype(np.float64) - intrinsics.cx) * depths / intrinsics.fx
-    y_cam = (vs.astype(np.float64) - intrinsics.cy) * depths / intrinsics.fy
+    x_cam = (us.astype(np.float64) - intrinsics.cx) * depths / fx
+    y_cam = (vs.astype(np.float64) - intrinsics.cy) * depths / fy
     z_cam = depths
 
     points_cam = np.stack([x_cam, y_cam, z_cam], axis=1)  # (N, 3)
@@ -184,6 +203,16 @@ def _voxel_downsample(
 
     每个体素保留一个点 (体素内均值), 控制总点数。
     """
+    if len(points) == 0:
+        return points
+
+    # Filter out NaN/inf points before processing
+    finite_mask = np.isfinite(points).all(axis=1)
+    if not finite_mask.all():
+        points = points[finite_mask]
+        if len(points) == 0:
+            return points
+
     if voxel_size <= 0 or len(points) <= max_points:
         if len(points) > max_points:
             indices = np.random.choice(len(points), max_points, replace=False)

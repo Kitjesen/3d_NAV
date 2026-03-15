@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+import threading
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -40,6 +41,7 @@ class EpisodicMemory:
     def __init__(self, clip_encoder: object | None = None) -> None:
         self._records: List[MemoryRecord] = []
         self._clip = clip_encoder
+        self._lock = threading.Lock()
 
     # ---------- 写入 ----------
 
@@ -53,13 +55,19 @@ class EpisodicMemory:
         """添加一条记忆记录"""
         pos = np.array(position, dtype=float)
 
-        # 空间去重：距最近记录 < MIN_DISTANCE_M 则跳过
-        if self._records:
-            last_pos = self._records[-1].position
-            if np.linalg.norm(pos[:2] - last_pos[:2]) < self.MIN_DISTANCE_M:
-                return
+        # 位置验证：拒绝 NaN/Inf 位置
+        if not np.isfinite(pos[:2]).all():
+            logger.debug("EpisodicMemory.add: rejected non-finite position %s", pos)
+            return
 
-        # 生成描述
+        # 空间去重（快速检查，持锁时间短）
+        with self._lock:
+            if self._records:
+                last_pos = self._records[-1].position
+                if np.linalg.norm(pos[:2] - last_pos[:2]) < self.MIN_DISTANCE_M:
+                    return
+
+        # 生成描述（锁外，可能耗时）
         unique_labels = list(dict.fromkeys(labels))[:8]
         if description is None:
             label_str = "、".join(unique_labels) if unique_labels else "无可见对象"
@@ -67,7 +75,7 @@ class EpisodicMemory:
             room_str = f"（推测{room_type}）" if room_type else ""
             description = f"位置{pos_str}：{label_str}{room_str}"
 
-        # 文本嵌入
+        # 文本嵌入（锁外，CLIP 调用可能耗时）
         embedding = None
         if self._clip is not None:
             try:
@@ -84,11 +92,11 @@ class EpisodicMemory:
             embedding=embedding,
         )
 
-        self._records.append(record)
-
-        # FIFO 淘汰
-        if len(self._records) > self.MAX_RECORDS:
-            self._records = self._records[-self.MAX_RECORDS:]
+        with self._lock:
+            self._records.append(record)
+            # FIFO 淘汰
+            if len(self._records) > self.MAX_RECORDS:
+                self._records = self._records[-self.MAX_RECORDS:]
 
     # ---------- 检索 ----------
 
@@ -99,7 +107,8 @@ class EpisodicMemory:
         max_age_sec: Optional[float] = None,
     ) -> List[MemoryRecord]:
         """语义文本检索"""
-        candidates = self._filter_by_age(max_age_sec)
+        with self._lock:
+            candidates = self._filter_by_age(max_age_sec)
         if not candidates:
             return []
 
@@ -133,8 +142,12 @@ class EpisodicMemory:
     ) -> List[MemoryRecord]:
         """空间范围检索"""
         pos = np.array(position, dtype=float)
+        if not np.isfinite(pos[:2]).all():
+            return []
+        with self._lock:
+            records_snap = list(self._records)
         results = []
-        for r in self._records:
+        for r in records_snap:
             dist = float(np.linalg.norm(pos[:2] - r.position[:2]))
             if dist <= radius:
                 results.append((dist, r))
@@ -162,14 +175,16 @@ class EpisodicMemory:
 
     def get_summary(self) -> str:
         """返回近期记忆摘要（用于 Slow Path prompt）"""
-        recent = self._records[-10:]  # 最近10条
+        with self._lock:
+            recent = self._records[-5:]
         if not recent:
             return ""
-        summaries = [f"  {r.description}" for r in recent[-5:]]
+        summaries = [f"  {r.description}" for r in recent]
         return "【近期探索记忆】\n" + "\n".join(summaries)
 
     def __len__(self) -> int:
-        return len(self._records)
+        with self._lock:
+            return len(self._records)
 
     # ---------- 内部 ----------
 

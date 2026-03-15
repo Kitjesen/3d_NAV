@@ -150,6 +150,20 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("enable_semantic")),
     )
 
+    # ---- 8. 三环认知架构 (SafetyMonitor + Evaluator + DialogueManager) ----
+    rings = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(subsystems_dir, "rings.launch.py")
+        ),
+    )
+
+    # ---- 9. 运营服务 (地图管理 + 巡检路线 + 电子围栏 + 定时任务 + 任务日志) ----
+    services = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(subsystems_dir, "services.launch.py")
+        ),
+    )
+
     return LaunchDescription(
         [
             max_speed_arg,
@@ -168,5 +182,7 @@ def generate_launch_description():
             driver,
             grpc,
             semantic,
+            rings,
+            services,
         ]
     )

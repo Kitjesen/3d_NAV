@@ -19,6 +19,7 @@
   <depend>tf_transformations</depend>
   <exec_depend>python3-transforms3d</exec_depend>
   <exec_depend>python3-grpcio</exec_depend>
+  <exec_depend>semantic_common</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

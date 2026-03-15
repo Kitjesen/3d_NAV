@@ -14,7 +14,7 @@ RestartSec=5
 TimeoutStartSec=30
 TimeoutStopSec=15
 WatchdogSec=30
-KillMode=mixed
+KillMode=control-group
 KillSignal=SIGINT
 SuccessExitStatus=130 SIGINT
 

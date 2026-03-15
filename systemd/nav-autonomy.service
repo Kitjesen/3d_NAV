@@ -13,7 +13,7 @@ ExecStart=/bin/bash /opt/nav/scripts/services/nav-autonomy.sh
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15
-KillMode=mixed
+KillMode=control-group
 KillSignal=SIGINT
 SuccessExitStatus=130 SIGINT
 

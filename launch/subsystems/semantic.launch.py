@@ -71,7 +71,7 @@ def generate_launch_description():
 
     # ── 语义规划节点 ──
     # initial_instruction 和 llm.backend 作为参数覆盖 yaml 中的默认值
-    # 空字符串参数不会覆盖 (planner_node 内部检查非空才生效)
+    # 注意: 空字符串会覆盖 YAML — planner_node 内部对空值做了 fallback 处理
     planner_node = Node(
         package="semantic_planner",
         executable="semantic_planner_node",

@@ -59,6 +59,8 @@ import traceback
 from enum import Enum
 from typing import Optional, Dict
 
+from semantic_common import safe_json_loads
+
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -69,7 +71,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry, OccupancyGrid
 from sensor_msgs.msg import Image, PointCloud2
-from std_msgs.msg import String
+from std_msgs.msg import String, Empty, Float32
 
 # B5: Nav2 NavigateToPose action
 try:
@@ -246,14 +248,30 @@ class SemanticPlannerNode(Node):
         # 语义数据持久化目录 (mapping 时保存, navigation 时加载)
         self.declare_parameter("semantic_data_dir", "")  # 空=不加载/保存
 
+        # 启动后自动发送的指令 (探索模式用, launch 参数传入)
+        self.declare_parameter("initial_instruction", "")  # 空=不自动发送
+
         # ── 读取参数 ──
+        # base_url 参数声明 (YAML 中可选)
+        self.declare_parameter("llm.base_url", "")
+        self.declare_parameter("llm_fallback.base_url", "")
+
+        # P1-4 fix: 空字符串 launch 参数不应覆盖 YAML 配置
+        _backend = self.get_parameter("llm.backend").value
+        if not _backend:
+            _backend = "kimi"
+            self.get_logger().info(
+                "llm.backend is empty (launch override), using default: kimi"
+            )
+
         primary_config = LLMConfig(
-            backend=self.get_parameter("llm.backend").value,
+            backend=_backend,
             model=self.get_parameter("llm.model").value,
             api_key_env=self.get_parameter("llm.api_key_env").value,
             timeout_sec=self.get_parameter("llm.timeout_sec").value,
             max_retries=self.get_parameter("llm.max_retries").value,
             temperature=self.get_parameter("llm.temperature").value,
+            base_url=self.get_parameter("llm.base_url").value,
         )
 
         fallback_config = LLMConfig(
@@ -262,6 +280,7 @@ class SemanticPlannerNode(Node):
             api_key_env=self.get_parameter("llm_fallback.api_key_env").value,
             timeout_sec=self.get_parameter("llm_fallback.timeout_sec").value,
             max_retries=self.get_parameter("llm_fallback.max_retries").value,
+            base_url=self.get_parameter("llm_fallback.base_url").value,
         )
 
         # SCG 参数
@@ -411,7 +430,7 @@ class SemanticPlannerNode(Node):
         self._last_voi_slow_time: float = 0.0
 
         # SCG 路径规划内部状态
-        self._scg_result_event = threading.Event()
+        self._scg_result_event = asyncio.Event()
         self._scg_latest_result: Optional[dict] = None
 
         # 跟随模式标记 (FOLLOW 动作通过现有导航闭环实现)
@@ -461,7 +480,12 @@ class SemanticPlannerNode(Node):
         self._replan_count: int = 0
         self._explore_count: int = 0
         self._task_start_time: float = 0.0
+        self._failure_reason: str = ""
         self._execution_context: str = ""  # GAP: 闭环反馈 — 成功时累计场景变化
+        self._wait_timer = None  # Fix #1: WAIT action one-shot timer handle
+        self._nav_goal_timeout: float = 120.0  # Fix #5: per-goal navigation timeout (seconds)
+        self._navigation_start_time: float = 0.0  # Fix #5: timestamp when NAVIGATING state entered
+        self._last_scene_graph_time: float = 0.0  # Fix #6: timestamp of last scene graph update
 
         # 创新3: 连续 Re-perception 状态
         self._continuous_reperception = self.get_parameter(
@@ -490,7 +514,9 @@ class SemanticPlannerNode(Node):
 
         # 异步事件循环 (在单独线程中运行 LLM 调用)
         self._loop = asyncio.new_event_loop()
+        self._futures_lock = threading.Lock()  # 保护 _pending_futures 的跨线程访问
         self._pending_futures: set = set()  # 防止 asyncio.Task 被 GC 回收
+        self._active_mission_future = None  # 当前任务的 Future，新指令到达时取消
         self._async_thread = threading.Thread(
             target=self._run_async_loop, daemon=True
         )
@@ -596,6 +622,25 @@ class SemanticPlannerNode(Node):
                 f"req={scg_req_topic}, res={scg_res_topic}"
             )
 
+        # ── 操作类命令发布器 ──
+        self._patrol_cmd_pub = self.create_publisher(String, '/nav/patrol/command', 10)
+        self._poi_cmd_pub = self.create_publisher(String, '/nav/poi/command', 10)
+        self._map_cmd_pub = self.create_publisher(String, '/nav/map/command', 10)
+        self._cancel_pub = self.create_publisher(Empty, '/nav/cancel', 10)
+        self._speed_pub = self.create_publisher(Float32, '/nav/speed', 10)
+        self._response_pub = self.create_publisher(String, '/nav/voice/response', 10)
+
+        # ── 操作类动作集合 (非导航类, 直接路由到命令话题) ──
+        self._OPERATIONAL_ACTIONS = {
+            SubGoalAction.PATROL,
+            SubGoalAction.SAVE_MAP,
+            SubGoalAction.SAVE_POI,
+            SubGoalAction.SET_SPEED,
+            SubGoalAction.RETURN_HOME,
+            SubGoalAction.PAUSE,
+            SubGoalAction.RESUME,
+        }
+
         # ── 监控定时器 (C9: 参数化频率) ──
         monitor_period = 1.0 / max(self._monitor_hz, 0.1)
         self._monitor_timer = self.create_timer(monitor_period, self._monitor_callback)
@@ -609,6 +654,18 @@ class SemanticPlannerNode(Node):
             f"implicit_fsm_ready={self._implicit_fsm.is_ready}"
         )
 
+        # ── 自动发送初始指令 (探索模式 launch 参数 target:=...) ──
+        _init_instr = self.get_parameter("initial_instruction").value
+        if _init_instr:
+            self.get_logger().info(
+                f"Will auto-send instruction in 3s: '{_init_instr}'"
+            )
+            self._initial_instruction_timer = self.create_timer(
+                3.0, lambda: self._fire_initial_instruction(_init_instr)
+            )
+        else:
+            self._initial_instruction_timer = None
+
     def _make_twist_stamped(self, linear_x=0.0, linear_y=0.0, angular_z=0.0):
         """构造 TwistStamped 消息 (frame_id='body', stamp=当前时间)."""
         msg = TwistStamped()
@@ -619,20 +676,73 @@ class SemanticPlannerNode(Node):
         msg.twist.angular.z = angular_z
         return msg
 
+    def _fire_initial_instruction(self, instruction: str):
+        """启动后自动发送初始指令 (一次性定时器回调)."""
+        if self._initial_instruction_timer is not None:
+            self._initial_instruction_timer.cancel()
+            self._initial_instruction_timer = None
+        msg = String()
+        msg.data = json.dumps({
+            "instruction": instruction,
+            "explore_if_unknown": True,
+            "language": "zh",
+        })
+        self.get_logger().info(f"Auto-sending initial instruction: '{instruction}'")
+        self._instruction_callback(msg)
+
     # ================================================================
     #  异步事件循环
     # ================================================================
 
     def _run_async_loop(self):
-        """在单独线程中运行异步事件循环。"""
-        asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
+        """在单独线程中运行异步事件循环，崩溃后自动重启。"""
+        while True:
+            asyncio.set_event_loop(self._loop)
+            try:
+                self._loop.run_forever()
+                break  # 正常关闭 (loop.stop() 调用)
+            except Exception as e:
+                self.get_logger().fatal(
+                    f"Async event loop crashed: {e}\n{traceback.format_exc()}"
+                )
+                # P0-2 fix: 自动重建并重启事件循环
+                try:
+                    self._loop = asyncio.new_event_loop()
+                    self.get_logger().warn("Async event loop restarted after crash")
+                except Exception as e2:
+                    self.get_logger().fatal(f"Async loop restart failed: {e2}")
+                    break
 
-    def _schedule_async(self, coro):
-        """在异步线程中调度协程。保存 Future 引用防止 GC 回收。"""
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        self._pending_futures.add(future)
-        future.add_done_callback(self._pending_futures.discard)
+    def _schedule_async(self, coro, is_mission: bool = False):
+        """在异步线程中调度协程。保存 Future 引用防止 GC 回收。
+
+        Args:
+            coro: 要调度的协程
+            is_mission: True = 这是主任务协程 (decompose/replan)，
+                       新指令到达时会取消它
+        """
+        try:
+            if self._loop.is_closed():
+                self.get_logger().error(
+                    "Async loop is closed, cannot schedule coroutine — "
+                    "LLM/async operations unavailable"
+                )
+                return
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            with self._futures_lock:
+                self._pending_futures.add(future)
+                if is_mission:
+                    self._active_mission_future = future
+
+            def _on_done(f):
+                with self._futures_lock:
+                    self._pending_futures.discard(f)
+                    if self._active_mission_future is f:
+                        self._active_mission_future = None
+
+            future.add_done_callback(_on_done)
+        except RuntimeError as e:
+            self.get_logger().error(f"Failed to schedule async task: {e}")
 
     # ================================================================
     #  Callbacks
@@ -658,7 +768,9 @@ class SemanticPlannerNode(Node):
             follow_person_mode = data.get("follow_person_mode", False)
             follow_target = data.get("target_label", "person") or "person"
             follow_distance = float(data.get("follow_distance", 1.5))
-        except (json.JSONDecodeError, AttributeError):
+        except (json.JSONDecodeError, AttributeError) as e:
+            # Fix #11: Log JSON parse failure instead of silent fallback
+            self.get_logger().warn(f"Instruction JSON parse failed, using raw string: {e}")
             instruction = msg.data
             language = "zh"
             explore = True
@@ -702,6 +814,13 @@ class SemanticPlannerNode(Node):
             f"(lang={language}, explore={explore})"
         )
 
+        # 取消旧任务的 async 协程，防止旧 LLM 结果覆盖新指令状态
+        with self._futures_lock:
+            if self._active_mission_future and not self._active_mission_future.done():
+                self._active_mission_future.cancel()
+                self.get_logger().info("Cancelled previous mission coroutine")
+                self._active_mission_future = None
+
         # 重置状态
         self._fsm_prev_instruction = self._current_instruction or instruction
         self._current_instruction = instruction
@@ -720,6 +839,10 @@ class SemanticPlannerNode(Node):
         self._fsm_search_state = "had_searching_1"
         self._action_executor.reset()
         self._current_plan = None
+        # 重置状态机——确保从 CANCELLED/FAILED 等终态能接受新指令
+        if self._state in (PlannerState.CANCELLED, PlannerState.FAILED,
+                           PlannerState.COMPLETED):
+            self._state = PlannerState.IDLE
 
         # Step 1: 任务分解 (SayCan)
         plan = self._decomposer.decompose_with_rules(instruction)
@@ -727,12 +850,111 @@ class SemanticPlannerNode(Node):
             self.get_logger().info(
                 f"Rule-based decomposition: {len(plan.subgoals)} subgoals"
             )
+            # Check if this is an operational (non-navigation) intent
+            if plan.subgoals and plan.subgoals[0].action in self._OPERATIONAL_ACTIONS:
+                self.get_logger().info(
+                    f"Operational intent detected: {plan.subgoals[0].action.value}, "
+                    f"routing to command topics"
+                )
+                self._current_plan = plan
+                self._execute_operational(plan)
+                return
             self._current_plan = plan
             self._execute_next_subgoal()
         else:
             self.get_logger().info("Complex instruction, using LLM decomposition")
             self._set_state(PlannerState.DECOMPOSING)
-            self._schedule_async(self._llm_decompose())
+            self._schedule_async(self._llm_decompose(), is_mission=True)
+
+    # ================================================================
+    #  操作类意图路由 (非导航, 直接发布到命令话题)
+    # ================================================================
+
+    def _execute_operational(self, plan):
+        """Execute operational (non-navigation) subgoals by publishing to command topics."""
+        for sg in plan.subgoals:
+            action = sg.action
+            params = sg.parameters
+
+            if action == SubGoalAction.PATROL:
+                route = params.get("route", "default")
+                cmd = json.dumps({"action": "start", "name": route})
+                msg = String()
+                msg.data = cmd
+                self._patrol_cmd_pub.publish(msg)
+                self._publish_response(f"好的，启动巡逻路线「{route}」")
+                self.get_logger().info(f"Operational: PATROL route={route}")
+
+            elif action == SubGoalAction.SAVE_MAP:
+                cmd = json.dumps({"action": "save"})
+                msg = String()
+                msg.data = cmd
+                self._map_cmd_pub.publish(msg)
+                self._publish_response("正在保存地图...")
+                self.get_logger().info("Operational: SAVE_MAP")
+
+            elif action == SubGoalAction.SAVE_POI:
+                name = params.get("name", sg.target or "未命名")
+                x = round(self._robot_position["x"], 2) if self._robot_position else 0.0
+                y = round(self._robot_position["y"], 2) if self._robot_position else 0.0
+                cmd = json.dumps({"action": "set", "name": name, "x": x, "y": y, "z": 0.0})
+                msg = String()
+                msg.data = cmd
+                self._poi_cmd_pub.publish(msg)
+                self._publish_response(f"已标记当前位置为「{name}」")
+                self.get_logger().info(f"Operational: SAVE_POI name={name} pos=({x},{y})")
+
+            elif action == SubGoalAction.SET_SPEED:
+                speed = float(params.get("value", 1.0))
+                msg = Float32()
+                msg.data = speed
+                self._speed_pub.publish(msg)
+                self._publish_response(f"速度已调整为 {speed:.1f} m/s")
+                self.get_logger().info(f"Operational: SET_SPEED value={speed}")
+
+            elif action == SubGoalAction.RETURN_HOME:
+                # Publish goal to origin or saved home position
+                goal = PoseStamped()
+                goal.header.frame_id = "map"
+                goal.header.stamp = self.get_clock().now().to_msg()
+                goal.pose.position.x = 0.0
+                goal.pose.position.y = 0.0
+                goal.pose.position.z = 0.0
+                goal.pose.orientation.w = 1.0
+                self._pub_goal.publish(goal)
+                self._publish_response("好的，正在返航")
+                self.get_logger().info("Operational: RETURN_HOME -> goal(0,0)")
+
+            elif action == SubGoalAction.PAUSE:
+                msg = Empty()
+                self._cancel_pub.publish(msg)
+                self._publish_response("已暂停当前任务")
+                self.get_logger().info("Operational: PAUSE")
+
+            elif action == SubGoalAction.RESUME:
+                self._publish_response("恢复暂不支持，请重新下达指令")
+                self.get_logger().info("Operational: RESUME (not yet supported)")
+
+            elif action == SubGoalAction.STOP:
+                msg = Empty()
+                self._cancel_pub.publish(msg)
+                self._publish_response("已停止")
+                self.get_logger().info("Operational: STOP -> cancel")
+
+        # Update state to completed
+        self._set_state(PlannerState.COMPLETED)
+        self._publish_status()
+
+    def _publish_response(self, text: str):
+        """Publish voice/text response for the user."""
+        msg = String()
+        msg.data = json.dumps({
+            "response": text,
+            "timestamp": time.time(),
+            "instruction": self._current_instruction or "",
+        }, ensure_ascii=False)
+        self._response_pub.publish(msg)
+        self.get_logger().info(f"Response: {text}")
 
     def _cancel_callback(self, msg: String):
         """
@@ -775,16 +997,18 @@ class SemanticPlannerNode(Node):
 
     def _planner_status_callback(self, msg: String):
         """响应 pct_adapter 的 stuck / stuck_final 信号, 触发语义层重规划。"""
-        try:
-            data = json.loads(msg.data)
-        except (json.JSONDecodeError, TypeError):
+        data = safe_json_loads(msg.data, default=None)
+        if data is None:
             return
 
         event = data.get("event", "")
         if event == "stuck_final":
-            self.get_logger().warn(
-                "[Geometric Stuck Final] 几何层重规划耗尽, 触发语义重规划"
-            )
+            now = time.time()
+            if now - getattr(self, '_last_stuck_final_log', 0) > 5.0:
+                self.get_logger().warn(
+                    "[Geometric Stuck Final] 几何层重规划耗尽, 触发语义重规划"
+                )
+                self._last_stuck_final_log = now
             self._handle_geometric_stuck(data)
 
     def _handle_geometric_stuck(self, data: dict):
@@ -796,10 +1020,23 @@ class SemanticPlannerNode(Node):
             PlannerState.APPROACHING,
         }
         if self._state not in executing_states:
-            self.get_logger().info(
-                f"[Geometric Stuck] 忽略 stuck_final, 当前状态: {self._state.value}"
-            )
+            # BUG FIX: 非执行态下节流日志，每 5s 打印一次而非每 100ms
+            now = time.time()
+            if now - getattr(self, '_last_stuck_ignore_log', 0) > 5.0:
+                self.get_logger().info(
+                    f"[Geometric Stuck] 忽略 stuck_final, 当前状态: {self._state.value}"
+                )
+                self._last_stuck_ignore_log = now
             return
+
+        # BUG FIX: 进入 NAVIGATING 后给 local_planner 至少 3s 的 grace period
+        if self._navigation_start_time > 0:
+            elapsed = time.time() - self._navigation_start_time
+            if elapsed < 3.0:
+                self.get_logger().debug(
+                    f"[Geometric Stuck] Grace period: {elapsed:.1f}s < 3.0s, 忽略"
+                )
+                return
         reason = (
             f"Path geometrically blocked at waypoint "
             f"{data.get('index', '?')}/{data.get('total', '?')}"
@@ -901,6 +1138,7 @@ class SemanticPlannerNode(Node):
           - PersonTracker 直接复用已解析的 dict，消除第二次 json.loads
         """
         self._latest_scene_graph = msg.data
+        self._last_scene_graph_time = time.time()  # Fix #6: Track scene graph freshness
 
         # 哈希检测: 内容未变化时跳过解析（Hydra keyframe-skip 思路）
         new_hash = hash(msg.data)
@@ -916,11 +1154,11 @@ class SemanticPlannerNode(Node):
             return
 
         # 一次解析，缓存结果
-        try:
-            scene_data = json.loads(msg.data)
+        scene_data = safe_json_loads(msg.data, default=None)
+        if scene_data is not None:
             self._latest_scene_graph_parsed = scene_data
             self._latest_scene_graph_hash = new_hash
-        except (json.JSONDecodeError, TypeError):
+        else:
             scene_data = self._latest_scene_graph_parsed or {}
 
         # 增量更新 runtime KG (每次场景图更新都提取房间-物体关系)
@@ -980,20 +1218,23 @@ class SemanticPlannerNode(Node):
         self._robot_position = {"x": p.x, "y": p.y, "z": p.z}
 
         # ── Odometry 驱动的连续 Re-perception（替代 Nav2 feedback）──
-        if (
-            prev is not None
-            and self._continuous_reperception
-            and self._state == PlannerState.NAVIGATING
-            and self._current_goal
-            and self._is_semantic_target(self._current_goal.target_label)
-        ):
-            dx = p.x - prev["x"]
-            dy = p.y - prev["y"]
-            self._nav_accumulated_dist += math.sqrt(dx * dx + dy * dy)
-            dist_since = self._nav_accumulated_dist - self._last_reperception_dist
-            if dist_since >= self._reperception_interval_m:
-                self._last_reperception_dist = self._nav_accumulated_dist
-                self._trigger_continuous_reperception()
+        try:
+            if (
+                prev is not None
+                and self._continuous_reperception
+                and self._state == PlannerState.NAVIGATING
+                and self._current_goal
+                and self._is_semantic_target(self._current_goal.target_label)
+            ):
+                dx = p.x - prev["x"]
+                dy = p.y - prev["y"]
+                self._nav_accumulated_dist += math.sqrt(dx * dx + dy * dy)
+                dist_since = self._nav_accumulated_dist - self._last_reperception_dist
+                if dist_since >= self._reperception_interval_m:
+                    self._last_reperception_dist = self._nav_accumulated_dist
+                    self._trigger_continuous_reperception()
+        except Exception as e:
+            self.get_logger().warn(f"Odom reperception trigger error: {e}")
 
     def _costmap_callback(self, msg: OccupancyGrid):
         """缓存占据栅格, 供 Frontier 评分探索使用。"""
@@ -1160,13 +1401,8 @@ class SemanticPlannerNode(Node):
         """LLM 分解复杂指令 (SayCan / Inner Monologue)。"""
         try:
             # 获取场景摘要
-            scene_summary = ""
-            try:
-                sg = json.loads(self._latest_scene_graph)
-                scene_summary = sg.get("summary", "")
-            except (json.JSONDecodeError, TypeError) as e:
-                # A3 修复: 记录日志
-                self.get_logger().debug(f"Scene graph parse failed: {e}")
+            sg = safe_json_loads(self._latest_scene_graph, default={})
+            scene_summary = sg.get("summary", "")
             if self._execution_context:
                 scene_summary = (scene_summary or "") + "\n\n[Execution history]\n" + self._execution_context
 
@@ -1198,11 +1434,14 @@ class SemanticPlannerNode(Node):
             self._current_plan = plan
             self._execute_next_subgoal()
 
+        except asyncio.CancelledError:
+            # 新指令到达时取消了旧的 decompose — 正常行为，不设 FAILED
+            self.get_logger().info("LLM decomposition cancelled (new instruction arrived)")
         except Exception as e:
             self.get_logger().error(
                 f"Decomposition failed: {e}\n{traceback.format_exc()}"
             )
-            self._set_state(PlannerState.FAILED)
+            self._set_state(PlannerState.FAILED, reason="decomposition_failed")
 
     # ================================================================
     #  子目标执行引擎 (LOVON 动作原语)
@@ -1215,7 +1454,7 @@ class SemanticPlannerNode(Node):
             return
 
         if self._current_plan is None:
-            self._set_state(PlannerState.FAILED)
+            self._set_state(PlannerState.FAILED, reason="no_plan")
             return
 
         if self._current_plan.is_complete:
@@ -1225,7 +1464,7 @@ class SemanticPlannerNode(Node):
 
         if self._current_plan.is_failed:
             self.get_logger().error("Task plan failed (subgoal exhausted retries)")
-            self._set_state(PlannerState.FAILED)
+            self._set_state(PlannerState.FAILED, reason="subgoal_retries_exhausted")
             return
 
         subgoal = self._current_plan.active_subgoal
@@ -1265,10 +1504,10 @@ class SemanticPlannerNode(Node):
             self._execute_backtrack(subgoal)
 
         elif subgoal.action == SubGoalAction.STOP:
-            self.get_logger().info("⏹ STOP action — cancelling current task")
-            self._cancel_navigation()
+            self.get_logger().info("⏹ STOP action — stopping robot and advancing")
+            self._pub_cmd_vel.publish(self._make_twist_stamped())
             self._set_state(PlannerState.IDLE)
-            self._advance_subgoal()
+            self._subgoal_completed()
 
         elif subgoal.action == SubGoalAction.PICK:
             self.get_logger().info(
@@ -1289,7 +1528,7 @@ class SemanticPlannerNode(Node):
         elif subgoal.action == SubGoalAction.STATUS:
             self.get_logger().info("📊 STATUS query — reporting system state")
             self._publish_status_report(subgoal.target or "all")
-            self._advance_subgoal()
+            self._subgoal_completed()
 
         elif subgoal.action == SubGoalAction.FOLLOW:
             # FOLLOW 复用完整导航闭环: resolve → navigate → 到达 → re-resolve → navigate ...
@@ -1311,10 +1550,18 @@ class SemanticPlannerNode(Node):
         elif subgoal.action == SubGoalAction.WAIT:
             wait_sec = subgoal.parameters.get("wait_sec", 3.0)
             self.get_logger().info(f"Waiting {wait_sec}s...")
-            self.create_timer(
-                wait_sec,
-                lambda: self._subgoal_completed(),
-            )
+            # Fix #1: Store timer handle and cancel in callback to prevent recurring fire
+            self._wait_timer = self.create_timer(wait_sec, self._on_wait_complete)
+
+    def _on_wait_complete(self):
+        """Fix #1: One-shot WAIT timer callback — cancel recurring timer, then advance."""
+        if self._wait_timer is not None:
+            self._wait_timer.cancel()
+            self._wait_timer = None
+        if self._state in (PlannerState.CANCELLED, PlannerState.IDLE,
+                           PlannerState.COMPLETED, PlannerState.FAILED):
+            return
+        self._subgoal_completed()
 
     def _execute_approach(self, subgoal: SubGoal):
         """执行 APPROACH 子目标 (LOVON)。"""
@@ -1360,11 +1607,16 @@ class SemanticPlannerNode(Node):
     async def _vision_verify(self, subgoal: SubGoal):
         """VLM 视觉验证 (VLMnav 方案)。"""
         try:
-            result = await self._resolver.vision_grounding(
-                instruction=subgoal.target,
-                scene_graph_json=self._latest_scene_graph,
-                image_base64=self._latest_image_base64,
-                language=self._current_language,
+            # Fix #7: Add timeout to vision_grounding in verify path
+            # Consider @async_timeout when state callback not needed
+            result = await asyncio.wait_for(
+                self._resolver.vision_grounding(
+                    instruction=subgoal.target,
+                    scene_graph_json=self._latest_scene_graph,
+                    image_base64=self._latest_image_base64,
+                    language=self._current_language,
+                ),
+                timeout=30.0,
             )
 
             visible = result.get("target_visible", False)
@@ -1384,6 +1636,9 @@ class SemanticPlannerNode(Node):
                 )
                 self._subgoal_failed(f"VLM verification failed: {reasoning}")
 
+        except asyncio.TimeoutError:
+            self.get_logger().error("Vision verify timed out (30s)")
+            self._subgoal_failed("VLM verify timeout")
         except Exception as e:
             # A4 修复: 异常时不再默认 success
             self.get_logger().error(
@@ -1414,7 +1669,8 @@ class SemanticPlannerNode(Node):
         )
 
         # 旋转完成后停止并推进子目标
-        self.create_timer(
+        # 必须保存引用，否则无法取消 → 多次触发 _subgoal_completed 破坏状态
+        self._look_around_finish_timer = self.create_timer(
             cmd.timeout_sec,
             lambda: self._finish_look_around(),
         )
@@ -1430,11 +1686,18 @@ class SemanticPlannerNode(Node):
 
     def _finish_look_around(self):
         """停止旋转, 完成 LOOK_AROUND 子目标。"""
+        # 防止多次触发: finish timer 和 spin timer 都取消
+        if self._state != PlannerState.LOOKING_AROUND:
+            return
+
         self._pub_cmd_vel.publish(self._make_twist_stamped())
 
         if self._look_around_timer is not None:
             self._look_around_timer.cancel()
             self._look_around_timer = None
+        if hasattr(self, '_look_around_finish_timer') and self._look_around_finish_timer is not None:
+            self._look_around_finish_timer.cancel()
+            self._look_around_finish_timer = None
 
         self._subgoal_completed()
 
@@ -1526,16 +1789,13 @@ class SemanticPlannerNode(Node):
         target = getattr(subgoal, "target", "") or ""
         if not target:
             return ""
-        try:
-            sg = json.loads(self._latest_scene_graph)
-            objs = sg.get("objects", [])
-            if isinstance(objs, list) and objs:
-                labels = [str(o.get("label", "")) for o in objs[:6] if o]
-                visible = ", ".join(l for l in labels if l)
-                if visible:
-                    return f"Reached {target}. Visible: {visible}"
-        except (json.JSONDecodeError, TypeError, KeyError):
-            pass
+        sg = safe_json_loads(self._latest_scene_graph, default={})
+        objs = sg.get("objects", [])
+        if isinstance(objs, list) and objs:
+            labels = [str(o.get("label", "")) for o in objs[:6] if o]
+            visible = ", ".join(l for l in labels if l)
+            if visible:
+                return f"Reached {target}. Visible: {visible}"
         return f"Reached {target}."
 
     def _subgoal_failed(self, reason: str = ""):
@@ -1612,14 +1872,10 @@ class SemanticPlannerNode(Node):
             )
             if can_replan:
                 # ── LERa 恢复: Look → Explain → Replan ──
-                current_labels = []
-                try:
-                    sg = json.loads(self._latest_scene_graph)
-                    current_labels = [
-                        o.get("label", "") for o in sg.get("objects", [])
-                    ]
-                except (json.JSONDecodeError, TypeError, KeyError):
-                    pass
+                sg = safe_json_loads(self._latest_scene_graph, default={})
+                current_labels = [
+                    o.get("label", "") for o in sg.get("objects", [])
+                ]
 
                 lera_action = self._action_executor.lera_recover(
                     failed_action=(
@@ -1631,6 +1887,7 @@ class SemanticPlannerNode(Node):
                     failure_count=(
                         failed_subgoal.retry_count if failed_subgoal else 1
                     ),
+                    event_loop=self._loop,
                 )
                 self.get_logger().warn(
                     f"[LERa] recovery={lera_action}, triggering replanning "
@@ -1639,12 +1896,13 @@ class SemanticPlannerNode(Node):
 
                 if lera_action == "abort":
                     self.get_logger().warn("[LERa] aborting navigation")
-                    self._set_state(PlannerState.FAILED)
+                    self._set_state(PlannerState.FAILED, reason="lera_abort")
                     return
 
                 self._set_state(PlannerState.REPLANNING)
                 self._schedule_async(
-                    self._llm_replan(reason, failed_subgoal, lera_action)
+                    self._llm_replan(reason, failed_subgoal, lera_action),
+                    is_mission=True,
                 )
                 return
 
@@ -1661,12 +1919,8 @@ class SemanticPlannerNode(Node):
             self._replan_count += 1
 
             # 场景摘要 + 失败反馈
-            scene_summary = ""
-            try:
-                sg = json.loads(self._latest_scene_graph)
-                scene_summary = sg.get("summary", "")
-            except (json.JSONDecodeError, TypeError):
-                scene_summary = ""
+            sg = safe_json_loads(self._latest_scene_graph, default={})
+            scene_summary = sg.get("summary", "")
 
             failed_desc = "unknown"
             if failed_subgoal is not None:
@@ -1706,7 +1960,7 @@ class SemanticPlannerNode(Node):
             response = await self._resolver._call_with_fallback(messages)
             if not response:
                 self.get_logger().error("Replan failed: no LLM response")
-                self._set_state(PlannerState.FAILED)
+                self._set_state(PlannerState.FAILED, reason="replan_no_llm_response")
                 return
 
             new_plan = self._decomposer.parse_decomposition_response(
@@ -1714,7 +1968,7 @@ class SemanticPlannerNode(Node):
             )
             if not new_plan.subgoals:
                 self.get_logger().error("Replan failed: empty subgoal list")
-                self._set_state(PlannerState.FAILED)
+                self._set_state(PlannerState.FAILED, reason="replan_empty_subgoals")
                 return
 
             self.get_logger().info(
@@ -1728,7 +1982,7 @@ class SemanticPlannerNode(Node):
             self.get_logger().error(
                 f"LLM replan exception: {e}\n{traceback.format_exc()}"
             )
-            self._set_state(PlannerState.FAILED)
+            self._set_state(PlannerState.FAILED, reason="replan_exception")
 
     # ================================================================
     #  目标解析 (VLingNav 双进程 + ESCA 选择性 Grounding)
@@ -1745,13 +1999,32 @@ class SemanticPlannerNode(Node):
           - AdaNav (ICLR 2026): 不确定性驱动推理深度
         """
         try:
-            result = await self._resolver.resolve(
-                instruction=self._current_instruction,
-                scene_graph_json=self._latest_scene_graph,
-                robot_position=self._robot_position,
-                language=self._current_language,
-                explore_if_unknown=self._current_explore_if_unknown,
-            )
+            # Fix #10: Check for empty/stale scene graph before resolving
+            if not self._latest_scene_graph or self._latest_scene_graph == "{}":
+                sg_age = time.time() - self._last_scene_graph_time if self._last_scene_graph_time > 0 else float('inf')
+                if sg_age > 5.0:
+                    self.get_logger().warn(
+                        f"Scene graph empty/stale (age={sg_age:.1f}s), "
+                        "resolve may fall back to exploration"
+                    )
+
+            # Fix #4: Wrap resolve() with timeout to prevent indefinite hang
+            # Consider @async_timeout when state callback not needed
+            try:
+                result = await asyncio.wait_for(
+                    self._resolver.resolve(
+                        instruction=self._current_instruction,
+                        scene_graph_json=self._latest_scene_graph,
+                        robot_position=self._robot_position,
+                        language=self._current_language,
+                        explore_if_unknown=self._current_explore_if_unknown,
+                    ),
+                    timeout=60.0,
+                )
+            except asyncio.TimeoutError:
+                self.get_logger().error("Goal resolution timed out (60s)")
+                self._subgoal_failed("resolve_timeout")
+                return
 
             if not result.is_valid:
                 self.get_logger().error(f"Goal resolution failed: {result.error}")
@@ -1808,11 +2081,15 @@ class SemanticPlannerNode(Node):
                     "Low confidence on slow path, trying vision grounding..."
                 )
                 try:
-                    vg_result = await self._resolver.vision_grounding(
-                        instruction=self._current_instruction,
-                        scene_graph_json=self._latest_scene_graph,
-                        image_base64=self._latest_image_base64,
-                        language=self._current_language,
+                    # Fix #4: Add timeout to vision_grounding call
+                    vg_result = await asyncio.wait_for(
+                        self._resolver.vision_grounding(
+                            instruction=self._current_instruction,
+                            scene_graph_json=self._latest_scene_graph,
+                            image_base64=self._latest_image_base64,
+                            language=self._current_language,
+                        ),
+                        timeout=30.0,
                     )
                     if vg_result.get("target_visible", False):
                         result.confidence = max(
@@ -1822,6 +2099,8 @@ class SemanticPlannerNode(Node):
                             f"Vision grounding: target visible, "
                             f"confidence→{result.confidence:.2f}"
                         )
+                except asyncio.TimeoutError:
+                    self.get_logger().warn("Vision grounding timed out (30s), continuing")
                 except Exception as e:
                     # A3 修复: 记录日志, 不静默失败
                     self.get_logger().warn(
@@ -1847,7 +2126,7 @@ class SemanticPlannerNode(Node):
                         )
                         return
 
-                self._handle_navigate_result(result)
+                await self._handle_navigate_result(result)
             elif result.action == "explore":
                 await self._handle_explore_result(result)
             else:
@@ -1866,22 +2145,29 @@ class SemanticPlannerNode(Node):
 
     def _scg_result_callback(self, msg: String):
         """接收 perception_node 返回的 SCG 规划结果。"""
-        try:
-            data = json.loads(msg.data)
+        data = safe_json_loads(msg.data, default=None)
+        if data is not None:
             self._scg_latest_result = data
-        except (json.JSONDecodeError, TypeError) as e:
-            self.get_logger().warn(f"SCG result JSON parse error: {e}")
-            self._scg_latest_result = {"success": False, "waypoints": [], "error": str(e)}
-        finally:
-            self._scg_result_event.set()
+        else:
+            self.get_logger().warn("SCG result JSON parse error")
+            self._scg_latest_result = {"success": False, "waypoints": [], "error": "JSON parse failed"}
+        # 从 ROS2 回调线程安全地唤醒 async Event
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._scg_result_event.set)
+        else:
+            # 降级: 直接设置（可能在 shutdown 期间）
+            try:
+                self._scg_result_event.set()
+            except RuntimeError:
+                pass
 
-    def _plan_with_scg(
+    async def _plan_with_scg(
         self,
         start_pos: dict,
         goal_pos: tuple,
     ) -> Optional[list]:
         """
-        通过 SCG 规划多路径点路径。
+        通过 SCG 规划多路径点路径（异步版本，不阻塞 async event loop）。
 
         Args:
             start_pos: {"x": ..., "y": ..., "z": ...} 机器人当前位置
@@ -1911,8 +2197,12 @@ class SemanticPlannerNode(Node):
         # 发布请求
         self._pub_scg_request.publish(req_msg)
 
-        # 等待结果 (带超时)
-        received = self._scg_result_event.wait(timeout=self._scg_timeout)
+        # 异步等待结果（不阻塞 event loop）
+        try:
+            await asyncio.wait_for(self._scg_result_event.wait(), timeout=self._scg_timeout)
+            received = True
+        except asyncio.TimeoutError:
+            received = False
         if not received or self._scg_latest_result is None:
             self.get_logger().warn(
                 f"SCG plan request timed out after {self._scg_timeout}s"
@@ -1943,7 +2233,7 @@ class SemanticPlannerNode(Node):
         )
         return waypoints
 
-    def _handle_navigate_result(self, result: GoalResult):
+    async def _handle_navigate_result(self, result: GoalResult):
         """处理导航结果 — 发布目标 (B5: 优先用 Nav2 action)。"""
         # 安全检查: 目标距离
         if self._robot_position:
@@ -1965,7 +2255,7 @@ class SemanticPlannerNode(Node):
 
         # SCG 路径规划 (若启用且机器人位置已知, 尝试生成多路径点)
         if self._scg_enable and self._robot_position:
-            scg_waypoints = self._plan_with_scg(
+            scg_waypoints = await self._plan_with_scg(
                 start_pos=self._robot_position,
                 goal_pos=(result.target_x, result.target_y, result.target_z),
             )
@@ -2254,8 +2544,6 @@ class SemanticPlannerNode(Node):
 
     def _build_voi_state(self, distance_remaining: float) -> SchedulerState:
         """构建 VoI 调度器输入状态 (BA-HSG §3.4.4)。"""
-        import json as _json
-
         # 从场景图提取目标信念信息
         target_cred = 0.5
         target_exist = 0.6
@@ -2264,8 +2552,8 @@ class SemanticPlannerNode(Node):
         total_objects = 0
 
         if self._latest_scene_graph and self._current_goal:
+            sg = safe_json_loads(self._latest_scene_graph, default={})
             try:
-                sg = _json.loads(self._latest_scene_graph)
                 objects = sg.get("objects", [])
                 total_objects = len(objects)
                 target_label = (self._current_goal.target_label or "").lower()
@@ -2279,7 +2567,7 @@ class SemanticPlannerNode(Node):
                             target_exist = max(target_exist, belief.get("P_exist", 0.6))
                             sigma = belief.get("sigma_pos", 1.0)
                             target_var = min(target_var, sigma * sigma)
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            except (KeyError, TypeError, ValueError) as e:
                 self.get_logger().debug(f"VoI scheduler state parse failed: {e}")
 
         return SchedulerState(
@@ -2313,12 +2601,16 @@ class SemanticPlannerNode(Node):
 
         async def _do_slow_reason():
             try:
-                result = await self._resolver.resolve(
-                    instruction=self._current_instruction,
-                    scene_graph_json=self._latest_scene_graph,
-                    robot_position=self._robot_position,
-                    language=self._current_language,
-                    clip_encoder=getattr(self, "_clip_encoder", None),
+                # Fix #4: Add timeout to VoI slow-reason resolve call
+                result = await asyncio.wait_for(
+                    self._resolver.resolve(
+                        instruction=self._current_instruction,
+                        scene_graph_json=self._latest_scene_graph,
+                        robot_position=self._robot_position,
+                        language=self._current_language,
+                        clip_encoder=getattr(self, "_clip_encoder", None),
+                    ),
+                    timeout=60.0,
                 )
                 if result.is_valid and result.action == "navigate":
                     if result.confidence > self._current_goal.confidence + 0.1:
@@ -2483,10 +2775,7 @@ class SemanticPlannerNode(Node):
 
     def _extract_detection_for_implicit_fsm(self, target_text: str):
         """从最新场景图提取隐式 FSM 所需检测特征。"""
-        try:
-            sg = json.loads(self._latest_scene_graph)
-        except (json.JSONDecodeError, TypeError):
-            return "NULL", 0.0, np.array([0.5, 0.5]), np.array([0.0, 0.0])
+        sg = safe_json_loads(self._latest_scene_graph, default={})
 
         objects = sg.get("objects", [])
         if not isinstance(objects, list) or not objects:
@@ -2559,7 +2848,7 @@ class SemanticPlannerNode(Node):
         """
         if not self._explore_enabled or not self._current_explore_if_unknown:
             self.get_logger().info("Exploration disabled, failing")
-            self._set_state(PlannerState.FAILED)
+            self._set_state(PlannerState.FAILED, reason="exploration_disabled")
             return
 
         # ── 探索终止判断: 步数 + 语义信号 ──
@@ -2593,7 +2882,7 @@ class SemanticPlannerNode(Node):
                 self._publish_goal_from_command(cmd)
                 self._set_state(PlannerState.BACKTRACKING)
             else:
-                self._set_state(PlannerState.FAILED)
+                self._set_state(PlannerState.FAILED, reason=f"exploration_exhausted:{fail_reason}")
             return
 
         self._explore_count += 1
@@ -2607,7 +2896,8 @@ class SemanticPlannerNode(Node):
                     self._publish_exploration_goal(sgnav_result, source="sg_nav")
                     return
 
-                self.get_logger().debug(
+                # Fix #14: Promote to info — SG-Nav unavailable is operationally significant
+                self.get_logger().info(
                     "SG-Nav exploration unavailable, fallback to frontier/llm"
                 )
 
@@ -2626,24 +2916,35 @@ class SemanticPlannerNode(Node):
                     self._publish_exploration_goal(frontier_result, source="frontier")
                     return
 
-                self.get_logger().debug(
-                    "Frontier exploration unavailable, fallback to LLM exploration"
+                # Fix #14: Promote to info — zero frontiers is operationally significant
+                self.get_logger().info(
+                    "Frontier exploration unavailable (no valid frontiers), fallback to LLM exploration"
                 )
 
             # Fallback: LLM 建议探索方向
-            explore_result = await self._resolver.generate_exploration_waypoint(
-                instruction=self._current_instruction,
-                robot_position=self._robot_position,
-                step_distance=self._step_distance,
-                language=self._current_language,
-                scene_graph_json=self._latest_scene_graph,
-            )
+            # Fix #4: Add timeout to generate_exploration_waypoint call
+            # Consider @async_timeout when state callback not needed
+            try:
+                explore_result = await asyncio.wait_for(
+                    self._resolver.generate_exploration_waypoint(
+                        instruction=self._current_instruction,
+                        robot_position=self._robot_position,
+                        step_distance=self._step_distance,
+                        language=self._current_language,
+                        scene_graph_json=self._latest_scene_graph,
+                    ),
+                    timeout=60.0,
+                )
+            except asyncio.TimeoutError:
+                self.get_logger().error("LLM exploration waypoint timed out (60s)")
+                self._set_state(PlannerState.FAILED, reason="exploration_timeout")
+                return
 
             if explore_result.is_valid:
                 self._current_goal = explore_result
                 self._publish_exploration_goal(explore_result, source="llm")
             else:
-                self._set_state(PlannerState.FAILED)
+                self._set_state(PlannerState.FAILED, reason="llm_exploration_invalid")
 
     async def _generate_sgnav_waypoint(self) -> Optional[GoalResult]:
         """用 SG-Nav 子图推理 + frontier 插值生成探索航点。"""
@@ -2804,16 +3105,23 @@ class SemanticPlannerNode(Node):
         confirmed_visible = False
         if run_vision:
             try:
-                vg = await self._resolver.vision_grounding(
-                    instruction=result.target_label,
-                    scene_graph_json=self._latest_scene_graph,
-                    image_base64=self._latest_image_base64,
-                    language=self._current_language,
+                # Fix #7: Add timeout to vision_grounding in re-perception check
+                # Consider @async_timeout when state callback not needed
+                vg = await asyncio.wait_for(
+                    self._resolver.vision_grounding(
+                        instruction=result.target_label,
+                        scene_graph_json=self._latest_scene_graph,
+                        image_base64=self._latest_image_base64,
+                        language=self._current_language,
+                    ),
+                    timeout=30.0,
                 )
                 confirmed_visible = bool(
                     vg.get("target_visible", False)
                     and float(vg.get("confidence", 0.0)) > self._vision_verify_threshold
                 )
+            except asyncio.TimeoutError:
+                self.get_logger().debug("SG-Nav re-perception vision check timed out (30s)")
             except Exception as e:
                 self.get_logger().debug(f"SG-Nav re-perception vision check failed: {e}")
 
@@ -2890,15 +3198,23 @@ class SemanticPlannerNode(Node):
         ):
             return
 
+        # ── Fix #6: Scene graph staleness check ──
+        if self._last_scene_graph_time > 0:
+            sg_age = time.time() - self._last_scene_graph_time
+            if sg_age > 10.0:
+                self.get_logger().warn(
+                    f"Scene graph stale ({sg_age:.1f}s > 10s), perception may be down"
+                )
+
         # ── 拓扑记忆更新 (L3MVN) ──
         if self._robot_position:
-            visible_labels = []
+            sg = safe_json_loads(self._latest_scene_graph, default={})
             try:
-                sg = json.loads(self._latest_scene_graph)
                 visible_labels = [
                     obj["label"] for obj in sg.get("objects", [])[:10]
                 ]
-            except (json.JSONDecodeError, TypeError, KeyError) as e:
+            except (KeyError, TypeError) as e:
+                visible_labels = []
                 self.get_logger().debug(f"Scene graph parse in monitor: {e}")
 
             # 从场景图提取当前所在房间
@@ -2948,7 +3264,17 @@ class SemanticPlannerNode(Node):
                     f"Semantic nav timeout ({elapsed:.0f}s > "
                     f"{self._instruction_timeout:.0f}s)"
                 )
-                self._set_state(PlannerState.FAILED)
+                self._set_state(PlannerState.FAILED, reason="timeout")
+                return
+
+        # ── Fix #5: Per-goal navigation timeout (PoseStamped mode) ──
+        if self._state == PlannerState.NAVIGATING and self._navigation_start_time > 0:
+            nav_elapsed = time.time() - self._navigation_start_time
+            if nav_elapsed > self._nav_goal_timeout:
+                self.get_logger().warn(
+                    f"Navigation goal timeout ({nav_elapsed:.1f}s > {self._nav_goal_timeout}s)"
+                )
+                self._subgoal_failed("navigation_goal_timeout")
                 return
 
         # ── 到达检测 ──
@@ -2964,7 +3290,11 @@ class SemanticPlannerNode(Node):
                 )
 
                 if dist < self._arrival_radius:
-                    if self._state == PlannerState.NAVIGATING:
+                    # Fix #9: When Nav2 action is active, let Nav2 result callback
+                    # handle completion to avoid double _subgoal_completed race
+                    if self._nav2_goal_active:
+                        pass  # Let Nav2 result callback handle completion
+                    elif self._state == PlannerState.NAVIGATING:
                         self.get_logger().info(
                             f"Arrived at target: {self._current_goal.target_label}"
                         )
@@ -3010,17 +3340,53 @@ class SemanticPlannerNode(Node):
             self._pub_goal.publish(goal)
         self._current_action_cmd = cmd
 
-    def _set_state(self, new_state: PlannerState):
+    def _set_state(self, new_state: PlannerState, reason: str = ""):
         """更新状态。"""
         old_state = self._state
         self._state = new_state
+        # Fix #5: Record navigation start time for per-goal timeout
+        # Always reset when entering NAVIGATING (including re-entry in follow-mode)
+        if new_state == PlannerState.NAVIGATING:
+            self._navigation_start_time = time.time()
+        if new_state == PlannerState.FAILED and reason:
+            self._failure_reason = reason
+        elif new_state not in (PlannerState.FAILED, PlannerState.CANCELLED):
+            self._failure_reason = ""
         if old_state != new_state:
             self.get_logger().info(f"State: {old_state.value} → {new_state.value}")
 
     def _publish_status(self):
         """发布当前状态 (含任务计划进度)。"""
+        # 统一 task_status: 外部消费者只需关注 running/completed/failed/idle
+        _RUNNING_STATES = {
+            PlannerState.DECOMPOSING, PlannerState.RESOLVING,
+            PlannerState.NAVIGATING, PlannerState.LOOKING_AROUND,
+            PlannerState.APPROACHING, PlannerState.VERIFYING,
+            PlannerState.EXPLORING, PlannerState.BACKTRACKING,
+            PlannerState.REPLANNING,
+        }
+        if self._state in _RUNNING_STATES:
+            task_status = "running"
+        elif self._state == PlannerState.COMPLETED:
+            task_status = "completed"
+        elif self._state == PlannerState.FAILED:
+            task_status = "failed"
+        elif self._state == PlannerState.CANCELLED:
+            task_status = "cancelled"
+        else:
+            task_status = "idle"
+
+        # 子目标进度
+        current_step = 0
+        total_steps = 0
+        if self._current_plan:
+            total_steps = len(self._current_plan.subgoals)
+            current_step = self._current_plan.current_step
+
         status = {
             "state": self._state.value,
+            "task_status": task_status,
+            "failure_reason": self._failure_reason,
             "instruction": self._current_instruction or "",
             "exploration_strategy": self._exploration_strategy,
             "target_label": (
@@ -3032,6 +3398,8 @@ class SemanticPlannerNode(Node):
             "is_exploring": self._state == PlannerState.EXPLORING,
             "explore_count": self._explore_count,
             "replan_count": self._replan_count,
+            "current_step": current_step,
+            "total_steps": total_steps,
             "elapsed_sec": round(time.time() - self._task_start_time, 1)
             if self._task_start_time > 0
             else 0,
@@ -3133,6 +3501,20 @@ class SemanticPlannerNode(Node):
 
     def destroy_node(self):
         """清理 + 保存语义数据。"""
+        # Fix #13: Cancel pending async futures before stopping loop.
+        # Note: concurrent.futures.Future.cancel() only prevents execution if not yet started.
+        # Already-running coroutines will complete or timeout via asyncio.wait_for().
+        # The 3s thread join timeout below ensures we don't hang on shutdown.
+        with self._futures_lock:
+            for future in list(self._pending_futures):
+                future.cancel()
+            self._pending_futures.clear()
+            self._active_mission_future = None
+        # 清理 look_around timers
+        if hasattr(self, '_look_around_finish_timer') and self._look_around_finish_timer:
+            self._look_around_finish_timer.cancel()
+        if self._look_around_timer:
+            self._look_around_timer.cancel()
         # 保存持久化数据
         if self._semantic_data_dir:
             try:
@@ -3146,15 +3528,31 @@ class SemanticPlannerNode(Node):
 
 
 def main(args=None):
+    import signal
+
     rclpy.init(args=args)
     node = SemanticPlannerNode()
+
+    # 信号处理: systemd nav-semantic.service 用 KillSignal=SIGINT + KillMode=mixed
+    # 确保 SIGTERM/SIGINT 都能触发优雅关闭, 避免 16s 后被 SIGKILL
+    def _shutdown_handler(signum, frame):
+        sig_name = signal.Signals(signum).name
+        node.get_logger().info(f"Received {sig_name}, shutting down gracefully...")
+        rclpy.shutdown()
+
+    signal.signal(signal.SIGTERM, _shutdown_handler)
+    signal.signal(signal.SIGINT, _shutdown_handler)
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -288,16 +288,16 @@ private:
     for (int i = 0; i < laserCloudSize; i++) {
       point = laserCloud_->points[i];
 
-      // point is in body frame (from /cloud_registered)
-      // Convert to odom frame to match vehicleX_/Y_ used in main loop
-      float dx = point.x * cosVehicleYaw_ - point.y * sinVehicleYaw_;
-      float dy = point.x * sinVehicleYaw_ + point.y * cosVehicleYaw_;
-      float pointX = dx + vehicleX_;
-      float pointY = dy + vehicleY_;
-      float pointZ = point.z + vehicleZ_;
+      // point is in odom/world frame (from /cloud_map, same as CMU /registered_scan)
+      // No rotation needed — directly compute relative position
+      float pointX = point.x;
+      float pointY = point.y;
+      float pointZ = point.z;
 
-      // Distance from robot: sqrt(dx² + dy²) = sqrt(point.x² + point.y²)
-      float dis = sqrt(point.x * point.x + point.y * point.y);
+      // Distance from robot in odom frame
+      float relX = pointX - vehicleX_;
+      float relY = pointY - vehicleY_;
+      float dis = sqrt(relX * relX + relY * relY);
       
       // Filter points: must be within relevant height range relative to vehicle
       // and within mapping radius

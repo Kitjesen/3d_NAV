@@ -79,14 +79,25 @@ make docker-stop      # docker-compose down
 
 ## Architecture
 
+### Layer Contract (7 层, 详见 `config/layer_contract.yaml`)
+
 ```
-Livox LiDAR → SLAM (Fast-LIO2 + PGO) → Terrain Analysis → Planning → Dog Board
-                        ↓                                       ↓
-                  Localizer (ICP)                    gRPC Gateway ← Flutter App
-                        ↓
-           Semantic Layer (optional):
-           semantic_perception → scene graph → semantic_planner
+L6 Interaction   │ gRPC Gateway (:50051) ← Flutter App / RViz
+                 │   ↓ goal_pose / instruction          ↑ mission_status / telemetry
+L5 Orchestration │ pct_path_adapter → way_point    mission_arc (FSM)
+                 │   ↓ global_path → waypoint 推进       ↑ planner_status
+L4 Planning      │ local_planner ← terrain_map     global_planner / semantic_planner
+                 │   ↓ cmd_vel                          ↑ scene_graph / goal_pose
+L3 Perception    │ terrain_analysis    semantic_perception (YOLO+CLIP+SceneGraph)
+                 │   ↑ map_cloud                        ↑ camera RGB-D
+L2 SLAM          │ Fast-LIO2 / Point-LIO → odometry + map_cloud
+                 │   ↑ LiDAR
+L1 Drivers       │ livox_ros_driver2    han_dog_bridge (cmd_vel → gRPC Walk)
+                 │   ↑ hardware                         ↓ CMS gRPC :13145
+L0 Common        │ semantic_common (validation / sanitize / robustness)
 ```
+
+**依赖规则**: Layer N 只能 import Layer 0..N-1，层间通信走 ROS2 话题。L0 是唯一允许跨层 Python import 的包。
 
 ### Source Packages (`src/`)
 
@@ -95,8 +106,10 @@ Livox LiDAR → SLAM (Fast-LIO2 + PGO) → Terrain Analysis → Planning → Dog
 | `slam/` | fastlio2, pgo, localizer, hba, interface | Fast-LIO2 frontend, PGO loop closure, ICP relocalization (38 C++/Py files) |
 | `base_autonomy/` | local_planner, terrain_analysis, terrain_analysis_ext, sensor_scan_generation, visualization_tools | Local planner + terrain analysis (ground estimation, traversability). local_planner 支持 `slopeWeight` 参数（默认 0=关闭，建议 3~6）让地形代价影响路径选择得分。pathFollower 渐进卡死检测：`stuck_timeout`(默认 10s) + `stuck_dist_thre`(默认 0.15m)，半超时发 `WARN_STUCK`，全超时发 `STUCK`，含反向运动加速检测和恢复确认（连续 3 帧速度 >0.05m/s） |
 | `global_planning/` | PCT_planner, pct_adapters, NeuPAN | PCT Planner (tomography-based global path planning, pybind11 wrapper). pct_path_adapter 增加 `max_index_jump`（默认 3）航点跳跃保护和 `max_first_waypoint_dist`（默认 10.0m）首航点距离校验 |
+| `nav_rings/` | safety_monitor, evaluator, dialogue_manager | Three-ring cognitive architecture: R1 reflex (safety aggregation), R2 cognition (closed-loop eval), R3 dialogue (unified user state) |
 | `remote_monitoring/` | — | gRPC gateway (port 50051) — telemetry, control, OTA, WebRTC bridge (C++, 44 files) |
 | `drivers/` | livox_ros_driver2, robot_driver | Livox LiDAR driver + quadruped robot serial interface |
+| `semantic_common/` | robustness, validation, sanitize | L0 base infrastructure: validation, sanitization, retry/timeout decorators (shared by all Python layers) |
 | `semantic_perception/` | — | YOLO-World + CLIP + ConceptGraphs scene graph (22,345 LOC, 75 Py files) |
 | `semantic_planner/` | — | VLN planner with Fast-Slow dual-process (9,645 LOC, 29 Py files) |
 | `vla_nav/` | model, training, ros2, deploy | VLA navigation experiments (RL trainer, Habitat collector, SFT) |
@@ -199,6 +212,7 @@ export DASHSCOPE_API_KEY="sk-..."     # Qwen (China fallback)
 | `config/semantic_perception.yaml` | Perception module configuration |
 | `config/robot_config.yaml` | Robot geometry, speed limits, safety params, driver config (single source of truth) |
 | `config/topic_contract.yaml` | Standard ROS2 topic names (all `/nav/` prefixed) |
+| `config/layer_contract.yaml` | 7-layer architecture: dependency rules, package assignments, topic boundaries |
 | `config/qos_profiles.yaml` | ROS2 QoS profiles |
 | `config/cyclonedds.xml` | CycloneDDS configuration |
 
@@ -242,6 +256,7 @@ launch/
 - `config/semantic_planner.yaml` — LLM + planner config
 - `config/robot_config.yaml` — Robot physical parameters (single source of truth)
 - `config/topic_contract.yaml` — ROS2 topic interface contract
+- `config/layer_contract.yaml` — 7-layer dependency rules (L0 common → L6 interaction)
 
 ## Test Structure
 
@@ -317,6 +332,10 @@ All standard topics use `/nav/` prefix. Defined in `config/topic_contract.yaml`.
 | `/nav/semantic/instruction` | String | Natural language navigation instruction |
 | `/nav/semantic/resolved_goal` | PoseStamped | Semantically resolved goal |
 | `/nav/semantic/status` | String (JSON) | Semantic planner status |
+| `/nav/voice/response` | String (JSON) | Voice/text response to user: {response, timestamp, instruction} |
+| `/nav/safety_state` | String (JSON) | Ring 1: unified safety state (level, links alive, issues) |
+| `/nav/execution_eval` | String (JSON) | Ring 2: closed-loop eval (cross_track_error, progress_rate, assessment) |
+| `/nav/dialogue_state` | String (JSON) | Ring 3: unified user state (understood, doing, progress_pct, safety, eta_sec) |
 
 TF frames: `map` → `odom` → `body`
 
@@ -421,7 +440,7 @@ If changing topic names, update `config/topic_contract.yaml` and `docs/02-archit
 | Directory | Contents |
 |---|---|
 | `01-getting-started/` | Quick start, build guide, deployment |
-| `02-architecture/` | System architecture, algorithm reference, topic contract |
+| `02-architecture/` | System architecture, algorithm reference, topic contract, **task orchestration (multi-agent)** |
 | `03-development/` | API reference, parameter tuning, troubleshooting, refactoring |
 | `04-deployment/` | Docker guide, OTA guide |
 | `05-specialized/` | WebRTC, gRPC gateway, proto regeneration, communication optimization |

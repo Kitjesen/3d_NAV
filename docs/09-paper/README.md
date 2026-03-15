@@ -72,3 +72,6 @@
 | 2026-02-18 | **TSG + LLM 端到端验证** — Kimi-k2.5 实测3场景, TSG与LLM决策一致, 穿越记忆有效 |
 | 2026-02-18 | **品牌更名**: HSG-Nav → **NaviMind (灵途)**, 全文档更新 |
 | 2026-02-18 | 测试总数: 66 → **99** (新增33个TSG测试), 12个LLM端到端 + 6个TSG+LLM探索测试 |
+| 2026-03-09 | **ROS2 节点集成测试 T1-T8 全部 PASS** — 真实 C++ 节点在 S100P 验证 |
+| 2026-03-12 | **论文引用更新**: Hydra→SPADE (IROS 2025), +DovSG (RA-L 2025), +S-Graphs 2.0 (RA-L 2025), +FSR-VLN |
+| 2026-03-12 | **研究 PPT**: LingTu_Navigation_Research_2026.pptx (19页), 含感知层/TSG/Memory/VoI 技术深度幻灯片 |

@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <thread>
+#include <vector>
 #include "remote_monitoring/core/idempotency_cache.hpp"
 
 using remote_monitoring::core::IdempotencyCache;

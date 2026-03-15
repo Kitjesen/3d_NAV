@@ -193,7 +193,7 @@ class TestLeraRecover(unittest.TestCase):
         """Mock LLM returns valid JSON → use LLM action."""
 
         class MockLLM:
-            def chat(self, prompt, max_tokens=200):
+            async def chat(self, prompt, max_tokens=200, **kwargs):
                 return '{"reason": "路径被阻挡", "action": "expand_search", "params": {}}'
 
         executor = ActionExecutor()
@@ -210,7 +210,7 @@ class TestLeraRecover(unittest.TestCase):
         """Mock LLM returns garbage → fallback to rule-based."""
 
         class MockLLM:
-            def chat(self, prompt, max_tokens=200):
+            async def chat(self, prompt, max_tokens=200, **kwargs):
                 return "I don't understand"
 
         executor = ActionExecutor()
@@ -227,7 +227,7 @@ class TestLeraRecover(unittest.TestCase):
         """Mock LLM raises exception → fallback to rule-based."""
 
         class MockLLM:
-            def chat(self, prompt, max_tokens=200):
+            async def chat(self, prompt, max_tokens=200, **kwargs):
                 raise ConnectionError("LLM unavailable")
 
         executor = ActionExecutor()
@@ -244,7 +244,7 @@ class TestLeraRecover(unittest.TestCase):
         """Mock LLM returns invalid action → fallback."""
 
         class MockLLM:
-            def chat(self, prompt, max_tokens=200):
+            async def chat(self, prompt, max_tokens=200, **kwargs):
                 return '{"reason": "test", "action": "dance", "params": {}}'
 
         executor = ActionExecutor()

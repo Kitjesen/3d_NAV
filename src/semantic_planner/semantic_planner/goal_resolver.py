@@ -943,43 +943,15 @@ class GoalResolver:
         if subjects:
             return subjects, modifiers
 
-        # 跳过 Level 3 LLM: 当关键词和场景标签完全无交集时 (如中英跨语言)
-        # LLM 角色解析不会有帮助, 且浪费 API 调用
-        has_any_overlap = any(
-            kw in lbl or lbl in kw
-            for kw in keywords
-            for lbl in scene_labels
+        # Level 1 + Level 2 都未匹配 — 全部当主语
+        # 注意: 不在此处调用 LLM (原 Level 3)，因为:
+        #   1. 此函数在 Fast Path (<200ms) 同步调用，LLM 阻塞 ~5s 违反性能目标
+        #   2. 需要 LLM 解析的复杂指令应走 Slow Path (AdaNav 熵触发)
+        #   3. 全部当主语是安全的 fallback — 置信度阈值会过滤误匹配
+        logger.debug(
+            "Role parsing: Level 1+2 failed, treating all %d keywords as subjects",
+            len(keywords),
         )
-        if not has_any_overlap:
-            logger.debug(
-                "Skipping LLM role parsing: no keyword-label overlap "
-                "(cross-lingual scenario)"
-            )
-            return keywords[:], []
-
-        # 第 3 级: LLM 回退 (异步 → 在同步上下文中跑)
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(
-                        asyncio.run,
-                        self._parse_roles_llm(inst_lower, scene_labels),
-                    )
-                    subjects, modifiers = future.result(timeout=5.0)
-            else:
-                subjects, modifiers = loop.run_until_complete(
-                    self._parse_roles_llm(inst_lower, scene_labels)
-                )
-            if subjects:
-                logger.info("LLM role parsing: subjects=%s, modifiers=%s", subjects, modifiers)
-                return subjects, modifiers
-        except Exception as e:
-            logger.debug("LLM role parsing failed (non-critical): %s", e)
-
-        # 全部当主语
         return keywords[:], []
 
     @staticmethod
@@ -1074,68 +1046,6 @@ class GoalResolver:
         if found_in_scene:
             return [found_in_scene[0]], found_in_scene[1:]
         return [], []
-
-    async def _parse_roles_llm(
-        self,
-        inst_lower: str,
-        scene_labels: List[str],
-    ) -> Tuple[List[str], List[str]]:
-        """
-        第 3 级: LLM 解析复杂指令中的主语和修饰语。
-
-        B6 新增: 处理规则无法覆盖的复杂句式, 例如:
-          - "找到书房里靠窗的那把红色椅子"
-          - "go to the second room and find the cup on the table near the window"
-        """
-        labels_str = ", ".join(scene_labels[:30])
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a robot navigation instruction parser. "
-                    "Given an instruction and a list of visible object labels, "
-                    "identify the TARGET objects (what the robot should go to) "
-                    "and REFERENCE objects (spatial landmarks used for locating the target). "
-                    "Reply in strict JSON: {\"targets\": [...], \"references\": [...]}"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Instruction: \"{inst_lower}\"\n"
-                    f"Visible objects: [{labels_str}]\n"
-                    f"Identify targets and references."
-                ),
-            },
-        ]
-
-        response = await self._call_with_fallback(messages)
-        if not response:
-            return [], []
-
-        try:
-            data = self._extract_json(response)
-            targets = [
-                str(t).lower() for t in data.get("targets", [])
-                if isinstance(t, str)
-            ]
-            references = [
-                str(r).lower() for r in data.get("references", [])
-                if isinstance(r, str)
-            ]
-            # 映射回场景标签
-            matched_targets = [
-                lbl for lbl in scene_labels
-                if any(t in lbl or lbl in t for t in targets)
-            ]
-            matched_refs = [
-                lbl for lbl in scene_labels
-                if any(r in lbl or lbl in r for r in references)
-            ]
-            return list(set(matched_targets)), list(set(matched_refs))
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.debug("LLM role parsing response parse failed: %s", e)
-            return [], []
 
     # ================================================================
     #  BA-HSG: 多假设验证与重选 (§3.4.3)
@@ -1911,11 +1821,14 @@ class GoalResolver:
     async def _call_with_fallback(
         self, messages: List[Dict[str, str]]
     ) -> Optional[str]:
-        """调用主 LLM, 失败则尝试备用。"""
+        """调用主 LLM, 失败或空响应则尝试备用。"""
         # 主 LLM
         if self._primary.is_available():
             try:
-                return await self._primary.chat(messages)
+                result = await self._primary.chat(messages)
+                if result and result.strip():
+                    return result
+                logger.warning("Primary LLM returned empty response, trying fallback")
             except LLMError as e:
                 logger.warning("Primary LLM failed: %s", e)
 
@@ -1923,7 +1836,10 @@ class GoalResolver:
         if self._fallback and self._fallback.is_available():
             try:
                 logger.info("Trying fallback LLM...")
-                return await self._fallback.chat(messages)
+                result = await self._fallback.chat(messages)
+                if result and result.strip():
+                    return result
+                logger.error("Fallback LLM also returned empty response")
             except LLMError as e:
                 logger.error("Fallback LLM also failed: %s", e)
 
@@ -2030,7 +1946,8 @@ class GoalResolver:
                 if not cleaned.endswith("}"):
                     cleaned += "}"
                 try:
-                    return json.loads(cleaned)
+                    json.loads(cleaned)  # 验证 JSON 有效
+                    return cleaned       # 返回字符串，不是 dict
                 except json.JSONDecodeError:
                     pass
 

@@ -19,18 +19,20 @@ semantic_planner_node:
     # 推荐: kimi (国内直连, 无需VPN, 性价比高)
     llm:
       backend: "kimi"                    # openai | kimi | claude | qwen
-      model: "kimi-k2.5"                # kimi-k2.5 (推荐) | moonshot-v1-8k
+      model: "kimi-k2.5"                # Kimi K2.5 (国内直连, Kimi Code API)
       api_key_env: "MOONSHOT_API_KEY"    # 从环境变量读取 API Key
-      timeout_sec: 15.0                  # 单次 API 调用超时
+      base_url: "https://api.kimi.com/coding/v1"
+      timeout_sec: 15.0                  # Kimi 响应较快
       max_retries: 2                     # 失败重试次数
       temperature: 0.2                   # 低温度 → 稳定输出
 
-    # ── 备用 LLM (当主 LLM 失败时切换) ──
+    # ── 备用 LLM (当主 LLM 失败时自动切换到不同后端) ──
     llm_fallback:
-      backend: "qwen"                    # 阿里云, 国内低延迟
-      model: "qwen-turbo"
+      backend: "qwen"                    # 通义千问作为异构备用
+      model: "qwen-turbo"               # 轻量模型, 低延迟
       api_key_env: "DASHSCOPE_API_KEY"
-      timeout_sec: 15.0
+      base_url: ""                       # 使用默认 DashScope endpoint
+      timeout_sec: 10.0
       max_retries: 1
 
     # ── 目标解析 ──

@@ -15,6 +15,7 @@ import 'package:flutter_monitor/features/control/webrtc_video_widget.dart';
 import 'package:flutter_monitor/core/grpc/dog_direct_client.dart';
 import 'package:flutter_monitor/core/providers/robot_profile_provider.dart';
 import 'package:flutter_monitor/core/locale/locale_provider.dart';
+import 'package:flutter_monitor/features/voice/voice_chat_widget.dart';
 
 class ControlScreen extends StatefulWidget {
   const ControlScreen({super.key});
@@ -28,6 +29,9 @@ class _ControlScreenState extends State<ControlScreen>
   // ─── Double-tap e-stop red flash ───
   late final AnimationController _flashController;
   late final Animation<double> _flashOpacity;
+
+  // ─── Voice chat panel visibility ───
+  bool _showVoiceChat = false;
 
   // ─── Joystick deadzone (0% ~ 30%, default 10%) ───
   double _deadzone = 0.10;
@@ -380,14 +384,34 @@ class _ControlScreenState extends State<ControlScreen>
           ),
         ],
       ),
-      // ─── Return home FAB ───
+      // ─── FABs: Voice + Return Home ───
       floatingActionButton: Padding(
         padding: const EdgeInsets.only(bottom: 80),
-        child: FloatingActionButton(
-          heroTag: 'returnHome',
-          onPressed: _returnHome,
-          backgroundColor: Colors.blue,
-          child: const Icon(Icons.home_rounded, color: Colors.white),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Voice command FAB
+            FloatingActionButton(
+              heroTag: 'voiceCmd',
+              onPressed: () {
+                HapticFeedback.mediumImpact();
+                setState(() => _showVoiceChat = !_showVoiceChat);
+              },
+              backgroundColor: _showVoiceChat ? Colors.red : AppColors.primary,
+              child: Icon(
+                _showVoiceChat ? Icons.close_rounded : Icons.mic_rounded,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Return home FAB
+            FloatingActionButton(
+              heroTag: 'returnHome',
+              onPressed: _returnHome,
+              backgroundColor: Colors.blue,
+              child: const Icon(Icons.home_rounded, color: Colors.white),
+            ),
+          ],
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
@@ -547,6 +571,16 @@ class _ControlScreenState extends State<ControlScreen>
               ],
             ),
           ),
+
+          // ─── Voice chat panel ───
+          if (_showVoiceChat)
+            Positioned(
+              right: 80,
+              bottom: 20,
+              child: VoiceChatWidget(
+                onClose: () => setState(() => _showVoiceChat = false),
+              ),
+            ),
 
           // ─── Red flash overlay for double-tap e-stop ───
           AnimatedBuilder(

@@ -58,6 +58,8 @@ autonomy:
 # ── 高层控制 ──
 control:
   goal_pose: /nav/goal_pose             # geometry_msgs/PoseStamped (导航目标)
+  patrol_goals: /nav/patrol_goals       # std_msgs/String JSON: {waypoints, loop, route_name} (巡检路线 → mission_arc)
+  cancel: /nav/cancel                   # std_msgs/Empty (取消当前任务)
 
 # ── 语义导航层 (VLN) ──
 # 所有语义话题在 /nav/semantic/ 命名空间下, 与几何导航零冲突。
@@ -70,6 +72,39 @@ semantic:
   resolved_goal: /nav/goal_pose                 # geometry_msgs/PoseStamped (解析后的目标，直连 PCT Planner)
   status: /nav/semantic/status                  # std_msgs/String (JSON: 阶段/目标/置信度)
   costmap: /nav/costmap                          # nav_msgs/OccupancyGrid (optional, planner→perception SCG 内部接口)
+  voice_response: /nav/voice/response          # std_msgs/String JSON: {response: "好的", timestamp, instruction}
+
+# ── 三环认知架构 (nav_rings) ──
+# Ring 1 反射弧 / Ring 2 认知环 / Ring 3 对话环
+rings:
+  safety_state: /nav/safety_state          # std_msgs/String (JSON: level, links, issues)
+  execution_eval: /nav/execution_eval      # std_msgs/String (JSON: assessment, cross_track_error, progress_rate)
+  dialogue_state: /nav/dialogue_state      # std_msgs/String (JSON: understood, doing, progress_pct, safety, eta_sec)
+
+# ── 运营服务 (nav_services) ──
+# 命令/响应模式: 客户端发 command, 节点回 response
+services:
+  # 地图管理
+  map_command: /nav/map/command            # std_msgs/String JSON: {action: list|save|delete|rename|set_active, name, ...}
+  map_response: /nav/map/response          # std_msgs/String JSON: {action, success, maps, message}
+  poi_command: /nav/poi/command            # std_msgs/String JSON: {action: set|delete|list|navigate, name, x, y, z}
+  poi_response: /nav/poi/response          # std_msgs/String JSON: {action, success, pois, message}
+
+  # 巡检路线
+  patrol_command: /nav/patrol/command      # std_msgs/String JSON: {action: save|load|list|delete|start|stop, name, waypoints, loop}
+  patrol_response: /nav/patrol/response    # std_msgs/String JSON: {action, success, routes, message}
+
+  # 电子围栏
+  geofence_command: /nav/geofence/command  # std_msgs/String JSON: {action: add|remove|list|clear|enable|disable, name, polygon}
+  geofence_response: /nav/geofence/response  # std_msgs/String JSON: {action, success, fences, message}
+
+  # 定时任务
+  schedule_command: /nav/schedule/command   # std_msgs/String JSON: {action: add|remove|list|enable|disable, name, patrol_route, hour, minute, weekdays}
+  schedule_response: /nav/schedule/response  # std_msgs/String JSON: {action, success, schedules, message}
+
+  # 任务历史
+  history_query: /nav/history/query        # std_msgs/String JSON: {action: list|detail, count, id}
+  history_response: /nav/history/response  # std_msgs/String JSON: {action, missions, detail}
 
 # ── TF 坐标系 ──
 tf:

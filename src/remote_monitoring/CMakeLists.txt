@@ -13,6 +13,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(interface REQUIRED)
 
 # ---- Proto library (from robot_proto package) ----
@@ -113,7 +114,7 @@ target_link_libraries(grpc_gateway ${OpenCV_LIBRARIES})
 target_link_libraries(grpc_gateway OpenSSL::Crypto)
 
 ament_target_dependencies(grpc_gateway
-  rclcpp nav_msgs sensor_msgs geometry_msgs std_msgs tf2_ros interface
+  rclcpp nav_msgs sensor_msgs geometry_msgs std_msgs tf2_ros tf2_geometry_msgs interface
 )
 
 # ---- Install ----

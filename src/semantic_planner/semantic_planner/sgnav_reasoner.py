@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
@@ -128,15 +129,18 @@ class SGNavReasoner:
         self._target_credibility: Dict[str, float] = {}
         # 多视角观测历史: target_key -> list of ObservationRecord
         self._observation_history: Dict[str, List[ObservationRecord]] = {}
+        self._cred_lock = threading.Lock()
 
     @property
     def target_credibility(self) -> Dict[str, float]:
-        return dict(self._target_credibility)
+        with self._cred_lock:
+            return dict(self._target_credibility)
 
     def reset(self):
         """重置可信度记忆和观测历史。"""
-        self._target_credibility.clear()
-        self._observation_history.clear()
+        with self._cred_lock:
+            self._target_credibility.clear()
+            self._observation_history.clear()
 
     async def select_frontier(
         self,
@@ -358,11 +362,12 @@ class SGNavReasoner:
             path_confidence=path_confidence,
             confirmed_visible=confirmed_visible,
         )
-        history = self._observation_history.setdefault(key, [])
-        history.append(obs)
-        # 保留最近 N_max 条观测
-        if len(history) > self.reperception_n_max:
-            history[:] = history[-self.reperception_n_max:]
+        with self._cred_lock:
+            history = self._observation_history.setdefault(key, [])
+            history.append(obs)
+            # 保留最近 N_max 条观测
+            if len(history) > self.reperception_n_max:
+                history[:] = history[-self.reperception_n_max:]
 
         n_obs = len(history)
 
@@ -386,14 +391,15 @@ class SGNavReasoner:
             evidence = max(evidence, 0.9)
 
         # --- EMA 可信度更新 (保持向后兼容) ---
-        prev = self._target_credibility.get(key, 0.5)
-        cred = prev * self.credibility_decay + evidence * (1.0 - self.credibility_decay)
+        with self._cred_lock:
+            prev = self._target_credibility.get(key, 0.5)
+            cred = prev * self.credibility_decay + evidence * (1.0 - self.credibility_decay)
 
-        if match_count == 0 and not confirmed_visible:
-            cred -= self.false_positive_penalty
+            if match_count == 0 and not confirmed_visible:
+                cred -= self.false_positive_penalty
 
-        cred = min(max(cred, 0.0), 1.0)
-        self._target_credibility[key] = cred
+            cred = min(max(cred, 0.0), 1.0)
+            self._target_credibility[key] = cred
 
         # --- SG-Nav 重感知: 多视角累积置信度 (S_accum) ---
         # 对历史中有正向观测 (match_count > 0 或 confirmed_visible) 的帧取均值
@@ -754,16 +760,20 @@ class SGNavReasoner:
             "去", "找", "到", "在", "附近", "的", "一个", "一下", "please",
         }
         tokens = re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]{1,4}", text.lower())
+        seen: set = set()
         dedup = []
         for t in tokens:
-            if t in stop_words or len(t) <= 1:
+            if t in stop_words or len(t) <= 1 or t in seen:
                 continue
-            if t not in dedup:
-                dedup.append(t)
+            seen.add(t)
+            dedup.append(t)
         return dedup
 
     @staticmethod
-    def _extract_json(text: str) -> Dict:
+    def _extract_json(text) -> Dict:
+        # BUG FIX: LLM client (e.g. Claude) 可能已经返回 dict，不需要再 json.loads
+        if isinstance(text, dict):
+            return text
         if not text:
             return {}
 

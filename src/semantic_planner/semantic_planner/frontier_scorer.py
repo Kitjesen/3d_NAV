@@ -26,11 +26,14 @@ Frontier 评分探索 — 统一目标 Grounding 与 Frontier 选择。
 
 import math
 import logging
+import time as _time_mod
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
+
+from semantic_common import safe_json_dumps, sanitize_float
 
 # 双语扩展: 用于 frontier 语言评分中的跨语言关键词匹配
 try:
@@ -88,12 +91,12 @@ class Frontier:
         return {
             "frontier_id": self.frontier_id,
             "center_world": {
-                "x": round(float(self.center_world[0]), 2),
-                "y": round(float(self.center_world[1]), 2),
+                "x": round(sanitize_float(float(self.center_world[0])), 2),
+                "y": round(sanitize_float(float(self.center_world[1])), 2),
             },
             "size": self.size,
-            "score": round(self.score, 3),
-            "distance": round(self.distance, 2),
+            "score": round(sanitize_float(self.score), 3),
+            "distance": round(sanitize_float(self.distance), 2),
             "direction": self.direction_label,
             "nearby_objects": self.nearby_labels,
         }
@@ -232,23 +235,29 @@ class FrontierScorer:
         rows, cols = self._grid.shape
         frontier_mask = np.zeros((rows, cols), dtype=bool)
 
-        # 找 frontier cells
-        for r in range(1, rows - 1):
-            for c in range(1, cols - 1):
-                if self._grid[r, c] != FREE_CELL:
-                    continue
-                # 检查 4-邻域是否有 unknown
-                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    if self._grid[r + dr, c + dc] == UNKNOWN_CELL:
-                        frontier_mask[r, c] = True
-                        break
+        # 找 frontier cells (向量化: 60~100ms Python loop → <1ms numpy)
+        free_mask = self._grid[1:-1, 1:-1] == FREE_CELL
+        has_unknown_neighbor = (
+            (self._grid[:-2, 1:-1] == UNKNOWN_CELL)    # 上
+            | (self._grid[2:, 1:-1] == UNKNOWN_CELL)   # 下
+            | (self._grid[1:-1, :-2] == UNKNOWN_CELL)   # 左
+            | (self._grid[1:-1, 2:] == UNKNOWN_CELL)    # 右
+        )
+        frontier_mask[1:-1, 1:-1] = free_mask & has_unknown_neighbor
 
         # 聚类 frontier cells (简单连通分量)
+        # Complexity: O(n * cluster_radius^2) per frontier cell — budget-limited to 500ms
         visited = np.zeros_like(frontier_mask, dtype=bool)
         clusters: List[List[Tuple[int, int]]] = []
+        _bfs_start = _time_mod.time()
+        _bfs_timeout = False
 
         for r in range(rows):
+            if _bfs_timeout:
+                break
             for c in range(cols):
+                if _bfs_timeout:
+                    break
                 if frontier_mask[r, c] and not visited[r, c]:
                     # BFS 聚类
                     cluster = []
@@ -256,6 +265,10 @@ class FrontierScorer:
                     visited[r, c] = True
 
                     while queue:
+                        if len(cluster) % 200 == 0:
+                            if _time_mod.time() - _bfs_start > 0.5:
+                                _bfs_timeout = True
+                                break
                         cr, cc = queue.popleft()
                         cluster.append((cr, cc))
 
@@ -268,8 +281,18 @@ class FrontierScorer:
                                     visited[nr, nc] = True
                                     queue.append((nr, nc))
 
-                    if len(cluster) >= self.min_frontier_size:
+                    # BFS 超时时丢弃当前部分 cluster（质心偏移不可靠）
+                    if not _bfs_timeout and len(cluster) >= self.min_frontier_size:
                         clusters.append(cluster)
+
+                    if _bfs_timeout or _time_mod.time() - _bfs_start > 0.5:
+                        if not _bfs_timeout:
+                            _bfs_timeout = True
+                        logger.warning(
+                            "Frontier BFS exceeded 500ms budget, returning partial "
+                            "results (%d clusters, last cluster discarded)", len(clusters),
+                        )
+                        break
 
         # 转换为 Frontier 对象
         self._frontiers = []
@@ -498,7 +521,8 @@ class FrontierScorer:
         if not self._frontiers:
             return []
 
-        max_dist = max(f.distance for f in self._frontiers) or 1.0
+        max_dist = max(f.distance for f in self._frontiers)
+        max_dist = max(max_dist, 1.0)  # 归一化最小 1m，避免全零退化
         inst_lower = instruction.lower()
 
         # ── 双语关键词集 (跨语言匹配, 带缓存) ──
@@ -511,48 +535,63 @@ class FrontierScorer:
                 self._bilingual_kw_cache.clear()
             self._bilingual_kw_cache[inst_lower] = inst_keywords
 
-        # ── 预计算: 物体空间分布方向 ──
+        # ── 预计算: 物体位置矩阵 + 空间分布方向 ──
+        # 向量化: 避免每个 frontier 循环内重复 np.array 创建
+        _obj_positions = None  # (M, 2) ndarray for distance broadcasting
+        _obj_labels_lower = []
         obj_directions: List[Tuple[float, str]] = []  # (angle, label)
         if scene_objects:
-            for obj in scene_objects:
-                obj_pos = np.array([obj["position"]["x"], obj["position"]["y"]])
-                delta = obj_pos - robot_position[:2]
-                if np.linalg.norm(delta) > 0.5:
-                    angle = math.atan2(delta[1], delta[0])
-                    obj_directions.append((angle, obj["label"].lower()))
+            _obj_positions = np.array([
+                [obj["position"]["x"], obj["position"]["y"]]
+                for obj in scene_objects
+            ])
+            _obj_labels_lower = [obj["label"].lower() for obj in scene_objects]
+            deltas = _obj_positions - robot_position[:2]
+            dists = np.linalg.norm(deltas, axis=1)
+            for i, (d, dist) in enumerate(zip(deltas, dists)):
+                if dist > 0.5:
+                    angle = math.atan2(d[1], d[0])
+                    obj_directions.append((angle, _obj_labels_lower[i]))
+
+        # 预计算 visited_positions 矩阵
+        _visited_arr = None  # (V, 2) ndarray
+        if visited_positions:
+            _visited_arr = np.array([vp[:2] for vp in visited_positions])
 
         for frontier in self._frontiers:
+            # 重置 nearby_labels，避免上一轮评分的 stale 数据残留
+            frontier.nearby_labels = []
+
             # ── 1. 距离分 (归一化) ──
             dist_score = 1.0 - (frontier.distance / max_dist)
 
             # ── 2. 新颖度分 (L3MVN 拓扑记忆) ──
             novelty_score = 1.0
-            if visited_positions:
-                min_visited_dist = min(
-                    float(np.linalg.norm(frontier.center_world - vp[:2]))
-                    for vp in visited_positions
-                ) if visited_positions else float('inf')
+            if _visited_arr is not None:
+                min_visited_dist = float(np.min(
+                    np.linalg.norm(_visited_arr - frontier.center_world[:2], axis=1)
+                ))
                 novelty_score = min(1.0, min_visited_dist / self.novelty_distance)
 
             # ── 3. 语言相关性分 (VLFM) ──
             language_score = 0.0
             nearby_labels = []
-            if scene_objects:
-                for obj in scene_objects:
-                    obj_pos = np.array([obj["position"]["x"], obj["position"]["y"]])
-                    dist_to_frontier = float(np.linalg.norm(
-                        frontier.center_world - obj_pos
-                    ))
-                    if dist_to_frontier < self.nearby_object_radius:
-                        nearby_labels.append(obj["label"])
-                        # 跨语言匹配: "灭火器" 的关键词集含 "fire extinguisher"
-                        lbl_lower = obj["label"].lower()
-                        if any(kw in lbl_lower or lbl_lower in kw
-                               for kw in inst_keywords):
-                            language_score += 0.5
-                        language_score += self._cooccurrence_score(
-                            inst_keywords, lbl_lower
-                        )
+            if _obj_positions is not None:
+                # 向量化距离计算: 一次算所有物体到 frontier 的距离
+                dists_to_frontier = np.linalg.norm(
+                    _obj_positions - frontier.center_world[:2], axis=1
+                )
+                nearby_mask = dists_to_frontier < self.nearby_object_radius
+                for idx in np.where(nearby_mask)[0]:
+                    lbl = scene_objects[idx]["label"]
+                    nearby_labels.append(lbl)
+                    lbl_lower = _obj_labels_lower[idx]
+                    if any(kw in lbl_lower or lbl_lower in kw
+                           for kw in inst_keywords):
+                        language_score += 0.5
+                    language_score += self._cooccurrence_score(
+                        inst_keywords, lbl_lower
+                    )
                 frontier.nearby_labels = nearby_labels
                 language_score = min(1.0, language_score)
 
@@ -648,13 +687,8 @@ class FrontierScorer:
 
     @staticmethod
     def _angle_diff(a: float, b: float) -> float:
-        """计算两个角度的最小差 (-pi, pi]。"""
-        d = a - b
-        while d > math.pi:
-            d -= 2 * math.pi
-        while d < -math.pi:
-            d += 2 * math.pi
-        return d
+        """计算两个角度的最小差 (-pi, pi]。O(1) 闭合公式，无循环。"""
+        return (a - b + math.pi) % (2 * math.pi) - math.pi
 
     @staticmethod
     def _cooccurrence_score(inst_keywords: Set[str], label: str) -> float:
@@ -954,11 +988,10 @@ class FrontierScorer:
 
     def get_frontiers_summary(self) -> str:
         """导出 frontier 摘要 (给 LLM 消费)。"""
-        import json
-        return json.dumps({
+        return safe_json_dumps({
             "frontier_count": len(self._frontiers),
             "frontiers": [f.to_dict() for f in self._frontiers[:5]],
-        }, ensure_ascii=False)
+        })
 
     @staticmethod
     def _angle_to_label(angle: float) -> str:

@@ -88,6 +88,16 @@ def generate_launch_description():
         default_value="false",
         description="是否启动 gRPC Gateway (远程监控)",
     )
+    target_arg = DeclareLaunchArgument(
+        "target",
+        default_value="",
+        description="语义探索目标 (自然语言, 如 '找到餐桌'). 空=纯覆盖探索",
+    )
+    llm_backend_arg = DeclareLaunchArgument(
+        "llm_backend",
+        default_value="mock",
+        description="LLM 后端 (mock=无需API, kimi=月之暗面, openai=GPT)",
+    )
 
     # ---- 1. LiDAR 驱动 ----
     lidar = IncludeLaunchDescription(
@@ -132,6 +142,9 @@ def generate_launch_description():
     # ---- 5. 语义子系统 (探索模式专用配置) ----
     # 使用 semantic_exploration.yaml 替代默认 semantic_planner.yaml
     # 该配置启用了: SCG auto_expand, GCM, frontier 探索策略, mock LLM
+    #
+    # target 参数: 传递给 planner_node 的 initial_instruction, 启动 3s 后自动触发
+    # llm_backend: 覆盖 yaml 中的 llm.backend (mock/kimi/openai)
     semantic = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(subsystems_dir, "semantic.launch.py")
@@ -143,6 +156,8 @@ def generate_launch_description():
             "planner_config": os.path.join(
                 config_dir, "semantic_exploration.yaml"
             ),
+            "initial_instruction": LaunchConfiguration("target"),
+            "llm_backend": LaunchConfiguration("llm_backend"),
         }.items(),
     )
 
@@ -157,6 +172,20 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("enable_grpc")),
     )
 
+    # ---- 7. 三环认知架构 (SafetyMonitor + Evaluator + DialogueManager) ----
+    rings = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(subsystems_dir, "rings.launch.py")
+        ),
+    )
+
+    # ---- 8. 运营服务 (地图管理 + 巡检路线 + 电子围栏 + 定时任务 + 任务日志) ----
+    services = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(subsystems_dir, "services.launch.py")
+        ),
+    )
+
     return LaunchDescription(
         [
             # 参数
@@ -166,6 +195,8 @@ def generate_launch_description():
             dog_host_arg,
             dog_port_arg,
             enable_grpc_arg,
+            target_arg,
+            llm_backend_arg,
             # 子系统 (按启动顺序)
             lidar,
             slam,
@@ -173,5 +204,7 @@ def generate_launch_description():
             driver,
             semantic,
             grpc,
+            rings,
+            services,
         ]
     )
