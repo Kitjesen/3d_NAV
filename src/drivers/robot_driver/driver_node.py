@@ -11,6 +11,8 @@ driver 自身的 watchdog 仍能在 cmd_vel_timeout_ms 内将机器人停车。
   - 透明: 发布 /driver/watchdog_active 供外部监控
 """
 
+import math
+
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
@@ -85,9 +87,13 @@ class GenericRobotDriver(Node):
     def cmd_vel_callback(self, msg):
         """收到速度指令 → 更新看门狗时间戳 + 缓存指令."""
         self._last_cmd_vel_time = self.get_clock().now()
-        self._cmd_vx = msg.twist.linear.x
-        self._cmd_vy = msg.twist.linear.y
-        self._cmd_wz = msg.twist.angular.z
+        vx = msg.twist.linear.x
+        vy = msg.twist.linear.y
+        wz = msg.twist.angular.z
+        # NaN/Inf 防御：非法速度降级为零
+        self._cmd_vx = vx if math.isfinite(vx) else 0.0
+        self._cmd_vy = vy if math.isfinite(vy) else 0.0
+        self._cmd_wz = wz if math.isfinite(wz) else 0.0
 
         if self._watchdog_triggered:
             self._watchdog_triggered = False
@@ -156,6 +162,9 @@ class GenericRobotDriver(Node):
         dt = (current_time - self.last_time).nanoseconds / 1e9
 
         # [IMPLEMENT] 用编码器实际值替换
+        # 防止异常 dt 导致位置暴涨
+        if dt > 1.0 or dt < 0.0:
+            dt = 0.0
         delta_x = (self.vx * cos(self.th) - self.vy * sin(self.th)) * dt
         delta_y = (self.vx * sin(self.th) + self.vy * cos(self.th)) * dt
         delta_th = self.vth * dt
@@ -163,6 +172,13 @@ class GenericRobotDriver(Node):
         self.x += delta_x
         self.y += delta_y
         self.th += delta_th
+        # NaN 安全阀
+        if not math.isfinite(self.x):
+            self.x = 0.0
+        if not math.isfinite(self.y):
+            self.y = 0.0
+        if not math.isfinite(self.th):
+            self.th = 0.0
 
         self.publish_odometry(current_time)
         self.last_time = current_time

@@ -1,0 +1,39 @@
+rosbag2_bagfile_information:
+  compression_format: ''
+  compression_mode: ''
+  duration:
+    nanoseconds: 311897801605
+  files:
+  - duration:
+      nanoseconds: 311897801605
+    message_count: 467340
+    path: slope_ros2.db3
+    starting_time:
+      nanoseconds_since_epoch: 1709800641791331483
+  message_count: 467340
+  relative_file_paths:
+  - slope_ros2.db3
+  ros_distro: humble
+  starting_time:
+    nanoseconds_since_epoch: 1709800641791331483
+  storage_identifier: sqlite3
+  topics_with_message_count:
+  - message_count: 2493
+    topic_metadata:
+      name: /points_raw
+      offered_qos_profiles: ''
+      serialization_format: cdr
+      type: sensor_msgs/msg/PointCloud2
+  - message_count: 154949
+    topic_metadata:
+      name: /imu_raw
+      offered_qos_profiles: ''
+      serialization_format: cdr
+      type: sensor_msgs/msg/Imu
+  - message_count: 154949
+    topic_metadata:
+      name: /state_SDK
+      offered_qos_profiles: ''
+      serialization_format: cdr
+      type: nav_msgs/msg/Odometry
+  version: 4

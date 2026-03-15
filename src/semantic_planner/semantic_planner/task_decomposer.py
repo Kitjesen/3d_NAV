@@ -40,6 +40,14 @@ class SubGoalAction(Enum):
     PICK = "pick"                  # 抓取/取物 (Manipulation)
     PLACE = "place"                # 放置物体 (Manipulation)
     STATUS = "status"              # 查询系统/机器人状态
+    PATROL = "patrol"              # 巡检/巡逻
+    SAVE_MAP = "save_map"          # 保存地图
+    SAVE_POI = "save_poi"          # 保存/标记兴趣点
+    SET_SPEED = "set_speed"        # 调整速度
+    SET_GEOFENCE = "set_geofence"  # 设置电子围栏
+    RETURN_HOME = "return_home"    # 返回基地/充电桩
+    PAUSE = "pause"                # 暂停当前任务
+    RESUME = "resume"              # 恢复暂停的任务
 
 
 class SubGoalStatus(Enum):
@@ -82,7 +90,7 @@ class TaskPlan:
 
     @property
     def is_complete(self) -> bool:
-        return all(
+        return bool(self.subgoals) and all(
             sg.status in (SubGoalStatus.COMPLETED, SubGoalStatus.SKIPPED)
             for sg in self.subgoals
         )
@@ -256,9 +264,9 @@ class TaskDecomposer:
         "停", "停下", "停止", "停下来", "停一下",
         "别走了", "别动", "不要动", "站住",
         "取消", "取消任务", "终止", "终止任务",
-        "中断", "中止", "暂停",
+        "中断", "中止",
         "算了", "不用了", "不找了", "不去了",
-        "回来", "回来吧", "不用去了",
+        "不用去了",
         "紧急停止", "急停",
         "停止任务", "停掉", "关掉",
     ], key=len, reverse=True)
@@ -304,10 +312,10 @@ class TaskDecomposer:
         "当前任务", "任务状态", "任务进度",
         "完成了吗", "做完了吗", "好了吗",
         "还剩多少", "剩余电量", "剩余时间",
-        "现在在哪", "现在位置", "当前位置", "你在哪",
+        "现在在哪", "现在位置", "当前位置", "你在哪", "现在在做什么",
         "温度", "温度多少", "当前温度",
         "是否在线", "连接状态", "网络状态",
-        "速度", "当前速度",
+        "当前速度",
         "报告状态", "汇报状态",
     ], key=len, reverse=True)
 
@@ -434,12 +442,165 @@ class TaskDecomposer:
         "temperature", "current speed",
         "connection status", "network status",
         "report status", "status report",
+        "status", "battery",
     ]
 
     # ── 17. 英文巡检前缀 ──
     SIMPLE_INSPECT_PATTERNS_EN = [
         "inspect ", "examine ", "audit ",
     ]
+
+    # ── 18. 巡检/巡逻 ──
+    SIMPLE_PATROL_PATTERNS_ZH = sorted([
+        "巡逻", "巡检", "开始巡逻", "开始巡检", "巡视", "巡查",
+        "跑一圈", "走一圈", "绕一圈", "巡逻一圈",
+        "启动巡逻", "执行巡检", "执行巡逻",
+        "巡逻路线", "巡检路线", "按路线巡逻",
+        "开始巡视", "定点巡逻", "例行巡检",
+    ], key=len, reverse=True)
+
+    SIMPLE_PATROL_PATTERNS_EN = [
+        "patrol", "start patrol", "begin patrol",
+        "do a patrol", "run patrol", "patrol route",
+        "start inspection", "inspection round",
+    ]
+
+    # ── 19. 保存地图 ──
+    SIMPLE_SAVE_MAP_PATTERNS_ZH = sorted([
+        "保存地图", "存地图", "存图", "保存当前地图", "存一下地图",
+        "地图保存", "建图完成", "结束建图",
+        "存个地图", "把地图存下来", "保存一下地图",
+    ], key=len, reverse=True)
+
+    SIMPLE_SAVE_MAP_PATTERNS_EN = [
+        "save map", "save the map", "save current map",
+        "store map", "finish mapping",
+    ]
+
+    # ── 20. 保存/标记兴趣点 ──
+    SIMPLE_SAVE_POI_PATTERNS_ZH = sorted([
+        "标记", "标记为", "标记成", "标记这里",
+        "记住这里", "记住这个位置", "记住当前位置",
+        "保存位置", "保存这个位置", "保存这个点", "保存当前位置",
+        "设为", "设置为", "命名为",
+        "记录位置", "存个点", "存个位置",
+        "这里是", "这里叫", "把这里叫做",
+        "添加兴趣点", "新建兴趣点", "添加POI",
+        "保存为", "记为", "定义为",
+    ], key=len, reverse=True)
+
+    SIMPLE_SAVE_POI_PATTERNS_EN = [
+        "mark here as", "mark this as", "mark here", "mark this",
+        "save this location as", "save this location",
+        "remember here as", "remember this as",
+        "save poi", "add poi", "mark location",
+        "set waypoint", "name this place",
+        "this is ", "call this place",
+    ]
+
+    # ── 21. 速度控制 ──
+    SIMPLE_SPEED_PATTERNS_ZH = sorted([
+        "快点", "慢点", "加速", "减速", "调速",
+        "速度调到", "速度设为", "速度设置为",
+        "调快", "调慢", "快一点", "慢一点",
+        "全速", "最大速度", "最快",
+        "低速", "最低速度", "最慢",
+        "正常速度", "恢复速度", "默认速度",
+    ], key=len, reverse=True)
+
+    SIMPLE_SPEED_PATTERNS_EN = [
+        "speed up", "slow down", "go faster", "go slower",
+        "set speed to", "set speed", "speed ", "max speed",
+        "full speed", "normal speed", "default speed",
+    ]
+
+    # ── 22. 返航 ──
+    SIMPLE_RETURN_PATTERNS_ZH = sorted([
+        "回去", "回家", "返航", "回基地", "回出发点",
+        "回到起点", "返回起点", "返回基地",
+        "返回充电桩", "回充电桩", "去充电", "回去充电",
+        "收工", "任务完成回去", "回来",
+        "返回原点", "返回", "回到原来的位置",
+    ], key=len, reverse=True)
+
+    SIMPLE_RETURN_PATTERNS_EN = [
+        "go home", "return home", "go back", "return to base",
+        "return to start", "go to charging", "head back",
+        "come back", "rtb",
+    ]
+
+    # ── 23. 暂停/恢复 ──
+    SIMPLE_PAUSE_PATTERNS_ZH = sorted([
+        "暂停", "等一下", "等等", "先等一下",
+        "暂停任务", "暂时停下", "等一等",
+        "先停一下", "先暂停",
+    ], key=len, reverse=True)
+
+    SIMPLE_RESUME_PATTERNS_ZH = sorted([
+        "继续", "恢复", "继续走", "继续任务",
+        "继续导航", "继续巡逻", "恢复任务",
+        "接着走", "接着", "继续执行",
+    ], key=len, reverse=True)
+
+    def _extract_poi_name(self, inst: str) -> str:
+        """Extract POI name from instruction like '标记为充电桩' / '这里叫仓库'."""
+        import re
+        for pat in [r'标记为(.+?)$', r'标记成(.+?)$', r'设为(.+?)$', r'设置为(.+?)$',
+                    r'命名为(.+?)$', r'保存为(.+?)$', r'记为(.+?)$', r'定义为(.+?)$',
+                    r'这里叫(.+?)$', r'这里是(.+?)$', r'把这里叫做(.+?)$',
+                    r'叫做(.+?)$', r'叫(.+?)$',
+                    r'mark (?:here |this )?as (.+?)$', r'save (?:this )?(?:location |poi )?as (.+?)$',
+                    r'remember (?:here |this )?as (.+?)$', r'(?:this is |call this place )(.+?)$',
+                    r'name this place (.+?)$']:
+            m = re.search(pat, inst, re.IGNORECASE)
+            if m:
+                name = m.group(1).strip().rstrip('。.!！')
+                if name:
+                    return name
+        # Fallback: extract last noun phrase
+        try:
+            from .chinese_tokenizer import get_tokenizer
+            tok = get_tokenizer()
+            nouns = tok.extract_noun_phrases(inst)
+            if nouns:
+                return nouns[-1]
+            kws = tok.extract_keywords(inst, min_length=2)
+            if kws:
+                return kws[-1]
+        except Exception:
+            pass
+        return "未命名"
+
+    def _extract_speed_value(self, inst: str) -> Optional[float]:
+        """Extract speed value from instruction like '速度调到0.5'."""
+        import re
+        m = re.search(r'(\d+\.?\d*)\s*(?:m/?s|米每秒)?', inst)
+        if m:
+            val = float(m.group(1))
+            if val > 10:  # Likely percentage
+                val = val / 100.0
+            return min(max(val, 0.1), 3.0)  # Clamp to [0.1, 3.0]
+        # Semantic speed keywords
+        if any(w in inst for w in ['全速', '最大', '最快', 'full', 'max']):
+            return 2.0
+        if any(w in inst for w in ['快', 'faster', 'speed up', '加速']):
+            return 1.5
+        if any(w in inst for w in ['慢', 'slower', 'slow down', '减速', '低速']):
+            return 0.3
+        if any(w in inst for w in ['正常', '默认', 'normal', 'default', '恢复速度']):
+            return 1.0
+        return None
+
+    def _extract_route_name(self, inst: str) -> str:
+        """Extract patrol route name from instruction like '巡逻路线A'."""
+        import re
+        for pat in [r'路线(.+?)$', r'按(.+?)巡', r'route\s+(.+?)$', r'patrol\s+(.+?)$']:
+            m = re.search(pat, inst, re.IGNORECASE)
+            if m:
+                name = m.group(1).strip()
+                if name:
+                    return name
+        return "default"
 
     def decompose_with_rules(self, instruction: str) -> Optional[TaskPlan]:
         """
@@ -462,7 +623,7 @@ class TaskDecomposer:
             "并且", "而且", "同时", "以及",
             "先去", "先找", "先到",
             "每个", "每一个", "所有", "全部", "依次",
-            "巡逻", "巡视所有", "逐一",
+            "巡视所有", "逐一",
             "完成后", "完成之后", "完成以后", "做完再",
             "然后", "接着", "再去", "再找",
             "每隔", "定期", "循环", "反复",
@@ -470,7 +631,7 @@ class TaskDecomposer:
         _COMPLEXITY_MARKERS_EN = (
             " if ", " then ", " else ", " otherwise ", " and then ",
             " after that ", " followed by ", " every ", " each ",
-            " all ", " patrol ", " one by one ",
+            " all ", " one by one ",
             " after ", " before ", " once done ",
             " repeat ", " periodically ", " continuously ",
         )
@@ -507,6 +668,74 @@ class TaskDecomposer:
             return TaskPlan(
                 instruction=instruction,
                 subgoals=[SubGoal(step_id=0, action=SubGoalAction.STATUS, target=query)],
+            )
+
+        # ── 1.5 暂停/恢复 ──
+        if any(inst.startswith(p) for p in self.SIMPLE_PAUSE_PATTERNS_ZH):
+            return TaskPlan(
+                instruction=instruction,
+                subgoals=[SubGoal(step_id=0, action=SubGoalAction.PAUSE, target="current_task")],
+            )
+        if any(inst.startswith(p) for p in self.SIMPLE_RESUME_PATTERNS_ZH):
+            return TaskPlan(
+                instruction=instruction,
+                subgoals=[SubGoal(step_id=0, action=SubGoalAction.RESUME, target="current_task")],
+            )
+
+        # ── 1.6 返航 (before navigate, "回去" could match nav "去") ──
+        is_return = any(inst.startswith(p) for p in self.SIMPLE_RETURN_PATTERNS_ZH)
+        if any(inst_lower.startswith(p) for p in self.SIMPLE_RETURN_PATTERNS_EN):
+            is_return = True
+        if is_return:
+            return TaskPlan(
+                instruction=instruction,
+                subgoals=[SubGoal(step_id=0, action=SubGoalAction.RETURN_HOME, target="home")],
+            )
+
+        # ── 1.7 巡逻/巡检 ──
+        is_patrol = any(inst.startswith(p) for p in self.SIMPLE_PATROL_PATTERNS_ZH)
+        if any(inst_lower.startswith(p) for p in self.SIMPLE_PATROL_PATTERNS_EN):
+            is_patrol = True
+        if is_patrol:
+            route = self._extract_route_name(inst)
+            return TaskPlan(
+                instruction=instruction,
+                subgoals=[SubGoal(step_id=0, action=SubGoalAction.PATROL,
+                                  target="patrol", parameters={"route": route})],
+            )
+
+        # ── 1.8 保存地图 ──
+        is_save_map = any(inst.startswith(p) for p in self.SIMPLE_SAVE_MAP_PATTERNS_ZH)
+        if any(inst_lower.startswith(p) for p in self.SIMPLE_SAVE_MAP_PATTERNS_EN):
+            is_save_map = True
+        if is_save_map:
+            return TaskPlan(
+                instruction=instruction,
+                subgoals=[SubGoal(step_id=0, action=SubGoalAction.SAVE_MAP, target="current_map")],
+            )
+
+        # ── 1.9 保存兴趣点 ──
+        is_save_poi = any(inst.startswith(p) for p in self.SIMPLE_SAVE_POI_PATTERNS_ZH)
+        if any(inst_lower.startswith(p) for p in self.SIMPLE_SAVE_POI_PATTERNS_EN):
+            is_save_poi = True
+        if is_save_poi:
+            name = self._extract_poi_name(inst)
+            return TaskPlan(
+                instruction=instruction,
+                subgoals=[SubGoal(step_id=0, action=SubGoalAction.SAVE_POI,
+                                  target=name, parameters={"name": name})],
+            )
+
+        # ── 1.10 速度调整 ──
+        is_speed = any(inst.startswith(p) for p in self.SIMPLE_SPEED_PATTERNS_ZH)
+        if any(inst_lower.startswith(p) for p in self.SIMPLE_SPEED_PATTERNS_EN):
+            is_speed = True
+        if is_speed:
+            speed = self._extract_speed_value(inst)
+            return TaskPlan(
+                instruction=instruction,
+                subgoals=[SubGoal(step_id=0, action=SubGoalAction.SET_SPEED,
+                                  target="speed", parameters={"value": speed or 1.0})],
             )
 
         # ── 2. 探索 ──
@@ -638,7 +867,7 @@ class TaskDecomposer:
             )
 
         # ── 6. 跟随 ──
-        is_follow = any(inst.startswith(p) or p in inst for p in self.SIMPLE_FOLLOW_PATTERNS_ZH)
+        is_follow = any(inst.startswith(p) for p in self.SIMPLE_FOLLOW_PATTERNS_ZH)
         if any(inst_lower.startswith(p) for p in self.SIMPLE_FOLLOW_PATTERNS_EN):
             is_follow = True
         if "follow" in inst_lower and ("person" in inst_lower or "human" in inst_lower or "him" in inst_lower or "her" in inst_lower):
@@ -851,19 +1080,42 @@ Output format (strict JSON):
         ]
 
     def parse_decomposition_response(
-        self, instruction: str, response_text: str
+        self, instruction: str, response_text
     ) -> TaskPlan:
         """
         解析 LLM 返回的子目标列表。
 
         Args:
             instruction: 原始指令
-            response_text: LLM 响应文本
+            response_text: LLM 响应文本 (str 或 dict)
 
         Returns:
             TaskPlan
         """
         import re
+
+        # BUG FIX: LLM client (e.g. Claude) 可能已经返回 dict
+        if isinstance(response_text, dict):
+            data = response_text
+            subgoals = []
+            for i, sg_data in enumerate(data.get("subgoals", [])):
+                action_str = sg_data.get("action", "navigate")
+                try:
+                    action = SubGoalAction(action_str)
+                except ValueError:
+                    action = SubGoalAction.NAVIGATE
+                subgoals.append(SubGoal(
+                    step_id=i,
+                    action=action,
+                    target=sg_data.get("target", instruction),
+                    parameters=sg_data.get("parameters", {}),
+                ))
+            if not subgoals:
+                subgoals = [
+                    SubGoal(step_id=0, action=SubGoalAction.NAVIGATE, target=instruction),
+                    SubGoal(step_id=1, action=SubGoalAction.VERIFY, target=instruction),
+                ]
+            return TaskPlan(instruction=instruction, subgoals=subgoals)
 
         # 提取 JSON
         match = re.search(r"```(?:json)?\s*([\s\S]*?)```", response_text)

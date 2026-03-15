@@ -1,0 +1,22 @@
+rosbag2_bagfile_information:
+  compression_format: ''
+  compression_mode: ''
+  custom_data: null
+  duration:
+    nanoseconds: 0
+  files:
+  - duration:
+      nanoseconds: 0
+    message_count: 0
+    path: corridor_60s.db3
+    starting_time:
+      nanoseconds_since_epoch: 9223372036854775807
+  message_count: 0
+  relative_file_paths:
+  - corridor_60s.db3
+  ros_distro: rosbags
+  starting_time:
+    nanoseconds_since_epoch: 9223372036854775807
+  storage_identifier: sqlite3
+  topics_with_message_count: []
+  version: 9

@@ -25,6 +25,7 @@
   <exec_depend>message_filters</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>semantic_common</exec_depend>
 
   <test_depend>ament_python</test_depend>
   <test_depend>python3-pytest</test_depend>

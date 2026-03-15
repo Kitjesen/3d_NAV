@@ -106,7 +106,7 @@ bool SystemServiceImpl::IsPathUnderMapDir(const std::string &path) const {
   }
 }
 
-bool SystemServiceImpl::RequireLease(robot::v1::BaseResponse *base) {
+bool SystemServiceImpl::RequireLease(robot::v1::ResponseBase *base) {
   if (!lease_mgr_ || lease_mgr_->HasActiveLease()) {
     return true;  // 无 lease_mgr 时放行; 有活跃租约时放行
   }

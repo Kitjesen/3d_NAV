@@ -161,6 +161,16 @@ class TomogramPlanner(object):
         """
         规划路径的方法，支持设置起始点和终点的高度。
         """
+        # 输入 NaN 防御：拒绝非有限坐标，避免 C++ planner segfault
+        if not (np.all(np.isfinite(start_pos)) and np.all(np.isfinite(end_pos))):
+            print(f"[planner_wrapper] rejecting NaN/Inf input: start={start_pos} end={end_pos}",
+                  flush=True)
+            return None
+        if not (np.isfinite(start_height) and np.isfinite(end_height)):
+            print(f"[planner_wrapper] rejecting NaN/Inf height: start_h={start_height} end_h={end_height}",
+                  flush=True)
+            return None
+
         # 将起始点和终点的二维位置转换为索引
         self.start_idx[1:] = self.pos2idx(start_pos)
         self.end_idx[1:] = self.pos2idx(end_pos)

@@ -507,6 +507,13 @@ private:
 
   void joystickHandler(const sensor_msgs::msg::Joy::ConstSharedPtr joy)
   {
+    const int n_axes = static_cast<int>(joy->axes.size());
+    if (joy_axis_fwd_ >= n_axes || joy_axis_left_ >= n_axes ||
+        joy_axis_yaw_ >= n_axes || joy_axis_autonomy_ >= n_axes) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+          "Joy axes size (%d) < required axis index, ignoring", n_axes);
+      return;
+    }
     joyTime_ = now().seconds();
     joySpeedRaw_ = sqrt(joy->axes[joy_axis_left_] * joy->axes[joy_axis_left_] + joy->axes[joy_axis_fwd_] * joy->axes[joy_axis_fwd_]);
     joySpeed_ = joySpeedRaw_;
@@ -540,7 +547,7 @@ private:
   {
     double speedTime = now().seconds();
     if (autonomyMode_ && speedTime - joyTime_ > joyToSpeedDelay_ && joySpeedRaw_ == 0) {
-      joySpeed_ = speed->data / maxSpeed_;
+      joySpeed_ = (maxSpeed_ > 1e-6) ? speed->data / maxSpeed_ : 0.0;
 
       if (joySpeed_ < 0) joySpeed_ = 0;
       else if (joySpeed_ > 1.0) joySpeed_ = 1.0;

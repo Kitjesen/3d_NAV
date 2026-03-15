@@ -126,3 +126,20 @@ src/semantic_perception/test_results/
 
 # Vendored third-party libraries (use system install)
 src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/
+
+# 大文件 — 不进 git
+*.tar
+*.tar.gz
+*.tgz
+*.bagol*
+*.part
+mobileclip2_b.ts
+tools/hbm_convert/ai_toolchain_s100_cpu.tar
+tools/hbm_convert/s100-oe-package.tgz
+sim/datasets/legkilo_all/
+tools/hbm_convert/calib_data/
+tools/hbm_convert/model_output/*.hbm
+tools/hbm_convert/model_output/*.bc
+tools/hbm_convert/model_output/.hb_compile_tmp/
+*.pcd
+*.gif

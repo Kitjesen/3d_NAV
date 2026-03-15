@@ -441,17 +441,30 @@ class PctPlannerAstar(Node):
     # ── callbacks ─────────────────────────────────────────────────────────────
 
     def _on_odom(self, msg: Odometry):
-        self._rx = msg.pose.pose.position.x
-        self._ry = msg.pose.pose.position.y
-        self._rz = msg.pose.pose.position.z
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        z = msg.pose.pose.position.z
+        # 跳过 NaN/Inf 里程计
+        if math.isfinite(x) and math.isfinite(y):
+            self._rx = x
+            self._ry = y
+            self._rz = z if math.isfinite(z) else self._rz
 
     def _on_loc_quality(self, msg: Float32):
-        self._loc_quality = msg.data
+        v = msg.data
+        if math.isfinite(v):
+            self._loc_quality = v
 
     def _on_goal(self, msg: PoseStamped):
         gx = msg.pose.position.x
         gy = msg.pose.position.y
         gz = msg.pose.position.z   # 0.0 = 2D goal; >0.1 = 3D goal with Z
+        # NaN/Inf 目标拒绝
+        if not (math.isfinite(gx) and math.isfinite(gy)):
+            self.get_logger().warn(f'Rejecting NaN/Inf goal: ({gx}, {gy})')
+            self._publish_status('FAILED')
+            return
+        gz = gz if math.isfinite(gz) else 0.0
         self.get_logger().info(f'Goal received: ({gx:.2f}, {gy:.2f}, z={gz:.2f})')
         if self._loc_quality < self._loc_quality_min:
             self.get_logger().warn(

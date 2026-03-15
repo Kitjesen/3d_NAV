@@ -12,7 +12,7 @@ ExecStart=/bin/bash /opt/nav/scripts/services/nav-semantic.sh
 Restart=always
 RestartSec=5
 TimeoutStopSec=15
-KillMode=mixed
+KillMode=control-group
 KillSignal=SIGINT
 SuccessExitStatus=130 SIGINT
 
@@ -20,6 +20,7 @@ MemoryMax=6G
 
 Environment=HOME=/home/sunrise
 Environment=LANG=en_US.UTF-8
+EnvironmentFile=-/etc/nav/semantic.env
 
 StandardOutput=journal
 StandardError=journal

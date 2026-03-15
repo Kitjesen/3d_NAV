@@ -49,6 +49,9 @@ from interface.msg import RobotState, BatteryState
 from grpc import aio as grpc_aio
 import han_dog_message as dog_msg
 
+from semantic_common.sanitize import sanitize_float
+from semantic_common.validation import normalize_quaternion
+
 
 class HanDogBridge(Node):
     """ROS2 ↔ han_dog gRPC 桥接节点."""
@@ -154,9 +157,9 @@ class HanDogBridge(Node):
     def _cmd_vel_callback(self, msg: TwistStamped):
         """收到 /cmd_vel → 缓存指令, 喂狗."""
         self._last_cmd_time = self.get_clock().now()
-        self._cmd_vx = msg.twist.linear.x
-        self._cmd_vy = msg.twist.linear.y
-        self._cmd_wz = msg.twist.angular.z
+        self._cmd_vx = sanitize_float(msg.twist.linear.x)
+        self._cmd_vy = sanitize_float(msg.twist.linear.y)
+        self._cmd_wz = sanitize_float(msg.twist.angular.z)
 
         if self._watchdog_triggered:
             self._watchdog_triggered = False
@@ -174,8 +177,16 @@ class HanDogBridge(Node):
         now = self.get_clock().now()
         dt = (now - self._last_slam_reset_time).nanoseconds / 1e9
         if dt >= self._slam_reset_interval:
-            self._pos_x = msg.pose.pose.position.x
-            self._pos_y = msg.pose.pose.position.y
+            sx = msg.pose.pose.position.x
+            sy = msg.pose.pose.position.y
+            # 跳过 NaN/Inf SLAM 位置，防止毒化航位推算
+            if not (math.isfinite(sx) and math.isfinite(sy)):
+                self.get_logger().warn(
+                    f'SLAM odom contains NaN/Inf: ({sx}, {sy}), skipping reset',
+                    throttle_duration_sec=5.0)
+                return
+            self._pos_x = sx
+            self._pos_y = sy
             self._last_slam_reset_time = now
             self.get_logger().debug(
                 f'SLAM reset pos: ({self._pos_x:.3f}, {self._pos_y:.3f})')
@@ -267,11 +278,18 @@ class HanDogBridge(Node):
         now_sec = self.get_clock().now().nanoseconds / 1e9
         if self._last_odom_time is not None:
             dt = now_sec - self._last_odom_time
-            qx, qy, qz, qw = self._latest_quaternion
-            yaw = math.atan2(2.0 * (qw * qz + qx * qy),
-                             1.0 - 2.0 * (qy * qy + qz * qz))
-            self._pos_x += (self._cmd_vx * math.cos(yaw) - self._cmd_vy * math.sin(yaw)) * dt
-            self._pos_y += (self._cmd_vx * math.sin(yaw) + self._cmd_vy * math.cos(yaw)) * dt
+            # 防止异常 dt（时钟跳变 / 首帧）导致位置暴涨
+            if 0.0 < dt < 1.0:
+                qx, qy, qz, qw = self._latest_quaternion
+                yaw = math.atan2(2.0 * (qw * qz + qx * qy),
+                                 1.0 - 2.0 * (qy * qy + qz * qz))
+                self._pos_x += (self._cmd_vx * math.cos(yaw) - self._cmd_vy * math.sin(yaw)) * dt
+                self._pos_y += (self._cmd_vx * math.sin(yaw) + self._cmd_vy * math.cos(yaw)) * dt
+                # 最终 NaN 安全阀：若积分结果非有限，回退到上一帧
+                if not math.isfinite(self._pos_x):
+                    self._pos_x = 0.0
+                if not math.isfinite(self._pos_y):
+                    self._pos_y = 0.0
         self._last_odom_time = now_sec
 
         odom.pose.pose.position.x = self._pos_x
@@ -459,15 +477,19 @@ class HanDogBridge(Node):
         self.get_logger().info('Starting IMU stream listener...')
         async for imu in self._stub.ListenImu(dog_msg.Empty()):
             # han_dog Imu: gyroscope (Vector3), quaternion (Quaternion), timestamp
-            self._latest_gyro = (imu.gyroscope.x, imu.gyroscope.y, imu.gyroscope.z)
+            gx = sanitize_float(imu.gyroscope.x)
+            gy = sanitize_float(imu.gyroscope.y)
+            gz = sanitize_float(imu.gyroscope.z)
+            self._latest_gyro = (gx, gy, gz)
             # han_dog Quaternion: Hamilton convention (w, x, y, z)
             # ROS convention: (x, y, z, w)
-            self._latest_quaternion = (
-                imu.quaternion.x,
-                imu.quaternion.y,
-                imu.quaternion.z,
-                imu.quaternion.w,
-            )
+            # 归一化四元数，防止非单位四元数导致下游 atan2 异常
+            q_raw = (imu.quaternion.x, imu.quaternion.y,
+                     imu.quaternion.z, imu.quaternion.w)
+            q_norm = normalize_quaternion(*q_raw)
+            if q_norm is not None:
+                self._latest_quaternion = q_norm
+            # 若归一化失败（零向量），保留上一次有效值
 
     async def _listen_joint(self):
         """订阅 dog 关节数据流 → 更新内部状态."""

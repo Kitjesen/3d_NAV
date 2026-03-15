@@ -253,12 +253,21 @@ private:
   double robot_x_{0.0};
   double robot_y_{0.0};
   bool odom_received_{false};
+  std::chrono::steady_clock::time_point last_odom_time_;
 
   // TF 缓存: 用上一次成功的 map→odom 变换做粗略距离预判,
-  // 距离远时跳过实时 TF 查询 (节省 ~95% 的 lookupTransform 调用)
+  // 距离远时跳过实时 TF 查询 (节省 ~95% 的 lookupTransform 调用).
+  // Thread-safety: accessed only from check_timer_ callback (single-threaded executor).
+  // If switching to MultiThreadedExecutor, protect with a dedicated mutex.
   geometry_msgs::msg::TransformStamped cached_tf_;
   bool cached_tf_valid_{false};
   std::chrono::steady_clock::time_point cached_tf_time_;
+
+  // 语义导航状态追踪
+  std::string semantic_state_str_;          // planner state: "navigating", "exploring", etc.
+  std::string semantic_failure_reason_;     // 失败原因
+  int semantic_explore_count_{0};
+  float semantic_elapsed_sec_{0.0f};
 
   // 事件
   std::shared_ptr<EventBuffer> event_buffer_;

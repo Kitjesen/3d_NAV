@@ -12,7 +12,7 @@ ExecStart=/bin/bash /opt/nav/scripts/services/nav-lidar.sh
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=10
-KillMode=mixed
+KillMode=control-group
 KillSignal=SIGINT
 SuccessExitStatus=130 SIGINT
 

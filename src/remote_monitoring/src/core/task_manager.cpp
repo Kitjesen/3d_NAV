@@ -257,19 +257,84 @@ void TaskManager::SemanticGoalCallback(
 void TaskManager::SemanticStatusCallback(
     const std_msgs::msg::String::ConstSharedPtr msg) {
   // 解析语义导航状态 JSON
-  // 格式: {"state": "NAVIGATING", "detail": "...", "step": 5, ...}
+  // 格式: {"task_status":"running|completed|failed", "state":"navigating",
+  //         "explore_count":5, "elapsed_sec":45.2, "failure_reason":"...",
+  //         "current_step":2, "total_steps":5}
+
+  std::lock_guard<std::mutex> lock(task_mutex_);
 
   // 只在语义导航任务或人物跟随任务活跃时处理状态
-  std::lock_guard<std::mutex> lock(task_mutex_);
   if (task_params_.type != robot::v1::TASK_TYPE_SEMANTIC_NAV &&
       task_params_.type != robot::v1::TASK_TYPE_FOLLOW_PERSON) {
     return;
   }
 
-  // TODO: 解析 JSON 并填充 SemanticNavProgress
-  // 当前简单记录日志
-  RCLCPP_DEBUG(node_->get_logger(),
-               "TaskManager: Semantic status: %s", msg->data.c_str());
+  // 简单 JSON 字段提取 (复用 PlannerStatusCallback 风格, 避免引入第三方 JSON 库)
+  auto extract_str = [&](const std::string &key) -> std::string {
+    const std::string needle = "\"" + key + "\":\"";
+    const auto pos = msg->data.find(needle);
+    if (pos == std::string::npos) return "";
+    const auto start = pos + needle.size();
+    const auto end = msg->data.find('"', start);
+    if (end == std::string::npos) return "";
+    return msg->data.substr(start, end - start);
+  };
+  auto extract_int = [&](const std::string &key) -> int {
+    const std::string needle = "\"" + key + "\":";
+    const auto pos = msg->data.find(needle);
+    if (pos == std::string::npos) return -1;
+    try {
+      return std::stoi(msg->data.substr(pos + needle.size()));
+    } catch (...) { return -1; }
+  };
+  auto extract_float = [&](const std::string &key) -> float {
+    const std::string needle = "\"" + key + "\":";
+    const auto pos = msg->data.find(needle);
+    if (pos == std::string::npos) return 0.0f;
+    try {
+      return std::stof(msg->data.substr(pos + needle.size()));
+    } catch (...) { return 0.0f; }
+  };
+
+  const std::string task_status = extract_str("task_status");
+  const std::string state = extract_str("state");
+  const std::string failure_reason = extract_str("failure_reason");
+  const int explore_count = extract_int("explore_count");
+  const int current_step = extract_int("current_step");
+  const int total_steps = extract_int("total_steps");
+  const float elapsed_sec = extract_float("elapsed_sec");
+
+  // 更新缓存字段
+  semantic_state_str_ = state;
+  semantic_failure_reason_ = failure_reason;
+  semantic_explore_count_ = (explore_count >= 0) ? explore_count : 0;
+  semantic_elapsed_sec_ = elapsed_sec;
+
+  // 任务完成/失败 → 自动结束 App 任务
+  if (task_status == "completed") {
+    RCLCPP_INFO(node_->get_logger(),
+                "TaskManager: Semantic nav completed (%.1fs)", elapsed_sec);
+    const auto id = task_id_;
+    state_.store(TaskState::IDLE);
+    if (progress_callback_) {
+      progress_callback_(id, robot::v1::TASK_STATUS_COMPLETED, 100.0f,
+                         "Semantic navigation completed");
+    }
+  } else if (task_status == "failed") {
+    RCLCPP_WARN(node_->get_logger(),
+                "TaskManager: Semantic nav failed: %s (%.1fs)",
+                failure_reason.c_str(), elapsed_sec);
+    state_.store(TaskState::IDLE);
+  } else if (task_status == "running" && progress_callback_) {
+    // 基于子目标进度报告百分比
+    float pct = 0.0f;
+    if (total_steps > 0 && current_step >= 0) {
+      pct = 100.0f * static_cast<float>(current_step) /
+            static_cast<float>(total_steps);
+    }
+    progress_callback_(task_id_, robot::v1::TASK_STATUS_RUNNING, pct,
+                       "Semantic navigation in progress");
+  }
 }
 
 void TaskManager::PlannerStatusCallback(
@@ -288,7 +353,9 @@ void TaskManager::PlannerStatusCallback(
     const std::string needle = "\"" + key + "\":";
     const auto pos = msg->data.find(needle);
     if (pos == std::string::npos) return -1;
-    return std::stoi(msg->data.substr(pos + needle.size()));
+    try {
+      return std::stoi(msg->data.substr(pos + needle.size()));
+    } catch (...) { return -1; }
   };
   auto extract_str = [&](const std::string &key) -> std::string {
     const std::string needle = "\"" + key + "\":\"";
@@ -296,6 +363,7 @@ void TaskManager::PlannerStatusCallback(
     if (pos == std::string::npos) return "";
     const auto start = pos + needle.size();
     const auto end = msg->data.find('"', start);
+    if (end == std::string::npos) return "";
     return msg->data.substr(start, end - start);
   };
 
@@ -758,6 +826,7 @@ void TaskManager::OdomCallback(
   robot_x_ = msg->pose.pose.position.x;
   robot_y_ = msg->pose.pose.position.y;
   odom_received_ = true;
+  last_odom_time_ = std::chrono::steady_clock::now();
   // 仅在 frame_id 变化时赋值, 避免 100Hz 下每帧 std::string 堆操作
   if (!msg->header.frame_id.empty() &&
       msg->header.frame_id != odom_frame_) {
@@ -776,14 +845,25 @@ void TaskManager::CheckArrival() {
 
   double rx, ry;
   bool have_odom;
+  std::chrono::steady_clock::time_point odom_time;
   {
     std::lock_guard<std::mutex> lock(odom_mutex_);
     rx = robot_x_;
     ry = robot_y_;
     have_odom = odom_received_;
+    odom_time = last_odom_time_;
   }
 
   if (!have_odom) {
+    return;
+  }
+
+  // 里程计陈旧检测: 超过 5 秒未更新则跳过到达判定
+  auto odom_age = std::chrono::steady_clock::now() - odom_time;
+  if (odom_age > std::chrono::seconds(5)) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+        "TaskManager: Odometry stale (%.1fs), pausing arrival check",
+        std::chrono::duration<double>(odom_age).count());
     return;
   }
 
@@ -856,6 +936,9 @@ void TaskManager::CheckArrival() {
 
   double odom_wx, odom_wy, odom_wz;
   if (!TransformToOdom(wp_x, wp_y, wp_z, odom_wx, odom_wy, odom_wz)) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+        "TaskManager: TF map->odom unavailable in CheckArrival, "
+        "cannot transform waypoint [%.2f, %.2f]", wp_x, wp_y);
     return;
   }
 
@@ -945,6 +1028,19 @@ void TaskManager::PublishCurrentWaypoint() {
 
   // Phase 2: TF + 发布不需要 task_mutex_（调用者在此之后不再读写任务状态）
   // 注: 调用者保证 PublishCurrentWaypoint 是锁内最后一个需要任务数据的操作
+
+  // 里程计陈旧检测: 超过 5 秒未更新则不发布航点
+  {
+    std::lock_guard<std::mutex> lock(odom_mutex_);
+    auto odom_age = std::chrono::steady_clock::now() - last_odom_time_;
+    if (odom_received_ && odom_age > std::chrono::seconds(5)) {
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+          "TaskManager: Odometry stale (%.1fs), pausing waypoint publishing",
+          std::chrono::duration<double>(odom_age).count());
+      return;
+    }
+  }
+
   double odom_x, odom_y, odom_z;
   if (!TransformToOdom(wp_x, wp_y, wp_z, odom_x, odom_y, odom_z)) {
     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,

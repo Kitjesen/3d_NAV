@@ -72,7 +72,7 @@ class _LinearFSMModel:
     @classmethod
     def from_npz(cls, path: str) -> "_LinearFSMModel":
         arr = np.load(path)
-        return cls(
+        model = cls(
             w_state=np.asarray(arr["w_state"], dtype=np.float64),
             b_state=np.asarray(arr["b_state"], dtype=np.float64),
             w_search=np.asarray(arr["w_search"], dtype=np.float64),
@@ -80,6 +80,15 @@ class _LinearFSMModel:
             w_motion=np.asarray(arr["w_motion"], dtype=np.float64),
             b_motion=np.asarray(arr["b_motion"], dtype=np.float64),
         )
+        # 校验权重维度与特征向量 (12-dim) 匹配
+        n_feat = 12
+        if model.w_state.shape[0] != n_feat:
+            raise ValueError(f"w_state shape mismatch: expected ({n_feat}, ?), got {model.w_state.shape}")
+        if model.w_search.shape[0] != n_feat:
+            raise ValueError(f"w_search shape mismatch: expected ({n_feat}, ?), got {model.w_search.shape}")
+        if model.w_motion.shape[0] != n_feat:
+            raise ValueError(f"w_motion shape mismatch: expected ({n_feat}, ?), got {model.w_motion.shape}")
+        return model
 
     @classmethod
     def default(cls) -> "_LinearFSMModel":
@@ -191,6 +200,12 @@ class ImplicitFSMPolicy:
         state_idx = int(np.argmax(state_prob))
         search_idx = int(np.argmax(search_prob))
 
+        # Bounds check against state lists
+        if state_idx >= len(MISSION_STATES):
+            state_idx = len(MISSION_STATES) - 1
+        if search_idx >= len(SEARCH_STATES):
+            search_idx = len(SEARCH_STATES) - 1
+
         return ImplicitFSMPrediction(
             mission_state_out=MISSION_STATES[state_idx],
             search_state_out=SEARCH_STATES[search_idx],
@@ -202,9 +217,14 @@ class ImplicitFSMPolicy:
     @staticmethod
     def _softmax(x: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=np.float64)
+        if not np.all(np.isfinite(x)):
+            return np.ones(len(x), dtype=np.float64) / max(len(x), 1)
         x = x - np.max(x)
         exp_x = np.exp(x)
-        return exp_x / np.sum(exp_x)
+        denom = np.sum(exp_x)
+        if denom == 0.0 or not np.isfinite(denom):
+            return np.ones_like(exp_x) / max(len(exp_x), 1)
+        return exp_x / denom
 
     @staticmethod
     def _is_match(predicted_object: str, mission_object: str) -> bool:
@@ -214,6 +234,9 @@ class ImplicitFSMPolicy:
             return False
         if p == "null":
             return False
+        # 短词 (≤2 字符) 要求完全匹配，避免 "door" in "outdoor" 等误匹配
+        if len(p) <= 2 or len(m) <= 2:
+            return p == m
         return p in m or m in p
 
     @staticmethod

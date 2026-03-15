@@ -260,6 +260,20 @@ void SafetyGate::TerrainMapCallback(
   bool found_slow = false;
   float min_dist = 999.0f;
 
+  // 检查 "intensity" 字段是否存在 (不同 LiDAR 驱动可能不提供此字段)
+  bool has_intensity = false;
+  for (const auto &field : msg->fields) {
+    if (field.name == "intensity") {
+      has_intensity = true;
+      break;
+    }
+  }
+  if (!has_intensity) {
+    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 10000,
+        "SafetyGate: PointCloud2 missing 'intensity' field, skipping safety check");
+    return;
+  }
+
   // 遍历 terrain_map 点云 (odom 坐标系, intensity = 障碍物高度)
   sensor_msgs::PointCloud2ConstIterator<float> it_x(*msg, "x");
   sensor_msgs::PointCloud2ConstIterator<float> it_y(*msg, "y");

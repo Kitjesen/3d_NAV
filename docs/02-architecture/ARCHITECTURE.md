@@ -658,3 +658,18 @@ cd dart && dart pub get
 - No network, no app
 - Pure hardware control
 - Suitable for outdoor field testing
+
+---
+
+## Multi-Agent Task Orchestration
+
+LingTu 作为导航执行层，可以被多种外部系统触发任务。完整的多 agent 编排架构（语音 Askme → mission-orchestrator → nav-gateway → LingTu）请参见：
+
+**→ [TASK_ORCHESTRATION.md](./TASK_ORCHESTRATION.md)**
+
+涵盖内容：
+- 5 种任务触发方式（语音/App/gRPC/ROS2 topic/launch 参数）
+- 完整链路数据流图
+- 任务状态回传机制
+- 语义导航内部 Fast-Slow 双通道流程
+- gRPC 调试命令示例

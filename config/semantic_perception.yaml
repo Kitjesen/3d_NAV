@@ -18,7 +18,7 @@
 semantic_perception_node:
   ros__parameters:
     # ── 检测器后端 ──
-    detector_type: "yoloe"               # yoloe (USS-Nav 默认) | yolo_world (legacy) | grounding_dino
+    detector_type: "bpu"                 # bpu (S100P BPU 加速) | yoloe | yolo_world | grounding_dino
 
     # ── YOLO-E 实例分割 (USS-Nav 默认) ──
     yoloe:
@@ -28,16 +28,24 @@ semantic_perception_node:
       tensorrt: false                    # true = TensorRT FP16 加速 (首次编译慢)
       max_detections: 30                 # 单帧最大检测数
 
-    # ── YOLO-World 参数 (legacy fallback) ──
+    # ── BPU YOLO 参数 (D-Robotics Nash, S100P 专用) ──
+    bpu:
+      model_path: ""                       # 空 = 自动发现 /home/sunrise/models/ 下最优模型
+      confidence: 0.25                     # 检测置信度阈值
+      iou_threshold: 0.45                  # NMS IoU 阈值
+      max_detections: 30                   # 单帧最大检测数
+
+    # ── YOLO-World 参数 (S100P CPU 部署) ──
     yolo_world:
-      model_size: "l"
-      confidence: 0.3
-      iou_threshold: 0.5
+      model_size: "s"                     # S100P 用 small 模型 (yolov8s-worldv2)
+      confidence: 0.4                     # 提高阈值减少虚检 (0.3→0.4)
+      iou_threshold: 0.45
       tensorrt: false
 
     # ── 语义编码 (USS-Nav: text-only Mobile-CLIP) ──
+    # BPU 模式下禁用 — COCO-80 闭词汇检测不需要 CLIP, 且 S100P 无法下载 HF 模型
     clip:
-      enable: true
+      enable: false
       model: "ViT-B/32"                 # 文本编码器 (text-only 模式下仅加载文本分支)
       text_only: true                    # USS-Nav: true = 仅编码标签文本 (15Hz)
                                          #          false = 编码图像裁剪 (legacy, ~5Hz)
@@ -49,8 +57,8 @@ semantic_perception_node:
       box_threshold: 0.35
       text_threshold: 0.25
 
-    # ── 默认检测类别 (英文, 用 . 分隔) ──
-    default_classes: "door . chair . fire extinguisher . person . desk . stairs . elevator . sign . trash can . sofa"
+    # ── 默认检测类别 (英文, 用 . 分隔, 导航相关 COCO 类 + 工业安全) ──
+    default_classes: "door . chair . fire extinguisher . person . desk . stairs . elevator . sign . trash can . sofa . car . truck . bus . bicycle . motorcycle . bench . backpack . laptop . tv . traffic light . stop sign . potted plant . bed . toilet . bottle . cup . dog . cat"
 
     # ── Laplacian 模糊过滤 ──
     laplacian_threshold: 100.0
@@ -63,7 +71,7 @@ semantic_perception_node:
     # ── USS-Nav 双指标融合 ──
     iou_threshold: 0.3
     clip_similarity_threshold: 0.75      # Ωsem 阈值 (USS-Nav Eq.2)
-    merge_distance: 0.5                  # fallback 距离阈值 (m)
+    merge_distance: 1.5                  # fallback 距离阈值 (m) — CPU ~0.5s/帧, 需更大容差
 
     # ── 场景图 ──
     scene_graph:

@@ -250,8 +250,15 @@ class GlobalPlanner(Node):
                 self.robot_frame,
                 rclpy.time.Time()
             )
-            pos = np.array([t.transform.translation.x, t.transform.translation.y], dtype=np.float32)
-            return pos, t.transform.translation.z, True
+            tx = t.transform.translation.x
+            ty = t.transform.translation.y
+            tz = t.transform.translation.z
+            if not (np.isfinite(tx) and np.isfinite(ty)):
+                self.get_logger().warn(
+                    f'TF 位置含 NaN/Inf: ({tx}, {ty})', throttle_duration_sec=5.0)
+                return None, None, False
+            pos = np.array([tx, ty], dtype=np.float32)
+            return pos, tz if np.isfinite(tz) else 0.0, True
         except (LookupException, ExtrapolationException, ConnectivityException) as e:
             self.get_logger().warn(f"TF 等待: {e}", throttle_duration_sec=5.0)
             return None, None, False
@@ -263,6 +270,13 @@ class GlobalPlanner(Node):
         x = msg.pose.position.x
         y = msg.pose.position.y
         z = msg.pose.position.z
+        # NaN/Inf 目标拒绝
+        if not (np.isfinite(x) and np.isfinite(y)):
+            self.get_logger().warn(f'Rejecting NaN/Inf goal: ({x}, {y})')
+            self.publish_status('FAILED')
+            return
+        if not np.isfinite(z):
+            z = 0.0
         if z == 0.0:
             # 2D 工具 (RViz "2D Nav Goal", gRPC 未设 z) 发来 z=0
             # 自动从 tomogram 查找目标 XY 的地形表面高度，解决坡度地形规划失败问题
@@ -277,7 +291,12 @@ class GlobalPlanner(Node):
         self._handle_goal(x, y, z, "goal_pose")
     
     def goal_point_callback(self, msg):
-        self._handle_goal(msg.point.x, msg.point.y, msg.point.z, "clicked_point")
+        x, y, z = msg.point.x, msg.point.y, msg.point.z
+        if not (np.isfinite(x) and np.isfinite(y)):
+            self.get_logger().warn(f'Rejecting NaN/Inf clicked_point: ({x}, {y})')
+            return
+        z = z if np.isfinite(z) else 0.0
+        self._handle_goal(x, y, z, "clicked_point")
     
     def _handle_goal(self, x, y, z, source):
         current_time = self.get_clock().now()

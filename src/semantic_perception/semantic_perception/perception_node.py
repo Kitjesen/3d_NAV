@@ -24,24 +24,37 @@ USS-Nav vs 原实现:
 
 import asyncio
 import json
+import math
 import os
 import re
 import time
 import traceback
 from typing import List, Optional
 
+import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.duration import Duration
 
+from semantic_common import (
+    validate_bgr,
+    validate_depth,
+    validate_depth_pair,
+    validate_intrinsics,
+    normalize_quaternion,
+)
+
 from sensor_msgs.msg import Image, CameraInfo
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 from std_srvs.srv import Trigger
-from semantic_perception.srv import QueryScene
+try:
+    from semantic_perception.srv import QueryScene
+except ImportError:
+    QueryScene = None
 
 import message_filters
 from cv_bridge import CvBridge
@@ -72,7 +85,7 @@ class SemanticPerceptionNode(Node):
         super().__init__("semantic_perception_node")
 
         # ── 参数声明 ──
-        self.declare_parameter("detector_type", "yoloe")  # USS-Nav: yoloe (默认) | yolo_world | grounding_dino
+        self.declare_parameter("detector_type", "yoloe")  # yoloe | yolo_world | grounding_dino | bpu
         # YOLO-E 分割参数 (USS-Nav 默认)
         self.declare_parameter("yoloe.model_size", "l")
         self.declare_parameter("yoloe.confidence", 0.3)
@@ -84,6 +97,11 @@ class SemanticPerceptionNode(Node):
         self.declare_parameter("yolo_world.confidence", 0.3)
         self.declare_parameter("yolo_world.iou_threshold", 0.5)
         self.declare_parameter("yolo_world.tensorrt", False)
+        # BPU YOLO 参数 (D-Robotics Nash, S100P 专用)
+        self.declare_parameter("bpu.model_path", "")
+        self.declare_parameter("bpu.confidence", 0.25)
+        self.declare_parameter("bpu.iou_threshold", 0.45)
+        self.declare_parameter("bpu.max_detections", 30)
         # 语义编码 (USS-Nav: text-only Mobile-CLIP)
         self.declare_parameter("clip.enable", True)
         self.declare_parameter("clip.model", "ViT-B/32")
@@ -114,6 +132,7 @@ class SemanticPerceptionNode(Node):
         self.declare_parameter("camera_frame", "camera_link")
         self.declare_parameter("world_frame", "map")
         self.declare_parameter("tf_timeout_sec", 0.1)
+        self.declare_parameter("tf_fallback_enable", True)  # 无 TF 时用默认静态变换
         # 实例追踪参数 (C10 参数化)
         self.declare_parameter("tracker.stale_timeout", 300.0)
         self.declare_parameter("tracker.ema_alpha", 0.3)
@@ -156,6 +175,11 @@ class SemanticPerceptionNode(Node):
         self._warned_no_tf = False
         self._tf_fail_count = 0
         self._tf_total_count = 0
+        # TF fallback: 无 SLAM 时使用默认静态变换 (map→camera_link)
+        self._tf_fallback_enable = self.get_parameter("tf_fallback_enable").value
+        self._tf_fallback_matrix = np.eye(4)
+        self._tf_fallback_matrix[:3, 3] = [0.15, 0.0, 0.45]  # body(z=0.35) + camera(x=0.15, z=0.1)
+        self._tf_fallback_warned = False
 
         # 指令→检测器: 缓存最新指令和合并后的类别
         self._instruction_merge_enable = self.get_parameter("instruction_merge_enable").value
@@ -179,10 +203,9 @@ class SemanticPerceptionNode(Node):
             self._tracker.set_knowledge_graph(self._knowledge_graph)
             kg_stats = self._knowledge_graph.get_stats()
             self.get_logger().info(
-                "KG injected: %d concepts, %d relations, %d safety constraints",
-                kg_stats["total_concepts"],
-                kg_stats["total_relations"],
-                kg_stats["total_safety_constraints"],
+                f"KG injected: {kg_stats['total_concepts']} concepts, "
+                f"{kg_stats['total_relations']} relations, "
+                f"{kg_stats['total_safety_constraints']} safety constraints"
             )
 
             # 用 KG 词汇表扩展检测器类别 (开放词汇增强)
@@ -194,13 +217,12 @@ class SemanticPerceptionNode(Node):
                     expanded = self._default_classes.rstrip(" .") + " . " + " . ".join(new_terms[:30])
                     self._default_classes = expanded
                     self.get_logger().info(
-                        "Detection classes expanded with %d KG terms (total: %d)",
-                        min(len(new_terms), 30),
-                        len(expanded.split(".")),
+                        f"Detection classes expanded with {min(len(new_terms), 30)} KG terms "
+                        f"(total: {len(expanded.split('.'))})"
                     )
         except Exception as e:
             self._knowledge_graph = None
-            self.get_logger().warning("KG initialization failed (non-critical): %s", e)
+            self.get_logger().warning(f"KG initialization failed (non-critical): {e}")
 
         # 场景图快照 (DovSG 动态更新)
         self._prev_scene_snapshot: dict = {}
@@ -241,8 +263,7 @@ class SemanticPerceptionNode(Node):
                     if default_labels:
                         self._clip_encoder.precompute_labels(default_labels)
                     self.get_logger().info(
-                        "USS-Nav MobileCLIP text encoder loaded (text-only, %d labels cached)",
-                        len(default_labels),
+                        f"USS-Nav MobileCLIP text encoder loaded (text-only, {len(default_labels)} labels cached)"
                     )
                 else:
                     self._clip_encoder = CLIPEncoder(
@@ -317,10 +338,11 @@ class SemanticPerceptionNode(Node):
             period = 1.0 / self._sg_publish_rate
             self._sg_timer = self.create_timer(period, self._publish_scene_graph)
 
-        # ── 查询服务 ──
-        self._query_srv = self.create_service(
-            QueryScene, "/nav/semantic/query", self._query_callback
-        )
+        # ── 查询服务 (需要 srv 编译, 可选) ──
+        if QueryScene is not None:
+            self._query_srv = self.create_service(
+                QueryScene, "/nav/semantic/query", self._query_callback
+            )
 
         self.get_logger().info(
             f"SemanticPerceptionNode started: detector={self._detector_type}, "
@@ -352,6 +374,15 @@ class SemanticPerceptionNode(Node):
                     confidence=self.get_parameter("yolo_world.confidence").value,
                     iou_threshold=self.get_parameter("yolo_world.iou_threshold").value,
                     tensorrt=self.get_parameter("yolo_world.tensorrt").value,
+                )
+            elif self._detector_type == "bpu":
+                from .bpu_detector import BPUDetector as BPUDet
+                model_path = self.get_parameter("bpu.model_path").value
+                self._detector = BPUDet(
+                    confidence=self.get_parameter("bpu.confidence").value,
+                    iou_threshold=self.get_parameter("bpu.iou_threshold").value,
+                    model_path=model_path or None,
+                    max_detections=self.get_parameter("bpu.max_detections").value,
                 )
             elif self._detector_type == "grounding_dino":
                 from .grounding_dino_detector import GroundingDINODetector
@@ -409,7 +440,10 @@ class SemanticPerceptionNode(Node):
                         rclpy.time.Time(),  # 最新可用
                         timeout=Duration(seconds=self._tf_timeout),
                     )
-                except Exception:
+                except Exception as e2:
+                    if not self._warned_no_tf:
+                        self.get_logger().warn(f"TF fallback also failed: {e2}")
+                        self._warned_no_tf = True
                     return None
             else:
                 transform = self._tf_buffer.lookup_transform(
@@ -422,7 +456,11 @@ class SemanticPerceptionNode(Node):
             # TransformStamped → 4x4 矩阵
             t = transform.transform.translation
             q = transform.transform.rotation
-            rot = self._quat_to_rotation(q.x, q.y, q.z, q.w)
+            quat = normalize_quaternion(q.x, q.y, q.z, q.w)
+            if quat is None:
+                return None  # Invalid quaternion
+            qx, qy, qz, qw = quat
+            rot = self._quat_to_rotation(qx, qy, qz, qw)
             tf_mat = np.eye(4)
             tf_mat[:3, :3] = rot
             tf_mat[:3, 3] = [t.x, t.y, t.z]
@@ -452,14 +490,18 @@ class SemanticPerceptionNode(Node):
     # ================================================================
 
     def _camera_info_callback(self, msg: CameraInfo):
-        """接收相机内参 (只需一次)。"""
+        """接收相机内参 (只需一次, 后续消息忽略 — 内参不变)。"""
         if self._intrinsics is not None:
             return
 
+        result = validate_intrinsics(msg.k, msg.width, msg.height, caller="perception")
+        if result is None:
+            return
+
         self._intrinsics = CameraIntrinsics(
-            fx=msg.k[0], fy=msg.k[4],
-            cx=msg.k[2], cy=msg.k[5],
-            width=msg.width, height=msg.height,
+            fx=result.fx, fy=result.fy,
+            cx=result.cx, cy=result.cy,
+            width=result.width, height=result.height,
         )
         self.get_logger().info(
             f"Camera intrinsics received: fx={self._intrinsics.fx:.1f}, "
@@ -593,13 +635,23 @@ class SemanticPerceptionNode(Node):
         tf_camera_to_world = self._lookup_tf_camera_to_world(color_msg.header.stamp)
         if tf_camera_to_world is None:
             self._tf_fail_count += 1
-            if self._tf_fail_count % 50 == 0:
-                fail_rate = self._tf_fail_count / max(self._tf_total_count, 1) * 100
-                self.get_logger().warn(
-                    "TF fail rate: %d/%d (%.1f%%) — 3D projection degraded",
-                    self._tf_fail_count, self._tf_total_count, fail_rate,
-                )
-            return
+            if self._tf_fallback_enable:
+                # 降级模式: 使用默认静态变换, 检测仍然运行
+                tf_camera_to_world = self._tf_fallback_matrix
+                if not self._tf_fallback_warned:
+                    self.get_logger().warn(
+                        "TF unavailable — using static fallback transform. "
+                        "3D positions approximate until SLAM/TF online."
+                    )
+                    self._tf_fallback_warned = True
+            else:
+                if self._tf_fail_count % 50 == 0:
+                    fail_rate = self._tf_fail_count / max(self._tf_total_count, 1) * 100
+                    self.get_logger().warn(
+                        f"TF fail rate: {self._tf_fail_count}/{self._tf_total_count} "
+                        f"({fail_rate:.1f}%) — 3D projection degraded"
+                    )
+                return
 
         try:
             self._process_frame(color_msg, depth_msg, tf_camera_to_world)
@@ -626,8 +678,22 @@ class SemanticPerceptionNode(Node):
         Pipeline: YOLO-E mask → Mobile-CLIP text → mask+depth→点云 → 双指标融合
         """
         # 1. 转换为 numpy
-        bgr = self._bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
-        depth = self._bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+        try:
+            bgr = self._bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
+            depth = self._bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+        except Exception as e:
+            self.get_logger().error(f"Image conversion failed: {e}")
+            return
+
+        bgr = validate_bgr(bgr, caller="perception")
+        if bgr is None:
+            return
+        depth = validate_depth(depth, caller="perception")
+        if depth is None:
+            return
+        depth = validate_depth_pair(bgr, depth, caller="perception")
+        if depth is None:
+            return
 
         # 2. Laplacian 模糊检测
         if is_blurry(bgr, threshold=self._laplacian_threshold):
@@ -785,13 +851,13 @@ class SemanticPerceptionNode(Node):
                         "Scene diff: %s", diff["summary"],
                     )
             except Exception as e:
-                self.get_logger().debug("Scene diff failed: %s", e)
+                self.get_logger().debug(f"Scene diff failed: {e}")
 
         # 缓存快照用于下次 diff
         try:
             self._prev_scene_snapshot = json.loads(sg_json)
-        except Exception:
-            pass
+        except Exception as e:
+            self.get_logger().debug(f"Scene snapshot cache failed: {e}")
 
         msg.data = sg_json
         self._pub_scene_graph.publish(msg)

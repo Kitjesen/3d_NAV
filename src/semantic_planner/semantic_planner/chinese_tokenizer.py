@@ -10,7 +10,7 @@
 """
 
 import logging
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,25 @@ _BILINGUAL_CONCEPTS: List[Tuple[List[str], List[str]]] = [
     (["路灯", "灯柱"], ["street light", "lamp post"]),
     (["井盖"], ["manhole cover"]),
     (["公园长椅", "户外长椅"], ["park bench"]),
+    # ── 交通工具 (COCO 常见类) ──
+    (["汽车", "轿车", "小车"], ["car", "vehicle", "automobile"]),
+    (["卡车", "货车", "大卡"], ["truck", "lorry"]),
+    (["公交车", "巴士", "大巴"], ["bus"]),
+    (["摩托车", "摩托", "电动车"], ["motorcycle", "motorbike", "scooter"]),
+    (["自行车", "单车", "脚踏车"], ["bicycle", "bike"]),
+    (["飞机", "飞行器"], ["airplane", "aircraft"]),
+    (["船", "小船"], ["boat", "ship"]),
+    # ── 动物 (COCO 常见类) ──
+    (["猫", "小猫", "猫咪"], ["cat"]),
+    (["狗", "小狗", "犬"], ["dog"]),
+    (["鸟", "小鸟"], ["bird"]),
+    # ── 食物/餐具 (COCO 常见类) ──
+    (["碗", "饭碗"], ["bowl"]),
+    (["盘子", "碟子", "餐盘"], ["plate", "dish"]),
+    (["刀", "餐刀", "小刀"], ["knife"]),
+    (["勺子", "汤匙"], ["spoon"]),
+    (["叉子", "餐叉"], ["fork"]),
+    (["餐桌", "饭桌"], ["dining table"]),
     # ── 人 ──
     (["人", "行人", "员工", "访客"], ["person", "people", "pedestrian"]),
     # ── 房间 / 区域 (场景图 room label) ──
@@ -413,6 +432,8 @@ class ChineseTokenizer:
         Returns:
             名词短语列表
         """
+        if not text:
+            return []
         if not self.use_jieba or not self._jieba:
             return self.extract_keywords(text)
 
@@ -439,7 +460,7 @@ class ChineseTokenizer:
 
 
 # 全局单例
-_global_tokenizer: ChineseTokenizer = None
+_global_tokenizer: Optional[ChineseTokenizer] = None
 
 
 def get_tokenizer(use_jieba: bool = True, custom_dict_path: str = None) -> ChineseTokenizer:

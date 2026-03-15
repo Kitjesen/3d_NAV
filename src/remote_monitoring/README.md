@@ -2,9 +2,9 @@
 
 机器人远程监控与控制系统 | ROS 2 + gRPC
 
-**版本**: 1.2.2  
-**日期**: 2026-02-12  
-**状态**: Phase 2 完成（航点管理 + Flutter 集成 + 重连恢复 + 质量收口）
+**版本**: 1.8.0
+**日期**: 2026-03-12
+**状态**: Phase 2 完成（航点管理 + Flutter 集成 + 重连恢复 + 质量收口 + LeaseManager gtest 全通过）
 
 ---
 
@@ -587,13 +587,14 @@ teleopStream.sink.add(TeleopCommand()
 - [x] Safety Gate：deadman + 限幅 + 倾斜保护
 - [x] 构建系统、Launch 文件、配置文件
 
-### Phase 2 - 控制与任务产品化 ⏳ 待完成
+### Phase 2 - 控制与任务产品化 ✅ 核心完成
 
 - [x] SetMode / StartTask / CancelTask 接入实际 ROS 2 (通过 ModeManager + TaskManager)
 - [x] GetActiveWaypoints / ClearWaypoints 航点管理 RPC
 - [x] TaskManager 成为唯一 /way_point 发布者 (map→odom tf2 变换)
 - [x] 安全联动: E-stop / 模式切换自动挂起/恢复任务
 - [x] 操作守卫: StartTask 需 Lease + AUTONOMOUS 模式
+- [x] LeaseManager 单元测试 (10 gtest 全通过: Acquire/Release/Renew/Validate/ForceRelease/Timeout)
 - [ ] Lease 续约/抢占规则完善（多客户端）
 - [ ] 事件系统与 `/diagnostics` 集成
 - [ ] 弱网断连恢复流程（含 teleop 失联停车验证）

@@ -22,11 +22,14 @@
 import math
 import time
 import logging
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+from semantic_common import safe_json_loads
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,13 @@ class ActionExecutor:
 
         self._status = ActionStatus.IDLE
         self._start_time = 0.0
+        self._lock = threading.Lock()  # 保护 _status/_start_time 的跨线程访问
+
+    def _set_executing(self) -> None:
+        """线程安全地设置执行状态。"""
+        with self._lock:
+            self._status = ActionStatus.EXECUTING
+            self._start_time = time.time()
 
     @property
     def status(self) -> ActionStatus:
@@ -122,8 +132,7 @@ class ActionExecutor:
             dy = target_position["y"] - robot_position["y"]
             yaw = math.atan2(dy, dx)
 
-        self._status = ActionStatus.EXECUTING
-        self._start_time = time.time()
+        self._set_executing()
 
         return ActionCommand(
             command_type="goal",
@@ -167,8 +176,7 @@ class ActionExecutor:
             goal_x = robot_position["x"]
             goal_y = robot_position["y"]
 
-        self._status = ActionStatus.EXECUTING
-        self._start_time = time.time()
+        self._set_executing()
 
         return ActionCommand(
             command_type="goal",
@@ -190,8 +198,7 @@ class ActionExecutor:
         Returns:
             ActionCommand (velocity 类型, angular_z)
         """
-        self._status = ActionStatus.EXECUTING
-        self._start_time = time.time()
+        self._set_executing()
 
         return ActionCommand(
             command_type="velocity",
@@ -219,8 +226,7 @@ class ActionExecutor:
         dy = target_position["y"] - robot_position["y"]
         yaw = math.atan2(dy, dx)
 
-        self._status = ActionStatus.EXECUTING
-        self._start_time = time.time()
+        self._set_executing()
 
         return ActionCommand(
             command_type="goal",
@@ -239,8 +245,7 @@ class ActionExecutor:
 
         LOVON: 当目标丢失时, 回到上次看到目标的位置重新搜索。
         """
-        self._status = ActionStatus.EXECUTING
-        self._start_time = time.time()
+        self._set_executing()
 
         return ActionCommand(
             command_type="goal",
@@ -251,20 +256,28 @@ class ActionExecutor:
         )
 
     def check_timeout(self) -> bool:
-        """检查当前动作是否超时。"""
-        if self._status != ActionStatus.EXECUTING:
-            return False
-        return (time.time() - self._start_time) > self.nav_timeout
+        """检查当前动作是否超时。
+
+        NOTE: Called by planner_node._monitor_callback() for per-goal timeout detection.
+        线程安全: _lock 保护 _status/_start_time 的原子读取。
+        """
+        with self._lock:
+            if self._status != ActionStatus.EXECUTING:
+                return False
+            return (time.time() - self._start_time) > self.nav_timeout
 
     def mark_succeeded(self) -> None:
-        self._status = ActionStatus.SUCCEEDED
+        with self._lock:
+            self._status = ActionStatus.SUCCEEDED
 
     def mark_failed(self) -> None:
-        self._status = ActionStatus.FAILED
+        with self._lock:
+            self._status = ActionStatus.FAILED
 
     def reset(self) -> None:
-        self._status = ActionStatus.IDLE
-        self._start_time = 0.0
+        with self._lock:
+            self._status = ActionStatus.IDLE
+            self._start_time = 0.0
 
     # ── LERa 三步失败恢复: Look → Explain → Replan ──
 
@@ -275,6 +288,7 @@ class ActionExecutor:
         original_goal: str,
         failure_count: int = 1,
         llm_client: Optional[Any] = None,
+        event_loop: Optional[Any] = None,
     ) -> str:
         """
         LERa 三步失败恢复：Look → Explain → Replan。
@@ -289,6 +303,7 @@ class ActionExecutor:
             original_goal: 原始导航目标
             failure_count: 已连续失败次数
             llm_client: 可选的 LLM 客户端（需有 chat() 方法）
+            event_loop: 已有的 asyncio 事件循环（避免阻塞 ROS2 回调线程）
 
         Returns:
             恢复策略: "retry_different_path" | "expand_search" |
@@ -320,20 +335,42 @@ class ActionExecutor:
 
         if llm_client is not None:
             try:
-                import json
+                import asyncio
                 import re
 
-                response = llm_client.chat(prompt, max_tokens=200)
-                match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
-                if match:
-                    data = json.loads(match.group())
-                    action = data.get('action', '')
-                    if action in valid_actions:
-                        logger.info(
-                            "[LERa] LLM recovery: reason=%s action=%s",
-                            data.get('reason', '?'), action,
+                messages = [{"role": "user", "content": prompt}]
+
+                # P0-1 fix: 使用调用方提供的事件循环，避免在 ROS2 回调线程上
+                # 创建阻塞的 event loop（会冻结导航 LLM 超时秒数）
+                loop = event_loop
+                if loop is not None and loop.is_running():
+                    future = asyncio.run_coroutine_threadsafe(
+                        llm_client.chat(messages, temperature=0.3), loop
+                    )
+                    response = future.result(timeout=15.0)
+                else:
+                    # 无可用 loop 时的降级：创建临时 loop（仅用于无 ROS2 上下文场景）
+                    tmp_loop = asyncio.new_event_loop()
+                    try:
+                        response = tmp_loop.run_until_complete(
+                            llm_client.chat(messages, temperature=0.3)
                         )
-                        return action
+                    finally:
+                        tmp_loop.close()
+
+                if not response:
+                    logger.warning("[LERa] LLM returned empty response")
+                else:
+                    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+                    if match:
+                        data = safe_json_loads(match.group(), default={})
+                        action = data.get('action', '')
+                        if action in valid_actions:
+                            logger.info(
+                                "[LERa] LLM recovery: reason=%s action=%s",
+                                data.get('reason', '?'), action,
+                            )
+                            return action
             except Exception as e:
                 logger.warning("[LERa] LLM call failed, using fallback: %s", e)
 

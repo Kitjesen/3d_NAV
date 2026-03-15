@@ -27,6 +27,8 @@ import logging
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
+from semantic_common.robustness import _try_empty_cuda_cache
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +46,7 @@ class CLIPEncoder:
     def __init__(
         self,
         model_name: str = "ViT-B/32",
-        device: str = "cuda",
+        device: str = "auto",
         enable_cache: bool = True,
         cache_size: int = 1000,
         batch_size: int = 32,
@@ -55,13 +57,19 @@ class CLIPEncoder:
 
         Args:
             model_name: CLIP模型名称
-            device: 设备（cuda/cpu）
+            device: 设备（"auto"/"cuda"/"cpu"）
             enable_cache: 是否启用特征缓存
             cache_size: 缓存大小
             batch_size: 批处理大小
             multi_scale: 是否使用多尺度特征
         """
         self._model_name = model_name
+        if device == "auto":
+            try:
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            except ImportError:
+                device = "cpu"
         self._device = device
         self._enable_cache = enable_cache
         self._cache_size = cache_size
@@ -130,6 +138,28 @@ class CLIPEncoder:
                 "open-clip-torch not installed. Run: pip install open-clip-torch"
             )
             raise
+        except RuntimeError as e:
+            logger.error(f"CLIP model load failed (GPU/runtime error): {e}")
+            logger.warning("Falling back to CPU...")
+            try:
+                self._device = "cpu"
+                self._model, _, self._preprocess = open_clip.create_model_and_transforms(
+                    clip_model_name,
+                    pretrained="openai",
+                    device="cpu",
+                )
+                self._tokenizer = open_clip.get_tokenizer(clip_model_name)
+                self._model.eval()
+                with torch.no_grad():
+                    dummy = torch.randn(1, 3, 224, 224)
+                    feat = self._model.encode_image(dummy)
+                    self._feature_dim = feat.shape[-1]
+                logger.info(
+                    "CLIP loaded on CPU fallback: feature_dim=%d", self._feature_dim
+                )
+            except Exception as e2:
+                logger.error(f"CLIP CPU fallback also failed: {e2}")
+                raise
 
     def _compute_image_hash(self, rgb: np.ndarray, bbox: np.ndarray) -> str:
         """
@@ -188,6 +218,10 @@ class CLIPEncoder:
         if self._model is None or len(bboxes) == 0:
             return [np.array([]) for _ in bboxes]
 
+        if rgb.ndim != 3 or rgb.shape[2] != 3:
+            logger.warning(f"encode_image_crops: invalid image shape {rgb.shape}, expected (H,W,3)")
+            return [np.array([]) for _ in bboxes]
+
         import time
         import torch
         from PIL import Image
@@ -227,9 +261,14 @@ class CLIPEncoder:
                 cache_keys.append(None)
 
             self._cache_misses += 1
-            need_encode_indices.append(i)
 
             crop = rgb_image[y1:y2, x1:x2]
+            if crop.dtype.kind == 'f' and not np.isfinite(crop).all():
+                logger.debug(f"Crop {i} contains NaN/inf, skipping")
+                results[i] = np.array([])
+                continue
+
+            need_encode_indices.append(i)
             pil_crop = Image.fromarray(crop)
 
             # 多尺度特征（可选）
@@ -248,25 +287,34 @@ class CLIPEncoder:
 
         # 批处理编码
         if need_encode_indices:
-            if self._multi_scale:
-                # 多尺度特征编码
-                all_features = []
-                for scale_idx in range(len(scales)):
-                    batch = torch.stack([crops[i][scale_idx] for i in range(len(crops))]).to(self._device)
+            try:
+                if self._multi_scale:
+                    # 多尺度特征编码
+                    all_features = []
+                    for scale_idx in range(len(scales)):
+                        batch = torch.stack([crops[i][scale_idx] for i in range(len(crops))]).to(self._device)
+                        with torch.no_grad():
+                            features = self._model.encode_image(batch)
+                            features = features / (features.norm(dim=-1, keepdim=True) + 1e-8)
+                            all_features.append(features.cpu().numpy())
+
+                    # 平均多尺度特征
+                    features = np.mean(all_features, axis=0)
+                else:
+                    # 单尺度批处理
+                    batch = torch.stack(crops).to(self._device)
                     with torch.no_grad():
                         features = self._model.encode_image(batch)
-                        features = features / features.norm(dim=-1, keepdim=True)
-                        all_features.append(features.cpu().numpy())
-
-                # 平均多尺度特征
-                features = np.mean(all_features, axis=0)
-            else:
-                # 单尺度批处理
-                batch = torch.stack(crops).to(self._device)
-                with torch.no_grad():
-                    features = self._model.encode_image(batch)
-                    features = features / features.norm(dim=-1, keepdim=True)
-                    features = features.cpu().numpy()
+                        features = features / (features.norm(dim=-1, keepdim=True) + 1e-8)
+                        features = features.cpu().numpy()
+            except RuntimeError as e:
+                logger.error(f"CLIP batch encoding failed (possible OOM): {e}")
+                try:
+                    del batch  # Free GPU tensor before cache cleanup
+                except Exception:
+                    pass
+                _try_empty_cuda_cache()
+                return [np.array([]) for _ in bboxes]
 
             # 填充结果和更新缓存
             for idx, need_idx in enumerate(need_encode_indices):
@@ -313,6 +361,9 @@ class CLIPEncoder:
 
         import torch
 
+        # Truncate early, before cache lookup, to ensure cache key consistency
+        texts = [t[:200] for t in texts]
+
         # 检查缓存
         results = []
         need_encode_texts = []
@@ -333,12 +384,17 @@ class CLIPEncoder:
 
         # 批处理编码
         if need_encode_texts:
-            tokens = self._tokenizer(need_encode_texts).to(self._device)
+            try:
+                tokens = self._tokenizer(need_encode_texts).to(self._device)
 
-            with torch.no_grad():
-                features = self._model.encode_text(tokens)
-                features = features / features.norm(dim=-1, keepdim=True)
-                features = features.cpu().numpy()
+                with torch.no_grad():
+                    features = self._model.encode_text(tokens)
+                    features = features / (features.norm(dim=-1, keepdim=True) + 1e-8)
+                    features = features.cpu().numpy()
+            except RuntimeError as e:
+                logger.error("CLIP text encoding failed (possible OOM): %s", e)
+                _try_empty_cuda_cache()
+                return np.array([])
 
             # 填充结果和更新缓存
             for idx, need_idx in enumerate(need_encode_indices):
@@ -379,6 +435,9 @@ class CLIPEncoder:
                 similarities.append(0.0)
             else:
                 sim = float(np.dot(text_feat[0], img_feat))
+                # Guard NaN from malformed features
+                if not np.isfinite(sim):
+                    sim = 0.0
                 similarities.append(max(0.0, sim))  # CLIP 相似度可能为负
 
         return similarities
@@ -457,8 +516,16 @@ class CLIPEncoder:
             tensor = self._preprocess(pil_img).unsqueeze(0).to(self._device)
             with torch.no_grad():
                 feat = self._model.encode_image(tensor)
-                feat = feat / feat.norm(dim=-1, keepdim=True)
+                feat = feat / (feat.norm(dim=-1, keepdim=True) + 1e-8)
                 return feat.cpu().numpy()[0]
+        except RuntimeError as e:
+            err_msg = str(e).lower()
+            if "cuda" in err_msg or "out of memory" in err_msg:
+                logger.error("_encode_single_image CUDA OOM: %s", e)
+                _try_empty_cuda_cache()
+            else:
+                logger.debug("_encode_single_image failed: %s", e)
+            return np.array([])
         except Exception as e:
             logger.debug("_encode_single_image failed: %s", e)
             return np.array([])
@@ -515,7 +582,9 @@ class CLIPEncoder:
             fused = fused / weights_sum
 
         norm = np.linalg.norm(fused)
-        return fused / norm if norm > 0 else fused
+        if not np.isfinite(norm) or norm < 1e-8:
+            return np.array([])
+        return fused / norm
 
     def get_statistics(self) -> Dict[str, float]:
         """
@@ -550,12 +619,5 @@ class CLIPEncoder:
         """释放 GPU 资源"""
         self._model = None
         self.clear_cache()
-
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
-
+        _try_empty_cuda_cache()
         logger.info("CLIP encoder shut down")

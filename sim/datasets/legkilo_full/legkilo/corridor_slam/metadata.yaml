@@ -1,0 +1,50 @@
+rosbag2_bagfile_information:
+  compression_format: ''
+  compression_mode: ''
+  custom_data: null
+  duration:
+    nanoseconds: 445920357824
+  files:
+  - duration:
+      nanoseconds: 445920357824
+    message_count: 670538
+    path: corridor_slam.db3
+    starting_time:
+      nanoseconds_since_epoch: 1694523958647683464
+  message_count: 670538
+  relative_file_paths:
+  - corridor_slam.db3
+  ros_distro: rosbags
+  starting_time:
+    nanoseconds_since_epoch: 1694523958647683464
+  storage_identifier: sqlite3
+  topics_with_message_count:
+  - message_count: 222039
+    topic_metadata:
+      name: /high_state
+      offered_qos_profiles: []
+      serialization_format: cdr
+      type: unitree_legged_msgs/msg/HighState
+      type_description_hash: RIHS01_860f59b66e4283766912ec13be3890f8b52f6d41b4f25af85083a39c87f12ee7
+  - message_count: 222039
+    topic_metadata:
+      name: /state_SDK
+      offered_qos_profiles: []
+      serialization_format: cdr
+      type: nav_msgs/msg/Odometry
+      type_description_hash: RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0
+  - message_count: 222039
+    topic_metadata:
+      name: /imu_raw
+      offered_qos_profiles: []
+      serialization_format: cdr
+      type: sensor_msgs/msg/Imu
+      type_description_hash: RIHS01_7d9a00ff131080897a5ec7e26e315954b8eae3353c3f995c55faf71574000b5b
+  - message_count: 4421
+    topic_metadata:
+      name: /points_raw
+      offered_qos_profiles: []
+      serialization_format: cdr
+      type: sensor_msgs/msg/PointCloud2
+      type_description_hash: RIHS01_9198cabf7da3796ae6fe19c4cb3bdd3525492988c70522628af5daa124bae2b5
+  version: 9

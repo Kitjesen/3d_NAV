@@ -1,8 +1,8 @@
 # Semantic Perception API
 
-**版本**: 1.0.0
+**版本**: 1.8.0
 **状态**: ✅ 生产就绪
-**完成日期**: 2026-02-17
+**完成日期**: 2026-02-17 | **最后更新**: 2026-03-12
 
 ---
 
@@ -177,18 +177,25 @@ tracker.reset()
 ```
 RGB + Depth 图像
     ↓
-1. 2D检测 (DetectorAPI)
+1. 2D检测 (YOLO-World, DetectorAPI)
     ↓
-2. CLIP编码 (EncoderAPI)
+2. CLIP编码 (HOV-SG三源融合: f_g+f_l+f_m, EncoderAPI)
     ↓
 3. 3D投影 (内部实现)
     ↓
-4. 实例追踪 (TrackerAPI)
+4. 实例追踪 (DBSCAN特征精炼, TrackerAPI)
     ↓
-5. 场景图构建 (内部实现)
+5. 场景图构建 (RoomNode视角嵌入K=10, 4层结构)
     ↓
-Detection3D列表 + SceneGraph
+Detection3D列表 + SceneGraph + TopologyGraph
 ```
+
+### HOV-SG 感知升级 (NaviMind 论文)
+
+- **三源 CLIP 融合** (`encode_three_source`): f_g 全局 + f_l 裁剪 + f_m 掩码裁剪, 权重 0.25/0.50/0.25
+- **DBSCAN 特征精炼**: 每 5 次检测对 TrackedObject 历史做聚类
+- **RoomNode 视角嵌入**: K=10 FIFO, `query_similarity()` 支持房间级语义检索
+- **4 层场景图**: Object → ViewNode → RoomNode → BuildingNode
 
 ---
 
@@ -424,6 +431,6 @@ MIT License
 
 ---
 
-**版本**: 1.0.0
-**最后更新**: 2026-02-17
+**版本**: 1.8.0
+**最后更新**: 2026-03-12
 **状态**: ✅ 生产就绪

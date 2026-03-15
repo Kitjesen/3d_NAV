@@ -94,9 +94,8 @@ class PerceptionFactory:
             from ..impl.yolo_world_detector import YOLOWorldDetector
             return YOLOWorldDetector(config)
         elif detector_type == "grounding_dino":
-            # TODO: 实现GroundingDINO检测器
             raise ConfigurationError(
-                "GroundingDINO detector not implemented yet. "
+                "GroundingDINO not supported on BPU hardware. "
                 "Use 'yolo_world' instead."
             )
         else:
@@ -135,9 +134,8 @@ class PerceptionFactory:
             from ..impl.clip_encoder import CLIPEncoder
             return CLIPEncoder(config)
         elif encoder_type == "blip":
-            # TODO: 实现BLIP编码器
             raise ConfigurationError(
-                "BLIP encoder not implemented yet. "
+                "BLIP not supported on BPU hardware. "
                 "Use 'clip' instead."
             )
         else:
@@ -212,7 +210,7 @@ class PerceptionFactory:
         Returns:
             检测器类型列表
         """
-        return ["yolo_world"]  # "grounding_dino" 待实现
+        return ["yolo_world"]
 
     @staticmethod
     def get_available_encoders() -> list:
@@ -222,7 +220,7 @@ class PerceptionFactory:
         Returns:
             编码器类型列表
         """
-        return ["clip"]  # "blip" 待实现
+        return ["clip"]
 
     @staticmethod
     def get_available_trackers() -> list:

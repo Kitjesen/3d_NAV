@@ -16,14 +16,14 @@ Logic:
 """
 
 import json
+import math
+import time
 
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Path, Odometry
 from geometry_msgs.msg import PointStamped, Point
 from std_msgs.msg import String
-import time
-import math
 import numpy as np
 # Monkey patch for transforms3d compatibility with newer numpy
 if not hasattr(np, 'float'):
@@ -33,6 +33,8 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from numpy import dot
+
+from semantic_common.sanitize import safe_json_dumps
 
 class PCTPathAdapter(Node):
     def __init__(self):
@@ -99,7 +101,11 @@ class PCTPathAdapter(Node):
     
     def odom_callback(self, msg):
         """Update robot current position"""
-        self.robot_pos = msg.pose.pose.position
+        p = msg.pose.pose.position
+        # 跳过 NaN/Inf 里程计，防止毒化航点距离计算
+        if not (math.isfinite(p.x) and math.isfinite(p.y)):
+            return
+        self.robot_pos = p
         # Store frame_id of Odometry to know what frame the local planner expects
         self.odom_frame = msg.header.frame_id
         
@@ -177,6 +183,11 @@ class PCTPathAdapter(Node):
             p_map = [point_in_map.x, point_in_map.y, point_in_map.z, 1.0]
             p_odom = dot(mat, p_map)
             
+            # NaN 防御：TF 矩阵乘法可能产生非有限值
+            if not (math.isfinite(p_odom[0]) and math.isfinite(p_odom[1])):
+                self.get_logger().warn(
+                    'Transform produced NaN/Inf result', throttle_duration_sec=5.0)
+                return None
             new_point = Point()
             new_point.x = p_odom[0]
             new_point.y = p_odom[1]
@@ -194,7 +205,15 @@ class PCTPathAdapter(Node):
         """
         if not self.path_received or not self.current_path or self.robot_pos is None or self.odom_frame is None:
             return
-            
+
+        try:
+            self._control_loop_inner()
+        except Exception as e:
+            self.get_logger().error(
+                f'control_loop error: {e}', throttle_duration_sec=5.0)
+
+    def _control_loop_inner(self):
+        """control_loop 的实际逻辑，异常由外层统一捕获。"""
         # Get current target in MAP frame
         target_pose_map = self.current_path[self.current_waypoint_idx].pose.position
         
@@ -234,8 +253,8 @@ class PCTPathAdapter(Node):
         self.waypoint_pub.publish(waypoint_msg)
 
     def _publish_status(self, event: str, index: int, total: int) -> None:
-        """发布规划器状态事件到 /nav/planner_status"""
-        payload = json.dumps({'event': event, 'index': index, 'total': total})
+        """发布规划器状态事件到 /nav/adapter_status"""
+        payload = safe_json_dumps({'event': event, 'index': index, 'total': total})
         msg = String()
         msg.data = payload
         self.status_pub.publish(msg)

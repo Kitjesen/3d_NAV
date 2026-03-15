@@ -4,10 +4,12 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   flutter_blue_plus_winrt
+  flutter_tts
   flutter_webrtc
   permission_handler_windows
   screen_retriever_windows
   share_plus
+  speech_to_text_windows
   url_launcher_windows
   webview_windows
   window_manager

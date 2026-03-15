@@ -16,10 +16,10 @@ TEST_F(LeaseManagerTest, AcquireAndRelease) {
   robot::v1::OperatorLease lease;
   bool ok = mgr_.AcquireLease("client-1", &lease);
   EXPECT_TRUE(ok);
-  EXPECT_FALSE(lease.token().empty());
+  EXPECT_FALSE(lease.lease_token().empty());
   EXPECT_TRUE(mgr_.HasActiveLease());
 
-  bool released = mgr_.ReleaseLease(lease.token());
+  bool released = mgr_.ReleaseLease(lease.lease_token());
   EXPECT_TRUE(released);
   EXPECT_FALSE(mgr_.HasActiveLease());
 }
@@ -40,7 +40,7 @@ TEST_F(LeaseManagerTest, SameClientCanReacquire) {
 TEST_F(LeaseManagerTest, ValidateHoldsToken) {
   robot::v1::OperatorLease lease;
   mgr_.AcquireLease("client-1", &lease);
-  EXPECT_TRUE(mgr_.ValidateLease(lease.token()));
+  EXPECT_TRUE(mgr_.ValidateLease(lease.lease_token()));
   EXPECT_FALSE(mgr_.ValidateLease("wrong-token"));
 }
 
@@ -57,7 +57,7 @@ TEST_F(LeaseManagerTest, RenewExtendsTTL) {
   mgr_.AcquireLease("client-1", &lease);
 
   robot::v1::OperatorLease renewed;
-  EXPECT_TRUE(mgr_.RenewLease(lease.token(), &renewed));
+  EXPECT_TRUE(mgr_.RenewLease(lease.lease_token(), &renewed));
   EXPECT_TRUE(mgr_.HasActiveLease());
 }
 
