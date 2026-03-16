@@ -24,8 +24,9 @@
 
 import asyncio
 import logging
-import time
 import math
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -489,8 +490,10 @@ class TrackedObject:
         x1, y1, x2, y2 = det.bbox_2d
         bbox_w = max(float(x2 - x1), 1.0)
         bbox_h = max(float(y2 - y1), 1.0)
-        # 粗略估算: 假设 fx ~ 600 (典型 RGB-D 相机)
-        fx_approx = 600.0
+        # 使用真实 fx (由 update() 传入), 否则 fallback 到 600
+        fx_approx = getattr(det, '_intrinsics_fx', 0.0)
+        if fx_approx <= 0:
+            fx_approx = 600.0
         extent_x = (bbox_w / fx_approx) * det.depth * 0.5
         extent_y = extent_x  # 对称近似
         extent_z = (bbox_h / fx_approx) * det.depth * 0.5
@@ -604,6 +607,10 @@ class InstanceTracker:
     GEO_POINT_DIST_TAU = 0.05    # 点云匹配距离阈值 τ (m), USS-Nav Eq.1
     CANDIDATE_RADIUS = 2.0       # ikd-tree 候选查询半径 (m)
 
+    # FOV 检查参数 (OneMap 理念: 只对视野内物体记录负面证据)
+    FOV_HALF_ANGLE = 0.52         # 相机水平半视角 (rad, ~60° FOV → 30°)
+    FOV_MAX_RANGE = 5.0           # 最大检测距离 (m)
+
     def __init__(
         self,
         merge_distance: float = 0.5,
@@ -621,6 +628,7 @@ class InstanceTracker:
         self.stale_timeout = stale_timeout
         self.max_views = max_views
 
+        self._lock = threading.Lock()  # 线程安全: 保护 _objects 并发访问
         self._objects: Dict[int, TrackedObject] = {}
         self._next_id = 0
 
@@ -656,7 +664,8 @@ class InstanceTracker:
 
     @property
     def objects(self) -> Dict[int, TrackedObject]:
-        return self._objects
+        with self._lock:
+            return dict(self._objects)  # 返回快照，防止外部迭代时并发修改
 
     @property
     def views(self) -> Dict[int, ViewNode]:
@@ -671,61 +680,95 @@ class InstanceTracker:
         """
         self._room_llm_namer = namer
 
-    def update(self, detections: List[Detection3D]) -> List[TrackedObject]:
+    def _is_in_fov(
+        self,
+        obj_pos: np.ndarray,
+        camera_pos: np.ndarray,
+        camera_forward: np.ndarray,
+    ) -> bool:
+        """检查物体是否在相机视锥体内 (OneMap 理念: 只对可见物体记录负面证据)。"""
+        diff = obj_pos[:3] - camera_pos[:3]
+        dist = np.linalg.norm(diff)
+        if dist < 0.1 or dist > self.FOV_MAX_RANGE:
+            return False
+        cos_angle = np.dot(diff, camera_forward[:3]) / (dist * max(np.linalg.norm(camera_forward[:3]), 1e-7))
+        return cos_angle > math.cos(self.FOV_HALF_ANGLE)
+
+    def update(
+        self,
+        detections: List[Detection3D],
+        camera_pos: Optional[np.ndarray] = None,
+        camera_forward: Optional[np.ndarray] = None,
+        intrinsics_fx: float = 0.0,
+    ) -> List[TrackedObject]:
         """
         用本帧检测结果更新全局物体表。
 
         Args:
             detections: 本帧 3D 检测列表
+            camera_pos: 相机世界坐标 [x,y,z] (用于 FOV 检查)
+            camera_forward: 相机朝向单位向量 [fx,fy,fz] (用于 FOV 检查)
+            intrinsics_fx: 相机焦距 fx (用于 3D 包围盒估算, 0=使用默认 600)
 
         Returns:
             本帧匹配/新建的 TrackedObject 列表
         """
-        matched: List[TrackedObject] = []
+        with self._lock:
+            matched: List[TrackedObject] = []
 
-        for det in detections:
-            best_obj = self._find_match(det)
-            if best_obj is not None:
-                best_obj.update(det)
-                matched.append(best_obj)
-            else:
-                # USS-Nav: 新实例含点云
-                init_points = np.empty((0, 3))
-                if hasattr(det, 'points') and det.points is not None and len(det.points) > 0:
-                    init_points = det.points.copy()
-                obj = TrackedObject(
-                    object_id=self._next_id,
-                    label=det.label,
-                    position=det.position.copy(),
-                    best_score=det.score,
-                    last_seen=time.time(),
-                    features=det.features.copy() if det.features.size > 0 else np.array([]),
-                    points=init_points,
+            for det in detections:
+                # 传递真实 fx 给 _update_extent
+                if intrinsics_fx > 0:
+                    det._intrinsics_fx = intrinsics_fx
+                best_obj = self._find_match(det)
+                if best_obj is not None:
+                    best_obj.update(det)
+                    matched.append(best_obj)
+                else:
+                    # USS-Nav: 新实例含点云
+                    init_points = np.empty((0, 3))
+                    if hasattr(det, 'points') and det.points is not None and len(det.points) > 0:
+                        init_points = det.points.copy()
+                    obj = TrackedObject(
+                        object_id=self._next_id,
+                        label=det.label,
+                        position=det.position.copy(),
+                        best_score=det.score,
+                        last_seen=time.time(),
+                        features=det.features.copy() if det.features.size > 0 else np.array([]),
+                        points=init_points,
+                    )
+                    self._enrich_from_kg(obj)
+                    self._objects[self._next_id] = obj
+                    self._next_id += 1
+                    matched.append(obj)
+
+            # BA-HSG: 负面证据 — 仅对视锥体内的已知物体记录 miss (OneMap 理念)
+            detected_ids = {m.object_id for m in matched}
+            has_fov = camera_pos is not None and camera_forward is not None
+            for obj in self._objects.values():
+                if obj.object_id not in detected_ids and obj.detection_count >= 2:
+                    dt = time.time() - obj.last_seen
+                    if dt > 5.0:
+                        # FOV 检查: 只对确实在视野内但没检测到的物体记录 miss
+                        if has_fov:
+                            if self._is_in_fov(obj.position, camera_pos, camera_forward):
+                                obj.record_miss()
+                        else:
+                            # 无 FOV 信息时保持原行为 (兼容)
+                            obj.record_miss()
+
+            # 清理过期实例
+            self._prune_stale()
+
+            # 限制最大数量
+            if len(self._objects) > self.max_objects:
+                sorted_objs = sorted(
+                    self._objects.values(),
+                    key=lambda o: (o.credibility, o.detection_count),
+                    reverse=True,
                 )
-                self._enrich_from_kg(obj)
-                self._objects[self._next_id] = obj
-                self._next_id += 1
-                matched.append(obj)
-
-        # BA-HSG: 负面证据 — 在视域内的已知物体未被检测到 → miss
-        detected_ids = {m.object_id for m in matched}
-        for obj in self._objects.values():
-            if obj.object_id not in detected_ids and obj.detection_count >= 2:
-                dt = time.time() - obj.last_seen
-                if dt > 5.0:
-                    obj.record_miss()
-
-        # 清理过期实例
-        self._prune_stale()
-
-        # 限制最大数量
-        if len(self._objects) > self.max_objects:
-            sorted_objs = sorted(
-                self._objects.values(),
-                key=lambda o: (o.credibility, o.detection_count),
-                reverse=True,
-            )
-            self._objects = {o.object_id: o for o in sorted_objs[:self.max_objects]}
+                self._objects = {o.object_id: o for o in sorted_objs[:self.max_objects]}
 
         # BA-HSG: 图扩散传播 (节流: 最多 1Hz, 避免 O(n²) 每帧开销)
         now = time.time()

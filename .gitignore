@@ -143,3 +143,5 @@ tools/hbm_convert/model_output/*.bc
 tools/hbm_convert/model_output/.hb_compile_tmp/
 *.pcd
 *.gif
+**/target/
+**/.omc/

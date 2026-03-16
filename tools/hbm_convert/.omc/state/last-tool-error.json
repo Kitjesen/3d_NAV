@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"ssh sunrise@192.168.66.190 python3 << 'PYEOF'\\nimport sys, cv2, numpy as np, os\\n\\n# 添加包路径，让相对导入正常工作\\nsys.path.insert(0, \\\"/home/sunrise/lingtu/src/semantic_perception\\\")\\nos.chdir(\\\"/home...",
-  "error": "Exit code 1\n[UCP]: log level = 3\n[UCP]: UCP version = 3.7.3\n[VP]: log level = 3\n[DNN]: log level = 3\n[HPL]: log level = 3\n[UCPT]: log level = 6\n[BPU][[BPU_MONITOR]][281472897058496][INFO]BPULib verison(2, 1, 2)[0d3f195]!\n[DNN] HBTL_EXT_DNN log level:6\n[DNN]: 3.7.3_(4.2.11 HBRT)\n[BPU] Custom vocabulary loaded: 125 classes from /home/sunrise/models/yoloe-26s-seg_nav125_640_vocab.json\nTraceback (most recent call last):\n  File \"<stdin>\", line 10, in <module>\n  File \"/home/sunrise/lingtu/src/semantic...",
-  "timestamp": "2026-03-14T20:39:36.048Z",
-  "retry_count": 2
-}

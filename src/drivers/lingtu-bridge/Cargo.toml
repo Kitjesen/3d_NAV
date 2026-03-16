@@ -1,0 +1,24 @@
+[package]
+name = "lingtu-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance Rust bridge: ROS2 cmd_vel ↔ brainstem CMS gRPC"
+
+[dependencies]
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI args
+clap = { version = "4", features = ["derive"] }
+
+[build-dependencies]
+tonic-build = "0.12"

@@ -777,7 +777,16 @@ class SemanticPerceptionNode(Node):
             return
 
         # 5. USS-Nav 双指标融合实例追踪
-        tracked_objs = self._tracker.update(detections_3d)
+        # 传入相机位姿用于 FOV 检查 (OneMap 理念: 只对视野内物体记录负面证据)
+        cam_pos = tf_camera_to_world[:3, 3] if tf_camera_to_world is not None else None
+        cam_fwd = tf_camera_to_world[:3, 2] if tf_camera_to_world is not None else None
+        cam_fx = self._intrinsics.fx if self._intrinsics is not None else 0.0
+        tracked_objs = self._tracker.update(
+            detections_3d,
+            camera_pos=cam_pos,
+            camera_forward=cam_fwd,
+            intrinsics_fx=cam_fx,
+        )
 
         # 5.5 开放词汇: 未知物体 → KG 概念映射 (DovSG / LOVON)
         if self._knowledge_graph is not None:
