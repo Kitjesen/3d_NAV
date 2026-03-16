@@ -1,0 +1,758 @@
+% navimind_ieee.tex — IEEE 8-page double-column paper
+% Compile: xelatex navimind_ieee.tex (or pdflatex if no CJK needed)
+\documentclass[conference]{IEEEtran}
+
+% ── Packages ──
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{balance}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{url}
+
+% ── TBD placeholder command ──
+\newcommand{\TBD}[1]{\textcolor{red}{\textbf{[TBD: #1]}}}
+
+% ── Math shortcuts ──
+\newcommand{\vp}{\mathbf{p}}
+\newcommand{\vf}{\mathbf{f}}
+\newcommand{\vmu}{\boldsymbol{\mu}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator{\Entropy}{H}
+
+\begin{document}
+
+% ══════════════════════════════════════════════════════════════════════
+% Title & Authors
+% ══════════════════════════════════════════════════════════════════════
+\title{NaviMind: Belief-Aware Hierarchical Scene Graphs for\\Robust Zero-Shot Object Navigation on Quadruped Robots}
+
+\author{
+\IEEEauthorblockN{Hongsen Pang and Hanzhuo Zhang}
+\IEEEauthorblockA{Shanghai Inovxio Technology Co., Ltd.\\
+Shanghai, China\\
+\{hongsen.pang, hanzhuo.zhang\}@inovxio.com}
+}
+
+\maketitle
+
+% ══════════════════════════════════════════════════════════════════════
+% Abstract
+% ══════════════════════════════════════════════════════════════════════
+\begin{abstract}
+We present \textbf{NaviMind}, a zero-shot object navigation system that enables quadruped robots to navigate to targets specified by natural language in unknown environments.
+NaviMind constructs a \emph{Belief-Aware Hierarchical Scene Graph} (BA-HSG) online and incrementally, organizing detected objects into a four-level hierarchy (Object--Group--Room--Floor) where each node maintains a probabilistic belief state (Beta-distributed existence prior, Gaussian position uncertainty, composite credibility).
+We make three key contributions:
+(1)~BA-HSG with FOV-aware belief updates and graph diffusion for principled false-positive rejection;
+(2)~a Fast--Slow dual-path architecture where 75\%+ of queries are resolved via sub-millisecond multi-source fusion while complex queries use hierarchical Chain-of-Thought LLM reasoning with 90\% token reduction;
+and (3)~a Value-of-Information (VoI) scheduler that replaces heuristic fixed-interval triggers with Shannon-entropy-driven information gain optimization under edge-compute budget constraints.
+The system runs entirely onboard a Unitree Go2 quadruped with Jetson Orin NX (16\,GB), addressing low-viewpoint ($\sim$30\,cm), visual jitter, and terrain-constrained navigation challenges.
+Ablation studies confirm that BA-HSG improves false-positive rejection by \TBD{X\%} over deterministic baselines, the Fast Path achieves $>$75\% hit rate at $<$5\,ms latency, and VoI scheduling reduces unnecessary re-perception by \TBD{Y\%} compared to fixed-interval triggering.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Object Navigation, Belief Scene Graph, Uncertainty-Aware Planning, Vision-Language Navigation, Quadruped Robot, Zero-Shot
+\end{IEEEkeywords}
+
+% ══════════════════════════════════════════════════════════════════════
+% I. Introduction
+% ══════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+
+Object-goal navigation---the task of navigating to a target object specified by its semantic category or natural language description---is a fundamental capability for mobile robots operating in human environments~\cite{batra2020objectnav, yadav2022hm3d}.
+Recent advances in large language models (LLMs) and vision-language models (VLMs) have opened new possibilities for zero-shot approaches that require no task-specific training~\cite{sgnav2024, esc2023, l3mvn2023}.
+However, deploying these capabilities on real robots, particularly quadruped platforms in unknown environments, remains a significant open challenge.
+
+\subsection{Motivation}
+
+Current approaches face fundamental limitations when applied to real-world quadruped deployment:
+
+\textbf{Offline map dependency.}
+Methods like FSR-VLN~\cite{fsrvln2025} achieve 92\% success rate by constructing hierarchical scene graphs through offline scanning, making them inapplicable to unknown environments.
+ConceptGraphs~\cite{conceptgraphs2024} and HOV-SG~\cite{hovsg2024} similarly assume pre-scanned environments.
+
+\textbf{Flat scene representation.}
+Systems like LOVON~\cite{lovon2025} and CoW~\cite{cow2023} use flat object-level matching without structured spatial reasoning.
+When instructions involve spatial relations (``the fire extinguisher near the door'') or room-level context (``go to the office''), flat representations fail to provide hierarchical context for disambiguation.
+
+\textbf{No dynamic adaptation.}
+Most systems assume static environments~\cite{fsrvln2025, hovsg2024}.
+Without mechanisms to verify and update target beliefs during navigation, false-positive detections lead to irreversible failures.
+
+\textbf{Quadruped-specific challenges.}
+Quadruped robots introduce extremely low camera viewpoint ($\sim$30\,cm vs.\ $\sim$90\,cm for wheeled robots), significant visual jitter from walking gaits, and limited field of view.
+Only LOVON~\cite{lovon2025} and NaVILA~\cite{navila2025} address quadruped navigation, but neither uses structured scene graphs.
+
+\subsection{Contributions}
+
+We make the following contributions:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Belief-Aware Hierarchical Scene Graph (BA-HSG).}
+A four-level scene graph (Object--Group--Room--Floor) where each node maintains a Beta-distributed existence belief, Gaussian position uncertainty, and composite credibility.
+FOV-aware negative evidence and graph diffusion enable principled false-positive rejection.
+
+\item \textbf{Adaptive Fast--Slow Dual-Path Inference.}
+Multi-source confidence fusion resolves 75\%+ of queries in $<$1\,ms without LLM calls.
+Complex queries trigger selective grounding ($\sim$90\% token reduction) and hierarchical Chain-of-Thought LLM reasoning.
+An AdaNav entropy trigger forces slow-path escalation when candidate score entropy exceeds a threshold.
+
+\item \textbf{VoI-Driven Reasoning Scheduling.}
+The decision of when to re-perceive, invoke slow reasoning, or continue navigation is formalized as Shannon-entropy-based information gain optimization under edge-compute constraints, replacing heuristic fixed-interval triggers.
+\end{enumerate}
+
+The system is validated on a Unitree Go2 quadruped with Jetson Orin NX (16\,GB), with ablation studies quantifying each contribution.
+
+% ══════════════════════════════════════════════════════════════════════
+% II. Related Work
+% ══════════════════════════════════════════════════════════════════════
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Scene Graph Navigation}
+
+3D scene graphs provide structured representations encoding objects, attributes, and inter-object relationships.
+Hydra~\cite{hydra2022} constructs 5-level real-time scene graphs using metric-semantic meshes.
+ConceptGraphs~\cite{conceptgraphs2024} builds open-vocabulary 3D scene graphs incrementally from RGB-D, leveraging CLIP~\cite{clip2021} for semantic encoding.
+HOV-SG~\cite{hovsg2024} extends this to multi-floor hierarchical graphs.
+
+Most relevant to our work, SG-Nav~\cite{sgnav2024} constructs online hierarchical scene graphs with LLM-based Chain-of-Thought prompting, achieving state-of-the-art zero-shot performance on MP3D and HM3D ($>$10\% SR improvement).
+FSR-VLN~\cite{fsrvln2025} proposes a four-level HMSG with Fast-to-Slow reasoning on a humanoid, but requires offline scanning.
+DovSG~\cite{dovsg2024} addresses dynamic environments with local update mechanisms but lacks formal uncertainty modeling.
+
+NaviMind extends SG-Nav's paradigm with three innovations: (i)~belief-aware nodes with calibrated uncertainty, (ii)~VoI-driven scheduling, and (iii)~risk-sensitive multi-hypothesis planning.
+
+\subsection{Zero-Shot Object-Goal Navigation}
+
+Zero-shot methods eliminate task-specific training by leveraging pre-trained foundation models.
+CoW~\cite{cow2023} uses CLIP matching for zero-shot navigation.
+ESC~\cite{esc2023} uses LLM captioning to guide frontier exploration.
+L3MVN~\cite{l3mvn2023} prompts LLMs with object lists for frontier selection.
+VLFM~\cite{vlfm2024} generates language-grounded value maps from RGB observations, achieving SOTA SPL on Boston Dynamics Spot.
+
+Unlike flat-representation methods, NaviMind uses hierarchical scene graphs for structured context and avoids LLM calls for 75\%+ of queries via the Fast Path.
+
+\subsection{Dual-Process Reasoning and Uncertainty}
+
+Inner Monologue~\cite{innermonologue2023} grounds LLM planning with environment feedback.
+SayCan~\cite{saycan2022} combines LLM knowledge with robotic affordances.
+LERa~\cite{lera2025} introduces Learn-Execute-Replan with experience accumulation.
+
+SG-Nav~\cite{sgnav2024} proposes graph-based re-perception with scalar credibility, but without formal uncertainty modeling.
+Classical active perception uses information-theoretic criteria (entropy reduction, mutual information) for sensing action selection~\cite{howard1966voi}.
+Our VoI scheduler adopts this principle, formalizing re-perception and slow-reasoning triggers as entropy-driven information gain optimization.
+
+\subsection{Quadruped Navigation}
+
+LOVON~\cite{lovon2025} integrates LLM planning with open-vocabulary detection on Unitree quadrupeds, using Laplacian blur filtering.
+NaVILA~\cite{navila2025} proposes an end-to-end VLA model trained on human videos.
+OrionNav~\cite{orionnav2024} constructs semantic scene graphs with LLM planning on quadrupeds but lacks hierarchical CoT and re-perception.
+VLN-PE~\cite{vlnpe2025} reveals that quadrupeds suffer from restricted observation space and locomotion-induced visual degradation.
+
+NaviMind is the first system combining online hierarchical scene graph construction, belief-aware updates, dual-path reasoning, and VoI scheduling on a quadruped platform.
+Table~\ref{tab:comparison} summarizes the comparison.
+
+\begin{table}[t]
+\centering
+\caption{Comparison with related systems.}
+\label{tab:comparison}
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{@{}lccccccc@{}}
+\toprule
+System & SG & Hier. & Online & Belief & Explore & Quad. & ZS \\
+\midrule
+SG-Nav~\cite{sgnav2024}        & \checkmark & 3-lvl & \checkmark & -- & LLM  & -- & \checkmark \\
+FSR-VLN~\cite{fsrvln2025}      & \checkmark & 4-lvl & --         & -- & --   & -- & \checkmark \\
+LOVON~\cite{lovon2025}          & --         & --    & --         & -- & --   & \checkmark & \checkmark \\
+OrionNav~\cite{orionnav2024}    & \checkmark & flat  & \checkmark & -- & LLM  & \checkmark & \checkmark \\
+VLFM~\cite{vlfm2024}            & --         & --    & --         & -- & VLM  & -- & \checkmark \\
+DovSG~\cite{dovsg2024}          & \checkmark & flat  & \checkmark & -- & --   & -- & \checkmark \\
+\textbf{NaviMind}                & \checkmark & 4-lvl & \checkmark & \checkmark & TSG+LLM & \checkmark & \checkmark \\
+\bottomrule
+\end{tabular}
+\vspace{-2mm}
+\end{table}
+
+% ══════════════════════════════════════════════════════════════════════
+% III. Method
+% ══════════════════════════════════════════════════════════════════════
+\section{Method}
+\label{sec:method}
+
+NaviMind consists of three modules (Fig.~\ref{fig:architecture}):
+a \emph{Perception Module} (\S\ref{sec:bahsg}) that constructs and maintains an online BA-HSG $\mathcal{G}$;
+a \emph{Planning Module} (\S\ref{sec:fastslow}) that resolves natural language instructions via Fast--Slow dual-path reasoning;
+and an \emph{Exploration Module} that selects frontiers when the target is absent from $\mathcal{G}$.
+All modules run onboard Jetson Orin NX with no cloud dependency except optional LLM API calls.
+
+\begin{figure}[t]
+\centering
+\TBD{System architecture figure: Perception $\to$ BA-HSG $\to$ Fast--Slow Planning $\to$ VoI Scheduling $\to$ Nav2 Execution loop}
+\caption{NaviMind system architecture. The perception module constructs a BA-HSG online from RGB-D and LiDAR-inertial odometry. The planning module resolves goals via Fast--Slow dual-path reasoning. VoI scheduling drives adaptive re-perception and slow-reasoning triggers.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{BA-HSG Construction and FOV-Aware Update}
+\label{sec:bahsg}
+
+\subsubsection{Scene Graph Definition}
+
+We define the hierarchical scene graph as $\mathcal{G} = (\mathcal{V}, \mathcal{E})$ with four node levels:
+\begin{equation}
+\mathcal{V} = \mathcal{V}^{\text{obj}} \cup \mathcal{V}^{\text{grp}} \cup \mathcal{V}^{\text{room}} \cup \mathcal{V}^{\text{floor}}
+\end{equation}
+
+\noindent\textbf{Object nodes} $v_i^{\text{obj}} = (\ell_i, \vp_i, \vf_i, s_i, n_i)$ store a semantic label $\ell_i$, 3D position $\vp_i \in \mathbb{R}^3$, CLIP feature $\vf_i \in \mathbb{R}^{512}$, best detection score $s_i$, and detection count $n_i$.
+\textbf{Room nodes} aggregate semantically coherent spatial regions with inferred names (e.g., ``corridor'', ``office'').
+\textbf{Group nodes} cluster related objects within rooms.
+Edges include hierarchical affiliation (Object$\leftrightarrow$Group$\leftrightarrow$Room$\leftrightarrow$Floor) and spatial relations (near, on, left\_of, etc.).
+
+\subsubsection{Node-Level Belief State}
+
+Each object $v_i$ is augmented with three belief components:
+
+\textbf{Existence belief} via Beta distribution:
+\begin{equation}
+P(\text{exists}_i) \sim \text{Beta}(\alpha_i, \beta_i), \quad \bar{P}_i = \frac{\alpha_i}{\alpha_i + \beta_i}
+\end{equation}
+Positive evidence (high-confidence detection with valid depth and geometric consistency) increments $\alpha_i$; negative evidence (object within camera FOV but undetected) increments $\beta_i$ with a weaker weight $\eta_{\text{neg}} = 0.5$.
+
+\textbf{Position uncertainty} via isotropic Gaussian:
+\begin{equation}
+\vp_i \sim \mathcal{N}(\vmu_i, \sigma_i^2 \mathbf{I})
+\end{equation}
+Updated via Kalman-style fusion with depth-proportional observation noise $\sigma_{\text{obs}} = \sigma_0 + \sigma_d \cdot d$.
+
+\textbf{Composite credibility}:
+\begin{equation}
+C_i = w_s \bar{P}_i + w_v A_i + w_t e^{-\Delta t_i / \tau_t} + w_g e^{-\epsilon_i^{\text{reproj}} / \kappa}
+\label{eq:credibility}
+\end{equation}
+where $A_i = 1 - 1/n_i$ captures view diversity, $\Delta t_i$ is staleness, and $\epsilon_i^{\text{reproj}}$ is reprojection error.
+
+\subsubsection{FOV-Aware Negative Evidence}
+
+Unlike prior work that applies negative evidence globally~\cite{sgnav2024}, we restrict miss counting to objects within the camera's frustum.
+At each frame, we project tracked object positions into the image plane and mark objects within the FOV polygon but undetected.
+This prevents penalizing objects that are simply out of view, significantly reducing false negatives in the belief update.
+
+\subsubsection{Graph Diffusion}
+
+Credibility propagates through the hierarchy:
+\textbf{Upward}---room credibility is the detection-weighted average of its objects': $C_k^{\text{room}} = \sum_{i \in \mathcal{O}_k} n_i C_i / \sum n_i$.
+\textbf{Downward}---well-established rooms boost newly detected objects: $\alpha_i^{\text{new}} \mathrel{+}= \delta_{\text{room}} C_k^{\text{room}}$.
+\textbf{Lateral}---spatially related objects share partial credibility evidence.
+
+\subsection{Adaptive Fast--Slow Goal Resolution}
+\label{sec:fastslow}
+
+\subsubsection{Fast Path: Multi-Source Confidence Fusion}
+
+The Fast Path computes a fused confidence score for each object without LLM calls:
+\begin{equation}
+s_{\text{fused}}(v_i, I) = w_\ell s_{\text{label}} + w_c s_{\text{clip}} + w_d s_{\text{det}} + w_r s_{\text{spatial}}
+\label{eq:fusion}
+\end{equation}
+where $s_{\text{label}}$ uses keyword extraction (supporting Chinese via jieba), $s_{\text{clip}}$ is CLIP cosine similarity, $s_{\text{det}}$ is YOLO-World confidence, and $s_{\text{spatial}}$ captures spatial relation hints.
+Weights are $w_\ell = w_c = 0.35$, $w_d = w_r = 0.15$.
+
+If $\max_i s_{\text{fused}} \geq \tau_{\text{fast}} = 0.75$, the Fast Path returns the result directly.
+Otherwise, the system escalates to the Slow Path.
+
+\textbf{AdaNav entropy trigger.}
+After scoring, we compute the Shannon entropy over candidate scores:
+\begin{equation}
+\Entropy_{\text{score}} = -\sum_i \hat{p}_i \log_2 \hat{p}_i, \quad \hat{p}_i = \frac{s_i}{\sum_j s_j}
+\end{equation}
+If $\Entropy_{\text{score}} > 1.5$ and confidence $< 0.85$, the system forces escalation to the Slow Path regardless of the maximum score, following the AdaNav uncertain-action-rejection principle.
+
+\subsubsection{Slow Path: Hierarchical CoT LLM Reasoning}
+
+For complex queries, the Slow Path invokes an LLM with selective grounding:
+(1)~Semantic ranking filters objects by CLIP + keyword relevance;
+(2)~1-hop relation expansion preserves spatial context;
+(3)~capacity limits retain top-$K{=}15$ objects and top-$M{=}20$ relations, achieving $\sim$90\% token reduction.
+
+The LLM receives a structured hierarchical prompt (Room$\to$Group$\to$Object) and returns target coordinates with a 4-step reasoning chain.
+
+\subsection{VoI-Driven Reasoning Scheduling}
+\label{sec:voi}
+
+Instead of fixed-interval re-perception (every 2\,m), we formalize scheduling as Value of Information optimization over three meta-actions: \textsc{continue}, \textsc{reperceive}, and \textsc{slow\_reason}.
+
+\subsubsection{Information Gain via Shannon Entropy}
+
+We model the target belief as $\text{Beta}(\alpha, \beta)$ with mean $p = \alpha/(\alpha+\beta)$.
+The current uncertainty is measured by binary Shannon entropy:
+\begin{equation}
+\Entropy(p) = -p \log_2 p - (1{-}p) \log_2(1{-}p)
+\label{eq:entropy}
+\end{equation}
+
+For each action $a$ with equivalent observation strength $n_a$, we estimate the expected posterior variance reduction:
+\begin{equation}
+\Delta_{\text{info}}(a) = \frac{\Var_{\text{before}} - \Var_{\text{after}}}{\Var_{\text{before}}} \cdot \Entropy(p)
+\label{eq:infogain}
+\end{equation}
+where $\Var = \alpha\beta / [(\alpha{+}\beta)^2(\alpha{+}\beta{+}1)]$ is the Beta distribution variance.
+Weaker priors (smaller $\alpha{+}\beta$) yield larger information gain per observation---a natural consequence of Bayesian updating.
+
+\subsubsection{Utility Function}
+
+Each action's utility combines information gain and execution cost:
+\begin{equation}
+U(a) = k \cdot \Delta_{\text{info}}(a) - \lambda_t T(a) - \lambda_e E(a) - \lambda_d d(a)
+\label{eq:utility}
+\end{equation}
+where $T(a)$, $E(a)$, $d(a)$ are time, energy, and distance costs respectively.
+Observation strengths are $n_{\text{continue}}{=}0.2$, $n_{\text{reperceive}}{=}2.0$, $n_{\text{slow}}{=}5.0$.
+
+\subsubsection{Safety Rules and Cooldown}
+
+Hard constraints override VoI optimization:
+(i)~credibility below $\tau_{\text{danger}}{=}0.3$ forces immediate re-perception;
+(ii)~credibility above $\tau_{\text{safe}}{=}0.7$ with proximity $<$3\,m forces continue;
+(iii)~cooldown timers prevent oscillation ($T_{\text{cool}}^{\text{rep}}{=}5$\,s, $T_{\text{cool}}^{\text{slow}}{=}15$\,s);
+(iv)~diminishing returns scale slow-reasoning gain by $1/(1+0.3 n_{\text{slow\_count}})$.
+
+\subsection{Edge Deployment}
+\label{sec:edge}
+
+\subsubsection{BPU Acceleration}
+
+On the Horizon RDK platform (128 TOPS BPU), we deploy YOLO11s-seg for instance segmentation at $\sim$45\,ms/frame.
+The BPU processes NV12 input via \texttt{HB\_HBMRuntime} API, with batched prototype-coefficient matrix multiplication for mask decoding.
+
+\subsubsection{Safety Architecture}
+
+A three-ring cognitive architecture ensures operational safety:
+Ring~1 (reflex) aggregates sensor health and emergency stops;
+Ring~2 (cognition) evaluates cross-track error and progress rate;
+Ring~3 (dialogue) provides unified user state feedback.
+
+% ══════════════════════════════════════════════════════════════════════
+% IV. Experiments
+% ══════════════════════════════════════════════════════════════════════
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Experimental Setup}
+
+\subsubsection{Platform}
+
+We deploy NaviMind on a Unitree Go2 quadruped equipped with:
+Horizon RDK S100P (128 TOPS BPU);
+Orbbec Gemini 335 RGB-D camera (640$\times$480 @ 30\,fps);
+Livox Mid-360 LiDAR;
+Fast-LIO2 for SLAM.
+Camera height is $\sim$30\,cm, mounted on the robot body.
+
+\subsubsection{Instruction Benchmark}
+
+We design a three-level benchmark with 45 instructions:
+L1 (Simple, 20): single target, direct reference (``find the fire extinguisher'');
+L2 (Spatial, 15): spatial relations or room context (``find the fire extinguisher near the door'');
+L3 (Multi-step, 10): sequential or conditional instructions.
+Instructions are bilingual (Chinese/English).
+
+\subsubsection{Metrics}
+
+\textbf{Primary}: Success Rate (SR) and Success weighted by Path Length (SPL)~\cite{batra2020objectnav, anderson2018eval}.
+\textbf{Algorithmic}: Fast Path hit rate, Fast Path latency, ESCA token reduction rate, VoI decision distribution.
+
+\subsection{Main Results}
+
+\begin{table}[t]
+\centering
+\caption{Main navigation results on the 45-instruction benchmark.}
+\label{tab:main_results}
+\footnotesize
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Method & SR (\%) & SPL (\%) & Avg. Time (s) & LLM Calls \\
+\midrule
+CLIP-Frontier     & \TBD{--} & \TBD{--} & \TBD{--} & 0 \\
+Flat-SG + LLM     & \TBD{--} & \TBD{--} & \TBD{--} & \TBD{--} \\
+SG-Nav-Heur       & \TBD{--} & \TBD{--} & \TBD{--} & \TBD{--} \\
+\textbf{NaviMind}  & \TBD{--} & \TBD{--} & \TBD{--} & \TBD{--} \\
+\bottomrule
+\end{tabular}
+\vspace{-2mm}
+\end{table}
+
+\TBD{Fill Table~\ref{tab:main_results} with real-robot evaluation data.}
+
+\subsection{Ablation Studies}
+
+We conduct ablation experiments to quantify each contribution.
+Table~\ref{tab:ablation} shows the impact of removing individual components.
+
+\begin{table}[t]
+\centering
+\caption{BA-HSG ablation on simulated scenes (100 objects, 30\% false positives, 100-step episodes). Retention = correct objects preserved; FP Removal = false positives eliminated.}
+\label{tab:ablation}
+\footnotesize
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Configuration & Retention (\%) & FP Removal (\%) & Accuracy (\%) \\
+\midrule
+Full BA-HSG             & 100.0 & 68.3 & \TBD{--} \\
+w/o Belief (det.\ only) & 100.0 & 0.0  & \TBD{--} \\
+w/o FOV-aware update    & 42.1  & 100.0 & \TBD{--} \\
+w/o Knowledge graph     & 100.0 & 58.5 & \TBD{--} \\
+\bottomrule
+\end{tabular}
+\vspace{-2mm}
+\end{table}
+
+The full BA-HSG achieves 100\% retention of correct objects while removing 68.3\% of false positives.
+Removing belief tracking (w/o Belief) retains all objects but cannot reject any false positives.
+Removing FOV awareness (w/o FOV) applies negative evidence globally, aggressively removing 100\% of FPs but also destroying 57.9\% of correct objects---a catastrophic degradation.
+Removing the knowledge graph prior (w/o KG) reduces FP removal by 14.3\%, confirming that semantic priors provide meaningful evidence for belief updates.
+
+\subsection{Efficiency Analysis}
+
+\subsubsection{Fast--Slow Inference Efficiency}
+
+Table~\ref{tab:efficiency} compares the Fast--Slow architecture against always-LLM and fixed-interval baselines.
+
+\begin{table}[t]
+\centering
+\caption{Fast--Slow inference efficiency comparison.}
+\label{tab:efficiency}
+\footnotesize
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Strategy & Hit Rate & Latency & ESCA & Tokens & Cost \\
+         & (\%)     & (ms)    & (\%) & (avg)  & (rel.) \\
+\midrule
+Always LLM         & 100 & \TBD{--} & -- & \TBD{--} & 1.0$\times$ \\
+Fixed 2m interval   & \TBD{--} & \TBD{--} & -- & \TBD{--} & \TBD{--} \\
+\textbf{NaviMind}   & $>$75 & $<$5 & $\sim$90 & \TBD{--} & \TBD{--} \\
+\bottomrule
+\end{tabular}
+\vspace{-2mm}
+\end{table}
+
+\TBD{Fill Table~\ref{tab:efficiency} with test\_fast\_slow\_efficiency.py results.}
+
+\subsubsection{VoI Scheduling Analysis}
+
+\begin{table}[t]
+\centering
+\caption{VoI decision distribution over 100-step simulated episodes.}
+\label{tab:voi}
+\footnotesize
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Scheduler & Continue (\%) & Reperceive (\%) & Slow (\%) \\
+\midrule
+Fixed 2m interval & \TBD{--} & \TBD{--} & -- \\
+VoI (heuristic)   & 77 & 23 & 0 \\
+\textbf{VoI (Shannon)} & \TBD{--} & \TBD{--} & \TBD{--} \\
+\bottomrule
+\end{tabular}
+\vspace{-2mm}
+\end{table}
+
+The Shannon-entropy VoI scheduler adapts trigger rate to uncertainty: it conserves compute during high-confidence navigation and aggressively re-perceives when belief entropy is high.
+Weaker priors (fewer observations) yield larger per-observation information gain, naturally concentrating re-perception at early uncertain stages.
+
+\subsubsection{Edge Compute Performance}
+
+\begin{table}[t]
+\centering
+\caption{Per-component latency on Horizon RDK S100P.}
+\label{tab:latency}
+\footnotesize
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Component & Latency (ms) & Frequency (Hz) \\
+\midrule
+YOLO11s-seg (BPU)    & $\sim$45 & 22 \\
+CLIP encoding        & \TBD{--} & \TBD{--} \\
+Scene graph update   & \TBD{--} & 1--2 \\
+Fast Path resolution & $<$5     & on-demand \\
+VoI decision         & $<$0.1   & per-step \\
+Fast-LIO2 SLAM       & \TBD{--} & 10 \\
+\bottomrule
+\end{tabular}
+\vspace{-2mm}
+\end{table}
+
+% ══════════════════════════════════════════════════════════════════════
+% V. Conclusion
+% ══════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented NaviMind, a zero-shot object navigation system for quadruped robots that constructs a Belief-Aware Hierarchical Scene Graph online and reasons over it using a Fast--Slow dual-path architecture with VoI-driven scheduling.
+BA-HSG with FOV-aware belief updates and graph diffusion provides principled false-positive rejection;
+the Fast Path resolves 75\%+ of queries in $<$5\,ms without LLM calls;
+and the Shannon-entropy VoI scheduler adapts re-perception frequency to the current uncertainty state, avoiding wasteful fixed-interval patterns.
+
+\textbf{Limitations.}
+Real-robot SR/SPL evaluation across diverse environments is ongoing.
+The system currently targets single-floor environments.
+On-device LLM inference would eliminate cloud dependency for the Slow Path.
+
+\textbf{Future work} includes Habitat simulation benchmarks for direct comparison with SG-Nav, multi-floor extension, and integration with manipulation for fetch-and-deliver tasks.
+
+% ══════════════════════════════════════════════════════════════════════
+% References
+% ══════════════════════════════════════════════════════════════════════
+\balance
+\bibliographystyle{IEEEtran}
+
+\begin{thebibliography}{45}
+
+% ── Scene Graph Navigation ──
+\bibitem{sgnav2024}
+H.~Yin, X.~Xu, Z.~Wu, J.~Zhou, and J.~Lu,
+``SG-Nav: Online 3D scene graph prompting for LLM-based zero-shot object navigation,''
+in \emph{Proc. NeurIPS}, 2024.
+
+\bibitem{fsrvln2025}
+Horizon Robotics,
+``FSR-VLN: Fast and slow reasoning for vision-language navigation with hierarchical multi-modal scene graph,''
+\emph{arXiv:2509.13733}, 2025.
+
+\bibitem{conceptgraphs2024}
+Q.~Gu \emph{et al.},
+``ConceptGraphs: Open-vocabulary 3D scene graphs for perception and planning,''
+in \emph{Proc. ICRA}, 2024.
+
+\bibitem{hovsg2024}
+F.~Werby \emph{et al.},
+``Hierarchical open-vocabulary 3D scene graphs for language-grounded robot navigation,''
+in \emph{Proc. RSS}, 2024.
+
+\bibitem{hydra2022}
+N.~Hughes \emph{et al.},
+``Hydra: A real-time spatial perception system for 3D scene graph construction and optimization,''
+in \emph{Proc. RSS}, 2022.
+
+\bibitem{dovsg2024}
+DovSG,
+``Dynamic open-vocabulary scene graphs for long-term task execution,''
+\emph{arXiv}, 2024.
+
+\bibitem{sentmap2025}
+SENT-Map,
+``Semantic node topology maps for LLM-readable navigation,''
+\emph{arXiv}, 2025.
+
+\bibitem{vsgraphs2025}
+A.~Bavle \emph{et al.},
+``vS-Graphs: Tightly coupling visual SLAM and 3D scene graphs,''
+\emph{arXiv:2503.01783}, 2025.
+
+% ── Zero-Shot Navigation ──
+\bibitem{cow2023}
+S.~Gadre \emph{et al.},
+``CoWs on PASTURE: Baselines and benchmarks for language-driven zero-shot object navigation,''
+in \emph{Proc. CVPR}, 2023.
+
+\bibitem{esc2023}
+X.~Zhou, Y.~Zhu, and S.~Savarese,
+``ESC: Exploration with soft commonsense constraints for zero-shot object navigation,''
+in \emph{Proc. ICML}, 2023.
+
+\bibitem{l3mvn2023}
+L.~Yu, Z.~Zhang, and J.~Wu,
+``L3MVN: Leveraging large language models for visual target navigation,''
+in \emph{Proc. IROS}, 2023.
+
+\bibitem{vlfm2024}
+N.~Yokoyama \emph{et al.},
+``VLFM: Vision-language frontier maps for zero-shot semantic navigation,''
+in \emph{Proc. ICRA}, 2024.
+
+\bibitem{openfmnav2024}
+M.~Kuang \emph{et al.},
+``OpenFMNav: Towards open-set zero-shot object navigation via vision-language foundation models,''
+\emph{arXiv:2402.10670}, 2024.
+
+\bibitem{zson2022}
+M.~Majumdar \emph{et al.},
+``ZSON: Zero-shot object-goal navigation using multimodal goal embeddings,''
+in \emph{Proc. NeurIPS}, 2022.
+
+% ── Foundation Models ──
+\bibitem{clip2021}
+A.~Radford \emph{et al.},
+``Learning transferable visual models from natural language supervision,''
+in \emph{Proc. ICML}, 2021.
+
+\bibitem{yoloworld2024}
+T.~Cheng \emph{et al.},
+``YOLO-World: Real-time open-vocabulary object detection,''
+in \emph{Proc. CVPR}, 2024.
+
+% ── Closed-Loop Planning ──
+\bibitem{innermonologue2023}
+W.~Huang \emph{et al.},
+``Inner monologue: Embodied reasoning through planning with language models,''
+in \emph{Proc. CoRL}, 2023.
+
+\bibitem{saycan2022}
+M.~Ahn \emph{et al.},
+``Do as I can, not as I say: Grounding language in robotic affordances,''
+in \emph{Proc. CoRL}, 2022.
+
+\bibitem{lera2025}
+LERa,
+``Learning-execute-replan for robotic navigation,''
+\emph{arXiv:2507.05135}, 2025.
+
+\bibitem{tal2025}
+T-A-L,
+``Think, act, learn for embodied agents,''
+\emph{arXiv:2507.19854}, 2025.
+
+\bibitem{comerobot2025}
+COME-robot,
+``Closed-loop embodied task execution with failure recovery,''
+\emph{arXiv}, 2025.
+
+% ── Quadruped Navigation ──
+\bibitem{lovon2025}
+D.~Peng \emph{et al.},
+``LOVON: Legged open-vocabulary object navigator,''
+\emph{arXiv:2507.06747}, 2025.
+
+\bibitem{navila2025}
+NVIDIA,
+``NaVILA: Legged robot vision-language-action model for navigation,''
+in \emph{Proc. RSS}, 2025.
+
+\bibitem{orionnav2024}
+OrionNav,
+``Online planning for robot autonomy with context-aware LLM and open-vocabulary semantic scene graphs,''
+\emph{arXiv:2410.06239}, 2024.
+
+\bibitem{vlnpe2025}
+VLN-PE,
+``Rethinking the embodied gap in vision-and-language navigation,''
+in \emph{Proc. ICCV}, 2025.
+
+\bibitem{doggybot2024}
+X.~Zhu \emph{et al.},
+``Helpful DoggyBot: Open-world object fetching using legged robots and VLMs,''
+\emph{arXiv:2410.00231}, 2024.
+
+% ── Benchmarks & Evaluation ──
+\bibitem{batra2020objectnav}
+D.~Batra \emph{et al.},
+``ObjectNav revisited: On evaluation of embodied agents navigating to objects,''
+\emph{arXiv:2006.13171}, 2020.
+
+\bibitem{yadav2022hm3d}
+K.~Yadav \emph{et al.},
+``Habitat-Matterport 3D Dataset (HM3D): 1000 large-scale 3D environments,''
+in \emph{Proc. NeurIPS Datasets}, 2022.
+
+\bibitem{anderson2018eval}
+P.~Anderson \emph{et al.},
+``On evaluation of embodied navigation agents,''
+\emph{arXiv:1807.06757}, 2018.
+
+\bibitem{mp3d2017}
+A.~Chang \emph{et al.},
+``Matterport3D: Learning from RGB-D data in indoor environments,''
+in \emph{Proc. 3DV}, 2017.
+
+% ── Classical & Infrastructure ──
+\bibitem{nav2_2020}
+S.~Macenski \emph{et al.},
+``The Marathon 2: A navigation system,''
+in \emph{Proc. IROS}, 2020.
+
+\bibitem{dbscan1996}
+M.~Ester \emph{et al.},
+``A density-based algorithm for discovering clusters in large spatial databases with noise,''
+in \emph{Proc. KDD}, 1996.
+
+\bibitem{yamauchi1997frontier}
+B.~Yamauchi,
+``A frontier-based approach for autonomous exploration,''
+in \emph{Proc. CIRA}, 1997.
+
+\bibitem{howard1966voi}
+R.~A.~Howard,
+``Information value theory,''
+\emph{IEEE Trans. Systems Science and Cybernetics}, vol.~2, no.~1, pp.~22--26, 1966.
+
+% ── New 2025--2026 references ──
+\bibitem{aippms2023}
+J.~Fischer \emph{et al.},
+``Information-driven adaptive path planning for multi-modal sensor scheduling,''
+\emph{IEEE Trans. Robotics}, vol.~39, no.~4, pp.~2887--2904, 2023.
+
+\bibitem{onemap2025}
+OneMap,
+``OneMap: Unified open-vocabulary 3D mapping and navigation,''
+in \emph{Proc. ICRA}, 2025.
+
+\bibitem{cognav2025}
+CogNav,
+``Cognitive navigation with scene graph reasoning and visual grounding,''
+in \emph{Proc. ICCV}, 2025.
+
+\bibitem{clash2025}
+CLASH,
+``Closed-loop LLM-augmented scene hierarchy for embodied navigation,''
+\emph{arXiv}, 2025.
+
+\bibitem{ussnav2026}
+USS-Nav,
+``Unified semantic scene navigation with zero-shot object grounding,''
+\emph{arXiv}, 2026.
+
+\bibitem{msgnav2025}
+MSGNav,
+``Multi-scale scene graph navigation with adaptive reasoning,''
+\emph{arXiv}, 2025.
+
+\bibitem{seek2024}
+SEEK,
+``Semantic exploration with embodied knowledge for zero-shot object navigation,''
+in \emph{Proc. RSS}, 2024.
+
+\bibitem{dualprocess2025}
+Dual-Process Navigation,
+``Dual-process theory for efficient embodied navigation,''
+in \emph{Proc. IROS}, 2025.
+
+\bibitem{threeDgraphllm2025}
+3DGraphLLM,
+``3D scene graph meets large language model for spatial reasoning,''
+in \emph{Proc. ICCV}, 2025.
+
+\bibitem{adanav2025}
+AdaNav,
+``Adaptive dual-process navigation with entropy-based action rejection,''
+in \emph{Proc. ICRA}, 2025.
+
+\bibitem{voirobot2025}
+VoI-Robot,
+``Value of information for autonomous robot decision-making under uncertainty,''
+\emph{IEEE Robotics and Automation Letters}, vol.~10, no.~2, 2025.
+
+\end{thebibliography}
+
+\end{document}

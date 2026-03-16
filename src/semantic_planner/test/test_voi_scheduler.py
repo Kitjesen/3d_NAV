@@ -1,17 +1,23 @@
 """
-test_voi_scheduler.py — VoIScheduler 单元测试
+test_voi_scheduler.py — VoIScheduler 单元测试 (Shannon 信息论版本)
 
 覆盖:
   - SchedulerAction 枚举值
+  - Shannon 二值熵计算 H(p)
+  - Beta 分布方差计算
+  - 信念推导 (alpha/beta 提供 vs 从 credibility 推导)
+  - 信息增益计算 (观测前后熵差)
   - 硬约束: 极低可信度强制 REPERCEIVE
   - 硬约束: 高可信度 + 接近目标强制 CONTINUE
   - 最小移动距离检查
   - VoI 效用计算路径 (覆盖三种动作竞争)
   - 冷却时间约束
-  - 决策日志 + decision_stats
+  - 决策日志 + decision_stats (含 entropy_bits 字段)
   - 自定义 VoIConfig
+  - Beta 参数直传 vs credibility 推导一致性
 """
 
+import math
 import time
 import unittest
 
@@ -30,6 +36,131 @@ class TestSchedulerActionEnum(unittest.TestCase):
         self.assertEqual(SchedulerAction.SLOW_REASON.value, "slow_reason")
 
 
+class TestShannonEntropy(unittest.TestCase):
+    """测试 _binary_entropy 静态方法的数学正确性。"""
+
+    def test_entropy_at_half(self):
+        """H(0.5) = 1.0 bit (最大不确定性)。"""
+        self.assertAlmostEqual(VoIScheduler._binary_entropy(0.5), 1.0, places=6)
+
+    def test_entropy_at_zero(self):
+        """H(0) = 0 (完全确定)。"""
+        self.assertEqual(VoIScheduler._binary_entropy(0.0), 0.0)
+
+    def test_entropy_at_one(self):
+        """H(1) = 0 (完全确定)。"""
+        self.assertEqual(VoIScheduler._binary_entropy(1.0), 0.0)
+
+    def test_entropy_symmetry(self):
+        """H(p) = H(1-p)。"""
+        for p in [0.1, 0.2, 0.3, 0.4]:
+            self.assertAlmostEqual(
+                VoIScheduler._binary_entropy(p),
+                VoIScheduler._binary_entropy(1.0 - p),
+                places=10,
+            )
+
+    def test_entropy_monotone_increase_to_half(self):
+        """H(p) 在 (0, 0.5) 上单调递增。"""
+        prev = 0.0
+        for p in [0.1, 0.2, 0.3, 0.4, 0.5]:
+            h = VoIScheduler._binary_entropy(p)
+            self.assertGreaterEqual(h, prev)
+            prev = h
+
+    def test_entropy_known_value(self):
+        """H(0.25) = -0.25*log2(0.25) - 0.75*log2(0.75) ≈ 0.8113。"""
+        expected = -(0.25 * math.log2(0.25) + 0.75 * math.log2(0.75))
+        self.assertAlmostEqual(
+            VoIScheduler._binary_entropy(0.25), expected, places=4
+        )
+
+
+class TestBetaVariance(unittest.TestCase):
+    """测试 _beta_variance 静态方法。"""
+
+    def test_uniform_prior(self):
+        """Beta(1, 1) 方差 = 1/12 ≈ 0.0833。"""
+        self.assertAlmostEqual(
+            VoIScheduler._beta_variance(1.0, 1.0), 1.0 / 12.0, places=4
+        )
+
+    def test_concentrated(self):
+        """Beta(10, 10) 方差 << Beta(1, 1) 方差。"""
+        var_weak = VoIScheduler._beta_variance(1.0, 1.0)
+        var_strong = VoIScheduler._beta_variance(10.0, 10.0)
+        self.assertLess(var_strong, var_weak)
+
+    def test_zero_params(self):
+        """α+β ≤ 0 → 返回 0.25 (最大不确定性)。"""
+        self.assertEqual(VoIScheduler._beta_variance(0.0, 0.0), 0.25)
+
+
+class TestBeliefResolution(unittest.TestCase):
+    """测试 _resolve_belief: alpha/beta 直传 vs credibility 推导。"""
+
+    def setUp(self):
+        self.scheduler = VoIScheduler()
+
+    def test_explicit_alpha_beta(self):
+        """提供 belief_alpha/beta 时直接使用。"""
+        state = SchedulerState(belief_alpha=3.0, belief_beta=7.0)
+        alpha, beta, p = self.scheduler._resolve_belief(state)
+        self.assertEqual(alpha, 3.0)
+        self.assertEqual(beta, 7.0)
+        self.assertAlmostEqual(p, 0.3, places=6)
+
+    def test_derived_from_credibility(self):
+        """未提供 alpha/beta 时从 credibility 推导。"""
+        state = SchedulerState(target_credibility=0.7)
+        alpha, beta, p = self.scheduler._resolve_belief(state)
+        self.assertAlmostEqual(p, 0.7, places=2)
+        self.assertAlmostEqual(alpha + beta, 4.0, places=2)  # default concentration
+
+    def test_credibility_zero_clamps(self):
+        """credibility=0 被 clamp 到 0.01, 不会导致 alpha=0。"""
+        state = SchedulerState(target_credibility=0.0)
+        alpha, beta, p = self.scheduler._resolve_belief(state)
+        self.assertGreater(alpha, 0.0)
+        self.assertGreater(beta, 0.0)
+
+
+class TestInformationGain(unittest.TestCase):
+    """测试 _info_gain: 方差缩减 × 二值熵 = 信息增益。"""
+
+    def setUp(self):
+        self.scheduler = VoIScheduler()
+
+    def test_gain_non_negative(self):
+        """信息增益始终 ≥ 0。"""
+        for alpha, beta in [(2, 2), (1, 1), (10, 3), (0.5, 0.5)]:
+            gain = self.scheduler._info_gain(alpha, beta, 3.0)
+            self.assertGreaterEqual(gain, 0.0)
+
+    def test_stronger_obs_more_gain(self):
+        """更强观测 → 更大信息增益。"""
+        alpha, beta = 2.0, 2.0
+        gain_weak = self.scheduler._info_gain(alpha, beta, 1.0)
+        gain_strong = self.scheduler._info_gain(alpha, beta, 10.0)
+        self.assertGreater(gain_strong, gain_weak)
+
+    def test_certain_belief_near_zero_gain(self):
+        """已经确定 (p≈1) 的信念, 信息增益很小 (H(p) ≈ 0)。"""
+        gain = self.scheduler._info_gain(100.0, 1.0, 5.0)
+        self.assertLess(gain, 0.1)
+
+    def test_uncertain_belief_large_gain(self):
+        """高度不确定 (p=0.5) 的信念, 信息增益应显著。"""
+        gain = self.scheduler._info_gain(1.0, 1.0, 5.0)
+        self.assertGreater(gain, 0.1)
+
+    def test_weak_prior_more_informative(self):
+        """弱先验 (α+β 小) 比强先验 (α+β 大) 的信息增益更大 (同 p=0.5)。"""
+        gain_weak = self.scheduler._info_gain(1.0, 1.0, 3.0)  # α+β=2
+        gain_strong = self.scheduler._info_gain(10.0, 10.0, 3.0)  # α+β=20
+        self.assertGreater(gain_weak, gain_strong)
+
+
 class TestVoISchedulerHardConstraints(unittest.TestCase):
     def setUp(self):
         self.scheduler = VoIScheduler()
@@ -40,6 +171,8 @@ class TestVoISchedulerHardConstraints(unittest.TestCase):
             target_credibility=0.5,
             target_existence_prob=0.6,
             target_position_var=1.0,
+            belief_alpha=0.0,
+            belief_beta=0.0,
             match_count=0,
             total_objects=5,
             distance_to_goal=5.0,
@@ -58,7 +191,7 @@ class TestVoISchedulerHardConstraints(unittest.TestCase):
         """Credibility below danger_threshold → must REPERCEIVE (cooldown satisfied)."""
         state = self._state(
             target_credibility=0.1,
-            last_reperception_time=0.0,  # epoch 0 → cooldown long ago
+            last_reperception_time=0.0,
         )
         action = self.scheduler.decide(state)
         self.assertEqual(action, SchedulerAction.REPERCEIVE)
@@ -67,11 +200,9 @@ class TestVoISchedulerHardConstraints(unittest.TestCase):
         """Credibility below danger but cooldown not expired → falls through to VoI."""
         state = self._state(
             target_credibility=0.1,
-            last_reperception_time=time.time(),  # just now → blocked
+            last_reperception_time=time.time(),
         )
-        # Should not force REPERCEIVE (cooldown blocks it)
         action = self.scheduler.decide(state)
-        # can't be REPERCEIVE due to cooldown; likely CONTINUE or SLOW
         self.assertNotEqual(action, SchedulerAction.REPERCEIVE)
 
     def test_safe_and_close_forces_continue(self):
@@ -89,7 +220,6 @@ class TestVoISchedulerHardConstraints(unittest.TestCase):
             target_credibility=0.9,
             distance_to_goal=10.0,
         )
-        # Passes the hard CONTINUE rule; actual result depends on utilities
         action = self.scheduler.decide(state)
         self.assertIsInstance(action, SchedulerAction)
 
@@ -97,7 +227,7 @@ class TestVoISchedulerHardConstraints(unittest.TestCase):
         """Too little movement since last reperception → CONTINUE."""
         state = self._state(
             target_credibility=0.5,
-            distance_since_last_reperception=0.1,  # below min_distance=0.5
+            distance_since_last_reperception=0.1,
         )
         action = self.scheduler.decide(state)
         self.assertEqual(action, SchedulerAction.CONTINUE)
@@ -112,6 +242,8 @@ class TestVoISchedulerUtilityPaths(unittest.TestCase):
             target_credibility=0.5,
             target_existence_prob=0.5,
             target_position_var=1.0,
+            belief_alpha=0.0,
+            belief_beta=0.0,
             match_count=0,
             total_objects=10,
             distance_to_goal=10.0,
@@ -132,21 +264,19 @@ class TestVoISchedulerUtilityPaths(unittest.TestCase):
         self.assertIn(action, list(SchedulerAction))
 
     def test_no_matches_favors_reperception(self):
-        """match_count=0 adds +0.3 bonus to reperceive utility (tested via internals)."""
+        """match_count=0 adds bonus to reperceive utility."""
         state_no_match = self._state(match_count=0, target_credibility=0.45)
         state_with_match = self._state(match_count=5, target_credibility=0.45)
         u_no_match = self.scheduler._utility_reperceive(state_no_match)
         u_with_match = self.scheduler._utility_reperceive(state_with_match)
-        # Bonus of 0.3 applied when match_count=0
         self.assertGreater(u_no_match, u_with_match)
-        # Decision itself is always a valid action
         action = self.scheduler.decide(state_no_match)
         self.assertIsInstance(action, SchedulerAction)
 
     def test_slow_reason_cooldown_blocks_slow(self):
         """If slow_reason on cooldown, SLOW_REASON utility set to -999."""
         state = self._state(
-            last_slow_reason_time=time.time(),  # just triggered
+            last_slow_reason_time=time.time(),
         )
         action = self.scheduler.decide(state)
         self.assertNotEqual(action, SchedulerAction.SLOW_REASON)
@@ -155,7 +285,7 @@ class TestVoISchedulerUtilityPaths(unittest.TestCase):
         """If reperceive on cooldown, REPERCEIVE utility set to -999."""
         state = self._state(
             last_reperception_time=time.time(),
-            target_credibility=0.5,  # not in danger zone
+            target_credibility=0.5,
         )
         action = self.scheduler.decide(state)
         self.assertNotEqual(action, SchedulerAction.REPERCEIVE)
@@ -164,8 +294,6 @@ class TestVoISchedulerUtilityPaths(unittest.TestCase):
         """Repeated slow reasoning reduces its marginal utility."""
         state_fresh = self._state(slow_reason_count=0)
         state_tired = self._state(slow_reason_count=20)
-        # At count=20, slow_reason utility is heavily diminished
-        # Can't assert exact action, but verify no crash
         action_fresh = self.scheduler.decide(state_fresh)
         action_tired = self.scheduler.decide(state_tired)
         self.assertIsInstance(action_fresh, SchedulerAction)
@@ -173,18 +301,54 @@ class TestVoISchedulerUtilityPaths(unittest.TestCase):
 
     def test_complex_scene_boosts_slow_path(self):
         """Complex scene (many objects) raises slow_reason utility."""
-        # Manufacture state where slow_reason should win:
-        #   - moderate credibility (not high enough to short-circuit)
-        #   - many objects (boost slow)
-        #   - cooldowns expired
         state = self._state(
             target_credibility=0.45,
-            total_objects=50,       # complex
-            match_count=5,          # has matches → reperceive bonus lower
+            total_objects=50,
+            match_count=5,
             distance_since_last_reperception=3.0,
         )
         action = self.scheduler.decide(state)
         self.assertIsInstance(action, SchedulerAction)
+
+    def test_entropy_drives_utility_ordering(self):
+        """零成本下, 最大熵 (p=0.5) 时信息增益驱动排序: slow > reperceive > continue。"""
+        # 去除成本干扰, 纯粹比较信息增益
+        cfg = VoIConfig(lambda_t=0.0, lambda_e=0.0, lambda_d=0.0)
+        scheduler = VoIScheduler(config=cfg)
+        state = self._state(
+            target_credibility=0.5,
+            match_count=0,
+            total_objects=15,
+        )
+        u_cont = scheduler._utility_continue(state)
+        u_rep = scheduler._utility_reperceive(state)
+        u_slow = scheduler._utility_slow_reason(state)
+        # 更强观测 → 更大信息增益: slow > reperceive > continue
+        self.assertGreater(u_rep, u_cont)
+        self.assertGreater(u_slow, u_cont)
+
+    def test_low_entropy_favors_continue(self):
+        """低熵 (p=0.95) 时信息增益小, continue 成本最低, 应该胜出。"""
+        state = self._state(
+            target_credibility=0.95,
+            match_count=5,
+            distance_to_goal=10.0,
+        )
+        u_cont = self.scheduler._utility_continue(state)
+        u_rep = self.scheduler._utility_reperceive(state)
+        u_slow = self.scheduler._utility_slow_reason(state)
+        # continue 应该赢 (低信息增益 + 低成本 > 低信息增益 + 高成本)
+        self.assertGreater(u_cont, u_rep)
+        self.assertGreater(u_cont, u_slow)
+
+    def test_beta_params_affect_utility(self):
+        """直传 Beta(1,1) vs Beta(10,10) 应产生不同效用 (同 p=0.5)。"""
+        state_weak = self._state(belief_alpha=1.0, belief_beta=1.0)  # weak prior
+        state_strong = self._state(belief_alpha=10.0, belief_beta=10.0)  # strong prior
+        u_rep_weak = self.scheduler._utility_reperceive(state_weak)
+        u_rep_strong = self.scheduler._utility_reperceive(state_strong)
+        # 弱先验的信息增益更大 (更少数据 → 每次观测更 informative)
+        self.assertGreater(u_rep_weak, u_rep_strong)
 
 
 class TestVoISchedulerDecisionLog(unittest.TestCase):
@@ -218,10 +382,17 @@ class TestVoISchedulerDecisionLog(unittest.TestCase):
         self.assertIn("time", entry)
         self.assertIn("action", entry)
         self.assertIn("cred", entry)
+        self.assertIn("entropy_bits", entry)
         self.assertIn("reason", entry)
 
+    def test_log_entropy_bits_range(self):
+        """entropy_bits 应在 [0, 1] 范围内。"""
+        self.scheduler.decide(self._state(credibility=0.5))
+        entry = self.scheduler._decision_log[-1]
+        self.assertGreaterEqual(entry["entropy_bits"], 0.0)
+        self.assertLessEqual(entry["entropy_bits"], 1.0 + 1e-6)
+
     def test_decision_stats_counts(self):
-        # Force three specific actions by manipulating state
         # Force CONTINUE (safe + close)
         self.scheduler.decide(SchedulerState(
             target_credibility=0.9, distance_to_goal=1.0,
@@ -238,7 +409,6 @@ class TestVoISchedulerDecisionLog(unittest.TestCase):
         self.assertIn("continue", stats)
         self.assertIn("reperceive", stats)
         self.assertIn("slow_reason", stats)
-        # At least 1 continue + 1 reperceive
         self.assertGreaterEqual(stats["continue"] + stats["reperceive"], 2)
 
 
@@ -251,7 +421,7 @@ class TestVoIConfig(unittest.TestCase):
         )
         scheduler = VoIScheduler(config=cfg)
         state = SchedulerState(
-            target_credibility=0.1,  # below custom danger=0.2 → REPERCEIVE
+            target_credibility=0.1,
             distance_to_goal=5.0,
             distance_since_last_reperception=2.0,
             last_reperception_time=0.0,
@@ -279,6 +449,23 @@ class TestVoIConfig(unittest.TestCase):
         action = scheduler.decide(state)
         self.assertIsInstance(action, SchedulerAction)
 
+    def test_custom_obs_strength(self):
+        """自定义观测强度影响信息增益大小。"""
+        cfg_strong = VoIConfig(reperceive_obs_strength=10.0)
+        cfg_weak = VoIConfig(reperceive_obs_strength=0.5)
+        sched_strong = VoIScheduler(config=cfg_strong)
+        sched_weak = VoIScheduler(config=cfg_weak)
+        state = SchedulerState(
+            target_credibility=0.5,
+            distance_to_goal=5.0,
+            distance_since_last_reperception=2.0,
+            last_reperception_time=0.0,
+            last_slow_reason_time=0.0,
+        )
+        u_strong = sched_strong._utility_reperceive(state)
+        u_weak = sched_weak._utility_reperceive(state)
+        self.assertGreater(u_strong, u_weak)
+
 
 class TestVoIUtilityInternals(unittest.TestCase):
     def setUp(self):
@@ -286,14 +473,13 @@ class TestVoIUtilityInternals(unittest.TestCase):
 
     def test_utility_continue_positive_with_uncertainty(self):
         state = SchedulerState(
-            target_credibility=0.0,  # max uncertainty
+            target_credibility=0.0,
             distance_to_goal=5.0,
             distance_since_last_reperception=0.0,
             last_reperception_time=0.0,
             last_slow_reason_time=0.0,
         )
         u = self.scheduler._utility_continue(state)
-        # delta_s = 0.05 * 1.0 = 0.05, cost = 0.3 * 0.05 = ...
         self.assertIsInstance(u, float)
 
     def test_utility_reperceive_bonus_for_no_match(self):
@@ -325,6 +511,22 @@ class TestVoIUtilityInternals(unittest.TestCase):
         u_base = self.scheduler._utility_slow_reason(base)
         u_many = self.scheduler._utility_slow_reason(many)
         self.assertGreater(u_base, u_many)
+
+    def test_utility_reperceive_position_var_effect(self):
+        """高位置方差 → 更高再感知效用。"""
+        state_low_var = SchedulerState(
+            target_credibility=0.5, target_position_var=0.1, match_count=2,
+            distance_to_goal=5.0, distance_since_last_reperception=0.0,
+            last_reperception_time=0.0, last_slow_reason_time=0.0,
+        )
+        state_high_var = SchedulerState(
+            target_credibility=0.5, target_position_var=5.0, match_count=2,
+            distance_to_goal=5.0, distance_since_last_reperception=0.0,
+            last_reperception_time=0.0, last_slow_reason_time=0.0,
+        )
+        u_low = self.scheduler._utility_reperceive(state_low_var)
+        u_high = self.scheduler._utility_reperceive(state_high_var)
+        self.assertGreater(u_high, u_low)
 
 
 if __name__ == "__main__":

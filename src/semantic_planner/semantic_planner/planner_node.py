@@ -183,7 +183,9 @@ class SemanticPlannerNode(Node):
         # 创新3: Frontier 视觉评分权重 (VLFM 核心)
         self.declare_parameter("exploration.frontier_vision_weight", 0.0)
         # 创新4: 语义先验权重 (Topology-Aware Semantic Exploration)
-        self.declare_parameter("exploration.frontier_semantic_prior_weight", 0.2)
+        self.declare_parameter("exploration.frontier_semantic_prior_weight", 0.15)
+        # 创新5: 语义不确定性权重 (RoomTypePosterior.entropy 驱动探索)
+        self.declare_parameter("exploration.frontier_semantic_uncertainty_weight", 0.15)
         # R11: USS-Nav TSP + 失败记忆参数
         self.declare_parameter("exploration.frontier_tsp_reorder", True)
         self.declare_parameter("exploration.frontier_tsp_limit", 20)
@@ -361,6 +363,7 @@ class SemanticPlannerNode(Node):
             grounding_relation_bonus=self.get_parameter("exploration.frontier_grounding_relation_bonus").value,
             vision_weight=self.get_parameter("exploration.frontier_vision_weight").value,
             semantic_prior_weight=self.get_parameter("exploration.frontier_semantic_prior_weight").value,
+            semantic_uncertainty_weight=self.get_parameter("exploration.frontier_semantic_uncertainty_weight").value,
             tsp_reorder=self.get_parameter("exploration.frontier_tsp_reorder").value,
             tsp_frontier_limit=self.get_parameter("exploration.frontier_tsp_limit").value,
             tsp_ig_radius_cells=self.get_parameter("exploration.frontier_tsp_ig_radius_cells").value,
@@ -1170,6 +1173,14 @@ class SemanticPlannerNode(Node):
                     self._runtime_kg.observe_room(room_type, labels, confs)
             except (ImportError, TypeError, KeyError, ValueError) as e:
                 self.get_logger().debug(f"Runtime KG update failed (non-critical): {e}")
+
+        # 注入房间类型后验到 frontier scorer (不确定性驱动探索)
+        try:
+            rp = scene_data.get("room_posteriors", {})
+            if rp:
+                self._frontier_scorer.set_room_type_posteriors_from_json(rp)
+        except (TypeError, KeyError, AttributeError):
+            pass
 
         # 更新情节记忆（复用已解析的 scene_data）
         try:

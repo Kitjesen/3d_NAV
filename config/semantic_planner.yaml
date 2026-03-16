@@ -72,7 +72,9 @@ semantic_planner_node:
       # 创新3: Frontier CLIP 视觉评分权重 (VLFM 核心)
       frontier_vision_weight: 0.0              # 0=禁用; 启用建议 0.15
       # 创新4: 语义先验权重 (Topology-Aware Semantic Exploration)
-      frontier_semantic_prior_weight: 0.2      # 0=禁用; 启用建议 0.2
+      frontier_semantic_prior_weight: 0.15     # 语义先验权重
+      # 创新5: 语义不确定性权重 (RoomTypePosterior.entropy 驱动探索)
+      frontier_semantic_uncertainty_weight: 0.15  # 高 entropy 房间 → 值得探索
 
       # USS-Nav TSP 后处理参数 (贪心 nearest-neighbor 重排序访问顺序)
       frontier_tsp_reorder: true               # 是否启用 TSP 贪心重排序; true=按 1/IG+dist 排; false=保持评分排序

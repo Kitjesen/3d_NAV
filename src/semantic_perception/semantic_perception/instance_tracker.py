@@ -227,6 +227,8 @@ class RoomNode:
     group_ids: List[int] = field(default_factory=list)
     semantic_labels: List[str] = field(default_factory=list)
     llm_named: bool = False        # 是否由 LLM 命名
+    clip_feature: Optional[np.ndarray] = None   # OneMap: room 级 CLIP 聚合特征
+    feature_count: int = 0                       # 已融合的物体特征数
 
 
 @dataclass
@@ -640,6 +642,7 @@ class InstanceTracker:
         # Room LLM 命名状态 (创新1: 在线增量场景图补强)
         self._room_llm_namer: Optional[Callable] = None  # async (labels) -> str
         self._room_name_cache: Dict[int, str] = {}       # region_id -> LLM name
+        self._last_rooms: List[RoomNode] = []              # OneMap: 最近一次 compute_rooms 缓存
         self._llm_pending_tasks: Dict[int, asyncio.Task] = {}  # region_id -> pending LLM task
         self._region_stability: Dict[int, Tuple[frozenset, float]] = {}  # region_id -> (obj_id_set, stable_since)
 
@@ -1313,6 +1316,30 @@ class InstanceTracker:
                     # 触发异步 LLM 命名 (fire-and-forget, 结果下次 compute 时可用)
                     self._trigger_room_llm_naming(r.region_id, labels)
 
+            # OneMap: EMA 聚合 room 内物体 CLIP 特征
+            room_clip = None
+            feat_count = 0
+            alpha = 0.3  # EMA 平滑系数
+            for oid in r.object_ids:
+                obj = self._objects.get(oid)
+                if obj is None or obj.features.size == 0:
+                    continue
+                f = np.asarray(obj.features, dtype=np.float64)
+                f_norm = np.linalg.norm(f)
+                if f_norm == 0:
+                    continue
+                f = f / f_norm
+                if room_clip is None:
+                    room_clip = f.copy()
+                else:
+                    room_clip = alpha * f + (1.0 - alpha) * room_clip
+                feat_count += 1
+            # L2 归一化最终聚合特征
+            if room_clip is not None:
+                norm = np.linalg.norm(room_clip)
+                if norm > 0:
+                    room_clip = room_clip / norm
+
             rooms.append(
                 RoomNode(
                     room_id=r.region_id,
@@ -1322,9 +1349,45 @@ class InstanceTracker:
                     group_ids=room_to_groups.get(r.region_id, []),
                     semantic_labels=labels,
                     llm_named=is_llm_named,
+                    clip_feature=room_clip,
+                    feature_count=feat_count,
                 )
             )
+        self._last_rooms = rooms
         return rooms
+
+    def query_rooms_by_embedding(
+        self, embedding: np.ndarray, top_k: int = 3
+    ) -> List[Tuple["RoomNode", float]]:
+        """OneMap: 用 CLIP embedding 查询最相似的 room。
+
+        Args:
+            embedding: 查询向量 (e.g. 512-dim CLIP feature)
+            top_k: 返回 top-k 个匹配结果
+
+        Returns:
+            [(RoomNode, cosine_score), ...] 按相似度降序
+        """
+        with self._lock:
+            rooms = list(self._last_rooms)
+        if not rooms:
+            return []
+
+        q = np.asarray(embedding, dtype=np.float64).ravel()
+        q_norm = np.linalg.norm(q)
+        if q_norm == 0:
+            return []
+        q = q / q_norm
+
+        scored: List[Tuple[RoomNode, float]] = []
+        for room in rooms:
+            if room.clip_feature is None:
+                continue
+            score = float(np.dot(q, room.clip_feature))
+            scored.append((room, score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:top_k]
 
     _LLM_NAMING_MAX_CONCURRENT = 3
     _LLM_NAMING_TIMEOUT_S = 15.0

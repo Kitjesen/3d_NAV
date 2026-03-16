@@ -29,7 +29,7 @@ import logging
 import time as _time_mod
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -128,7 +128,9 @@ class FrontierScorer:
         # 创新3: 视觉评分权重 (VLFM 核心)
         vision_weight: float = 0.0,       # 默认 0 = 不启用; 启用时建议 0.15
         # 创新4: 语义先验权重 (Topology-Aware Semantic Exploration)
-        semantic_prior_weight: float = 0.0,  # 默认 0 = 不启用; 启用时建议 0.2
+        semantic_prior_weight: float = 0.15,  # 语义先验权重
+        # 创新5: 语义不确定性权重 (RoomTypePosterior.entropy 驱动探索)
+        semantic_uncertainty_weight: float = 0.15,
         # USS-Nav TSP: 贪心 nearest-neighbor 重排序
         tsp_reorder: bool = True,         # 是否启用 TSP 后处理重排序
         tsp_frontier_limit: int = 20,     # frontier 数量超过此值时跳过 TSP
@@ -159,6 +161,8 @@ class FrontierScorer:
 
         self.vision_weight = max(vision_weight, 0.0)
         self.semantic_prior_weight = max(semantic_prior_weight, 0.0)
+        self.semantic_uncertainty_weight = max(semantic_uncertainty_weight, 0.0)
+        self._room_type_posteriors: Dict[int, Any] = {}  # room_id → RoomTypePosterior
 
         self.tsp_reorder = tsp_reorder
         self.tsp_frontier_limit = max(tsp_frontier_limit, 2)
@@ -344,6 +348,37 @@ class FrontierScorer:
         if self.semantic_prior_weight <= 0.0:
             self.semantic_prior_weight = 0.2
             logger.info("Frontier semantic prior scoring enabled (weight=0.2)")
+
+    def set_room_type_posteriors(self, posteriors: Dict[int, Any]) -> None:
+        """注入房间类型后验分布 (不确定性驱动探索)。"""
+        self._room_type_posteriors = dict(posteriors)
+
+    def set_room_type_posteriors_from_json(self, posteriors_json: Dict[str, Dict]) -> None:
+        """从场景图 JSON 中的 room_posteriors 注入后验。
+
+        JSON 格式: {"room_id": {"entropy": float, "best_type": str, "confidence": float, "top3": [...]}}
+        转换为轻量 proxy 对象供 _compute_uncertainty_score 使用。
+        """
+        class _PosteriorProxy:
+            __slots__ = ('entropy', 'hypotheses')
+            def __init__(self, entropy: float, top3: list):
+                self.entropy = entropy
+                self.hypotheses = {}
+                for item in top3:
+                    if isinstance(item, dict):
+                        for k, v in item.items():
+                            self.hypotheses[k] = v
+
+        parsed: Dict[int, Any] = {}
+        for rid_str, data in posteriors_json.items():
+            try:
+                rid = int(rid_str)
+                entropy = float(data.get("entropy", 0.0))
+                top3 = data.get("top3", [])
+                parsed[rid] = _PosteriorProxy(entropy, top3)
+            except (ValueError, TypeError, AttributeError):
+                continue
+        self._room_type_posteriors = parsed
 
     def set_room_object_kg(self, kg) -> None:
         """注入房间-物体知识图谱 (P2: SEEK-style P(target|room))。"""
@@ -639,7 +674,14 @@ class FrontierScorer:
                     frontier, robot_position, scene_rooms,
                 )
 
-            # ── 7. KG 目标-房间概率评分 (P2: SEEK-style) ──
+            # ── 7. 语义不确定性评分 (RoomTypePosterior.entropy 驱动探索) ──
+            uncertainty_score = 0.0
+            if self.semantic_uncertainty_weight > 0.0 and scene_rooms:
+                uncertainty_score = self._compute_uncertainty_score(
+                    frontier, robot_position, scene_rooms,
+                )
+
+            # ── 8. KG 目标-房间概率评分 (P2: SEEK-style) ──
             # 如果附近物体暗示某种房间类型, 用 KG 查询目标在该房间的概率
             kg_room_score = 0.0
             if self._room_object_kg and nearby_labels:
@@ -650,7 +692,8 @@ class FrontierScorer:
             # ── 综合评分 ──
             total_w = (self.distance_weight + self.novelty_weight
                        + self.language_weight + self.grounding_weight
-                       + self.vision_weight + self.semantic_prior_weight)
+                       + self.vision_weight + self.semantic_prior_weight
+                       + self.semantic_uncertainty_weight)
             if total_w > 0:
                 frontier.score = (
                     self.distance_weight / total_w * dist_score
@@ -659,6 +702,7 @@ class FrontierScorer:
                     + self.grounding_weight / total_w * grounding_score
                     + self.vision_weight / total_w * vision_score
                     + self.semantic_prior_weight / total_w * semantic_score
+                    + self.semantic_uncertainty_weight / total_w * uncertainty_score
                 )
             else:
                 frontier.score = 0.0
@@ -763,6 +807,55 @@ class FrontierScorer:
                 return min(1.0, top_score)
 
         return 0.0
+
+    def _compute_uncertainty_score(
+        self,
+        frontier: Frontier,
+        robot_position: np.ndarray,
+        scene_rooms: List[Dict],
+    ) -> float:
+        """
+        计算 frontier 方向附近房间的语义不确定性评分。
+
+        高 entropy (房间类型不确定) → 高分 → 鼓励探索。
+        基于 RoomTypePosterior.entropy, 由 set_room_type_posteriors() 注入。
+        """
+        if not self._room_type_posteriors:
+            return 0.0
+
+        best_score = 0.0
+        for room in scene_rooms:
+            room_center = np.array([
+                float(room.get("center", {}).get("x", 0.0)),
+                float(room.get("center", {}).get("y", 0.0)),
+            ])
+
+            frontier_vec = frontier.center_world - robot_position[:2]
+            room_vec = room_center - robot_position[:2]
+            fn = np.linalg.norm(frontier_vec)
+            rn = np.linalg.norm(room_vec)
+            if fn < 0.1 or rn < 0.1:
+                continue
+
+            cos_sim = float(np.dot(frontier_vec, room_vec) / (fn * rn))
+            if cos_sim < 0.3:
+                continue
+
+            room_id = room.get("room_id", -1)
+            posterior = self._room_type_posteriors.get(room_id)
+            if posterior is None:
+                continue
+
+            entropy = posterior.entropy if hasattr(posterior, 'entropy') else 0.0
+            # 归一化 entropy: log2(N) 为最大熵 (N 个假设均匀分布)
+            n_hyp = len(posterior.hypotheses) if hasattr(posterior, 'hypotheses') else 1
+            max_entropy = math.log2(max(n_hyp, 2))
+            norm_entropy = min(1.0, entropy / max_entropy) if max_entropy > 0 else 0.0
+
+            score = cos_sim * norm_entropy
+            best_score = max(best_score, score)
+
+        return min(1.0, best_score)
 
     def _compute_kg_room_score(
         self,

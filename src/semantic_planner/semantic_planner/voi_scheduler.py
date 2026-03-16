@@ -12,9 +12,11 @@ VoI (Value of Information) 驱动的快慢推理与再感知调度器 (BA-HSG §
 效用函数:
   U(a) = ΔE[S] - λ_t·ΔT(a) - λ_e·ΔE(a) - λ_d·Δd(a)
 
-其中 ΔE[S] 近似为:
-  k · (H(P(goal)) - E[H(P(goal) | new_obs)])
-  用经验模型估计: credibility_gap, match_uncertainty, goal_variance
+其中 ΔE[S] 使用 Shannon 信息论计算:
+  - 信念建模: Beta(α, β), 其中 p = α/(α+β) = target_credibility
+  - H_before = 二值熵 H(p) = -p·log₂(p) - (1-p)·log₂(1-p)
+  - E[H_after] = 估计观测后的期望熵 (虚拟观测更新 Beta 参数)
+  - delta_info = H_before - E[H_after]  (信息增益, 单位: bits)
 """
 
 import logging
@@ -41,6 +43,9 @@ class SchedulerState:
     target_credibility: float = 0.5
     target_existence_prob: float = 0.6
     target_position_var: float = 1.0
+    # Beta 分布参数 (可选, 未提供时从 credibility 推导)
+    belief_alpha: float = 0.0
+    belief_beta: float = 0.0
     # 场景图统计
     match_count: int = 0
     total_objects: int = 0
@@ -84,20 +89,95 @@ class VoIConfig:
     credibility_safe: float = 0.7   # 可信度 > 此值 → 倾向 continue
     credibility_danger: float = 0.3 # 可信度 < 此值 → 强制 reperceive
 
+    # 虚拟观测强度 (用于估计 E[H_after])
+    reperceive_obs_strength: float = 2.0   # 再感知等效观测次数
+    slow_reason_obs_strength: float = 5.0  # 慢推理等效观测次数
+    continue_obs_strength: float = 0.2     # 继续行进的偶然发现强度
+
+    # 默认 Beta 先验浓度 (当 alpha/beta 未提供时)
+    default_belief_concentration: float = 4.0
+
 
 class VoIScheduler:
-    """VoI 信息价值调度器。
-    
+    """VoI 信息价值调度器 (Shannon 信息论版本)。
+
     核心决策逻辑:
-    1. 根据当前信念状态估计每个动作的信息增益 ΔE[S]
-    2. 减去各动作的执行成本 (时间, 能耗, 里程)
-    3. 考虑冷却约束
-    4. 选择效用最高的动作
+    1. 将目标信念建模为 Beta(α, β) 分布
+    2. 用 Shannon 二值熵 H(p) 度量当前不确定性
+    3. 估计每个动作的信息增益 ΔH = H_before - E[H_after]
+    4. 减去各动作的执行成本 (时间, 能耗, 里程)
+    5. 考虑冷却约束和安全规则
+    6. 选择效用最高的动作
     """
 
     def __init__(self, config: Optional[VoIConfig] = None):
         self._config = config or VoIConfig()
         self._decision_log: list = []
+
+    @staticmethod
+    def _binary_entropy(p: float) -> float:
+        """二值 Shannon 熵 H(p) = -p·log₂(p) - (1-p)·log₂(1-p)。
+
+        p ∈ (0, 1), 返回值 ∈ [0, 1] bits。
+        边界: H(0) = H(1) = 0, H(0.5) = 1.0。
+        """
+        if p <= 0.0 or p >= 1.0:
+            return 0.0
+        return -(p * math.log2(p) + (1.0 - p) * math.log2(1.0 - p))
+
+    @staticmethod
+    def _beta_variance(alpha: float, beta: float) -> float:
+        """Beta(α, β) 分布的方差 = αβ / ((α+β)²(α+β+1))。"""
+        s = alpha + beta
+        if s <= 0:
+            return 0.25  # 最大不确定性
+        return (alpha * beta) / (s * s * (s + 1.0))
+
+    def _resolve_belief(self, state: SchedulerState) -> tuple:
+        """从 SchedulerState 推导 Beta 分布参数 (α, β) 和均值 p。
+
+        如果 state.belief_alpha > 0 且 state.belief_beta > 0, 直接使用;
+        否则从 target_credibility 和默认浓度推导。
+        """
+        if state.belief_alpha > 0 and state.belief_beta > 0:
+            alpha = state.belief_alpha
+            beta = state.belief_beta
+        else:
+            # 从 credibility 反推: p = α/(α+β), 令 α+β = concentration
+            p = max(0.01, min(0.99, state.target_credibility))
+            conc = self._config.default_belief_concentration
+            alpha = p * conc
+            beta = (1.0 - p) * conc
+        p = alpha / (alpha + beta)
+        return alpha, beta, p
+
+    def _info_gain(
+        self, alpha: float, beta: float, obs_strength: float
+    ) -> float:
+        """计算观测的期望信息增益 (bits)。
+
+        使用 Beta 分布方差衡量不确定性:
+          U_before = Var[Beta(α, β)]
+          U_after  = Var[Beta(α + n·p, β + n·(1-p))]  (期望后验)
+          gain = (U_before - U_after) / U_before * H(p)
+
+        方差减少比例 × 二值熵 = 信息增益 (归一化到 [0, 1] bits)。
+        弱先验 (小 α+β) 每次观测方差减少更多 → 信息增益更大。
+        """
+        p = alpha / (alpha + beta)
+        var_before = self._beta_variance(alpha, beta)
+        if var_before <= 1e-12:
+            return 0.0  # 已确定, 无信息可获
+
+        alpha_post = alpha + obs_strength * p
+        beta_post = beta + obs_strength * (1.0 - p)
+        var_after = self._beta_variance(alpha_post, beta_post)
+
+        # 方差缩减比例 ∈ [0, 1]
+        var_reduction = max(0.0, (var_before - var_after) / var_before)
+
+        # 乘以当前二值熵作为信息量的上界
+        return var_reduction * self._binary_entropy(p)
 
     def decide(self, state: SchedulerState) -> SchedulerAction:
         """根据当前状态选择最优动作。"""
@@ -148,52 +228,74 @@ class VoIScheduler:
         return best_action
 
     def _utility_continue(self, state: SchedulerState) -> float:
-        """continue 动作的效用: 无信息增益, 低成本。"""
+        """continue 动作的效用: 微弱信息增益 (行进中偶然发现), 低成本。"""
         cfg = self._config
-        # 信息增益: 行进中自动检测可能发现新物体
-        delta_s = 0.05 * (1.0 - state.target_credibility)
+        alpha, beta, _p = self._resolve_belief(state)
+
+        delta_info = self._info_gain(alpha, beta, cfg.continue_obs_strength)
+
         cost = cfg.lambda_d * cfg.cost_continue_dist
-        return cfg.k_info_gain * delta_s - cost
+        return cfg.k_info_gain * delta_info - cost
 
     def _utility_reperceive(self, state: SchedulerState) -> float:
-        """reperceive 动作的效用: 中等信息增益, 中等成本。"""
-        cfg = self._config
-        # 信息增益: 与当前不确定性成正比
-        uncertainty = 1.0 - state.target_credibility
-        position_info = min(1.0, state.target_position_var / 2.0)
-        delta_s = (0.4 * uncertainty + 0.3 * position_info)
+        """reperceive 动作的效用: 中等信息增益, 中等成本。
 
-        # 如果匹配数为 0, 再感知价值更高
-        if state.match_count == 0:
-            delta_s += 0.3
+        位置方差和匹配缺失提供额外增益。
+        """
+        cfg = self._config
+        alpha, beta, _p = self._resolve_belief(state)
+
+        delta_info = self._info_gain(alpha, beta, cfg.reperceive_obs_strength)
+
+        # 位置不确定性: 高方差 → 再感知可减少空间熵
+        position_entropy = 0.5 * math.log2(
+            max(1.0, 2.0 * math.pi * math.e * state.target_position_var)
+        )
+        # 归一化到 [0, 0.3] (position_var=2.0 时 ≈ 0.3)
+        position_bonus = min(0.3, position_entropy * 0.1)
+
+        # 如果匹配数为 0, 再感知价值更高 (信息论: 零观测 = 最大先验熵)
+        no_match_bonus = 0.3 if state.match_count == 0 else 0.0
+
+        total_gain = delta_info + position_bonus + no_match_bonus
 
         cost = (cfg.lambda_t * cfg.cost_reperceive_time
                 + cfg.lambda_e * cfg.cost_reperceive_energy)
-        return cfg.k_info_gain * delta_s - cost
+        return cfg.k_info_gain * total_gain - cost
 
     def _utility_slow_reason(self, state: SchedulerState) -> float:
-        """slow_reason 动作的效用: 高信息增益, 高成本。"""
-        cfg = self._config
-        # 慢推理在 credibility 中等、场景复杂时最有价值
-        uncertainty = 1.0 - state.target_credibility
-        scene_complexity = min(1.0, state.total_objects / 20.0)
-        delta_s = 0.5 * uncertainty + 0.2 * scene_complexity
+        """slow_reason 动作的效用: 高信息增益, 高成本。
 
-        # 已多次慢推理 → 边际收益递减
+        场景复杂度和边际收益递减影响最终增益。
+        """
+        cfg = self._config
+        alpha, beta, _p = self._resolve_belief(state)
+
+        delta_info = self._info_gain(alpha, beta, cfg.slow_reason_obs_strength)
+
+        # 场景复杂度: 物体越多, LLM 推理越有价值 (更多关系可发现)
+        scene_complexity = min(1.0, state.total_objects / 20.0)
+        complexity_bonus = 0.2 * scene_complexity
+
+        total_gain = delta_info + complexity_bonus
+
+        # 已多次慢推理 → 边际收益递减 (信息论: 重复观测的边际信息趋零)
         diminishing = 1.0 / (1.0 + 0.3 * state.slow_reason_count)
-        delta_s *= diminishing
+        total_gain *= diminishing
 
         cost = (cfg.lambda_t * cfg.cost_slow_time
                 + cfg.lambda_e * cfg.cost_slow_energy)
-        return cfg.k_info_gain * delta_s - cost
+        return cfg.k_info_gain * total_gain - cost
 
     def _log_decision(
         self, state: SchedulerState, action: SchedulerAction, reason: str
     ) -> None:
+        alpha, beta, p = self._resolve_belief(state)
         entry = {
             "time": time.time(),
             "action": action.value,
             "cred": round(state.target_credibility, 3),
+            "entropy_bits": round(self._binary_entropy(p), 4),
             "dist_to_goal": round(state.distance_to_goal, 2),
             "reason": reason,
         }
