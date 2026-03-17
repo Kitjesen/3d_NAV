@@ -19,6 +19,8 @@
 \usepackage{subcaption}
 \usepackage{enumitem}
 \usepackage{url}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,backgrounds,calc,shapes.geometric}
 
 % ── TBD placeholder command ──
 \newcommand{\TBD}[1]{\textcolor{red}{\textbf{[TBD: #1]}}}
@@ -199,12 +201,109 @@ a \emph{Planning Module} (\S\ref{sec:fastslow}) that resolves natural language i
 and an \emph{Exploration Module} that selects frontiers when the target is absent from $\mathcal{G}$.
 All modules run onboard Jetson Orin NX with no cloud dependency except optional LLM API calls.
 
-\begin{figure}[t]
+\begin{figure*}[t]
 \centering
-\TBD{System architecture figure: Perception $\to$ BA-HSG $\to$ Fast--Slow Planning $\to$ VoI Scheduling $\to$ Nav2 Execution loop}
-\caption{NaviMind system architecture. The perception module constructs a BA-HSG online from RGB-D and LiDAR-inertial odometry. The planning module resolves goals via Fast--Slow dual-path reasoning. VoI scheduling drives adaptive re-perception and slow-reasoning triggers.}
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    >=Stealth,
+    node distance=0.6cm and 0.8cm,
+    every node/.style={font=\small},
+    layer/.style={draw, rounded corners=3pt, minimum height=0.7cm, text centered, font=\small\sffamily},
+    hw/.style={layer, fill=gray!15, minimum width=2.4cm},
+    sense/.style={layer, fill=blue!12, minimum width=2.4cm},
+    slam/.style={layer, fill=cyan!12, minimum width=2.4cm},
+    perc/.style={layer, fill=green!12, minimum width=2.8cm},
+    plan/.style={layer, fill=orange!12, minimum width=2.8cm},
+    orch/.style={layer, fill=red!10, minimum width=2.4cm},
+    inter/.style={layer, fill=purple!10, minimum width=2.4cm},
+    ring/.style={draw, dashed, rounded corners=4pt, fill=yellow!8, minimum height=0.6cm, font=\small\sffamily},
+    arr/.style={->, thick, color=black!70},
+    darr/.style={<->, thick, color=black!50, dashed},
+]
+
+% ── L1 Drivers ──
+\node[hw] (lidar) {Livox Mid-360};
+\node[hw, right=0.6cm of lidar] (rgbd) {Orbbec RGB-D};
+\node[hw, right=0.6cm of rgbd] (imu) {IMU};
+\node[hw, right=0.6cm of imu] (dog) {Quadruped};
+
+% ── L2 SLAM ──
+\node[slam, above=0.7cm of $(lidar)!0.5!(imu)$] (fastlio) {Fast-LIO2 / Point-LIO};
+
+% ── L3 Perception ──
+\node[perc, above=0.7cm of rgbd] (yolo) {YOLO11s-seg (BPU)};
+\node[perc, right=0.5cm of yolo] (clip) {MobileCLIP};
+\node[perc, above=0.7cm of $(yolo)!0.5!(clip)$] (bahsg) {\textbf{BA-HSG} $\mathcal{G}$};
+\node[sense, left=0.3cm of yolo] (terrain) {Terrain Analysis};
+
+% ── L4 Planning ──
+\node[plan, above=0.9cm of bahsg] (fastslow) {\textbf{Fast--Slow} Goal Resolution};
+\node[plan, left=1.2cm of fastslow] (frontier) {Frontier Scorer};
+\node[plan, right=1.2cm of fastslow] (voi) {\textbf{VoI} Scheduler};
+
+% ── L5 Orchestration ──
+\node[orch, above=0.7cm of fastslow] (mission) {Mission Arc FSM};
+\node[orch, left=0.8cm of mission] (global) {PCT Global Planner};
+\node[orch, right=0.8cm of mission] (local) {Local Planner};
+
+% ── L6 Interaction ──
+\node[inter, above=0.7cm of mission] (grpc) {gRPC Gateway :50051};
+\node[inter, right=0.8cm of grpc] (flutter) {Flutter App};
+
+% ── Three Rings (orthogonal) ──
+\node[ring, right=2.0cm of dog] (r1) {R1 Safety};
+\node[ring, above=0.3cm of r1] (r2) {R2 Eval};
+\node[ring, above=0.3cm of r2] (r3) {R3 Dialogue};
+
+% ── Arrows: L1 → L2/L3 ──
+\draw[arr] (lidar) -- (fastlio);
+\draw[arr] (imu) -- (fastlio);
+\draw[arr] (rgbd) -- (yolo);
+
+% ── L2 → L3 ──
+\draw[arr] (fastlio) -| node[pos=0.3, above, font=\scriptsize]{odom + map} (terrain);
+\draw[arr] (fastlio) -- (bahsg);
+
+% ── L3 internal ──
+\draw[arr] (yolo) -- (bahsg);
+\draw[arr] (clip) -- (bahsg);
+\draw[arr] (terrain) |- (local);
+
+% ── L3 → L4 ──
+\draw[arr] (bahsg) -- node[right, font=\scriptsize]{scene graph} (fastslow);
+\draw[arr] (bahsg) -| (frontier);
+
+% ── L4 internal ──
+\draw[darr] (fastslow) -- (voi);
+\draw[arr] (frontier) -- (fastslow);
+
+% ── L4 → L5 ──
+\draw[arr] (fastslow) -- node[right, font=\scriptsize]{goal} (mission);
+\draw[arr] (mission) -- (global);
+\draw[arr] (mission) -- (local);
+\draw[arr] (global) -- node[above, font=\scriptsize]{path} (local);
+
+% ── L5 → L6 ──
+\draw[arr] (mission) -- (grpc);
+\draw[darr] (grpc) -- (flutter);
+
+% ── L5 → L1 (cmd_vel) ──
+\draw[arr] (local) -- node[right, font=\scriptsize]{cmd\_vel} (dog);
+
+% ── VoI feedback loop ──
+\draw[arr, color=red!60, densely dashed] (voi) to[out=-20, in=20] node[right, font=\scriptsize, color=red!70]{re-perceive} (bahsg);
+
+% ── Ring connections ──
+\draw[arr, color=gray, thin, dotted] (r1) -- (dog);
+
+% ── NL instruction input ──
+\node[above=0.15cm of grpc, font=\scriptsize\itshape, color=black!60] {NL instruction};
+
+\end{tikzpicture}%
+}
+\caption{NaviMind system architecture. The perception module (L3) constructs a BA-HSG online from RGB-D detections (YOLO11s-seg on BPU), MobileCLIP features, and LiDAR-inertial odometry (L2). The planning module (L4) resolves natural language goals via Fast--Slow dual-path reasoning. The VoI scheduler triggers adaptive re-perception (dashed red arrow) when belief entropy is high. Three orthogonal rings (R1--R3) provide safety, evaluation, and dialogue feedback.}
 \label{fig:architecture}
-\end{figure}
+\end{figure*}
 
 \subsection{BA-HSG Construction and FOV-Aware Update}
 \label{sec:bahsg}
@@ -228,8 +327,16 @@ Each object $v_i$ is augmented with three belief components:
 \textbf{Existence belief} via Beta distribution:
 \begin{equation}
 P(\text{exists}_i) \sim \text{Beta}(\alpha_i, \beta_i), \quad \bar{P}_i = \frac{\alpha_i}{\alpha_i + \beta_i}
+\label{eq:existence}
 \end{equation}
-Positive evidence (high-confidence detection with valid depth and geometric consistency) increments $\alpha_i$; negative evidence (object within camera FOV but undetected) increments $\beta_i$ with a weaker weight $\eta_{\text{neg}} = 0.5$.
+Positive evidence (high-confidence detection with valid depth and geometric consistency) and negative evidence (object within camera FOV but undetected) update the parameters as:
+\begin{equation}
+\alpha_i' = \alpha_i + \mathbb{1}[\text{hit}], \quad
+\beta_i' = \beta_i + \eta_{\text{neg}} \cdot \mathbb{1}[\text{miss}]
+\label{eq:belief_update}
+\end{equation}
+where $\eta_{\text{neg}} = 0.5$ down-weights negative evidence to account for detection noise.
+A miss is only counted when the object falls within the camera frustum (see below).
 
 \textbf{Position uncertainty} via isotropic Gaussian:
 \begin{equation}
@@ -247,14 +354,29 @@ where $A_i = 1 - 1/n_i$ captures view diversity, $\Delta t_i$ is staleness, and 
 \subsubsection{FOV-Aware Negative Evidence}
 
 Unlike prior work that applies negative evidence globally~\cite{sgnav2024}, we restrict miss counting to objects within the camera's frustum.
-At each frame, we project tracked object positions into the image plane and mark objects within the FOV polygon but undetected.
+An object $v_i$ at position $\vp_i$ is within the FOV of a camera at position $\vp_{\text{cam}}$ with forward direction $\vf_{\text{cam}}$ iff:
+\begin{equation}
+\cos\!\left(\angle(\vp_i - \vp_{\text{cam}},\; \vf_{\text{cam}})\right) > \cos\!\frac{\theta}{2}
+\;\;\wedge\;\;
+\|\vp_i - \vp_{\text{cam}}\| < d_{\max}
+\label{eq:fov}
+\end{equation}
+where $\theta$ is the horizontal field of view and $d_{\max}$ is the maximum reliable depth.
+Only objects satisfying Eq.~\eqref{eq:fov} but undetected receive negative evidence updates via Eq.~\eqref{eq:belief_update}.
 This prevents penalizing objects that are simply out of view, significantly reducing false negatives in the belief update.
 
 \subsubsection{Graph Diffusion}
 
-Credibility propagates through the hierarchy:
-\textbf{Upward}---room credibility is the detection-weighted average of its objects': $C_k^{\text{room}} = \sum_{i \in \mathcal{O}_k} n_i C_i / \sum n_i$.
-\textbf{Downward}---well-established rooms boost newly detected objects: $\alpha_i^{\text{new}} \mathrel{+}= \delta_{\text{room}} C_k^{\text{room}}$.
+Credibility propagates through the hierarchy.
+\textbf{Upward}---room credibility is the detection-weighted average of its objects':
+$C_k^{\text{room}} = \sum_{i \in \mathcal{O}_k} n_i C_i \big/ \sum_{i \in \mathcal{O}_k} n_i$.
+\textbf{Downward}---well-established rooms boost newly detected child objects via:
+\begin{equation}
+\bar{P}'(\text{child}) = \bar{P}(\text{child}) + w_{\downarrow}\!\left(C_k^{\text{room}} - C_{\text{prior}}^{\text{room}}\right)
+\label{eq:diffusion}
+\end{equation}
+where $w_{\downarrow}$ controls the diffusion strength and $C_{\text{prior}}^{\text{room}}$ is the room's prior credibility before the current update.
+This allows newly detected objects in a well-characterized room (e.g., ``office'' with many confirmed objects) to receive a credibility boost, accelerating convergence.
 \textbf{Lateral}---spatially related objects share partial credibility evidence.
 
 \subsection{Adaptive Fast--Slow Goal Resolution}
@@ -264,7 +386,7 @@ Credibility propagates through the hierarchy:
 
 The Fast Path computes a fused confidence score for each object without LLM calls:
 \begin{equation}
-s_{\text{fused}}(v_i, I) = w_\ell s_{\text{label}} + w_c s_{\text{clip}} + w_d s_{\text{det}} + w_r s_{\text{spatial}}
+s_{\text{fused}}(v_i, I) = \sum_{k} w_k \cdot s_k = w_\ell s_{\text{label}} + w_c s_{\text{clip}} + w_d s_{\text{det}} + w_r s_{\text{spatial}}
 \label{eq:fusion}
 \end{equation}
 where $s_{\text{label}}$ uses keyword extraction (supporting Chinese via jieba), $s_{\text{clip}}$ is CLIP cosine similarity, $s_{\text{det}}$ is YOLO-World confidence, and $s_{\text{spatial}}$ captures spatial relation hints.
@@ -277,6 +399,7 @@ Otherwise, the system escalates to the Slow Path.
 After scoring, we compute the Shannon entropy over candidate scores:
 \begin{equation}
 \Entropy_{\text{score}} = -\sum_i \hat{p}_i \log_2 \hat{p}_i, \quad \hat{p}_i = \frac{s_i}{\sum_j s_j}
+\label{eq:adanav}
 \end{equation}
 If $\Entropy_{\text{score}} > 1.5$ and confidence $< 0.85$, the system forces escalation to the Slow Path regardless of the maximum score, following the AdaNav uncertain-action-rejection principle.
 
@@ -286,6 +409,14 @@ For complex queries, the Slow Path invokes an LLM with selective grounding:
 (1)~Semantic ranking filters objects by CLIP + keyword relevance;
 (2)~1-hop relation expansion preserves spatial context;
 (3)~capacity limits retain top-$K{=}15$ objects and top-$M{=}20$ relations, achieving $\sim$90\% token reduction.
+
+The ESCA filtering ratio quantifies the token reduction achieved:
+\begin{equation}
+R_{\text{ESCA}} = 1 - \frac{|\mathcal{V}_{\text{filtered}}| + |\mathcal{E}_{\text{filtered}}|}{|\mathcal{V}| + |\mathcal{E}|}
+\label{eq:esca}
+\end{equation}
+where $\mathcal{V}_{\text{filtered}}$, $\mathcal{E}_{\text{filtered}}$ are the nodes and edges retained after selective grounding.
+In practice, $R_{\text{ESCA}} \approx 0.90$ (200 objects $\to$ $\sim$15 objects), drastically reducing LLM prompt length and cost.
 
 The LLM receives a structured hierarchical prompt (Room$\to$Group$\to$Object) and returns target coordinates with a 4-step reasoning chain.
 
@@ -303,19 +434,22 @@ The current uncertainty is measured by binary Shannon entropy:
 \label{eq:entropy}
 \end{equation}
 
-For each action $a$ with equivalent observation strength $n_a$, we estimate the expected posterior variance reduction:
+For each action $a$ with equivalent observation strength $n_a$, we estimate the expected information gain as the reduction in Shannon entropy:
 \begin{equation}
-\Delta_{\text{info}}(a) = \frac{\Var_{\text{before}} - \Var_{\text{after}}}{\Var_{\text{before}}} \cdot \Entropy(p)
+\Delta I(a) = \Entropy_{\text{before}} - \mathbb{E}\!\left[\Entropy_{\text{after}} \mid a\right]
 \label{eq:infogain}
 \end{equation}
-where $\Var = \alpha\beta / [(\alpha{+}\beta)^2(\alpha{+}\beta{+}1)]$ is the Beta distribution variance.
-Weaker priors (smaller $\alpha{+}\beta$) yield larger information gain per observation---a natural consequence of Bayesian updating.
+where $\Entropy_{\text{before}} = \Entropy(p)$ from Eq.~\eqref{eq:entropy} and the expected posterior entropy is computed by marginalizing over positive and negative observation outcomes under the current Beta prior:
+\begin{equation}
+\mathbb{E}[\Entropy_{\text{after}}] = p \cdot \Entropy\!\left(\frac{\alpha + n_a}{\alpha + \beta + n_a}\right) + (1{-}p) \cdot \Entropy\!\left(\frac{\alpha}{\alpha + \beta + n_a}\right)
+\end{equation}
+The Beta distribution variance $\Var[\text{Beta}(\alpha,\beta)] = \alpha\beta / [(\alpha{+}\beta)^2(\alpha{+}\beta{+}1)]$ decreases with total observations $\alpha{+}\beta$, so weaker priors yield larger $\Delta I$ per observation---a natural consequence of Bayesian updating.
 
 \subsubsection{Utility Function}
 
 Each action's utility combines information gain and execution cost:
 \begin{equation}
-U(a) = k \cdot \Delta_{\text{info}}(a) - \lambda_t T(a) - \lambda_e E(a) - \lambda_d d(a)
+U(a) = k \cdot \Delta I(a) - \lambda_t T(a) - \lambda_e E(a) - \lambda_d d(a)
 \label{eq:utility}
 \end{equation}
 where $T(a)$, $E(a)$, $d(a)$ are time, energy, and distance costs respectively.

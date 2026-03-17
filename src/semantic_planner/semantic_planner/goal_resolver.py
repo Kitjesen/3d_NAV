@@ -322,7 +322,9 @@ class GoalResolver:
 
         objects = sg.get("objects", [])
         if not objects:
-            return None
+            # 无物体但可能有 room 匹配
+            keywords = self._extract_keywords(instruction)
+            return self._try_room_fallback(instruction, keywords, sg, clip_encoder)
 
         # GAP: 逐层 CLIP 筛选 (FSR-VLN 路线 A) — 先筛 Room 再筛 Object
         allowed_obj_ids = self._get_object_ids_in_top_rooms(
@@ -331,7 +333,8 @@ class GoalResolver:
         if allowed_obj_ids is not None:  # None = 未启用/无 rooms
             objects = [o for o in objects if o.get("id") in allowed_obj_ids]
             if not objects:
-                return None
+                keywords = self._extract_keywords(instruction)
+                return self._try_room_fallback(instruction, keywords, sg, clip_encoder)
 
         relations = sg.get("relations", [])
         inst_lower = instruction.lower()
@@ -490,7 +493,7 @@ class GoalResolver:
             scored.append((obj, fused_score, reason))
 
         if not scored:
-            return None
+            return self._try_room_fallback(instruction, keywords, sg, clip_encoder)
 
         # 取最高分
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -595,6 +598,13 @@ class GoalResolver:
                         path="fast",
                         frame_id=sg.get("frame_id", "map"),
                     )
+
+            # ── Room 级 fallback: 区域指令匹配 ("去厨房"、"到走廊") ──
+            room_result = self._try_room_fallback(
+                instruction, keywords, sg, clip_encoder,
+            )
+            if room_result is not None:
+                return room_result
 
             return None  # 不够确定, 交给 LLM
 
@@ -845,6 +855,102 @@ class GoalResolver:
 
         clip_scored.sort(key=lambda x: x[1], reverse=True)
         return clip_scored
+
+    def _try_room_fallback(
+        self,
+        instruction: str,
+        keywords: List[str],
+        scene_graph: dict,
+        clip_encoder: Optional[Any] = None,
+    ) -> Optional[GoalResult]:
+        """Room 级 fallback: 当物体匹配失败时, 尝试匹配区域/房间。
+
+        支持 "去厨房"、"到走廊"、"find the kitchen" 等区域级指令。
+        从 scene_graph["rooms"] 中提取 room name/center/clip_feature,
+        用关键词匹配或 CLIP 相似度评分, 返回 room center 作为导航目标。
+        """
+        rooms = scene_graph.get("rooms", [])
+        if not rooms:
+            return None
+
+        inst_lower = instruction.lower()
+        best_room = None
+        best_match = 0.0
+
+        for room in rooms:
+            name = room.get("name", "")
+            center = room.get("center")
+            if not name or not center:
+                continue
+
+            name_lower = name.lower()
+            match_score = 0.0
+
+            # 方式 1: CLIP 文本-图像相似度 (room 有 clip_feature 时)
+            if clip_encoder is not None and room.get("clip_feature") is not None:
+                try:
+                    rf = np.array(room["clip_feature"])
+                    if rf.size > 0:
+                        sims = clip_encoder.text_image_similarity(
+                            instruction, [rf]
+                        )
+                        if sims:
+                            match_score = max(match_score, sims[0])
+                except (ValueError, TypeError, AttributeError):
+                    pass
+
+            # 方式 2: 关键词文本匹配
+            for kw in keywords:
+                kw_l = kw.lower()
+                if kw_l in name_lower or name_lower in kw_l:
+                    match_score = max(match_score, 0.8)
+                    break
+
+            # 方式 3: 直接子串匹配 (指令包含房间名 或 房间名包含指令关键部分)
+            if match_score < 0.5:
+                if name_lower in inst_lower or inst_lower in name_lower:
+                    match_score = max(match_score, 0.7)
+
+            if match_score > best_match:
+                best_match = match_score
+                best_room = room
+
+        if best_room is None or best_match < 0.5:
+            return None
+
+        center = best_room["center"]
+        if isinstance(center, (list, tuple)):
+            cx = center[0] if len(center) > 0 else 0.0
+            cy = center[1] if len(center) > 1 else 0.0
+            cz = center[2] if len(center) > 2 else 0.0
+        elif isinstance(center, dict):
+            cx = center.get("x", 0.0)
+            cy = center.get("y", 0.0)
+            cz = center.get("z", 0.0)
+        else:
+            return None
+
+        confidence = best_match * 0.6
+        room_name = best_room.get("name", "unknown_room")
+        logger.info(
+            "Fast path room fallback: '%s' match=%.2f conf=%.2f at (%.2f, %.2f)",
+            room_name, best_match, confidence, cx, cy,
+        )
+
+        return GoalResult(
+            action="navigate",
+            target_x=cx,
+            target_y=cy,
+            target_z=cz,
+            target_label=room_name,
+            confidence=confidence,
+            reasoning=f"Fast path room fallback: '{room_name}' match={best_match:.2f}",
+            is_valid=True,
+            path="fast",
+            frame_id=scene_graph.get("frame_id", "map"),
+            hint_room=room_name,
+            hint_room_center=[cx, cy, cz],
+        )
 
     @staticmethod
     def _extract_keywords(instruction: str) -> List[str]:
