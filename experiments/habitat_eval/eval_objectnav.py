@@ -177,6 +177,34 @@ def compute_soft_spl(path_length: float, shortest_path: float, distance_to_goal:
     return progress * efficiency
 
 
+# ── 成功判定 ──
+
+def _check_success(
+    env: Any,
+    agent_pos: np.ndarray,
+    goal_positions: List[np.ndarray],
+    success_distance: float,
+) -> bool:
+    """
+    判定 episode 是否成功。
+    优先使用 habitat 内置 Success 指标 (检查所有目标实例 + 朝向);
+    失败时回退到距离判定。
+    """
+    # 1. habitat 内置指标 (最准确)
+    try:
+        metrics = env.get_metrics()
+        if "success" in metrics:
+            return bool(metrics["success"])
+    except Exception:
+        pass
+
+    # 2. 回退: 到任意目标实例的距离
+    if not goal_positions:
+        return False
+    min_dist = min(np.linalg.norm(agent_pos - gp) for gp in goal_positions)
+    return min_dist < success_distance
+
+
 # ── Episode 运行 ──
 
 def run_episode(
@@ -184,6 +212,7 @@ def run_episode(
     agent: NaviMindAgent,
     max_steps: int,
     success_distance: float,
+    episode_idx: int = 0,
 ) -> Dict[str, Any]:
     """运行单个 episode, 返回评测指标。"""
     obs = env.reset()
@@ -193,24 +222,29 @@ def run_episode(
     goal_category = getattr(episode, "object_category", "")
     goal_category = _normalize_category(goal_category)
 
-    # 目标位置
-    goal_position = None
+    # 所有目标实例位置 (ObjectNav 任意一个满足即成功)
+    goal_positions = []
     if hasattr(episode, "goals") and episode.goals:
-        goal_pos = episode.goals[0].position
-        goal_position = np.array(goal_pos, dtype=np.float64)
+        goal_positions = [
+            np.array(g.position, dtype=np.float64) for g in episode.goals
+        ]
+    goal_position = goal_positions[0] if goal_positions else None
 
     # 最短路径长度 (geodesic)
     shortest_path_length = 0.0
-    if hasattr(episode, "info") and "geodesic_distance" in episode.info:
+    if hasattr(episode, "info") and episode.info and "geodesic_distance" in episode.info:
         shortest_path_length = float(episode.info["geodesic_distance"])
 
-    # 起始距离
+    # 起始距离 (到最近目标实例)
     start_position = env.sim.get_agent_state().position.copy()
-    start_distance = float(np.linalg.norm(start_position - goal_position)) if goal_position is not None else 0.0
+    start_distance = (
+        float(min(np.linalg.norm(start_position - gp) for gp in goal_positions))
+        if goal_positions else 0.0
+    )
 
     # 重置 agent
     agent.reset()
-    agent.set_goal(goal_category, goal_position)
+    agent.set_goal(goal_category, goal_position, start_position=start_position)
 
     # 语义类别映射
     semantic_categories = get_semantic_categories(env)
@@ -220,18 +254,16 @@ def run_episode(
     success = False
     step = 0
 
+    _ACT = {0: "STOP", 1: "FWD", 2: "L", 3: "R"}
+    _act_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+
     for step in range(max_steps):
         obs["_semantic_categories"] = semantic_categories
 
         action = agent.act(obs)
+        _act_counts[action] = _act_counts.get(action, 0) + 1
 
-        if action == 0:  # STOP
-            agent_pos = env.sim.get_agent_state().position
-            if goal_position is not None:
-                dist = np.linalg.norm(agent_pos - goal_position)
-                success = dist < success_distance
-            break
-
+        # 始终调用 env.step (包括 STOP), 确保 habitat metrics 更新
         obs = env.step(action)
 
         current_position = env.sim.get_agent_state().position
@@ -239,9 +271,29 @@ def run_episode(
         path_length += step_dist
         prev_position = current_position.copy()
 
-    # 最终距离
+        # 首个 episode 前 50 步详细日志 (坐标对齐诊断)
+        if episode_idx == 0 and step < 50:
+            gps = obs.get("gps", np.zeros(2))
+            compass = obs.get("compass", [0.0])
+            print(
+                f"  [DBG] s={step+1:3d} {_ACT.get(action,'?'):4s}"
+                f" world=({current_position[0]:6.2f},{current_position[2]:6.2f})"
+                f" gps=({float(gps[0]):6.2f},{float(gps[1]):6.2f})"
+                f" hdg={math.degrees(float(compass[0])):6.1f}°"
+                f" d={step_dist:.3f}m path={path_length:.3f}m",
+                flush=True,
+            )
+
+        if action == 0:  # STOP — 读取 habitat 内置 success 指标
+            success = _check_success(env, current_position, goal_positions, success_distance)
+            break
+
+    # 最终距离 (到最近目标实例)
     final_position = env.sim.get_agent_state().position
-    distance_to_goal = float(np.linalg.norm(final_position - goal_position)) if goal_position is not None else float("inf")
+    distance_to_goal = (
+        float(min(np.linalg.norm(final_position - gp) for gp in goal_positions))
+        if goal_positions else float("inf")
+    )
 
     spl = compute_spl(success, path_length, shortest_path_length)
     soft_spl = compute_soft_spl(path_length, shortest_path_length, distance_to_goal, start_distance)
@@ -466,7 +518,7 @@ def main():
             break
 
         env.current_episode = episode
-        ep_result = run_episode(env, agent, max_steps, success_distance)
+        ep_result = run_episode(env, agent, max_steps, success_distance, episode_idx=i)
         results.append(ep_result)
 
         if args.verbose:

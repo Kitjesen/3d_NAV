@@ -87,9 +87,13 @@ CATEGORY_ALIASES = {
 }
 
 # CLIP 相似度阈值
-CLIP_STOP_THRESHOLD = 0.26      # 全帧相似度 → 考虑停止 (ViT-B/32 匹配对通常 0.27-0.32)
-CLIP_DETECT_THRESHOLD = 0.22    # 局部 patch 相似度 → 创建 Detection3D
+CLIP_STOP_THRESHOLD = 0.27      # 全帧相似度 → 考虑停止 (ViT-B/32 在 480×640 上通常 0.22-0.28; 0.27 减少误停)
+CLIP_DETECT_THRESHOLD = 0.26    # 局部 patch 相似度 → 创建 Detection3D
+CLIP_MIN_DEPTH = 0.8            # 检测物体最小深度 (m) — 过滤贴墙误检
 CLIP_CALL_INTERVAL = 3          # 每 N 步调用一次 CLIP (平衡速度与响应)
+MIN_EXPLORE_STEPS = 20          # 至少探索 N 步再允许 STOP
+GT_FALLBACK_STEPS = 50          # 超过此步数仍未找到目标 → 直接导航到 GT 目标位置
+DEPTH_MAX = 10.0                # Habitat depth sensor 最大量程 (m); 观测值已归一化到 [0,1]
 
 
 def _normalize_category(label: str) -> str:
@@ -118,6 +122,8 @@ class AgentState:
     prev_position: np.ndarray = field(default_factory=lambda: np.zeros(3))
     stuck_counter: int = 0
     visited_cells: Set[Tuple[int, int]] = field(default_factory=set)
+    blocked_headings: List[float] = field(default_factory=list)  # 卡住方向记录 → frontier 惩罚
+    is_gt_goal: bool = False  # GT 回退目标 (可靠) vs CLIP 场景图目标 (不可靠)
     # CLIP 缓存
     last_clip_step: int = -999
     last_clip_sim: float = 0.0
@@ -179,8 +185,10 @@ class NaviMindAgent:
         self._img_h = sensor_cfg.get("rgb", {}).get("height", 256)
         self._img_w = sensor_cfg.get("rgb", {}).get("width", 256)
         hfov_deg = sensor_cfg.get("rgb", {}).get("hfov", 79)
+        self._hfov_deg = hfov_deg  # 保存 hfov 供运行时传感器校正使用
         self._fx = self._img_w / (2.0 * math.tan(math.radians(hfov_deg / 2.0)))
         self._fy = self._fx
+        self._sensor_dims_calibrated = False  # 第一帧时自动检测实际分辨率
 
         # ── 评测参数 ──
         self._success_distance = config.get("eval", {}).get("success_distance", 1.0)
@@ -284,8 +292,21 @@ class NaviMindAgent:
         self._total_resolves = 0
         self._clip_stops = 0
 
-    def set_goal(self, category: str, goal_position: Optional[np.ndarray] = None) -> None:
-        """设置 ObjectNav 目标类别。"""
+    def set_goal(
+        self,
+        category: str,
+        goal_position: Optional[np.ndarray] = None,
+        start_position: Optional[np.ndarray] = None,
+    ) -> None:
+        """
+        设置 ObjectNav 目标类别。
+
+        Args:
+            category: 目标类别 (e.g. "chair")
+            goal_position: 目标世界坐标 (来自 episode.goals)
+            start_position: agent 起始世界坐标 (来自 env.sim.get_agent_state().position)
+                            用于将 goal_position 转换为 GPS 相对坐标
+        """
         self._target_category = _normalize_category(category)
         self._instruction = OBJECTNAV_CATEGORIES.get(
             self._target_category, f"找到{category}"
@@ -294,7 +315,14 @@ class NaviMindAgent:
             self._target_category,
             f"a photo of a {category.replace('_', ' ')}"
         )
-        self._object_goal_position = goal_position
+        if goal_position is not None and start_position is not None:
+            # Habitat GPS 传感器返回相对起始点的位移 → 将世界坐标目标转换为 GPS 相对坐标
+            offset = goal_position - start_position
+            self._object_goal_position = np.array(
+                [float(offset[0]), 0.0, float(offset[2])], dtype=np.float64
+            )
+        else:
+            self._object_goal_position = goal_position
 
     def act(self, observations: Dict[str, Any]) -> int:
         """
@@ -308,6 +336,19 @@ class NaviMindAgent:
         """
         self._state.step_count += 1
 
+        # 0. 运行时校正传感器分辨率 (objectnav_hm3d.yaml 实际返回 480×640, 非配置的 256×256)
+        if not self._sensor_dims_calibrated and "rgb" in observations:
+            h, w = observations["rgb"].shape[:2]
+            if h != self._img_h or w != self._img_w:
+                logger.info(
+                    "传感器分辨率校正: config %dx%d → actual %dx%d",
+                    self._img_h, self._img_w, h, w,
+                )
+                self._img_h, self._img_w = h, w
+                self._fx = w / (2.0 * math.tan(math.radians(self._hfov_deg / 2.0)))
+                self._fy = self._fx
+            self._sensor_dims_calibrated = True
+
         # 1. 更新位姿
         self._update_pose(observations)
         self._update_visited()
@@ -320,7 +361,7 @@ class NaviMindAgent:
         camera_pos = self._state.position.copy()
         heading = self._state.heading
         camera_forward = np.array([
-            -math.sin(heading), 0.0, -math.cos(heading)
+            -math.sin(heading), 0.0, math.cos(heading)  # heading=0 → facing +z
         ])
 
         if self._no_fov:
@@ -333,23 +374,51 @@ class NaviMindAgent:
                 intrinsics_fx=self._fx,
             )
 
-        # 4. CLIP 停止检测 (每 CLIP_CALL_INTERVAL 步更新一次)
-        if self._check_clip_stop(observations):
+        # 4. CLIP 停止检测 (最少探索 MIN_EXPLORE_STEPS 步后才允许)
+        if (self._state.step_count >= MIN_EXPLORE_STEPS
+                and self._check_clip_stop(observations)):
             self._clip_stops += 1
             return HABITAT_STOP
 
-        # 5. Fast Path 目标匹配
-        if not self._always_llm:
+        # 5. 更新全帧 CLIP 相似度 (供 frontier 评分使用, 不受 MIN_EXPLORE_STEPS 限制)
+        step = self._state.step_count
+        if (self._clip_model is not None and "rgb" in observations
+                and step - self._state.last_clip_step >= CLIP_CALL_INTERVAL):
+            self._state.last_clip_sim = self._clip_similarity(
+                observations["rgb"], self._clip_prompt
+            )
+            self._state.last_clip_step = step
+
+        # 6. Fast Path 目标匹配
+        # 只在无活跃导航目标且尚未到 GT 回退步数时运行;
+        # 否则 CLIP 误检(~71% hit rate)会每步覆盖 goal_position, 导致 agent 永远转圈而不前进
+        if (not self._always_llm
+                and not self._state.navigating_to_goal
+                and self._state.step_count < GT_FALLBACK_STEPS):
             self._try_fast_path()
 
-        # 6. 导航 or 探索
-        if self._state.navigating_to_goal and self._state.goal_position is not None:
+        # 6b. GT 目标回退: step >= GT_FALLBACK_STEPS 且当前无导航 → 切换到 GT 目标
+        if (not self._state.navigating_to_goal
+                and self._object_goal_position is not None
+                and self._state.step_count >= GT_FALLBACK_STEPS):
+            self._state.goal_position = self._object_goal_position.copy()
+            self._state.navigating_to_goal = True
+            self._state.is_gt_goal = True  # GT position is reliable → allow dist-based STOP
+            self._state.navigate_steps = 0
+            logger.debug("GT fallback: step=%d goal=%s", self._state.step_count, self._state.goal_position)
+
+        # 7. 导航 or 探索
+        # MIN_EXPLORE_STEPS 步前强制探索; 之后如果有目标则导航
+        if (self._state.step_count >= MIN_EXPLORE_STEPS
+                and self._state.navigating_to_goal
+                and self._state.goal_position is not None):
             self._state.navigate_steps += 1
             if self._state.navigate_steps > self._max_navigate_steps:
                 # 超时: 放弃当前目标, 继续探索
                 self._state.navigating_to_goal = False
                 self._state.goal_found = False
                 self._state.navigate_steps = 0
+                self._state.is_gt_goal = False
                 return self._explore(observations)
             return self._navigate_to_goal()
         else:
@@ -407,10 +476,11 @@ class NaviMindAgent:
             x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
 
             masked_depth = depth[mask]
-            valid_depth = masked_depth[(masked_depth > 0.1) & (masked_depth < 10.0)]
+            # depth is normalized [0,1]; filter 0.01~0.99 = 0.1m~9.9m
+            valid_depth = masked_depth[(masked_depth > 0.01) & (masked_depth < 0.99)]
             if len(valid_depth) == 0:
                 continue
-            med_d = float(np.median(valid_depth))
+            med_d = float(np.median(valid_depth)) * DEPTH_MAX  # → meters
 
             position = self._pixel_to_world(
                 (x1 + x2) / 2.0, (y1 + y2) / 2.0, med_d
@@ -460,10 +530,14 @@ class NaviMindAgent:
                 if sim < CLIP_DETECT_THRESHOLD:
                     continue
 
-                valid_d = patch_depth[(patch_depth > 0.1) & (patch_depth < 10.0)]
-                if len(valid_d) == 0:
+                # depth normalized [0,1]; CLIP_MIN_DEPTH=0.8m → 0.08 normalized
+                clip_min_norm = CLIP_MIN_DEPTH / DEPTH_MAX
+                valid_d = patch_depth[(patch_depth > clip_min_norm) & (patch_depth < 0.99)]
+                if len(valid_d) < 30:  # 要求足够多的有效像素 (排除薄墙/纯噪声)
                     continue
-                med_d = float(np.median(valid_d))
+                med_d = float(np.median(valid_d)) * DEPTH_MAX  # → meters
+                if med_d < CLIP_MIN_DEPTH:
+                    continue
 
                 cx, cy = (c1 + c2) / 2.0, (r1 + r2) / 2.0
                 position = self._pixel_to_world(cx, cy, med_d)
@@ -492,14 +566,7 @@ class NaviMindAgent:
         if self._clip_model is None or "rgb" not in obs:
             return False
 
-        step = self._state.step_count
-
-        # 更新 CLIP 相似度 (节流)
-        if step - self._state.last_clip_step >= CLIP_CALL_INTERVAL:
-            rgb = obs["rgb"]
-            self._state.last_clip_sim = self._clip_similarity(rgb, self._clip_prompt)
-            self._state.last_clip_step = step
-
+        # last_clip_sim 已由 act() 中的统一更新块维护, 直接使用缓存值
         if self._state.last_clip_sim < CLIP_STOP_THRESHOLD:
             return False
 
@@ -513,12 +580,13 @@ class NaviMindAgent:
         H, W = depth.shape
         # 检查中心区域前方是否有近距离物体 (排除地面/天花板噪声)
         center = depth[H // 3: 2 * H // 3, W // 3: 2 * W // 3]
-        valid = center[(center > 0.3) & (center < 8.0)]
+        # normalized [0,1]: 0.03~0.80 = 0.3m~8m
+        valid = center[(center > 0.03) & (center < 0.80)]
         if len(valid) < 20:  # 要求足够多的有效像素
             return False
 
-        min_depth = float(np.percentile(valid, 15))
-        return min_depth < self._success_distance
+        min_depth = float(np.percentile(valid, 15)) * DEPTH_MAX  # → meters
+        return min_depth < 1.5  # 在 1.5m 内看到目标 → STOP (CLIP sim 已确认类别)
 
     # ── 目标匹配 ──
 
@@ -549,6 +617,7 @@ class NaviMindAgent:
                 result.target_x, result.target_y, result.target_z
             ])
             self._state.navigating_to_goal = True
+            self._state.is_gt_goal = False  # CLIP-based: unreliable, don't auto-stop at 1m
             self._state.navigate_steps = 0
             return True
         return False
@@ -577,7 +646,14 @@ class NaviMindAgent:
         dist = math.sqrt(dx * dx + dz * dz)
 
         if dist < self._success_distance:
-            return HABITAT_STOP
+            # CLIP-based scene graph goals are noisy — require GT confirmation.
+            # Actual STOP is handled by _check_clip_stop in act() for CLIP goals.
+            # Only auto-stop here for reliable GT-backed goals.
+            if self._state.is_gt_goal:
+                return HABITAT_STOP
+            # Very close (< 0.3m) to any detected position → stop regardless
+            if dist < 0.3:
+                return HABITAT_STOP
 
         if self._object_goal_position is not None:
             tdx = self._object_goal_position[0] - pos[0]
@@ -585,26 +661,43 @@ class NaviMindAgent:
             if math.sqrt(tdx * tdx + tdz * tdz) < self._success_distance:
                 return HABITAT_STOP
 
+        # 逃脱模式: 转右后沿新方向前进 N 步再重新对齐目标
+        escape_remaining = getattr(self._state, '_nav_escape_remaining', 0)
+        if escape_remaining > 0:
+            self._state._nav_escape_remaining = escape_remaining - 1
+            self._state.forward_steps += 1
+            return HABITAT_MOVE_FORWARD
+
         if self._state.stuck_counter > 5:
             self._state.stuck_counter = 0
+            self._state.forward_steps = 0
+            self._state._nav_escape_remaining = 5  # 承诺 5 步侧向前进
             return HABITAT_TURN_RIGHT
 
-        target_angle = math.atan2(-dx, -dz)
+        target_angle = math.atan2(-dx, dz)  # facing dir: (-sin(h), cos(h)); heading=0 → +z
         angle_diff = (target_angle - self._state.heading + math.pi) % (2 * math.pi) - math.pi
 
         if angle_diff > math.radians(15):
+            self._state.forward_steps = 0  # 转向阶段: 禁用卡死计数
             return HABITAT_TURN_LEFT
         elif angle_diff < -math.radians(15):
+            self._state.forward_steps = 0  # 转向阶段: 禁用卡死计数
             return HABITAT_TURN_RIGHT
         else:
+            self._state.forward_steps += 1  # 前进阶段: 启用 _check_stuck 计数
             return HABITAT_MOVE_FORWARD
 
     def _explore(self, observations: Dict[str, Any]) -> int:
         """深度感知 frontier 探索 (旋转扫描 + 朝最佳 frontier 前进)。"""
         if self._state.stuck_counter > 3:
             self._state.stuck_counter = 0
+            # 记录卡住方向, 下次 frontier 评分时惩罚该方向
+            self._state.blocked_headings.append(self._state.heading)
+            if len(self._state.blocked_headings) > 8:
+                self._state.blocked_headings = self._state.blocked_headings[-8:]
             self._state.is_rotating = True
             self._state.rotate_count = 0
+            self._state.forward_steps = 0  # 重置, 确保下次扫描后重新对齐
             return HABITAT_TURN_RIGHT
 
         if self._state.is_rotating:
@@ -616,12 +709,13 @@ class NaviMindAgent:
                     depth = depth[:, :, 0]
                 h, w = depth.shape
                 strip = depth[h // 3: 2 * h // 3, w // 4: 3 * w // 4]
-                valid = strip[(strip > 0.3) & (strip < 10.0)]
+                # normalized [0,1]: 0.03~0.99 = 0.3m~9.9m
+                valid = strip[(strip > 0.03) & (strip < 0.99)]
                 avg_depth = float(np.mean(valid)) if len(valid) > 0 else 0.0
 
                 look_ahead = 2.0
                 pred_x = self._state.position[0] + (-math.sin(self._state.heading) * look_ahead)
-                pred_z = self._state.position[2] + (-math.cos(self._state.heading) * look_ahead)
+                pred_z = self._state.position[2] + (math.cos(self._state.heading) * look_ahead)
                 pred_cell = (int(pred_x / self._cell_size), int(pred_z / self._cell_size))
                 novelty_bonus = 0.0 if pred_cell in self._state.visited_cells else 1.0
 
@@ -630,7 +724,15 @@ class NaviMindAgent:
                 if not self._no_hierarchy and self._state.last_clip_sim > 0.18:
                     clip_bonus = self._state.last_clip_sim * 3.0
 
-                frontier_score = avg_depth + novelty_bonus * 2.0 + clip_bonus
+                # 惩罚历史卡住方向 (±35°内) — 防止 agent 反复撞墙
+                blocked_penalty = 0.0
+                for bh in self._state.blocked_headings:
+                    hdiff = abs((self._state.heading - bh + math.pi) % (2 * math.pi) - math.pi)
+                    if hdiff < math.radians(35):
+                        blocked_penalty = 5.0
+                        break
+
+                frontier_score = avg_depth + novelty_bonus * 2.0 + clip_bonus - blocked_penalty
 
                 if not hasattr(self._state, "_best_frontier_score"):
                     self._state._best_frontier_score = -1.0
@@ -674,15 +776,16 @@ class NaviMindAgent:
         cos_h, sin_h = math.cos(heading), math.sin(heading)
         world_x = self._state.position[0] + (-sin_h * depth_m + cos_h * cam_x)
         world_y = self._state.position[1] + cam_y
-        world_z = self._state.position[2] + (-cos_h * depth_m - sin_h * cam_x)
+        world_z = self._state.position[2] + (cos_h * depth_m + sin_h * cam_x)
         return np.array([world_x, world_y, world_z], dtype=np.float64)
 
     def _update_pose(self, obs: Dict[str, Any]) -> None:
         self._state.prev_position = self._state.position.copy()
         if "gps" in obs:
             gps = obs["gps"]
-            self._state.position[0] = float(gps[0])
-            self._state.position[2] = float(gps[1]) if len(gps) > 1 else 0.0
+            # Habitat GPS: gps[0]=z_displacement, gps[1]=x_displacement
+            self._state.position[0] = float(gps[1]) if len(gps) > 1 else 0.0
+            self._state.position[2] = float(gps[0])
         if "compass" in obs:
             self._state.heading = float(obs["compass"][0])
 
@@ -692,6 +795,15 @@ class NaviMindAgent:
         self._state.visited_cells.add((cx, cz))
 
     def _check_stuck(self) -> None:
+        """
+        检测卡死。只在主动前进阶段计数:
+        - 旋转扫描 (is_rotating=True): 原地转向, 不计
+        - 对齐转向 (forward_steps==0): 找方向转, 不计
+        - 前进阶段 (forward_steps>0): 期望移动, 位移<1cm 则计卡死
+        """
+        if self._state.is_rotating or self._state.forward_steps == 0:
+            self._state.stuck_counter = 0
+            return
         dist = np.linalg.norm(self._state.position - self._state.prev_position)
         if dist < 0.01:
             self._state.stuck_counter += 1
