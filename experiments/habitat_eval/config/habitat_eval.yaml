@@ -1,0 +1,56 @@
+# Habitat ObjectNav 评测配置
+# NaviMind (灵途) — Fast-Slow 双进程语义导航评测
+
+# ── 传感器配置 ──
+sensor:
+  rgb:
+    width: 256
+    height: 256
+    hfov: 79           # 度
+    position: [0, 0.88, 0]  # 相机高度 (m)
+  depth:
+    width: 256
+    height: 256
+    hfov: 79
+    min_depth: 0.0
+    max_depth: 10.0
+  semantic:
+    width: 256
+    height: 256
+    hfov: 79
+  gps:
+    dimensionality: 2   # [x, z] in habitat frame
+  compass:
+    dimensionality: 1   # heading angle
+
+# ── 动作空间 ──
+action:
+  move_forward: 0.25     # 米
+  turn_left: 30          # 度
+  turn_right: 30         # 度
+  # STOP 动作无参数
+
+# ── 评测参数 ──
+eval:
+  max_steps: 500
+  success_distance: 2.0  # 米, 到达目标此距离内并 STOP 即为成功
+  dataset: "hm3d"
+  split: "val"
+
+# ── 场景图构建参数 ──
+scene_graph:
+  merge_distance: 0.8     # 米, 同一物体实例合并距离
+  iou_threshold: 0.3
+  clip_threshold: 0.75
+  max_objects: 200
+  stale_timeout: 9999.0   # 评测中不清理过期物体
+
+# ── Fast Path 参数 ──
+fast_path:
+  threshold: 0.75          # 置信度阈值
+  confidence_threshold: 0.6
+
+# ── 探索策略 ──
+exploration:
+  rotate_steps: 12         # 360°/30° = 12 步完成一圈扫描
+  frontier_distance: 2.0   # 米, 朝 frontier 前进的距离
