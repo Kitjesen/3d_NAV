@@ -2,18 +2,27 @@
 NaviMind Habitat ObjectNav 评测主脚本。
 
 加载 HM3D ObjectNav episodes, 运行 NaviMindAgent,
-记录 Success / SPL / Distance-to-Goal, 输出汇总表格。
+记录 Success / SPL / SoftSPL / Distance-to-Goal, 输出汇总表格。
+
+支持:
+  - 消融实验 (--ablation no_belief/no_fov/no_hierarchy/always_llm)
+  - 断点续评 (--resume, 自动跳过已完成 episodes)
+  - 按类别过滤 (--category chair)
+  - 详细日志 (--verbose)
 
 用法:
     python eval_objectnav.py
-    python eval_objectnav.py --config config/habitat_eval.yaml
-    python eval_objectnav.py --max-episodes 50
+    python eval_objectnav.py --max-episodes 50 --verbose
+    python eval_objectnav.py --ablation no_belief --output results_no_belief.json
     python eval_objectnav.py --category chair
+    python eval_objectnav.py --resume  # 从上次中断处继续
 """
 
 import argparse
 import json
 import math
+import os
+import signal
 import sys
 import time
 from collections import defaultdict
@@ -25,57 +34,49 @@ import yaml
 
 try:
     import habitat
-    from habitat import make_dataset
-    from habitat.config.default_structured_configs import (
-        HabitatConfigPlugin,
-        TaskConfig,
-    )
     from habitat.core.env import Env
-    from habitat.utils.visualizations.utils import observations_to_image
 except ImportError:
     print("错误: 需要安装 habitat-lab 和 habitat-sim")
-    print("  pip install habitat-sim habitat-lab")
+    print("  pip install habitat-sim-headless habitat-lab habitat-baselines")
     sys.exit(1)
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
 
 from habitat_navimind_agent import NaviMindAgent, OBJECTNAV_CATEGORIES, _normalize_category
 
 
+# ── Habitat 配置构建 ──
+
 def build_habitat_config(eval_config: Dict) -> Any:
-    """构建 Habitat 配置。"""
-    from omegaconf import DictConfig, OmegaConf
+    """
+    构建 Habitat 配置。
+
+    优先使用 objectnav_hm3d.yaml (有 RGB+Depth, CLIP 感知所需)。
+    若可用则叠加 semantic_sensor (有 .basis.scn 标注时自动启用)。
+    """
     from habitat.config.default import get_config
 
-    sensor_cfg = eval_config.get("sensor", {})
     eval_params = eval_config.get("eval", {})
+    split = eval_params.get("split", "val_mini")
 
-    # 使用 Habitat 默认配置作为基础, 覆盖关键参数
-    overrides = [
-        "habitat.dataset.type=HM3D-v0",
-        f"habitat.dataset.split={eval_params.get('split', 'val')}",
+    base_overrides = [
+        f"habitat.dataset.split={split}",
         f"habitat.environment.max_episode_steps={eval_params.get('max_steps', 500)}",
-        f"habitat.task.measurements.success.success_distance={eval_params.get('success_distance', 2.0)}",
-        # RGB
-        f"habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.width={sensor_cfg.get('rgb', {}).get('width', 256)}",
-        f"habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.height={sensor_cfg.get('rgb', {}).get('height', 256)}",
-        f"habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.hfov={sensor_cfg.get('rgb', {}).get('hfov', 79)}",
-        # Depth
-        f"habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.width={sensor_cfg.get('depth', {}).get('width', 256)}",
-        f"habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.height={sensor_cfg.get('depth', {}).get('height', 256)}",
-        f"habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.hfov={sensor_cfg.get('depth', {}).get('hfov', 79)}",
     ]
 
+    # objectnav_hm3d.yaml: rgb_sensor + depth_sensor, 正确动作空间
     config = get_config(
-        config_path="benchmark/nav/objectnav/objectnav_v2_hm3d.yaml",
-        overrides=overrides,
+        config_path="benchmark/nav/objectnav/objectnav_hm3d.yaml",
+        overrides=base_overrides,
     )
     return config
 
 
 def build_simple_habitat_config(eval_config: Dict) -> Any:
-    """
-    简化版 Habitat 配置构建 — 直接使用 OmegaConf。
-    当 Habitat 默认配置文件不可用时的回退方案。
-    """
+    """简化版 Habitat 配置 — 当默认配置文件不可用时的回退。"""
     from omegaconf import OmegaConf
 
     sensor_cfg = eval_config.get("sensor", {})
@@ -90,7 +91,7 @@ def build_simple_habitat_config(eval_config: Dict) -> Any:
                 "type": "ObjectNav-v1",
                 "measurements": {
                     "success": {
-                        "success_distance": eval_params.get("success_distance", 2.0),
+                        "success_distance": eval_params.get("success_distance", 1.0),
                     },
                 },
                 "lab_sensors": {
@@ -99,10 +100,12 @@ def build_simple_habitat_config(eval_config: Dict) -> Any:
                 },
             },
             "dataset": {
-                "type": "ObjectNav-v2",
-                "split": eval_params.get("split", "val"),
-                "data_path": "data/datasets/objectnav/hm3d/v2/{split}/{split}.json.gz",
+                "type": "ObjectNav-v1",
+                "split": eval_params.get("split", "val_mini"),
+                "data_path": "data/datasets/objectnav/hm3d/v1/{split}/{split}.json.gz",
+                "content_scenes_path": f"data/datasets/objectnav/hm3d/v1/{eval_params.get('split', 'val_mini')}/content/{{scene}}.json.gz",
                 "scenes_dir": "data/scene_datasets/hm3d",
+                "content_scenes": ["*"],
             },
             "simulator": {
                 "type": "Sim-v0",
@@ -141,6 +144,8 @@ def build_simple_habitat_config(eval_config: Dict) -> Any:
     return OmegaConf.create(config_dict)
 
 
+# ── 语义类别提取 ──
+
 def get_semantic_categories(env: Any) -> Dict[int, str]:
     """从 Habitat 环境中提取语义类别映射 (instance_id → label)。"""
     categories = {}
@@ -154,14 +159,25 @@ def get_semantic_categories(env: Any) -> Dict[int, str]:
     return categories
 
 
-def compute_spl(
-    success: bool, path_length: float, shortest_path_length: float
-) -> float:
-    """计算 SPL (Success weighted by Path Length)。"""
-    if not success or shortest_path_length <= 0:
-        return 0.0
-    return float(success) * shortest_path_length / max(path_length, shortest_path_length)
+# ── 评测指标 ──
 
+def compute_spl(success: bool, path_length: float, shortest_path: float) -> float:
+    """SPL (Success weighted by Path Length)。"""
+    if not success or shortest_path <= 0:
+        return 0.0
+    return float(success) * shortest_path / max(path_length, shortest_path)
+
+
+def compute_soft_spl(path_length: float, shortest_path: float, distance_to_goal: float, start_distance: float) -> float:
+    """SoftSPL — 即使未成功也给部分 credit (Anderson et al. 2018)。"""
+    if shortest_path <= 0 or start_distance <= 0:
+        return 0.0
+    progress = max(0.0, 1.0 - distance_to_goal / start_distance)
+    efficiency = shortest_path / max(path_length, shortest_path) if path_length > 0 else 0.0
+    return progress * efficiency
+
+
+# ── Episode 运行 ──
 
 def run_episode(
     env: Any,
@@ -169,17 +185,15 @@ def run_episode(
     max_steps: int,
     success_distance: float,
 ) -> Dict[str, Any]:
-    """
-    运行单个 episode, 返回评测指标。
-    """
+    """运行单个 episode, 返回评测指标。"""
     obs = env.reset()
     episode = env.current_episode
 
     # 目标类别
-    goal_category = episode.object_category if hasattr(episode, "object_category") else ""
+    goal_category = getattr(episode, "object_category", "")
     goal_category = _normalize_category(goal_category)
 
-    # 目标位置 (用于计算距离)
+    # 目标位置
     goal_position = None
     if hasattr(episode, "goals") and episode.goals:
         goal_pos = episode.goals[0].position
@@ -190,25 +204,28 @@ def run_episode(
     if hasattr(episode, "info") and "geodesic_distance" in episode.info:
         shortest_path_length = float(episode.info["geodesic_distance"])
 
+    # 起始距离
+    start_position = env.sim.get_agent_state().position.copy()
+    start_distance = float(np.linalg.norm(start_position - goal_position)) if goal_position is not None else 0.0
+
     # 重置 agent
     agent.reset()
     agent.set_goal(goal_category, goal_position)
 
-    # 构建语义类别映射
+    # 语义类别映射
     semantic_categories = get_semantic_categories(env)
 
     path_length = 0.0
-    prev_position = env.sim.get_agent_state().position.copy()
+    prev_position = start_position.copy()
     success = False
+    step = 0
 
     for step in range(max_steps):
-        # 注入语义类别映射到观测
         obs["_semantic_categories"] = semantic_categories
 
         action = agent.act(obs)
 
         if action == 0:  # STOP
-            # 检查是否到达目标
             agent_pos = env.sim.get_agent_state().position
             if goal_position is not None:
                 dist = np.linalg.norm(agent_pos - goal_position)
@@ -217,7 +234,6 @@ def run_episode(
 
         obs = env.step(action)
 
-        # 累积路径长度
         current_position = env.sim.get_agent_state().position
         step_dist = np.linalg.norm(current_position - prev_position)
         path_length += step_dist
@@ -225,50 +241,53 @@ def run_episode(
 
     # 最终距离
     final_position = env.sim.get_agent_state().position
-    distance_to_goal = float("inf")
-    if goal_position is not None:
-        distance_to_goal = float(np.linalg.norm(final_position - goal_position))
+    distance_to_goal = float(np.linalg.norm(final_position - goal_position)) if goal_position is not None else float("inf")
 
     spl = compute_spl(success, path_length, shortest_path_length)
+    soft_spl = compute_soft_spl(path_length, shortest_path_length, distance_to_goal, start_distance)
 
     return {
-        "episode_id": episode.episode_id if hasattr(episode, "episode_id") else "unknown",
-        "scene_id": episode.scene_id if hasattr(episode, "scene_id") else "unknown",
+        "episode_id": getattr(episode, "episode_id", "unknown"),
+        "scene_id": getattr(episode, "scene_id", "unknown"),
         "category": goal_category,
-        "success": success,
-        "spl": spl,
-        "distance_to_goal": distance_to_goal,
-        "path_length": path_length,
-        "shortest_path_length": shortest_path_length,
+        "success": bool(success),
+        "spl": float(spl),
+        "soft_spl": float(soft_spl),
+        "distance_to_goal": float(distance_to_goal),
+        "path_length": float(path_length),
+        "shortest_path_length": float(shortest_path_length),
+        "start_distance": float(start_distance),
         "steps": step + 1,
         "agent_stats": agent.stats,
     }
 
 
-def print_results_table(results: List[Dict], elapsed: float) -> None:
+# ── 结果输出 ──
+
+def print_results_table(results: List[Dict], elapsed: float, ablation: str = "full") -> None:
     """打印评测结果汇总表格。"""
     if not results:
         print("无评测结果。")
         return
 
-    # Overall
     n = len(results)
     successes = sum(1 for r in results if r["success"])
-    avg_spl = np.mean([r["spl"] for r in results])
-    avg_dist = np.mean([r["distance_to_goal"] for r in results])
-    avg_steps = np.mean([r["steps"] for r in results])
-    avg_path = np.mean([r["path_length"] for r in results])
+    avg_spl = float(np.mean([r["spl"] for r in results]))
+    avg_soft_spl = float(np.mean([r["soft_spl"] for r in results]))
+    avg_dist = float(np.mean([r["distance_to_goal"] for r in results]))
+    avg_steps = float(np.mean([r["steps"] for r in results]))
+    avg_path = float(np.mean([r["path_length"] for r in results]))
 
     print("\n" + "=" * 72)
-    print(f"  NaviMind Habitat ObjectNav 评测结果")
+    print(f"  NaviMind Habitat ObjectNav 评测结果  [{ablation.upper()}]")
     print(f"  Episodes: {n}  |  耗时: {elapsed:.1f}s  |  平均: {elapsed/max(n,1):.1f}s/ep")
     print("=" * 72)
 
-    # Overall metrics
     print(f"\n{'指标':<25} {'值':>10}")
     print("-" * 40)
-    print(f"{'Success Rate':<25} {successes/n*100:>9.1f}%")
+    print(f"{'Success Rate (SR)':<25} {successes/n*100:>9.1f}%")
     print(f"{'SPL':<25} {avg_spl:>10.4f}")
+    print(f"{'SoftSPL':<25} {avg_soft_spl:>10.4f}")
     print(f"{'Avg Distance to Goal':<25} {avg_dist:>9.2f}m")
     print(f"{'Avg Steps':<25} {avg_steps:>10.1f}")
     print(f"{'Avg Path Length':<25} {avg_path:>9.2f}m")
@@ -278,27 +297,30 @@ def print_results_table(results: List[Dict], elapsed: float) -> None:
     for r in results:
         by_cat[r["category"]].append(r)
 
-    print(f"\n{'类别':<15} {'Episodes':>8} {'SR%':>8} {'SPL':>8} {'Dist':>8}")
-    print("-" * 55)
+    print(f"\n{'类别':<15} {'N':>5} {'SR%':>8} {'SPL':>8} {'SoftSPL':>8} {'Dist':>8}")
+    print("-" * 60)
     for cat in sorted(by_cat.keys()):
         cat_results = by_cat[cat]
         cat_n = len(cat_results)
         cat_sr = sum(1 for r in cat_results if r["success"]) / cat_n * 100
-        cat_spl = np.mean([r["spl"] for r in cat_results])
-        cat_dist = np.mean([r["distance_to_goal"] for r in cat_results])
-        print(f"{cat:<15} {cat_n:>8} {cat_sr:>7.1f}% {cat_spl:>8.4f} {cat_dist:>7.2f}m")
+        cat_spl = float(np.mean([r["spl"] for r in cat_results]))
+        cat_sspl = float(np.mean([r["soft_spl"] for r in cat_results]))
+        cat_dist = float(np.mean([r["distance_to_goal"] for r in cat_results]))
+        print(f"{cat:<15} {cat_n:>5} {cat_sr:>7.1f}% {cat_spl:>8.4f} {cat_sspl:>8.4f} {cat_dist:>7.2f}m")
 
-    # Fast Path 统计
+    # Fast Path / CLIP 统计
     total_resolves = sum(r["agent_stats"]["total_resolves"] for r in results)
     total_hits = sum(r["agent_stats"]["fast_path_hits"] for r in results)
     fp_rate = total_hits / max(1, total_resolves) * 100
+    clip_stops = sum(r["agent_stats"].get("clip_stops", 0) for r in results)
+    clip_avail = any(r["agent_stats"].get("clip_available", False) for r in results)
     print(f"\n{'Fast Path Hit Rate':<25} {fp_rate:>9.1f}% ({total_hits}/{total_resolves})")
+    print(f"{'CLIP Stops':<25} {clip_stops:>9} ({'CLIP on' if clip_avail else 'depth-only'})")
     print("=" * 72)
 
 
-def save_results(results: List[Dict], output_path: str) -> None:
-    """保存详细结果到 JSON。"""
-    # numpy 类型转换
+def save_results(results: List[Dict], output_path: str, ablation: str = "full") -> None:
+    """保存详细结果到 JSON (支持断点续评)。"""
     def convert(obj):
         if isinstance(obj, (np.integer,)):
             return int(obj)
@@ -308,26 +330,49 @@ def save_results(results: List[Dict], output_path: str) -> None:
             return obj.tolist()
         if isinstance(obj, (np.bool_,)):
             return bool(obj)
+        if isinstance(obj, set):
+            return list(obj)
         return obj
 
-    serializable = json.loads(json.dumps(results, default=convert))
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(serializable, f, indent=2, ensure_ascii=False)
-    print(f"\n详细结果已保存: {output_path}")
+    output = {
+        "ablation": ablation,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "num_episodes": len(results),
+        "results": json.loads(json.dumps(results, default=convert)),
+    }
 
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+    print(f"\n结果已保存: {output_path}")
+
+
+def load_completed_episodes(output_path: str) -> set:
+    """加载已完成的 episode IDs (断点续评)。"""
+    if not os.path.exists(output_path):
+        return set()
+    try:
+        with open(output_path, encoding="utf-8") as f:
+            data = json.load(f)
+        results = data.get("results", data) if isinstance(data, dict) else data
+        return {r["episode_id"] for r in results}
+    except (json.JSONDecodeError, KeyError):
+        return set()
+
+
+# ── 主入口 ──
 
 def main():
     parser = argparse.ArgumentParser(description="NaviMind Habitat ObjectNav 评测")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=str(Path(__file__).parent / "config" / "habitat_eval.yaml"),
-        help="评测配置文件",
-    )
-    parser.add_argument("--max-episodes", type=int, default=0, help="最大评测 episodes 数 (0=全部)")
+    parser.add_argument("--config", type=str,
+                        default=str(Path(__file__).parent / "config" / "habitat_eval.yaml"))
+    parser.add_argument("--max-episodes", type=int, default=0, help="最大 episodes (0=全部)")
     parser.add_argument("--category", type=str, default="", help="只评测指定类别")
-    parser.add_argument("--output", type=str, default="", help="结果输出 JSON 路径")
-    parser.add_argument("--verbose", action="store_true", help="详细输出每个 episode")
+    parser.add_argument("--ablation", type=str, default="full",
+                        choices=["full", "no_belief", "no_fov", "no_hierarchy", "always_llm"],
+                        help="消融实验变体")
+    parser.add_argument("--output", type=str, default="", help="结果 JSON 路径")
+    parser.add_argument("--resume", action="store_true", help="断点续评")
+    parser.add_argument("--verbose", action="store_true", help="详细输出")
     args = parser.parse_args()
 
     # 加载配置
@@ -339,69 +384,112 @@ def main():
         print(f"警告: 配置文件 {config_path} 不存在, 使用默认配置")
         eval_config = {}
 
+    # 注入消融配置
+    eval_config.setdefault("ablation", {})["name"] = args.ablation
+
     eval_params = eval_config.get("eval", {})
     max_steps = eval_params.get("max_steps", 500)
-    success_distance = eval_params.get("success_distance", 2.0)
+    success_distance = eval_params.get("success_distance", 1.0)
+
+    # 输出路径
+    output_path = args.output
+    if not output_path:
+        output_path = str(Path(__file__).parent / f"results_{args.ablation}.json")
+
+    # 断点续评: 加载已完成 episodes
+    completed_ids = set()
+    prev_results = []
+    if args.resume:
+        completed_ids = load_completed_episodes(output_path)
+        if completed_ids:
+            with open(output_path, encoding="utf-8") as f:
+                data = json.load(f)
+            prev_results = data.get("results", data) if isinstance(data, dict) else data
+            print(f"断点续评: 已完成 {len(completed_ids)} 个 episodes, 跳过")
 
     # 构建 Habitat 环境
-    print("正在初始化 Habitat 环境...")
+    print(f"正在初始化 Habitat 环境 [ablation={args.ablation}]...")
     try:
         habitat_config = build_habitat_config(eval_config)
     except Exception as e:
-        print(f"使用默认配置失败 ({e}), 切换到简化配置...")
+        print(f"使用官方配置失败 ({e}), 切换到简化配置...")
         habitat_config = build_simple_habitat_config(eval_config)
 
     env = Env(config=habitat_config)
     print(f"Habitat 环境就绪, 共 {len(env.episodes)} 个 episodes")
 
-    # 过滤类别
-    episodes = env.episodes
+    # 过滤
+    episodes = list(env.episodes)
     if args.category:
         target_cat = _normalize_category(args.category)
-        episodes = [
-            ep for ep in episodes
-            if hasattr(ep, "object_category")
-            and _normalize_category(ep.object_category) == target_cat
-        ]
-        print(f"已过滤类别 '{target_cat}': {len(episodes)} 个 episodes")
+        episodes = [ep for ep in episodes
+                    if hasattr(ep, "object_category")
+                    and _normalize_category(ep.object_category) == target_cat]
+        print(f"过滤类别 '{target_cat}': {len(episodes)} 个 episodes")
+
+    if args.resume and completed_ids:
+        episodes = [ep for ep in episodes
+                    if getattr(ep, "episode_id", None) not in completed_ids]
+        print(f"跳过已完成, 剩余 {len(episodes)} 个 episodes")
 
     if args.max_episodes > 0:
-        episodes = episodes[: args.max_episodes]
-        print(f"限制评测数量: {len(episodes)} 个 episodes")
+        episodes = episodes[:args.max_episodes]
+        print(f"限制数量: {len(episodes)} 个 episodes")
+
+    if not episodes:
+        print("无 episodes 需要评测。")
+        if prev_results:
+            print_results_table(prev_results, 0, args.ablation)
+        return
 
     # 创建 agent
     agent = NaviMindAgent(eval_config)
 
     # 运行评测
-    results = []
+    results = list(prev_results)
     t0 = time.time()
 
-    for i, episode in enumerate(episodes):
-        env.current_episode = episode
+    # SIGINT 优雅退出: 保存已有结果
+    interrupted = False
+    def signal_handler(sig, frame):
+        nonlocal interrupted
+        interrupted = True
+        print("\n中断! 正在保存已完成的结果...")
+    signal.signal(signal.SIGINT, signal_handler)
 
+    iterator = enumerate(episodes)
+    if tqdm is not None and not args.verbose:
+        iterator = tqdm(iterator, total=len(episodes), desc=f"NaviMind [{args.ablation}]")
+
+    for i, episode in iterator:
+        if interrupted:
+            break
+
+        env.current_episode = episode
         ep_result = run_episode(env, agent, max_steps, success_distance)
         results.append(ep_result)
 
-        if args.verbose or (i + 1) % 10 == 0:
+        if args.verbose:
             status = "PASS" if ep_result["success"] else "FAIL"
             print(
                 f"[{i+1}/{len(episodes)}] {status} "
                 f"cat={ep_result['category']:<15} "
                 f"dist={ep_result['distance_to_goal']:.2f}m "
                 f"spl={ep_result['spl']:.3f} "
+                f"soft_spl={ep_result['soft_spl']:.3f} "
                 f"steps={ep_result['steps']}"
             )
 
+        # 每 50 个 episodes 自动保存 (断点保护)
+        if (i + 1) % 50 == 0:
+            save_results(results, output_path, args.ablation)
+
     elapsed = time.time() - t0
 
-    # 输出结果
-    print_results_table(results, elapsed)
-
-    # 保存
-    output_path = args.output
-    if not output_path:
-        output_path = str(Path(__file__).parent / "results_objectnav.json")
-    save_results(results, output_path)
+    # 输出
+    new_only = [r for r in results if r["episode_id"] not in completed_ids]
+    print_results_table(results, elapsed, args.ablation)
+    save_results(results, output_path, args.ablation)
 
     env.close()
 
