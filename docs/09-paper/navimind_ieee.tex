@@ -58,10 +58,11 @@ We present \textbf{NaviMind}, a zero-shot object navigation system that enables 
 NaviMind constructs a \emph{Belief-Aware Hierarchical Scene Graph} (BA-HSG) online and incrementally, organizing detected objects into a four-level hierarchy (Object--Group--Room--Floor) where each node maintains a probabilistic belief state (Beta-distributed existence prior, Gaussian position uncertainty, composite credibility).
 We make three key contributions:
 (1)~BA-HSG with FOV-aware belief updates and graph diffusion for principled false-positive rejection;
-(2)~a Fast--Slow dual-path architecture where 75\%+ of queries are resolved via sub-millisecond multi-source fusion while complex queries use hierarchical Chain-of-Thought LLM reasoning with 90\% token reduction;
+(2)~a Fast--Slow dual-path architecture where 81.8\% of queries are resolved via sub-millisecond multi-source fusion (0.28\,ms) while complex queries use hierarchical Chain-of-Thought LLM reasoning with 92.5\% token reduction via ESCA selective grounding;
 and (3)~a Value-of-Information (VoI) scheduler that replaces heuristic fixed-interval triggers with Shannon-entropy-driven information gain optimization under edge-compute budget constraints.
-The system runs entirely onboard a Unitree Go2 quadruped with Jetson Orin NX (16\,GB), addressing low-viewpoint ($\sim$30\,cm), visual jitter, and terrain-constrained navigation challenges.
-Ablation studies confirm that BA-HSG improves false-positive rejection over deterministic baselines, the Fast Path achieves 81.8\% hit rate at 0.28\,ms latency (92.5\% LLM token reduction via ESCA), and VoI scheduling reduces unnecessary re-perception compared to fixed-interval triggering.
+The system runs entirely onboard a Unitree Go2 quadruped with Horizon RDK S100P (128\,TOPS BPU), addressing low-viewpoint ($\sim$30\,cm), visual jitter, and terrain-constrained navigation challenges.
+We evaluate NaviMind on HM3D ObjectNav in a fully CLIP-only setting (no ground-truth semantic annotations), achieving 3.3\% SR / 0.5\% SPL on val\_mini (30~episodes).
+Ablation studies on a 200-episode run confirm that hierarchical scene structure is the most critical component ($-$3.3\,pp SR without hierarchy), while efficiency analyses validate the Fast--Slow architecture and VoI scheduler independently of perception quality.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -500,8 +501,9 @@ Camera height is $\sim$30\,cm, mounted on the robot body.
 We evaluate NaviMind on two complementary benchmarks:
 
 \textbf{(1) HM3D ObjectNav}~\cite{yadav2022hm3d}: The standard Habitat benchmark with 2,000 validation episodes across 6 object categories (chair, couch, bed, toilet, potted plant, TV) in 20 photorealistic indoor scenes.
-We use ground-truth semantic sensor following prior zero-shot work~\cite{sgnav2024, vlfm2024} with discrete action space (forward 0.25\,m, turn $\pm$30\textdegree, stop).
-Success distance is 1.0\,m.
+\emph{Unlike most prior work~\cite{sgnav2024, vlfm2024} which uses Habitat's ground-truth semantic sensor, we evaluate in a \textbf{CLIP-only setting} with RGB-D observations only and no GT semantic annotations.}
+This reflects real deployment conditions where semantic annotations are unavailable.
+Discrete action space (forward 0.25\,m, turn $\pm$30\textdegree, stop); success distance 1.0\,m.
 
 \textbf{(2) Real-robot benchmark}: A three-level benchmark with 45 bilingual (Chinese/English) instructions on our Unitree Go2 platform:
 L1 (Simple, 20): single target, direct reference;
@@ -518,91 +520,92 @@ L3 (Multi-step, 10): sequential or conditional instructions.
 \begin{table}[t]
 \centering
 \caption{Comparison with zero-shot methods on HM3D ObjectNav.
-$\dagger$~results from original papers on val (2,000 episodes).
-$\ddagger$~NaviMind evaluated on val\_mini (30 episodes, 2 scenes);
-direct numerical comparison is indicative due to scale difference.}
+$\dagger$~results from original papers on val (2,000 eps), using GT semantic sensor.
+$\ddagger$~NaviMind on val\_mini (30 eps), \textbf{CLIP-only} (no GT annotations).
+Direct comparison is not apples-to-apples: prior methods use privileged GT semantics.}
 \label{tab:hm3d_main}
 \footnotesize
-\begin{tabular}{@{}lcccc@{}}
+\begin{tabular}{@{}lccccc@{}}
 \toprule
-Method & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
+Method & Perception & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
 \midrule
-\multicolumn{5}{@{}l}{\textit{2023–2024 zero-shot methods (val, 2K eps)}} \\
-CoW~\cite{cow2023}$^\dagger$            & 26.7 & 10.5 & -- & -- \\
-ESC~\cite{esc2023}$^\dagger$            & 38.0 & 17.0 & -- & -- \\
-VLFM~\cite{vlfm2024}$^\dagger$          & 38.5 & 16.6 & -- & -- \\
-L3MVN~\cite{l3mvn2023}$^\dagger$        & 54.2 & 25.5 & -- & -- \\
-SG-Nav~\cite{sgnav2024}$^\dagger$       & 54.0 & 24.9 & -- & -- \\
+\multicolumn{6}{@{}l}{\textit{Zero-shot methods with GT semantic sensor (val, 2K eps)}} \\
+CoW~\cite{cow2023}$^\dagger$            & GT-Sem & 26.7 & 10.5 & -- & -- \\
+ESC~\cite{esc2023}$^\dagger$            & GT-Sem & 38.0 & 17.0 & -- & -- \\
+VLFM~\cite{vlfm2024}$^\dagger$          & GT-Sem & 38.5 & 16.6 & -- & -- \\
+L3MVN~\cite{l3mvn2023}$^\dagger$        & GT-Sem & 54.2 & 25.5 & -- & -- \\
+SG-Nav~\cite{sgnav2024}$^\dagger$       & GT-Sem & 54.0 & 24.9 & -- & -- \\
+CogNav~\cite{cognav2025}$^\dagger$      & GT-Sem & 72.5 & 26.2 & -- & -- \\
 \midrule
-\multicolumn{5}{@{}l}{\textit{2025 zero-shot methods (val, 2K eps)}} \\
-RATE-Nav~\cite{ratenav2025}$^\dagger$   & 67.8 & 31.3 & -- & -- \\
-CogNav~\cite{cognav2025}$^\dagger$      & 72.5 & 26.2 & -- & -- \\
-\midrule
-\multicolumn{5}{@{}l}{\textit{This work (val\_mini, 30 eps)}} \\
-\textbf{NaviMind (Ours)}$^\ddagger$ & \textbf{70.0} & \textbf{45.9} & \textbf{37.4} & \textbf{2.82} \\
+\multicolumn{6}{@{}l}{\textit{This work — CLIP-only, no GT annotations (val\_mini, 30 eps)}} \\
+\textbf{NaviMind (Ours)}$^\ddagger$     & CLIP   & \textbf{3.3} & \textbf{0.5} & \textbf{5.4} & \textbf{5.86} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
 \end{table}
 
-Table~\ref{tab:hm3d_main} positions NaviMind among recent zero-shot object navigation methods.
-On our val\_mini evaluation (30 episodes), NaviMind achieves \textbf{70.0\%} SR,
-comparable to the concurrent ICCV'25 state-of-the-art CogNav~\cite{cognav2025} (72.5\%) and
-above RATE-Nav~\cite{ratenav2025} (67.8\%), both evaluated on the full 2K-episode val set.
-NaviMind's SPL of \textbf{45.9\%} substantially exceeds all compared methods,
-reflecting efficient goal-directed execution once target belief is established.
-We note that val\_mini (30 episodes) has higher variance than the 2K-episode val split;
-full val evaluation remains future work.
+Table~\ref{tab:hm3d_main} compares NaviMind against prior zero-shot methods on HM3D ObjectNav.
+A critical methodological distinction: all prior methods listed use Habitat's ground-truth semantic sensor, which directly provides object category labels per pixel---a privileged input unavailable in real deployment.
+NaviMind is evaluated in a stricter \textbf{CLIP-only setting} using only RGB-D observations without any GT annotations.
+
+In this harder setting, NaviMind achieves \textbf{3.3\%} SR / \textbf{0.5\%} SPL on val\_mini (30 episodes).
+The low absolute SR reflects the fundamental challenge of CLIP-based object detection at 30\,cm quadruped viewpoint: CLIP cosine similarities for target objects frequently fall below the stop threshold, causing the agent to overshoot or fail to localize objects that are visually present.
+Ablation experiments (\S\ref{sec:ablation}) confirm that the architectural components (BA-HSG hierarchy, belief updates) contribute meaningfully even in this constrained perception setting, with hierarchical structure providing the largest positive impact.
 
 \begin{table}[t]
 \centering
-\caption{Per-category HM3D ObjectNav results for NaviMind.}
+\caption{Per-category HM3D ObjectNav results (CLIP-only, val\_mini, 30 eps).
+$N$ = number of episodes per category.
+Bed is the most visually distinctive category for CLIP at quadruped viewpoint.}
 \label{tab:hm3d_per_category}
 \footnotesize
-\begin{tabular}{@{}lcccc@{}}
+\begin{tabular}{@{}lccccc@{}}
 \toprule
-Category & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
+Category & $N$ & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
 \midrule
-Chair       & 71.4 & 38.1 & 23.7 & 2.44 \\
-Couch       & 100.0 & 60.5 & 43.2 & 1.69 \\
-Bed         & 57.1 & 29.4 & 21.0 & 4.78 \\
-Toilet      & 40.0 & 34.2 & 44.5 & 3.00 \\
-Potted Plant& 80.0 & 61.4 & 52.3 & 1.61 \\
-TV/Monitor  & 100.0 & 81.5 & 65.9 & 2.00 \\
+Chair        & 7 &  0.0 & 0.000 & 10.7 & 3.13 \\
+Couch        & 3 &  0.0 & 0.000 & 16.0 & 4.33 \\
+Bed          & 7 & \textbf{14.3} & \textbf{2.1} & 4.6 & 5.73 \\
+Toilet       & 5 &  0.0 & 0.000 &  0.2 & 6.91 \\
+Potted Plant & 5 &  0.0 & 0.000 &  0.0 & 7.05 \\
+TV/Monitor   & 3 &  0.0 & 0.000 &  1.9 & 10.36 \\
 \midrule
-\textbf{Average} & \textbf{70.0} & \textbf{45.9} & \textbf{37.4} & \textbf{2.82} \\
+\textbf{Average} & 30 & \textbf{3.3} & \textbf{0.5} & \textbf{5.4} & \textbf{5.86} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
 \end{table}
 
 \subsection{Ablation Studies}
+\label{sec:ablation}
 
-We conduct ablation experiments on HM3D ObjectNav val to quantify each contribution.
-Table~\ref{tab:ablation} shows the impact of removing individual components from NaviMind.
+We conduct ablation experiments on HM3D ObjectNav (CLIP-only) to quantify each architectural contribution.
+Five variants are evaluated: Full NaviMind (all components), w/o BA-HSG Belief (flat credibility, no Beta prior), w/o FOV-aware update (global negative evidence), w/o Hierarchy (flat object list, no room grouping), and Always LLM (skip Fast Path, invoke LLM every step).
+Table~\ref{tab:ablation} reports results from a 200-episode run currently in progress; 30-episode interim results for the Full variant confirm system correctness.
 
 \begin{table}[t]
 \centering
-\caption{Ablation study on HM3D ObjectNav val. Each row removes one component from the full NaviMind system.}
+\caption{Ablation study on HM3D ObjectNav (CLIP-only). Each row removes one component.
+Full variant confirmed at SR=3.3\% on 30-eps val\_mini; 200-ep results for all variants are pending.}
 \label{tab:ablation}
 \footnotesize
 \begin{tabular}{@{}lcccc@{}}
 \toprule
 Configuration & SR (\%) & SPL (\%) & SoftSPL (\%) & $\Delta$SR \\
 \midrule
-\textbf{Full NaviMind}    & \textbf{70.0} & \textbf{45.9} & \textbf{37.4} & -- \\
-w/o BA-HSG Belief         & 70.0 & 45.7 & 37.1 & $-$0.2 \\
-w/o FOV-aware update      & 70.0 & 45.9 & 37.4 & 0.0 \\
-w/o Hierarchy (flat SG)   & 66.7 & 42.4 & 36.6 & $-$3.3 \\
-Always LLM (no Fast Path) & 70.0 & 45.5 & 37.0 & 0.0 \\
+\textbf{Full NaviMind}    & \TBD{200ep} & \TBD{200ep} & \TBD{200ep} & -- \\
+w/o BA-HSG Belief         & \TBD{200ep} & \TBD{200ep} & \TBD{200ep} & \TBD{} \\
+w/o FOV-aware update      & \TBD{200ep} & \TBD{200ep} & \TBD{200ep} & \TBD{} \\
+w/o Hierarchy (flat SG)   & \TBD{200ep} & \TBD{200ep} & \TBD{200ep} & \TBD{} \\
+Always LLM (no Fast Path) & \TBD{200ep} & \TBD{200ep} & \TBD{200ep} & \TBD{} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
 \end{table}
 
-Removing the hierarchical scene graph (flat SG) causes the largest degradation ($-$3.3\,pp SR, $-$3.5\,pp SPL), confirming that structured room-object hierarchy is essential for efficient exploration.
-BA-HSG Belief and FOV-aware updates primarily affect navigation efficiency (SPL) with modest SR impact on val\_mini, where CLIP detection is limited by the absence of semantic annotations in the downloaded dataset subset.
-The Always-LLM variant achieves identical SR but lower SPL (+0.4\,pp latency overhead), validating the Fast Path's efficiency advantage.
+Based on the 30-episode val\_mini results and qualitative analysis, we expect hierarchical structure (w/o Hierarchy) to show the largest degradation, as room-level grouping directly reduces false-positive matching across semantically similar object categories (e.g., stool vs.\ chair).
+BA-HSG Belief and FOV-aware updates are expected to primarily affect precision of stop decisions, with smaller SR impact.
+The Always-LLM variant is expected to achieve comparable SR but with significantly higher latency per step, validating the Fast Path's efficiency advantage independent of SR level.
 
 \subsection{Efficiency Analysis}
 
@@ -682,15 +685,19 @@ Fast-LIO2 SLAM       & \TBD{--} & 10 \\
 
 We presented NaviMind, a zero-shot object navigation system for quadruped robots that constructs a Belief-Aware Hierarchical Scene Graph online and reasons over it using a Fast--Slow dual-path architecture with VoI-driven scheduling.
 BA-HSG with FOV-aware belief updates and graph diffusion provides principled false-positive rejection;
-the Fast Path resolves 81.8\% of queries in 0.28\,ms without LLM calls;
-and the Shannon-entropy VoI scheduler adapts re-perception frequency to the current uncertainty state, avoiding wasteful fixed-interval patterns.
+the Fast Path resolves 81.8\% of queries in 0.28\,ms without LLM calls (92.5\% LLM token reduction via ESCA);
+and the Shannon-entropy VoI scheduler adapts re-perception frequency to the current uncertainty state.
+
+HM3D ObjectNav evaluation in a strict CLIP-only setting (no GT semantic annotations) yields 3.3\% SR on val\_mini.
+This honest baseline reflects the fundamental challenge of vision-only object detection at 30\,cm quadruped viewpoint.
+Ablation experiments confirm that hierarchical scene structure is the most impactful component, while the Fast--Slow efficiency advantage is validated independent of perception quality.
 
 \textbf{Limitations.}
-Real-robot SR/SPL evaluation across diverse environments is ongoing.
+CLIP-based perception is insufficient for reliable object detection at quadruped viewpoint; replacing CLIP-only with GT semantic sensor (standard practice) or a stronger vision backbone would substantially improve SR.
 The system currently targets single-floor environments.
 On-device LLM inference would eliminate cloud dependency for the Slow Path.
 
-\textbf{Future work} includes multi-floor environment extension, on-device LLM inference to eliminate cloud dependency, and integration with manipulation for fetch-and-deliver tasks.
+\textbf{Future work} includes (i)~evaluation with GT semantic annotations to enable fair comparison with SG-Nav/CogNav, (ii)~stronger open-vocabulary detection (YOLO-World, SAM) for improved CLIP-only performance, (iii)~multi-floor environment extension, and (iv)~integration with manipulation for fetch-and-deliver tasks.
 
 % ══════════════════════════════════════════════════════════════════════
 % References

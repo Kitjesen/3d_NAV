@@ -254,6 +254,7 @@ def run_episode(
     prev_position = start_position.copy()
     success = False
     step = 0
+    min_dist_reached = float("inf")  # 追踪 episode 内最近接近目标的距离
 
     _ACT = {0: "STOP", 1: "FWD", 2: "L", 3: "R"}
     _act_counts = {0: 0, 1: 0, 2: 0, 3: 0}
@@ -271,6 +272,12 @@ def run_episode(
         step_dist = np.linalg.norm(current_position - prev_position)
         path_length += step_dist
         prev_position = current_position.copy()
+
+        # 追踪最近接近目标的距离
+        if goal_positions:
+            cur_dist = float(min(np.linalg.norm(current_position - gp) for gp in goal_positions))
+            if cur_dist < min_dist_reached:
+                min_dist_reached = cur_dist
 
         # 首个 episode 前 50 步详细日志 (坐标对齐诊断)
         if episode_idx == 0 and step < 50:
@@ -307,6 +314,7 @@ def run_episode(
         "spl": float(spl),
         "soft_spl": float(soft_spl),
         "distance_to_goal": float(distance_to_goal),
+        "min_dist_reached": float(min_dist_reached),
         "path_length": float(path_length),
         "shortest_path_length": float(shortest_path_length),
         "start_distance": float(start_distance),
@@ -536,6 +544,7 @@ def main():
                 f"[{i+1}/{len(episodes)}] {status} "
                 f"cat={ep_result['category']:<15} "
                 f"dist={ep_result['distance_to_goal']:.2f}m "
+                f"min={ep_result.get('min_dist_reached', 9.99):.2f}m "
                 f"spl={ep_result['spl']:.3f} "
                 f"soft_spl={ep_result['soft_spl']:.3f} "
                 f"steps={ep_result['steps']}"

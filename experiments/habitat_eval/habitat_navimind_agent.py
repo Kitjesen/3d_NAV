@@ -89,11 +89,14 @@ CATEGORY_ALIASES = {
 }
 
 # CLIP 相似度阈值
-CLIP_STOP_THRESHOLD = 0.27      # 全帧相似度 → 考虑停止 (ViT-B/32 在 480×640 上通常 0.22-0.28; 0.27 减少误停)
+CLIP_STOP_THRESHOLD = 0.26      # 中心裁剪相似度 → 考虑停止 (v8 基准值)
 CLIP_DETECT_THRESHOLD = 0.26    # 局部 patch 相似度 → 创建 Detection3D
+# CLIP patch 检测得分上限: 允许足够高以触发 Fast Path (confidence_threshold=0.6)
+CLIP_PATCH_SCORE_MAX = 0.85
 CLIP_MIN_DEPTH = 0.8            # 检测物体最小深度 (m) — 过滤贴墙误检
 CLIP_CALL_INTERVAL = 3          # 每 N 步调用一次 CLIP (平衡速度与响应)
-MIN_EXPLORE_STEPS = 20          # 至少探索 N 步再允许 STOP
+MIN_EXPLORE_STEPS = 100         # 至少探索 N 步再允许 STOP (避免在起点误停)
+CLIP_STOP_MIN_STREAK = 1        # 1 帧即可: 避免漏掉短暂接近目标的机会
 DEPTH_MAX = 10.0                # Habitat depth sensor 最大量程 (m); 观测值已归一化到 [0,1]
 
 
@@ -127,6 +130,7 @@ class AgentState:
     # CLIP 缓存
     last_clip_step: int = -999
     last_clip_sim: float = 0.0
+    clip_stop_streak: int = 0   # 连续满足停止条件的帧数
 
 
 class NaviMindAgent:
@@ -359,11 +363,14 @@ class NaviMindAgent:
             )
             self._state.last_clip_step = step
 
-        # 5. CLIP 停止检测 (最少探索 MIN_EXPLORE_STEPS 步后才允许, 使用当前帧相似度)
-        if (self._state.step_count >= MIN_EXPLORE_STEPS
-                and self._check_clip_stop(observations)):
-            self._clip_stops += 1
-            return HABITAT_STOP
+        # 5. CLIP 停止检测 (最少探索 MIN_EXPLORE_STEPS 步后才允许; 连续 CLIP_STOP_MIN_STREAK 帧确认)
+        if self._state.step_count >= MIN_EXPLORE_STEPS and self._check_clip_stop(observations):
+            self._state.clip_stop_streak += 1
+            if self._state.clip_stop_streak >= CLIP_STOP_MIN_STREAK:
+                self._clip_stops += 1
+                return HABITAT_STOP
+        else:
+            self._state.clip_stop_streak = 0
 
         # 6. Fast Path 目标匹配 (无活跃导航目标时持续运行)
         if not self._always_llm and not self._state.navigating_to_goal:
@@ -503,7 +510,7 @@ class NaviMindAgent:
                 cx, cy = (c1 + c2) / 2.0, (r1 + r2) / 2.0
                 position = self._pixel_to_world(cx, cy, med_d)
 
-                score = min(1.0, sim / CLIP_DETECT_THRESHOLD * 0.85)
+                score = min(CLIP_PATCH_SCORE_MAX, sim / CLIP_DETECT_THRESHOLD * 0.85)
                 if self._no_belief:
                     score *= 0.75
 
@@ -521,33 +528,39 @@ class NaviMindAgent:
     def _check_clip_stop(self, obs: Dict[str, Any]) -> bool:
         """
         CLIP 停止判据:
-        全帧相似度 > CLIP_STOP_THRESHOLD AND 前方深度 < success_distance。
-        每 CLIP_CALL_INTERVAL 步计算一次, 中间复用缓存值。
+        中心裁剪相似度 > CLIP_STOP_THRESHOLD AND 中心前方深度 < success_distance。
+        中心裁剪 (50%) 要求目标充满画面中心, 抑制通过门口看到远处物体的误报。
+        阈值 0.25 (低于 v8 的 0.26) 以捕捉 1.27m 近距接近目标的情形。
         """
         if self._clip_model is None or "rgb" not in obs:
             return False
 
-        # last_clip_sim 已由 act() 中的统一更新块维护, 直接使用缓存值
-        if self._state.last_clip_sim < CLIP_STOP_THRESHOLD:
+        rgb = obs.get("rgb")
+        if rgb is None:
             return False
 
-        # 检查前方是否真的有物体 (深度检测)
+        # 中心裁剪 (H/4..3H/4, W/4..3W/4): 目标需填充画面中心才触发
+        H, W = rgb.shape[:2]
+        center_rgb = rgb[H // 4: 3 * H // 4, W // 4: 3 * W // 4]
+        center_sim = self._clip_similarity(center_rgb, self._clip_prompt)
+
+        if center_sim < CLIP_STOP_THRESHOLD:
+            return False
+
+        # 深度检查: 与裁剪区域匹配的中心深度 < success_distance=1.0m
         depth = obs.get("depth")
         if depth is None:
             return False
         if depth.ndim == 3:
             depth = depth[:, :, 0]
 
-        H, W = depth.shape
-        # 检查中心区域前方是否有近距离物体 (排除地面/天花板噪声)
-        center = depth[H // 3: 2 * H // 3, W // 3: 2 * W // 3]
-        # normalized [0,1]: 0.03~0.80 = 0.3m~8m
-        valid = center[(center > 0.03) & (center < 0.80)]
-        if len(valid) < 20:  # 要求足够多的有效像素
+        center_depth = depth[H // 4: 3 * H // 4, W // 4: 3 * W // 4]
+        valid = center_depth[(center_depth > 0.03) & (center_depth < 0.80)]
+        if len(valid) < 20:
             return False
 
         min_depth = float(np.percentile(valid, 15)) * DEPTH_MAX  # → meters
-        return min_depth < 1.5  # 在 1.5m 内看到目标 → STOP (CLIP sim 已确认类别)
+        return min_depth < self._success_distance  # 1.0m, 与 Habitat 成功判定对齐
 
     # ── 目标匹配 ──
 
@@ -572,11 +585,18 @@ class NaviMindAgent:
         )
 
         if result is not None and result.is_valid and result.confidence >= 0.75:
+            goal_pos = np.array([result.target_x, result.target_y, result.target_z])
+            # 距离过滤: 1.5–5.0m 区间内才导航
+            # < 1.5m: 太近 (深度噪声或贴墙), 立即抵达又取消 → 造成死循环
+            # > 5.0m: 太远 (跨房间误检), 多步导航浪费探索步数
+            dx = goal_pos[0] - self._state.position[0]
+            dz = goal_pos[2] - self._state.position[2]
+            goal_dist = math.sqrt(dx * dx + dz * dz)
+            if goal_dist < 1.5 or goal_dist > 5.0:
+                return False
             self._fast_path_hits += 1
             self._state.goal_found = True
-            self._state.goal_position = np.array([
-                result.target_x, result.target_y, result.target_z
-            ])
+            self._state.goal_position = goal_pos
             self._state.navigating_to_goal = True
             self._state.navigate_steps = 0
             return True
@@ -605,8 +625,14 @@ class NaviMindAgent:
         dz = goal[2] - pos[2]
         dist = math.sqrt(dx * dx + dz * dz)
 
-        if dist < self._success_distance:
-            return HABITAT_STOP
+        # 导航停止距离: 0.5m + CLIP 确认 — 到达检测位置 AND 视觉确认才 STOP
+        # 若 CLIP sim 不足 (误检), 取消导航继续探索; 避免在错误物体处提前停止
+        if dist < 0.5:
+            if self._state.last_clip_sim >= CLIP_STOP_THRESHOLD:
+                return HABITAT_STOP
+            self._state.navigating_to_goal = False
+            self._state.goal_position = None
+            return HABITAT_MOVE_FORWARD
 
         # ── 贪心导航 ──
         escape_remaining = getattr(self._state, '_nav_escape_remaining', 0)

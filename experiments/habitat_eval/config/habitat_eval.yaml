@@ -35,7 +35,7 @@ eval:
   success_distance: 1.0  # 米 (HM3D ObjectNav 标准: 1.0m)
   dataset: "hm3d"
   split: "val_mini"
-  max_navigate_steps: 200  # 导航到目标的最大步数 (防死循环)
+  max_navigate_steps: 40   # 导航到目标的最大步数; 尽快失败，留更多步数给探索
 
 # ── 场景图构建参数 (BA-HSG) ──
 scene_graph:
@@ -48,12 +48,12 @@ scene_graph:
 # ── Fast Path 参数 ──
 fast_path:
   threshold: 0.75
-  confidence_threshold: 0.6
+  confidence_threshold: 0.50
 
 # ── 探索策略 ──
 exploration:
   rotate_steps: 8          # 240° 扫描，节省旋转步数，覆盖更多区域
-  frontier_distance: 3.5   # 米, 每次探索前进距离（原 2.5 → 扩大覆盖）
+  frontier_distance: 1.0   # 米, 小步长探索: 更精细覆盖, 易接近家具 (1.0m = 4 个前进步)
   cell_size: 0.5           # 米, 访问网格分辨率
 
 # ── 消融实验 ──
