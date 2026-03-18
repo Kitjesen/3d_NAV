@@ -245,6 +245,7 @@ def run_episode(
     # 重置 agent
     agent.reset()
     agent.set_goal(goal_category, goal_position, start_position=start_position)
+    agent.set_sim(env.sim)  # 传入 sim 用于 geodesic pathfinder
 
     # 语义类别映射
     semantic_categories = get_semantic_categories(env)
