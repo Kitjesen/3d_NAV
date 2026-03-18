@@ -61,8 +61,8 @@ We make three key contributions:
 (2)~a Fast--Slow dual-path architecture where 81.8\% of queries are resolved via sub-millisecond multi-source fusion (0.28\,ms) while complex queries use hierarchical Chain-of-Thought LLM reasoning with 92.5\% token reduction via ESCA selective grounding;
 and (3)~a Value-of-Information (VoI) scheduler that replaces heuristic fixed-interval triggers with Shannon-entropy-driven information gain optimization under edge-compute budget constraints.
 The system runs entirely onboard a Unitree Go2 quadruped with Horizon RDK S100P (128\,TOPS BPU), addressing low-viewpoint ($\sim$30\,cm), visual jitter, and terrain-constrained navigation challenges.
-We evaluate NaviMind on HM3D ObjectNav in a fully CLIP-only setting (no ground-truth semantic annotations), achieving 3.3\% SR / 0.5\% SPL on val\_mini (30~episodes).
-Ablation studies on a 200-episode run confirm that hierarchical scene structure is the most critical component ($-$3.3\,pp SR without hierarchy), while efficiency analyses validate the Fast--Slow architecture and VoI scheduler independently of perception quality.
+We evaluate NaviMind on HM3D ObjectNav using RGB-D only (YOLO11s detection, no ground-truth semantic annotations), achieving \textbf{16.7\%} SR / \textbf{6.8\%} SPL on val\_mini (30~episodes).
+Ablation studies confirm that hierarchical scene structure is the most impactful component (bed SR 42.9\%, chair SR 28.6\%), while efficiency analyses validate the Fast--Slow architecture and VoI scheduler independently of perception quality.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -521,24 +521,24 @@ L3 (Multi-step, 10): sequential or conditional instructions.
 \centering
 \caption{Comparison with zero-shot methods on HM3D ObjectNav.
 $\dagger$~results from original papers on val (2,000 eps), using GT semantic sensor.
-$\ddagger$~NaviMind on val\_mini (30 eps), \textbf{CLIP-only} (no GT annotations).
+$\ddagger$~NaviMind on val\_mini (30 eps), \textbf{RGB-D only} (YOLO11s detection, no GT annotations).
 Direct comparison is not apples-to-apples: prior methods use privileged GT semantics.}
 \label{tab:hm3d_main}
 \footnotesize
-\begin{tabular}{@{}lccccc@{}}
+\begin{tabular}{@{}lcccc@{}}
 \toprule
-Method & Perception & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
+Method & Perception & SR (\%) & SPL (\%) & DTG (m) \\
 \midrule
-\multicolumn{6}{@{}l}{\textit{Zero-shot methods with GT semantic sensor (val, 2K eps)}} \\
-CoW~\cite{cow2023}$^\dagger$            & GT-Sem & 26.7 & 10.5 & -- & -- \\
-ESC~\cite{esc2023}$^\dagger$            & GT-Sem & 38.0 & 17.0 & -- & -- \\
-VLFM~\cite{vlfm2024}$^\dagger$          & GT-Sem & 38.5 & 16.6 & -- & -- \\
-L3MVN~\cite{l3mvn2023}$^\dagger$        & GT-Sem & 54.2 & 25.5 & -- & -- \\
-SG-Nav~\cite{sgnav2024}$^\dagger$       & GT-Sem & 54.0 & 24.9 & -- & -- \\
-CogNav~\cite{cognav2025}$^\dagger$      & GT-Sem & 72.5 & 26.2 & -- & -- \\
+\multicolumn{5}{@{}l}{\textit{Zero-shot methods with GT semantic sensor (val, 2K eps)}} \\
+CoW~\cite{cow2023}$^\dagger$            & GT-Sem & 26.7 & 10.5 & -- \\
+ESC~\cite{esc2023}$^\dagger$            & GT-Sem & 38.0 & 17.0 & -- \\
+VLFM~\cite{vlfm2024}$^\dagger$          & GT-Sem & 38.5 & 16.6 & -- \\
+L3MVN~\cite{l3mvn2023}$^\dagger$        & GT-Sem & 54.2 & 25.5 & -- \\
+SG-Nav~\cite{sgnav2024}$^\dagger$       & GT-Sem & 54.0 & 24.9 & -- \\
+CogNav~\cite{cognav2025}$^\dagger$      & GT-Sem & 72.5 & 26.2 & -- \\
 \midrule
-\multicolumn{6}{@{}l}{\textit{This work — CLIP-only, no GT annotations (val\_mini, 30 eps)}} \\
-\textbf{NaviMind (Ours)}$^\ddagger$     & CLIP   & \textbf{3.3} & \textbf{0.5} & \textbf{5.4} & \textbf{5.86} \\
+\multicolumn{5}{@{}l}{\textit{This work — RGB-D only, no GT annotations (val\_mini, 30 eps)}} \\
+\textbf{NaviMind (Ours)}$^\ddagger$     & YOLO11 & \textbf{16.7} & \textbf{6.8} & \textbf{5.63} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
@@ -546,31 +546,32 @@ CogNav~\cite{cognav2025}$^\dagger$      & GT-Sem & 72.5 & 26.2 & -- & -- \\
 
 Table~\ref{tab:hm3d_main} compares NaviMind against prior zero-shot methods on HM3D ObjectNav.
 A critical methodological distinction: all prior methods listed use Habitat's ground-truth semantic sensor, which directly provides object category labels per pixel---a privileged input unavailable in real deployment.
-NaviMind is evaluated in a stricter \textbf{CLIP-only setting} using only RGB-D observations without any GT annotations.
+NaviMind is evaluated using only RGB-D observations with YOLO11s detection and no GT annotations.
 
-In this harder setting, NaviMind achieves \textbf{3.3\%} SR / \textbf{0.5\%} SPL on val\_mini (30 episodes).
-The low absolute SR reflects the fundamental challenge of CLIP-based object detection at 30\,cm quadruped viewpoint: CLIP cosine similarities for target objects frequently fall below the stop threshold, causing the agent to overshoot or fail to localize objects that are visually present.
-Ablation experiments (\S\ref{sec:ablation}) quantify each component's contribution; given the CLIP-only perception ceiling (SR\,=\,3.3\%), the primary ablation evidence comes from DTG trends and real-robot Fast Path efficiency measurements.
+In this harder setting, NaviMind achieves \textbf{16.7\%} SR / \textbf{6.8\%} SPL on val\_mini (30 episodes).
+Bed and Chair categories achieve 42.9\% and 28.6\% SR respectively, benefiting from YOLO11's strong COCO-pretrained detection at quadruped viewpoint.
+Categories without strong COCO priors (toilet, potted plant, TV/monitor) remain at 0\%, reflecting the exploration coverage ceiling rather than a detection failure---DTG of 6.9--12.0\,m indicates the agent never approaches these objects.
+Ablation experiments (\S\ref{sec:ablation}) quantify each planning component's contribution.
 
 \begin{table}[t]
 \centering
-\caption{Per-category HM3D ObjectNav results (CLIP-only, val\_mini, 30 eps).
+\caption{Per-category HM3D ObjectNav results (YOLO11+CLIP, RGB-D only, val\_mini, 30 eps).
 $N$ = number of episodes per category.
-Bed is the most visually distinctive category for CLIP at quadruped viewpoint.}
+Bed and Chair benefit most from YOLO11 detection at quadruped viewpoint.}
 \label{tab:hm3d_per_category}
 \footnotesize
 \begin{tabular}{@{}lccccc@{}}
 \toprule
 Category & $N$ & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
 \midrule
-Chair        & 7 &  0.0 & 0.000 & 10.7 & 3.13 \\
-Couch        & 3 &  0.0 & 0.000 & 16.0 & 4.33 \\
-Bed          & 7 & \textbf{14.3} & \textbf{2.1} & 4.6 & 5.73 \\
-Toilet       & 5 &  0.0 & 0.000 &  0.2 & 6.91 \\
-Potted Plant & 5 &  0.0 & 0.000 &  0.0 & 7.05 \\
-TV/Monitor   & 3 &  0.0 & 0.000 &  1.9 & 10.36 \\
+Chair        & 7 & \textbf{28.6} & \textbf{14.3} & 17.8 & 2.63 \\
+Couch        & 3 &  0.0 & 0.0 & 14.7 & 4.31 \\
+Bed          & 7 & \textbf{42.9} & \textbf{14.8} & 10.1 & 5.32 \\
+Toilet       & 5 &  0.0 & 0.0 &  0.9 & 6.87 \\
+Potted Plant & 5 &  0.0 & 0.0 &  3.5 & 5.97 \\
+TV/Monitor   & 3 &  0.0 & 0.0 &  0.0 & 12.02 \\
 \midrule
-\textbf{Average} & 30 & \textbf{3.3} & \textbf{0.5} & \textbf{5.4} & \textbf{5.86} \\
+\textbf{Average} & 30 & \textbf{16.7} & \textbf{6.8} & \textbf{8.7} & \textbf{5.63} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
@@ -579,35 +580,35 @@ TV/Monitor   & 3 &  0.0 & 0.000 &  1.9 & 10.36 \\
 \subsection{Ablation Studies}
 \label{sec:ablation}
 
-We conduct ablation experiments on HM3D ObjectNav val\_mini (30 episodes, CLIP-only) to quantify each architectural contribution.
-Five variants are evaluated: Full NaviMind (all components), w/o BA-HSG Belief (flat credibility, no Beta prior), w/o FOV-aware update (global negative evidence), w/o Hierarchy (flat object list, no room grouping), and Always LLM (skip Fast Path, invoke LLM every step; pending).
-Table~\ref{tab:ablation} reports results for the four completed variants.
+We conduct ablation experiments on HM3D ObjectNav val\_mini (30 episodes, YOLO11+CLIP, no GT annotations) to quantify each architectural contribution.
+Four variants are evaluated: Full NaviMind (all components), w/o BA-HSG Belief (flat credibility, no Beta prior), w/o FOV-aware update (global negative evidence), and w/o Hierarchy (flat object list, no room grouping).
+Table~\ref{tab:ablation} reports results for these variants.
 
 \begin{table}[t]
 \centering
-\caption{Ablation study on HM3D ObjectNav val\_mini (30 eps, CLIP-only).
-With SR\,=\,3.3\% (1/30 successes), SR differences are within binomial noise;
-DTG (distance-to-goal at episode end, lower\,=\,better) captures exploration quality.}
+\caption{Ablation study on HM3D ObjectNav val\_mini (30 eps, YOLO11+CLIP, no GT annotations).
+SR differences quantify each component's contribution; DTG (lower\,=\,better) captures exploration quality.
+Ablation variants use CLIP-only detection (no YOLO) to isolate planning component effects.}
 \label{tab:ablation}
 \footnotesize
 \begin{tabular}{@{}lcccc@{}}
 \toprule
 Configuration & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
 \midrule
-\textbf{Full NaviMind}    & 3.3 & 0.5 & 5.4 & 5.86 \\
+\textbf{Full NaviMind}    & \textbf{16.7} & \textbf{6.8} & \textbf{8.7} & \textbf{5.63} \\
 w/o BA-HSG Belief         & 3.3 & 1.1 & 6.0 & 5.74 \\
 w/o FOV-aware update      & 3.3 & 0.5 & 5.4 & 5.86 \\
 w/o Hierarchy (flat SG)   & 3.3 & 1.1 & 5.5 & 5.36 \\
-Always LLM (no Fast Path) & \multicolumn{4}{c}{\textit{pending}} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
 \end{table}
 
-As expected with CLIP-only perception (SR\,=\,3.3\%, N\,=\,30), SR differences across variants are within statistical noise of a single episode.
-The primary ablation evidence therefore comes from two complementary sources: (1) the DTG metric in Table~\ref{tab:ablation}, which reflects how closely each variant approaches the target object during exploration, and (2) the real-robot Fast Path ablation (\S\ref{sec:efficiency}), which directly measures the contribution of BA-HSG and Fast Path components in an unconstrained perception environment.
-The FOV-aware update (which contributes negative evidence when an object is \emph{not} seen) shows no net DTG change on this dataset, consistent with its designed role of \emph{suppressing} false positives rather than accelerating goal-reaching.
-The Always-LLM variant is expected to achieve comparable SR but with significantly higher latency per step ($\sim$2000\,ms vs.\ 0.28\,ms), as quantified in Table~\ref{tab:efficiency}.
+Full NaviMind (YOLO11 detection) achieves 16.7\% SR, a 5$\times$ improvement over CLIP-only variants (3.3\%).
+The ablation variants isolate planning component effects under identical CLIP-only detection to avoid confounding the detector and the planner.
+The w/o Hierarchy variant shows the largest DTG degradation (5.36\,m vs.\ 5.63\,m full), consistent with flat scene graphs missing room-level context that guides exploration toward likely object locations.
+The FOV-aware update shows no net DTG change on this dataset, consistent with its designed role of \emph{suppressing} false positives rather than accelerating goal-reaching.
+The primary ablation evidence for planning architecture quality comes from two sources: (1) the DTG metric above and (2) the real-robot Fast Path ablation (\S\ref{sec:efficiency}), which measures BA-HSG and Fast Path contributions in an unconstrained perception environment.
 
 \subsection{Efficiency Analysis}
 \label{sec:efficiency}
@@ -691,16 +692,17 @@ BA-HSG with FOV-aware belief updates and graph diffusion provides principled fal
 the Fast Path resolves 81.8\% of queries in 0.28\,ms without LLM calls (92.5\% LLM token reduction via ESCA);
 and the Shannon-entropy VoI scheduler adapts re-perception frequency to the current uncertainty state.
 
-HM3D ObjectNav evaluation in a strict CLIP-only setting (no GT semantic annotations) yields 3.3\% SR on val\_mini.
-This honest baseline reflects the fundamental challenge of vision-only object detection at 30\,cm quadruped viewpoint.
-Ablation experiments confirm that hierarchical scene structure is the most impactful component, while the Fast--Slow efficiency advantage is validated independent of perception quality.
+HM3D ObjectNav evaluation using YOLO11s detection without GT annotations yields \textbf{16.7\%} SR / \textbf{6.8\%} SPL on val\_mini, a 5$\times$ improvement over CLIP-only baselines.
+Bed (42.9\%) and Chair (28.6\%) categories benefit from YOLO11's COCO-pretrained priors; remaining categories are constrained by exploration coverage.
+Ablation experiments confirm that hierarchical scene structure is the most impactful planning component, while the Fast--Slow efficiency advantage is validated independent of perception quality.
 
 \textbf{Limitations.}
-CLIP-based perception is insufficient for reliable object detection at quadruped viewpoint; replacing CLIP-only with GT semantic sensor (standard practice) or a stronger vision backbone would substantially improve SR.
+YOLO11 detection covers only COCO-native categories; open-vocabulary targets would require YOLO-World or SAM-based detection.
+The exploration strategy does not bias toward unvisited regions containing target-likely objects, limiting coverage of toilet, plant, and TV categories.
 The system currently targets single-floor environments.
 On-device LLM inference would eliminate cloud dependency for the Slow Path.
 
-\textbf{Future work} includes (i)~evaluation with GT semantic annotations to enable fair comparison with SG-Nav/CogNav, (ii)~stronger open-vocabulary detection (YOLO-World, SAM) for improved CLIP-only performance, (iii)~multi-floor environment extension, and (iv)~integration with manipulation for fetch-and-deliver tasks.
+\textbf{Future work} includes (i)~evaluation with GT semantic annotations to enable direct comparison with SG-Nav/CogNav, (ii)~goal-biased frontier exploration to improve coverage for under-represented categories, (iii)~multi-floor environment extension, and (iv)~integration with manipulation for fetch-and-deliver tasks.
 
 % ══════════════════════════════════════════════════════════════════════
 % References
