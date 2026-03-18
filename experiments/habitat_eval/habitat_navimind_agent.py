@@ -119,6 +119,17 @@ YOLO_DETECT_CONF = 0.25   # 检测置信度 → 加入场景图
 YOLO_CALL_INTERVAL = 1    # 每步都跑 YOLO (GPU ~15ms)
 DEPTH_MAX = 10.0                # Habitat depth sensor 最大量程 (m); 观测值已归一化到 [0,1]
 
+# YOLO 物体共存语义 bonus (探索旋转扫描时使用)
+# 格式: {目标类别: {共存 COCO class_id: bonus分}}
+YOLO_COOCCUR_BONUS: "Dict[str, Dict[int, float]]" = {
+    "chair":        {57: 2.0, 60: 1.5},            # couch(57), dining table(60) → 同一生活空间
+    "couch":        {56: 1.5, 62: 2.5, 63: 2.0},   # chair(56), tv(62), monitor(63) → 客厅
+    "bed":          {59: 3.0},                      # 另一张床(59) → 卧室确认
+    "toilet":       {56: 0.5},                      # chair(56) → 有家具房间(弱先验)
+    "potted_plant": {57: 2.0, 60: 1.5, 56: 1.0},   # couch, table, chair → 客厅/餐厅
+    "tv_monitor":   {57: 3.5, 56: 1.5, 60: 1.0},   # couch(57) → 强TV指示
+}
+
 
 def _normalize_category(label: str) -> str:
     """将 Habitat 标注类别归一化到 ObjectNav 6 大类。"""
@@ -584,6 +595,16 @@ class NaviMindAgent:
             ))
         return detections
 
+    def _yolo_detect_coco_ids(self, obs: "Dict[str, Any]") -> "Set[int]":
+        """运行 YOLO，返回当前帧所有检测到的 COCO class ID (conf ≥ YOLO_DETECT_CONF)。"""
+        if self._yolo is None:
+            return set()
+        rgb = obs.get("rgb")
+        if rgb is None:
+            return set()
+        results = self._yolo(rgb, verbose=False, conf=YOLO_DETECT_CONF, imgsz=256)
+        return {int(box.cls[0].item()) for box in results[0].boxes}
+
     def _update_yolo_state(self, obs: "Dict[str, Any]") -> None:
         """更新 last_yolo_depth (每步调用)。"""
         step = self._state.step_count
@@ -838,6 +859,17 @@ class NaviMindAgent:
                 if not self._no_hierarchy and self._state.last_clip_sim > 0.18:
                     clip_bonus = self._state.last_clip_sim * 3.0
 
+                # YOLO 共存语义 bonus — 探索方向有共存物体则加分 (无需 API)
+                yolo_cooccur_bonus = 0.0
+                if self._yolo is not None and "rgb" in observations:
+                    cooccur_map = YOLO_COOCCUR_BONUS.get(self._target_category, {})
+                    if cooccur_map:
+                        detected_ids = self._yolo_detect_coco_ids(observations)
+                        for cls_id, bonus in cooccur_map.items():
+                            if cls_id in detected_ids:
+                                yolo_cooccur_bonus += bonus
+                        yolo_cooccur_bonus = min(yolo_cooccur_bonus, 5.0)  # cap 避免压制其他 frontier
+
                 # 惩罚历史卡住方向 (±35°内) — 防止 agent 反复撞墙
                 blocked_penalty = 0.0
                 for bh in self._state.blocked_headings:
@@ -846,7 +878,7 @@ class NaviMindAgent:
                         blocked_penalty = 5.0
                         break
 
-                frontier_score = avg_depth + novelty_bonus * 2.0 + clip_bonus - blocked_penalty
+                frontier_score = avg_depth + novelty_bonus * 2.0 + clip_bonus + yolo_cooccur_bonus - blocked_penalty
 
                 if not hasattr(self._state, "_best_frontier_score"):
                     self._state._best_frontier_score = -1.0

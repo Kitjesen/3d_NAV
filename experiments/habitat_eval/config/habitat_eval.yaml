@@ -31,7 +31,7 @@ action:
 
 # ── 评测参数 ──
 eval:
-  max_steps: 500
+  max_steps: 1000  # 增加步数 (TV DTG=12m 需要更多探索)
   success_distance: 1.0  # 米 (HM3D ObjectNav 标准: 1.0m)
   dataset: "hm3d"
   split: "val_mini"
