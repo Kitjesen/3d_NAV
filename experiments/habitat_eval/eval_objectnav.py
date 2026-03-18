@@ -65,6 +65,8 @@ def build_habitat_config(eval_config: Dict) -> Any:
     base_overrides = [
         f"habitat.dataset.split={split}",
         f"habitat.environment.max_episode_steps={eval_params.get('max_steps', 500)}",
+        # 使用 annotated 数据集配置: .semantic.glb 语义标注 (已验证存在)
+        "habitat.simulator.scene_dataset=data/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json",
     ]
 
     # objectnav_hm3d.yaml: rgb_sensor + depth_sensor, 正确动作空间
@@ -228,7 +230,6 @@ def run_episode(
         goal_positions = [
             np.array(g.position, dtype=np.float64) for g in episode.goals
         ]
-    goal_position = goal_positions[0] if goal_positions else None
 
     # 最短路径长度 (geodesic)
     shortest_path_length = 0.0
@@ -426,6 +427,14 @@ def main():
     parser.add_argument("--resume", action="store_true", help="断点续评")
     parser.add_argument("--verbose", action="store_true", help="详细输出")
     args = parser.parse_args()
+
+    # 随机种子 — 保证可复现性
+    np.random.seed(42)
+    try:
+        import torch
+        torch.manual_seed(42)
+    except ImportError:
+        pass
 
     # 加载配置
     config_path = Path(args.config)

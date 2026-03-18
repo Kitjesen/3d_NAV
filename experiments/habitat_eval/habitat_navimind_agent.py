@@ -350,13 +350,7 @@ class NaviMindAgent:
                 intrinsics_fx=self._fx,
             )
 
-        # 4. CLIP 停止检测 (最少探索 MIN_EXPLORE_STEPS 步后才允许)
-        if (self._state.step_count >= MIN_EXPLORE_STEPS
-                and self._check_clip_stop(observations)):
-            self._clip_stops += 1
-            return HABITAT_STOP
-
-        # 5. 更新全帧 CLIP 相似度 (供 frontier 评分使用, 不受 MIN_EXPLORE_STEPS 限制)
+        # 4. 更新全帧 CLIP 相似度 (必须在 stop 检测之前, 确保当前帧数据)
         step = self._state.step_count
         if (self._clip_model is not None and "rgb" in observations
                 and step - self._state.last_clip_step >= CLIP_CALL_INTERVAL):
@@ -364,6 +358,12 @@ class NaviMindAgent:
                 observations["rgb"], self._clip_prompt
             )
             self._state.last_clip_step = step
+
+        # 5. CLIP 停止检测 (最少探索 MIN_EXPLORE_STEPS 步后才允许, 使用当前帧相似度)
+        if (self._state.step_count >= MIN_EXPLORE_STEPS
+                and self._check_clip_stop(observations)):
+            self._clip_stops += 1
+            return HABITAT_STOP
 
         # 6. Fast Path 目标匹配 (无活跃导航目标时持续运行)
         if not self._always_llm and not self._state.navigating_to_goal:
@@ -597,10 +597,7 @@ class NaviMindAgent:
     # ── 导航 & 探索 ──
 
     def _navigate_to_goal(self) -> int:
-        """
-        目标导航: 优先使用 Habitat navmesh geodesic 路径 (穿门/绕墙),
-        回退到贪心转向前进。
-        """
+        """贪心目标导航: 对准目标方向后前进; 卡死时原地逃脱。"""
         goal = self._state.goal_position
         pos = self._state.position
 
