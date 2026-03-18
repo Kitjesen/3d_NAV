@@ -65,8 +65,8 @@ def build_habitat_config(eval_config: Dict) -> Any:
     base_overrides = [
         f"habitat.dataset.split={split}",
         f"habitat.environment.max_episode_steps={eval_params.get('max_steps', 500)}",
-        # 使用 annotated 数据集配置: .semantic.glb 语义标注 (已验证存在)
-        "habitat.simulator.scene_dataset=data/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json",
+        # 允许沿墙滑动 — VLFM/SG-Nav/CogNav 标准设置，避免 agent 卡死
+        "habitat.simulator.habitat_sim_v0.allow_sliding=True",
     ]
 
     # objectnav_hm3d.yaml: rgb_sensor + depth_sensor, 正确动作空间
