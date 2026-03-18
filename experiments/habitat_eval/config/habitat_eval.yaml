@@ -1,12 +1,12 @@
 # Habitat ObjectNav 评测配置
-# NaviMind (灵途) — Fast-Slow 双进程语义导航评测
+# NaviMind (灵途) — BA-HSG + Fast-Slow 双进程语义导航
 
 # ── 传感器配置 ──
 sensor:
   rgb:
     width: 256
     height: 256
-    hfov: 79           # 度
+    hfov: 79
     position: [0, 0.88, 0]  # 相机高度 (m)
   depth:
     width: 256
@@ -19,38 +19,49 @@ sensor:
     height: 256
     hfov: 79
   gps:
-    dimensionality: 2   # [x, z] in habitat frame
+    dimensionality: 2
   compass:
-    dimensionality: 1   # heading angle
+    dimensionality: 1
 
 # ── 动作空间 ──
 action:
   move_forward: 0.25     # 米
   turn_left: 30          # 度
   turn_right: 30         # 度
-  # STOP 动作无参数
 
 # ── 评测参数 ──
 eval:
   max_steps: 500
-  success_distance: 2.0  # 米, 到达目标此距离内并 STOP 即为成功
+  success_distance: 1.0  # 米 (HM3D ObjectNav 标准: 1.0m)
   dataset: "hm3d"
-  split: "val"
+  split: "val_mini"
+  max_navigate_steps: 200  # 导航到目标的最大步数 (防死循环)
 
-# ── 场景图构建参数 ──
+# ── 场景图构建参数 (BA-HSG) ──
 scene_graph:
-  merge_distance: 0.8     # 米, 同一物体实例合并距离
+  merge_distance: 0.8
   iou_threshold: 0.3
   clip_threshold: 0.75
-  max_objects: 200
+  max_objects: 300
   stale_timeout: 9999.0   # 评测中不清理过期物体
 
 # ── Fast Path 参数 ──
 fast_path:
-  threshold: 0.75          # 置信度阈值
+  threshold: 0.75
   confidence_threshold: 0.6
 
 # ── 探索策略 ──
 exploration:
-  rotate_steps: 12         # 360°/30° = 12 步完成一圈扫描
-  frontier_distance: 2.0   # 米, 朝 frontier 前进的距离
+  rotate_steps: 8          # 240° 扫描，节省旋转步数，覆盖更多区域
+  frontier_distance: 3.5   # 米, 每次探索前进距离（原 2.5 → 扩大覆盖）
+  cell_size: 0.5           # 米, 访问网格分辨率
+
+# ── 消融实验 ──
+# 通过命令行 --ablation 覆盖, 这里是默认值
+ablation:
+  name: "full"
+  # full         — 完整 NaviMind (BA-HSG + FOV + 层次图 + Fast Path)
+  # no_belief    — 去掉贝叶斯信念 (不传 FOV, score 降低)
+  # no_fov       — 去掉 FOV-aware 负面证据
+  # no_hierarchy — 平坦物体列表替代层次场景图
+  # always_llm   — 跳过 Fast Path, 纯探索 (模拟 SG-Nav 依赖 LLM)

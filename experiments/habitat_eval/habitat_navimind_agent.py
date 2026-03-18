@@ -1,9 +1,11 @@
 """
-NaviMind Habitat Agent — BA-HSG + Fast-Slow + CLIP 零样本 ObjectNav 评测。
+NaviMind Habitat Agent — BA-HSG + Fast-Slow 零样本 ObjectNav 评测。
 
 感知策略 (按优先级):
-  1. Habitat ground-truth semantic sensor (有 .basis.scn 标注时)
+  1. Habitat ground-truth semantic sensor (有 .basis.scn 标注时) — 与 SG-Nav/VLFM/L3MVN 相同假设
   2. CLIP RGB patch 检测 (无标注时的零样本回退, 与 VLFM/CoW 相同路线)
+
+Agent 不接收目标位置信息——所有导航决策基于在线感知和 BA-HSG 场景图。
 
 停止判据: CLIP 帧相似度 > 阈值 AND 前方深度 < success_distance。
 
@@ -92,7 +94,6 @@ CLIP_DETECT_THRESHOLD = 0.26    # 局部 patch 相似度 → 创建 Detection3D
 CLIP_MIN_DEPTH = 0.8            # 检测物体最小深度 (m) — 过滤贴墙误检
 CLIP_CALL_INTERVAL = 3          # 每 N 步调用一次 CLIP (平衡速度与响应)
 MIN_EXPLORE_STEPS = 20          # 至少探索 N 步再允许 STOP
-GT_FALLBACK_STEPS = 50          # 超过此步数仍未找到目标 → 直接导航到 GT 目标位置
 DEPTH_MAX = 10.0                # Habitat depth sensor 最大量程 (m); 观测值已归一化到 [0,1]
 
 
@@ -123,7 +124,6 @@ class AgentState:
     stuck_counter: int = 0
     visited_cells: Set[Tuple[int, int]] = field(default_factory=set)
     blocked_headings: List[float] = field(default_factory=list)  # 卡住方向记录 → frontier 惩罚
-    is_gt_goal: bool = False  # GT 回退目标 (可靠) vs CLIP 场景图目标 (不可靠)
     # CLIP 缓存
     last_clip_step: int = -999
     last_clip_sim: float = 0.0
@@ -212,11 +212,6 @@ class NaviMindAgent:
         self._target_category = ""
         self._instruction = ""
         self._clip_prompt = ""
-        self._object_goal_position: Optional[np.ndarray] = None
-        self._goal_position_world: Optional[np.ndarray] = None  # 世界坐标, 用于 pathfinder
-        self._sim = None  # Habitat sim 实例, 用于 geodesic 导航
-        self._geofollow = None  # GreedyGeodesicFollower (每 episode 重建)
-
         # ── 统计 ──
         self._fast_path_hits = 0
         self._total_resolves = 0
@@ -290,32 +285,12 @@ class NaviMindAgent:
         self._tracker = self._make_tracker()
         self._state = AgentState()
         self._state.target_forward_steps = self._frontier_forward
-        self._object_goal_position = None
-        self._goal_position_world = None
-        self._geofollow = None
         self._fast_path_hits = 0
         self._total_resolves = 0
         self._clip_stops = 0
 
-    def set_sim(self, sim: Any) -> None:
-        """传入 Habitat sim 实例, 用于 geodesic pathfinder 导航 (穿门/绕墙)。"""
-        self._sim = sim
-
-    def set_goal(
-        self,
-        category: str,
-        goal_position: Optional[np.ndarray] = None,
-        start_position: Optional[np.ndarray] = None,
-    ) -> None:
-        """
-        设置 ObjectNav 目标类别。
-
-        Args:
-            category: 目标类别 (e.g. "chair")
-            goal_position: 目标世界坐标 (来自 episode.goals)
-            start_position: agent 起始世界坐标 (来自 env.sim.get_agent_state().position)
-                            用于将 goal_position 转换为 GPS 相对坐标
-        """
+    def set_goal(self, category: str) -> None:
+        """设置 ObjectNav 目标类别（零样本，agent 不接收目标位置）。"""
         self._target_category = _normalize_category(category)
         self._instruction = OBJECTNAV_CATEGORIES.get(
             self._target_category, f"找到{category}"
@@ -323,18 +298,6 @@ class NaviMindAgent:
         self._clip_prompt = CLIP_PROMPTS.get(
             self._target_category,
             f"a photo of a {category.replace('_', ' ')}"
-        )
-        if goal_position is not None and start_position is not None:
-            # Habitat GPS 传感器返回相对起始点的位移 → 将世界坐标目标转换为 GPS 相对坐标
-            offset = goal_position - start_position
-            self._object_goal_position = np.array(
-                [float(offset[0]), 0.0, float(offset[2])], dtype=np.float64
-            )
-        else:
-            self._object_goal_position = goal_position
-        # 保存世界坐标 (用于 pathfinder geodesic 导航)
-        self._goal_position_world = (
-            np.array(goal_position, dtype=np.float32) if goal_position is not None else None
         )
 
     def act(self, observations: Dict[str, Any]) -> int:
@@ -402,23 +365,9 @@ class NaviMindAgent:
             )
             self._state.last_clip_step = step
 
-        # 6. Fast Path 目标匹配
-        # 只在无活跃导航目标且尚未到 GT 回退步数时运行;
-        # 否则 CLIP 误检(~71% hit rate)会每步覆盖 goal_position, 导致 agent 永远转圈而不前进
-        if (not self._always_llm
-                and not self._state.navigating_to_goal
-                and self._state.step_count < GT_FALLBACK_STEPS):
+        # 6. Fast Path 目标匹配 (无活跃导航目标时持续运行)
+        if not self._always_llm and not self._state.navigating_to_goal:
             self._try_fast_path()
-
-        # 6b. GT 目标回退: step >= GT_FALLBACK_STEPS 且当前无导航 → 切换到 GT 目标
-        if (not self._state.navigating_to_goal
-                and self._object_goal_position is not None
-                and self._state.step_count >= GT_FALLBACK_STEPS):
-            self._state.goal_position = self._object_goal_position.copy()
-            self._state.navigating_to_goal = True
-            self._state.is_gt_goal = True  # GT position is reliable → allow dist-based STOP
-            self._state.navigate_steps = 0
-            logger.debug("GT fallback: step=%d goal=%s", self._state.step_count, self._state.goal_position)
 
         # 7. 导航 or 探索
         # MIN_EXPLORE_STEPS 步前强制探索; 之后如果有目标则导航
@@ -431,7 +380,6 @@ class NaviMindAgent:
                 self._state.navigating_to_goal = False
                 self._state.goal_found = False
                 self._state.navigate_steps = 0
-                self._state.is_gt_goal = False
                 return self._explore(observations)
             return self._navigate_to_goal()
         else:
@@ -630,7 +578,6 @@ class NaviMindAgent:
                 result.target_x, result.target_y, result.target_z
             ])
             self._state.navigating_to_goal = True
-            self._state.is_gt_goal = False  # CLIP-based: unreliable, don't auto-stop at 1m
             self._state.navigate_steps = 0
             return True
         return False
@@ -662,54 +609,9 @@ class NaviMindAgent:
         dist = math.sqrt(dx * dx + dz * dz)
 
         if dist < self._success_distance:
-            if self._state.is_gt_goal:
-                return HABITAT_STOP
-            if dist < 0.3:
-                return HABITAT_STOP
+            return HABITAT_STOP
 
-        if self._object_goal_position is not None:
-            tdx = self._object_goal_position[0] - pos[0]
-            tdz = self._object_goal_position[2] - pos[2]
-            if math.sqrt(tdx * tdx + tdz * tdz) < self._success_distance:
-                return HABITAT_STOP
-
-        # ── Geodesic 路径跟随 (GT goal + sim 可用时) ──
-        # 使用 GreedyGeodesicFollower 避免手动处理坐标系转换
-        if (
-            self._state.is_gt_goal
-            and self._sim is not None
-            and self._goal_position_world is not None
-        ):
-            try:
-                import habitat_sim
-                if self._geofollow is None:
-                    self._geofollow = habitat_sim.GreedyGeodesicFollower(
-                        self._sim.pathfinder,
-                        self._sim.get_agent(0),
-                        goal_radius=self._success_distance,
-                        stop_key=None,
-                        forward_key="move_forward",
-                        left_key="turn_left",
-                        right_key="turn_right",
-                    )
-                next_key = self._geofollow.next_action_along(self._goal_position_world)
-                if next_key is None:
-                    return HABITAT_STOP
-                _KEY = {"move_forward": HABITAT_MOVE_FORWARD,
-                        "turn_left": HABITAT_TURN_LEFT,
-                        "turn_right": HABITAT_TURN_RIGHT}
-                action = _KEY.get(next_key)
-                if action is not None:
-                    if action == HABITAT_MOVE_FORWARD:
-                        self._state.forward_steps += 1
-                    else:
-                        self._state.forward_steps = 0
-                    return action
-            except Exception as e:
-                logger.debug("GreedyGeodesicFollower error: %s — falling back to greedy", e)
-                self._geofollow = None  # 重建
-
-        # ── 贪心导航 (回退) ──
+        # ── 贪心导航 ──
         escape_remaining = getattr(self._state, '_nav_escape_remaining', 0)
         if escape_remaining > 0:
             self._state._nav_escape_remaining = escape_remaining - 1
@@ -746,7 +648,7 @@ class NaviMindAgent:
             self._state.is_rotating = True
             self._state.rotate_count = 0
             self._state.forward_steps = 0  # 重置, 确保下次扫描后重新对齐
-            return HABITAT_TURN_RIGHT
+            return HABITAT_TURN_LEFT if np.random.random() > 0.5 else HABITAT_TURN_RIGHT
 
         if self._state.is_rotating:
             self._state.rotate_count += 1
