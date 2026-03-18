@@ -517,27 +517,42 @@ L3 (Multi-step, 10): sequential or conditional instructions.
 
 \begin{table}[t]
 \centering
-\caption{Comparison with zero-shot methods on HM3D ObjectNav val (2,000 episodes). All methods use no task-specific training. $\dagger$~indicates results from original papers.}
+\caption{Comparison with zero-shot methods on HM3D ObjectNav.
+$\dagger$~results from original papers on val (2,000 episodes).
+$\ddagger$~NaviMind evaluated on val\_mini (30 episodes, 2 scenes);
+direct numerical comparison is indicative due to scale difference.}
 \label{tab:hm3d_main}
 \footnotesize
 \begin{tabular}{@{}lcccc@{}}
 \toprule
 Method & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
 \midrule
+\multicolumn{5}{@{}l}{\textit{2023–2024 zero-shot methods (val, 2K eps)}} \\
 CoW~\cite{cow2023}$^\dagger$            & 26.7 & 10.5 & -- & -- \\
 ESC~\cite{esc2023}$^\dagger$            & 38.0 & 17.0 & -- & -- \\
 VLFM~\cite{vlfm2024}$^\dagger$          & 38.5 & 16.6 & -- & -- \\
-SG-Nav~\cite{sgnav2024}$^\dagger$       & 46.4 & 19.6 & -- & -- \\
+L3MVN~\cite{l3mvn2023}$^\dagger$        & 54.2 & 25.5 & -- & -- \\
+SG-Nav~\cite{sgnav2024}$^\dagger$       & 54.0 & 24.9 & -- & -- \\
 \midrule
-\textbf{NaviMind (Ours)} & \textbf{70.0} & \textbf{45.9} & \textbf{37.4} & \textbf{2.82} \\
+\multicolumn{5}{@{}l}{\textit{2025 zero-shot methods (val, 2K eps)}} \\
+RATE-Nav~\cite{ratenav2025}$^\dagger$   & 67.8 & 31.3 & -- & -- \\
+CogNav~\cite{cognav2025}$^\dagger$      & 72.5 & 26.2 & -- & -- \\
+\midrule
+\multicolumn{5}{@{}l}{\textit{This work (val\_mini, 30 eps)}} \\
+\textbf{NaviMind (Ours)}$^\ddagger$ & \textbf{70.0} & \textbf{45.9} & \textbf{37.4} & \textbf{2.82} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
 \end{table}
 
-Table~\ref{tab:hm3d_main} compares NaviMind against state-of-the-art zero-shot methods on HM3D ObjectNav val\_mini (30 episodes, 2 scenes).
-NaviMind achieves \textbf{70.0\%} SR, outperforming SG-Nav (46.4\%) by +23.6 pp, with SPL of 45.9\% nearly $2.3\times$ higher.
-$\dagger$ Results from original papers on HM3D val (2000 episodes); our evaluation uses val\_mini for tractable ablation.
+Table~\ref{tab:hm3d_main} positions NaviMind among recent zero-shot object navigation methods.
+On our val\_mini evaluation (30 episodes), NaviMind achieves \textbf{70.0\%} SR,
+comparable to the concurrent ICCV'25 state-of-the-art CogNav~\cite{cognav2025} (72.5\%) and
+above RATE-Nav~\cite{ratenav2025} (67.8\%), both evaluated on the full 2K-episode val set.
+NaviMind's SPL of \textbf{45.9\%} substantially exceeds all compared methods,
+reflecting efficient goal-directed execution once target belief is established.
+We note that val\_mini (30 episodes) has higher variance than the 2K-episode val split;
+full val evaluation remains future work.
 
 \begin{table}[t]
 \centering
@@ -874,9 +889,16 @@ OneMap,
 in \emph{Proc. ICRA}, 2025.
 
 \bibitem{cognav2025}
-CogNav,
-``Cognitive navigation with scene graph reasoning and visual grounding,''
+Z.~Cao \emph{et al.},
+``CogNav: Cognitive process modeling for object goal navigation with LLMs,''
 in \emph{Proc. ICCV}, 2025.
+arXiv:2412.10439.
+
+\bibitem{ratenav2025}
+Y.~Zhang \emph{et al.},
+``RATE-Nav: Region-aware termination enhancement for zero-shot object navigation
+with vision-language models,''
+\emph{arXiv preprint arXiv:2506.02354}, 2025.
 
 \bibitem{clash2025}
 CLASH,
