@@ -19,6 +19,7 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -48,6 +49,11 @@ def generate_launch_description():
         "llm_backend",
         default_value="",
         description="覆盖 LLM 后端 (空=使用yaml配置, mock/kimi/openai/claude)",
+    )
+    enable_reconstruction_arg = DeclareLaunchArgument(
+        "enable_reconstruction",
+        default_value="false",
+        description="启用三维重建节点 (true=启用彩色语义点云聚合)",
     )
 
     # ── 语义感知节点 ──
@@ -95,13 +101,33 @@ def generate_launch_description():
         ],
     )
 
+    # ── 三维重建节点（可选）──
+    reconstruction_node = Node(
+        package="reconstruction",
+        executable="reconstruction_node",
+        name="reconstruction_node",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_reconstruction")),
+        remappings=[
+            ("color_image", "/camera/color/image_raw"),
+            ("depth_image", "/camera/depth/image_rect_raw"),
+            ("camera_info", "/camera/color/camera_info"),
+            ("scene_graph", "/nav/semantic/scene_graph"),
+            ("semantic_cloud", "/nav/reconstruction/semantic_cloud"),
+            ("stats", "/nav/reconstruction/stats"),
+            ("save_ply", "/nav/reconstruction/save_ply"),
+        ],
+    )
+
     return LaunchDescription(
         [
             perception_config_arg,
             planner_config_arg,
             initial_instruction_arg,
             llm_backend_arg,
+            enable_reconstruction_arg,
             perception_node,
             planner_node,
+            reconstruction_node,
         ]
     )

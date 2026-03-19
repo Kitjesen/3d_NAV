@@ -74,6 +74,13 @@ semantic:
   costmap: /nav/costmap                          # nav_msgs/OccupancyGrid (optional, planner→perception SCG 内部接口)
   voice_response: /nav/voice/response          # std_msgs/String JSON: {response: "好的", timestamp, instruction}
 
+# ── 三维重建层 ──
+# reconstruction_node 未启动时这些话题不存在，现有系统不受影响。
+reconstruction:
+  semantic_cloud: /nav/reconstruction/semantic_cloud  # sensor_msgs/PointCloud2 (XYZRGB 彩色语义点云, 1Hz)
+  stats: /nav/reconstruction/stats                    # std_msgs/String JSON: {total_points, labeled_points, objects, voxels}
+  save_ply_service: /nav/reconstruction/save_ply      # std_srvs/Trigger → 保存 PLY 到 maps/reconstruction/
+
 # ── 三环认知架构 (nav_rings) ──
 # Ring 1 反射弧 / Ring 2 认知环 / Ring 3 对话环
 rings:

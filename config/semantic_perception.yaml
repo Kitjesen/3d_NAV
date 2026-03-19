@@ -92,3 +92,13 @@ semantic_perception_node:
     # ── 性能 (USS-Nav 15Hz) ──
     target_fps: 15.0                     # USS-Nav: 15Hz on Jetson Orin NX
     skip_frames: 1                       # 处理每帧 (不跳帧)
+
+# ── reconstruction_node 参数 ──
+reconstruction_node:
+  ros__parameters:
+    publish_rate: 1.0                    # 彩色点云发布频率 (Hz)
+    voxel_size: 0.05                     # 体素分辨率 (m)，越小越精细但越占内存
+    camera_frame: "camera_color_optical_frame"  # Orbbec 彩色相机坐标系
+    world_frame: "map"                   # SLAM 世界坐标系
+    save_dir: "maps/reconstruction"      # PLY 保存目录
+    min_points_to_publish: 1000          # 低于此点数不发布（避免噪声帧）
