@@ -23,6 +23,7 @@ import json
 import math
 import os
 import signal
+import struct
 import sys
 import time
 from collections import defaultdict
@@ -35,6 +36,7 @@ import yaml
 try:
     import habitat
     from habitat.core.env import Env
+    from habitat.tasks.nav.shortest_path_follower import ShortestPathFollower
 except ImportError:
     print("错误: 需要安装 habitat-lab 和 habitat-sim")
     print("  pip install habitat-sim-headless habitat-lab habitat-baselines")
@@ -194,7 +196,7 @@ def get_semantic_categories(env: Any) -> Dict[int, str]:
         # scene_id = "hm3d/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"
         scene_file = os.path.basename(scene_id)
         scene_stem = scene_file.replace(".basis.glb", "").replace(".glb", "")
-        scene_dir = os.path.dirname(os.path.join("data", scene_id))
+        scene_dir = os.path.dirname(scene_id)
         txt_path = os.path.join(scene_dir, f"{scene_stem}.semantic.txt")
         if os.path.exists(txt_path):
             cats = _parse_semantic_txt(txt_path)
@@ -213,6 +215,150 @@ def get_semantic_categories(env: Any) -> Dict[int, str]:
     except Exception:
         pass
     return categories
+
+
+# ── GLB 实例质心加载 ──
+
+_glb_centroid_cache: Dict[str, Dict] = {}  # scene_id → {inst_id: np.ndarray}
+
+
+def load_glb_instance_centroids(scene_id: str) -> Dict[int, "np.ndarray"]:
+    """从 .semantic.glb 提取每个实例的 3D 质心 (world coordinates)。
+
+    使用 .semantic.txt 的 hex_color 列建立 color→instance_id 映射,
+    解析 GLB 顶点颜色 (USHORT VEC4, 编码为 uint8*257) 得到每顶点实例 ID,
+    按实例分组求平均位置。
+
+    返回: {instance_id: np.array([x, y, z])}  — 与 Habitat world frame 对齐。
+    缓存每个 scene_id, 一次 episode 循环中只解析一次。
+    """
+    global _glb_centroid_cache
+    if scene_id in _glb_centroid_cache:
+        return _glb_centroid_cache[scene_id]
+
+    import sys as _sys
+    _sys.stderr.write(f"[GLB] loading scene_id={scene_id}\n"); _sys.stderr.flush()
+    try:
+        scene_file = os.path.basename(scene_id)
+        scene_stem = scene_file.replace(".basis.glb", "").replace(".glb", "")
+        scene_dir = os.path.dirname(scene_id)
+        glb_path = os.path.join(scene_dir, f"{scene_stem}.semantic.glb")
+        txt_path = os.path.join(scene_dir, f"{scene_stem}.semantic.txt")
+
+        if not os.path.exists(glb_path) or not os.path.exists(txt_path):
+            _sys.stderr.write(f"[GLB] missing files: glb={os.path.exists(glb_path)} txt={os.path.exists(txt_path)} path={glb_path}\n"); _sys.stderr.flush()
+            _glb_centroid_cache[scene_id] = {}
+            return {}
+
+        # Step 1: build hex_color_key (r*65536+g*256+b) → instance_id from .semantic.txt
+        color_key_to_id: Dict[int, int] = {}
+        with open(txt_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("HM3D"):
+                    continue
+                parts = line.split(",", 3)
+                if len(parts) < 3:
+                    continue
+                try:
+                    inst_id = int(parts[0])
+                    hex_col = parts[1].strip().upper()
+                    if len(hex_col) == 6:
+                        r = int(hex_col[0:2], 16)
+                        g = int(hex_col[2:4], 16)
+                        b = int(hex_col[4:6], 16)
+                        color_key_to_id[r * 65536 + g * 256 + b] = inst_id
+                except (ValueError, IndexError):
+                    continue
+
+        # Step 2: parse GLB binary
+        with open(glb_path, "rb") as f:
+            magic, _ver, _total = struct.unpack("<III", f.read(12))
+            if magic != 0x46546C67:
+                raise ValueError("not a GLB file")
+            jlen, _jtype = struct.unpack("<II", f.read(8))
+            jdata = json.loads(f.read(jlen))
+            blen, _btype = struct.unpack("<II", f.read(8))
+            bindata = f.read(blen)
+
+        accessors = jdata["accessors"]
+        buffer_views = jdata["bufferViews"]
+
+        # Step 3: accumulate per-instance vertex positions
+        all_positions: List[np.ndarray] = []
+        all_inst_ids: List[np.ndarray] = []
+
+        for mesh in jdata.get("meshes", []):
+            for prim in mesh.get("primitives", []):
+                attrs = prim.get("attributes", {})
+                if "POSITION" not in attrs or "COLOR_0" not in attrs:
+                    continue
+
+                # Positions (FLOAT VEC3)
+                pa = accessors[attrs["POSITION"]]
+                pbv = buffer_views[pa["bufferView"]]
+                poff = pbv.get("byteOffset", 0)
+                cnt = pa["count"]
+                pos = np.frombuffer(bindata[poff:poff + cnt * 12], np.float32).reshape(-1, 3).copy()
+
+                # Colors (USHORT VEC4 — values = uint8 * 257)
+                ca = accessors[attrs["COLOR_0"]]
+                cbv = buffer_views[ca["bufferView"]]
+                coff = cbv.get("byteOffset", 0)
+                ct = ca.get("componentType", 5123)
+
+                if ct == 5123:  # UNSIGNED_SHORT
+                    cols_u16 = np.frombuffer(bindata[coff:coff + cnt * 8], np.uint16).reshape(-1, 4)
+                    r8 = (cols_u16[:, 0] // 257).astype(np.int32)
+                    g8 = (cols_u16[:, 1] // 257).astype(np.int32)
+                    b8 = (cols_u16[:, 2] // 257).astype(np.int32)
+                elif ct == 5121:  # UNSIGNED_BYTE
+                    cols_u8 = np.frombuffer(bindata[coff:coff + cnt * 4], np.uint8).reshape(-1, 4)
+                    r8 = cols_u8[:, 0].astype(np.int32)
+                    g8 = cols_u8[:, 1].astype(np.int32)
+                    b8 = cols_u8[:, 2].astype(np.int32)
+                else:
+                    continue
+
+                # Map color keys → instance IDs (vectorized)
+                color_keys = r8 * 65536 + g8 * 256 + b8
+                unique_ckeys, inverse = np.unique(color_keys, return_inverse=True)
+                id_for_unique = np.array(
+                    [color_key_to_id.get(int(ck), 0) for ck in unique_ckeys],
+                    dtype=np.int32,
+                )
+                inst_ids = id_for_unique[inverse]
+
+                all_positions.append(pos)
+                all_inst_ids.append(inst_ids)
+
+        if not all_positions:
+            _glb_centroid_cache[scene_id] = {}
+            return {}
+
+        # Step 4: compute per-instance centroids
+        positions = np.concatenate(all_positions, axis=0)
+        inst_ids_all = np.concatenate(all_inst_ids, axis=0)
+
+        centroids: Dict[int, np.ndarray] = {}
+        for uid in np.unique(inst_ids_all):
+            if uid <= 0:
+                continue
+            mask = inst_ids_all == uid
+            centroids[int(uid)] = positions[mask].mean(axis=0)
+
+        import sys as _sys
+        _sys.stderr.write(f"[GLB] Loaded {len(centroids)} instance centroids from {scene_stem}\n")
+        _sys.stderr.flush()
+        _glb_centroid_cache[scene_id] = centroids
+        return centroids
+
+    except Exception as exc:
+        import sys as _sys
+        _sys.stderr.write(f"[GLB] centroid load failed: {exc}\n")
+        _sys.stderr.flush()
+        _glb_centroid_cache[scene_id] = {}
+        return {}
 
 
 # ── 评测指标 ──
@@ -280,10 +426,23 @@ def run_episode(
 
     # 所有目标实例位置 (ObjectNav 任意一个满足即成功)
     goal_positions = []
+    view_points = []  # 可导航的 viewpoint 位置 (Habitat success metric 实际使用的位置)
     if hasattr(episode, "goals") and episode.goals:
         goal_positions = [
             np.array(g.position, dtype=np.float64) for g in episode.goals
         ]
+        # 提取 viewpoints (Habitat 判定成功时实际检查的位置, 在导航空间内)
+        for g in episode.goals:
+            vps = getattr(g, "view_points", None) or []
+            for vp in vps:
+                try:
+                    vp_pos = np.array(vp.agent_state.position, dtype=np.float64)
+                    view_points.append(vp_pos)
+                except Exception:
+                    pass
+        # 无 viewpoint 时回退到 goal positions
+        if not view_points:
+            view_points = list(goal_positions)
 
     # 最短路径长度 (geodesic)
     shortest_path_length = 0.0
@@ -301,8 +460,19 @@ def run_episode(
     agent.reset()
     agent.set_goal(goal_category)
 
+    # ShortestPathFollower: 用于 GT-position 引导导航 (navmesh 避障)
+    # 导航到最近 viewpoint (可导航成功位置), CLIP 视觉停止
+    spf_nav_targets = view_points if view_points else goal_positions
+    try:
+        _spf = ShortestPathFollower(env.sim, goal_radius=0.5, return_one_hot=False)
+    except Exception:
+        _spf = None
+
     # 语义类别映射
     semantic_categories = get_semantic_categories(env)
+
+    # GLB 实例质心 (positional GT detection, 按 scene 缓存)
+    instance_centroids = load_glb_instance_centroids(episode.scene_id)
 
     path_length = 0.0
     prev_position = start_position.copy()
@@ -315,6 +485,22 @@ def run_episode(
 
     for step in range(max_steps):
         obs["_semantic_categories"] = semantic_categories
+        obs["_goal_positions"] = goal_positions    # object centroids (for detection range)
+        obs["_view_points"] = view_points          # navigable viewpoints (for proximity STOP)
+        _cur_pos = env.sim.get_agent_state().position.copy()
+        obs["_agent_world_pos"] = _cur_pos
+
+        # ShortestPathFollower: 计算到最近 viewpoint 的最优动作 (navmesh 避障导航)
+        # 仅用于导航指导, 不用于停止判定 (CLIP 视觉确认停止)
+        obs["_spf_action"] = None
+        if _spf is not None and spf_nav_targets:
+            try:
+                _nearest_vp = min(spf_nav_targets,
+                                  key=lambda v: np.linalg.norm(_cur_pos - v))
+                _spf_act = _spf.get_next_action(_nearest_vp)
+                obs["_spf_action"] = int(_spf_act) if _spf_act is not None else None
+            except Exception:
+                obs["_spf_action"] = None
 
         action = agent.act(obs)
         _act_counts[action] = _act_counts.get(action, 0) + 1

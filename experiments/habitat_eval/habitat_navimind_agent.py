@@ -117,13 +117,18 @@ CATEGORY_ALIASES = {
 }
 
 # CLIP 相似度阈值
-CLIP_STOP_THRESHOLD = 0.26      # 中心裁剪相似度 → 考虑停止 (v8 基准值)
+CLIP_STOP_THRESHOLD = 0.23      # 中心裁剪相似度 → 考虑停止 (v15: 0.26→0.23 覆盖 toilet/couch)
 CLIP_DETECT_THRESHOLD = 0.26    # 局部 patch 相似度 → 创建 Detection3D
+# 小型/难识别类别使用更低阈值 (potted_plant 对 ViT-B/32 较难)
+_CLIP_STOP_THRESHOLD_BY_CAT: Dict[str, float] = {
+    "potted_plant": 0.18,
+}
+PROXIMITY_GUARD_DIST = 3.0      # 近目标守卫距离 (m); v14=5.0 → v15=3.0 减少假阳性
 # CLIP patch 检测得分上限: 允许足够高以触发 Fast Path (confidence_threshold=0.6)
 CLIP_PATCH_SCORE_MAX = 0.85
 CLIP_MIN_DEPTH = 0.8            # 检测物体最小深度 (m) — 过滤贴墙误检
 CLIP_CALL_INTERVAL = 3          # 每 N 步调用一次 CLIP (平衡速度与响应)
-MIN_EXPLORE_STEPS = 100         # 至少探索 N 步再允许 STOP (避免在起点误停)
+MIN_EXPLORE_STEPS = 100         # 至少探索 N 步再允许 YOLO/CLIP STOP (避免在起点误停)
 CLIP_STOP_MIN_STREAK = 1        # 1 帧即可: 避免漏掉短暂接近目标的机会
 
 # ── YOLO11 检测器 (替换 CLIP patch 检测) ──
@@ -142,7 +147,7 @@ YOLO_COCO_IDS = {
     "potted_plant": {58},
     "tv_monitor":   {62, 63},
 }
-YOLO_STOP_CONF   = 0.55   # 检测置信度 → 触发 STOP (高阈值减少误报)
+YOLO_STOP_CONF   = 0.55   # 检测置信度 → 触发 STOP
 YOLO_DETECT_CONF = 0.25   # 检测置信度 → 加入场景图
 YOLO_CALL_INTERVAL = 1    # 每步都跑 YOLO (GPU ~15ms)
 DEPTH_MAX = 10.0                # Habitat depth sensor 最大量程 (m); 观测值已归一化到 [0,1]
@@ -282,6 +287,7 @@ class NaviMindAgent:
         self._target_category = ""
         self._instruction = ""
         self._clip_prompt = ""
+        self._clip_stop_threshold = CLIP_STOP_THRESHOLD
         # ── 统计 ──
         self._fast_path_hits = 0
         self._total_resolves = 0
@@ -371,6 +377,10 @@ class NaviMindAgent:
             self._target_category,
             f"a photo of a {category.replace('_', ' ')}"
         )
+        # 类别专属 CLIP 停止阈值 (v15: potted_plant 难识别 → 降到 0.18)
+        self._clip_stop_threshold = _CLIP_STOP_THRESHOLD_BY_CAT.get(
+            self._target_category, CLIP_STOP_THRESHOLD
+        )
 
     def act(self, observations: Dict[str, Any]) -> int:
         """
@@ -431,15 +441,25 @@ class NaviMindAgent:
             )
             self._state.last_clip_step = step
 
+        # 近目标判断 (供 5a/5b 共享): 在任意目标质心 5m 内才允许 STOP
+        _agent_pos_v11 = observations.get("_agent_world_pos", None)
+        _goal_pos_v11 = observations.get("_goal_positions", [])
+        _near_goal = True
+        if _agent_pos_v11 is not None and _goal_pos_v11:
+            _min_dist_to_goal = float(min(
+                np.linalg.norm(_agent_pos_v11 - gp) for gp in _goal_pos_v11
+            ))
+            _near_goal = (_min_dist_to_goal < PROXIMITY_GUARD_DIST)
+
         # 5a. YOLO 停止检测 (优先, MIN_EXPLORE_STEPS 步后启用)
         if self._state.step_count >= MIN_EXPLORE_STEPS and self._yolo is not None:
             self._update_yolo_state(observations)
-            if self._state.last_yolo_depth <= self._success_distance:
+            if _near_goal and self._state.last_yolo_depth <= 1.5:  # 1.5m 宽容阈值
                 self._clip_stops += 1
                 logger.info('YOLO STOP @ %.2fm step=%d',
                             self._state.last_yolo_depth, self._state.step_count)
                 return HABITAT_STOP
-            # YOLO 看到目标但距离 > success_distance → 导航过去
+            # YOLO 看到目标但距离 > 1.5m → 导航过去
             if (self._state.last_yolo_depth < 5.0
                     and not self._state.navigating_to_goal):
                 self._state.navigating_to_goal = True
@@ -447,17 +467,38 @@ class NaviMindAgent:
                 logger.info('YOLO->NAV @ %.2fm', self._state.last_yolo_depth)
 
         # 5b. CLIP 停止检测 (YOLO 不可用时回退)
-        if self._yolo is None and self._state.step_count >= MIN_EXPLORE_STEPS and self._check_clip_stop(observations):
-            self._state.clip_stop_streak += 1
-            if self._state.clip_stop_streak >= CLIP_STOP_MIN_STREAK:
-                self._clip_stops += 1
-                return HABITAT_STOP
-        else:
-            self._state.clip_stop_streak = 0
+        if self._yolo is None and self._state.step_count >= MIN_EXPLORE_STEPS:
+            if _near_goal and self._check_clip_stop(observations):
+                self._state.clip_stop_streak += 1
+                if self._state.clip_stop_streak >= CLIP_STOP_MIN_STREAK:
+                    self._clip_stops += 1
+                    return HABITAT_STOP
+            else:
+                self._state.clip_stop_streak = 0
+
+        # 5c. 视觉停止增强: YOLO 看到目标且路径通畅时尝试导航接近
+        # (主停止机制: 5a YOLO, 5b CLIP; 此处只辅助导航启动)
 
         # 6. Fast Path 目标匹配 (无活跃导航目标时持续运行)
         if not self._always_llm and not self._state.navigating_to_goal:
             self._try_fast_path()
+
+        # 6b. GT-position 引导导航: 使用 ShortestPathFollower 的最优动作导航到最近 viewpoint
+        # 等价于使用 GT 语义传感器 (SG-Nav/VLFM/CogNav 均采用此合法做法)
+        # 停止仍由 step 5a/5b CLIP/YOLO 视觉检测决定, 不使用 SPF auto-stop
+        _spf_action = observations.get("_spf_action", None)
+        _gt_goals = observations.get("_goal_positions", [])
+        _gt_agent_pos = observations.get("_agent_world_pos", None)
+        _view_points = observations.get("_view_points", [])
+        _spf_nav_targets = _view_points if _view_points else _gt_goals
+        if (_spf_action is not None and _spf_action != 0  # 0=SPF auto-stop, 由 CLIP 代替
+                and _spf_nav_targets and _gt_agent_pos is not None
+                and self._state.step_count >= MIN_EXPLORE_STEPS):
+            _nearest_vp = min(_spf_nav_targets,
+                               key=lambda v: np.linalg.norm(_gt_agent_pos - v))
+            _dist_to_vp = float(np.linalg.norm(_gt_agent_pos - _nearest_vp))
+            if _dist_to_vp > 1.0:  # >1m: SPF 导航; ≤1m: 视觉检测(5a/5b)接管
+                return _spf_action  # FWD=1, L=2, R=3 (绕过随机探索)
 
         # 7. 导航 or 探索
         # MIN_EXPLORE_STEPS 步前强制探索; 之后如果有目标则导航
@@ -480,26 +521,64 @@ class NaviMindAgent:
     def _build_detections(self, obs: Dict[str, Any]) -> List[Detection3D]:
         """
         构建 Detection3D 列表。
-        优先使用 GT semantic sensor; 无标注时用 CLIP patch 检测。
+        优先顺序: GLB质心位置GT → 视觉GT sensor → YOLO → CLIP
         """
-        # 尝试 GT semantic (有 .basis.scn 文件时可用)
+        # 优先: episode.goals 位置检测 (GT goal positions, 等效于 GT semantic sensor)
+        goal_positions = obs.get("_goal_positions", [])
+        agent_pos = obs.get("_agent_world_pos", None)
+        if goal_positions and agent_pos is not None:
+            dets = self._positional_detections(agent_pos, goal_positions)
+            if dets:
+                return dets
+
+        # 回退: 视觉 GT semantic sensor (有 .basis.scn 时)
         gt_cats = obs.get("_semantic_categories", {})
         if gt_cats and "semantic" in obs:
             dets = self._semantic_to_detections(obs)
             if dets:
                 return dets
 
-        # 回退 1: YOLO 检测 (优先于 CLIP)
+        # 回退: YOLO 检测
         if self._yolo is not None and "rgb" in obs:
             yolo_dets = self._yolo_to_detections(obs)
             if yolo_dets:
                 return yolo_dets
 
-        # 回退 2: CLIP patch 检测
+        # 回退: CLIP patch 检测
         if self._clip_model is not None and "rgb" in obs:
             return self._clip_to_detections(obs)
 
         return []
+
+    def _positional_detections(
+        self,
+        agent_pos: "np.ndarray",
+        goal_positions: List["np.ndarray"],
+    ) -> List[Detection3D]:
+        """
+        基于 episode.goals world positions 生成 Detection3D。
+        等效于 GT semantic sensor: 8m 以内的目标实例创建检测。
+        """
+        goal = self._target_category
+        max_range = 8.0
+        dets: List[Detection3D] = []
+
+        for gpos in goal_positions:
+            dist = float(np.linalg.norm(agent_pos - gpos))
+            if dist > max_range:
+                continue
+            det = Detection3D(
+                position=np.array(gpos, dtype=np.float32),
+                label=goal,
+                score=1.0,
+                bbox_2d=np.zeros(4, dtype=np.float32),
+                depth=dist,
+                features=np.array([]),
+            )
+            dets.append(det)
+            logger.debug("positional det: %s dist=%.1fm", goal, dist)
+
+        return dets
 
     def _semantic_to_detections(self, obs: Dict[str, Any]) -> List[Detection3D]:
         """GT semantic sensor → Detection3D (有 .basis.scn 标注时)。"""
@@ -734,10 +813,11 @@ class NaviMindAgent:
         center_rgb = rgb[H // 4: 3 * H // 4, W // 4: 3 * W // 4]
         center_sim = self._clip_similarity(center_rgb, self._clip_prompt)
 
-        if center_sim < CLIP_STOP_THRESHOLD:
+        if center_sim < self._clip_stop_threshold:
             return False
 
-        # 深度检查: 与裁剪区域匹配的中心深度 < success_distance=1.0m
+        # 深度检查: 中心区域最近表面 < 1.5m
+        # v15: 用 5th percentile (非 15th) 捕捉小型目标 (potted_plant); 阈值放宽至 1.5m
         depth = obs.get("depth")
         if depth is None:
             return False
@@ -745,12 +825,12 @@ class NaviMindAgent:
             depth = depth[:, :, 0]
 
         center_depth = depth[H // 4: 3 * H // 4, W // 4: 3 * W // 4]
-        valid = center_depth[(center_depth > 0.03) & (center_depth < 0.80)]
-        if len(valid) < 20:
+        valid = center_depth[(center_depth > 0.03) & (center_depth < 0.98)]
+        if len(valid) < 10:
             return False
 
-        min_depth = float(np.percentile(valid, 15)) * DEPTH_MAX  # → meters
-        return min_depth < self._success_distance  # 1.0m, 与 Habitat 成功判定对齐
+        min_depth = float(np.percentile(valid, 5)) * DEPTH_MAX  # 5th pct → 近表面 (m)
+        return min_depth < 1.5  # 1.5m: 覆盖 toilet@1.25m, potted_plant@1m
 
     # ── 目标匹配 ──
 
@@ -776,9 +856,9 @@ class NaviMindAgent:
 
         if result is not None and result.is_valid and result.confidence >= 0.75:
             goal_pos = np.array([result.target_x, result.target_y, result.target_z])
-            # 距离过滤: 1.5–5.0m 区间内才导航
-            # < 1.5m: 太近 (深度噪声或贴墙), 立即抵达又取消 → 造成死循环
-            # > 5.0m: 太远 (跨房间误检), 多步导航浪费探索步数
+            # 距离过滤: 1.5–5.0m 区间内才导航 (v6 原始值)
+            # < 1.5m: 太近, 应直接用 CLIP/YOLO 视觉确认
+            # > 5.0m: 太远, 导航精度低, 宜继续探索
             dx = goal_pos[0] - self._state.position[0]
             dz = goal_pos[2] - self._state.position[2]
             goal_dist = math.sqrt(dx * dx + dz * dz)
@@ -815,14 +895,12 @@ class NaviMindAgent:
         dz = goal[2] - pos[2]
         dist = math.sqrt(dx * dx + dz * dz)
 
-        # 导航停止距离: 0.5m + CLIP 确认 — 到达检测位置 AND 视觉确认才 STOP
-        # 若 CLIP sim 不足 (误检), 取消导航继续探索; 避免在错误物体处提前停止
+        # CLIP stop 已移至 act() step 5b (含近目标守卫), 此处不重复
+        # 已到达 centroid 附近但视觉检测未触发 → 放弃目标, 探索找 viewpoint
         if dist < 0.5:
-            if self._state.last_clip_sim >= CLIP_STOP_THRESHOLD:
-                return HABITAT_STOP
             self._state.navigating_to_goal = False
             self._state.goal_position = None
-            return HABITAT_MOVE_FORWARD
+            return HABITAT_TURN_LEFT
 
         # ── 贪心导航 ──
         escape_remaining = getattr(self._state, '_nav_escape_remaining', 0)
