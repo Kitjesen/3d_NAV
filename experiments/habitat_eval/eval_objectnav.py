@@ -54,22 +54,33 @@ def build_habitat_config(eval_config: Dict) -> Any:
     """
     构建 Habitat 配置。
 
-    优先使用 objectnav_hm3d.yaml (有 RGB+Depth, CLIP 感知所需)。
-    若可用则叠加 semantic_sensor (有 .basis.scn 标注时自动启用)。
+    使用 objectnav_hm3d.yaml + rgbds_agent (RGB+Depth+Semantic) +
+    hm3d_annotated_basis 场景数据集配置 (GT 语义标注, .semantic.glb)。
     """
     from habitat.config.default import get_config
 
     eval_params = eval_config.get("eval", {})
     split = eval_params.get("split", "val_mini")
+    w = h = 256
 
     base_overrides = [
         f"habitat.dataset.split={split}",
         f"habitat.environment.max_episode_steps={eval_params.get('max_steps', 500)}",
         # 允许沿墙滑动 — VLFM/SG-Nav/CogNav 标准设置，避免 agent 卡死
         "habitat.simulator.habitat_sim_v0.allow_sliding=True",
+        # GT 语义标注 — .semantic.glb (SG-Nav/VLFM/CogNav 相同假设)
+        "habitat.simulator.scene_dataset=data/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json",
+        # 加入 semantic_sensor (rgbds_agent = rgb + depth + semantic)
+        "habitat/simulator/sensor_setups@habitat.simulator.agents.main_agent=rgbds_agent",
+        # 统一传感器分辨率 256×256
+        f"habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.width={w}",
+        f"habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.height={h}",
+        f"habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.width={w}",
+        f"habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.height={h}",
+        f"habitat.simulator.agents.main_agent.sim_sensors.semantic_sensor.width={w}",
+        f"habitat.simulator.agents.main_agent.sim_sensors.semantic_sensor.height={h}",
     ]
 
-    # objectnav_hm3d.yaml: rgb_sensor + depth_sensor, 正确动作空间
     config = get_config(
         config_path="benchmark/nav/objectnav/objectnav_hm3d.yaml",
         overrides=base_overrides,
@@ -148,9 +159,36 @@ def build_simple_habitat_config(eval_config: Dict) -> Any:
 
 # ── 语义类别提取 ──
 
+def _parse_semantic_txt(txt_path: str) -> Dict[int, str]:
+    """解析 HM3D .semantic.txt → {instance_id: category_name}。
+    格式: instance_id,hex_color,"category_name",flag
+    """
+    categories: Dict[int, str] = {}
+    try:
+        with open(txt_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("HM3D"):
+                    continue
+                parts = line.split(",", 3)
+                if len(parts) < 3:
+                    continue
+                inst_id = int(parts[0])
+                category = parts[2].strip('"').strip()
+                if category:
+                    categories[inst_id] = category
+    except Exception:
+        pass
+    return categories
+
+
 def get_semantic_categories(env: Any) -> Dict[int, str]:
-    """从 Habitat 环境中提取语义类别映射 (instance_id → label)。"""
-    categories = {}
+    """从 Habitat 环境中提取语义类别映射 (instance_id → label)。
+
+    优先读取 semantic_scene.objects (需 .basis.scn / 正确 scene_dataset 配置);
+    为空时从 .semantic.txt 直接解析 (HM3D v0.2 标注格式)。
+    """
+    categories: Dict[int, str] = {}
     try:
         scene = env.sim.semantic_scene
         for obj in scene.objects:
@@ -158,6 +196,21 @@ def get_semantic_categories(env: Any) -> Dict[int, str]:
                 categories[int(obj.id)] = obj.category.name()
     except Exception:
         pass
+
+    if not categories:
+        # 回退: 直接解析 .semantic.txt
+        try:
+            scene_id = env.current_episode.scene_id
+            # scene_id = "hm3d/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"
+            scene_file = os.path.basename(scene_id)
+            scene_stem = scene_file.replace(".basis.glb", "").replace(".glb", "")
+            scene_dir = os.path.dirname(os.path.join("data", scene_id))
+            txt_path = os.path.join(scene_dir, f"{scene_stem}.semantic.txt")
+            if os.path.exists(txt_path):
+                categories = _parse_semantic_txt(txt_path)
+        except Exception:
+            pass
+
     return categories
 
 
