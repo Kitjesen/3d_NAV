@@ -149,6 +149,8 @@ class SemanticPerceptionNode(Node):
         # 指令→检测器文本处理: 动态合并用户指令目标词到检测类别
         self.declare_parameter("instruction_topic", "instruction")
         self.declare_parameter("instruction_merge_enable", True)
+        # 语义地图持久化: 非空路径表示启用跨会话物体位置保存/加载
+        self.declare_parameter("semantic_map_path", "")
 
         # ── 读取参数 ──
         self._detector_type = self.get_parameter("detector_type").value
@@ -195,6 +197,25 @@ class SemanticPerceptionNode(Node):
             max_objects=self.get_parameter("scene_graph.max_objects").value,
             stale_timeout=self.get_parameter("tracker.stale_timeout").value,
         )
+
+        # 语义地图持久化 — 启动时加载已保存的物体场景图
+        self._semantic_map_path = self.get_parameter("semantic_map_path").value
+        if self._semantic_map_path:
+            import os
+            if os.path.exists(self._semantic_map_path):
+                if self._tracker.load_from_file(self._semantic_map_path):
+                    self.get_logger().info(
+                        f"[SemanticMap] Loaded persistent scene graph from {self._semantic_map_path} "
+                        f"({len(self._tracker._objects)} objects)"
+                    )
+                else:
+                    self.get_logger().warning(
+                        f"[SemanticMap] Failed to load scene graph from {self._semantic_map_path}"
+                    )
+            else:
+                self.get_logger().info(
+                    f"[SemanticMap] No existing map at {self._semantic_map_path}, will create on shutdown"
+                )
 
         # 知识图谱注入 (ConceptBot / DovSG: 每个物体创建时查 KG 补属性)
         try:
@@ -1091,7 +1112,19 @@ class SemanticPerceptionNode(Node):
     # ================================================================
 
     def destroy_node(self):
-        """清理资源。"""
+        """清理资源，保存语义地图。"""
+        # 语义地图持久化 — 关闭时保存物体场景图
+        if getattr(self, "_semantic_map_path", "") and getattr(self, "_tracker", None):
+            import os
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(self._semantic_map_path)), exist_ok=True)
+                self._tracker.save_to_file(self._semantic_map_path)
+                self.get_logger().info(
+                    f"[SemanticMap] Saved {len(self._tracker._objects)} objects to {self._semantic_map_path}"
+                )
+            except Exception as e:
+                self.get_logger().warn(f"[SemanticMap] Failed to save scene graph: {e}")
+
         if self._detector is not None:
             try:
                 self._detector.shutdown()

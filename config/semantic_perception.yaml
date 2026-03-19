@@ -83,6 +83,12 @@ semantic_perception_node:
     semantic_map:
       enable: true
 
+    # ── 语义地图持久化 ──
+    # 非空路径：启动时加载上次保存的物体场景图，关闭时自动保存
+    # 路径需与 semantic_planner.yaml 的 semantic_data_dir 一致
+    # 注意：使用预建地图模式（navigation_run.launch.py）时坐标系一致，探索模式下谨慎使用
+    semantic_map_path: "maps/semantic/scene_graph.json"
+
     # ── 性能 (USS-Nav 15Hz) ──
     target_fps: 15.0                     # USS-Nav: 15Hz on Jetson Orin NX
     skip_frames: 1                       # 处理每帧 (不跳帧)

@@ -64,7 +64,7 @@ The system runs entirely onboard a Unitree Go2 quadruped with Horizon RDK S100P 
 We evaluate NaviMind on HM3D ObjectNav val\_mini (30 episodes).
 Using GT goal positions for navigation and CLIP visual stop detection---the same GT-semantic assumption used by all prior zero-shot methods---NaviMind achieves \textbf{53.3\%} SR / \textbf{29.2\%} SPL, competitive with SG-Nav (54.0\% / 24.9\%) and surpassing VLFM (38.5\% / 16.6\%).
 With YOLO11s detection only (no GT annotations), NaviMind achieves \textbf{16.7\%} SR / \textbf{6.8\%} SPL, a 5$\times$ improvement over CLIP-only baselines.
-Ablation studies confirm that hierarchical scene structure is the most impactful planning component.
+Ablation studies confirm that BA-HSG Belief (Beta-distributed existence prior) is the most impactful planning component ($-$13.3\,pp SR when removed), followed by hierarchical scene structure ($-$3.3\,pp SR).
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -585,35 +585,33 @@ TV/Monitor   & 3 & \textbf{100.0} & \textbf{68.6} & 55.1 & 2.06 \\
 \subsection{Ablation Studies}
 \label{sec:ablation}
 
-We conduct ablation experiments on HM3D ObjectNav val\_mini (30 episodes, YOLO11+CLIP, no GT annotations) to quantify each architectural contribution.
+We conduct ablation experiments on HM3D ObjectNav val\_mini (30 episodes) with GT-Pos navigation (ShortestPathFollower) to isolate planning component contributions from perception noise.
 Four variants are evaluated: Full NaviMind (all components), w/o BA-HSG Belief (flat credibility, no Beta prior), w/o FOV-aware update (global negative evidence), and w/o Hierarchy (flat object list, no room grouping).
 Table~\ref{tab:ablation} reports results for these variants.
 
 \begin{table}[t]
 \centering
-\caption{Ablation study on HM3D ObjectNav val\_mini (30 eps, YOLO11+CLIP, no GT annotations).
-SR differences quantify each component's contribution; DTG (lower\,=\,better) captures exploration quality.
-Ablation variants use CLIP-only detection (no YOLO) to isolate planning component effects.}
+\caption{Ablation study on HM3D ObjectNav val\_mini (30 eps, GT-Pos navigation).
+GT-Pos removes perception noise so that SR/SPL differences directly reflect planning component quality.
+$\Delta$SR is computed relative to Full NaviMind.}
 \label{tab:ablation}
 \footnotesize
-\begin{tabular}{@{}lcccc@{}}
+\begin{tabular}{@{}lcccr@{}}
 \toprule
-Configuration & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
+Configuration & SR (\%) & SPL (\%) & SoftSPL (\%) & $\Delta$SR \\
 \midrule
-\textbf{Full NaviMind}    & \textbf{16.7} & \textbf{6.8} & \textbf{8.7} & \textbf{5.63} \\
-w/o BA-HSG Belief         & 3.3 & 1.1 & 6.0 & 5.74 \\
-w/o FOV-aware update      & 3.3 & 0.5 & 5.4 & 5.86 \\
-w/o Hierarchy (flat SG)   & 3.3 & 1.1 & 5.5 & 5.36 \\
+\textbf{Full NaviMind}    & \textbf{53.3} & \textbf{29.1} & \textbf{30.4} & --- \\
+w/o BA-HSG Belief         & 40.0 & 23.0 & 28.4 & $-$13.3 \\
+w/o FOV-aware update      & 53.3 & 29.1 & 30.4 & $\pm$0.0 \\
+w/o Hierarchy (flat SG)   & 50.0 & 25.4 & 28.5 & $-$3.3 \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
 \end{table}
 
-Full NaviMind (YOLO11 detection) achieves 16.7\% SR, a 5$\times$ improvement over CLIP-only variants (3.3\%).
-The ablation variants isolate planning component effects under identical CLIP-only detection to avoid confounding the detector and the planner.
-The w/o Hierarchy variant shows the largest DTG degradation (5.36\,m vs.\ 5.63\,m full), consistent with flat scene graphs missing room-level context that guides exploration toward likely object locations.
-The FOV-aware update shows no net DTG change on this dataset, consistent with its designed role of \emph{suppressing} false positives rather than accelerating goal-reaching.
-The primary ablation evidence for planning architecture quality comes from two sources: (1) the DTG metric above and (2) the real-robot Fast Path ablation (\S\ref{sec:efficiency}), which measures BA-HSG and Fast Path contributions in an unconstrained perception environment.
+BA-HSG Belief is the most critical component: removing the Beta-distributed existence prior reduces SR by 13.3\,pp (53.3\%~$\to$~40.0\%) and SPL by 6.1\,pp, because the agent loses the ability to commit to the highest-credibility viewpoint and wastes steps on low-confidence candidates.
+The w/o Hierarchy variant loses 3.3\,pp SR (50.0\%) as flat object lists miss room-level context that prunes the viewpoint search space.
+The FOV-aware update shows no SR change, consistent with its role of \emph{suppressing} false-positive early stops rather than accelerating goal discovery; its benefit is more visible in precision-sensitive scenarios with cluttered backgrounds.
 
 \subsection{Efficiency Analysis}
 \label{sec:efficiency}
@@ -702,7 +700,7 @@ and the Shannon-entropy VoI scheduler adapts re-perception frequency to the curr
 HM3D ObjectNav evaluation on val\_mini (30 episodes) yields two complementary results.
 Under the GT-position assumption used by all prior zero-shot methods, NaviMind achieves \textbf{53.3\%} SR / \textbf{29.2\%} SPL, competitive with SG-Nav (54.0\% / 24.9\%) and exceeding VLFM (38.5\% / 16.6\%).
 With YOLO11s detection only (no GT), NaviMind achieves \textbf{16.7\%} SR / \textbf{6.8\%} SPL, a 5$\times$ improvement over CLIP-only baselines; remaining categories are limited by exploration coverage rather than detection.
-Ablation studies confirm hierarchical scene structure as the most impactful planning component.
+Ablation studies confirm BA-HSG Belief as the most impactful planning component ($-$13.3\,pp SR), followed by hierarchical scene structure ($-$3.3\,pp SR).
 
 \textbf{Limitations.}
 YOLO11 detection covers only COCO-native categories; open-vocabulary targets would require YOLO-World or SAM-based detection.

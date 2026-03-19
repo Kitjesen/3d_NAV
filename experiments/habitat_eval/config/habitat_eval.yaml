@@ -34,7 +34,7 @@ eval:
   max_steps: 1000  # 增加步数 (TV DTG=12m 需要更多探索)
   success_distance: 1.0  # 米 (HM3D ObjectNav 标准: 1.0m)
   dataset: "hm3d"
-  split: "val_mini"
+  split: "val_mini"         # val_mini: 30 eps (快速验证); val: 2000 eps (论文标准 ±2pp)
   max_navigate_steps: 40   # 导航到目标的最大步数; 尽快失败，留更多步数给探索
 
 # ── 场景图构建参数 (BA-HSG) ──

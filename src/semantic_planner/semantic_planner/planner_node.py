@@ -3439,12 +3439,29 @@ class SemanticPlannerNode(Node):
     # ================================================================
 
     def _load_semantic_data(self, data_dir: str) -> None:
-        """从目录加载持久化语义数据 (KG + 拓扑记忆)。"""
+        """从目录加载持久化语义数据 (KG + 拓扑记忆 + 场景图缓存)。"""
         import os
         from .room_object_kg import RoomObjectKG
 
         kg_path = os.path.join(data_dir, "room_object_kg.json")
         topo_path = os.path.join(data_dir, "topo_memory.json")
+        sg_cache_path = os.path.join(data_dir, "scene_graph_cache.json")
+
+        # 场景图热启动缓存: 让 Goal Resolver 在感知节点发布第一帧前就有历史数据
+        if os.path.exists(sg_cache_path):
+            try:
+                with open(sg_cache_path, 'r', encoding='utf-8') as f:
+                    cached_sg = f.read()
+                self._latest_scene_graph = cached_sg
+                self._latest_scene_graph_parsed = safe_json_loads(cached_sg, default=None)
+                if self._latest_scene_graph_parsed:
+                    n_obj = len(self._latest_scene_graph_parsed.get("objects", []))
+                    self.get_logger().info(
+                        f"[SemanticMap] Scene graph cache loaded ({n_obj} objects), "
+                        f"planner ready before first camera frame"
+                    )
+            except Exception as e:
+                self.get_logger().warning(f"[SemanticMap] Failed to load scene graph cache: {e}")
 
         # 初始化 runtime KG (用于增量收集本次 session 的数据)
         self._runtime_kg = RoomObjectKG()
@@ -3505,6 +3522,19 @@ class SemanticPlannerNode(Node):
             self.get_logger().info(f"Topo memory saved to {topo_path}")
         except Exception as e:
             self.get_logger().warning(f"Failed to save topo memory: {e}")
+
+        # 保存最新场景图 JSON 缓存 (供下次启动热加载)
+        try:
+            sg = getattr(self, "_latest_scene_graph", None)
+            if sg:
+                sg_cache_path = os.path.join(data_dir, "scene_graph_cache.json")
+                with open(sg_cache_path, 'w', encoding='utf-8') as f:
+                    f.write(sg)
+                parsed = getattr(self, "_latest_scene_graph_parsed", None) or {}
+                n_obj = len(parsed.get("objects", []))
+                self.get_logger().info(f"[SemanticMap] Scene graph cache saved ({n_obj} objects)")
+        except Exception as e:
+            self.get_logger().warning(f"[SemanticMap] Failed to save scene graph cache: {e}")
 
     # ================================================================
     #  生命周期
