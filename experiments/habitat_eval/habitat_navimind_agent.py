@@ -76,16 +76,44 @@ CLIP_PROMPTS = {
     "tv_monitor": "a photo of a television monitor or TV screen",
 }
 
-# 类别同义词
+# 类别同义词 — 包含 HM3D .semantic.txt 常见变体
 CATEGORY_ALIASES = {
+    # couch / sofa
     "sofa": "couch",
+    "armchair": "chair",
+    "sofa chair": "couch",
+    "circular sofa": "couch",
+    "l-shaped sofa": "couch",
+    "sofa set": "couch",
+    "sofa seat": "couch",
+    # chair variants
+    "dining chair": "chair",
+    "desk chair": "chair",
+    "rocking chair": "chair",
+    "bar chair": "chair",
+    "office chair": "chair",
+    "highchair": "chair",
+    "patio chair": "chair",
+    "lounge chair": "chair",
+    "folding chair": "chair",
+    "bean bag chair": "chair",
+    "camping chair": "chair",
+    "computer chair": "chair",
+    # potted plant
     "plant": "potted_plant",
     "potted plant": "potted_plant",
+    "decorative plant": "potted_plant",
+    "table plant": "potted_plant",
+    "ornamental plant": "potted_plant",
+    # tv / monitor
     "television": "tv_monitor",
     "tv": "tv_monitor",
     "monitor": "tv_monitor",
     "tv/monitor": "tv_monitor",
     "tv monitor": "tv_monitor",
+    "led tv": "tv_monitor",
+    "tv led": "tv_monitor",
+    "wall tv": "tv_monitor",
 }
 
 # CLIP 相似度阈值

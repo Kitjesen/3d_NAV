@@ -185,9 +185,25 @@ def _parse_semantic_txt(txt_path: str) -> Dict[int, str]:
 def get_semantic_categories(env: Any) -> Dict[int, str]:
     """从 Habitat 环境中提取语义类别映射 (instance_id → label)。
 
-    优先读取 semantic_scene.objects (需 .basis.scn / 正确 scene_dataset 配置);
-    为空时从 .semantic.txt 直接解析 (HM3D v0.2 标注格式)。
+    优先解析 .semantic.txt (包含完整 instance_id → label, 所有 HM3D ID);
+    若不存在则读取 semantic_scene.objects (可能因 Replica ID 限制而不完整)。
     """
+    # 优先: 从 .semantic.txt 直接解析 (完整覆盖所有 instance IDs)
+    try:
+        scene_id = env.current_episode.scene_id
+        # scene_id = "hm3d/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"
+        scene_file = os.path.basename(scene_id)
+        scene_stem = scene_file.replace(".basis.glb", "").replace(".glb", "")
+        scene_dir = os.path.dirname(os.path.join("data", scene_id))
+        txt_path = os.path.join(scene_dir, f"{scene_stem}.semantic.txt")
+        if os.path.exists(txt_path):
+            cats = _parse_semantic_txt(txt_path)
+            if cats:
+                return cats
+    except Exception:
+        pass
+
+    # 回退: semantic_scene.objects (可能因 Replica max-id 限制不完整)
     categories: Dict[int, str] = {}
     try:
         scene = env.sim.semantic_scene
@@ -196,21 +212,6 @@ def get_semantic_categories(env: Any) -> Dict[int, str]:
                 categories[int(obj.id)] = obj.category.name()
     except Exception:
         pass
-
-    if not categories:
-        # 回退: 直接解析 .semantic.txt
-        try:
-            scene_id = env.current_episode.scene_id
-            # scene_id = "hm3d/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"
-            scene_file = os.path.basename(scene_id)
-            scene_stem = scene_file.replace(".basis.glb", "").replace(".glb", "")
-            scene_dir = os.path.dirname(os.path.join("data", scene_id))
-            txt_path = os.path.join(scene_dir, f"{scene_stem}.semantic.txt")
-            if os.path.exists(txt_path):
-                categories = _parse_semantic_txt(txt_path)
-        except Exception:
-            pass
-
     return categories
 
 
