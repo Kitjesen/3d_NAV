@@ -156,14 +156,19 @@ def pack_pointcloud2(pts, frame_id, stamp):
     return msg
 
 
-class MuJoCoSimNode(Node):
-    def __init__(self, model, data):
+class MuJoCoROS2Bridge(Node):
+    def __init__(self, model, data, robot_body='robot', lidar=None, lidar_freq=10.0):
         super().__init__('mujoco_sim')
         self.model = model
         self.data = data
+        self._ext_lidar = lidar  # 外部 LiDAR 对象（LivoxMid360SimVectorized 等）
 
-        self.robot_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, 'robot')
-        self.lidar_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, 'lidar')
+        self.robot_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, robot_body)
+        if self.robot_id < 0:
+            self.get_logger().warn(f"Body '{robot_body}' not found, falling back to index 1")
+            self.robot_id = 1
+        lidar_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, 'lidar')
+        self.lidar_id = lidar_body_id if lidar_body_id >= 0 else self.robot_id
         self.jnt_adr = model.jnt_dofadr[
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, 'root')
         ]
@@ -184,9 +189,17 @@ class MuJoCoSimNode(Node):
         self._frame = 0
 
         self.create_timer(0.02, self._tick_50hz)
-        self.create_timer(0.1, self._tick_10hz)
+        self.create_timer(1.0 / max(lidar_freq, 1.0), self._tick_10hz)
 
         self.get_logger().info(f'MuJoCo sim node started. Robot at {data.xpos[self.robot_id]}')
+
+    def spin_once(self):
+        """主循环外调用，处理一次 ROS2 回调（非阻塞）。"""
+        rclpy.spin_once(self, timeout_sec=0)
+
+    def destroy(self):
+        """释放节点资源。"""
+        self.destroy_node()
 
     def _cmd_cb(self, msg):
         self._cmd_vx = msg.twist.linear.x
@@ -275,7 +288,10 @@ class MuJoCoSimNode(Node):
         self.tf_br.sendTransform([t1, t2])
 
     def _tick_10hz(self):
-        pts = scan_lidar(self.model, self.data, self.lidar_id, self.robot_id, self._frame)
+        if self._ext_lidar is not None:
+            pts = self._ext_lidar.scan(self.data)
+        else:
+            pts = scan_lidar(self.model, self.data, self.lidar_id, self.robot_id, self._frame)
         self._frame += 1
 
         if len(pts) == 0:
@@ -292,6 +308,10 @@ class MuJoCoSimNode(Node):
                 f't={self.data.time:.1f}s pos=({pos[0]:.2f},{pos[1]:.2f},{pos[2]:.2f}) '
                 f'pts={len(pts)} cmd=({self._cmd_vx:.2f},{self._cmd_wz:.2f})'
             )
+
+
+# 向后兼容别名
+MuJoCoSimNode = MuJoCoROS2Bridge
 
 
 def main():
@@ -312,7 +332,7 @@ def main():
     print(f"Model loaded. Robot at {data.xpos[1]}")
 
     rclpy.init()
-    node = MuJoCoSimNode(model, data)
+    node = MuJoCoROS2Bridge(model, data)
 
     print("\n" + "=" * 60)
     print("MuJoCo Sim running!")
