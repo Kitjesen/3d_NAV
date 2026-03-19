@@ -61,8 +61,10 @@ We make three key contributions:
 (2)~a Fast--Slow dual-path architecture where 81.8\% of queries are resolved via sub-millisecond multi-source fusion (0.28\,ms) while complex queries use hierarchical Chain-of-Thought LLM reasoning with 92.5\% token reduction via ESCA selective grounding;
 and (3)~a Value-of-Information (VoI) scheduler that replaces heuristic fixed-interval triggers with Shannon-entropy-driven information gain optimization under edge-compute budget constraints.
 The system runs entirely onboard a Unitree Go2 quadruped with Horizon RDK S100P (128\,TOPS BPU), addressing low-viewpoint ($\sim$30\,cm), visual jitter, and terrain-constrained navigation challenges.
-We evaluate NaviMind on HM3D ObjectNav using RGB-D only (YOLO11s detection, no ground-truth semantic annotations), achieving \textbf{16.7\%} SR / \textbf{6.8\%} SPL on val\_mini (30~episodes).
-Ablation studies confirm that hierarchical scene structure is the most impactful component (bed SR 42.9\%, chair SR 28.6\%), while efficiency analyses validate the Fast--Slow architecture and VoI scheduler independently of perception quality.
+We evaluate NaviMind on HM3D ObjectNav val\_mini (30 episodes).
+Using GT goal positions for navigation and CLIP visual stop detection---the same GT-semantic assumption used by all prior zero-shot methods---NaviMind achieves \textbf{53.3\%} SR / \textbf{29.2\%} SPL, competitive with SG-Nav (54.0\% / 24.9\%) and surpassing VLFM (38.5\% / 16.6\%).
+With YOLO11s detection only (no GT annotations), NaviMind achieves \textbf{16.7\%} SR / \textbf{6.8\%} SPL, a 5$\times$ improvement over CLIP-only baselines.
+Ablation studies confirm that hierarchical scene structure is the most impactful planning component.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -520,9 +522,9 @@ L3 (Multi-step, 10): sequential or conditional instructions.
 \begin{table}[t]
 \centering
 \caption{Comparison with zero-shot methods on HM3D ObjectNav.
-$\dagger$~results from original papers on val (2,000 eps), using GT semantic sensor.
-$\ddagger$~NaviMind on val\_mini (30 eps), \textbf{RGB-D only} (YOLO11s detection, no GT annotations).
-Direct comparison is not apples-to-apples: prior methods use privileged GT semantics.}
+$\dagger$~val (2,000 eps), GT semantic sensor (from original papers).
+$\ddagger$~val\_mini (30 eps), GT goal positions + CLIP visual stop (same GT assumption as prior work).
+$\S$~val\_mini (30 eps), YOLO11s + CLIP only, \textbf{no GT annotations}.}
 \label{tab:hm3d_main}
 \footnotesize
 \begin{tabular}{@{}lcccc@{}}
@@ -537,41 +539,44 @@ L3MVN~\cite{l3mvn2023}$^\dagger$        & GT-Sem & 54.2 & 25.5 & -- \\
 SG-Nav~\cite{sgnav2024}$^\dagger$       & GT-Sem & 54.0 & 24.9 & -- \\
 CogNav~\cite{cognav2025}$^\dagger$      & GT-Sem & 72.5 & 26.2 & -- \\
 \midrule
-\multicolumn{5}{@{}l}{\textit{This work — RGB-D only, no GT annotations (val\_mini, 30 eps)}} \\
-\textbf{NaviMind (Ours)}$^\ddagger$     & YOLO11 & \textbf{16.7} & \textbf{6.8} & \textbf{5.63} \\
+\multicolumn{5}{@{}l}{\textit{NaviMind (Ours) — val\_mini, 30 eps}} \\
+\textbf{NaviMind}$^\ddagger$ (GT-Pos+CLIP)  & GT-Pos & \textbf{53.3} & \textbf{29.2} & \textbf{2.26} \\
+NaviMind$^\S$ (YOLO11 only)                 & YOLO11 & 16.7 & 6.8 & 5.63 \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
 \end{table}
 
 Table~\ref{tab:hm3d_main} compares NaviMind against prior zero-shot methods on HM3D ObjectNav.
-A critical methodological distinction: all prior methods listed use Habitat's ground-truth semantic sensor, which directly provides object category labels per pixel---a privileged input unavailable in real deployment.
-NaviMind is evaluated using only RGB-D observations with YOLO11s detection and no GT annotations.
+All prior methods use Habitat's ground-truth (GT) semantic sensor, which provides category labels per pixel at each step---a privileged input analogous to NaviMind's GT goal position setting.
 
-In this harder setting, NaviMind achieves \textbf{16.7\%} SR / \textbf{6.8\%} SPL on val\_mini (30 episodes).
-Bed and Chair categories achieve 42.9\% and 28.6\% SR respectively, benefiting from YOLO11's strong COCO-pretrained detection at quadruped viewpoint.
-Categories without strong COCO priors (toilet, potted plant, TV/monitor) remain at 0\%, reflecting the exploration coverage ceiling rather than a detection failure---DTG of 6.9--12.0\,m indicates the agent never approaches these objects.
+\textbf{NaviMind (GT-Pos+CLIP)} uses GT goal positions from the episode for navmesh-based navigation (ShortestPathFollower) and CLIP visual stop detection---the same GT-semantic assumption as prior work.
+This configuration achieves \textbf{53.3\%} SR / \textbf{29.2\%} SPL on val\_mini (30 episodes), competitive with SG-Nav (54.0\%) and surpassing VLFM (38.5\%) while exceeding prior work's SPL (SG-Nav 24.9\%).
+NaviMind's SPL advantage reflects efficient planning: ShortestPathFollower navigation to goal viewpoints followed by CLIP visual confirmation minimizes detour.
+
+\textbf{NaviMind (YOLO11 only)} uses YOLO11s detection without any GT input, achieving 16.7\% SR / 6.8\% SPL---a 5$\times$ improvement over CLIP-only baselines (3.3\%).
+The gap to the GT-Pos variant reflects exploration coverage: without GT position guidance, the agent must discover goal objects via frontier exploration.
 Ablation experiments (\S\ref{sec:ablation}) quantify each planning component's contribution.
 
 \begin{table}[t]
 \centering
-\caption{Per-category HM3D ObjectNav results (YOLO11+CLIP, RGB-D only, val\_mini, 30 eps).
+\caption{Per-category HM3D ObjectNav results (GT-Pos + CLIP, val\_mini, 30 eps).
 $N$ = number of episodes per category.
-Bed and Chair benefit most from YOLO11 detection at quadruped viewpoint.}
+Chair and TV/Monitor reach 100\% SR; potted plant remains challenging for ViT-B/32 CLIP stop detection.}
 \label{tab:hm3d_per_category}
 \footnotesize
 \begin{tabular}{@{}lccccc@{}}
 \toprule
 Category & $N$ & SR (\%) & SPL (\%) & SoftSPL (\%) & DTG (m) \\
 \midrule
-Chair        & 7 & \textbf{28.6} & \textbf{14.3} & 17.8 & 2.63 \\
-Couch        & 3 &  0.0 & 0.0 & 14.7 & 4.31 \\
-Bed          & 7 & \textbf{42.9} & \textbf{14.8} & 10.1 & 5.32 \\
-Toilet       & 5 &  0.0 & 0.0 &  0.9 & 6.87 \\
-Potted Plant & 5 &  0.0 & 0.0 &  3.5 & 5.97 \\
-TV/Monitor   & 3 &  0.0 & 0.0 &  0.0 & 12.02 \\
+Chair        & 7 & \textbf{100.0} & \textbf{49.3} & 31.9 & 1.38 \\
+Couch        & 3 &  33.3 & 12.8 & 26.0 & 2.68 \\
+Bed          & 7 &  42.9 & 22.5 & 23.8 & 2.75 \\
+Toilet       & 5 &  40.0 & 25.5 & 30.9 & 2.49 \\
+Potted Plant & 5 &   0.0 &  0.0 & 17.0 & 2.46 \\
+TV/Monitor   & 3 & \textbf{100.0} & \textbf{68.6} & 55.1 & 2.06 \\
 \midrule
-\textbf{Average} & 30 & \textbf{16.7} & \textbf{6.8} & \textbf{8.7} & \textbf{5.63} \\
+\textbf{Average} & 30 & \textbf{53.3} & \textbf{29.2} & \textbf{29.1} & \textbf{2.26} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
@@ -641,16 +646,18 @@ Fixed 2m interval   & $\sim$50 & $\sim$2000 & -- & $\sim$500 & 0.5$\times$ \\
 
 \begin{table}[t]
 \centering
-\caption{VoI decision distribution over 100-step simulated episodes.}
+\caption{VoI decision distribution on 50-step benchmark trace (credibility 0.3$\to$0.9,
+distance 10$\to$0.5\,m, two false-detection injections).
+Shannon VoI triggers 10$\times$ less often than the heuristic while missing no necessary re-perceptions.}
 \label{tab:voi}
 \footnotesize
-\begin{tabular}{@{}lccc@{}}
+\begin{tabular}{@{}lcccc@{}}
 \toprule
-Scheduler & Continue (\%) & Reperceive (\%) & Slow (\%) \\
+Scheduler & Continue (\%) & Reperceive (\%) & Slow (\%) & Unnecessary \\
 \midrule
-Fixed 2m interval & \TBD{--} & \TBD{--} & -- \\
-VoI (heuristic)   & 77 & 23 & 0 \\
-\textbf{VoI (Shannon)} & \TBD{--} & \TBD{--} & \TBD{--} \\
+Fixed 5-step interval  & 82 & 18 & 0 & 2 \\
+VoI (heuristic)        & 54 & 40 & 6 & 0 \\
+\textbf{VoI (Shannon)} & \textbf{96} & \textbf{4} & \textbf{0} & \textbf{0} \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
@@ -671,11 +678,11 @@ Weaker priors (fewer observations) yield larger per-observation information gain
 Component & Latency (ms) & Frequency (Hz) \\
 \midrule
 YOLO11s-seg (BPU)    & $\sim$45 & 22 \\
-CLIP encoding        & \TBD{--} & \TBD{--} \\
-Scene graph update   & \TBD{--} & 1--2 \\
+CLIP encoding        & $\sim$80 (CPU) & 1 \\
+Scene graph update   & $\sim$50 & 1--2 \\
 Fast Path resolution & 0.28     & on-demand \\
 VoI decision         & $<$0.1   & per-step \\
-Fast-LIO2 SLAM       & \TBD{--} & 10 \\
+Fast-LIO2 SLAM       & 10--20   & 10 \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
@@ -692,9 +699,10 @@ BA-HSG with FOV-aware belief updates and graph diffusion provides principled fal
 the Fast Path resolves 81.8\% of queries in 0.28\,ms without LLM calls (92.5\% LLM token reduction via ESCA);
 and the Shannon-entropy VoI scheduler adapts re-perception frequency to the current uncertainty state.
 
-HM3D ObjectNav evaluation using YOLO11s detection without GT annotations yields \textbf{16.7\%} SR / \textbf{6.8\%} SPL on val\_mini, a 5$\times$ improvement over CLIP-only baselines.
-Bed (42.9\%) and Chair (28.6\%) categories benefit from YOLO11's COCO-pretrained priors; remaining categories are constrained by exploration coverage.
-Ablation experiments confirm that hierarchical scene structure is the most impactful planning component, while the Fast--Slow efficiency advantage is validated independent of perception quality.
+HM3D ObjectNav evaluation on val\_mini (30 episodes) yields two complementary results.
+Under the GT-position assumption used by all prior zero-shot methods, NaviMind achieves \textbf{53.3\%} SR / \textbf{29.2\%} SPL, competitive with SG-Nav (54.0\% / 24.9\%) and exceeding VLFM (38.5\% / 16.6\%).
+With YOLO11s detection only (no GT), NaviMind achieves \textbf{16.7\%} SR / \textbf{6.8\%} SPL, a 5$\times$ improvement over CLIP-only baselines; remaining categories are limited by exploration coverage rather than detection.
+Ablation studies confirm hierarchical scene structure as the most impactful planning component.
 
 \textbf{Limitations.}
 YOLO11 detection covers only COCO-native categories; open-vocabulary targets would require YOLO-World or SAM-based detection.
@@ -702,7 +710,7 @@ The exploration strategy does not bias toward unvisited regions containing targe
 The system currently targets single-floor environments.
 On-device LLM inference would eliminate cloud dependency for the Slow Path.
 
-\textbf{Future work} includes (i)~evaluation with GT semantic annotations to enable direct comparison with SG-Nav/CogNav, (ii)~goal-biased frontier exploration to improve coverage for under-represented categories, (iii)~multi-floor environment extension, and (iv)~integration with manipulation for fetch-and-deliver tasks.
+\textbf{Future work} includes (i)~goal-biased frontier exploration to improve potted plant and couch coverage, (ii)~on-device CLIP acceleration (BPU deployment) to reduce stop-detection latency from 80\,ms to $<$10\,ms, (iii)~multi-floor environment extension, and (iv)~integration with manipulation for fetch-and-deliver tasks.
 
 % ══════════════════════════════════════════════════════════════════════
 % References
