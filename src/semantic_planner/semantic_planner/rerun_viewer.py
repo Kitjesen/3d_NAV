@@ -81,7 +81,13 @@ class RerunViewerNode(Node):
 
         # ── Rerun 初始化 ──
         rr.init(app_name, spawn=False)
-        rr.serve_web(open_browser=False, web_port=web_port)
+        # Rerun 0.30+: serve_web_viewer; 旧版: serve_web
+        if hasattr(rr, 'serve_web_viewer'):
+            rr.serve_web_viewer(open_browser=False, web_port=web_port)
+        elif hasattr(rr, 'serve_web'):
+            rr.serve_web(open_browser=False, web_port=web_port)
+        else:
+            rr.spawn()
         self.get_logger().info(
             f"Rerun Web 查看器: http://0.0.0.0:{web_port}"
         )
