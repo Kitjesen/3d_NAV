@@ -318,7 +318,18 @@ class RerunViewerNode(Node):
             label = obj.get("label", "?")
             conf = obj.get("confidence", 0.5)
 
-            positions.append([pos[0], pos[1], pos[2] + 0.3])
+            # position 可能是 list [x,y,z] 或 dict {"x":..,"y":..,"z":..}
+            try:
+                if isinstance(pos, dict):
+                    px, py, pz = float(pos.get("x", 0)), float(pos.get("y", 0)), float(pos.get("z", 0))
+                elif isinstance(pos, (list, tuple)) and len(pos) >= 3:
+                    px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
+                else:
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            positions.append([px, py, pz + 0.3])
             labels.append(f"{label} ({conf:.0%})")
 
             # 颜色按置信度
