@@ -89,6 +89,7 @@ usage() {
     echo ""
     echo -e "  ${B}DEV${N}                                              ${D}开发工具${N}"
     echo -e "    ${G}build${N}                                         编译 ROS2 工作空间"
+    echo -e "    ${G}viz${N}                                           Rerun 3D 可视化 (:9090)"
     echo -e "    ${G}test${N}        ${D}[PACKAGE]${N}                       运行测试"
     echo -e "    ${G}stub${N}        ${D}nav|explore${N}                     无硬件仿真模式"
     echo ""
@@ -675,6 +676,17 @@ except Exception as e:
     done
 }
 
+cmd_viz() {
+    mini_banner
+    log_run "Rerun 3D 可视化"
+    echo ""
+    config_panel \
+        "${D}查看器${N}  http://0.0.0.0:9090" \
+        "${D}内容${N}    相机 + 物体 + 路径 + 地图" \
+        "${D}退出${N}    Ctrl+C"
+    run_cmd "ros2 run semantic_planner rerun_viewer"
+}
+
 cmd_stub() {
     local mode="${EXTRA_ARGS# }"
     SLAM_PROFILE="stub"
@@ -716,7 +728,7 @@ parse_opts "$@"
 
 # Source ROS2
 case "$COMMAND" in
-    map|nav|explore|agent|chat|go|find|tag|say|stop|status|health|topics|save-map|build|test|stub)
+    map|nav|explore|agent|chat|viz|go|find|tag|say|stop|status|health|topics|save-map|build|test|stub)
         source_ros2 ;;
 esac
 
@@ -726,6 +738,7 @@ case "$COMMAND" in
     explore)    cmd_explore ;;
     agent)      cmd_agent ;;
     chat)       cmd_chat ;;
+    viz)        cmd_viz ;;
     go)         cmd_go ;;
     find)       cmd_find ;;
     tag)        cmd_tag ;;
