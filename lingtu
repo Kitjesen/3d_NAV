@@ -300,10 +300,25 @@ cmd_agent() {
     cmd_nav
 }
 
+# 检查导航系统是否有订阅者
+check_nav_running() {
+    local topic="$1"
+    local subs
+    subs=$(ros2 topic info "$topic" 2>/dev/null | grep "Subscription count:" | awk '{print $NF}')
+    if [ "${subs:-0}" = "0" ]; then
+        log_warn "导航系统未运行"
+        echo -e "  ${D}请先启动: lingtu nav --map <名称> --semantic${N}"
+        echo -e "  ${D}或测试模式: lingtu stub nav${N}"
+        return 1
+    fi
+    return 0
+}
+
 cmd_go() {
     local target="${EXTRA_ARGS# }"
     [ -z "$target" ] && { log_fail "请指定目标: ${W}lingtu go \"体育馆\"${N}"; exit 1; }
     mini_banner
+    check_nav_running "/nav/semantic/instruction" || return 0
     log_run "导航到 ${B}${target}${N}"
     run_cmd "ros2 topic pub --once /nav/semantic/instruction std_msgs/msg/String \"data: '$target'\""
     log_ok "指令已发送"
@@ -313,6 +328,7 @@ cmd_find() {
     local target="${EXTRA_ARGS# }"
     [ -z "$target" ] && { log_fail "请指定目标: ${W}lingtu find \"红色椅子\"${N}"; exit 1; }
     mini_banner
+    check_nav_running "/nav/semantic/bbox_navigate" || return 0
     log_run "视觉搜索 ${B}${target}${N}"
     run_cmd "ros2 topic pub --once /nav/semantic/bbox_navigate std_msgs/msg/String \"data: '{\\\"target\\\": \\\"$target\\\"}'\""
     log_ok "搜索指令已发送"
@@ -322,6 +338,7 @@ cmd_tag() {
     local name="${EXTRA_ARGS# }"
     [ -z "$name" ] && { log_fail "请指定名称: ${W}lingtu tag \"入口\"${N}"; exit 1; }
     mini_banner
+    check_nav_running "/nav/semantic/tag_location" || return 0
     log_run "标记位置 ${B}${name}${N}"
     run_cmd "ros2 topic pub --once /nav/semantic/tag_location std_msgs/msg/String \"data: '{\\\"name\\\": \\\"$name\\\"}'\""
     log_ok "已标记"
@@ -331,6 +348,7 @@ cmd_say() {
     local text="${EXTRA_ARGS# }"
     [ -z "$text" ] && { log_fail "请输入内容: ${W}lingtu say \"去厨房\"${N}"; exit 1; }
     mini_banner
+    check_nav_running "/nav/agent/input" || return 0
     log_run "Agent ← ${B}${text}${N}"
     run_cmd "ros2 topic pub --once /nav/agent/input std_msgs/msg/String \"data: '$text'\""
     log_ok "已发送"

@@ -19,6 +19,14 @@ setup(
         "dashscope",
         "jieba",
     ],
+    extras_require={
+        'agent': [
+            'langchain-core>=0.2',
+            'langchain-openai>=0.1',
+            'langchain>=0.2',
+            'pydantic>=2.0',
+        ],
+    },
     zip_safe=True,
     maintainer="3dNAV Team",
     maintainer_email="dev@3dnav.io",
