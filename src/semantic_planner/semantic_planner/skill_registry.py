@@ -379,11 +379,16 @@ class LingTuNavigationSkills:
         self._stop_fn: Optional[Callable] = None        # 注入: 停止导航
         self._speak_fn: Optional[Callable] = None       # 注入: 发布 /nav/voice/response
         self._explore_fn: Optional[Callable] = None     # 注入: 启动探索
+        self._follow_fn: Optional[Callable] = None      # 注入: 跟随人
+        self._describe_fn: Optional[Callable] = None    # 注入: 描述场景
+        self._photo_fn: Optional[Callable] = None       # 注入: 拍照
+        self._patrol_fn: Optional[Callable] = None      # 注入: 巡逻
 
     def set_callbacks(self, **kwargs: Any) -> None:
         """注入 ROS2 回调函数。
 
-        支持的键: navigate, tag, query, bbox_nav, stop, speak, explore
+        支持的键: navigate, tag, query, bbox_nav, stop, speak, explore,
+                  follow, describe, photo, patrol
         """
         for key, fn in kwargs.items():
             attr = f"_{key}_fn"
@@ -486,3 +491,57 @@ class LingTuNavigationSkills:
         if self._query_fn:
             return self._query_fn("list")
         return "无已标记地点"
+
+    @skill(
+        name="follow_person",
+        description=(
+            "跟随指定的人。描述你要跟随的人的外观特征。"
+            " / Follow a person matching the given appearance description."
+        ),
+        category="navigation",
+    )
+    def follow_person(self, description: str = "person") -> str:
+        """description: 人物外观描述，如 '穿红色衣服的人'"""
+        if self._follow_fn:
+            return self._follow_fn(description)
+        return "跟随功能未就绪"
+
+    @skill(
+        name="describe_scene",
+        description=(
+            "描述当前机器人看到的场景。返回周围物体、房间类型等信息。"
+            " / Describe the current scene: nearby objects, room type, etc."
+        ),
+        category="perception",
+    )
+    def describe_scene(self) -> str:
+        if self._describe_fn:
+            return self._describe_fn()
+        return "场景描述功能未就绪"
+
+    @skill(
+        name="take_photo",
+        description=(
+            "拍摄当前视角的照片并保存。"
+            " / Capture and save a photo from the current camera view."
+        ),
+        category="perception",
+    )
+    def take_photo(self) -> str:
+        if self._photo_fn:
+            return self._photo_fn()
+        return "拍照功能未就绪"
+
+    @skill(
+        name="patrol",
+        description=(
+            "按照已标记的地点进行巡逻。机器人会依次访问指定的地点列表。"
+            " / Patrol a list of named locations in order."
+        ),
+        category="navigation",
+    )
+    def patrol(self, places: str = "") -> str:
+        """places: 巡逻地点列表，逗号分隔，如 '入口,走廊,办公室'。空=巡逻所有已标记地点"""
+        if self._patrol_fn:
+            return self._patrol_fn(places)
+        return "巡逻功能未就绪"
