@@ -70,6 +70,7 @@ usage() {
     echo -e "    ${G}nav${N}         ${D}--map NAME [--semantic]${N}         导航模式 · 加载地图 + 路径规划"
     echo -e "    ${G}explore${N}     ${D}[\"目标描述\"]${N}                   探索模式 · 未知环境 + 边走边建"
     echo -e "    ${G}agent${N}       ${D}[--llm kimi|openai]${N}            大脑模式 · LLM Agent 全自主"
+    echo -e "    ${G}chat${N}                                          交互对话 · 终端直接对话控制"
     echo ""
     echo -e "  ${B}QUICK ACTIONS${N}                                     ${D}单条指令${N}"
     echo -e "    ${G}go${N}          ${D}\"目标\"${N}                          语义导航 · ${D}\"去体育馆\"${N}"
@@ -104,6 +105,7 @@ usage() {
     echo -e "    ${D}\$${N} lingtu agent --llm kimi              ${D}# Agent 全自主${N}"
     echo -e "    ${D}\$${N} lingtu go \"体育馆\"                    ${D}# 一句话导航${N}"
     echo -e "    ${D}\$${N} lingtu find \"红色椅子\"                ${D}# 视觉搜索导航${N}"
+    echo -e "    ${D}\$${N} lingtu chat                          ${D}# 交互对话模式${N}"
     echo -e "    ${D}\$${N} lingtu stub nav                      ${D}# 无硬件测试${N}"
     echo ""
 }
@@ -472,6 +474,189 @@ cmd_test() {
     fi
 }
 
+cmd_chat() {
+    mini_banner
+    log_run "交互对话模式"
+    echo ""
+
+    # 检查是否有 ROS2 Agent 在跑
+    local has_agent=false
+    if command -v ros2 &>/dev/null; then
+        if ros2 node list 2>/dev/null | grep -q "agent_node"; then
+            has_agent=true
+        fi
+    fi
+
+    if [ "$has_agent" = true ]; then
+        echo -e "  ${OK} Agent 节点在线 — 通过 ROS2 通信"
+        echo -e "  ${D}输入自然语言指令，Agent 会自主决策执行${N}"
+    else
+        echo -e "  ${WARN} Agent 节点未运行 — 直接调用 LLM API"
+        echo -e "  ${D}输入指令会直接发给 LLM，但无法执行机器人动作${N}"
+    fi
+    echo -e "  ${D}输入 quit/exit/q 退出, help 查看快捷命令${N}"
+    echo ""
+
+    local history_file="${SCRIPT_DIR}/.chat_history"
+    touch "$history_file" 2>/dev/null || true
+
+    while true; do
+        echo -ne "  ${C}灵途${N} ${M}›${N} "
+        read -r input || break
+
+        # 空行跳过
+        [ -z "$input" ] && continue
+
+        # 退出
+        case "$input" in
+            quit|exit|q|bye) log_ok "再见"; break ;;
+        esac
+
+        # 快捷命令 (不需要 ROS2)
+        case "$input" in
+            help)
+                echo -e "  ${B}快捷命令:${N}"
+                echo -e "    ${G}go <目标>${N}       导航到目标"
+                echo -e "    ${G}find <物体>${N}     视觉搜索"
+                echo -e "    ${G}tag <名称>${N}      标记位置"
+                echo -e "    ${G}stop${N}            停止运动"
+                echo -e "    ${G}where${N}           当前位置"
+                echo -e "    ${G}scene${N}           场景描述"
+                echo -e "    ${G}status${N}          系统状态"
+                echo -e "    ${G}quit${N}            退出"
+                echo ""
+                continue
+                ;;
+            stop)
+                cmd_stop 2>/dev/null
+                continue
+                ;;
+            status)
+                cmd_status 2>/dev/null
+                continue
+                ;;
+            where|where_am_i)
+                if [ "$has_agent" = true ]; then
+                    ros2 topic pub --once /nav/agent/input std_msgs/msg/String "data: '我现在在哪里'" 2>/dev/null
+                    sleep 1
+                    local resp=$(ros2 topic echo --once /nav/agent/output std_msgs/msg/String 2>/dev/null | head -5)
+                    [ -n "$resp" ] && echo -e "  ${DOT} $resp" || echo -e "  ${D}(等待响应...)${N}"
+                else
+                    echo -e "  ${D}需要 Agent 节点在线${N}"
+                fi
+                continue
+                ;;
+            scene)
+                if [ "$has_agent" = true ]; then
+                    local sg=$(ros2 topic echo --once --no-arr /nav/semantic/scene_graph std_msgs/msg/String 2>/dev/null | head -3)
+                    [ -n "$sg" ] && echo -e "  ${DOT} $sg" || echo -e "  ${D}(无场景图)${N}"
+                else
+                    echo -e "  ${D}需要导航系统在线${N}"
+                fi
+                continue
+                ;;
+        esac
+
+        # go/find/tag 快捷前缀
+        case "$input" in
+            go\ *)
+                local target="${input#go }"
+                echo -e "  ${DOT} 导航到 ${B}${target}${N}"
+                if [ "$has_agent" = true ]; then
+                    ros2 topic pub --once /nav/semantic/instruction std_msgs/msg/String "data: '$target'" 2>/dev/null
+                    echo -e "  ${OK} 指令已发送"
+                else
+                    echo -e "  ${D}需要导航系统在线${N}"
+                fi
+                continue
+                ;;
+            find\ *)
+                local target="${input#find }"
+                echo -e "  ${DOT} 视觉搜索 ${B}${target}${N}"
+                if [ "$has_agent" = true ]; then
+                    ros2 topic pub --once /nav/semantic/bbox_navigate std_msgs/msg/String "data: '{\"target\": \"$target\"}'" 2>/dev/null
+                    echo -e "  ${OK} 搜索指令已发送"
+                else
+                    echo -e "  ${D}需要导航系统在线${N}"
+                fi
+                continue
+                ;;
+            tag\ *)
+                local name="${input#tag }"
+                echo -e "  ${DOT} 标记 ${B}${name}${N}"
+                if [ "$has_agent" = true ]; then
+                    ros2 topic pub --once /nav/semantic/tag_location std_msgs/msg/String "data: '{\"name\": \"$name\"}'" 2>/dev/null
+                    echo -e "  ${OK} 已标记"
+                else
+                    echo -e "  ${D}需要导航系统在线${N}"
+                fi
+                continue
+                ;;
+        esac
+
+        # 自然语言 → Agent 或直接 LLM
+        if [ "$has_agent" = true ]; then
+            # 通过 ROS2 发给 Agent Node
+            ros2 topic pub --once /nav/agent/input std_msgs/msg/String "data: '$input'" 2>/dev/null
+            echo -e "  ${D}(思考中...)${N}"
+            # 等待响应 (最多 15 秒)
+            local resp
+            resp=$(timeout 15 ros2 topic echo --once /nav/agent/output std_msgs/msg/String 2>/dev/null | grep "data:" | head -1)
+            if [ -n "$resp" ]; then
+                # 提取 JSON 中的 response 字段
+                local answer
+                answer=$(echo "$resp" | python3 -c "
+import sys, json
+try:
+    raw = sys.stdin.read().strip()
+    # 去掉 'data: ' 前缀
+    if raw.startswith(\"data: '\") or raw.startswith('data: \"'):
+        raw = raw[7:-1]
+    d = json.loads(raw)
+    print(d.get('response', raw))
+except:
+    print(raw)
+" 2>/dev/null)
+                echo -e "  ${G}灵途${N} ${DOT} ${answer:-$resp}"
+            else
+                echo -e "  ${Y}(响应超时，Agent 可能仍在执行...)${N}"
+            fi
+        else
+            # 无 ROS2 — 直接调 LLM API (如果有 key)
+            local api_key="${MOONSHOT_API_KEY:-${OPENAI_API_KEY:-}}"
+            if [ -n "$api_key" ]; then
+                echo -e "  ${D}(调用 LLM...)${N}"
+                local answer
+                answer=$(python3 -c "
+import os, json, sys
+try:
+    from openai import OpenAI
+    key = os.environ.get('MOONSHOT_API_KEY', os.environ.get('OPENAI_API_KEY', ''))
+    base = 'https://api.moonshot.cn/v1' if 'MOONSHOT_API_KEY' in os.environ else None
+    client = OpenAI(api_key=key, base_url=base) if base else OpenAI(api_key=key)
+    resp = client.chat.completions.create(
+        model='moonshot-v1-auto' if base else 'gpt-4o-mini',
+        messages=[
+            {'role': 'system', 'content': '你是灵途(LingTu)，一个四足导航机器人的AI。简短回答。当前无法执行动作（离线模式），但可以回答问题和规划。'},
+            {'role': 'user', 'content': '''$input'''}
+        ],
+        max_tokens=200,
+    )
+    print(resp.choices[0].message.content)
+except Exception as e:
+    print(f'LLM 调用失败: {e}')
+" 2>/dev/null)
+                echo -e "  ${G}灵途${N} ${DOT} ${answer}"
+            else
+                echo -e "  ${D}无 LLM API key，设置 MOONSHOT_API_KEY 或 OPENAI_API_KEY${N}"
+            fi
+        fi
+
+        # 保存历史
+        echo "$input" >> "$history_file" 2>/dev/null || true
+    done
+}
+
 cmd_stub() {
     local mode="${EXTRA_ARGS# }"
     SLAM_PROFILE="stub"
@@ -513,7 +698,7 @@ parse_opts "$@"
 
 # Source ROS2
 case "$COMMAND" in
-    map|nav|explore|agent|go|find|tag|say|stop|status|health|topics|save-map|build|test|stub)
+    map|nav|explore|agent|chat|go|find|tag|say|stop|status|health|topics|save-map|build|test|stub)
         source_ros2 ;;
 esac
 
@@ -522,6 +707,7 @@ case "$COMMAND" in
     nav)        cmd_nav ;;
     explore)    cmd_explore ;;
     agent)      cmd_agent ;;
+    chat)       cmd_chat ;;
     go)         cmd_go ;;
     find)       cmd_find ;;
     tag)        cmd_tag ;;
