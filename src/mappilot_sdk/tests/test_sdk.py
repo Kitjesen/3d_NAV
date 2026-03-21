@@ -9,6 +9,18 @@ import unittest
 
 import numpy as np
 
+# semantic_common 仅在 S100P ROS2 环境可用
+try:
+    import semantic_common
+    _HAS_SEMANTIC_COMMON = True
+except ImportError:
+    _HAS_SEMANTIC_COMMON = False
+
+_NEED_BACKEND = unittest.skipUnless(
+    _HAS_SEMANTIC_COMMON,
+    "需要 semantic_common (仅 S100P ROS2 环境)"
+)
+
 
 class TestPerceptionSDK(unittest.TestCase):
     """PerceptionSDK 基本功能测试。"""
@@ -17,6 +29,7 @@ class TestPerceptionSDK(unittest.TestCase):
         from mappilot_sdk import PerceptionSDK
         self.sdk = PerceptionSDK()
 
+    @_NEED_BACKEND
     def test_is_available(self):
         self.assertTrue(self.sdk.is_available)
 
@@ -25,6 +38,7 @@ class TestPerceptionSDK(unittest.TestCase):
         data = json.loads(sg_json)
         self.assertIn("objects", data)
 
+    @_NEED_BACKEND
     def test_update_from_detections(self):
         from mappilot_sdk.mocks import make_mock_detection
         dets = [
@@ -34,6 +48,7 @@ class TestPerceptionSDK(unittest.TestCase):
         count = self.sdk.update_from_detections(dets)
         self.assertGreaterEqual(count, 2)
 
+    @_NEED_BACKEND
     def test_get_safety_level_known(self):
         level = self.sdk.get_safety_level("fire extinguisher")
         self.assertEqual(level, "caution")
@@ -42,6 +57,7 @@ class TestPerceptionSDK(unittest.TestCase):
         level = self.sdk.get_safety_level("banana_xyz")
         self.assertEqual(level, "safe")
 
+    @_NEED_BACKEND
     def test_check_safety_dangerous(self):
         result = self.sdk.check_safety("electrical_panel", "pick")
         self.assertIsNotNone(result)
@@ -51,10 +67,12 @@ class TestPerceptionSDK(unittest.TestCase):
         result = self.sdk.check_safety("chair", "sit")
         self.assertIsNone(result)
 
+    @_NEED_BACKEND
     def test_get_affordances_chair(self):
         affordances = self.sdk.get_affordances("chair")
         self.assertIn("sittable", affordances)
 
+    @_NEED_BACKEND
     def test_enrich_known(self):
         props = self.sdk.enrich_object("fire extinguisher")
         self.assertTrue(props["kg_matched"])
@@ -64,6 +82,7 @@ class TestPerceptionSDK(unittest.TestCase):
         props = self.sdk.enrich_object("xyz_unknown_widget")
         self.assertFalse(props["kg_matched"])
 
+    @_NEED_BACKEND
     def test_clear_resets_tracker(self):
         from mappilot_sdk.mocks import make_mock_detection
         det = make_mock_detection("chair", (1.0, 0.0, 0.0), seed=1)
@@ -79,6 +98,7 @@ class TestNavigationSDK(unittest.TestCase):
         from mappilot_sdk import NavigationSDK
         self.sdk = NavigationSDK()
 
+    @_NEED_BACKEND
     def test_is_available(self):
         self.assertTrue(self.sdk.is_available)
 
@@ -164,6 +184,7 @@ class TestMocks(unittest.TestCase):
         self.assertEqual(len(pub.published), 1)
         self.assertEqual(pub.last["data"], "hello")
 
+    @_NEED_BACKEND
     def test_mock_detection(self):
         from mappilot_sdk.mocks import make_mock_detection
         det = make_mock_detection("chair", (1.0, 2.0, 0.5), seed=42)

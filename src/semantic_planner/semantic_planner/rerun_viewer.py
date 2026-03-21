@@ -71,8 +71,8 @@ class RerunViewerNode(Node):
         # ── 参数 ──
         self.declare_parameter("web_port", 9090)
         self.declare_parameter("app_name", "LingTu")
-        self.declare_parameter("max_image_fps", 10.0)
-        self.declare_parameter("max_pointcloud_fps", 2.0)
+        self.declare_parameter("max_image_fps", 3.0)
+        self.declare_parameter("max_pointcloud_fps", 0.5)
 
         web_port = self.get_parameter("web_port").value
         app_name = self.get_parameter("app_name").value
@@ -81,23 +81,32 @@ class RerunViewerNode(Node):
 
         # ── Rerun 初始化 ──
         rr.init(app_name, spawn=False)
-        # Rerun 0.30+: serve_web_viewer; 旧版: serve_web
-        if hasattr(rr, 'serve_web_viewer'):
-            rr.serve_web_viewer(open_browser=False, web_port=web_port)
-        elif hasattr(rr, 'serve_web'):
-            rr.serve_web(open_browser=False, web_port=web_port)
+        # gRPC 服务模式 — 客户端连接查看
+        grpc_port = web_port
+        if hasattr(rr, 'serve_grpc'):
+            uri = rr.serve_grpc(grpc_port=grpc_port, server_memory_limit="256MiB")
+            self.get_logger().info(
+                f"Rerun gRPC: {uri}"
+            )
+            self.get_logger().info(
+                f"查看方式: rerun 'rerun+http://192.168.66.190:{grpc_port}/proxy'"
+            )
         else:
             rr.spawn()
         self.get_logger().info(
             f"Rerun Web 查看器: http://0.0.0.0:{web_port}"
         )
 
-        # 设置默认 blueprint (兼容 Rerun 0.30+)
+        # 布局: 左边 3D 场景，右边相机 RGB + 深度 + 状态
         try:
             rr.send_blueprint(rrb.Blueprint(
-                rrb.Spatial3DView(
-                    name="3D Scene",
-                    origin="world",
+                rrb.Horizontal(
+                    rrb.Spatial3DView(name="3D Scene", origin="world"),
+                    rrb.Vertical(
+                        rrb.Spatial2DView(name="Camera RGB", origin="camera/rgb"),
+                        rrb.Spatial2DView(name="Depth", origin="camera/depth"),
+                        rrb.TextLogView(name="Status", origin="status"),
+                    ),
                 ),
             ))
         except Exception as e:
