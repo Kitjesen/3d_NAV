@@ -3,7 +3,7 @@
 #  LingTu CLI — 灵途自主导航系统
 #  穹沛科技 (Qiongpei Technology)
 # ──────────────────────────────────────────────────────────
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION=$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "dev")
