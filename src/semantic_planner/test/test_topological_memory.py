@@ -12,6 +12,8 @@ test_topological_memory.py — 拓扑记忆单元测试
 import unittest
 import numpy as np
 
+import pytest
+pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
 from semantic_planner.topological_memory import TopologicalMemory, TopoNode
 
 

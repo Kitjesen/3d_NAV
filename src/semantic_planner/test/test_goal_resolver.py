@@ -18,6 +18,8 @@ from semantic_planner.llm_client import (
     ClaudeClient,
     QwenClient,
 )
+import pytest
+pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
 from semantic_planner.goal_resolver import GoalResolver, GoalResult
 from semantic_planner.prompt_templates import (
     build_goal_resolution_prompt,

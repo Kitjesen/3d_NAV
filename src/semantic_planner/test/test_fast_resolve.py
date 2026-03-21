@@ -13,6 +13,8 @@ import json
 import unittest
 
 from semantic_planner.llm_client import LLMConfig
+import pytest
+pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
 from semantic_planner.goal_resolver import GoalResolver
 
 
@@ -232,6 +234,117 @@ class TestKeywordExtraction(unittest.TestCase):
         kws = GoalResolver._extract_keywords("找fire extinguisher")
         self.assertIn("fire", kws)
         self.assertIn("extinguisher", kws)
+
+
+class TestRoomFallback(unittest.TestCase):
+    """Room 级 fallback 测试 — 物体匹配失败时匹配区域。"""
+
+    def setUp(self):
+        self.config = LLMConfig(backend="openai", model="test")
+        self.resolver = GoalResolver(self.config, fast_path_threshold=0.75)
+
+    def _make_sg_with_rooms(self, objects=None, rooms=None):
+        """构建含 rooms 的场景图 JSON。"""
+        return json.dumps({
+            "timestamp": 0,
+            "object_count": len(objects or []),
+            "objects": objects or [],
+            "relations": [],
+            "rooms": rooms or [],
+        })
+
+    def test_room_keyword_match_chinese(self):
+        """中文区域指令 '去厨房' 匹配 room name '厨房'。"""
+        sg = self._make_sg_with_rooms(
+            objects=[
+                {"id": 0, "label": "table", "position": [1, 1, 0],
+                 "score": 0.3, "detection_count": 1},
+            ],
+            rooms=[
+                {"name": "厨房", "center": [5.0, 3.0, 0.0], "object_ids": [0]},
+                {"name": "客厅", "center": [10.0, 8.0, 0.0], "object_ids": []},
+            ],
+        )
+        result = self.resolver.fast_resolve("去厨房", sg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.path, "fast")
+        self.assertEqual(result.target_label, "厨房")
+        self.assertAlmostEqual(result.target_x, 5.0)
+        self.assertAlmostEqual(result.target_y, 3.0)
+        self.assertEqual(result.hint_room, "厨房")
+        self.assertIsNotNone(result.hint_room_center)
+        # confidence = match_score * 0.6, match_score >= 0.7
+        self.assertGreater(result.confidence, 0.0)
+        self.assertLessEqual(result.confidence, 1.0)
+
+    def test_room_keyword_match_english(self):
+        """英文 'find the kitchen' 匹配 room name 'kitchen'。"""
+        sg = self._make_sg_with_rooms(
+            rooms=[
+                {"name": "kitchen", "center": [4.0, 2.0, 0.0], "object_ids": []},
+                {"name": "bedroom", "center": [12.0, 6.0, 0.0], "object_ids": []},
+            ],
+        )
+        result = self.resolver.fast_resolve("find the kitchen", sg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.target_label, "kitchen")
+        self.assertAlmostEqual(result.target_x, 4.0)
+
+    def test_room_fallback_not_triggered_when_object_matches(self):
+        """物体匹配成功时不走 room fallback。"""
+        sg = self._make_sg_with_rooms(
+            objects=[
+                {"id": 0, "label": "chair", "position": [3.0, 2.0, 0.0],
+                 "score": 0.9, "detection_count": 5},
+            ],
+            rooms=[
+                {"name": "chair_room", "center": [10.0, 10.0, 0.0], "object_ids": [0]},
+            ],
+        )
+        result = self.resolver.fast_resolve("go to the chair", sg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.target_label, "chair")
+        # 应该是物体匹配, 不是 room fallback
+        self.assertAlmostEqual(result.target_x, 3.0)
+
+    def test_room_no_match_returns_none(self):
+        """Room 也不匹配时返回 None。"""
+        sg = self._make_sg_with_rooms(
+            rooms=[
+                {"name": "kitchen", "center": [4.0, 2.0, 0.0], "object_ids": []},
+            ],
+        )
+        result = self.resolver.fast_resolve("find the elephant", sg)
+        self.assertIsNone(result)
+
+    def test_room_center_dict_format(self):
+        """Room center 为 dict 格式 {x, y, z} 时正确解析。"""
+        sg = self._make_sg_with_rooms(
+            rooms=[
+                {"name": "走廊", "center": {"x": 7.0, "y": 4.0, "z": 0.0},
+                 "object_ids": []},
+            ],
+        )
+        result = self.resolver.fast_resolve("到走廊", sg)
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result.target_x, 7.0)
+        self.assertAlmostEqual(result.target_y, 4.0)
+
+    def test_room_no_center_skipped(self):
+        """Room 缺少 center 时跳过。"""
+        sg = self._make_sg_with_rooms(
+            rooms=[
+                {"name": "厨房", "object_ids": []},  # no center
+            ],
+        )
+        result = self.resolver.fast_resolve("去厨房", sg)
+        self.assertIsNone(result)
+
+    def test_room_empty_rooms_returns_none(self):
+        """rooms 为空时 room fallback 不触发。"""
+        sg = self._make_sg_with_rooms(rooms=[])
+        result = self.resolver.fast_resolve("去厨房", sg)
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
