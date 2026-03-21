@@ -3,10 +3,10 @@
 # install_semantic_deps.sh — 安装语义导航 Python 依赖 (pip-only)
 #
 # Usage:
-#   bash scripts/install_semantic_deps.sh
+#   bash scripts/install_semantic_deps.sh [--agent]
 #
 # 不再需要 clone 任何仓库!
-# 所有依赖通过 pip 安装, 适合 Jetson Orin NX 部署。
+# 所有依赖通过 pip 安装, 适合 Jetson Orin NX / S100P 部署。
 #
 # 方案对比 (为什么不 clone):
 #   ┌──────────────┬───────────────┬──────────────────────┐
@@ -23,11 +23,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo ""
 echo "=========================================="
 echo " 语义导航依赖安装 (Semantic Nav)"
 echo "=========================================="
 echo ""
+
+# ── 核心依赖 (requirements.txt) ──
+echo "[0/5] 核心依赖 (requirements.txt)"
+pip3 install -r "$SCRIPT_DIR/../requirements.txt"
 
 # ── 1. 检测器: YOLO-World (替代 GroundingDINO) ──
 echo "[1/5] ultralytics (YOLO-World, CVPR 2024)"
@@ -56,6 +62,13 @@ pip install opencv-python-headless
 echo ""
 echo "[5/5] 核心库"
 pip install numpy scipy
+
+# ── 可选: Agent 模式 ──
+if [ "${1:-}" = "--agent" ]; then
+    echo ""
+    echo "Installing Agent dependencies (LangChain)..."
+    pip3 install -r "$SCRIPT_DIR/../requirements-agent.txt"
+fi
 
 echo ""
 echo "=========================================="

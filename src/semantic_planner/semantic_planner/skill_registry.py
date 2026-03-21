@@ -464,7 +464,7 @@ class LingTuNavigationSkills:
     def explore(self) -> str:
         if self._explore_fn:
             return self._explore_fn()
-        return "探索功能未就绪"
+        return "探索需要导航系统在线: lingtu explore"
 
     @skill(
         name="where_am_i",
@@ -477,7 +477,7 @@ class LingTuNavigationSkills:
     def where_am_i(self) -> str:
         if self._query_fn:
             return self._query_fn()
-        return "位置查询功能未就绪"
+        return "需要导航系统在线才能获取位置"
 
     @skill(
         name="list_known_places",
@@ -490,7 +490,7 @@ class LingTuNavigationSkills:
     def list_known_places(self) -> str:
         if self._query_fn:
             return self._query_fn("list")
-        return "无已标记地点"
+        return "请先启动导航系统: lingtu nav --semantic"
 
     @skill(
         name="follow_person",
@@ -504,7 +504,7 @@ class LingTuNavigationSkills:
         """description: 人物外观描述，如 '穿红色衣服的人'"""
         if self._follow_fn:
             return self._follow_fn(description)
-        return "跟随功能未就绪"
+        return "跟随需要导航系统在线运行且相机可用"
 
     @skill(
         name="describe_scene",
@@ -517,7 +517,7 @@ class LingTuNavigationSkills:
     def describe_scene(self) -> str:
         if self._describe_fn:
             return self._describe_fn()
-        return "场景描述功能未就绪"
+        return "场景描述需要导航系统在线运行。请先启动: lingtu nav --semantic"
 
     @skill(
         name="take_photo",
@@ -530,7 +530,7 @@ class LingTuNavigationSkills:
     def take_photo(self) -> str:
         if self._photo_fn:
             return self._photo_fn()
-        return "拍照功能未就绪"
+        return "拍照需要相机在线。请先启动: lingtu nav --semantic"
 
     @skill(
         name="patrol",
@@ -544,4 +544,4 @@ class LingTuNavigationSkills:
         """places: 巡逻地点列表，逗号分隔，如 '入口,走廊,办公室'。空=巡逻所有已标记地点"""
         if self._patrol_fn:
             return self._patrol_fn(places)
-        return "巡逻功能未就绪"
+        return "巡逻需要导航系统在线运行，并至少标记 2 个地点"
