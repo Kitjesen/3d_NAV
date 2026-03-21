@@ -92,23 +92,16 @@ class RerunViewerNode(Node):
             f"Rerun Web 查看器: http://0.0.0.0:{web_port}"
         )
 
-        # 设置默认 blueprint
-        rr.send_blueprint(rrb.Blueprint(
-            rrb.Horizontal(
+        # 设置默认 blueprint (兼容 Rerun 0.30+)
+        try:
+            rr.send_blueprint(rrb.Blueprint(
                 rrb.Spatial3DView(
                     name="3D Scene",
                     origin="world",
-                    background=rrb.Background(kind="SolidColor", color=[20, 20, 30]),
                 ),
-                rrb.Vertical(
-                    rrb.Spatial2DView(name="Camera", origin="camera/rgb"),
-                    rrb.Spatial2DView(name="Depth", origin="camera/depth"),
-                    rrb.TextDocumentView(name="Status", origin="status"),
-                    column_shares=[2, 1, 1],
-                ),
-                row_shares=[3, 2],
-            ),
-        ))
+            ))
+        except Exception as e:
+            self.get_logger().warn(f"Blueprint setup failed (non-fatal): {e}")
 
         # ── 节流状态 ──
         self._last_image_time = 0.0
