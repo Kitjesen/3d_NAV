@@ -4,7 +4,9 @@ test_laplacian_filter.py — Laplacian 模糊检测单元测试
 
 import unittest
 import numpy as np
+import pytest
 
+pytest.importorskip("cv2", reason="OpenCV 仅在机器人环境可用")
 from semantic_perception.laplacian_filter import (
     compute_laplacian_variance,
     is_blurry,

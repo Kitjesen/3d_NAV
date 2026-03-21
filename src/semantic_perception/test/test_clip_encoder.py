@@ -17,8 +17,10 @@ from unittest.mock import Mock, patch, MagicMock
 
 import sys
 import os
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
 from semantic_perception.clip_encoder import CLIPEncoder
 
 

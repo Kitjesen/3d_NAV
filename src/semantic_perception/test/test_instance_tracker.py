@@ -13,7 +13,9 @@ import time
 import unittest
 
 import numpy as np
+import pytest
 
+pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
 from semantic_perception.instance_tracker import (
     RELATION_NEAR_THRESHOLD,
     InstanceTracker,
