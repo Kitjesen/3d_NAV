@@ -59,6 +59,7 @@ class BBoxNavConfig:
     lost_timeout: float = 5.0         # 丢失超时 (s)
     arrived_threshold: float = 0.3    # 到达判定距离容差 (m)
     depth_roi_ratio: float = 0.2      # 深度取样区域占 bbox 面积比例 (边长比)
+    servo_takeover_distance: float = 3.0  # 视觉伺服接管距离 (m), 大于此值用规划栈
 
 
 class BBoxNavigator:

@@ -1328,7 +1328,13 @@ class SemanticPlannerNode(Node):
         self.get_logger().info("BBox nav 已停止")
 
     def _bbox_nav_tick(self):
-        """10Hz BBox 导航循环 — 每帧更新控制量。"""
+        """10Hz BBox 导航循环 — 两阶段集成。
+
+        阶段 1 (远程, > servo_takeover_distance):
+          bbox → 3D 位置 → 发布为 goal_pose → 规划栈接管 (A* + 局部避障)
+        阶段 2 (近程, <= servo_takeover_distance):
+          bbox → 3D → PD 视觉伺服 → 直接 cmd_vel (精确接近)
+        """
         if not self._bbox_nav_active:
             self._stop_bbox_nav()
             return
@@ -1345,55 +1351,87 @@ class SemanticPlannerNode(Node):
         # 获取当前 bbox（沿用上一帧的 _target_bbox）
         current_bbox = self._bbox_navigator._target_bbox
         if current_bbox is None:
-            # 还没有有效 bbox，触发丢失检测
             self._bbox_navigator.tick_lost_check()
             if self._bbox_navigator.state == "lost":
                 self.get_logger().warn("BBox nav: 目标已丢失 (无初始 bbox)")
                 self._stop_bbox_nav()
             return
 
-        # 深度图 (若没有则传 None，bbox_navigator 会以场景图 fallback 处理)
+        # 深度图 + 相机内参
         depth_image = getattr(self, "_latest_depth_image", None)
-
-        # 相机内参 (若没有则使用 fallback 默认值)
         intrinsics = getattr(self, "_camera_intrinsics", None)
         if intrinsics is None:
-            intrinsics = (600.0, 600.0, 320.0, 240.0)  # fx, fy, cx, cy fallback
+            intrinsics = (600.0, 600.0, 320.0, 240.0)
 
         if depth_image is None:
-            # 无深度图时直接做丢失检测并停止
             self._bbox_navigator.tick_lost_check()
-            state = self._bbox_navigator.state
-            if state == "lost":
+            if self._bbox_navigator.state == "lost":
                 self.get_logger().warn("BBox nav: 无深度图，目标丢失")
                 self._stop_bbox_nav()
-            # 无深度图无法计算 3D，跳过本帧
             return
 
-        # 调用核心更新
-        result = self._bbox_navigator.update(
-            bbox=current_bbox,
-            depth_image=depth_image,
-            camera_intrinsics=intrinsics,
+        # 计算 3D 目标位置
+        target_3d = self._bbox_navigator.compute_3d_from_bbox(
+            current_bbox, depth_image,
+            intrinsics[0], intrinsics[1], intrinsics[2], intrinsics[3],
             robot_pose=robot_pose,
         )
+        if target_3d is None:
+            return
 
-        state = result["state"]
-        if state == "tracking":
-            self._pub_cmd_vel.publish(
-                self._make_twist_stamped(
-                    linear_x=result["linear_x"],
-                    angular_z=result["angular_z"],
-                )
-            )
-        elif state == "arrived":
+        # 计算距离
+        dx = target_3d[0] - robot_pose[0]
+        dy = target_3d[1] - robot_pose[1]
+        distance = float(np.sqrt(dx * dx + dy * dy))
+        cfg = self._bbox_navigator._config
+
+        # ── 到达判定 ──
+        if distance < cfg.arrived_threshold + cfg.target_distance:
             self.get_logger().info(
-                f"BBox nav: 已到达目标! distance={result['distance']:.2f}m"
+                f"BBox nav: 已到达目标! distance={distance:.2f}m"
             )
             self._stop_bbox_nav()
-        elif state == "lost":
-            self.get_logger().warn("BBox nav: 目标丢失")
-            self._stop_bbox_nav()
+            return
+
+        # ── 阶段切换 ──
+        if distance > cfg.servo_takeover_distance:
+            # 阶段 1: 远程 → 发 goal_pose 给规划栈
+            goal_pose = PoseStamped()
+            goal_pose.header.stamp = self.get_clock().now().to_msg()
+            goal_pose.header.frame_id = "map"
+            goal_pose.pose.position.x = float(target_3d[0])
+            goal_pose.pose.position.y = float(target_3d[1])
+            goal_pose.pose.position.z = 0.0
+            goal_pose.pose.orientation.w = 1.0
+            self._send_nav2_goal(goal_pose, "bbox_visual_target")
+            self.get_logger().debug(
+                f"BBox nav [远程]: distance={distance:.1f}m → goal_pose ({target_3d[0]:.1f}, {target_3d[1]:.1f})"
+            )
+        else:
+            # 阶段 2: 近程 → PD 视觉伺服直接控制
+            result = self._bbox_navigator.update(
+                bbox=current_bbox,
+                depth_image=depth_image,
+                camera_intrinsics=intrinsics,
+                robot_pose=robot_pose,
+            )
+            state = result["state"]
+            if state == "tracking":
+                self._pub_cmd_vel.publish(
+                    self._make_twist_stamped(
+                        linear_x=result["linear_x"],
+                        angular_z=result["angular_z"],
+                    )
+                )
+                self.get_logger().debug(
+                    f"BBox nav [近程]: distance={distance:.1f}m → lx={result['linear_x']:.2f}, az={result['angular_z']:.2f}"
+                )
+            elif state == "arrived":
+                self.get_logger().info(f"BBox nav: 已到达! distance={result['distance']:.2f}m")
+                self._stop_bbox_nav()
+            elif state == "lost":
+                self.get_logger().warn("BBox nav: 目标丢失")
+                self._stop_bbox_nav()
 
     def _scene_graph_callback(self, msg: String):
         """更新最新场景图 + 增量更新房间-物体 KG + 情节记忆。
