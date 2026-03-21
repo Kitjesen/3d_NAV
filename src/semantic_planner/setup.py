@@ -27,6 +27,7 @@ setup(
     entry_points={
         "console_scripts": [
             "semantic_planner_node = semantic_planner.planner_node:main",
+            "agent_node = semantic_planner.agent_node:main",
         ],
     },
 )

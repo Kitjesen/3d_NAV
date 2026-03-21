@@ -98,6 +98,8 @@ from .implicit_fsm_policy import (
     ImplicitFSMObservation,
 )
 from .person_tracker import PersonTracker
+from .bbox_navigator import BBoxNavigator, BBoxNavConfig
+from .vlm_bbox_query import query_object_bbox
 
 
 class PlannerState(Enum):
@@ -253,6 +255,9 @@ class SemanticPlannerNode(Node):
         # 启动后自动发送的指令 (探索模式用, launch 参数传入)
         self.declare_parameter("initial_instruction", "")  # 空=不自动发送
 
+        # Tag 记忆层: 用户手动标记的地点 JSON 文件路径 (空=仅内存，不持久化)
+        self.declare_parameter("tagged_locations_path", "")
+
         # ── 读取参数 ──
         # base_url 参数声明 (YAML 中可选)
         self.declare_parameter("llm.base_url", "")
@@ -315,6 +320,15 @@ class SemanticPlannerNode(Node):
         self._monitor_hz = self.get_parameter("execution.monitor_hz").value
         self._vision_verify_threshold = self.get_parameter("vision.verify_threshold").value
 
+        # ── Tag 记忆层初始化 ──
+        from .tagged_locations import TaggedLocationStore
+        _tagged_path = self.get_parameter("tagged_locations_path").value
+        self._tag_store = TaggedLocationStore(_tagged_path)
+        self.get_logger().info(
+            f"TaggedLocationStore initialized, path='{_tagged_path}', "
+            f"entries={len(self._tag_store.list_all())}"
+        )
+
         # ── 目标解析器 ──
         self._resolver = GoalResolver(
             primary_config=primary_config,
@@ -324,6 +338,7 @@ class SemanticPlannerNode(Node):
                 "goal_resolution.fast_path_threshold"
             ).value,
             max_replan_attempts=self._max_replan_attempts,
+            tagged_location_store=self._tag_store,
         )
 
         # ── 子模块 ──
@@ -448,6 +463,14 @@ class SemanticPlannerNode(Node):
             lost_timeout=3.0,
         )
 
+        # BBox 视觉伺服导航器 (通用目标追踪, "看到就追" 模式)
+        self._bbox_navigator = BBoxNavigator(BBoxNavConfig(
+            target_distance=1.5,
+        ))
+        self._bbox_nav_active = False
+        self._bbox_nav_timer = None
+        self._robot_yaw: float = 0.0  # 从 odom 四元数提取，供 bbox_nav 使用
+
         # B5: Nav2 NavigateToPose action client
         self._use_nav2_action = self.get_parameter("nav2.use_action_client").value
         self._nav2_action_timeout = self.get_parameter("nav2.action_timeout_sec").value
@@ -477,6 +500,8 @@ class SemanticPlannerNode(Node):
         ).value
         self._latest_scene_graph: str = "{}"
         self._robot_position: Optional[Dict[str, float]] = None
+        # 语义记忆: 标签地点存储 {name: {"x": float, "y": float, "z": float}}
+        self._tagged_locations: Dict[str, Dict[str, float]] = {}
         self._current_goal: Optional[GoalResult] = None
         self._current_plan: Optional[TaskPlan] = None
         self._current_action_cmd: Optional[ActionCommand] = None
@@ -570,6 +595,14 @@ class SemanticPlannerNode(Node):
             String, "/nav/semantic/cancel", self._cancel_callback, 10
         )
 
+        # Tag 记忆层: 接收标记地点指令
+        # 消息格式 (JSON):
+        #   标记指定坐标: {"name": "体育馆", "x": 25.0, "y": 30.0}
+        #   标记当前位置: {"name": "体育馆"}  (不传 x/y 则用当前里程计位置)
+        self._sub_tag_location = self.create_subscription(
+            String, "/nav/semantic/tag_location", self._tag_location_callback, 10
+        )
+
         # 几何层 stuck_final 信号 → 触发语义层重规划 (pct_path_adapter JSON 事件)
         self._sub_adapter_status = self.create_subscription(
             String, "/nav/adapter_status",
@@ -583,6 +616,16 @@ class SemanticPlannerNode(Node):
         self._sub_follow_person_cmd = self.create_subscription(
             String, "/nav/semantic/follow_person_cmd",
             self._follow_person_cmd_callback, 10
+        )
+
+        # BBox 视觉伺服导航: "看到目标就追" 模式
+        # 消息格式: {"target": "红色椅子"}          — VLM 模式: 用 VLM 在当前帧找目标 bbox
+        #           {"target": "red chair", "mode": "vlm"}  — 同上 (显式指定)
+        #           {"bbox": [x1,y1,x2,y2], "mode": "direct"}  — 直接给 bbox
+        #           {} 或 {"stop": true}            — 停止
+        self._sub_bbox_nav = self.create_subscription(
+            String, "/nav/semantic/bbox_navigate",
+            self._bbox_navigate_callback, 10
         )
 
         # 可选: 订阅相机图像 (用于 VLM vision grounding)
@@ -959,6 +1002,55 @@ class SemanticPlannerNode(Node):
         self._response_pub.publish(msg)
         self.get_logger().info(f"Response: {text}")
 
+    def _tag_location_callback(self, msg: String):
+        """Tag 记忆层: 接收 /nav/semantic/tag_location 消息，存储地点标签。
+
+        消息格式 (JSON):
+          标记指定坐标: {"name": "体育馆", "x": 25.0, "y": 30.0}
+          标记当前位置: {"name": "体育馆"}  (不传 x/y 则用当前里程计位置)
+          删除标签:     {"name": "体育馆", "delete": true}
+        """
+        try:
+            from semantic_common import safe_json_loads
+            data = safe_json_loads(msg.data, default=None)
+            if not data or "name" not in data:
+                self.get_logger().warning(
+                    f"tag_location: invalid message (need 'name'): {msg.data!r}"
+                )
+                return
+
+            name = str(data["name"])
+
+            if data.get("delete"):
+                removed = self._tag_store.remove(name)
+                self.get_logger().info(
+                    f"tag_location: {'removed' if removed else 'not found'} '{name}'"
+                )
+                self._tag_store.save()
+                return
+
+            if "x" in data and "y" in data:
+                x = float(data["x"])
+                y = float(data["y"])
+                z = float(data.get("z", 0.0))
+            elif self._robot_position is not None:
+                x = self._robot_position["x"]
+                y = self._robot_position["y"]
+                z = self._robot_position.get("z", 0.0)
+            else:
+                self.get_logger().warning(
+                    "tag_location: no coordinates provided and odometry not yet received"
+                )
+                return
+
+            self._tag_store.tag(name, x=x, y=y, z=z, yaw=data.get("yaw"))
+            self._tag_store.save()
+            self.get_logger().info(
+                f"tag_location: tagged '{name}' at ({x:.2f}, {y:.2f}, {z:.2f})"
+            )
+        except Exception as e:
+            self.get_logger().error(f"tag_location callback error: {e}")
+
     def _cancel_callback(self, msg: String):
         """
         F1: 任务取消。
@@ -1132,6 +1224,177 @@ class SemanticPlannerNode(Node):
         self._current_plan = follow_plan
         self._execute_next_subgoal()
 
+    # ================================================================
+    #  BBox 视觉伺服导航 — "看到就追" 模式
+    # ================================================================
+
+    def _bbox_navigate_callback(self, msg: String):
+        """
+        BBox 视觉伺服导航指令。
+
+        消息格式 (JSON):
+          {"target": "红色椅子"}                       — VLM 模式: 用 VLM 在当前帧找目标 bbox
+          {"target": "red chair", "mode": "vlm"}       — 同上 (显式指定)
+          {"bbox": [x1,y1,x2,y2], "mode": "direct"}   — 直接给 bbox，立即开始追踪
+          {}  或 {"stop": true}                        — 停止
+
+        流程 (VLM 模式):
+          1. query_object_bbox() 调用视觉 LLM 在最新图像中定位目标
+          2. 找到 bbox → _start_bbox_nav() 启动 10Hz 定时器循环
+          3. 每帧: bbox_navigator.update() → 发布 TwistStamped
+          4. arrived / lost → 停止定时器，停车
+        """
+        raw = msg.data.strip() if msg.data else ""
+
+        # 停止命令
+        if not raw or raw in ("{}", "null"):
+            self._stop_bbox_nav()
+            return
+
+        try:
+            params = json.loads(raw)
+        except json.JSONDecodeError as e:
+            self.get_logger().warn(f"BBox nav JSON parse error: {e}")
+            return
+
+        if params.get("stop", False):
+            self._stop_bbox_nav()
+            return
+
+        mode = params.get("mode", "vlm")
+
+        if mode == "direct" and "bbox" in params:
+            # 直接给 bbox，立即启动
+            bbox = params["bbox"]
+            if not isinstance(bbox, list) or len(bbox) != 4:
+                self.get_logger().warn(f"BBox nav: invalid bbox format: {bbox}")
+                return
+            self._start_bbox_nav(bbox)
+
+        elif "target" in params:
+            # VLM 模式: 异步查询当前图像
+            target = params["target"]
+            self.get_logger().info(f"BBox nav: VLM querying '{target}'...")
+
+            async def _vlm_query():
+                if not self._latest_image_base64:
+                    self.get_logger().warn("BBox nav: 无相机图像，无法执行 VLM 查询")
+                    return
+                try:
+                    bbox = await query_object_bbox(
+                        self._resolver, self._latest_image_base64, target
+                    )
+                    if bbox:
+                        self.get_logger().info(
+                            f"BBox nav: VLM 找到 '{target}' at {bbox}"
+                        )
+                        self._start_bbox_nav(bbox)
+                    else:
+                        self.get_logger().info(
+                            f"BBox nav: VLM 未在当前帧找到 '{target}'"
+                        )
+                except Exception as e:
+                    self.get_logger().error(f"BBox nav VLM query 失败: {e}")
+
+            self._schedule_async(_vlm_query())
+
+        else:
+            self.get_logger().warn(
+                f"BBox nav: 消息格式无效 (需要 'target' 或 'bbox' 字段): {raw[:100]}"
+            )
+
+    def _start_bbox_nav(self, initial_bbox: list):
+        """启动 BBox 视觉伺服导航循环 (10Hz)。"""
+        self._bbox_navigator.set_target_bbox(initial_bbox)
+        self._bbox_nav_active = True
+
+        # 取消旧定时器（防重入）
+        if self._bbox_nav_timer is not None:
+            self._bbox_nav_timer.cancel()
+        self._bbox_nav_timer = self.create_timer(0.1, self._bbox_nav_tick)
+        self.get_logger().info(f"BBox nav 已启动, initial_bbox={initial_bbox}")
+
+    def _stop_bbox_nav(self):
+        """停止 BBox 视觉伺服导航，停车。"""
+        if self._bbox_nav_timer is not None:
+            self._bbox_nav_timer.cancel()
+            self._bbox_nav_timer = None
+        if not self._bbox_nav_active:
+            return
+        self._bbox_nav_active = False
+        self._bbox_navigator.stop()
+        # 停车
+        self._pub_cmd_vel.publish(self._make_twist_stamped())
+        self.get_logger().info("BBox nav 已停止")
+
+    def _bbox_nav_tick(self):
+        """10Hz BBox 导航循环 — 每帧更新控制量。"""
+        if not self._bbox_nav_active:
+            self._stop_bbox_nav()
+            return
+
+        # 机器人当前位姿 (x, y, yaw)
+        if self._robot_position is None:
+            return
+        robot_pose = (
+            self._robot_position["x"],
+            self._robot_position["y"],
+            self._robot_yaw,
+        )
+
+        # 获取当前 bbox（沿用上一帧的 _target_bbox）
+        current_bbox = self._bbox_navigator._target_bbox
+        if current_bbox is None:
+            # 还没有有效 bbox，触发丢失检测
+            self._bbox_navigator.tick_lost_check()
+            if self._bbox_navigator.state == "lost":
+                self.get_logger().warn("BBox nav: 目标已丢失 (无初始 bbox)")
+                self._stop_bbox_nav()
+            return
+
+        # 深度图 (若没有则传 None，bbox_navigator 会以场景图 fallback 处理)
+        depth_image = getattr(self, "_latest_depth_image", None)
+
+        # 相机内参 (若没有则使用 fallback 默认值)
+        intrinsics = getattr(self, "_camera_intrinsics", None)
+        if intrinsics is None:
+            intrinsics = (600.0, 600.0, 320.0, 240.0)  # fx, fy, cx, cy fallback
+
+        if depth_image is None:
+            # 无深度图时直接做丢失检测并停止
+            self._bbox_navigator.tick_lost_check()
+            state = self._bbox_navigator.state
+            if state == "lost":
+                self.get_logger().warn("BBox nav: 无深度图，目标丢失")
+                self._stop_bbox_nav()
+            # 无深度图无法计算 3D，跳过本帧
+            return
+
+        # 调用核心更新
+        result = self._bbox_navigator.update(
+            bbox=current_bbox,
+            depth_image=depth_image,
+            camera_intrinsics=intrinsics,
+            robot_pose=robot_pose,
+        )
+
+        state = result["state"]
+        if state == "tracking":
+            self._pub_cmd_vel.publish(
+                self._make_twist_stamped(
+                    linear_x=result["linear_x"],
+                    angular_z=result["angular_z"],
+                )
+            )
+        elif state == "arrived":
+            self.get_logger().info(
+                f"BBox nav: 已到达目标! distance={result['distance']:.2f}m"
+            )
+            self._stop_bbox_nav()
+        elif state == "lost":
+            self.get_logger().warn("BBox nav: 目标丢失")
+            self._stop_bbox_nav()
+
     def _scene_graph_callback(self, msg: String):
         """更新最新场景图 + 增量更新房间-物体 KG + 情节记忆。
 
@@ -1227,6 +1490,12 @@ class SemanticPlannerNode(Node):
         p = msg.pose.pose.position
         prev = self._robot_position
         self._robot_position = {"x": p.x, "y": p.y, "z": p.z}
+
+        # 提取 yaw 角，供 BBox 导航器使用
+        q = msg.pose.pose.orientation
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self._robot_yaw = math.atan2(siny_cosp, cosy_cosp)
 
         # ── Odometry 驱动的连续 Re-perception（替代 Nav2 feedback）──
         try:
@@ -3556,12 +3825,21 @@ class SemanticPlannerNode(Node):
             self._look_around_finish_timer.cancel()
         if self._look_around_timer:
             self._look_around_timer.cancel()
+        # 清理 BBox 导航定时器
+        self._stop_bbox_nav()
         # 保存持久化数据
         if self._semantic_data_dir:
             try:
                 self._save_semantic_data(self._semantic_data_dir)
             except Exception as e:
                 self.get_logger().warning(f"Failed to save semantic data on shutdown: {e}")
+
+        # 保存 Tag 记忆
+        if hasattr(self, "_tag_store"):
+            try:
+                self._tag_store.save()
+            except Exception as e:
+                self.get_logger().warning(f"Failed to save tagged locations on shutdown: {e}")
 
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._async_thread.join(timeout=3.0)

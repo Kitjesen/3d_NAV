@@ -81,6 +81,20 @@ def generate_launch_description():
         "enable_semantic", default_value="false",
         description="是否启用语义导航 (VLN) 子系统",
     )
+    semantic_map_path_arg = DeclareLaunchArgument(
+        "semantic_map_path", default_value="",
+        description="语义地图路径 (空=自动从 map_path 推断)",
+    )
+
+    # ---- Agent 开关 (默认关闭) ----
+    enable_agent_arg = DeclareLaunchArgument(
+        "enable_agent", default_value="false",
+        description="是否启用 LLM Agent 大脑 (需要 LLM API key)",
+    )
+    agent_llm_backend_arg = DeclareLaunchArgument(
+        "agent_llm_backend", default_value="mock",
+        description="Agent LLM 后端 (mock/kimi/openai)",
+    )
 
     # ---- 1. LiDAR 驱动 ----
     lidar = IncludeLaunchDescription(
@@ -147,17 +161,31 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(subsystems_dir, "semantic.launch.py")
         ),
+        launch_arguments={
+            "semantic_map_path": LaunchConfiguration("semantic_map_path"),
+        }.items(),
         condition=IfCondition(LaunchConfiguration("enable_semantic")),
     )
 
-    # ---- 8. 三环认知架构 (SafetyMonitor + Evaluator + DialogueManager) ----
+    # ---- 8. LLM Agent 大脑 (可选, 默认关闭) ----
+    agent = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(subsystems_dir, "agent.launch.py")
+        ),
+        launch_arguments={
+            "agent_llm_backend": LaunchConfiguration("agent_llm_backend"),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("enable_agent")),
+    )
+
+    # ---- 9. 三环认知架构 (SafetyMonitor + Evaluator + DialogueManager) ----
     rings = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(subsystems_dir, "rings.launch.py")
         ),
     )
 
-    # ---- 9. 运营服务 (地图管理 + 巡检路线 + 电子围栏 + 定时任务 + 任务日志) ----
+    # ---- 10. 运营服务 (地图管理 + 巡检路线 + 电子围栏 + 定时任务 + 任务日志) ----
     services = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(subsystems_dir, "services.launch.py")
@@ -175,6 +203,9 @@ def generate_launch_description():
             planner_profile_arg,
             localizer_profile_arg,
             enable_semantic_arg,
+            semantic_map_path_arg,
+            enable_agent_arg,
+            agent_llm_backend_arg,
             lidar,
             slam,
             planning,
@@ -182,6 +213,7 @@ def generate_launch_description():
             driver,
             grpc,
             semantic,
+            agent,
             rings,
             services,
         ]

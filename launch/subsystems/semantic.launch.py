@@ -55,6 +55,16 @@ def generate_launch_description():
         default_value="false",
         description="启用三维重建节点 (true=启用彩色语义点云聚合)",
     )
+    semantic_map_path_arg = DeclareLaunchArgument(
+        "semantic_map_path",
+        default_value="",
+        description="语义地图持久化路径 (场景图 JSON, 如 /data/maps/office_semantic.json)",
+    )
+    tagged_locations_path_arg = DeclareLaunchArgument(
+        "tagged_locations_path",
+        default_value="",
+        description="标签地点记忆路径 (JSON, 如 /data/maps/office_tags.json)",
+    )
 
     # ── 语义感知节点 ──
     perception_node = Node(
@@ -62,7 +72,10 @@ def generate_launch_description():
         executable="semantic_perception_node",
         name="semantic_perception_node",
         output="screen",
-        parameters=[LaunchConfiguration("perception_config")],
+        parameters=[
+            LaunchConfiguration("perception_config"),
+            {"semantic_map_path": LaunchConfiguration("semantic_map_path")},
+        ],
         remappings=[
             # 将标准 Orbbec 话题映射到节点内部名称
             ("color_image", "/camera/color/image_raw"),
@@ -88,6 +101,7 @@ def generate_launch_description():
             {
                 "initial_instruction": LaunchConfiguration("initial_instruction"),
                 "llm.backend": LaunchConfiguration("llm_backend"),
+                "tagged_locations_path": LaunchConfiguration("tagged_locations_path"),
             },
         ],
         remappings=[
@@ -126,6 +140,8 @@ def generate_launch_description():
             initial_instruction_arg,
             llm_backend_arg,
             enable_reconstruction_arg,
+            semantic_map_path_arg,
+            tagged_locations_path_arg,
             perception_node,
             planner_node,
             reconstruction_node,

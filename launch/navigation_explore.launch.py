@@ -98,6 +98,11 @@ def generate_launch_description():
         default_value="mock",
         description="LLM 后端 (mock=无需API, kimi=月之暗面, openai=GPT)",
     )
+    semantic_map_path_arg = DeclareLaunchArgument(
+        "semantic_map_path",
+        default_value="",
+        description="语义地图持久化路径 (空=不持久化, 如 /data/maps/explore_semantic.json)",
+    )
 
     # ---- 1. LiDAR 驱动 ----
     lidar = IncludeLaunchDescription(
@@ -158,6 +163,7 @@ def generate_launch_description():
             ),
             "initial_instruction": LaunchConfiguration("target"),
             "llm_backend": LaunchConfiguration("llm_backend"),
+            "semantic_map_path": LaunchConfiguration("semantic_map_path"),
         }.items(),
     )
 
@@ -197,6 +203,7 @@ def generate_launch_description():
             enable_grpc_arg,
             target_arg,
             llm_backend_arg,
+            semantic_map_path_arg,
             # 子系统 (按启动顺序)
             lidar,
             slam,

@@ -3454,6 +3454,8 @@ class InstanceTracker:
                 "safety_level": obj.safety_level,
                 "affordances": obj.affordances,
                 "floor_level": obj.floor_level,
+                "features": obj.features.tolist() if obj.features is not None and obj.features.size > 0 else [],
+                "points": obj.points.tolist() if obj.points is not None and len(obj.points) > 0 else [],
             }
         for vid, view in self._views.items():
             data["views"][str(vid)] = {
@@ -3500,9 +3502,12 @@ class InstanceTracker:
                 safety_level=odata.get("safety_level", "safe"),
                 affordances=odata.get("affordances", []),
                 floor_level=odata.get("floor_level", 0),
+                features=np.array(odata.get("features", [])),
+                points=np.array(odata.get("points", [])).reshape(-1, 3) if odata.get("points") else np.empty((0, 3)),
             )
             obj._update_credibility()
             self._enrich_from_kg(obj)
+            obj.source = "loaded"
             self._objects[oid] = obj
 
         for vid_str, vdata in data.get("views", {}).items():

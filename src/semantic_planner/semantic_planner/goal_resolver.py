@@ -34,6 +34,7 @@ from semantic_common import safe_json_loads, sanitize_position
 
 from .adacot import AdaCoTRouter, AdaCoTConfig, AdaCoTDecision
 from .llm_client import LLMClientBase, LLMError, LLMConfig, create_llm_client
+from .tagged_locations import TaggedLocationStore
 from .prompt_templates import (
     build_goal_resolution_prompt,
     build_exploration_prompt,
@@ -229,6 +230,7 @@ class GoalResolver:
         confidence_threshold: float = 0.6,
         fast_path_threshold: float = 0.75,   # Fast 路径最低置信度
         max_replan_attempts: int = 3,
+        tagged_location_store: Optional[TaggedLocationStore] = None,
     ) -> None:
         self._primary = create_llm_client(primary_config)
         self._fallback = (
@@ -237,6 +239,9 @@ class GoalResolver:
         self._confidence_threshold = confidence_threshold
         self._fast_path_threshold = fast_path_threshold
         self._max_replan_attempts = max_replan_attempts
+
+        # Tag 记忆层 (层 0: 用户手动标记的地点)
+        self._tag_store: Optional[TaggedLocationStore] = tagged_location_store
 
         # 探索状态
         self._explored_directions: List[Dict[str, float]] = []
@@ -260,6 +265,46 @@ class GoalResolver:
 
         # AdaCoT: 动态快慢路径路由 (VLingNav 2026)
         self._adacot = AdaCoTRouter()
+
+    # ================================================================
+    #  Tag 记忆层 (层 0: 精确/模糊匹配用户标记地点)
+    # ================================================================
+
+    def _resolve_by_tag(self, instruction: str) -> Optional[GoalResult]:
+        """Tag 记忆查询：精确匹配优先，然后模糊匹配。
+
+        Args:
+            instruction: 用户自然语言指令
+
+        Returns:
+            GoalResult (path="tag", confidence=1.0) 或 None
+        """
+        if self._tag_store is None:
+            return None
+
+        # 精确匹配
+        entry = self._tag_store.query(instruction)
+        if entry is None:
+            # 模糊匹配 (标签名包含于指令，或指令包含于标签名)
+            entry = self._tag_store.query_fuzzy(instruction)
+
+        if entry is None:
+            return None
+
+        pos = entry["position"]
+        name = entry["name"]
+        logger.info("[Tag层] 命中标签地点 '%s' at (%.2f, %.2f, %.2f)", name, pos[0], pos[1], pos[2])
+        return GoalResult(
+            action="navigate",
+            target_x=float(pos[0]),
+            target_y=float(pos[1]),
+            target_z=float(pos[2]),
+            target_label=name,
+            confidence=1.0,
+            reasoning=f"Tag memory exact/fuzzy match: '{name}'",
+            is_valid=True,
+            path="tag",
+        )
 
     # ================================================================
     #  AdaNav: 得分熵计算
@@ -1248,6 +1293,11 @@ class GoalResolver:
         Returns:
             GoalResult
         """
+        # ── 层 0: Tag 记忆 (精确匹配，最快，无需场景图) ──
+        tag_result = self._resolve_by_tag(instruction)
+        if tag_result is not None:
+            return tag_result
+
         # ── Step 0: AdaCoT 路径预判 (VLingNav 2026) ──
         sg_dict = safe_json_loads(scene_graph_json, default=None) if scene_graph_json else None
 

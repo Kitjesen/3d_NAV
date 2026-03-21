@@ -23,6 +23,7 @@ import sys
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -51,6 +52,14 @@ def generate_launch_description():
     slam_profile_arg = DeclareLaunchArgument(
         "slam_profile", default_value="fastlio2",
         description="SLAM 算法 profile (fastlio2, pointlio, stub)",
+    )
+    enable_semantic_arg = DeclareLaunchArgument(
+        "enable_semantic", default_value="false",
+        description="建图时是否启用语义感知 (采集物体到语义地图)",
+    )
+    semantic_map_path_arg = DeclareLaunchArgument(
+        "semantic_map_path", default_value="",
+        description="语义地图保存路径 (建图模式下用于采集)",
     )
 
     # ---- 1. LiDAR 驱动 ----
@@ -96,15 +105,29 @@ def generate_launch_description():
         )
     )
 
+    # ---- 6. 语义感知 (可选, 建图时采集物体) ----
+    semantic = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(subsystems_dir, "semantic.launch.py")
+        ),
+        launch_arguments={
+            "semantic_map_path": LaunchConfiguration("semantic_map_path"),
+        }.items(),
+        condition=IfCondition(LaunchConfiguration("enable_semantic")),
+    )
+
     return LaunchDescription(
         [
             max_speed_arg,
             autonomy_mode_arg,
             slam_profile_arg,
+            enable_semantic_arg,
+            semantic_map_path_arg,
             lidar,
             slam,
             autonomy,
             driver,
             grpc,
+            semantic,
         ]
     )
