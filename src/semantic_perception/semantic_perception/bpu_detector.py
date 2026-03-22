@@ -89,8 +89,9 @@ class BPUDetector(DetectorBase):
     """
 
     MODEL_CANDIDATES = [
-        # YOLO-World (导航大词汇表, 优先) — 需通过 export_yoloworld_bpu.py + convert_onnx_to_hbm.sh 生成
-        "/home/sunrise/models/yolov8s-worldv2_nav*_640_nashe_640x640_nv12.hbm",
+        # YOLO-E 26s (导航 125 类词汇表, 最优先) — yoloe26s_seg_nav125
+        # NOTE: yolov8s-worldv2 无法转 .hbm (Einsum op 不支持 Nash BPU)
+        "/home/sunrise/models/yoloe26s_seg_nav125_nashe_640x640_nv12.hbm",
         # 标准 YOLO (COCO-80 闭词汇, 降级)
         "/home/sunrise/models/yolo11s_seg_nashe_640x640_nv12.hbm",
         "/home/sunrise/models/yolo12s_detect_nashe_640x640_nv12.hbm",

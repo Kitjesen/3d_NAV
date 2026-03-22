@@ -63,7 +63,7 @@
 | 文件 | 行数 | 职责 |
 |------|-----:|------|
 | `topology_graph.py` | 536 | 拓扑图：ViewNode + RoomNode，跨房间可达性，query_by_position / query_by_label |
-| `topo_types.py` | 460 | 数据类型：ViewNode、RoomNode、TopoEdge，序列化/反序列化 |
+| `topology_types.py` | 460 | 数据类型：ViewNode、RoomNode、TopoEdge，序列化/反序列化 |
 | `room_manager.py` | 959 | 房间管理器：房间边界估计，房间-物体归属，动态合并/分裂 |
 | `leiden_segmentation.py` | 366 | Leiden 图聚类：将场景图物体节点聚类为语义房间区域 |
 
@@ -83,7 +83,7 @@
 | 文件 | 行数 | 职责 |
 |------|-----:|------|
 | `knowledge_graph.py` | 568 | 知识图谱：室内场景本体，物体-属性-关系三元组，SPARQL 风格查询 |
-| `kg_data.py` | 1 944 | 知识图谱数据：预定义物体分类、属性词典、房间-物体先验共现表 |
+| `knowledge_data.py` | 1 944 | 知识图谱数据：预定义物体分类、属性词典、房间-物体先验共现表 |
 | `bpu_qp_bridge.py` | 314 | BPU 量化感知桥接：将 BPU 输出概率校准到知识图谱置信度空间 |
 
 ---

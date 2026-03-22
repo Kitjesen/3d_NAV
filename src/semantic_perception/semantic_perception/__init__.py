@@ -28,9 +28,9 @@
 # scg_path_planner.py   基于语义关系的可达性搜索
 # hybrid_planner.py     语义场景图 + 几何 costmap 联合规划
 
-# --- Topology 拓扑图 (topology_graph / topo_types / room_manager / leiden_segmentation) ---
+# --- Topology 拓扑图 (topology_graph / topology_types / room_manager / leiden_segmentation) ---
 # topology_graph.py         ViewNode + RoomNode，跨房间可达性
-# topo_types.py             ViewNode / RoomNode / TopoEdge 数据类型
+# topology_types.py             ViewNode / RoomNode / TopoEdge 数据类型
 # room_manager.py           房间边界估计，房间-物体归属，动态合并/分裂
 # leiden_segmentation.py    Leiden 图聚类 → 语义房间区域
 
@@ -38,9 +38,9 @@
 # belief_network.py     物体存在概率推断，时序衰减，跨传感器融合
 # belief_propagation.py Loopy BP 场景图语义标签后验推断
 
-# --- KnowledgeGraph 知识图谱 (knowledge_graph / kg_data / bpu_qp_bridge) ---
+# --- KnowledgeGraph 知识图谱 (knowledge_graph / knowledge_data / bpu_qp_bridge) ---
 # knowledge_graph.py    室内场景本体，三元组，SPARQL 风格查询
-# kg_data.py            预定义分类 + 属性词典 + 房间-物体先验 (1944 行)
+# knowledge_data.py            预定义分类 + 属性词典 + 房间-物体先验 (1944 行)
 # bpu_qp_bridge.py      BPU 量化输出 → 知识图谱置信度校准
 
 # --- Geometry 几何处理 (geometry_extractor / polyhedron_expansion / laplacian_filter / local_rolling_grid) ---

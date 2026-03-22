@@ -1,0 +1,1 @@
+<mujoco><compiler angle="radian"/><option gravity="0 0 -9.81" timestep="0.002"/><include file="robot.xml"/><worldbody><geom name="floor" type="plane" size="50 50 0.1" condim="3" conaffinity="1" friction="1 0.5 0.5"/></worldbody></mujoco>

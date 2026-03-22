@@ -43,13 +43,13 @@
 # prompt_templates.py   H-CoT 4 步 + frontier/explored prompt
 # chinese_tokenizer.py  jieba 分词 + 停用词
 
-# --- Mixin (planner_init / nav2_mixin / subgoal_mixin / bbox_mixin / operational_mixin / resolve_mixin / callbacks_mixin / state_mixin) ---
-# planner_init.py       初始化：ROS2 声明 + 子模块实例化
+# --- Mixin (init_mixin / nav2_mixin / subgoal_mixin / bbox_nav_mixin / operational_mixin / goal_mixin / callbacks_mixin / state_mixin) ---
+# init_mixin.py       初始化：ROS2 声明 + 子模块实例化
 # nav2_mixin.py         Nav2 ActionClient 封装
 # subgoal_mixin.py      子目标队列推进
-# bbox_mixin.py         BBoxNavigator 生命周期
+# bbox_nav_mixin.py         BBoxNavigator 生命周期
 # operational_mixin.py  健康检查 + metrics
-# resolve_mixin.py      goal_resolver 调用封装
+# goal_mixin.py      goal_resolver 调用封装
 # callbacks_mixin.py    ROS2 回调实现
 # state_mixin.py        PlannerState FSM 转换
 

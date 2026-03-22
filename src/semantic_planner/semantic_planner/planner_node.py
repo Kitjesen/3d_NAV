@@ -105,12 +105,12 @@ from .vlm_bbox_query import query_object_bbox
 from .planner_state import PlannerState  # noqa: F811 — 独立模块，避免循环导入
 from .nav2_mixin import Nav2Mixin
 from .subgoal_mixin import SubgoalMixin
-from .bbox_mixin import BBoxNavMixin
+from .bbox_nav_mixin import BBoxNavMixin
 from .operational_mixin import OperationalMixin
 from .callbacks_mixin import CallbacksMixin
-from .resolve_mixin import ResolveMixin
+from .goal_mixin import ResolveMixin
 from .state_mixin import StateMixin
-from .planner_init import PlannerInitMixin
+from .init_mixin import PlannerInitMixin
 
 
 class SemanticPlannerNode(

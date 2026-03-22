@@ -323,7 +323,7 @@ class IndustrialKnowledgeGraph:
 
     def _build_industrial_knowledge(self) -> None:
         """从 kg_data 加载静态知识，并构建索引。"""
-        from .kg_data import build_all_knowledge
+        from .knowledge_data import build_all_knowledge
         build_all_knowledge(self._concepts, self._relations, self._safety_constraints)
         self._build_indices()
 

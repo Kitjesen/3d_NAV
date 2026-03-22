@@ -83,6 +83,29 @@ Livox LiDAR --> Fast-LIO2 (SLAM) --> Terrain Analysis --> PCT Planner --> Dog Bo
 
 **Remote Monitoring**: gRPC server on port 50051. Flutter client (Android, Windows, iOS) for telemetry, manual control, and OTA updates.
 
+## Platform Boundary
+
+`lingtu` is the robot autonomy provider for the NOVA Dog platform. It owns:
+
+- ROS2 navigation and localization
+- semantic perception and scene graph construction
+- provider-side task execution
+- provider-side gRPC telemetry and data streams
+
+`lingtu` is not the operator-facing runtime and should not be treated as the
+top-level product control plane.
+
+For the product boundary:
+
+- `nav` wraps `lingtu` navigation as a product service
+- `sense` wraps `lingtu` perception outputs as product-readable scene truth
+- `voice` and `askme` stay on the operator interaction side
+- `arbiter`, `safety`, and `control` own mission, safety, and actuation policy
+
+See
+[`products/nova-dog/runtime/docs/ASKME_LINGTU_DECOUPLING.md`](/D:/inovxio/products/nova-dog/runtime/docs/ASKME_LINGTU_DECOUPLING.md)
+for the cross-project decoupling design.
+
 ## Source Layout
 
 ```

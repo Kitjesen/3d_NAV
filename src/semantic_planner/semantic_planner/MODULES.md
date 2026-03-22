@@ -94,12 +94,12 @@
 
 | 文件 | 行数 | 职责 |
 |------|-----:|------|
-| `planner_init.py` | 632 | 初始化 Mixin：ROS2 订阅/发布声明，参数读取，子模块实例化 |
+| `init_mixin.py` | 632 | 初始化 Mixin：ROS2 订阅/发布声明，参数读取，子模块实例化 |
 | `nav2_mixin.py` | 872 | Nav2 接口 Mixin：ActionClient (NavigateToPose)，目标发送/取消/状态查询 |
 | `subgoal_mixin.py` | 605 | 子目标推进 Mixin：航点队列管理，OmniNav 层次子目标切换 |
-| `bbox_mixin.py` | 223 | 包围框 Mixin：BBoxNavigator 生命周期管理，视觉伺服触发条件 |
+| `bbox_nav_mixin.py` | 223 | 包围框 Mixin：BBoxNavigator 生命周期管理，视觉伺服触发条件 |
 | `operational_mixin.py` | 266 | 运营 Mixin：健康检查，metrics 上报，watchdog |
-| `resolve_mixin.py` | 382 | 解析 Mixin：goal_resolver 调用封装，结果路由到 Nav2 / frontier / bbox |
+| `goal_mixin.py` | 382 | 解析 Mixin：goal_resolver 调用封装，结果路由到 Nav2 / frontier / bbox |
 | `callbacks_mixin.py` | 302 | 回调 Mixin：scene_graph / odometry / instruction ROS2 回调实现 |
 | `state_mixin.py` | 373 | 状态 Mixin：PlannerState FSM 转换，/nav/semantic/status 发布 |
 
