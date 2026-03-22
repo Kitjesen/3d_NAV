@@ -92,6 +92,7 @@ usage() {
     echo -e "    ${G}viz${N}                                           Rerun 3D 可视化 (:9090)"
     echo -e "    ${G}test${N}        ${D}[PACKAGE]${N}                       运行测试"
     echo -e "    ${G}stub${N}        ${D}nav|explore${N}                     无硬件仿真模式"
+    echo -e "    ${G}sim${N}         ${D}[--world NAME] [--headless]${N}     MuJoCo 仿真平台"
     echo ""
     echo -e "  ${B}OPTIONS${N}"
     echo -e "    ${D}--speed${N} ${W}N${N}         最大速度 m/s          ${D}(默认 0.5)${N}"
@@ -108,6 +109,10 @@ usage() {
     echo -e "    ${D}\$${N} lingtu find \"红色椅子\"                ${D}# 视觉搜索导航${N}"
     echo -e "    ${D}\$${N} lingtu chat                          ${D}# 交互对话模式${N}"
     echo -e "    ${D}\$${N} lingtu stub nav                      ${D}# 无硬件测试${N}"
+    echo -e "    ${D}\$${N} lingtu sim                          ${D}# MuJoCo 工厂场景${N}"
+    echo -e "    ${D}\$${N} lingtu sim --world open_field       ${D}# 切换场景${N}"
+    echo -e "    ${D}\$${N} lingtu sim --headless               ${D}# 无头模式${N}"
+    echo -e "    ${D}\$${N} lingtu sim --scenario navigation    ${D}# 导航测试${N}"
     echo ""
 }
 
@@ -687,6 +692,62 @@ cmd_viz() {
     run_cmd "ros2 run semantic_planner rerun_viewer"
 }
 
+cmd_sim() {
+    mini_banner
+    log_run "仿真平台"
+    echo ""
+
+    # 解析仿真专属参数
+    local sim_engine="mujoco"
+    local sim_world="factory"
+    local sim_scenario=""
+    local sim_headless=""
+    local sim_goal=""
+    local sim_instruction=""
+    local sim_max_time="120"
+    local sim_list_worlds=false
+
+    # 从 EXTRA_ARGS 中提取参数
+    local remaining=""
+    local args_arr=($EXTRA_ARGS)
+    local i=0
+    while [ $i -lt ${#args_arr[@]} ]; do
+        case "${args_arr[$i]}" in
+            --engine)     i=$((i+1)); sim_engine="${args_arr[$i]}" ;;
+            --world)      i=$((i+1)); sim_world="${args_arr[$i]}" ;;
+            --scenario)   i=$((i+1)); sim_scenario="${args_arr[$i]}" ;;
+            --headless)   sim_headless="--headless" ;;
+            --goal)       i=$((i+1)); sim_goal="${args_arr[$i]}" ;;
+            --instruction) i=$((i+1)); sim_instruction="${args_arr[$i]}" ;;
+            --max-time)   i=$((i+1)); sim_max_time="${args_arr[$i]}" ;;
+            --list-worlds) sim_list_worlds=true ;;
+        esac
+        i=$((i+1))
+    done
+
+    if [ "$sim_list_worlds" = true ]; then
+        run_cmd "python3 -m simulate.cli --list-worlds"
+        return 0
+    fi
+
+    config_panel \
+        "${D}引擎${N}    ${sim_engine}" \
+        "${D}场景${N}    ${sim_world}" \
+        "${D}测试${N}    ${sim_scenario:-手动驾驶}" \
+        "${D}模式${N}    $([ -n "$sim_headless" ] && echo "${Y}无头${N}" || echo "${G}GUI${N}")"
+
+    local cmd="python3 -m simulate.cli"
+    cmd="$cmd --engine $sim_engine"
+    cmd="$cmd --world $sim_world"
+    [ -n "$sim_scenario" ] && cmd="$cmd --scenario $sim_scenario"
+    [ -n "$sim_headless" ] && cmd="$cmd --headless"
+    [ -n "$sim_goal" ] && cmd="$cmd --goal $sim_goal"
+    [ -n "$sim_instruction" ] && cmd="$cmd --instruction \"$sim_instruction\""
+    cmd="$cmd --max-time $sim_max_time"
+
+    run_cmd "cd $SCRIPT_DIR && $cmd"
+}
+
 cmd_stub() {
     local mode="${EXTRA_ARGS# }"
     SLAM_PROFILE="stub"
@@ -728,7 +789,7 @@ parse_opts "$@"
 
 # Source ROS2
 case "$COMMAND" in
-    map|nav|explore|agent|chat|viz|go|find|tag|say|stop|status|health|topics|save-map|build|test|stub)
+    map|nav|explore|agent|chat|viz|go|find|tag|say|stop|status|health|topics|save-map|build|test|stub|sim)
         source_ros2 ;;
 esac
 
@@ -753,6 +814,7 @@ case "$COMMAND" in
     build)      cmd_build ;;
     test)       cmd_test ;;
     stub)       cmd_stub ;;
+    sim)        cmd_sim ;;
     -h|--help|help) usage ;;
     -V|--version|version) echo "LingTu v${VERSION}" ;;
     *)
