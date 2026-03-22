@@ -172,6 +172,22 @@ class SemanticPerceptionNode(Node):
         self._intrinsics: Optional[CameraIntrinsics] = None
         self._frame_count = 0
         self._last_process_time = 0.0
+
+        # 关键帧选择器 (OpenFly/DualMap 风格, 替代固定 skip_frames)
+        try:
+            from .keyframe_selector import KeyframeSelector, KeyframeConfig
+            self._keyframe_selector = KeyframeSelector(KeyframeConfig(
+                min_translation=0.3,
+                min_rotation=10.0,
+                max_interval=3.0,
+                min_interval=1.0 / max(self._target_fps, 1),
+                enable_visual=True,
+                enable_curvature=True,
+            ))
+            self._use_keyframe_selector = True
+        except Exception:
+            self._keyframe_selector = None
+            self._use_keyframe_selector = False
         self._min_interval = 1.0 / max(self._target_fps, 0.1)
         self._warned_no_camera_info = False
         self._warned_no_tf = False
@@ -632,14 +648,55 @@ class SemanticPerceptionNode(Node):
 
     def _rgbd_callback(self, color_msg: Image, depth_msg: Image):
         """RGB-D 同步回调 — 主处理管道。"""
-        # 帧率控制
         self._frame_count += 1
-        if self._frame_count % max(self._skip_frames, 1) != 0:
-            return
-
         now = time.time()
-        if now - self._last_process_time < self._min_interval:
-            return
+
+        # 关键帧选择 (OpenFly/DualMap 风格) 或 固定跳帧 (fallback)
+        if self._use_keyframe_selector and self._keyframe_selector is not None:
+            # 从 TF 获取机器人位置用于关键帧判定
+            robot_x, robot_y, robot_yaw = 0.0, 0.0, 0.0
+            try:
+                tf_mat = self._lookup_tf_camera_to_world(color_msg.header.stamp)
+                if tf_mat is not None:
+                    robot_x = float(tf_mat[0, 3])
+                    robot_y = float(tf_mat[1, 3])
+                    import math
+                    robot_yaw = math.atan2(float(tf_mat[1, 0]), float(tf_mat[0, 0]))
+            except Exception:
+                pass
+
+            # 快速灰度缩略图用于视觉变化检测
+            gray_thumb = None
+            try:
+                raw = np.frombuffer(color_msg.data, dtype=np.uint8)
+                if color_msg.encoding in ("rgb8", "bgr8"):
+                    img = raw.reshape(color_msg.height, color_msg.width, 3)
+                    import cv2
+                    gray_thumb = cv2.cvtColor(
+                        cv2.resize(img, (160, 90)), cv2.COLOR_BGR2GRAY
+                    )
+            except Exception:
+                pass
+
+            if not self._keyframe_selector.is_keyframe(
+                robot_x, robot_y, robot_yaw, gray_thumb, now
+            ):
+                return
+
+            # 每 100 帧打印一次关键帧统计
+            if self._frame_count % 100 == 0:
+                stats = self._keyframe_selector.stats
+                self.get_logger().info(
+                    f"Keyframe stats: {stats['keyframes']}/{stats['total']} "
+                    f"({stats['keyframe_rate']}), saved {stats['savings']}"
+                )
+        else:
+            # fallback: 固定跳帧
+            if self._frame_count % max(self._skip_frames, 1) != 0:
+                return
+            if now - self._last_process_time < self._min_interval:
+                return
+
         self._last_process_time = now
 
         # 前置条件检查
