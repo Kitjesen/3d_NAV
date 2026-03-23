@@ -60,9 +60,10 @@ class PolicyRunner:
         self.input_name = inp.name
         self.output_name = out.name
 
-        # 5-frame history buffer — 用站立姿态初始化 (NOT zeros!)
-        # brainstem 初始化时用真实传感器数据填充, 这里用站立时的理论值
-        self.history: deque = deque(maxlen=HISTORY_LEN)
+        # 自动检测 history 长度: policy 输入维度 / OBS_DIM
+        policy_input_dim = inp.shape[1] if len(inp.shape) > 1 else inp.shape[0]
+        self._history_len = max(1, policy_input_dim // OBS_DIM)
+        self.history: deque = deque(maxlen=self._history_len)
         self.last_action = STANDING_POSE.copy()
         # 将在 warm_up() 中用真实传感器数据填充
 
@@ -74,7 +75,7 @@ class PolicyRunner:
             np.zeros(3),  # direction = 0 (idle)
             joint_pos_16, joint_vel_16)
         self.history.clear()
-        for _ in range(HISTORY_LEN):
+        for _ in range(self._history_len):
             self.history.append(init_obs.copy())
         print(f'[Policy] History warmed up: pg={projected_gravity[:3]}')
 

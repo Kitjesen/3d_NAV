@@ -124,8 +124,36 @@ class MuJoCoEngine(SimEngine):
         robot_xml = self._robot_cfg.robot_xml
 
         if xml_path:
-            # 直接使用给定路径
-            self._model = mujoco.MjModel.from_xml_path(xml_path)
+            # 检查 XML 是否包含地面 (worldbody 中有 geom)
+            # 如果是裸 robot.xml (没有地面)，自动包装场景
+            _xml_content = Path(xml_path).read_text(encoding="utf-8", errors="ignore")
+            # 只有明确包含 floor/ground plane 才认为有地面
+            _has_floor = ('name="floor"' in _xml_content
+                          or 'name="ground"' in _xml_content
+                          or 'type="plane"' in _xml_content)
+            if _has_floor:
+                self._model = mujoco.MjModel.from_xml_path(xml_path)
+            else:
+                # 自动注入地面: 在 <worldbody> 开头插入 floor geom
+                _robot_dir = str(Path(xml_path).parent)
+                _floor_geom = (
+                    '    <geom name="floor" type="plane" size="50 50 0.1"'
+                    ' conaffinity="1" condim="3" friction="1 0.5 0.5"/>\n'
+                )
+                _patched = _xml_content.replace(
+                    "<worldbody>",
+                    "<worldbody>\n" + _floor_geom,
+                    1  # 只替换第一个
+                )
+                _tmp = tempfile.NamedTemporaryFile(
+                    suffix=".xml", delete=False, dir=_robot_dir, mode="w"
+                )
+                _tmp.write(_patched)
+                _tmp.close()
+                try:
+                    self._model = mujoco.MjModel.from_xml_path(_tmp.name)
+                finally:
+                    Path(_tmp.name).unlink(missing_ok=True)
         elif self._world_cfg.scene_xml and Path(self._world_cfg.scene_xml).exists():
             self._model = mujoco.MjModel.from_xml_path(self._world_cfg.scene_xml)
         else:
@@ -215,10 +243,25 @@ class MuJoCoEngine(SimEngine):
         # 设置站立初始关节角
         self._apply_standing_pose()
 
+        # 手臂关节也设零位 ctrl (原版 bridge 要求)
+        offset = self._robot_cfg.leg_act_offset
+        for i in range(offset):
+            if i < len(self._data.ctrl):
+                self._data.ctrl[i] = 0.0
+
         mujoco.mj_forward(self._model, self._data)
+
+        # 稳定阶段: 跑 1000 步 (2s) 纯 PD 控制，不跑 policy
+        # (policy 在初始状态会输出错误 action 导致弹飞)
+        _policy_backup = self._policy
+        self._policy = None  # 临时禁用 policy
+        for _ in range(1000):
+            mujoco.mj_step(self._model, self._data)
+        self._policy = _policy_backup  # 恢复 policy
+
         self._sim_time = 0.0
 
-        # 重置策略 history
+        # 重置策略 history (用稳定后的真实传感器数据)
         if self._policy is not None:
             self._policy.reset()
             gyro, pg = self._get_imu()
