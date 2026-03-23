@@ -248,12 +248,12 @@ class FastPathMixin:
                     + WEIGHT_SPATIAL_HINT * spatial_score
                 )
             else:
-                # 无CLIP: 重分配权重 — 不伪造数据
-                # 标签匹配 0.55, 检测器 0.25, 空间 0.20
+                # 无CLIP: 标签匹配是主信号 — 精确匹配即过 0.75 阈值
+                # 标签匹配 0.75, 检测器 0.15, 空间 0.10
                 fused_score = (
-                    0.55 * label_score
-                    + 0.25 * detector_score
-                    + 0.20 * spatial_score
+                    0.75 * label_score
+                    + 0.15 * detector_score
+                    + 0.10 * spatial_score
                 )
 
             # ── 来源可信度折扣 ──
