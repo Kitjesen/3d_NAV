@@ -259,10 +259,13 @@ class _MuJoCoEngine:
 # ── 主入口 ────────────────────────────────────────────────────────────────────
 
 def _launch_nav_stack(enable_semantic: bool = False):
-    """在子进程中启动导航栈 (stub profile)。
+    """在子进程中启动导航栈子系统 (绕过硬件依赖)。
+
+    直接启动 autonomy + planning 子系统，不走 navigation_run.launch.py
+    (后者会尝试加载 livox_ros_driver2 等硬件包)。
 
     Returns:
-        subprocess.Popen 或 None (如果启动失败)
+        list[subprocess.Popen] 或 [] (如果启动失败)
     """
     import subprocess
     import shutil
@@ -270,26 +273,58 @@ def _launch_nav_stack(enable_semantic: bool = False):
     ros2_bin = shutil.which("ros2")
     if ros2_bin is None:
         _log_warn("ros2 命令不可用，跳过导航栈启动")
-        return None
+        return []
 
-    cmd = [
-        ros2_bin, "launch", "launch/navigation_run.launch.py",
-        "slam_profile:=stub",
-        "planner_profile:=stub",
-        f"enable_semantic:={'true' if enable_semantic else 'false'}",
-    ]
-    _log_info(f"启动导航栈: {' '.join(cmd[-3:])}")
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        _log_ok(f"导航栈已启动 (PID {proc.pid})")
-        return proc
-    except Exception as e:
-        _log_warn(f"导航栈启动失败: {e}")
-        return None
+    # 定位 launch 文件 (相对于 repo root)
+    repo_root = Path(__file__).resolve().parent.parent
+    autonomy_launch = repo_root / "launch" / "subsystems" / "autonomy.launch.py"
+    planning_launch = repo_root / "launch" / "subsystems" / "planning.launch.py"
+
+    # 构建 bash 环境前缀 (source 所有可能的 install 路径)
+    env_prefix = (
+        "source /opt/ros/humble/setup.bash 2>/dev/null; "
+        "source /opt/nav/install/setup.bash 2>/dev/null; "
+        f"source {repo_root}/install/setup.bash 2>/dev/null; "
+    )
+
+    procs = []
+
+    def _launch(name, launch_file, extra_args=""):
+        cmd = f"{env_prefix} ros2 launch {launch_file} {extra_args}"
+        _log_info(f"启动 {name}")
+        try:
+            p = subprocess.Popen(
+                ["bash", "-c", cmd],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            )
+            procs.append(p)
+        except Exception as e:
+            _log_warn(f"{name} 启动失败: {e}")
+
+    # 1. autonomy (terrain_analysis + local_planner + pathFollower)
+    if autonomy_launch.exists():
+        _launch("autonomy (terrain + local_planner)", autonomy_launch)
+    else:
+        _log_warn(f"autonomy.launch.py 不存在: {autonomy_launch}")
+
+    # 2. planning (global_planner + pct_path_adapter, stub profile)
+    if planning_launch.exists():
+        _launch("planning (stub profile)", planning_launch, "planner_profile:=stub")
+    else:
+        _log_warn(f"planning.launch.py 不存在: {planning_launch}")
+
+    # 3. semantic (可选)
+    if enable_semantic:
+        semantic_launch = repo_root / "launch" / "subsystems" / "semantic.launch.py"
+        if semantic_launch.exists():
+            _launch("semantic planner", semantic_launch)
+
+    if procs:
+        _log_ok(f"导航栈已启动 ({len(procs)} 个子系统)")
+    else:
+        _log_warn("没有导航子系统成功启动")
+
+    return procs
 
 
 def run_simulation(
@@ -361,9 +396,9 @@ def run_simulation(
         _log_warn(f"ROS2 桥接启动失败: {e}")
 
     # 导航栈联动
-    nav_proc = None
+    nav_procs = []
     if enable_nav:
-        nav_proc = _launch_nav_stack(enable_semantic=enable_semantic)
+        nav_procs = _launch_nav_stack(enable_semantic=enable_semantic)
 
     # 场景初始化
     if test_scenario is not None:
@@ -390,10 +425,15 @@ def run_simulation(
         print()
         _log_info("用户中止仿真")
     finally:
-        if nav_proc is not None:
+        if nav_procs:
             _log_info("停止导航栈...")
-            nav_proc.terminate()
-            nav_proc.wait(timeout=5)
+            for p in nav_procs:
+                p.terminate()
+            for p in nav_procs:
+                try:
+                    p.wait(timeout=5)
+                except Exception:
+                    p.kill()
         if bridge is not None:
             bridge.stop()
         sim_engine.close()
