@@ -16,6 +16,7 @@ LingTu Transport Layer — 可插拔通信抽象
 
 from .core import Transport, Publisher, Subscriber, TransportStrategy, TopicConfig
 from .factory import create_publisher, create_subscriber, create_transport
+from .ros2_mixin import TransportMixin
 
 __all__ = [
     "Transport",
@@ -23,6 +24,7 @@ __all__ = [
     "Subscriber",
     "TransportStrategy",
     "TopicConfig",
+    "TransportMixin",
     "create_publisher",
     "create_subscriber",
     "create_transport",

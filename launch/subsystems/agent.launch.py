@@ -34,6 +34,26 @@ def generate_launch_description():
         default_value="zh",
         description="Agent 语言 (zh/en)",
     )
+    tagged_locations_arg = DeclareLaunchArgument(
+        "tagged_locations_path",
+        default_value="",
+        description="标签地点 JSON 文件路径 (空=仅内存)",
+    )
+    conversation_db_arg = DeclareLaunchArgument(
+        "conversation_db_path",
+        default_value="",
+        description="对话历史 SQLite 路径 (空=不持久化)",
+    )
+    mcp_enable_arg = DeclareLaunchArgument(
+        "mcp_enable",
+        default_value="false",
+        description="是否启动 MCP Server",
+    )
+    mcp_port_arg = DeclareLaunchArgument(
+        "mcp_port",
+        default_value="8090",
+        description="MCP Server 端口",
+    )
 
     agent_node = Node(
         package="semantic_planner",
@@ -44,6 +64,10 @@ def generate_launch_description():
             "llm.backend": LaunchConfiguration("agent_llm_backend"),
             "llm.model": LaunchConfiguration("agent_llm_model"),
             "language": LaunchConfiguration("agent_language"),
+            "tagged_locations_path": LaunchConfiguration("tagged_locations_path"),
+            "conversation_db_path": LaunchConfiguration("conversation_db_path"),
+            "mcp.enable": LaunchConfiguration("mcp_enable"),
+            "mcp.port": LaunchConfiguration("mcp_port"),
         }],
         remappings=[
             ("odometry", "/nav/odometry"),
@@ -54,5 +78,9 @@ def generate_launch_description():
         llm_backend_arg,
         llm_model_arg,
         language_arg,
+        tagged_locations_arg,
+        conversation_db_arg,
+        mcp_enable_arg,
+        mcp_port_arg,
         agent_node,
     ])

@@ -31,6 +31,10 @@ class SimROS2Bridge:
       engine.get_lidar_points()  -> np.ndarray shape (N,4) xyzi, world frame
       engine.get_camera_data()   -> CameraData (rgb, depth, K)
       engine.apply_velocity(vx, vy, wz) -> None
+
+    transport:
+      enable_shm=True 时，相机图像额外通过 SHM 发布 (raw bytes, ~200μs)。
+      自定义高速消费者可通过 SHM 读取，ROS2 工具通过 DDS 读取。
     """
 
     # 默认发布频率 (Hz)
@@ -38,9 +42,10 @@ class SimROS2Bridge:
     CAMERA_HZ = 15
     CLOUD_HZ = 10
 
-    def __init__(self, engine, node_name: str = "sim_ros2_bridge"):
+    def __init__(self, engine, node_name: str = "sim_ros2_bridge", enable_shm: bool = False):
         self._engine = engine
         self._node_name = node_name
+        self._enable_shm = enable_shm
         self._lock = threading.Lock()
         self._running = False
 
@@ -50,6 +55,10 @@ class SimROS2Bridge:
         self._cmd_wz: float = 0.0
         self._cmd_time: float = 0.0
         self._cmd_watchdog_sec: float = 0.2
+
+        # SHM 快速通道 (延迟初始化)
+        self._shm_rgb_pub = None
+        self._shm_depth_pub = None
 
         # ROS2 对象 (延迟初始化)
         self._node = None
@@ -128,8 +137,28 @@ class SimROS2Bridge:
         # 发布静态 TF: map -> odom (仿真中相同)
         self._publish_static_map_odom()
 
+        # SHM 快速通道 (可选, ~200μs vs DDS ~1300μs for 900KB image)
+        if self._enable_shm:
+            try:
+                import sys, os
+                _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+                if _repo_root not in sys.path:
+                    sys.path.insert(0, _repo_root)
+                from transport.shm_transport import SHMTransport
+                from transport.core import TopicConfig
+                _shm = SHMTransport()
+                self._shm_rgb_pub = _shm.create_publisher(
+                    TopicConfig(name="/camera/color/image_raw", buffer_size=4*1024*1024))
+                self._shm_depth_pub = _shm.create_publisher(
+                    TopicConfig(name="/camera/depth/image_raw", buffer_size=4*1024*1024))
+                self._node.get_logger().info("[SimROS2Bridge] SHM fast channel enabled (camera)")
+            except Exception as e:
+                self._node.get_logger().warning(f"[SimROS2Bridge] SHM init failed: {e}")
+                self._enable_shm = False
+
         self._node.get_logger().info(
-            f"[SimROS2Bridge] node '{self._node_name}' started")
+            f"[SimROS2Bridge] node '{self._node_name}' started"
+            f"{' [+SHM]' if self._enable_shm else ''}")
 
     def _publish_static_map_odom(self):
         """发布静态 TF: map -> odom (仿真中视为同一坐标系)."""
@@ -282,8 +311,12 @@ class SimROS2Bridge:
             img_msg.encoding = "rgb8"
             img_msg.is_bigendian = False
             img_msg.step = w * 3
-            img_msg.data = cam.rgb.tobytes()
+            rgb_bytes = cam.rgb.tobytes()
+            img_msg.data = rgb_bytes
             self._img_pub.publish(img_msg)
+            # SHM 并行发布 (raw bytes, ~200μs)
+            if self._shm_rgb_pub is not None:
+                self._shm_rgb_pub.publish(rgb_bytes)
 
         # 深度图像
         if cam.depth is not None:
@@ -296,8 +329,12 @@ class SimROS2Bridge:
             depth_msg.encoding = "32FC1"
             depth_msg.is_bigendian = False
             depth_msg.step = w * 4
-            depth_msg.data = cam.depth.astype(np.float32).tobytes()
+            depth_bytes = cam.depth.astype(np.float32).tobytes()
+            depth_msg.data = depth_bytes
             self._depth_pub.publish(depth_msg)
+            # SHM 并行发布
+            if self._shm_depth_pub is not None:
+                self._shm_depth_pub.publish(depth_bytes)
 
         # CameraInfo
         if cam.K is not None:

@@ -258,12 +258,48 @@ class _MuJoCoEngine:
 
 # ── 主入口 ────────────────────────────────────────────────────────────────────
 
+def _launch_nav_stack(enable_semantic: bool = False):
+    """在子进程中启动导航栈 (stub profile)。
+
+    Returns:
+        subprocess.Popen 或 None (如果启动失败)
+    """
+    import subprocess
+    import shutil
+
+    ros2_bin = shutil.which("ros2")
+    if ros2_bin is None:
+        _log_warn("ros2 命令不可用，跳过导航栈启动")
+        return None
+
+    cmd = [
+        ros2_bin, "launch", "launch/navigation_run.launch.py",
+        "slam_profile:=stub",
+        "planner_profile:=stub",
+        f"enable_semantic:={'true' if enable_semantic else 'false'}",
+    ]
+    _log_info(f"启动导航栈: {' '.join(cmd[-3:])}")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        _log_ok(f"导航栈已启动 (PID {proc.pid})")
+        return proc
+    except Exception as e:
+        _log_warn(f"导航栈启动失败: {e}")
+        return None
+
+
 def run_simulation(
     engine: str = "mujoco",
     world: str = "factory",
     scenario: Optional[str] = None,
     headless: bool = False,
     scenario_args: Optional[dict] = None,
+    enable_nav: bool = False,
+    enable_semantic: bool = False,
 ):
     """主入口，被 lingtu sim 调用。
 
@@ -273,6 +309,8 @@ def run_simulation(
         scenario:      测试场景名称 (navigation/semantic_nav/None)
         headless:      无头模式 (无 GUI)
         scenario_args: 场景额外参数 (goal, instruction 等)
+        enable_nav:    同时启动导航栈 (stub profile)
+        enable_semantic: 同时启动语义导航
     """
     _mini_banner()
     _log_run("启动仿真")
@@ -282,11 +320,19 @@ def run_simulation(
     worlds = list_worlds()
     world_desc = worlds.get(world, world)
 
+    nav_label = "off"
+    if enable_semantic:
+        nav_label = "semantic (stub)"
+        enable_nav = True
+    elif enable_nav:
+        nav_label = "stub"
+
     _config_panel(
         f"{_D}引擎{_N}    {engine}",
         f"{_D}场景{_N}    {world}  {_D}({world_desc}){_N}",
         f"{_D}测试{_N}    {scenario or '(手动驾驶)'}"[:40],
         f"{_D}模式{_N}    {'无头' if headless else 'GUI'}",
+        f"{_D}导航{_N}    {nav_label}",
     )
 
     # 构建引擎
@@ -314,6 +360,11 @@ def run_simulation(
     except Exception as e:
         _log_warn(f"ROS2 桥接启动失败: {e}")
 
+    # 导航栈联动
+    nav_proc = None
+    if enable_nav:
+        nav_proc = _launch_nav_stack(enable_semantic=enable_semantic)
+
     # 场景初始化
     if test_scenario is not None:
         test_scenario.setup(sim_engine)
@@ -339,6 +390,10 @@ def run_simulation(
         print()
         _log_info("用户中止仿真")
     finally:
+        if nav_proc is not None:
+            _log_info("停止导航栈...")
+            nav_proc.terminate()
+            nav_proc.wait(timeout=5)
         if bridge is not None:
             bridge.stop()
         sim_engine.close()
@@ -401,6 +456,11 @@ def _parse_args(argv=None):
     # semantic_nav 场景参数
     p.add_argument("--instruction", default="导航到目标区域",
                    help="语义导航指令 (默认: '导航到目标区域')")
+    # 导航栈联动
+    p.add_argument("--nav", action="store_true",
+                   help="同时启动导航栈 (stub profile, 无需硬件)")
+    p.add_argument("--semantic", action="store_true",
+                   help="同时启动语义导航 (含 --nav)")
     # 工具命令
     p.add_argument("--list-worlds", action="store_true",
                    help="列出所有可用场景")
@@ -437,6 +497,8 @@ def main(argv=None):
         scenario=args.scenario,
         headless=args.headless,
         scenario_args=scenario_args,
+        enable_nav=args.nav,
+        enable_semantic=args.semantic,
     )
 
 

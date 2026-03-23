@@ -45,6 +45,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 from .skill_registry import LingTuNavigationSkills, SkillRegistry
+from .tagged_locations import TaggedLocationStore
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,7 @@ class AgentNode(Node):
         self.declare_parameter("agent.enabled", True)
         self.declare_parameter("agent.max_iterations", 5)
         self.declare_parameter("agent.history_len", 10)     # 保留最近N轮对话
+        self.declare_parameter("tagged_locations_path", "")  # 标签地点 JSON
 
         backend = self.get_parameter("llm.backend").value
         model = self.get_parameter("llm.model").value
@@ -156,6 +158,15 @@ class AgentNode(Node):
         self._enabled: bool = self.get_parameter("agent.enabled").value
         self._max_iterations: int = self.get_parameter("agent.max_iterations").value
         self._history_len: int = self.get_parameter("agent.history_len").value
+
+        # ── 标签地点存储 (三层降级第一层: tagged → visual → semantic) ──
+        tags_path = self.get_parameter("tagged_locations_path").value
+        self._tag_store = TaggedLocationStore(tags_path)
+        if tags_path:
+            count = len(self._tag_store.list_all())
+            self.get_logger().info(f"TaggedLocationStore loaded: {count} places from {tags_path}")
+        else:
+            self.get_logger().info("TaggedLocationStore: in-memory mode (no persistence)")
 
         # ── 发布器 (在 skill callbacks 之前初始化) ──
         self._pub_output = self.create_publisher(String, "/nav/agent/output", 10)
@@ -363,12 +374,42 @@ class AgentNode(Node):
         """
 
         def navigate_fn(target: str) -> str:
+            # 三层降级: 1) tagged locations → 2) instruction → semantic planner
+            tagged = self._tag_store.query(target) or self._tag_store.query_fuzzy(target)
+            if tagged:
+                # 第一层: 已知标签地点 — 直接发 goal_pose
+                pos = tagged["position"]
+                from geometry_msgs.msg import PoseStamped
+                goal = PoseStamped()
+                goal.header.stamp = self.get_clock().now().to_msg()
+                goal.header.frame_id = "map"
+                goal.pose.position.x = float(pos[0])
+                goal.pose.position.y = float(pos[1])
+                goal.pose.position.z = float(pos[2]) if len(pos) > 2 else 0.0
+                goal.pose.orientation.w = 1.0
+                if tagged.get("yaw") is not None:
+                    import math
+                    yaw = tagged["yaw"]
+                    goal.pose.orientation.z = math.sin(yaw / 2)
+                    goal.pose.orientation.w = math.cos(yaw / 2)
+                if not hasattr(self, '_pub_goal'):
+                    self._pub_goal = self.create_publisher(
+                        PoseStamped, "/nav/goal_pose", 10
+                    )
+                self._pub_goal.publish(goal)
+                return (
+                    f"找到已知地点 '{tagged['name']}' "
+                    f"({pos[0]:.1f}, {pos[1]:.1f})，正在导航"
+                )
+            # 第二层: 转发给语义规划器 (scene graph / LLM)
             msg = String()
             msg.data = target
             self._pub_instruction.publish(msg)
             return f"已发送导航指令: {target}"
 
         def tag_fn(name: str) -> str:
+            self._tag_store.tag(name, self._robot_x, self._robot_y)
+            self._tag_store.save()
             msg = String()
             msg.data = json.dumps(
                 {"name": name, "x": self._robot_x, "y": self._robot_y},
@@ -392,7 +433,11 @@ class AgentNode(Node):
 
         def query_fn(query: str = "status") -> str:
             if query == "list":
-                return "暂无已标记地点 (TaggedLocationStore 待接入)"
+                places = self._tag_store.list_all()
+                if not places:
+                    return "暂无已标记地点"
+                lines = [f"  - {p['name']} ({p['position'][0]:.1f}, {p['position'][1]:.1f})" for p in places]
+                return f"已知地点 ({len(places)}):\n" + "\n".join(lines)
             return f"当前位置: ({self._robot_x:.1f}, {self._robot_y:.1f})"
 
         def explore_fn() -> str:
@@ -467,11 +512,16 @@ class AgentNode(Node):
             if self._latest_scene_graph
             else "未知"
         )
+        places = self._tag_store.list_all()
+        if places:
+            known = ", ".join(f"{p['name']}({p['position'][0]:.0f},{p['position'][1]:.0f})" for p in places)
+        else:
+            known = "暂无"
         return template.format(
             skill_descriptions=self._skill_registry.to_prompt_description(),
             robot_position=f"({self._robot_x:.1f}, {self._robot_y:.1f})",
             scene_description=scene_summary,
-            known_places="暂无 (TaggedLocationStore 待接入)",
+            known_places=known,
         )
 
     # ------------------------------------------------------------------
