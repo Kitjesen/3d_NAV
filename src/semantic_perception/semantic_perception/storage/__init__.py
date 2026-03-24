@@ -1,15 +1,12 @@
-# Copyright 2025-2026 穹沛科技 (Qiongpei Technology)
-# Adapted from DimOS (dimensionalOS/dimos), Apache 2.0 License
-"""LingTu 时序存储层。
+"""Re-exported from memory.storage. Import from there directly.
 
-导出:
-    SqliteStore      — SQLite 后端（pickle BLOB + 时间索引）
-    SceneGraphEntry  — 场景图快照 dataclass
-    TimeSeriesStore  — 抽象基类（自定义后端时继承）
+Exports:
+    SqliteStore      -- SQLite backend (pickle BLOB + time index)
+    SceneGraphEntry  -- scene graph snapshot dataclass
+    TimeSeriesStore  -- abstract base class (subclass for custom backends)
 """
-
-from semantic_perception.storage.sqlite_store import SqliteStore
-from semantic_perception.storage.timeseries_store import SceneGraphEntry, TimeSeriesStore
+from memory.storage.sqlite_store import SqliteStore  # noqa: F401
+from memory.storage.timeseries_store import SceneGraphEntry, TimeSeriesStore  # noqa: F401
 
 __all__ = [
     "SqliteStore",
