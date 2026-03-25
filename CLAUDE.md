@@ -8,28 +8,36 @@ LingTu (灵途) is an autonomous navigation system for quadruped robots in outdo
 
 - **Platform**: S100P (RDK X5, Nash BPU 128 TOPS, aarch64) | ROS2 Humble | Ubuntu 22.04
 - **Languages**: Python (framework + semantic modules), C++ (SLAM/terrain/planner)
-- **Architecture**: dimos-style modular — 10 big Modules, autoconnect Blueprint, pluggable backends
-- **Entry point**: `python main_nav.py` (replaces ros2 launch for the Module stack)
+- **Architecture**: Module-First — Module is the only runtime unit, Blueprint is the only orchestration
+- **Guideline**: `docs/MODULE_FIRST_GUIDELINE.md` — 8 rules for how code should be structured
 
 ## Quick Start
 
 ```bash
 # Framework tests (no ROS2 needed, runs on any machine)
-python -m pytest src/core/tests/ -q       # 599 tests
+python -m pytest src/core/tests/ -q       # 580 tests
 
 # Run navigation stack (stub mode, no hardware)
-python main_nav.py --robot stub --no-native --llm mock
+python main_nav.py --robot stub --llm mock
 
 # Run on real robot (S100P)
 python main_nav.py --robot thunder --dog-host 192.168.66.190 --detector bpu --llm kimi
 
-# ROS2 launch (legacy, still works on S100P)
-source /opt/ros/humble/setup.bash
-make mapping          # SLAM + sensors, manual drive
-make navigation       # loads existing map
+# Or use Blueprint directly in any script
+from core import autoconnect
+from drivers.thunder.han_dog_module import ThunderDriver
+from nav.navigation_module import NavigationModule
+from nav.safety_ring_module import SafetyRingModule
+autoconnect(
+    ThunderDriver.blueprint(dog_host="192.168.66.190"),
+    NavigationModule.blueprint(planner="astar"),
+    SafetyRingModule.blueprint(),
+).build().start()
 ```
 
-## Architecture — 10 Big Modules
+## Architecture — Module-First
+
+Module is the only runtime unit. No ROS2 Node wrappers. Blueprint composes Modules.
 
 ```python
 system = autoconnect(
@@ -47,7 +55,7 @@ system = autoconnect(
 system.start()
 ```
 
-### Pluggable Backends
+### Pluggable Backends (via Registry)
 
 | Module | Backends |
 |--------|----------|
@@ -56,6 +64,8 @@ system.start()
 | Encoder | `clip` (ViT-B/32), `mobileclip` (edge) |
 | LLM | `kimi`, `openai`, `claude`, `qwen`, `mock` |
 | Planner | `astar` (pure Python), `pct` (C++ ele_planner.so) |
+
+All backends registered via `@register("category", "name")` in `core.registry`. Zero if/else.
 
 ### Backpressure Policies
 
@@ -74,42 +84,44 @@ bp.wire("Perception", "scene_graph", "Planner", "scene_graph", transport="dds") 
 bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   # high bandwidth
 ```
 
-## Source Directory (`src/`, 10 dirs)
+## Source Directory (`src/`, 9 dirs, 308 .py files)
 
-| Directory | Role |
-|-----------|------|
-| `core/` | Framework: Module, Blueprint, Transport, NativeModule, msgs, spec, tests (599+) |
-| `nav/` | Navigation: `core/` (C++ pybind11 algorithms), `rings/` (safety ROS2 nodes), `services/`, NavigationModule, SafetyRingModule |
-| `semantic/` | Semantic: `common/` (L0 utils), `perception/` (YOLO+CLIP+SceneGraph+Service), `planner/` (GoalResolver+LLM+Service) |
-| `memory/` | Memory layer: spatial (topological, episodic), knowledge (KG, belief), storage (SQLite, timeseries) |
-| `drivers/` | Hardware: `thunder/` (ThunderDriver + han_dog_bridge), `sim/` (stub, MuJoCo), `livox_ros_driver2/` |
-| `gateway/` | External: GatewayModule (FastAPI HTTP/WS/SSE), MCPServerModule (16 MCP tools) |
-| `base_autonomy/` | C++ terrain_analysis + local_planner + AutonomyModule |
-| `global_planning/` | C++ PCT_planner + Python pct_adapters + GlobalPlannerModule |
-| `slam/` | C++ SLAM: Fast-LIO2 + Point-LIO |
-| `reconstruction/` | 3D reconstruction |
+| Directory | .py | Role |
+|-----------|-----|------|
+| `core/` | 68 | Framework: Module, Blueprint, Transport, NativeModule, Registry, utils, msgs, tests (580) |
+| `nav/` | 10 | NavigationModule, SafetyRingModule, services (map/patrol/geofence/scheduler Modules) |
+| `semantic/` | 171 | perception/ (Detector+Encoder+Service), planner/ (SemanticPlanner+LLM+Service), reconstruction/, common/ |
+| `memory/` | 27 | Spatial (topological, episodic), knowledge (KG, belief), storage (SQLite, timeseries), Modules |
+| `drivers/` | 13 | thunder/ (ThunderDriver + han_dog_bridge), sim/ (stub, MuJoCo) |
+| `gateway/` | 5 | GatewayModule (FastAPI HTTP/WS/SSE), MCPServerModule (16 MCP tools) |
+| `global_planning/` | 6 | pct_adapters: GlobalPlannerModule, PathAdapterModule, MissionArcModule |
+| `base_autonomy/` | 3 | AutonomyModule — manages 4 C++ NativeModule nodes as one unit |
+| `slam/` | 5 | C++ SLAM: Fast-LIO2 + Point-LIO (via NativeModule) |
+
+Third-party: `third_party/PCT_planner/` (131MB C++ planner, .so binaries)
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `main_nav.py` | Entry point — autoconnect, CLI args, all backends configurable |
+| `main_nav.py` | CLI entry point — autoconnect, all backends configurable |
+| `docs/MODULE_FIRST_GUIDELINE.md` | 8 rules for Module-First architecture |
 | `src/core/module.py` | Module base class (idempotent stop, ref cleanup, layer tags) |
 | `src/core/stream.py` | Out[T]/In[T] ports (5 backpressure policies, thread-safe) |
-| `src/core/blueprint.py` | Blueprint builder (per-wire transport, topo sort, instance modules) |
+| `src/core/blueprint.py` | Blueprint builder (per-wire transport, topo sort, autoconnect) |
+| `src/core/registry.py` | Plugin registry (@register decorator, get/list/auto_select) |
+| `src/core/utils/` | Cross-layer utilities: sanitize, robustness, validation |
 | `src/core/native_module.py` | C++ subprocess manager (watchdog, restart, SIGTERM/SIGKILL) |
-| `src/core/native_factories.py` | Pre-configured factories for 7 C++ nodes |
-| `src/core/rerun_module.py` | Rerun 3D visualization (browser at :9090) |
 | `src/nav/navigation_module.py` | Unified planner + tracker + mission FSM |
 | `src/nav/safety_ring_module.py` | Unified safety reflex + evaluator + dialogue |
 | `src/semantic/planner/.../semantic_planner_module.py` | Unified semantic planner |
 | `src/semantic/planner/.../llm_module.py` | Pluggable LLM (5 backends) |
 | `src/semantic/perception/.../detector_module.py` | Pluggable detector (5 backends) |
-| `src/semantic/perception/.../service.py` | PerceptionService (pure algorithm, no ROS2) |
+| `src/semantic/perception/.../service.py` | PerceptionService (pure algorithm) |
 | `src/semantic/planner/.../service.py` | PlannerService (GoalResolution + Frontier + Action) |
-| `src/gateway/gateway_module.py` | FastAPI HTTP/WS/SSE (replaces C++ gRPC gateway) |
+| `src/semantic/reconstruction/` | 3D RGB-D reconstruction + semantic labeling + PLY export |
+| `src/gateway/gateway_module.py` | FastAPI HTTP/WS/SSE gateway |
 | `src/gateway/mcp_server.py` | MCP server — 16 tools for AI agent control |
-| `src/base_autonomy/autonomy_module.py` | Manages 4 C++ NativeModule nodes as one unit |
 | `src/drivers/thunder/han_dog_module.py` | ThunderDriver (gRPC → brainstem CMS) |
 | `config/robot_config.yaml` | Robot physical parameters (single source of truth) |
 
@@ -117,28 +129,37 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 
 ```bash
 # Framework tests (primary, no ROS2 needed)
-python -m pytest src/core/tests/ -q                    # 599 tests, ~40s
+python -m pytest src/core/tests/ -q                    # 580 tests, ~27s
 
-# ROS2 build (for C++ nodes on S100P)
+# ROS2 build (for C++ nodes on S100P only)
 source /opt/ros/humble/setup.bash
 make build                                              # colcon release build
-
-# Planning pipeline tests (no ROS2)
-python tests/planning/test_pct_adapter_logic.py
-
-# System launch (ROS2 legacy)
-./mapping.sh          # Mapping mode
-./planning.sh         # Navigation mode
 ```
 
 ## Critical Files — Do Not Break
 
-- `src/core/module.py` — Module base class (all 10 modules depend on it)
+- `src/core/module.py` — Module base class (all modules depend on it)
 - `src/core/blueprint.py` — Blueprint + autoconnect (system assembly)
 - `src/core/stream.py` — In[T]/Out[T] ports (data flow backbone)
+- `src/core/registry.py` — Plugin registry (all backends depend on it)
+- `src/core/utils/` — Cross-layer utilities (18+ files import from here)
 - `src/semantic/perception/.../instance_tracker.py` — Scene graph builder
 - `src/semantic/planner/.../goal_resolver.py` — Fast-Slow core logic
 - `config/robot_config.yaml` — Robot physical parameters
+
+## Module Dependency Rules
+
+```
+All Modules ──→ core/ (Module, In/Out, Registry, utils, msgs)
+                 ↑ only legal dependency direction
+
+nav/          does NOT import semantic/, drivers/, gateway/
+semantic/     does NOT import nav/, drivers/, gateway/
+drivers/      does NOT import nav/, semantic/ (lazy import in blueprints only)
+gateway/      does NOT import nav/, semantic/, drivers/
+```
+
+Planner backends resolved via `core.registry.get("planner_backend", name)`, not direct import.
 
 ## Semantic Navigation
 
@@ -161,11 +182,6 @@ export ANTHROPIC_API_KEY="sk-ant-..." # Claude
 export DASHSCOPE_API_KEY="sk-..."     # Qwen (China fallback)
 ```
 
-Or use LLMModule in Blueprint:
-```python
-LLMModule.blueprint(backend="kimi")   # auto-reads env var
-```
-
 ## MCP Server (AI Agent Control)
 
 16 tools exposed via JSON-RPC at `http://<robot>:8090/mcp`:
@@ -183,36 +199,6 @@ LLMModule.blueprint(backend="kimi")   # auto-reads env var
 claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 ```
 
-## Configuration Files
-
-| File | Purpose |
-|------|---------|
-| `config/robot_config.yaml` | Robot geometry, speed limits, safety params, driver config |
-| `config/semantic_planner.yaml` | LLM backend, goal resolution, exploration, fusion weights |
-| `config/semantic_perception.yaml` | Perception module configuration |
-| `config/topic_contract.yaml` | Standard ROS2 topic names (all `/nav/` prefixed) |
-| `config/layer_contract.yaml` | 7-layer architecture dependency rules |
-
-## ROS2 Topic Contract
-
-All standard topics use `/nav/` prefix. Defined in `config/topic_contract.yaml`. Key topics:
-
-| Topic | Type | Description |
-|---|---|---|
-| `/nav/odometry` | Odometry | SLAM odometry |
-| `/nav/map_cloud` | PointCloud2 | Map point cloud (world frame) |
-| `/nav/terrain_map` | PointCloud2 | Base terrain analysis |
-| `/nav/global_path` | Path | Global planned path |
-| `/nav/local_path` | Path | Local planned path |
-| `/nav/way_point` | PointStamped | Waypoint input to local_planner |
-| `/nav/cmd_vel` | TwistStamped | Velocity commands |
-| `/nav/goal_pose` | PoseStamped | Navigation goal |
-| `/nav/planner_status` | String | IDLE/PLANNING/SUCCESS/FAILED/STUCK |
-| `/nav/semantic/scene_graph` | String (JSON) | Scene graph |
-| `/nav/semantic/instruction` | String | Natural language instruction |
-
-TF frames: `map` -> `odom` -> `body`
-
 ## S100P Deployment
 
 - **SSH**: `ssh sunrise@192.168.66.190`
@@ -225,11 +211,12 @@ TF frames: `map` -> `odom` -> `body`
 
 - **C++**: Google style (`.clang-format`, 2-space indent, 100 col)
 - **Python**: English comments in new code. Chinese comments exist in legacy code.
-- **Framework**: All new Modules use `core.Module` base with In[T]/Out[T] type hints
+- **Framework**: All Modules use `core.Module` base with In[T]/Out[T] type hints
+- **No ROS2 in Modules**: rclpy only in legacy/ dirs and C++ NativeModule launchers
 
 ## Known Limitations
 
 - Fast Path uses rule-based matching (not learned policies)
 - S100P has no CUDA — Open3D GPU features unavailable, use C++ terrain_analysis instead
 - Kimi API key may expire — Slow Path unavailable without valid LLM key
-- Framework tests (599) are mock-based — real hardware integration tests need S100P
+- Framework tests (580) are mock-based — real hardware integration tests need S100P
