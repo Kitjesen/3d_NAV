@@ -128,27 +128,62 @@ class TestSafetyRingModule(unittest.TestCase):
 
 
 # ============================================================================
-# AutonomyModule
+# TerrainModule / LocalPlannerModule / PathFollowerModule
 # ============================================================================
 
-class TestAutonomyModule(unittest.TestCase):
+class TestTerrainModule(unittest.TestCase):
 
     def test_ports(self):
-        from base_autonomy.autonomy_module import AutonomyModule
-        m = AutonomyModule()
+        from base_autonomy.terrain_module import TerrainModule
+        m = TerrainModule(backend="simple")
+        self.assertIn("odometry", m.ports_in)
+        self.assertIn("map_cloud", m.ports_in)
+        self.assertIn("terrain_map", m.ports_out)
+        self.assertIn("traversability", m.ports_out)
         self.assertIn("alive", m.ports_out)
 
     def test_layer(self):
-        from base_autonomy.autonomy_module import AutonomyModule
-        m = AutonomyModule()
+        from base_autonomy.terrain_module import TerrainModule
+        m = TerrainModule(backend="simple")
         self.assertEqual(m.layer, 2)
 
-    def test_health_structure(self):
-        from base_autonomy.autonomy_module import AutonomyModule
-        m = AutonomyModule()
+    def test_health(self):
+        from base_autonomy.terrain_module import TerrainModule
+        m = TerrainModule(backend="simple")
         h = m.health()
-        self.assertIn("autonomy", h)
-        self.assertEqual(h["autonomy"]["total"], 0)  # no nodes created without setup
+        self.assertIn("terrain", h)
+        self.assertEqual(h["terrain"]["backend"], "simple")
+
+
+class TestLocalPlannerModule(unittest.TestCase):
+
+    def test_ports(self):
+        from base_autonomy.local_planner_module import LocalPlannerModule
+        m = LocalPlannerModule(backend="simple")
+        self.assertIn("odometry", m.ports_in)
+        self.assertIn("terrain_map", m.ports_in)
+        self.assertIn("waypoint", m.ports_in)
+        self.assertIn("local_path", m.ports_out)
+
+    def test_layer(self):
+        from base_autonomy.local_planner_module import LocalPlannerModule
+        m = LocalPlannerModule(backend="simple")
+        self.assertEqual(m.layer, 2)
+
+
+class TestPathFollowerModule(unittest.TestCase):
+
+    def test_ports(self):
+        from base_autonomy.path_follower_module import PathFollowerModule
+        m = PathFollowerModule(backend="pid")
+        self.assertIn("odometry", m.ports_in)
+        self.assertIn("local_path", m.ports_in)
+        self.assertIn("cmd_vel", m.ports_out)
+
+    def test_layer(self):
+        from base_autonomy.path_follower_module import PathFollowerModule
+        m = PathFollowerModule(backend="pid")
+        self.assertEqual(m.layer, 2)
 
 
 # ============================================================================
