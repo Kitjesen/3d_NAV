@@ -30,9 +30,6 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-
 from core.module import Module
 from core.stream import In, Out
 from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion

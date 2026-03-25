@@ -23,9 +23,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from core.module import Module
 from core.stream import Out
 from core.config import RobotConfig, get_config

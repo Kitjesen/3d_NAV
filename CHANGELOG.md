@@ -6,6 +6,67 @@ Format: [Semantic Versioning](https://semver.org/) — `MAJOR.MINOR.PATCH`
 
 ---
 
+## [2.0.0] — 2026-03-25 (架构全面模块化重构 + 10 大模块 + MCP 服务)
+
+### 架构重构
+
+- **模块化设计** — 10 个大模块 (Module) + autoconnect Blueprint 组装 + dimos 风格架构
+- **Per-wire 传输解耦** — callback (默认, 0 延迟) / DDS (跨进程) / SHM (高带宽) 按接线选择
+- **5 种背压策略** — all (无背压) / latest (丢包) / throttle (限频) / sample (采样) / buffer (缓冲)
+- **NativeModule** — C++ 子进程生命周期管理 (watchdog / restart / SIGTERM / SIGKILL)
+- **Service 层** — PerceptionService + PlannerService，业务逻辑与接口分离
+- **Module 生命周期加固** — 幂等 stop / 引用循环清理 / 崩溃隔离
+
+### 新增模块
+
+- **NavigationModule** — 统一 planner + waypoint 跟踪 + mission FSM
+- **SafetyRingModule** — 统一安全反射 + 执行评估 + 对话状态
+- **SemanticPlannerModule** — 统一 goal resolver + frontier explorer + task decomposer
+- **AutonomyModule** — 4 个 C++ 地形/规划节点作为单一单元管理
+- **DetectorModule** — 可插拔目标检测 (5 后端: yoloe / yolo_world / bpu / grounding_dino + 返回重新排列)
+- **EncoderModule** — 可插拔特征编码 (2 后端: clip / mobileclip)
+- **LLMModule** — 可插拔 LLM 推理 (5 后端: kimi / openai / claude / qwen / mock)
+- **GlobalPlannerModule** — 可插拔路径规划 (2 后端: astar / pct)
+- **GatewayModule** — FastAPI HTTP/WS/SSE 网关 (替代 C++ gRPC 网关)
+- **MCPServerModule** — 16 个 MCP 工具用于 AI agent 机器人控制
+- **RerunModule** — 3D 浏览器可视化 (:9090)
+
+### 传输层重构
+
+- **DDS 传输改用 raw cyclonedds** — 零 rclpy 依赖，降低耦合度
+- **TransportAdapter** — 桥接 TransportABC 后端到 Transport 协议
+- **SHM Subscriber 惰性重试** — 非阻塞 attach，自动恢复
+- **S100P cyclonedds 验证** — 从源码编译 (Unitree 方案)
+
+### 工程结构清理
+
+- **src/ 目录重组** — 17 目录 → 10 目录 (core / nav / semantic / memory / drivers / gateway / base_autonomy / global_planning / slam / reconstruction)
+- **删除** — client/ (689MB Flutter) / C++ gRPC 网关 (40 文件) / 模型权重 (203MB) / sdk/ / ota_daemon/
+- **ThunderDriver** — 从 HanDogModule 改名 (产品命名)
+- **nav 合并** — nav_core + nav_rings + nav_services → nav/ (统一)
+- **semantic 合并** — semantic_common + semantic_perception + semantic_planner → semantic/ (统一)
+- **global_planning 清理** — 7 包 → 2 包 (far_planner 归档)
+
+### 测试覆盖
+
+- **481 → 600+ 测试** — 框架测试无 ROS2 需求，S100P 集成测试全通过
+- **新增测试套件** — registry / transport / lifecycle / crash isolation / service layer / perception/planner 解耦
+
+### 破坏性变更 (BREAKING)
+
+- `han_dog_bridge.py` → `src/drivers/thunder/han_dog_bridge.py` (路径变更)
+- Import 路径调整: `from src.semantic.perception` 替代 `from src.semantic_perception`
+- Transport 后端 API: `TransportAdapter.register()` 替代直接实例化
+
+### 已知限制
+
+- Fast Path 使用规则匹配 (非学习策略)
+- S100P 无 CUDA — Open3D GPU 特性不可用，改用 C++ terrain_analysis
+- Kimi API Key 可能过期 — Slow Path 需要有效 LLM 密钥
+- 框架测试 (600+) 基于 Mock — 真实硬件集成测试需 S100P
+
+---
+
 ## [1.8.0] — 2026-03-09 (全链路集成完成 + brainstem 上板)
 
 ### 集成测试全通 (T1-T8)

@@ -6,14 +6,8 @@ Same port interface as NovaDogConnection so it drops into any blueprint.
 from __future__ import annotations
 
 import math
-import sys
-import os
 import time
 from typing import Any, Dict
-
-_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _src not in sys.path:
-    sys.path.insert(0, _src)
 
 from core.stream import In, Out
 from core.module import Module

@@ -1,3 +1,4 @@
+# DEPRECATED: Use SafetyRingModule instead (from nav.safety_ring_module)
 #!/usr/bin/env python3
 """
 Ring 1 -- SafetyModule -- hive Module version

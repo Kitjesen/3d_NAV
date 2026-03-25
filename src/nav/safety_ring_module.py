@@ -23,9 +23,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from core.module import Module
 from core.stream import In, Out
 from core.msgs.nav import Odometry, Path
@@ -146,7 +143,6 @@ class SafetyRingModule(Module, layer=0):
 
         self.safety_state.publish(SafetyState(
             level=level.value,
-            ts=time.time(),
         ))
 
     # -- Ring 2: Execution Evaluation ----------------------------------------

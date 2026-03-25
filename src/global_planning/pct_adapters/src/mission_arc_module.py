@@ -1,3 +1,4 @@
+# DEPRECATED: Use NavigationModule instead (from nav.navigation_module)
 #!/usr/bin/env python3
 """
 MissionArcModule -- Mission lifecycle FSM as a core Module (no rclpy).

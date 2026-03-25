@@ -23,33 +23,28 @@ Usage::
 
 Pipeline::
 
-    SLAM(C++) → Terrain(C++) → LocalPlanner(C++)    ← NativeModule (DDS)
-                     ↕ DDS
+    AutonomyModule (C++: SLAM + Terrain + LocalPlanner + PathFollower)
+                         ↕ DDS
     Camera → DetectorModule → EncoderModule
-                     ↓ callback
+                         ↓ callback
     PerceptionService(tracker) → SceneGraph
-                     ↓ transport (decoupled)
-    GoalResolverModule ←→ LLMModule
-                     ↓
-    GlobalPlannerModule → PathAdapterModule → MissionArcModule
-                     ↓
+                         ↓ transport (decoupled)
+    SemanticPlannerModule ←→ LLMModule
+                         ↓
+    NavigationModule (plan + track + FSM)
+                         ↓
     ThunderDriver → cmd_vel → Robot
-                     ↓
-    SafetyModule ←→ EvaluatorModule → DialogueModule
-                     ↓
+                         ↓
+    SafetyRingModule (reflex + eval + dialogue)
+                         ↓
     GatewayModule (HTTP/WS/SSE) → App/Console
+    MCPServerModule (16 MCP tools) → AI Agents
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import sys
 from typing import Any
-
-_src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _src_dir not in sys.path:
-    sys.path.insert(0, _src_dir)
 
 from core.blueprint import Blueprint
 from core.config import get_config
@@ -97,31 +92,13 @@ def full_stack_blueprint(
         planner: "astar", "pct"
         tomogram: path to tomogram .pickle for global planner
         gateway_port: FastAPI gateway port
-        enable_native: include C++ NativeModule nodes
-        enable_semantic: include perception + planning modules
-        enable_gateway: include HTTP gateway
+        enable_native: include C++ AutonomyModule nodes
+        enable_semantic: include perception + semantic planning modules
+        enable_gateway: include HTTP gateway and MCP server
         **config: extra config (dog_host, dog_port, etc.)
     """
     cfg = get_config()
     bp = Blueprint()
-
-    # ── Layer 1-2: C++ native nodes (NativeModule, DDS) ─────────────────
-
-    if enable_native:
-        from core.native_factories import (
-            terrain_analysis, terrain_analysis_ext,
-            local_planner, path_follower,
-            slam_fastlio2, slam_pointlio,
-        )
-        bp.add(terrain_analysis(cfg), alias="terrain")
-        bp.add(terrain_analysis_ext(cfg), alias="terrain_ext")
-        bp.add(local_planner(cfg), alias="local_planner")
-        bp.add(path_follower(cfg), alias="path_follower")
-
-        if slam_profile == "pointlio":
-            bp.add(slam_pointlio(cfg), alias="slam")
-        else:
-            bp.add(slam_fastlio2(cfg), alias="slam")
 
     # ── Layer 1: Robot driver (pluggable via registry) ───────────────────
 
@@ -138,15 +115,11 @@ def full_stack_blueprint(
            dog_port=config.get("dog_port", cfg.driver.dog_port))
     driver_name = DriverCls.__name__
 
-    # ── Layer 0: Safety ring ─────────────────────────────────────────────
+    # ── Layer 2: C++ autonomy stack (NativeModule, DDS) ──────────────────
 
-    from nav.rings.nav_rings.safety_module import SafetyModule
-    from nav.rings.nav_rings.evaluator_module import EvaluatorModule
-    from nav.rings.nav_rings.dialogue_module import DialogueModule
-
-    bp.add(SafetyModule)
-    bp.add(EvaluatorModule)
-    bp.add(DialogueModule)
+    if enable_native:
+        from base_autonomy.autonomy_module import AutonomyModule
+        bp.add(AutonomyModule)
 
     # ── Layer 3: Perception (pluggable detector + encoder) ───────────────
 
@@ -161,36 +134,29 @@ def full_stack_blueprint(
         except ImportError:
             logger.warning("Perception modules not available, skipping")
 
-    # ── Layer 4: Planning (pluggable LLM + global planner) ───────────────
+    # ── Layer 4: Semantic planning (unified module + LLM) ────────────────
 
     if enable_semantic:
         try:
+            from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
             from semantic.planner.semantic_planner.llm_module import LLMModule
-            from semantic.planner.semantic_planner.goal_resolver_module import GoalResolverModule
-            from semantic.planner.semantic_planner.frontier_module import FrontierModule
-            from semantic.planner.semantic_planner.action_executor_module import ActionExecutorModule
-            from semantic.planner.semantic_planner.task_decomposer_module import TaskDecomposerModule
 
+            bp.add(SemanticPlannerModule)
             bp.add(LLMModule, backend=llm)
-            bp.add(GoalResolverModule)
-            bp.add(FrontierModule)
-            bp.add(ActionExecutorModule)
-            bp.add(TaskDecomposerModule)
         except ImportError:
-            logger.warning("Planner modules not available, skipping")
+            logger.warning("Semantic planner modules not available, skipping")
 
-    # ── Layer 5: Path orchestration ──────────────────────────────────────
+    # ── Layer 5: Navigation (unified plan + track + FSM) ─────────────────
 
-    from global_planning.pct_adapters.src.path_adapter_module import PathAdapterModule
-    from global_planning.pct_adapters.src.mission_arc_module import MissionArcModule
-    from global_planning.pct_adapters.src.global_planner_module import GlobalPlannerModule
+    from nav.navigation_module import NavigationModule
+    bp.add(NavigationModule, planner=planner, tomogram=tomogram)
 
-    bp.add(GlobalPlannerModule, planner=planner, tomogram=tomogram)
-    bp.add(PathAdapterModule)
-    bp.add(MissionArcModule,
-           max_replan_count=config.get("max_replan_count", 3))
+    # ── Layer 0: Safety ring (reflex + eval + dialogue) ──────────────────
 
-    # ── Layer 6: Gateway (HTTP/WS/SSE) ───────────────────────────────────
+    from nav.safety_ring_module import SafetyRingModule
+    bp.add(SafetyRingModule)
+
+    # ── Layer 6: Gateway (HTTP/WS/SSE + MCP server) ──────────────────────
 
     if enable_gateway:
         try:
@@ -199,17 +165,23 @@ def full_stack_blueprint(
         except ImportError:
             logger.warning("GatewayModule not available, skipping")
 
+        try:
+            from gateway.mcp_server import MCPServerModule
+            bp.add(MCPServerModule, port=8090)
+        except ImportError:
+            logger.warning("MCPServerModule not available, skipping")
+
     # ── Wiring: 3-tier decoupling ────────────────────────────────────────
 
     # Tier 1: Safety — direct callback (zero latency)
-    bp.wire("SafetyModule", "stop_cmd", driver_name, "stop_signal")
-    bp.wire("SafetyModule", "stop_cmd", "MissionArcModule", "stop_signal")
+    bp.wire("SafetyRingModule", "stop_cmd", driver_name, "stop_signal")
+    bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
 
     # Tier 3: Semantic — transport decoupled (crash isolation)
     if enable_semantic:
         try:
             bp.wire("DetectorModule", "detections",
-                    "GoalResolverModule", "detections",
+                    "SemanticPlannerModule", "detections",
                     transport="local")
         except (ValueError, KeyError):
             pass

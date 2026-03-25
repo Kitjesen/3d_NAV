@@ -15,15 +15,9 @@ import json
 import logging
 import math
 import socket
-import sys
-import os
 import threading
 import time
 from typing import Any, Dict, Optional
-
-_src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _src not in sys.path:
-    sys.path.insert(0, _src)
 
 from core.stream import In, Out
 from core.module import Module

@@ -25,14 +25,7 @@ Usage::
 
 from __future__ import annotations
 
-import sys
-import os
 from typing import Any
-
-# Ensure src/ is importable
-_src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _src_dir not in sys.path:
-    sys.path.insert(0, _src_dir)
 
 from core.blueprint import Blueprint
 

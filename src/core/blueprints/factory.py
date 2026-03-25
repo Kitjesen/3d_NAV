@@ -32,13 +32,7 @@ from __future__ import annotations
 
 import logging
 import platform
-import sys
-import os
 from typing import Any
-
-_src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _src_dir not in sys.path:
-    sys.path.insert(0, _src_dir)
 
 from core.blueprint import Blueprint
 from core.registry import get, list_plugins, auto_select
