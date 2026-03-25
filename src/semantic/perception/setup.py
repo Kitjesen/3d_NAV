@@ -24,8 +24,6 @@ setup(
     description="Semantic perception for VLN: USS-Nav pipeline (YOLO-E + Mobile-CLIP + point cloud fusion)",
     license="MIT",
     entry_points={
-        "console_scripts": [
-            "semantic_perception_node = semantic_perception.perception_node:main",
-        ],
+        "console_scripts": [],
     },
 )

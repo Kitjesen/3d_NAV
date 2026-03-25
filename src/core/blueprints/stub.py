@@ -118,30 +118,15 @@ class StubDogModule(Module, layer=1):
 # -- Blueprint factory -------------------------------------------------
 
 def stub_blueprint(**config: Any) -> Blueprint:
-    """Test blueprint -- no hardware, all Python modules.
-
-    Includes only those upstream modules that are importable.  Falls back
-    to StubDogModule alone if nav_rings / pct_adapters are not available.
-    """
-    from nav.rings.nav_rings.safety_module import SafetyModule
-    from nav.rings.nav_rings.evaluator_module import EvaluatorModule
-    from nav.rings.nav_rings.dialogue_module import DialogueModule
-    from global_planning.pct_adapters.src.path_adapter_module import PathAdapterModule
-    from global_planning.pct_adapters.src.mission_arc_module import MissionArcModule
+    """Test blueprint -- StubDogModule + new module architecture."""
+    from nav.navigation_module import NavigationModule
+    from nav.safety_ring_module import SafetyRingModule
 
     bp = Blueprint()
-
-    bp.add(SafetyModule)
     bp.add(StubDogModule)
-    bp.add(EvaluatorModule)
-    bp.add(PathAdapterModule)
-    bp.add(MissionArcModule,
-           max_replan_count=config.get("max_replan_count", 3))
-    bp.add(DialogueModule)
+    bp.add(NavigationModule, planner=config.get("planner", "astar"))
+    bp.add(SafetyRingModule)
 
-    # Explicit cross-name wires (same as navigation blueprint)
-    bp.wire("SafetyModule", "stop_cmd", "StubDogModule", "stop_signal")
-    bp.wire("SafetyModule", "stop_cmd", "MissionArcModule", "stop_signal")
-
+    bp.wire("SafetyRingModule", "stop_cmd", "StubDogModule", "stop_signal")
     bp.auto_wire()
     return bp

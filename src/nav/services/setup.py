@@ -18,12 +18,6 @@ setup(
     description='L5 运营服务 — 地图管理、巡检路线、电子围栏、任务调度、任务日志',
     license='Apache-2.0',
     entry_points={
-        'console_scripts': [
-            'map_manager = nav_services.map_manager:main',
-            'patrol_manager = nav_services.patrol_manager:main',
-            'geofence_manager = nav_services.geofence_manager:main',
-            'task_scheduler = nav_services.task_scheduler:main',
-            'mission_logger = nav_services.mission_logger:main',
-        ],
+        'console_scripts': [],
     },
 )

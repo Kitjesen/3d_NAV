@@ -240,35 +240,17 @@ class SimDogModule(Module, layer=1):
 # -- Blueprint factory -------------------------------------------------
 
 def simulation_blueprint(**config: Any) -> Blueprint:
-    """Simulation blueprint -- MuJoCo sim + full Python stack.
-
-    Args:
-        sim_host: Simulation server hostname (default "localhost").
-        sim_port: Simulation server port (default 8765).
-        max_replan_count: Mission replan budget (default 3).
-        Any other key is silently ignored.
-    """
-    from nav.rings.nav_rings.safety_module import SafetyModule
-    from nav.rings.nav_rings.evaluator_module import EvaluatorModule
-    from nav.rings.nav_rings.dialogue_module import DialogueModule
-    from global_planning.pct_adapters.src.path_adapter_module import PathAdapterModule
-    from global_planning.pct_adapters.src.mission_arc_module import MissionArcModule
+    """Simulation blueprint -- SimDogModule + new module architecture."""
+    from nav.navigation_module import NavigationModule
+    from nav.safety_ring_module import SafetyRingModule
 
     bp = Blueprint()
-
-    bp.add(SafetyModule)
     bp.add(SimDogModule,
            sim_host=config.get("sim_host", "localhost"),
            sim_port=config.get("sim_port", 8765))
-    bp.add(EvaluatorModule)
-    bp.add(PathAdapterModule)
-    bp.add(MissionArcModule,
-           max_replan_count=config.get("max_replan_count", 3))
-    bp.add(DialogueModule)
+    bp.add(NavigationModule, planner=config.get("planner", "astar"))
+    bp.add(SafetyRingModule)
 
-    # Explicit cross-name wires (same as navigation blueprint)
-    bp.wire("SafetyModule", "stop_cmd", "SimDogModule", "stop_signal")
-    bp.wire("SafetyModule", "stop_cmd", "MissionArcModule", "stop_signal")
-
+    bp.wire("SafetyRingModule", "stop_cmd", "SimDogModule", "stop_signal")
     bp.auto_wire()
     return bp

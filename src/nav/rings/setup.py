@@ -17,10 +17,6 @@ setup(
     description='Three-ring cognitive architecture nodes',
     license='MIT',
     entry_points={
-        'console_scripts': [
-            'safety_monitor = nav_rings.safety_monitor:main',
-            'evaluator = nav_rings.evaluator:main',
-            'dialogue_manager = nav_rings.dialogue_manager:main',
-        ],
+        'console_scripts': [],
     },
 )
