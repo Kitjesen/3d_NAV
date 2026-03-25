@@ -1,0 +1,133 @@
+# PCT 规划器：怎么用
+
+## 1. 怎么启动
+
+### 方式一：launch（推荐）
+
+- **正式规划**（整栈：定位 + 全局规划 + 局部 + 路径跟踪）:
+  ```bash
+  ros2 launch pct_planner system_launch.py
+  ```
+- **测试**（无真机/无真定位）:
+  ```bash
+  ros2 launch pct_planner test/planner_only_launch.py
+  ```
+  或测整条链: `ros2 launch pct_planner test/test_planning_launch.py`
+
+### 方式二：直接运行节点
+
+- 先 `source install/setup.bash`，再:
+  ```bash
+  ros2 run pct_planner global_planner.py
+  ```
+  或用参数覆盖地图等:
+  ```bash
+  ros2 run pct_planner global_planner.py --ros-args -p map_file:=Spiral -p map_frame:=map
+  ```
+- 也可以直接跑 Python（用 config 默认值，需在 workspace 下保证能找到地图）:
+  ```bash
+  cd src/global_planning/PCT_planner/planner/scripts
+  python3 global_planner.py
+  ```
+  直接运行时地图名等来自 `planner/config/param.py` 默认值；改地图用 launch 的 `map_path` 或 `ros2 run ... -p map_file:=xxx`。
+
+---
+
+## 2. 可调参数（默认在 planner/config/param.py）
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| map_file | spiral0.3_2 | 地图名（不含扩展名），对应 rsc/tomogram/<map_file>.pickle 或 .pcd |
+| map_frame | map | 固定帧 |
+| robot_frame | body | 机器人本体帧 |
+| min_plan_interval | 1.0 | 最小规划间隔（秒） |
+| default_goal_height | 0.0 | 目标点默认高度（2D 目标时用） |
+| tomogram_resolution | 0.2 | 从 PCD 建 tomogram 时的栅格分辨率 (m) |
+| tomogram_slice_dh | 0.5 | 层高步长 (m)；**Slices 层数 = ceil(点云高度范围 / slice_dh)**，不能直接设层数，只能通过改 slice_dh 间接控制（越小层数越多） |
+| tomogram_ground_h | 0.0 | 地面高度 (m) |
+| publish_map_pointcloud | true | 是否发布 /map_pointcloud |
+| publish_tomogram | true | 是否发布 /tomogram（可穿越性可视化） |
+| use_quintic | true | 轨迹优化是否用 quintic 样条 |
+| max_heading_rate | 10 | 最大航向角变化率 (deg/s) |
+
+launch 里可传参，例如: `ros2 launch pct_planner system_launch.py map_path:=/path/to/mymap`；`ros2 run` 时用 `--ros-args -p 参数名:=值`。
+
+---
+
+## 3. tomography 是干什么的
+
+**tomography** 是「从点云建 tomogram」的模块，和**规划**是两条线：
+
+- **建图（tomography）**：输入 .pcd 点云 → 算可穿越性、高程等 → 输出 .pickle（tomogram）。  
+  脚本在 `tomography/scripts/`：如 `build_tomogram.py`（离线 PCD→pickle）、`tomography.py`（在线建图并发布）、`visualize_tomogram.py`（从 pickle 发布可视化）。  
+  作用：为规划提供「可通行 + 高度」的栅格图，规划器读的是 .pickle，不直接读点云。
+
+- **规划（planner）**：读已有 tomogram（.pickle 或由 .pcd 现场建），做 A* + 轨迹优化，发布 /pct_path。  
+  不跑 tomography 也能规划，只要已有 .pickle（或 .pcd 让规划器自动建一次 tomogram）。
+
+总结：**tomography = 建 tomogram；planner = 用 tomogram 做全局路径规划**。正式导航时一般用现成地图（.pickle），只有换新点云或新场景时才需要跑 tomography 建图。
+
+---
+
+## 4. 从 map.pcd 到规划的流程
+
+你有一份地图点云 **map.pcd** 时，按下面做即可用来做全局规划。
+
+1. **把 .pcd 放到规划器能读到的地方**  
+   - 放到 `PCT_planner/rsc/tomogram/` 下，命名为例如 `mymap.pcd`；  
+   - 或用绝对路径，后面用 `map_file:=/path/to/mymap`（不含扩展名）。
+
+2. **（二选一）建 tomogram**  
+   - **方式 A（推荐）**：直接启动规划器，用同一名字的 map（如 `map_file:=mymap`）。  
+     若该目录下**没有** `mymap.pickle`，规划器会**自动用 mymap.pcd 建一次 tomogram** 并缓存成 .pickle，下次直接用 .pickle。  
+   - **方式 B**：先离线建好 .pickle，再启动规划器。  
+     在 `tomography/scripts/` 下跑：  
+     `python3 build_tomogram.py`（需在脚本里或参数里指定 pcd 路径和输出名），得到 `mymap.pickle` 后拷到 `rsc/tomogram/`。
+
+3. **启动规划**  
+   - 正式：`ros2 launch pct_planner system_launch.py map_path:=mymap`（或你放的路径/名字）。  
+   - 测试：`ros2 launch pct_planner test/planner_only_launch.py map_path:=mymap`。  
+   - 若用绝对路径：`map_path:=/path/to/mymap`（仍不含 .pcd/.pickle）。
+
+4. **设起点、发目标**  
+   - 有真定位：TF 已有 map→body，在 RViz 里用「2D Goal Pose」或「Publish Point」发目标即可。  
+   - 无真定位（测试）：用 test launch，在 RViz 里「2D Pose Estimate」设起点，「2D Goal Pose」设终点。
+
+**一句话**：  
+- **相对地图名**（如 `mymap`）：.pcd/.pickle 必须在 **rsc/tomogram/** 下（如 `rsc/tomogram/mymap.pcd`），启动用 `map_path:=mymap`。  
+- **绝对路径**（如 `/path/to/maps/mymap`）：.pcd/.pickle 放在该路径下即可，不必在 tomogram 文件夹；启动用 `map_path:=/path/to/maps/mymap`。  
+没有 .pickle 时会自动从同名的 .pcd 建一次并缓存。
+
+---
+
+## 5. 怎么调好：两件事 + 关键参数
+
+整体就两件事：**(1) PCD → pickle（tomogram 建图）**、(2) **A* 规划**。调好 = 建图参数让分层/连通性合理 + 规划参数让路径可接受。
+
+### (1) 分层太少（如只有 5 层、上下楼断）怎么办
+
+- 层数是在**建 tomogram 时**定死的，写在 .pickle 里；**已有 .pickle 不会因为改参数就变层数**。
+- 要变层数必须**重新建图**：
+  - **做法 A**：删掉当前 .pickle，用**更小的 tomogram_slice_dh** 让规划器从 .pcd 自动重建。  
+    例如对 `spiral0.3_2`：删掉 `rsc/tomogram/spiral0.3_2.pickle`，启动时传 `tomogram_slice_dh:=0.25`（或 0.3），再启动规划器，会用同名的 .pcd 重建并生成新的 .pickle（层数变多）。
+  - **做法 B**：用 `tomography/scripts/build_tomogram.py` 指定 pcd、slice_dh、输出路径，生成新 .pickle 后拷到 rsc/tomogram/，再启动规划器。
+
+- **建议**：楼梯/多层场景用 **tomogram_slice_dh = 0.25～0.3**，层数 ≈ 点云高度范围(m) / slice_dh；层多一点，上下楼连通性才好。
+
+### (2) 建图阶段可调（PCD → pickle）
+
+| 参数 | 作用 | 建议 |
+|------|------|------|
+| tomogram_resolution | 平面栅格分辨率 (m) | 0.2 常用；更小更细但更占内存 |
+| tomogram_slice_dh | 层高步长，决定层数 | 楼梯/多层用 0.25～0.3；平地可用 0.5 |
+| tomogram_ground_h | 地面高度 (m) | 点云 z 零点不对时改 |
+
+建图时用 launch 传参即可，例如：  
+`tomogram_slice_dh:=0.25 tomogram_resolution:=0.2`（在**没有**对应 .pickle 或删掉 .pickle 后**第一次**启动才生效）。
+
+### (3) 规划阶段（A*）
+
+- 当前 C++ 里 **a_start_cost_threshold=40、safe_cost_margin=30、step_cost_weight=0.5** 在 `planner_wrapper.py` 的 `init_map` 里是硬编码的；若以后要调「可穿越性代价权重、起点代价阈值」等，需要改那处或暴露成参数。
+- 你已能调的：**use_quintic**、**max_heading_rate**（param.py / ROS 参数），影响轨迹优化形状和转弯。
+
+**小结**：分层太少就**删 .pickle + 用更小 tomogram_slice_dh 重建**；楼梯/多层建议 slice_dh 0.25～0.3。建图参数在第一次建图（或重建）时传；规划参数目前主要是 use_quintic / max_heading_rate。

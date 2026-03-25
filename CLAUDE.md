@@ -94,11 +94,10 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 | `memory/` | 27 | Spatial (topological, episodic), knowledge (KG, belief), storage (SQLite, timeseries), Modules |
 | `drivers/` | 13 | thunder/ (ThunderDriver + han_dog_bridge), sim/ (stub, MuJoCo) |
 | `gateway/` | 5 | GatewayModule (FastAPI HTTP/WS/SSE), MCPServerModule (16 MCP tools) |
-| `global_planning/` | 6 | pct_adapters: GlobalPlannerModule, PathAdapterModule, MissionArcModule |
+| `global_planning/` | 6+C++ | PCT_planner (C++ ele_planner.so) + pct_adapters (GlobalPlanner/PathAdapter/MissionArc Module) |
 | `base_autonomy/` | 3 | AutonomyModule — manages 4 C++ NativeModule nodes as one unit |
 | `slam/` | 5 | C++ SLAM: Fast-LIO2 + Point-LIO (via NativeModule) |
 
-Third-party: `third_party/PCT_planner/` (131MB C++ planner, .so binaries)
 
 ## Key Files
 

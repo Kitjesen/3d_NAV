@@ -241,11 +241,8 @@ class _PCTBackend:
         self._tomogram_path = tomogram_path
         self._obstacle_thr = obstacle_thr
         try:
-            # PCT_planner lives in third_party/ at repo root
-            _repo_root = os.path.abspath(os.path.join(
-                os.path.dirname(__file__), "..", "..", "..", ".."))
             sys.path.insert(0, os.path.join(
-                _repo_root, "third_party", "PCT_planner", "planner", "lib"))
+                os.path.dirname(__file__), "..", "..", "PCT_planner", "planner", "lib"))
             from planner_wrapper import TomogramPlanner
             self._planner = TomogramPlanner(tomogram_path)
             logger.info("PCT ele_planner loaded: %s", tomogram_path)
