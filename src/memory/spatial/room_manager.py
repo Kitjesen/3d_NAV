@@ -24,7 +24,7 @@ from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 
-from semantic.perception.semantic_perception.tracked_objects import (
+from core.msgs.scene import (
     FLOOR_HEIGHT,
     FLOOR_MERGE_TOLERANCE,
     FloorNode,

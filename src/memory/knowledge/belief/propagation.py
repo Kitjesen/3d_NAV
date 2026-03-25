@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
-from semantic.perception.semantic_perception.tracked_objects import (
+from core.msgs.scene import (
     BeliefMessage,
     BP_CONVERGENCE_EPS,
     BP_KG_PRIOR_BOOST,
@@ -39,7 +39,7 @@ from semantic.perception.semantic_perception.tracked_objects import (
 )
 
 if TYPE_CHECKING:
-    from semantic.perception.semantic_perception.tracked_objects import Region
+    from core.msgs.scene import Region
 
 logger = logging.getLogger(__name__)
 
