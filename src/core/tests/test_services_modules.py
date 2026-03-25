@@ -12,16 +12,16 @@ import os
 
 import pytest
 
-from src.core import In, Out, Module
-from src.core.msgs.nav import Odometry
-from src.core.msgs.sensor import Image, CameraIntrinsics
-from src.core.msgs.semantic import SceneGraph
+from core import In, Out, Module
+from core.msgs.nav import Odometry
+from core.msgs.sensor import Image, CameraIntrinsics
+from core.msgs.semantic import SceneGraph
 
 from nav.services.nav_services.map_manager_module import MapManagerModule
 from nav.services.nav_services.patrol_manager_module import PatrolManagerModule
 from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
 from nav.services.nav_services.task_scheduler_module import TaskSchedulerModule
-from src.reconstruction.reconstruction.reconstruction_module import ReconstructionModule
+from semantic.reconstruction.reconstruction_module import ReconstructionModule
 
 
 # ============================================================================

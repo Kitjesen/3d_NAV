@@ -43,7 +43,7 @@ from geometry_msgs.msg import PointStamped, TwistStamped
 from nav_msgs.msg import Odometry, Path
 from std_msgs.msg import String
 
-from semantic.common.semantic_common.sanitize import safe_json_dumps, sanitize_float
+from core.utils.sanitize import safe_json_dumps, sanitize_float
 
 
 class Assessment(Enum):

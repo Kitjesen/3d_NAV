@@ -32,7 +32,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 from semantic_common import sanitize_position, safe_json_dumps
-from semantic.common.semantic_common.sanitize import safe_json_dump
+from core.utils.sanitize import safe_json_dump
 
 from .projection import Detection3D
 

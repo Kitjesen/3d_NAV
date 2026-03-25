@@ -26,7 +26,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from nav_msgs.msg import Odometry
 
-from semantic.common.semantic_common.sanitize import safe_json_dumps, safe_json_loads
+from core.utils.sanitize import safe_json_dumps, safe_json_loads
 
 
 # 最大保留任务记录数

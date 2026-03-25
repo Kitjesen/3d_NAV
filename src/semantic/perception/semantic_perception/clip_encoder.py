@@ -27,7 +27,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
-from semantic.common.semantic_common.robustness import _try_empty_cuda_cache
+from core.utils.robustness import _try_empty_cuda_cache
 
 logger = logging.getLogger(__name__)
 

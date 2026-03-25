@@ -49,8 +49,8 @@ from interface.msg import RobotState, BatteryState
 from grpc import aio as grpc_aio
 import han_dog_message as dog_msg
 
-from semantic.common.semantic_common.sanitize import sanitize_float
-from semantic.common.semantic_common.validation import normalize_quaternion
+from core.utils.sanitize import sanitize_float
+from core.utils.validation import normalize_quaternion
 
 
 class HanDogBridge(Node):

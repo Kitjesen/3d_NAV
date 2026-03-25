@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from semantic.common.semantic_common import safe_json_dumps
+from core.utils.sanitize import safe_json_dumps
 
 logger = logging.getLogger(__name__)
 
@@ -547,7 +547,7 @@ class TopologicalMemory:
     def save_to_file(self, path: str) -> bool:
         """保存拓扑记忆到 JSON 文件。"""
         import os
-        from semantic.common.semantic_common.sanitize import safe_json_dump as _safe_dump
+        from core.utils.sanitize import safe_json_dump as _safe_dump
 
         with self._lock:
             nodes_copy = dict(self._nodes)

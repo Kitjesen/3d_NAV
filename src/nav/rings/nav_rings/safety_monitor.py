@@ -40,7 +40,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Bool, Int8, String, Float32
 
-from semantic.common.semantic_common.sanitize import safe_json_dumps
+from core.utils.sanitize import safe_json_dumps
 
 
 class SafetyLevel(Enum):

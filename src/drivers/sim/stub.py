@@ -72,22 +72,15 @@ class StubConnection(Module, layer=1):
 
 
 def stub_blueprint(**config) -> "Blueprint":
-    """Test blueprint -- StubConnection + full Python navigation stack."""
+    """Test blueprint -- StubConnection + new module architecture."""
     from core.blueprint import Blueprint
-    from nav_rings.nav_rings.safety_module import SafetyModule
-    from nav_rings.nav_rings.evaluator_module import EvaluatorModule
-    from nav_rings.nav_rings.dialogue_module import DialogueModule
-    from global_planning.pct_adapters.src.path_adapter_module import PathAdapterModule
-    from global_planning.pct_adapters.src.mission_arc_module import MissionArcModule
+    from nav.navigation_module import NavigationModule
+    from nav.safety_ring_module import SafetyRingModule
 
     bp = Blueprint()
-    bp.add(SafetyModule)
     bp.add(StubConnection)
-    bp.add(EvaluatorModule)
-    bp.add(PathAdapterModule)
-    bp.add(MissionArcModule)
-    bp.add(DialogueModule)
-    bp.wire("SafetyModule", "stop_cmd", "StubConnection", "stop_signal")
-    bp.wire("SafetyModule", "stop_cmd", "MissionArcModule", "stop_signal")
+    bp.add(NavigationModule, planner=config.get("planner", "astar"))
+    bp.add(SafetyRingModule)
+    bp.wire("SafetyRingModule", "stop_cmd", "StubConnection", "stop_signal")
     bp.auto_wire()
     return bp

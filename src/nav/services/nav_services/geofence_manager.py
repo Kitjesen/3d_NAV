@@ -23,7 +23,7 @@ from std_msgs.msg import String
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PolygonStamped, Point32
 
-from semantic.common.semantic_common.sanitize import safe_json_dumps, safe_json_loads
+from core.utils.sanitize import safe_json_dumps, safe_json_loads
 
 try:
     import yaml

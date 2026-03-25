@@ -33,7 +33,7 @@ try:
 except ImportError:
     torch = None
 
-from semantic.common.semantic_common.robustness import _try_empty_cuda_cache
+from core.utils.robustness import _try_empty_cuda_cache
 from .detector_base import DetectorBase, Detection2D
 
 logger = logging.getLogger(__name__)

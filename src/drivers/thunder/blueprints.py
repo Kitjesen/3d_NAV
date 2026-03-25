@@ -1,10 +1,10 @@
-"""NOVA Dog blueprints -- three tiers of navigation stack composition.
+"""Thunder blueprints — three tiers using new 10-module architecture.
 
 Usage::
 
-    from drivers.thunder import nova_dog_basic, nova_dog_nav, nova_dog_semantic
-    handle = nova_dog_nav(dog_host="192.168.66.190").build()
-    handle.start()
+    from drivers.thunder.blueprints import thunder_basic, thunder_nav, thunder_semantic
+    system = thunder_nav(dog_host="192.168.66.190").build()
+    system.start()
 """
 
 from __future__ import annotations
@@ -20,73 +20,63 @@ if _src not in sys.path:
 from core.blueprint import Blueprint
 
 
-def _common_modules():
-    """Import shared non-driver modules."""
-    from nav.rings.nav_rings.safety_module import SafetyModule
-    from nav.rings.nav_rings.evaluator_module import EvaluatorModule
-    from nav.rings.nav_rings.dialogue_module import DialogueModule
-    from global_planning.pct_adapters.src.path_adapter_module import PathAdapterModule
-    from global_planning.pct_adapters.src.mission_arc_module import MissionArcModule
-    return SafetyModule, EvaluatorModule, DialogueModule, PathAdapterModule, MissionArcModule
+def thunder_basic(dog_host: str = "127.0.0.1", dog_port: int = 13145, **kw) -> Blueprint:
+    """Basic: ThunderDriver + SafetyRing + Navigation. No semantic."""
+    from drivers.thunder.han_dog_module import ThunderDriver
+    from nav.navigation_module import NavigationModule
+    from nav.safety_ring_module import SafetyRingModule
 
-
-def _add_common(bp: Blueprint, driver_name: str, **config) -> Blueprint:
-    """Add common modules + standard wiring to a blueprint."""
-    Safety, Evaluator, Dialogue, PathAdapter, MissionArc = _common_modules()
-    bp.add(Safety)
-    bp.add(Evaluator)
-    bp.add(PathAdapter)
-    bp.add(MissionArc, max_replan_count=config.get("max_replan_count", 3))
-    bp.add(Dialogue)
-    bp.wire("SafetyModule", "stop_cmd", driver_name, "stop_signal")
-    bp.wire("SafetyModule", "stop_cmd", "MissionArcModule", "stop_signal")
+    bp = Blueprint()
+    bp.add(ThunderDriver, dog_host=dog_host, dog_port=dog_port)
+    bp.add(NavigationModule, planner=kw.get("planner", "astar"))
+    bp.add(SafetyRingModule)
+    bp.wire("SafetyRingModule", "stop_cmd", "ThunderDriver", "stop_signal")
     bp.auto_wire()
     return bp
 
 
-def nova_dog_basic(dog_host: str = "127.0.0.1", dog_port: int = 13145, **kw) -> Blueprint:
-    """Basic: driver + safety + path following. No semantic perception."""
-    from drivers.thunder.connection import NovaDogConnection
-    bp = Blueprint()
-    bp.add(NovaDogConnection, dog_host=dog_host, dog_port=dog_port)
-    return _add_common(bp, "NovaDogConnection", **kw)
-
-
-def nova_dog_nav(dog_host: str = "127.0.0.1", dog_port: int = 13145, **kw) -> Blueprint:
-    """Navigation: basic + perception + goal resolver + memory."""
-    bp = nova_dog_basic(dog_host=dog_host, dog_port=dog_port, **kw)
+def thunder_nav(dog_host: str = "127.0.0.1", dog_port: int = 13145, **kw) -> Blueprint:
+    """Navigation: basic + perception + semantic planner."""
+    bp = thunder_basic(dog_host=dog_host, dog_port=dog_port, **kw)
     try:
-        from semantic.perception.semantic_perception.perception_module import PerceptionModule
-        from semantic.planner.semantic_planner.goal_resolver_module import GoalResolverModule
-        from semantic.planner.semantic_planner.task_decomposer_module import TaskDecomposerModule
-        from semantic.planner.semantic_planner.action_executor_module import ActionExecutorModule
-        from memory import TopologicalMemoryModule, EpisodicMemoryModule
-        bp.add(PerceptionModule)
-        bp.add(GoalResolverModule)
-        bp.add(TaskDecomposerModule)
-        bp.add(ActionExecutorModule)
-        bp.add(TopologicalMemoryModule)
-        bp.add(EpisodicMemoryModule)
-        bp.auto_wire()
-    except ImportError:
-        pass  # semantic modules optional
-    return bp
+        from semantic.perception.semantic_perception.detector_module import DetectorModule
+        from semantic.perception.semantic_perception.encoder_module import EncoderModule
+        from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
+        from semantic.planner.semantic_planner.llm_module import LLMModule
 
-
-def nova_dog_semantic(
-    dog_host: str = "127.0.0.1",
-    dog_port: int = 13145,
-    llm_backend: str = "kimi",
-    **kw,
-) -> Blueprint:
-    """Full semantic: nav + frontier exploration + tagged locations."""
-    bp = nova_dog_nav(dog_host=dog_host, dog_port=dog_port, **kw)
-    try:
-        from semantic.planner.semantic_planner.frontier_module import FrontierModule
-        from memory import TaggedLocationsModule
-        bp.add(FrontierModule)
-        bp.add(TaggedLocationsModule)
+        bp.add(DetectorModule, detector=kw.get("detector", "yoloe"))
+        bp.add(EncoderModule, encoder=kw.get("encoder", "mobileclip"))
+        bp.add(SemanticPlannerModule)
+        bp.add(LLMModule, backend=kw.get("llm", "mock"))
         bp.auto_wire()
     except ImportError:
         pass
     return bp
+
+
+def thunder_semantic(
+    dog_host: str = "127.0.0.1",
+    dog_port: int = 13145,
+    **kw,
+) -> Blueprint:
+    """Full semantic: nav + gateway + MCP server."""
+    bp = thunder_nav(dog_host=dog_host, dog_port=dog_port, **kw)
+    try:
+        from gateway.gateway_module import GatewayModule
+        bp.add(GatewayModule, port=kw.get("gateway_port", 5050))
+        bp.auto_wire()
+    except ImportError:
+        pass
+    try:
+        from gateway.mcp_server import MCPServerModule
+        bp.add(MCPServerModule, port=kw.get("mcp_port", 8090))
+        bp.auto_wire()
+    except ImportError:
+        pass
+    return bp
+
+
+# Backward-compatible aliases
+nova_dog_basic = thunder_basic
+nova_dog_nav = thunder_nav
+nova_dog_semantic = thunder_semantic

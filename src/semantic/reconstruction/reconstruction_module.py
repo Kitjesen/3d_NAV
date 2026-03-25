@@ -25,10 +25,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from src.core import Module, In, Out
-from src.core.msgs.nav import Odometry
-from src.core.msgs.sensor import CameraIntrinsics, Image
-from src.core.msgs.semantic import SceneGraph
+from core import Module, In, Out
+from core.msgs.nav import Odometry
+from core.msgs.sensor import CameraIntrinsics, Image
+from core.msgs.semantic import SceneGraph
 
 from .color_projector import ColorProjector
 from .semantic_labeler import SemanticLabeler

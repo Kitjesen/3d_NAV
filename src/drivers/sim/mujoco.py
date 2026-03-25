@@ -143,24 +143,17 @@ class MujocoConnection(Module, layer=1):
 
 
 def simulation_blueprint(**config) -> "Blueprint":
-    """Sim blueprint -- MujocoConnection + full Python navigation stack."""
+    """Sim blueprint -- MujocoConnection + new module architecture."""
     from core.blueprint import Blueprint
-    from nav.rings.nav_rings.safety_module import SafetyModule
-    from nav.rings.nav_rings.evaluator_module import EvaluatorModule
-    from nav.rings.nav_rings.dialogue_module import DialogueModule
-    from global_planning.pct_adapters.src.path_adapter_module import PathAdapterModule
-    from global_planning.pct_adapters.src.mission_arc_module import MissionArcModule
+    from nav.navigation_module import NavigationModule
+    from nav.safety_ring_module import SafetyRingModule
 
     bp = Blueprint()
-    bp.add(SafetyModule)
     bp.add(MujocoConnection,
            sim_host=config.get("sim_host", "localhost"),
            sim_port=config.get("sim_port", 8765))
-    bp.add(EvaluatorModule)
-    bp.add(PathAdapterModule)
-    bp.add(MissionArcModule)
-    bp.add(DialogueModule)
-    bp.wire("SafetyModule", "stop_cmd", "MujocoConnection", "stop_signal")
-    bp.wire("SafetyModule", "stop_cmd", "MissionArcModule", "stop_signal")
+    bp.add(NavigationModule, planner=config.get("planner", "astar"))
+    bp.add(SafetyRingModule)
+    bp.wire("SafetyRingModule", "stop_cmd", "MujocoConnection", "stop_signal")
     bp.auto_wire()
     return bp

@@ -34,7 +34,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 
-from semantic.common.semantic_common.sanitize import safe_json_dumps, safe_json_loads
+from core.utils.sanitize import safe_json_dumps, safe_json_loads
 
 
 # ── 状态描述模板 (中文, 面向终端用户) ──

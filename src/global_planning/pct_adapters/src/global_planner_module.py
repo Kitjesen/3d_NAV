@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional
 
@@ -151,6 +152,7 @@ class GlobalPlannerModule(Module, layer=5):
 # Backends (pure algorithm, no ROS2)
 # ---------------------------------------------------------------------------
 
+@register("planner_backend", "astar", description="Pure Python A* on tomogram grid")
 class _AStarBackend:
     """Pure Python A* on tomogram grid."""
 
@@ -230,6 +232,7 @@ class _AStarBackend:
         return path
 
 
+@register("planner_backend", "pct", description="C++ ele_planner via .so (aarch64 only)")
 class _PCTBackend:
     """C++ ele_planner via .so (aarch64 only)."""
 

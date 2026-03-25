@@ -21,7 +21,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Empty
 
-from semantic.common.semantic_common.sanitize import safe_json_dumps, safe_json_loads
+from core.utils.sanitize import safe_json_dumps, safe_json_loads
 
 try:
     import yaml

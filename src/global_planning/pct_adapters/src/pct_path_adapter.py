@@ -34,7 +34,7 @@ from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from numpy import dot
 
-from semantic.common.semantic_common.sanitize import safe_json_dumps
+from core.utils.sanitize import safe_json_dumps
 
 class PCTPathAdapter(Node):
     def __init__(self):

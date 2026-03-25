@@ -19,8 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.core import Module, In, Out
-from src.core.msgs.nav import Odometry
+from core import Module, In, Out
+from core.msgs.nav import Odometry
 
 try:
     import yaml

@@ -17,7 +17,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.core import Module, In, Out
+from core import Module, In, Out
 
 try:
     import yaml

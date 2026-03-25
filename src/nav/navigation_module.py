@@ -116,16 +116,21 @@ class NavigationModule(Module, layer=5):
         self._set_state(MissionState.IDLE)
 
     def _create_planner(self):
-        """Factory: select planning algorithm."""
+        """Factory: select planning algorithm via registry (zero direct import)."""
+        from core.registry import get
         name = self._planner_name.lower()
-        if name == "astar":
-            from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
-            return _AStarBackend(self._tomogram, self._obstacle_thr)
-        elif name == "pct":
-            from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
-            return _PCTBackend(self._tomogram, self._obstacle_thr)
-        else:
-            raise ValueError(f"Unknown planner: '{name}'. Available: astar, pct")
+        try:
+            # Ensure backends are registered (lazy import triggers @register)
+            import global_planning.pct_adapters.src.global_planner_module  # noqa: F401
+        except ImportError:
+            pass
+        try:
+            BackendCls = get("planner_backend", name)
+        except KeyError:
+            from core.registry import list_plugins
+            available = list_plugins("planner_backend")
+            raise ValueError(f"Unknown planner: '{name}'. Available: {available}")
+        return BackendCls(self._tomogram, self._obstacle_thr)
 
     # -- State machine -------------------------------------------------------
 
