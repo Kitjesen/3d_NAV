@@ -1,20 +1,29 @@
-# ROS 2 编译产物
+# ============================================================
+# LingTu .gitignore — 2026-03-24 cleaned
+# ============================================================
+
+# ── ROS 2 build artifacts ──
 build/
 install/
 log/
 
-# ROS bag 文件（通常很大）
+# ── ROS bag files ──
 *.bag
 *.db3
 *.mcap
 
-# Python 缓存
-*.pyc
+# ── Python ──
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
+*.egg-info/
+venv/
+env/
+.venv/
+.pytest_cache/
 
-# C++ 编译产物
+# ── C/C++ build artifacts ──
 *.o
 *.so
 *.a
@@ -22,52 +31,63 @@ __pycache__/
 *.exe
 *.out
 
+# ── Model weights (large binaries — distribute via release-models.yml) ──
+*.pt
+*.pth
+*.onnx
+*.engine
+*.bin
+*.hbm
+mobileclip2_b.ts
 
+# ── Large data / media files ──
+*.tar
+*.tar.gz
+*.tgz
+*.pcd
+*.gif
+*.bagol*
+*.part
+
+# ── Maps & 3D assets (keep example files) ──
+maps/*.pcd
+tools/meshes/*.pcd
+tools/meshes/*.obj
+tools/meshes/*.ply
+tools/videos/*.mp4
+tools/videos/*.gif
 !src/global_planning/PCT_planner/rsc/PCD/example.pcd
 !src/global_planning/PCT_planner/rsc/tomogram/example.pickle
 
-# IDE 和编辑器文件
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# 日志文件
-*.log
-
-# Temporary files
-*.tmp
-*.temp
-# ROS bag 数据库文件
-*.db3
-*.mcap
-
-# C++ 编译产物
-*.so
-*.a
-*.o
-
-# 大型地图/模型/媒体文件
-maps/*.pcd
-src/global_planning/PCT_planner/rsc/PCD/*.pcd
-src/global_planning/PCT_planner/rsc/tomogram/*.pickle
-tools/*.pcd
-tools/*.mp4
-tools/*.obj
-tools/*.ply
-
-# IDE 文件
+# ── IDE / editor / tooling ──
 .vscode/
 .idea/
 .cursor/
 .agents/
 *.swp
+*.swo
 *~
 .DS_Store
 
-# Flutter 相关
+# ── AI agent / OMC state ──
+**/.omc/
+.chat_history
+
+# ── Temporary files ──
+*.tmp
+*.temp
+*.test
+*.log
+
+# ── Keys / credentials — NEVER commit ──
+keys/
+*.pem
+
+# ── Build / dist artifacts ──
+dist/
+**/target/
+
+# ── Flutter client ──
 client/flutter_monitor/.dart_tool/
 client/flutter_monitor/.flutter-plugins
 client/flutter_monitor/.flutter-plugins-dependencies
@@ -76,72 +96,34 @@ client/flutter_monitor/build/
 client/flutter_monitor/linux/flutter/ephemeral/
 client/flutter_monitor/web/.dart_tool/
 
-# Python 虚拟环境
-venv/
-env/
-.venv/
-*.egg-info/
-
-# gRPC 生成的文件（如果需要，可以注释掉）
-# src/remote_monitoring/build/generated/
-
-# 临时测试文件
-*.test
-*.tmp
-
-# OTA 签名密钥 (绝对不能入库!)
-keys/
-*.pem
-
-# OTA 构建产物
-dist/
-
-# VLN third-party dependencies (use scripts/clone_semantic_deps.sh to restore)
+# ── Third-party (use scripts/clone_semantic_deps.sh to restore) ──
 third_party/
 !third_party/.gitkeep
 
-# Generated test/paper output (do not commit)
+# ── Generated test/paper output ──
 paper_figures/
 pipeline_videos/
 functional_test_output/
 test_results/
+src/semantic_perception/test_results/
 det_*.jpg
 det_*.png
 
-# pytest cache
-.pytest_cache/
-
-# API keys / credentials — never commit
-generate_paper_figures*.py
-
-# Model weights (large binary files — use release-models.yml to distribute)
-*.pt
-*.pth
-*.onnx
-*.engine
-*.bin
-
-# Per-run test output
-src/semantic_perception/test_results/
-
-# Vendored third-party libraries (use system install)
+# ── Vendored libs (use system install) ──
 src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/
 
-# 大文件 — 不进 git
-*.tar
-*.tar.gz
-*.tgz
-*.bagol*
-*.part
-mobileclip2_b.ts
-tools/hbm_convert/ai_toolchain_s100_cpu.tar
-tools/hbm_convert/s100-oe-package.tgz
-sim/datasets/legkilo_all/
+# ── HBM conversion build artifacts ──
 tools/hbm_convert/calib_data/
 tools/hbm_convert/model_output/*.hbm
 tools/hbm_convert/model_output/*.bc
 tools/hbm_convert/model_output/.hb_compile_tmp/
-*.pcd
-*.gif
-**/target/
-**/.omc/
+
+# ── Sim datasets (too large for git) ──
+sim/datasets/legkilo_all/
+
+# ── Research reference repos (clone manually, see research/README.md) ──
+research/semantic_map_refs/
+!research/README.md
+
+# ── Misc generated ──
+generate_paper_figures*.py

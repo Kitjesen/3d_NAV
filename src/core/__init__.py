@@ -1,21 +1,36 @@
-"""lingtu.core — 模块编排框架核心，直接在 src/ 内构建。
+"""lingtu.core — Module orchestration framework core, built directly in src/.
 
-核心组件:
-- msgs     — 统一消息类型 (Vector3, Odometry, SceneGraph, ...)
-- stream   — 类型化数据流端口 (Out[T], In[T]) 与传输抽象 (Transport)
-- module   — 自动端口扫描的 Module 基类
-- blueprint — 声明式编排蓝图 (Blueprint, autoconnect, SystemHandle)
+Core components:
+- transport — Pluggable transport layer (Transport, LocalTransport, SHM, DDS, Dual)
+- msgs      — Unified message types (Vector3, Odometry, SceneGraph, ...)
+- stream    — Typed data-flow ports (Out[T], In[T]) and transport abstraction
+- module    — Module base class with automatic port scanning
+- blueprint — Declarative orchestration blueprint (Blueprint, autoconnect, SystemHandle)
+- config    — Unified configuration loader (config/robot_config.yaml)
+- clock     — Switchable real-time / simulation clock
 """
 
-from .stream import In, LocalTransport, Out, Transport
+from .stream import In, Out
+from .transport import Transport, LocalTransport
 from .module import Module
 from .blueprint import Blueprint, SystemHandle, autoconnect
+from .config import RobotConfig, get_config, load_config, reset_config
+from .clock import Clock, clock
+from .native_module import NativeModule, NativeModuleConfig
 
 __all__ = [
+    # transport
+    "Transport", "LocalTransport",
     # stream
-    "Transport", "LocalTransport", "Out", "In",
+    "Out", "In",
     # module
     "Module",
     # blueprint
     "Blueprint", "SystemHandle", "autoconnect",
+    # config
+    "RobotConfig", "load_config", "get_config", "reset_config",
+    # clock
+    "Clock", "clock",
+    # native
+    "NativeModule", "NativeModuleConfig",
 ]

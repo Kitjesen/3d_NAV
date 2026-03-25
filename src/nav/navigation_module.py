@@ -1,0 +1,288 @@
+"""NavigationModule — unified path planning + tracking + mission FSM.
+
+Replaces 3 separate modules (GlobalPlannerModule, PathAdapterModule, MissionArcModule)
+with one Module. Internal strategies are pluggable.
+
+Ports:
+  In:  goal_pose, odometry, instruction, stop_signal
+  Out: waypoint, global_path, cmd_vel, planner_status, mission_status, adapter_status
+
+Strategies:
+  planner:  "astar" | "pct"       — global path planning algorithm
+  tracker:  "waypoint"            — waypoint tracking approach
+  fsm:      "simple"              — mission state machine
+
+Usage::
+
+    bp.add(NavigationModule, planner="astar", tomogram="building.pickle")
+    bp.add(NavigationModule, planner="pct")  # S100P with ele_planner.so
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+import time
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from core.module import Module
+from core.stream import In, Out
+from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion, Twist
+from core.msgs.nav import Odometry, Path
+from core.registry import register
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Mission states
+# ---------------------------------------------------------------------------
+
+class MissionState:
+    IDLE = "IDLE"
+    PLANNING = "PLANNING"
+    EXECUTING = "EXECUTING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    STUCK = "STUCK"
+
+
+# ---------------------------------------------------------------------------
+# NavigationModule
+# ---------------------------------------------------------------------------
+
+@register("navigation", "default", description="Unified navigation module")
+class NavigationModule(Module, layer=5):
+    """Unified navigation: plan → track → FSM in one Module.
+
+    Combines GlobalPlanner + PathAdapter + MissionArc functionality.
+    Each stage has a pluggable strategy.
+    """
+
+    # -- Inputs --
+    goal_pose: In[PoseStamped]
+    odometry: In[Odometry]
+    instruction: In[str]
+    stop_signal: In[int]
+
+    # -- Outputs --
+    waypoint: Out[PoseStamped]
+    global_path: Out[list]
+    planner_status: Out[str]
+    mission_status: Out[dict]
+    adapter_status: Out[dict]
+
+    def __init__(
+        self,
+        planner: str = "astar",
+        tomogram: str = "",
+        obstacle_thr: float = 49.9,
+        waypoint_threshold: float = 1.5,
+        stuck_timeout: float = 10.0,
+        stuck_dist_thre: float = 0.15,
+        max_replan_count: int = 3,
+        downsample_dist: float = 2.0,
+        **kw,
+    ):
+        super().__init__(**kw)
+        self._planner_name = planner
+        self._tomogram = tomogram
+        self._obstacle_thr = obstacle_thr
+        self._wp_threshold = waypoint_threshold
+        self._stuck_timeout = stuck_timeout
+        self._stuck_dist = stuck_dist_thre
+        self._max_replan = max_replan_count
+        self._downsample_dist = downsample_dist
+
+        # Internal state
+        self._planner_backend = None
+        self._state = MissionState.IDLE
+        self._robot_pos = np.zeros(3)
+        self._path: List[np.ndarray] = []
+        self._wp_index = 0
+        self._replan_count = 0
+        self._last_progress_time = time.time()
+        self._last_progress_pos = np.zeros(3)
+        self._goal: Optional[np.ndarray] = None
+
+    def setup(self):
+        self._planner_backend = self._create_planner()
+        self.goal_pose.subscribe(self._on_goal)
+        self.odometry.subscribe(self._on_odom)
+        self.instruction.subscribe(self._on_instruction)
+        self.stop_signal.subscribe(self._on_stop)
+        self._set_state(MissionState.IDLE)
+
+    def _create_planner(self):
+        """Factory: select planning algorithm."""
+        name = self._planner_name.lower()
+        if name == "astar":
+            from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+            return _AStarBackend(self._tomogram, self._obstacle_thr)
+        elif name == "pct":
+            from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
+            return _PCTBackend(self._tomogram, self._obstacle_thr)
+        else:
+            raise ValueError(f"Unknown planner: '{name}'. Available: astar, pct")
+
+    # -- State machine -------------------------------------------------------
+
+    def _set_state(self, state: str):
+        self._state = state
+        self.planner_status.publish(state)
+        self.mission_status.publish({
+            "state": state,
+            "replan_count": self._replan_count,
+            "wp_index": self._wp_index,
+            "wp_total": len(self._path),
+            "ts": time.time(),
+        })
+
+    # -- Input handlers ------------------------------------------------------
+
+    def _on_goal(self, goal: PoseStamped):
+        """New navigation goal → plan path."""
+        self._goal = np.array([goal.pose.position.x, goal.pose.position.y,
+                               goal.pose.position.z])
+        self._replan_count = 0
+        self._plan()
+
+    def _on_instruction(self, text: str):
+        """Natural language instruction — not handled here, just log."""
+        logger.info("NavigationModule received instruction: %s", text[:50])
+
+    def _on_stop(self, level: int):
+        """Stop signal → abort mission."""
+        if level >= 1:
+            self._path.clear()
+            self._wp_index = 0
+            self._set_state(MissionState.IDLE)
+
+    def _on_odom(self, odom: Odometry):
+        """Odometry update → advance waypoint tracking + stuck detection."""
+        self._robot_pos = np.array([odom.x, odom.y, getattr(odom, 'z', 0.0)])
+
+        if self._state != MissionState.EXECUTING or not self._path:
+            return
+
+        # Waypoint arrival check
+        if self._wp_index < len(self._path):
+            wp = self._path[self._wp_index]
+            dist = np.linalg.norm(self._robot_pos[:2] - wp[:2])
+
+            if dist < self._wp_threshold:
+                self._wp_index += 1
+                self._last_progress_time = time.time()
+                self._last_progress_pos = self._robot_pos.copy()
+
+                self.adapter_status.publish({
+                    "event": "waypoint_reached",
+                    "index": self._wp_index,
+                    "total": len(self._path),
+                })
+
+                if self._wp_index >= len(self._path):
+                    self._set_state(MissionState.SUCCESS)
+                    return
+
+                # Publish next waypoint
+                self._publish_waypoint()
+
+        # Stuck detection
+        now = time.time()
+        moved = np.linalg.norm(self._robot_pos[:2] - self._last_progress_pos[:2])
+        elapsed = now - self._last_progress_time
+
+        if elapsed > self._stuck_timeout * 0.5 and moved < self._stuck_dist:
+            self.adapter_status.publish({"event": "WARN_STUCK",
+                                         "elapsed": round(elapsed, 1)})
+        if elapsed > self._stuck_timeout and moved < self._stuck_dist:
+            if self._replan_count < self._max_replan:
+                self._replan_count += 1
+                logger.warning("Stuck detected, replanning (%d/%d)",
+                               self._replan_count, self._max_replan)
+                self._plan()
+            else:
+                self._set_state(MissionState.STUCK)
+
+    # -- Planning ------------------------------------------------------------
+
+    def _plan(self):
+        """Run global planner and start tracking."""
+        if self._goal is None or self._planner_backend is None:
+            self._set_state(MissionState.FAILED)
+            return
+
+        self._set_state(MissionState.PLANNING)
+        t0 = time.time()
+
+        try:
+            raw_path = self._planner_backend.plan(self._robot_pos, self._goal)
+        except Exception:
+            logger.exception("Planning failed")
+            self._set_state(MissionState.FAILED)
+            return
+
+        if not raw_path:
+            self._set_state(MissionState.FAILED)
+            return
+
+        # Downsample
+        self._path = self._downsample(raw_path)
+        self._wp_index = 0
+        self._last_progress_time = time.time()
+        self._last_progress_pos = self._robot_pos.copy()
+
+        plan_ms = (time.time() - t0) * 1000
+        logger.info("Planned %d waypoints in %.1fms (planner=%s)",
+                     len(self._path), plan_ms, self._planner_name)
+
+        self.global_path.publish(self._path)
+        self._set_state(MissionState.EXECUTING)
+        self._publish_waypoint()
+
+    def _downsample(self, path: list) -> List[np.ndarray]:
+        """Downsample path by minimum 3D distance."""
+        if not path:
+            return []
+        result = [np.array(path[0][:3])]
+        for p in path[1:]:
+            pt = np.array(p[:3]) if len(p) >= 3 else np.array([p[0], p[1], 0.0])
+            if np.linalg.norm(pt - result[-1]) >= self._downsample_dist:
+                result.append(pt)
+        # Always include goal
+        goal = np.array(path[-1][:3]) if len(path[-1]) >= 3 else np.array([path[-1][0], path[-1][1], 0.0])
+        if np.linalg.norm(goal - result[-1]) > 0.1:
+            result.append(goal)
+        return result
+
+    def _publish_waypoint(self):
+        """Publish current waypoint as PoseStamped."""
+        if self._wp_index >= len(self._path):
+            return
+        wp = self._path[self._wp_index]
+        pose = PoseStamped(
+            pose=Pose(position=Vector3(float(wp[0]), float(wp[1]),
+                                       float(wp[2]) if len(wp) > 2 else 0.0),
+                      orientation=Quaternion(0, 0, 0, 1)),
+            frame_id="map", ts=time.time(),
+        )
+        self.waypoint.publish(pose)
+
+    # -- Health --------------------------------------------------------------
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["navigation"] = {
+            "planner": self._planner_name,
+            "state": self._state,
+            "wp_index": self._wp_index,
+            "wp_total": len(self._path),
+            "replan_count": self._replan_count,
+        }
+        return info

@@ -38,7 +38,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type
 
 from .module import Module
-from .stream import In, LocalTransport, Out, Transport
+from .stream import In, Out
+from .transport.local import Transport, LocalTransport
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,15 @@ class _ModuleEntry:
     module_cls: Type[Module]
     config: Dict[str, Any]
     alias: Optional[str] = None
+    instance: Optional[Module] = None  # pre-instantiated module (e.g. NativeModule)
 
     @property
     def name(self) -> str:
-        return self.alias or self.module_cls.__name__
+        if self.alias:
+            return self.alias
+        if self.instance is not None:
+            return type(self.instance).__name__
+        return self.module_cls.__name__
 
 
 # ---------------------------------------------------------------------------
@@ -65,11 +71,18 @@ class _ModuleEntry:
 
 @dataclass(frozen=True)
 class _WireSpec:
-    """一条 Out→In 连接的规格。"""
-    out_module: str   # 模块名 (alias 或 class.__name__)
-    out_port: str     # Out 端口名
-    in_module: str    # 模块名
-    in_port: str      # In 端口名
+    """一条 Out→In 连接的规格。
+
+    transport: None = direct callback (default, zero-copy, same process)
+               "dds" = CycloneDDS (cross-process, crash isolation)
+               "shm" = shared memory (same machine, high bandwidth)
+               or a Transport instance for custom backends
+    """
+    out_module: str   # module name (alias or class.__name__)
+    out_port: str     # Out port name
+    in_module: str    # module name
+    in_port: str      # In port name
+    transport: Any = None  # None=callback, "dds"/"shm"/Transport instance
 
 
 # ---------------------------------------------------------------------------
@@ -90,19 +103,29 @@ class Blueprint:
 
     # -- 注册 ---------------------------------------------------------------
 
-    def add(self, module_cls: Type[Module], alias: Optional[str] = None,
+    def add(self, module_or_cls, alias: Optional[str] = None,
             **config: Any) -> Blueprint:
-        """注册一个模块类。
+        """Register a module class or a pre-instantiated module.
 
         Args:
-            module_cls: Module 子类
-            alias: 可选别名，用于同一类型多实例场景
-            **config: 传递给 Module.__init__ 的配置参数
+            module_or_cls: Module subclass (instantiated during build) or
+                           a Module instance (used as-is, e.g. NativeModule).
+            alias: Optional alias for multi-instance scenarios.
+            **config: Passed to Module.__init__ when module_or_cls is a class.
 
         Returns:
-            self (链式调用)
+            self (chained)
         """
-        entry = _ModuleEntry(module_cls=module_cls, config=config, alias=alias)
+        if isinstance(module_or_cls, Module):
+            # Pre-instantiated module (e.g. NativeModule(config))
+            entry = _ModuleEntry(
+                module_cls=type(module_or_cls),
+                config={},
+                alias=alias,
+                instance=module_or_cls,
+            )
+        else:
+            entry = _ModuleEntry(module_cls=module_or_cls, config=config, alias=alias)
         # 检查名称唯一性
         existing = {e.name for e in self._entries}
         if entry.name in existing:
@@ -116,19 +139,25 @@ class Blueprint:
     # -- 连接 ---------------------------------------------------------------
 
     def wire(self, out_module: str, out_port: str,
-             in_module: str, in_port: str) -> Blueprint:
-        """显式连接一个 Out 端口到一个 In 端口。
+             in_module: str, in_port: str,
+             transport: Any = None) -> Blueprint:
+        """Connect an Out port to an In port.
 
         Args:
-            out_module: 输出模块名 (类名或别名)
-            out_port: 输出端口名
-            in_module: 输入模块名
-            in_port: 输入端口名
+            out_module: Output module name (class name or alias).
+            out_port: Output port name.
+            in_module: Input module name.
+            in_port: Input port name.
+            transport: Delivery strategy for this connection.
+                None    — direct callback (default, zero-copy, same thread)
+                "dds"   — CycloneDDS (cross-process, crash isolation, ~1ms)
+                "shm"   — shared memory (same machine, high bandwidth, ~50μs)
+                Transport instance — custom backend
 
         Returns:
             self
         """
-        self._wires.append(_WireSpec(out_module, out_port, in_module, in_port))
+        self._wires.append(_WireSpec(out_module, out_port, in_module, in_port, transport))
         return self
 
     def auto_wire(self) -> Blueprint:
@@ -180,11 +209,14 @@ class Blueprint:
         if transport is None:
             transport = LocalTransport()
 
-        # 1. 实例化模块
+        # 1. Instantiate modules (or use pre-built instances)
         instances: Dict[str, Module] = {}
         entry_map: Dict[str, _ModuleEntry] = {}
         for entry in self._entries:
-            instance = entry.module_cls(**entry.config)
+            if entry.instance is not None:
+                instance = entry.instance
+            else:
+                instance = entry.module_cls(**entry.config)
             instances[entry.name] = instance
             entry_map[entry.name] = entry
 
@@ -211,11 +243,13 @@ class Blueprint:
         for v in layer_violations:
             logger.warning("Layer dependency violation: %s", v)
 
-        # 6. 绑定传输层到所有端口
+        # 6. Bind global transport to Out ports that don't already have
+        #    a per-wire transport (set by _do_wire with transport= param)
         for mod_name, mod in instances.items():
             for port_name, port in mod.ports_out.items():
-                topic = f"/{mod_name}/{port_name}"
-                port._bind_transport(transport, topic)
+                if port._transport is None:
+                    topic = f"/{mod_name}/{port_name}"
+                    port._bind_transport(transport, topic)
 
         # 7. 计算启动顺序 (拓扑排序)
         startup_order = self._topo_sort(instances, connections)
@@ -231,6 +265,27 @@ class Blueprint:
     # -- 内部方法 -----------------------------------------------------------
 
     @staticmethod
+    def _resolve_transport(transport_spec: Any) -> Optional[Transport]:
+        """Resolve a transport spec ("dds", "shm", instance) to a Transport."""
+        if transport_spec is None:
+            return None  # direct callback
+        if isinstance(transport_spec, str):
+            if transport_spec == "dds":
+                from .transport.dds import DDSTransport
+                from .transport.adapter import TransportAdapter
+                return TransportAdapter(DDSTransport())
+            elif transport_spec == "shm":
+                from .transport.shm import SHMTransport
+                from .transport.adapter import TransportAdapter
+                return TransportAdapter(SHMTransport())
+            elif transport_spec == "local":
+                return LocalTransport()
+            else:
+                raise ValueError(f"Unknown transport: '{transport_spec}'")
+        # Assume it's already a Transport instance
+        return transport_spec
+
+    @staticmethod
     def _do_wire(
         spec: _WireSpec,
         instances: Dict[str, Module],
@@ -239,7 +294,7 @@ class Blueprint:
         wired_in: Set[Tuple[str, str]],
         connections: List[Tuple[str, str, str, str]],
     ) -> None:
-        """执行一条显式连接。"""
+        """Execute one wire connection."""
         if spec.out_module not in instances:
             raise ValueError(f"wire: unknown output module '{spec.out_module}'")
         if spec.in_module not in instances:
@@ -256,7 +311,7 @@ class Blueprint:
                 f"wire: module '{spec.in_module}' has no In port '{spec.in_port}'"
             )
 
-        # 类型校验
+        # Type check
         if o.msg_type != i.msg_type:
             raise TypeError(
                 f"wire: type mismatch {spec.out_module}.{spec.out_port} "
@@ -264,14 +319,25 @@ class Blueprint:
                 f"({i.msg_type.__name__})"
             )
 
-        o._add_callback(i._deliver)
+        transport = Blueprint._resolve_transport(spec.transport)
+        if transport is None:
+            # Direct callback — zero-copy, same thread (default)
+            o._add_callback(i._deliver)
+            mode = "callback"
+        else:
+            # Transport-mediated — decoupled, may cross process/thread
+            topic = f"/{spec.out_module}/{spec.out_port}"
+            o._bind_transport(transport, topic)
+            transport.subscribe(topic, i._deliver)
+            mode = f"transport({getattr(transport, 'backend_name', type(transport).__name__)})"
+
         wired_in.add((spec.in_module, spec.in_port))
         connections.append((spec.out_module, spec.out_port, spec.in_module, spec.in_port))
         logger.debug(
-            "Wired %s.%s → %s.%s [%s]",
+            "Wired %s.%s → %s.%s [%s, %s]",
             spec.out_module, spec.out_port,
             spec.in_module, spec.in_port,
-            o.msg_type.__name__,
+            o.msg_type.__name__, mode,
         )
 
     @staticmethod
@@ -331,49 +397,46 @@ class Blueprint:
         返回违规描述列表 (空=通过)。
         """
         violations: List[str] = []
-        for out_mod, out_port, in_mod, in_port in connections:
-            out_layer = instances[out_mod].layer
-            in_layer = instances[in_mod].layer
-            if out_layer is not None and in_layer is not None:
-                # 高层 Out → 低层 In 是正常的命令方向 (L6→L1)
-                # 低层 Out → 高层 In 是正常的感知方向 (L1→L6)
-                # 违规: 同层互连无问题; 但如果 In 模块层级 < Out 模块层级 - 1
-                # 这里我们只标记反向越层: Out.layer > In.layer 且跨度 >1
-                # 实际更宽松: 任何层级都可以连接，只要不是反向 import
-                # 这里采用简单规则: 如果有环路 (A→B且B→A) 则报警
-                pass  # 层级信息仅做参考，不强制阻断
+        # Note: layer checking at data-flow level is intentionally lenient.
+        # Cross-layer data flow is normal in robotics (L1 sensor → L5 planner,
+        # L5 command → L1 driver). The layer contract ("N imports 0..N-1")
+        # governs Python imports, not data flow direction.
+        # We only detect cycles here, which indicate true dependency problems.
 
         # 检测连接环路
         adj: Dict[str, Set[str]] = defaultdict(set)
         for out_mod, _, in_mod, _ in connections:
             adj[out_mod].add(in_mod)
 
-        # 简单环路检测 (DFS)
-        visited: Set[str] = set()
-        in_stack: Set[str] = set()
+        # Cycle detection (DFS with explicit path tracking)
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color: Dict[str, int] = {n: WHITE for n in instances}
 
-        def _dfs(node: str, path: List[str]) -> Optional[List[str]]:
-            if node in in_stack:
-                cycle_start = path.index(node)
-                return path[cycle_start:] + [node]
-            if node in visited:
-                return None
-            visited.add(node)
-            in_stack.add(node)
-            path.append(node)
-            for neighbor in adj.get(node, []):
-                cycle = _dfs(neighbor, path)
-                if cycle:
-                    return cycle
-            path.pop()
-            in_stack.remove(node)
-            return None
-
-        for mod_name in instances:
-            if mod_name not in visited:
-                cycle = _dfs(mod_name, [])
-                if cycle:
-                    violations.append(f"Cycle detected: {' → '.join(cycle)}")
+        for start in instances:
+            if color[start] != WHITE:
+                continue
+            stack = [(start, iter(adj.get(start, [])))]
+            color[start] = GRAY
+            path = [start]
+            while stack:
+                node, neighbors = stack[-1]
+                try:
+                    nxt = next(neighbors)
+                    if nxt not in color:
+                        continue
+                    if color[nxt] == GRAY:
+                        # Found cycle
+                        idx = path.index(nxt)
+                        cycle = path[idx:] + [nxt]
+                        violations.append(f"Cycle detected: {' → '.join(cycle)}")
+                    elif color[nxt] == WHITE:
+                        color[nxt] = GRAY
+                        path.append(nxt)
+                        stack.append((nxt, iter(adj.get(nxt, []))))
+                except StopIteration:
+                    color[node] = BLACK
+                    path.pop()
+                    stack.pop()
 
         return violations
 
@@ -463,13 +526,21 @@ class SystemHandle:
         if not self._started:
             return
         for name in reversed(self._startup_order):
-            mod = self._modules[name]
+            mod = self._modules.get(name)
+            if mod is None:
+                continue
             try:
                 mod.stop()
             except Exception:
                 logger.exception("Error stopping module %s", name)
         if hasattr(self._transport, 'close'):
-            self._transport.close()
+            try:
+                self._transport.close()
+            except Exception:
+                logger.exception("Error closing transport")
+        # Break module references to allow GC of the entire graph
+        self._modules.clear()
+        self._connections.clear()
         self._started = False
         logger.info("System stopped")
 

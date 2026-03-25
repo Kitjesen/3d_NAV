@@ -53,7 +53,7 @@ import time
 from enum import Enum
 from typing import List, Optional
 
-from semantic_common.sanitize import safe_json_dumps, safe_json_loads
+from semantic.common.semantic_common.sanitize import safe_json_dumps, safe_json_loads
 
 
 class MissionState(Enum):

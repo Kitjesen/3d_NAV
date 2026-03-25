@@ -86,6 +86,8 @@ class Module:
         self._ports_in: Dict[str, In[Any]] = {}
         self._ports_out: Dict[str, Out[Any]] = {}
         self._running = False
+        self._closed = False
+        self._closed_lock = __import__("threading").Lock()
 
         # 扫描类型标注，实例化端口
         globalns: Dict[str, Any] = {}
@@ -124,9 +126,25 @@ class Module:
         logger.debug("Module %s started", type(self).__name__)
 
     def stop(self) -> None:
-        """停止模块。"""
+        """Stop module. Idempotent — safe to call multiple times.
+
+        Breaks reference cycles (Module → Out → callback → Module) so the
+        garbage collector can reclaim the entire module graph after shutdown.
+        """
+        with self._closed_lock:
+            if self._closed:
+                return
+            self._closed = True
         self._running = False
+        self._cleanup_refs()
         logger.debug("Module %s stopped", type(self).__name__)
+
+    def _cleanup_refs(self) -> None:
+        """Break reference cycles by clearing all port callbacks and transports."""
+        for port in self._ports_out.values():
+            port._clear_callbacks()
+        for port in self._ports_in.values():
+            port._clear_subscriber()
 
     # -- 端口访问 ---------------------------------------------------------
 

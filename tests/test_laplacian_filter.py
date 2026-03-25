@@ -8,7 +8,7 @@
 import pytest
 import numpy as np
 from semantic_perception.laplacian_filter import is_blurry
-from semantic_perception.projection import project_2d_to_3d
+from semantic_perception.projection import project_to_3d, CameraIntrinsics
 from semantic_perception.instance_tracker import InstanceTracker
 
 
@@ -17,14 +17,12 @@ class TestLaplacianFilter:
 
     def test_sharp_image(self):
         """测试清晰图像"""
-        # 创建清晰图像（高对比度）
         img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
         result = is_blurry(img, threshold=100.0)
         assert isinstance(result, bool)
 
     def test_blurry_image(self):
         """测试模糊图像"""
-        # 创建模糊图像（低对比度）
         img = np.ones((480, 640, 3), dtype=np.uint8) * 128
         result = is_blurry(img, threshold=100.0)
         assert isinstance(result, bool)
@@ -37,29 +35,29 @@ class TestLaplacianFilter:
 
 
 class TestProjection:
-    """测试2D到3D投影"""
+    """测试2D到3D投影 (project_to_3d: 单点投影)"""
+
+    def _intrinsics(self):
+        return CameraIntrinsics(fx=500.0, fy=500.0, cx=320.0, cy=240.0,
+                                width=640, height=480)
 
     def test_basic_projection(self):
-        """测试基础投影"""
-        bbox = np.array([100, 100, 200, 200])
-        depth_image = np.ones((480, 640), dtype=np.float32) * 2.0
-        camera_info = {
-            'fx': 500.0, 'fy': 500.0,
-            'cx': 320.0, 'cy': 240.0
-        }
-
-        result = project_2d_to_3d(bbox, depth_image, camera_info)
+        """测试基础投影: bbox 中心 (150,150) 深度 2m"""
+        intrinsics = self._intrinsics()
+        result = project_to_3d(150.0, 150.0, 2.0, intrinsics)
         assert result is not None
-        assert len(result) == 3  # x, y, z
+        assert len(result) == 3
+        # x = (150 - 320) * 2 / 500 = -0.68
+        assert abs(result[0] - (-0.68)) < 0.01
+        # z = depth
+        assert abs(result[2] - 2.0) < 0.01
 
     def test_invalid_depth(self):
-        """测试无效深度"""
-        bbox = np.array([100, 100, 200, 200])
-        depth_image = np.zeros((480, 640), dtype=np.float32)
-        camera_info = {'fx': 500.0, 'fy': 500.0, 'cx': 320.0, 'cy': 240.0}
-
-        result = project_2d_to_3d(bbox, depth_image, camera_info)
-        # 应该处理无效深度
+        """测试零深度"""
+        intrinsics = self._intrinsics()
+        result = project_to_3d(150.0, 150.0, 0.0, intrinsics)
+        assert result is not None
+        assert result[2] == 0.0
 
 
 class TestInstanceTracker:

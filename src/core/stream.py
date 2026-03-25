@@ -1,120 +1,40 @@
-"""lingtu.core.stream — 类型化数据流端口与可插拔传输层。
+"""lingtu.core.stream — Typed data-flow ports and pluggable transport layer.
 
-受 dimos Stream/Transport 模式启发，简化为 LingTu 导航系统所需的核心：
+Inspired by the dimos Stream/Transport pattern, simplified for LingTu:
 
-- Transport (Protocol) — 进程间 / 跨节点通信抽象
-- LocalTransport       — 进程内零拷贝总线 (用于测试和单进程仿真)
-- Out[T]               — 输出端口，发布消息
-- In[T]                — 输入端口，接收消息
+- Transport (Protocol) — inter-process / cross-node communication abstraction
+- LocalTransport       — in-process zero-copy bus (testing & single-process)
+- Out[T]               — output port, publishes messages
+- In[T]                — input port, receives messages
 
-设计原则：
-  1. 零外部依赖 (纯 Python typing + threading)
-  2. 与 msgs 层解耦 — T 可以是任意类型
-  3. Transport 可选 — Out/In 可纯本地回调模式使用
+Design principles:
+  1. Zero external dependencies (pure Python typing + threading)
+  2. Decoupled from the msgs layer — T can be any type
+  3. Transport is optional — Out/In work in pure local-callback mode
+
+Transport and LocalTransport are now defined in core.transport.local and
+re-exported here for backward compatibility.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
+import threading
 from typing import (
     Any,
     Callable,
-    Dict,
     Generic,
     List,
     Optional,
-    Protocol,
     TypeVar,
-    runtime_checkable,
 )
+
+from .transport.local import Transport, LocalTransport  # canonical location
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-
-# ---------------------------------------------------------------------------
-# Transport Protocol
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class Transport(Protocol):
-    """传输层抽象协议。
-
-    任何实现 publish / subscribe / close 的对象均可作为传输后端，
-    包括 ROS2、DDS、SHM、gRPC 等。
-    """
-
-    def publish(self, topic: str, msg: Any) -> None:
-        """发布消息到指定 topic。"""
-        ...
-
-    def subscribe(self, topic: str, cb: Callable[[Any], None]) -> None:
-        """订阅指定 topic，收到消息时调用 cb。"""
-        ...
-
-    def close(self) -> None:
-        """释放资源。"""
-        ...
-
-
-# ---------------------------------------------------------------------------
-# LocalTransport — 进程内零拷贝总线
-# ---------------------------------------------------------------------------
-
-class LocalTransport:
-    """进程内同步总线，用于单进程模式和测试。
-
-    消息零拷贝传递（直接引用传递），无序列化开销。
-    线程安全：内部使用 Lock 保护订阅列表。
-    """
-
-    def __init__(self) -> None:
-        self._bus: Dict[str, List[Callable[[Any], None]]] = {}
-        self._lock = threading.Lock()
-
-    def publish(self, topic: str, msg: Any) -> None:
-        """发布消息，同步调用所有订阅者回调。"""
-        with self._lock:
-            callbacks = list(self._bus.get(topic, []))
-        for cb in callbacks:
-            try:
-                cb(msg)
-            except Exception:
-                logger.exception("LocalTransport callback error on topic '%s'", topic)
-
-    def subscribe(self, topic: str, cb: Callable[[Any], None]) -> None:
-        """订阅 topic。"""
-        with self._lock:
-            self._bus.setdefault(topic, []).append(cb)
-
-    def unsubscribe(self, topic: str, cb: Callable[[Any], None]) -> None:
-        """取消订阅。"""
-        with self._lock:
-            cbs = self._bus.get(topic)
-            if cbs and cb in cbs:
-                cbs.remove(cb)
-
-    def close(self) -> None:
-        """清空所有订阅。"""
-        with self._lock:
-            self._bus.clear()
-
-    @property
-    def topics(self) -> List[str]:
-        """返回当前活跃的 topic 列表。"""
-        with self._lock:
-            return list(self._bus.keys())
-
-    def subscriber_count(self, topic: str) -> int:
-        """返回指定 topic 的订阅者数量。"""
-        with self._lock:
-            return len(self._bus.get(topic, []))
-
-    def __repr__(self) -> str:
-        return f"LocalTransport(topics={len(self._bus)})"
 
 
 # ---------------------------------------------------------------------------
@@ -152,10 +72,10 @@ class Out(Generic[T]):
 
     def publish(self, msg: T) -> None:
         """发布一条消息到所有本地订阅者和外部传输层。"""
-        self._msg_count += 1
-        self._last_ts = time.time()
         # 本地回调
         with self._lock:
+            self._msg_count += 1
+            self._last_ts = time.time()
             cbs = list(self._callbacks)
         for cb in cbs:
             try:
@@ -186,6 +106,13 @@ class Out(Generic[T]):
         """绑定外部传输层。topic 默认使用端口名。"""
         self._transport = transport
         self._transport_topic = topic or self._name
+
+    def _clear_callbacks(self) -> None:
+        """Remove all callbacks and transport binding. Called on Module.stop()."""
+        with self._lock:
+            self._callbacks.clear()
+        self._transport = None
+        self._transport_topic = None
 
     # -- 属性 -------------------------------------------------------------------
 
@@ -220,19 +147,26 @@ class Out(Generic[T]):
 # ---------------------------------------------------------------------------
 
 class In(Generic[T]):
-    """类型化输入端口。
+    """Typed input port.
 
-    使用 subscribe(cb) 注册消息处理回调。
-    消息通过 _deliver(msg) 送达（通常由 Out._add_callback 或 Transport 触发）。
+    Receives messages via _deliver() (called by Out callbacks or Transport).
+    Supports two delivery policies:
 
-    支持两种接收模式:
-    1. 被动回调 — subscribe(cb) 后，由上游 Out 或 Transport 推送
-    2. 缓冲最新值 — latest 属性保存最近一条消息
+    - "all" (default): every message triggers the callback immediately.
+    - "latest": only the most recent message is kept. If the callback is
+      still running from a previous delivery, new messages update ``latest``
+      but do NOT re-enter the callback. This prevents slow consumers
+      (e.g. LLM at 2s) from being overwhelmed by fast publishers (e.g. IMU
+      at 50Hz). The consumer reads ``self.latest`` when ready.
+
+    Set the policy after construction via ``set_policy("latest")``.
     """
 
     __slots__ = (
         "_name", "_msg_type", "_callback", "_msg_count",
-        "_last_ts", "_latest", "_lock",
+        "_last_ts", "_latest", "_lock", "_policy", "_in_callback",
+        "_drop_count", "_throttle_interval", "_last_deliver_ts",
+        "_sample_n", "_sample_counter", "_buffer_size", "_buffer",
     )
 
     def __init__(self, name: str, msg_type: type) -> None:
@@ -243,23 +177,118 @@ class In(Generic[T]):
         self._last_ts: float = 0.0
         self._latest: Optional[T] = None
         self._lock = threading.Lock()
+        self._policy: str = "all"
+        self._in_callback: bool = False
+        self._drop_count: int = 0
+        # Throttle state
+        self._throttle_interval: float = 0.0
+        self._last_deliver_ts: float = 0.0
+        # Sample state
+        self._sample_n: int = 1
+        self._sample_counter: int = 0
+        # Buffer state
+        self._buffer_size: int = 1
+        self._buffer: List = []
 
-    # -- 核心 API ----------------------------------------------------------------
+    # -- Core API ----------------------------------------------------------------
 
     def subscribe(self, cb: Callable[[T], None]) -> None:
-        """注册消息处理回调。后注册会覆盖先前回调。"""
+        """Register message callback. Raises RuntimeError if already subscribed."""
+        if self._callback is not None:
+            raise RuntimeError(
+                f"In[{self._name}] already subscribed. "
+                f"Each input port accepts exactly one subscriber."
+            )
         self._callback = cb
 
+    def _clear_subscriber(self) -> None:
+        """Remove callback. Called on Module.stop() to break reference cycles."""
+        self._callback = None
+
+    def set_policy(self, policy: str, **kwargs) -> None:
+        """Set delivery policy with optional parameters.
+
+        Policies:
+            "all"      — deliver every message (default)
+            "latest"   — drop if callback busy (non-reentrant)
+            "throttle" — max N messages/sec (interval=seconds between delivers)
+            "sample"   — deliver every Nth message (n=skip count)
+            "buffer"   — collect N messages, deliver as batch list (size=batch size)
+
+        Usage in Module.setup()::
+
+            self.image.set_policy("latest")               # drop old frames
+            self.imu.set_policy("throttle", interval=0.1) # max 10Hz
+            self.lidar.set_policy("sample", n=5)          # every 5th scan
+            self.detections.set_policy("buffer", size=10)  # batch of 10
+        """
+        valid = ("all", "latest", "throttle", "sample", "buffer")
+        if policy not in valid:
+            raise ValueError(f"Unknown policy '{policy}', expected one of {valid}")
+        self._policy = policy
+        if policy == "throttle":
+            self._throttle_interval = kwargs.get("interval", 0.1)
+        elif policy == "sample":
+            self._sample_n = max(1, kwargs.get("n", 2))
+            self._sample_counter = 0
+        elif policy == "buffer":
+            self._buffer_size = max(1, kwargs.get("size", 10))
+            self._buffer = []
+
     def _deliver(self, msg: T) -> None:
-        """投递消息（由 Out 回调或 Transport 调用）。"""
+        """Deliver a message (called by Out callback or Transport)."""
         self._msg_count += 1
         self._last_ts = time.time()
         self._latest = msg
-        if self._callback:
+
+        if not self._callback:
+            return
+
+        # -- Policy: latest (drop if busy) --
+        if self._policy == "latest" and self._in_callback:
+            self._drop_count += 1
+            return
+
+        # -- Policy: throttle (rate limit) --
+        if self._policy == "throttle":
+            now = time.time()
+            if now - self._last_deliver_ts < self._throttle_interval:
+                self._drop_count += 1
+                return
+            self._last_deliver_ts = now
+
+        # -- Policy: sample (every Nth) --
+        if self._policy == "sample":
+            self._sample_counter += 1
+            if self._sample_counter < self._sample_n:
+                self._drop_count += 1
+                return
+            self._sample_counter = 0
+
+        # -- Policy: buffer (collect batch) --
+        if self._policy == "buffer":
+            self._buffer.append(msg)
+            if len(self._buffer) < self._buffer_size:
+                return
+            batch = list(self._buffer)
+            self._buffer.clear()
+            self._in_callback = True
             try:
-                self._callback(msg)
+                self._callback(batch)
             except Exception:
-                logger.exception("In[%s] callback error", self._name)
+                logger.exception("In[%s] buffer callback error", self._name)
+            finally:
+                self._in_callback = False
+            return
+
+        # -- Policy: all / latest / throttle / sample → deliver single --
+        self._in_callback = True
+        try:
+            self._callback(msg)
+        except Exception:
+            logger.exception("In[%s] callback error", self._name)
+        finally:
+            self._in_callback = False
 
     # -- 属性 -------------------------------------------------------------------
 
@@ -281,14 +310,26 @@ class In(Generic[T]):
 
     @property
     def latest(self) -> Optional[T]:
-        """最近收到的一条消息，未收到过则为 None。"""
+        """Most recent message, or None if nothing received yet."""
         return self._latest
 
     @property
     def connected(self) -> bool:
-        """是否已注册回调。"""
+        """True if a callback has been registered."""
         return self._callback is not None
+
+    @property
+    def policy(self) -> str:
+        """Delivery policy: "all" or "latest"."""
+        return self._policy
+
+    @property
+    def drop_count(self) -> int:
+        """Number of messages dropped due to backpressure (latest policy)."""
+        return self._drop_count
 
     def __repr__(self) -> str:
         status = "connected" if self._callback else "idle"
-        return f"In('{self._name}', {self._msg_type.__name__}, n={self._msg_count}, {status})"
+        policy_str = f", policy={self._policy}" if self._policy != "all" else ""
+        drop_str = f", dropped={self._drop_count}" if self._drop_count else ""
+        return f"In('{self._name}', {self._msg_type.__name__}, n={self._msg_count}, {status}{policy_str}{drop_str})"

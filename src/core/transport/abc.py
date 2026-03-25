@@ -1,0 +1,95 @@
+"""core.transport.abc — Abstract base classes for pluggable transport backends.
+
+Provides the ABC hierarchy used by ROS2-style transport backends (DDS, SHM,
+Dual).  Upper-layer nodes communicate through Publisher / Subscriber without
+knowing the underlying implementation.
+
+Classes:
+    TransportStrategy — enum selecting which backend to use
+    TopicConfig       — per-topic configuration dataclass
+    Publisher         — abstract message publisher
+    Subscriber        — abstract message subscriber
+    TransportABC      — abstract factory creating Publisher / Subscriber
+"""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Callable
+
+
+class TransportStrategy(Enum):
+    """Transport strategy selection."""
+    DDS = "dds"
+    SHM = "shm"
+    AUTO = "auto"
+    DUAL = "dual"
+
+
+@dataclass
+class TopicConfig:
+    """Topic configuration."""
+    name: str
+    msg_type: Any = None
+    strategy: TransportStrategy = TransportStrategy.DDS
+    buffer_size: int = 0
+    qos_depth: int = 10
+    reliable: bool = False
+
+
+class Publisher(ABC):
+    """Message publisher."""
+
+    def __init__(self, topic: TopicConfig):
+        self._topic = topic
+
+    @property
+    def topic_name(self) -> str:
+        return self._topic.name
+
+    @abstractmethod
+    def publish(self, msg: Any) -> None:
+        ...
+
+    def close(self) -> None:
+        pass
+
+
+class Subscriber(ABC):
+    """Message subscriber."""
+
+    def __init__(self, topic: TopicConfig, callback: Callable):
+        self._topic = topic
+        self._callback = callback
+
+    @property
+    def topic_name(self) -> str:
+        return self._topic.name
+
+    @abstractmethod
+    def start(self) -> None:
+        ...
+
+    def close(self) -> None:
+        pass
+
+
+class TransportABC(ABC):
+    """Transport layer factory (ABC counterpart for ROS2-style backends)."""
+
+    @abstractmethod
+    def create_publisher(self, topic: TopicConfig) -> Publisher:
+        ...
+
+    @abstractmethod
+    def create_subscriber(self, topic: TopicConfig, callback: Callable) -> Subscriber:
+        ...
+
+    @abstractmethod
+    def close(self) -> None:
+        ...
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        ...

@@ -945,3 +945,104 @@ class TestLayerDeps:
         )
         h = system.health()
         assert h["layer_violations"] == []
+
+
+# ============================================================================
+# TestBackpressure — In[T] delivery policies
+# ============================================================================
+
+class TestBackpressure:
+    """Test In[T] backpressure with 'latest' policy."""
+
+    def test_default_policy_is_all(self):
+        """Default policy delivers every message."""
+        inp = In("val", int)
+        assert inp.policy == "all"
+        assert inp.drop_count == 0
+
+    def test_set_policy_latest(self):
+        inp = In("val", int)
+        inp.set_policy("latest")
+        assert inp.policy == "latest"
+
+    def test_set_policy_invalid_raises(self):
+        inp = In("val", int)
+        with pytest.raises(ValueError, match="Unknown policy"):
+            inp.set_policy("random")
+
+    def test_all_policy_delivers_every_message(self):
+        """With 'all' policy, every _deliver() triggers callback."""
+        inp = In("val", int)
+        received = []
+        inp.subscribe(received.append)
+        for i in range(10):
+            inp._deliver(i)
+        assert received == list(range(10))
+        assert inp.drop_count == 0
+
+    def test_latest_policy_drops_when_busy(self):
+        """With 'latest' policy, messages are dropped if callback is running."""
+        import threading
+
+        inp = In("val", int)
+        inp.set_policy("latest")
+
+        barrier = threading.Event()
+        received = []
+
+        def slow_callback(msg):
+            received.append(msg)
+            if msg == 1:
+                barrier.wait(timeout=2.0)  # block on first real message
+
+        inp.subscribe(slow_callback)
+
+        # Deliver from a background thread so it blocks
+        t = threading.Thread(target=inp._deliver, args=(1,))
+        t.start()
+        import time; time.sleep(0.02)  # let it enter callback
+
+        # These should be dropped (callback busy)
+        inp._deliver(2)
+        inp._deliver(3)
+        inp._deliver(4)
+
+        # Release the blocked callback
+        barrier.set()
+        t.join(timeout=2.0)
+
+        # Only message 1 was processed, 2-4 dropped
+        assert received == [1]
+        assert inp.drop_count == 3
+        assert inp.latest == 4  # latest always updated
+        assert inp.msg_count == 4  # all counted
+
+    def test_latest_policy_normal_when_not_busy(self):
+        """With 'latest' policy, sequential messages all deliver normally."""
+        inp = In("val", int)
+        inp.set_policy("latest")
+        received = []
+        inp.subscribe(received.append)
+
+        for i in range(5):
+            inp._deliver(i)
+
+        assert received == list(range(5))
+        assert inp.drop_count == 0
+
+    def test_latest_always_updates(self):
+        """Even when dropping, .latest property always has the newest value."""
+        inp = In("val", str)
+        inp.set_policy("latest")
+        inp._deliver("a")
+        inp._deliver("b")
+        inp._deliver("c")
+        assert inp.latest == "c"
+        assert inp.msg_count == 3
+
+    def test_drop_count_in_repr(self):
+        """Drop count appears in repr when non-zero."""
+        inp = In("val", int)
+        inp.set_policy("latest")
+        assert "latest" in repr(inp)
+        assert "dropped" not in repr(inp)

@@ -1,0 +1,614 @@
+"""lingtu.core.msgs.semantic — 语义导航消息类型。
+
+覆盖 Detection3D, SceneGraph, GoalResult, NavigationCommand,
+SafetyState, MissionStatus，对齐 LingTu 语义感知/规划话题契约。
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import struct
+import time
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
+
+import numpy as np
+
+from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+
+
+# ---------------------------------------------------------------------------
+# Detection3D
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Detection3D:
+    """三维检测结果，对应 /nav/semantic/detections_3d。"""
+
+    id: str = ""
+    label: str = ""
+    confidence: float = 0.0
+    position: Vector3 = field(default_factory=Vector3)
+    bbox_2d: List[float] = field(default_factory=list)  # [x1, y1, x2, y2]
+    clip_feature: Optional[np.ndarray] = None  # 512-dim
+    ts: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.ts == 0.0:
+            self.ts = time.time()
+
+    def distance_to(self, other: Detection3D) -> float:
+        """到另一个检测的欧氏距离。"""
+        dx = self.position.x - other.position.x
+        dy = self.position.y - other.position.y
+        dz = self.position.z - other.position.z
+        return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    # -- 序列化 --------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "confidence": self.confidence,
+            "position": [self.position.x, self.position.y, self.position.z],
+            "bbox_2d": self.bbox_2d,
+            "has_clip_feature": self.clip_feature is not None,
+            "ts": self.ts,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Detection3D:
+        pos = d.get("position", [0, 0, 0])
+        if isinstance(pos, dict):
+            position = Vector3(float(pos.get("x", 0)), float(pos.get("y", 0)),
+                               float(pos.get("z", 0)))
+        else:
+            position = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
+        return cls(
+            id=str(d.get("id", "")),
+            label=str(d.get("label", "")),
+            confidence=float(d.get("confidence", 0)),
+            position=position,
+            bbox_2d=list(d.get("bbox_2d", [])),
+            ts=float(d.get("ts", 0)),
+        )
+
+    def encode(self) -> bytes:
+        """二进制编码。"""
+        id_b = self.id.encode("utf-8")
+        label_b = self.label.encode("utf-8")
+        bbox = self.bbox_2d + [0.0] * max(0, 4 - len(self.bbox_2d))
+        has_clip = 1 if self.clip_feature is not None else 0
+        header = struct.pack(
+            "<HHf3d4ddB",
+            len(id_b), len(label_b), self.confidence,
+            self.position.x, self.position.y, self.position.z,
+            bbox[0], bbox[1], bbox[2], bbox[3],
+            self.ts, has_clip,
+        )
+        parts = [header, id_b, label_b]
+        if self.clip_feature is not None:
+            clip_arr = np.asarray(self.clip_feature, dtype=np.float32)
+            parts.append(struct.pack("<I", clip_arr.size))
+            parts.append(clip_arr.tobytes())
+        return b"".join(parts)
+
+    @classmethod
+    def decode(cls, data: bytes) -> Detection3D:
+        # header: 2H(4) + f(4) + 3d(24) + 4d(32) + d(8) + B(1) = 73 bytes
+        hdr_fmt = struct.Struct("<HHf3d4ddB")
+        vals = hdr_fmt.unpack(data[: hdr_fmt.size])
+        id_len, label_len, conf = vals[0], vals[1], vals[2]
+        px, py, pz = vals[3], vals[4], vals[5]
+        b0, b1, b2, b3 = vals[6], vals[7], vals[8], vals[9]
+        ts_val = vals[10]
+        has_clip = vals[11]
+        off = hdr_fmt.size
+        det_id = data[off: off + id_len].decode("utf-8")
+        off += id_len
+        label = data[off: off + label_len].decode("utf-8")
+        off += label_len
+        clip_feature = None
+        if has_clip:
+            clip_size = struct.unpack("<I", data[off: off + 4])[0]
+            off += 4
+            clip_feature = np.frombuffer(data[off: off + clip_size * 4], dtype=np.float32).copy()
+        return cls(
+            id=det_id, label=label, confidence=conf,
+            position=Vector3(px, py, pz),
+            bbox_2d=[b0, b1, b2, b3], clip_feature=clip_feature, ts=ts_val,
+        )
+
+    def __repr__(self) -> str:
+        clip_str = f", clip={self.clip_feature.shape}" if self.clip_feature is not None else ""
+        return (
+            f"Detection3D(id='{self.id}', label='{self.label}', "
+            f"conf={self.confidence:.2f}, pos=[{self.position.x:.2f}, "
+            f"{self.position.y:.2f}, {self.position.z:.2f}]{clip_str})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Relation / Region (SceneGraph 子结构)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Relation:
+    """场景图关系边。"""
+
+    subject_id: str = ""
+    predicate: str = ""  # near, on, left_of, right_of, ...
+    object_id: str = ""
+    confidence: float = 1.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "subject_id": self.subject_id,
+            "predicate": self.predicate,
+            "object_id": self.object_id,
+            "confidence": self.confidence,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Relation:
+        return cls(
+            subject_id=str(d.get("subject_id", "")),
+            predicate=str(d.get("predicate", "")),
+            object_id=str(d.get("object_id", "")),
+            confidence=float(d.get("confidence", 1.0)),
+        )
+
+    def __repr__(self) -> str:
+        return f"Relation({self.subject_id} --{self.predicate}--> {self.object_id})"
+
+
+@dataclass
+class Region:
+    """场景区域。"""
+
+    name: str = ""
+    object_ids: List[str] = field(default_factory=list)
+    center: Optional[Vector3] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "object_ids": self.object_ids,
+            "center": [self.center.x, self.center.y, self.center.z] if self.center else None,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Region:
+        c = d.get("center")
+        center = Vector3(float(c[0]), float(c[1]), float(c[2])) if c else None
+        return cls(
+            name=str(d.get("name", "")),
+            object_ids=list(d.get("object_ids", [])),
+            center=center,
+        )
+
+    def __repr__(self) -> str:
+        return f"Region('{self.name}', objects={len(self.object_ids)})"
+
+
+# ---------------------------------------------------------------------------
+# SceneGraph
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SceneGraph:
+    """场景图，对应 /nav/semantic/scene_graph (JSON)。"""
+
+    objects: List[Detection3D] = field(default_factory=list)
+    relations: List[Relation] = field(default_factory=list)
+    regions: List[Region] = field(default_factory=list)
+    ts: float = 0.0
+    frame_id: str = "map"
+
+    def __post_init__(self) -> None:
+        if self.ts == 0.0:
+            self.ts = time.time()
+
+    # -- 查询 ----------------------------------------------------------------
+
+    def get_object_by_id(self, obj_id: str) -> Optional[Detection3D]:
+        """根据 ID 获取物体。"""
+        for obj in self.objects:
+            if obj.id == obj_id:
+                return obj
+        return None
+
+    def get_objects_by_label(self, label: str) -> List[Detection3D]:
+        """根据标签获取物体列表（不区分大小写）。"""
+        return [o for o in self.objects if o.label.lower() == label.lower()]
+
+    # -- 序列化 --------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "objects": [o.to_dict() for o in self.objects],
+            "relations": [r.to_dict() for r in self.relations],
+            "regions": [r.to_dict() for r in self.regions],
+            "ts": self.ts,
+            "frame_id": self.frame_id,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> SceneGraph:
+        return cls(
+            objects=[Detection3D.from_dict(o) for o in d.get("objects", [])],
+            relations=[Relation.from_dict(r) for r in d.get("relations", [])],
+            regions=[Region.from_dict(r) for r in d.get("regions", [])],
+            ts=float(d.get("ts", 0)),
+            frame_id=str(d.get("frame_id", "map")),
+        )
+
+    def to_json(self, **kwargs: Any) -> str:
+        """序列化为 JSON 字符串。"""
+        return json.dumps(self.to_dict(), ensure_ascii=False, **kwargs)
+
+    @classmethod
+    def from_json(cls, s: str) -> SceneGraph:
+        """从 JSON 字符串反序列化。"""
+        return cls.from_dict(json.loads(s))
+
+    def encode(self) -> bytes:
+        """二进制编码 — 使用 JSON 中间格式。"""
+        payload = self.to_json().encode("utf-8")
+        return struct.pack("<I", len(payload)) + payload
+
+    @classmethod
+    def decode(cls, data: bytes) -> SceneGraph:
+        length = struct.unpack("<I", data[:4])[0]
+        payload = data[4: 4 + length].decode("utf-8")
+        return cls.from_json(payload)
+
+    def __repr__(self) -> str:
+        return (
+            f"SceneGraph(objects={len(self.objects)}, relations={len(self.relations)}, "
+            f"regions={len(self.regions)}, frame='{self.frame_id}')"
+        )
+
+
+# ---------------------------------------------------------------------------
+# GoalResult
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GoalResult:
+    """目标解析结果，来自 goal_resolver Fast/Slow Path。"""
+
+    action: str = "navigate"  # "navigate" | "explore"
+    target_label: str = ""
+    target_x: float = 0.0
+    target_y: float = 0.0
+    target_z: float = 0.0
+    confidence: float = 0.0
+    reasoning: str = ""
+    is_valid: bool = False
+    path: str = ""  # "fast" | "slow"
+    hint_room: str = ""
+    score_entropy: float = 0.0
+
+    # -- 转换 ----------------------------------------------------------------
+
+    def as_pose_stamped(self, frame_id: str = "map") -> PoseStamped:
+        """转为 PoseStamped，朝向默认为单位四元数。"""
+        return PoseStamped(
+            pose=Pose(
+                position=Vector3(self.target_x, self.target_y, self.target_z),
+                orientation=Quaternion(),
+            ),
+            frame_id=frame_id,
+        )
+
+    # -- 序列化 --------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "target_label": self.target_label,
+            "target_x": self.target_x,
+            "target_y": self.target_y,
+            "target_z": self.target_z,
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
+            "is_valid": self.is_valid,
+            "path": self.path,
+            "hint_room": self.hint_room,
+            "score_entropy": self.score_entropy,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> GoalResult:
+        return cls(
+            action=str(d.get("action", "navigate")),
+            target_label=str(d.get("target_label", "")),
+            target_x=float(d.get("target_x", 0)),
+            target_y=float(d.get("target_y", 0)),
+            target_z=float(d.get("target_z", 0)),
+            confidence=float(d.get("confidence", 0)),
+            reasoning=str(d.get("reasoning", "")),
+            is_valid=bool(d.get("is_valid", False)),
+            path=str(d.get("path", "")),
+            hint_room=str(d.get("hint_room", "")),
+            score_entropy=float(d.get("score_entropy", 0)),
+        )
+
+    def encode(self) -> bytes:
+        payload = json.dumps(self.to_dict(), ensure_ascii=False).encode("utf-8")
+        return struct.pack("<I", len(payload)) + payload
+
+    @classmethod
+    def decode(cls, data: bytes) -> GoalResult:
+        length = struct.unpack("<I", data[:4])[0]
+        return cls.from_dict(json.loads(data[4: 4 + length].decode("utf-8")))
+
+    def __repr__(self) -> str:
+        return (
+            f"GoalResult(action='{self.action}', label='{self.target_label}', "
+            f"conf={self.confidence:.2f}, valid={self.is_valid}, path='{self.path}')"
+        )
+
+
+# ---------------------------------------------------------------------------
+# NavigationCommand
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NavigationCommand:
+    """导航指令，可转为 Twist 发布到 /nav/cmd_vel。"""
+
+    command_type: str = "velocity"  # velocity | goto | label
+    target_position: Optional[Vector3] = None
+    target_label: Optional[str] = None
+    linear_x: float = 0.0
+    linear_y: float = 0.0
+    angular_z: float = 0.0
+    confidence: float = 1.0
+
+    def to_twist(self) -> Twist:
+        """转为 Twist 速度指令。"""
+        return Twist(
+            linear=Vector3(self.linear_x, self.linear_y, 0.0),
+            angular=Vector3(0.0, 0.0, self.angular_z),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "command_type": self.command_type,
+            "linear_x": self.linear_x,
+            "linear_y": self.linear_y,
+            "angular_z": self.angular_z,
+            "confidence": self.confidence,
+        }
+        if self.target_position is not None:
+            d["target_position"] = [self.target_position.x, self.target_position.y,
+                                    self.target_position.z]
+        if self.target_label is not None:
+            d["target_label"] = self.target_label
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> NavigationCommand:
+        tp = d.get("target_position")
+        target_position = Vector3(float(tp[0]), float(tp[1]), float(tp[2])) if tp else None
+        return cls(
+            command_type=str(d.get("command_type", "velocity")),
+            target_position=target_position,
+            target_label=d.get("target_label"),
+            linear_x=float(d.get("linear_x", 0)),
+            linear_y=float(d.get("linear_y", 0)),
+            angular_z=float(d.get("angular_z", 0)),
+            confidence=float(d.get("confidence", 1.0)),
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"NavigationCommand(type='{self.command_type}', "
+            f"vx={self.linear_x:.2f}, wz={self.angular_z:.2f})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# SafetyState
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SafetyState:
+    """安全状态，对应 /nav/safety_state。"""
+
+    level: str = "safe"  # safe | warn | danger | estop
+    issues: List[str] = field(default_factory=list)
+    timestamp: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.timestamp == 0.0:
+            self.timestamp = time.time()
+
+    @property
+    def is_safe(self) -> bool:
+        return self.level == "safe"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"level": self.level, "issues": self.issues, "timestamp": self.timestamp}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> SafetyState:
+        return cls(
+            level=str(d.get("level", "safe")),
+            issues=list(d.get("issues", [])),
+            timestamp=float(d.get("timestamp", 0)),
+        )
+
+    def __repr__(self) -> str:
+        return f"SafetyState(level='{self.level}', issues={len(self.issues)})"
+
+
+# ---------------------------------------------------------------------------
+# MissionStatus
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MissionStatus:
+    """任务状态，对应 /nav/semantic/status。"""
+
+    state: str = "idle"  # idle | planning | executing | success | failed
+    goal: Optional[str] = None
+    progress_pct: float = 0.0
+    elapsed_sec: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "goal": self.goal,
+            "progress_pct": self.progress_pct,
+            "elapsed_sec": self.elapsed_sec,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> MissionStatus:
+        return cls(
+            state=str(d.get("state", "idle")),
+            goal=d.get("goal"),
+            progress_pct=float(d.get("progress_pct", 0)),
+            elapsed_sec=float(d.get("elapsed_sec", 0)),
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"MissionStatus(state='{self.state}', goal='{self.goal}', "
+            f"progress={self.progress_pct:.1f}%)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# ExecutionEval — Ring 2 评估结果
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ExecutionEval:
+    """闭环执行评估结果，对应 /nav/execution_eval。
+
+    由 Evaluator (Ring 2) 产生，对比执行效果与规划预期。
+    """
+
+    assessment: str = "IDLE"  # IDLE | ON_TRACK | DRIFTING | STALLED | REGRESSING
+    cross_track_error: float = 0.0      # m, 偏离规划路径距离
+    distance_to_goal: float = 0.0       # m, 到目标距离
+    progress_rate: float = 0.0          # m/s, 负值=接近目标
+    heading_error_deg: float = 0.0      # deg, 航向偏差
+    stall_time: float = 0.0             # s, 无进展时长
+    velocity_efficiency: float = 1.0    # actual/cmd 速度比
+    ts: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.ts == 0.0:
+            self.ts = time.time()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "assessment": self.assessment,
+            "cross_track_error": self.cross_track_error,
+            "distance_to_goal": self.distance_to_goal,
+            "progress_rate": self.progress_rate,
+            "heading_error_deg": self.heading_error_deg,
+            "stall_time": self.stall_time,
+            "velocity_efficiency": self.velocity_efficiency,
+            "ts": self.ts,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ExecutionEval:
+        return cls(
+            assessment=str(d.get("assessment", "IDLE")),
+            cross_track_error=float(d.get("cross_track_error", 0)),
+            distance_to_goal=float(d.get("distance_to_goal", 0)),
+            progress_rate=float(d.get("progress_rate", 0)),
+            heading_error_deg=float(d.get("heading_error_deg", 0)),
+            stall_time=float(d.get("stall_time", 0)),
+            velocity_efficiency=float(d.get("velocity_efficiency", 1.0)),
+            ts=float(d.get("ts", 0)),
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"ExecutionEval(assessment='{self.assessment}', "
+            f"cte={self.cross_track_error:.2f}m, "
+            f"dist={self.distance_to_goal:.1f}m, "
+            f"rate={self.progress_rate:.3f}m/s)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# DialogueState — Ring 3 对话状态
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DialogueState:
+    """统一对话状态，对应 /nav/dialogue_state。
+
+    由 DialogueManager (Ring 3) 聚合安全 + 评估 + 任务状态，
+    面向终端用户（Flutter App / gRPC / 日志）。
+    """
+
+    understood: Optional[str] = None       # 用户意图
+    doing: str = "待命中"                    # 当前动作描述
+    progress_pct: float = 0.0              # 进度百分比
+    distance_m: Optional[float] = None     # 到目标距离
+    issue: Optional[str] = None            # 当前问题
+    safety: str = "OK"                     # 安全级别
+    safety_text: str = "安全"               # 安全描述
+    eta_sec: Optional[float] = None        # 预估到达时间
+    mission_state: str = "IDLE"            # 任务 FSM 状态
+    response: Optional[str] = None         # 语音回复
+    position_x: float = 0.0
+    position_y: float = 0.0
+    ts: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.ts == 0.0:
+            self.ts = time.time()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "understood": self.understood,
+            "doing": self.doing,
+            "progress_pct": self.progress_pct,
+            "distance_m": self.distance_m,
+            "issue": self.issue,
+            "safety": self.safety,
+            "safety_text": self.safety_text,
+            "eta_sec": self.eta_sec,
+            "mission_state": self.mission_state,
+            "response": self.response,
+            "position": {"x": self.position_x, "y": self.position_y},
+            "ts": self.ts,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> DialogueState:
+        pos = d.get("position", {})
+        return cls(
+            understood=d.get("understood"),
+            doing=str(d.get("doing", "待命中")),
+            progress_pct=float(d.get("progress_pct", 0)),
+            distance_m=d.get("distance_m"),
+            issue=d.get("issue"),
+            safety=str(d.get("safety", "OK")),
+            safety_text=str(d.get("safety_text", "安全")),
+            eta_sec=d.get("eta_sec"),
+            mission_state=str(d.get("mission_state", "IDLE")),
+            response=d.get("response"),
+            position_x=float(pos.get("x", 0)) if isinstance(pos, dict) else 0.0,
+            position_y=float(pos.get("y", 0)) if isinstance(pos, dict) else 0.0,
+            ts=float(d.get("ts", 0)),
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"DialogueState(doing='{self.doing}', safety='{self.safety}', "
+            f"mission='{self.mission_state}', progress={self.progress_pct:.1f}%)"
+        )

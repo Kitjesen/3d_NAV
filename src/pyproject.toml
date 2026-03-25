@@ -1,0 +1,30 @@
+[project]
+name = "lingtu-core"
+version = "0.1.0"
+description = "LingTu navigation system core packages"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = [
+    "core*",
+    "drivers*",
+    "memory*",
+    "nav_rings*",
+    "nav_services*",
+    "global_planning*",
+    "semantic_planner*",
+    "semantic_perception*",
+    "semantic_common*",
+    "reconstruction*",
+]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.backends._legacy:_Backend"

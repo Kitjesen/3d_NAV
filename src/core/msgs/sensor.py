@@ -1,0 +1,558 @@
+"""lingtu.core.msgs.sensor — 传感器数据类型，供感知与 SLAM 模块使用。
+
+Classes
+-------
+ImageFormat   — 图像像素格式枚举
+Image         — NumPy 图像容器 (BGR/RGB/RGBA/GRAY/Depth)
+CameraIntrinsics — 相机内参 (fx, fy, cx, cy)
+PointCloud    — N×3/N×4 点云 (纯 numpy, 无 Open3D)
+Imu           — 惯性测量单元数据
+"""
+
+from __future__ import annotations
+
+import struct
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+import numpy as np
+
+from .geometry import Quaternion, Vector3
+
+# ---------------------------------------------------------------------------
+# ImageFormat
+# ---------------------------------------------------------------------------
+
+
+class ImageFormat(Enum):
+    """Pixel encoding formats."""
+
+    BGR = "BGR"
+    RGB = "RGB"
+    RGBA = "RGBA"
+    GRAY = "GRAY"
+    DEPTH_F32 = "DEPTH_F32"  # float32 metres
+    DEPTH_U16 = "DEPTH_U16"  # uint16 millimetres
+
+
+# ---------------------------------------------------------------------------
+# Image
+# ---------------------------------------------------------------------------
+
+# Header layout for encode(): format_len(I) + format_str + ndim(I) + shape(I*ndim) + dtype_len(I) + dtype_str
+_IMG_HEADER = struct.Struct("<I")  # reused for individual uint32 fields
+
+
+@dataclass
+class Image:
+    """NumPy-backed image with format metadata.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pixel data — shape ``(H, W)`` for grayscale/depth, ``(H, W, C)`` for colour.
+    format : ImageFormat
+        Pixel encoding.
+    ts : float
+        Timestamp (seconds since epoch).
+    frame_id : str
+        TF frame this image was captured in.
+    """
+
+    data: np.ndarray = field(default_factory=lambda: np.zeros((1, 1, 3), dtype=np.uint8))
+    format: ImageFormat = field(default=ImageFormat.BGR)
+    ts: float = field(default_factory=time.time)
+    frame_id: str = field(default="camera")
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.data, np.ndarray):
+            self.data = np.asarray(self.data)
+
+    # -- factory methods -----------------------------------------------------
+
+    @classmethod
+    def from_numpy(cls, arr: np.ndarray, fmt: ImageFormat = ImageFormat.BGR,
+                   frame_id: str = "camera") -> Image:
+        """Wrap an existing array."""
+        return cls(data=np.asarray(arr), format=fmt, frame_id=frame_id)
+
+    @classmethod
+    def from_file(cls, path: str | Path, fmt: ImageFormat | None = None,
+                  frame_id: str = "camera") -> Image:
+        """Load from an image file.  Requires *cv2* (optional dependency)."""
+        try:
+            import cv2  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise ImportError("cv2 is required for Image.from_file()") from exc
+
+        img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise FileNotFoundError(f"Cannot read image: {path}")
+
+        if fmt is None:
+            if img.ndim == 2:
+                fmt = ImageFormat.GRAY
+            elif img.shape[2] == 4:
+                fmt = ImageFormat.RGBA
+            else:
+                fmt = ImageFormat.BGR  # OpenCV default
+        return cls(data=img, format=fmt, frame_id=frame_id)
+
+    # -- properties ----------------------------------------------------------
+
+    @property
+    def height(self) -> int:
+        return int(self.data.shape[0])
+
+    @property
+    def width(self) -> int:
+        return int(self.data.shape[1])
+
+    @property
+    def channels(self) -> int:
+        return 1 if self.data.ndim == 2 else int(self.data.shape[2])
+
+    # -- format conversion ---------------------------------------------------
+
+    def to_rgb(self) -> Image:
+        """Convert to RGB format."""
+        if self.format is ImageFormat.RGB:
+            return self
+        if self.format is ImageFormat.BGR:
+            return Image(self.data[..., ::-1].copy(), ImageFormat.RGB, self.ts, self.frame_id)
+        if self.format is ImageFormat.RGBA:
+            return Image(self.data[..., :3][..., ::-1].copy(), ImageFormat.RGB, self.ts, self.frame_id)
+        if self.format is ImageFormat.GRAY:
+            return Image(np.stack([self.data] * 3, axis=-1), ImageFormat.RGB, self.ts, self.frame_id)
+        raise ValueError(f"Cannot convert {self.format} to RGB")
+
+    def to_bgr(self) -> Image:
+        """Convert to BGR format."""
+        if self.format is ImageFormat.BGR:
+            return self
+        if self.format is ImageFormat.RGB:
+            return Image(self.data[..., ::-1].copy(), ImageFormat.BGR, self.ts, self.frame_id)
+        if self.format is ImageFormat.RGBA:
+            return Image(self.data[..., :3].copy(), ImageFormat.BGR, self.ts, self.frame_id)
+        if self.format is ImageFormat.GRAY:
+            return Image(np.stack([self.data] * 3, axis=-1), ImageFormat.BGR, self.ts, self.frame_id)
+        raise ValueError(f"Cannot convert {self.format} to BGR")
+
+    def to_grayscale(self) -> Image:
+        """Convert to single-channel grayscale."""
+        if self.format is ImageFormat.GRAY:
+            return self
+        if self.format in (ImageFormat.BGR, ImageFormat.RGB):
+            # ITU-R BT.601 luma weights
+            if self.format is ImageFormat.RGB:
+                r, g, b = self.data[..., 0], self.data[..., 1], self.data[..., 2]
+            else:
+                b, g, r = self.data[..., 0], self.data[..., 1], self.data[..., 2]
+            gray = (0.299 * r + 0.587 * g + 0.114 * b).astype(self.data.dtype)
+            return Image(gray, ImageFormat.GRAY, self.ts, self.frame_id)
+        if self.format is ImageFormat.RGBA:
+            r, g, b = self.data[..., 0], self.data[..., 1], self.data[..., 2]
+            gray = (0.299 * r + 0.587 * g + 0.114 * b).astype(self.data.dtype)
+            return Image(gray, ImageFormat.GRAY, self.ts, self.frame_id)
+        raise ValueError(f"Cannot convert {self.format} to grayscale")
+
+    # -- spatial ops ---------------------------------------------------------
+
+    def resize(self, w: int, h: int) -> Image:
+        """Resize using nearest-neighbour (no cv2 dependency)."""
+        try:
+            import cv2  # type: ignore[import-untyped]
+            resized = cv2.resize(self.data, (w, h))
+        except ImportError:
+            # Pure-numpy nearest-neighbour fallback
+            row_idx = (np.arange(h) * self.height / h).astype(int)
+            col_idx = (np.arange(w) * self.width / w).astype(int)
+            resized = self.data[np.ix_(row_idx, col_idx)] if self.data.ndim == 2 \
+                else self.data[np.ix_(row_idx, col_idx, np.arange(self.channels))]
+        return Image(resized, self.format, self.ts, self.frame_id)
+
+    def crop(self, x: int, y: int, w: int, h: int) -> Image:
+        """Crop region ``(x, y, w, h)`` — top-left origin."""
+        cropped = self.data[y: y + h, x: x + w].copy()
+        return Image(cropped, self.format, self.ts, self.frame_id)
+
+    # -- serialisation -------------------------------------------------------
+
+    def encode(self) -> bytes:
+        """Serialise to raw bytes:  header + pixel data.
+
+        Header: format_len(u32) + format_str + ndim(u32)
+                + shape(u32×ndim) + dtype_len(u32) + dtype_str + ts(f64) + frame_len(u32) + frame_str
+        """
+        fmt_bytes = self.format.value.encode()
+        dtype_bytes = self.data.dtype.str.encode()
+        frame_bytes = self.frame_id.encode()
+        buf = bytearray()
+        buf += struct.pack("<I", len(fmt_bytes)) + fmt_bytes
+        buf += struct.pack("<I", self.data.ndim)
+        for s in self.data.shape:
+            buf += struct.pack("<I", s)
+        buf += struct.pack("<I", len(dtype_bytes)) + dtype_bytes
+        buf += struct.pack("<d", self.ts)
+        buf += struct.pack("<I", len(frame_bytes)) + frame_bytes
+        buf += self.data.tobytes()
+        return bytes(buf)
+
+    @classmethod
+    def decode(cls, raw: bytes) -> Image:
+        """Reconstruct from bytes produced by :meth:`encode`."""
+        off = 0
+
+        def _read_u32() -> int:
+            nonlocal off
+            val = struct.unpack_from("<I", raw, off)[0]
+            off += 4
+            return val
+
+        fmt_len = _read_u32()
+        fmt_str = raw[off: off + fmt_len].decode(); off += fmt_len
+        ndim = _read_u32()
+        shape = tuple(_read_u32() for _ in range(ndim))
+        dtype_len = _read_u32()
+        dtype_str = raw[off: off + dtype_len].decode(); off += dtype_len
+        ts = struct.unpack_from("<d", raw, off)[0]; off += 8
+        frame_len = _read_u32()
+        frame_id = raw[off: off + frame_len].decode(); off += frame_len
+        data = np.frombuffer(raw, dtype=np.dtype(dtype_str), offset=off).reshape(shape)
+        return cls(data=data.copy(), format=ImageFormat(fmt_str), ts=ts, frame_id=frame_id)
+
+    # -- introspection -------------------------------------------------------
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Metadata dict (no pixel data)."""
+        return {
+            "format": self.format.value,
+            "height": self.height,
+            "width": self.width,
+            "channels": self.channels,
+            "dtype": self.data.dtype.str,
+            "ts": self.ts,
+            "frame_id": self.frame_id,
+        }
+
+    def __repr__(self) -> str:
+        return (f"Image({self.width}x{self.height}, {self.format.value}, "
+                f"dtype={self.data.dtype}, frame='{self.frame_id}')")
+
+
+# ---------------------------------------------------------------------------
+# CameraIntrinsics
+# ---------------------------------------------------------------------------
+
+_INTRINSICS_FMT = struct.Struct("<6d2I")  # fx,fy,cx,cy,depth_scale, _pad, W, H  → 56 bytes
+# Actually: fx(d) fy(d) cx(d) cy(d) depth_scale(d) width(I) height(I) → 48 bytes
+_INTRINSICS_FMT = struct.Struct("<5dII")  # 5×8 + 2×4 = 48 bytes
+
+
+@dataclass
+class CameraIntrinsics:
+    """Pinhole camera intrinsic parameters.
+
+    Parameters
+    ----------
+    fx, fy : float
+        Focal lengths in pixels.
+    cx, cy : float
+        Principal point in pixels.
+    width, height : int
+        Image dimensions.
+    depth_scale : float
+        Multiplier to convert raw depth values to metres (e.g. 0.001 for mm).
+    """
+
+    fx: float = 0.0
+    fy: float = 0.0
+    cx: float = 0.0
+    cy: float = 0.0
+    width: int = 0
+    height: int = 0
+    depth_scale: float = 1.0
+
+    # -- properties ----------------------------------------------------------
+
+    @property
+    def K_matrix(self) -> np.ndarray:
+        """3×3 intrinsic matrix ``K``."""
+        return np.array([
+            [self.fx, 0.0, self.cx],
+            [0.0, self.fy, self.cy],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+
+    def project(self, u: float, v: float, depth: float) -> Vector3:
+        """Back-project pixel ``(u, v)`` at *depth* (metres) to 3-D point.
+
+        Uses the standard pinhole model::
+
+            X = (u - cx) * depth / fx
+            Y = (v - cy) * depth / fy
+            Z = depth
+        """
+        x = (u - self.cx) * depth / self.fx
+        y = (v - self.cy) * depth / self.fy
+        return Vector3(x, y, depth)
+
+    # -- factory / conversion ------------------------------------------------
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> CameraIntrinsics:
+        """Load from OpenCV-style YAML calibration file."""
+        import yaml  # type: ignore[import-untyped]
+
+        with open(path) as f:
+            data = yaml.safe_load(f)
+
+        width = data.get("image_width", 0)
+        height = data.get("image_height", 0)
+        K = data.get("camera_matrix", {}).get("data", [0.0] * 9)
+        depth_scale = data.get("depth_scale", 1.0)
+        return cls(
+            fx=K[0], fy=K[4], cx=K[2], cy=K[5],
+            width=width, height=height, depth_scale=depth_scale,
+        )
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> CameraIntrinsics:
+        return cls(
+            fx=d["fx"], fy=d["fy"], cx=d["cx"], cy=d["cy"],
+            width=d["width"], height=d["height"],
+            depth_scale=d.get("depth_scale", 1.0),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "fx": self.fx, "fy": self.fy,
+            "cx": self.cx, "cy": self.cy,
+            "width": self.width, "height": self.height,
+            "depth_scale": self.depth_scale,
+        }
+
+    # -- binary encode / decode ----------------------------------------------
+
+    def encode(self) -> bytes:
+        """48 bytes: 5×float64 + 2×uint32."""
+        return _INTRINSICS_FMT.pack(
+            self.fx, self.fy, self.cx, self.cy, self.depth_scale,
+            self.width, self.height,
+        )
+
+    @classmethod
+    def decode(cls, data: bytes) -> CameraIntrinsics:
+        fx, fy, cx, cy, ds, w, h = _INTRINSICS_FMT.unpack(data[: _INTRINSICS_FMT.size])
+        return cls(fx=fx, fy=fy, cx=cx, cy=cy, width=w, height=h, depth_scale=ds)
+
+    def __repr__(self) -> str:
+        return (f"CameraIntrinsics(fx={self.fx:.1f}, fy={self.fy:.1f}, "
+                f"cx={self.cx:.1f}, cy={self.cy:.1f}, "
+                f"{self.width}x{self.height}, scale={self.depth_scale})")
+
+
+# ---------------------------------------------------------------------------
+# PointCloud
+# ---------------------------------------------------------------------------
+
+# Header: num_points(u32) + cols(u32) + ts(f64) + frame_len(u32) + frame_str
+_PC_HDR = struct.Struct("<IId")  # 16 bytes fixed part
+
+
+@dataclass
+class PointCloud:
+    """Lightweight point cloud — ``(N, 3)`` XYZ or ``(N, 4)`` XYZ+intensity.
+
+    All operations are pure NumPy (no Open3D dependency).
+    """
+
+    points: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
+    ts: float = field(default_factory=time.time)
+    frame_id: str = field(default="map")
+
+    def __post_init__(self) -> None:
+        self.points = np.asarray(self.points, dtype=np.float32)
+        if self.points.ndim == 1 and self.points.size == 0:
+            self.points = self.points.reshape(0, 3)
+        if self.points.ndim != 2 or self.points.shape[1] not in (3, 4):
+            raise ValueError(f"points must be (N,3) or (N,4), got {self.points.shape}")
+
+    # -- factory methods -----------------------------------------------------
+
+    @classmethod
+    def from_numpy(cls, points: np.ndarray, frame_id: str = "map") -> PointCloud:
+        return cls(points=points, frame_id=frame_id)
+
+    @classmethod
+    def from_depth(cls, depth: np.ndarray, intrinsics: CameraIntrinsics,
+                   frame_id: str = "camera") -> PointCloud:
+        """Back-project a depth image to a 3-D point cloud.
+
+        Parameters
+        ----------
+        depth : np.ndarray
+            ``(H, W)`` depth image.  Values are in raw sensor units;
+            ``intrinsics.depth_scale`` is applied automatically.
+        intrinsics : CameraIntrinsics
+            Camera calibration.
+        """
+        h, w = depth.shape[:2]
+        u = np.arange(w, dtype=np.float32)
+        v = np.arange(h, dtype=np.float32)
+        u, v = np.meshgrid(u, v)
+
+        z = depth.astype(np.float32) * intrinsics.depth_scale
+        mask = z > 0
+        z = z[mask]
+        x = ((u[mask] - intrinsics.cx) * z / intrinsics.fx)
+        y = ((v[mask] - intrinsics.cy) * z / intrinsics.fy)
+        pts = np.stack([x, y, z], axis=-1)
+        return cls(points=pts, frame_id=frame_id)
+
+    # -- properties ----------------------------------------------------------
+
+    @property
+    def num_points(self) -> int:
+        return int(self.points.shape[0])
+
+    @property
+    def is_empty(self) -> bool:
+        return self.num_points == 0
+
+    # -- transforms ----------------------------------------------------------
+
+    def transform(self, matrix: np.ndarray) -> PointCloud:
+        """Apply a 4×4 homogeneous transform, returning a **new** cloud."""
+        matrix = np.asarray(matrix, dtype=np.float64)
+        if matrix.shape != (4, 4):
+            raise ValueError(f"Transform must be 4x4, got {matrix.shape}")
+
+        xyz = self.points[:, :3].astype(np.float64)
+        ones = np.ones((xyz.shape[0], 1), dtype=np.float64)
+        homo = np.hstack([xyz, ones])  # (N, 4)
+        transformed = (matrix @ homo.T).T[:, :3].astype(np.float32)
+
+        if self.points.shape[1] == 4:
+            # preserve intensity column
+            transformed = np.hstack([transformed, self.points[:, 3:4]])
+
+        return PointCloud(points=transformed, ts=self.ts, frame_id=self.frame_id)
+
+    def voxel_downsample(self, voxel_size: float) -> PointCloud:
+        """Grid-based voxel down-sampling (pure NumPy)."""
+        if self.is_empty or voxel_size <= 0:
+            return PointCloud(self.points.copy(), self.ts, self.frame_id)
+
+        xyz = self.points[:, :3]
+        keys = np.floor(xyz / voxel_size).astype(np.int64)
+        # unique voxel keys → keep first point per voxel
+        _, idx = np.unique(keys, axis=0, return_index=True)
+        idx.sort()  # preserve original ordering
+        return PointCloud(points=self.points[idx].copy(), ts=self.ts, frame_id=self.frame_id)
+
+    # -- serialisation -------------------------------------------------------
+
+    def encode(self) -> bytes:
+        """Serialise: fixed header + frame string + raw float32 blob."""
+        frame_bytes = self.frame_id.encode()
+        n, cols = self.points.shape
+        buf = bytearray()
+        buf += _PC_HDR.pack(n, cols, self.ts)
+        buf += struct.pack("<I", len(frame_bytes)) + frame_bytes
+        buf += self.points.tobytes()
+        return bytes(buf)
+
+    @classmethod
+    def decode(cls, raw: bytes) -> PointCloud:
+        off = 0
+        n, cols, ts = _PC_HDR.unpack_from(raw, off); off += _PC_HDR.size
+        frame_len = struct.unpack_from("<I", raw, off)[0]; off += 4
+        frame_id = raw[off: off + frame_len].decode(); off += frame_len
+        pts = np.frombuffer(raw, dtype=np.float32, offset=off, count=n * cols).reshape(n, cols)
+        return cls(points=pts.copy(), ts=ts, frame_id=frame_id)
+
+    # -- introspection -------------------------------------------------------
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Metadata dict (no point data)."""
+        xyz = self.points[:, :3]
+        if self.is_empty:
+            bounds = {"min": [0, 0, 0], "max": [0, 0, 0]}
+        else:
+            bounds = {
+                "min": xyz.min(axis=0).tolist(),
+                "max": xyz.max(axis=0).tolist(),
+            }
+        return {
+            "num_points": self.num_points,
+            "cols": int(self.points.shape[1]),
+            "frame_id": self.frame_id,
+            "ts": self.ts,
+            "bounds": bounds,
+        }
+
+    def __repr__(self) -> str:
+        return f"PointCloud({self.num_points} pts, frame='{self.frame_id}')"
+
+
+# ---------------------------------------------------------------------------
+# Imu
+# ---------------------------------------------------------------------------
+
+_IMU_FMT = struct.Struct("<10d")  # quat(4) + gyro(3) + accel(3) = 10 doubles = 80 bytes
+
+
+@dataclass
+class Imu:
+    """Inertial measurement unit reading.
+
+    Fields mirror ROS ``sensor_msgs/Imu``.
+    """
+
+    orientation: Quaternion = field(default_factory=Quaternion.identity)
+    angular_velocity: Vector3 = field(default_factory=Vector3)
+    linear_acceleration: Vector3 = field(default_factory=Vector3)
+    ts: float = field(default_factory=time.time)
+    frame_id: str = field(default="imu_link")
+
+    # -- encode / decode -----------------------------------------------------
+
+    def encode(self) -> bytes:
+        """88 bytes: 10×float64 (quaternion + gyro + accel) + ts(f64) + frame."""
+        frame_bytes = self.frame_id.encode()
+        buf = bytearray()
+        buf += _IMU_FMT.pack(
+            self.orientation.x, self.orientation.y,
+            self.orientation.z, self.orientation.w,
+            self.angular_velocity.x, self.angular_velocity.y, self.angular_velocity.z,
+            self.linear_acceleration.x, self.linear_acceleration.y, self.linear_acceleration.z,
+        )
+        buf += struct.pack("<d", self.ts)
+        buf += struct.pack("<I", len(frame_bytes)) + frame_bytes
+        return bytes(buf)
+
+    @classmethod
+    def decode(cls, raw: bytes) -> Imu:
+        vals = _IMU_FMT.unpack_from(raw, 0)
+        off = _IMU_FMT.size
+        ts = struct.unpack_from("<d", raw, off)[0]; off += 8
+        frame_len = struct.unpack_from("<I", raw, off)[0]; off += 4
+        frame_id = raw[off: off + frame_len].decode()
+        return cls(
+            orientation=Quaternion(vals[0], vals[1], vals[2], vals[3]),
+            angular_velocity=Vector3(vals[4], vals[5], vals[6]),
+            linear_acceleration=Vector3(vals[7], vals[8], vals[9]),
+            ts=ts,
+            frame_id=frame_id,
+        )
+
+    def __repr__(self) -> str:
+        return (f"Imu(gyro=({self.angular_velocity.x:.3f}, "
+                f"{self.angular_velocity.y:.3f}, {self.angular_velocity.z:.3f}), "
+                f"accel=({self.linear_acceleration.x:.3f}, "
+                f"{self.linear_acceleration.y:.3f}, {self.linear_acceleration.z:.3f}), "
+                f"frame='{self.frame_id}')")

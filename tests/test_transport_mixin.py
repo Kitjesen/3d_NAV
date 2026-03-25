@@ -16,10 +16,12 @@ import threading
 import time
 import unittest
 
-# 确保 repo root 在 path 中
+# 确保 repo root 和 src/ 在 path 中
 _repo = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _repo not in sys.path:
-    sys.path.insert(0, _repo)
+_src = os.path.join(_repo, "src")
+for _p in (_repo, _src):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 # ============================================================
@@ -254,7 +256,7 @@ class TestSimCLI(unittest.TestCase):
     """Sim CLI 参数解析测试。"""
 
     def test_parse_default_args(self):
-        from simulate.cli import _parse_args
+        from sim.engine.cli import _parse_args
         args = _parse_args([])
         self.assertEqual(args.engine, "mujoco")
         self.assertEqual(args.world, "factory")
@@ -264,18 +266,18 @@ class TestSimCLI(unittest.TestCase):
         self.assertFalse(args.semantic)
 
     def test_parse_nav_flag(self):
-        from simulate.cli import _parse_args
+        from sim.engine.cli import _parse_args
         args = _parse_args(["--nav"])
         self.assertTrue(args.nav)
         self.assertFalse(args.semantic)
 
     def test_parse_semantic_flag(self):
-        from simulate.cli import _parse_args
+        from sim.engine.cli import _parse_args
         args = _parse_args(["--semantic"])
         self.assertTrue(args.semantic)
 
     def test_parse_scenario_with_instruction(self):
-        from simulate.cli import _parse_args
+        from sim.engine.cli import _parse_args
         args = _parse_args([
             "--scenario", "semantic_nav",
             "--instruction", "导航到大门",
@@ -286,7 +288,7 @@ class TestSimCLI(unittest.TestCase):
         self.assertEqual(args.max_time, 60.0)
 
     def test_parse_goal_coordinates(self):
-        from simulate.cli import _parse_args
+        from sim.engine.cli import _parse_args
         args = _parse_args(["--scenario", "navigation", "--goal", "10,5"])
         self.assertEqual(args.goal, "10,5")
 
