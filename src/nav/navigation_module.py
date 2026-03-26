@@ -1,16 +1,18 @@
 """NavigationModule — unified path planning + tracking + mission FSM.
 
-Replaces 3 separate modules (GlobalPlannerModule, PathAdapterModule, MissionArcModule)
-with one Module. Internal strategies are pluggable.
+Replaces GlobalPlannerModule, PathAdapterModule, MissionArcModule with one Module.
+
+Features:
+  - Global path planning (pluggable: astar, pct via Registry)
+  - Waypoint tracking with arrival detection
+  - Stuck detection + auto-replan with max retry
+  - Patrol mode (multi-point waypoint list)
+  - Cancel support
+  - Planning/mission timeout
 
 Ports:
-  In:  goal_pose, odometry, instruction, stop_signal
-  Out: waypoint, global_path, cmd_vel, planner_status, mission_status, adapter_status
-
-Strategies:
-  planner:  "astar" | "pct"       — global path planning algorithm
-  tracker:  "waypoint"            — waypoint tracking approach
-  fsm:      "simple"              — mission state machine
+  In:  goal_pose, odometry, instruction, stop_signal, patrol_goals, cancel
+  Out: waypoint, global_path, planner_status, mission_status, adapter_status
 
 Usage::
 
@@ -47,6 +49,8 @@ class MissionState:
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     STUCK = "STUCK"
+    CANCELLED = "CANCELLED"
+    PATROLLING = "PATROLLING"
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +70,8 @@ class NavigationModule(Module, layer=5):
     odometry: In[Odometry]
     instruction: In[str]
     stop_signal: In[int]
+    patrol_goals: In[list]
+    cancel: In[str]
 
     # -- Outputs --
     waypoint: Out[PoseStamped]
@@ -106,6 +112,18 @@ class NavigationModule(Module, layer=5):
         self._last_progress_time = time.time()
         self._last_progress_pos = np.zeros(3)
         self._goal: Optional[np.ndarray] = None
+        self._failure_reason = ""
+
+        # Patrol state
+        self._patrol_goals: List[np.ndarray] = []
+        self._patrol_index = 0
+        self._patrol_loop = False
+
+        # Timeouts
+        self._planning_timeout = kw.get("planning_timeout", 30.0)
+        self._mission_timeout = kw.get("mission_timeout", 300.0)
+        self._mission_start_time = 0.0
+        self._planning_start_time = 0.0
 
     def setup(self):
         self._planner_backend = self._create_planner()
@@ -113,6 +131,8 @@ class NavigationModule(Module, layer=5):
         self.odometry.subscribe(self._on_odom)
         self.instruction.subscribe(self._on_instruction)
         self.stop_signal.subscribe(self._on_stop)
+        self.patrol_goals.subscribe(self._on_patrol_goals)
+        self.cancel.subscribe(self._on_cancel)
         self._set_state(MissionState.IDLE)
 
     def _create_planner(self):
@@ -165,11 +185,65 @@ class NavigationModule(Module, layer=5):
             self._wp_index = 0
             self._set_state(MissionState.IDLE)
 
+    def _on_cancel(self, msg: str):
+        """Cancel current mission."""
+        if self._state in (MissionState.IDLE, MissionState.CANCELLED):
+            return
+        self._path.clear()
+        self._wp_index = 0
+        self._patrol_goals.clear()
+        self._patrol_index = 0
+        self._failure_reason = f"cancelled: {msg}" if msg else "cancelled"
+        self._set_state(MissionState.CANCELLED)
+        logger.info("Mission cancelled: %s", msg)
+
+    def _on_patrol_goals(self, goals: list):
+        """Patrol mode — navigate to a list of goals sequentially.
+
+        Args:
+            goals: list of [x, y] or [x, y, z] coordinates, or
+                   list of dicts with {"x": ..., "y": ..., "loop": bool}
+        """
+        if not goals:
+            return
+        self._patrol_goals.clear()
+        self._patrol_loop = False
+
+        for g in goals:
+            if isinstance(g, dict):
+                self._patrol_goals.append(np.array([g["x"], g["y"], g.get("z", 0.0)]))
+                if g.get("loop"):
+                    self._patrol_loop = True
+            elif isinstance(g, (list, tuple)) and len(g) >= 2:
+                self._patrol_goals.append(np.array([g[0], g[1], g[2] if len(g) > 2 else 0.0]))
+
+        if self._patrol_goals:
+            self._patrol_index = 0
+            self._goal = self._patrol_goals[0]
+            self._replan_count = 0
+            self._set_state(MissionState.PATROLLING)
+            logger.info("Patrol started: %d goals, loop=%s", len(self._patrol_goals), self._patrol_loop)
+            self._plan()
+
+    def _advance_patrol(self) -> bool:
+        """Advance to next patrol goal. Returns True if more goals remain."""
+        self._patrol_index += 1
+        if self._patrol_index >= len(self._patrol_goals):
+            if self._patrol_loop:
+                self._patrol_index = 0
+            else:
+                return False
+        self._goal = self._patrol_goals[self._patrol_index]
+        self._replan_count = 0
+        logger.info("Patrol advancing to goal %d/%d", self._patrol_index + 1, len(self._patrol_goals))
+        self._plan()
+        return True
+
     def _on_odom(self, odom: Odometry):
         """Odometry update → advance waypoint tracking + stuck detection."""
         self._robot_pos = np.array([odom.x, odom.y, getattr(odom, 'z', 0.0)])
 
-        if self._state != MissionState.EXECUTING or not self._path:
+        if self._state not in (MissionState.EXECUTING, MissionState.PATROLLING) or not self._path:
             return
 
         # Waypoint arrival check
@@ -189,6 +263,10 @@ class NavigationModule(Module, layer=5):
                 })
 
                 if self._wp_index >= len(self._path):
+                    # Path completed — check if patrol has more goals
+                    if self._state == MissionState.PATROLLING and self._patrol_goals:
+                        if self._advance_patrol():
+                            return  # next patrol goal started
                     self._set_state(MissionState.SUCCESS)
                     return
 
@@ -210,7 +288,16 @@ class NavigationModule(Module, layer=5):
                                self._replan_count, self._max_replan)
                 self._plan()
             else:
+                self._failure_reason = "stuck after max replans"
                 self._set_state(MissionState.STUCK)
+
+        # Mission timeout
+        if self._mission_start_time > 0:
+            mission_elapsed = now - self._mission_start_time
+            if mission_elapsed > self._mission_timeout:
+                self._failure_reason = f"mission timeout ({self._mission_timeout}s)"
+                self._set_state(MissionState.FAILED)
+                logger.warning("Mission timeout after %.0fs", mission_elapsed)
 
     # -- Planning ------------------------------------------------------------
 
@@ -221,6 +308,7 @@ class NavigationModule(Module, layer=5):
             return
 
         self._set_state(MissionState.PLANNING)
+        self._mission_start_time = time.time()
         t0 = time.time()
 
         try:
@@ -286,5 +374,8 @@ class NavigationModule(Module, layer=5):
             "wp_index": self._wp_index,
             "wp_total": len(self._path),
             "replan_count": self._replan_count,
+            "failure_reason": self._failure_reason,
+            "patrol_index": self._patrol_index if self._patrol_goals else -1,
+            "patrol_total": len(self._patrol_goals),
         }
         return info
