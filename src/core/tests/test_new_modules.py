@@ -358,6 +358,39 @@ class TestRerunModule(unittest.TestCase):
 
 
 # ============================================================================
+# SLAMModule
+# ============================================================================
+
+class TestSLAMModule(unittest.TestCase):
+
+    def test_ports(self):
+        from slam.slam_module import SLAMModule
+        m = SLAMModule(backend="fastlio2")
+        self.assertIn("odometry", m.ports_out)
+        self.assertIn("map_cloud", m.ports_out)
+        self.assertIn("alive", m.ports_out)
+
+    def test_layer(self):
+        from slam.slam_module import SLAMModule
+        m = SLAMModule(backend="fastlio2")
+        self.assertEqual(m.layer, 1)
+
+    def test_backends_registered(self):
+        from slam.slam_module import SLAMModule  # trigger @register
+        from core.registry import list_plugins
+        backends = list_plugins("slam")
+        self.assertIn("fastlio2", backends)
+        self.assertIn("pointlio", backends)
+
+    def test_health(self):
+        from slam.slam_module import SLAMModule
+        m = SLAMModule(backend="pointlio")
+        h = m.health()
+        self.assertIn("slam", h)
+        self.assertEqual(h["slam"]["backend"], "pointlio")
+
+
+# ============================================================================
 # SemanticPlannerModule
 # ============================================================================
 
