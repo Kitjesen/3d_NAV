@@ -48,6 +48,7 @@ from drivers.sim.go1_sim_driver import Go1SimDriverModule
 from nav.navigation_module import NavigationModule, MissionState
 from base_autonomy.modules.local_planner_module import LocalPlannerModule
 from base_autonomy.modules.path_follower_module import PathFollowerModule
+from base_autonomy.modules.terrain_module import TerrainModule
 
 from sim.engine.core.world import ObstacleConfig
 
@@ -202,7 +203,8 @@ bp.add(Go1SimDriverModule,
 
 bp.add(LiveMapper, goal_xy=GOAL_XY, goal_delay=3.0)
 
-bp.add(LocalPlannerModule, backend="simple")
+bp.add(TerrainModule, backend="simple")
+bp.add(LocalPlannerModule, backend="cmu_py")
 bp.add(PathFollowerModule,  backend="pid", max_speed=0.4, lookahead=1.5)
 
 bp.add(NavigationModule,
@@ -218,6 +220,9 @@ bp.wire("Go1SimDriverModule", "odometry",    "LocalPlannerModule",  "odometry")
 bp.wire("Go1SimDriverModule", "odometry",    "PathFollowerModule",  "odometry")
 bp.wire("Go1SimDriverModule", "odometry",    "LiveMapper",          "odom_in")
 bp.wire("Go1SimDriverModule", "lidar_cloud", "LiveMapper",          "lidar_in")
+bp.wire("Go1SimDriverModule", "lidar_cloud", "TerrainModule",       "map_cloud")
+bp.wire("Go1SimDriverModule", "odometry",    "TerrainModule",       "odometry")
+bp.wire("TerrainModule",      "terrain_map", "LocalPlannerModule",  "terrain_map")
 bp.wire("LiveMapper",         "costmap_out", "NavigationModule",    "costmap")
 bp.wire("LiveMapper",         "goal_cmd",    "NavigationModule",    "goal_pose")
 bp.wire("NavigationModule",   "waypoint",    "LocalPlannerModule",  "waypoint")
@@ -251,7 +256,7 @@ import mujoco
 
 FPS   = 15
 W, H  = 1280, 720
-MAX_S = 60        # maximum recording seconds
+MAX_S = 80        # maximum recording seconds
 EXTRA_S = 3       # extra seconds to record after goal reached
 
 # Wait until driver has model loaded (it loads in setup(), before start)
