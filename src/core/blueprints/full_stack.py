@@ -118,7 +118,7 @@ def full_stack_blueprint(
     # ── Layer 2: C++ autonomy stack (NativeModule, DDS) ──────────────────
 
     if enable_native:
-        from base_autonomy.autonomy_module import AutonomyModule
+        from base_autonomy.modules.autonomy_module import AutonomyModule
         bp.add(AutonomyModule)
 
     # ── Layer 3: Perception (pluggable detector + encoder) ───────────────

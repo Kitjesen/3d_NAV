@@ -30,7 +30,8 @@
       "WebFetch(domain:opendatalab.com)",
       "WebFetch(domain:blog.csdn.net)",
       "WebFetch(domain:forums.developer.nvidia.com)",
-      "mcp__plugin_oh-my-claudecode_t__python_repl"
+      "mcp__plugin_oh-my-claudecode_t__python_repl",
+      "WebFetch(domain:nanobind.readthedocs.io)"
     ]
   }
 }
