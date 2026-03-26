@@ -16,11 +16,11 @@ import math
 import threading
 from typing import Any, Dict, List, Optional
 
-from src.core.module import Module
-from src.core.stream import In, Out
-from src.core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
-from src.core.msgs.nav import Odometry
-from src.core.msgs.semantic import GoalResult as MsgGoalResult, SceneGraph
+from core.module import Module
+from core.stream import In, Out
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core.msgs.nav import Odometry
+from core.msgs.semantic import GoalResult as MsgGoalResult, SceneGraph
 
 logger = logging.getLogger(__name__)
 

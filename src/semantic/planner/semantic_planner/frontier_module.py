@@ -15,9 +15,9 @@ from typing import Any, List, Optional
 
 import numpy as np
 
-from src.core import Module, In, Out
-from src.core.msgs import Odometry, PoseStamped, SceneGraph
-from src.core.msgs.geometry import Pose, Quaternion, Vector3
+from core import Module, In, Out
+from core.msgs import Odometry, PoseStamped, SceneGraph
+from core.msgs.geometry import Pose, Quaternion, Vector3
 
 from .frontier_scorer import FrontierScorer
 from .exploration_strategy import extract_frontier_scene_data

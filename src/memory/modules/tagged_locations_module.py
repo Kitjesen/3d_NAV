@@ -15,9 +15,9 @@ from typing import Any, Optional
 
 import numpy as np
 
-from src.core import Module, In, Out
-from src.core.msgs import Odometry, PoseStamped
-from src.core.msgs.geometry import Pose, Quaternion, Vector3
+from core import Module, In, Out
+from core.msgs import Odometry, PoseStamped
+from core.msgs.geometry import Pose, Quaternion, Vector3
 
 from memory.spatial.tagged_locations import TaggedLocationStore
 

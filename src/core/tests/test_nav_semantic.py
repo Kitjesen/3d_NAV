@@ -8,9 +8,9 @@ import time
 import numpy as np
 import pytest
 
-from src.core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
-from src.core.msgs.nav import OccupancyGrid, Odometry, Path
-from src.core.msgs.semantic import (
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core.msgs.nav import OccupancyGrid, Odometry, Path
+from core.msgs.semantic import (
     Detection3D,
     GoalResult,
     MissionStatus,

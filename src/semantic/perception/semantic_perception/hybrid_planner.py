@@ -1,4 +1,4 @@
-"""
+"""EXPERIMENTAL — not used in production navigation stack.
 混合路径规划器 (Hybrid Planner) — 拓扑图辅助的分层路径规划。
 
 核心思想:

@@ -105,14 +105,14 @@ def tracker():
 @pytest.fixture
 def tsg():
     """新鲜的 TopologySemGraph 实例。"""
-    from semantic_perception.topology_graph import TopologySemGraph
+    from memory.spatial.topology_graph import TopologySemGraph
     return TopologySemGraph()
 
 
 @pytest.fixture
 def tsg_two_rooms():
     """预配置两个房间 + 一条边的 TopologySemGraph。"""
-    from semantic_perception.topology_graph import TopologySemGraph
+    from memory.spatial.topology_graph import TopologySemGraph
 
     g = TopologySemGraph()
     sg = {

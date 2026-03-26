@@ -5,10 +5,10 @@ TaggedLocationsModule -- frontier exploration and memory Module conversions.
 import pytest
 import numpy as np
 
-from src.core import Module, In, Out, Blueprint, autoconnect
-from src.core.msgs.nav import Odometry
-from src.core.msgs.geometry import Pose, PoseStamped, Vector3, Quaternion
-from src.core.msgs.semantic import Detection3D, SceneGraph
+from core import Module, In, Out, Blueprint, autoconnect
+from core.msgs.nav import Odometry
+from core.msgs.geometry import Pose, PoseStamped, Vector3, Quaternion
+from core.msgs.semantic import Detection3D, SceneGraph
 
 from semantic_planner.frontier_module import FrontierModule
 from semantic_planner.topological_memory_module import TopologicalMemoryModule

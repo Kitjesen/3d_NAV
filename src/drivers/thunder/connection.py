@@ -12,7 +12,7 @@ Han Dog Module — dimos 风格的四足机器人桥接模块。
        alive        (bool)        — gRPC 连接状态
 
 用法:
-    from src.core import autoconnect
+    from core import autoconnect
     from drivers.thunder.han_dog_module import NovaDogConnection
 
     handle = autoconnect(

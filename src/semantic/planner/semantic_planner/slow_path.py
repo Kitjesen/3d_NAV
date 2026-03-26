@@ -737,7 +737,7 @@ class SlowPathMixin:
         self._visited_room_ids.clear()
         if self._tsg is not None:
             try:
-                from semantic_perception.topology_graph import TopologySemGraph as _TSG
+                from memory.spatial.topology_graph import TopologySemGraph as _TSG
                 self._tsg = _TSG()
             except ImportError:
                 self._tsg = None

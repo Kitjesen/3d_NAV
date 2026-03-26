@@ -46,7 +46,7 @@ from .prompt_templates import (
 )
 
 try:
-    from semantic_perception.topology_graph import TopologySemGraph
+    from memory.spatial.topology_graph import TopologySemGraph
 except ImportError:
     TopologySemGraph = None
 

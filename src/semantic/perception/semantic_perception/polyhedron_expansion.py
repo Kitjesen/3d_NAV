@@ -1,4 +1,4 @@
-"""
+"""EXPERIMENTAL — not used in production navigation stack.
 多面体扩展 (Polyhedron Expansion) — USS-Nav 核心算法实现。
 
 功能:

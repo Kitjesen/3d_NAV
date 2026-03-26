@@ -17,11 +17,11 @@ import time
 
 import pytest
 
-from src.core.stream import In, LocalTransport, Out
-from src.core.module import Module
-from src.core.blueprint import Blueprint, SystemHandle, autoconnect
-from src.core.msgs.geometry import PoseStamped, Vector3
-from src.core.msgs.semantic import SceneGraph, Detection3D, GoalResult
+from core.stream import In, LocalTransport, Out
+from core.module import Module
+from core.blueprint import Blueprint, SystemHandle, autoconnect
+from core.msgs.geometry import PoseStamped, Vector3
+from core.msgs.semantic import SceneGraph, Detection3D, GoalResult
 
 
 # ============================================================================
@@ -352,7 +352,7 @@ class TestLocalTransport:
 
     def test_transport_protocol(self):
         """LocalTransport 满足 Transport 协议。"""
-        from src.core.stream import Transport
+        from core.stream import Transport
         t = LocalTransport()
         assert isinstance(t, Transport)
 

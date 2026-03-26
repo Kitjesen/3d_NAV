@@ -25,7 +25,7 @@ from semantic_perception.polyhedron_expansion import (
     PolyhedronExpansionConfig,
 )
 from semantic_perception.scg_builder import SCGBuilder, SCGConfig
-from semantic_perception.topology_graph import TopologySemGraph
+from memory.spatial.topology_graph import TopologySemGraph
 
 
 def create_mock_environment():

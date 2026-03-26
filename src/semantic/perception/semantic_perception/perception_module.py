@@ -20,16 +20,16 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from src.core import Module, In, Out
-from src.core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
-from src.core.msgs.semantic import (
+from core import Module, In, Out
+from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
+from core.msgs.semantic import (
     Detection3D as CoreDetection3D,
     Relation,
     Region,
     SceneGraph,
 )
-from src.core.msgs.nav import Odometry
-from src.core.msgs.geometry import Vector3
+from core.msgs.nav import Odometry
+from core.msgs.geometry import Vector3
 
 logger = logging.getLogger(__name__)
 

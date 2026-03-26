@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from src.core.msgs.geometry import (
+from core.msgs.geometry import (
     Quaternion,
     Pose,
     PoseStamped,

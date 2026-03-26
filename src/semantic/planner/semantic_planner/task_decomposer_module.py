@@ -13,8 +13,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from src.core.module import Module
-from src.core.stream import In, Out
+from core.module import Module
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 

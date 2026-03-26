@@ -13,10 +13,10 @@ import math
 
 import pytest
 
-from src.core import In, Module, Out, autoconnect, Blueprint
-from src.core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
-from src.core.msgs.nav import Odometry
-from src.core.msgs.semantic import GoalResult as MsgGoalResult, SceneGraph, Detection3D
+from core import In, Module, Out, autoconnect, Blueprint
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core.msgs.nav import Odometry
+from core.msgs.semantic import GoalResult as MsgGoalResult, SceneGraph, Detection3D
 
 from semantic_planner.goal_resolver_module import GoalResolverModule
 from semantic_planner.task_decomposer_module import TaskDecomposerModule

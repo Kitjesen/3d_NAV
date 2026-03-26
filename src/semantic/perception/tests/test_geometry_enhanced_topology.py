@@ -18,7 +18,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from semantic_perception.geometry_extractor import GeometryExtractor
-from semantic_perception.topology_graph import TopoNode, TopologySemGraph
+from memory.spatial.topology_graph import TopoNode, TopologySemGraph
 
 
 def test_toponode_serialization():

@@ -17,7 +17,7 @@ import unittest
 
 import numpy as np
 
-from semantic_perception.topology_graph import (
+from memory.spatial.topology_graph import (
     TopologySemGraph,
     TopoNode,
     TopoEdge,

@@ -78,7 +78,7 @@ from .tracked_objects import (
     ViewNode,
     infer_room_type,
 )
-from .belief_propagation import BeliefPropagationMixin
+from memory.knowledge.belief.propagation import BeliefPropagationMixin
 from .room_manager import RoomManagerMixin
 
 logger = logging.getLogger(__name__)
@@ -793,7 +793,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
             logger.warning("Cannot load belief model without KG")
             return False
         try:
-            from semantic_perception.belief_network import BeliefPredictor
+            from memory.knowledge.belief.network import BeliefPredictor
             self._belief_model = BeliefPredictor.from_kg(
                 self._knowledge_graph, weights_path=path)
             logger.info("Belief GCN model loaded from %s", path)
@@ -813,7 +813,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
             logger.warning("Cannot train belief model without KG")
             return False
         try:
-            from semantic_perception.belief_network import (
+            from memory.knowledge.belief.network import (
                 BeliefPredictor, BeliefTrainer as BTrainer,
                 KGBeliefGCN, KGSceneGraphDataset, SafetyWeightedBCELoss,
                 build_object_vocabulary, build_cooccurrence_matrix,

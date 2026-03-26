@@ -15,8 +15,8 @@ from typing import Any, Optional
 
 import numpy as np
 
-from src.core import Module, In, Out
-from src.core.msgs import Odometry, SceneGraph
+from core import Module, In, Out
+from core.msgs import Odometry, SceneGraph
 
 from memory.spatial.episodic import EpisodicMemory
 
