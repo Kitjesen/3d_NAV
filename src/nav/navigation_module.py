@@ -241,7 +241,11 @@ class NavigationModule(Module, layer=5):
 
     def _on_odom(self, odom: Odometry):
         """Odometry update → advance waypoint tracking + stuck detection."""
-        self._robot_pos = np.array([odom.x, odom.y, getattr(odom, 'z', 0.0)])
+        self._robot_pos = np.array([
+            odom.pose.position.x,
+            odom.pose.position.y,
+            odom.pose.position.z,
+        ])
 
         if self._state not in (MissionState.EXECUTING, MissionState.PATROLLING) or not self._path:
             return

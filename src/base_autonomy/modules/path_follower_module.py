@@ -46,7 +46,7 @@ class PathFollowerModule(Module, layer=2):
     alive: Out[bool]
 
     def __init__(self, backend: str = "pure_pursuit",
-                 max_speed: float = 1.0, lookahead: float = 1.5, **kw):
+                 max_speed: float = 0.4, lookahead: float = 1.5, **kw):
         super().__init__(**kw)
         self._backend = backend
         self._max_speed = max_speed
@@ -102,9 +102,13 @@ class PathFollowerModule(Module, layer=2):
         super().stop()
 
     def _on_odom(self, odom: Odometry):
-        self._robot_x = odom.x
-        self._robot_y = odom.y
-        self._robot_yaw = odom.yaw
+        self._robot_x = odom.pose.position.x
+        self._robot_y = odom.pose.position.y
+        # Extract yaw safely from quaternion (avoid deep property chain / recursion)
+        q = odom.pose.orientation
+        siny = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self._robot_yaw = math.atan2(siny, cosy)
 
         # PID backend: compute cmd_vel on each odom update
         if self._backend == "pid" and self._path_points is not None:
@@ -148,9 +152,11 @@ class PathFollowerModule(Module, layer=2):
         while yaw_err < -math.pi:
             yaw_err += 2 * math.pi
 
-        # P controller
-        vx = min(self._max_speed, dist * 0.5)
-        wz = max(-1.0, min(1.0, yaw_err * 2.0))
+        # P controller with speed/yaw coupling
+        wz = max(-0.5, min(0.5, yaw_err * 0.6))  # match policy range
+        # Slow down when turning hard (cos coupling)
+        turn_factor = max(0.3, math.cos(yaw_err))
+        vx = min(self._max_speed, dist * 0.3) * turn_factor
 
         self.cmd_vel.publish(Twist(
             linear=Vector3(vx, 0.0, 0.0),

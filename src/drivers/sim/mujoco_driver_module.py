@@ -187,8 +187,13 @@ class MujocoDriverModule(Module, layer=1):
     def _on_cmd_vel(self, twist: Twist):
         if self._stopped:
             return
-        self._cmd_vx = twist.linear.x if hasattr(twist.linear, 'x') else 0.0
-        self._cmd_vy = twist.linear.y if hasattr(twist.linear, 'y') else 0.0
+        # Robot body frame: +Y is forward in MuJoCo (URDF→MJCF 90° offset)
+        # Navigation frame: +X is forward
+        # Remap: nav_vx → sim_vy, nav_vy → -sim_vx
+        nav_vx = twist.linear.x if hasattr(twist.linear, 'x') else 0.0
+        nav_vy = twist.linear.y if hasattr(twist.linear, 'y') else 0.0
+        self._cmd_vx = -nav_vy   # nav +Y → sim -X
+        self._cmd_vy = nav_vx    # nav +X → sim +Y (forward)
         self._cmd_wz = twist.angular.z if hasattr(twist.angular, 'z') else 0.0
 
     def _on_stop(self, level: int):
