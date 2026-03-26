@@ -176,6 +176,14 @@ class _AStarBackend:
         logger.info("A* loaded tomogram: %s, grid=%s", path,
                      self._grid.shape if self._grid is not None else None)
 
+    def update_map(self, grid: np.ndarray, resolution: float = 0.2,
+                   origin: np.ndarray = None):
+        """Live costmap update — replaces the static pickle-loaded grid."""
+        self._grid = grid
+        self._resolution = resolution
+        if origin is not None:
+            self._origin = np.array(origin[:2])
+
     def plan(self, start: np.ndarray, goal: np.ndarray) -> list:
         if self._grid is None:
             return []

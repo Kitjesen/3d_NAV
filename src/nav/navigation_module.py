@@ -68,6 +68,7 @@ class NavigationModule(Module, layer=5):
     # -- Inputs --
     goal_pose: In[PoseStamped]
     odometry: In[Odometry]
+    costmap: In[dict]
     instruction: In[str]
     stop_signal: In[int]
     patrol_goals: In[list]
@@ -129,6 +130,7 @@ class NavigationModule(Module, layer=5):
         self._planner_backend = self._create_planner()
         self.goal_pose.subscribe(self._on_goal)
         self.odometry.subscribe(self._on_odom)
+        self.costmap.subscribe(self._on_costmap)
         self.instruction.subscribe(self._on_instruction)
         self.stop_signal.subscribe(self._on_stop)
         self.patrol_goals.subscribe(self._on_patrol_goals)
@@ -184,6 +186,29 @@ class NavigationModule(Module, layer=5):
             self._path.clear()
             self._wp_index = 0
             self._set_state(MissionState.IDLE)
+
+    def _on_costmap(self, data: dict):
+        """Live costmap update from terrain analysis or mapper.
+
+        Updates planner grid and triggers replan if currently executing.
+
+        Args:
+            data: {"grid": np.ndarray, "resolution": float, "origin": [x, y]}
+        """
+        if self._planner_backend and hasattr(self._planner_backend, 'update_map'):
+            grid = data.get("grid")
+            if grid is not None:
+                self._planner_backend.update_map(
+                    grid,
+                    resolution=data.get("resolution", 0.2),
+                    origin=data.get("origin"),
+                )
+                # Replan if active goal + enough time since last plan (3s cooldown)
+                if (self._state in (MissionState.EXECUTING, MissionState.PATROLLING)
+                        and self._goal is not None
+                        and time.time() - self._mission_start_time > 3.0):
+                    self._mission_start_time = time.time()  # reset cooldown
+                    self._plan()
 
     def _on_cancel(self, msg: str):
         """Cancel current mission."""

@@ -79,6 +79,7 @@ class MujocoDriverModule(Module, layer=1):
         policy_path: str = "",
         robot_xml: str = "",
         start_pos: tuple = (0.0, 0.0, 0.35),
+        obstacles: list = None,
         **kw,
     ):
         super().__init__(**kw)
@@ -88,6 +89,7 @@ class MujocoDriverModule(Module, layer=1):
         self._policy_path = policy_path or str(_SIM_ROOT / "robot" / "policy.onnx")
         self._robot_xml = robot_xml or str(_ROBOT_XML)
         self._start_pos = start_pos
+        self._obstacles = obstacles or []
 
         self._engine = None
         self._sim_thread: Optional[threading.Thread] = None
@@ -124,8 +126,14 @@ class MujocoDriverModule(Module, layer=1):
             if self._policy_path:
                 robot_cfg.policy_onnx = self._policy_path
 
-            # Don't set scene_xml in WorldConfig — let load(xml_path) merge robot+scene
-            world_cfg = WorldConfig()
+            from sim.engine.core.world import ObstacleConfig
+            obs_cfgs = []
+            for o in self._obstacles:
+                if isinstance(o, dict):
+                    obs_cfgs.append(ObstacleConfig(**o))
+                else:
+                    obs_cfgs.append(o)
+            world_cfg = WorldConfig(obstacles=obs_cfgs)
 
             camera_cfg = CameraConfig(
                 name="front_camera", width=640, height=480,

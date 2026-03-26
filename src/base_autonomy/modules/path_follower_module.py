@@ -102,13 +102,24 @@ class PathFollowerModule(Module, layer=2):
         super().stop()
 
     def _on_odom(self, odom: Odometry):
+        prev_x, prev_y = self._robot_x, self._robot_y
         self._robot_x = odom.pose.position.x
         self._robot_y = odom.pose.position.y
-        # Extract yaw safely from quaternion (avoid deep property chain / recursion)
-        q = odom.pose.orientation
-        siny = 2.0 * (q.w * q.z + q.x * q.y)
-        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-        self._robot_yaw = math.atan2(siny, cosy)
+
+        # Estimate yaw from velocity or position delta (more reliable than quaternion
+        # for robots where body frame doesn't align with motion direction)
+        vx = odom.twist.linear.x if hasattr(odom.twist.linear, 'x') else 0.0
+        vy = odom.twist.linear.y if hasattr(odom.twist.linear, 'y') else 0.0
+        speed = math.hypot(vx, vy)
+        if speed > 0.05:
+            # Use velocity direction
+            self._robot_yaw = math.atan2(vy, vx)
+        else:
+            # Fallback: position delta
+            dx = self._robot_x - prev_x
+            dy = self._robot_y - prev_y
+            if math.hypot(dx, dy) > 0.01:
+                self._robot_yaw = math.atan2(dy, dx)
 
         # PID backend: compute cmd_vel on each odom update
         if self._backend == "pid" and self._path_points is not None:
