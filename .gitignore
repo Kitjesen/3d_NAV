@@ -128,3 +128,4 @@ research/semantic_map_refs/
 # ── Misc generated ──
 generate_paper_figures*.py
 src/global_planning/PCT_planner/planner/lib/3rdparty/
+.claude/worktrees/
