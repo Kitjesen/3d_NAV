@@ -1,0 +1,80 @@
+<!-- Go1 flat terrain scene — navigation obstacles
+     Assets resolved from mujoco_menagerie/unitree_go1/assets/ at runtime.
+     The Python loader injects <include file="unitree_go1.xml"/> and assets dict.
+
+     Obstacle geoms are in group=2 so LiDAR (groups 0+2) can see them
+     but robot body geoms (group=0) are excluded via bodyexclude in mj_multiRay.
+
+     Keyframe "home" must come from unitree_go1.xml (provided by menagerie).
+-->
+<mujoco model="go1_flat_nav">
+  <compiler angle="radian" autolimits="true"/>
+  <option gravity="0 0 -9.81" timestep="0.005" integrator="RK4"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+    <headlight ambient="0.35 0.35 0.35"/>
+    <quality shadowsize="2048"/>
+    <map znear="0.01" zfar="200"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker"
+             rgb1=".88 .88 .85" rgb2=".72 .72 .70" width="512" height="512"/>
+    <material name="grid_mat"  texture="grid"  texrepeat="8 8" reflectance="0.03"/>
+    <material name="wall_mat"  rgba=".55 .55 .60 1"/>
+    <material name="block_mat" rgba=".75 .35 .25 1"/>
+    <material name="goal_mat"  rgba=".25 .80 .30 0.6"/>
+  </asset>
+
+  <worldbody>
+    <!-- Floor — group 0, LiDAR will see it only below range_min -->
+    <geom name="floor" type="plane" size="60 60 0.1"
+          material="grid_mat" conaffinity="1" condim="3" group="0"/>
+
+    <!-- Lights -->
+    <light name="sun"  pos="0 0 30"   dir="0 0 -1"     diffuse=".85 .85 .85" specular=".15 .15 .15"/>
+    <light name="fill" pos="8 -8 12"  dir="-0.5 0.5 -1" diffuse=".30 .30 .30"/>
+
+    <!-- ── Navigation obstacles (group=2: visible to LiDAR, not robot self) ── -->
+
+    <!-- Left wall corridor -->
+    <geom name="wall_L" type="box" size="8.0 0.15 0.8"
+          pos="5.0  3.5 0.8" material="wall_mat" conaffinity="1" group="2"/>
+    <!-- Right wall corridor -->
+    <geom name="wall_R" type="box" size="8.0 0.15 0.8"
+          pos="5.0 -3.5 0.8" material="wall_mat" conaffinity="1" group="2"/>
+    <!-- Center block — forces robot to navigate around it -->
+    <geom name="block_C" type="box" size="0.6 1.8 0.6"
+          pos="5.0  0.0 0.6" material="block_mat" conaffinity="1" group="2"/>
+    <!-- Far wall closing off corridor -->
+    <geom name="wall_far" type="box" size="0.15 4.0 0.8"
+          pos="12.0 0.0 0.8" material="wall_mat" conaffinity="1" group="2"/>
+    <!-- Extra scattered blocks for richer mapping -->
+    <geom name="block_A" type="box" size="0.5 0.5 0.6"
+          pos="3.0  2.0 0.6" material="block_mat" conaffinity="1" group="2"/>
+    <geom name="block_B" type="box" size="0.5 0.5 0.6"
+          pos="3.0 -2.0 0.6" material="block_mat" conaffinity="1" group="2"/>
+    <geom name="cyl_A" type="cylinder" size="0.35 0.7"
+          pos="8.0  2.2 0.7" rgba=".3 .6 .8 1" conaffinity="1" group="2"/>
+    <geom name="cyl_B" type="cylinder" size="0.35 0.7"
+          pos="8.0 -2.2 0.7" rgba=".3 .6 .8 1" conaffinity="1" group="2"/>
+
+    <!-- Goal marker (visual only, no collision) -->
+    <geom name="goal_marker" type="cylinder" size="0.30 0.02"
+          pos="10.0 0.0 0.02" material="goal_mat" conaffinity="0" group="1"/>
+
+    <!-- IMU site — needed by Go1OnnxController for gravity vector -->
+    <!-- (Also declared in unitree_go1.xml via menagerie; this is a fallback
+         in case the menagerie XML uses a different site name) -->
+  </worldbody>
+
+  <sensor>
+    <!-- Sensors declared in unitree_go1.xml override these if names collide.
+         Listed here as documentation of what the policy expects. -->
+    <!-- gyro       : body angular velocity (trunk) -->
+    <!-- local_linvel: body linear velocity in local frame -->
+    <!-- imu site   : used to compute gravity vector via xmat -->
+  </sensor>
+
+</mujoco>

@@ -56,6 +56,8 @@ class PathFollowerModule(Module, layer=2):
         self._robot_y = 0.0
         self._robot_yaw = 0.0
         self._path_points = None
+        self._smooth_vx = 0.0
+        self._smooth_wz = 0.0
 
     def setup(self):
         self.odometry.subscribe(self._on_odom)
@@ -152,7 +154,15 @@ class PathFollowerModule(Module, layer=2):
         dist = math.hypot(dx, dy)
 
         if dist < 0.2:
-            self.cmd_vel.publish(Twist())
+            self._smooth_vx *= 0.5  # decay to zero
+            self._smooth_wz *= 0.5
+            if abs(self._smooth_vx) < 0.01:
+                self._smooth_vx = 0.0
+                self._smooth_wz = 0.0
+            self.cmd_vel.publish(Twist(
+                linear=Vector3(self._smooth_vx, 0.0, 0.0),
+                angular=Vector3(0.0, 0.0, self._smooth_wz),
+            ))
             return
 
         desired_yaw = math.atan2(dy, dx)
@@ -169,9 +179,14 @@ class PathFollowerModule(Module, layer=2):
         turn_factor = max(0.3, math.cos(yaw_err))
         vx = min(self._max_speed, dist * 0.3) * turn_factor
 
+        # Exponential smoothing for continuous motion
+        alpha = 0.3  # smoothing factor (0=no change, 1=instant)
+        self._smooth_vx = (1 - alpha) * self._smooth_vx + alpha * vx
+        self._smooth_wz = (1 - alpha) * self._smooth_wz + alpha * wz
+
         self.cmd_vel.publish(Twist(
-            linear=Vector3(vx, 0.0, 0.0),
-            angular=Vector3(0.0, 0.0, wz),
+            linear=Vector3(self._smooth_vx, 0.0, 0.0),
+            angular=Vector3(0.0, 0.0, self._smooth_wz),
         ))
 
     def health(self) -> Dict[str, Any]:

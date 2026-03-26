@@ -31,7 +31,8 @@
       "WebFetch(domain:blog.csdn.net)",
       "WebFetch(domain:forums.developer.nvidia.com)",
       "mcp__plugin_oh-my-claudecode_t__python_repl",
-      "WebFetch(domain:nanobind.readthedocs.io)"
+      "WebFetch(domain:nanobind.readthedocs.io)",
+      "WebFetch(domain:deepwiki.com)"
     ]
   }
 }
