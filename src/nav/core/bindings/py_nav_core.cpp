@@ -1,104 +1,112 @@
 /**
- * pybind11 bindings for nav_core
+ * nanobind bindings for nav_core
+ *
+ * Migrated from pybind11 → nanobind for:
+ *   - 2-4x faster compilation
+ *   - 3-5x smaller .so
+ *   - Better ndarray zero-copy with numpy
+ *   - Free-threaded Python support (future)
  *
  * 编译: cmake -B build && cmake --build build
  * 使用: import _nav_core
  */
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 
 #include "nav_core/types.hpp"
 #include "nav_core/path_follower_core.hpp"
 #include "nav_core/pct_adapter_core.hpp"
 #include "nav_core/local_planner_core.hpp"
+#include "nav_core/terrain_core.hpp"
 
-namespace py = pybind11;
+namespace nb = nanobind;
 using namespace nav_core;
 
-PYBIND11_MODULE(_nav_core, m) {
-  m.doc() = "nav_core — 零 ROS2 依赖的导航核心算法 (C++ → Python)";
+NB_MODULE(_nav_core, m) {
+  m.doc() = "nav_core — 零 ROS2 依赖的导航核心算法 (C++ → Python, nanobind)";
 
   // ── 基础类型 ──
-  py::class_<Vec3>(m, "Vec3")
-    .def(py::init<>())
-    .def(py::init([](double x, double y, double z) {
-      return Vec3{x, y, z};
-    }), py::arg("x") = 0.0, py::arg("y") = 0.0, py::arg("z") = 0.0)
-    .def_readwrite("x", &Vec3::x)
-    .def_readwrite("y", &Vec3::y)
-    .def_readwrite("z", &Vec3::z);
+  nb::class_<Vec3>(m, "Vec3")
+    .def(nb::init<>())
+    .def("__init__", [](Vec3* v, double x, double y, double z) {
+      new (v) Vec3{x, y, z};
+    }, nb::arg("x") = 0.0, nb::arg("y") = 0.0, nb::arg("z") = 0.0)
+    .def_rw("x", &Vec3::x)
+    .def_rw("y", &Vec3::y)
+    .def_rw("z", &Vec3::z);
 
-  py::class_<Pose>(m, "Pose")
-    .def(py::init<>())
-    .def_readwrite("position", &Pose::position)
-    .def_readwrite("yaw", &Pose::yaw);
+  nb::class_<Pose>(m, "Pose")
+    .def(nb::init<>())
+    .def_rw("position", &Pose::position)
+    .def_rw("yaw", &Pose::yaw);
 
-  py::class_<Twist>(m, "Twist")
-    .def(py::init<>())
-    .def_readwrite("vx", &Twist::vx)
-    .def_readwrite("vy", &Twist::vy)
-    .def_readwrite("wz", &Twist::wz);
+  nb::class_<Twist>(m, "Twist")
+    .def(nb::init<>())
+    .def_rw("vx", &Twist::vx)
+    .def_rw("vy", &Twist::vy)
+    .def_rw("wz", &Twist::wz);
 
   m.def("normalize_angle", &normalizeAngle);
   m.def("distance_2d", &distance2D);
   m.def("distance_3d", &distance3D);
 
   // ── PathFollower ──
-  py::class_<PathFollowerParams>(m, "PathFollowerParams")
-    .def(py::init<>())
-    .def_readwrite("sensor_offset_x", &PathFollowerParams::sensorOffsetX)
-    .def_readwrite("sensor_offset_y", &PathFollowerParams::sensorOffsetY)
-    .def_readwrite("base_look_ahead_dis", &PathFollowerParams::baseLookAheadDis)
-    .def_readwrite("look_ahead_ratio", &PathFollowerParams::lookAheadRatio)
-    .def_readwrite("min_look_ahead_dis", &PathFollowerParams::minLookAheadDis)
-    .def_readwrite("max_look_ahead_dis", &PathFollowerParams::maxLookAheadDis)
-    .def_readwrite("yaw_rate_gain", &PathFollowerParams::yawRateGain)
-    .def_readwrite("stop_yaw_rate_gain", &PathFollowerParams::stopYawRateGain)
-    .def_readwrite("max_yaw_rate", &PathFollowerParams::maxYawRate)
-    .def_readwrite("max_speed", &PathFollowerParams::maxSpeed)
-    .def_readwrite("max_accel", &PathFollowerParams::maxAccel)
-    .def_readwrite("switch_time_thre", &PathFollowerParams::switchTimeThre)
-    .def_readwrite("dir_diff_thre", &PathFollowerParams::dirDiffThre)
-    .def_readwrite("omni_dir_goal_thre", &PathFollowerParams::omniDirGoalThre)
-    .def_readwrite("omni_dir_diff_thre", &PathFollowerParams::omniDirDiffThre)
-    .def_readwrite("stop_dis_thre", &PathFollowerParams::stopDisThre)
-    .def_readwrite("slow_dwn_dis_thre", &PathFollowerParams::slowDwnDisThre)
-    .def_readwrite("two_way_drive", &PathFollowerParams::twoWayDrive)
-    .def_readwrite("no_rot_at_goal", &PathFollowerParams::noRotAtGoal);
+  nb::class_<PathFollowerParams>(m, "PathFollowerParams")
+    .def(nb::init<>())
+    .def_rw("sensor_offset_x", &PathFollowerParams::sensorOffsetX)
+    .def_rw("sensor_offset_y", &PathFollowerParams::sensorOffsetY)
+    .def_rw("base_look_ahead_dis", &PathFollowerParams::baseLookAheadDis)
+    .def_rw("look_ahead_ratio", &PathFollowerParams::lookAheadRatio)
+    .def_rw("min_look_ahead_dis", &PathFollowerParams::minLookAheadDis)
+    .def_rw("max_look_ahead_dis", &PathFollowerParams::maxLookAheadDis)
+    .def_rw("yaw_rate_gain", &PathFollowerParams::yawRateGain)
+    .def_rw("stop_yaw_rate_gain", &PathFollowerParams::stopYawRateGain)
+    .def_rw("max_yaw_rate", &PathFollowerParams::maxYawRate)
+    .def_rw("max_speed", &PathFollowerParams::maxSpeed)
+    .def_rw("max_accel", &PathFollowerParams::maxAccel)
+    .def_rw("switch_time_thre", &PathFollowerParams::switchTimeThre)
+    .def_rw("dir_diff_thre", &PathFollowerParams::dirDiffThre)
+    .def_rw("omni_dir_goal_thre", &PathFollowerParams::omniDirGoalThre)
+    .def_rw("omni_dir_diff_thre", &PathFollowerParams::omniDirDiffThre)
+    .def_rw("stop_dis_thre", &PathFollowerParams::stopDisThre)
+    .def_rw("slow_dwn_dis_thre", &PathFollowerParams::slowDwnDisThre)
+    .def_rw("two_way_drive", &PathFollowerParams::twoWayDrive)
+    .def_rw("no_rot_at_goal", &PathFollowerParams::noRotAtGoal);
 
-  py::class_<PathFollowerState>(m, "PathFollowerState")
-    .def(py::init<>())
-    .def_readwrite("vehicle_speed", &PathFollowerState::vehicleSpeed)
-    .def_readwrite("path_point_id", &PathFollowerState::pathPointID)
-    .def_readwrite("nav_fwd", &PathFollowerState::navFwd);
+  nb::class_<PathFollowerState>(m, "PathFollowerState")
+    .def(nb::init<>())
+    .def_rw("vehicle_speed", &PathFollowerState::vehicleSpeed)
+    .def_rw("path_point_id", &PathFollowerState::pathPointID)
+    .def_rw("nav_fwd", &PathFollowerState::navFwd);
 
-  py::class_<PathFollowerOutput>(m, "PathFollowerOutput")
-    .def(py::init<>())
-    .def_readwrite("cmd", &PathFollowerOutput::cmd)
-    .def_readwrite("dir_diff", &PathFollowerOutput::dirDiff)
-    .def_readwrite("end_dis", &PathFollowerOutput::endDis)
-    .def_readwrite("can_accel", &PathFollowerOutput::canAccel);
+  nb::class_<PathFollowerOutput>(m, "PathFollowerOutput")
+    .def(nb::init<>())
+    .def_rw("cmd", &PathFollowerOutput::cmd)
+    .def_rw("dir_diff", &PathFollowerOutput::dirDiff)
+    .def_rw("end_dis", &PathFollowerOutput::endDis)
+    .def_rw("can_accel", &PathFollowerOutput::canAccel);
 
   m.def("adaptive_look_ahead", &adaptiveLookAhead);
   m.def("compute_control", &computeControl,
-    py::arg("vehicle_rel"), py::arg("vehicle_yaw_diff"),
-    py::arg("path_points"), py::arg("joy_speed"),
-    py::arg("current_time"), py::arg("slow_factor"),
-    py::arg("safety_stop"), py::arg("params"), py::arg("state"));
+    nb::arg("vehicle_rel"), nb::arg("vehicle_yaw_diff"),
+    nb::arg("path_points"), nb::arg("joy_speed"),
+    nb::arg("current_time"), nb::arg("slow_factor"),
+    nb::arg("safety_stop"), nb::arg("params"), nb::arg("state"));
 
   // ── PCT Adapter ──
   m.def("downsample_path", &downsamplePath);
 
-  py::class_<WaypointTrackerParams>(m, "WaypointTrackerParams")
-    .def(py::init<>())
-    .def_readwrite("waypoint_distance", &WaypointTrackerParams::waypointDistance)
-    .def_readwrite("arrival_threshold", &WaypointTrackerParams::arrivalThreshold)
-    .def_readwrite("stuck_timeout_sec", &WaypointTrackerParams::stuckTimeoutSec)
-    .def_readwrite("max_replan_count", &WaypointTrackerParams::maxReplanCount)
-    .def_readwrite("replan_cooldown_sec", &WaypointTrackerParams::replanCooldownSec)
-    .def_readwrite("search_window", &WaypointTrackerParams::searchWindow);
+  nb::class_<WaypointTrackerParams>(m, "WaypointTrackerParams")
+    .def(nb::init<>())
+    .def_rw("waypoint_distance", &WaypointTrackerParams::waypointDistance)
+    .def_rw("arrival_threshold", &WaypointTrackerParams::arrivalThreshold)
+    .def_rw("stuck_timeout_sec", &WaypointTrackerParams::stuckTimeoutSec)
+    .def_rw("max_replan_count", &WaypointTrackerParams::maxReplanCount)
+    .def_rw("replan_cooldown_sec", &WaypointTrackerParams::replanCooldownSec)
+    .def_rw("search_window", &WaypointTrackerParams::searchWindow);
 
-  py::enum_<WaypointEvent>(m, "WaypointEvent")
+  nb::enum_<WaypointEvent>(m, "WaypointEvent")
     .value("NONE", WaypointEvent::kNone)
     .value("WAYPOINT_REACHED", WaypointEvent::kWaypointReached)
     .value("GOAL_REACHED", WaypointEvent::kGoalReached)
@@ -106,17 +114,17 @@ PYBIND11_MODULE(_nav_core, m) {
     .value("REPLANNING", WaypointEvent::kReplanning)
     .value("STUCK_FINAL", WaypointEvent::kStuckFinal);
 
-  py::class_<WaypointResult>(m, "WaypointResult")
-    .def(py::init<>())
-    .def_readwrite("event", &WaypointResult::event)
-    .def_readwrite("current_index", &WaypointResult::currentIndex)
-    .def_readwrite("total_waypoints", &WaypointResult::totalWaypoints)
-    .def_readwrite("target_point", &WaypointResult::targetPoint)
-    .def_readwrite("has_target", &WaypointResult::hasTarget);
+  nb::class_<WaypointResult>(m, "WaypointResult")
+    .def(nb::init<>())
+    .def_rw("event", &WaypointResult::event)
+    .def_rw("current_index", &WaypointResult::currentIndex)
+    .def_rw("total_waypoints", &WaypointResult::totalWaypoints)
+    .def_rw("target_point", &WaypointResult::targetPoint)
+    .def_rw("has_target", &WaypointResult::hasTarget);
 
-  py::class_<WaypointTracker>(m, "WaypointTracker")
-    .def(py::init<const WaypointTrackerParams&>(),
-         py::arg("params") = WaypointTrackerParams())
+  nb::class_<WaypointTracker>(m, "WaypointTracker")
+    .def(nb::init<const WaypointTrackerParams&>(),
+         nb::arg("params") = WaypointTrackerParams())
     .def("set_path", &WaypointTracker::setPath)
     .def("update", &WaypointTracker::update)
     .def("path", &WaypointTracker::path)
@@ -126,29 +134,78 @@ PYBIND11_MODULE(_nav_core, m) {
     .def("goal_pose", &WaypointTracker::goalPose);
 
   // ── Local Planner ──
-  py::class_<VoxelGridParams>(m, "VoxelGridParams")
-    .def(py::init<>())
-    .def_readwrite("grid_voxel_size", &VoxelGridParams::gridVoxelSize)
-    .def_readwrite("grid_voxel_offset_x", &VoxelGridParams::gridVoxelOffsetX)
-    .def_readwrite("grid_voxel_offset_y", &VoxelGridParams::gridVoxelOffsetY)
-    .def_readwrite("search_radius", &VoxelGridParams::searchRadius)
-    .def_readwrite("grid_voxel_num_x", &VoxelGridParams::gridVoxelNumX)
-    .def_readwrite("grid_voxel_num_y", &VoxelGridParams::gridVoxelNumY);
+  nb::class_<VoxelGridParams>(m, "VoxelGridParams")
+    .def(nb::init<>())
+    .def_rw("grid_voxel_size", &VoxelGridParams::gridVoxelSize)
+    .def_rw("grid_voxel_offset_x", &VoxelGridParams::gridVoxelOffsetX)
+    .def_rw("grid_voxel_offset_y", &VoxelGridParams::gridVoxelOffsetY)
+    .def_rw("search_radius", &VoxelGridParams::searchRadius)
+    .def_rw("grid_voxel_num_x", &VoxelGridParams::gridVoxelNumX)
+    .def_rw("grid_voxel_num_y", &VoxelGridParams::gridVoxelNumY);
 
   m.def("world_to_voxel", [](double x2, double y2, const VoxelGridParams& g) {
     int indX, indY;
     bool ok = worldToVoxel(x2, y2, g, indX, indY);
-    return py::make_tuple(ok, indX, indY);
+    return nb::make_tuple(ok, indX, indY);
   });
 
-  py::class_<PathScoreParams>(m, "PathScoreParams")
-    .def(py::init<>())
-    .def_readwrite("dir_weight", &PathScoreParams::dirWeight)
-    .def_readwrite("slope_weight", &PathScoreParams::slopeWeight)
-    .def_readwrite("omni_dir_goal_thre", &PathScoreParams::omniDirGoalThre);
+  nb::class_<PathScoreParams>(m, "PathScoreParams")
+    .def(nb::init<>())
+    .def_rw("dir_weight", &PathScoreParams::dirWeight)
+    .def_rw("slope_weight", &PathScoreParams::slopeWeight)
+    .def_rw("omni_dir_goal_thre", &PathScoreParams::omniDirGoalThre);
 
   m.def("score_path", &scorePath);
   m.def("ang_diff_deg", &angDiffDeg);
   m.def("compute_rot_dir_w", &computeRotDirW);
   m.def("compute_group_dir_w", &computeGroupDirW);
+
+  // ── Terrain Analysis ──
+  nb::class_<TerrainParams>(m, "TerrainParams")
+    .def(nb::init<>())
+    .def_rw("scan_voxel_size", &TerrainParams::scanVoxelSize)
+    .def_rw("terrain_voxel_size", &TerrainParams::terrainVoxelSize)
+    .def_rw("terrain_voxel_half_width", &TerrainParams::terrainVoxelHalfWidth)
+    .def_rw("decay_time", &TerrainParams::decayTime)
+    .def_rw("no_decay_dis", &TerrainParams::noDecayDis)
+    .def_rw("clearing_dis", &TerrainParams::clearingDis)
+    .def_rw("use_sorting", &TerrainParams::useSorting)
+    .def_rw("quantile_z", &TerrainParams::quantileZ)
+    .def_rw("consider_drop", &TerrainParams::considerDrop)
+    .def_rw("limit_ground_lift", &TerrainParams::limitGroundLift)
+    .def_rw("max_ground_lift", &TerrainParams::maxGroundLift)
+    .def_rw("obstacle_height_thre", &TerrainParams::obstacleHeightThre)
+    .def_rw("no_data_obstacle", &TerrainParams::noDataObstacle)
+    .def_rw("min_block_point_num", &TerrainParams::minBlockPointNum)
+    .def_rw("vehicle_height", &TerrainParams::vehicleHeight)
+    .def_rw("min_rel_z", &TerrainParams::minRelZ)
+    .def_rw("max_rel_z", &TerrainParams::maxRelZ)
+    .def_rw("dis_ratio_z", &TerrainParams::disRatioZ)
+    .def_rw("planar_voxel_size", &TerrainParams::planarVoxelSize)
+    .def_rw("planar_voxel_half_width", &TerrainParams::planarVoxelHalfWidth);
+
+  nb::class_<TerrainResult>(m, "TerrainResult")
+    .def(nb::init<>())
+    .def_rw("terrain_points", &TerrainResult::terrain_points)
+    .def_rw("n_points", &TerrainResult::n_points)
+    .def_rw("elevation_map", &TerrainResult::elevation_map)
+    .def_rw("map_width", &TerrainResult::map_width)
+    .def_rw("map_origin_x", &TerrainResult::map_origin_x)
+    .def_rw("map_origin_y", &TerrainResult::map_origin_y)
+    .def_rw("map_resolution", &TerrainResult::map_resolution);
+
+  nb::class_<TerrainAnalysisCore>(m, "TerrainAnalysisCore")
+    .def(nb::init<const TerrainParams&>(),
+         nb::arg("params") = TerrainParams())
+    .def("update_vehicle", &TerrainAnalysisCore::updateVehicle,
+         nb::arg("x"), nb::arg("y"), nb::arg("z"),
+         nb::arg("roll"), nb::arg("pitch"), nb::arg("yaw"))
+    .def("process", [](TerrainAnalysisCore& self,
+                        const std::vector<float>& cloud_flat,
+                        double timestamp) {
+      // cloud_flat: [x0,y0,z0,i0, x1,y1,z1,i1, ...] — Nx4 flat
+      int n = (int)cloud_flat.size() / 4;
+      return self.process(cloud_flat.data(), n, timestamp);
+    }, nb::arg("cloud_xyzi"), nb::arg("timestamp"))
+    .def("clear", &TerrainAnalysisCore::clear);
 }

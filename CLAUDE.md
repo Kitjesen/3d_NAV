@@ -17,11 +17,17 @@ LingTu (灵途) is an autonomous navigation system for quadruped robots in outdo
 # Framework tests (no ROS2 needed, runs on any machine)
 python -m pytest src/core/tests/ -q       # 580 tests
 
-# Run navigation stack (stub mode, no hardware)
-python main_nav.py --robot stub --llm mock
+# CLI with interactive REPL (profile-based, recommended)
+python main_nav.py                        # interactive profile selector
+python main_nav.py stub                   # no hardware, framework testing
+python main_nav.py dev                    # semantic pipeline, no C++ nodes
+python main_nav.py s100p                  # real S100P robot (BPU + Kimi)
+python main_nav.py explore                # exploration, no pre-built map
+python main_nav.py --list                 # list all profiles
 
-# Run on real robot (S100P)
-python main_nav.py --robot thunder --dog-host 192.168.66.190 --detector bpu --llm kimi
+# Override any profile flag
+python main_nav.py s100p --llm mock       # real robot but mock LLM
+python main_nav.py stub --no-repl         # daemon mode (no interactive)
 
 # Or use Blueprint directly in any script
 from core import autoconnect

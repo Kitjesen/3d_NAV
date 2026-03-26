@@ -97,14 +97,14 @@ else()
   target_link_libraries(test_validation GTest::gtest_main)
   gtest_discover_tests(test_validation)
 
-  # pybind11 (可选)
+  # nanobind (替代 pybind11 — 更快编译, 更小 .so, 更好 numpy 零拷贝)
   find_package(Python3 COMPONENTS Interpreter Development QUIET)
   if(Python3_FOUND)
-    FetchContent_Declare(pybind11
-      GIT_REPOSITORY https://github.com/pybind/pybind11.git
+    FetchContent_Declare(nanobind
+      GIT_REPOSITORY https://github.com/wjakob/nanobind.git
       GIT_TAG        v2.12.0)
-    FetchContent_MakeAvailable(pybind11)
-    pybind11_add_module(_nav_core bindings/py_nav_core.cpp)
+    FetchContent_MakeAvailable(nanobind)
+    nanobind_add_module(_nav_core bindings/py_nav_core.cpp)
     target_include_directories(_nav_core PRIVATE include)
   endif()
 endif()
