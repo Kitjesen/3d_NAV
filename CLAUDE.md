@@ -20,6 +20,7 @@ python -m pytest src/core/tests/ -q       # 580 tests
 # CLI with interactive REPL (profile-based, recommended)
 python main_nav.py                        # interactive profile selector
 python main_nav.py stub                   # no hardware, framework testing
+python main_nav.py sim                    # MuJoCo kinematic simulation
 python main_nav.py dev                    # semantic pipeline, no C++ nodes
 python main_nav.py s100p                  # real S100P robot (BPU + Kimi)
 python main_nav.py explore                # exploration, no pre-built map
@@ -27,7 +28,8 @@ python main_nav.py --list                 # list all profiles
 
 # Override any profile flag
 python main_nav.py s100p --llm mock       # real robot but mock LLM
-python main_nav.py stub --no-repl         # daemon mode (no interactive)
+python main_nav.py s100p --daemon         # background daemon (S100P)
+python main_nav.py stop                   # stop running daemon
 
 # Or use Blueprint directly in any script
 from core import autoconnect
