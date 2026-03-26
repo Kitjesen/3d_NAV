@@ -54,10 +54,13 @@ class MuJoCoLidar:
             self._sensor = None
             self._init_fallback(model, data, config)
 
-        # Geom filter mask (only detect environment geom group=1, skip robot group=0)
+        # Geom filter mask — enable all common groups (0, 1, 2) so LiDAR sees
+        # both dynamic-generated obstacles (group=0) and scene geometry (any group)
         import mujoco
         self._geomgroup = np.zeros(6, dtype=np.uint8)
-        self._geomgroup[config.geom_group] = 1
+        self._geomgroup[0] = 1  # default geom group (scene obstacles, floors)
+        self._geomgroup[1] = 1  # explicit environment group
+        # group=2 is typically visual-only, skip it
 
         # Pre-compute fallback ray directions (golden angle spiral)
         if not self._use_livox_module:
