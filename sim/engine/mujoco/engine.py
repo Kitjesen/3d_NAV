@@ -8,6 +8,7 @@ Core logic sourced from nova_nav_bridge.py:
   - IMU / joint state reading (get_imu, get_joint_state)
   - LiDAR scan wrapper
 """
+import os
 import tempfile
 import threading
 import time
@@ -128,11 +129,65 @@ class MuJoCoEngine(SimEngine):
             # If it is a bare robot.xml (no ground), auto-wrap with a scene
             _xml_content = Path(xml_path).read_text(encoding="utf-8", errors="ignore")
             # Only consider it grounded if it explicitly contains a floor/plane
-            _has_floor = ('name="floor"' in _xml_content
+            _has_floor = ('floor' in _xml_content.lower()
                           or 'name="ground"' in _xml_content
                           or 'type="plane"' in _xml_content)
-            if _has_floor:
+            _has_actuators = '<actuator>' in _xml_content
+            if _has_floor and _has_actuators:
+                # Scene already has robot (actuators present) — use as-is
                 self._model = mujoco.MjModel.from_xml_path(xml_path)
+            elif _has_floor and not _has_actuators:
+                # Scene has floor but no robot — merge robot into scene
+                # Strategy: load robot.xml as base, extract scene worldbody
+                # geometry and inject as extra bodies
+                import re
+                # Extract everything inside <worldbody>...</worldbody> from scene
+                _wb_match = re.search(
+                    r'<worldbody>(.*?)</worldbody>', _xml_content, re.DOTALL)
+                if _wb_match:
+                    _scene_bodies = _wb_match.group(1)
+                    # Remove placeholder robot body
+                    _scene_bodies = re.sub(
+                        r'<body name="robot_placeholder".*?</body>',
+                        '', _scene_bodies, flags=re.DOTALL)
+                    _scene_bodies = re.sub(
+                        r'<body name="base_link".*?</body>',
+                        '', _scene_bodies, flags=re.DOTALL)
+
+                    # Extract scene <asset> contents (materials, textures)
+                    _asset_match = re.search(
+                        r'<asset>(.*?)</asset>', _xml_content, re.DOTALL)
+                    _scene_assets = _asset_match.group(1) if _asset_match else ''
+
+                    # Read robot.xml and inject scene assets + bodies
+                    _robot_content = Path(robot_xml).read_text(
+                        encoding="utf-8", errors="ignore")
+
+                    # Inject scene assets into robot's <asset> block
+                    if _scene_assets.strip():
+                        _robot_content = _robot_content.replace(
+                            '</asset>',
+                            '\n    <!-- scene assets -->\n%s\n  </asset>'
+                            % _scene_assets)
+
+                    # Inject scene bodies into robot's <worldbody>
+                    _merged = _robot_content.replace(
+                        '</worldbody>',
+                        '\n    <!-- ══ Scene geometry (from %s) ══ -->\n%s\n  </worldbody>'
+                        % (Path(xml_path).name, _scene_bodies))
+                    _robot_dir = str(Path(robot_xml).parent)
+                    _tmp = tempfile.NamedTemporaryFile(
+                        suffix=".xml", delete=False, dir=_robot_dir,
+                        mode="w", encoding="utf-8")
+                    _tmp.write(_merged)
+                    _tmp.close()
+                    try:
+                        self._model = mujoco.MjModel.from_xml_path(_tmp.name)
+                    finally:
+                        Path(_tmp.name).unlink(missing_ok=True)
+                else:
+                    # Fallback: just load scene as-is
+                    self._model = mujoco.MjModel.from_xml_path(xml_path)
             else:
                 # Auto-inject ground: insert floor geom after <worldbody>
                 _robot_dir = str(Path(xml_path).parent)

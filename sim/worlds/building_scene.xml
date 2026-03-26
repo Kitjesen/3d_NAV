@@ -194,37 +194,12 @@
          (pos = Start 位置 + 机体高度 0.5m)
          body 名称不要改：base_link / lidar_link — bridge 依赖这两个名字
     ══════════════════════════════════════════════════════════════════ -->
-    <body name="base_link" pos="2.0 3.0 0.50">
+    <!-- ══ Robot placeholder — 真实 robot 通过 MuJoCoEngine.load() 动态合并 ══ -->
+    <!-- 如需独立查看场景: python -m mujoco.viewer sim/worlds/building_scene.xml -->
+    <body name="robot_placeholder" pos="2.0 3.0 0.50">
       <freejoint name="robot_root"/>
-
-      <!-- 机体（替换为自研 URDF mesh）-->
       <geom name="chassis" type="box" size="0.42 0.28 0.10"
             material="robot_mat" mass="22" conaffinity="1"/>
-
-      <!-- 简化腿（视觉占位，等待自研 URDF）-->
-      <geom name="leg_fl" type="capsule" size="0.032"
-            fromto=" 0.30  0.20 -.10  0.30  0.20 -.40" rgba=".12 .32 .72 1" mass="0.8" conaffinity="1"/>
-      <geom name="leg_fr" type="capsule" size="0.032"
-            fromto=" 0.30 -.20 -.10  0.30 -.20 -.40" rgba=".12 .32 .72 1" mass="0.8" conaffinity="1"/>
-      <geom name="leg_rl" type="capsule" size="0.032"
-            fromto="-.30  0.20 -.10 -.30  0.20 -.40" rgba=".12 .32 .72 1" mass="0.8" conaffinity="1"/>
-      <geom name="leg_rr" type="capsule" size="0.032"
-            fromto="-.30 -.20 -.10 -.30 -.20 -.40" rgba=".12 .32 .72 1" mass="0.8" conaffinity="1"/>
-
-      <!-- Livox MID-360 安装体（机体顶部中央 +0.22m）-->
-      <body name="lidar_link" pos="0 0 0.22">
-        <geom name="lidar_housing" type="cylinder" size="0.058 0.046"
-              material="lidar_mat" mass="0.50" conaffinity="0"/>
-        <geom name="lidar_pole" type="capsule" size="0.016"
-              fromto="0 0 -0.01  0 0 -0.13" rgba=".28 .28 .28 1" mass="0.08" conaffinity="0"/>
-        <!-- LiDAR 原点 site（ray_caster_lidar plugin 用）-->
-        <site name="lidar_site" pos="0 0 0" size="0.001"/>
-      </body>
-
-      <!-- 前向指示箭头（黄色，X+ 方向）-->
-      <geom name="dir_arrow" type="capsule" size="0.022"
-            fromto="0.05 0 0.12  0.42 0 0.12" material="arrow_mat" conaffinity="0"/>
-
       <inertial pos="0 0 0" mass="22" diaginertia="0.78 1.18 1.18"/>
     </body>
 

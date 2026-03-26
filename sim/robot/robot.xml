@@ -115,6 +115,13 @@
               pos="0 0 -0.00945" rgba="0.2 0.8 0.8 0.3" group="0"/>
       </body>
 
+      <!-- ── Front Camera (RGB-D, 640x480, 用于感知和深度) ── -->
+      <body name="front_camera_link" pos="0.15 0 0.05" euler="0 0.2 0">
+        <camera name="front_camera" fovy="60" mode="fixed"/>
+        <geom name="camera_vis" type="box" size="0.02 0.02 0.01"
+              rgba="0.1 0.1 0.1 1" contype="0" conaffinity="0" group="2"/>
+      </body>
+
       <!-- ════════════════════════════════════════════════════════ -->
       <!--  机械臂 (6 DOF + 夹爪)                                 -->
       <!-- ════════════════════════════════════════════════════════ -->

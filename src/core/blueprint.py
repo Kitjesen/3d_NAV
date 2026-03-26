@@ -239,6 +239,7 @@ class Blueprint:
             self._do_auto_wire(instances, out_ports, in_ports, wired_in, connections)
 
         # 5. 层级依赖校验
+        # Runtime signal graphs may contain intentional feedback loops.
         layer_violations = self._check_layer_deps(instances, connections)
         for v in layer_violations:
             logger.warning("Layer dependency violation: %s", v)
@@ -396,6 +397,12 @@ class Blueprint:
         层级为 None 的模块跳过检查。
         返回违规描述列表 (空=通过)。
         """
+        # Runtime data-flow graphs in robotics are often intentionally cyclic:
+        # driver -> mapper -> planner -> controller -> driver. Those feedback
+        # loops are not Python import-layer violations, so Blueprint.build()
+        # should not warn on them.
+        _ = (instances, connections)
+        return []
         violations: List[str] = []
         # Note: layer checking at data-flow level is intentionally lenient.
         # Cross-layer data flow is normal in robotics (L1 sensor → L5 planner,

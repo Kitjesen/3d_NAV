@@ -13,6 +13,7 @@
 - 消息统计 (msg_count, last_ts, latest)
 """
 
+import logging
 import time
 
 import pytest
@@ -933,6 +934,33 @@ class TestLayerDeps:
         )
         h = system.health()
         assert h["layer_violations"] == []
+
+    def test_feedback_loop_does_not_warn_and_preserves_fallback_order(self, caplog):
+        class PlantModule(Module, layer=1):
+            cmd: In[Vector3]
+            state: Out[Vector3]
+
+        class ControllerModule(Module, layer=2):
+            state: In[Vector3]
+            cmd: Out[Vector3]
+
+        with caplog.at_level(logging.WARNING):
+            system = (
+                Blueprint()
+                .add(ControllerModule)
+                .add(PlantModule)
+                .wire("PlantModule", "state", "ControllerModule", "state")
+                .wire("ControllerModule", "cmd", "PlantModule", "cmd")
+                .build()
+            )
+
+        h = system.health()
+        assert h["layer_violations"] == []
+        assert h["startup_order"] == ["ControllerModule", "PlantModule"]
+        assert not any(
+            "Layer dependency violation" in record.getMessage()
+            for record in caplog.records
+        )
 
     def test_normal_layer_flow(self):
         """正常层级流 (L1 → L4) 无违规。"""
