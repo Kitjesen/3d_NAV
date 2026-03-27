@@ -24,7 +24,7 @@ namespace nb = nanobind;
 using namespace nav_core;
 
 NB_MODULE(_nav_core, m) {
-  m.doc() = "nav_core — 零 ROS2 依赖的导航核心算法 (C++ → Python, nanobind)";
+  m.doc() = "nav_core -- ROS2-free navigation core algorithms (C++ to Python, nanobind)";
 
   // ── 基础类型 ──
   nb::class_<Vec3>(m, "Vec3")
