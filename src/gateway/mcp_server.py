@@ -288,10 +288,50 @@ class MCPServerModule(Module, layer=6):
         self._safety: Optional[Dict] = None
         self._mission: Optional[Dict] = None
         self._system_handle = None  # set externally for health queries
+        self._skill_registry: Dict[str, Any] = {}   # skill_name -> bound method
+        self._dynamic_tools: List[Dict] = []         # populated by on_system_modules
 
     def set_system_handle(self, handle):
         """Inject SystemHandle for health/module queries."""
         self._system_handle = handle
+
+    def on_system_modules(self, modules: Dict[str, Any]) -> None:
+        """Auto-discover all @skill methods from all system modules.
+
+        Called by Blueprint after build(). Populates dynamic tools list so
+        MCPServerModule exposes ALL @skill methods without manual registration.
+        """
+        self._skill_registry = {}
+        self._dynamic_tools = []
+
+        for mod_name, mod in modules.items():
+            if not hasattr(mod, 'get_skill_infos'):
+                continue
+            try:
+                infos = mod.get_skill_infos()
+            except Exception:
+                continue
+            for info in infos:
+                # Register method in skill_registry
+                method = getattr(mod, info.func_name, None)
+                if method is not None:
+                    self._skill_registry[info.func_name] = method
+
+                # Build MCP tool descriptor
+                import json as _j
+                schema = _j.loads(info.args_schema)
+                desc = schema.pop("description", "")
+                tool = {
+                    "name": info.func_name,
+                    "description": f"[{info.class_name}] {desc}".strip(),
+                    "inputSchema": schema,
+                }
+                self._dynamic_tools.append(tool)
+
+        logger.info(
+            "MCP dynamic tools: %d from %d modules",
+            len(self._dynamic_tools), len(modules)
+        )
 
     def setup(self):
         self.odometry.subscribe(self._on_odom)
@@ -512,23 +552,32 @@ class MCPServerModule(Module, layer=6):
                 return JSONResponse(status_code=204, content=None)
 
             if method == "tools/list":
-                return JSONResponse(_ok(req_id, {"tools": TOOLS}))
+                tools = mcp._dynamic_tools if mcp._dynamic_tools else TOOLS
+                return JSONResponse(_ok(req_id, {"tools": tools}))
 
             if method == "tools/call":
                 name = params.get("name", "")
-                args = params.get("arguments", {})
+                args = params.get("arguments") or {}
                 try:
-                    result = mcp._execute_tool(name, args)
-                    return JSONResponse(_text(req_id, result))
+                    # Try dynamic skill registry first (auto-discovered @skill methods)
+                    skill_method = mcp._skill_registry.get(name)
+                    if skill_method is not None:
+                        result = skill_method(**args)
+                        out = str(result) if result is not None else "Done."
+                    else:
+                        # Fall back to static hardcoded tools
+                        out = mcp._execute_tool(name, args)
+                    return JSONResponse(_text(req_id, out))
                 except Exception as e:
                     logger.exception("MCP tool error: %s", name)
-                    return JSONResponse(_text(req_id, f"Error: {e}"))
+                    return JSONResponse(_text(req_id, f"Error calling '{name}': {e}"))
 
             return JSONResponse(_error(req_id, -32601, f"Unknown method: {method}"))
 
         @app.get("/health")
         async def health():
-            return {"status": "ok", "tools": len(TOOLS), "port": mcp._port}
+            n = len(mcp._dynamic_tools) if mcp._dynamic_tools else len(TOOLS)
+            return {"status": "ok", "tools": n, "dynamic": bool(mcp._dynamic_tools), "port": mcp._port}
 
         uvicorn.run(app, host=self._host, port=self._port, log_level="warning")
 

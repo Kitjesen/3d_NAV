@@ -47,6 +47,72 @@ def rpc(fn):
     return fn
 
 
+def skill(fn):
+    """Mark a Module method as AI-callable skill.
+
+    A skill is an @rpc method additionally exposed to AI agents (MCP server, Agent module).
+    MCPServerModule auto-discovers all @skill methods at build time via on_system_modules().
+
+    Usage:
+        class NavigationModule(Module):
+            @skill
+            def navigate_to(self, x: float, y: float) -> str:
+                \"\"\"Navigate to coordinates (x, y) in map frame.\"\"\"
+                ...
+    """
+    fn.__rpc__ = True
+    fn.__skill__ = True
+    return fn
+
+
+import inspect as _inspect
+import json as _json
+from dataclasses import dataclass as _dataclass
+
+
+@_dataclass
+class SkillInfo:
+    """Metadata for a single @skill method, used by MCPServerModule for tool discovery."""
+    func_name: str
+    class_name: str
+    args_schema: str  # JSON string of MCP-compatible inputSchema
+
+
+def _build_skill_schema(method) -> dict:
+    """Build MCP inputSchema dict from a bound @skill method's signature + docstring."""
+    sig = _inspect.signature(method)
+    doc = _inspect.getdoc(method) or ""
+
+    _PY_TO_JSON = {
+        int: "integer", float: "number", str: "string", bool: "boolean",
+        type(None): "null",
+    }
+
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
+
+    for pname, param in sig.parameters.items():
+        if pname == "self":
+            continue
+        ann = param.annotation
+        json_type = _PY_TO_JSON.get(ann, "string")
+        prop: Dict[str, Any] = {"type": json_type}
+        if param.default is not _inspect.Parameter.empty:
+            prop["default"] = param.default
+        else:
+            required.append(pname)
+        properties[pname] = prop
+
+    schema: Dict[str, Any] = {
+        "type": "object",
+        "description": doc,
+        "properties": properties,
+    }
+    if required:
+        schema["required"] = required
+    return schema
+
+
 class Module:
     """模块基类 — LingTu 编排框架的核心构件。
 
@@ -203,6 +269,36 @@ class Module:
             except Exception:
                 continue
         return result
+
+    @property
+    def skills(self) -> Dict[str, Any]:
+        """Discover all @skill-decorated methods (AI-callable subset of @rpc)."""
+        result = {}
+        for name in dir(self):
+            if name.startswith('_'):
+                continue
+            try:
+                method = getattr(self, name)
+                if callable(method) and getattr(method, '__skill__', False):
+                    result[name] = method
+            except Exception:
+                continue
+        return result
+
+    def get_skill_infos(self) -> "List[SkillInfo]":
+        """Return SkillInfo list for all @skill methods on this module.
+
+        Used by MCPServerModule.on_system_modules() for dynamic tool discovery.
+        """
+        infos = []
+        for name, method in self.skills.items():
+            schema = _build_skill_schema(method)
+            infos.append(SkillInfo(
+                func_name=name,
+                class_name=type(self).__name__,
+                args_schema=_json.dumps(schema),
+            ))
+        return infos
 
     def call_rpc(self, method_name: str, **kwargs: Any):
         """Call an RPC method by name. Returns the method result."""

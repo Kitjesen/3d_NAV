@@ -15,6 +15,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import time
@@ -23,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from core.module import Module
+from core.module import Module, skill
 from core.stream import In, Out
 from core.msgs.nav import Odometry, Path
 from core.msgs.geometry import Twist, Vector3
@@ -259,6 +260,26 @@ class SafetyRingModule(Module, layer=0):
 
     def _on_mission(self, status: dict):
         self._latest_mission = status
+
+    # -- AI-callable skills -----------------------------------------------
+
+    @skill
+    def get_safety_status(self) -> str:
+        """Get current safety state: level, cross-track error, distance to goal, and module health."""
+        return json.dumps({
+            "level": self._safety_level.name,
+            "cross_track_error": round(self._cross_track_error(), 3),
+            "distance_to_goal": round(self._distance_to_goal(), 3),
+            "modules_ok": self._check_links() != SafetyLevel.STOP,
+        })
+
+    @skill
+    def emergency_stop(self) -> str:
+        """Trigger an emergency stop (safety level STOP). Use for immediate halt."""
+        self._safety_level = SafetyLevel.STOP
+        self.stop_cmd.publish(2)
+        self.safety_state.publish(SafetyState(level=SafetyLevel.STOP.value))
+        return json.dumps({"status": "estop_triggered"})
 
     def health(self) -> Dict[str, Any]:
         info = super().port_summary()

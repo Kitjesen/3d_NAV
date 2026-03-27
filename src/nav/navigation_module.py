@@ -22,6 +22,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -30,7 +31,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from core.module import Module
+from core.module import Module, skill
 from core.stream import In, Out
 from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion, Twist
 from core.msgs.nav import Odometry, Path
@@ -436,6 +437,84 @@ class NavigationModule(Module, layer=5):
                 self._ros2_wp_pub.publish(pt)
             except Exception:
                 pass
+
+    # -- AI-callable skills (auto-discovered by MCPServerModule) ---------------
+
+    @skill
+    def navigate_to(self, x: float, y: float, yaw: float = 0.0) -> str:
+        """Navigate to map coordinates.
+
+        Args:
+            x: X coordinate in meters (map frame)
+            y: Y coordinate in meters (map frame)
+            yaw: Heading in radians (default 0)
+
+        Returns:
+            Status string
+        """
+        q_w = math.cos(yaw / 2)
+        q_z = math.sin(yaw / 2)
+        pose = PoseStamped(
+            pose=Pose(
+                position=Vector3(x, y, 0.0),
+                orientation=Quaternion(0.0, 0.0, q_z, q_w),
+            ),
+            frame_id="map",
+            ts=0.0,
+        )
+        self._on_goal(pose)
+        return json.dumps({"status": "navigating", "goal": [x, y], "yaw": yaw})
+
+    @skill
+    def stop_navigation(self) -> str:
+        """Immediately stop all robot motion and cancel current mission."""
+        self._on_stop(2)
+        return json.dumps({"status": "stopped"})
+
+    @skill
+    def cancel_mission(self, reason: str = "user_cancel") -> str:
+        """Cancel current navigation mission gracefully."""
+        self._on_cancel(reason)
+        return json.dumps({"status": "cancelled", "reason": reason})
+
+    @skill
+    def get_navigation_status(self) -> str:
+        """Get current navigation state, position, and mission progress."""
+        pos = None
+        if self._robot_pos is not None:
+            pos = {"x": round(float(self._robot_pos[0]), 3),
+                   "y": round(float(self._robot_pos[1]), 3),
+                   "yaw": 0.0}
+        goal = None
+        if self._goal is not None:
+            goal = {"x": round(float(self._goal[0]), 3),
+                    "y": round(float(self._goal[1]), 3)}
+        return json.dumps({
+            "state": self._state,
+            "position": pos,
+            "goal": goal,
+            "path_length": len(self._path),
+            "waypoint_index": self._wp_index,
+            "replan_count": self._replan_count,
+            "failure_reason": self._failure_reason,
+        })
+
+    @skill
+    def start_patrol(self, waypoints_json: str) -> str:
+        """Start patrol mode — navigate a list of waypoints sequentially.
+
+        Args:
+            waypoints_json: JSON array of [x, y] pairs, e.g. "[[1.0, 2.0], [3.0, 4.0]]"
+
+        Returns:
+            Status string
+        """
+        try:
+            goals = json.loads(waypoints_json)
+            self._on_patrol_goals(goals)
+            return json.dumps({"status": "patrolling", "goals": len(goals)})
+        except Exception as e:
+            return json.dumps({"error": str(e)})
 
     def stop(self):
         if self._ros2_node is not None:
