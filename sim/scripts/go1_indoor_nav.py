@@ -34,7 +34,6 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 sys.path.insert(0, str(_REPO_ROOT))
 
 import mujoco
-import onnxruntime as ort
 
 from core.module import Module
 from core.blueprint import Blueprint
@@ -49,7 +48,7 @@ from base_autonomy.modules import LocalPlannerModule, PathFollowerModule
 
 # ── Go1 policy constants ──
 _CTRL_DT = 0.02       # 50 Hz policy
-_ACTION_SCALE = 0.5
+_ACTION_SCALE = 0.5   # MuJoCo Playground Go1: confirmed action_scale=0.5, Kp=35
 _N_RAYS = 180
 _LIDAR_MIN = 0.2
 _LIDAR_MAX = 8.0
@@ -132,10 +131,11 @@ class LiveMapper(Module, layer=3):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Go1 RL Policy
+# Go1 RL Policy (48-dim obs, 12 joints, no history — Isaac Lab Go1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class Go1Policy:
     def __init__(self, onnx_path: str):
+        import onnxruntime as ort
         self.sess = ort.InferenceSession(
             onnx_path, providers=ort.get_available_providers())
         self.out_name = self.sess.get_outputs()[0].name
@@ -396,7 +396,7 @@ def main():
         action = policy.compute(m, d, cmd)
         d.ctrl[:] = action * _ACTION_SCALE + policy.default_angles
 
-    # Stabilize with direct policy calls
+    # Stabilize with policy
     print("Stabilizing (500 steps)...")
     zero_cmd = np.array([0, 0, 0], dtype=np.float32)
     for i in range(500):
