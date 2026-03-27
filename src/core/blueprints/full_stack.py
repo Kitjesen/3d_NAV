@@ -62,6 +62,14 @@ def _ensure_drivers_registered():
         import core.blueprints.stub  # noqa: F401
     except ImportError:
         pass
+    try:
+        import drivers.sim.mujoco_driver_module  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        import drivers.sim.ros2_sim_driver  # noqa: F401
+    except ImportError:
+        pass
 
 
 def full_stack_blueprint(
@@ -118,8 +126,8 @@ def full_stack_blueprint(
     # ── Layer 2: C++ autonomy stack (NativeModule, DDS) ──────────────────
 
     if enable_native:
-        from base_autonomy.modules.autonomy_module import AutonomyModule
-        bp.add(AutonomyModule)
+        from base_autonomy.modules.autonomy_module import add_autonomy_stack
+        add_autonomy_stack(bp, backend="cmu", path_follower_backend="nav_core")
 
     # ── Layer 3: Perception (pluggable detector + encoder) ───────────────
 
@@ -177,16 +185,12 @@ def full_stack_blueprint(
     bp.wire("SafetyRingModule", "stop_cmd", driver_name, "stop_signal")
     bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
 
-    # Tier 3: Semantic — transport decoupled (crash isolation)
-    if enable_semantic:
-        try:
-            bp.wire("DetectorModule", "detections",
-                    "SemanticPlannerModule", "detections",
-                    transport="local")
-        except (ValueError, KeyError):
-            pass
+    # Tier 1b: Goal routing — sim_ros2 driver bridges ROS2 goal_pose
+    if hasattr(DriverCls, 'goal_pose'):
+        bp.wire(driver_name, "goal_pose", "NavigationModule", "goal_pose")
 
     # Tier 2: Everything else — auto_wire (direct callback)
+    # goal_pose, odometry, instruction, etc. matched by (name, type)
     bp.auto_wire()
 
     return bp

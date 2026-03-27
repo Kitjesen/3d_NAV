@@ -76,6 +76,20 @@ so_path = os.path.join(os.path.dirname(__file__), "../../global_planning/PCT_pla
 has_pct = os.path.exists(so_path)
 print("OK" if has_pct else "NOT FOUND (will use A*)")
 
+print("  nav_core.score_path...", end=" ")
+try:
+    _nav_core.score_path
+    print("OK")
+except AttributeError:
+    print("MISSING")
+
+print("  nav_core.compute_control...", end=" ")
+try:
+    _nav_core.compute_control
+    print("OK")
+except AttributeError:
+    print("MISSING")
+
 print("  planner backends...", end=" ")
 from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
 try:
@@ -139,7 +153,7 @@ print("  PASSED")
 # ── Step 3: Full navigation pipeline ──
 print()
 print("=" * 60)
-print("Step 3: Full MuJoCo navigation (terrain + planner)")
+print("Step 3: Full MuJoCo navigation (cmu_py + nav_core + A*)")
 print("=" * 60)
 
 from drivers.sim.mujoco_driver_module import MujocoDriverModule
@@ -196,8 +210,8 @@ class LiveMapper(Module, layer=3):
 bp = Blueprint()
 bp.add(MujocoDriverModule, world="open_field", sim_rate=50.0, render=False, obstacles=obstacles)
 bp.add(LiveMapper)
-bp.add(LocalPlannerModule, backend="simple")
-bp.add(PathFollowerModule, backend="pid")
+bp.add(LocalPlannerModule, backend="cmu_py")
+bp.add(PathFollowerModule, backend="nav_core")
 bp.add(NavigationModule, planner="astar", waypoint_threshold=2.0, downsample_dist=1.0)
 
 bp.wire("MujocoDriverModule", "odometry", "LiveMapper", "odom_in")
@@ -205,6 +219,7 @@ bp.wire("MujocoDriverModule", "odometry", "NavigationModule", "odometry")
 bp.wire("MujocoDriverModule", "odometry", "LocalPlannerModule", "odometry")
 bp.wire("MujocoDriverModule", "odometry", "PathFollowerModule", "odometry")
 bp.wire("MujocoDriverModule", "lidar_cloud", "LiveMapper", "lidar_in")
+bp.wire("MujocoDriverModule", "lidar_cloud", "LocalPlannerModule", "terrain_map")
 bp.wire("LiveMapper", "costmap_out", "NavigationModule", "costmap")
 bp.wire("LiveMapper", "goal_cmd", "NavigationModule", "goal_pose")
 bp.wire("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
@@ -213,7 +228,7 @@ bp.wire("PathFollowerModule", "cmd_vel", "MujocoDriverModule", "cmd_vel")
 
 system = bp.build()
 system.start()
-time.sleep(4.0)
+time.sleep(6.0)  # extra warmup for cmu_py path loading + terrain init
 
 mapper = system.get_module("LiveMapper")
 nav = system.get_module("NavigationModule")
@@ -225,7 +240,7 @@ mapper.goal_cmd.publish(PoseStamped(
 ))
 
 success = False
-for t in range(20):
+for t in range(30):  # 60s total (real algorithms need more time)
     time.sleep(2.0)
     nh = nav.health()["navigation"]
     dist = math.hypot(mapper.rx - GOAL[0], mapper.ry - GOAL[1])

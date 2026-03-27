@@ -293,7 +293,10 @@ class TestMCPServerModule(unittest.TestCase):
         m._odom = {"x": 5.0, "y": 3.0, "z": 0.0}
         result = json.loads(m._execute_tool("tag_location", {"name": "office"}))
         self.assertEqual(result["tagged"], "office")
-        self.assertIn("office", m._tagged_locations)
+        # Verify via TaggedLocationStore
+        from gateway.mcp_server import _get_tagged_store
+        store = _get_tagged_store()
+        self.assertIsNotNone(store.query("office"))
 
     def test_execute_navigate_to(self):
         import json
@@ -411,7 +414,7 @@ class TestSemanticPlannerModule(unittest.TestCase):
 
     def test_ports_out(self):
         m = self._make()
-        self.assertIn("resolved_goal", m.ports_out)
+        self.assertIn("goal_pose", m.ports_out)
         self.assertIn("planner_status", m.ports_out)
         self.assertIn("task_plan", m.ports_out)
 

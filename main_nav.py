@@ -41,7 +41,15 @@ import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+_SRC = os.path.join(os.path.dirname(__file__), "src")
+sys.path.insert(0, _SRC)
+
+# ROS2-style sub-packages use bare imports (e.g. `from semantic_common import ...`).
+# In colcon workspace these are installed; for Module-First CLI, add parent dirs.
+for _sub in ("semantic/common", "semantic/planner", "semantic/perception"):
+    _p = os.path.join(_SRC, _sub)
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 logger = logging.getLogger("lingtu")
 
@@ -78,10 +86,10 @@ PROFILES = {
         gateway_port=5050,
     ),
     "sim": dict(
-        _desc="MuJoCo kinematic simulation",
-        robot="kinematic_sim", detector="yoloe", encoder="mobileclip",
+        _desc="MuJoCo simulation (full algorithm stack)",
+        robot="sim_ros2", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
-        enable_native=False, enable_semantic=False, enable_gateway=True,
+        enable_native=False, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
     ),
     "dev": dict(

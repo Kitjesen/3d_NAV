@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+DEPRECATED — use sim/engine/bridge/ros2_bridge.py (SimROS2Bridge) instead.
+This file is kept for backward compatibility with legacy scripts.
+The unified bridge is used by sim/engine/cli.py.
+
 MuJoCo + ROS2 最小闭环 Bridge
 
 验证通过的完整闭环:
@@ -178,6 +182,7 @@ class MuJoCoROS2Bridge(Node):
         self.pub_odom = self.create_publisher(Odometry, '/nav/odometry', qos)
         self.pub_cloud = self.create_publisher(PointCloud2, '/nav/registered_cloud', qos)
         self.pub_cloud2 = self.create_publisher(PointCloud2, '/livox/lidar', qos)
+        self.pub_map_cloud = self.create_publisher(PointCloud2, '/nav/map_cloud', qos)
         self.tf_br = TransformBroadcaster(self)
 
         self.create_subscription(TwistStamped, '/nav/cmd_vel', self._cmd_cb, qos)
@@ -301,6 +306,7 @@ class MuJoCoROS2Bridge(Node):
         msg = pack_pointcloud2(pts, 'body', stamp)
         self.pub_cloud.publish(msg)
         self.pub_cloud2.publish(msg)
+        self.pub_map_cloud.publish(msg)  # For C++ terrainAnalysis
 
         if self._frame % 50 == 0:
             pos = self.data.xpos[self.robot_id]

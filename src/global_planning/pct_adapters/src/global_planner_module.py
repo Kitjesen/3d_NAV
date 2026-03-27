@@ -186,7 +186,10 @@ class _AStarBackend:
 
     def plan(self, start: np.ndarray, goal: np.ndarray) -> list:
         if self._grid is None:
-            return []
+            # No costmap yet — return straight-line to goal
+            # C++ localPlanner handles obstacle avoidance
+            logger.info("A* no costmap, straight-line to goal")
+            return [start[:3].tolist(), goal[:3].tolist()]
         # World → grid coords
         si = int((start[0] - self._origin[0]) / self._resolution)
         sj = int((start[1] - self._origin[1]) / self._resolution)

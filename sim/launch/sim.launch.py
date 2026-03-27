@@ -27,7 +27,7 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     # ── 参数 ─────────────────────────────────────────────────────────────────
     world_arg = DeclareLaunchArgument('world', default_value='open_field',
-                                      description='MuJoCo world: open_field | spiral_terrain')
+                                      description='MuJoCo world (from registry): factory | open_field | building | spiral | empty')
     rviz_arg  = DeclareLaunchArgument('use_rviz', default_value='false')
 
     world   = LaunchConfiguration('world')
@@ -35,10 +35,10 @@ def generate_launch_description():
 
     sim_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # ── 1. MuJoCo 仿真节点 ───────────────────────────────────────────────────
+    # ── 1. MuJoCo 仿真节点 (统一入口 engine/cli.py) ───────────────────────────
     mujoco_sim = ExecuteProcess(
-        cmd=['python3', os.path.join(sim_dir, 'scripts', 'run_sim.py'),
-             '--world', world],
+        cmd=['python3', os.path.join(sim_dir, 'engine', 'cli.py'),
+             '--world', world, '--headless'],
         name='mujoco_sim',
         output='screen',
     )
@@ -62,7 +62,7 @@ def generate_launch_description():
             executable='terrainAnalysis',
             name='terrain_analysis',
             remappings=[
-                ('/cloud_map',    '/livox/lidar'),     # LiDAR 点云 → terrain
+                ('/cloud_map',    '/nav/registered_cloud'),  # unified /nav/* contract
                 ('/terrain_map',  '/nav/terrain_map'),
             ],
             parameters=[{
@@ -83,7 +83,7 @@ def generate_launch_description():
             executable='localPlannerNodeExe',
             name='local_planner',
             remappings=[
-                ('/cloud_map',   '/livox/lidar'),
+                ('/cloud_map',   '/nav/registered_cloud'),  # unified /nav/* contract
                 ('/terrain_map', '/nav/terrain_map'),
                 ('/way_point',   '/nav/way_point'),
                 ('/cmd_vel',     '/nav/cmd_vel'),

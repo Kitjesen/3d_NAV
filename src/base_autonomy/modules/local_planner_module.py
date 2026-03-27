@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from pathlib import Path as FsPath
 from typing import Any, Dict, List, Optional
 
@@ -333,6 +334,7 @@ class LocalPlannerModule(Module, layer=2):
         self._robot_yaw = 0.0
         self._latest_waypoint: Optional[PoseStamped] = None
         self._terrain_points: Optional[np.ndarray] = None
+        self._last_cmu_py_time: float = 0.0
 
         # cmu_py state
         self._path_data: Optional[Dict] = None
@@ -428,7 +430,11 @@ class LocalPlannerModule(Module, layer=2):
         self._robot_yaw = getattr(odom, "yaw", 0.0)
 
         if self._backend == "cmu_py" and self._latest_waypoint is not None:
-            self._run_cmu_py()
+            # Rate-limit cmu_py to ~1 Hz (compute_control needs stable reference frame)
+            now = time.time()
+            if now - self._last_cmu_py_time >= 1.0:
+                self._last_cmu_py_time = now
+                self._run_cmu_py()
 
     def _on_terrain(self, cloud: PointCloud):
         """Store terrain obstacle points for local planning."""

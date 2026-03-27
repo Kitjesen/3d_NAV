@@ -135,6 +135,24 @@ class NavigationModule(Module, layer=5):
         self.stop_signal.subscribe(self._on_stop)
         self.patrol_goals.subscribe(self._on_patrol_goals)
         self.cancel.subscribe(self._on_cancel)
+
+        # Optional ROS2 bridge for C++ localPlanner
+        self._ros2_node = None
+        self._ros2_wp_pub = None
+        try:
+            import rclpy
+            from rclpy.node import Node
+            from geometry_msgs.msg import PointStamped
+            from rclpy.qos import QoSProfile, ReliabilityPolicy
+            if not rclpy.ok():
+                rclpy.init(args=[])
+            self._ros2_node = rclpy.create_node('nav_waypoint_bridge')
+            qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            self._ros2_wp_pub = self._ros2_node.create_publisher(PointStamped, '/nav/way_point', qos)
+            logger.info("NavigationModule: ROS2 waypoint bridge enabled -> /nav/way_point")
+        except (ImportError, Exception) as e:
+            logger.debug("NavigationModule: ROS2 not available, waypoint bridge disabled: %s", e)
+
         self._set_state(MissionState.IDLE)
 
     def _create_planner(self):
@@ -204,7 +222,9 @@ class NavigationModule(Module, layer=5):
                     origin=data.get("origin"),
                 )
                 # Replan if active goal + enough time since last plan (3s cooldown)
-                if (self._state in (MissionState.EXECUTING, MissionState.PATROLLING)
+                # Also replan on FAILED — initial plan may have failed before map was ready
+                if (self._state in (MissionState.EXECUTING, MissionState.PATROLLING,
+                                    MissionState.FAILED)
                         and self._goal is not None
                         and time.time() - self._mission_start_time > 3.0):
                     self._mission_start_time = time.time()  # reset cooldown
@@ -392,6 +412,22 @@ class NavigationModule(Module, layer=5):
             frame_id="map", ts=time.time(),
         )
         self.waypoint.publish(pose)
+        if self._ros2_wp_pub is not None:
+            try:
+                from geometry_msgs.msg import PointStamped
+                pt = PointStamped()
+                pt.header.frame_id = 'map'
+                pt.point.x = float(wp[0])
+                pt.point.y = float(wp[1])
+                pt.point.z = float(wp[2]) if len(wp) > 2 else 0.0
+                self._ros2_wp_pub.publish(pt)
+            except Exception:
+                pass
+
+    def stop(self):
+        if self._ros2_node is not None:
+            self._ros2_node.destroy_node()
+            self._ros2_node = None
 
     # -- Health --------------------------------------------------------------
 

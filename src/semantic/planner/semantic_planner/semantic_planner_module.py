@@ -55,8 +55,7 @@ class SemanticPlannerModule(Module, layer=4):
     detections: In[list]
 
     # -- Outputs --
-    resolved_goal: Out[PoseStamped]
-    frontier_goal: Out[PoseStamped]
+    goal_pose: Out[PoseStamped]
     task_plan: Out[dict]
     planner_status: Out[str]
 
@@ -97,19 +96,23 @@ class SemanticPlannerModule(Module, layer=4):
         self.detections.subscribe(self._on_detections)
 
     def _init_backends(self):
-        """Lazy-load algorithm backends."""
-        # GoalResolver
+        """Lazy-load algorithm backends (relative imports within package)."""
+        # GoalResolver — needs LLMConfig for slow path (fast path works without LLM)
         try:
-            from semantic_planner.goal_resolver import GoalResolver, GoalResolverConfig
-            config = GoalResolverConfig(fast_path_threshold=self._fast_threshold)
-            self._goal_resolver = GoalResolver(config)
+            from .goal_resolver import GoalResolver
+            from .llm_client import LLMConfig
+            llm_cfg = LLMConfig()  # defaults; slow path uses env API keys
+            self._goal_resolver = GoalResolver(
+                primary_config=llm_cfg,
+                fast_path_threshold=self._fast_threshold,
+            )
             logger.info("GoalResolver initialized (threshold=%.2f)", self._fast_threshold)
         except ImportError:
             logger.warning("GoalResolver not available")
 
         # FrontierScorer
         try:
-            from semantic_planner.frontier_scorer import FrontierScorer
+            from .frontier_scorer import FrontierScorer
             self._frontier_scorer = FrontierScorer()
             logger.info("FrontierScorer initialized")
         except ImportError:
@@ -117,7 +120,7 @@ class SemanticPlannerModule(Module, layer=4):
 
         # TaskDecomposer
         try:
-            from semantic_planner.task_decomposer import TaskDecomposer
+            from .task_decomposer import TaskDecomposer
             self._task_decomposer = TaskDecomposer()
             logger.info("TaskDecomposer initialized (strategy=%s)", self._decomposer_strategy)
         except ImportError:
@@ -125,7 +128,7 @@ class SemanticPlannerModule(Module, layer=4):
 
         # ActionExecutor
         try:
-            from semantic_planner.action_executor import ActionExecutor
+            from .action_executor import ActionExecutor
             self._action_executor = ActionExecutor()
             logger.info("ActionExecutor initialized")
         except ImportError:
@@ -193,7 +196,7 @@ class SemanticPlannerModule(Module, layer=4):
                                   orientation=Quaternion(0, 0, 0, 1)),
                         frame_id="map", ts=time.time(),
                     )
-                    self.resolved_goal.publish(pose)
+                    self.goal_pose.publish(pose)
                     self.planner_status.publish("RESOLVED")
                     return
 
@@ -218,7 +221,7 @@ class SemanticPlannerModule(Module, layer=4):
                               orientation=Quaternion(0, 0, 0, 1)),
                     frame_id="map", ts=time.time(),
                 )
-                self.frontier_goal.publish(pose)
+                self.goal_pose.publish(pose)
                 self._frontier_count += 1
                 self.planner_status.publish("EXPLORING")
             else:

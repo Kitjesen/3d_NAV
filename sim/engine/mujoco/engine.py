@@ -242,7 +242,7 @@ class MuJoCoEngine(SimEngine):
         for cam_cfg in self._camera_cfgs:
             try:
                 self._cameras[cam_cfg.name] = MuJoCoCamera(self._model, cam_cfg)
-            except ValueError as e:
+            except Exception as e:
                 print(f'[MuJoCoEngine] Warning: {e}')
 
         # Initialize policy

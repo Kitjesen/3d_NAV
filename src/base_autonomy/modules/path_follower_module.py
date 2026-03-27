@@ -177,17 +177,8 @@ class PathFollowerModule(Module, layer=2):
         self._robot_x = odom.pose.position.x
         self._robot_y = odom.pose.position.y
 
-        # Estimate yaw from velocity or position delta
-        vx = odom.twist.linear.x if hasattr(odom.twist.linear, 'x') else 0.0
-        vy = odom.twist.linear.y if hasattr(odom.twist.linear, 'y') else 0.0
-        speed = math.hypot(vx, vy)
-        if speed > 0.05:
-            self._robot_yaw = math.atan2(vy, vx)
-        else:
-            dx = self._robot_x - prev_x
-            dy = self._robot_y - prev_y
-            if math.hypot(dx, dy) > 0.01:
-                self._robot_yaw = math.atan2(dy, dx)
+        # Extract yaw from quaternion (reliable, works at all speeds)
+        self._robot_yaw = odom.yaw
 
         if self._backend == "nav_core" and self._nc_path:
             self._nav_core_step(odom.ts)
@@ -214,9 +205,8 @@ class PathFollowerModule(Module, layer=2):
                 )
                 pts.append(v)
             self._nc_path = pts
-
-            # Reset state when new path arrives
-            self._nc_state = nc.PathFollowerState()
+            # Note: do NOT reset nc_state here — compute_control needs
+            # continuous state to ramp up speed (vehicleSpeed persists)
 
         elif self._backend == "pid":
             pts = []
@@ -313,14 +303,12 @@ class PathFollowerModule(Module, layer=2):
         while yaw_err < -math.pi:
             yaw_err += 2 * math.pi
 
-        # P controller with speed/yaw coupling
-        wz = max(-0.5, min(0.5, yaw_err * 0.6))  # match policy range
-        # Slow down when turning hard (cos coupling)
-        turn_factor = max(0.3, math.cos(yaw_err))
-        vx = min(self._max_speed, dist * 0.3) * turn_factor
+        # P controller with cos coupling — Go1 has low yaw drift (~2°/8s)
+        wz = max(-0.8, min(0.8, yaw_err * 0.5))
+        turn_factor = max(0.2, math.cos(yaw_err))
+        vx = min(self._max_speed, max(0.15, dist * 0.25)) * turn_factor
 
-        # Exponential smoothing for continuous motion
-        alpha = 0.3  # smoothing factor (0=no change, 1=instant)
+        alpha = 0.2
         self._smooth_vx = (1 - alpha) * self._smooth_vx + alpha * vx
         self._smooth_wz = (1 - alpha) * self._smooth_wz + alpha * wz
 

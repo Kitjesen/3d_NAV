@@ -57,6 +57,40 @@ from core.registry import register
 
 logger = logging.getLogger(__name__)
 
+# Lazy-loaded memory backends (avoid hard import dependency)
+_tagged_store = None
+_episodic_mem = None
+_topo_mem = None
+
+
+def _get_tagged_store():
+    global _tagged_store
+    if _tagged_store is None:
+        try:
+            from memory.spatial.tagged_locations import TaggedLocationStore
+            _tagged_store = TaggedLocationStore()
+            logger.info("MCP: TaggedLocationStore connected (in-memory)")
+        except ImportError:
+            pass
+    return _tagged_store
+
+
+def _get_memories():
+    global _episodic_mem, _topo_mem
+    if _episodic_mem is None:
+        try:
+            from memory.spatial.episodic import EpisodicMemory
+            _episodic_mem = EpisodicMemory()
+        except ImportError:
+            pass
+    if _topo_mem is None:
+        try:
+            from memory.spatial.topological import TopologicalMemory
+            _topo_mem = TopologicalMemory()
+        except ImportError:
+            pass
+    return _episodic_mem, _topo_mem
+
 MCP_PROTOCOL_VERSION = "2025-11-25"
 
 
@@ -253,7 +287,6 @@ class MCPServerModule(Module, layer=6):
         self._sg_json: str = "{}"
         self._safety: Optional[Dict] = None
         self._mission: Optional[Dict] = None
-        self._tagged_locations: Dict[str, Dict] = {}
         self._system_handle = None  # set externally for health queries
 
     def set_system_handle(self, handle):
@@ -348,24 +381,52 @@ class MCPServerModule(Module, layer=6):
         if name == "get_robot_position":
             return json.dumps(self._odom or {"error": "no odometry"})
 
-        # Memory
+        # Memory — connected to TaggedLocationStore + EpisodicMemory/TopologicalMemory
         if name == "query_memory":
-            # Delegate to memory module if available
-            return json.dumps({"query": args["query"],
-                               "results": [], "note": "memory query not yet connected"})
+            query = args["query"]
+            results = []
+            episodic, topo = _get_memories()
+            if topo:
+                try:
+                    nodes = topo.query_by_text(query, top_k=3)
+                    for n in nodes:
+                        results.append({"source": "topological", "label": n.label,
+                                        "position": list(n.position), "score": getattr(n, 'score', 0)})
+                except Exception:
+                    pass
+            if episodic:
+                try:
+                    records = episodic.query_by_text(query, top_k=3)
+                    for r in records:
+                        results.append({"source": "episodic", "label": getattr(r, 'label', ''),
+                                        "position": list(getattr(r, 'position', [0, 0, 0])),
+                                        "ts": getattr(r, 'timestamp', 0)})
+                except Exception:
+                    pass
+            store = _get_tagged_store()
+            if store:
+                match = store.query_fuzzy(query)
+                if match:
+                    results.append({"source": "tagged", "label": match["name"],
+                                    "position": match["position"]})
+            return json.dumps({"query": query, "results": results, "count": len(results)})
 
         if name == "list_tagged_locations":
-            return json.dumps({"locations": self._tagged_locations})
+            store = _get_tagged_store()
+            locs = store.list_all() if store else []
+            return json.dumps({"locations": locs})
 
         if name == "tag_location":
-            if self._odom:
-                self._tagged_locations[args["name"]] = {
-                    "x": self._odom["x"], "y": self._odom["y"],
-                    "z": self._odom.get("z", 0), "ts": time.time(),
-                }
-                return json.dumps({"tagged": args["name"],
-                                   "position": self._tagged_locations[args["name"]]})
-            return json.dumps({"error": "no odometry, can't tag"})
+            if not self._odom:
+                return json.dumps({"error": "no odometry, can't tag"})
+            store = _get_tagged_store()
+            if not store:
+                return json.dumps({"error": "TaggedLocationStore not available"})
+            store.tag(args["name"],
+                      x=self._odom["x"], y=self._odom["y"],
+                      z=self._odom.get("z", 0))
+            entry = store.query(args["name"])
+            return json.dumps({"tagged": args["name"], "position": entry})
 
         # Planning
         if name == "send_instruction":
@@ -476,6 +537,6 @@ class MCPServerModule(Module, layer=6):
         info["mcp"] = {
             "port": self._port,
             "tools": len(TOOLS),
-            "tagged_locations": len(self._tagged_locations),
+            "tagged_locations": len(_get_tagged_store().list_all()) if _get_tagged_store() else 0,
         }
         return info

@@ -48,6 +48,9 @@ class MobileCLIPEncoder:
         pretrained: str = "openai",
     ):
         self._model_name = model_name
+        if device == "auto":
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         self._device = device
         self._pretrained = pretrained
 

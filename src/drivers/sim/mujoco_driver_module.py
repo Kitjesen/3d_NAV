@@ -135,15 +135,19 @@ class MujocoDriverModule(Module, layer=1):
                     obs_cfgs.append(o)
             world_cfg = WorldConfig(obstacles=obs_cfgs)
 
-            camera_cfg = CameraConfig(
-                name="front_camera", width=640, height=480,
-                fovy=60.0, render_depth=True)
+            # Only create camera when rendering is enabled (requires OpenGL)
+            camera_cfgs = []
+            if self._render:
+                camera_cfg = CameraConfig(
+                    name="front_camera", width=640, height=480,
+                    fovy=60.0, render_depth=True)
+                camera_cfgs = [camera_cfg]
 
             self._engine = MuJoCoEngine(
                 robot_config=robot_cfg,
                 world_config=world_cfg,
                 lidar_config=LidarConfig(geom_group=0),
-                camera_configs=[camera_cfg],
+                camera_configs=camera_cfgs,
                 headless=not self._render,
             )
             # building_scene.xml etc. are standalone scenes without robot include.
@@ -195,13 +199,10 @@ class MujocoDriverModule(Module, layer=1):
     def _on_cmd_vel(self, twist: Twist):
         if self._stopped:
             return
-        # Robot body frame: +Y is forward in MuJoCo (URDF→MJCF 90° offset)
-        # Navigation frame: +X is forward
-        # Remap: nav_vx → sim_vy, nav_vy → -sim_vx
-        nav_vx = twist.linear.x if hasattr(twist.linear, 'x') else 0.0
-        nav_vy = twist.linear.y if hasattr(twist.linear, 'y') else 0.0
-        self._cmd_vx = -nav_vy   # nav +Y → sim -X
-        self._cmd_vy = nav_vx    # nav +X → sim +Y (forward)
+        # MuJoCo engine: linear_x = forward, linear_y = lateral (verified by Step 2 test)
+        # Nav stack: vx = forward, vy = lateral — same convention, direct passthrough
+        self._cmd_vx = twist.linear.x if hasattr(twist.linear, 'x') else 0.0
+        self._cmd_vy = twist.linear.y if hasattr(twist.linear, 'y') else 0.0
         self._cmd_wz = twist.angular.z if hasattr(twist.angular, 'z') else 0.0
 
     def _on_stop(self, level: int):
