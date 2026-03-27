@@ -78,6 +78,13 @@ def _dim(t: str) -> str:    return _c("2", t)
 # ── Profiles ──────────────────────────────────────────────────────────
 
 PROFILES = {
+    "map": dict(
+        _desc="Mapping mode — build map with SLAM, then save",
+        robot="sim_ros2", detector="yoloe", encoder="mobileclip",
+        llm="mock", planner="astar",
+        enable_native=False, enable_semantic=False, enable_gateway=False,
+        gateway_port=5050,
+    ),
     "stub": dict(
         _desc="No hardware, framework testing",
         robot="stub", detector="yoloe", encoder="mobileclip",
@@ -290,6 +297,154 @@ class LingTuREPL(cmd.Cmd):
             return
         nav.cancel._deliver("user")
         print("  Mission cancelled")
+
+    # ── Map management commands ──
+
+    def do_map(self, arg):
+        """Map management: map list | map save <name> | map use <name> | map build <name> | map delete <name>"""
+        parts = arg.split()
+        if not parts:
+            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name>")
+            return
+
+        subcmd = parts[0]
+        name = parts[1] if len(parts) > 1 else ""
+
+        if subcmd == "list":
+            self._map_list()
+        elif subcmd == "save" and name:
+            self._map_save(name)
+        elif subcmd == "use" and name:
+            self._map_use(name)
+        elif subcmd == "build" and name:
+            self._map_build_tomogram(name)
+        elif subcmd == "delete" and name:
+            self._map_delete(name)
+        else:
+            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name>")
+
+    def _map_list(self):
+        """List available maps."""
+        import os
+        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        if not os.path.isdir(map_dir):
+            print(f"  No maps directory: {map_dir}")
+            return
+        # Find active map
+        active_link = os.path.join(map_dir, "active")
+        active_name = ""
+        if os.path.islink(active_link):
+            active_name = os.path.basename(os.readlink(active_link))
+
+        maps = sorted(d for d in os.listdir(map_dir)
+                      if os.path.isdir(os.path.join(map_dir, d)) and d != "active")
+        if not maps:
+            print("  No maps found")
+            return
+        for m in maps:
+            has_pcd = os.path.exists(os.path.join(map_dir, m, "map.pcd"))
+            has_tomo = os.path.exists(os.path.join(map_dir, m, "tomogram.pickle"))
+            marker = " *" if m == active_name else ""
+            status = []
+            if has_pcd: status.append("pcd")
+            if has_tomo: status.append("tomogram")
+            print(f"  {m}{marker}  [{', '.join(status) or 'empty'}]")
+
+    def _map_save(self, name):
+        """Save current SLAM map via ROS2 PGO service."""
+        import subprocess, os
+        map_dir = os.path.join(
+            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")), name)
+        os.makedirs(map_dir, exist_ok=True)
+        pcd_path = os.path.join(map_dir, "map.pcd")
+        print(f"  Saving map to {pcd_path}...")
+        try:
+            result = subprocess.run(
+                ["ros2", "service", "call", "/pgo/save_maps",
+                 "interface/srv/SaveMaps", f"{{file_path: '{pcd_path}'}}"],
+                capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                print(f"  PCD saved: {pcd_path}")
+                self._map_build_tomogram(name)
+            else:
+                print(f"  Save failed: {result.stderr[:200]}")
+        except FileNotFoundError:
+            print("  Error: ros2 not found. Run on S100P with ROS2.")
+        except subprocess.TimeoutExpired:
+            print("  Error: save_maps service timed out")
+
+    def _map_use(self, name):
+        """Set active map and reload planner tomogram."""
+        import os
+        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        map_path = os.path.join(map_dir, name)
+        if not os.path.isdir(map_path):
+            print(f"  Map not found: {name}")
+            return
+        # Update active symlink
+        active_link = os.path.join(map_dir, "active")
+        if os.path.islink(active_link):
+            os.unlink(active_link)
+        elif os.path.exists(active_link):
+            import shutil; shutil.rmtree(active_link)
+        os.symlink(map_path, active_link)
+
+        # Reload NavigationModule planner with new tomogram
+        tomogram = os.path.join(map_path, "tomogram.pickle")
+        nav = self._get_module("NavigationModule")
+        if nav and os.path.exists(tomogram) and hasattr(nav, '_planner_backend'):
+            if hasattr(nav._planner_backend, '_load_tomogram'):
+                nav._planner_backend._load_tomogram(tomogram)
+                print(f"  Active map: {name} (tomogram loaded)")
+            elif hasattr(nav._planner_backend, 'update_map'):
+                import pickle
+                with open(tomogram, 'rb') as f:
+                    data = pickle.load(f)
+                if 'grid' in data:
+                    nav._planner_backend.update_map(data['grid'], data.get('resolution', 0.2))
+                print(f"  Active map: {name} (costmap loaded)")
+            else:
+                print(f"  Active map: {name} (planner reload not supported)")
+        else:
+            if not os.path.exists(tomogram):
+                print(f"  Active map: {name} (no tomogram — run: map build {name})")
+            else:
+                print(f"  Active map: {name}")
+
+    def _map_build_tomogram(self, name):
+        """Build tomogram from PCD file."""
+        import os, sys
+        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        pcd_path = os.path.join(map_dir, name, "map.pcd")
+        tomogram_path = os.path.join(map_dir, name, "tomogram.pickle")
+        if not os.path.exists(pcd_path):
+            print(f"  No PCD file: {pcd_path}")
+            return
+        print(f"  Building tomogram from {pcd_path}...")
+        try:
+            # Add tomography scripts to path
+            tomo_dir = os.path.join(os.path.dirname(__file__) or '.',
+                                    'src', 'global_planning', 'PCT_planner', 'tomography', 'scripts')
+            if not os.path.isdir(tomo_dir):
+                tomo_dir = os.path.join('src', 'global_planning', 'PCT_planner', 'tomography', 'scripts')
+            if tomo_dir not in sys.path:
+                sys.path.insert(0, tomo_dir)
+            from global_planning.PCT_planner.tomography.scripts.build_tomogram import build_tomogram_from_pcd
+            build_tomogram_from_pcd(pcd_path, tomogram_path)
+            print(f"  Tomogram built: {tomogram_path}")
+        except Exception as e:
+            print(f"  Build failed: {e}")
+
+    def _map_delete(self, name):
+        """Delete a map directory."""
+        import os, shutil
+        map_dir = os.path.join(
+            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")), name)
+        if not os.path.isdir(map_dir):
+            print(f"  Map not found: {name}")
+            return
+        shutil.rmtree(map_dir)
+        print(f"  Deleted: {name}")
 
     # ── Monitoring commands ──
 

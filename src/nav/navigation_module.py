@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -170,7 +171,19 @@ class NavigationModule(Module, layer=5):
             from core.registry import list_plugins
             available = list_plugins("planner_backend")
             raise ValueError(f"Unknown planner: '{name}'. Available: {available}")
-        return BackendCls(self._tomogram, self._obstacle_thr)
+
+        # Resolve tomogram path: explicit > active map > empty
+        tomogram_path = self._tomogram
+        if not tomogram_path or not os.path.exists(tomogram_path):
+            # Try the active map directory
+            active_tomo = os.path.join(
+                os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+                "active", "tomogram.pickle")
+            if os.path.exists(active_tomo):
+                tomogram_path = active_tomo
+                logger.info("NavigationModule: using active map tomogram: %s", tomogram_path)
+
+        return BackendCls(tomogram_path, self._obstacle_thr)
 
     # -- State machine -------------------------------------------------------
 
