@@ -255,6 +255,10 @@ class Blueprint:
         # 7. 计算启动顺序 (拓扑排序)
         startup_order = self._topo_sort(instances, connections)
 
+        # 8. Notify each module of the full module set (on_system_modules hook)
+        for mod in instances.values():
+            mod.on_system_modules(dict(instances))
+
         return SystemHandle(
             modules=instances,
             transport=transport,

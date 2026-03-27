@@ -31,6 +31,22 @@ from .stream import In, Out
 logger = logging.getLogger(__name__)
 
 
+def rpc(fn):
+    """Mark a Module method as RPC-callable.
+
+    Decorated methods can be discovered via Module.rpcs property
+    and called across module boundaries.
+
+    Usage:
+        class MyModule(Module):
+            @rpc
+            def navigate_to(self, x: float, y: float) -> bool:
+                ...
+    """
+    fn.__rpc__ = True
+    return fn
+
+
 class Module:
     """模块基类 — LingTu 编排框架的核心构件。
 
@@ -105,12 +121,12 @@ class Module:
             origin = get_origin(ann)
             if origin is Out:
                 inner = get_args(ann)[0] if get_args(ann) else Any
-                port = Out(name, inner)
+                port = Out(inner, name, self)
                 setattr(self, name, port)
                 self._ports_out[name] = port
             elif origin is In:
                 inner = get_args(ann)[0] if get_args(ann) else Any
-                port = In(name, inner)
+                port = In(inner, name, self)
                 setattr(self, name, port)
                 self._ports_in[name] = port
 
@@ -164,12 +180,92 @@ class Module:
         return {**self._ports_in, **self._ports_out}
 
     @property
+    def outputs(self) -> Dict[str, Out[Any]]:
+        """Alias for ports_out — dimos API compatibility."""
+        return self._ports_out
+
+    @property
+    def inputs(self) -> Dict[str, In[Any]]:
+        """Alias for ports_in — dimos API compatibility."""
+        return self._ports_in
+
+    @property
+    def rpcs(self) -> Dict[str, Any]:
+        """Discover all @rpc-decorated methods on this module."""
+        result = {}
+        for name in dir(self):
+            if name.startswith('_'):
+                continue
+            try:
+                method = getattr(self, name)
+                if callable(method) and getattr(method, '__rpc__', False):
+                    result[name] = method
+            except Exception:
+                continue
+        return result
+
+    def call_rpc(self, method_name: str, **kwargs: Any):
+        """Call an RPC method by name. Returns the method result."""
+        rpcs = self.rpcs
+        if method_name not in rpcs:
+            raise ValueError(
+                f"RPC method '{method_name}' not found on {type(self).__name__}"
+            )
+        return rpcs[method_name](**kwargs)
+
+    @property
     def running(self) -> bool:
         return self._running
 
     @property
     def layer(self) -> Optional[int]:
         return self._layer
+
+    # -- System-level hooks -----------------------------------------------
+
+    def on_system_modules(self, modules: "Dict[str, Module]") -> None:
+        """Called by Blueprint after all modules are built.
+
+        Override to inspect other modules, discover @rpc methods,
+        or establish cross-module dependencies.
+
+        Args:
+            modules: dict of {module_name: module_instance}
+        """
+        pass
+
+    # -- Dynamic port creation --------------------------------------------
+
+    def io(self, name: str, direction: type, msg_type: type = None) -> Any:
+        """Dynamically create a port at runtime.
+
+        Args:
+            name: port name
+            direction: In or Out class
+            msg_type: message type (optional, defaults to Any)
+
+        Returns:
+            The created port instance
+
+        Usage::
+
+            self.io("custom_output", Out, PoseStamped)
+            self.io("custom_input", In, Odometry)
+        """
+        resolved_type = msg_type if msg_type is not None else Any
+
+        if direction is Out or (isinstance(direction, type) and issubclass(direction, Out)):
+            port = Out(resolved_type, name, self)
+            self._ports_out[name] = port
+            setattr(self, name, port)
+            return port
+        elif direction is In or (isinstance(direction, type) and issubclass(direction, In)):
+            port = In(resolved_type, name, self)
+            self._ports_in[name] = port
+            setattr(self, name, port)
+            return port
+        else:
+            raise ValueError(f"direction must be In or Out, got {direction}")
 
     # -- Blueprint 工厂 ---------------------------------------------------
 

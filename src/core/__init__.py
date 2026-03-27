@@ -12,7 +12,7 @@ Core components:
 
 from .stream import In, Out
 from .transport import Transport, LocalTransport
-from .module import Module
+from .module import Module, rpc
 from .blueprint import Blueprint, SystemHandle, autoconnect
 from .config import RobotConfig, get_config, load_config, reset_config
 from .clock import Clock, clock
@@ -24,7 +24,7 @@ __all__ = [
     # stream
     "Out", "In",
     # module
-    "Module",
+    "Module", "rpc",
     # blueprint
     "Blueprint", "SystemHandle", "autoconnect",
     # config

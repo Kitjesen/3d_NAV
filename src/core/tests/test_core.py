@@ -19,7 +19,7 @@ import time
 import pytest
 
 from core.stream import In, LocalTransport, Out
-from core.module import Module
+from core.module import Module, rpc
 from core.blueprint import Blueprint, SystemHandle, autoconnect
 from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.semantic import SceneGraph, Detection3D, GoalResult
@@ -94,7 +94,7 @@ class SetupTrackModule(Module, layer=2):
 class TestOut:
     def test_basic_publish(self):
         """Out.publish 调用已注册的回调。"""
-        port = Out("test", SceneGraph)
+        port = Out(SceneGraph, "test")
         received = []
         port._add_callback(received.append)
 
@@ -106,7 +106,7 @@ class TestOut:
 
     def test_multiple_callbacks(self):
         """Out 支持多个回调 (扇出)。"""
-        port = Out("test", int)
+        port = Out(int, "test")
         r1, r2 = [], []
         port._add_callback(r1.append)
         port._add_callback(r2.append)
@@ -118,7 +118,7 @@ class TestOut:
 
     def test_msg_count_and_ts(self):
         """发布后 msg_count 递增，last_ts 更新。"""
-        port = Out("counter", int)
+        port = Out(int, "counter")
         assert port.msg_count == 0
         assert port.last_ts == 0.0
 
@@ -133,7 +133,7 @@ class TestOut:
 
     def test_remove_callback(self):
         """_remove_callback 后不再收到消息。"""
-        port = Out("test", int)
+        port = Out(int, "test")
         received = []
         port._add_callback(received.append)
         port.publish(1)
@@ -145,7 +145,7 @@ class TestOut:
 
     def test_properties(self):
         """Out 属性正确。"""
-        port = Out("my_port", SceneGraph)
+        port = Out(SceneGraph, "my_port")
         assert port.name == "my_port"
         assert port.msg_type is SceneGraph
         assert port.callback_count == 0
@@ -155,7 +155,7 @@ class TestOut:
 
     def test_callback_exception_doesnt_stop_delivery(self):
         """一个回调异常不影响其他回调。"""
-        port = Out("test", int)
+        port = Out(int, "test")
         received = []
 
         def bad_cb(msg):
@@ -175,7 +175,7 @@ class TestOut:
 class TestIn:
     def test_deliver(self):
         """_deliver 调用已注册的回调。"""
-        port = In("test", SceneGraph)
+        port = In(SceneGraph, "test")
         received = []
         port.subscribe(received.append)
 
@@ -187,7 +187,7 @@ class TestIn:
 
     def test_latest(self):
         """latest 保存最新消息。"""
-        port = In("test", int)
+        port = In(int, "test")
         assert port.latest is None
 
         port._deliver(10)
@@ -198,7 +198,7 @@ class TestIn:
 
     def test_msg_count(self):
         """_deliver 递增 msg_count。"""
-        port = In("test", int)
+        port = In(int, "test")
         assert port.msg_count == 0
 
         port._deliver(1)
@@ -207,7 +207,7 @@ class TestIn:
 
     def test_connected_property(self):
         """connected 反映是否有注册回调。"""
-        port = In("test", int)
+        port = In(int, "test")
         assert not port.connected
 
         port.subscribe(lambda x: None)
@@ -215,14 +215,14 @@ class TestIn:
 
     def test_deliver_without_subscriber(self):
         """无订阅者时 _deliver 不报错，仍更新 latest。"""
-        port = In("test", int)
+        port = In(int, "test")
         port._deliver(42)  # 不应报错
         assert port.latest == 42
         assert port.msg_count == 1
 
     def test_callback_exception_doesnt_crash(self):
         """回调异常不影响 In 状态更新。"""
-        port = In("test", int)
+        port = In(int, "test")
 
         def bad_cb(msg):
             raise ValueError("oops")
@@ -240,8 +240,8 @@ class TestIn:
 class TestOutToIn:
     def test_direct_connection(self):
         """Out._add_callback(In._deliver) 实现直连。"""
-        out = Out("scene_graph", SceneGraph)
-        inp = In("scene_graph", SceneGraph)
+        out = Out(SceneGraph, "scene_graph")
+        inp = In(SceneGraph, "scene_graph")
 
         out._add_callback(inp._deliver)
 
@@ -254,9 +254,9 @@ class TestOutToIn:
 
     def test_fan_out(self):
         """一个 Out 连接多个 In。"""
-        out = Out("pose", PoseStamped)
-        in1 = In("pose", PoseStamped)
-        in2 = In("pose", PoseStamped)
+        out = Out(PoseStamped, "pose")
+        in1 = In(PoseStamped, "pose")
+        in2 = In(PoseStamped, "pose")
 
         out._add_callback(in1._deliver)
         out._add_callback(in2._deliver)
@@ -380,7 +380,7 @@ class TestOutWithTransport:
     def test_bind_transport(self):
         """Out 绑定 Transport 后，publish 同时发送到传输层。"""
         transport = LocalTransport()
-        out = Out("scene_graph", SceneGraph)
+        out = Out(SceneGraph, "scene_graph")
         out._bind_transport(transport, "/nav/scene_graph")
 
         received_local = []
@@ -976,6 +976,230 @@ class TestLayerDeps:
 
 
 # ============================================================================
+# TestOnSystemModules — on_system_modules hook
+# ============================================================================
+
+class TestOnSystemModules:
+    """on_system_modules is called by Blueprint.build() after all modules
+    are instantiated and wired, allowing cross-module discovery."""
+
+    def test_hook_called_during_build(self):
+        """on_system_modules is called on every module during build()."""
+        received: dict = {}
+
+        class ObserverModule(Module):
+            data: Out[Vector3]
+
+            def on_system_modules(self, modules):
+                received.update(modules)
+
+        system = Blueprint().add(ObserverModule).build()
+        assert "ObserverModule" in received
+        assert received["ObserverModule"] is system.get_module("ObserverModule")
+
+    def test_hook_receives_all_modules(self):
+        """Each module's on_system_modules receives the full module dict."""
+        snapshots: list = []
+
+        class ModA(Module):
+            scene_graph: Out[SceneGraph]
+
+            def on_system_modules(self, modules):
+                snapshots.append(set(modules.keys()))
+
+        class ModB(Module):
+            scene_graph: In[SceneGraph]
+
+            def on_system_modules(self, modules):
+                snapshots.append(set(modules.keys()))
+
+        Blueprint().add(ModA).add(ModB).auto_wire().build()
+
+        assert len(snapshots) == 2
+        for snap in snapshots:
+            assert snap == {"ModA", "ModB"}
+
+    def test_hook_can_discover_rpc_methods(self):
+        """on_system_modules can inspect @rpc methods on peer modules."""
+        from core.module import rpc
+
+        found_rpcs: list = []
+
+        class ServiceModule(Module):
+            data: Out[Vector3]
+
+            @rpc
+            def ping(self) -> str:
+                return "pong"
+
+        class ClientModule(Module):
+            data: In[Vector3]
+
+            def on_system_modules(self, modules):
+                svc = modules.get("ServiceModule")
+                if svc is not None:
+                    found_rpcs.extend(svc.rpcs.keys())
+
+        Blueprint().add(ServiceModule).add(ClientModule).auto_wire().build()
+        assert "ping" in found_rpcs
+
+    def test_hook_called_before_system_handle_returned(self):
+        """on_system_modules is called before build() returns, so the
+        SystemHandle's modules dict is fully populated by the time
+        start() is called."""
+        call_order: list = []
+
+        class WatchModule(Module):
+            data: Out[Vector3]
+
+            def on_system_modules(self, modules):
+                call_order.append("hook")
+
+            def setup(self):
+                call_order.append("setup")
+
+        system = Blueprint().add(WatchModule).build()
+        system.start()
+        # hook is called during build(), before setup() during start()
+        assert call_order.index("hook") < call_order.index("setup")
+        system.stop()
+
+    def test_default_hook_is_noop(self):
+        """Default on_system_modules does nothing — no exception raised."""
+        system = (
+            Blueprint()
+            .add(SourceModule)
+            .add(SinkModule)
+            .auto_wire()
+            .build()
+        )
+        # If we got here without exception, the noop default worked fine.
+        assert len(system.modules) == 2
+
+
+# ============================================================================
+# TestIoDynamicPorts — io() dynamic port creation
+# ============================================================================
+
+class TestIoDynamicPorts:
+    """io() creates In/Out ports at runtime and registers them in
+    _ports_in / _ports_out so Blueprint wiring and cleanup both work."""
+
+    def test_io_creates_out_port(self):
+        """io(..., Out, T) creates an Out port registered in ports_out."""
+        mod = SourceModule()
+        port = mod.io("dynamic_out", Out, Vector3)
+
+        assert isinstance(port, Out)
+        assert "dynamic_out" in mod.ports_out
+        assert mod.dynamic_out is port
+        assert port.msg_type is Vector3
+        assert port.name == "dynamic_out"
+
+    def test_io_creates_in_port(self):
+        """io(..., In, T) creates an In port registered in ports_in."""
+        mod = SinkModule()
+        port = mod.io("dynamic_in", In, Vector3)
+
+        assert isinstance(port, In)
+        assert "dynamic_in" in mod.ports_in
+        assert mod.dynamic_in is port
+        assert port.msg_type is Vector3
+        assert port.name == "dynamic_in"
+
+    def test_io_without_msg_type_uses_Any(self):
+        """io() with no msg_type defaults to typing.Any."""
+        from typing import Any
+        mod = SourceModule()
+        port = mod.io("untyped_out", Out)
+        assert port.msg_type is Any
+
+    def test_io_invalid_direction_raises(self):
+        """io() with an invalid direction raises ValueError."""
+        mod = SourceModule()
+        with pytest.raises(ValueError, match="direction must be In or Out"):
+            mod.io("bad", str, Vector3)
+
+    def test_io_port_is_functional(self):
+        """Dynamic Out port publishes to subscribers correctly."""
+        mod = SourceModule()
+        port = mod.io("dyn_vec", Out, Vector3)
+
+        received = []
+        port._add_callback(received.append)
+
+        v = Vector3(1.0, 2.0, 3.0)
+        port.publish(v)
+
+        assert received == [v]
+        assert port.msg_count == 1
+
+    def test_io_in_port_receives_messages(self):
+        """Dynamic In port receives messages via _deliver."""
+        mod = SinkModule()
+        port = mod.io("dyn_in", In, Vector3)
+
+        received = []
+        port.subscribe(received.append)
+
+        v = Vector3(4.0, 5.0, 6.0)
+        port._deliver(v)
+
+        assert received == [v]
+        assert port.latest is v
+
+    def test_io_dynamic_port_wirable(self):
+        """Dynamic ports created in __init__ can be wired via Blueprint.
+
+        Ports must exist at build() time so Blueprint can resolve them.
+        io() is called from __init__ (or before build()) for this use case.
+        """
+
+        class DynSource(Module):
+            def __init__(self, **config):
+                super().__init__(**config)
+                self.io("dyn_vec", Out, Vector3)
+
+        class DynSink(Module):
+            def __init__(self, **config):
+                super().__init__(**config)
+                self.io("dyn_vec", In, Vector3)
+
+        system = (
+            Blueprint()
+            .add(DynSource)
+            .add(DynSink)
+            .wire("DynSource", "dyn_vec", "DynSink", "dyn_vec")
+            .build()
+        )
+        system.start()
+
+        src = system.get_module("DynSource")
+        sink = system.get_module("DynSink")
+
+        v = Vector3(7.0, 8.0, 9.0)
+        src.dyn_vec.publish(v)
+        assert sink.dyn_vec.latest is v
+
+        system.stop()
+
+    def test_io_cleanup_on_stop(self):
+        """Dynamic ports are cleaned up when the module stops."""
+        mod = SourceModule()
+        out_port = mod.io("dyn_out", Out, Vector3)
+        in_port = mod.io("dyn_in", In, Vector3)
+
+        received = []
+        out_port._add_callback(received.append)
+        in_port.subscribe(received.append)
+
+        mod.stop()
+
+        # After stop, callbacks and subscribers are cleared
+        assert out_port.callback_count == 0
+        assert in_port._callback is None
+
+# ============================================================================
 # TestBackpressure — In[T] delivery policies
 # ============================================================================
 
@@ -984,23 +1208,23 @@ class TestBackpressure:
 
     def test_default_policy_is_all(self):
         """Default policy delivers every message."""
-        inp = In("val", int)
+        inp = In(int, "val")
         assert inp.policy == "all"
         assert inp.drop_count == 0
 
     def test_set_policy_latest(self):
-        inp = In("val", int)
+        inp = In(int, "val")
         inp.set_policy("latest")
         assert inp.policy == "latest"
 
     def test_set_policy_invalid_raises(self):
-        inp = In("val", int)
+        inp = In(int, "val")
         with pytest.raises(ValueError, match="Unknown policy"):
             inp.set_policy("random")
 
     def test_all_policy_delivers_every_message(self):
         """With 'all' policy, every _deliver() triggers callback."""
-        inp = In("val", int)
+        inp = In(int, "val")
         received = []
         inp.subscribe(received.append)
         for i in range(10):
@@ -1012,7 +1236,7 @@ class TestBackpressure:
         """With 'latest' policy, messages are dropped if callback is running."""
         import threading
 
-        inp = In("val", int)
+        inp = In(int, "val")
         inp.set_policy("latest")
 
         barrier = threading.Event()
@@ -1047,7 +1271,7 @@ class TestBackpressure:
 
     def test_latest_policy_normal_when_not_busy(self):
         """With 'latest' policy, sequential messages all deliver normally."""
-        inp = In("val", int)
+        inp = In(int, "val")
         inp.set_policy("latest")
         received = []
         inp.subscribe(received.append)
@@ -1060,7 +1284,7 @@ class TestBackpressure:
 
     def test_latest_always_updates(self):
         """Even when dropping, .latest property always has the newest value."""
-        inp = In("val", str)
+        inp = In(str, "val")
         inp.set_policy("latest")
         inp._deliver("a")
         inp._deliver("b")
@@ -1070,7 +1294,121 @@ class TestBackpressure:
 
     def test_drop_count_in_repr(self):
         """Drop count appears in repr when non-zero."""
-        inp = In("val", int)
+        inp = In(int, "val")
         inp.set_policy("latest")
         assert "latest" in repr(inp)
         assert "dropped" not in repr(inp)
+
+
+# ============================================================================
+# TestRpc — @rpc decorator and Module.rpcs / call_rpc
+# ============================================================================
+
+class TestRpc:
+    """Tests for the @rpc decorator, Module.rpcs property, and call_rpc method."""
+
+    def test_rpc_marks_method(self):
+        """@rpc sets __rpc__ = True on the decorated function."""
+        def my_fn(self):
+            pass
+
+        decorated = rpc(my_fn)
+        assert getattr(decorated, '__rpc__', False) is True
+
+    def test_rpc_preserves_function(self):
+        """@rpc returns the same callable (no wrapper)."""
+        def my_fn(self):
+            return 42
+
+        decorated = rpc(my_fn)
+        assert decorated is my_fn
+
+    def test_rpcs_discovers_decorated_methods(self):
+        """Module.rpcs returns all @rpc-decorated methods."""
+        class MyModule(Module):
+            @rpc
+            def navigate_to(self, x: float, y: float) -> bool:
+                return True
+
+            @rpc
+            def get_status(self) -> str:
+                return "ok"
+
+        mod = MyModule()
+        discovered = mod.rpcs
+        assert "navigate_to" in discovered
+        assert "get_status" in discovered
+
+    def test_rpcs_excludes_non_rpc_methods(self):
+        """Module.rpcs does not include methods without @rpc."""
+        class MyModule(Module):
+            @rpc
+            def rpc_method(self) -> str:
+                return "rpc"
+
+            def plain_method(self) -> str:
+                return "plain"
+
+        mod = MyModule()
+        discovered = mod.rpcs
+        assert "rpc_method" in discovered
+        assert "plain_method" not in discovered
+
+    def test_rpcs_excludes_private_methods(self):
+        """Module.rpcs never returns names starting with underscore."""
+        class MyModule(Module):
+            @rpc
+            def public_rpc(self) -> int:
+                return 1
+
+        mod = MyModule()
+        for name in mod.rpcs:
+            assert not name.startswith('_'), f"Private name leaked: {name}"
+
+    def test_rpcs_empty_when_no_decorators(self):
+        """Module.rpcs returns empty dict when no @rpc methods exist."""
+        mod = SourceModule()
+        assert mod.rpcs == {}
+
+    def test_call_rpc_invokes_method(self):
+        """call_rpc calls the named @rpc method and returns its result."""
+        class MyModule(Module):
+            @rpc
+            def add(self, a: int, b: int) -> int:
+                return a + b
+
+        mod = MyModule()
+        result = mod.call_rpc("add", a=3, b=4)
+        assert result == 7
+
+    def test_call_rpc_unknown_method_raises(self):
+        """call_rpc raises ValueError for unknown method names."""
+        mod = SourceModule()
+        with pytest.raises(ValueError, match="RPC method 'nonexistent' not found"):
+            mod.call_rpc("nonexistent")
+
+    def test_call_rpc_non_rpc_method_raises(self):
+        """call_rpc raises ValueError for methods that exist but lack @rpc."""
+        class MyModule(Module):
+            def plain(self) -> str:
+                return "plain"
+
+        mod = MyModule()
+        with pytest.raises(ValueError, match="RPC method 'plain' not found"):
+            mod.call_rpc("plain")
+
+    def test_rpcs_returns_bound_methods(self):
+        """rpcs values are bound methods callable without explicit self."""
+        class MyModule(Module):
+            @rpc
+            def ping(self) -> str:
+                return "pong"
+
+        mod = MyModule()
+        ping_fn = mod.rpcs["ping"]
+        assert ping_fn() == "pong"
+
+    def test_rpc_importable_from_core(self):
+        """rpc is exported from the core package."""
+        from core import rpc as core_rpc
+        assert core_rpc is rpc

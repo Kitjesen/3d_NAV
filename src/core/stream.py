@@ -54,13 +54,14 @@ class Out(Generic[T]):
     """
 
     __slots__ = (
-        "_name", "_msg_type", "_callbacks", "_transport",
+        "_name", "_msg_type", "owner", "_callbacks", "_transport",
         "_transport_topic", "_msg_count", "_last_ts", "_lock",
     )
 
-    def __init__(self, name: str, msg_type: type) -> None:
+    def __init__(self, msg_type: type, name: str, owner: Any = None) -> None:
         self._name = name
         self._msg_type = msg_type
+        self.owner = owner
         self._callbacks: List[Callable[[T], None]] = []
         self._transport: Optional[Transport] = None
         self._transport_topic: Optional[str] = None
@@ -88,6 +89,18 @@ class Out(Generic[T]):
                 self._transport.publish(self._transport_topic, msg)
             except Exception:
                 logger.exception("Out[%s] transport publish error", self._name)
+
+    # -- 公开 API ----------------------------------------------------------------
+
+    def subscribe(self, cb: Callable[[T], Any]) -> Callable[[], None]:
+        """Subscribe to this output. Returns an unsubscribe callable.
+
+        Compatible with dimos Out.subscribe() API.
+        """
+        self._add_callback(cb)
+        def unsubscribe() -> None:
+            self._remove_callback(cb)
+        return unsubscribe
 
     # -- 连接 API (由 Blueprint 调用) --------------------------------------------
 
@@ -163,15 +176,16 @@ class In(Generic[T]):
     """
 
     __slots__ = (
-        "_name", "_msg_type", "_callback", "_msg_count",
+        "_name", "_msg_type", "owner", "_callback", "_msg_count",
         "_last_ts", "_latest", "_lock", "_policy", "_in_callback",
         "_drop_count", "_throttle_interval", "_last_deliver_ts",
         "_sample_n", "_sample_counter", "_buffer_size", "_buffer",
     )
 
-    def __init__(self, name: str, msg_type: type) -> None:
+    def __init__(self, msg_type: type, name: str, owner: Any = None) -> None:
         self._name = name
         self._msg_type = msg_type
+        self.owner = owner
         self._callback: Optional[Callable[[T], None]] = None
         self._msg_count: int = 0
         self._last_ts: float = 0.0

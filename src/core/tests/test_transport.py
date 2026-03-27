@@ -253,8 +253,8 @@ class TestTransportAdapter:
 
         adapter = TransportAdapter(SHMTransport())
 
-        out = Out("test_val", int)
-        inp = In("test_val", int)
+        out = Out(int, "test_val")
+        inp = In(int, "test_val")
 
         # Bind transport to out port
         out._bind_transport(adapter, "/test/port_flow")
