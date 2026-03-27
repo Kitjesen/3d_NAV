@@ -89,6 +89,7 @@ PROFILES = {
         _desc="MuJoCo simulation (full algorithm stack)",
         robot="sim_ros2", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
+        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
         enable_native=False, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
     ),
@@ -101,11 +102,11 @@ PROFILES = {
     ),
     "s100p": dict(
         _desc="Full S100P robot (BPU + Kimi)",
-        robot="thunder", detector="bpu", encoder="mobileclip",
+        robot="sim_ros2", detector="bpu", encoder="mobileclip",
         llm="kimi", planner="astar",
-        enable_native=True, enable_semantic=True, enable_gateway=True,
+        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+        enable_native=False, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
-        dog_host="192.168.66.190", dog_port=13145,
     ),
     "explore": dict(
         _desc="Exploration, no pre-built map needed",
