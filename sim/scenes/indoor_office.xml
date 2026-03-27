@@ -6,7 +6,7 @@
 
   <visual>
     <headlight diffuse=".7 .7 .7" ambient=".3 .3 .3" specular="0.5 0.5 0.5"/>
-    <global azimuth="150" elevation="-35"/>
+    <global azimuth="150" elevation="-35" offwidth="1280" offheight="720"/>
     <quality shadowsize="4096"/>
     <map force="0.01"/>
   </visual>
