@@ -1412,3 +1412,162 @@ class TestRpc:
         """rpc is exported from the core package."""
         from core import rpc as core_rpc
         assert core_rpc is rpc
+
+
+# ============================================================================
+# TestWorker — Worker process and WorkerManager
+# ============================================================================
+
+class _WorkerTestModule(Module):
+    """Minimal module used to verify cross-process RPC calls."""
+    value: Out[int]
+
+    def __init__(self, initial=0, **kw):
+        super().__init__(**kw)
+        self._val = initial
+
+    @rpc
+    def get_value(self) -> int:
+        return self._val
+
+    @rpc
+    def set_value(self, v: int) -> None:
+        self._val = v
+
+
+class TestWorker:
+    """Tests for Worker and WorkerManager IPC."""
+
+    def test_worker_list_empty(self):
+        """Fresh worker returns empty module list."""
+        import multiprocessing
+        from core.worker import Worker
+
+        cmd_q: multiprocessing.Queue = multiprocessing.Queue()
+        resp_q: multiprocessing.Queue = multiprocessing.Queue()
+        w = Worker(worker_id="test", cmd_queue=cmd_q, resp_queue=resp_q)
+        w.start()
+
+        cmd_q.put(("LIST",))
+        resp = resp_q.get(timeout=5.0)
+        assert resp[0] == "RESULT"
+        assert resp[1] == []
+
+        cmd_q.put(("SHUTDOWN",))
+        resp_q.get(timeout=5.0)
+        w.join(timeout=5.0)
+
+    def test_worker_deploy_module(self):
+        """DEPLOY instantiates a module inside the worker."""
+        import multiprocessing
+        from core.worker import Worker
+
+        cmd_q: multiprocessing.Queue = multiprocessing.Queue()
+        resp_q: multiprocessing.Queue = multiprocessing.Queue()
+        w = Worker(worker_id="test", cmd_queue=cmd_q, resp_queue=resp_q)
+        w.start()
+
+        cmd_q.put(("DEPLOY", _WorkerTestModule, "mod1", (), {"initial": 42}))
+        resp = resp_q.get(timeout=5.0)
+        assert resp[0] == "OK"
+        assert resp[1] == "mod1"
+
+        # Confirm the module appears in the list
+        cmd_q.put(("LIST",))
+        resp = resp_q.get(timeout=5.0)
+        assert "mod1" in resp[1]
+
+        cmd_q.put(("SHUTDOWN",))
+        resp_q.get(timeout=5.0)
+        w.join(timeout=5.0)
+
+    def test_worker_rpc_call_across_process(self):
+        """RPC call crosses the process boundary and returns the correct value."""
+        import multiprocessing
+        from core.worker import Worker
+
+        cmd_q: multiprocessing.Queue = multiprocessing.Queue()
+        resp_q: multiprocessing.Queue = multiprocessing.Queue()
+        w = Worker(worker_id="test", cmd_queue=cmd_q, resp_queue=resp_q)
+        w.start()
+
+        # Deploy with initial=7
+        cmd_q.put(("DEPLOY", _WorkerTestModule, "mod1", (), {"initial": 7}))
+        resp_q.get(timeout=5.0)
+
+        # get_value should return 7
+        cmd_q.put(("RPC_CALL", "mod1", "get_value", (), {}))
+        resp = resp_q.get(timeout=5.0)
+        assert resp[0] == "RESULT"
+        assert resp[1] == 7
+
+        # set_value then get_value
+        cmd_q.put(("RPC_CALL", "mod1", "set_value", (), {"v": 99}))
+        resp_q.get(timeout=5.0)
+
+        cmd_q.put(("RPC_CALL", "mod1", "get_value", (), {}))
+        resp = resp_q.get(timeout=5.0)
+        assert resp[1] == 99
+
+        cmd_q.put(("SHUTDOWN",))
+        resp_q.get(timeout=5.0)
+        w.join(timeout=5.0)
+
+    def test_worker_shutdown_graceful(self):
+        """SHUTDOWN stops all modules and the worker process exits cleanly."""
+        import multiprocessing
+        from core.worker import Worker
+
+        cmd_q: multiprocessing.Queue = multiprocessing.Queue()
+        resp_q: multiprocessing.Queue = multiprocessing.Queue()
+        w = Worker(worker_id="test", cmd_queue=cmd_q, resp_queue=resp_q)
+        w.start()
+        assert w.is_alive()
+
+        cmd_q.put(("DEPLOY", _WorkerTestModule, "m", (), {}))
+        resp_q.get(timeout=5.0)
+
+        cmd_q.put(("SHUTDOWN",))
+        resp = resp_q.get(timeout=5.0)
+        assert resp[0] == "OK"
+
+        w.join(timeout=5.0)
+        assert not w.is_alive()
+
+    def test_worker_manager_multiple_workers(self):
+        """WorkerManager starts multiple workers and routes commands correctly."""
+        from core.worker_manager import WorkerManager
+
+        mgr = WorkerManager(n_workers=2)
+        mgr.start()
+        assert mgr.is_started
+        assert mgr.n_workers == 2
+
+        mgr.deploy(0, _WorkerTestModule, "m0", kwargs={"initial": 10})
+        mgr.deploy(1, _WorkerTestModule, "m1", kwargs={"initial": 20})
+
+        assert mgr.list_modules(0) == ["m0"]
+        assert mgr.list_modules(1) == ["m1"]
+
+        assert mgr.rpc_call(0, "m0", "get_value") == 10
+        assert mgr.rpc_call(1, "m1", "get_value") == 20
+
+        mgr.shutdown()
+        assert not mgr.is_started
+
+    def test_worker_manager_setup_start_stop_lifecycle(self):
+        """WorkerManager setup/start_module/stop_module calls module lifecycle."""
+        from core.worker_manager import WorkerManager
+
+        mgr = WorkerManager(n_workers=1)
+        mgr.start()
+
+        mgr.deploy(0, _WorkerTestModule, "mod", kwargs={"initial": 5})
+        mgr.setup(0, "mod")
+        mgr.start_module(0, "mod")
+
+        # Module is running — get_value still works
+        assert mgr.rpc_call(0, "mod", "get_value") == 5
+
+        mgr.stop_module(0, "mod")
+        mgr.shutdown()

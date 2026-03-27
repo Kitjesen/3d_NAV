@@ -17,6 +17,8 @@ from .blueprint import Blueprint, SystemHandle, autoconnect
 from .config import RobotConfig, get_config, load_config, reset_config
 from .clock import Clock, clock
 from .native_module import NativeModule, NativeModuleConfig
+from .rpc_client import RPCClient
+from .remote_ports import RemoteOut, RemoteIn
 
 __all__ = [
     # transport
@@ -33,4 +35,17 @@ __all__ = [
     "Clock", "clock",
     # native
     "NativeModule", "NativeModuleConfig",
+    # rpc / remote
+    "RPCClient", "RemoteOut", "RemoteIn",
+    # coordinator (imported lazily — requires WorkerManager)
+    "ModuleCoordinator",
 ]
+
+
+def __getattr__(name: str):
+    # Lazy export so ModuleCoordinator is available via `from core import ModuleCoordinator`
+    # without failing when worker_manager.py does not yet exist.
+    if name == "ModuleCoordinator":
+        from .coordinator import ModuleCoordinator  # type: ignore[import]
+        return ModuleCoordinator
+    raise AttributeError(f"module 'core' has no attribute {name!r}")
