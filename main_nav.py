@@ -110,7 +110,7 @@ PROFILES = {
     "nav": dict(
         _desc="Navigation with pre-built map (localizer + semantic + gateway)",
         robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip",
-        llm="kimi", planner="astar",
+        llm="qwen", planner="astar",
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
         enable_native=False, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
@@ -118,7 +118,7 @@ PROFILES = {
     "explore": dict(
         _desc="Exploration, no pre-built map needed",
         robot="thunder", slam_profile="fastlio2", detector="bpu", encoder="mobileclip",
-        llm="kimi", planner="astar",
+        llm="qwen", planner="astar",
         enable_native=True, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
         dog_host="192.168.66.190", dog_port=13145,
@@ -201,6 +201,25 @@ def _setup_logging(level: str, profile_name: str) -> str:
     root.addHandler(file_h)
 
     return str(log_dir)
+
+
+# ── Kill residual ports ──────────────────────────────────────────────
+
+def _kill_residual_ports(cfg: dict) -> None:
+    """Kill processes occupying our ports from a previous run."""
+    import subprocess, platform
+    if platform.system() != "Linux":
+        return
+    ports = [cfg.get("gateway_port", 5050), 8090, 5060]  # Gateway, MCP, Teleop
+    for port in ports:
+        try:
+            result = subprocess.run(
+                ["fuser", "-k", "%d/tcp" % port],
+                capture_output=True, timeout=3)
+            if result.returncode == 0:
+                logging.getLogger(__name__).info("Killed residual process on port %d", port)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
 
 
 # ── Pre-start health check ───────────────────────────────────────────
@@ -1061,6 +1080,9 @@ def main() -> None:
         print(f"  {_red('Health check failed')} — some modules did not build correctly")
         sys.exit(1)
     logger.info("Health check passed: %d modules OK", len(system.modules))
+
+    # ── Kill residual ports ──
+    _kill_residual_ports(blueprint_cfg)
 
     # ── Start ──
     try:
