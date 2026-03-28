@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lingtu"
+version = "1.8.0"
+description = "LingTu — autonomous navigation for quadruped robots"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "fastapi",
+    "uvicorn",
+    "websockets",
+]
+
+[project.optional-dependencies]
+perception = ["torch", "ultralytics", "open-clip-torch"]
+llm = ["openai", "anthropic"]
+vector = ["chromadb"]
+dev = ["pytest"]
+
+[project.scripts]
+lingtu = "lingtu_cli:main"
+
+[tool.setuptools]
+py-modules = ["lingtu_cli"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/core/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

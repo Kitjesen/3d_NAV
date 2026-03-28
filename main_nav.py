@@ -6,9 +6,9 @@ Usage:
     lingtu stub                     # no hardware, framework testing
     lingtu sim                      # MuJoCo kinematic simulation
     lingtu dev                      # semantic pipeline, no C++ nodes
-    lingtu s100p                    # real S100P robot (BPU + Kimi)
+    lingtu nav                    # navigation with pre-built map
     lingtu explore                  # exploration, no pre-built map
-    lingtu s100p --daemon           # background daemon (S100P)
+    lingtu nav --daemon           # background daemon mode
     lingtu stop                     # stop running daemon
     lingtu --list                   # list all profiles
 
@@ -369,7 +369,7 @@ class LingTuREPL(cmd.Cmd):
             else:
                 print(f"  Save failed: {result.stderr[:200]}")
         except FileNotFoundError:
-            print("  Error: ros2 not found. Run on S100P with ROS2.")
+            print("  Error: ros2 not found. Run on robot with ROS2.")
         except subprocess.TimeoutExpired:
             print("  Error: save_maps service timed out")
 
@@ -829,7 +829,7 @@ def _list_profiles():
         if not p.get("enable_semantic"):
             parts.append("no-semantic")
         print(f"  {_dim('           ' + ', '.join(parts))}")
-    print(f"\n  Override any flag: lingtu s100p --llm mock\n")
+    print(f"\n  Override any flag: lingtu nav --llm mock\n")
 
 
 # ── Special commands ──────────────────────────────────────────────────
@@ -950,7 +950,7 @@ def main() -> None:
               stub      No hardware, framework testing
               sim       MuJoCo kinematic simulation
               dev       Semantic pipeline, no C++ nodes
-              s100p     Full S100P robot (BPU + Kimi)
+              nav     Navigation with pre-built map
               explore   Exploration, no pre-built map
 
             special commands:
