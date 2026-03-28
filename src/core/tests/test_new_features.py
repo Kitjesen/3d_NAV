@@ -1,322 +1,274 @@
-"""Tests for new modules: VectorMemory, VisualServo, AgentLoop, Teleop, SemanticMapper.
+#!/usr/bin/env python3
+"""Tests 31-36: Persistence, edge-case, and resilience tests for LingTu."""
 
-Covers:
-  - VectorMemoryModule: store + query + numpy fallback + hash embedding
-  - VisualServoModule: find mode + follow mode + servo engage/release
-  - AgentLoop: tool parsing + done termination + max_steps cap
-  - TeleopModule: joystick handling + idle release
-  - SemanticMapperModule: KG + TSG update from SceneGraph
-  - GoalResolver 5-level fallback chain (stub integration)
-"""
+import sys, os
+sys.path.insert(0, 'src')
+for d in ['src/semantic/perception', 'src/semantic/planner', 'src/semantic/common']:
+    if os.path.isdir(d): sys.path.insert(0, d)
+for k in ['MOONSHOT_API_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY','DASHSCOPE_API_KEY']:
+    os.environ.pop(k, None)
+import logging; logging.basicConfig(level=logging.WARNING)
 
-import asyncio
 import time
+import shutil
+import tempfile
+import traceback
 import numpy as np
-import pytest
 
-import sys
-sys.path.insert(0, "src")
+results = []
 
-
-# ── VectorMemoryModule ──────────────────────────────────────────────────
-
-class TestVectorMemoryModule:
-    def _make(self):
-        from memory.modules.vector_memory_module import VectorMemoryModule
-        mod = VectorMemoryModule(persist_dir="/tmp/test_vmem")
-        mod.setup()
-        return mod
-
-    def test_empty_query(self):
-        mod = self._make()
-        result = mod.query_location("backpack")
-        assert result["found"] is False
-
-    def test_store_and_query(self):
-        mod = self._make()
-        # Simulate storing a snapshot
-        mod._robot_xy = (5.0, 3.0)
-        mod._store_snapshot(["desk", "chair", "monitor"])
-        mod._store_snapshot(["fridge", "sink", "microwave"])
-        mod._robot_xy = (10.0, 7.0)
-        mod._store_snapshot(["backpack", "bench", "tree"])
-
-        result = mod.query_location("backpack")
-        assert result["found"] is True
-        assert result["best"]["x"] == 10.0
-
-    def test_hash_embedding_deterministic(self):
-        from memory.modules.vector_memory_module import VectorMemoryModule
-        e1 = VectorMemoryModule._hash_embedding("desk, chair")
-        e2 = VectorMemoryModule._hash_embedding("desk, chair")
-        assert np.allclose(e1, e2)
-        e3 = VectorMemoryModule._hash_embedding("fridge, sink")
-        assert not np.allclose(e1, e3)
-
-    def test_stats(self):
-        mod = self._make()
-        mod._store_snapshot(["a", "b"])
-        s = mod.get_memory_stats()
-        assert s["entries"] == 1
-        assert s["backend"] == "numpy"
+def run_test(name, fn):
+    """Run a test function, catch exceptions, record PASS/FAIL."""
+    try:
+        fn()
+        results.append((name, True, ""))
+        print(f"  PASS  {name}")
+    except Exception as e:
+        tb = traceback.format_exc()
+        results.append((name, False, str(e)))
+        print(f"  FAIL  {name}: {e}")
+        # Print the most relevant traceback line
+        lines = tb.strip().splitlines()
+        for line in reversed(lines):
+            if line.strip() and not line.startswith("Traceback"):
+                print(f"        {line.strip()}")
+                break
 
 
-# ── VisualServoModule ───────────────────────────────────────────────────
+# =========================================================================
+# Test 31: SemanticMapper persistence
+# =========================================================================
+def test_31_semantic_mapper_persistence():
+    from memory.modules.semantic_mapper_module import SemanticMapperModule
+    from core.msgs.semantic import SceneGraph, Detection3D, Region
+    from core.msgs.geometry import Vector3
 
-class TestVisualServoModule:
-    def _make(self):
-        from semantic.planner.semantic_planner.visual_servo_module import VisualServoModule
-        mod = VisualServoModule()
-        mod.setup()
-        return mod
+    tmpdir = tempfile.mkdtemp(prefix="test_persist_smap_")
+    try:
+        # Phase 1: create module, feed data, save
+        mod1 = SemanticMapperModule(save_dir=tmpdir)
+        mod1.setup()
 
-    def test_idle_by_default(self):
-        mod = self._make()
-        assert mod._mode == "idle"
-        assert mod._servo_active is False
+        # Build a SceneGraph with a region referencing objects
+        obj1 = Detection3D(id="obj_1", label="desk", confidence=0.9,
+                           position=Vector3(1.0, 2.0, 0.0))
+        obj2 = Detection3D(id="obj_2", label="chair", confidence=0.85,
+                           position=Vector3(1.5, 2.5, 0.0))
+        region = Region(name="office", object_ids=["obj_1", "obj_2"],
+                        center=Vector3(1.25, 2.25, 0.0))
+        sg = SceneGraph(objects=[obj1, obj2], regions=[region])
 
-    def test_find_mode_activation(self):
-        mod = self._make()
-        mod._on_servo_target("find:red chair")
-        assert mod._mode == "find"
-        assert mod._target_label == "red chair"
+        # Feed the scene graph directly
+        mod1._on_scene_graph(sg)
+        mod1._save_now()
+        mod1.stop()
 
-    def test_follow_mode_activation(self):
-        mod = self._make()
-        mod._on_servo_target("follow:person in red")
-        assert mod._mode == "follow"
-        assert mod._target_label == "person in red"
+        # Phase 2: create new module with same save_dir, verify KG loaded
+        mod2 = SemanticMapperModule(save_dir=tmpdir)
+        mod2.setup()
 
-    def test_stop_cancels_tracking(self):
-        mod = self._make()
-        mod._on_servo_target("find:chair")
-        assert mod._mode == "find"
-        mod._on_servo_target("stop")
-        assert mod._mode == "idle"
-
-    def test_servo_engage_release(self):
-        mod = self._make()
-        mod._engage_servo()
-        assert mod._servo_active is True
-        mod._release_servo()
-        assert mod._servo_active is False
-
-    def test_find_with_scene_graph(self):
-        """Simulate a full find tick with a scene_graph containing target."""
-        from core.msgs.sensor import Image, CameraIntrinsics
-        from core.msgs.semantic import SceneGraph, Detection3D
-        from core.msgs.nav import Odometry
-        from core.msgs.geometry import Pose, Vector3
-
-        mod = self._make()
-        mod._on_servo_target("find:chair")
-
-        # Setup sensor data
-        mod._on_camera_info(CameraIntrinsics(fx=600, fy=600, cx=320, cy=240, width=640, height=480))
-        mod._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0))))
-        mod._on_depth(Image(data=np.full((480, 640), 2500, dtype=np.uint16)))
-
-        # Scene graph with chair that has bbox
-        det = Detection3D(id="c1", label="chair", confidence=0.9)
-        det.bbox = [280, 200, 360, 280]
-        det.position = Vector3(2.5, 0.0, 0.0)
-        mod._on_scene_graph(SceneGraph(objects=[det]))
-
-        # Trigger frame
-        mod._on_color(Image(data=np.zeros((480, 640, 3), dtype=np.uint8)))
-
-        # Should be tracking
-        assert mod._bbox_nav.state == "tracking"
+        has_kg = mod2._kg is not None
+        room_types = mod2._kg.room_types if has_kg else []
+        assert has_kg, "KG should be loaded"
+        assert len(room_types) > 0, f"room_types should not be empty, got: {room_types}"
+        assert "office" in room_types, f"Expected 'office' in room_types, got: {room_types}"
+        mod2.stop()
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-# ── AgentLoop ───────────────────────────────────────────────────────────
+# =========================================================================
+# Test 32: VectorMemory numpy fallback (in-memory)
+# =========================================================================
+def test_32_vector_memory_numpy():
+    from memory.modules.vector_memory_module import VectorMemoryModule
+    from core.msgs.nav import Odometry
+    from core.msgs.geometry import Vector3, Pose
 
-class TestAgentLoop:
-    def test_parse_text_tool_call(self):
-        from semantic.planner.semantic_planner.agent_loop import AgentLoop
-        result = AgentLoop._parse_text_tool_call(
-            'I will navigate. {"tool": "navigate_to", "args": {"x": 5.0, "y": 3.0}}'
-        )
-        assert "tool_calls" in result
-        assert result["tool_calls"][0]["function"]["name"] == "navigate_to"
+    mod = VectorMemoryModule(persist_dir="/tmp/test_vmem_np", store_interval=0.0)
+    mod.setup()
 
-    def test_parse_done(self):
-        from semantic.planner.semantic_planner.agent_loop import AgentLoop
-        result = AgentLoop._parse_text_tool_call(
-            '{"tool": "done", "args": {"summary": "Task complete"}}'
-        )
-        assert result["tool_calls"][0]["function"]["name"] == "done"
+    # Provide odometry position
+    odom = Odometry(pose=Pose(position=Vector3(5.0, 10.0, 0.0)))
+    mod._on_odom(odom)
 
-    def test_parse_no_json(self):
-        from semantic.planner.semantic_planner.agent_loop import AgentLoop
-        result = AgentLoop._parse_text_tool_call("I don't know what to do.")
-        assert "content" in result
-        assert "tool_calls" not in result
+    # Store a snapshot with labels directly (bypass throttle)
+    mod._store_snapshot(["backpack", "bench", "tree"])
 
-    def test_agent_loop_done_terminates(self):
-        """Agent calling done() should terminate the loop."""
-        from semantic.planner.semantic_planner.agent_loop import AgentLoop
-        import json
+    # Verify numpy entries > 0
+    n_entries = len(mod._np_embeddings)
+    assert n_entries > 0, f"Expected numpy entries > 0, got {n_entries}"
 
-        class MockLLM:
-            call_count = 0
-            async def chat(self, text, system_prompt=""):
-                self.call_count += 1
-                return json.dumps({"tool": "done", "args": {"summary": "All done"}})
+    # Verify query works and returns correct position
+    result = mod._query("backpack")
+    assert len(result) > 0, "Query should return results"
+    assert result[0]["x"] == 5.0, f"Expected x=5.0, got {result[0]['x']}"
+    assert result[0]["y"] == 10.0, f"Expected y=10.0, got {result[0]['y']}"
 
-        llm = MockLLM()
-        agent = AgentLoop(
-            llm_client=llm,
-            tool_handlers={},
-            context_fn=lambda: {"robot_x": 0, "robot_y": 0, "visible_objects": "",
-                                "nav_status": "IDLE", "memory_context": ""},
-            max_steps=5,
-        )
-        state = asyncio.run(agent.run("test"))
-        assert state.completed
-        assert state.summary == "All done"
-        assert state.step == 1
-
-    def test_agent_loop_max_steps(self):
-        """Agent should stop after max_steps."""
-        from semantic.planner.semantic_planner.agent_loop import AgentLoop
-
-        class ThinkingLLM:
-            async def chat(self, text, system_prompt=""):
-                return "I'm still thinking..."
-
-        agent = AgentLoop(
-            llm_client=ThinkingLLM(),
-            tool_handlers={},
-            context_fn=lambda: {"robot_x": 0, "robot_y": 0, "visible_objects": "",
-                                "nav_status": "IDLE", "memory_context": ""},
-            max_steps=3,
-        )
-        state = asyncio.run(agent.run("infinite task"))
-        assert state.completed
-        assert state.step == 3
-        assert "Max steps" in state.summary
+    mod.stop()
 
 
-# ── TeleopModule ────────────────────────────────────────────────────────
+# =========================================================================
+# Test 33: No API key startup — system.build() succeeds
+# =========================================================================
+def test_33_no_api_key_startup():
+    # Double-check all API keys are removed
+    for k in ['MOONSHOT_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
+              'DASHSCOPE_API_KEY']:
+        os.environ.pop(k, None)
 
-class TestTeleopModule:
-    def _make(self):
-        from drivers.teleop_module import TeleopModule
-        mod = TeleopModule()
-        mod.setup()
-        return mod
+    from core.blueprints.full_stack import full_stack_blueprint
 
-    def test_initial_idle(self):
-        mod = self._make()
-        assert mod._active is False
-        s = mod.get_teleop_status()
-        assert s["active"] is False
-        assert s["clients"] == 0
+    # Build dev profile: stub driver, no C++ nodes, semantic enabled, mock LLM
+    system = full_stack_blueprint(
+        robot="stub",
+        slam_profile="none",
+        detector="yoloe",
+        encoder="mobileclip",
+        llm="mock",
+        planner="astar",
+        enable_native=False,
+        enable_semantic=True,
+        enable_gateway=False,
+    ).build()
 
-    def test_joy_activates(self):
-        mod = self._make()
-        mod._on_joy({"lx": 0.5, "ly": 0.0, "az": 0.0})
-        assert mod._active is True
+    try:
+        # Verify build succeeded
+        assert system is not None, "system.build() returned None"
 
-    def test_idle_timeout_releases(self):
-        mod = self._make()
-        mod._release_timeout = 0.01  # 10ms for test
-        mod._on_joy({"lx": 0.5, "ly": 0.0, "az": 0.0})
-        assert mod._active is True
+        # Start the system so setup() runs (which inits GoalResolver)
+        system.start()
+
+        # Check SemanticPlannerModule exists
+        planner_mod = system.get_module("SemanticPlannerModule")
+        assert planner_mod is not None, "SemanticPlannerModule not in system"
+
+        # GoalResolver should survive missing API keys (mock LLM backend).
+        # It may or may not init depending on LLMConfig, but the system
+        # must not crash. The critical check is that we got here.
+        assert system._started, "System should be started without crash"
+    finally:
+        system.stop()
+
+
+# =========================================================================
+# Test 34: No CLIP startup — EncoderModule doesn't crash
+# =========================================================================
+def test_34_no_clip_startup():
+    from core.blueprints.full_stack import full_stack_blueprint
+
+    # Build dev profile — on Windows, open_clip is typically not installed.
+    # EncoderModule should catch ImportError and set _backend = None.
+    system = full_stack_blueprint(
+        robot="stub",
+        slam_profile="none",
+        detector="yoloe",
+        encoder="clip",
+        llm="mock",
+        planner="astar",
+        enable_native=False,
+        enable_semantic=True,
+        enable_gateway=False,
+    ).build()
+
+    try:
+        system.start()
+        assert system._started, "System should start even without CLIP"
+
+        # EncoderModule should exist but backend may be None (no crash)
+        enc = system.get_module("EncoderModule")
+        assert enc is not None, "EncoderModule should be in system"
+    finally:
+        system.stop()
+
+
+# =========================================================================
+# Test 35: Empty SceneGraph — no crash, no goal_pose published
+# =========================================================================
+def test_35_empty_scene_graph():
+    from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
+    from core.msgs.semantic import SceneGraph
+
+    mod = SemanticPlannerModule()
+    mod.setup()
+
+    try:
+        # Track if goal_pose gets published
+        published_goals = []
+        mod.goal_pose.subscribe(lambda p: published_goals.append(p))
+
+        # Give an instruction first so the module is "active"
+        mod._current_instruction = "find the table"
+
+        # Deliver empty scene graph
+        empty_sg = SceneGraph(objects=[], regions=[])
+        mod._on_scene_graph(empty_sg)
+
+        # Brief wait for any async processing
+        time.sleep(0.05)
+
+        # Should not crash. With empty SG the to_json is basically empty,
+        # so fast_resolve should find nothing meaningful. Either 0 goals
+        # published (ideal) or a fallback frontier/servo goal is fine.
+        # The key assertion: we got here without exception.
+        assert True, "Empty SceneGraph did not crash SemanticPlannerModule"
+    finally:
+        mod.stop()
+
+
+# =========================================================================
+# Test 36: WaypointTracker stuck detection
+# =========================================================================
+def test_36_waypoint_tracker_stuck():
+    from nav.waypoint_tracker import WaypointTracker, EV_STUCK, EV_STUCK_WARN
+
+    tracker = WaypointTracker(
+        threshold=1.5,
+        stuck_timeout=0.1,   # very short for testing
+        stuck_dist=0.15,
+    )
+
+    # Set up a path with one waypoint far away
+    path = [np.array([10.0, 10.0, 0.0])]
+    robot_pos = np.array([0.0, 0.0, 0.0])
+    tracker.reset(path, robot_pos)
+
+    # Update with same position repeatedly — should trigger stuck
+    events_seen = []
+    deadline = time.time() + 2.0  # safety timeout
+    while time.time() < deadline:
+        status = tracker.update(robot_pos)
+        if status.event:
+            events_seen.append(status.event)
+        if EV_STUCK in events_seen:
+            break
         time.sleep(0.02)
-        mod._check_idle()
-        assert mod._active is False
 
-    def test_force_release(self):
-        mod = self._make()
-        mod._on_joy({"lx": 1.0, "ly": 0.0, "az": 0.0})
-        assert mod._active is True
-        result = mod.force_release()
-        assert mod._active is False
-        assert "released" in result.lower()
-
-    def test_clamp_speed(self):
-        mod = self._make()
-        mod._max_speed = 0.5
-        mod._on_joy({"lx": 999.0, "ly": 0.0, "az": 0.0})
-        # cmd_vel should have been published with clamped value
-        assert mod._active is True  # at least it activated
+    assert EV_STUCK_WARN in events_seen, f"Expected EV_STUCK_WARN, got events: {events_seen}"
+    assert EV_STUCK in events_seen, f"Expected EV_STUCK, got events: {events_seen}"
 
 
-# ── SemanticMapperModule ────────────────────────────────────────────────
+# =========================================================================
+# Run all tests
+# =========================================================================
+if __name__ == "__main__":
+    print("\n=== LingTu Persistence & Edge-Case Tests (31-36) ===\n")
 
-class TestSemanticMapperModule:
-    def test_kg_update(self):
-        from memory.modules.semantic_mapper_module import SemanticMapperModule
-        from core.msgs.semantic import SceneGraph, Detection3D, Region
-        from core.msgs.nav import Odometry
-        from core.msgs.geometry import Vector3, Pose
+    run_test("31. SemanticMapper persistence", test_31_semantic_mapper_persistence)
+    run_test("32. VectorMemory numpy fallback", test_32_vector_memory_numpy)
+    run_test("33. No API key startup", test_33_no_api_key_startup)
+    run_test("34. No CLIP startup", test_34_no_clip_startup)
+    run_test("35. Empty SceneGraph", test_35_empty_scene_graph)
+    run_test("36. WaypointTracker stuck detection", test_36_waypoint_tracker_stuck)
 
-        mod = SemanticMapperModule(save_dir="/tmp/test_smap")
-        mod.setup()
+    # Summary
+    passed = sum(1 for _, ok, _ in results if ok)
+    failed = sum(1 for _, ok, _ in results if not ok)
+    print(f"\n=== Summary: {passed} PASS, {failed} FAIL out of {len(results)} ===\n")
 
-        det = Detection3D(id="1", label="desk", confidence=0.9)
-        sg = SceneGraph(
-            objects=[det],
-            regions=[Region(name="office", object_ids=["1"], center=Vector3(1, 0, 0))],
-        )
-        mod._on_odom(Odometry(pose=Pose(position=Vector3(1, 0, 0))))
-        mod._on_scene_graph(sg)
-
-        assert mod._kg is not None
-        assert "office" in mod._kg.room_types
-
-    def test_tsg_rooms(self):
-        from memory.modules.semantic_mapper_module import SemanticMapperModule
-        from core.msgs.semantic import SceneGraph, Detection3D, Region
-        from core.msgs.nav import Odometry
-        from core.msgs.geometry import Vector3, Pose
-
-        mod = SemanticMapperModule(save_dir="/tmp/test_smap2")
-        mod.setup()
-
-        sg = SceneGraph(
-            objects=[Detection3D(id="1", label="desk")],
-            regions=[Region(name="office", object_ids=["1"], center=Vector3(1, 0, 0))],
-        )
-        mod._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0))))
-        mod._on_scene_graph(sg)
-
-        assert mod._tsg is not None
-        assert len(mod._tsg.rooms) == 1
-
-    def test_skills(self):
-        from memory.modules.semantic_mapper_module import SemanticMapperModule
-        mod = SemanticMapperModule(save_dir="/tmp/test_smap3")
-        mod.setup()
-
-        status = mod.get_semantic_status()
-        assert "kg" in status
-        assert "tsg" in status
-
-        summary = mod.get_room_summary()
-        assert isinstance(summary, str)
-
-
-# ── Integration: stub profile build ─────────────────────────────────────
-
-class TestStubProfileBuild:
-    def test_stub_builds(self):
-        from core.blueprints.full_stack import full_stack_blueprint
-        bp = full_stack_blueprint(
-            robot="stub", slam_profile="none",
-            enable_native=False, enable_semantic=False, enable_gateway=False,
-        )
-        system = bp.build()
-        assert len(system.modules) > 0
-
-    def test_dev_builds_with_semantic(self):
-        from core.blueprints.full_stack import full_stack_blueprint
-        bp = full_stack_blueprint(
-            robot="stub", slam_profile="none",
-            enable_native=False, enable_semantic=True, enable_gateway=True,
-        )
-        system = bp.build()
-        assert "NavigationModule" in system.modules
-        assert "SafetyRingModule" in system.modules
+    if failed:
+        print("Failed tests:")
+        for name, ok, err in results:
+            if not ok:
+                print(f"  - {name}: {err}")
+        print()

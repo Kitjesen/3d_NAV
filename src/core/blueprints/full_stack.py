@@ -82,6 +82,31 @@ def full_stack_blueprint(
     _drv = driver_name(robot)
     _slam = slam_module_name(slam_profile)
 
+    # map_cloud routing — SLAM module publishes map_cloud to map consumers.
+    # When SLAM is active, explicitly wire to avoid ambiguity with driver's lidar_cloud.
+    if _slam:
+        _cloud_consumers = ["OccupancyGridModule", "ElevationMapModule", "TerrainModule"]
+        for consumer in _cloud_consumers:
+            try:
+                bp.wire(_slam, "map_cloud", consumer, "map_cloud")
+            except Exception:
+                pass
+
+    # depth_image routing — Driver or CameraBridge provides depth.
+    if enable_semantic:
+        _depth_src = "CameraBridgeModule"
+        try:
+            from core.registry import get as _get_plugin
+            if hasattr(_get_plugin("driver", robot), "depth_image"):
+                _depth_src = _drv
+        except Exception:
+            pass
+        for consumer in ["ReconstructionModule", "VisualServoModule"]:
+            try:
+                bp.wire(_depth_src, "depth_image", consumer, "depth_image")
+            except Exception:
+                pass
+
     # Safety → all actuators
     bp.wire("SafetyRingModule", "stop_cmd", _drv, "stop_signal")
     bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
@@ -117,9 +142,28 @@ def full_stack_blueprint(
     except Exception:
         pass
 
-    # SLAM odometry priority over driver dead-reckoning
+    # Odometry routing — when SLAM is active, two sources exist (Driver + SLAM)
+    # causing auto_wire ambiguity on ALL odometry consumers.
+    # Solution: SLAM → NavigationModule (high accuracy for planning),
+    #           Driver → everything else (always available, low latency).
     if _slam:
         bp.wire(_slam, "odometry", "NavigationModule", "odometry")
+        # Driver odometry to all other consumers that need it
+        _odom_consumers = [
+            "OccupancyGridModule", "ElevationMapModule", "TerrainModule",
+            "LocalPlannerModule", "PathFollowerModule",
+            "SemanticMapperModule", "EpisodicMemoryModule", "TaggedLocationsModule",
+            "VectorMemoryModule", "SemanticPlannerModule", "VisualServoModule",
+            "ReconstructionModule",
+            "SafetyRingModule", "GeofenceManagerModule",
+        ]
+        if enable_gateway:
+            _odom_consumers += ["GatewayModule", "MCPServerModule"]
+        for consumer in _odom_consumers:
+            try:
+                bp.wire(_drv, "odometry", consumer, "odometry")
+            except Exception:
+                pass  # module not in blueprint for this profile
 
     # Goal routing from sim driver
     try:
