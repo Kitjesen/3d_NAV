@@ -100,6 +100,14 @@ def full_stack_blueprint(
         except Exception:
             pass
 
+    # SemanticPlanner goal_pose → Navigation (must be explicit since auto_wire
+    # skips In ports that already have explicit wires from Gateway/MCP above)
+    if enable_semantic:
+        try:
+            bp.wire("SemanticPlannerModule", "goal_pose", "NavigationModule", "goal_pose")
+        except Exception:
+            pass
+
     # cmd_vel monitoring — SafetyRing needs to see all cmd_vel sources
     try:
         if enable_gateway:

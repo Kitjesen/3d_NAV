@@ -1,0 +1,18 @@
+{
+  "pid": 236460,
+  "profile": "stub",
+  "started_at": "2026-03-29T00:26:49",
+  "log_dir": "D:\\inovxio\\brain\\lingtu\\logs\\20260329_002646_stub",
+  "config": {
+    "robot": "stub",
+    "slam_profile": "none",
+    "detector": "yoloe",
+    "encoder": "mobileclip",
+    "llm": "mock",
+    "planner": "astar",
+    "enable_native": false,
+    "enable_semantic": false,
+    "enable_gateway": true,
+    "gateway_port": 5050
+  }
+}

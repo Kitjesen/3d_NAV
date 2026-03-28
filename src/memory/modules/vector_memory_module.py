@@ -164,10 +164,12 @@ class VectorMemoryModule(Module, layer=3):
         if self._encoder is not None and hasattr(self._encoder, "encode_text"):
             try:
                 results = self._encoder.encode_text([text])
-                if results and len(results) > 0:
-                    vec = np.array(results[0], dtype=np.float32)
-                    vec /= max(np.linalg.norm(vec), 1e-8)
-                    return vec
+                if results is not None and len(results) > 0:
+                    vec = np.array(results[0], dtype=np.float32).flatten()
+                    norm = float(np.linalg.norm(vec))
+                    if norm > 1e-8:
+                        vec /= norm
+                        return vec
             except Exception as e:
                 logger.debug("VectorMemory: encode_text failed: %s", e)
         # Fallback: simple bag-of-words hash embedding
@@ -175,9 +177,17 @@ class VectorMemoryModule(Module, layer=3):
 
     @staticmethod
     def _hash_embedding(text: str, dim: int = 512) -> np.ndarray:
-        """Deterministic hash embedding for text (fallback when no CLIP)."""
+        """Deterministic hash embedding for text (fallback when no CLIP).
+
+        Tokenizes on spaces, commas, and common stop words to ensure
+        'find backpack' matches 'backpack, bench'.
+        """
+        import re
+        _STOP = {"go", "to", "the", "find", "where", "is", "a", "an", "my", "at", "in", "on", "for", "of", "area", "place", "spot"}
+        words = re.split(r'[,\s]+', text.lower().strip())
+        words = [w for w in words if w and w not in _STOP]
         vec = np.zeros(dim, dtype=np.float32)
-        for i, word in enumerate(text.lower().split(", ")):
+        for word in words:
             h = hash(word) % dim
             vec[h] += 1.0
         norm = np.linalg.norm(vec)

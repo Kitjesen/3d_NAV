@@ -392,7 +392,13 @@ class SemanticPlannerModule(Module, layer=4):
 
     def _try_resolve(self, instruction: str, sg_json: str) -> None:
         if self._goal_resolver is None:
+            # No GoalResolver — skip Fast Path, try remaining fallbacks
+            if self._try_vector_memory(instruction):
+                return
+            self._explore_frontier(instruction)
             return
+
+        # Level 2: Fast Path (scene graph matching)
         try:
             self._goal_resolver.maybe_reload_kg()
             result = self._goal_resolver.fast_resolve(instruction, sg_json)
@@ -412,18 +418,19 @@ class SemanticPlannerModule(Module, layer=4):
                         frame_id="map",
                         ts=time.time(),
                     )
-                    self._current_goal_pose = pose  # track for LERa retry
+                    self._current_goal_pose = pose
                     self.goal_pose.publish(pose)
                     self.planner_status.publish("RESOLVED")
                     return
-
-            # Fast path miss → vector memory → frontier → visual servo.
-            if self._try_vector_memory(instruction):
-                return
-            self._explore_frontier(instruction)
         except Exception:
-            logger.exception("Goal resolution failed")
-            self._fallback_visual_servo(instruction)
+            logger.exception("Fast path resolution failed")
+
+        # Level 3: Vector Memory (CLIP embedding search)
+        if self._try_vector_memory(instruction):
+            return
+
+        # Level 4: Frontier exploration → Level 5: Visual servo
+        self._explore_frontier(instruction)
 
     # ── Vector Memory Search ─────────────────────────────────────────────────
 
