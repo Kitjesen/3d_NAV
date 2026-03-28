@@ -159,6 +159,10 @@ class VisualServoModule(Module, layer=4):
         elif mode_str == "follow":
             self._mode = MODE_FOLLOW
             self._target_label = label
+            # Set description so PersonTracker knows who to find
+            self._person_tracker._description = label
+            self._person_tracker._target_selected = False
+            self._person_tracker._person = None
             logger.info("VisualServo: follow mode — target='%s'", label)
         else:
             logger.warning("VisualServo: unknown mode '%s'", mode_str)
@@ -283,7 +287,9 @@ class VisualServoModule(Module, layer=4):
         if wp is not None:
             # Person following always goes through planning stack
             self._release_servo()
-            self._publish_goal_from_3d(np.array([wp[0], wp[1], 0.0]))
+            self._publish_goal_from_3d(np.array([
+                float(wp["x"]), float(wp["y"]), float(wp.get("z", 0.0))
+            ]))
 
         self._publish_status()
 
