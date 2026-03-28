@@ -109,7 +109,7 @@ PROFILES = {
     ),
     "s100p": dict(
         _desc="Full S100P robot (BPU + Kimi)",
-        robot="sim_ros2", slam_profile="bridge", detector="bpu", encoder="mobileclip",
+        robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip",
         llm="kimi", planner="astar",
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
         enable_native=False, enable_semantic=True, enable_gateway=True,

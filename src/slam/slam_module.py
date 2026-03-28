@@ -1,15 +1,16 @@
-"""SLAMModule — LiDAR-inertial SLAM as a pluggable Module.
+"""SLAMModule — LiDAR-inertial SLAM / localization as a pluggable Module.
 
 Produces odometry + map point cloud from LiDAR + IMU.
 
 Backends:
-  "fastlio2"  — Fast-LIO2 (C++ NativeModule, default)
-  "pointlio"  — Point-LIO (C++ NativeModule, alternative)
+  "fastlio2"   — Fast-LIO2 SLAM (build map + localize simultaneously)
+  "pointlio"   — Point-LIO SLAM (alternative)
+  "localizer"  — ICP Localizer (localize against pre-built map, no mapping)
 
 Usage::
 
-    bp.add(SLAMModule, backend="fastlio2")
-    # Out: odometry, map_cloud
+    bp.add(SLAMModule, backend="fastlio2")   # mapping mode
+    bp.add(SLAMModule, backend="localizer")  # navigation mode (has map)
 """
 
 from __future__ import annotations
@@ -28,10 +29,11 @@ logger = logging.getLogger(__name__)
 
 @register("slam", "fastlio2", description="Fast-LIO2 LiDAR-inertial SLAM")
 @register("slam", "pointlio", description="Point-LIO alternative SLAM")
+@register("slam", "localizer", description="ICP localizer against pre-built map")
 class SLAMModule(Module, layer=1):
-    """LiDAR-inertial SLAM — produces odometry + map.
+    """LiDAR-inertial SLAM / localization — produces odometry + map.
 
-    Both backends are C++ executables managed via NativeModule.
+    All backends are C++ executables managed via NativeModule.
     """
 
     # -- Outputs --
@@ -49,8 +51,10 @@ class SLAMModule(Module, layer=1):
             self._setup_fastlio2()
         elif self._backend == "pointlio":
             self._setup_pointlio()
+        elif self._backend == "localizer":
+            self._setup_localizer()
         else:
-            raise ValueError(f"Unknown SLAM backend: {self._backend}. Available: fastlio2, pointlio")
+            raise ValueError(f"Unknown SLAM backend: {self._backend}. Available: fastlio2, pointlio, localizer")
 
     def _setup_fastlio2(self):
         try:
@@ -71,6 +75,16 @@ class SLAMModule(Module, layer=1):
             self._node.setup()
         except (ImportError, FileNotFoundError, PermissionError) as e:
             logger.warning("SLAMModule [pointlio]: not available: %s", e)
+
+    def _setup_localizer(self):
+        try:
+            from core.config import get_config
+            from core.native_factories import slam_localizer
+            cfg = get_config()
+            self._node = slam_localizer(cfg)
+            self._node.setup()
+        except (ImportError, FileNotFoundError, PermissionError) as e:
+            logger.warning("SLAMModule [localizer]: not available: %s", e)
 
     def start(self):
         super().start()

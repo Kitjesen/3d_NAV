@@ -204,6 +204,42 @@ def slam_fastlio2(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
+def slam_localizer(cfg: Optional[RobotConfig] = None) -> NativeModule:
+    """ICP Localizer — localization against a pre-built map.
+
+    Requires Fast-LIO2 running for real-time LiDAR odometry.
+    Localizer does ICP matching against a static PCD map.
+    """
+    cfg = cfg or get_config()
+    config_path = cfg.raw.get("slam", {}).get(
+        "localizer_config",
+        os.path.join(_prefix(cfg), "share", "localizer", "config", "localizer.yaml"),
+    )
+    map_path = cfg.raw.get("slam", {}).get(
+        "static_map_path",
+        os.path.join(
+            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+            "active", "map.pcd",
+        ),
+    )
+    return NativeModule(NativeModuleConfig(
+        executable=_exe(cfg, "localizer", "localizer_node"),
+        name="localizer",
+        parameters={
+            "config_path": config_path,
+            "static_map_path": map_path,
+        },
+        remappings={
+            "/cloud_registered": "/nav/registered_cloud",
+            "/Odometry": "/nav/odometry",
+            "map_cloud": "/nav/map_cloud",
+        },
+        env=_DDS_ENV,
+        auto_restart=True,
+        max_restarts=3,
+    ))
+
+
 def slam_pointlio(cfg: Optional[RobotConfig] = None) -> NativeModule:
     """Point-LIO SLAM — alternative SLAM profile."""
     cfg = cfg or get_config()
