@@ -67,6 +67,7 @@ class CameraBridgeModule(Module, layer=1):
         self._qos_depth = qos_depth
 
         self._node = None
+        self._context = None
         self._spin_thread: Optional[threading.Thread] = None
         self._running = False
 
@@ -77,15 +78,15 @@ class CameraBridgeModule(Module, layer=1):
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from sensor_msgs.msg import Image as ROS2Image, CameraInfo
 
-            if not rclpy.ok():
-                rclpy.init()
+            self._context = rclpy.Context()
+            self._context.init()
 
             qos = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
                 depth=self._qos_depth,
             )
 
-            self._node = Node(self._node_name)
+            self._node = Node(self._node_name, context=self._context)
             self._node.create_subscription(
                 ROS2Image, self._color_topic, self._on_ros2_color, qos)
             self._node.create_subscription(
@@ -121,6 +122,9 @@ class CameraBridgeModule(Module, layer=1):
         if self._node:
             self._node.destroy_node()
             self._node = None
+        if self._context:
+            self._context.try_shutdown()
+            self._context = None
         super().stop()
 
     # ── ROS2 callbacks ────────────────────────────────────────────────────────
@@ -187,5 +191,5 @@ class CameraBridgeModule(Module, layer=1):
     def _spin_loop(self) -> None:
         import rclpy
         period = 1.0 / self._spin_rate
-        while self._running and rclpy.ok():
+        while self._running and self._context and self._context.ok():
             rclpy.spin_once(self._node, timeout_sec=period)

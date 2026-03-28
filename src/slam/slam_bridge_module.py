@@ -68,6 +68,7 @@ class SlamBridgeModule(Module, layer=1):
         self._qos_depth = qos_depth
 
         self._node = None
+        self._context = None
         self._spin_thread: Optional[threading.Thread] = None
         self._running = False
 
@@ -79,15 +80,16 @@ class SlamBridgeModule(Module, layer=1):
             from sensor_msgs.msg import PointCloud2
             from nav_msgs.msg import Odometry as ROS2Odom
 
-            if not rclpy.ok():
-                rclpy.init()
+            # Each bridge gets its own context to avoid multi-thread spin conflicts
+            self._context = rclpy.Context()
+            self._context.init()
 
             qos = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
                 depth=self._qos_depth,
             )
 
-            self._node = Node(self._node_name)
+            self._node = Node(self._node_name, context=self._context)
             self._node.create_subscription(
                 PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos)
             self._node.create_subscription(
@@ -121,6 +123,9 @@ class SlamBridgeModule(Module, layer=1):
         if self._node:
             self._node.destroy_node()
             self._node = None
+        if self._context:
+            self._context.try_shutdown()
+            self._context = None
         super().stop()
 
     # ── ROS2 callbacks ────────────────────────────────────────────────────────
@@ -184,5 +189,5 @@ class SlamBridgeModule(Module, layer=1):
     def _spin_loop(self) -> None:
         import rclpy
         period = 1.0 / self._spin_rate
-        while self._running and rclpy.ok():
+        while self._running and self._context and self._context.ok():
             rclpy.spin_once(self._node, timeout_sec=period)

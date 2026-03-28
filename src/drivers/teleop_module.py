@@ -93,8 +93,11 @@ class TeleopModule(Module, layer=6):
 
     def stop(self) -> None:
         self._running = False
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._loop and self._loop.is_running():
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except RuntimeError:
+                pass  # loop already closed
         if self._server_thread:
             self._server_thread.join(timeout=3.0)
         self._release_autonomy()
