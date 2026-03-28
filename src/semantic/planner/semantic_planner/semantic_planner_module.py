@@ -146,7 +146,7 @@ class SemanticPlannerModule(Module, layer=4):
         self.mission_status.subscribe(self._on_mission_status)
 
     def _init_backends(self) -> None:
-        """Lazy-load algorithm backends (relative imports within package)."""
+        """Lazy-load algorithm backends. Each backend is independent — one failure doesn't block others."""
         try:
             from .goal_resolver import GoalResolver
             from .llm_client import LLMConfig
@@ -157,22 +157,22 @@ class SemanticPlannerModule(Module, layer=4):
                 save_dir=self._save_dir,
             )
             logger.info("GoalResolver initialized (threshold=%.2f)", self._fast_threshold)
-        except ImportError:
-            logger.warning("GoalResolver not available")
+        except Exception as e:
+            logger.warning("GoalResolver not available: %s", e)
 
         try:
             from .frontier_scorer import FrontierScorer
             self._frontier_scorer = FrontierScorer()
             logger.info("FrontierScorer initialized")
-        except ImportError:
-            logger.warning("FrontierScorer not available")
+        except Exception as e:
+            logger.warning("FrontierScorer not available: %s", e)
 
         try:
             from .task_decomposer import TaskDecomposer
             self._task_decomposer = TaskDecomposer()
             logger.info("TaskDecomposer initialized (strategy=%s)", self._decomposer_strategy)
-        except ImportError:
-            logger.warning("TaskDecomposer not available")
+        except Exception as e:
+            logger.warning("TaskDecomposer not available: %s", e)
 
         try:
             from .action_executor import ActionExecutor
@@ -180,7 +180,7 @@ class SemanticPlannerModule(Module, layer=4):
                 approach_distance=self._approach_dist,
             )
             logger.info("ActionExecutor (LERa) initialized")
-        except ImportError:
+        except Exception as e:
             logger.warning("ActionExecutor not available")
 
     # ── Input handlers ────────────────────────────────────────────────────────
