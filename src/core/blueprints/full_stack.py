@@ -133,11 +133,14 @@ def full_stack_blueprint(
     # slam_profile="bridge"             → SlamBridgeModule 桥接已在跑的 ROS2 SLAM
     # slam_profile="none"               → 不加 SLAM (stub/dev 模式)
 
+    _slam_module_name = ""  # tracks which SLAM module was added (for explicit wiring)
+
     if slam_profile and slam_profile != "none":
         if slam_profile == "bridge":
             try:
                 from slam.slam_bridge_module import SlamBridgeModule
                 bp.add(SlamBridgeModule)
+                _slam_module_name = "SlamBridgeModule"
                 logger.info("SLAM: bridge mode (subscribing to external ROS2 SLAM)")
             except ImportError as e:
                 logger.warning("SlamBridgeModule not available: %s", e)
@@ -145,13 +148,14 @@ def full_stack_blueprint(
             try:
                 from slam.slam_module import SLAMModule
                 bp.add(SLAMModule, backend=slam_profile)
+                _slam_module_name = "SLAMModule"
                 logger.info("SLAM: managed mode (backend=%s)", slam_profile)
             except ImportError as e:
-                # Fallback to bridge if SLAMModule unavailable
                 logger.warning("SLAMModule not available (%s), falling back to bridge", e)
                 try:
                     from slam.slam_bridge_module import SlamBridgeModule
                     bp.add(SlamBridgeModule)
+                    _slam_module_name = "SlamBridgeModule"
                 except ImportError:
                     logger.warning("SlamBridgeModule also not available, no SLAM")
 
@@ -265,6 +269,12 @@ def full_stack_blueprint(
             logger.warning("MCPServerModule not available, skipping")
 
     # ── Wiring: 3-tier decoupling ────────────────────────────────────────
+
+    # Tier 0: SLAM odometry → all consumers (priority over driver dead-reckoning)
+    # When SLAM is active, its odometry is more accurate. Explicit wire ensures
+    # it takes priority; auto_wire sees ambiguity (2 sources) and skips.
+    if _slam_module_name:
+        bp.wire(_slam_module_name, "odometry", "NavigationModule", "odometry")
 
     # Tier 1: Safety — direct callback (zero latency)
     bp.wire("SafetyRingModule", "stop_cmd", driver_name, "stop_signal")

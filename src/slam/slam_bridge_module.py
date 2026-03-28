@@ -6,7 +6,7 @@ Subscribes to ROS2:
 
 Publishes to Module ports:
   map_cloud: Out[PointCloud]  — consumed by OccupancyGridModule, ElevationMapModule, TerrainModule
-  slam_odom: Out[Odometry]    — SLAM-corrected odometry (optional override)
+  odometry: Out[Odometry]     — SLAM-corrected odometry (overrides driver dead-reckoning)
 
 Graceful degradation: if rclpy is not available (Windows dev, stub mode),
 the module starts silently with no ROS2 subscriptions.  Ports stay empty.
@@ -48,7 +48,7 @@ class SlamBridgeModule(Module, layer=1):
 
     # -- Outputs --
     map_cloud: Out[PointCloud]
-    slam_odom: Out[Odometry]
+    odometry:  Out[Odometry]   # SLAM-corrected, overrides driver dead-reckoning
     alive:     Out[bool]
 
     def __init__(
@@ -175,7 +175,7 @@ class SlamBridgeModule(Module, layer=1):
                     orientation=Quaternion(x=q.x, y=q.y, z=q.z, w=q.w),
                 ),
             )
-            self.slam_odom.publish(odom)
+            self.odometry.publish(odom)
         except Exception as e:
             logger.debug("SlamBridge: odom parse error: %s", e)
 
