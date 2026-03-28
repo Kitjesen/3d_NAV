@@ -86,6 +86,27 @@ def full_stack_blueprint(
     bp.wire("SafetyRingModule", "stop_cmd", _drv, "stop_signal")
     bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
 
+    # Instruction routing — Gateway/MCP both publish instruction: Out[str],
+    # causing auto_wire ambiguity. Explicitly fan-in both sources to consumers.
+    if enable_gateway:
+        try:
+            if enable_semantic:
+                bp.wire("GatewayModule", "instruction", "SemanticPlannerModule", "instruction")
+                bp.wire("MCPServerModule", "instruction", "SemanticPlannerModule", "instruction")
+            bp.wire("GatewayModule", "instruction", "NavigationModule", "instruction")
+            bp.wire("MCPServerModule", "instruction", "NavigationModule", "instruction")
+        except Exception:
+            pass
+
+    # cmd_vel monitoring — SafetyRing needs to see all cmd_vel sources
+    try:
+        if enable_gateway:
+            bp.wire("GatewayModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
+        if enable_semantic:
+            bp.wire("VisualServoModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
+    except Exception:
+        pass
+
     # SLAM odometry priority over driver dead-reckoning
     if _slam:
         bp.wire(_slam, "odometry", "NavigationModule", "odometry")
