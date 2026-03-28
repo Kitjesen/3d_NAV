@@ -84,119 +84,81 @@ def full_stack_blueprint(
 
     # map_cloud routing — SLAM module publishes map_cloud to map consumers.
     # When SLAM is active, explicitly wire to avoid ambiguity with driver's lidar_cloud.
+    # Only wire to modules actually in the blueprint.
+    _bp_names = {e.name for e in bp._entries}
     if _slam:
-        _cloud_consumers = ["OccupancyGridModule", "ElevationMapModule", "TerrainModule"]
-        for consumer in _cloud_consumers:
-            try:
+        for consumer in ["OccupancyGridModule", "ElevationMapModule", "TerrainModule"]:
+            if consumer in _bp_names:
                 bp.wire(_slam, "map_cloud", consumer, "map_cloud")
-            except Exception:
-                pass
 
     # depth_image routing — Driver or CameraBridge provides depth.
     if enable_semantic:
-        _depth_src = "CameraBridgeModule"
-        try:
-            from core.registry import get as _get_plugin
-            if hasattr(_get_plugin("driver", robot), "depth_image"):
-                _depth_src = _drv
-        except Exception:
-            pass
+        _depth_src = "CameraBridgeModule" if "CameraBridgeModule" in _bp_names else _drv
         for consumer in ["ReconstructionModule", "VisualServoModule"]:
-            try:
+            if consumer in _bp_names and _depth_src in _bp_names:
                 bp.wire(_depth_src, "depth_image", consumer, "depth_image")
-            except Exception:
-                pass
 
     # Safety → all actuators
     bp.wire("SafetyRingModule", "stop_cmd", _drv, "stop_signal")
     bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
 
+    # Helper: only wire if both modules exist in the blueprint
+    def _w(out_mod, out_port, in_mod, in_port):
+        if out_mod in _bp_names and in_mod in _bp_names:
+            bp.wire(out_mod, out_port, in_mod, in_port)
+
     # Instruction + goal routing — Gateway/MCP both publish instruction/goal_pose,
     # causing auto_wire ambiguity. Explicitly fan-in both sources to consumers.
-    if enable_gateway:
-        try:
-            if enable_semantic:
-                bp.wire("GatewayModule", "instruction", "SemanticPlannerModule", "instruction")
-                bp.wire("MCPServerModule", "instruction", "SemanticPlannerModule", "instruction")
-            bp.wire("GatewayModule", "instruction", "NavigationModule", "instruction")
-            bp.wire("MCPServerModule", "instruction", "NavigationModule", "instruction")
-            bp.wire("GatewayModule", "goal_pose", "NavigationModule", "goal_pose")
-            bp.wire("MCPServerModule", "goal_pose", "NavigationModule", "goal_pose")
-        except Exception:
-            pass
-
-    # SemanticPlanner goal_pose → Navigation (must be explicit since auto_wire
-    # skips In ports that already have explicit wires from Gateway/MCP above)
-    if enable_semantic:
-        try:
-            bp.wire("SemanticPlannerModule", "goal_pose", "NavigationModule", "goal_pose")
-        except Exception:
-            pass
+    _w("GatewayModule", "instruction", "SemanticPlannerModule", "instruction")
+    _w("MCPServerModule", "instruction", "SemanticPlannerModule", "instruction")
+    _w("GatewayModule", "instruction", "NavigationModule", "instruction")
+    _w("MCPServerModule", "instruction", "NavigationModule", "instruction")
+    _w("GatewayModule", "goal_pose", "NavigationModule", "goal_pose")
+    _w("MCPServerModule", "goal_pose", "NavigationModule", "goal_pose")
+    _w("SemanticPlannerModule", "goal_pose", "NavigationModule", "goal_pose")
 
     # cmd_vel monitoring — SafetyRing needs to see all cmd_vel sources
-    try:
-        if enable_gateway:
-            bp.wire("GatewayModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
-        if enable_semantic:
-            bp.wire("VisualServoModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
-    except Exception:
-        pass
+    _w("GatewayModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
+    _w("VisualServoModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
 
-    # Odometry routing — when SLAM is active, two sources exist (Driver + SLAM)
-    # causing auto_wire ambiguity on ALL odometry consumers.
-    # Solution: SLAM → NavigationModule (high accuracy for planning),
-    #           Driver → everything else (always available, low latency).
-    if _slam:
+    # Odometry routing — SLAM → Nav (high accuracy), Driver → everything else
+    if _slam and _slam in _bp_names:
         bp.wire(_slam, "odometry", "NavigationModule", "odometry")
-        # Driver odometry to all other consumers that need it
-        _odom_consumers = [
+        for consumer in [
             "OccupancyGridModule", "ElevationMapModule", "TerrainModule",
             "LocalPlannerModule", "PathFollowerModule",
             "SemanticMapperModule", "EpisodicMemoryModule", "TaggedLocationsModule",
             "VectorMemoryModule", "SemanticPlannerModule", "VisualServoModule",
-            "ReconstructionModule",
-            "SafetyRingModule", "GeofenceManagerModule",
-        ]
-        if enable_gateway:
-            _odom_consumers += ["GatewayModule", "MCPServerModule"]
-        for consumer in _odom_consumers:
-            try:
+            "ReconstructionModule", "SafetyRingModule", "GeofenceManagerModule",
+            "GatewayModule", "MCPServerModule",
+        ]:
+            if consumer in _bp_names:
                 bp.wire(_drv, "odometry", consumer, "odometry")
-            except Exception:
-                pass  # module not in blueprint for this profile
 
     # Goal routing from sim driver
     try:
-        DriverCls = __import__("core.registry", fromlist=["get"]).get("driver", robot)
-        if hasattr(DriverCls, "goal_pose"):
+        from core.registry import get as _get_plugin
+        if hasattr(_get_plugin("driver", robot), "goal_pose"):
             bp.wire(_drv, "goal_pose", "NavigationModule", "goal_pose")
     except Exception:
         pass
 
-    # Autonomy chain — explicit wires
+    # Autonomy chain
     if enable_native:
-        bp.wire("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
-        bp.wire("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
-        bp.wire("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
-        bp.wire("PathFollowerModule", "cmd_vel", _drv, "cmd_vel")
+        _w("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
+        _w("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
+        _w("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
+        _w("PathFollowerModule", "cmd_vel", _drv, "cmd_vel")
 
     # Visual servo — dual channel
-    if enable_semantic:
-        try:
-            bp.wire("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target")
-            bp.wire("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
-            bp.wire("VisualServoModule", "nav_stop", "NavigationModule", "stop_signal")
-            if enable_native:
-                bp.wire("VisualServoModule", "cmd_vel", _drv, "cmd_vel")
-        except Exception:
-            pass
+    _w("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target")
+    _w("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
+    _w("VisualServoModule", "nav_stop", "NavigationModule", "stop_signal")
+    if enable_native:
+        _w("VisualServoModule", "cmd_vel", _drv, "cmd_vel")
 
     # Teleop — joystick cmd_vel + pause autonomy
-    if enable_gateway:
-        try:
-            bp.wire("TeleopModule", "cmd_vel", _drv, "cmd_vel")
-            bp.wire("TeleopModule", "nav_stop", "NavigationModule", "stop_signal")
-        except Exception:
-            pass
+    _w("TeleopModule", "cmd_vel", _drv, "cmd_vel")
+    _w("TeleopModule", "nav_stop", "NavigationModule", "stop_signal")
 
     return bp
