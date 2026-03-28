@@ -86,7 +86,7 @@ def full_stack_blueprint(
     bp.wire("SafetyRingModule", "stop_cmd", _drv, "stop_signal")
     bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
 
-    # Instruction routing — Gateway/MCP both publish instruction: Out[str],
+    # Instruction + goal routing — Gateway/MCP both publish instruction/goal_pose,
     # causing auto_wire ambiguity. Explicitly fan-in both sources to consumers.
     if enable_gateway:
         try:
@@ -95,6 +95,8 @@ def full_stack_blueprint(
                 bp.wire("MCPServerModule", "instruction", "SemanticPlannerModule", "instruction")
             bp.wire("GatewayModule", "instruction", "NavigationModule", "instruction")
             bp.wire("MCPServerModule", "instruction", "NavigationModule", "instruction")
+            bp.wire("GatewayModule", "goal_pose", "NavigationModule", "goal_pose")
+            bp.wire("MCPServerModule", "goal_pose", "NavigationModule", "goal_pose")
         except Exception:
             pass
 
