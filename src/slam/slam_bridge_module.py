@@ -187,7 +187,10 @@ class SlamBridgeModule(Module, layer=1):
     # ── Spin loop ─────────────────────────────────────────────────────────────
 
     def _spin_loop(self) -> None:
-        import rclpy
+        from rclpy.executors import SingleThreadedExecutor
+        executor = SingleThreadedExecutor(context=self._context)
+        executor.add_node(self._node)
         period = 1.0 / self._spin_rate
         while self._running and self._context and self._context.ok():
-            rclpy.spin_once(self._node, timeout_sec=period)
+            executor.spin_once(timeout_sec=period)
+        executor.shutdown()
