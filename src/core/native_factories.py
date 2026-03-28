@@ -204,6 +204,31 @@ def slam_fastlio2(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
+def slam_pgo(cfg: Optional[RobotConfig] = None) -> NativeModule:
+    """PGO node — Pose Graph Optimization for map saving.
+
+    Subscribes to Fast-LIO2 output, provides /pgo/save_maps service.
+    Must run alongside Fast-LIO2.
+    """
+    cfg = cfg or get_config()
+    config_path = cfg.raw.get("slam", {}).get(
+        "pgo_config",
+        os.path.join(_prefix(cfg), "share", "pgo", "config", "pgo.yaml"),
+    )
+    return NativeModule(NativeModuleConfig(
+        executable=_exe(cfg, "pgo", "pgo_node"),
+        name="pgo",
+        parameters={"config_path": config_path},
+        remappings={
+            "/cloud_registered": "/nav/registered_cloud",
+            "/Odometry": "/nav/odometry",
+        },
+        env=_DDS_ENV,
+        auto_restart=True,
+        max_restarts=3,
+    ))
+
+
 def slam_localizer(cfg: Optional[RobotConfig] = None) -> NativeModule:
     """ICP Localizer — localization against a pre-built map.
 

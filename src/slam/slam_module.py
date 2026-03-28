@@ -45,7 +45,8 @@ class SLAMModule(Module, layer=1):
         super().__init__(**kw)
         self._backend = backend
         self._node = None
-        self._lio_node = None  # localizer mode: Fast-LIO2 companion
+        self._lio_node = None   # localizer mode: Fast-LIO2 companion
+        self._pgo_node = None   # fastlio2 mode: PGO for map saving
 
     def setup(self):
         if self._backend == "fastlio2":
@@ -58,12 +59,15 @@ class SLAMModule(Module, layer=1):
             raise ValueError(f"Unknown SLAM backend: {self._backend}. Available: fastlio2, pointlio, localizer")
 
     def _setup_fastlio2(self):
+        """Fast-LIO2 SLAM + PGO (map saving requires PGO's /pgo/save_maps service)."""
         try:
             from core.config import get_config
-            from core.native_factories import slam_fastlio2
+            from core.native_factories import slam_fastlio2, slam_pgo
             cfg = get_config()
             self._node = slam_fastlio2(cfg)
             self._node.setup()
+            self._pgo_node = slam_pgo(cfg)
+            self._pgo_node.setup()
         except (ImportError, FileNotFoundError, PermissionError) as e:
             logger.warning("SLAMModule [fastlio2]: not available: %s", e)
 
@@ -93,33 +97,27 @@ class SLAMModule(Module, layer=1):
 
     def start(self):
         super().start()
-        if self._lio_node:
-            try:
-                self._lio_node.start()
-                logger.info("SLAMModule [localizer]: Fast-LIO2 companion started")
-            except Exception as e:
-                logger.error("SLAMModule: Fast-LIO2 companion start failed: %s", e)
-        if self._node:
-            try:
-                self._node.start()
-                logger.info("SLAMModule [%s]: C++ node started", self._backend)
-            except Exception as e:
-                logger.error("SLAMModule: start failed: %s", e)
+        for name, node in [("Fast-LIO2 companion", self._lio_node),
+                           ("PGO", self._pgo_node),
+                           (self._backend, self._node)]:
+            if node:
+                try:
+                    node.start()
+                    logger.info("SLAMModule: %s started", name)
+                except Exception as e:
+                    logger.error("SLAMModule: %s start failed: %s", name, e)
         self.alive.publish(self._node is not None)
 
     def stop(self):
-        if self._node:
-            try:
-                self._node.stop()
-            except Exception:
-                pass
-            self._node = None
-        if self._lio_node:
-            try:
-                self._lio_node.stop()
-            except Exception:
-                pass
-            self._lio_node = None
+        for node in [self._node, self._pgo_node, self._lio_node]:
+            if node:
+                try:
+                    node.stop()
+                except Exception:
+                    pass
+        self._node = None
+        self._pgo_node = None
+        self._lio_node = None
         self.alive.publish(False)
         super().stop()
 
