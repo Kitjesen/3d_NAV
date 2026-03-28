@@ -123,10 +123,16 @@ class SemanticPlannerModule(Module, layer=4):
         self._lera_running: bool = False   # prevent concurrent LERa calls
         self._requery_count: int = 0       # cap requery_goal to avoid infinite loop
 
+        # Sibling module references (set in on_system_modules)
+        self._vector_memory = None
+
         # Stats
         self._resolve_count: int = 0
         self._frontier_count: int = 0
         self._lera_count: int = 0
+
+    def on_system_modules(self, modules: dict) -> None:
+        self._vector_memory = modules.get("VectorMemoryModule")
 
     def setup(self) -> None:
         self._init_backends()
@@ -409,11 +415,44 @@ class SemanticPlannerModule(Module, layer=4):
                     self.planner_status.publish("RESOLVED")
                     return
 
-            # Fast path miss → frontier exploration → visual servo fallback.
+            # Fast path miss → vector memory → frontier → visual servo.
+            if self._try_vector_memory(instruction):
+                return
             self._explore_frontier(instruction)
         except Exception:
             logger.exception("Goal resolution failed")
             self._fallback_visual_servo(instruction)
+
+    # ── Vector Memory Search ─────────────────────────────────────────────────
+
+    def _try_vector_memory(self, instruction: str) -> bool:
+        """Query VectorMemoryModule for fuzzy location match. Returns True if navigating."""
+        if self._vector_memory is None:
+            return False
+        try:
+            result = self._vector_memory.query_location(instruction)
+            if not result.get("found"):
+                return False
+            best = result["best"]
+            if best.get("score", 0) < 0.3:
+                return False
+            pose = PoseStamped(
+                pose=Pose(
+                    position=Vector3(x=float(best["x"]), y=float(best["y"]), z=0.0),
+                    orientation=Quaternion(0, 0, 0, 1),
+                ),
+                frame_id="map",
+                ts=time.time(),
+            )
+            self._current_goal_pose = pose
+            self.goal_pose.publish(pose)
+            self.planner_status.publish("VECTOR_MEMORY")
+            logger.info("Vector memory hit: '%s' → (%.1f, %.1f) score=%.2f",
+                        instruction, best["x"], best["y"], best["score"])
+            return True
+        except Exception as e:
+            logger.debug("Vector memory query failed: %s", e)
+            return False
 
     # ── Frontier Exploration ──────────────────────────────────────────────────
 

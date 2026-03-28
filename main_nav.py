@@ -540,6 +540,74 @@ class LingTuREPL(cmd.Cmd):
             bar = "█" * int(r["probability"] * 20)
             print(f"    {r['room']:20s} {bar} {r['probability']:.2f}")
 
+    # ── Agent commands ──
+
+    def do_agent(self, arg):
+        """Multi-turn agent: agent <instruction>  (e.g. agent find the red chair and tag it)"""
+        if not arg.strip():
+            print("  Usage: agent <instruction>")
+            return
+        mod = self._get_module("SemanticPlannerModule")
+        if mod is None:
+            print("  SemanticPlannerModule not running")
+            return
+        if not hasattr(mod, 'agent_instruction'):
+            print("  agent_instruction port not available")
+            return
+        mod.agent_instruction._deliver(arg.strip())
+        print(f"  Agent loop started: '{arg.strip()}'")
+
+    # ── Vector memory commands ──
+
+    def do_vmem(self, arg):
+        """Vector memory: vmem query <text> | vmem stats"""
+        parts = arg.split(None, 1)
+        subcmd = parts[0] if parts else ""
+        rest = parts[1] if len(parts) > 1 else ""
+
+        mod = self._get_module("VectorMemoryModule")
+        if mod is None:
+            print("  VectorMemoryModule not running")
+            return
+
+        if subcmd == "query" and rest:
+            result = mod.query_location(rest.strip())
+            if not result.get("found"):
+                print(f"  No match for '{rest.strip()}'")
+                return
+            for r in result.get("results", []):
+                bar = "█" * int(r["score"] * 20)
+                print(f"    ({r['x']:6.1f}, {r['y']:6.1f})  {bar} {r['score']:.2f}  {r.get('labels', '')[:40]}")
+        elif subcmd == "stats":
+            s = mod.get_memory_stats()
+            print(f"  Backend:  {s['backend']}")
+            print(f"  Entries:  {s['entries']}")
+            print(f"  Stored:   {s['store_count']} snapshots")
+            print(f"  Dir:      {s['persist_dir']}")
+        else:
+            print("  Usage: vmem query <text> | vmem stats")
+
+    # ── Teleop commands ──
+
+    def do_teleop(self, arg):
+        """Teleop control: teleop status | teleop release"""
+        mod = self._get_module("TeleopModule")
+        if mod is None:
+            print("  TeleopModule not running")
+            return
+
+        subcmd = arg.strip()
+        if subcmd == "status":
+            s = mod.get_teleop_status()
+            active = "ACTIVE" if s["active"] else "idle"
+            print(f"  Status:  {active}")
+            print(f"  Clients: {s['clients']}")
+            print(f"  Port:    ws://0.0.0.0:{s['port']}/teleop")
+        elif subcmd == "release":
+            print(f"  {mod.force_release()}")
+        else:
+            print("  Usage: teleop status | teleop release")
+
     # ── Monitoring commands ──
 
     def do_status(self, arg):
