@@ -45,6 +45,7 @@ class SLAMModule(Module, layer=1):
         super().__init__(**kw)
         self._backend = backend
         self._node = None
+        self._lio_node = None  # localizer mode: Fast-LIO2 companion
 
     def setup(self):
         if self._backend == "fastlio2":
@@ -77,10 +78,14 @@ class SLAMModule(Module, layer=1):
             logger.warning("SLAMModule [pointlio]: not available: %s", e)
 
     def _setup_localizer(self):
+        """Localizer needs Fast-LIO2 (odometry source) + localizer_node (ICP map matching)."""
         try:
             from core.config import get_config
-            from core.native_factories import slam_localizer
+            from core.native_factories import slam_fastlio2, slam_localizer
             cfg = get_config()
+            # Fast-LIO2 provides /cloud_registered + /Odometry that localizer subscribes to
+            self._lio_node = slam_fastlio2(cfg)
+            self._lio_node.setup()
             self._node = slam_localizer(cfg)
             self._node.setup()
         except (ImportError, FileNotFoundError, PermissionError) as e:
@@ -88,6 +93,12 @@ class SLAMModule(Module, layer=1):
 
     def start(self):
         super().start()
+        if self._lio_node:
+            try:
+                self._lio_node.start()
+                logger.info("SLAMModule [localizer]: Fast-LIO2 companion started")
+            except Exception as e:
+                logger.error("SLAMModule: Fast-LIO2 companion start failed: %s", e)
         if self._node:
             try:
                 self._node.start()
@@ -103,6 +114,12 @@ class SLAMModule(Module, layer=1):
             except Exception:
                 pass
             self._node = None
+        if self._lio_node:
+            try:
+                self._lio_node.stop()
+            except Exception:
+                pass
+            self._lio_node = None
         self.alive.publish(False)
         super().stop()
 
