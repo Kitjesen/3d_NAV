@@ -125,6 +125,7 @@ class SemanticPlannerModule(Module, layer=4):
 
         # Sibling module references (set in on_system_modules)
         self._vector_memory = None
+        self._tagged_locations = None
 
         # Stats
         self._resolve_count: int = 0
@@ -133,6 +134,7 @@ class SemanticPlannerModule(Module, layer=4):
 
     def on_system_modules(self, modules: dict) -> None:
         self._vector_memory = modules.get("VectorMemoryModule")
+        self._tagged_locations = modules.get("TaggedLocationsModule")
 
     def setup(self) -> None:
         self._init_backends()
@@ -580,11 +582,21 @@ class SemanticPlannerModule(Module, layer=4):
         return f"'{label}' not visible"
 
     def _tool_query_memory(self, text: str) -> str:
-        # Delegate to VectorMemoryModule via MCP if available
-        return f"Memory query: '{text}' (not yet connected)"
+        if self._vector_memory is None:
+            return "Vector memory not available"
+        result = self._vector_memory.query_location(text)
+        if not result.get("found"):
+            return f"No memory match for '{text}'"
+        best = result["best"]
+        return f"Found: ({best['x']:.1f}, {best['y']:.1f}) score={best['score']:.2f} labels={best.get('labels', '')}"
 
     def _tool_tag_location(self, name: str) -> str:
         x, y = float(self._robot_pos[0]), float(self._robot_pos[1])
+        if self._tagged_locations is not None:
+            try:
+                self._tagged_locations.tag_command._deliver(f"tag:{name}")
+            except Exception:
+                pass
         return f"Tagged '{name}' at ({x:.1f}, {y:.1f})"
 
     def _tool_say(self, text: str) -> str:
