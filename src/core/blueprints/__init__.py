@@ -1,24 +1,16 @@
-"""lingtu.core.blueprints -- pre-built system blueprints.
+"""lingtu.core.blueprints — pre-built system blueprints.
 
-Four ways to build a navigation stack:
+Primary entry point:
+    full_stack_blueprint(robot="thunder", slam_profile="fastlio2", ...)
 
-- make_blueprint(robot="nova_dog")  -- pluggable: pick driver by name
-- navigation_blueprint()            -- real robot (hardcoded HanDogModule)
-- simulation_blueprint()            -- MuJoCo sim (SimDogModule)
-- stub_blueprint()                  -- CI testing (StubDogModule)
-
-Prefer make_blueprint() for new code -- it uses the driver registry
-so adding a new robot type requires zero changes here.
+Legacy:
+    stub_blueprint() — CI testing (StubDogModule, no hardware)
 """
 
-from .navigation import navigation_blueprint
-from .simulation import simulation_blueprint
+from .full_stack import full_stack_blueprint
 from .stub import stub_blueprint
-from .factory import make_blueprint
 
 __all__ = [
-    "make_blueprint",
-    "navigation_blueprint",
-    "simulation_blueprint",
+    "full_stack_blueprint",
     "stub_blueprint",
 ]

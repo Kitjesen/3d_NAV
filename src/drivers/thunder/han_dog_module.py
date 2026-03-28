@@ -9,8 +9,8 @@ Ports:
 
 Usage::
 
-    from core.blueprints.navigation import navigation_blueprint
-    system = navigation_blueprint(dog_host="192.168.66.190").build()
+    from core.blueprints.full_stack import full_stack_blueprint
+    system = full_stack_blueprint(robot="thunder", dog_host="192.168.66.190").build()
     system.start()
 """
 

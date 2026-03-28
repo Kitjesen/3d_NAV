@@ -1,17 +1,8 @@
-"""GlobalPlannerModule — pluggable global path planner as an independent Module.
+"""Planner backends — A* and PCT (C++ ele_planner).
 
-Wraps any GlobalPlanner backend (PCT C++ ele_planner, pure Python A*, NativeModule)
-into a core Module. Swapping planners = one Blueprint argument.
-
-Backends:
-  "pct"     — C++ ele_planner via .so (S100P aarch64, fast)
-  "astar"   — Pure Python A* on tomogram (any platform, no .so)
-  "native"  — NativeModule subprocess (full ROS2 node, legacy)
-
-Usage::
-
-    bp.add(GlobalPlannerModule, planner="astar", tomogram="building2_9.pickle")
-    bp.add(GlobalPlannerModule, planner="pct")  # needs ele_planner.so
+Used by GlobalPlannerService (nav/global_planner_service.py) via Registry:
+    backend = get("planner_backend", "astar")
+    backend = get("planner_backend", "pct")
 """
 
 from __future__ import annotations
@@ -20,132 +11,13 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 
-from core.module import Module
-from core.stream import In, Out
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
-from core.msgs.nav import Path, Odometry
 from core.registry import register
 
 logger = logging.getLogger(__name__)
-
-
-class PlanResult:
-    """Global planner output."""
-    __slots__ = ("path", "status", "plan_ms", "planner_name")
-
-    def __init__(self, path: list, status: str = "SUCCESS",
-                 plan_ms: float = 0.0, planner_name: str = ""):
-        self.path = path          # list of (x, y, z) tuples
-        self.status = status      # IDLE / PLANNING / SUCCESS / FAILED
-        self.plan_ms = plan_ms
-        self.planner_name = planner_name
-
-    def __repr__(self):
-        return f"PlanResult({self.status}, {len(self.path)} waypoints, {self.plan_ms:.1f}ms)"
-
-
-@register("planner", "global", description="Pluggable global path planner")
-class GlobalPlannerModule(Module, layer=5):
-    """Pluggable global path planner Module.
-
-    In:  goal_pose (PoseStamped) — where to go
-         odometry  (Odometry)    — where we are
-    Out: global_path (list)      — planned waypoints
-         planner_status (str)    — IDLE/PLANNING/SUCCESS/FAILED
-    """
-
-    goal_pose: In[PoseStamped]
-    odometry: In[Odometry]
-    global_path: Out[list]
-    planner_status: Out[str]
-
-    def __init__(
-        self,
-        planner: str = "astar",
-        tomogram: str = "",
-        obstacle_thr: float = 49.9,
-        **kw,
-    ):
-        super().__init__(**kw)
-        self._planner_name = planner
-        self._tomogram = tomogram
-        self._obstacle_thr = obstacle_thr
-        self._backend = None
-        self._latest_pos: Optional[np.ndarray] = None
-        self._plan_count = 0
-        self._total_plan_ms = 0.0
-
-    def setup(self):
-        self._backend = self._create_backend()
-        self.goal_pose.subscribe(self._on_goal)
-        self.odometry.subscribe(self._on_odom)
-        self.planner_status.publish("IDLE")
-
-    def _create_backend(self):
-        name = self._planner_name.lower()
-        if name == "astar":
-            return _AStarBackend(
-                tomogram_path=self._tomogram,
-                obstacle_thr=self._obstacle_thr,
-            )
-        elif name == "pct":
-            return _PCTBackend(
-                tomogram_path=self._tomogram,
-                obstacle_thr=self._obstacle_thr,
-            )
-        else:
-            raise ValueError(
-                f"Unknown planner '{name}'. Available: astar, pct"
-            )
-
-    def _on_odom(self, odom: Odometry):
-        self._latest_pos = np.array([odom.x, odom.y, getattr(odom, 'z', 0.0)])
-
-    def _on_goal(self, goal: PoseStamped):
-        if self._backend is None:
-            self.planner_status.publish("FAILED")
-            return
-        if self._latest_pos is None:
-            logger.warning("GlobalPlannerModule: no odometry yet, can't plan")
-            self.planner_status.publish("FAILED")
-            return
-
-        self.planner_status.publish("PLANNING")
-        start = self._latest_pos
-        end = np.array([goal.pose.position.x, goal.pose.position.y,
-                        goal.pose.position.z])
-
-        t0 = time.time()
-        try:
-            path = self._backend.plan(start, end)
-            plan_ms = (time.time() - t0) * 1000
-            self._plan_count += 1
-            self._total_plan_ms += plan_ms
-
-            if path and len(path) > 0:
-                self.global_path.publish(path)
-                self.planner_status.publish("SUCCESS")
-            else:
-                self.planner_status.publish("FAILED")
-        except Exception:
-            logger.exception("Global planning failed")
-            self.planner_status.publish("FAILED")
-
-    def health(self) -> Dict[str, Any]:
-        info = super().port_summary()
-        avg_ms = (self._total_plan_ms / self._plan_count
-                  if self._plan_count > 0 else 0.0)
-        info["planner"] = {
-            "backend": self._planner_name,
-            "loaded": self._backend is not None,
-            "plans": self._plan_count,
-            "avg_ms": round(avg_ms, 1),
-        }
-        return info
 
 
 # ---------------------------------------------------------------------------
