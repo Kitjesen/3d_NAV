@@ -50,15 +50,18 @@ class TestNavigationModule(unittest.TestCase):
 
     def test_on_stop_clears(self):
         m = self._make()
-        m._path = [np.array([1, 2, 0])]
+        # Path now lives in the WaypointTracker service
+        m._tracker._path = [np.array([1, 2, 0])]
         m._on_stop(2)
-        self.assertEqual(len(m._path), 0)
+        self.assertEqual(m._tracker.path_length, 0)
         self.assertEqual(m._state, "IDLE")
 
     def test_downsample(self):
         m = self._make(downsample_dist=2.0)
         path = [(0, 0, 0), (0.5, 0, 0), (1, 0, 0), (3, 0, 0), (5, 0, 0)]
-        result = m._downsample(path)
+        goal = np.array(path[-1])
+        # Downsample now lives in GlobalPlannerService
+        result = m._planner_svc._downsample(path, goal)
         self.assertLess(len(result), len(path))
 
     def test_on_odom_updates_pos(self):
@@ -411,12 +414,14 @@ class TestSemanticPlannerModule(unittest.TestCase):
         self.assertIn("scene_graph", m.ports_in)
         self.assertIn("odometry", m.ports_in)
         self.assertIn("detections", m.ports_in)
+        self.assertIn("mission_status", m.ports_in)
 
     def test_ports_out(self):
         m = self._make()
         self.assertIn("goal_pose", m.ports_out)
         self.assertIn("planner_status", m.ports_out)
         self.assertIn("task_plan", m.ports_out)
+        self.assertIn("cancel", m.ports_out)
 
     def test_decompose_fallback(self):
         m = self._make()
@@ -431,6 +436,97 @@ class TestSemanticPlannerModule(unittest.TestCase):
         m = self._make()
         h = m.health()
         self.assertIn("semantic_planner", h)
+        self.assertIn("lera_triggers", h["semantic_planner"])
+
+    # -- LERa integration tests -----------------------------------------------
+
+    def test_lera_ignored_when_executing(self):
+        """Non-terminal nav states must not trigger LERa."""
+        m = self._make()
+        statuses = []
+        m.planner_status._add_callback(statuses.append)
+        m._on_mission_status({"state": "EXECUTING"})
+        self.assertNotIn("RECOVERING", statuses)
+
+    def test_lera_triggers_on_stuck(self):
+        """STUCK state must publish RECOVERING and increment lera_count."""
+        import time as _time
+        m = self._make()
+        statuses = []
+        m.planner_status._add_callback(statuses.append)
+        m._lera_cooldown = 0  # disable cooldown for test
+        m._on_mission_status({"state": "STUCK"})
+        # RECOVERING is published synchronously before thread launch.
+        self.assertIn("RECOVERING", statuses)
+        self.assertEqual(m._lera_count, 1)
+        # Wait briefly for background thread to finish and clear _lera_running.
+        for _ in range(20):
+            with m._lera_lock:
+                if not m._lera_running:
+                    break
+            _time.sleep(0.05)
+
+    def test_lera_cooldown_prevents_storm(self):
+        """Second STUCK within cooldown window must be silently dropped."""
+        m = self._make()
+        counts = []
+        m.planner_status._add_callback(lambda s: counts.append(s) if s == "RECOVERING" else None)
+        m._lera_cooldown = 999  # very long cooldown
+        m._last_nav_state = ""  # first trigger allowed
+        m._on_mission_status({"state": "STUCK"})
+        m._last_nav_state = ""  # reset so state-change check passes
+        m._on_mission_status({"state": "STUCK"})  # must be dropped by cooldown
+        self.assertEqual(len(counts), 1)
+
+    def test_lera_abort_publishes_cancel(self):
+        """abort strategy must publish 'lera_abort' on cancel port."""
+        m = self._make()
+        cancels = []
+        m.cancel._add_callback(cancels.append)
+        m._dispatch_recovery("abort")
+        self.assertEqual(cancels, ["lera_abort"])
+
+    def test_lera_retry_republishes_goal(self):
+        """retry_different_path must republish the cached goal_pose."""
+        m = self._make()
+        goals = []
+        m.goal_pose._add_callback(goals.append)
+        pose = PoseStamped(
+            pose=Pose(position=Vector3(3, 4, 0), orientation=Quaternion(0, 0, 0, 1)),
+            frame_id="map", ts=0.0,
+        )
+        m._current_goal_pose = pose
+        m._dispatch_recovery("retry_different_path")
+        self.assertEqual(len(goals), 1)
+        self.assertAlmostEqual(goals[0].pose.position.x, 3.0)
+
+    def test_lera_abort_clears_state(self):
+        """abort must reset failure_count and current_instruction."""
+        m = self._make()
+        m._failure_count = 3
+        m._current_instruction = "go to kitchen"
+        m._dispatch_recovery("abort")
+        self.assertEqual(m._failure_count, 0)
+        self.assertEqual(m._current_instruction, "")
+
+    def test_lera_no_duplicate_trigger_same_state(self):
+        """Consecutive publishes of the same state must only trigger LERa once."""
+        m = self._make()
+        m._lera_cooldown = 0
+        m._on_mission_status({"state": "STUCK"})
+        count_after_first = m._lera_count
+        m._on_mission_status({"state": "STUCK"})  # same state, must be dropped
+        self.assertEqual(m._lera_count, count_after_first)
+
+    def test_scene_graph_stored_as_object(self):
+        """_on_scene_graph must persist the SceneGraph object, not just JSON."""
+        from core.msgs.semantic import SceneGraph, Detection3D
+        from core.msgs.geometry import Vector3
+        m = self._make()
+        sg = SceneGraph(objects=[Detection3D(label="chair", confidence=0.9)])
+        m._on_scene_graph(sg)
+        self.assertIsNotNone(m._current_scene_graph)
+        self.assertEqual(m._current_scene_graph.objects[0].label, "chair")
 
 
 if __name__ == "__main__":

@@ -110,6 +110,21 @@ class WorkerManager:
         resp = self._send(worker_id, ("LIST",))
         return resp[1] if resp[0] == "RESULT" else []
 
+    def get_skills(self, worker_id: int, module_id: str) -> List[dict]:
+        """Return serialized SkillInfo list for a module in a worker."""
+        resp = self._send(worker_id, ("GET_SKILLS", module_id))
+        return resp[1] if resp[0] == "RESULT" else []
+
+    def bind_port(self, worker_id: int, module_id: str,
+                  port_name: str, direction: str, topic: str) -> None:
+        """Bind a port inside a worker to SHM transport on the given topic.
+
+        direction: "out" | "in"
+        Sends BIND_PORT IPC command to the worker; the worker attaches the
+        port to a TransportAdapter(SHMTransport()) using the given topic.
+        """
+        self._send(worker_id, ("BIND_PORT", module_id, port_name, direction, topic))
+
     def shutdown(self) -> None:
         """Shutdown all workers gracefully, then join their processes."""
         for wid in list(self._workers):
@@ -126,6 +141,11 @@ class WorkerManager:
         self._resp_queues.clear()
         self._started = False
         logger.info("WorkerManager: all workers shut down")
+
+    def get_pid(self, worker_id: int) -> Optional[int]:
+        """Return the OS PID of a worker process, or None if not started."""
+        w = self._workers.get(worker_id)
+        return w.pid if w is not None else None
 
     @property
     def n_workers(self) -> int:

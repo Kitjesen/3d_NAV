@@ -19,7 +19,7 @@ import time
 import pytest
 
 from core.stream import In, LocalTransport, Out
-from core.module import Module, rpc
+from core.module import Module, rpc, skill
 from core.blueprint import Blueprint, SystemHandle, autoconnect
 from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.semantic import SceneGraph, Detection3D, GoalResult
@@ -1418,6 +1418,22 @@ class TestRpc:
 # TestWorker — Worker process and WorkerManager
 # ============================================================================
 
+class _SkillModDoThing(Module):
+    """Module with a @skill method — must be module-level for multiprocessing pickle."""
+    @skill
+    def do_thing(self, x: int) -> str:
+        """Do a thing with x."""
+        return str(x)
+
+
+class _SkillModPing(Module):
+    """Module with a @skill method — must be module-level for multiprocessing pickle."""
+    @skill
+    def ping(self) -> str:
+        """Ping the module."""
+        return "pong"
+
+
 class _WorkerTestModule(Module):
     """Minimal module used to verify cross-process RPC calls."""
     value: Out[int]
@@ -1570,4 +1586,47 @@ class TestWorker:
         assert mgr.rpc_call(0, "mod", "get_value") == 5
 
         mgr.stop_module(0, "mod")
+        mgr.shutdown()
+
+    def test_worker_get_skills_command(self):
+        """GET_SKILLS returns serialized SkillInfo list for a deployed module."""
+        import multiprocessing
+        from core.worker import Worker
+
+        cmd_q: multiprocessing.Queue = multiprocessing.Queue()
+        resp_q: multiprocessing.Queue = multiprocessing.Queue()
+        w = Worker(worker_id="sk", cmd_queue=cmd_q, resp_queue=resp_q)
+        w.start()
+
+        cmd_q.put(("DEPLOY", _SkillModDoThing, "skmod", (), {}))
+        resp_q.get(timeout=5.0)
+
+        cmd_q.put(("GET_SKILLS", "skmod"))
+        resp = resp_q.get(timeout=5.0)
+        assert resp[0] == "RESULT"
+        skills = resp[1]
+        assert isinstance(skills, list)
+        assert len(skills) == 1
+        assert skills[0]["func_name"] == "do_thing"
+        assert skills[0]["class_name"] == "_SkillModDoThing"
+        assert "args_schema" in skills[0]
+
+        cmd_q.put(("SHUTDOWN",))
+        resp_q.get(timeout=5.0)
+        w.join(timeout=5.0)
+
+    def test_worker_manager_get_skills(self):
+        """WorkerManager.get_skills() aggregates skill info from a worker module."""
+        from core.worker_manager import WorkerManager
+
+        mgr = WorkerManager(n_workers=1)
+        mgr.start()
+        mgr.deploy(0, _SkillModPing, "sm", kwargs={})
+
+        skills = mgr.get_skills(0, "sm")
+        assert isinstance(skills, list)
+        assert len(skills) == 1
+        assert skills[0]["func_name"] == "ping"
+        assert skills[0]["class_name"] == "_SkillModPing"
+
         mgr.shutdown()

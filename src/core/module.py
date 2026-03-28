@@ -130,6 +130,11 @@ class Module:
     # 类级别层级标签，子类可覆盖
     _layer: Optional[int] = None
 
+    # Modules that host network servers (HTTP, WebSocket) set this True so
+    # Blueprint._build_worker_mode() keeps them in the main process where they
+    # can receive RPCClient proxies via on_system_modules() directly.
+    _run_in_main: bool = False
+
     # -- dimos 风格 __init_subclass__: 在类定义时设置 None 占位 -----------
 
     def __init_subclass__(cls, layer: Optional[int] = None, **kwargs: Any) -> None:
@@ -257,32 +262,34 @@ class Module:
 
     @property
     def rpcs(self) -> Dict[str, Any]:
-        """Discover all @rpc-decorated methods on this module."""
+        """Discover all @rpc-decorated methods on this module.
+
+        Scans the class MRO __dict__ (not dir(self)) to avoid triggering
+        property getters (like skills/rpcs themselves) and prevent cross-
+        recursive infinite loops between the two scanning properties.
+        """
         result = {}
-        for name in dir(self):
-            if name.startswith('_'):
-                continue
-            try:
-                method = getattr(self, name)
-                if callable(method) and getattr(method, '__rpc__', False):
-                    result[name] = method
-            except Exception:
-                continue
+        for cls in type(self).__mro__:
+            for name, val in cls.__dict__.items():
+                if name.startswith('_') or name in result:
+                    continue
+                if callable(val) and getattr(val, '__rpc__', False):
+                    result[name] = getattr(self, name)
         return result
 
     @property
     def skills(self) -> Dict[str, Any]:
-        """Discover all @skill-decorated methods (AI-callable subset of @rpc)."""
+        """Discover all @skill-decorated methods (AI-callable subset of @rpc).
+
+        Scans the class MRO __dict__ to avoid infinite cross-recursion with rpcs.
+        """
         result = {}
-        for name in dir(self):
-            if name.startswith('_'):
-                continue
-            try:
-                method = getattr(self, name)
-                if callable(method) and getattr(method, '__skill__', False):
-                    result[name] = method
-            except Exception:
-                continue
+        for cls in type(self).__mro__:
+            for name, val in cls.__dict__.items():
+                if name.startswith('_') or name in result:
+                    continue
+                if callable(val) and getattr(val, '__skill__', False):
+                    result[name] = getattr(self, name)
         return result
 
     def get_skill_infos(self) -> "List[SkillInfo]":

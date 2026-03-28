@@ -13,7 +13,7 @@ Core components:
 from .stream import In, Out
 from .transport import Transport, LocalTransport
 from .module import Module, rpc, skill, SkillInfo
-from .blueprint import Blueprint, SystemHandle, autoconnect
+from .blueprint import Blueprint, SystemHandle, WorkerSystemHandle, autoconnect
 from .config import RobotConfig, get_config, load_config, reset_config
 from .clock import Clock, clock
 from .native_module import NativeModule, NativeModuleConfig
@@ -28,7 +28,7 @@ __all__ = [
     # module
     "Module", "rpc", "skill", "SkillInfo",
     # blueprint
-    "Blueprint", "SystemHandle", "autoconnect",
+    "Blueprint", "SystemHandle", "WorkerSystemHandle", "autoconnect",
     # config
     "RobotConfig", "load_config", "get_config", "reset_config",
     # clock
@@ -39,13 +39,23 @@ __all__ = [
     "RPCClient", "RemoteOut", "RemoteIn",
     # coordinator (imported lazily — requires WorkerManager)
     "ModuleCoordinator",
+    # introspection (imported lazily)
+    "render_text", "render_dot", "render_svg", "render_png",
+    # resource monitor (imported lazily)
+    "ResourceMonitor",
 ]
 
 
 def __getattr__(name: str):
-    # Lazy export so ModuleCoordinator is available via `from core import ModuleCoordinator`
-    # without failing when worker_manager.py does not yet exist.
     if name == "ModuleCoordinator":
         from .coordinator import ModuleCoordinator  # type: ignore[import]
         return ModuleCoordinator
+    if name in ("render_text", "render_dot", "render_svg", "render_png",
+                "render_connections"):
+        import importlib
+        mod = importlib.import_module(".introspection", package=__name__)
+        return getattr(mod, name)
+    if name == "ResourceMonitor":
+        from .resource_monitor import ResourceMonitor
+        return ResourceMonitor
     raise AttributeError(f"module 'core' has no attribute {name!r}")

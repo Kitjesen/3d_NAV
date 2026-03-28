@@ -131,6 +131,27 @@ class TestRPCClient:
         proxy = RPCClient(mgr, worker_id=0, module_id="nav")
         assert proxy.rpc_methods == set()
 
+    def test_get_skill_infos_calls_get_skills(self):
+        from core.module import SkillInfo
+        mgr = make_mock_manager()
+        mgr.get_skills.return_value = [
+            {"func_name": "navigate", "class_name": "NavModule", "args_schema": "{}"},
+        ]
+        proxy = RPCClient(mgr, worker_id=1, module_id="nav", rpc_methods={"navigate"})
+        infos = proxy.get_skill_infos()
+        mgr.get_skills.assert_called_once_with(1, "nav")
+        assert len(infos) == 1
+        assert isinstance(infos[0], SkillInfo)
+        assert infos[0].func_name == "navigate"
+        assert infos[0].class_name == "NavModule"
+
+    def test_get_skill_infos_returns_empty_on_no_skills(self):
+        mgr = make_mock_manager()
+        mgr.get_skills.return_value = []
+        proxy = RPCClient(mgr, worker_id=0, module_id="nav")
+        infos = proxy.get_skill_infos()
+        assert infos == []
+
 
 # ---------------------------------------------------------------------------
 # RemoteOut tests

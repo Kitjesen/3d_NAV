@@ -446,6 +446,100 @@ class LingTuREPL(cmd.Cmd):
         shutil.rmtree(map_dir)
         print(f"  Deleted: {name}")
 
+    # ── Semantic map commands ──
+
+    def do_smap(self, arg):
+        """Semantic map: smap status | rooms | save | load <dir> | query <text>"""
+        parts = arg.split(None, 1)
+        subcmd = parts[0] if parts else ""
+        rest = parts[1] if len(parts) > 1 else ""
+
+        if subcmd == "status":
+            self._smap_status()
+        elif subcmd == "rooms":
+            self._smap_rooms()
+        elif subcmd == "save":
+            self._smap_save()
+        elif subcmd == "load":
+            self._smap_load(rest.strip())
+        elif subcmd == "query" and rest:
+            self._smap_query(rest.strip())
+        else:
+            print("  Usage: smap status | rooms | save | load <dir> | query <text>")
+
+    def _smap_get(self):
+        """Return SemanticMapperModule instance or None."""
+        try:
+            from memory.modules.semantic_mapper_module import SemanticMapperModule
+            return self._get_module(SemanticMapperModule.__name__)
+        except ImportError:
+            return None
+
+    def _smap_status(self):
+        mod = self._smap_get()
+        if mod is None:
+            print("  SemanticMapperModule not running")
+            return
+        s = mod.get_semantic_status()
+        kg = s.get("kg", {})
+        tsg = s.get("tsg", {})
+        print(f"  Save dir : {s['save_dir']}")
+        print(f"  KG       : {kg.get('room_types', 0)} room types, "
+              f"{kg.get('unique_objects', 0)} object types, "
+              f"{kg.get('total_observations', 0)} observations")
+        print(f"  TSG      : {tsg.get('rooms', 0)} rooms, "
+              f"{tsg.get('frontiers', 0)} frontiers, "
+              f"current={tsg.get('current_room', 'unknown')}")
+        print(f"  Updates  : {s['sg_updates']} scene-graph callbacks")
+
+    def _smap_rooms(self):
+        mod = self._smap_get()
+        if mod is None:
+            print("  SemanticMapperModule not running")
+            return
+        summary = mod.get_room_summary()
+        for line in summary.splitlines():
+            print(f"  {line}")
+
+    def _smap_save(self):
+        mod = self._smap_get()
+        if mod is None:
+            print("  SemanticMapperModule not running")
+            return
+        mod._save_now()
+        print(f"  Saved to {mod._save_dir}")
+
+    def _smap_load(self, directory):
+        if not directory:
+            print("  Usage: smap load <directory>")
+            return
+        import os
+        directory = os.path.expanduser(directory)
+        mod = self._smap_get()
+        if mod is None:
+            print("  SemanticMapperModule not running")
+            return
+        ok = mod.load_from_dir(directory)
+        if ok:
+            print(f"  Loaded from {directory}")
+        else:
+            print(f"  Load failed (check path: {directory})")
+
+    def _smap_query(self, text):
+        mod = self._smap_get()
+        if mod is None:
+            print("  SemanticMapperModule not running")
+            return
+        result = mod.query_room_for_object(text)
+        rooms = result.get("rooms", [])
+        if not rooms:
+            print(f"  No data for '{text}' (source: {result.get('source', '?')})")
+            return
+        print(f"  '{text}' most likely in:")
+        for r in rooms:
+            bar = "█" * int(r["probability"] * 20)
+            print(f"    {r['room']:20s} {bar} {r['probability']:.2f}")
+
     # ── Monitoring commands ──
 
     def do_status(self, arg):

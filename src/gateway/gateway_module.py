@@ -46,6 +46,9 @@ class GatewayModule(Module, layer=6):
     Out: goal_pose, cmd_vel, stop_cmd, instruction (to other modules)
     """
 
+    # Keep in main process: binds HTTP/WS server ports.
+    _run_in_main: bool = True
+
     # Receive from modules → stream to clients
     odometry: In[Odometry]
     scene_graph: In[SceneGraph]

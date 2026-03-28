@@ -238,6 +238,7 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
         fast_path_threshold: float = 0.75,   # Fast 路径最低置信度
         max_replan_attempts: int = 3,
         tagged_location_store: Optional[TaggedLocationStore] = None,
+        save_dir: str = "",
     ) -> None:
         self._primary = create_llm_client(primary_config)
         self._fallback = (
@@ -259,8 +260,14 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
         self._belief_manager = TargetBeliefManager()
 
         # 创新4: 语义先验引擎 (拓扑感知探索)
+        import os as _os
+        import time as _time
         from .semantic_prior import SemanticPriorEngine
-        self._semantic_prior_engine = SemanticPriorEngine()
+        _kg_path = _os.path.join(save_dir, "room_object_kg.json") if save_dir else None
+        self._semantic_prior_engine = SemanticPriorEngine(kg_path=_kg_path)
+        self._kg_path = _kg_path
+        self._kg_reload_interval = 120.0  # seconds between KG reloads
+        self._last_kg_reload = _time.time()
 
         # P1: 房间-物体知识图谱 (KG-backed room prediction)
         self._room_object_kg = None
@@ -272,6 +279,22 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
 
         # AdaCoT: 动态快慢路径路由 (VLingNav 2026)
         self._adacot = AdaCoTRouter()
+
+    # ================================================================
+    #  KG hot-reload (SemanticMapperModule saves every 30s)
+    # ================================================================
+
+    def maybe_reload_kg(self) -> None:
+        """Reload learned KG priors if the file has been updated recently."""
+        import time, os
+        if not self._kg_path or not os.path.exists(self._kg_path):
+            return
+        now = time.time()
+        if now - self._last_kg_reload < self._kg_reload_interval:
+            return
+        self._last_kg_reload = now
+        if self._semantic_prior_engine.load_learned_priors(self._kg_path):
+            logger.debug("GoalResolver: KG priors hot-reloaded from %s", self._kg_path)
 
     # ================================================================
     #  Tag 记忆层 (层 0: 精确/模糊匹配用户标记地点)

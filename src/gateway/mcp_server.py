@@ -263,6 +263,10 @@ class MCPServerModule(Module, layer=6):
     control the robot via tool calls.
     """
 
+    # Keep in main process: binds an HTTP server and must receive RPCClient
+    # proxies via on_system_modules() so it can call @skill methods on workers.
+    _run_in_main: bool = True
+
     # Receive from modules (for queries)
     odometry: In[Odometry]
     scene_graph: In[SceneGraph]

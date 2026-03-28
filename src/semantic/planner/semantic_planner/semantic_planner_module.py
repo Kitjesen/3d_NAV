@@ -5,10 +5,11 @@ Internal strategies handle different algorithms.
 
 Pipeline:
   instruction → decompose → resolve goal → explore frontiers → execute action
+  NavigationModule.mission_status (STUCK/FAILED) → LERa recovery → new goal
 
 Ports:
-  In:  instruction, scene_graph, odometry, detections
-  Out: resolved_goal, frontier_goal, task_plan, goal_pose, planner_status
+  In:  instruction, scene_graph, odometry, detections, mission_status
+  Out: goal_pose, task_plan, planner_status, cancel
 
 Strategies:
   decomposer: "rules" | "llm"
@@ -25,8 +26,9 @@ Usage::
 from __future__ import annotations
 
 import logging
+import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -39,6 +41,9 @@ from core.registry import register
 
 logger = logging.getLogger(__name__)
 
+# Minimum seconds between consecutive LERa triggers (prevents storm on repeated STUCK).
+_LERA_COOLDOWN = 15.0
+
 
 @register("semantic_planner", "default", description="Unified semantic planner module")
 class SemanticPlannerModule(Module, layer=4):
@@ -46,18 +51,30 @@ class SemanticPlannerModule(Module, layer=4):
 
     Internally composes GoalResolver, FrontierScorer, TaskDecomposer,
     ActionExecutor. Each is a strategy, not a separate Module.
+
+    LERa integration
+    ----------------
+    Subscribes to NavigationModule.mission_status. On STUCK or FAILED, calls
+    ActionExecutor.lera_recover() and dispatches one of four strategies:
+      retry_different_path — republish current goal (NavigationModule replans)
+      expand_search        — ask FrontierScorer for an alternative frontier
+      requery_goal         — re-run Fast→Slow goal resolution from scratch
+      abort                — publish "lera_abort" to cancel port
     """
 
     # -- Inputs --
-    instruction: In[str]
-    scene_graph: In[SceneGraph]
-    odometry: In[Odometry]
-    detections: In[list]
+    instruction:    In[str]
+    scene_graph:    In[SceneGraph]
+    odometry:       In[Odometry]
+    detections:     In[list]
+    mission_status: In[dict]   # from NavigationModule — drives LERa recovery
 
     # -- Outputs --
-    goal_pose: Out[PoseStamped]
-    task_plan: Out[dict]
-    planner_status: Out[str]
+    goal_pose:       Out[PoseStamped]
+    task_plan:       Out[dict]
+    planner_status:  Out[str]
+    cancel:          Out[str]  # "lera_abort" → NavigationModule.cancel
+    servo_target:    Out[str]  # "find:<label>" → VisualServoModule
 
     def __init__(
         self,
@@ -66,51 +83,73 @@ class SemanticPlannerModule(Module, layer=4):
         frontier_score_threshold: float = 0.2,
         max_frontiers: int = 10,
         approach_distance: float = 0.5,
+        lera_cooldown: float = _LERA_COOLDOWN,
+        save_dir: str = "",
         **kw,
     ):
         super().__init__(**kw)
         self._decomposer_strategy = decomposer
         self._fast_threshold = fast_path_threshold
+        self._save_dir = save_dir
         self._frontier_threshold = frontier_score_threshold
         self._max_frontiers = max_frontiers
         self._approach_dist = approach_distance
+        self._lera_cooldown = lera_cooldown
 
-        # Backends (lazy init)
+        # Backends (lazy init in setup)
         self._goal_resolver = None
         self._frontier_scorer = None
         self._task_decomposer = None
         self._action_executor = None
 
-        # State
+        # Odometry / position
         self._robot_pos = np.zeros(3)
-        self._latest_sg: Optional[str] = None
-        self._current_instruction = ""
-        self._resolve_count = 0
-        self._frontier_count = 0
 
-    def setup(self):
+        # Scene graph — keep both JSON string (for GoalResolver) and
+        # the original object (for LERa label extraction).
+        self._latest_sg: Optional[str] = None
+        self._current_scene_graph: Optional[SceneGraph] = None
+
+        # Active instruction + resolved goal
+        self._current_instruction: str = ""
+        self._current_goal_pose: Optional[PoseStamped] = None
+
+        # LERa state — all guarded by _lera_lock
+        self._lera_lock = threading.Lock()
+        self._failure_count: int = 0
+        self._last_nav_state: str = ""
+        self._last_lera_time: float = 0.0
+        self._lera_running: bool = False   # prevent concurrent LERa calls
+        self._requery_count: int = 0       # cap requery_goal to avoid infinite loop
+
+        # Stats
+        self._resolve_count: int = 0
+        self._frontier_count: int = 0
+        self._lera_count: int = 0
+
+    def setup(self) -> None:
         self._init_backends()
         self.instruction.subscribe(self._on_instruction)
         self.scene_graph.subscribe(self._on_scene_graph)
         self.odometry.subscribe(self._on_odom)
         self.detections.subscribe(self._on_detections)
+        self.mission_status.subscribe(self._on_mission_status)
 
-    def _init_backends(self):
+    def _init_backends(self) -> None:
         """Lazy-load algorithm backends (relative imports within package)."""
-        # GoalResolver — needs LLMConfig for slow path (fast path works without LLM)
         try:
             from .goal_resolver import GoalResolver
             from .llm_client import LLMConfig
-            llm_cfg = LLMConfig()  # defaults; slow path uses env API keys
+            llm_cfg = LLMConfig()
             self._goal_resolver = GoalResolver(
                 primary_config=llm_cfg,
                 fast_path_threshold=self._fast_threshold,
+                save_dir=self._save_dir,
             )
             logger.info("GoalResolver initialized (threshold=%.2f)", self._fast_threshold)
         except ImportError:
             logger.warning("GoalResolver not available")
 
-        # FrontierScorer
         try:
             from .frontier_scorer import FrontierScorer
             self._frontier_scorer = FrontierScorer()
@@ -118,7 +157,6 @@ class SemanticPlannerModule(Module, layer=4):
         except ImportError:
             logger.warning("FrontierScorer not available")
 
-        # TaskDecomposer
         try:
             from .task_decomposer import TaskDecomposer
             self._task_decomposer = TaskDecomposer()
@@ -126,46 +164,208 @@ class SemanticPlannerModule(Module, layer=4):
         except ImportError:
             logger.warning("TaskDecomposer not available")
 
-        # ActionExecutor
         try:
             from .action_executor import ActionExecutor
-            self._action_executor = ActionExecutor()
-            logger.info("ActionExecutor initialized")
+            self._action_executor = ActionExecutor(
+                approach_distance=self._approach_dist,
+            )
+            logger.info("ActionExecutor (LERa) initialized")
         except ImportError:
             logger.warning("ActionExecutor not available")
 
-    # -- Input handlers ------------------------------------------------------
+    # ── Input handlers ────────────────────────────────────────────────────────
 
-    def _on_instruction(self, text: str):
+    def _on_instruction(self, text: str) -> None:
         """New instruction → decompose → resolve."""
         self._current_instruction = text
+        with self._lera_lock:
+            self._failure_count = 0
+            self._requery_count = 0
+            self._last_nav_state = ""
         self.planner_status.publish("PROCESSING")
 
-        # Step 1: Decompose
         plan = self._decompose(text)
         if plan:
             self.task_plan.publish(plan)
 
-        # Step 2: Try fast resolve against current scene graph
         if self._latest_sg:
             self._try_resolve(text, self._latest_sg)
 
-    def _on_scene_graph(self, sg: SceneGraph):
-        """Scene graph update → re-resolve if we have an active instruction."""
-        sg_json = sg.to_json() if hasattr(sg, 'to_json') else str(sg)
+    def _on_scene_graph(self, sg: SceneGraph) -> None:
+        """Scene graph update → cache + re-resolve if active instruction."""
+        sg_json = sg.to_json() if hasattr(sg, "to_json") else str(sg)
         self._latest_sg = sg_json
+        self._current_scene_graph = sg  # keep object for LERa label extraction
 
         if self._current_instruction and self._goal_resolver:
             self._try_resolve(self._current_instruction, sg_json)
 
-    def _on_odom(self, odom: Odometry):
-        self._robot_pos = np.array([odom.x, odom.y, getattr(odom, 'z', 0.0)])
+    def _on_odom(self, odom: Odometry) -> None:
+        self._robot_pos = np.array([odom.x, odom.y, getattr(odom, "z", 0.0)])
 
-    def _on_detections(self, dets: list):
-        """Detection update — could trigger frontier re-evaluation."""
-        pass  # consumed by scene_graph path
+    def _on_detections(self, dets: list) -> None:
+        """Detection update — consumed by scene_graph path."""
+        pass
 
-    # -- Decomposition -------------------------------------------------------
+    def _on_mission_status(self, status: dict) -> None:
+        """NavigationModule failure → trigger LERa recovery.
+
+        This method runs on the caller's callback thread (synchronous publish
+        chain). It must return immediately — the actual LERa call (which may
+        block up to 15 s on a network LLM) is dispatched to a daemon thread.
+        """
+        state = status.get("state", "")
+
+        # Fast path: non-terminal states only update cached nav state.
+        if state not in ("STUCK", "FAILED"):
+            with self._lera_lock:
+                self._last_nav_state = state
+            return
+
+        # All checks and mutations under lock to avoid races with _run_lera.
+        with self._lera_lock:
+            # Ignore repeated publishes of the same state.
+            if state == self._last_nav_state:
+                return
+            self._last_nav_state = state
+
+            # Cooldown — prevent storm if NavigationModule bounces quickly.
+            now = time.time()
+            if now - self._last_lera_time < self._lera_cooldown:
+                logger.debug("[LERa] cooldown active (%.1fs left)",
+                             self._lera_cooldown - (now - self._last_lera_time))
+                return
+
+            # Prevent concurrent LERa calls — only one in-flight at a time.
+            if self._lera_running:
+                logger.debug("[LERa] already running, skipping duplicate trigger")
+                return
+
+            self._last_lera_time = now
+            self._failure_count += 1
+            self._lera_count += 1
+            self._lera_running = True
+
+            # Snapshot mutable state for the background thread (avoids races).
+            labels: List[str] = (
+                [obj.label for obj in self._current_scene_graph.objects if obj.label]
+                if self._current_scene_graph else []
+            )
+            instruction = self._current_instruction
+            failure_count = self._failure_count
+            llm_client = (getattr(self._goal_resolver, "_llm", None)
+                          if self._goal_resolver else None)
+
+        logger.info("[LERa] Triggered: nav_state=%s failure#%d instruction='%s'",
+                    state, failure_count, instruction[:40])
+
+        # Publish RECOVERING synchronously before thread launch so the UI
+        # reflects the state change without waiting for the LLM call.
+        self.planner_status.publish("RECOVERING")
+
+        # Dispatch Explain+Replan to a daemon thread — never block odom chain.
+        threading.Thread(
+            target=self._run_lera,
+            args=(instruction, labels, failure_count, llm_client),
+            daemon=True,
+            name="lera-recovery",
+        ).start()
+
+    def _run_lera(
+        self,
+        instruction: str,
+        labels: List[str],
+        failure_count: int,
+        llm_client: Optional[Any],
+    ) -> None:
+        """Background thread: Explain+Replan, then dispatch recovery action.
+
+        Out.publish() is thread-safe (Lock-protected), so dispatching from
+        here is safe.
+        """
+        try:
+            if self._action_executor is not None:
+                strategy = self._action_executor.lera_recover(
+                    failed_action=instruction,
+                    current_labels=labels,
+                    original_goal=instruction,
+                    failure_count=failure_count,
+                    llm_client=llm_client,
+                    event_loop=None,
+                )
+            else:
+                # Rule-based fallback (mirrors ActionExecutor defaults).
+                if failure_count >= 3:
+                    strategy = "abort"
+                elif failure_count >= 2:
+                    strategy = "expand_search"
+                else:
+                    strategy = "retry_different_path"
+
+            logger.info("[LERa] Strategy: %s (failure#%d)", strategy, failure_count)
+            self._dispatch_recovery(strategy)
+        except Exception:
+            logger.exception("[LERa] Unexpected error in recovery thread")
+            self.planner_status.publish("FAILED")
+        finally:
+            with self._lera_lock:
+                self._lera_running = False
+
+    # ── LERa recovery dispatch ────────────────────────────────────────────────
+
+    def _dispatch_recovery(self, strategy: str) -> None:
+        """Map LERa strategy string to port actions."""
+        if strategy == "retry_different_path":
+            # Re-send the same semantic goal — NavigationModule will cancel
+            # the current path and replan from scratch.
+            if self._current_goal_pose is not None:
+                self.goal_pose.publish(self._current_goal_pose)
+                self.planner_status.publish("RETRYING")
+            else:
+                # No goal cached yet — fall through to frontier exploration.
+                self._explore_frontier(self._current_instruction)
+
+        elif strategy == "expand_search":
+            # Ask FrontierScorer for an unexplored vantage point.
+            self._explore_frontier(self._current_instruction)
+
+        elif strategy == "requery_goal":
+            with self._lera_lock:
+                self._requery_count += 1
+                requery_count = self._requery_count
+            if requery_count > 2:
+                # LLM kept suggesting requery — force abort to avoid infinite loop.
+                logger.warning("[LERa] requery_goal capped (%d), forcing abort",
+                               requery_count)
+                self.cancel.publish("lera_abort")
+                self.planner_status.publish("ABORTED")
+                with self._lera_lock:
+                    self._failure_count = 0
+                    self._requery_count = 0
+                self._current_instruction = ""
+                self._current_goal_pose = None
+            else:
+                # Re-run full Fast→Slow resolution with the current scene graph.
+                with self._lera_lock:
+                    self._failure_count = 0
+                if self._latest_sg and self._current_instruction:
+                    self._try_resolve(self._current_instruction, self._latest_sg)
+                else:
+                    self.planner_status.publish("FAILED")
+
+        elif strategy == "abort":
+            self.cancel.publish("lera_abort")
+            self.planner_status.publish("ABORTED")
+            self._failure_count = 0
+            self._current_instruction = ""
+            self._current_goal_pose = None
+
+        else:
+            logger.warning("[LERa] Unknown strategy '%s', defaulting to abort", strategy)
+            self.cancel.publish("lera_abort")
+            self.planner_status.publish("ABORTED")
+
+    # ── Decomposition ─────────────────────────────────────────────────────────
 
     def _decompose(self, instruction: str) -> Optional[dict]:
         if self._task_decomposer is None:
@@ -173,63 +373,83 @@ class SemanticPlannerModule(Module, layer=4):
         try:
             if self._decomposer_strategy == "rules":
                 return self._task_decomposer.decompose_with_rules(instruction)
-            else:
-                return {"subtasks": [instruction]}
+            return {"subtasks": [instruction]}
         except Exception:
             logger.exception("Task decomposition failed")
             return {"subtasks": [instruction]}
 
-    # -- Goal Resolution -----------------------------------------------------
+    # ── Goal Resolution ───────────────────────────────────────────────────────
 
-    def _try_resolve(self, instruction: str, sg_json: str):
+    def _try_resolve(self, instruction: str, sg_json: str) -> None:
         if self._goal_resolver is None:
             return
         try:
+            self._goal_resolver.maybe_reload_kg()
             result = self._goal_resolver.fast_resolve(instruction, sg_json)
-            if result and hasattr(result, 'confidence') and result.confidence >= self._fast_threshold:
+            if (result and hasattr(result, "confidence")
+                    and result.confidence >= self._fast_threshold):
                 self._resolve_count += 1
-                pos = result.position if hasattr(result, 'position') else [0, 0, 0]
+                pos = result.position if hasattr(result, "position") else [0, 0, 0]
                 if isinstance(pos, (list, tuple)) and len(pos) >= 2:
                     pose = PoseStamped(
-                        pose=Pose(position=Vector3(float(pos[0]), float(pos[1]),
-                                                    float(pos[2]) if len(pos) > 2 else 0.0),
-                                  orientation=Quaternion(0, 0, 0, 1)),
-                        frame_id="map", ts=time.time(),
+                        pose=Pose(
+                            position=Vector3(
+                                float(pos[0]), float(pos[1]),
+                                float(pos[2]) if len(pos) > 2 else 0.0,
+                            ),
+                            orientation=Quaternion(0, 0, 0, 1),
+                        ),
+                        frame_id="map",
+                        ts=time.time(),
                     )
+                    self._current_goal_pose = pose  # track for LERa retry
                     self.goal_pose.publish(pose)
                     self.planner_status.publish("RESOLVED")
                     return
 
-            # Fast path failed → try frontier exploration
+            # Fast path miss → frontier exploration → visual servo fallback.
             self._explore_frontier(instruction)
         except Exception:
             logger.exception("Goal resolution failed")
-            self.planner_status.publish("FAILED")
+            self._fallback_visual_servo(instruction)
 
-    # -- Frontier Exploration ------------------------------------------------
+    # ── Frontier Exploration ──────────────────────────────────────────────────
 
-    def _explore_frontier(self, instruction: str):
+    def _explore_frontier(self, instruction: str) -> None:
         if self._frontier_scorer is None:
-            self.planner_status.publish("NO_FRONTIER")
+            self._fallback_visual_servo(instruction)
             return
         try:
             best = self._frontier_scorer.get_best_frontier()
-            if best and hasattr(best, 'position'):
+            if best and hasattr(best, "position"):
                 pos = best.position
                 pose = PoseStamped(
-                    pose=Pose(position=Vector3(float(pos[0]), float(pos[1]), 0.0),
-                              orientation=Quaternion(0, 0, 0, 1)),
-                    frame_id="map", ts=time.time(),
+                    pose=Pose(
+                        position=Vector3(float(pos[0]), float(pos[1]), 0.0),
+                        orientation=Quaternion(0, 0, 0, 1),
+                    ),
+                    frame_id="map",
+                    ts=time.time(),
                 )
+                self._current_goal_pose = pose  # track for LERa retry
                 self.goal_pose.publish(pose)
                 self._frontier_count += 1
                 self.planner_status.publish("EXPLORING")
             else:
-                self.planner_status.publish("NO_FRONTIER")
+                self._fallback_visual_servo(instruction)
         except Exception:
             logger.exception("Frontier exploration failed")
+            self._fallback_visual_servo(instruction)
 
-    # -- Health --------------------------------------------------------------
+    # ── Visual Servo Fallback ────────────────────────────────────────────────
+
+    def _fallback_visual_servo(self, instruction: str) -> None:
+        """Last resort: trigger VisualServoModule to find the target visually."""
+        self.servo_target.publish(f"find:{instruction}")
+        self.planner_status.publish("VISUAL_SERVO")
+        logger.info("Semantic planner: fallback to visual servo for '%s'", instruction)
+
+    # ── Health ────────────────────────────────────────────────────────────────
 
     def health(self) -> Dict[str, Any]:
         info = super().port_summary()
@@ -240,5 +460,9 @@ class SemanticPlannerModule(Module, layer=4):
             "executor": self._action_executor is not None,
             "resolves": self._resolve_count,
             "frontier_explores": self._frontier_count,
+            "lera_triggers": self._lera_count,
+            "failure_count": self._failure_count,
+            "last_nav_state": self._last_nav_state,
+            "current_instruction": self._current_instruction[:40] if self._current_instruction else "",
         }
         return info

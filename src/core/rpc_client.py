@@ -10,7 +10,7 @@ Usage:
     proxy.start()  # lifecycle command
 """
 import logging
-from typing import Any, Callable, Optional, Set
+from typing import Any, Callable, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,16 @@ class RPCClient:
     def health(self) -> dict:
         """Return health dict from the remote Worker."""
         return self._mgr.health(self._worker_id, self._module_id)
+
+    def get_skill_infos(self) -> "List[SkillInfo]":
+        """Fetch @skill metadata from the remote module via IPC GET_SKILLS.
+
+        Returns a list of SkillInfo objects describing each @skill method.
+        Used by MCPServerModule.on_system_modules() for dynamic tool discovery.
+        """
+        from core.module import SkillInfo
+        raw = self._mgr.get_skills(self._worker_id, self._module_id)
+        return [SkillInfo(**d) for d in raw]
 
     # -- Properties -----------------------------------------------------------
 

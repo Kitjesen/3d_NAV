@@ -100,6 +100,7 @@ class Blueprint:
         self._entries: List[_ModuleEntry] = []
         self._wires: List[_WireSpec] = []
         self._auto_wired: bool = False
+        self._global_cfg: Dict[str, Any] = {}
 
     # -- 注册 ---------------------------------------------------------------
 
@@ -160,6 +161,23 @@ class Blueprint:
         self._wires.append(_WireSpec(out_module, out_port, in_module, in_port, transport))
         return self
 
+    def global_config(self, n_workers: int = 0, **kwargs: Any) -> "Blueprint":
+        """Set global system configuration — dimos API compatibility.
+
+        Allows the dimos-style chained build::
+
+            autoconnect(...).global_config(n_workers=4).build()
+
+        Args:
+            n_workers: Worker processes. 0 = single-process (default).
+            **kwargs: Reserved for future global settings.
+
+        Returns:
+            self (chained)
+        """
+        self._global_cfg = {"n_workers": n_workers, **kwargs}
+        return self
+
     def auto_wire(self) -> Blueprint:
         """自动连接: 按 (端口名, 消息类型) 匹配 Out→In。
 
@@ -194,18 +212,30 @@ class Blueprint:
 
     # -- 构建 ---------------------------------------------------------------
 
-    def build(self, transport: Optional[Transport] = None) -> SystemHandle:
-        """实例化所有模块，执行连接，返回 SystemHandle。
+    def build(
+        self,
+        transport: Optional[Transport] = None,
+        n_workers: int = 0,
+    ) -> "SystemHandle":
+        """实例化所有模块，执行连接，返回运行时句柄。
 
         Args:
             transport: 可选外部传输层。None 时使用 LocalTransport。
+            n_workers: Worker 进程数。0 = 单进程模式（默认，向后兼容）。
+                       >0 = Worker 模式：模块部署到子进程，on_system_modules
+                       收到 RPCClient 代理而非裸 Module 实例。
 
         Returns:
-            SystemHandle 运行时句柄
+            SystemHandle (n_workers=0) 或 WorkerSystemHandle (n_workers>0)
 
         Raises:
             ValueError: 层级依赖违规 (高层 Out → 低层 In 的逆向数据流)
         """
+        # global_config() overrides the parameter when set
+        n_workers = self._global_cfg.get("n_workers", n_workers)
+
+        if n_workers > 0:
+            return self._build_worker_mode(n_workers)
         if transport is None:
             transport = LocalTransport()
 
@@ -487,6 +517,126 @@ class Blueprint:
 
         return result
 
+    # -- Worker 模式构建 -------------------------------------------------------
+
+    def _build_worker_mode(self, n_workers: int) -> "WorkerSystemHandle":
+        """Deploy modules to Worker subprocesses and return a WorkerSystemHandle.
+
+        Strategy (hybrid):
+          - Modules with _run_in_main=True stay in the main process so they can
+            receive RPCClient proxies via on_system_modules() and call them directly.
+          - All other modules are deployed to Worker subprocesses.
+          - Worker-to-worker wires use SHM via BIND_PORT IPC commands.
+          - Cross-boundary wires use SHM on the worker side + TransportAdapter on the
+            local side so data flows across the process boundary transparently.
+        """
+        from core.coordinator import ModuleCoordinator
+        from core.transport.shm import SHMTransport
+        from core.transport.adapter import TransportAdapter
+
+        # Separate entries by placement
+        worker_entries = [e for e in self._entries if not e.module_cls._run_in_main]
+        local_entries  = [e for e in self._entries if e.module_cls._run_in_main]
+
+        # 1. Deploy worker modules round-robin across workers
+        coord = ModuleCoordinator(n_workers=n_workers)
+        coord.start()
+        proxies: Dict[str, Any] = {}
+        for entry in worker_entries:
+            proxy = coord.deploy(entry.module_cls, entry.name, kwargs=entry.config)
+            proxies[entry.name] = proxy
+
+        # 2. Instantiate local (main-process) modules
+        local_instances: Dict[str, Any] = {}
+        for entry in local_entries:
+            if entry.instance is not None:
+                inst = entry.instance
+            else:
+                inst = entry.module_cls(**entry.config)
+            local_instances[entry.name] = inst
+
+        # 3. Wire explicit connections
+        local_out_ports: Dict[str, Dict[str, Any]] = {
+            n: m.ports_out for n, m in local_instances.items()
+        }
+        local_in_ports: Dict[str, Dict[str, Any]] = {
+            n: m.ports_in for n, m in local_instances.items()
+        }
+        wired_in: Set[Tuple[str, str]] = set()
+        connections: List[Tuple[str, str, str, str]] = []
+
+        for spec in self._wires:
+            out_mod, out_port = spec.out_module, spec.out_port
+            in_mod,  in_port  = spec.in_module,  spec.in_port
+            topic = f"/{out_mod}/{out_port}"
+            out_is_worker = out_mod in proxies
+            in_is_worker  = in_mod  in proxies
+
+            if out_is_worker and in_is_worker:
+                # Both worker: SHM bind on each side
+                coord._mgr.bind_port(
+                    coord._assignments[out_mod], out_mod, out_port, "out", topic
+                )
+                coord._mgr.bind_port(
+                    coord._assignments[in_mod], in_mod, in_port, "in", topic
+                )
+                connections.append((out_mod, out_port, in_mod, in_port))
+            elif not out_is_worker and not in_is_worker:
+                # Both local: direct callback wire
+                self._do_wire(
+                    spec, local_instances,
+                    local_out_ports, local_in_ports,
+                    wired_in, connections,
+                )
+            elif out_is_worker:
+                # Worker Out → local In: worker publishes SHM, local subscribes
+                coord._mgr.bind_port(
+                    coord._assignments[out_mod], out_mod, out_port, "out", topic
+                )
+                in_p = local_in_ports.get(in_mod, {}).get(in_port)
+                if in_p is not None and (in_mod, in_port) not in wired_in:
+                    t = TransportAdapter(SHMTransport())
+                    t.subscribe(topic, in_p._deliver)
+                    wired_in.add((in_mod, in_port))
+                connections.append((out_mod, out_port, in_mod, in_port))
+            else:
+                # Local Out → worker In: local binds SHM Out, worker subscribes
+                out_p = local_out_ports.get(out_mod, {}).get(out_port)
+                if out_p is not None:
+                    t = TransportAdapter(SHMTransport())
+                    out_p._bind_transport(t, topic)
+                coord._mgr.bind_port(
+                    coord._assignments[in_mod], in_mod, in_port, "in", topic
+                )
+                connections.append((out_mod, out_port, in_mod, in_port))
+
+        # 4. Auto-wire local-to-local ports by name + msg_type
+        if self._auto_wired:
+            self._do_auto_wire(
+                local_instances, local_out_ports, local_in_ports, wired_in, connections
+            )
+
+        # 5. Lifecycle: workers first (already deployed), then local modules
+        coord.setup_all()
+        coord.start_all()
+        for inst in local_instances.values():
+            inst.setup()
+        for inst in local_instances.values():
+            inst.start()
+
+        # 6. on_system_modules: local modules get full dict {name: RPCClient|Module}
+        #    MCPServerModule.on_system_modules() calls proxy.get_skill_infos() which
+        #    routes via IPC — no changes needed in MCPServerModule itself.
+        all_modules: Dict[str, Any] = {**proxies, **local_instances}
+        for inst in local_instances.values():
+            inst.on_system_modules(all_modules)
+
+        logger.info(
+            "WorkerMode: %d worker modules (%d workers), %d local modules, %d connections",
+            len(proxies), n_workers, len(local_instances), len(connections),
+        )
+        return WorkerSystemHandle(coord, proxies, local_instances, connections)
+
 
 # ---------------------------------------------------------------------------
 # SystemHandle — 运行时句柄
@@ -612,6 +762,95 @@ class SystemHandle:
         return (
             f"SystemHandle({status}, modules={len(self._modules)}, "
             f"connections={len(self._connections)})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# WorkerSystemHandle — Worker 模式运行时句柄
+# ---------------------------------------------------------------------------
+
+class WorkerSystemHandle:
+    """Runtime handle for a system deployed across Worker subprocesses.
+
+    Mirrors the SystemHandle interface so callers can use both interchangeably.
+    Worker modules are accessed as RPCClient proxies; local modules as bare instances.
+    """
+
+    def __init__(
+        self,
+        coord: Any,
+        proxies: Dict[str, Any],
+        local_instances: Dict[str, Any],
+        connections: List[Tuple[str, str, str, str]],
+    ) -> None:
+        self._coord = coord
+        self._proxies = proxies
+        self._local = local_instances
+        self._connections = connections
+        self._started = True  # lifecycle already handled by _build_worker_mode
+
+    def start(self) -> None:
+        """No-op — lifecycle already completed during build()."""
+        pass
+
+    def stop(self) -> None:
+        """Stop local modules, then shut down all worker processes."""
+        for name in reversed(list(self._local)):
+            try:
+                self._local[name].stop()
+            except Exception:
+                logger.exception("Error stopping local module %s", name)
+        self._coord.shutdown()
+        self._local.clear()
+        self._proxies.clear()
+        self._connections.clear()
+        self._started = False
+
+    def get_module(self, name: str) -> Any:
+        """Return the RPCClient proxy or local instance for a module."""
+        if name in self._proxies:
+            return self._proxies[name]
+        if name in self._local:
+            return self._local[name]
+        raise KeyError(f"Unknown module: '{name}'")
+
+    @property
+    def modules(self) -> Dict[str, Any]:
+        """All modules: {name: RPCClient|Module}."""
+        return {**self._proxies, **self._local}
+
+    @property
+    def connections(self) -> List[Tuple[str, str, str, str]]:
+        return list(self._connections)
+
+    @property
+    def started(self) -> bool:
+        return self._started
+
+    def health(self) -> Dict[str, Any]:
+        """Return health dict for all modules (worker and local)."""
+        result: Dict[str, Any] = {}
+        for name, proxy in self._proxies.items():
+            try:
+                result[name] = proxy.health()
+            except Exception as e:
+                result[name] = {"error": str(e)}
+        for name, inst in self._local.items():
+            result[name] = inst.port_summary()
+        return {
+            "started": self._started,
+            "module_count": len(self._proxies) + len(self._local),
+            "worker_modules": list(self._proxies.keys()),
+            "local_modules": list(self._local.keys()),
+            "connection_count": len(self._connections),
+            "modules": result,
+        }
+
+    def __repr__(self) -> str:
+        status = "running" if self._started else "stopped"
+        return (
+            f"WorkerSystemHandle({status}, workers={list(self._proxies.keys())}, "
+            f"local={list(self._local.keys())})"
         )
 
 

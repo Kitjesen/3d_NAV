@@ -20,8 +20,9 @@ Commands:
 import logging
 import multiprocessing
 import os
+import sys
 import traceback
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -34,20 +35,32 @@ class Worker(multiprocessing.Process):
     """
 
     def __init__(self, worker_id: str, cmd_queue: multiprocessing.Queue,
-                 resp_queue: multiprocessing.Queue):
+                 resp_queue: multiprocessing.Queue,
+                 extra_sys_path: "List[str] | None" = None):
         super().__init__(daemon=True, name=f"worker-{worker_id}")
         self.worker_id = worker_id
         self._cmd_q = cmd_queue
         self._resp_q = resp_queue
         self._modules: Dict[str, Any] = {}  # module_id → instance
+        # Capture parent sys.path so the subprocess can import the same modules.
+        # On Windows (spawn start method) the child process does not inherit the
+        # parent's sys.path, causing pickle failures for classes defined in
+        # project source trees (e.g. test_core._WorkerTestModule).
+        self._extra_sys_path: List[str] = list(extra_sys_path or sys.path)
 
     def run(self) -> None:
         """Worker event loop — process commands until SHUTDOWN."""
+        # Restore parent's sys.path before any imports or pickle operations.
+        for p in reversed(self._extra_sys_path):
+            if p not in sys.path:
+                sys.path.insert(0, p)
         logger.info("Worker %s started (pid=%d)", self.worker_id, os.getpid())
         while True:
             try:
                 msg = self._cmd_q.get(timeout=1.0)
-            except Exception:
+            except Exception as _get_exc:
+                if not isinstance(_get_exc, __import__('queue').Empty):
+                    self._resp_q.put(("ERROR", f"get failed: {_get_exc!r}"))
                 continue
 
             if msg is None:
@@ -91,6 +104,37 @@ class Worker(multiprocessing.Process):
 
                 elif cmd == "LIST":
                     self._resp_q.put(("RESULT", list(self._modules.keys())))
+
+                elif cmd == "GET_SKILLS":
+                    _, mod_id = msg
+                    mod = self._modules[mod_id]
+                    infos = mod.get_skill_infos()
+                    # Serialize to plain dicts — Queue cannot carry dataclass instances
+                    result = [
+                        {
+                            "func_name": i.func_name,
+                            "class_name": i.class_name,
+                            "args_schema": i.args_schema,
+                        }
+                        for i in infos
+                    ]
+                    self._resp_q.put(("RESULT", result))
+
+                elif cmd == "BIND_PORT":
+                    _, mod_id, port_name, direction, topic = msg
+                    mod = self._modules[mod_id]
+                    from core.transport.shm import SHMTransport
+                    from core.transport.adapter import TransportAdapter
+                    t = TransportAdapter(SHMTransport())
+                    if direction == "out":
+                        port = mod.ports_out.get(port_name)
+                        if port is not None:
+                            port._bind_transport(t, topic)
+                    elif direction == "in":
+                        port = mod.ports_in.get(port_name)
+                        if port is not None:
+                            t.subscribe(topic, port._deliver)
+                    self._resp_q.put(("OK", port_name))
 
                 elif cmd == "SHUTDOWN":
                     for mod_id, mod in list(self._modules.items()):

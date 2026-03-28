@@ -37,6 +37,7 @@ class ModuleCoordinator:
         self._proxies: Dict[str, RPCClient] = {}
         self._assignments: Dict[str, int] = {}  # module_id → worker_id
         self._next_worker: int = 0
+        self._monitor: Optional[Any] = None
 
     def start(self) -> None:
         """Start all worker processes."""
@@ -113,6 +114,42 @@ class ModuleCoordinator:
     def get_proxy(self, module_id: str) -> Optional[RPCClient]:
         """Return the RPCClient for a deployed module, or None."""
         return self._proxies.get(module_id)
+
+    def start_resource_monitor(self, poll_interval: float = 5.0) -> Any:
+        """Start tracking CPU/memory for all worker processes.
+
+        Registers each live worker PID with a ResourceMonitor and starts
+        the background polling thread.
+
+        Args:
+            poll_interval: Seconds between polls (default 5.0).
+
+        Returns:
+            ResourceMonitor instance. Access stats via monitor.stats() or
+            monitor.summary().
+
+        Example::
+
+            coord = ModuleCoordinator(n_workers=4)
+            coord.start()
+            # ... deploy modules ...
+            monitor = coord.start_resource_monitor(poll_interval=3.0)
+            print(monitor.summary())
+        """
+        from core.resource_monitor.monitor import ResourceMonitor
+        monitor = ResourceMonitor(poll_interval=poll_interval)
+        for wid in range(self._mgr.n_workers):
+            pid = self._mgr.get_pid(wid)
+            if pid is not None:
+                monitor.register(f"worker-{wid}", pid)
+        monitor.start()
+        self._monitor = monitor
+        return monitor
+
+    @property
+    def resource_monitor(self) -> Optional[Any]:
+        """The active ResourceMonitor, or None if not started."""
+        return self._monitor
 
     @property
     def proxies(self) -> Dict[str, RPCClient]:
