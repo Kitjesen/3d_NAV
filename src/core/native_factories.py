@@ -23,7 +23,7 @@ from .config import RobotConfig, get_config
 from .native_module import NativeModule, NativeModuleConfig
 
 # Default install prefix — overridable via RobotConfig.raw["nav_install"]
-_DEFAULT_PREFIX = "/opt/lingtu/nav/install"
+_DEFAULT_PREFIX = "/opt/nova/lingtu/v1.8.0/install"
 
 _DDS_ENV = {
     "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
