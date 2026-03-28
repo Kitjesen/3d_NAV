@@ -128,15 +128,32 @@ def full_stack_blueprint(
            dog_port=config.get("dog_port", cfg.driver.dog_port))
     driver_name = DriverCls.__name__
 
-    # ── Layer 1b: SLAM bridge (ROS2 → Python map_cloud + slam_odom) ───────
-    # Bridges /nav/map_cloud from external SLAM (C++ ROS2 process) into
-    # the Python pipeline.  Graceful no-op when rclpy unavailable.
+    # ── Layer 1b: SLAM (managed or bridged) ──────────────────────────────
+    # slam_profile="fastlio2"|"pointlio" → SLAMModule 启动并管理 C++ SLAM 进程
+    # slam_profile="bridge"             → SlamBridgeModule 桥接已在跑的 ROS2 SLAM
+    # slam_profile="none"               → 不加 SLAM (stub/dev 模式)
 
-    try:
-        from slam.slam_bridge_module import SlamBridgeModule
-        bp.add(SlamBridgeModule)
-    except ImportError as e:
-        logger.warning("SlamBridgeModule not available, skipping: %s", e)
+    if slam_profile and slam_profile != "none":
+        if slam_profile == "bridge":
+            try:
+                from slam.slam_bridge_module import SlamBridgeModule
+                bp.add(SlamBridgeModule)
+                logger.info("SLAM: bridge mode (subscribing to external ROS2 SLAM)")
+            except ImportError as e:
+                logger.warning("SlamBridgeModule not available: %s", e)
+        else:
+            try:
+                from slam.slam_module import SLAMModule
+                bp.add(SLAMModule, backend=slam_profile)
+                logger.info("SLAM: managed mode (backend=%s)", slam_profile)
+            except ImportError as e:
+                # Fallback to bridge if SLAMModule unavailable
+                logger.warning("SLAMModule not available (%s), falling back to bridge", e)
+                try:
+                    from slam.slam_bridge_module import SlamBridgeModule
+                    bp.add(SlamBridgeModule)
+                except ImportError:
+                    logger.warning("SlamBridgeModule also not available, no SLAM")
 
     # ── Layer 2: C++ autonomy stack (NativeModule, DDS) ──────────────────
 

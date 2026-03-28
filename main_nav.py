@@ -80,21 +80,21 @@ def _dim(t: str) -> str:    return _c("2", t)
 PROFILES = {
     "map": dict(
         _desc="Mapping mode — build map with SLAM, then save",
-        robot="sim_ros2", detector="yoloe", encoder="mobileclip",
+        robot="sim_ros2", slam_profile="bridge", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
         enable_native=False, enable_semantic=False, enable_gateway=False,
         gateway_port=5050,
     ),
     "stub": dict(
         _desc="No hardware, framework testing",
-        robot="stub", detector="yoloe", encoder="mobileclip",
+        robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
         enable_native=False, enable_semantic=False, enable_gateway=True,
         gateway_port=5050,
     ),
     "sim": dict(
         _desc="MuJoCo simulation (full algorithm stack)",
-        robot="sim_ros2", detector="yoloe", encoder="mobileclip",
+        robot="sim_ros2", slam_profile="bridge", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
         enable_native=False, enable_semantic=True, enable_gateway=True,
@@ -102,14 +102,14 @@ PROFILES = {
     ),
     "dev": dict(
         _desc="Semantic pipeline, no C++ nodes",
-        robot="stub", detector="yoloe", encoder="mobileclip",
+        robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
         enable_native=False, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
     ),
     "s100p": dict(
         _desc="Full S100P robot (BPU + Kimi)",
-        robot="sim_ros2", detector="bpu", encoder="mobileclip",
+        robot="sim_ros2", slam_profile="bridge", detector="bpu", encoder="mobileclip",
         llm="kimi", planner="astar",
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
         enable_native=False, enable_semantic=True, enable_gateway=True,
@@ -117,7 +117,7 @@ PROFILES = {
     ),
     "explore": dict(
         _desc="Exploration, no pre-built map needed",
-        robot="thunder", detector="bpu", encoder="mobileclip",
+        robot="thunder", slam_profile="fastlio2", detector="bpu", encoder="mobileclip",
         llm="kimi", planner="astar",
         enable_native=True, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
