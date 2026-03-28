@@ -217,19 +217,38 @@ def full_stack_blueprint(
         except ImportError:
             logger.warning("Perception modules not available, skipping")
 
-    # ── Layer 3b: Semantic mapper (KG + topological graph) ──────────────
-    # Subscribes to scene_graph + odometry → drives RoomObjectKG + TopologySemGraph.
-    # Publishes topo_summary (str) → SemanticPlannerModule for exploration context.
+    # ── Layer 3b: Memory + reconstruction ────────────────────────────────
 
     semantic_save_dir = config.get("semantic_save_dir", _DEFAULT_SEMANTIC_DIR)
 
     if enable_semantic:
+        # SemanticMapperModule: SceneGraph → RoomObjectKG + TopologySemGraph
         try:
             from memory.modules.semantic_mapper_module import SemanticMapperModule
             bp.add(SemanticMapperModule, save_dir=semantic_save_dir)
-            logger.info("SemanticMapperModule added (save_dir=%s)", semantic_save_dir)
         except ImportError as e:
-            logger.warning("SemanticMapperModule not available, skipping: %s", e)
+            logger.warning("SemanticMapperModule not available: %s", e)
+
+        # EpisodicMemoryModule: navigation events → episodic store → LERa context
+        try:
+            from memory.modules.episodic_module import EpisodicMemoryModule
+            bp.add(EpisodicMemoryModule)
+        except ImportError as e:
+            logger.warning("EpisodicMemoryModule not available: %s", e)
+
+        # TaggedLocationsModule: user-tagged locations with @skill for MCP
+        try:
+            from memory.modules.tagged_locations_module import TaggedLocationsModule
+            bp.add(TaggedLocationsModule)
+        except ImportError as e:
+            logger.warning("TaggedLocationsModule not available: %s", e)
+
+        # ReconstructionModule: RGB-D → 3D semantic point cloud → PLY export
+        try:
+            from semantic.reconstruction.reconstruction_module import ReconstructionModule
+            bp.add(ReconstructionModule)
+        except ImportError as e:
+            logger.warning("ReconstructionModule not available: %s", e)
 
     # ── Layer 4: Semantic planning (unified module + LLM) ────────────────
 
@@ -265,6 +284,14 @@ def full_stack_blueprint(
 
     from nav.safety_ring_module import SafetyRingModule
     bp.add(SafetyRingModule)
+
+    # ── Layer 6: Geofence (safety boundary enforcement) ────────────────
+
+    try:
+        from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
+        bp.add(GeofenceManagerModule)
+    except ImportError:
+        pass  # optional
 
     # ── Layer 6: Gateway (HTTP/WS/SSE + MCP server) ──────────────────────
 
