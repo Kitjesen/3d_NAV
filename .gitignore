@@ -129,5 +129,4 @@ research/semantic_map_refs/
 generate_paper_figures*.py
 src/global_planning/PCT_planner/planner/lib/3rdparty/
 .claude/worktrees/
-mujoco_menagerie/
 mobileclip_blt.ts
