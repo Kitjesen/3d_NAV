@@ -278,23 +278,35 @@ class AgentLoop:
     @staticmethod
     def _parse_text_tool_call(text: str) -> dict:
         """Extract tool call from LLM text response."""
-        import re
-        # Try to find JSON in response
-        match = re.search(r'\{[^{}]*"tool"[^{}]*\}', text)
-        if match:
-            try:
-                data = json.loads(match.group())
-                tool_name = data.get("tool", "")
-                args = data.get("args", {})
-                if tool_name:
-                    return {
-                        "tool_calls": [{
-                            "function": {"name": tool_name, "arguments": json.dumps(args)},
-                            "id": f"call_{time.time_ns()}",
-                        }],
-                    }
-            except json.JSONDecodeError:
-                pass
+        # Try to find JSON with "tool" key — scan for balanced braces
+        start = text.find('{"tool"')
+        if start < 0:
+            start = text.find('"tool"')
+            if start > 0:
+                start = text.rfind('{', 0, start)
+        if start >= 0:
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == '{':
+                    depth += 1
+                elif text[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            data = json.loads(text[start:i + 1])
+                            tool_name = data.get("tool", "")
+                            args = data.get("args", {})
+                            if tool_name:
+                                return {
+                                    "tool_calls": [{
+                                        "function": {"name": tool_name,
+                                                     "arguments": json.dumps(args)},
+                                        "id": f"call_{time.time_ns()}",
+                                    }],
+                                }
+                        except json.JSONDecodeError:
+                            pass
+                        break
         return {"content": text}
 
     async def _execute_tool(self, tool_call: dict, state: AgentState) -> str:
