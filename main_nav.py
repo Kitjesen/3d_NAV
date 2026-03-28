@@ -107,8 +107,8 @@ PROFILES = {
         enable_native=False, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
     ),
-    "s100p": dict(
-        _desc="Full S100P robot (BPU + Kimi)",
+    "nav": dict(
+        _desc="Navigation with pre-built map (localizer + semantic + gateway)",
         robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip",
         llm="kimi", planner="astar",
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
