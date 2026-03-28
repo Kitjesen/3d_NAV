@@ -116,4 +116,12 @@ def full_stack_blueprint(
         except Exception:
             pass
 
+    # Teleop — joystick cmd_vel + pause autonomy
+    if enable_gateway:
+        try:
+            bp.wire("TeleopModule", "cmd_vel", _drv, "cmd_vel")
+            bp.wire("TeleopModule", "nav_stop", "NavigationModule", "stop_signal")
+        except Exception:
+            pass
+
     return bp

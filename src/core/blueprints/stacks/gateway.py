@@ -1,4 +1,4 @@
-"""Gateway stack: HTTP/WS/SSE + MCP server."""
+"""Gateway stack: HTTP/WS/SSE + MCP server + Teleop."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from core.blueprint import Blueprint
 logger = logging.getLogger(__name__)
 
 
-def gateway(port: int = 5050, mcp_port: int = 8090) -> Blueprint:
-    """External interfaces: REST API + WebSocket + MCP tools."""
+def gateway(port: int = 5050, mcp_port: int = 8090, teleop_port: int = 5060) -> Blueprint:
+    """External interfaces: REST API + WebSocket + MCP tools + Teleop."""
     bp = Blueprint()
 
     try:
@@ -24,5 +24,11 @@ def gateway(port: int = 5050, mcp_port: int = 8090) -> Blueprint:
         bp.add(MCPServerModule, port=mcp_port)
     except ImportError:
         logger.warning("MCPServerModule not available")
+
+    try:
+        from drivers.teleop_module import TeleopModule
+        bp.add(TeleopModule, port=teleop_port)
+    except ImportError:
+        pass
 
     return bp

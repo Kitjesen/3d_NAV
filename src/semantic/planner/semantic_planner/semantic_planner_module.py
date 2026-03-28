@@ -63,11 +63,12 @@ class SemanticPlannerModule(Module, layer=4):
     """
 
     # -- Inputs --
-    instruction:    In[str]
-    scene_graph:    In[SceneGraph]
-    odometry:       In[Odometry]
-    detections:     In[list]
-    mission_status: In[dict]   # from NavigationModule — drives LERa recovery
+    instruction:       In[str]       # single-shot resolve (Fast→Frontier→VisualServo)
+    agent_instruction: In[str]       # multi-turn agent loop (observe→think→act cycle)
+    scene_graph:       In[SceneGraph]
+    odometry:          In[Odometry]
+    detections:        In[list]
+    mission_status:    In[dict]      # from NavigationModule — drives LERa recovery
 
     # -- Outputs --
     goal_pose:       Out[PoseStamped]
@@ -130,6 +131,7 @@ class SemanticPlannerModule(Module, layer=4):
     def setup(self) -> None:
         self._init_backends()
         self.instruction.subscribe(self._on_instruction)
+        self.agent_instruction.subscribe(self._on_agent_instruction)
         self.scene_graph.subscribe(self._on_scene_graph)
         self.odometry.subscribe(self._on_odom)
         self.detections.subscribe(self._on_detections)
@@ -440,6 +442,115 @@ class SemanticPlannerModule(Module, layer=4):
         except Exception:
             logger.exception("Frontier exploration failed")
             self._fallback_visual_servo(instruction)
+
+    # ── Multi-turn Agent Loop ─────────────────────────────────────────────
+
+    def _on_agent_instruction(self, instruction: str) -> None:
+        """Handle multi-turn agent instruction (observe→think→act cycle)."""
+        if not instruction.strip():
+            return
+        self.planner_status.publish("AGENT_RUNNING")
+        import threading
+        threading.Thread(
+            target=self._run_agent_loop_sync,
+            args=(instruction,),
+            name="agent_loop",
+            daemon=True,
+        ).start()
+
+    def _run_agent_loop_sync(self, instruction: str) -> None:
+        """Run agent loop in a background thread (wraps async)."""
+        import asyncio
+        try:
+            loop = asyncio.new_event_loop()
+            state = loop.run_until_complete(self._run_agent_loop(instruction))
+            if state.completed:
+                self.planner_status.publish("AGENT_DONE")
+                logger.info("Agent loop done: %s", state.summary)
+            else:
+                self.planner_status.publish("AGENT_FAILED")
+        except Exception:
+            logger.exception("Agent loop failed")
+            self.planner_status.publish("AGENT_FAILED")
+
+    async def _run_agent_loop(self, instruction: str):
+        """Build AgentLoop with tool bindings and run."""
+        from .agent_loop import AgentLoop
+
+        llm = self._goal_resolver._primary if self._goal_resolver else None
+        if llm is None:
+            self.planner_status.publish("AGENT_FAILED")
+            return
+
+        # Tool handlers bound to this module's capabilities
+        handlers = {
+            "navigate_to": self._tool_navigate_to,
+            "navigate_to_object": self._tool_navigate_to_object,
+            "detect_object": self._tool_detect_object,
+            "query_memory": self._tool_query_memory,
+            "tag_location": self._tool_tag_location,
+            "say": self._tool_say,
+        }
+
+        agent = AgentLoop(
+            llm_client=llm,
+            tool_handlers=handlers,
+            context_fn=self._agent_context,
+            max_steps=10,
+            timeout=120.0,
+        )
+        return await agent.run(instruction)
+
+    def _agent_context(self) -> dict:
+        """Build context dict for the agent loop."""
+        visible = ""
+        if self._current_scene_graph:
+            labels = [o.label for o in self._current_scene_graph.objects if o.label]
+            visible = ", ".join(labels[:20])
+        return {
+            "robot_x": float(self._robot_pos[0]),
+            "robot_y": float(self._robot_pos[1]),
+            "visible_objects": visible or "none",
+            "nav_status": self._last_nav_state or "IDLE",
+            "memory_context": "",
+        }
+
+    def _tool_navigate_to(self, x: float, y: float) -> str:
+        pose = PoseStamped(
+            pose=Pose(position=Vector3(x=x, y=y, z=0.0), orientation=Quaternion(0, 0, 0, 1)),
+            frame_id="map",
+        )
+        self.goal_pose.publish(pose)
+        return f"Navigating to ({x:.1f}, {y:.1f})"
+
+    def _tool_navigate_to_object(self, label: str) -> str:
+        if self._latest_sg:
+            self._try_resolve(label, self._latest_sg)
+            return f"Resolving target: {label}"
+        return "No scene graph available"
+
+    def _tool_detect_object(self, label: str) -> str:
+        if not self._current_scene_graph:
+            return "No scene graph"
+        matches = [o for o in self._current_scene_graph.objects
+                   if o.label and label.lower() in o.label.lower()]
+        if matches:
+            positions = [f"({o.position.x:.1f},{o.position.y:.1f})" for o in matches
+                         if o.position]
+            return f"Found {len(matches)}: {', '.join(positions)}"
+        return f"'{label}' not visible"
+
+    def _tool_query_memory(self, text: str) -> str:
+        # Delegate to VectorMemoryModule via MCP if available
+        return f"Memory query: '{text}' (not yet connected)"
+
+    def _tool_tag_location(self, name: str) -> str:
+        x, y = float(self._robot_pos[0]), float(self._robot_pos[1])
+        return f"Tagged '{name}' at ({x:.1f}, {y:.1f})"
+
+    def _tool_say(self, text: str) -> str:
+        logger.info("Agent says: %s", text)
+        return f"Said: {text}"
 
     # ── Visual Servo Fallback ────────────────────────────────────────────────
 

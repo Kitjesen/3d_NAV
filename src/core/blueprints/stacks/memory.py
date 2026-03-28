@@ -1,4 +1,4 @@
-"""Memory stack: SemanticMapper + EpisodicMemory + TaggedLocations."""
+"""Memory stack: SemanticMapper + EpisodicMemory + TaggedLocations + VectorMemory."""
 
 from __future__ import annotations
 
@@ -32,6 +32,12 @@ def memory(save_dir: str = "", **config) -> Blueprint:
     try:
         from memory.modules.tagged_locations_module import TaggedLocationsModule
         bp.add(TaggedLocationsModule)
+    except ImportError:
+        pass
+
+    try:
+        from memory.modules.vector_memory_module import VectorMemoryModule
+        bp.add(VectorMemoryModule, persist_dir=save_dir)
     except ImportError:
         pass
 
