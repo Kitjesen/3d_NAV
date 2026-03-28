@@ -128,6 +128,19 @@ def full_stack_blueprint(
            dog_port=config.get("dog_port", cfg.driver.dog_port))
     driver_name = DriverCls.__name__
 
+    # ── Layer 1a: Camera bridge (ROS2 → color_image + depth_image) ───────
+    # Needed when driver has no camera output (ThunderDriver on real robot).
+    # ROS2SimDriverModule / MujocoDriverModule already publish camera ports,
+    # so only add the bridge for drivers that lack them.
+
+    if not hasattr(DriverCls, 'color_image'):
+        try:
+            from drivers.thunder.camera_bridge_module import CameraBridgeModule
+            bp.add(CameraBridgeModule)
+            logger.info("CameraBridgeModule added (driver '%s' has no camera)", driver_name)
+        except ImportError as e:
+            logger.warning("CameraBridgeModule not available: %s", e)
+
     # ── Layer 1b: SLAM (managed or bridged) ──────────────────────────────
     # slam_profile="fastlio2"|"pointlio" → SLAMModule 启动并管理 C++ SLAM 进程
     # slam_profile="bridge"             → SlamBridgeModule 桥接已在跑的 ROS2 SLAM
