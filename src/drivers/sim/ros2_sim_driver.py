@@ -58,6 +58,7 @@ class ROS2SimDriverModule(Module, layer=1):
     # -- Outputs --
     odometry: Out[Odometry]
     lidar_cloud: Out[PointCloud]
+    map_cloud: Out[PointCloud]   # alias for lidar_cloud → feeds OccupancyGrid/Terrain
     camera_image: Out[Image]
     depth_image: Out[Image]
     goal_pose: Out[PoseStamped]
@@ -237,11 +238,13 @@ class ROS2SimDriverModule(Module, layer=1):
             if pts.shape[0] == 0:
                 return
 
-            self.lidar_cloud.publish(PointCloud(
+            cloud = PointCloud(
                 points=pts,
                 frame_id=msg.header.frame_id or "body",
                 ts=time.time(),
-            ))
+            )
+            self.lidar_cloud.publish(cloud)
+            self.map_cloud.publish(cloud)
         except Exception as e:
             logger.error("ROS2SimDriverModule: cloud conversion error: %s", e)
 

@@ -97,7 +97,7 @@ PROFILES = {
         robot="sim_ros2", slam_profile="bridge", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
-        enable_native=False, enable_semantic=True, enable_gateway=True,
+        enable_native=True, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
     ),
     "dev": dict(
