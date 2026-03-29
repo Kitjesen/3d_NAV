@@ -706,57 +706,38 @@ class LingTuREPL(cmd.Cmd):
 
                 print(f"  {_bold('LingTu')} [{mode_str}]  {ts}  {elapsed}s  Ctrl+C to stop\n")
 
+                # Pose — the most important info
+                nav = self._get_module("NavigationModule")
+                x, y, z, yaw = 0.0, 0.0, 0.0, 0.0
+                if nav:
+                    x, y, z = nav._robot_pos[0], nav._robot_pos[1], nav._robot_pos[2]
+                    yaw_deg = 0.0
+                    # Try get yaw from latest odom
+                    try:
+                        import math
+                        q = nav._latest_quat if hasattr(nav, '_latest_quat') else None
+                        if q:
+                            yaw_deg = math.degrees(math.atan2(2*(q[3]*q[2]+q[0]*q[1]), 1-2*(q[1]*q[1]+q[2]*q[2])))
+                    except Exception:
+                        pass
+
+                print(f"  {_bold('POSE')}:  x={x:7.2f}  y={y:7.2f}  z={z:5.2f}  yaw={yaw_deg:6.1f}°")
+                print()
+
                 # SLAM
                 slam = self._get_module("SlamBridgeModule") or self._get_module("SLAMModule")
                 if slam:
                     odom = slam.odometry.msg_count if hasattr(slam, 'odometry') else 0
                     cloud = slam.map_cloud.msg_count if hasattr(slam, 'map_cloud') else 0
-                    print(f"  SLAM:  odom {_bold(str(odom)):>6s}  cloud {_bold(str(cloud)):>6s}")
+                    hz = odom / max(elapsed, 1)
+                    print(f"  SLAM:  odom {_bold(str(odom)):>6s} ({hz:.0f}Hz)  cloud {_bold(str(cloud)):>6s}")
 
-                # Navigation
-                nav = self._get_module("NavigationModule")
+                # Navigation state
                 if nav:
                     state = nav._state
                     wp = f"{nav._tracker.wp_index}/{nav._tracker.path_length}" if hasattr(nav, '_tracker') else "-"
-                    pos = "(%.1f, %.1f)" % (nav._robot_pos[0], nav._robot_pos[1])
                     color = _green if state in ("IDLE", "SUCCESS") else _yellow if state == "EXECUTING" else _red
-                    print(f"  NAV:   {color(state):>12s}  wp {wp}  pos {pos}")
-
-                # Costmap
-                og = self._get_module("OccupancyGridModule")
-                if og:
-                    print(f"  MAP:   costmap {og.costmap.msg_count}  grid {og.occupancy_grid.msg_count}")
-
-                # Semantic
-                planner = self._get_module("SemanticPlannerModule")
-                if planner:
-                    print(f"  PLAN:  resolves {planner._resolve_count}  frontiers {planner._frontier_count}")
-
-                # Memory
-                mapper = self._get_module("SemanticMapperModule")
-                if mapper:
-                    kg_rooms = len(mapper._kg.room_types) if mapper._kg else 0
-                    tsg_rooms = len(mapper._tsg.rooms) if mapper._tsg else 0
-                    print(f"  MEM:   rooms {kg_rooms}  topo {tsg_rooms}  sg {mapper._sg_count}")
-
-                # Gateway/MCP
-                gw = self._get_module("GatewayModule")
-                mcp = self._get_module("MCPServerModule")
-                if gw or mcp:
-                    parts = []
-                    if gw: parts.append(f"gw:{gw._port}")
-                    if mcp: parts.append(f"mcp:{len(getattr(mcp, '_dynamic_tools', []))} tools")
-                    print(f"  NET:   {' | '.join(parts)}")
-
-                # Maps available
-                import os as _os
-                map_dir = _os.environ.get("NAV_MAP_DIR", _os.path.expanduser("~/data/nova/maps"))
-                if _os.path.isdir(map_dir):
-                    maps = [d for d in _os.listdir(map_dir) if _os.path.isdir(_os.path.join(map_dir, d)) and d != "active"]
-                    active = ""
-                    if _os.path.islink(_os.path.join(map_dir, "active")):
-                        active = _os.path.basename(_os.readlink(_os.path.join(map_dir, "active")))
-                    print(f"  MAPS:  {len(maps)} saved  active={active or 'none'}")
+                    print(f"  NAV:   {color(state)}  waypoint {wp}")
 
                 print()
                 time.sleep(interval)
