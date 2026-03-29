@@ -1,4 +1,4 @@
-"""SLAM stack: managed (fastlio2/pointlio/localizer) or bridge."""
+"""SLAM stack: C++ runs as systemd service, Python only bridges data."""
 
 from __future__ import annotations
 
@@ -12,62 +12,57 @@ logger = logging.getLogger(__name__)
 def slam(profile: str = "fastlio2") -> Blueprint:
     """SLAM / localization stack.
 
+    C++ SLAM always runs as a separate systemd service (correct DDS isolation).
+    Python only bridges ROS2 topics into Module ports.
+
     Profiles:
-      "fastlio2"/"pointlio" → SLAMModule manages C++ process
-      "localizer"           → SLAMModule manages Fast-LIO2 + ICP localizer
-      "bridge"              → SlamBridgeModule subscribes to external ROS2
-      "none"/""             → empty (stub/dev mode)
+      "fastlio2"  → start slam + slam_pgo services (mapping mode)
+      "localizer" → start slam + localizer services (navigation mode)
+      "bridge"    → subscribe only, assume SLAM already running
+      "none"/""   → empty (stub/dev mode)
     """
     bp = Blueprint()
 
     if not profile or profile == "none":
         return bp
 
-    if profile == "bridge":
-        # Bridge only — subscribe to externally managed ROS2 SLAM
-        try:
-            from slam.slam_bridge_module import SlamBridgeModule
-            bp.add(SlamBridgeModule)
-        except ImportError as e:
-            logger.warning("SlamBridgeModule not available: %s", e)
-    else:
-        # Managed mode: lingtu controls which C++ processes run.
-        # Stop any conflicting systemd SLAM service first.
-        try:
-            from core.service_manager import get_service_manager
-            svc = get_service_manager()
-            # Stop systemd SLAM — we manage our own
-            if svc.is_running("slam"):
-                logger.info("Stopping systemd slam (lingtu manages SLAM)")
-                svc.stop("slam")
-            # LiDAR driver — should be running (boot service)
-            svc.ensure("lidar")
-            svc.wait_ready("lidar", timeout=10.0)
-        except Exception:
-            pass
+    # Start the right systemd services for this mode
+    try:
+        from core.service_manager import get_service_manager
+        svc = get_service_manager()
 
-        # SLAMModule manages C++ processes (fastlio2+PGO or localizer+LIO)
-        try:
-            from slam.slam_module import SLAMModule
-            bp.add(SLAMModule, backend=profile)
-        except ImportError as e:
-            logger.warning("SLAMModule not available: %s", e)
+        if profile == "fastlio2":
+            svc.stop("localizer")  # stop nav mode if running
+            svc.ensure("slam", "slam_pgo")
+            svc.wait_ready("slam", timeout=10.0)
+            logger.info("SLAM mapping services started (slam + pgo)")
 
-        # SlamBridgeModule bridges ROS2 topics back into Python Module ports
-        try:
-            from slam.slam_bridge_module import SlamBridgeModule
-            bp.add(SlamBridgeModule)
-        except ImportError:
-            pass
+        elif profile == "localizer":
+            svc.stop("slam_pgo")  # stop map mode if running
+            svc.ensure("slam", "localizer")
+            svc.wait_ready("slam", "localizer", timeout=10.0)
+            logger.info("SLAM localization services started (slam + localizer)")
+
+        elif profile == "bridge":
+            pass  # assume SLAM already running
+
+    except Exception as e:
+        logger.warning("SLAM service manager: %s", e)
+
+    # Bridge ROS2 topics into Python Module ports
+    try:
+        from slam.slam_bridge_module import SlamBridgeModule
+        bp.add(SlamBridgeModule)
+    except ImportError as e:
+        logger.warning("SlamBridgeModule not available: %s", e)
 
     return bp
 
 
 def slam_module_name(profile: str) -> str:
-    """Return the Module class name for SLAM data wiring (odometry + map_cloud).
+    """Return the Module class name for SLAM data wiring.
 
     Always SlamBridgeModule — it has the Out ports.
-    SLAMModule only manages C++ process lifecycle, no Out ports used.
     """
     if not profile or profile == "none":
         return ""

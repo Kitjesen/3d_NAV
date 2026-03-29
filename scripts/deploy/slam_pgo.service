@@ -1,0 +1,14 @@
+[Unit]
+Description=LingTu PGO (map saving)
+After=slam.service
+Requires=slam.service
+
+[Service]
+Type=simple
+User=sunrise
+ExecStart=/opt/nova/lingtu/v1.8.0/install/pgo/lib/pgo/pgo_node --ros-args -p config_path:=/opt/nova/lingtu/v1.8.0/install/pgo/share/pgo/config/pgo.yaml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

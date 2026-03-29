@@ -1,0 +1,14 @@
+[Unit]
+Description=LingTu ICP Localizer
+After=slam.service
+Requires=slam.service
+
+[Service]
+Type=simple
+User=sunrise
+ExecStart=/opt/nova/lingtu/v1.8.0/install/localizer/lib/localizer/localizer_node --ros-args -p config_path:=/opt/nova/lingtu/v1.8.0/install/localizer/share/localizer/config/localizer.yaml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

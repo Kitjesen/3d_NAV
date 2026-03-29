@@ -1,0 +1,16 @@
+[Unit]
+Description=LingTu SLAM (%i mode)
+After=lidar.service
+Requires=lidar.service
+
+[Service]
+Type=simple
+User=sunrise
+Environment=PATH=/home/sunrise/data/dart-sdk/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-/etc/lingtu/slam.env
+ExecStart=/opt/nova/lingtu/v1.8.0/install/fastlio2/lib/fastlio2/lio_node --ros-args -p config_path:=/opt/nova/lingtu/v1.8.0/install/fastlio2/share/fastlio2/config/lio.yaml -r /cloud_registered:=/nav/registered_cloud -r /Odometry:=/nav/odometry -r /cloud_map:=/nav/map_cloud
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
