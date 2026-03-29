@@ -16,7 +16,7 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     try:
         from core.service_manager import get_service_manager
         svc = get_service_manager()
-        svc.ensure("lingtu_camera")
+        svc.ensure("camera")
     except Exception:
         pass
     try:
