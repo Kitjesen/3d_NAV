@@ -103,6 +103,63 @@ class ThunderDriver(Module, layer=1):
         # asyncio
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._grpc_thread: Optional[threading.Thread] = None
+        self._brainstem_proc = None  # auto-started brainstem subprocess
+
+    # ── Brainstem auto-start ──
+
+    def _ensure_brainstem(self) -> None:
+        """Start brainstem gRPC server if not already running on target port."""
+        import socket, subprocess, os
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        try:
+            s.connect((self._dog_host, self._dog_port))
+            s.close()
+            logger.info("brainstem already running on %s:%d", self._dog_host, self._dog_port)
+            return
+        except (ConnectionRefusedError, OSError):
+            pass
+
+        # Only auto-start on localhost
+        if self._dog_host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            logger.warning("brainstem not reachable at %s:%d (remote host, cannot auto-start)",
+                           self._dog_host, self._dog_port)
+            return
+
+        brainstem_dir = os.path.expanduser("~/data/brainstem")
+        dart_bin = None
+        for p in ["/home/sunrise/data/dart-sdk/bin/dart", os.path.expanduser("~/data/dart-sdk/bin/dart")]:
+            if os.path.exists(p):
+                dart_bin = p
+                break
+        if dart_bin is None or not os.path.isdir(brainstem_dir):
+            logger.warning("brainstem not found, cannot auto-start")
+            return
+
+        logger.info("Auto-starting brainstem (dart run han_dog/bin/server.dart)...")
+        env = os.environ.copy()
+        env["MEDULLA_STANDALONE"] = "1"
+        env["MEDULLA_PORT"] = str(self._dog_port)
+        self._brainstem_proc = subprocess.Popen(
+            [dart_bin, "run", "han_dog/bin/server.dart"],
+            cwd=brainstem_dir, env=env,
+            stdout=open("/tmp/brainstem.log", "a"),
+            stderr=subprocess.STDOUT,
+        )
+        # Wait for gRPC port to open
+        import time
+        for _ in range(30):  # up to 15 seconds
+            time.sleep(0.5)
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.5)
+                s.connect((self._dog_host, self._dog_port))
+                s.close()
+                logger.info("brainstem started (pid=%d, port=%d)", self._brainstem_proc.pid, self._dog_port)
+                return
+            except (ConnectionRefusedError, OSError):
+                pass
+        logger.error("brainstem failed to start within 15s")
 
     # ── 生命周期 ──
 
@@ -113,9 +170,12 @@ class ThunderDriver(Module, layer=1):
         self.slam_odom.subscribe(self._on_slam_odom)
 
     def start(self):
-        """启动 gRPC 连接 + 看门狗。"""
+        """启动 brainstem (如果未运行) + gRPC 连接 + 看门狗。"""
         super().start()
         self._shutdown = False
+
+        # Auto-start brainstem if not already running
+        self._ensure_brainstem()
 
         # 启动 asyncio 事件循环 (独立线程)
         self._loop = asyncio.new_event_loop()
@@ -148,6 +208,15 @@ class ThunderDriver(Module, layer=1):
         if self._grpc_thread:
             self._grpc_thread.join(timeout=3.0)
         self.alive.publish(False)
+        # Stop auto-started brainstem
+        if self._brainstem_proc is not None:
+            logger.info("Stopping auto-started brainstem (pid=%d)", self._brainstem_proc.pid)
+            self._brainstem_proc.terminate()
+            try:
+                self._brainstem_proc.wait(timeout=5)
+            except Exception:
+                self._brainstem_proc.kill()
+            self._brainstem_proc = None
         super().stop()
 
     # ── 端口回调 ──
