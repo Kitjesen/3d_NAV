@@ -196,6 +196,29 @@ lingtu nav --daemon             # 后台运行
 lingtu stop                     # 停止后台进程
 ```
 
+## Xbox 手柄遥控
+
+插上 Xbox 手柄 USB，启动 joy 节点：
+
+```bash
+ros2 run joy joy_node
+```
+
+手柄操作：
+
+```
+左摇杆 Y     前进/后退
+左摇杆 X     左右平移
+右摇杆 X     转向
+
+LT (左扳机)  按住 = 手动接管，松开 = 恢复自主导航
+RT (右扳机)  避障开关（保留）
+```
+
+**核心：按住 LT 接管，松开 LT 恢复导航。安全保护始终生效。**
+
+手柄由 C++ pathFollower 直接处理，不需要启动 lingtu。
+
 ## 故障排查
 
 | 问题 | 解决 |
