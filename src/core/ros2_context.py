@@ -35,13 +35,13 @@ def ensure_rclpy() -> None:
 
 
 def get_shared_executor():
-    """Get the singleton MultiThreadedExecutor. Auto-starts spin thread."""
+    """Get the singleton SingleThreadedExecutor. Auto-starts spin thread."""
     global _executor, _spin_thread, _running
     with _lock:
         if _executor is None:
-            from rclpy.executors import MultiThreadedExecutor
+            from rclpy.executors import SingleThreadedExecutor
             ensure_rclpy()
-            _executor = MultiThreadedExecutor()
+            _executor = SingleThreadedExecutor()
             _running = True
             _spin_thread = threading.Thread(
                 target=_spin_loop, daemon=True, name="ros2_shared_spin")
