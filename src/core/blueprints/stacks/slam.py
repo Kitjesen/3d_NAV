@@ -24,27 +24,36 @@ def slam(profile: str = "fastlio2") -> Blueprint:
         return bp
 
     if profile == "bridge":
-        # Pull up SLAM systemd services on demand
-        try:
-            from core.service_manager import get_service_manager, SERVICES_SLAM
-            svc = get_service_manager()
-            svc.ensure(*SERVICES_SLAM)
-            svc.wait_ready(*SERVICES_SLAM, timeout=10.0)
-        except Exception:
-            pass  # not on Linux / no systemd
+        # Bridge only — subscribe to externally managed ROS2 SLAM
         try:
             from slam.slam_bridge_module import SlamBridgeModule
             bp.add(SlamBridgeModule)
         except ImportError as e:
             logger.warning("SlamBridgeModule not available: %s", e)
     else:
-        # Managed mode: SLAMModule manages C++ processes (lio/pgo/livox),
-        # SlamBridgeModule bridges ROS2 topics back into Python Module ports.
+        # Managed mode: lingtu controls which C++ processes run.
+        # Stop any conflicting systemd SLAM service first.
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
+            # Stop systemd SLAM — we manage our own
+            if svc.is_running("nav-slam"):
+                logger.info("Stopping systemd nav-slam (lingtu manages SLAM)")
+                svc.stop("nav-slam")
+            # LiDAR driver — pull up on demand
+            svc.ensure("nav-lidar")
+            svc.wait_ready("nav-lidar", timeout=10.0)
+        except Exception:
+            pass
+
+        # SLAMModule manages C++ processes (fastlio2+PGO or localizer+LIO)
         try:
             from slam.slam_module import SLAMModule
             bp.add(SLAMModule, backend=profile)
         except ImportError as e:
             logger.warning("SLAMModule not available: %s", e)
+
+        # SlamBridgeModule bridges ROS2 topics back into Python Module ports
         try:
             from slam.slam_bridge_module import SlamBridgeModule
             bp.add(SlamBridgeModule)

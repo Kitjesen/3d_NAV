@@ -80,7 +80,7 @@ def _dim(t: str) -> str:    return _c("2", t)
 PROFILES = {
     "map": dict(
         _desc="Mapping mode — SLAM builds map, then 'map save <name>'",
-        robot="sim_ros2", slam_profile="bridge", detector="yoloe", encoder="mobileclip",
+        robot="sim_ros2", slam_profile="fastlio2", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
         enable_native=False, enable_semantic=False, enable_gateway=False,
         gateway_port=5050,
@@ -108,8 +108,8 @@ PROFILES = {
         gateway_port=5050,
     ),
     "nav": dict(
-        _desc="Navigation with pre-built map (SLAM by systemd + semantic + gateway)",
-        robot="sim_ros2", slam_profile="bridge", detector="bpu", encoder="mobileclip",
+        _desc="Navigation with pre-built map (localizer + semantic + gateway)",
+        robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip",
         llm="qwen", planner="astar",
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
         enable_native=False, enable_semantic=True, enable_gateway=True,
@@ -117,7 +117,7 @@ PROFILES = {
     ),
     "explore": dict(
         _desc="Exploration, no pre-built map needed",
-        robot="thunder", slam_profile="bridge", detector="bpu", encoder="mobileclip",
+        robot="thunder", slam_profile="fastlio2", detector="bpu", encoder="mobileclip",
         llm="qwen", planner="astar",
         enable_native=True, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
