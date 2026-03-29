@@ -6,10 +6,19 @@ for d in ["src/semantic/perception", "src/semantic/planner", "src/semantic/commo
     if os.path.isdir(d):
         sys.path.insert(0, d)
 import logging
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.INFO)
 import numpy as np
-import rerun as rr
 
+# Initialize rclpy FIRST before anything else
+try:
+    import rclpy
+    if not rclpy.ok():
+        rclpy.init()
+    print("rclpy initialized")
+except ImportError:
+    print("rclpy not available")
+
+import rerun as rr
 rr.init("lingtu_mapping")
 server_uri = rr.serve_grpc(grpc_port=9877)
 rr.serve_web_viewer(open_browser=False, web_port=9090, connect_to=server_uri)

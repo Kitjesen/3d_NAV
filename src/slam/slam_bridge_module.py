@@ -80,9 +80,10 @@ class SlamBridgeModule(Module, layer=1):
             from sensor_msgs.msg import PointCloud2
             from nav_msgs.msg import Odometry as ROS2Odom
 
-            # Use default global context for DDS discovery compatibility
+            # Expect rclpy.init() called once at system startup
             if not rclpy.ok():
                 rclpy.init()
+                logger.debug("SlamBridgeModule: rclpy.init() called (first module)")
 
             qos = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
