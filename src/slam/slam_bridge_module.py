@@ -174,16 +174,15 @@ class SlamBridgeModule(Module, layer=1):
         try:
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
-            t = msg.twist.twist
             odom = Odometry(
                 pose=Pose(
-                    position=Vector3(x=p.x, y=p.y, z=p.z),
-                    orientation=Quaternion(x=q.x, y=q.y, z=q.z, w=q.w),
+                    position=Vector3(x=float(p.x), y=float(p.y), z=float(p.z)),
+                    orientation=Quaternion(x=float(q.x), y=float(q.y), z=float(q.z), w=float(q.w)),
                 ),
             )
             self.odometry.publish(odom)
         except Exception as e:
-            logger.debug("SlamBridge: odom parse error: %s", e)
+            logger.warning("SlamBridge: odom error: %s", e)
 
     # ── Spin loop ─────────────────────────────────────────────────────────────
 
