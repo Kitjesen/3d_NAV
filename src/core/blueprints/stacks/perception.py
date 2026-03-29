@@ -13,11 +13,20 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     """Visual perception: object detection + CLIP encoding + 3D reconstruction."""
     bp = Blueprint()
     # Pull up camera service on demand
+    # Camera service + bridge (only when perception is needed)
     try:
         from core.service_manager import get_service_manager
         svc = get_service_manager()
         svc.ensure("camera")
     except Exception:
+        pass
+    try:
+        from core.registry import get as _get_drv
+        drv_name = config.get("_driver_cls_name", "")
+        # Add camera bridge if driver has no camera output
+        from drivers.thunder.camera_bridge_module import CameraBridgeModule
+        bp.add(CameraBridgeModule)
+    except ImportError:
         pass
     try:
         from semantic.perception.semantic_perception.detector_module import DetectorModule

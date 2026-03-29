@@ -39,14 +39,7 @@ def driver(robot: str = "thunder", **config) -> Blueprint:
            dog_host=config.get("dog_host", cfg.driver.dog_host),
            dog_port=config.get("dog_port", cfg.driver.dog_port))
 
-    # Camera bridge for drivers without camera output (ThunderDriver)
-    if not hasattr(DriverCls, "color_image"):
-        try:
-            from drivers.thunder.camera_bridge_module import CameraBridgeModule
-            bp.add(CameraBridgeModule)
-        except ImportError:
-            pass
-
+    # Camera bridge moved to perception() stack — only loaded when needed
     return bp
 
 

@@ -67,6 +67,6 @@ def _spin_loop() -> None:
     import rclpy
     try:
         while _running and rclpy.ok():
-            _executor.spin_once(timeout_sec=0.001)
+            _executor.spin_once(timeout_sec=0.02)
     except Exception:
         pass
