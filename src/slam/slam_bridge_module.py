@@ -192,5 +192,8 @@ class SlamBridgeModule(Module, layer=1):
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
         period = 1.0 / self._spin_rate
-        while self._running and rclpy.ok():
-            self._executor.spin_once(timeout_sec=period)
+        try:
+            while self._running and rclpy.ok():
+                self._executor.spin_once(timeout_sec=period)
+        except Exception:
+            pass  # ExternalShutdownException on system stop
