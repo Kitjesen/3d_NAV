@@ -85,16 +85,21 @@ class SlamBridgeModule(Module, layer=1):
                 rclpy.init()
                 logger.debug("SlamBridgeModule: rclpy.init() called (first module)")
 
-            qos = QoSProfile(
+            qos_reliable = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
+                depth=self._qos_depth,
+            )
+            qos_besteffort = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
                 depth=self._qos_depth,
             )
 
             self._node = Node(self._node_name)
             self._node.create_subscription(
-                PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos)
+                PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos_reliable)
+            # Odometry: try BEST_EFFORT (compatible with both RELIABLE and BEST_EFFORT publishers)
             self._node.create_subscription(
-                ROS2Odom, self._odom_topic, self._on_ros2_odom, qos)
+                ROS2Odom, self._odom_topic, self._on_ros2_odom, qos_besteffort)
 
             logger.info(
                 "SlamBridgeModule: node '%s' — cloud=%s odom=%s",
