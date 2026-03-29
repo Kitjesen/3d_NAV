@@ -145,6 +145,8 @@ class NavigationModule(Module, layer=5):
                 import rclpy
                 from geometry_msgs.msg import PointStamped
                 from rclpy.qos import QoSProfile, ReliabilityPolicy
+                from rclpy.executors import SingleThreadedExecutor
+                import threading
                 if not rclpy.ok():
                     rclpy.init(args=[])
                 self._ros2_node = rclpy.create_node("nav_waypoint_bridge")
@@ -152,6 +154,12 @@ class NavigationModule(Module, layer=5):
                 self._ros2_wp_pub = self._ros2_node.create_publisher(
                     PointStamped, "/nav/way_point", qos
                 )
+                # Spin in background so this node doesn't block other rclpy nodes
+                self._ros2_executor = SingleThreadedExecutor()
+                self._ros2_executor.add_node(self._ros2_node)
+                self._ros2_spin_thread = threading.Thread(
+                    target=self._ros2_spin, daemon=True, name="nav_ros2_spin")
+                self._ros2_spin_thread.start()
                 logger.info("NavigationModule: ROS2 waypoint bridge enabled -> /nav/way_point")
             except (ImportError, Exception) as e:
                 logger.debug("NavigationModule: ROS2 not available: %s", e)
@@ -159,6 +167,15 @@ class NavigationModule(Module, layer=5):
             logger.info("NavigationModule: ROS2 bridge disabled (Python autonomy stack active)")
 
         self._set_state(MissionState.IDLE)
+
+    def _ros2_spin(self) -> None:
+        """Background spin for ROS2 waypoint publisher node."""
+        import rclpy
+        try:
+            while rclpy.ok() and self._ros2_node:
+                self._ros2_executor.spin_once(timeout_sec=0.1)
+        except Exception:
+            pass
 
     # ── Mission FSM ───────────────────────────────────────────────────────
 
@@ -436,6 +453,9 @@ class NavigationModule(Module, layer=5):
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     def stop(self) -> None:
+        if hasattr(self, '_ros2_executor') and self._ros2_executor:
+            self._ros2_executor.shutdown()
+            self._ros2_executor = None
         if self._ros2_node is not None:
             self._ros2_node.destroy_node()
             self._ros2_node = None
