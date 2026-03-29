@@ -675,7 +675,6 @@ class LingTuREPL(cmd.Cmd):
         interval = float(arg) if arg else 2.0
         try:
             while True:
-                # Clear screen
                 os.system("cls" if os.name == "nt" else "clear")
                 ts = time.strftime("%H:%M:%S")
                 print(f"  {_dim(f'[{ts}]  refresh every {interval:.0f}s  Ctrl+C to stop')}\n")
@@ -685,6 +684,84 @@ class LingTuREPL(cmd.Cmd):
             print("\n  Watch stopped")
 
     do_w = do_watch
+
+    def do_live(self, arg):
+        """Real-time dashboard: live [interval]. Shows key metrics, auto-detects mode."""
+        interval = float(arg) if arg else 1.0
+        start_time = time.time()
+        try:
+            while True:
+                os.system("cls" if os.name == "nt" else "clear")
+                elapsed = int(time.time() - start_time)
+                ts = time.strftime("%H:%M:%S")
+
+                # Detect mode from profile
+                mode = self._cfg.get("slam_profile", "?")
+                if mode in ("fastlio2", "pointlio"):
+                    mode_str = _green("MAP")
+                elif mode == "localizer":
+                    mode_str = _green("NAV")
+                else:
+                    mode_str = _green(mode.upper())
+
+                print(f"  {_bold('LingTu')} [{mode_str}]  {ts}  {elapsed}s  Ctrl+C to stop\n")
+
+                # SLAM
+                slam = self._get_module("SlamBridgeModule") or self._get_module("SLAMModule")
+                if slam:
+                    odom = slam.odometry.msg_count if hasattr(slam, 'odometry') else 0
+                    cloud = slam.map_cloud.msg_count if hasattr(slam, 'map_cloud') else 0
+                    print(f"  SLAM:  odom {_bold(str(odom)):>6s}  cloud {_bold(str(cloud)):>6s}")
+
+                # Navigation
+                nav = self._get_module("NavigationModule")
+                if nav:
+                    state = nav._state
+                    wp = f"{nav._tracker.wp_index}/{nav._tracker.path_length}" if hasattr(nav, '_tracker') else "-"
+                    pos = "(%.1f, %.1f)" % (nav._robot_pos[0], nav._robot_pos[1])
+                    color = _green if state in ("IDLE", "SUCCESS") else _yellow if state == "EXECUTING" else _red
+                    print(f"  NAV:   {color(state):>12s}  wp {wp}  pos {pos}")
+
+                # Costmap
+                og = self._get_module("OccupancyGridModule")
+                if og:
+                    print(f"  MAP:   costmap {og.costmap.msg_count}  grid {og.occupancy_grid.msg_count}")
+
+                # Semantic
+                planner = self._get_module("SemanticPlannerModule")
+                if planner:
+                    print(f"  PLAN:  resolves {planner._resolve_count}  frontiers {planner._frontier_count}")
+
+                # Memory
+                mapper = self._get_module("SemanticMapperModule")
+                if mapper:
+                    kg_rooms = len(mapper._kg.room_types) if mapper._kg else 0
+                    tsg_rooms = len(mapper._tsg.rooms) if mapper._tsg else 0
+                    print(f"  MEM:   rooms {kg_rooms}  topo {tsg_rooms}  sg {mapper._sg_count}")
+
+                # Gateway/MCP
+                gw = self._get_module("GatewayModule")
+                mcp = self._get_module("MCPServerModule")
+                if gw or mcp:
+                    parts = []
+                    if gw: parts.append(f"gw:{gw._port}")
+                    if mcp: parts.append(f"mcp:{len(getattr(mcp, '_dynamic_tools', []))} tools")
+                    print(f"  NET:   {' | '.join(parts)}")
+
+                # Maps available
+                import os as _os
+                map_dir = _os.environ.get("NAV_MAP_DIR", _os.path.expanduser("~/data/nova/maps"))
+                if _os.path.isdir(map_dir):
+                    maps = [d for d in _os.listdir(map_dir) if _os.path.isdir(_os.path.join(map_dir, d)) and d != "active"]
+                    active = ""
+                    if _os.path.islink(_os.path.join(map_dir, "active")):
+                        active = _os.path.basename(_os.readlink(_os.path.join(map_dir, "active")))
+                    print(f"  MAPS:  {len(maps)} saved  active={active or 'none'}")
+
+                print()
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\n  Live stopped")
 
     def do_module(self, arg):
         """Inspect a module: module <name>"""
