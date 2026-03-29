@@ -46,12 +46,18 @@ class _AStarBackend:
             if tomo_data is not None and hasattr(tomo_data, "ndim") and tomo_data.ndim == 4:
                 # Extract traversability layer (channel 0), use first slice
                 self._grid = np.asarray(tomo_data[0, 0], dtype=np.float32)
+                # Tomogram stores center, but A* needs bottom-left origin
+                center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
+                h, w = self._grid.shape
+                res = raw.get("resolution", 1.0)
+                self._origin = center - np.array([w * res / 2, h * res / 2])
+                self._resolution = res
             else:
-                # Legacy format: grid or traversability key
+                # Legacy format: grid or traversability key, origin is bottom-left
                 self._grid = raw.get("grid", raw.get("traversability"))
-            self._resolution = raw.get("resolution", 1.0)
-            origin = raw.get("center", raw.get("origin", [0, 0]))
-            self._origin = np.array(origin[:2], dtype=np.float64)
+                self._resolution = raw.get("resolution", 1.0)
+                origin = raw.get("origin", [0, 0])
+                self._origin = np.array(origin[:2], dtype=np.float64)
         logger.info("A* loaded tomogram: %s, grid=%s", path,
                      self._grid.shape if self._grid is not None else None)
 
