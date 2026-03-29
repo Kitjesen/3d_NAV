@@ -35,7 +35,21 @@ def _prefix(cfg: RobotConfig) -> str:
 
 
 def _exe(cfg: RobotConfig, package: str, binary: str) -> str:
+    # colcon install layout: prefix/package/lib/package/binary
+    colcon_path = os.path.join(_prefix(cfg), package, "lib", package, binary)
+    if os.path.exists(colcon_path):
+        return colcon_path
+    # fallback: prefix/lib/package/binary
     return os.path.join(_prefix(cfg), "lib", package, binary)
+
+
+def _share(cfg: RobotConfig, package: str, *sub) -> str:
+    # colcon: prefix/package/share/package/...
+    colcon_path = os.path.join(_prefix(cfg), package, "share", package, *sub)
+    if os.path.exists(colcon_path):
+        return colcon_path
+    # fallback: prefix/share/package/...
+    return os.path.join(_prefix(cfg), "share", package, *sub)
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +197,7 @@ def slam_fastlio2(cfg: Optional[RobotConfig] = None) -> NativeModule:
     cfg = cfg or get_config()
     config_path = cfg.raw.get("slam", {}).get(
         "fastlio2_config",
-        os.path.join(_prefix(cfg), "share", "fastlio2", "config", "lio.yaml"),
+        _share(cfg, "fastlio2", "config", "lio.yaml"),
     )
     return NativeModule(NativeModuleConfig(
         executable=_exe(cfg, "fastlio2", "lio_node"),
@@ -213,7 +227,7 @@ def slam_pgo(cfg: Optional[RobotConfig] = None) -> NativeModule:
     cfg = cfg or get_config()
     config_path = cfg.raw.get("slam", {}).get(
         "pgo_config",
-        os.path.join(_prefix(cfg), "share", "pgo", "config", "pgo.yaml"),
+        _share(cfg, "pgo", "config", "pgo.yaml"),
     )
     return NativeModule(NativeModuleConfig(
         executable=_exe(cfg, "pgo", "pgo_node"),
@@ -238,7 +252,7 @@ def slam_localizer(cfg: Optional[RobotConfig] = None) -> NativeModule:
     cfg = cfg or get_config()
     config_path = cfg.raw.get("slam", {}).get(
         "localizer_config",
-        os.path.join(_prefix(cfg), "share", "localizer", "config", "localizer.yaml"),
+        _share(cfg, "localizer", "config", "localizer.yaml"),
     )
     map_path = cfg.raw.get("slam", {}).get(
         "static_map_path",
@@ -270,7 +284,7 @@ def slam_pointlio(cfg: Optional[RobotConfig] = None) -> NativeModule:
     cfg = cfg or get_config()
     config_path = cfg.raw.get("slam", {}).get(
         "pointlio_config",
-        os.path.join(_prefix(cfg), "share", "pointlio", "config", "pointlio.yaml"),
+        _share(cfg, "pointlio", "config", "pointlio.yaml"),
     )
     return NativeModule(NativeModuleConfig(
         executable=_exe(cfg, "pointlio", "pointlio_node"),
