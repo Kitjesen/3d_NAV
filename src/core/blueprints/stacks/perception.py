@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -> Blueprint:
     """Visual perception: object detection + CLIP encoding + 3D reconstruction."""
     bp = Blueprint()
+    # Pull up camera service on demand
+    try:
+        from core.service_manager import get_service_manager, SERVICES_CAMERA
+        svc = get_service_manager()
+        svc.ensure(*SERVICES_CAMERA)
+    except Exception:
+        pass
     try:
         from semantic.perception.semantic_perception.detector_module import DetectorModule
         from semantic.perception.semantic_perception.encoder_module import EncoderModule

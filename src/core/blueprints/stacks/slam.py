@@ -24,6 +24,14 @@ def slam(profile: str = "fastlio2") -> Blueprint:
         return bp
 
     if profile == "bridge":
+        # Pull up SLAM systemd services on demand
+        try:
+            from core.service_manager import get_service_manager, SERVICES_SLAM
+            svc = get_service_manager()
+            svc.ensure(*SERVICES_SLAM)
+            svc.wait_ready(*SERVICES_SLAM, timeout=10.0)
+        except Exception:
+            pass  # not on Linux / no systemd
         try:
             from slam.slam_bridge_module import SlamBridgeModule
             bp.add(SlamBridgeModule)

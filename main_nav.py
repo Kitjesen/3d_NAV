@@ -1240,6 +1240,15 @@ def main() -> None:
     # ── Shutdown ──
     print("  Stopping modules...")
     system.stop()
+    # Release on-demand systemd services
+    try:
+        from core.service_manager import get_service_manager
+        svc = get_service_manager()
+        if svc._started:
+            print("  Releasing services: %s" % ", ".join(svc._started))
+            svc.stop_all_started()
+    except Exception:
+        pass
     _clear_run_state()
     print(f"  {_green('Done.')}\n")
 
