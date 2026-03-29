@@ -68,7 +68,7 @@ class SlamBridgeModule(Module, layer=1):
         self._qos_depth = qos_depth
 
         self._node = None
-        self._context = None
+        self._executor = None
         self._spin_thread: Optional[threading.Thread] = None
         self._running = False
 
@@ -80,16 +80,16 @@ class SlamBridgeModule(Module, layer=1):
             from sensor_msgs.msg import PointCloud2
             from nav_msgs.msg import Odometry as ROS2Odom
 
-            # Each bridge gets its own context to avoid multi-thread spin conflicts
-            self._context = rclpy.Context()
-            self._context.init()
+            # Use default global context for DDS discovery compatibility
+            if not rclpy.ok():
+                rclpy.init()
 
             qos = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
                 depth=self._qos_depth,
             )
 
-            self._node = Node(self._node_name, context=self._context)
+            self._node = Node(self._node_name)
             self._node.create_subscription(
                 PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos)
             self._node.create_subscription(
@@ -120,12 +120,12 @@ class SlamBridgeModule(Module, layer=1):
         self._running = False
         if self._spin_thread:
             self._spin_thread.join(timeout=3.0)
+        if self._executor:
+            self._executor.shutdown()
+            self._executor = None
         if self._node:
             self._node.destroy_node()
             self._node = None
-        if self._context:
-            self._context.try_shutdown()
-            self._context = None
         super().stop()
 
     # ── ROS2 callbacks ────────────────────────────────────────────────────────
@@ -187,10 +187,10 @@ class SlamBridgeModule(Module, layer=1):
     # ── Spin loop ─────────────────────────────────────────────────────────────
 
     def _spin_loop(self) -> None:
+        import rclpy
         from rclpy.executors import SingleThreadedExecutor
-        executor = SingleThreadedExecutor(context=self._context)
-        executor.add_node(self._node)
+        self._executor = SingleThreadedExecutor()
+        self._executor.add_node(self._node)
         period = 1.0 / self._spin_rate
-        while self._running and self._context and self._context.ok():
-            executor.spin_once(timeout_sec=period)
-        executor.shutdown()
+        while self._running and rclpy.ok():
+            self._executor.spin_once(timeout_sec=period)
