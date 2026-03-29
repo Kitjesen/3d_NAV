@@ -68,38 +68,29 @@ class SlamBridgeModule(Module, layer=1):
         self._qos_depth = qos_depth
 
         self._node = None
-        self._executor = None
-        self._spin_thread: Optional[threading.Thread] = None
         self._running = False
 
     def setup(self) -> None:
         try:
-            import rclpy
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from sensor_msgs.msg import PointCloud2
             from nav_msgs.msg import Odometry as ROS2Odom
+            from core.ros2_context import ensure_rclpy, get_shared_executor
 
-            # Expect rclpy.init() called once at system startup
-            if not rclpy.ok():
-                rclpy.init()
-                logger.debug("SlamBridgeModule: rclpy.init() called (first module)")
+            ensure_rclpy()
 
-            qos_reliable = QoSProfile(
+            qos = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
-                depth=self._qos_depth,
-            )
-            qos_besteffort = QoSProfile(
-                reliability=ReliabilityPolicy.BEST_EFFORT,
                 depth=self._qos_depth,
             )
 
             self._node = Node(self._node_name)
+            get_shared_executor().add_node(self._node)
             self._node.create_subscription(
-                PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos_reliable)
-            # Odometry: try BEST_EFFORT (compatible with both RELIABLE and BEST_EFFORT publishers)
+                PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos)
             self._node.create_subscription(
-                ROS2Odom, self._odom_topic, self._on_ros2_odom, qos_besteffort)
+                ROS2Odom, self._odom_topic, self._on_ros2_odom, qos)
 
             logger.info(
                 "SlamBridgeModule: node '%s' — cloud=%s odom=%s",
@@ -115,20 +106,11 @@ class SlamBridgeModule(Module, layer=1):
         if self._node is None:
             self.alive.publish(False)
             return
-
         self._running = True
-        self._spin_thread = threading.Thread(
-            target=self._spin_loop, name="slam_bridge_spin", daemon=True)
-        self._spin_thread.start()
         self.alive.publish(True)
 
     def stop(self) -> None:
         self._running = False
-        if self._spin_thread:
-            self._spin_thread.join(timeout=3.0)
-        if self._executor:
-            self._executor.shutdown()
-            self._executor = None
         if self._node:
             self._node.destroy_node()
             self._node = None
@@ -191,14 +173,4 @@ class SlamBridgeModule(Module, layer=1):
 
     # ── Spin loop ─────────────────────────────────────────────────────────────
 
-    def _spin_loop(self) -> None:
-        import rclpy
-        from rclpy.executors import SingleThreadedExecutor
-        self._executor = SingleThreadedExecutor()
-        self._executor.add_node(self._node)
-        period = 1.0 / self._spin_rate
-        try:
-            while self._running and rclpy.ok():
-                self._executor.spin_once(timeout_sec=period)
-        except Exception:
-            pass  # ExternalShutdownException on system stop
+    # Spin handled by shared executor (core.ros2_context)

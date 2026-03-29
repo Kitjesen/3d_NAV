@@ -1241,6 +1241,12 @@ def main() -> None:
     # ── Shutdown ──
     print("  Stopping modules...")
     system.stop()
+    # Shutdown shared ROS2 executor
+    try:
+        from core.ros2_context import shutdown_shared_executor
+        shutdown_shared_executor()
+    except Exception:
+        pass
     # Release on-demand systemd services
     try:
         from core.service_manager import get_service_manager
