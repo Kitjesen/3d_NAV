@@ -44,7 +44,7 @@ class MobileCLIPEncoder:
     def __init__(
         self,
         model_name: str = "ViT-B-32",
-        device: str = "cuda",
+        device: str = "auto",
         pretrained: str = "openai",
     ):
         self._model_name = model_name
