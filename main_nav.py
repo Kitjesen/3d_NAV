@@ -686,9 +686,17 @@ class LingTuREPL(cmd.Cmd):
     do_w = do_watch
 
     def do_live(self, arg):
-        """Real-time dashboard: live [interval]. Shows key metrics, auto-detects mode."""
+        """Real-time dashboard with hotkeys. Press keys while viewing:
+        s = save map    g = go (enter target)    x = stop motion
+        n = navigate to coordinates    q = quit live    Ctrl+C = quit live"""
         interval = float(arg) if arg else 1.0
         start_time = time.time()
+        # Non-blocking keyboard input
+        import sys, select
+        if os.name != "nt":
+            import tty, termios
+            old_settings = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
         try:
             while True:
                 os.system("cls" if os.name == "nt" else "clear")
@@ -739,9 +747,61 @@ class LingTuREPL(cmd.Cmd):
                     color = _green if state in ("IDLE", "SUCCESS") else _yellow if state == "EXECUTING" else _red
                     print(f"  NAV:   {color(state)}  waypoint {wp}")
 
+                # Hotkey bar
                 print()
-                time.sleep(interval)
+                print(f"  {_dim('[s]ave map  [g]o target  [x] stop  [n]av x,y  [q]uit')}")
+
+                # Non-blocking key check
+                key = None
+                if os.name != "nt":
+                    deadline = time.time() + interval
+                    while time.time() < deadline:
+                        if select.select([sys.stdin], [], [], 0.1)[0]:
+                            key = sys.stdin.read(1)
+                            break
+                else:
+                    time.sleep(interval)
+
+                if key == "q":
+                    break
+                elif key == "s":
+                    print("\n  Enter map name: ", end="", flush=True)
+                    if os.name != "nt":
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                    name = input().strip()
+                    if os.name != "nt":
+                        tty.setcbreak(sys.stdin.fileno())
+                    if name:
+                        self._map_save(name)
+                        time.sleep(2)
+                elif key == "g":
+                    print("\n  Go to: ", end="", flush=True)
+                    if os.name != "nt":
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                    target = input().strip()
+                    if os.name != "nt":
+                        tty.setcbreak(sys.stdin.fileno())
+                    if target:
+                        self.do_go(target)
+                        time.sleep(1)
+                elif key == "x":
+                    self.do_stop("")
+                elif key == "n":
+                    print("\n  Navigate x y: ", end="", flush=True)
+                    if os.name != "nt":
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                    coords = input().strip()
+                    if os.name != "nt":
+                        tty.setcbreak(sys.stdin.fileno())
+                    if coords:
+                        self.do_navigate(coords)
+                        time.sleep(1)
+
         except KeyboardInterrupt:
+            pass
+        finally:
+            if os.name != "nt":
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
             print("\n  Live stopped")
 
     def do_module(self, arg):
