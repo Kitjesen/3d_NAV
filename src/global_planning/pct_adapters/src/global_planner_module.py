@@ -39,12 +39,19 @@ class _AStarBackend:
     def _load_tomogram(self, path: str):
         import pickle
         with open(path, "rb") as f:
-            data = pickle.load(f)
-        if isinstance(data, dict):
-            self._grid = data.get("grid", data.get("traversability"))
-            self._resolution = data.get("resolution", 1.0)
-            origin = data.get("origin", [0, 0])
-            self._origin = np.array(origin[:2])
+            raw = pickle.load(f)
+        if isinstance(raw, dict):
+            # Tomogram format: data=(5, N_slices, W, H), first channel = traversability
+            tomo_data = raw.get("data")
+            if tomo_data is not None and hasattr(tomo_data, "ndim") and tomo_data.ndim == 4:
+                # Extract traversability layer (channel 0), use first slice
+                self._grid = np.asarray(tomo_data[0, 0], dtype=np.float32)
+            else:
+                # Legacy format: grid or traversability key
+                self._grid = raw.get("grid", raw.get("traversability"))
+            self._resolution = raw.get("resolution", 1.0)
+            origin = raw.get("center", raw.get("origin", [0, 0]))
+            self._origin = np.array(origin[:2], dtype=np.float64)
         logger.info("A* loaded tomogram: %s, grid=%s", path,
                      self._grid.shape if self._grid is not None else None)
 
