@@ -104,6 +104,7 @@ def get_service_manager() -> ServiceManager:
 
 
 # Service groups — what each mode needs
-SERVICES_SLAM = ["nav-lidar", "nav-slam"]
-SERVICES_CAMERA = ["orbbec-camera"]
-SERVICES_ALL = SERVICES_SLAM + SERVICES_CAMERA
+SERVICES_LIDAR = ["lingtu_lidar"]
+SERVICES_SLAM = ["lingtu_slam"]
+SERVICES_CAMERA = ["lingtu_camera"]
+SERVICES_HARDWARE = SERVICES_LIDAR + SERVICES_CAMERA

@@ -14,9 +14,9 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     bp = Blueprint()
     # Pull up camera service on demand
     try:
-        from core.service_manager import get_service_manager, SERVICES_CAMERA
+        from core.service_manager import get_service_manager
         svc = get_service_manager()
-        svc.ensure(*SERVICES_CAMERA)
+        svc.ensure("lingtu_camera")
     except Exception:
         pass
     try:

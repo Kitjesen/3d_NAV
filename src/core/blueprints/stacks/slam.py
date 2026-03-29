@@ -37,12 +37,12 @@ def slam(profile: str = "fastlio2") -> Blueprint:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
             # Stop systemd SLAM — we manage our own
-            if svc.is_running("nav-slam"):
-                logger.info("Stopping systemd nav-slam (lingtu manages SLAM)")
-                svc.stop("nav-slam")
-            # LiDAR driver — pull up on demand
-            svc.ensure("nav-lidar")
-            svc.wait_ready("nav-lidar", timeout=10.0)
+            if svc.is_running("lingtu_slam"):
+                logger.info("Stopping systemd lingtu_slam (lingtu manages SLAM)")
+                svc.stop("lingtu_slam")
+            # LiDAR driver — should be running (boot service)
+            svc.ensure("lingtu_lidar")
+            svc.wait_ready("lingtu_lidar", timeout=10.0)
         except Exception:
             pass
 
