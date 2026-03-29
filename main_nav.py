@@ -80,9 +80,10 @@ def _dim(t: str) -> str:    return _c("2", t)
 PROFILES = {
     "map": dict(
         _desc="Mapping mode — SLAM builds map, then 'map save <name>'",
-        robot="sim_ros2", slam_profile="fastlio2", detector="yoloe", encoder="mobileclip",
+        robot="stub", slam_profile="fastlio2", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
         enable_native=False, enable_semantic=False, enable_gateway=False,
+        enable_map_modules=False,
         gateway_port=5050,
     ),
     "stub": dict(
