@@ -153,18 +153,41 @@ geofence:
   stop_margin: 0.5            # m
   enabled: false
 
+# ── Tomogram 构建 (build_tomogram_from_pcd) ──
+# map save 时用这些参数从 PCD 生成 tomogram
+tomogram:
+  resolution: 0.2              # 格网分辨率 (m)
+  slice_dh: 0.5                # 垂直切片间距 (m)，层数自动算
+  ground_h: 0.0                # 地面基准高度 (m)
+  # 可通行性分析
+  kernel_size: 7               # 地形分析卷积核大小
+  interval_min: 0.50           # 最小可通行间隔 — 地面到障碍物 (m)
+  interval_free: 0.65          # 自由通行间隔 — 机器人高度 (m)
+  slope_max: 0.40              # 最大坡度 (tan值, ~22°)
+  step_max: 0.17               # 最大台阶高度 (m)
+  standable_ratio: 0.20        # 可站立面积比例
+  cost_barrier: 50.0           # 障碍物代价阈值 (≥此值不可通行)
+  safe_margin: 0.4             # 安全边距 (m)
+  inflation: 0.2               # 障碍膨胀半径 (m)
+
 # ── PCT 全局规划器 ──
 pct_planner:
   default_goal_height: 0.0    # 2D工具目标未设z时的备用高度 (m)
-  tomogram_resolution: 0.2    # 格网分辨率 (m)
-  tomogram_slice_dh: 0.5      # 高度切片间距 (m); 建图时设多少这里要一致
-  tomogram_ground_h: 0.0      # 建图基准地面高度 (m)
   publish_map_pointcloud: true # 发布 /map_pointcloud 供 RViz2 3D 点击使用
   publish_tomogram: true       # 发布 /tomogram 可视化
   smooth_min_dist: 3             # 路径平滑最小格距 (格数)
   loc_quality_min: 0.3           # ICP定位质量最低阈值，低于此值拒绝规划
   smooth_method: catmull_rom   # 路径平滑方式: catmull_rom / downsample
   smooth_interp: 3             # Catmull-Rom 每段插值点数
+
+# ── OccupancyGrid 实时栅格 ──
+occupancy_grid:
+  resolution: 0.2              # 格网分辨率 (m)
+  map_radius: 30.0             # 机器人中心半径 (m)
+  z_min: 0.10                  # 忽略低于此高度的点 (m) — 地面
+  z_max: 2.00                  # 忽略高于此高度的点 (m) — 天花板
+  inflation_radius: 0.50       # 障碍膨胀半径 (m) ≈ 机器人半宽
+  publish_hz: 2.0              # 发布频率 (Hz)
 
 # ── 健康监控 ──
 health:

@@ -43,28 +43,65 @@ def _make_scene_cfg(resolution=0.2, slice_dh=0.5, ground_h=0.0, **trav_kw):
     return Cfg()
 
 
+def _load_tomogram_config():
+    """Load tomogram params from robot_config.yaml if available."""
+    defaults = dict(
+        resolution=0.2, slice_dh=0.5, ground_h=0.0,
+        kernel_size=7, interval_min=0.50, interval_free=0.65,
+        slope_max=0.40, step_max=0.17, standable_ratio=0.20,
+        cost_barrier=50.0, safe_margin=0.4, inflation=0.2,
+    )
+    try:
+        import sys
+        # Find project root (4 levels up from this script)
+        root = os.path.abspath(os.path.join(_script_dir, "..", "..", "..", ".."))
+        if root not in sys.path:
+            sys.path.insert(0, os.path.join(root, "src"))
+        from core.config import get_config
+        cfg = get_config()
+        tomo = cfg.raw.get("tomogram", {})
+        for k in defaults:
+            if k in tomo:
+                defaults[k] = tomo[k]
+    except Exception:
+        pass
+    return defaults
+
+
 def build_tomogram_from_pcd(
     pcd_path,
     output_pickle_path=None,
-    resolution=0.2,
-    slice_dh=0.5,
-    ground_h=0.0,
+    resolution=None,
+    slice_dh=None,
+    ground_h=None,
     **trav_kwargs
 ):
     """
     Build tomogram from a .pcd file (no ROS).
 
+    Parameters are read from robot_config.yaml (tomogram section).
+    Explicit arguments override config values.
+
     Args:
         pcd_path: Full path to .pcd file.
-        output_pickle_path: If set, save data_dict to this path (e.g. .../map.pickle).
-        resolution: Grid resolution (m).
-        slice_dh: Height step between slices (m).
-        ground_h: Ground height for bounds (m).
-        **trav_kwargs: Optional traversability params (kernel_size, interval_min, ...).
+        output_pickle_path: If set, save data_dict to this path.
+        resolution: Grid resolution (m). None = read from config.
+        slice_dh: Height step between slices (m). None = read from config.
+        ground_h: Ground height for bounds (m). None = read from config.
+        **trav_kwargs: Override traversability params (kernel_size, etc.).
 
     Returns:
-        data_dict: Same format as planner_wrapper expects (data, resolution, center, slice_h0, slice_dh).
+        data_dict: (data, resolution, center, slice_h0, slice_dh).
     """
+    # Load from config, then override with explicit args
+    conf = _load_tomogram_config()
+    resolution = resolution if resolution is not None else conf["resolution"]
+    slice_dh = slice_dh if slice_dh is not None else conf["slice_dh"]
+    ground_h = ground_h if ground_h is not None else conf["ground_h"]
+    for k in ["kernel_size", "interval_min", "interval_free", "slope_max",
+              "step_max", "standable_ratio", "cost_barrier", "safe_margin", "inflation"]:
+        if k not in trav_kwargs and k in conf:
+            trav_kwargs[k] = conf[k]
     if not os.path.isfile(pcd_path):
         raise FileNotFoundError(f"PCD not found: {pcd_path}")
 
