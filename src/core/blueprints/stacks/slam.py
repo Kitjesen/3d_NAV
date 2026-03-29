@@ -30,24 +30,28 @@ def slam(profile: str = "fastlio2") -> Blueprint:
         except ImportError as e:
             logger.warning("SlamBridgeModule not available: %s", e)
     else:
+        # Managed mode: SLAMModule manages C++ processes (lio/pgo/livox),
+        # SlamBridgeModule bridges ROS2 topics back into Python Module ports.
         try:
             from slam.slam_module import SLAMModule
             bp.add(SLAMModule, backend=profile)
         except ImportError as e:
-            logger.warning("SLAMModule not available (%s), falling back to bridge", e)
-            try:
-                from slam.slam_bridge_module import SlamBridgeModule
-                bp.add(SlamBridgeModule)
-            except ImportError:
-                pass
+            logger.warning("SLAMModule not available: %s", e)
+        try:
+            from slam.slam_bridge_module import SlamBridgeModule
+            bp.add(SlamBridgeModule)
+        except ImportError:
+            pass
 
     return bp
 
 
 def slam_module_name(profile: str) -> str:
-    """Return the Module class name for SLAM wiring."""
+    """Return the Module class name for SLAM data wiring (odometry + map_cloud).
+
+    Always SlamBridgeModule — it has the Out ports.
+    SLAMModule only manages C++ process lifecycle, no Out ports used.
+    """
     if not profile or profile == "none":
         return ""
-    if profile == "bridge":
-        return "SlamBridgeModule"
-    return "SLAMModule"
+    return "SlamBridgeModule"
