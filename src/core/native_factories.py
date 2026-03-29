@@ -189,6 +189,38 @@ def path_follower(cfg: Optional[RobotConfig] = None) -> NativeModule:
 
 
 # ---------------------------------------------------------------------------
+# LiDAR Driver
+# ---------------------------------------------------------------------------
+
+def livox_driver(cfg: Optional[RobotConfig] = None) -> NativeModule:
+    """Livox MID-360 ROS2 driver — publishes /lidar/scan (CustomMsg) + /imu/data."""
+    cfg = cfg or get_config()
+    config_path = cfg.raw.get("lidar", {}).get(
+        "livox_config",
+        _share(cfg, "livox_ros_driver2", "config", "MID360_config.json"),
+    )
+    return NativeModule(NativeModuleConfig(
+        executable=_exe(cfg, "livox_ros_driver2", "livox_ros_driver2_node"),
+        name="livox_driver",
+        parameters={
+            "xfer_format": 1,  # 1=Livox CustomMsg
+            "multi_topic": 0,
+            "data_src": 0,     # 0=LiDAR hardware
+            "publish_freq": 10.0,
+            "output_data_type": 0,
+            "user_config_path": config_path,
+        },
+        remappings={
+            "/livox/lidar": "/lidar/scan",
+            "/livox/imu": "/imu/data",
+        },
+        env=_DDS_ENV,
+        auto_restart=True,
+        max_restarts=3,
+    ))
+
+
+# ---------------------------------------------------------------------------
 # SLAM
 # ---------------------------------------------------------------------------
 

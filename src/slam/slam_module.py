@@ -45,8 +45,9 @@ class SLAMModule(Module, layer=1):
         super().__init__(**kw)
         self._backend = backend
         self._node = None
-        self._lio_node = None   # localizer mode: Fast-LIO2 companion
-        self._pgo_node = None   # fastlio2 mode: PGO for map saving
+        self._lio_node = None    # localizer mode: Fast-LIO2 companion
+        self._pgo_node = None    # fastlio2 mode: PGO for map saving
+        self._lidar_node = None  # Livox driver (all modes that need LiDAR)
 
     def setup(self):
         if self._backend == "fastlio2":
@@ -58,8 +59,20 @@ class SLAMModule(Module, layer=1):
         else:
             raise ValueError(f"Unknown SLAM backend: {self._backend}. Available: fastlio2, pointlio, localizer")
 
+    def _setup_lidar_driver(self):
+        """Start Livox LiDAR driver (shared by all SLAM modes)."""
+        try:
+            from core.config import get_config
+            from core.native_factories import livox_driver
+            cfg = get_config()
+            self._lidar_node = livox_driver(cfg)
+            self._lidar_node.setup()
+        except (ImportError, FileNotFoundError, PermissionError) as e:
+            logger.warning("SLAMModule: Livox driver not available: %s", e)
+
     def _setup_fastlio2(self):
-        """Fast-LIO2 SLAM + PGO (map saving requires PGO's /pgo/save_maps service)."""
+        """Livox driver + Fast-LIO2 SLAM + PGO."""
+        self._setup_lidar_driver()
         try:
             from core.config import get_config
             from core.native_factories import slam_fastlio2, slam_pgo
@@ -82,7 +95,8 @@ class SLAMModule(Module, layer=1):
             logger.warning("SLAMModule [pointlio]: not available: %s", e)
 
     def _setup_localizer(self):
-        """Localizer needs Fast-LIO2 (odometry source) + localizer_node (ICP map matching)."""
+        """Livox driver + Fast-LIO2 (odometry source) + localizer_node (ICP map matching)."""
+        self._setup_lidar_driver()
         try:
             from core.config import get_config
             from core.native_factories import slam_fastlio2, slam_localizer
@@ -97,7 +111,8 @@ class SLAMModule(Module, layer=1):
 
     def start(self):
         super().start()
-        for name, node in [("Fast-LIO2 companion", self._lio_node),
+        for name, node in [("Livox driver", self._lidar_node),
+                           ("Fast-LIO2 companion", self._lio_node),
                            ("PGO", self._pgo_node),
                            (self._backend, self._node)]:
             if node:
@@ -109,7 +124,7 @@ class SLAMModule(Module, layer=1):
         self.alive.publish(self._node is not None)
 
     def stop(self):
-        for node in [self._node, self._pgo_node, self._lio_node]:
+        for node in [self._node, self._pgo_node, self._lio_node, self._lidar_node]:
             if node:
                 try:
                     node.stop()
@@ -118,6 +133,7 @@ class SLAMModule(Module, layer=1):
         self._node = None
         self._pgo_node = None
         self._lio_node = None
+        self._lidar_node = None
         self.alive.publish(False)
         super().stop()
 
