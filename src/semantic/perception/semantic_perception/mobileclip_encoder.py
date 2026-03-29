@@ -118,9 +118,21 @@ class MobileCLIPEncoder:
             clip_model_name,
         )
 
+        # Try local cache first (avoids HuggingFace Hub network calls)
+        pretrained = self._pretrained
+        import os, glob
+        local_pattern = os.path.expanduser(
+            "~/.cache/huggingface/hub/models--timm--vit_base_patch32_clip_224.openai/"
+            "snapshots/*/open_clip_pytorch_model.bin"
+        )
+        local_hits = glob.glob(local_pattern)
+        if local_hits:
+            pretrained = local_hits[0]
+            logger.info("Using local CLIP weights: %s", pretrained)
+
         self._model, _, _ = open_clip.create_model_and_transforms(
             clip_model_name,
-            pretrained=self._pretrained,
+            pretrained=pretrained,
             device=self._device,
         )
         self._tokenizer = open_clip.get_tokenizer(clip_model_name)
