@@ -41,4 +41,10 @@ def memory(save_dir: str = "", **config) -> Blueprint:
     except ImportError:
         pass
 
+    try:
+        from memory.modules.temporal_memory_module import TemporalMemoryModule
+        bp.add(TemporalMemoryModule, save_dir=save_dir)
+    except ImportError:
+        pass
+
     return bp

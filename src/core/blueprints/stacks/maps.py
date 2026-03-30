@@ -27,6 +27,17 @@ def maps(**config) -> Blueprint:
                z_min=og.get("z_min", 0.10),
                z_max=og.get("z_max", 2.00),
                publish_hz=og.get("publish_hz", 2.0))
+
+        from nav.voxel_grid_module import VoxelGridModule
+        vg = cfg.raw.get("voxel_grid", {})
+        bp.add(VoxelGridModule,
+               voxel_size=config.get("voxel_size", vg.get("voxel_size", 0.05)),
+               max_range=config.get("voxel_max_range", vg.get("max_range", 20.0)),
+               min_z=vg.get("min_z", -0.5),
+               max_z=vg.get("max_z", 3.0),
+               decay_rate=vg.get("decay_rate", 0.01),
+               publish_interval=vg.get("publish_interval", 2.0))
+
         bp.add(ESDFModule)
         bp.add(ElevationMapModule,
                resolution=config.get("elev_resolution", og.get("resolution", 0.2)),

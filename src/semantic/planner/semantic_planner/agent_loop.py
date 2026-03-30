@@ -1,19 +1,22 @@
 """AgentLoop — multi-turn observe→think→act cycle with LLM tool calling.
 
 Upgrades SemanticPlannerModule from single-shot resolve to iterative agent:
-  1. Observe: gather scene_graph + odometry + memory context
+  1. Observe: gather scene_graph + odometry + memory context + camera image
   2. Think:   LLM decides next action via tool calling
-  3. Act:     execute tool (navigate_to, detect_object, query_memory, tag_location)
+  3. Act:     execute tool (navigate_to, detect_object, query_memory, tag_location,
+              describe_scene, assess_situation)
   4. Repeat:  until task complete, max_steps reached, or abort
 
 Tools exposed to LLM:
-  navigate_to(x, y)        — publish goal_pose
-  navigate_to_object(label) — Fast Path resolve
-  detect_object(label)      — check scene_graph for object
-  query_memory(text)        — vector search past locations
-  tag_location(name)        — save current position
-  say(text)                 — speak to user
-  done(summary)             — mark task complete
+  navigate_to(x, y)             — publish goal_pose
+  navigate_to_object(label)     — Fast Path resolve
+  detect_object(label)          — check scene_graph for object
+  query_memory(text)            — vector search past locations
+  tag_location(name)            — save current position
+  say(text)                     — speak to user
+  done(summary)                 — mark task complete
+  describe_scene()              — VLM: describe current camera view
+  assess_situation(goal)        — VLM: does current view help reach goal?
 
 Usage (called by SemanticPlannerModule._on_instruction):
   loop = AgentLoop(llm_client, tools, publish_fns)
@@ -131,6 +134,48 @@ AGENT_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_scene",
+            "description": (
+                "Ask the VLM to describe what the robot camera currently sees. "
+                "Use this when you need to understand the visual environment — "
+                "e.g. 'what room am I in?', 'is there a path ahead?'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "context": {
+                        "type": "string",
+                        "description": "Optional hint about what the robot is trying to do",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "assess_situation",
+            "description": (
+                "Ask the VLM whether what the robot currently sees is useful for "
+                "reaching a specific goal. Returns whether the view is relevant, "
+                "a suggestion for the next action, and visible obstacles."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "The navigation goal to assess against the current view",
+                    },
+                },
+                "required": ["goal"],
+            },
+        },
+    },
 ]
 
 AGENT_SYSTEM_PROMPT = """You are a navigation robot assistant. You execute tasks by calling tools in sequence.
@@ -140,6 +185,7 @@ Available information:
 - Visible objects: {visible_objects}
 - Navigation status: {nav_status}
 - Memory context: {memory_context}
+- Camera available: {camera_available}
 
 Rules:
 - Break complex tasks into steps and execute them one at a time.
@@ -147,6 +193,8 @@ Rules:
 - Use query_memory for fuzzy location requests ("去上次放背包的地方").
 - Use navigate_to_object for objects currently in view.
 - Use navigate_to for known coordinates.
+- Use describe_scene() when you need to understand what the robot currently sees.
+- Use assess_situation(goal) when you are unsure whether the current view is helpful.
 - Call done() when the task is complete.
 - If you cannot complete the task after several attempts, call done() with an explanation.
 """
@@ -183,7 +231,9 @@ class AgentLoop:
         Args:
             llm_client: LLM client with chat() method (supports tool calling)
             tool_handlers: {tool_name: handler_fn} — each returns a result string
-            context_fn: returns {robot_x, robot_y, visible_objects, nav_status, memory_context}
+            context_fn: returns {robot_x, robot_y, visible_objects, nav_status,
+                        memory_context, camera_image (np.ndarray or None),
+                        scene_graph (dict or None), camera_available (bool)}
             max_steps: max iterations before forced stop
             timeout: max wall-clock seconds
         """
@@ -192,6 +242,7 @@ class AgentLoop:
         self._context_fn = context_fn
         self._max_steps = max_steps
         self._timeout = timeout
+        self._vlm_agent = None  # lazy-initialized on first VLM tool call
 
     async def run(self, instruction: str) -> AgentState:
         """Execute the agent loop for a given instruction."""
@@ -203,7 +254,14 @@ class AgentLoop:
 
         # Initial system + user message
         ctx = self._context_fn()
-        system_msg = AGENT_SYSTEM_PROMPT.format(**ctx)
+        # Ensure new keys have defaults for backward-compat with older context_fn
+        ctx.setdefault("camera_available", ctx.get("camera_image") is not None)
+        system_msg = AGENT_SYSTEM_PROMPT.format(**{
+            k: v for k, v in ctx.items() if k in (
+                "robot_x", "robot_y", "visible_objects",
+                "nav_status", "memory_context", "camera_available",
+            )
+        })
         state.messages = [
             {"role": "system", "content": system_msg},
             {"role": "user", "content": instruction},
@@ -330,6 +388,9 @@ class AgentLoop:
             state.completed = True
             state.summary = args.get("summary", "Task complete")
             result = state.summary
+        elif name in ("describe_scene", "assess_situation"):
+            # VLM tools — handled internally using the VLMSceneAgent
+            result = await self._execute_vlm_tool(name, args)
         elif name in self._handlers:
             try:
                 handler = self._handlers[name]
@@ -362,6 +423,58 @@ class AgentLoop:
         logger.info("AgentLoop step %d: %s(%s) → %s",
                      state.step, name, args, result[:100])
         return result
+
+    def _get_vlm_agent(self):
+        """Return the VLMSceneAgent, creating it lazily on first use."""
+        if self._vlm_agent is None:
+            try:
+                from .vlm_scene_agent import VLMSceneAgent
+                self._vlm_agent = VLMSceneAgent(self._llm)
+                logger.info("AgentLoop: VLMSceneAgent initialized (backend=%s)",
+                            type(self._llm).__name__)
+            except Exception as e:
+                logger.warning("AgentLoop: VLMSceneAgent init failed: %s", e)
+        return self._vlm_agent
+
+    async def _execute_vlm_tool(self, name: str, args: dict) -> str:
+        """Execute a VLM scene-understanding tool.
+
+        Retrieves the latest camera frame from context_fn and dispatches to
+        VLMSceneAgent. Returns a plain string suitable for appending to the
+        agent's message history.
+        """
+        vlm = self._get_vlm_agent()
+        if vlm is None:
+            return "VLM scene understanding not available"
+
+        # Pull the latest context to get the current camera frame and scene graph
+        ctx = self._context_fn()
+        camera_image = ctx.get("camera_image")  # np.ndarray or None
+        scene_graph = ctx.get("scene_graph")    # dict or None
+
+        try:
+            if name == "describe_scene":
+                context_hint = args.get("context", "")
+                return await vlm.describe_scene(camera_image, context=context_hint)
+
+            elif name == "assess_situation":
+                goal = args.get("goal", "")
+                result = await vlm.assess_situation(camera_image, goal, scene_graph)
+                # Format the structured result as a readable string for the agent
+                lines = [f"Relevant to goal: {result.get('relevant', False)}"]
+                suggestion = result.get("suggestion", "")
+                if suggestion:
+                    lines.append(f"Suggestion: {suggestion}")
+                obstacles = result.get("obstacles", [])
+                if obstacles:
+                    lines.append(f"Obstacles: {', '.join(str(o) for o in obstacles)}")
+                return "\n".join(lines)
+
+        except Exception as e:
+            logger.warning("AgentLoop: VLM tool '%s' failed: %s", name, e)
+            return f"VLM tool error: {e}"
+
+        return f"Unknown VLM tool: {name}"
 
 
 # Need asyncio import at module level for iscoroutinefunction check

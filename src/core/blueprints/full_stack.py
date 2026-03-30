@@ -87,7 +87,7 @@ def full_stack_blueprint(
     # Only wire to modules actually in the blueprint.
     _bp_names = {e.name for e in bp._entries}
     if _slam:
-        for consumer in ["OccupancyGridModule", "ElevationMapModule", "TerrainModule"]:
+        for consumer in ["OccupancyGridModule", "ElevationMapModule", "TerrainModule", "VoxelGridModule"]:
             if consumer in _bp_names:
                 bp.wire(_slam, "map_cloud", consumer, "map_cloud")
 
@@ -126,9 +126,11 @@ def full_stack_blueprint(
         bp.wire(_slam, "odometry", "NavigationModule", "odometry")
         for consumer in [
             "OccupancyGridModule", "ElevationMapModule", "TerrainModule",
+            "VoxelGridModule", "WavefrontFrontierExplorer",
             "LocalPlannerModule", "PathFollowerModule",
             "SemanticMapperModule", "EpisodicMemoryModule", "TaggedLocationsModule",
-            "VectorMemoryModule", "SemanticPlannerModule", "VisualServoModule",
+            "VectorMemoryModule", "TemporalMemoryModule",
+            "SemanticPlannerModule", "VisualServoModule",
             "ReconstructionModule", "SafetyRingModule", "GeofenceManagerModule",
             "GatewayModule", "MCPServerModule",
         ]:

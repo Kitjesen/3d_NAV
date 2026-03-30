@@ -127,6 +127,9 @@ class SemanticPlannerModule(Module, layer=4):
         self._vector_memory = None
         self._tagged_locations = None
 
+        # Latest camera frame for VLM tools in the agent loop
+        self._latest_rgb: Optional[np.ndarray] = None
+
         # Stats
         self._resolve_count: int = 0
         self._frontier_count: int = 0

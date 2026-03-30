@@ -24,6 +24,20 @@ def navigation(
            tomogram=tomogram,
            enable_ros2_bridge=not enable_native)
 
+    if config.get("enable_frontier", False):
+        try:
+            from nav.frontier_explorer_module import WavefrontFrontierExplorer
+            bp.add(WavefrontFrontierExplorer,
+                   min_frontier_size=config.get("frontier_min_size", 5),
+                   safe_distance=config.get("frontier_safe_distance", 1.0),
+                   lookahead_distance=config.get("frontier_lookahead", 5.0),
+                   max_explored_distance=config.get("frontier_max_dist", 15.0),
+                   info_gain_threshold=config.get("frontier_info_gain", 0.03),
+                   goal_timeout=config.get("frontier_goal_timeout", 30.0),
+                   explore_rate=config.get("frontier_rate", 2.0))
+        except ImportError as e:
+            logger.warning("FrontierExplorer not available: %s", e)
+
     if enable_native:
         try:
             from base_autonomy.modules.autonomy_module import add_autonomy_stack
