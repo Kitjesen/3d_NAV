@@ -57,6 +57,8 @@ ROBOT_HALF = [0.35, 0.155, 0.15]
 # ── Point Cloud ──────────────────────────────────────────────────────────────
 def on_cloud(msg):
     counts["cloud"] += 1
+    if counts["cloud"] % 5 != 0:  # throttle cloud to ~2Hz (from 10Hz)
+        return
     try:
         n = msg.width * msg.height
         if n == 0:
@@ -69,8 +71,8 @@ def on_cloud(msg):
         xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
         valid = np.isfinite(xyz).all(axis=1)
         xyz = xyz[valid]
-        if len(xyz) > 50000:
-            idx = np.random.choice(len(xyz), 50000, replace=False)
+        if len(xyz) > 20000:
+            idx = np.random.choice(len(xyz), 20000, replace=False)
             xyz = xyz[idx]
         if len(xyz) > 0:
             z = xyz[:, 2]
@@ -88,6 +90,8 @@ def on_cloud(msg):
 def on_odom(msg):
     global _last_odom_t
     counts["odom"] += 1
+    if counts["odom"] % 2 != 0:  # throttle to ~5Hz
+        return
     p = msg.pose.pose.position
     q = msg.pose.pose.orientation
     x, y, z = p.x, p.y, p.z
@@ -247,7 +251,7 @@ def _crop_square(img):
 
 def on_color(msg):
     counts["color"] += 1
-    if counts["color"] % 3 != 0:  # throttle to ~10fps
+    if counts["color"] % 6 != 0:  # throttle to ~5fps
         return
     try:
         h, w = msg.height, msg.width
