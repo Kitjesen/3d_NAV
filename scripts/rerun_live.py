@@ -321,6 +321,40 @@ def on_nav_path(msg):
         pass
 
 
+# ── Terrain Map (local planner input, PointCloud2 with traversability) ────────
+def on_terrain(msg):
+    counts["terrain"] = counts.get("terrain", 0) + 1
+    if counts["terrain"] % 3 != 0:
+        return
+    try:
+        n = msg.width * msg.height
+        if n == 0:
+            return
+        step = msg.point_step
+        raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
+        xyz = np.zeros((n, 3), dtype=np.float32)
+        xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+        xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+        xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+        valid = np.isfinite(xyz).all(axis=1)
+        xyz = xyz[valid]
+        if len(xyz) > 5000:
+            idx = np.random.choice(len(xyz), 5000, replace=False)
+            xyz = xyz[idx]
+        if len(xyz) == 0:
+            return
+        # Green = traversable (low), Red = obstacle (high)
+        z = xyz[:, 2]
+        z_norm = np.clip((z - z.min()) / max(z.max() - z.min(), 0.01), 0, 1)
+        colors = np.zeros((len(xyz), 3), dtype=np.uint8)
+        colors[:, 0] = (z_norm * 200).astype(np.uint8)
+        colors[:, 1] = ((1 - z_norm) * 200).astype(np.uint8)
+        colors[:, 2] = 50
+        rr.log("world/terrain_map", rr.Points3D(xyz, colors=colors, radii=0.05))
+    except Exception:
+        pass
+
+
 # ── Camera Color ─────────────────────────────────────────────────────────────
 def _crop_square(img):
     """Crop center square from portrait image after rotation."""
@@ -406,9 +440,10 @@ node.create_subscription(MarkerArray, "/nav/detections", on_detections, qos_best
 node.create_subscription(Path, "/nav/path", on_nav_path, qos_best)
 node.create_subscription(TFMessage, "/tf", on_tf, qos_best)
 node.create_subscription(TFMessage, "/tf_static", on_tf_static, qos_best)
+node.create_subscription(PointCloud2, "/nav/terrain_map_ext", on_terrain, qos_best)
 get_shared_executor().add_node(node)
 
-print("Streaming: voxels + robot + heading + trajectory + TF + costmap + detections + nav_path + camera")
+print("Streaming: map + robot + trajectory + TF + costmap + terrain + detections + nav_path + camera")
 print("Ctrl+C to stop.")
 try:
     while True:
