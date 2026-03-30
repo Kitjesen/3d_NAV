@@ -82,51 +82,70 @@ _ACTIVE_TOMOGRAM = os.path.join(
     "active", "tomogram.pickle",
 )
 
+# ── Hardware presets — one param switches the entire sensor stack ─────
+# Override with --robot <preset> on any profile
+ROBOT_PRESETS = {
+    "stub":       dict(robot="stub",      slam_profile="none",      detector="yoloe", encoder="mobileclip"),
+    "sim":        dict(robot="sim_mujoco", slam_profile="bridge",   detector="yoloe", encoder="mobileclip"),
+    "ros2":       dict(robot="sim_ros2",  slam_profile="bridge",    detector="yoloe", encoder="mobileclip"),
+    "s100p":      dict(robot="sim_ros2",  slam_profile="localizer", detector="bpu",   encoder="mobileclip"),
+    "thunder":    dict(robot="thunder",   slam_profile="localizer", detector="bpu",   encoder="mobileclip",
+                       dog_host="192.168.66.190", dog_port=13145),
+}
+
+# ── Profiles = task mode × hardware preset ───────────────────────────
+# Profile defines WHAT to do, robot preset defines WHERE to run.
+# `lingtu nav`                → nav task on s100p hardware (default)
+# `lingtu nav --robot sim`    → nav task in MuJoCo simulation
+# `lingtu nav --robot stub`   → nav task offline (no hardware)
+
 PROFILES = {
     "map": dict(
-        _desc="Mapping mode — SLAM + PGO builds map, then 'map save <name>'",
-        robot="sim_ros2", slam_profile="fastlio2", detector="yoloe", encoder="mobileclip",
+        _desc="Build map — SLAM + PGO, then 'map save <name>'",
+        _default_robot="s100p",
+        slam_profile="fastlio2",
         llm="mock", planner="astar",
         enable_native=False, enable_semantic=False, enable_gateway=True,
         enable_map_modules=True,
         gateway_port=5050,
     ),
-    "stub": dict(
-        _desc="No hardware, framework testing",
-        robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip",
-        llm="mock", planner="astar",
-        enable_native=False, enable_semantic=False, enable_gateway=True,
-        gateway_port=5050,
-    ),
-    "sim": dict(
-        _desc="MuJoCo simulation (full algorithm stack)",
-        robot="sim_ros2", slam_profile="bridge", detector="yoloe", encoder="mobileclip",
-        llm="mock", planner="astar",
-        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
-        enable_native=True, enable_semantic=True, enable_gateway=True,
-        gateway_port=5050,
-    ),
-    "dev": dict(
-        _desc="Semantic pipeline, no C++ nodes",
-        robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip",
-        llm="mock", planner="astar",
-        enable_native=False, enable_semantic=True, enable_gateway=True,
-        gateway_port=5050,
-    ),
     "nav": dict(
-        _desc="Navigation with pre-built map (localizer + semantic + gateway)",
-        robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip",
+        _desc="Navigate with pre-built map (localizer + full stack)",
+        _default_robot="s100p",
         llm="qwen", planner="astar",
         tomogram=_ACTIVE_TOMOGRAM,
         enable_native=False, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
     ),
     "explore": dict(
-        _desc="Exploration, no pre-built map (SLAM + frontier)",
-        robot="sim_ros2", slam_profile="fastlio2", detector="bpu", encoder="mobileclip",
+        _desc="Explore unknown area (SLAM + frontier, no map needed)",
+        _default_robot="s100p",
+        slam_profile="fastlio2",
         llm="qwen", planner="astar",
         enable_native=False, enable_semantic=True, enable_gateway=True,
         enable_frontier=True,
+        gateway_port=5050,
+    ),
+    "sim": dict(
+        _desc="MuJoCo simulation (full algorithm stack)",
+        _default_robot="sim",
+        llm="mock", planner="astar",
+        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+        enable_native=True, enable_semantic=True, enable_gateway=True,
+        gateway_port=5050,
+    ),
+    "dev": dict(
+        _desc="Semantic pipeline dev (no hardware)",
+        _default_robot="stub",
+        llm="mock", planner="astar",
+        enable_native=False, enable_semantic=True, enable_gateway=True,
+        gateway_port=5050,
+    ),
+    "stub": dict(
+        _desc="Framework testing (no hardware, no semantic)",
+        _default_robot="stub",
+        llm="mock", planner="astar",
+        enable_native=False, enable_semantic=False, enable_gateway=True,
         gateway_port=5050,
     ),
 }
@@ -1207,7 +1226,7 @@ def main() -> None:
     profile_name = args.profile
     if profile_name is None:
         has_custom = any([
-            args.robot, args.dog_host, args.detector,
+            args.dog_host, args.detector,
             args.encoder, args.llm, args.planner,
         ])
         if has_custom:
@@ -1222,10 +1241,24 @@ def main() -> None:
         print(f"  Available: {', '.join(PROFILES.keys())}")
         sys.exit(1)
 
-    # Build config: profile defaults + CLI overrides
+    # Build config: profile defaults + robot preset + CLI overrides
     cfg = dict(PROFILES[profile_name])
+
+    # Apply robot preset (fills in robot, slam_profile, detector, encoder)
+    robot_key = args.robot or cfg.pop("_default_robot", "stub")
+    if robot_key in ROBOT_PRESETS:
+        preset = ROBOT_PRESETS[robot_key]
+        for k, v in preset.items():
+            if k not in cfg:  # profile can override preset (e.g. slam_profile="fastlio2" in map)
+                cfg[k] = v
+            elif k == "robot":  # robot always comes from preset
+                cfg[k] = v
+    else:
+        cfg["robot"] = robot_key  # raw driver name (e.g. "sim_ros2")
+
+    # CLI overrides (explicit flags beat everything)
     overrides = {
-        "robot": args.robot, "dog_host": args.dog_host,
+        "dog_host": args.dog_host,
         "dog_port": args.dog_port, "detector": args.detector,
         "encoder": args.encoder, "llm": args.llm,
         "planner": args.planner, "tomogram": args.tomogram,
