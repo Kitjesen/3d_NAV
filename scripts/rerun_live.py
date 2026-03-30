@@ -46,17 +46,33 @@ from core.ros2_context import ensure_rclpy, get_shared_executor, shutdown_shared
 ensure_rclpy()
 
 import rerun as rr
+import rerun.blueprint as rrb
+
 rr.init("lingtu_live")
+
+# Layout: 3D world (left) + camera 2D (right top/bottom)
+blueprint = rrb.Blueprint(
+    rrb.Horizontal(
+        rrb.Spatial3DView(origin="world", name="3D World"),
+        rrb.Vertical(
+            rrb.Spatial2DView(origin="camera/color", name="Camera"),
+            rrb.Spatial2DView(origin="camera/depth", name="Depth"),
+            column_shares=[1, 1],
+        ),
+        column_shares=[3, 1],
+    ),
+)
 
 if _args.native:
     rr.spawn(connect=True)
     print("Rerun: native viewer")
 else:
-    # gRPC binds 0.0.0.0 so remote native viewers can connect directly
     server_uri = rr.serve_grpc(grpc_port=_args.grpc_port)
     rr.serve_web_viewer(open_browser=False, web_port=_args.web_port, connect_to=server_uri)
     print(f"Rerun web:  http://localhost:{_args.web_port}")
     print(f"Rerun gRPC: rerun --connect rerun+http://<robot_ip>:{_args.grpc_port}/proxy")
+
+rr.send_blueprint(blueprint)
 
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -77,11 +93,7 @@ _last_odom_t = 0.0
 # Robot body dimensions (half-sizes in meters) — Thunder quadruped
 ROBOT_HALF = [0.35, 0.155, 0.15]
 
-# Voxel block size for point cloud visualization (meters)
-VOXEL_SIZE = 0.08
-
-
-# ── Point Cloud (voxel blocks) ───────────────────────────────────────────────
+# ── Point Cloud (lightweight Points3D for remote viewing) ────────────────────
 def on_cloud(msg):
     counts["cloud"] += 1
     if counts["cloud"] % 5 != 0:  # throttle to ~2Hz
@@ -98,32 +110,20 @@ def on_cloud(msg):
         xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
         valid = np.isfinite(xyz).all(axis=1)
         xyz = xyz[valid]
-        if len(xyz) > 20000:
-            idx = np.random.choice(len(xyz), 20000, replace=False)
+        if len(xyz) > 10000:
+            idx = np.random.choice(len(xyz), 10000, replace=False)
             xyz = xyz[idx]
         if len(xyz) == 0:
             return
 
-        # Voxelize: snap to grid centers for block rendering
-        vox_idx = np.floor(xyz / VOXEL_SIZE).astype(np.int32)
-        # Deduplicate voxels
-        _, unique_idx = np.unique(vox_idx, axis=0, return_index=True)
-        centers = (vox_idx[unique_idx].astype(np.float32) + 0.5) * VOXEL_SIZE
-
         # Color by height
-        z = centers[:, 2]
+        z = xyz[:, 2]
         z_norm = np.clip((z - z.min()) / max(z.max() - z.min(), 0.01), 0, 1)
-        colors = np.zeros((len(centers), 3), dtype=np.uint8)
-        colors[:, 0] = (z_norm * 255).astype(np.uint8)       # red = high
-        colors[:, 2] = ((1 - z_norm) * 255).astype(np.uint8) # blue = low
+        colors = np.zeros((len(xyz), 3), dtype=np.uint8)
+        colors[:, 0] = (z_norm * 255).astype(np.uint8)
+        colors[:, 2] = ((1 - z_norm) * 255).astype(np.uint8)
         colors[:, 1] = 80
-
-        half = VOXEL_SIZE * 0.5
-        rr.log("world/point_cloud", rr.Boxes3D(
-            centers=centers,
-            half_sizes=np.full((len(centers), 3), half, dtype=np.float32),
-            colors=colors,
-        ))
+        rr.log("world/point_cloud", rr.Points3D(xyz, colors=colors, radii=0.03))
     except Exception:
         pass
 
