@@ -53,15 +53,17 @@ check("CAN Bus", os.path.exists("/sys/class/net/can0"))
 # 3. Ports
 print("\n  --- Ports ---")
 check("brainstem gRPC :13145", port_open("127.0.0.1", 13145))
-check("Gateway :5050", port_open("127.0.0.1", 5050), "(may not be running)")
-check("MCP :8090", port_open("127.0.0.1", 8090), "(may not be running)")
-check("Teleop :5060", port_open("127.0.0.1", 5060), "(may not be running)")
+for name, port in [("Gateway :5050", 5050), ("MCP :8090", 8090), ("Teleop :5060", 5060)]:
+    if port_open("127.0.0.1", port):
+        check(name, True)
+    else:
+        print("  [\033[33m--\033[0m] %s  (lingtu not running)" % name)
 
 # 4. ROS2 topics
 print("\n  --- ROS2 Topics ---")
 topics = run(["bash", "-c", "source /opt/ros/humble/setup.bash && source /opt/nova/lingtu/v1.8.0/install/setup.bash && ros2 topic list 2>/dev/null"], timeout=5)
 for topic in ["/nav/odometry", "/nav/map_cloud", "/nav/registered_cloud",
-              "/camera/color/image_raw", "/camera/depth/image_raw", "/lidar/scan"]:
+              "/camera/color/image_raw", "/camera/depth/image_raw", "/nav/lidar_scan"]:
     check(topic, topic in topics)
 
 # 5. Data flow (quick 3s test)
