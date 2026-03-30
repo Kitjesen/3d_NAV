@@ -123,7 +123,7 @@ def on_odom(msg):
     if _last_odom_t > 0:
         dt = now - _last_odom_t
         if dt > 0:
-            rr.log("metrics/slam_hz", rr.Scalar(1.0 / dt))
+            rr.log("metrics/slam_hz", rr.Scalars(1.0 / dt))
     _last_odom_t = now
 
 
@@ -213,7 +213,7 @@ def on_detections(msg):
                 colors=colors,
                 radii=0.12,
             ))
-            rr.log("metrics/det_count", rr.Scalar(len(positions)))
+            rr.log("metrics/det_count", rr.Scalars(len(positions)))
     except Exception:
         pass
 
