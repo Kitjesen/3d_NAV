@@ -72,7 +72,7 @@ slam_was_off = not service_active("slam")
 if slam_was_off:
     print("\n  [..] Starting slam for data flow test...")
     subprocess.run(["sudo", "systemctl", "start", "slam"], capture_output=True, timeout=5)
-    time.sleep(5)  # SLAM needs ~5s to initialize and start publishing
+    time.sleep(8)  # SLAM launch file needs ~8s to initialize + DDS discovery
 print("\n  --- Data Flow (3s) ---")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 try:
