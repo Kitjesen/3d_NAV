@@ -2,13 +2,14 @@
 """Live visualization via Rerun — full robot dashboard.
 
 Channels:
-  world/point_cloud   — LiDAR point cloud (height-colored)
+  world/point_cloud   — LiDAR voxel blocks (height-colored Boxes3D)
   world/robot         — robot body (wireframe box)
   world/heading       — orientation arrow (yellow)
   world/trajectory    — path traveled (blue line)
   world/costmap       — 2D occupancy grid (colored mesh)
   world/detections    — detected objects (labeled 3D points)
   world/nav_path      — planned navigation path (green line)
+  world/tf/{frame}    — TF coordinate frames (Transform3D)
   camera/color        — RGB camera (rotated for vertical mount)
   camera/depth        — depth image
   metrics/slam_hz     — SLAM update rate
@@ -21,7 +22,7 @@ View remotely:
     ssh -L 9090:127.0.0.1:9090 -L 9877:127.0.0.1:9877 sunrise@192.168.66.190
     Open http://localhost:9090
 """
-import sys, os, time, math, struct
+import sys, os, time, math
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import logging
 logging.basicConfig(level=logging.WARNING)
@@ -41,23 +42,28 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
 from sensor_msgs.msg import PointCloud2, Image
 from visualization_msgs.msg import MarkerArray
+from tf2_msgs.msg import TFMessage
 
 node = Node("rerun_viz")
 qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=5)
 qos_best = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=5)
 
 trajectory = []
-counts = {"odom": 0, "cloud": 0, "color": 0, "depth": 0, "costmap": 0, "det": 0, "path": 0}
+counts = {"odom": 0, "cloud": 0, "color": 0, "depth": 0,
+          "costmap": 0, "det": 0, "path": 0, "tf": 0}
 _last_odom_t = 0.0
 
 # Robot body dimensions (half-sizes in meters) — Thunder quadruped
 ROBOT_HALF = [0.35, 0.155, 0.15]
 
+# Voxel block size for point cloud visualization (meters)
+VOXEL_SIZE = 0.08
 
-# ── Point Cloud ──────────────────────────────────────────────────────────────
+
+# ── Point Cloud (voxel blocks) ───────────────────────────────────────────────
 def on_cloud(msg):
     counts["cloud"] += 1
-    if counts["cloud"] % 5 != 0:  # throttle cloud to ~2Hz (from 10Hz)
+    if counts["cloud"] % 5 != 0:  # throttle to ~2Hz
         return
     try:
         n = msg.width * msg.height
@@ -74,14 +80,29 @@ def on_cloud(msg):
         if len(xyz) > 20000:
             idx = np.random.choice(len(xyz), 20000, replace=False)
             xyz = xyz[idx]
-        if len(xyz) > 0:
-            z = xyz[:, 2]
-            z_norm = np.clip((z - z.min()) / max(z.max() - z.min(), 0.01), 0, 1)
-            colors = np.zeros((len(xyz), 3), dtype=np.uint8)
-            colors[:, 0] = (z_norm * 255).astype(np.uint8)       # red = high
-            colors[:, 2] = ((1 - z_norm) * 255).astype(np.uint8) # blue = low
-            colors[:, 1] = 80
-            rr.log("world/point_cloud", rr.Points3D(xyz, colors=colors, radii=0.02))
+        if len(xyz) == 0:
+            return
+
+        # Voxelize: snap to grid centers for block rendering
+        vox_idx = np.floor(xyz / VOXEL_SIZE).astype(np.int32)
+        # Deduplicate voxels
+        _, unique_idx = np.unique(vox_idx, axis=0, return_index=True)
+        centers = (vox_idx[unique_idx].astype(np.float32) + 0.5) * VOXEL_SIZE
+
+        # Color by height
+        z = centers[:, 2]
+        z_norm = np.clip((z - z.min()) / max(z.max() - z.min(), 0.01), 0, 1)
+        colors = np.zeros((len(centers), 3), dtype=np.uint8)
+        colors[:, 0] = (z_norm * 255).astype(np.uint8)       # red = high
+        colors[:, 2] = ((1 - z_norm) * 255).astype(np.uint8) # blue = low
+        colors[:, 1] = 80
+
+        half = VOXEL_SIZE * 0.5
+        rr.log("world/point_cloud", rr.Boxes3D(
+            centers=centers,
+            half_sizes=np.full((len(centers), 3), half, dtype=np.float32),
+            colors=colors,
+        ))
     except Exception:
         pass
 
@@ -96,7 +117,7 @@ def on_odom(msg):
     q = msg.pose.pose.orientation
     x, y, z = p.x, p.y, p.z
 
-    # Robot body — wireframe box at robot position
+    # Robot body — wireframe box
     rr.log("world/robot", rr.Boxes3D(
         centers=[[x, y, z + ROBOT_HALF[2]]],
         half_sizes=[ROBOT_HALF],
@@ -131,6 +152,37 @@ def on_odom(msg):
     _last_odom_t = now
 
 
+# ── TF Coordinate Frames ────────────────────────────────────────────────────
+def on_tf(msg):
+    counts["tf"] += 1
+    try:
+        for tf in msg.transforms:
+            child = tf.child_frame_id.lstrip("/")
+            t = tf.transform.translation
+            q = tf.transform.rotation
+            rr.log(f"world/tf/{child}", rr.Transform3D(
+                translation=[t.x, t.y, t.z],
+                rotation=rr.Quaternion(xyzw=[q.x, q.y, q.z, q.w]),
+            ))
+    except Exception:
+        pass
+
+
+def on_tf_static(msg):
+    """Static TF — logged once with static=True."""
+    try:
+        for tf in msg.transforms:
+            child = tf.child_frame_id.lstrip("/")
+            t = tf.transform.translation
+            q = tf.transform.rotation
+            rr.log(f"world/tf/{child}", rr.Transform3D(
+                translation=[t.x, t.y, t.z],
+                rotation=rr.Quaternion(xyzw=[q.x, q.y, q.z, q.w]),
+            ), static=True)
+    except Exception:
+        pass
+
+
 # ── Costmap (2D occupancy grid → colored ground plane) ───────────────────────
 def on_costmap(msg):
     counts["costmap"] += 1
@@ -145,36 +197,25 @@ def on_costmap(msg):
 
         grid = np.array(msg.data, dtype=np.int8).reshape(h, w)
 
-        # Build colored image: green=free, red=occupied, gray=unknown
+        # Build colored image
         img = np.zeros((h, w, 3), dtype=np.uint8)
-        free_mask = grid == 0
-        occ_mask = grid > 50
-        unk_mask = grid < 0
-
-        img[free_mask] = [40, 80, 40]      # dark green = free
-        img[occ_mask] = [200, 50, 50]       # red = occupied
-        img[unk_mask] = [60, 60, 60]        # gray = unknown
-
-        # Inflation zone (1-50)
+        img[grid == 0] = [40, 80, 40]           # dark green = free
+        img[grid > 50] = [200, 50, 50]           # red = occupied
+        img[grid < 0] = [60, 60, 60]             # gray = unknown
         inflate_mask = (grid > 0) & (grid <= 50)
-        img[inflate_mask] = [180, 160, 40]  # yellow = inflation
+        img[inflate_mask] = [180, 160, 40]        # yellow = inflation
 
-        # Build mesh vertices (flat ground plane at z=0.01)
-        # 4 corners of the costmap
+        # Flat ground mesh
         x0, y0 = ox, oy
         x1, y1 = ox + w * res, oy + h * res
         vertices = np.array([
-            [x0, y0, 0.01],
-            [x1, y0, 0.01],
-            [x1, y1, 0.01],
-            [x0, y1, 0.01],
+            [x0, y0, 0.01], [x1, y0, 0.01],
+            [x1, y1, 0.01], [x0, y1, 0.01],
         ], dtype=np.float32)
         triangles = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.uint32)
         texcoords = np.array([
-            [0.0, 1.0],
-            [1.0, 1.0],
-            [1.0, 0.0],
-            [0.0, 0.0],
+            [0.0, 1.0], [1.0, 1.0],
+            [1.0, 0.0], [0.0, 0.0],
         ], dtype=np.float32)
 
         rr.log("world/costmap", rr.Mesh3D(
@@ -212,10 +253,7 @@ def on_detections(msg):
 
         if positions:
             rr.log("world/detections", rr.Points3D(
-                positions,
-                labels=labels,
-                colors=colors,
-                radii=0.12,
+                positions, labels=labels, colors=colors, radii=0.12,
             ))
             rr.log("metrics/det_count", rr.Scalars(len(positions)))
     except Exception:
@@ -226,15 +264,11 @@ def on_detections(msg):
 def on_nav_path(msg):
     counts["path"] += 1
     try:
-        pts = []
-        for pose_s in msg.poses:
-            p = pose_s.pose.position
-            pts.append([p.x, p.y, p.z])
+        pts = [[ps.pose.position.x, ps.pose.position.y, ps.pose.position.z]
+               for ps in msg.poses]
         if len(pts) > 1:
             rr.log("world/nav_path", rr.LineStrips3D(
-                [pts],
-                colors=[[0, 255, 100]],
-                radii=0.04,
+                [pts], colors=[[0, 255, 100]], radii=0.04,
             ))
     except Exception:
         pass
@@ -259,8 +293,8 @@ def on_color(msg):
         if encoding in ("bgr8", "rgb8"):
             img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w, 3)
             if encoding == "bgr8":
-                img = img[:, :, ::-1]  # BGR → RGB
-            img = _crop_square(np.rot90(img, k=1))  # vertical mount → square
+                img = img[:, :, ::-1]
+            img = _crop_square(np.rot90(img, k=1))
             rr.log("camera/color", rr.Image(img))
         elif encoding in ("mono8", "8uc1"):
             img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w)
@@ -298,16 +332,18 @@ node.create_subscription(Image, "/camera/depth/image_raw", on_depth, qos)
 node.create_subscription(OccupancyGrid, "/nav/costmap", on_costmap, qos_best)
 node.create_subscription(MarkerArray, "/nav/detections", on_detections, qos_best)
 node.create_subscription(Path, "/nav/path", on_nav_path, qos_best)
+node.create_subscription(TFMessage, "/tf", on_tf, qos_best)
+node.create_subscription(TFMessage, "/tf_static", on_tf_static, qos_best)
 get_shared_executor().add_node(node)
 
-print("Streaming: point_cloud + robot(box) + heading + trajectory + costmap + detections + nav_path + camera")
+print("Streaming: voxels + robot + heading + trajectory + TF + costmap + detections + nav_path + camera")
 print("Ctrl+C to stop.")
 try:
     while True:
         time.sleep(2)
-        print("odom=%d cloud=%d color=%d depth=%d costmap=%d det=%d path=%d" % (
+        print("odom=%d cloud=%d color=%d depth=%d costmap=%d det=%d path=%d tf=%d" % (
             counts["odom"], counts["cloud"], counts["color"], counts["depth"],
-            counts["costmap"], counts["det"], counts["path"]))
+            counts["costmap"], counts["det"], counts["path"], counts["tf"]))
 except KeyboardInterrupt:
     pass
 
