@@ -1126,6 +1126,16 @@ def main() -> None:
         _cmd_stop()
         return
 
+    if args.profile == "doctor":
+        import subprocess as _sp
+        _sp.run([sys.executable, os.path.join(os.path.dirname(__file__) or ".", "scripts", "doctor.py")])
+        return
+
+    if args.profile == "rerun":
+        import subprocess as _sp
+        _sp.run([sys.executable, os.path.join(os.path.dirname(__file__) or ".", "scripts", "rerun_live.py")])
+        return
+
     # ── Resolve profile ──
     profile_name = args.profile
     if profile_name is None:
