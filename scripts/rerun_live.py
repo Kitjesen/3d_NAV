@@ -33,8 +33,9 @@ ensure_rclpy()
 
 import rerun as rr
 rr.init("lingtu_live")
-# Use rr.serve() for 0.30.x compatibility (bundles web viewer + WebSocket)
-rr.serve(open_browser=False, web_port=9090, ws_port=9877)
+server_uri = rr.serve_grpc(grpc_port=9877)
+rr.serve_web_viewer(open_browser=False, web_port=9090, connect_to=server_uri)
+print(f"gRPC: {server_uri}")
 print("Rerun: http://localhost:9090")
 
 from rclpy.node import Node
