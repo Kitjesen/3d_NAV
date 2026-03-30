@@ -133,18 +133,12 @@ class SlamBridgeModule(Module, layer=1):
                 pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
                 xyz = pts[:, :3].copy()
             else:
-                # Generic: extract x,y,z offsets from fields
-                offsets = {}
-                for f in msg.fields:
-                    offsets[f.name] = f.offset
-                if not all(k in offsets for k in ("x", "y", "z")):
-                    return
+                # Generic: extract x(0),y(4),z(8) via numpy reshape — no Python loop
+                raw = data.reshape(n_points, step)
                 xyz = np.zeros((n_points, 3), dtype=np.float32)
-                for i in range(n_points):
-                    base = i * step
-                    xyz[i, 0] = struct.unpack_from("<f", data, base + offsets["x"])[0]
-                    xyz[i, 1] = struct.unpack_from("<f", data, base + offsets["y"])[0]
-                    xyz[i, 2] = struct.unpack_from("<f", data, base + offsets["z"])[0]
+                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
 
             # Filter NaN/inf
             valid = np.isfinite(xyz).all(axis=1)

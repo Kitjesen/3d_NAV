@@ -56,18 +56,21 @@ def on_cloud(msg):
     counts["cloud"] += 1
     try:
         n = msg.width * msg.height
-        step = msg.point_step
-        if step == 16 and n > 0:
-            pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)[:, :3]
-        else:
+        if n == 0:
             return
+        step = msg.point_step
+        raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
+        # x,y,z at offset 0,4,8 (float32 each) — works for any point_step
+        pts = np.zeros((n, 3), dtype=np.float32)
+        pts[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+        pts[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+        pts[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
         valid = np.isfinite(pts).all(axis=1)
         pts = pts[valid]
+        if len(pts) > 50000:
+            idx = np.random.choice(len(pts), 50000, replace=False)
+            pts = pts[idx]
         if len(pts) > 0:
-            # Subsample for performance
-            if len(pts) > 50000:
-                idx = np.random.choice(len(pts), 50000, replace=False)
-                pts = pts[idx]
             rr.log("world/point_cloud", rr.Points3D(pts, radii=0.02))
     except Exception:
         pass
