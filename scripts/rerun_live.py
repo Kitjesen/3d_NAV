@@ -51,17 +51,18 @@ import rerun.blueprint as rrb
 rr.init("lingtu_live")
 
 # Layout: 3D world (left) + camera 2D (right top/bottom)
-blueprint = rrb.Blueprint(
-    rrb.Horizontal(
-        rrb.Spatial3DView(origin="world", name="3D World"),
-        rrb.Vertical(
-            rrb.Spatial2DView(origin="camera/color", name="Camera"),
-            rrb.Spatial2DView(origin="camera/depth", name="Depth"),
-            column_shares=[1, 1],
+try:
+    blueprint = rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Spatial3DView(origin="world", name="3D World"),
+            rrb.Vertical(
+                rrb.Spatial2DView(origin="camera/color", name="Camera"),
+                rrb.Spatial2DView(origin="camera/depth", name="Depth"),
+            ),
         ),
-        column_shares=[3, 1],
-    ),
-)
+    )
+except Exception:
+    blueprint = None
 
 if _args.native:
     rr.spawn(connect=True)
@@ -72,7 +73,11 @@ else:
     print(f"Rerun web:  http://localhost:{_args.web_port}")
     print(f"Rerun gRPC: rerun --connect rerun+http://<robot_ip>:{_args.grpc_port}/proxy")
 
-rr.send_blueprint(blueprint)
+if blueprint:
+    try:
+        rr.send_blueprint(blueprint)
+    except Exception:
+        pass
 
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
