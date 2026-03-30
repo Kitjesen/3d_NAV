@@ -98,7 +98,13 @@ _last_odom_t = 0.0
 # Robot body dimensions (half-sizes in meters) — Thunder quadruped
 ROBOT_HALF = [0.35, 0.155, 0.15]
 
-# ── Point Cloud (lightweight Points3D for remote viewing) ────────────────────
+# Accumulated global map (voxel hash for dedup, keeps map growing)
+_MAP_VOXEL_SIZE = 0.1  # 10cm grid for accumulation
+_map_voxels = {}  # (ix,iy,iz) → [r,g,b]
+_MAP_MAX = 100000  # max voxels to display
+
+
+# ── Point Cloud (accumulate into global map) ─────────────────────────────────
 def on_cloud(msg):
     counts["cloud"] += 1
     if counts["cloud"] % 5 != 0:  # throttle to ~2Hz
@@ -115,20 +121,35 @@ def on_cloud(msg):
         xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
         valid = np.isfinite(xyz).all(axis=1)
         xyz = xyz[valid]
-        if len(xyz) > 10000:
-            idx = np.random.choice(len(xyz), 10000, replace=False)
-            xyz = xyz[idx]
         if len(xyz) == 0:
             return
 
-        # Color by height
-        z = xyz[:, 2]
-        z_norm = np.clip((z - z.min()) / max(z.max() - z.min(), 0.01), 0, 1)
-        colors = np.zeros((len(xyz), 3), dtype=np.uint8)
+        # Accumulate into voxel map (global map grows over time)
+        vs = _MAP_VOXEL_SIZE
+        ix = np.floor(xyz[:, 0] / vs).astype(np.int32)
+        iy = np.floor(xyz[:, 1] / vs).astype(np.int32)
+        iz = np.floor(xyz[:, 2] / vs).astype(np.int32)
+        for i in range(len(ix)):
+            key = (int(ix[i]), int(iy[i]), int(iz[i]))
+            if key not in _map_voxels:
+                # Color by height
+                z_val = xyz[i, 2]
+                _map_voxels[key] = z_val
+
+        # Display accumulated map (subsample if too large)
+        keys = list(_map_voxels.keys())
+        if len(keys) > _MAP_MAX:
+            import random
+            keys = random.sample(keys, _MAP_MAX)
+
+        centers = np.array(keys, dtype=np.float32) * vs + vs * 0.5
+        z_vals = np.array([_map_voxels[tuple(k)] for k in keys], dtype=np.float32)
+        z_norm = np.clip((z_vals - z_vals.min()) / max(z_vals.max() - z_vals.min(), 0.01), 0, 1)
+        colors = np.zeros((len(centers), 3), dtype=np.uint8)
         colors[:, 0] = (z_norm * 255).astype(np.uint8)
         colors[:, 2] = ((1 - z_norm) * 255).astype(np.uint8)
         colors[:, 1] = 80
-        rr.log("world/point_cloud", rr.Points3D(xyz, colors=colors, radii=0.03))
+        rr.log("world/map", rr.Points3D(centers, colors=colors, radii=0.04))
     except Exception:
         pass
 
