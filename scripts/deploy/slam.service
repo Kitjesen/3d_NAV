@@ -6,7 +6,7 @@ After=lidar.service
 Type=simple
 User=sunrise
 WorkingDirectory=/opt/nav
-ExecStart=/bin/bash -c 'source /opt/nav/scripts/services/env.sh && exec ros2 run fastlio2 lio_node --ros-args -p config_path:=${NAV_DIR}/install/fastlio2/share/fastlio2/config/lio.yaml -r /cloud_registered:=/nav/registered_cloud -r /Odometry:=/nav/odometry -r /cloud_map:=/nav/map_cloud -r /imu/data:=/nav/imu -r /lidar/scan:=/nav/lidar_scan'
+ExecStart=/bin/bash -c 'source /opt/nav/scripts/services/env.sh && exec ros2 launch /opt/nav/launch/subsystems/slam.launch.py slam_profile:=fastlio2'
 Restart=on-failure
 RestartSec=3
 

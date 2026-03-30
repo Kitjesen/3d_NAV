@@ -6,7 +6,7 @@ After=slam.service
 Type=simple
 User=sunrise
 WorkingDirectory=/opt/nav
-ExecStart=/bin/bash -c 'source /opt/nav/scripts/services/env.sh && exec ros2 run localizer localizer_node --ros-args -p config_path:=${NAV_DIR}/install/localizer/share/localizer/config/localizer.yaml'
+ExecStart=/bin/bash -c 'source /opt/nav/scripts/services/env.sh && exec ros2 launch /opt/nav/launch/profiles/localizer_icp.launch.py'
 Restart=on-failure
 RestartSec=3
 
