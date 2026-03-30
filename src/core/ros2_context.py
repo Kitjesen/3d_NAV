@@ -65,8 +65,8 @@ def shutdown_shared_executor() -> None:
 
 def _spin_loop() -> None:
     import rclpy
-    try:
-        while _running and rclpy.ok():
+    while _running and rclpy.ok():
+        try:
             _executor.spin_once(timeout_sec=0.02)
-    except Exception:
-        pass
+        except Exception as e:
+            logger.warning("ROS2 spin_once error: %s", e)
