@@ -121,6 +121,7 @@ PROFILES = {
         robot="thunder", slam_profile="fastlio2", detector="bpu", encoder="mobileclip",
         llm="qwen", planner="astar",
         enable_native=True, enable_semantic=True, enable_gateway=True,
+        enable_frontier=True,
         gateway_port=5050,
         dog_host="192.168.66.190", dog_port=13145,
     ),
@@ -628,6 +629,39 @@ class LingTuREPL(cmd.Cmd):
         else:
             print("  Usage: teleop status | teleop release")
 
+    # ── Rerun commands ──
+
+    def do_rerun(self, arg):
+        """Rerun visualization: rerun on | rerun off | rerun status"""
+        subcmd = arg.strip().lower()
+        mod = self._get_module("RerunBridgeModule")
+
+        if subcmd == "on":
+            if mod is None:
+                # Module not in blueprint — dynamically add it
+                print("  RerunBridgeModule not in blueprint (start with --rerun)")
+                return
+            url = mod.start_rerun()
+            print(f"  Rerun: {url}")
+        elif subcmd == "off":
+            if mod is None:
+                print("  RerunBridgeModule not running")
+                return
+            result = mod.stop_rerun()
+            print(f"  Rerun: {result}")
+        elif subcmd == "status":
+            if mod is None:
+                print("  RerunBridgeModule not in blueprint")
+                return
+            s = mod.rerun_status()
+            active = _green("ACTIVE") if s["active"] else _dim("inactive")
+            print(f"  Status:  {active}")
+            if s["url"]:
+                print(f"  URL:     {s['url']}")
+            print(f"  Counts:  odom={s['counts'].get('odom',0)} cloud={s['counts'].get('cloud',0)}")
+        else:
+            print("  Usage: rerun on | off | status")
+
     # ── Monitoring commands ──
 
     def do_status(self, arg):
@@ -913,6 +947,8 @@ def _print_banner(profile_name, cfg, system, log_dir):
     print(f"  Detector:    {cfg.get('detector', '?'):12s}  LLM:     {cfg.get('llm', '?')}")
     if cfg.get("enable_gateway"):
         print(f"  Gateway:     http://localhost:{gw}")
+    if cfg.get("enable_rerun"):
+        print(f"  Rerun:       http://localhost:9090")
     if cfg.get("dog_host") and cfg["dog_host"] != "127.0.0.1":
         print(f"  Robot host:  {cfg['dog_host']}:{cfg.get('dog_port', 13145)}")
     print(f"  Logs:        {_dim(log_dir)}")
@@ -1112,6 +1148,8 @@ def main() -> None:
     parser.add_argument("--no-semantic", action="store_true")
     parser.add_argument("--no-gateway", action="store_true")
     parser.add_argument("--no-native", action="store_true")
+    parser.add_argument("--rerun", action="store_true",
+                        help="Enable Rerun 3D visualization on startup")
     parser.add_argument("--no-repl", action="store_true",
                         help="Foreground daemon (no interactive REPL)")
     parser.add_argument("--log-level", default="INFO", dest="log_level")
@@ -1173,6 +1211,8 @@ def main() -> None:
         cfg["enable_gateway"] = False
     if args.no_native:
         cfg["enable_native"] = False
+    if args.rerun:
+        cfg["enable_rerun"] = True
 
     # Daemon implies no REPL
     if args.daemon:
@@ -1220,6 +1260,17 @@ def main() -> None:
         logger.error("Start failed: %s", e, exc_info=True)
         print(f"\n  {_red('Start failed')}: {e}")
         sys.exit(1)
+
+    # ── Auto-start Rerun if requested ──
+    if cfg.get("enable_rerun"):
+        rerun_mod = None
+        try:
+            rerun_mod = system.get_module("RerunBridgeModule")
+        except KeyError:
+            pass
+        if rerun_mod:
+            url = rerun_mod.start_rerun()
+            logger.info("Rerun auto-started: %s", url)
 
     # ── Save run state ──
     _save_run_state(profile_name, cfg, log_dir)
