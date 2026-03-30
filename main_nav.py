@@ -77,13 +77,18 @@ def _dim(t: str) -> str:    return _c("2", t)
 
 # ── Profiles ──────────────────────────────────────────────────────────
 
+_ACTIVE_TOMOGRAM = os.path.join(
+    os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+    "active", "tomogram.pickle",
+)
+
 PROFILES = {
     "map": dict(
-        _desc="Mapping mode — SLAM builds map, then 'map save <name>'",
-        robot="stub", slam_profile="fastlio2", detector="yoloe", encoder="mobileclip",
+        _desc="Mapping mode — SLAM + PGO builds map, then 'map save <name>'",
+        robot="sim_ros2", slam_profile="fastlio2", detector="yoloe", encoder="mobileclip",
         llm="mock", planner="astar",
-        enable_native=False, enable_semantic=False, enable_gateway=False,
-        enable_map_modules=False,
+        enable_native=False, enable_semantic=False, enable_gateway=True,
+        enable_map_modules=True,
         gateway_port=5050,
     ),
     "stub": dict(
@@ -112,18 +117,17 @@ PROFILES = {
         _desc="Navigation with pre-built map (localizer + semantic + gateway)",
         robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip",
         llm="qwen", planner="astar",
-        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+        tomogram=_ACTIVE_TOMOGRAM,
         enable_native=False, enable_semantic=True, enable_gateway=True,
         gateway_port=5050,
     ),
     "explore": dict(
-        _desc="Exploration, no pre-built map needed",
-        robot="thunder", slam_profile="fastlio2", detector="bpu", encoder="mobileclip",
+        _desc="Exploration, no pre-built map (SLAM + frontier)",
+        robot="sim_ros2", slam_profile="fastlio2", detector="bpu", encoder="mobileclip",
         llm="qwen", planner="astar",
-        enable_native=True, enable_semantic=True, enable_gateway=True,
+        enable_native=False, enable_semantic=True, enable_gateway=True,
         enable_frontier=True,
         gateway_port=5050,
-        dog_host="192.168.66.190", dog_port=13145,
     ),
 }
 
@@ -203,6 +207,31 @@ def _setup_logging(level: str, profile_name: str) -> str:
     root.addHandler(file_h)
 
     return str(log_dir)
+
+
+# ── Pre-flight checks ────────────────────────────────────────────────
+
+def _preflight(profile_name: str, cfg: dict) -> None:
+    """Verify prerequisites before building the system. Warn, don't block."""
+    slam = cfg.get("slam_profile", "none")
+    tomogram = cfg.get("tomogram", "")
+
+    # nav profile: check active map exists
+    if slam == "localizer" and tomogram:
+        map_dir = os.path.dirname(tomogram)
+        if not os.path.isdir(map_dir):
+            print(f"  {_yellow('WARN')}: No active map at {map_dir}")
+            print(f"        Run 'lingtu map' first to build a map, then 'map use <name>'")
+        elif tomogram and not os.path.isfile(tomogram):
+            print(f"  {_yellow('WARN')}: Tomogram not found: {tomogram}")
+            print(f"        Run 'map build <name>' to generate it")
+
+    # map/explore: check on Linux (needs ROS2 + SLAM)
+    if slam in ("fastlio2", "pointlio") and os.name != "nt":
+        import shutil
+        if not shutil.which("ros2"):
+            print(f"  {_yellow('WARN')}: ros2 not in PATH — SLAM won't start")
+            print(f"        Source: source /opt/ros/humble/setup.bash")
 
 
 # ── Kill residual ports ──────────────────────────────────────────────
@@ -1232,6 +1261,9 @@ def main() -> None:
     desc = cfg.pop("_desc", "custom")
     blueprint_cfg = dict(cfg)
     cfg["_desc"] = desc
+
+    # ── Pre-flight checks ──
+    _preflight(profile_name, cfg)
 
     print(f"\n  Building system ({_green(profile_name)})...")
 

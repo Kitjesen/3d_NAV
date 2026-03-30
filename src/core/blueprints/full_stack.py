@@ -74,7 +74,7 @@ def full_stack_blueprint(
                                if enable_semantic else Blueprint(),
         planner_stack(llm, semantic_save_dir)
                                if enable_semantic else Blueprint(),
-        navigation(planner_backend, tomogram, enable_native),
+        navigation(planner_backend, tomogram, enable_native, **config),
         safety(),
         gateway(gateway_port, enable_rerun=enable_rerun)
                                if enable_gateway else Blueprint(),
