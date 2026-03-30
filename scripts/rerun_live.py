@@ -284,9 +284,21 @@ def _crop_square(img):
         return img[margin:margin + w]
     return img
 
+def _downsample(img, max_dim=320):
+    """Downsample image so longest side <= max_dim."""
+    h, w = img.shape[:2]
+    if max(h, w) <= max_dim:
+        return img
+    scale = max_dim / max(h, w)
+    new_h, new_w = int(h * scale), int(w * scale)
+    # Nearest-neighbor resize (fast, no OpenCV needed)
+    row_idx = (np.arange(new_h) * h // new_h).astype(int)
+    col_idx = (np.arange(new_w) * w // new_w).astype(int)
+    return img[np.ix_(row_idx, col_idx)]
+
 def on_color(msg):
     counts["color"] += 1
-    if counts["color"] % 6 != 0:  # throttle to ~5fps
+    if counts["color"] % 15 != 0:  # throttle to ~2fps
         return
     try:
         h, w = msg.height, msg.width
@@ -295,11 +307,11 @@ def on_color(msg):
             img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w, 3)
             if encoding == "bgr8":
                 img = img[:, :, ::-1]
-            img = _crop_square(np.rot90(img, k=1))
+            img = _downsample(_crop_square(np.rot90(img, k=1)))
             rr.log("camera/color", rr.Image(img))
         elif encoding in ("mono8", "8uc1"):
             img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w)
-            img = _crop_square(np.rot90(img, k=1))
+            img = _downsample(_crop_square(np.rot90(img, k=1)))
             rr.log("camera/color", rr.Image(img))
     except Exception:
         pass
@@ -308,7 +320,7 @@ def on_color(msg):
 # ── Camera Depth ─────────────────────────────────────────────────────────────
 def on_depth(msg):
     counts["depth"] += 1
-    if counts["depth"] % 5 != 0:  # throttle
+    if counts["depth"] % 15 != 0:  # throttle to ~2fps
         return
     try:
         h, w = msg.height, msg.width
@@ -316,10 +328,23 @@ def on_depth(msg):
         if encoding in ("16uc1",):
             img = np.frombuffer(msg.data, dtype=np.uint16).reshape(h, w)
             img = _crop_square(np.rot90(img, k=1))
+            # Downsample depth (nearest neighbor to preserve values)
+            if max(img.shape) > 320:
+                scale = 320 / max(img.shape)
+                nh, nw = int(img.shape[0]*scale), int(img.shape[1]*scale)
+                row_idx = (np.arange(nh) * img.shape[0] // nh).astype(int)
+                col_idx = (np.arange(nw) * img.shape[1] // nw).astype(int)
+                img = img[np.ix_(row_idx, col_idx)]
             rr.log("camera/depth", rr.DepthImage(img, meter=1000.0))
         elif encoding in ("32fc1",):
             img = np.frombuffer(msg.data, dtype=np.float32).reshape(h, w)
             img = _crop_square(np.rot90(img, k=1))
+            if max(img.shape) > 320:
+                scale = 320 / max(img.shape)
+                nh, nw = int(img.shape[0]*scale), int(img.shape[1]*scale)
+                row_idx = (np.arange(nh) * img.shape[0] // nh).astype(int)
+                col_idx = (np.arange(nw) * img.shape[1] // nw).astype(int)
+                img = img[np.ix_(row_idx, col_idx)]
             rr.log("camera/depth", rr.DepthImage(img, meter=1.0))
     except Exception:
         pass
