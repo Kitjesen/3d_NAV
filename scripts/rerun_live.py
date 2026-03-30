@@ -15,28 +15,48 @@ Channels:
   metrics/slam_hz     — SLAM update rate
   metrics/det_count   — detection count
 
-Usage on S100P:
+Usage:
+  On S100P (web viewer for remote access):
     python3 scripts/rerun_live.py
 
-View remotely:
+  On S100P (local native viewer):
+    python3 scripts/rerun_live.py --native
+
+  View remotely (method 1 — web viewer via SSH tunnel):
     ssh -L 9090:127.0.0.1:9090 -L 9877:127.0.0.1:9877 sunrise@192.168.66.190
     Open http://localhost:9090
+
+  View remotely (method 2 — native viewer connects to S100P gRPC):
+    python3 scripts/rerun_live.py                          # on S100P
+    rerun --connect rerun+http://192.168.66.190:9877/proxy # on local PC
 """
-import sys, os, time, math
+import sys, os, time, math, argparse
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import logging
 logging.basicConfig(level=logging.WARNING)
 import numpy as np
+
+parser = argparse.ArgumentParser(description="LingTu Rerun Live Viewer")
+parser.add_argument("--native", action="store_true", help="Launch native desktop viewer")
+parser.add_argument("--web-port", type=int, default=9090)
+parser.add_argument("--grpc-port", type=int, default=9877)
+_args = parser.parse_args()
 
 from core.ros2_context import ensure_rclpy, get_shared_executor, shutdown_shared_executor
 ensure_rclpy()
 
 import rerun as rr
 rr.init("lingtu_live")
-server_uri = rr.serve_grpc(grpc_port=9877)
-rr.serve_web_viewer(open_browser=False, web_port=9090, connect_to=server_uri)
-print(f"gRPC: {server_uri}")
-print("Rerun: http://localhost:9090")
+
+if _args.native:
+    rr.spawn(connect=True)
+    print("Rerun: native viewer")
+else:
+    # gRPC binds 0.0.0.0 so remote native viewers can connect directly
+    server_uri = rr.serve_grpc(grpc_port=_args.grpc_port)
+    rr.serve_web_viewer(open_browser=False, web_port=_args.web_port, connect_to=server_uri)
+    print(f"Rerun web:  http://localhost:{_args.web_port}")
+    print(f"Rerun gRPC: rerun --connect rerun+http://<robot_ip>:{_args.grpc_port}/proxy")
 
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
