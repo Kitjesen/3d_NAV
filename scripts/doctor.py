@@ -67,6 +67,12 @@ for topic in ["/nav/odometry", "/nav/map_cloud", "/nav/registered_cloud",
     check(topic, topic in topics)
 
 # 5. Data flow (quick 3s test)
+# Auto-start slam for accurate odom measurement
+slam_was_off = not service_active("slam")
+if slam_was_off:
+    print("\n  [..] Starting slam for data flow test...")
+    subprocess.run(["sudo", "systemctl", "start", "slam"], capture_output=True, timeout=5)
+    time.sleep(3)
 print("\n  --- Data Flow (3s) ---")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 try:
@@ -96,6 +102,9 @@ try:
     shutdown_shared_executor()
 except Exception as e:
     print("  [SKIP] Data flow test: %s" % e)
+
+if slam_was_off:
+    subprocess.run(["sudo", "systemctl", "stop", "slam"], capture_output=True, timeout=5)
 
 # 6. Maps
 print("\n  --- Maps ---")
