@@ -96,6 +96,14 @@ def on_odom(msg):
 
 
 # ── Camera Color ──
+def _crop_square(img):
+    """Crop center square from portrait image after rotation."""
+    h, w = img.shape[:2]
+    if h > w:
+        margin = (h - w) // 2
+        return img[margin:margin + w]
+    return img
+
 def on_color(msg):
     counts["color"] += 1
     if counts["color"] % 3 != 0:  # throttle to ~10fps
@@ -107,11 +115,11 @@ def on_color(msg):
             img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w, 3)
             if encoding == "bgr8":
                 img = img[:, :, ::-1]  # BGR → RGB
-            img = np.rot90(img, k=1)  # camera mounted vertically (CCW 90°)
+            img = _crop_square(np.rot90(img, k=1))  # vertical mount → square
             rr.log("camera/color", rr.Image(img))
         elif encoding in ("mono8", "8uc1"):
             img = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, w)
-            img = np.rot90(img, k=1)
+            img = _crop_square(np.rot90(img, k=1))
             rr.log("camera/color", rr.Image(img))
     except Exception:
         pass
@@ -127,11 +135,11 @@ def on_depth(msg):
         encoding = msg.encoding.lower()
         if encoding in ("16uc1",):
             img = np.frombuffer(msg.data, dtype=np.uint16).reshape(h, w)
-            img = np.rot90(img, k=1)  # camera mounted vertically (CCW 90°)
+            img = _crop_square(np.rot90(img, k=1))
             rr.log("camera/depth", rr.DepthImage(img, meter=1000.0))
         elif encoding in ("32fc1",):
             img = np.frombuffer(msg.data, dtype=np.float32).reshape(h, w)
-            img = np.rot90(img, k=1)
+            img = _crop_square(np.rot90(img, k=1))
             rr.log("camera/depth", rr.DepthImage(img, meter=1.0))
     except Exception:
         pass
