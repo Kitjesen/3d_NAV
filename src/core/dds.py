@@ -138,7 +138,7 @@ try:
         height: types.uint32
         width: types.uint32
         fields: types.sequence[DDS_PointField]
-        is_bigendian: types.bool
+        is_bigendian: bool
         point_step: types.uint32
         row_step: types.uint32
         data: types.sequence[types.uint8]
