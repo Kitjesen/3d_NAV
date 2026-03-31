@@ -118,6 +118,7 @@ class SlamBridgeModule(Module, layer=1):
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             t = msg.twist.twist
+            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
             self.odometry.publish(Odometry(
                 pose=Pose(
                     position=Vector3(x=p.x, y=p.y, z=p.z),
@@ -125,6 +126,7 @@ class SlamBridgeModule(Module, layer=1):
                 ),
                 vx=t.linear.x, vy=t.linear.y, vz=t.linear.z,
                 wx=t.angular.x, wy=t.angular.y, wz=t.angular.z,
+                ts=stamp,
             ))
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
