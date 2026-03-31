@@ -215,26 +215,34 @@ class DDSReader:
             from cyclonedds.domain import DomainParticipant
             from cyclonedds.topic import Topic
             from cyclonedds.sub import Subscriber, DataReader
-            from cyclonedds.core import Qos, Policy
-            from cyclonedds.util import duration
 
-            self._dp = DomainParticipant(domain=self._domain_id)
+            # cyclonedds 0.10.x uses domain_id=, not domain=
+            self._dp = DomainParticipant(domain_id=self._domain_id)
             subscriber = Subscriber(self._dp)
 
+            # Define a minimal IDL type for raw bytes reception
+            from cyclonedds.idl import IdlStruct
+            from dataclasses import dataclass as _dc
+
+            @_dc
+            class RawBytes(IdlStruct):
+                data: bytes
+
             for sub in self._subs:
-                # Use generic bytes topic for raw CDR reception
-                topic = Topic(self._dp, sub["dds_topic"], bytes)
-                qos = Qos(Policy.Reliability.Reliable(duration(seconds=1)))
-                reader = DataReader(subscriber, topic, qos=qos)
-                sub["reader"] = reader
-                self._readers.append(reader)
-                logger.info("DDSReader: subscribed %s → %s", sub["ros2_topic"], sub["dds_topic"])
+                try:
+                    topic = Topic(self._dp, sub["dds_topic"], RawBytes)
+                    reader = DataReader(subscriber, topic)
+                    sub["reader"] = reader
+                    self._readers.append(reader)
+                    logger.info("DDSReader: subscribed %s → %s", sub["ros2_topic"], sub["dds_topic"])
+                except Exception as e:
+                    logger.warning("DDSReader: failed to subscribe %s: %s", sub["ros2_topic"], e)
 
             self._running = True
             return True
 
         except ImportError:
-            logger.warning("DDSReader: cyclonedds not available, no subscriptions")
+            logger.warning("DDSReader: cyclonedds not available")
             return False
         except Exception as e:
             logger.warning("DDSReader: start failed: %s", e)
@@ -265,8 +273,12 @@ class DDSReader:
                 try:
                     samples = reader.take(N=10)
                     for sample in samples:
-                        if sample is not None:
-                            sub["callback"](sample)
+                        if sample is None:
+                            continue
+                        # Extract raw bytes from IdlStruct wrapper
+                        raw = getattr(sample, "data", sample)
+                        if raw is not None:
+                            sub["callback"](raw)
                 except Exception as e:
                     logger.debug("DDSReader poll error on %s: %s", sub["ros2_topic"], e)
             time.sleep(0.005)  # 200Hz poll rate
