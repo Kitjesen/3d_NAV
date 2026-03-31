@@ -209,8 +209,6 @@ class DDSReader:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._dp = None
-        self._use_listener = False
-        self._waitset = None
 
     def subscribe(self, ros2_topic: str, dds_type, callback: Callable):
         """Register a typed subscription."""
@@ -227,30 +225,15 @@ class DDSReader:
             logger.warning("DDSReader: cyclonedds not available")
             return False
         try:
-            from cyclonedds.core import WaitSet, ReadCondition, SampleState
-
             self._dp = DomainParticipant(domain_id=self._domain_id)
             qos = Qos(Policy.Reliability.Reliable(duration(seconds=1)))
-
-            conditions = []
             for sub in self._subs:
                 try:
                     topic = Topic(self._dp, sub["dds_topic"], sub["dds_type"])
-                    reader = DataReader(self._dp, topic, qos=qos)
-                    sub["reader"] = reader
-                    # ReadCondition triggers when new data arrives
-                    rc = ReadCondition(reader, SampleState.NotRead)
-                    sub["condition"] = rc
-                    conditions.append(rc)
+                    sub["reader"] = DataReader(self._dp, topic, qos=qos)
                     logger.info("DDSReader: %s → %s", sub["ros2_topic"], sub["dds_topic"])
                 except Exception as e:
                     logger.warning("DDSReader: failed %s: %s", sub["ros2_topic"], e)
-
-            # WaitSet blocks until data arrives — no polling needed
-            if conditions:
-                self._waitset = WaitSet(self._dp, conditions)
-                self._use_listener = True
-
             self._running = True
             return True
         except Exception as e:
@@ -271,47 +254,23 @@ class DDSReader:
             self._thread = None
 
     def _spin_loop(self) -> None:
-        if self._use_listener and self._waitset:
-            self._spin_waitset()
-        else:
-            self._spin_polling()
-
-    def _spin_waitset(self) -> None:
-        """WaitSet-based push: blocks until data arrives, zero idle CPU."""
+        """Poll readers and dispatch callbacks. 1ms sleep for low latency."""
         while self._running:
-            try:
-                triggered = self._waitset.wait(timeout=duration(milliseconds=100))
-                for sub in self._subs:
-                    cond = sub.get("condition")
-                    reader = sub.get("reader")
-                    if cond in triggered and reader:
-                        try:
-                            samples = reader.take(N=32)
-                            for sample in samples:
-                                if sample is not None:
-                                    sub["callback"](sample)
-                        except Exception as e:
-                            logger.debug("DDSReader take %s: %s", sub["ros2_topic"], e)
-            except Exception as e:
-                if self._running:
-                    logger.debug("DDSReader waitset: %s", e)
-                    time.sleep(0.01)
-
-    def _spin_polling(self) -> None:
-        """Polling fallback for older cyclonedds versions."""
-        while self._running:
+            got_any = False
             for sub in self._subs:
                 reader = sub.get("reader")
                 if reader is None:
                     continue
                 try:
-                    samples = reader.take(N=10)
+                    samples = reader.take(N=32)
                     for sample in samples:
                         if sample is not None:
+                            got_any = True
                             sub["callback"](sample)
                 except Exception as e:
                     logger.debug("DDSReader poll %s: %s", sub["ros2_topic"], e)
-            time.sleep(0.005)
+            # Adaptive sleep: 1ms when active, 5ms when idle
+            time.sleep(0.001 if got_any else 0.005)
 
 
 # ── DDSWriter — publish to ROS2 topics ───────────────────────────────────────
