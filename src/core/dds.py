@@ -142,7 +142,7 @@ try:
         point_step: types.uint32
         row_step: types.uint32
         data: types.sequence[types.uint8]
-        is_dense: types.bool
+        is_dense: bool
 
     @dataclass
     class DDS_Image(IdlStruct, typename="sensor_msgs::msg::dds_::Image_"):
