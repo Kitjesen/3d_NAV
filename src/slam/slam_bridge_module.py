@@ -1,30 +1,21 @@
-"""SlamBridgeModule — bridges ROS2 SLAM outputs into the Python Module pipeline.
+"""SlamBridgeModule — bridges DDS SLAM outputs into the Python Module pipeline.
 
-Subscribes to ROS2:
-  /nav/map_cloud       — sensor_msgs/PointCloud2 (XYZI) from SLAM
-  /nav/odometry        — nav_msgs/Odometry from SLAM (higher quality than driver)
+Subscribes to DDS topics (published by C++ SLAM nodes):
+  /nav/map_cloud       — PointCloud2 from SLAM
+  /nav/odometry        — Odometry from SLAM
 
-Publishes to Module ports:
-  map_cloud: Out[PointCloud]  — consumed by OccupancyGridModule, ElevationMapModule, TerrainModule
-  odometry: Out[Odometry]     — SLAM-corrected odometry (overrides driver dead-reckoning)
-
-Graceful degradation: if rclpy is not available (Windows dev, stub mode),
-the module starts silently with no ROS2 subscriptions.  Ports stay empty.
+Uses lightweight cyclonedds (no rclpy dependency). Falls back to rclpy if needed.
 
 Usage::
 
-    bp.add(SlamBridgeModule)                              # defaults
-    bp.add(SlamBridgeModule, cloud_topic="/my/cloud")     # custom topic
+    bp.add(SlamBridgeModule)
+    bp.add(SlamBridgeModule, cloud_topic="/my/cloud")
 """
 
 from __future__ import annotations
 
 import logging
-import struct
-import threading
-import time
-from typing import Optional
-
+import math
 import numpy as np
 
 from core.module import Module
@@ -36,41 +27,52 @@ from core.registry import register
 
 logger = logging.getLogger(__name__)
 
-_XYZI_POINT_STEP = 16  # 4 × float32
 
-
-@register("slam_bridge", "default", description="ROS2 SLAM → Python Module bridge")
+@register("slam_bridge", "default", description="DDS SLAM → Python Module bridge")
 class SlamBridgeModule(Module, layer=1):
-    """Bridges ROS2 SLAM point cloud and odometry into Module ports.
+    """Bridges SLAM point cloud and odometry into Module ports via DDS.
 
-    On systems without rclpy, starts silently — no crash, no output.
+    Tries cyclonedds first (lightweight), falls back to rclpy.
+    On systems without either, starts silently in stub mode.
     """
 
-    # -- Outputs --
     map_cloud: Out[PointCloud]
-    odometry:  Out[Odometry]   # SLAM-corrected, overrides driver dead-reckoning
+    odometry:  Out[Odometry]
     alive:     Out[bool]
 
     def __init__(
         self,
-        node_name: str = "slam_bridge",
         cloud_topic: str = "/nav/map_cloud",
         odom_topic: str = "/nav/odometry",
-        spin_rate: float = 50.0,
-        qos_depth: int = 10,
         **kw,
     ):
         super().__init__(**kw)
-        self._node_name = node_name
         self._cloud_topic = cloud_topic
         self._odom_topic = odom_topic
-        self._spin_rate = spin_rate
-        self._qos_depth = qos_depth
-
-        self._node = None
-        self._running = False
+        self._reader = None
+        self._rclpy_node = None  # fallback
 
     def setup(self) -> None:
+        # Try cyclonedds first (lightweight, no ROS2 env needed)
+        if self._try_cyclonedds():
+            return
+        # Fallback to rclpy
+        if self._try_rclpy():
+            return
+        logger.info("SlamBridgeModule: no DDS backend available, stub mode")
+
+    def _try_cyclonedds(self) -> bool:
+        try:
+            from core.dds import ROS2TopicReader
+            self._reader = ROS2TopicReader()
+            self._reader.on_odometry(self._odom_topic, self._on_dds_odom)
+            self._reader.on_pointcloud2(self._cloud_topic, self._on_dds_cloud)
+            logger.info("SlamBridgeModule: using cyclonedds (lightweight)")
+            return True
+        except ImportError:
+            return False
+
+    def _try_rclpy(self) -> bool:
         try:
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -79,92 +81,99 @@ class SlamBridgeModule(Module, layer=1):
             from core.ros2_context import ensure_rclpy, get_shared_executor
 
             ensure_rclpy()
-
-            qos = QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                depth=self._qos_depth,
-            )
-
-            self._node = Node(self._node_name)
-            get_shared_executor().add_node(self._node)
-            self._node.create_subscription(
-                PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos)
-            self._node.create_subscription(
-                ROS2Odom, self._odom_topic, self._on_ros2_odom, qos)
-
-            logger.info(
-                "SlamBridgeModule: node '%s' — cloud=%s odom=%s",
-                self._node_name, self._cloud_topic, self._odom_topic,
-            )
-        except ImportError:
-            logger.info("SlamBridgeModule: rclpy not available, running in stub mode")
-        except Exception as e:
-            logger.warning("SlamBridgeModule: setup failed: %s", e)
+            qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+            self._rclpy_node = Node("slam_bridge")
+            get_shared_executor().add_node(self._rclpy_node)
+            self._rclpy_node.create_subscription(PointCloud2, self._cloud_topic, self._on_rclpy_cloud, qos)
+            self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
+            logger.info("SlamBridgeModule: using rclpy (fallback)")
+            return True
+        except (ImportError, Exception) as e:
+            logger.debug("SlamBridgeModule: rclpy unavailable: %s", e)
+            return False
 
     def start(self) -> None:
         super().start()
-        if self._node is None:
+        if self._reader:
+            self._reader.spin_background()
+            self.alive.publish(True)
+        elif self._rclpy_node:
+            self.alive.publish(True)
+        else:
             self.alive.publish(False)
-            return
-        self._running = True
-        self.alive.publish(True)
 
     def stop(self) -> None:
-        self._running = False
-        if self._node:
-            self._node.destroy_node()
-            self._node = None
+        if self._reader:
+            self._reader.stop()
+        if self._rclpy_node:
+            self._rclpy_node.destroy_node()
+            self._rclpy_node = None
         super().stop()
 
-    # ── ROS2 callbacks ────────────────────────────────────────────────────────
+    # ── cyclonedds callbacks (parsed CDR) ────────────────────────────────
 
-    def _on_ros2_cloud(self, msg) -> None:
-        """Convert sensor_msgs/PointCloud2 (XYZI) → PointCloud and publish."""
+    def _on_dds_odom(self, odom) -> None:
         try:
-            n_points = msg.width * msg.height
-            if n_points == 0:
+            self.odometry.publish(Odometry(
+                pose=Pose(
+                    position=Vector3(x=odom.x, y=odom.y, z=odom.z),
+                    orientation=Quaternion(x=odom.qx, y=odom.qy, z=odom.qz, w=odom.qw),
+                ),
+            ))
+        except Exception as e:
+            logger.debug("SlamBridge dds odom error: %s", e)
+
+    def _on_dds_cloud(self, pc) -> None:
+        try:
+            n = pc.width * pc.height
+            if n == 0:
                 return
-
-            step = msg.point_step
-            data = np.frombuffer(msg.data, dtype=np.uint8)
-
-            if step == _XYZI_POINT_STEP:
-                # Fast path: XYZI packed as 4×float32
-                pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
-                xyz = pts[:, :3].copy()
-            else:
-                # Generic: extract x(0),y(4),z(8) via numpy reshape — no Python loop
-                raw = data.reshape(n_points, step)
-                xyz = np.zeros((n_points, 3), dtype=np.float32)
-                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
-                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
-                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
-
-            # Filter NaN/inf
+            step = pc.point_step
+            raw = np.frombuffer(pc.data, dtype=np.uint8).reshape(n, step)
+            xyz = np.zeros((n, 3), dtype=np.float32)
+            xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+            xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+            xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
-
             if xyz.shape[0] > 0:
                 self.map_cloud.publish(PointCloud.from_numpy(xyz, frame_id="map"))
-
         except Exception as e:
-            logger.debug("SlamBridge: cloud parse error: %s", e)
+            logger.debug("SlamBridge dds cloud error: %s", e)
 
-    def _on_ros2_odom(self, msg) -> None:
-        """Convert nav_msgs/Odometry → Odometry and publish."""
+    # ── rclpy callbacks (fallback) ───────────────────────────────────────
+
+    def _on_rclpy_odom(self, msg) -> None:
         try:
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
-            odom = Odometry(
+            self.odometry.publish(Odometry(
                 pose=Pose(
                     position=Vector3(x=float(p.x), y=float(p.y), z=float(p.z)),
                     orientation=Quaternion(x=float(q.x), y=float(q.y), z=float(q.z), w=float(q.w)),
                 ),
-            )
-            self.odometry.publish(odom)
+            ))
         except Exception as e:
-            logger.warning("SlamBridge: odom error: %s", e)
+            logger.warning("SlamBridge rclpy odom error: %s", e)
 
-    # ── Spin loop ─────────────────────────────────────────────────────────────
-
-    # Spin handled by shared executor (core.ros2_context)
+    def _on_rclpy_cloud(self, msg) -> None:
+        try:
+            n = msg.width * msg.height
+            if n == 0:
+                return
+            step = msg.point_step
+            if step == 16:
+                pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
+                xyz = pts[:, :3].copy()
+            else:
+                raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
+                xyz = np.zeros((n, 3), dtype=np.float32)
+                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+            valid = np.isfinite(xyz).all(axis=1)
+            xyz = xyz[valid]
+            if xyz.shape[0] > 0:
+                self.map_cloud.publish(PointCloud.from_numpy(xyz, frame_id="map"))
+        except Exception as e:
+            logger.debug("SlamBridge rclpy cloud error: %s", e)
