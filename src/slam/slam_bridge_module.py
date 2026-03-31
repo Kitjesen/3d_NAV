@@ -117,11 +117,14 @@ class SlamBridgeModule(Module, layer=1):
         try:
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
+            t = msg.twist.twist
             self.odometry.publish(Odometry(
                 pose=Pose(
                     position=Vector3(x=p.x, y=p.y, z=p.z),
                     orientation=Quaternion(x=q.x, y=q.y, z=q.z, w=q.w),
                 ),
+                vx=t.linear.x, vy=t.linear.y, vz=t.linear.z,
+                wx=t.angular.x, wy=t.angular.y, wz=t.angular.z,
             ))
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
@@ -152,11 +155,14 @@ class SlamBridgeModule(Module, layer=1):
         try:
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
+            t = msg.twist.twist
             self.odometry.publish(Odometry(
                 pose=Pose(
                     position=Vector3(x=float(p.x), y=float(p.y), z=float(p.z)),
                     orientation=Quaternion(x=float(q.x), y=float(q.y), z=float(q.z), w=float(q.w)),
                 ),
+                vx=float(t.linear.x), vy=float(t.linear.y), vz=float(t.linear.z),
+                wx=float(t.angular.x), wy=float(t.angular.y), wz=float(t.angular.z),
             ))
         except Exception as e:
             logger.warning("SlamBridge rclpy odom error: %s", e)
