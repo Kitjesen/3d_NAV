@@ -1,0 +1,17 @@
+[Unit]
+Description=LingTu Manager — Robot Control Panel
+After=network.target lidar.service camera.service
+Wants=lidar.service camera.service
+
+[Service]
+Type=simple
+User=sunrise
+WorkingDirectory=/home/sunrise/data/SLAM/navigation
+Environment=PYTHONUNBUFFERED=1
+Environment=NAV_MAP_DIR=/home/sunrise/data/nova/maps
+ExecStart=/usr/bin/python3 scripts/manager/manager.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

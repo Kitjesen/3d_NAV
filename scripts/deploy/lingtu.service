@@ -1,0 +1,20 @@
+[Unit]
+Description=LingTu Navigation System
+After=network.target lidar.service camera.service brainstem.service
+Wants=lidar.service camera.service
+
+[Service]
+Type=simple
+User=sunrise
+WorkingDirectory=/home/sunrise/data/SLAM/navigation
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 main_nav.py nav --no-repl --daemon
+Restart=on-failure
+RestartSec=5
+
+# Logging
+StandardOutput=append:/home/sunrise/data/nova/logs/lingtu/lingtu.log
+StandardError=append:/home/sunrise/data/nova/logs/lingtu/lingtu.log
+
+[Install]
+WantedBy=multi-user.target
