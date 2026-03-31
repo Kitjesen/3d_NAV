@@ -348,162 +348,343 @@ async def web_ui():
     return WEB_UI_HTML
 
 
-WEB_UI_HTML = """<!DOCTYPE html>
-<html lang="zh">
+WEB_UI_HTML = r"""<!doctype html>
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LingTu 灵途</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LingTu 控制面板</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, 'Helvetica Neue', sans-serif; background: #1a1a2e; color: #eee; }
-  .header { background: #16213e; padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
-  .header h1 { font-size: 20px; font-weight: 600; }
-  .header .mode { background: #0f3460; padding: 4px 12px; border-radius: 12px; font-size: 13px; }
-  .container { max-width: 800px; margin: 20px auto; padding: 0 16px; }
-  .card { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
-  .card h2 { font-size: 15px; color: #a0a0b0; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
-  .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
-  .btn { padding: 12px 24px; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; font-weight: 500; transition: all 0.2s; }
-  .btn:active { transform: scale(0.96); }
-  .btn-map { background: #e94560; color: white; }
-  .btn-nav { background: #0f3460; color: white; border: 1px solid #533483; }
-  .btn-explore { background: #533483; color: white; }
-  .btn-idle { background: #333; color: #aaa; }
-  .btn-stop { background: #ff0000; color: white; font-size: 18px; padding: 16px 32px; width: 100%; }
-  .btn-save { background: #0a9396; color: white; }
-  .btn-use { background: #005f73; color: white; }
-  .status { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .status-item { display: flex; justify-content: space-between; padding: 8px 12px; background: #1a1a2e; border-radius: 6px; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-  .dot-on { background: #00ff88; }
-  .dot-off { background: #ff4444; }
-  .map-list { margin-top: 8px; }
-  .map-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #1a1a2e; border-radius: 6px; margin-bottom: 4px; }
-  .map-item.active { border-left: 3px solid #00ff88; }
-  .nav-input { display: flex; gap: 8px; margin-top: 8px; }
-  .nav-input input { flex: 1; padding: 10px; background: #1a1a2e; border: 1px solid #333; border-radius: 6px; color: white; font-size: 14px; }
-  .nav-input .btn { flex-shrink: 0; }
-  #log { font-family: monospace; font-size: 12px; color: #888; max-height: 100px; overflow-y: auto; margin-top: 8px; padding: 8px; background: #111; border-radius: 6px; }
+:root{
+  --bg:#1a1a2e;--bg2:#121727;--panel:#1c2336;
+  --line:rgba(255,255,255,.08);--text:#eef3ff;--muted:#98a3bf;
+  --accent:#ffb703;--cyan:#4cc9f0;--green:#22c55e;--red:#ff4d4f;--orange:#ff7a18;
+  --shadow:0 16px 40px rgba(0,0,0,.28);--radius:18px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{
+  color:var(--text);
+  font:15px/1.45 "Bahnschrift","Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  background:radial-gradient(900px 500px at 100% 0,rgba(255,183,3,.08),transparent 55%),
+    radial-gradient(700px 400px at 0 100%,rgba(76,201,240,.07),transparent 55%),
+    linear-gradient(180deg,#1a1a2e,#151a29 55%,#101521);
+  min-height:100vh;
+}
+.shell{max-width:1360px;margin:0 auto;padding:14px}
+/* Topbar */
+.topbar{
+  position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:20px;
+  background:rgba(18,23,39,.86);backdrop-filter:blur(10px);box-shadow:var(--shadow);
+}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-mark{
+  width:48px;height:48px;display:grid;place-items:center;border-radius:14px;
+  font-weight:800;letter-spacing:.08em;color:#111;
+  background:linear-gradient(135deg,var(--accent),var(--orange));
+  box-shadow:0 10px 24px rgba(255,183,3,.18);
+}
+.eyebrow{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.14em}
+h1{font-size:22px;line-height:1.05}
+.top-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.live-chip{
+  display:inline-flex;align-items:center;gap:8px;padding:10px 12px;border-radius:999px;
+  background:rgba(255,255,255,.04);border:1px solid var(--line);color:var(--muted);white-space:nowrap;
+}
+.dot{width:10px;height:10px;border-radius:50%;background:#666;box-shadow:0 0 0 3px rgba(255,255,255,.05);flex-shrink:0}
+.dot.on{background:var(--green);box-shadow:0 0 10px rgba(34,197,94,.75),0 0 0 3px rgba(34,197,94,.16)}
+.dot.off{background:var(--red);box-shadow:0 0 10px rgba(255,77,79,.75),0 0 0 3px rgba(255,77,79,.16)}
+/* E-Stop */
+.estop-wrap{display:flex;flex-direction:column;align-items:center;padding:16px 0}
+.estop{
+  width:100px;height:100px;border-radius:50%;border:none;cursor:pointer;position:relative;
+  background:#801020;color:#fff;font:800 20px inherit;letter-spacing:.1em;
+  box-shadow:0 8px 0 #500810,0 15px 30px rgba(233,69,96,.4);transition:.1s;
+}
+.estop:active{transform:translateY(4px);box-shadow:0 4px 0 #500810,0 8px 15px rgba(233,69,96,.4)}
+.estop-ring{
+  position:absolute;inset:-12px;border:2px solid rgba(255,77,79,.4);border-radius:50%;
+  animation:pulse 2s infinite;pointer-events:none;
+}
+@keyframes pulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(1.2);opacity:0}}
+.estop-label{margin-top:8px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+/* Buttons */
+.btn{
+  appearance:none;border:0;cursor:pointer;padding:12px 16px;border-radius:14px;
+  color:var(--text);background:linear-gradient(180deg,#2b3550,#20273b);
+  border:1px solid rgba(255,255,255,.08);font:600 15px inherit;transition:.18s;
+}
+.btn:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(0,0,0,.24)}
+.btn:active{transform:translateY(0)}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.btn.success{background:linear-gradient(180deg,#169f55,#137c45)}
+.btn.warn{background:linear-gradient(180deg,#ffb703,#d58800);color:#161616}
+.btn.secondary{background:linear-gradient(180deg,#25304a,#1b2234)}
+/* Layout */
+.layout{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
+.panel{
+  background:linear-gradient(180deg,rgba(35,43,67,.92),rgba(24,29,44,.94));
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px;min-width:0;
+}
+.span2{grid-column:1/-1}
+.panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px}
+.panel-title{font-size:18px;font-weight:800}
+.panel-sub{font-size:13px;color:var(--muted)}
+/* Mode buttons */
+.mode-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.mode-btn{
+  position:relative;overflow:hidden;text-align:left;min-height:90px;padding:16px;border-radius:18px;
+  background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015)),linear-gradient(180deg,#27314a,#1c2336);
+  border:1px solid rgba(255,255,255,.08);cursor:pointer;
+}
+.mode-btn .t{display:block;font-size:18px;font-weight:800;margin-bottom:4px}
+.mode-btn .s{display:block;font-size:13px;color:var(--muted)}
+.mode-btn.active{
+  border-color:rgba(255,183,3,.52);
+  box-shadow:0 0 0 1px rgba(255,183,3,.22),0 14px 34px rgba(255,183,3,.12);
+  background:linear-gradient(180deg,rgba(255,183,3,.14),rgba(255,183,3,.03)),linear-gradient(180deg,#2a3651,#20283c);
+}
+.mode-btn.active::after{
+  content:"";position:absolute;inset:-20px;border:2px solid rgba(255,183,3,.18);border-radius:26px;animation:pulse 1.8s infinite;
+}
+/* Two-col sub areas */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.subcard{padding:14px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid var(--line)}
+.subhead{font-size:13px;color:var(--muted);margin-bottom:10px}
+.input-row{display:flex;gap:10px}
+input{
+  width:100%;padding:12px 14px;border-radius:14px;background:#111727;color:var(--text);
+  border:1px solid rgba(255,255,255,.09);outline:none;font:500 15px inherit;
+}
+input:focus{border-color:rgba(76,201,240,.45);box-shadow:0 0 0 3px rgba(76,201,240,.12)}
+.hint{margin-top:8px;font-size:12px;color:var(--muted)}
+/* Stats */
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.stat{padding:14px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid var(--line)}
+.stat .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.stat .v{margin-top:6px;font-size:18px;font-weight:800;word-break:break-word}
+/* Services */
+.services{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.service{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:12px;border-radius:14px;background:rgba(255,255,255,.03);border:1px solid var(--line);
+}
+.service .left{display:flex;align-items:center;gap:10px}
+.service .name{font-weight:700}
+.service .state{font-size:12px;color:var(--muted)}
+.error-box{padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.03);border:1px solid var(--line);color:#ffdede;word-break:break-word}
+.error-box.clean{color:var(--muted)}
+/* Maps */
+.maps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.map-card{
+  padding:14px;border-radius:16px;
+  background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));
+  border:1px solid var(--line);transition:.18s;
+}
+.map-card:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(0,0,0,.2)}
+.map-card.active{border-color:rgba(34,197,94,.68);box-shadow:0 0 0 1px rgba(34,197,94,.2),0 14px 28px rgba(34,197,94,.08)}
+.map-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:10px}
+.map-name{font-size:17px;font-weight:800;word-break:break-word}
+.tag{
+  display:inline-flex;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.05em;
+  background:rgba(255,255,255,.06);color:var(--muted);border:1px solid var(--line);white-space:nowrap;
+}
+.tag.active{color:#d7ffe6;background:rgba(34,197,94,.13);border-color:rgba(34,197,94,.35)}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.badge{font-size:12px;padding:6px 8px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid var(--line);color:var(--muted)}
+.badge.ok{color:#d7ffe6;border-color:rgba(34,197,94,.24);background:rgba(34,197,94,.1)}
+.empty{padding:18px;border-radius:16px;text-align:center;color:var(--muted);border:1px dashed rgba(255,255,255,.16);background:rgba(255,255,255,.02)}
+/* Toast */
+.toast-wrap{position:fixed;right:14px;bottom:14px;z-index:80;display:flex;flex-direction:column;gap:10px;max-width:min(420px,calc(100vw - 28px))}
+.toast{padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(16,21,33,.96);box-shadow:var(--shadow);animation:tin .2s ease-out}
+.toast.info{border-left:4px solid var(--cyan)}
+.toast.success{border-left:4px solid var(--green)}
+.toast.warn{border-left:4px solid var(--accent)}
+.toast.error{border-left:4px solid var(--red)}
+@keyframes tin{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+/* Responsive */
+@media(max-width:980px){.layout{grid-template-columns:1fr}.span2{grid-column:auto}.mode-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:720px){.topbar{flex-direction:column;align-items:stretch}.top-actions{justify-content:stretch}.top-actions>*{flex:1 1 auto}.two-col,.stats,.services{grid-template-columns:1fr}}
+@media(max-width:480px){.shell{padding:10px}h1{font-size:20px}.mode-btn{min-height:80px}.mode-btn .t{font-size:16px}}
 </style>
 </head>
 <body>
-<div class="header">
-  <h1>LingTu 灵途</h1>
-  <span class="mode" id="modeLabel">--</span>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">LT</div>
+      <div><div class="eyebrow">LingTu Quadruped Control</div><h1>灵途控制面板</h1></div>
+    </div>
+    <div class="top-actions">
+      <div class="live-chip"><span id="sseDot" class="dot off"></span><span id="sseText">遥测重连中</span></div>
+      <div class="live-chip"><span id="runDot" class="dot off"></span><span id="runText">离线</span></div>
+    </div>
+  </header>
+
+  <!-- E-Stop -->
+  <div class="estop-wrap">
+    <button class="estop" id="stopBtn">STOP<span class="estop-ring"></span></button>
+    <div class="estop-label">Emergency Brake</div>
+  </div>
+
+  <main class="layout">
+    <!-- Left Column: Controls -->
+    <section class="panel">
+      <div class="panel-head"><div><div class="panel-title">模式切换</div><div class="panel-sub">Mode Selection</div></div></div>
+      <div class="mode-grid">
+        <button class="btn mode-btn" data-mode="map"><span class="t">建图</span><span class="s">Map / SLAM</span></button>
+        <button class="btn mode-btn" data-mode="nav"><span class="t">导航</span><span class="s">Navigate</span></button>
+        <button class="btn mode-btn" data-mode="explore"><span class="t">探索</span><span class="s">Explore</span></button>
+        <button class="btn mode-btn" data-mode="idle"><span class="t">待机</span><span class="s">Idle</span></button>
+      </div>
+      <div class="two-col">
+        <div class="subcard">
+          <div class="subhead">导航目标</div>
+          <div class="input-row"><input id="navInput" placeholder="5 3 或 去门口"><button id="navBtn" class="btn warn">发送</button></div>
+          <div class="hint">自动识别坐标或语义指令</div>
+        </div>
+        <div class="subcard">
+          <div class="subhead">保存地图</div>
+          <div class="input-row"><input id="mapNameInput" placeholder="地图名称"><button id="saveMapBtn" class="btn success">保存</button></div>
+          <div class="hint">保存当前 SLAM 地图</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: Status -->
+    <section class="panel">
+      <div class="panel-head"><div><div class="panel-title">状态总览</div><div class="panel-sub">Real-time Telemetry</div></div></div>
+      <div class="stats">
+        <div class="stat"><div class="k">当前模式</div><div class="v" id="modeVal">--</div></div>
+        <div class="stat"><div class="k">SLAM</div><div class="v" id="slamVal">--</div></div>
+        <div class="stat"><div class="k">当前地图</div><div class="v" id="mapVal">--</div></div>
+        <div class="stat"><div class="k">遥测时间</div><div class="v" id="timeVal">--</div></div>
+      </div>
+      <div id="svcGrid" class="services"></div>
+      <div class="subhead">最近错误</div>
+      <div id="errBox" class="error-box clean">无</div>
+    </section>
+
+    <!-- Full Width: Maps -->
+    <section class="panel span2">
+      <div class="panel-head">
+        <div><div class="panel-title">地图列表</div><div class="panel-sub">活动地图绿色高亮</div></div>
+        <button id="refreshMaps" class="btn secondary">刷新</button>
+      </div>
+      <div id="mapsGrid" class="maps"><div class="empty">加载中...</div></div>
+    </section>
+  </main>
 </div>
 
-<div class="container">
-  <!-- Emergency Stop -->
-  <div class="card">
-    <button class="btn btn-stop" onclick="apiPost('/api/stop')">STOP 急停</button>
-  </div>
-
-  <!-- Mode Switching -->
-  <div class="card">
-    <h2>Operation Mode</h2>
-    <div class="btn-group">
-      <button class="btn btn-map" onclick="setMode('map')">建图</button>
-      <button class="btn btn-nav" onclick="setMode('nav')">导航</button>
-      <button class="btn btn-explore" onclick="setMode('explore')">探索</button>
-      <button class="btn btn-idle" onclick="setMode('idle')">待机</button>
-    </div>
-  </div>
-
-  <!-- Status -->
-  <div class="card">
-    <h2>System Status</h2>
-    <div class="status" id="statusGrid"></div>
-  </div>
-
-  <!-- Map Management -->
-  <div class="card">
-    <h2>Maps</h2>
-    <div class="btn-group">
-      <button class="btn btn-save" onclick="saveMap()">Save Map</button>
-    </div>
-    <div class="map-list" id="mapList"></div>
-  </div>
-
-  <!-- Navigation -->
-  <div class="card">
-    <h2>Navigate</h2>
-    <div class="nav-input">
-      <input type="text" id="navTarget" placeholder="go to the door / 5.0 3.0">
-      <button class="btn btn-nav" onclick="navigate()">Go</button>
-    </div>
-  </div>
-
-  <!-- Log -->
-  <div id="log"></div>
-</div>
+<div id="toasts" class="toast-wrap"></div>
 
 <script>
-const API = '';
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const S={status:null,maps:[],sse:null,connected:false,ever:false,ttime:"--"};
 
-function log(msg) {
-  const el = document.getElementById('log');
-  const t = new Date().toLocaleTimeString();
-  el.innerHTML = `[${t}] ${msg}<br>` + el.innerHTML;
-  el.innerHTML = el.innerHTML.split('<br>').slice(0, 20).join('<br>');
+function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[m])}
+
+function toast(msg,type="info",ttl=2600){
+  const w=$("#toasts"),n=document.createElement("div");
+  n.className="toast "+type;n.textContent=msg;w.appendChild(n);
+  setTimeout(()=>{n.style.opacity="0";n.style.transform="translateY(6px)";setTimeout(()=>n.remove(),180)},ttl);
 }
 
-async function apiPost(url, body = {}) {
-  try {
-    const r = await fetch(API + url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-    const data = await r.json();
-    log(`${url}: ${JSON.stringify(data)}`);
-    refresh();
-    return data;
-  } catch(e) { log(`ERROR: ${e}`); }
+async function api(url,method="GET",body){
+  const r=await fetch(url,{method,headers:body?{"Content-Type":"application/json"}:{},body:body?JSON.stringify(body):undefined});
+  const t=await r.text();let d={};if(t)try{d=JSON.parse(t)}catch{d={detail:t}}
+  if(!r.ok)throw new Error(d.detail||d.error||r.status+" "+r.statusText);return d;
 }
 
-async function setMode(mode) { await apiPost('/api/mode', {mode}); }
-
-async function saveMap() {
-  const name = prompt('Map name:', 'map_' + Date.now());
-  if (name) await apiPost('/api/map/save', {name});
+function setDot(el,on){el.classList.remove("on","off");el.classList.add(on?"on":"off")}
+function setMode(mode){
+  $("#modeVal").textContent=mode||"--";
+  $$(".mode-btn").forEach(b=>b.classList.toggle("active",b.dataset.mode===mode));
 }
 
-async function navigate() {
-  const target = document.getElementById('navTarget').value;
-  if (!target) return;
-  const parts = target.split(/\s+/);
-  if (parts.length >= 2 && !isNaN(parts[0])) {
-    await apiPost('/api/navigate', {x: parseFloat(parts[0]), y: parseFloat(parts[1])});
-  } else {
-    await apiPost('/api/navigate', {instruction: target});
-  }
+const SVC=[["slam","SLAM"],["slam_pgo","PGO"],["lidar","LiDAR"],["camera","Camera"],["brainstem","Brainstem"]];
+function renderSvc(svcs={}){
+  $("#svcGrid").innerHTML=SVC.map(([k,l])=>{const a=!!svcs[k];return`<div class="service"><div class="left"><span class="dot ${a?"on":"off"}"></span><span class="name">${l}</span></div><span class="state">${a?"ACTIVE":"OFF"}</span></div>`}).join("");
 }
 
-async function refresh() {
-  try {
-    const r = await fetch(API + '/api/status');
-    const s = await r.json();
-    document.getElementById('modeLabel').textContent = s.mode.toUpperCase();
-    const grid = document.getElementById('statusGrid');
-    grid.innerHTML = Object.entries(s.services).map(([k, v]) =>
-      `<div class="status-item"><span>${k}</span><span class="dot ${v ? 'dot-on' : 'dot-off'}"></span></div>`
-    ).join('');
-
-    const r2 = await fetch(API + '/api/map/list');
-    const m = await r2.json();
-    const mapList = document.getElementById('mapList');
-    mapList.innerHTML = m.maps.map(mp =>
-      `<div class="map-item ${mp.active ? 'active' : ''}">
-        <span>${mp.name} ${mp.active ? '(active)' : ''}</span>
-        <button class="btn btn-use" onclick="apiPost('/api/map/use', {name:'${mp.name}'})" style="padding:4px 12px;font-size:12px;">Use</button>
-      </div>`
-    ).join('');
-  } catch(e) {}
+function renderStatus(s={}){
+  S.status=s;setMode(s.mode);
+  $("#slamVal").textContent=s.slam_profile||"--";
+  $("#mapVal").textContent=s.active_map||"--";
+  $("#timeVal").textContent=S.ttime;
+  setDot($("#runDot"),!!s.lingtu_running);
+  $("#runText").textContent=s.lingtu_running?"在线":"离线";
+  renderSvc(s.services||{});
+  const eb=$("#errBox"),he=!!s.last_error;
+  eb.textContent=he?s.last_error:"无";eb.classList.toggle("clean",!he);
 }
 
-setInterval(refresh, 3000);
-refresh();
+function renderMaps(){
+  const m=S.maps||[],g=$("#mapsGrid");
+  if(!m.length){g.innerHTML='<div class="empty">暂无地图</div>';return}
+  g.innerHTML=m.map(mp=>`
+    <article class="map-card ${mp.active?"active":""}">
+      <div class="map-head"><div class="map-name">${esc(mp.name)}</div>${mp.active?'<span class="tag active">ACTIVE</span>':'<span class="tag">READY</span>'}</div>
+      <div class="badges">
+        <span class="badge ${mp.has_pcd?"ok":""}">PCD ${mp.has_pcd?"OK":"--"}</span>
+        <span class="badge ${mp.has_tomogram?"ok":""}">TOMO ${mp.has_tomogram?"OK":"--"}</span>
+      </div>
+      <button class="btn secondary" data-use="${encodeURIComponent(mp.name)}" ${mp.active?"disabled":""}>${mp.active?"当前地图":"切换"}</button>
+    </article>
+  `).join("");
+}
+
+async function refresh(silent=false){
+  try{renderStatus(await api("/api/status"))}catch(e){if(!silent)toast("状态获取失败","error")}
+}
+async function refreshMaps(silent=false){
+  try{S.maps=(await api("/api/map/list")).maps||[];renderMaps()}catch(e){if(!silent)toast("地图列表失败","error")}
+}
+
+function connectSSE(){
+  if(S.sse)S.sse.close();const es=new EventSource("/api/stream");S.sse=es;
+  es.onopen=()=>{const rec=S.ever&&!S.connected;S.connected=true;S.ever=true;setDot($("#sseDot"),true);$("#sseText").textContent="遥测在线";if(rec)toast("遥测已恢复","success")};
+  es.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.mode)setMode(d.mode);if(d.timestamp){S.ttime=new Date(d.timestamp*1000).toLocaleTimeString("zh-CN",{hour12:false});$("#timeVal").textContent=S.ttime}}catch{}};
+  es.onerror=()=>{if(S.connected)toast("遥测中断，重连中","warn",3000);S.connected=false;setDot($("#sseDot"),false);$("#sseText").textContent="重连中";es.close();setTimeout(connectSSE,2500)};
+}
+
+function parseNav(raw){
+  const t=(raw||"").trim();if(!t)return null;
+  const m=t.match(/^\(?\s*(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)\s*\)?$/);
+  return m?{x:+m[1],y:+m[2],type:"coord"}:{instruction:t,type:"inst"};
+}
+
+async function sendMode(mode){try{await api("/api/mode","POST",{mode});setMode(mode);toast("已切换: "+mode,"success");refresh(true)}catch(e){toast("切换失败: "+e.message,"error",3200)}}
+async function sendNav(){
+  const p=parseNav($("#navInput").value);if(!p)return toast("请输入目标","warn");
+  try{if(p.type==="coord"){await api("/api/navigate","POST",{x:p.x,y:p.y});toast("坐标导航: "+p.x+","+p.y,"success")}else{await api("/api/navigate","POST",{instruction:p.instruction});toast("语义导航已发送","success")}$("#navInput").value=""}catch(e){toast("导航失败: "+e.message,"error",3200)}
+}
+async function saveMap(){
+  const n=$("#mapNameInput").value.trim();if(!n)return toast("请输入名称","warn");
+  try{await api("/api/map/save","POST",{name:n});$("#mapNameInput").value="";toast("地图已保存: "+n,"success");refreshMaps(true);refresh(true)}catch(e){toast("保存失败: "+e.message,"error",3200)}
+}
+async function stopRobot(){try{await api("/api/stop","POST");toast("急停已触发","error",3200)}catch(e){toast("急停失败: "+e.message,"error",3200)}}
+
+function bind(){
+  $$(".mode-btn").forEach(b=>b.addEventListener("click",()=>sendMode(b.dataset.mode)));
+  $("#navBtn").addEventListener("click",sendNav);
+  $("#saveMapBtn").addEventListener("click",saveMap);
+  $("#stopBtn").addEventListener("click",stopRobot);
+  $("#refreshMaps").addEventListener("click",()=>refreshMaps());
+  $("#navInput").addEventListener("keydown",e=>{if(e.key==="Enter")sendNav()});
+  $("#mapNameInput").addEventListener("keydown",e=>{if(e.key==="Enter")saveMap()});
+  $("#mapsGrid").addEventListener("click",async e=>{
+    const b=e.target.closest("[data-use]");if(!b||b.disabled)return;
+    const name=decodeURIComponent(b.dataset.use);
+    try{await api("/api/map/use","POST",{name});toast("已切换: "+name,"success");refreshMaps(true);refresh(true)}catch(e){toast("切换失败: "+e.message,"error",3200)}
+  });
+}
+
+async function init(){bind();await Promise.all([refresh(true),refreshMaps(true)]);connectSSE()}
+init();
 </script>
 </body>
-</html>
-"""
+</html>"""
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
