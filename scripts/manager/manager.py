@@ -199,12 +199,17 @@ def _save_map(name: str) -> dict:
     map_dir = os.path.join(MAP_DIR, name)
     os.makedirs(map_dir, exist_ok=True)
     pcd_path = os.path.join(map_dir, "map.pcd")
+    # Must source ROS2 env for ros2 CLI
+    cmd = (
+        "source /opt/ros/humble/setup.bash && "
+        "source /opt/nav/install/setup.bash 2>/dev/null; "
+        f"ros2 service call /nav/save_map interface/srv/SaveMaps "
+        f"\"{{file_path: '{pcd_path}'}}\""
+    )
     try:
         result = subprocess.run(
-            ["ros2", "service", "call", "/nav/save_map",
-             "interface/srv/SaveMaps", f"{{file_path: '{pcd_path}'}}"],
-            capture_output=True, text=True, timeout=30,
-            env={**os.environ, "ROS_DISTRO": "humble"})
+            ["bash", "-c", cmd],
+            capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             return {"success": False, "error": result.stderr[:200]}
         return {"success": True, "pcd": pcd_path}
