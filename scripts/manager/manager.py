@@ -341,6 +341,76 @@ async def api_stream():
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+@app.get("/api/camera/snapshot")
+async def api_camera_snapshot():
+    """Grab one JPEG frame from ROS2 camera topic via cyclonedds."""
+    try:
+        sys.path.insert(0, os.path.join(NAV_DIR, "src"))
+        from core.dds import ROS2TopicReader
+        import threading, io
+
+        result = {"data": None}
+        evt = threading.Event()
+
+        def on_img(img):
+            if result["data"] is None:
+                import numpy as np
+                h, w = img.height, img.width
+                enc = img.encoding.lower() if hasattr(img, 'encoding') else ''
+                if enc in ("bgr8", "rgb8"):
+                    arr = np.array(img.data, dtype=np.uint8).reshape(h, w, 3)
+                    if enc == "bgr8":
+                        arr = arr[:, :, ::-1]
+                    # Rotate for vertical mount + crop square
+                    arr = np.rot90(arr, k=1)
+                    rh, rw = arr.shape[:2]
+                    if rh > rw:
+                        m = (rh - rw) // 2
+                        arr = arr[m:m+rw]
+                    # Encode JPEG
+                    try:
+                        import cv2
+                        ok, buf = cv2.imencode(".jpg", arr[:,:,::-1], [cv2.IMWRITE_JPEG_QUALITY, 70])
+                        if ok:
+                            result["data"] = bytes(buf)
+                    except ImportError:
+                        from PIL import Image as PilImage
+                        pil = PilImage.fromarray(arr)
+                        bio = io.BytesIO()
+                        pil.save(bio, format="JPEG", quality=70)
+                        result["data"] = bio.getvalue()
+                    evt.set()
+
+        reader = ROS2TopicReader()
+        reader.on_image("/camera/color/image_raw", on_img)
+        reader.spin_background()
+        evt.wait(timeout=3)
+        reader.stop()
+
+        if result["data"]:
+            from fastapi.responses import Response
+            return Response(content=result["data"], media_type="image/jpeg")
+        return JSONResponse({"error": "No camera frame received"}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/rerun/status")
+async def api_rerun_status():
+    """Check if Rerun web viewer is running."""
+    rerun_running = False
+    try:
+        import socket
+        s = socket.socket()
+        s.settimeout(1)
+        s.connect(("127.0.0.1", 9090))
+        s.close()
+        rerun_running = True
+    except Exception:
+        pass
+    return {"running": rerun_running, "url": "http://localhost:9090" if rerun_running else None}
+
+
 # ── Web UI ───────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -565,6 +635,25 @@ input:focus{border-color:rgba(76,201,240,.45);box-shadow:0 0 0 3px rgba(76,201,2
       <div id="errBox" class="error-box clean">无</div>
     </section>
 
+    <!-- Camera + 3D View -->
+    <section class="panel">
+      <div class="panel-head"><div><div class="panel-title">相机</div><div class="panel-sub">Camera Feed</div></div>
+        <button class="btn secondary" onclick="refreshCam()">刷新</button>
+      </div>
+      <div style="text-align:center">
+        <img id="camImg" src="/api/camera/snapshot" style="max-width:100%;border-radius:12px;background:#111;min-height:200px" onerror="this.style.opacity=0.3" alt="camera">
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><div><div class="panel-title">3D 视图</div><div class="panel-sub">Rerun Point Cloud</div></div>
+        <span id="rerunStatus" style="font-size:12px;color:var(--muted)">检测中...</span>
+      </div>
+      <div id="rerunWrap" style="border-radius:12px;overflow:hidden;background:#111;min-height:200px;display:flex;align-items:center;justify-content:center">
+        <span style="color:var(--muted)">Rerun 未运行</span>
+      </div>
+    </section>
+
     <!-- Full Width: Maps -->
     <section class="panel span2">
       <div class="panel-head">
@@ -680,7 +769,24 @@ function bind(){
   });
 }
 
-async function init(){bind();await Promise.all([refresh(true),refreshMaps(true)]);connectSSE()}
+function refreshCam(){$("#camImg").src="/api/camera/snapshot?t="+Date.now()}
+async function checkRerun(){
+  try{
+    const r=await api("/api/rerun/status");
+    const w=$("#rerunWrap"),s=$("#rerunStatus");
+    if(r.running){
+      s.textContent="ACTIVE";s.style.color="var(--green)";
+      w.innerHTML='<iframe src="http://'+location.hostname+':9090" style="width:100%;height:400px;border:none;border-radius:12px"></iframe>';
+    }else{
+      s.textContent="OFF";s.style.color="var(--muted)";
+      w.innerHTML='<span style="color:var(--muted)">Rerun 未运行 — 启动: python3 scripts/rerun_live.py</span>';
+    }
+  }catch{}
+}
+setInterval(refreshCam,3000);
+setInterval(checkRerun,10000);
+
+async function init(){bind();await Promise.all([refresh(true),refreshMaps(true)]);connectSSE();refreshCam();checkRerun()}
 init();
 </script>
 </body>
