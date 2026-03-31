@@ -112,24 +112,29 @@ class SlamBridgeModule(Module, layer=1):
 
     # ── cyclonedds callbacks (parsed CDR) ────────────────────────────────
 
-    def _on_dds_odom(self, odom) -> None:
+    def _on_dds_odom(self, msg) -> None:
+        """DDS_Odometry → Module Odometry."""
         try:
+            p = msg.pose.pose.position
+            q = msg.pose.pose.orientation
             self.odometry.publish(Odometry(
                 pose=Pose(
-                    position=Vector3(x=odom.x, y=odom.y, z=odom.z),
-                    orientation=Quaternion(x=odom.qx, y=odom.qy, z=odom.qz, w=odom.qw),
+                    position=Vector3(x=p.x, y=p.y, z=p.z),
+                    orientation=Quaternion(x=q.x, y=q.y, z=q.z, w=q.w),
                 ),
             ))
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
 
-    def _on_dds_cloud(self, pc) -> None:
+    def _on_dds_cloud(self, msg) -> None:
+        """DDS_PointCloud2 → Module PointCloud."""
         try:
-            n = pc.width * pc.height
+            n = msg.width * msg.height
             if n == 0:
                 return
-            step = pc.point_step
-            raw = np.frombuffer(pc.data, dtype=np.uint8).reshape(n, step)
+            step = msg.point_step
+            data = np.array(msg.data, dtype=np.uint8)
+            raw = data.reshape(n, step)
             xyz = np.zeros((n, 3), dtype=np.float32)
             xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
             xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)

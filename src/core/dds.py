@@ -1,190 +1,202 @@
-"""Lightweight DDS subscription layer — replaces rclpy for ROS2 topic reading.
+"""Lightweight DDS layer — subscribes to ROS2 topics without rclpy.
 
-Subscribes to ROS2 DDS topics using raw cyclonedds, no rclpy dependency.
-Falls back to rclpy if cyclonedds not available.
-
-ROS2 DDS topic mapping:
-  ROS2 topic "/nav/odometry" → DDS topic "rt/nav/odometry"
-  Message type nav_msgs/Odometry → CDR serialized bytes
+Uses cyclonedds with IDL types that match ROS2 DDS type names exactly.
+Zero ROS2 dependency: `pip install cyclonedds` is all you need.
 
 Usage::
 
-    from core.dds import DDSReader
+    from core.dds import ROS2TopicReader
 
-    reader = DDSReader()
-    reader.subscribe("/nav/odometry", "nav_msgs::msg::dds_::Odometry_", on_odom)
-    reader.subscribe("/nav/map_cloud", "sensor_msgs::msg::dds_::PointCloud2_", on_cloud)
-    reader.spin()  # blocking, or reader.spin_background()
+    reader = ROS2TopicReader()
+    reader.on_odometry("/nav/odometry", lambda o: print(o.pose.pose.position.x))
+    reader.on_pointcloud2("/nav/map_cloud", lambda pc: print(pc.width))
+    reader.spin_background()
 """
 
 from __future__ import annotations
 
 import logging
-import struct
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
+# ── ROS2 message types as cyclonedds IDL structs ────────────────────────────
+# typename must match ROS2 DDS type name exactly for subscription to work.
 
-# ── CDR parsers for ROS2 message types ───────────────────────────────────────
+try:
+    from cyclonedds.idl import IdlStruct, types
+    from cyclonedds.domain import DomainParticipant
+    from cyclonedds.topic import Topic
+    from cyclonedds.sub import DataReader
+    from cyclonedds.qos import Qos, Policy
+    from cyclonedds.util import duration
 
-def _align(offset: int, alignment: int) -> int:
-    """CDR alignment: advance offset to next multiple of alignment."""
-    return (offset + alignment - 1) & ~(alignment - 1)
+    _HAS_CYCLONEDDS = True
+
+    # ── std_msgs ──
+
+    @dataclass
+    class DDS_Time(IdlStruct):
+        sec: types.int32
+        nanosec: types.uint32
+
+    @dataclass
+    class DDS_Header(IdlStruct):
+        stamp: DDS_Time
+        frame_id: str
+
+    # ── geometry_msgs ──
+
+    @dataclass
+    class DDS_Point(IdlStruct):
+        x: types.float64
+        y: types.float64
+        z: types.float64
+
+    @dataclass
+    class DDS_Quaternion(IdlStruct):
+        x: types.float64
+        y: types.float64
+        z: types.float64
+        w: types.float64
+
+    @dataclass
+    class DDS_Pose(IdlStruct):
+        position: DDS_Point
+        orientation: DDS_Quaternion
+
+    @dataclass
+    class DDS_PoseWithCovariance(IdlStruct):
+        pose: DDS_Pose
+        covariance: types.array[types.float64, 36]
+
+    @dataclass
+    class DDS_Vector3(IdlStruct):
+        x: types.float64
+        y: types.float64
+        z: types.float64
+
+    @dataclass
+    class DDS_Twist(IdlStruct):
+        linear: DDS_Vector3
+        angular: DDS_Vector3
+
+    @dataclass
+    class DDS_TwistWithCovariance(IdlStruct):
+        twist: DDS_Twist
+        covariance: types.array[types.float64, 36]
+
+    @dataclass
+    class DDS_PoseStamped(IdlStruct, typename="geometry_msgs::msg::dds_::PoseStamped_"):
+        header: DDS_Header
+        pose: DDS_Pose
+
+    # ── nav_msgs ──
+
+    @dataclass
+    class DDS_Odometry(IdlStruct, typename="nav_msgs::msg::dds_::Odometry_"):
+        header: DDS_Header
+        child_frame_id: str
+        pose: DDS_PoseWithCovariance
+        twist: DDS_TwistWithCovariance
+
+    @dataclass
+    class DDS_MapMetaData(IdlStruct):
+        map_load_time: DDS_Time
+        resolution: types.float32
+        width: types.uint32
+        height: types.uint32
+        origin: DDS_Pose
+
+    @dataclass
+    class DDS_OccupancyGrid(IdlStruct, typename="nav_msgs::msg::dds_::OccupancyGrid_"):
+        header: DDS_Header
+        info: DDS_MapMetaData
+        data: types.sequence[types.int8]
+
+    @dataclass
+    class DDS_Path(IdlStruct, typename="nav_msgs::msg::dds_::Path_"):
+        header: DDS_Header
+        poses: types.sequence[DDS_PoseStamped]
+
+    # ── sensor_msgs ──
+
+    @dataclass
+    class DDS_PointField(IdlStruct):
+        name: str
+        offset: types.uint32
+        datatype: types.uint8
+        count: types.uint32
+
+    @dataclass
+    class DDS_PointCloud2(IdlStruct, typename="sensor_msgs::msg::dds_::PointCloud2_"):
+        header: DDS_Header
+        height: types.uint32
+        width: types.uint32
+        fields: types.sequence[DDS_PointField]
+        is_bigendian: types.bool
+        point_step: types.uint32
+        row_step: types.uint32
+        data: types.sequence[types.uint8]
+        is_dense: types.bool
+
+    @dataclass
+    class DDS_Image(IdlStruct, typename="sensor_msgs::msg::dds_::Image_"):
+        header: DDS_Header
+        height: types.uint32
+        width: types.uint32
+        encoding: str
+        is_bigendian: types.uint8
+        step: types.uint32
+        data: types.sequence[types.uint8]
+
+    # ── tf2_msgs ──
+
+    @dataclass
+    class DDS_TransformStamped_Translation(IdlStruct):
+        x: types.float64
+        y: types.float64
+        z: types.float64
+
+    @dataclass
+    class DDS_Transform(IdlStruct):
+        translation: DDS_TransformStamped_Translation
+        rotation: DDS_Quaternion
+
+    @dataclass
+    class DDS_TransformStamped(IdlStruct):
+        header: DDS_Header
+        child_frame_id: str
+        transform: DDS_Transform
+
+    @dataclass
+    class DDS_TFMessage(IdlStruct, typename="tf2_msgs::msg::dds_::TFMessage_"):
+        transforms: types.sequence[DDS_TransformStamped]
+
+except ImportError:
+    _HAS_CYCLONEDDS = False
 
 
-def _read_string(buf: bytes, offset: int) -> tuple[str, int]:
-    """Read CDR string: uint32 length + chars + null + alignment."""
-    offset = _align(offset, 4)
-    length = struct.unpack_from("<I", buf, offset)[0]
-    offset += 4
-    s = buf[offset:offset + length - 1].decode("utf-8", errors="replace")
-    offset += length
-    return s, offset
+# ── DDSReader ────────────────────────────────────────────────────────────────
 
+# Map of ROS2 message type shortnames → (DDS IDL class, DDS topic prefix)
+_MSG_TYPES: dict[str, Any] = {}
+if _HAS_CYCLONEDDS:
+    _MSG_TYPES = {
+        "odometry": DDS_Odometry,
+        "pointcloud2": DDS_PointCloud2,
+        "image": DDS_Image,
+        "occupancygrid": DDS_OccupancyGrid,
+        "path": DDS_Path,
+        "tfmessage": DDS_TFMessage,
+    }
 
-@dataclass
-class ParsedOdometry:
-    """Minimal parsed Odometry from CDR bytes."""
-    stamp_sec: int
-    stamp_nsec: int
-    frame_id: str
-    x: float
-    y: float
-    z: float
-    qx: float
-    qy: float
-    qz: float
-    qw: float
-
-
-def parse_odometry_cdr(data: bytes) -> Optional[ParsedOdometry]:
-    """Parse nav_msgs/Odometry from CDR bytes."""
-    try:
-        # Skip CDR header (4 bytes: encapsulation)
-        off = 4
-        # Header.stamp (sec: int32, nsec: uint32)
-        off = _align(off, 4)
-        sec = struct.unpack_from("<i", data, off)[0]; off += 4
-        nsec = struct.unpack_from("<I", data, off)[0]; off += 4
-        # Header.frame_id (string)
-        frame_id, off = _read_string(data, off)
-        # child_frame_id (string)
-        _child, off = _read_string(data, off)
-        # PoseWithCovariance.pose.position (3 × float64)
-        off = _align(off, 8)
-        x = struct.unpack_from("<d", data, off)[0]; off += 8
-        y = struct.unpack_from("<d", data, off)[0]; off += 8
-        z = struct.unpack_from("<d", data, off)[0]; off += 8
-        # PoseWithCovariance.pose.orientation (4 × float64)
-        qx = struct.unpack_from("<d", data, off)[0]; off += 8
-        qy = struct.unpack_from("<d", data, off)[0]; off += 8
-        qz = struct.unpack_from("<d", data, off)[0]; off += 8
-        qw = struct.unpack_from("<d", data, off)[0]; off += 8
-        return ParsedOdometry(sec, nsec, frame_id, x, y, z, qx, qy, qz, qw)
-    except Exception:
-        return None
-
-
-@dataclass
-class ParsedPointCloud2:
-    """Minimal parsed PointCloud2 from CDR bytes."""
-    frame_id: str
-    width: int
-    height: int
-    point_step: int
-    data: bytes
-
-
-def parse_pointcloud2_cdr(raw: bytes) -> Optional[ParsedPointCloud2]:
-    """Parse sensor_msgs/PointCloud2 from CDR bytes."""
-    try:
-        off = 4  # CDR header
-        # Header.stamp
-        off = _align(off, 4)
-        off += 8  # skip stamp (sec + nsec)
-        # Header.frame_id
-        frame_id, off = _read_string(raw, off)
-        # height, width (uint32)
-        off = _align(off, 4)
-        height = struct.unpack_from("<I", raw, off)[0]; off += 4
-        width = struct.unpack_from("<I", raw, off)[0]; off += 4
-        # fields[] — sequence<PointField>
-        off = _align(off, 4)
-        n_fields = struct.unpack_from("<I", raw, off)[0]; off += 4
-        for _ in range(n_fields):
-            # PointField: string name, uint32 offset, uint8 datatype, uint32 count
-            _name, off = _read_string(raw, off)
-            off = _align(off, 4)
-            off += 4  # offset
-            off += 1  # datatype
-            off = _align(off, 4)
-            off += 4  # count
-        # is_bigendian (bool/uint8)
-        off += 1
-        # point_step, row_step (uint32)
-        off = _align(off, 4)
-        point_step = struct.unpack_from("<I", raw, off)[0]; off += 4
-        row_step = struct.unpack_from("<I", raw, off)[0]; off += 4
-        # data[] — sequence<uint8>
-        off = _align(off, 4)
-        data_len = struct.unpack_from("<I", raw, off)[0]; off += 4
-        cloud_data = raw[off:off + data_len]
-        return ParsedPointCloud2(frame_id, width, height, point_step, cloud_data)
-    except Exception:
-        return None
-
-
-@dataclass
-class ParsedImage:
-    """Minimal parsed Image from CDR bytes."""
-    height: int
-    width: int
-    encoding: str
-    data: bytes
-
-
-def parse_image_cdr(raw: bytes) -> Optional[ParsedImage]:
-    """Parse sensor_msgs/Image from CDR bytes."""
-    try:
-        off = 4  # CDR header
-        # Header.stamp
-        off = _align(off, 4)
-        off += 8  # skip stamp
-        # Header.frame_id
-        _frame_id, off = _read_string(raw, off)
-        # height, width (uint32)
-        off = _align(off, 4)
-        height = struct.unpack_from("<I", raw, off)[0]; off += 4
-        width = struct.unpack_from("<I", raw, off)[0]; off += 4
-        # encoding (string)
-        encoding, off = _read_string(raw, off)
-        # is_bigendian (uint8)
-        off += 1
-        # step (uint32)
-        off = _align(off, 4)
-        _step = struct.unpack_from("<I", raw, off)[0]; off += 4
-        # data[] — sequence<uint8>
-        off = _align(off, 4)
-        data_len = struct.unpack_from("<I", raw, off)[0]; off += 4
-        img_data = raw[off:off + data_len]
-        return ParsedImage(height, width, encoding, img_data)
-    except Exception:
-        return None
-
-
-# ── DDS Reader (cyclonedds backend) ──────────────────────────────────────────
 
 class DDSReader:
-    """Lightweight DDS reader that subscribes to ROS2 topics without rclpy.
-
-    Uses cyclonedds Python binding. Subscriptions receive raw CDR bytes.
-    """
+    """Lightweight DDS reader for ROS2 topics — no rclpy needed."""
 
     def __init__(self, domain_id: int = 0):
         self._domain_id = domain_id
@@ -192,64 +204,38 @@ class DDSReader:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._dp = None
-        self._readers: list = []
 
-    def subscribe(self, ros2_topic: str, callback: Callable, msg_type: str = "raw"):
-        """Register a subscription. Call before spin().
-
-        Args:
-            ros2_topic: ROS2 topic name (e.g. "/nav/odometry")
-            callback: function(raw_bytes) — receives CDR serialized bytes
-            msg_type: hint for future auto-parsing ("odometry", "pointcloud2", "image", "raw")
-        """
+    def subscribe(self, ros2_topic: str, dds_type, callback: Callable):
+        """Register a typed subscription."""
         self._subs.append({
             "ros2_topic": ros2_topic,
-            "dds_topic": "rt" + ros2_topic,  # ROS2 DDS naming convention
+            "dds_topic": "rt" + ros2_topic,
+            "dds_type": dds_type,
             "callback": callback,
-            "msg_type": msg_type,
+            "reader": None,
         })
 
     def start(self) -> bool:
-        """Initialize cyclonedds and create readers. Returns True if successful."""
-        try:
-            from cyclonedds.domain import DomainParticipant
-            from cyclonedds.topic import Topic
-            from cyclonedds.sub import Subscriber, DataReader
-
-            # cyclonedds 0.10.x uses domain_id=, not domain=
-            self._dp = DomainParticipant(domain_id=self._domain_id)
-            subscriber = Subscriber(self._dp)
-
-            # Define a minimal IDL type for raw bytes reception
-            from cyclonedds.idl import IdlStruct
-            from dataclasses import dataclass as _dc
-
-            @_dc
-            class RawBytes(IdlStruct):
-                data: bytes
-
-            for sub in self._subs:
-                try:
-                    topic = Topic(self._dp, sub["dds_topic"], RawBytes)
-                    reader = DataReader(subscriber, topic)
-                    sub["reader"] = reader
-                    self._readers.append(reader)
-                    logger.info("DDSReader: subscribed %s → %s", sub["ros2_topic"], sub["dds_topic"])
-                except Exception as e:
-                    logger.warning("DDSReader: failed to subscribe %s: %s", sub["ros2_topic"], e)
-
-            self._running = True
-            return True
-
-        except ImportError:
+        if not _HAS_CYCLONEDDS:
             logger.warning("DDSReader: cyclonedds not available")
             return False
+        try:
+            self._dp = DomainParticipant(domain_id=self._domain_id)
+            qos = Qos(Policy.Reliability.Reliable(duration(seconds=1)))
+            for sub in self._subs:
+                try:
+                    topic = Topic(self._dp, sub["dds_topic"], sub["dds_type"])
+                    sub["reader"] = DataReader(self._dp, topic, qos=qos)
+                    logger.info("DDSReader: %s → %s", sub["ros2_topic"], sub["dds_topic"])
+                except Exception as e:
+                    logger.warning("DDSReader: failed %s: %s", sub["ros2_topic"], e)
+            self._running = True
+            return True
         except Exception as e:
             logger.warning("DDSReader: start failed: %s", e)
             return False
 
     def spin_background(self) -> None:
-        """Start polling in a background thread."""
         if not self._running:
             if not self.start():
                 return
@@ -257,14 +243,12 @@ class DDSReader:
         self._thread.start()
 
     def stop(self) -> None:
-        """Stop polling and clean up."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=2)
             self._thread = None
 
     def _spin_loop(self) -> None:
-        """Poll all readers and dispatch callbacks."""
         while self._running:
             for sub in self._subs:
                 reader = sub.get("reader")
@@ -273,48 +257,36 @@ class DDSReader:
                 try:
                     samples = reader.take(N=10)
                     for sample in samples:
-                        if sample is None:
-                            continue
-                        # Extract raw bytes from IdlStruct wrapper
-                        raw = getattr(sample, "data", sample)
-                        if raw is not None:
-                            sub["callback"](raw)
+                        if sample is not None:
+                            sub["callback"](sample)
                 except Exception as e:
-                    logger.debug("DDSReader poll error on %s: %s", sub["ros2_topic"], e)
-            time.sleep(0.005)  # 200Hz poll rate
+                    logger.debug("DDSReader poll %s: %s", sub["ros2_topic"], e)
+            time.sleep(0.005)
 
-
-# ── Convenience: auto-parsing reader ─────────────────────────────────────────
 
 class ROS2TopicReader(DDSReader):
-    """DDSReader with auto-parsing for common ROS2 message types.
+    """Convenience reader with typed subscribe helpers."""
 
-    Usage::
+    def on_odometry(self, topic: str, callback: Callable):
+        if _HAS_CYCLONEDDS:
+            self.subscribe(topic, DDS_Odometry, callback)
 
-        reader = ROS2TopicReader()
-        reader.on_odometry("/nav/odometry", lambda odom: print(odom.x, odom.y))
-        reader.on_pointcloud2("/nav/map_cloud", lambda pc: print(pc.width))
-        reader.on_image("/camera/color/image_raw", lambda img: print(img.encoding))
-        reader.spin_background()
-    """
+    def on_pointcloud2(self, topic: str, callback: Callable):
+        if _HAS_CYCLONEDDS:
+            self.subscribe(topic, DDS_PointCloud2, callback)
 
-    def on_odometry(self, topic: str, callback: Callable[[ParsedOdometry], None]):
-        def _parse(raw_bytes):
-            odom = parse_odometry_cdr(raw_bytes)
-            if odom:
-                callback(odom)
-        self.subscribe(topic, _parse, "odometry")
+    def on_image(self, topic: str, callback: Callable):
+        if _HAS_CYCLONEDDS:
+            self.subscribe(topic, DDS_Image, callback)
 
-    def on_pointcloud2(self, topic: str, callback: Callable[[ParsedPointCloud2], None]):
-        def _parse(raw_bytes):
-            pc = parse_pointcloud2_cdr(raw_bytes)
-            if pc:
-                callback(pc)
-        self.subscribe(topic, _parse, "pointcloud2")
+    def on_occupancy_grid(self, topic: str, callback: Callable):
+        if _HAS_CYCLONEDDS:
+            self.subscribe(topic, DDS_OccupancyGrid, callback)
 
-    def on_image(self, topic: str, callback: Callable[[ParsedImage], None]):
-        def _parse(raw_bytes):
-            img = parse_image_cdr(raw_bytes)
-            if img:
-                callback(img)
-        self.subscribe(topic, _parse, "image")
+    def on_path(self, topic: str, callback: Callable):
+        if _HAS_CYCLONEDDS:
+            self.subscribe(topic, DDS_Path, callback)
+
+    def on_tf(self, topic: str, callback: Callable):
+        if _HAS_CYCLONEDDS:
+            self.subscribe(topic, DDS_TFMessage, callback)
