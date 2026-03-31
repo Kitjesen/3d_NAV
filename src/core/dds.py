@@ -3,6 +3,9 @@
 Uses cyclonedds with IDL types that match ROS2 DDS type names exactly.
 Zero ROS2 dependency: `pip install cyclonedds` is all you need.
 
+NOTE: Do NOT add `from __future__ import annotations` — cyclonedds IdlStruct
+needs real type objects at class definition time, not string annotations.
+
 Usage::
 
     from core.dds import ROS2TopicReader
@@ -12,8 +15,6 @@ Usage::
     reader.on_pointcloud2("/nav/map_cloud", lambda pc: print(pc.width))
     reader.spin_background()
 """
-
-from __future__ import annotations
 
 import logging
 import threading
