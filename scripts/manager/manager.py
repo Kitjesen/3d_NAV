@@ -133,30 +133,56 @@ def _pid_alive(pid: int) -> bool:
 
 def _switch_to_idle():
     _stop_lingtu()
+    _stop_rerun()
     _systemctl("stop", "slam")
     _systemctl("stop", "slam_pgo")
     state.mode = "idle"
     state.slam_profile = "none"
 
 
+def _start_rerun():
+    """Start rerun_live.py for 3D visualization."""
+    import subprocess as _sp
+    _sp.Popen(
+        ["bash", "-c",
+         "source /opt/ros/humble/setup.bash && "
+         "source /opt/nav/install/setup.bash 2>/dev/null; "
+         f"cd {NAV_DIR} && exec python3 -u scripts/rerun_live.py"],
+        stdout=open("/tmp/rerun_live.log", "a"),
+        stderr=_sp.STDOUT,
+        preexec_fn=os.setsid,
+    )
+    logger.info("Rerun started")
+
+
+def _stop_rerun():
+    import subprocess as _sp
+    _sp.run(["pkill", "-9", "-f", "rerun_live"], capture_output=True)
+    _sp.run(["fuser", "-k", "9090/tcp"], capture_output=True)
+    _sp.run(["fuser", "-k", "9877/tcp"], capture_output=True)
+
+
 def _switch_to_map():
     _stop_lingtu()
+    _stop_rerun()
     _systemctl("start", "slam")
     _systemctl("start", "slam_pgo")
+    _start_rerun()
     state.mode = "map"
     state.slam_profile = "fastlio2"
 
 
 def _switch_to_nav():
     _stop_lingtu()
-    # Check active map exists
+    _stop_rerun()
     active_tomo = os.path.join(MAP_DIR, "active", "tomogram.pickle")
     if not os.path.exists(active_tomo):
         state.last_error = "No active map. Build a map first."
         return False
     _systemctl("stop", "slam_pgo")
-    _systemctl("start", "slam")  # localizer mode uses same service
+    _systemctl("start", "slam")
     _start_lingtu("nav")
+    _start_rerun()
     state.mode = "nav"
     state.slam_profile = "localizer"
     return True
@@ -164,9 +190,11 @@ def _switch_to_nav():
 
 def _switch_to_explore():
     _stop_lingtu()
+    _stop_rerun()
     _systemctl("start", "slam")
     _systemctl("stop", "slam_pgo")
     _start_lingtu("explore")
+    _start_rerun()
     state.mode = "explore"
     state.slam_profile = "fastlio2"
     return True
