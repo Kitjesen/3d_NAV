@@ -60,10 +60,46 @@ class PersonTracker:
         self._vlm_selecting: bool = False          # VLM 选人中 (防重入)
         self._clip_encoder = None                  # CLIP 编码器 (外部注入)
         self._lock = threading.Lock()
+        # FusionMOT backend (optional, enabled via enable_fusion_tracking)
+        self._fusion_tracker = None
+        self._reid_extractor = None
+        self._target_track_id: Optional[int] = None
 
     def set_clip_encoder(self, clip_encoder) -> None:
         """注入 CLIP 编码器，用于外观特征提取。"""
         self._clip_encoder = clip_encoder
+
+    def enable_fusion_tracking(self) -> bool:
+        """Enable FusionMOT + OSNet Re-ID backend for Kalman-smoothed tracking.
+
+        When enabled, update() routes through FusionMOT which provides:
+          - Kalman prediction between frames (smooth bbox trajectory)
+          - OSNet Re-ID features (robust re-identification after occlusion)
+          - Stable track IDs across frames
+
+        Returns True if successfully initialized, False if qp_perception unavailable.
+        """
+        try:
+            from qp_perception.tracking.fusion import FusionMOT, FusionMOTConfig
+            from qp_perception.reid.extractor import ReIDConfig, ReIDExtractor
+
+            reid_cfg = ReIDConfig(backbone="osnet_x1_0", device="")
+            self._reid_extractor = ReIDExtractor(reid_cfg)
+
+            mot_cfg = FusionMOTConfig()
+            self._fusion_tracker = FusionMOT(
+                config=mot_cfg,
+                feature_dim=self._reid_extractor.feature_dim,
+            )
+            logger.info("PersonTracker: FusionMOT + OSNet Re-ID enabled")
+            return True
+        except Exception as e:
+            logger.info(
+                "PersonTracker: FusionMOT unavailable (%s), using classic tracking", e
+            )
+            self._fusion_tracker = None
+            self._reid_extractor = None
+            return False
 
     async def select_target_with_vlm(
         self,
@@ -239,7 +275,8 @@ class PersonTracker:
         """
         每帧更新跟踪状态。
 
-        匹配策略 (优先级降序):
+        When FusionMOT is enabled (via enable_fusion_tracking), routes through
+        Kalman-smoothed tracking with OSNet Re-ID. Otherwise uses classic matching:
           1. obj_id 匹配 (instance_tracker 已赋予唯一 ID)
           2. 距离最近 (< MATCH_DIST_THRESHOLD)
           3. 外观特征 Re-ID (遮挡后恢复)
@@ -256,16 +293,21 @@ class PersonTracker:
             if o.get("label", "").lower() in ("person", "people", "human", "pedestrian")
         ]
         if not persons:
+            self._fusion_tick_empty()
             return False
 
         with self._lock:
+            # FusionMOT path: Kalman + OSNet Re-ID
+            if self._fusion_tracker is not None and rgb_frame is not None:
+                return self._update_fusion(persons, rgb_frame)
+
+            # ── Classic path (unchanged) ──
             if self._person is None:
                 # 未选定目标时，退化为跟最高置信度的 (兼容旧行为)
                 best = max(persons, key=lambda p: p.get("confidence", 0))
                 self._init_person(best)
                 return True
 
-            # ── 匹配策略 ──
             matched = self._match_person(persons, rgb_frame)
             if matched is not None:
                 self._update_tracked(matched, rgb_frame)
@@ -281,6 +323,123 @@ class PersonTracker:
                 return True
 
         return False
+
+    # ── FusionMOT backend ─────────────────────────────────────────────────────
+
+    def _update_fusion(self, persons: List[Dict], rgb_frame: np.ndarray) -> bool:
+        """Tracking via FusionMOT: Kalman smoothing + OSNet Re-ID.
+
+        Flow:
+          1. Convert person bboxes → FusionMOT input (xywh)
+          2. Extract OSNet Re-ID features from crops
+          3. FusionMOT.update() → stable (track_id, bbox, conf) list
+          4. Match target by track_id (O(1) lookup) or fall back to classic matching
+        """
+        timestamp = time.time()
+
+        # Convert person detections to FusionMOT format
+        bboxes, confs, valid_persons = [], [], []
+        for p in persons:
+            bbox = p.get("bbox")
+            if not bbox or len(bbox) < 4:
+                continue
+            if isinstance(bbox, np.ndarray):
+                bbox = bbox.tolist()
+            x1, y1 = float(bbox[0]), float(bbox[1])
+            x2, y2 = float(bbox[2]), float(bbox[3])
+            w, h = x2 - x1, y2 - y1
+            if w <= 0 or h <= 0:
+                continue
+            bboxes.append([x1, y1, w, h])
+            confs.append(float(p.get("confidence", 0.5)))
+            valid_persons.append(p)
+
+        if not bboxes:
+            self._fusion_tick_empty()
+            return False
+
+        bboxes_np = np.array(bboxes, dtype=np.float32)
+        confs_np = np.array(confs, dtype=np.float32)
+
+        # OSNet Re-ID feature extraction
+        features = None
+        if self._reid_extractor is not None:
+            try:
+                bbox_tuples = [(b[0], b[1], b[2], b[3]) for b in bboxes]
+                features = self._reid_extractor.extract(rgb_frame, bbox_tuples)
+            except Exception as e:
+                logger.debug("Re-ID extraction failed: %s", e)
+
+        # FusionMOT update → stable tracks
+        tracks = self._fusion_tracker.update(bboxes_np, confs_np, features, timestamp)
+        if not tracks:
+            return False
+
+        # Map track_id → person object (by bbox center proximity)
+        track_map = self._map_tracks_to_persons(tracks, valid_persons)
+
+        # Fast path: target locked by track_id
+        if self._target_track_id is not None and self._target_track_id in track_map:
+            self._update_tracked(track_map[self._target_track_id], rgb_frame)
+            return True
+
+        # Target track_id lost or not yet assigned — use classic matching to re-associate
+        if self._person is not None:
+            matched = self._match_person(list(track_map.values()), rgb_frame)
+            if matched is not None:
+                for tid, p in track_map.items():
+                    if p is matched:
+                        self._target_track_id = tid
+                        break
+                self._update_tracked(matched, rgb_frame)
+                return True
+            return False
+
+        # No target yet — pick highest confidence (default behavior)
+        if not self._target_selected:
+            best_tid = max(track_map, key=lambda t: track_map[t].get("confidence", 0))
+            self._init_person(track_map[best_tid])
+            self._target_track_id = best_tid
+            return True
+
+        return False
+
+    def _fusion_tick_empty(self) -> None:
+        """Maintain FusionMOT state with no detections (keeps lost-track timers)."""
+        if self._fusion_tracker is None:
+            return
+        try:
+            self._fusion_tracker.update(
+                np.empty((0, 4)), np.array([]), None, time.time()
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _map_tracks_to_persons(
+        tracks: list, persons: List[Dict],
+    ) -> Dict[int, Dict]:
+        """Map FusionMOT track_id to nearest input person by bbox center distance."""
+        result: Dict[int, Dict] = {}
+        for track_id, bbox_arr, conf in tracks:
+            tx, ty, tw, th = bbox_arr
+            tcx, tcy = tx + tw / 2, ty + th / 2
+            best_p, best_d = None, float("inf")
+            for p in persons:
+                pb = p.get("bbox", [0, 0, 0, 0])
+                if isinstance(pb, np.ndarray):
+                    pb = pb.tolist()
+                if len(pb) < 4:
+                    continue
+                pcx = (float(pb[0]) + float(pb[2])) / 2
+                pcy = (float(pb[1]) + float(pb[3])) / 2
+                d = (tcx - pcx) ** 2 + (tcy - pcy) ** 2
+                if d < best_d:
+                    best_d = d
+                    best_p = p
+            if best_p is not None:
+                result[int(track_id)] = best_p
+        return result
 
     def _match_person(
         self, persons: List[Dict], rgb_frame: Optional[np.ndarray]
@@ -478,3 +637,4 @@ class PersonTracker:
             self._description = ""
             self._target_selected = False
             self._vlm_selecting = False
+            self._target_track_id = None

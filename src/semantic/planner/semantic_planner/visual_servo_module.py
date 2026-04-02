@@ -117,6 +117,9 @@ class VisualServoModule(Module, layer=4):
         # Throttle image processing to ~10 Hz
         self.color_image.set_policy("throttle", interval=0.1)
 
+        # Try to enable FusionMOT + OSNet Re-ID for person tracking
+        self._person_tracker.enable_fusion_tracking()
+
     def stop(self) -> None:
         self._cancel_tracking()
         super().stop()
