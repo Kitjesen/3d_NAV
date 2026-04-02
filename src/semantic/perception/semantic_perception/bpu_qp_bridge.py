@@ -128,7 +128,7 @@ class FusionMOTWrapper:
         return self._to_tracks(results, detections, timestamp)
 
     def update_with_frame(self, detections, frame: np.ndarray, timestamp: float):
-        """带 Re-ID 特征的跟踪更新。"""
+        """Selective Re-ID: only extract features for ambiguous detections."""
         from qp_perception.types import BoundingBox, Track
 
         if not detections:
@@ -139,15 +139,12 @@ class FusionMOTWrapper:
         bboxes = np.array([[d.bbox.x, d.bbox.y, d.bbox.w, d.bbox.h] for d in detections], dtype=np.float32)
         confs = np.array([d.confidence for d in detections], dtype=np.float32)
 
-        # 提取 Re-ID 外观特征
-        bbox_tuples = [(d.bbox.x, d.bbox.y, d.bbox.w, d.bbox.h) for d in detections]
-        try:
-            features = self._reid.extract(frame, bbox_tuples)
-        except Exception as e:
-            logger.debug("Re-ID extraction failed: %s", e)
-            features = None
-
-        results = self._mot.update(bboxes, confs, features, timestamp)
+        # Selective Re-ID: skip extraction for high-IoU matched detections
+        results = self._mot.update_selective(
+            bboxes, confs, timestamp,
+            reid_extractor=self._reid,
+            frame=frame,
+        )
         return self._to_tracks(results, detections, timestamp)
 
     def _to_tracks(self, results, detections, timestamp):
