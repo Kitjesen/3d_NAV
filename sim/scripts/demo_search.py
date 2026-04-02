@@ -49,20 +49,29 @@ _BRAINSTEM_SIM = _ROOT.parent / "brainstem" / "sim"
 
 
 class OcclusionPerception:
-    """Ground truth + simulated occlusion when person behind furniture."""
+    """Ground truth + simulated occlusion when person behind wall/furniture.
 
-    def __init__(self, occlude_y_range=(9.5, 10.5), occlude_x_range=(6.0, 14.0)):
-        self._occ_y = occlude_y_range
-        self._occ_x = occlude_x_range
+    Person is invisible when:
+      - Behind the bedroom wall (y > 10.0) — wall blocks line of sight
+      - Robot is still in the hallway (y < 10.0)
+    Once robot also enters the bedroom area, person becomes visible again.
+    """
+
+    def __init__(self):
         self._gt = GroundTruthPerception()
 
     def update(self, engine, person_gt, timestamp):
         if person_gt is None:
             return None
-        # Simulate occlusion: person behind the bedroom wall (y=10)
         px, py = person_gt.position[0], person_gt.position[1]
-        if self._occ_y[0] <= py <= self._occ_y[1] and self._occ_x[0] <= px <= self._occ_x[1]:
-            return None  # occluded!
+        # Get robot position from engine
+        try:
+            rx, ry = float(engine._data.qpos[0]), float(engine._data.qpos[1])
+        except Exception:
+            rx, ry = 0.0, 0.0
+        # Person is behind bedroom wall AND robot is still in hallway
+        if py > 10.0 and ry < 9.5:
+            return None  # occluded by wall!
         return self._gt.update(engine, person_gt, timestamp)
 
 
@@ -93,13 +102,14 @@ def main():
     trajectory = WaypointWalk(
         waypoints=[
             (10.0, 5.0),   # start in hallway
-            (10.0, 7.0),   # walk forward
-            (10.0, 9.0),   # approach bedroom wall
-            (10.0, 10.5),  # cross through door (occluded!)
-            (8.0, 12.0),   # inside master bedroom
-            (4.0, 12.0),   # deep in bedroom
+            (10.0, 7.0),   # walk forward (robot follows)
+            (10.0, 9.5),   # approach bedroom wall (robot close)
+            (10.0, 11.0),  # cross through door → OCCLUDED
+            (8.0, 12.0),   # inside master bedroom → STILL OCCLUDED
+            (5.0, 12.0),   # deep in bedroom → robot enters SEARCH
+            (3.5, 12.0),   # stay in bedroom
         ],
-        speed=0.4,
+        speed=0.3,  # slow enough for robot to follow before occlusion
     )
 
     robot_start = [10.0, 3.0, 0.45]
@@ -200,7 +210,10 @@ def main():
             robot_yaw = R.from_quat(data.qpos[3:7][[1, 2, 3, 0]]).as_euler('xyz')[2]
 
             person_state = person_ctrl.step(data, dt_ctrl)
-            target = perception.update(None, person_state, data.time)
+            # Pass a simple engine-like object so OcclusionPerception can read robot pos
+            class _Eng:
+                _data = data
+            target = perception.update(_Eng(), person_state, data.time)
 
             cmd = behavior.update(
                 robot_pos[:2], robot_yaw,
