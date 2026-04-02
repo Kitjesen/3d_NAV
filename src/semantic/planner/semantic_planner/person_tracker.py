@@ -64,6 +64,7 @@ class PersonTracker:
         self._fusion_tracker = None
         self._reid_extractor = None
         self._target_track_id: Optional[int] = None
+        self._following_selector = None  # PersonFollowingSelector (optional)
 
     def set_clip_encoder(self, clip_encoder) -> None:
         """注入 CLIP 编码器，用于外观特征提取。"""
@@ -91,6 +92,22 @@ class PersonTracker:
                 config=mot_cfg,
                 feature_dim=self._reid_extractor.feature_dim,
             )
+
+            # PersonFollowingSelector: state machine for target lock lifecycle
+            try:
+                from qp_perception.selection.person_following import (
+                    FollowingConfig, PersonFollowingSelector,
+                )
+                self._following_selector = PersonFollowingSelector(
+                    FollowingConfig(
+                        search_timeout_s=self.REID_TIMEOUT,
+                        auto_lock=True,
+                        min_confidence=0.3,
+                    )
+                )
+            except Exception:
+                self._following_selector = None
+
             logger.info("PersonTracker: FusionMOT + OSNet Re-ID enabled")
             return True
         except Exception as e:
@@ -377,12 +394,38 @@ class PersonTracker:
         # Map track_id → person object (by bbox center proximity)
         track_map = self._map_tracks_to_persons(tracks, valid_persons)
 
-        # Fast path: target locked by track_id
+        # ── PersonFollowingSelector path ──
+        if self._following_selector is not None:
+            track_objects = self._raw_to_tracks(tracks, timestamp)
+
+            # If VLM selected a person but selector not yet locked, associate
+            if (
+                not self._following_selector.is_locked
+                and self._person is not None
+                and self._target_selected
+            ):
+                matched = self._match_person(list(track_map.values()), rgb_frame)
+                if matched is not None:
+                    for tid, p in track_map.items():
+                        if p is matched:
+                            self._following_selector.lock_track(tid, self._description)
+                            self._target_track_id = tid
+                            break
+
+            obs = self._following_selector.select(track_objects, timestamp)
+            if obs is not None:
+                person = track_map.get(obs.track_id)
+                if person is not None:
+                    self._target_track_id = obs.track_id
+                    self._update_tracked(person, rgb_frame)
+                    return True
+            return False
+
+        # ── Fallback: manual track_id matching (no selector) ──
         if self._target_track_id is not None and self._target_track_id in track_map:
             self._update_tracked(track_map[self._target_track_id], rgb_frame)
             return True
 
-        # Target track_id lost or not yet assigned — use classic matching to re-associate
         if self._person is not None:
             matched = self._match_person(list(track_map.values()), rgb_frame)
             if matched is not None:
@@ -394,7 +437,6 @@ class PersonTracker:
                 return True
             return False
 
-        # No target yet — pick highest confidence (default behavior)
         if not self._target_selected:
             best_tid = max(track_map, key=lambda t: track_map[t].get("confidence", 0))
             self._init_person(track_map[best_tid])
@@ -413,6 +455,23 @@ class PersonTracker:
             )
         except Exception:
             pass
+
+    @staticmethod
+    def _raw_to_tracks(raw_tracks: list, timestamp: float) -> list:
+        """Convert FusionMOT raw output to qp_perception Track objects."""
+        from qp_perception.types import BoundingBox, Track
+        result = []
+        for track_id, bbox_arr, conf in raw_tracks:
+            x, y, w, h = bbox_arr
+            result.append(Track(
+                track_id=int(track_id),
+                bbox=BoundingBox(x=float(x), y=float(y), w=float(w), h=float(h)),
+                confidence=float(conf),
+                class_id="person",
+                first_seen_ts=timestamp,
+                last_seen_ts=timestamp,
+            ))
+        return result
 
     @staticmethod
     def _map_tracks_to_persons(
@@ -611,6 +670,8 @@ class PersonTracker:
 
     def needs_vlm_reselect(self) -> bool:
         """是否需要 VLM 重新选人 (丢失超过 REID_TIMEOUT)。"""
+        if self._following_selector is not None:
+            return self._following_selector.needs_reselect
         if self._person is None:
             return True
         elapsed = time.time() - self._person.last_seen
@@ -637,3 +698,5 @@ class PersonTracker:
             self._target_selected = False
             self._vlm_selecting = False
             self._target_track_id = None
+            if self._following_selector is not None:
+                self._following_selector.unlock()
