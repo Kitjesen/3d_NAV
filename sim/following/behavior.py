@@ -94,9 +94,11 @@ class FollowingBehavior:
         self,
         config: BehaviorConfig | None = None,
         controller=None,
+        search_advisor=None,
     ):
         self._cfg = config or BehaviorConfig()
         self._controller = controller
+        self._search_advisor = search_advisor  # SearchAdvisor (optional)
         self._state = BehaviorState.FOLLOW
         self._state_enter_time = 0.0
         self._last_detection_time = 0.0
@@ -106,6 +108,7 @@ class FollowingBehavior:
         self._search_turn_progress = 0.0
         self._time = 0.0
         self._total_failures = 0
+        self._last_rgb: np.ndarray | None = None  # for VLM search
 
     @property
     def state(self) -> BehaviorState:
@@ -215,17 +218,53 @@ class FollowingBehavior:
         return FollowCommand()
 
     def _do_search(self, robot_pos, robot_yaw, dt) -> FollowCommand:
-        """Person lost briefly — look toward last movement direction.
+        """Person lost briefly — use SearchAdvisor cascade or geometric fallback.
 
-        Three phases:
+        With SearchAdvisor (3-tier):
+          Fast:   YOLO doors/corridors → immediate direction
+          Medium: SmolVLM scene description → update direction (async)
+          Slow:   Kimi API reasoning → update direction (async)
+
+        Without SearchAdvisor (geometric fallback):
           0. Turn toward person's last movement direction
           1. Walk toward last seen position
           2. Slow 360 scan (look around)
         """
         time_in_state = self._time - self._state_enter_time
 
+        # ── SearchAdvisor path (when available) ──
+        if self._search_advisor is not None:
+            advice = self._search_advisor.get_search_direction(
+                rgb_image=self._last_rgb,
+                last_position=self._last_seen.position,
+                last_velocity=self._last_seen.velocity,
+                robot_position=robot_pos,
+                robot_yaw=robot_yaw,
+            )
+            if advice.confidence > 0.1:
+                # Use advisor's recommended direction
+                if advice.position is not None:
+                    dx = advice.position[0] - robot_pos[0]
+                    dy = advice.position[1] - robot_pos[1]
+                    dist = math.hypot(dx, dy)
+                    angle = math.atan2(dy, dx)
+                    angle_err = self._angle_diff(angle, robot_yaw)
+                    vx = min(self._cfg.search_approach_speed, dist * 0.4)
+                    dyaw = np.clip(1.5 * angle_err, -1.0, 1.0)
+                    logger.debug(
+                        "SEARCH advisor [%s] conf=%.2f: %s → vx=%.2f dyaw=%.2f",
+                        advice.source, advice.confidence,
+                        advice.description[:50], vx, dyaw,
+                    )
+                    return FollowCommand(vx=float(vx), dyaw=float(dyaw))
+                else:
+                    angle_err = self._angle_diff(advice.direction, robot_yaw)
+                    dyaw = np.clip(1.5 * angle_err, -self._cfg.search_turn_speed, self._cfg.search_turn_speed)
+                    vx = 0.2 if abs(angle_err) < 0.3 else 0.0
+                    return FollowCommand(vx=float(vx), dyaw=float(dyaw))
+
+        # ── Geometric fallback (no advisor) ──
         if self._search_phase == 0:
-            # Turn toward disappear direction
             angle_err = self._angle_diff(self._last_seen.disappear_direction, robot_yaw)
             if abs(angle_err) < 0.2 or time_in_state > 3.0:
                 self._search_phase = 1
@@ -234,7 +273,6 @@ class FollowingBehavior:
             return FollowCommand(dyaw=float(dyaw))
 
         elif self._search_phase == 1:
-            # Walk toward last seen position
             dx = self._last_seen.position[0] - robot_pos[0]
             dy = self._last_seen.position[1] - robot_pos[1]
             dist = math.hypot(dx, dy)
@@ -249,10 +287,9 @@ class FollowingBehavior:
             return FollowCommand(vx=float(vx), dyaw=float(dyaw))
 
         else:
-            # Slow 360 look around
             self._search_turn_progress += self._cfg.search_turn_speed * 0.5 * dt
             if self._search_turn_progress > 2 * math.pi:
-                self._search_phase = 0  # restart
+                self._search_phase = 0
             return FollowCommand(dyaw=float(self._cfg.search_turn_speed * 0.5))
 
     def _do_explore(self, robot_pos, robot_yaw, dt) -> FollowCommand:
