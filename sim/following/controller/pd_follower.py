@@ -1,7 +1,12 @@
-"""PD following controller — proportional velocity control.
+"""PD following controller with velocity prediction.
 
-Transforms perceived target into robot body frame, applies
-proportional gains on distance and angular error.
+Instead of chasing the person's current position, predicts where
+they will be in predict_dt seconds and chases that point.
+This eliminates the "always behind" problem.
+
+The follow point is computed as:
+  predicted_pos = person_pos + person_vel * predict_dt
+  follow_point  = predicted_pos + (robot→predicted) * target_distance / dist
 """
 from __future__ import annotations
 
@@ -13,22 +18,21 @@ from sim.following.interfaces import FollowCommand, PerceivedTarget
 
 
 class PDFollower:
-    """Simple proportional-derivative following controller.
-
-    Computes (vx, vy, dyaw) from robot state and perceived target position.
-    """
+    """PD controller with velocity prediction for person following."""
 
     def __init__(
         self,
         target_distance: float = 1.5,
-        kp_linear: float = 0.8,
-        kp_lateral: float = 0.4,
-        kp_angular: float = 1.2,
+        predict_dt: float = 0.5,
+        kp_linear: float = 1.2,
+        kp_lateral: float = 0.5,
+        kp_angular: float = 1.5,
         max_vx: float = 1.0,
-        max_vy: float = 0.3,
-        max_dyaw: float = 1.0,
+        max_vy: float = 0.4,
+        max_dyaw: float = 1.5,
     ):
         self.target_distance = target_distance
+        self.predict_dt = predict_dt
         self.kp_linear = kp_linear
         self.kp_lateral = kp_lateral
         self.kp_angular = kp_angular
@@ -43,31 +47,46 @@ class PDFollower:
         target: PerceivedTarget,
         dt: float,
     ) -> FollowCommand:
-        # Vector from robot to target in world frame
-        dx_w = target.position_world[0] - robot_pos[0]
-        dy_w = target.position_world[1] - robot_pos[1]
+        # Predict where person will be
+        pred_x = target.position_world[0] + target.velocity_world[0] * self.predict_dt
+        pred_y = target.position_world[1] + target.velocity_world[1] * self.predict_dt
+
+        # Compute follow point: target_distance behind the predicted position
+        # "Behind" = in the direction from predicted pos toward robot
+        dx_w = pred_x - robot_pos[0]
+        dy_w = pred_y - robot_pos[1]
+        dist_to_pred = math.hypot(dx_w, dy_w)
+
+        if dist_to_pred < 0.01:
+            return FollowCommand()
+
+        # Follow point: offset from predicted pos toward robot by target_distance
+        follow_x = pred_x - (dx_w / dist_to_pred) * self.target_distance
+        follow_y = pred_y - (dy_w / dist_to_pred) * self.target_distance
+
+        # Vector from robot to follow point in world frame
+        fx_w = follow_x - robot_pos[0]
+        fy_w = follow_y - robot_pos[1]
 
         # Transform to robot body frame
         cos_y = math.cos(-robot_yaw)
         sin_y = math.sin(-robot_yaw)
-        dx_b = cos_y * dx_w - sin_y * dy_w  # forward
-        dy_b = sin_y * dx_w + cos_y * dy_w  # left
+        fx_b = cos_y * fx_w - sin_y * fy_w  # forward
+        fy_b = sin_y * fx_w + cos_y * fy_w  # left
 
-        distance = math.hypot(dx_b, dy_b)
-        angle_to_target = math.atan2(dy_b, dx_b)
+        dist_to_follow = math.hypot(fx_b, fy_b)
+        angle_to_follow = math.atan2(fy_b, fx_b)
 
-        # Distance error (positive = too far, need to move forward)
-        dist_error = distance - self.target_distance
+        # Velocity commands — proportional to distance to follow point
+        vx = np.clip(self.kp_linear * fx_b, -self.max_vx, self.max_vx)
+        vy = np.clip(self.kp_lateral * fy_b, -self.max_vy, self.max_vy)
+        dyaw = np.clip(self.kp_angular * angle_to_follow, -self.max_dyaw, self.max_dyaw)
 
-        # Velocity commands
-        vx = np.clip(self.kp_linear * dist_error, -self.max_vx, self.max_vx)
-        vy = np.clip(self.kp_lateral * dy_b, -self.max_vy, self.max_vy)
-        dyaw = np.clip(self.kp_angular * angle_to_target, -self.max_dyaw, self.max_dyaw)
-
-        # Slow down when close
-        if distance < self.target_distance * 0.5:
-            vx *= 0.3
-            vy *= 0.3
+        # Decelerate when within target distance
+        if dist_to_pred < self.target_distance:
+            scale = max(0.1, dist_to_pred / self.target_distance)
+            vx *= scale
+            vy *= scale
 
         return FollowCommand(vx=float(vx), vy=float(vy), dyaw=float(dyaw))
 

@@ -23,6 +23,7 @@ class GroundTruthPerception:
             return None
         return PerceivedTarget(
             position_world=person_gt.position.copy(),
+            velocity_world=person_gt.velocity.copy(),
             confidence=1.0,
             track_id=-1,
             timestamp=timestamp,

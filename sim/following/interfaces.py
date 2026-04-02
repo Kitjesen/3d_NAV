@@ -29,6 +29,7 @@ class PersonState:
 class PerceivedTarget:
     """Output of any perception pipeline."""
     position_world: np.ndarray   # [x, y, z] estimated world position
+    velocity_world: np.ndarray = field(default_factory=lambda: np.zeros(3))  # [vx, vy, vz] m/s
     confidence: float = 1.0      # 0.0 to 1.0
     bbox: Optional[tuple] = None # (x, y, w, h) image pixels, None for GT
     track_id: int = -1           # FusionMOT track ID, -1 for GT

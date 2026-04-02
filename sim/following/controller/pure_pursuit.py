@@ -30,15 +30,17 @@ class PurePursuitFollower:
     def __init__(
         self,
         target_distance: float = 1.5,
-        lookahead_distance: float = 2.5,
+        lookahead_distance: float = 2.0,
+        predict_dt: float = 0.5,
         max_vx: float = 1.0,
-        max_vy: float = 0.3,
-        max_dyaw: float = 1.0,
-        kp_linear: float = 0.8,
+        max_vy: float = 0.4,
+        max_dyaw: float = 1.5,
+        kp_linear: float = 1.2,
         path_buffer_size: int = 50,
     ):
         self.target_distance = target_distance
         self.lookahead_distance = lookahead_distance
+        self.predict_dt = predict_dt
         self.max_vx = max_vx
         self.max_vy = max_vy
         self.max_dyaw = max_dyaw
@@ -54,19 +56,20 @@ class PurePursuitFollower:
         target: PerceivedTarget,
         dt: float,
     ) -> FollowCommand:
-        target_xy = target.position_world[:2]
+        # Predict where person will be
+        pred_xy = target.position_world[:2] + target.velocity_world[:2] * self.predict_dt
 
-        # Add to path history (deduplicate close points)
+        # Add predicted position to path history
         if (
             self._last_target_pos is None
-            or np.linalg.norm(target_xy - self._last_target_pos) > 0.05
+            or np.linalg.norm(pred_xy - self._last_target_pos) > 0.05
         ):
-            self._path.append(target_xy.copy())
-            self._last_target_pos = target_xy.copy()
+            self._path.append(pred_xy.copy())
+            self._last_target_pos = pred_xy.copy()
 
-        # Compute distance to current target
-        dx_w = target_xy[0] - robot_pos[0]
-        dy_w = target_xy[1] - robot_pos[1]
+        # Compute distance to predicted target
+        dx_w = pred_xy[0] - robot_pos[0]
+        dy_w = pred_xy[1] - robot_pos[1]
         distance = math.hypot(dx_w, dy_w)
 
         # Find lookahead point on the path
@@ -92,9 +95,10 @@ class PurePursuitFollower:
         dist_error = distance - self.target_distance
         vx = np.clip(self.kp_linear * dist_error, -self.max_vx, self.max_vx)
 
-        # Slow down when close
-        if distance < self.target_distance * 0.5:
-            vx *= 0.3
+        # Decelerate when within target distance
+        if distance < self.target_distance:
+            scale = max(0.1, distance / self.target_distance)
+            vx *= scale
 
         # Yaw rate from curvature (bicycle model: dyaw = curvature * vx)
         dyaw = np.clip(
