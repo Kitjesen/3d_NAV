@@ -168,7 +168,11 @@ def main():
     # Initialize
     mujoco.mj_resetData(model, data)
     data.qpos[:3] = robot_start
-    data.qpos[3:7] = [1, 0, 0, 0]
+    # Face toward person: yaw = +90deg (person is in +Y direction)
+    # MuJoCo quaternion (w,x,y,z): yaw=pi/2 → [cos(pi/4), 0, 0, sin(pi/4)]
+    import math as _m
+    yaw0 = _m.atan2(person_start[1] - robot_start[1], person_start[0] - robot_start[0])
+    data.qpos[3:7] = [_m.cos(yaw0/2), 0, 0, _m.sin(yaw0/2)]
     data.qpos[DOF_IDS] = DEFAULT_ANGLES
     mujoco.mj_forward(model, data)
     person_state = person_ctrl.reset(data)
@@ -285,29 +289,38 @@ def main():
 
             if is_detected:
                 # Project person world position to camera pixel coordinates
+                # MuJoCo camera: cam_xmat columns are [right, up, -forward] in world
                 cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "front_camera")
                 cam_pos = data.cam_xpos[cam_id]
                 cam_mat = data.cam_xmat[cam_id].reshape(3, 3)
-                person_world = np.array([px, py, 1.0])  # person at ~1m height
-                point_cam = cam_mat.T @ (person_world - cam_pos)
-                # MuJoCo camera: -Z forward, Y down in image
-                if point_cam[2] < -0.1:  # person is in front of camera
-                    fovy = model.cam_fovy[cam_id]
-                    fy_px = pov_h / (2.0 * math.tan(math.radians(fovy) / 2.0))
-                    fx_px = fy_px
-                    cx_px, cy_px = pov_w / 2, pov_h / 2
-                    img_x = int(fx_px * (-point_cam[0] / -point_cam[2]) + cx_px)
-                    img_y = int(fy_px * (point_cam[1] / -point_cam[2]) + cy_px)
-                    # Box size scales with distance
-                    box_half = max(15, int(80 / max(dist, 0.5)))
-                    if 0 <= img_x < pov_w and 0 <= img_y < pov_h:
-                        cv2.rectangle(pov,
-                            (img_x - box_half, img_y - box_half * 2),
-                            (img_x + box_half, img_y + box_half),
-                            (0, 255, 0), 2)
-                        cv2.putText(pov, f"PERSON {dist:.1f}m",
-                            (img_x - box_half, img_y - box_half * 2 - 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                # Person body center at ~1m height, head at ~1.55m
+                for person_z in [1.0, 1.55, 0.4]:  # torso, head, legs
+                    person_world = np.array([px, py, person_z])
+                    # Transform to camera frame: cam_mat.T rotates world→camera
+                    d_world = person_world - cam_pos
+                    # Camera local coords: x=right, y=down, z=forward (OpenCV convention)
+                    # MuJoCo cam_xmat: columns are right(x), up(y), -forward(z)
+                    x_cam = cam_mat[:, 0] @ d_world   # right
+                    y_cam = -(cam_mat[:, 1] @ d_world)  # down (negate up)
+                    z_cam = -(cam_mat[:, 2] @ d_world)  # forward (negate -forward)
+                    if z_cam > 0.3:  # person is in front
+                        fovy = model.cam_fovy[cam_id]
+                        fy_px = pov_h / (2.0 * math.tan(math.radians(fovy) / 2.0))
+                        fx_px = fy_px
+                        img_x = int(fx_px * x_cam / z_cam + pov_w / 2)
+                        img_y = int(fy_px * y_cam / z_cam + pov_h / 2)
+                        if 0 <= img_x < pov_w and 0 <= img_y < pov_h:
+                            # Draw at torso level (first valid hit)
+                            box_w = max(15, int(50 / max(dist, 0.5)))
+                            box_h = max(30, int(120 / max(dist, 0.5)))
+                            x1 = max(0, img_x - box_w)
+                            y1 = max(0, img_y - box_h // 2)
+                            x2 = min(pov_w, img_x + box_w)
+                            y2 = min(pov_h, img_y + box_h // 2)
+                            cv2.rectangle(pov, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(pov, f"PERSON {dist:.1f}m",
+                                (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                            break  # only draw once
                 cv2.putText(pov, "TARGET: VISIBLE", (15, 70),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             else:
