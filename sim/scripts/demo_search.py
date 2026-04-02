@@ -34,10 +34,11 @@ import mujoco
 
 from following.interfaces import FollowCommand, PersonState, PerceivedTarget
 from following.person.person_model import PersonController, get_person_xml
-from following.person.trajectory import WaypointWalk
+from following.person.trajectory import WaypointWalk, RoomAwareWalk
 from following.perception.ground_truth import GroundTruthPerception
 from following.controller.pure_pursuit import PurePursuitFollower
 from following.behavior import FollowingBehavior, BehaviorConfig
+from following.task import TaskParser, FollowTask
 
 # Reuse RL policy code
 from scripts.run_person_following import (
@@ -97,29 +98,26 @@ def main():
     scene_xml = sim_dir / "scenes" / "go2_room_nova.xml"
     policy_path = find_policy()
 
-    # Person trajectory: walk through hallway, go through a door, disappear
+    # Person trajectory: walks through doors, never through walls
     person_start = [10.0, 5.0, 0.0]
-    trajectory = WaypointWalk(
-        waypoints=[
-            (10.0, 5.0),   # start in hallway
-            (10.0, 7.0),   # walk forward (robot follows)
-            (10.0, 9.5),   # approach bedroom wall (robot close)
-            (10.0, 11.0),  # cross through door → OCCLUDED
-            (8.0, 12.0),   # inside master bedroom → STILL OCCLUDED
-            (5.0, 12.0),   # deep in bedroom → robot enters SEARCH
-            (3.5, 12.0),   # stay in bedroom
-        ],
-        speed=0.3,  # slow enough for robot to follow before occlusion
+    trajectory = RoomAwareWalk(
+        room_sequence=["hallway", "master_br"],
+        speed=0.3,
     )
 
     robot_start = [10.0, 3.0, 0.45]
 
+    # Parse task from instruction (Fix 5: LLM task layer)
+    task_parser = TaskParser()
+    task = task_parser.parse("跟着那个穿红衣服的人")
+
     print("=" * 70)
     print("  DEMO: Person Following + Search Behavior")
     print("=" * 70)
-    print(f"  Person: hallway → door → bedroom (with occlusion)")
+    print(f"  Task:   {task.type}('{task.target}')")
+    print(f"  Person: hallway → master_br (via door at x=3, y=10)")
     print(f"  Robot:  follow → SEARCH when person disappears")
-    print(f"  Video:  dual view (overhead + robot POV)")
+    print(f"  Video:  dual view + FSM panel + detection box")
     print("=" * 70)
 
     # Build scene
@@ -151,6 +149,7 @@ def main():
         config=BehaviorConfig(search_timeout_s=3.0, explore_timeout_s=12.0),
         controller=controller,
     )
+    behavior.set_task(task)
 
     # Renderers
     overhead_renderer = mujoco.Renderer(model, height=540, width=960)
@@ -278,16 +277,107 @@ def main():
             cv2.putText(overhead, f"t={t_s:.1f}s  cmd=({cmd.vx:.2f},{cmd.vy:.2f},{cmd.dyaw:.2f})",
                         (15, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
 
-            # HUD on POV
+            # ── Fix 2: Detection box on POV ──
+            pov_h, pov_w = pov.shape[:2]
+            is_detected = target is not None if count > warmup_steps else False
             cv2.putText(pov, "ROBOT POV", (15, 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-            detected_str = "TARGET: VISIBLE" if (target is not None if count > warmup_steps else False) else "TARGET: LOST"
-            det_color = (0, 255, 0) if "VISIBLE" in detected_str else (0, 0, 255)
-            cv2.putText(pov, detected_str, (15, 70),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, det_color, 2)
 
-            # Side-by-side
-            combined = np.hstack([overhead, pov])
+            if is_detected:
+                # Project person world position to camera pixel coordinates
+                cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "front_camera")
+                cam_pos = data.cam_xpos[cam_id]
+                cam_mat = data.cam_xmat[cam_id].reshape(3, 3)
+                person_world = np.array([px, py, 1.0])  # person at ~1m height
+                point_cam = cam_mat.T @ (person_world - cam_pos)
+                # MuJoCo camera: -Z forward, Y down in image
+                if point_cam[2] < -0.1:  # person is in front of camera
+                    fovy = model.cam_fovy[cam_id]
+                    fy_px = pov_h / (2.0 * math.tan(math.radians(fovy) / 2.0))
+                    fx_px = fy_px
+                    cx_px, cy_px = pov_w / 2, pov_h / 2
+                    img_x = int(fx_px * (-point_cam[0] / -point_cam[2]) + cx_px)
+                    img_y = int(fy_px * (point_cam[1] / -point_cam[2]) + cy_px)
+                    # Box size scales with distance
+                    box_half = max(15, int(80 / max(dist, 0.5)))
+                    if 0 <= img_x < pov_w and 0 <= img_y < pov_h:
+                        cv2.rectangle(pov,
+                            (img_x - box_half, img_y - box_half * 2),
+                            (img_x + box_half, img_y + box_half),
+                            (0, 255, 0), 2)
+                        cv2.putText(pov, f"PERSON {dist:.1f}m",
+                            (img_x - box_half, img_y - box_half * 2 - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                cv2.putText(pov, "TARGET: VISIBLE", (15, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            else:
+                cv2.putText(pov, "TARGET: LOST", (15, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                # Draw search direction arrow when in SEARCH/EXPLORE
+                if cur_state in ("search", "explore"):
+                    arrow_cx, arrow_cy = pov_w // 2, pov_h // 2
+                    search_dir = behavior.last_seen.disappear_direction
+                    from scipy.spatial.transform import Rotation as R_conv
+                    robot_yaw_now = R_conv.from_quat(data.qpos[3:7][[1,2,3,0]]).as_euler('xyz')[2]
+                    rel_angle = search_dir - robot_yaw_now
+                    arrow_len = 60
+                    ax = int(arrow_cx + arrow_len * math.cos(-rel_angle + math.pi/2))
+                    ay = int(arrow_cy - arrow_len * math.sin(-rel_angle + math.pi/2))
+                    cv2.arrowedLine(pov, (arrow_cx, arrow_cy), (ax, ay), (0, 0, 255), 3, tipLength=0.3)
+                    cv2.putText(pov, "SEARCHING", (arrow_cx - 50, arrow_cy + 40),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+            # ── Fix 3: FSM state panel bar (bottom) ──
+            panel_h = 100
+            panel = np.zeros((panel_h, pov_w * 2, 3), dtype=np.uint8)
+            panel[:] = (30, 30, 30)  # dark background
+
+            # Draw state nodes
+            states = ["FOLLOW", "WAIT", "SEARCH", "EXPLORE", "RECOVER"]
+            state_colors_map = {
+                "follow": (0,200,0), "wait": (0,200,200), "search": (0,140,255),
+                "explore": (200,0,200), "recover": (0,0,200),
+            }
+            node_y = 30
+            node_spacing = pov_w * 2 // (len(states) + 1)
+            for i, s in enumerate(states):
+                nx = node_spacing * (i + 1)
+                is_active = s.lower() == cur_state
+                color = state_colors_map.get(s.lower(), (100,100,100))
+                radius = 18 if is_active else 12
+                thickness = -1 if is_active else 2
+                cv2.circle(panel, (nx, node_y), radius, color, thickness)
+                cv2.putText(panel, s, (nx - 25, node_y + 35),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                            (255,255,255) if is_active else (120,120,120), 1)
+                # Arrow to next
+                if i < len(states) - 1:
+                    cv2.arrowedLine(panel,
+                        (nx + radius + 5, node_y),
+                        (nx + node_spacing - radius - 10, node_y),
+                        (80, 80, 80), 1, tipLength=0.3)
+
+            # Status text
+            action_desc = {
+                "follow": "PurePursuit tracking",
+                "wait": "Holding position",
+                "search": "Searching: turn → approach → scan",
+                "explore": "Expanding search radius",
+                "recover": "Stopped, awaiting re-lock",
+            }.get(cur_state, "")
+            info_line = (
+                f"State: {cur_state.upper()}  |  Distance: {dist:.2f}m  |  "
+                f"Target: {'visible' if is_detected else 'LOST'}  |  "
+                f"Room: person@({px:.0f},{py:.0f})"
+            )
+            cv2.putText(panel, info_line, (15, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
+            cv2.putText(panel, f"Action: {action_desc}  |  cmd=({cmd.vx:+.2f}, {cmd.vy:+.2f}, {cmd.dyaw:+.2f})",
+                        (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (140, 140, 140), 1)
+
+            # Combine: overhead + POV side-by-side, panel below
+            top = np.hstack([overhead, pov])
+            combined = np.vstack([top, panel])
             frames.append(combined)
 
         if trajectory.is_complete and count > warmup_steps + int(5.0 / dt_sim):

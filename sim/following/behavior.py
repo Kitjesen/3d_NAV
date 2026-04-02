@@ -118,6 +118,31 @@ class FollowingBehavior:
     def last_seen(self) -> LastSeenInfo:
         return self._last_seen
 
+    def set_task(self, task) -> None:
+        """Set a task from TaskParser to drive the behavior FSM.
+
+        Args:
+            task: FollowTask with type, target, parameters.
+        """
+        self._target_description = getattr(task, "target", "")
+        task_type = getattr(task, "type", "follow")
+
+        if task_type == "follow":
+            self._transition(BehaviorState.FOLLOW)
+            logger.info("Task: FOLLOW target='%s'", self._target_description)
+        elif task_type == "find":
+            self._transition(BehaviorState.EXPLORE)
+            logger.info("Task: FIND target='%s'", self._target_description)
+        elif task_type == "stop":
+            self._transition(BehaviorState.WAIT)
+            logger.info("Task: STOP")
+        elif task_type == "patrol":
+            self._transition(BehaviorState.EXPLORE)
+            logger.info("Task: PATROL")
+        else:
+            self._transition(BehaviorState.FOLLOW)
+            logger.info("Task: %s target='%s'", task_type, self._target_description)
+
     def update(
         self,
         robot_pos: np.ndarray,
