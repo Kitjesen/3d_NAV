@@ -46,6 +46,7 @@ from following.person.trajectory import (
 from following.perception.ground_truth import GroundTruthPerception
 from following.controller.pd_follower import PDFollower
 from following.controller.pure_pursuit import PurePursuitFollower
+from following.behavior import FollowingBehavior, BehaviorConfig
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +284,10 @@ def main():
         controller = PurePursuitFollower(target_distance=args.target_distance)
     else:
         controller = PDFollower(target_distance=args.target_distance)
+    behavior = FollowingBehavior(
+        config=BehaviorConfig(),
+        controller=controller,
+    )
 
     # ── Initialize ──
     mujoco.mj_resetData(model, data)
@@ -359,11 +364,11 @@ def main():
             # Perceive
             target = perception.update(None, person_state, data.time)
 
-            # Follow
-            if target is not None:
-                cmd = controller.compute(robot_pos[:2], robot_yaw, target, dt_ctrl)
-            else:
-                cmd = FollowCommand()
+            # Behavior FSM: FOLLOW / SEARCH / EXPLORE / WAIT / RECOVER
+            cmd = behavior.update(
+                robot_pos[:2], robot_yaw,
+                target, person_state, dt_ctrl,
+            )
         else:
             cmd = FollowCommand()
 
@@ -418,6 +423,7 @@ def main():
                 f"person=({px:.1f},{py:.1f})  "
                 f"dist={dist:.2f}m  "
                 f"cmd=({cmd.vx:.2f},{cmd.vy:.2f},{cmd.dyaw:.2f})  "
+                f"[{behavior.state.value}]  "
                 f"RTF={rtf:.1f}x"
             )
 
