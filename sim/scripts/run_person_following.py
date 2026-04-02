@@ -45,6 +45,7 @@ from following.person.trajectory import (
 )
 from following.perception.ground_truth import GroundTruthPerception
 from following.controller.pd_follower import PDFollower
+from following.controller.pure_pursuit import PurePursuitFollower
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +174,7 @@ def main():
                         choices=["ground_truth"],
                         help="Perception pipeline")
     parser.add_argument("--controller", default="pd",
-                        choices=["pd"],
+                        choices=["pd", "pure_pursuit"],
                         help="Following controller")
     parser.add_argument("--target-distance", type=float, default=1.5,
                         help="Desired following distance (m)")
@@ -275,7 +276,10 @@ def main():
     # ── Create components ──
     person_ctrl = PersonController(model, trajectory)
     perception = GroundTruthPerception()
-    controller = PDFollower(target_distance=args.target_distance)
+    if args.controller == "pure_pursuit":
+        controller = PurePursuitFollower(target_distance=args.target_distance)
+    else:
+        controller = PDFollower(target_distance=args.target_distance)
 
     # ── Initialize ──
     mujoco.mj_resetData(model, data)
