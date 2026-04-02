@@ -236,6 +236,9 @@ def main():
 
     try:
         model = mujoco.MjModel.from_xml_path(tmp.name)
+        # Set offscreen buffer for HD video rendering
+        model.vis.global_.offwidth = 1920
+        model.vis.global_.offheight = 1080
         data = mujoco.MjData(model)
     except Exception as e:
         print(f"ERROR loading model: {e}")
@@ -303,11 +306,22 @@ def main():
 
     print(f"\nStarting simulation ({sim_steps} steps, dt={dt_sim*1000:.1f}ms)...")
 
-    # ── Video recording ──
+    # ── Video recording (720p, tracking overhead camera) ──
     frames = [] if args.render_video else None
     renderer = None
+    vid_cam = None
     if args.render_video:
-        renderer = mujoco.Renderer(model, height=480, width=640)
+        renderer = mujoco.Renderer(model, height=720, width=1280)
+        # Create a tracking camera that follows the midpoint of robot & person
+        vid_cam = mujoco.MjvCamera()
+        vid_cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        vid_cam.distance = 8.0      # close overhead
+        vid_cam.elevation = -75.0   # near top-down
+        vid_cam.azimuth = 90.0
+        # Hide ceiling for overhead view
+        ceiling_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ceiling")
+        if ceiling_id >= 0:
+            model.geom_rgba[ceiling_id] = [0, 0, 0, 0]  # transparent
 
     # ── Main loop ──
     t_start = time.monotonic()
@@ -370,10 +384,26 @@ def main():
         else:
             target_q = DEFAULT_ANGLES.copy()
 
-        # Record video frame
+        # Record video frame (tracking overhead camera)
         if frames is not None and count % (decimation * 2) == 0:
-            renderer.update_scene(data)
-            frames.append(renderer.render().copy())
+            # Track midpoint between robot and person
+            rx, ry = data.qpos[0], data.qpos[1]
+            px, py = person_state.position[0], person_state.position[1]
+            vid_cam.lookat[0] = (rx + px) / 2
+            vid_cam.lookat[1] = (ry + py) / 2
+            vid_cam.lookat[2] = 0.5
+            renderer.update_scene(data, vid_cam)
+            frame_rgb = renderer.render().copy()
+            # Draw HUD text on frame
+            import cv2
+            rx_f, ry_f = float(rx), float(ry)
+            px_f, py_f = float(px), float(py)
+            dist = math.hypot(rx_f - px_f, ry_f - py_f)
+            cv2.putText(frame_rgb, f"t={count*dt_sim:.1f}s  dist={dist:.2f}m  cmd=({cmd.vx:.2f},{cmd.vy:.2f},{cmd.dyaw:.2f})",
+                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.putText(frame_rgb, f"robot=({rx_f:.1f},{ry_f:.1f})  person=({px_f:.1f},{py_f:.1f})",
+                        (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+            frames.append(frame_rgb)
 
         # Status print
         if count % (int(1.0 / dt_sim)) == 0:
