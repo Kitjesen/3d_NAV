@@ -50,12 +50,11 @@ _BRAINSTEM_SIM = _ROOT.parent / "brainstem" / "sim"
 
 
 class OcclusionPerception:
-    """Ground truth + simulated occlusion when person behind wall/furniture.
+    """Ground truth + MuJoCo raycast occlusion check.
 
-    Person is invisible when:
-      - Behind the bedroom wall (y > 10.0) — wall blocks line of sight
-      - Robot is still in the hallway (y < 10.0)
-    Once robot also enters the bedroom area, person becomes visible again.
+    Uses mj_ray to cast a ray from robot camera to person.
+    If the ray hits a wall/furniture before reaching the person,
+    the person is occluded. This is physically accurate.
     """
 
     def __init__(self):
@@ -64,15 +63,49 @@ class OcclusionPerception:
     def update(self, engine, person_gt, timestamp):
         if person_gt is None:
             return None
-        px, py = person_gt.position[0], person_gt.position[1]
-        # Get robot position from engine
         try:
-            rx, ry = float(engine._data.qpos[0]), float(engine._data.qpos[1])
+            model = engine._model
+            data = engine._data
         except Exception:
-            rx, ry = 0.0, 0.0
-        # Person is behind bedroom wall AND robot is still in hallway
-        if py > 10.0 and ry < 9.5:
-            return None  # occluded by wall!
+            return self._gt.update(engine, person_gt, timestamp)
+
+        # Robot camera position (approximate: trunk + camera offset)
+        rx, ry, rz = float(data.qpos[0]), float(data.qpos[1]), float(data.qpos[2])
+        cam_pos = np.array([rx, ry, rz + 0.15])  # camera is ~15cm above trunk
+
+        # Person torso position
+        px, py = float(person_gt.position[0]), float(person_gt.position[1])
+        person_pos = np.array([px, py, 1.0])  # torso height
+
+        # Direction from camera to person
+        direction = person_pos - cam_pos
+        dist_to_person = np.linalg.norm(direction)
+        if dist_to_person < 0.1:
+            return self._gt.update(engine, person_gt, timestamp)
+
+        direction_norm = direction / dist_to_person
+
+        # MuJoCo raycast: check if anything blocks the line of sight
+        import mujoco
+        geom_id = np.array([-1], dtype=np.int32)
+        hit_dist = mujoco.mj_ray(
+            model, data,
+            cam_pos, direction_norm,
+            None,  # geomgroup: check all groups
+            1,     # flg_static: include static geoms (walls)
+            -1,    # bodyexclude: don't exclude any body
+            geom_id,
+        )
+
+        # If ray hits something closer than the person, person is occluded
+        if hit_dist > 0 and hit_dist < dist_to_person - 0.3:
+            # Check if the hit geom is the person (not a wall)
+            hit_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, int(geom_id[0]))
+            if hit_name and "person" in (hit_name or ""):
+                # Ray hit the person itself — visible
+                return self._gt.update(engine, person_gt, timestamp)
+            return None  # wall/furniture blocks the view
+
         return self._gt.update(engine, person_gt, timestamp)
 
 
@@ -259,6 +292,7 @@ def main():
 
         # Render dual-view frame
         if frames is not None and count % (decimation * 2) == 0:
+            is_detected = target is not None if count > warmup_steps else False
             # Overhead view
             vid_cam.lookat[0] = (rx + px) / 2
             vid_cam.lookat[1] = (ry + py) / 2
@@ -280,10 +314,55 @@ def main():
                         (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, state_color, 2)
             cv2.putText(overhead, f"t={t_s:.1f}s  cmd=({cmd.vx:.2f},{cmd.vy:.2f},{cmd.dyaw:.2f})",
                         (15, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+            cv2.putText(overhead, f"Controller: PurePursuit + VelocityPrediction",
+                        (15, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (150, 150, 150), 1)
+
+            # ── Draw predicted trajectory on overhead ──
+            # The overhead camera tracks midpoint — need to compute pixel coords
+            # Use the camera lookat and distance to map world→overhead pixel
+            oh_h, oh_w = overhead.shape[:2]
+            mid_x = vid_cam.lookat[0]
+            mid_y = vid_cam.lookat[1]
+            cam_dist = vid_cam.distance
+            # Approximate: at elevation -75deg, ground plane visible area
+            view_half_y = cam_dist * math.cos(math.radians(75)) * 1.2
+            view_half_x = view_half_y * (oh_w / oh_h)
+
+            def world_to_overhead_px(wx, wy):
+                px_x = int((wx - mid_x) / view_half_x * (oh_w / 2) + oh_w / 2)
+                px_y = int((mid_y - wy) / view_half_y * (oh_h / 2) + oh_h / 2)
+                return px_x, px_y
+
+            # Draw person predicted path (yellow dots) — where person is heading
+            if is_detected and target is not None:
+                for dt_pred in [0.5, 1.0, 1.5, 2.0, 3.0]:
+                    pred_x = px + float(person_state.velocity[0]) * dt_pred
+                    pred_y = py + float(person_state.velocity[1]) * dt_pred
+                    ppx, ppy = world_to_overhead_px(pred_x, pred_y)
+                    if 0 <= ppx < oh_w and 0 <= ppy < oh_h:
+                        cv2.circle(overhead, (ppx, ppy), 3, (0, 255, 255), -1)
+
+            # Draw robot planned path (cyan line) — follow waypoint chain
+            robot_oh = world_to_overhead_px(rx, ry)
+            if is_detected and target is not None:
+                # Follow point
+                fp_x = float(target.position_world[0] + target.velocity_world[0] * 0.5)
+                fp_y = float(target.position_world[1] + target.velocity_world[1] * 0.5)
+                fp_oh = world_to_overhead_px(fp_x, fp_y)
+                cv2.arrowedLine(overhead, robot_oh, fp_oh, (255, 255, 0), 2, tipLength=0.15)
+                # Target point marker
+                tp_oh = world_to_overhead_px(px, py)
+                cv2.drawMarker(overhead, tp_oh, (0, 0, 255), cv2.MARKER_CROSS, 15, 2)
+            elif cur_state in ("search", "explore"):
+                # Draw search direction
+                ls = behavior.last_seen
+                ls_oh = world_to_overhead_px(float(ls.position[0]), float(ls.position[1]))
+                cv2.arrowedLine(overhead, robot_oh, ls_oh, (0, 0, 255), 2, tipLength=0.15)
+                cv2.putText(overhead, "SEARCH", (ls_oh[0]-20, ls_oh[1]-10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
             # ── Fix 2: Detection box on POV ──
             pov_h, pov_w = pov.shape[:2]
-            is_detected = target is not None if count > warmup_steps else False
             cv2.putText(pov, "ROBOT POV", (15, 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
