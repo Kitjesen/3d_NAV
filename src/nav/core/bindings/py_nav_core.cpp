@@ -7,8 +7,8 @@
  *   - Better ndarray zero-copy with numpy
  *   - Free-threaded Python support (future)
  *
- * 编译: cmake -B build && cmake --build build
- * 使用: import _nav_core
+ * Build: cmake -B build && cmake --build build
+ * Usage: import _nav_core
  */
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
@@ -27,7 +27,7 @@ using namespace nav_core;
 NB_MODULE(_nav_core, m) {
   m.doc() = "nav_core -- ROS2-free navigation core algorithms (C++ to Python, nanobind)";
 
-  // ── 基础类型 ──
+  // ── Core types ──
   nb::class_<Vec3>(m, "Vec3")
     .def(nb::init<>())
     .def("__init__", [](Vec3* v, double x, double y, double z) {
