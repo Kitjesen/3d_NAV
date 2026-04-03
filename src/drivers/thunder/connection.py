@@ -1,7 +1,7 @@
 """
 Han Dog Module — dimos 风格的四足机器人桥接模块。
 
-替代 han_dog_bridge.py (ROS2 Node 版本)。
+替代 legacy/han_dog_bridge.py (ROS2 Node 版本)。
 用 src/core 的 Module/In/Out 声明端口，gRPC 连接 brainstem CMS。
 
 端口:

@@ -82,52 +82,60 @@ High layers depend on low layers only. L5→L2 (waypoint→PathFollower) is comm
 
 ### Composable Stack Factories (`src/core/blueprints/stacks/`)
 
-| Factory | Returns | Modules |
-|---------|---------|---------|
-| `driver(robot)` | Blueprint | Driver + CameraBridge (auto-detect) |
-| `slam(profile)` | Blueprint | SLAMModule or SlamBridgeModule |
-| `maps()` | Blueprint | OccupancyGrid + ESDF + ElevationMap |
-| `perception(det, enc)` | Blueprint | Detector + Encoder + Reconstruction |
-| `memory(save_dir)` | Blueprint | SemanticMapper + Episodic + Tagged + VectorMemory |
-| `planner(llm)` | Blueprint | SemanticPlanner + LLM + VisualServo |
-| `navigation(planner)` | Blueprint | NavigationModule + Autonomy chain |
-| `safety()` | Blueprint | SafetyRing + Geofence |
-| `gateway(port)` | Blueprint | Gateway + MCP + Teleop |
+
+| Factory                | Returns   | Modules                                           |
+| ---------------------- | --------- | ------------------------------------------------- |
+| `driver(robot)`        | Blueprint | Driver + CameraBridge (auto-detect)               |
+| `slam(profile)`        | Blueprint | SLAMModule or SlamBridgeModule                    |
+| `maps()`               | Blueprint | OccupancyGrid + ESDF + ElevationMap               |
+| `perception(det, enc)` | Blueprint | Detector + Encoder + Reconstruction               |
+| `memory(save_dir)`     | Blueprint | SemanticMapper + Episodic + Tagged + VectorMemory |
+| `planner(llm)`         | Blueprint | SemanticPlanner + LLM + VisualServo               |
+| `navigation(planner)`  | Blueprint | NavigationModule + Autonomy chain                 |
+| `safety()`             | Blueprint | SafetyRing + Geofence                             |
+| `gateway(port)`        | Blueprint | Gateway + MCP + Teleop                            |
+
 
 ### Pluggable Backends (via Registry)
 
-| Module | Backends |
-|--------|----------|
-| Driver | `thunder` (gRPC→brainstem), `stub` (testing), `sim_mujoco`, `sim_ros2` |
-| SLAM | `fastlio2`, `pointlio`, `localizer` (ICP on pre-built map), `bridge` (external ROS2) |
-| Detector | `yoloe`, `yolo_world`, `bpu` (Nash hardware), `grounding_dino` |
-| Encoder | `clip` (ViT-B/32), `mobileclip` (edge) |
-| LLM | `kimi`, `openai`, `claude`, `qwen`, `mock` |
-| Planner | `astar` (pure Python), `pct` (C++ ele_planner.so) |
-| PathFollower | `nav_core` (C++ nanobind), `pure_pursuit`, `pid` |
+
+| Module       | Backends                                                                             |
+| ------------ | ------------------------------------------------------------------------------------ |
+| Driver       | `thunder` (gRPC→brainstem), `stub` (testing), `sim_mujoco`, `sim_ros2`               |
+| SLAM         | `fastlio2`, `pointlio`, `localizer` (ICP on pre-built map), `bridge` (external ROS2) |
+| Detector     | `yoloe`, `yolo_world`, `bpu` (Nash hardware), `grounding_dino`                       |
+| Encoder      | `clip` (ViT-B/32), `mobileclip` (edge)                                               |
+| LLM          | `kimi`, `openai`, `claude`, `qwen`, `mock`                                           |
+| Planner      | `astar` (pure Python), `pct` (C++ ele_planner.so)                                    |
+| PathFollower | `nav_core` (C++ nanobind), `pure_pursuit`, `pid`                                     |
+
 
 ### Profiles (Complete)
 
-| Profile | Driver | SLAM | LLM | Planner | Native | Semantic | Gateway | Use Case |
-|---------|--------|------|-----|---------|--------|----------|---------|----------|
-| `stub` | stub | none | mock | astar | no | no | yes | Framework testing |
-| `dev` | stub | none | mock | astar | no | yes | yes | Semantic pipeline dev |
-| `sim` | sim_mujoco | bridge | mock | astar | yes | yes | yes | MuJoCo full simulation |
-| `map` | s100p | fastlio2 | mock | astar | no | no | yes | Build map with SLAM |
-| `nav` | s100p | localizer | qwen | astar | no | yes | yes | Navigate with pre-built map |
-| `explore` | s100p | fastlio2 | qwen | astar | no | yes | yes | Exploration (no map) |
+
+| Profile   | Driver     | SLAM      | LLM  | Planner | Native | Semantic | Gateway | Use Case                    |
+| --------- | ---------- | --------- | ---- | ------- | ------ | -------- | ------- | --------------------------- |
+| `stub`    | stub       | none      | mock | astar   | no     | no       | yes     | Framework testing           |
+| `dev`     | stub       | none      | mock | astar   | no     | yes      | yes     | Semantic pipeline dev       |
+| `sim`     | sim_mujoco | bridge    | mock | astar   | yes    | yes      | yes     | MuJoCo full simulation      |
+| `map`     | s100p      | fastlio2  | mock | astar   | no     | no       | yes     | Build map with SLAM         |
+| `nav`     | s100p      | localizer | qwen | astar   | no     | yes      | yes     | Navigate with pre-built map |
+| `explore` | s100p      | fastlio2  | qwen | astar   | no     | yes      | yes     | Exploration (no map)        |
+
 
 ### Robot Presets
 
 Robot presets provide hardware-specific defaults that get merged into profiles via `--robot`:
 
-| Preset | `robot` | `slam_profile` | `detector` | `encoder` | Extra |
-|--------|---------|----------------|------------|-----------|-------|
-| `stub` | stub | none | yoloe | mobileclip | — |
-| `sim` | sim_mujoco | bridge | yoloe | mobileclip | — |
-| `ros2` | sim_ros2 | bridge | yoloe | mobileclip | — |
-| `s100p` | sim_ros2 | localizer | bpu | mobileclip | — |
-| `thunder` | thunder | localizer | bpu | mobileclip | `dog_host=192.168.66.190`, `dog_port=13145` |
+
+| Preset    | `robot`    | `slam_profile` | `detector` | `encoder`  | Extra                                       |
+| --------- | ---------- | -------------- | ---------- | ---------- | ------------------------------------------- |
+| `stub`    | stub       | none           | yoloe      | mobileclip | —                                           |
+| `sim`     | sim_mujoco | bridge         | yoloe      | mobileclip | —                                           |
+| `ros2`    | sim_ros2   | bridge         | yoloe      | mobileclip | —                                           |
+| `s100p`   | sim_ros2   | localizer      | bpu        | mobileclip | —                                           |
+| `thunder` | thunder    | localizer      | bpu        | mobileclip | `dog_host=192.168.66.190`, `dog_port=13145` |
+
 
 ## 4. Repository Layout
 
@@ -163,46 +171,50 @@ lingtu/
 
 ## 5. Source Directory Detail (`src/`)
 
-| Directory | Role |
-|-----------|------|
-| `core/` | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (625) |
-| `core/msgs/` | Message types: geometry, nav, sensor, semantic (replaces ROS2 msg types) |
-| `core/transport/` | Backends: Local (callback), DDS (cyclonedds), SHM, Adapter |
-| `core/blueprints/` | System blueprints: `full_stack.py` calls 9 stack factories |
-| `core/spec/` | Protocol interfaces (16 specs) |
-| `core/tests/` | 625 framework tests (pytest, no ROS2 dependency) |
-| `nav/` | NavigationModule, SafetyRing, GlobalPlannerService, WaypointTracker, OccupancyGrid, ESDF, ElevationMap |
-| `semantic/` | perception/ (Detector+Encoder+SceneGraph), planner/ (SemanticPlanner+LLM+VisualServo+AgentLoop), reconstruction/ |
-| `memory/` | SemanticMapper, EpisodicMemory, TaggedLocations, VectorMemory, RoomObjectKG, TopologySemGraph |
-| `drivers/` | thunder/ (ThunderDriver + CameraBridge), sim/ (stub, MuJoCo, ROS2), TeleopModule |
-| `gateway/` | GatewayModule (FastAPI HTTP/WS/SSE), MCPServerModule (MCP tools) |
-| `base_autonomy/` | TerrainModule + LocalPlannerModule + PathFollowerModule (C++ nanobind backends) |
-| `slam/` | SLAMModule (Fast-LIO2/Point-LIO/Localizer), SlamBridgeModule, C++ SLAM nodes |
-| `global_planning/` | PCT_planner (C++ ele_planner.so) + _AStarBackend / _PCTBackend (via Registry) |
+
+| Directory          | Role                                                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `core/`            | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (625)               |
+| `core/msgs/`       | Message types: geometry, nav, sensor, semantic (replaces ROS2 msg types)                                         |
+| `core/transport/`  | Backends: Local (callback), DDS (cyclonedds), SHM, Adapter                                                       |
+| `core/blueprints/` | System blueprints: `full_stack.py` calls 9 stack factories                                                       |
+| `core/spec/`       | Protocol interfaces (16 specs)                                                                                   |
+| `core/tests/`      | 625 framework tests (pytest, no ROS2 dependency)                                                                 |
+| `nav/`             | NavigationModule, SafetyRing, GlobalPlannerService, WaypointTracker, OccupancyGrid, ESDF, ElevationMap           |
+| `semantic/`        | perception/ (Detector+Encoder+SceneGraph), planner/ (SemanticPlanner+LLM+VisualServo+AgentLoop), reconstruction/ |
+| `memory/`          | SemanticMapper, EpisodicMemory, TaggedLocations, VectorMemory, RoomObjectKG, TopologySemGraph                    |
+| `drivers/`         | thunder/ (ThunderDriver + CameraBridge), sim/ (stub, MuJoCo, ROS2), TeleopModule                                 |
+| `gateway/`         | GatewayModule (FastAPI HTTP/WS/SSE), MCPServerModule (MCP tools)                                                 |
+| `base_autonomy/`   | TerrainModule + LocalPlannerModule + PathFollowerModule (C++ nanobind backends)                                  |
+| `slam/`            | SLAMModule (Fast-LIO2/Point-LIO/Localizer), SlamBridgeModule, C++ SLAM nodes                                     |
+| `global_planning/` | PCT_planner (C++ ele_planner.so) + _AStarBackend / _PCTBackend (via Registry)                                    |
+
 
 ## 6. Key Files
 
-| File | Purpose |
-|------|---------|
-| `lingtu.py` | CLI entry point — profiles + REPL |
-| `src/core/blueprints/full_stack.py` | Top-level blueprint (~190 lines, 9 stack factories + cross-stack wires) |
-| `src/core/blueprints/stacks/` | 9 composable factory functions |
-| `src/core/module.py` | Module base class (In/Out, @skill, @rpc, layer tags) |
-| `src/core/stream.py` | Out[T]/In[T] ports (5 backpressure policies, thread-safe) |
-| `src/core/blueprint.py` | Blueprint builder (autoconnect, per-wire transport, auto_wire) |
-| `src/core/registry.py` | Plugin registry (@register decorator) |
-| `src/nav/navigation_module.py` | Global planner + WaypointTracker + mission FSM |
-| `src/nav/global_planner_service.py` | A*/PCT backend + _find_safe_goal BFS |
-| `src/nav/safety_ring_module.py` | Safety reflex + evaluator + dialogue |
-| `src/semantic/planner/.../semantic_planner_module.py` | 5-level fallback + multi-turn AgentLoop |
-| `src/semantic/planner/.../goal_resolver.py` | Fast-Slow dual-process + KG hot-reload |
-| `src/semantic/planner/.../visual_servo_module.py` | BBoxNavigator + PersonTracker (dual channel) |
-| `src/semantic/planner/.../agent_loop.py` | Multi-turn LLM tool calling (7 tools) |
-| `src/memory/modules/semantic_mapper_module.py` | SceneGraph → RoomObjectKG + TopologySemGraph |
-| `src/memory/modules/vector_memory_module.py` | CLIP + ChromaDB vector search |
-| `src/drivers/teleop_module.py` | WebSocket joystick + camera stream |
-| `src/slam/slam_module.py` | SLAM managed mode (fastlio2/pointlio/localizer) |
-| `config/robot_config.yaml` | Robot physical parameters (single source of truth) |
+
+| File                                                  | Purpose                                                                 |
+| ----------------------------------------------------- | ----------------------------------------------------------------------- |
+| `lingtu.py`                                           | CLI entry point — profiles + REPL                                       |
+| `src/core/blueprints/full_stack.py`                   | Top-level blueprint (~190 lines, 9 stack factories + cross-stack wires) |
+| `src/core/blueprints/stacks/`                         | 9 composable factory functions                                          |
+| `src/core/module.py`                                  | Module base class (In/Out, @skill, @rpc, layer tags)                    |
+| `src/core/stream.py`                                  | Out[T]/In[T] ports (5 backpressure policies, thread-safe)               |
+| `src/core/blueprint.py`                               | Blueprint builder (autoconnect, per-wire transport, auto_wire)          |
+| `src/core/registry.py`                                | Plugin registry (@register decorator)                                   |
+| `src/nav/navigation_module.py`                        | Global planner + WaypointTracker + mission FSM                          |
+| `src/nav/global_planner_service.py`                   | A*/PCT backend + _find_safe_goal BFS                                    |
+| `src/nav/safety_ring_module.py`                       | Safety reflex + evaluator + dialogue                                    |
+| `src/semantic/planner/.../semantic_planner_module.py` | 5-level fallback + multi-turn AgentLoop                                 |
+| `src/semantic/planner/.../goal_resolver.py`           | Fast-Slow dual-process + KG hot-reload                                  |
+| `src/semantic/planner/.../visual_servo_module.py`     | BBoxNavigator + PersonTracker (dual channel)                            |
+| `src/semantic/planner/.../agent_loop.py`              | Multi-turn LLM tool calling (7 tools)                                   |
+| `src/memory/modules/semantic_mapper_module.py`        | SceneGraph → RoomObjectKG + TopologySemGraph                            |
+| `src/memory/modules/vector_memory_module.py`          | CLIP + ChromaDB vector search                                           |
+| `src/drivers/teleop_module.py`                        | WebSocket joystick + camera stream                                      |
+| `src/slam/slam_module.py`                             | SLAM managed mode (fastlio2/pointlio/localizer)                         |
+| `config/robot_config.yaml`                            | Robot physical parameters (single source of truth)                      |
+
 
 ## 7. Build and Test Commands
 
@@ -310,6 +322,7 @@ Instruction: "go to where I left the backpack"
 ### Visual Servo (`visual_servo_module.py`)
 
 Two output channels based on distance:
+
 - Far (> 3m): `goal_pose → NavigationModule → planning stack`
 - Near (< 3m): `cmd_vel → Driver directly (PD servo, bypasses planner)`
 
@@ -332,12 +345,14 @@ export DASHSCOPE_API_KEY="sk-..."     # Qwen (China fallback)
 
 ## 14. SLAM / Localization
 
-| Mode | slam_profile | Backend | Use Case |
-|------|-------------|---------|----------|
-| Mapping | `fastlio2` | SLAMModule → C++ Fast-LIO2 | First visit, build map |
-| Localization | `localizer` | SLAMModule → Fast-LIO2 + ICP Localizer | Navigate with pre-built map |
-| Bridge | `bridge` | SlamBridgeModule → ROS2 subscriber | External SLAM (systemd) |
-| None | `none` | — | stub/dev mode |
+
+| Mode         | slam_profile | Backend                                | Use Case                    |
+| ------------ | ------------ | -------------------------------------- | --------------------------- |
+| Mapping      | `fastlio2`   | SLAMModule → C++ Fast-LIO2             | First visit, build map      |
+| Localization | `localizer`  | SLAMModule → Fast-LIO2 + ICP Localizer | Navigate with pre-built map |
+| Bridge       | `bridge`     | SlamBridgeModule → ROS2 subscriber     | External SLAM (systemd)     |
+| None         | `none`       | —                                      | stub/dev mode               |
+
 
 Localizer requires Fast-LIO2 companion (provides `/cloud_registered` + `/Odometry`).
 SLAM odometry is explicitly wired to NavigationModule (priority over driver dead-reckoning).
@@ -369,30 +384,34 @@ body → lidar: Static transform (extrinsics from lio.yaml)
 
 ### Core Topics
 
-| Topic | Type | Publisher | Subscriber | Frame |
-|-------|------|----------|------------|-------|
-| `/livox/lidar` | CustomMsg | livox_ros_driver2 | fastlio2 | lidar |
-| `/livox/imu` | Imu | livox_ros_driver2 | fastlio2 | body |
-| `/cloud_registered` | PointCloud2 | fastlio2 | PGO, Localizer | body |
-| `/cloud_map` | PointCloud2 | fastlio2 | terrain_analysis | odom |
-| `/Odometry` | Odometry | fastlio2 | all modules | odom→body |
-| `/terrain_map` | PointCloud2 | terrain_analysis | local_planner | odom |
-| `/way_point` | PointStamped | TaskManager (sole publisher) | local_planner | odom |
-| `/planner_waypoint` | PointStamped | pct_path_adapter | TaskManager | odom |
-| `/pct_path` | Path | pct_planner | pct_path_adapter | map |
-| `/path` | Path | local_planner | pathFollower | body |
-| `/cmd_vel` | Twist | pathFollower | robot_driver | body |
-| `/slow_down` | Int8 | local_planner | pathFollower | — |
-| `/stop` | Int8 | local_planner, SafetyGate, TaskManager | pathFollower | — |
+
+| Topic               | Type         | Publisher                              | Subscriber       | Frame     |
+| ------------------- | ------------ | -------------------------------------- | ---------------- | --------- |
+| `/livox/lidar`      | CustomMsg    | livox_ros_driver2                      | fastlio2         | lidar     |
+| `/livox/imu`        | Imu          | livox_ros_driver2                      | fastlio2         | body      |
+| `/cloud_registered` | PointCloud2  | fastlio2                               | PGO, Localizer   | body      |
+| `/cloud_map`        | PointCloud2  | fastlio2                               | terrain_analysis | odom      |
+| `/Odometry`         | Odometry     | fastlio2                               | all modules      | odom→body |
+| `/terrain_map`      | PointCloud2  | terrain_analysis                       | local_planner    | odom      |
+| `/way_point`        | PointStamped | TaskManager (sole publisher)           | local_planner    | odom      |
+| `/planner_waypoint` | PointStamped | pct_path_adapter                       | TaskManager      | odom      |
+| `/pct_path`         | Path         | pct_planner                            | pct_path_adapter | map       |
+| `/path`             | Path         | local_planner                          | pathFollower     | body      |
+| `/cmd_vel`          | Twist        | pathFollower                           | robot_driver     | body      |
+| `/slow_down`        | Int8         | local_planner                          | pathFollower     | —         |
+| `/stop`             | Int8         | local_planner, SafetyGate, TaskManager | pathFollower     | —         |
+
 
 ### Services
 
-| Service | Type | Provider | Purpose |
-|---------|------|----------|---------|
-| `/relocalize` | Relocalize | Localizer | Load map and relocalize |
-| `/relocalize_check` | IsValid | Localizer | Check relocalization status |
-| `/pgo/save_maps` | SaveMaps | PGO | Save optimized maps |
-| `/save_map` | SaveMaps | fastlio2 | Save current map |
+
+| Service             | Type       | Provider  | Purpose                     |
+| ------------------- | ---------- | --------- | --------------------------- |
+| `/relocalize`       | Relocalize | Localizer | Load map and relocalize     |
+| `/relocalize_check` | IsValid    | Localizer | Check relocalization status |
+| `/pgo/save_maps`    | SaveMaps   | PGO       | Save optimized maps         |
+| `/save_map`         | SaveMaps   | fastlio2  | Save current map            |
+
 
 ## 17. Task Orchestration (gRPC Remote Monitoring)
 
@@ -410,18 +429,20 @@ Flutter App ──gRPC──→ ControlService (guard: Lease + AUTONOMOUS)
 
 ### gRPC RPCs (proto: `src/robot_proto/proto/control.proto`)
 
-| RPC | Purpose |
-|-----|---------|
-| `StartTask` | Start navigation/mapping/patrol (needs Lease + AUTONOMOUS) |
-| `CancelTask` | Cancel current task |
-| `PauseTask` / `ResumeTask` | Suspend/resume |
-| `GetTaskStatus` | Query progress |
-| `GetActiveWaypoints` | Query active waypoints (source/list/progress) |
-| `ClearWaypoints` | Clear waypoints and stop (needs Lease) |
-| `SetMode` | Switch mode (IDLE/MANUAL/TELEOP/AUTONOMOUS/MAPPING) |
-| `EmergencyStop` | E-stop (suspends TaskManager) |
-| `StreamTeleop` | Bidirectional teleop stream |
-| `AcquireLease` | Acquire operation lease |
+
+| RPC                        | Purpose                                                    |
+| -------------------------- | ---------------------------------------------------------- |
+| `StartTask`                | Start navigation/mapping/patrol (needs Lease + AUTONOMOUS) |
+| `CancelTask`               | Cancel current task                                        |
+| `PauseTask` / `ResumeTask` | Suspend/resume                                             |
+| `GetTaskStatus`            | Query progress                                             |
+| `GetActiveWaypoints`       | Query active waypoints (source/list/progress)              |
+| `ClearWaypoints`           | Clear waypoints and stop (needs Lease)                     |
+| `SetMode`                  | Switch mode (IDLE/MANUAL/TELEOP/AUTONOMOUS/MAPPING)        |
+| `EmergencyStop`            | E-stop (suspends TaskManager)                              |
+| `StreamTeleop`             | Bidirectional teleop stream                                |
+| `AcquireLease`             | Acquire operation lease                                    |
+
 
 ### Waypoint Coordinate Convention
 
@@ -431,15 +452,17 @@ All waypoints published on `/way_point` are in **odom** frame. App waypoints (ma
 
 Auto-discovered @skill methods exposed via JSON-RPC at `http://<robot>:8090/mcp`.
 
-| Category | Tools |
-|----------|-------|
-| Navigation | `navigate_to`, `navigate_to_object`, `stop`, `get_navigation_status`, `set_mode` |
-| Perception | `get_scene_graph`, `detect_objects`, `get_robot_position` |
-| Memory | `query_memory`, `query_location` (vector), `list_tagged_locations`, `tag_location` |
-| Semantic Map | `get_room_summary`, `query_room_for_object`, `get_exploration_target` |
-| Visual Servo | `find_object`, `follow_person`, `stop_servo`, `get_servo_status` |
-| Planning | `send_instruction`, `decompose_task` |
-| System | `get_health`, `list_modules`, `get_config` |
+
+| Category     | Tools                                                                              |
+| ------------ | ---------------------------------------------------------------------------------- |
+| Navigation   | `navigate_to`, `navigate_to_object`, `stop`, `get_navigation_status`, `set_mode`   |
+| Perception   | `get_scene_graph`, `detect_objects`, `get_robot_position`                          |
+| Memory       | `query_memory`, `query_location` (vector), `list_tagged_locations`, `tag_location` |
+| Semantic Map | `get_room_summary`, `query_room_for_object`, `get_exploration_target`              |
+| Visual Servo | `find_object`, `follow_person`, `stop_servo`, `get_servo_status`                   |
+| Planning     | `send_instruction`, `decompose_task`                                               |
+| System       | `get_health`, `list_modules`, `get_config`                                         |
+
 
 ```bash
 claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
@@ -448,6 +471,7 @@ claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 ## 19. Teleop (Remote Control)
 
 WebSocket joystick at `ws://<robot>:5060/teleop`:
+
 - Phone/browser sends `{"type": "joy", "lx": 0.5, "ly": 0.0, "az": -0.3}`
 - Robot streams JPEG camera frames back
 - 3s idle → auto-releases to autonomous navigation
@@ -457,11 +481,13 @@ WebSocket joystick at `ws://<robot>:5060/teleop`:
 
 ### Entry Points
 
-| Entry | Role |
-|-------|------|
-| `lingtu.py` | Primary entry — sets project root, calls `cli.bootstrap.init`, then `cli.main.main` |
-| `main_nav.py` | Backward-compatible alias (same as `lingtu.py`) |
-| `lingtu_cli.py` | Target of pip console script (`pyproject.toml` → `lingtu = "lingtu_cli:main"`) |
+
+| Entry           | Role                                                                                |
+| --------------- | ----------------------------------------------------------------------------------- |
+| `lingtu.py`     | Primary entry — sets project root, calls `cli.bootstrap.init`, then `cli.main.main` |
+| `main_nav.py`   | Backward-compatible alias (same as `lingtu.py`)                                     |
+| `lingtu_cli.py` | Target of pip console script (`pyproject.toml` → `lingtu = "lingtu_cli:main"`)      |
+
 
 ### CLI Arguments
 
@@ -469,29 +495,31 @@ WebSocket joystick at `ws://<robot>:5060/teleop`:
 lingtu [profile] [options]
 ```
 
-| Argument | Type | Effect |
-|----------|------|--------|
-| `profile` | positional | Profile name (`stub`, `dev`, `sim`, `map`, `nav`, `explore`) |
-| `stop` | positional | Stop running daemon (SIGTERM to PID from `.lingtu/run.json`) |
-| `doctor` | positional | Run `scripts/doctor.py` diagnostics |
-| `rerun` | positional | Run `scripts/rerun_live.py` visualization |
-| `--list` | flag | List all profiles and exit |
-| `--daemon` / `-d` | flag | Fork as Unix daemon (implies no REPL) |
-| `--robot` | str | Override robot preset (`stub`, `sim`, `ros2`, `s100p`, `thunder`) |
-| `--dog-host` | str | Override Thunder robot host IP |
-| `--dog-port` | int | Override Thunder robot gRPC port |
-| `--detector` | str | Override detector backend (`yoloe`, `bpu`, `yolo_world`, `grounding_dino`) |
-| `--encoder` | str | Override encoder backend (`clip`, `mobileclip`) |
-| `--llm` | str | Override LLM backend (`kimi`, `openai`, `claude`, `qwen`, `mock`) |
-| `--planner` | str | Override planner backend (`astar`, `pct`) |
-| `--tomogram` | str | Override tomogram pickle path |
-| `--gateway-port` | int | Override gateway HTTP port (default 5050) |
-| `--no-semantic` | flag | Disable semantic pipeline |
-| `--no-gateway` | flag | Disable HTTP/WS/MCP gateway |
-| `--no-native` | flag | Disable C++ autonomy stack (use Python simple/pid) |
-| `--rerun` | flag | Enable Rerun visualization bridge |
-| `--no-repl` | flag | No interactive REPL; block on signal |
-| `--log-level` | str | Root log level (default `INFO`) |
+
+| Argument          | Type       | Effect                                                                     |
+| ----------------- | ---------- | -------------------------------------------------------------------------- |
+| `profile`         | positional | Profile name (`stub`, `dev`, `sim`, `map`, `nav`, `explore`)               |
+| `stop`            | positional | Stop running daemon (SIGTERM to PID from `.lingtu/run.json`)               |
+| `doctor`          | positional | Run `scripts/doctor.py` diagnostics                                        |
+| `rerun`           | positional | Run `scripts/rerun_live.py` visualization                                  |
+| `--list`          | flag       | List all profiles and exit                                                 |
+| `--daemon` / `-d` | flag       | Fork as Unix daemon (implies no REPL)                                      |
+| `--robot`         | str        | Override robot preset (`stub`, `sim`, `ros2`, `s100p`, `thunder`)          |
+| `--dog-host`      | str        | Override Thunder robot host IP                                             |
+| `--dog-port`      | int        | Override Thunder robot gRPC port                                           |
+| `--detector`      | str        | Override detector backend (`yoloe`, `bpu`, `yolo_world`, `grounding_dino`) |
+| `--encoder`       | str        | Override encoder backend (`clip`, `mobileclip`)                            |
+| `--llm`           | str        | Override LLM backend (`kimi`, `openai`, `claude`, `qwen`, `mock`)          |
+| `--planner`       | str        | Override planner backend (`astar`, `pct`)                                  |
+| `--tomogram`      | str        | Override tomogram pickle path                                              |
+| `--gateway-port`  | int        | Override gateway HTTP port (default 5050)                                  |
+| `--no-semantic`   | flag       | Disable semantic pipeline                                                  |
+| `--no-gateway`    | flag       | Disable HTTP/WS/MCP gateway                                                |
+| `--no-native`     | flag       | Disable C++ autonomy stack (use Python simple/pid)                         |
+| `--rerun`         | flag       | Enable Rerun visualization bridge                                          |
+| `--no-repl`       | flag       | No interactive REPL; block on signal                                       |
+| `--log-level`     | str        | Root log level (default `INFO`)                                            |
+
 
 ### Profile Resolution Order
 
@@ -502,53 +530,59 @@ lingtu [profile] [options]
 
 ### CLI Source Files
 
-| File | Role |
-|------|------|
-| `cli/__init__.py` | Package entry |
-| `cli/bootstrap.py` | `init()`: prepend `src/`, semantic subdirs to `sys.path` |
-| `cli/main.py` | Argparse, profile resolution, blueprint build, REPL/daemon loop |
-| `cli/profiles_data.py` | `ROBOT_PRESETS`, `PROFILES`, `_ACTIVE_TOMOGRAM` |
-| `cli/repl.py` | `LingTuREPL` (cmd.Cmd subclass) — interactive commands |
-| `cli/ui.py` | Banner, interactive profile picker, `list_profiles`, `cmd_stop` |
-| `cli/run_state.py` | PID file + `.lingtu/run.json` for daemon lifecycle |
-| `cli/runtime_extra.py` | `preflight`, `kill_residual_ports`, `health_check`, `daemonize` |
-| `cli/logging_util.py` | `setup_logging` — stderr + `logs/<timestamp>_<profile>/lingtu.log` |
-| `cli/paths.py` | Project root, `.lingtu/` dir, `logs/` base |
-| `cli/term.py` | TTY detection, ANSI color helpers |
+
+| File                   | Role                                                               |
+| ---------------------- | ------------------------------------------------------------------ |
+| `cli/__init__.py`      | Package entry                                                      |
+| `cli/bootstrap.py`     | `init()`: prepend `src/`, semantic subdirs to `sys.path`           |
+| `cli/main.py`          | Argparse, profile resolution, blueprint build, REPL/daemon loop    |
+| `cli/profiles_data.py` | `ROBOT_PRESETS`, `PROFILES`, `_ACTIVE_TOMOGRAM`                    |
+| `cli/repl.py`          | `LingTuREPL` (cmd.Cmd subclass) — interactive commands             |
+| `cli/ui.py`            | Banner, interactive profile picker, `list_profiles`, `cmd_stop`    |
+| `cli/run_state.py`     | PID file + `.lingtu/run.json` for daemon lifecycle                 |
+| `cli/runtime_extra.py` | `preflight`, `kill_residual_ports`, `health_check`, `daemonize`    |
+| `cli/logging_util.py`  | `setup_logging` — stderr + `logs/<timestamp>_<profile>/lingtu.log` |
+| `cli/paths.py`         | Project root, `.lingtu/` dir, `logs/` base                         |
+| `cli/term.py`          | TTY detection, ANSI color helpers                                  |
+
 
 ### Environment Variables
 
-| Variable | Default | Used By |
-|----------|---------|---------|
-| `NAV_MAP_DIR` | `~/data/nova/maps` | `profiles_data.py` (`_ACTIVE_TOMOGRAM`), `repl.py` (map commands) |
-| `MOONSHOT_API_KEY` | — | Kimi LLM backend |
-| `OPENAI_API_KEY` | — | OpenAI LLM backend |
-| `ANTHROPIC_API_KEY` | — | Claude LLM backend |
-| `DASHSCOPE_API_KEY` | — | Qwen LLM backend |
+
+| Variable            | Default            | Used By                                                           |
+| ------------------- | ------------------ | ----------------------------------------------------------------- |
+| `NAV_MAP_DIR`       | `~/data/nova/maps` | `profiles_data.py` (`_ACTIVE_TOMOGRAM`), `repl.py` (map commands) |
+| `MOONSHOT_API_KEY`  | —                  | Kimi LLM backend                                                  |
+| `OPENAI_API_KEY`    | —                  | OpenAI LLM backend                                                |
+| `ANTHROPIC_API_KEY` | —                  | Claude LLM backend                                                |
+| `DASHSCOPE_API_KEY` | —                  | Qwen LLM backend                                                  |
+
 
 ### REPL Commands
 
-| Command | Alias | Usage |
-|---------|-------|-------|
-| `navigate` | `nav` | `navigate x y [z]` — pose goal to NavigationModule |
-| `go` | — | `go <natural language>` — semantic instruction |
-| `stop` | — | Emergency stop (value 2 to all stop_signal ports) |
-| `cancel` | — | Cancel current navigation mission |
-| `status` | `s` | Module list + mission state |
-| `health` | `h` | System health report |
-| `map` | — | `list` / `save <name>` / `use <name>` / `build <name>` / `delete <name>` |
-| `smap` | — | `status` / `rooms` / `save` / `load <dir>` / `query <text>` (semantic map) |
-| `agent` | — | `agent <multi-step instruction>` (AgentLoop) |
-| `vmem` | — | `query <text>` / `stats` (vector memory) |
-| `teleop` | — | `status` / `release` |
-| `rerun` | — | `on` / `off` / `status` (Rerun visualization bridge) |
-| `watch` | `w` | `watch [interval]` — auto-refresh status (default 2s) |
-| `live` | — | Full-screen dashboard with hotkeys (`s/g/x/n/q`) |
-| `module` | `m` | `module <name>` — inspect one module (tab completion) |
-| `connections` | `c` | List all wires |
-| `log` | — | `log debug\|info\|warning\|error` — set log level |
-| `config` | — | Print current profile configuration |
-| `quit` | `q`, `exit` | Exit REPL |
+
+| Command       | Alias       | Usage                                                                      |
+| ------------- | ----------- | -------------------------------------------------------------------------- |
+| `navigate`    | `nav`       | `navigate x y [z]` — pose goal to NavigationModule                         |
+| `go`          | —           | `go <natural language>` — semantic instruction                             |
+| `stop`        | —           | Emergency stop (value 2 to all stop_signal ports)                          |
+| `cancel`      | —           | Cancel current navigation mission                                          |
+| `status`      | `s`         | Module list + mission state                                                |
+| `health`      | `h`         | System health report                                                       |
+| `map`         | —           | `list` / `save <name>` / `use <name>` / `build <name>` / `delete <name>`   |
+| `smap`        | —           | `status` / `rooms` / `save` / `load <dir>` / `query <text>` (semantic map) |
+| `agent`       | —           | `agent <multi-step instruction>` (AgentLoop)                               |
+| `vmem`        | —           | `query <text>` / `stats` (vector memory)                                   |
+| `teleop`      | —           | `status` / `release`                                                       |
+| `rerun`       | —           | `on` / `off` / `status` (Rerun visualization bridge)                       |
+| `watch`       | `w`         | `watch [interval]` — auto-refresh status (default 2s)                      |
+| `live`        | —           | Full-screen dashboard with hotkeys (`s/g/x/n/q`)                           |
+| `module`      | `m`         | `module <name>` — inspect one module (tab completion)                      |
+| `connections` | `c`         | List all wires                                                             |
+| `log`         | —           | `log debug|info|warning|error` — set log level                             |
+| `config`      | —           | Print current profile configuration                                        |
+| `quit`        | `q`, `exit` | Exit REPL                                                                  |
+
 
 ### Daemon Mode
 
@@ -561,19 +595,21 @@ Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state 
 
 ## 21. Configuration Files
 
-| File | Purpose |
-|------|---------|
-| `config/robot_config.yaml` | Robot physical parameters (single source of truth) |
-| `config/semantic_planner.yaml` | Semantic planner configuration |
-| `config/semantic_perception.yaml` | Perception pipeline configuration |
-| `config/semantic_exploration.yaml` | Exploration parameters |
-| `config/topic_contract.yaml` | Port name/type contracts |
-| `config/layer_contract.yaml` | Layer dependency contracts |
-| `config/qos_profiles.yaml` | QoS/backpressure profiles |
-| `config/cyclonedds.xml` | CycloneDDS configuration |
-| `src/slam/fastlio2/config/lio.yaml` | Fast-LIO2 parameters |
-| `src/slam/pgo/config/pgo.yaml` | PGO parameters |
-| `src/slam/localizer/config/localizer.yaml` | Localizer parameters |
+
+| File                                       | Purpose                                            |
+| ------------------------------------------ | -------------------------------------------------- |
+| `config/robot_config.yaml`                 | Robot physical parameters (single source of truth) |
+| `config/semantic_planner.yaml`             | Semantic planner configuration                     |
+| `config/semantic_perception.yaml`          | Perception pipeline configuration                  |
+| `config/semantic_exploration.yaml`         | Exploration parameters                             |
+| `config/topic_contract.yaml`               | Port name/type contracts                           |
+| `config/layer_contract.yaml`               | Layer dependency contracts                         |
+| `config/qos_profiles.yaml`                 | QoS/backpressure profiles                          |
+| `config/cyclonedds.xml`                    | CycloneDDS configuration                           |
+| `src/slam/fastlio2/config/lio.yaml`        | Fast-LIO2 parameters                               |
+| `src/slam/pgo/config/pgo.yaml`             | PGO parameters                                     |
+| `src/slam/localizer/config/localizer.yaml` | Localizer parameters                               |
+
 
 ## 22. S100P Deployment
 
@@ -600,16 +636,18 @@ Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state 
 
 ## 25. Related Documentation
 
-| Document | Purpose |
-|----------|---------|
-| `CLAUDE.md` | Claude Code-specific guidance (mirrors this file) |
-| `docs/MODULE_FIRST_GUIDELINE.md` | 8 rules for Module-First architecture |
-| `docs/REPO_LAYOUT.md` | Top-level directory map |
-| `docs/QUICKSTART.md` | Getting started guide |
-| `docs/TUNING.md` | Parameter tuning guide |
-| `src/base_autonomy/TERRAIN_ANALYSIS_EXPLAINED.md` | Terrain analysis deep dive |
-| `src/remote_monitoring/README.md` | gRPC Gateway documentation |
-| `src/robot_proto/proto/control.proto` | Task control protocol definition |
+
+| Document                                          | Purpose                                           |
+| ------------------------------------------------- | ------------------------------------------------- |
+| `CLAUDE.md`                                       | Claude Code-specific guidance (mirrors this file) |
+| `docs/MODULE_FIRST_GUIDELINE.md`                  | 8 rules for Module-First architecture             |
+| `docs/REPO_LAYOUT.md`                             | Top-level directory map                           |
+| `docs/QUICKSTART.md`                              | Getting started guide                             |
+| `docs/TUNING.md`                                  | Parameter tuning guide                            |
+| `src/base_autonomy/TERRAIN_ANALYSIS_EXPLAINED.md` | Terrain analysis deep dive                        |
+| `src/remote_monitoring/README.md`                 | gRPC Gateway documentation                        |
+| `src/robot_proto/proto/control.proto`             | Task control protocol definition                  |
+
 
 ---
 
@@ -621,16 +659,19 @@ Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state 
 
 **Key source files**:
 
-| File | Role |
-|------|------|
-| `src/slam/localizer/` | C++ ICP localizer node |
-| `src/slam/localizer/config/localizer.yaml` | `static_map_path`, ICP resolutions, `update_hz` |
-| `src/slam/localizer/launch/localizer_launch.py` | Launches Fast-LIO2 + localizer + RViz |
-| `src/slam/slam_module.py` | Python `SLAMModule` — `_setup_localizer()` starts LIO + localizer via NativeModule |
-| `src/slam/slam_bridge_module.py` | `SlamBridgeModule` — subscribes to `/nav/odometry` + `/nav/map_cloud` via DDS/rclpy |
-| `src/core/blueprints/stacks/slam.py` | `slam("localizer")` — ensures systemd services, adds `SlamBridgeModule` |
+
+| File                                            | Role                                                                                |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `src/slam/localizer/`                           | C++ ICP localizer node                                                              |
+| `src/slam/localizer/config/localizer.yaml`      | `static_map_path`, ICP resolutions, `update_hz`                                     |
+| `src/slam/localizer/launch/localizer_launch.py` | Launches Fast-LIO2 + localizer + RViz                                               |
+| `src/slam/slam_module.py`                       | Python `SLAMModule` — `_setup_localizer()` starts LIO + localizer via NativeModule  |
+| `src/slam/slam_bridge_module.py`                | `SlamBridgeModule` — subscribes to `/nav/odometry` + `/nav/map_cloud` via DDS/rclpy |
+| `src/core/blueprints/stacks/slam.py`            | `slam("localizer")` — ensures systemd services, adds `SlamBridgeModule`             |
+
 
 **Data flow**:
+
 ```
 Livox LiDAR → Fast-LIO2 (/cloud_registered + /Odometry)
                  ↓
@@ -643,15 +684,18 @@ Livox LiDAR → Fast-LIO2 (/cloud_registered + /Odometry)
 
 **Quick verification**:
 
-| Method | Command | Needs |
-|--------|---------|-------|
-| Framework ports/registry | `python -m pytest src/core/tests/test_new_modules.py::TestSLAMModule -q` | Nothing |
-| Bridge module smoke | `python -m pytest src/core/tests/test_integration_36.py -q` | Nothing |
-| Profile build check | `python -c "from core.blueprints.stacks import slam; bp = slam('localizer'); print('OK')"` | Nothing |
-| Full ROS2 localizer | `ros2 launch localizer localizer_launch.py` + `ros2 service call /relocalize ...` | ROS2 + LiDAR |
-| Check localization quality | `ros2 topic echo /localization_quality` | Running localizer |
+
+| Method                     | Command                                                                                    | Needs             |
+| -------------------------- | ------------------------------------------------------------------------------------------ | ----------------- |
+| Framework ports/registry   | `python -m pytest src/core/tests/test_new_modules.py::TestSLAMModule -q`                   | Nothing           |
+| Bridge module smoke        | `python -m pytest src/core/tests/test_integration_36.py -q`                                | Nothing           |
+| Profile build check        | `python -c "from core.blueprints.stacks import slam; bp = slam('localizer'); print('OK')"` | Nothing           |
+| Full ROS2 localizer        | `ros2 launch localizer localizer_launch.py` + `ros2 service call /relocalize ...`          | ROS2 + LiDAR      |
+| Check localization quality | `ros2 topic echo /localization_quality`                                                    | Running localizer |
+
 
 **Key parameters** (`localizer.yaml`):
+
 - `static_map_path` — PCD map file (empty = no auto-load, must call `/relocalize`)
 - `update_hz` — ICP update rate
 - Rough/refine ICP resolutions and score thresholds
@@ -664,15 +708,18 @@ Livox LiDAR → Fast-LIO2 (/cloud_registered + /Odometry)
 
 **Key source files**:
 
-| File | Role |
-|------|------|
-| `src/slam/fastlio2/` | C++ Fast-LIO2 SLAM node |
-| `src/slam/pgo/` | C++ Pose Graph Optimization (loop closure) |
-| `src/slam/slam_module.py` | `_setup_fastlio2()` — starts Livox + LIO + PGO |
-| `src/core/blueprints/stacks/slam.py` | `slam("fastlio2")` — ensures `slam` + `slam_pgo` services |
-| `src/global_planning/PCT_planner/tomography/` | Offline PCD → Tomogram conversion |
+
+| File                                          | Role                                                      |
+| --------------------------------------------- | --------------------------------------------------------- |
+| `src/slam/fastlio2/`                          | C++ Fast-LIO2 SLAM node                                   |
+| `src/slam/pgo/`                               | C++ Pose Graph Optimization (loop closure)                |
+| `src/slam/slam_module.py`                     | `_setup_fastlio2()` — starts Livox + LIO + PGO            |
+| `src/core/blueprints/stacks/slam.py`          | `slam("fastlio2")` — ensures `slam` + `slam_pgo` services |
+| `src/global_planning/PCT_planner/tomography/` | Offline PCD → Tomogram conversion                         |
+
 
 **Data flow**:
+
 ```
 Livox LiDAR → Fast-LIO2 (/cloud_map + /Odometry)
                  ↓
@@ -685,15 +732,18 @@ Livox LiDAR → Fast-LIO2 (/cloud_map + /Odometry)
 
 **Quick verification**:
 
-| Method | Command | Needs |
-|--------|---------|-------|
-| Framework smoke | `python -m pytest src/core/tests/test_new_modules.py::TestSLAMModule -q` | Nothing |
-| Profile `map` check | `python -c "from core.blueprints.full_stack import full_stack_blueprint; bp = full_stack_blueprint(slam_profile='fastlio2', enable_semantic=False); print('OK')"` | Nothing |
-| Map REPL | `python lingtu.py map` then `map save test_map` | ROS2 + LiDAR |
-| ROS2 direct | `ros2 launch fastlio2 lio_launch.py` + `ros2 service call /save_map ...` | ROS2 + LiDAR |
-| Tomogram generation | `cd src/global_planning/PCT_planner && python3 tomography/scripts/tomography.py --scene Common` | Saved PCD |
+
+| Method              | Command                                                                                                                                                           | Needs        |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| Framework smoke     | `python -m pytest src/core/tests/test_new_modules.py::TestSLAMModule -q`                                                                                          | Nothing      |
+| Profile `map` check | `python -c "from core.blueprints.full_stack import full_stack_blueprint; bp = full_stack_blueprint(slam_profile='fastlio2', enable_semantic=False); print('OK')"` | Nothing      |
+| Map REPL            | `python lingtu.py map` then `map save test_map`                                                                                                                   | ROS2 + LiDAR |
+| ROS2 direct         | `ros2 launch fastlio2 lio_launch.py` + `ros2 service call /save_map ...`                                                                                          | ROS2 + LiDAR |
+| Tomogram generation | `cd src/global_planning/PCT_planner && python3 tomography/scripts/tomography.py --scene Common`                                                                   | Saved PCD    |
+
 
 **Key parameters**:
+
 - `lio.yaml`: `lidar_type`, `scan_line`, `map_resolution`, `max_map_points`, extrinsics (`t_il`, `r_il`)
 - `pgo.yaml`: keyframe deltas, loop search radius, score thresholds
 - Map storage: `~/data/nova/maps/<name>/map.pcd` (default `NAV_MAP_DIR`)
@@ -706,18 +756,21 @@ Livox LiDAR → Fast-LIO2 (/cloud_map + /Odometry)
 
 **Key source files**:
 
-| File | Role |
-|------|------|
-| `src/nav/navigation_module.py` | `NavigationModule` — mission FSM, goal handling, replan logic |
-| `src/nav/global_planner_service.py` | `GlobalPlannerService` — A*/PCT backend, `_find_safe_goal` BFS, path downsample |
-| `src/nav/waypoint_tracker.py` | `WaypointTracker` — 2D arrival detection, stuck timeout |
-| `src/nav/occupancy_grid_module.py` | `OccupancyGridModule` — LiDAR → 2D costmap (feeds live A* replanning) |
-| `src/nav/esdf_module.py` | `ESDFModule` — signed distance field from occupancy |
-| `src/nav/elevation_map_module.py` | `ElevationMapModule` — per-cell height |
-| `src/global_planning/pct_adapters/src/global_planner_module.py` | Registers `_AStarBackend` and `_PCTBackend` |
-| `src/core/blueprints/stacks/navigation.py` | `navigation()` stack factory |
+
+| File                                                            | Role                                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `src/nav/navigation_module.py`                                  | `NavigationModule` — mission FSM, goal handling, replan logic                   |
+| `src/nav/global_planner_service.py`                             | `GlobalPlannerService` — A*/PCT backend, `_find_safe_goal` BFS, path downsample |
+| `src/nav/waypoint_tracker.py`                                   | `WaypointTracker` — 2D arrival detection, stuck timeout                         |
+| `src/nav/occupancy_grid_module.py`                              | `OccupancyGridModule` — LiDAR → 2D costmap (feeds live A* replanning)           |
+| `src/nav/esdf_module.py`                                        | `ESDFModule` — signed distance field from occupancy                             |
+| `src/nav/elevation_map_module.py`                               | `ElevationMapModule` — per-cell height                                          |
+| `src/global_planning/pct_adapters/src/global_planner_module.py` | Registers `_AStarBackend` and `_PCTBackend`                                     |
+| `src/core/blueprints/stacks/navigation.py`                      | `navigation()` stack factory                                                    |
+
 
 **Data flow**:
+
 ```
 goal_pose (from Gateway/MCP/SemanticPlanner)
     ↓
@@ -742,18 +795,21 @@ Parallel: OccupancyGridModule → costmap → GlobalPlannerService.update_map
 
 **Quick verification**:
 
-| Method | Command | Needs |
-|--------|---------|-------|
-| NavigationModule FSM | `python -m pytest src/core/tests/test_new_modules.py::TestNavigationModule -q` | Nothing |
-| Safe goal + planner | `python -m pytest src/core/tests/test_integration_36.py -q` | Nothing |
-| WaypointTracker stuck | `python -m pytest src/core/tests/test_new_features.py -q` | Nothing |
-| Full wiring check | `python -m pytest src/core/tests/test_cross_module_integration.py -q` | Nothing |
-| Non-native blueprint | `python -m pytest src/core/tests/test_non_native_navigation_blueprint.py -q` | Nothing |
-| PCT adapter logic | `python3 tests/planning/test_pct_adapter_logic.py` | Nothing |
-| Stub profile (live) | `python lingtu.py stub` then REPL: `go 10 5` | Nothing |
-| Sim profile (live) | `python lingtu.py sim` then REPL: `go 10 5` | MuJoCo deps |
+
+| Method                | Command                                                                        | Needs       |
+| --------------------- | ------------------------------------------------------------------------------ | ----------- |
+| NavigationModule FSM  | `python -m pytest src/core/tests/test_new_modules.py::TestNavigationModule -q` | Nothing     |
+| Safe goal + planner   | `python -m pytest src/core/tests/test_integration_36.py -q`                    | Nothing     |
+| WaypointTracker stuck | `python -m pytest src/core/tests/test_new_features.py -q`                      | Nothing     |
+| Full wiring check     | `python -m pytest src/core/tests/test_cross_module_integration.py -q`          | Nothing     |
+| Non-native blueprint  | `python -m pytest src/core/tests/test_non_native_navigation_blueprint.py -q`   | Nothing     |
+| PCT adapter logic     | `python3 tests/planning/test_pct_adapter_logic.py`                             | Nothing     |
+| Stub profile (live)   | `python lingtu.py stub` then REPL: `go 10 5`                                   | Nothing     |
+| Sim profile (live)    | `python lingtu.py sim` then REPL: `go 10 5`                                    | MuJoCo deps |
+
 
 **Key parameters** (`NavigationModule`):
+
 - `planner`: `"astar"` or `"pct"` (registry backend)
 - `tomogram`: path to `.pickle` (PCT/A* map source)
 - `waypoint_threshold`: 1.5m (arrival distance)
@@ -770,16 +826,19 @@ Parallel: OccupancyGridModule → costmap → GlobalPlannerService.update_map
 
 **Key source files**:
 
-| File | Role |
-|------|------|
-| `src/base_autonomy/modules/terrain_module.py` | `TerrainModule` — point cloud → terrain map + traversability |
-| `src/base_autonomy/modules/local_planner_module.py` | `LocalPlannerModule` — waypoint + terrain → local path |
-| `src/base_autonomy/modules/path_follower_module.py` | `PathFollowerModule` — local path → cmd_vel |
-| `src/base_autonomy/modules/autonomy_module.py` | `add_autonomy_stack()` — adds all three modules |
-| `src/base_autonomy/terrain_analysis/` | C++ terrain analysis node |
-| `src/base_autonomy/local_planner/` | C++ local planner + pathFollower |
+
+| File                                                | Role                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------ |
+| `src/base_autonomy/modules/terrain_module.py`       | `TerrainModule` — point cloud → terrain map + traversability |
+| `src/base_autonomy/modules/local_planner_module.py` | `LocalPlannerModule` — waypoint + terrain → local path       |
+| `src/base_autonomy/modules/path_follower_module.py` | `PathFollowerModule` — local path → cmd_vel                  |
+| `src/base_autonomy/modules/autonomy_module.py`      | `add_autonomy_stack()` — adds all three modules              |
+| `src/base_autonomy/terrain_analysis/`               | C++ terrain analysis node                                    |
+| `src/base_autonomy/local_planner/`                  | C++ local planner + pathFollower                             |
+
 
 **Data flow**:
+
 ```
 NavigationModule → waypoint (PoseStamped)
     ↓
@@ -794,22 +853,26 @@ cmd_vel (Twist) → Driver
 ```
 
 **Backends**:
+
 - Terrain: `nanobind` (C++ `_nav_core.TerrainAnalysisCore`), `native` (subprocess), `simple`
 - Local planner: `cmu` (CMU-style 12,348 candidate paths), `simple` (straight line)
 - Path follower: `nav_core` (C++ nanobind), `pure_pursuit` (native), `pid`
 
 **Quick verification**:
 
-| Method | Command | Needs |
-|--------|---------|-------|
-| Module smoke (simple/pid) | `python -m pytest src/core/tests/test_new_modules.py::TestLocalPlannerModule -q` | Nothing |
-| PathFollower smoke | `python -m pytest src/core/tests/test_new_modules.py::TestPathFollowerModule -q` | Nothing |
-| Wiring Nav→Local→Follow→Driver | `python -m pytest src/core/tests/test_cross_module_integration.py -q` | Nothing |
-| Non-native stack | `python -m pytest src/core/tests/test_non_native_navigation_blueprint.py -q` | Nothing |
-| C++ nodes (ROS2) | `ros2 launch local_planner local_planner.launch` | ROS2 + built C++ |
-| Stub planning pipeline | `bash tests/integration/test_planning_stub.sh` | ROS2 + `make build` |
+
+| Method                         | Command                                                                          | Needs               |
+| ------------------------------ | -------------------------------------------------------------------------------- | ------------------- |
+| Module smoke (simple/pid)      | `python -m pytest src/core/tests/test_new_modules.py::TestLocalPlannerModule -q` | Nothing             |
+| PathFollower smoke             | `python -m pytest src/core/tests/test_new_modules.py::TestPathFollowerModule -q` | Nothing             |
+| Wiring Nav→Local→Follow→Driver | `python -m pytest src/core/tests/test_cross_module_integration.py -q`            | Nothing             |
+| Non-native stack               | `python -m pytest src/core/tests/test_non_native_navigation_blueprint.py -q`     | Nothing             |
+| C++ nodes (ROS2)               | `ros2 launch local_planner local_planner.launch`                                 | ROS2 + built C++    |
+| Stub planning pipeline         | `bash tests/integration/test_planning_stub.sh`                                   | ROS2 + `make build` |
+
 
 **Key parameters**:
+
 - `LocalPlannerModule`: `_PATH_RANGE=3.5m`, `_OBSTACLE_HEIGHT_THRE=0.5m`, `_DIR_THRE=90deg`
 - `PathFollowerModule`: `max_speed`, `lookahead`, `yaw_rate_limit`
 - C++ `localPlanner`: `vehicleHeight`, `vehicleWidth`, `adjacentRange`
@@ -823,23 +886,26 @@ cmd_vel (Twist) → Driver
 
 **Key source files**:
 
-| File | Role |
-|------|------|
+
+| File                                                               | Role                                                      |
+| ------------------------------------------------------------------ | --------------------------------------------------------- |
 | `src/semantic/planner/semantic_planner/semantic_planner_module.py` | Unified planner: instruction → `_try_resolve` → goal_pose |
-| `src/semantic/planner/semantic_planner/goal_resolver.py` | `GoalResolver` — fusion weights, KG reload |
-| `src/semantic/planner/semantic_planner/fast_path.py` | `fast_resolve()` — System 1 matching (~0.17ms) |
-| `src/semantic/planner/semantic_planner/slow_path.py` | `async resolve()` — tag + AdaCoT + LLM (~2s) |
-| `src/semantic/planner/semantic_planner/agent_loop.py` | Multi-turn LLM tool calling (7 tools, 10 steps max) |
-| `src/semantic/planner/semantic_planner/task_decomposer.py` | Rules-based instruction decomposition |
-| `src/semantic/planner/semantic_planner/action_executor.py` | LERa failure recovery strategies |
-| `src/semantic/perception/semantic_perception/perception_module.py` | RGB-D + odom → scene graph |
-| `src/semantic/perception/semantic_perception/instance_tracker.py` | Multi-object tracking, scene graph builder |
-| `src/memory/modules/semantic_mapper_module.py` | Scene graph → RoomObjectKG + TopologySemGraph |
-| `src/memory/modules/vector_memory_module.py` | CLIP + ChromaDB vector search |
-| `src/memory/modules/tagged_locations_module.py` | Named location store |
-| `src/memory/modules/episodic_module.py` | Episodic memory for LLM context |
+| `src/semantic/planner/semantic_planner/goal_resolver.py`           | `GoalResolver` — fusion weights, KG reload                |
+| `src/semantic/planner/semantic_planner/fast_path.py`               | `fast_resolve()` — System 1 matching (~0.17ms)            |
+| `src/semantic/planner/semantic_planner/slow_path.py`               | `async resolve()` — tag + AdaCoT + LLM (~2s)              |
+| `src/semantic/planner/semantic_planner/agent_loop.py`              | Multi-turn LLM tool calling (7 tools, 10 steps max)       |
+| `src/semantic/planner/semantic_planner/task_decomposer.py`         | Rules-based instruction decomposition                     |
+| `src/semantic/planner/semantic_planner/action_executor.py`         | LERa failure recovery strategies                          |
+| `src/semantic/perception/semantic_perception/perception_module.py` | RGB-D + odom → scene graph                                |
+| `src/semantic/perception/semantic_perception/instance_tracker.py`  | Multi-object tracking, scene graph builder                |
+| `src/memory/modules/semantic_mapper_module.py`                     | Scene graph → RoomObjectKG + TopologySemGraph             |
+| `src/memory/modules/vector_memory_module.py`                       | CLIP + ChromaDB vector search                             |
+| `src/memory/modules/tagged_locations_module.py`                    | Named location store                                      |
+| `src/memory/modules/episodic_module.py`                            | Episodic memory for LLM context                           |
+
 
 **Data flow**:
+
 ```
 instruction (str) from Gateway/MCP
     ↓
@@ -865,6 +931,7 @@ LERa Recovery (on mission_status STUCK/FAILED):
 ```
 
 **Agent loop** (triggered by `agent_instruction` port):
+
 ```
 agent_instruction → AgentLoop(llm_client, 7 tools, max_steps=10, timeout=120s)
     ↓ observe→think→act cycle
@@ -874,20 +941,23 @@ agent_instruction → AgentLoop(llm_client, 7 tools, max_steps=10, timeout=120s)
 
 **Quick verification**:
 
-| Method | Command | Needs |
-|--------|---------|-------|
-| Planner module wiring | `python -m pytest src/core/tests/test_semantic_planner_modules.py -q` | Nothing |
-| Visual servo integration | `python -m pytest src/core/tests/test_visual_servo_semantic_integration.py -q` | Nothing |
-| Full semantic pipeline | `python -m pytest src/core/tests/test_sim_semantic_pipeline_blueprint.py -q` | Nothing |
-| GoalResolver unit tests | `python -m pytest src/semantic/planner/test/test_goal_resolver.py -q` | `semantic_common` |
-| Fast resolve tests | `python -m pytest src/semantic/planner/test/test_fast_resolve.py -q` | `semantic_common` |
-| BBoxNavigator tests | `python -m pytest src/semantic/planner/test/test_bbox_navigator.py -q` | `semantic_common` |
-| PersonTracker tests | `python -m pytest src/semantic/planner/test/test_person_tracker.py -q` | `semantic_common` |
-| Instance tracker tests | `python -m pytest src/semantic/perception/tests/test_instance_tracker.py -q` | `semantic_common` |
-| Dev profile (live) | `python lingtu.py dev` then REPL: `go red chair` | Nothing (mock LLM) |
-| Dev with real LLM | `python lingtu.py dev --llm kimi` then REPL: `go red chair` | `MOONSHOT_API_KEY` |
+
+| Method                   | Command                                                                        | Needs              |
+| ------------------------ | ------------------------------------------------------------------------------ | ------------------ |
+| Planner module wiring    | `python -m pytest src/core/tests/test_semantic_planner_modules.py -q`          | Nothing            |
+| Visual servo integration | `python -m pytest src/core/tests/test_visual_servo_semantic_integration.py -q` | Nothing            |
+| Full semantic pipeline   | `python -m pytest src/core/tests/test_sim_semantic_pipeline_blueprint.py -q`   | Nothing            |
+| GoalResolver unit tests  | `python -m pytest src/semantic/planner/test/test_goal_resolver.py -q`          | `semantic_common`  |
+| Fast resolve tests       | `python -m pytest src/semantic/planner/test/test_fast_resolve.py -q`           | `semantic_common`  |
+| BBoxNavigator tests      | `python -m pytest src/semantic/planner/test/test_bbox_navigator.py -q`         | `semantic_common`  |
+| PersonTracker tests      | `python -m pytest src/semantic/planner/test/test_person_tracker.py -q`         | `semantic_common`  |
+| Instance tracker tests   | `python -m pytest src/semantic/perception/tests/test_instance_tracker.py -q`   | `semantic_common`  |
+| Dev profile (live)       | `python lingtu.py dev` then REPL: `go red chair`                               | Nothing (mock LLM) |
+| Dev with real LLM        | `python lingtu.py dev --llm kimi` then REPL: `go red chair`                    | `MOONSHOT_API_KEY` |
+
 
 **Key parameters**:
+
 - `SemanticPlannerModule`: `fast_path_threshold=0.75`, `lera_cooldown=15s`, `save_dir`
 - `GoalResolver`: confidence weights (label/CLIP/detector/spatial), KG reload interval (120s)
 - `PerceptionModule`: `detector_type`, `confidence_threshold`, `skip_frames`
@@ -901,13 +971,16 @@ agent_instruction → AgentLoop(llm_client, 7 tools, max_steps=10, timeout=120s)
 
 **Key source files**:
 
-| File | Role |
-|------|------|
+
+| File                                                           | Role                                                |
+| -------------------------------------------------------------- | --------------------------------------------------- |
 | `src/semantic/planner/semantic_planner/visual_servo_module.py` | `VisualServoModule` — dual-channel servo controller |
-| `src/semantic/planner/semantic_planner/bbox_navigator.py` | `BBoxNavigator` — bbox + depth → 3D → PD control |
-| `src/semantic/planner/semantic_planner/person_tracker.py` | `PersonTracker` — VLM select + CLIP Re-ID |
+| `src/semantic/planner/semantic_planner/bbox_navigator.py`      | `BBoxNavigator` — bbox + depth → 3D → PD control    |
+| `src/semantic/planner/semantic_planner/person_tracker.py`      | `PersonTracker` — VLM select + CLIP Re-ID           |
+
 
 **Data flow — Find mode** (object tracking):
+
 ```
 servo_target = "find:red chair"
     ↓
@@ -923,6 +996,7 @@ VisualServoModule._tick_find
 ```
 
 **Data flow — Follow mode** (person following):
+
 ```
 servo_target = "follow:person_description"
     ↓
@@ -936,6 +1010,7 @@ NavigationModule → planning stack (always far-range for follow)
 **Mutual exclusion**: When close-range servo is active, `nav_stop=1` is published to pause NavigationModule so PathFollower stops producing conflicting `cmd_vel`.
 
 **Wiring in `full_stack.py`**:
+
 ```python
 bp.wire("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target")
 bp.wire("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
@@ -945,15 +1020,18 @@ bp.wire("VisualServoModule", "cmd_vel", driver_name, "cmd_vel")
 
 **Quick verification**:
 
-| Method | Command | Needs |
-|--------|---------|-------|
-| Servo integration test | `python -m pytest src/core/tests/test_visual_servo_semantic_integration.py -q` | Nothing |
-| BBoxNavigator unit | `python -m pytest src/semantic/planner/test/test_bbox_navigator.py -q` | `semantic_common` |
-| PersonTracker unit | `python -m pytest src/semantic/planner/test/test_person_tracker.py -q` | `semantic_common` |
-| Full wiring check | `python -m pytest src/core/tests/test_cross_module_integration.py -q` | Nothing |
-| MCP tools | `python -m pytest src/semantic/planner/test/test_mcp_server.py -q` | `semantic_common` |
+
+| Method                 | Command                                                                        | Needs             |
+| ---------------------- | ------------------------------------------------------------------------------ | ----------------- |
+| Servo integration test | `python -m pytest src/core/tests/test_visual_servo_semantic_integration.py -q` | Nothing           |
+| BBoxNavigator unit     | `python -m pytest src/semantic/planner/test/test_bbox_navigator.py -q`         | `semantic_common` |
+| PersonTracker unit     | `python -m pytest src/semantic/planner/test/test_person_tracker.py -q`         | `semantic_common` |
+| Full wiring check      | `python -m pytest src/core/tests/test_cross_module_integration.py -q`          | Nothing           |
+| MCP tools              | `python -m pytest src/semantic/planner/test/test_mcp_server.py -q`             | `semantic_common` |
+
 
 **Key parameters**:
+
 - `VisualServoModule`: `servo_takeover_distance=3.0m`, `follow_distance`, `lost_timeout`
 - `BBoxNavigator` (`BBoxNavConfig`): `target_distance`, `max_linear_speed`, `max_angular_speed`, `lost_timeout`
 - cmd_vel priority: Teleop > VisualServo > PathFollower
@@ -964,15 +1042,17 @@ bp.wire("VisualServoModule", "cmd_vel", driver_name, "cmd_vel")
 
 ### Test Categories
 
-| Category | Location | Count | ROS2? | Hardware? | Command |
-|----------|----------|-------|-------|-----------|---------|
-| Core framework | `src/core/tests/` | ~625 | No | No | `python -m pytest src/core/tests/ -q` |
-| Semantic planner | `src/semantic/planner/test/` | ~30 files | No | No | `python -m pytest src/semantic/planner/test/ -q` |
-| Perception | `src/semantic/perception/tests/` | ~15 files | No | No | `python -m pytest src/semantic/perception/tests/ -q` |
-| Planning logic | `tests/planning/` | ~5 files | No | No | `python3 tests/planning/test_pct_adapter_logic.py` |
-| Integration | `tests/integration/` | ~10 scripts | Yes | Some | `make test-integration` |
-| Benchmark | `tests/benchmark/` | 3 scripts | Yes | No | `make benchmark` |
-| ROS2 colcon | Various `package.xml` | — | Yes | No | `make test` |
+
+| Category         | Location                         | Count       | ROS2? | Hardware? | Command                                              |
+| ---------------- | -------------------------------- | ----------- | ----- | --------- | ---------------------------------------------------- |
+| Core framework   | `src/core/tests/`                | ~625        | No    | No        | `python -m pytest src/core/tests/ -q`                |
+| Semantic planner | `src/semantic/planner/test/`     | ~30 files   | No    | No        | `python -m pytest src/semantic/planner/test/ -q`     |
+| Perception       | `src/semantic/perception/tests/` | ~15 files   | No    | No        | `python -m pytest src/semantic/perception/tests/ -q` |
+| Planning logic   | `tests/planning/`                | ~5 files    | No    | No        | `python3 tests/planning/test_pct_adapter_logic.py`   |
+| Integration      | `tests/integration/`             | ~10 scripts | Yes   | Some      | `make test-integration`                              |
+| Benchmark        | `tests/benchmark/`               | 3 scripts   | Yes   | No        | `make benchmark`                                     |
+| ROS2 colcon      | Various `package.xml`            | —           | Yes   | No        | `make test`                                          |
+
 
 ### Quick Verification Ladder (fastest to most complete)
 
@@ -1004,11 +1084,14 @@ make test-integration
 
 ### Profile-Based Verification
 
-| Profile | What it exercises | How to start |
-|---------|------------------|--------------|
-| `stub` | Framework, Blueprint wiring, Gateway, A* planner (no semantic, no hardware) | `python lingtu.py stub` |
-| `dev` | All of `stub` + perception + memory + semantic planner + visual servo (mock LLM) | `python lingtu.py dev` |
-| `sim` | Full algorithm stack with MuJoCo physics simulation + native C++ autonomy | `python lingtu.py sim` |
-| `map` | SLAM mapping mode (Fast-LIO2 + PGO) | `python lingtu.py map` |
-| `s100p` | Real robot with localizer + semantic + BPU detector | `python lingtu.py s100p` |
-| `explore` | Real robot with SLAM + full native + semantic (no pre-built map) | `python lingtu.py explore` |
+
+| Profile   | What it exercises                                                                | How to start               |
+| --------- | -------------------------------------------------------------------------------- | -------------------------- |
+| `stub`    | Framework, Blueprint wiring, Gateway, A* planner (no semantic, no hardware)      | `python lingtu.py stub`    |
+| `dev`     | All of `stub` + perception + memory + semantic planner + visual servo (mock LLM) | `python lingtu.py dev`     |
+| `sim`     | Full algorithm stack with MuJoCo physics simulation + native C++ autonomy        | `python lingtu.py sim`     |
+| `map`     | SLAM mapping mode (Fast-LIO2 + PGO)                                              | `python lingtu.py map`     |
+| `s100p`   | Real robot with localizer + semantic + BPU detector                              | `python lingtu.py s100p`   |
+| `explore` | Real robot with SLAM + full native + semantic (no pre-built map)                 | `python lingtu.py explore` |
+
+
