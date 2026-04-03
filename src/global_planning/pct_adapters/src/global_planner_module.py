@@ -111,7 +111,7 @@ class _PCTBackend:
                     tomo_dir = "/"
                     pcd_dir = None
 
-            _MinimalCfg.planner.obstacle_thr = obstacle_thr
+            _MinimalCfg.planner.obstacle_thr = self._obstacle_thr
             planner = TomogramPlanner(_MinimalCfg)
             planner.loadTomogram(tomogram_path)
             self._planner = planner
