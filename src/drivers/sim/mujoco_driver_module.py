@@ -130,6 +130,7 @@ class MujocoDriverModule(Module, layer=1):
         self._cmd_vy = 0.0
         self._cmd_wz = 0.0
         self._stopped = False
+        self._camera_warned = False
 
     def setup(self):
         self.cmd_vel.subscribe(self._on_cmd_vel)
@@ -330,8 +331,10 @@ class MujocoDriverModule(Module, layer=1):
                                 height=int(h),
                                 depth_scale=1.0,
                             ))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        if not self._camera_warned:
+                            logger.warning("MujocoDriverModule: camera publish failed: %s", e)
+                            self._camera_warned = True
 
                 step_count += 1
 
@@ -357,4 +360,3 @@ class MujocoDriverModule(Module, layer=1):
             "render": self._render,
         }
         return info
-

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import List, Optional
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -59,23 +59,18 @@ class SimSceneObserver:
 
         pos = tf_camera_to_world[:3, 3]
         rot = tf_camera_to_world[:3, :3]
-        # MuJoCo driver odometry exposes the robot forward axis as -X in world rotation.
-        # Use that convention here so sim-only semantic visibility matches the live camera view.
-        forward = (-rot[:, 0]).astype(np.float64)
-        right = rot[:, 1].astype(np.float64)
-        up = rot[:, 2].astype(np.float64)
-        if np.linalg.norm(forward) < 1e-6:
-            forward = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-        else:
-            forward = forward / np.linalg.norm(forward)
-        if np.linalg.norm(right) < 1e-6:
-            right = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-        else:
-            right = right / np.linalg.norm(right)
-        if np.linalg.norm(up) < 1e-6:
-            up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-        else:
-            up = up / np.linalg.norm(up)
+
+        # Different MuJoCo/runtime paths have exposed the forward axis as either
+        # +X or -X in odometry. Try both conventions and keep the one that sees
+        # the most objects so sim-only semantics stays stable across platforms.
+        forward_candidates: List[np.ndarray] = []
+        for raw_forward in (rot[:, 0].astype(np.float64), (-rot[:, 0]).astype(np.float64)):
+            forward = self._normalize(raw_forward, np.array([1.0, 0.0, 0.0], dtype=np.float64))
+            if not any(np.allclose(forward, prev) for prev in forward_candidates):
+                forward_candidates.append(forward)
+
+        right = self._normalize(rot[:, 1].astype(np.float64), np.array([0.0, 1.0, 0.0], dtype=np.float64))
+        up = self._normalize(rot[:, 2].astype(np.float64), np.array([0.0, 0.0, 1.0], dtype=np.float64))
 
         allowed = {
             token.strip().lower()
@@ -89,6 +84,40 @@ class SimSceneObserver:
         width = int(getattr(intrinsics, "width", 640) or 640)
         height = int(getattr(intrinsics, "height", 480) or 480)
 
+        best: List[SimDetection3D] = []
+        for forward in forward_candidates:
+            detections = self._collect_detections(
+                pos=pos,
+                forward=forward,
+                right=right,
+                up=up,
+                allowed=allowed,
+                fx=fx,
+                fy=fy,
+                cx=cx,
+                cy=cy,
+                width=width,
+                height=height,
+            )
+            if len(detections) > len(best):
+                best = detections
+        return best
+
+    def _collect_detections(
+        self,
+        *,
+        pos: np.ndarray,
+        forward: np.ndarray,
+        right: np.ndarray,
+        up: np.ndarray,
+        allowed: set[str],
+        fx: float,
+        fy: float,
+        cx: float,
+        cy: float,
+        width: int,
+        height: int,
+    ) -> List[SimDetection3D]:
         detections: List[SimDetection3D] = []
         for obj in self._objects:
             if allowed and obj.label.lower() not in allowed:
@@ -120,6 +149,13 @@ class SimSceneObserver:
                 )
             )
         return detections
+
+    @staticmethod
+    def _normalize(vec: np.ndarray, fallback: np.ndarray) -> np.ndarray:
+        norm = float(np.linalg.norm(vec))
+        if norm < 1e-6:
+            return fallback.copy()
+        return (vec / norm).astype(np.float64)
 
     @classmethod
     def _load_objects(cls, world: str) -> List[_SceneObject]:

@@ -1,4 +1,4 @@
-﻿import importlib.util
+import importlib.util
 import sys
 
 import numpy as np
@@ -232,11 +232,7 @@ def test_sim_scene_observer_respects_live_forward_axis_convention():
         height = 480
 
     tf = np.eye(4, dtype=np.float32)
-    tf[:3, :3] = np.array([
-        [-1.0, 0.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ], dtype=np.float32)
+    tf[:3, :3] = np.eye(3, dtype=np.float32)
     tf[:3, 3] = [2.0, 3.0, 0.5]
     observer = SimSceneObserver(world="building_scene")
 
