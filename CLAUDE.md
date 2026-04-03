@@ -127,7 +127,7 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 
 | Directory | Role |
 |-----------|------|
-| `core/` | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (625) |
+| `core/` | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (640) |
 | `nav/` | NavigationModule, SafetyRing, GlobalPlannerService, WaypointTracker, OccupancyGrid, ESDF, ElevationMap |
 | `semantic/` | perception/ (Detector+Encoder), planner/ (SemanticPlanner+LLM+VisualServo+AgentLoop), reconstruction/ |
 | `memory/` | SemanticMapper, EpisodicMemory, TaggedLocations, VectorMemory, RoomObjectKG, TopologySemGraph |
@@ -343,4 +343,4 @@ bp.wire("TeleopModule", "cmd_vel", driver_name, "cmd_vel")
 - S100P has no CUDA — Open3D GPU features unavailable, use C++ terrain_analysis instead
 - Kimi API key may expire — Slow Path unavailable without valid LLM key
 - ChromaDB optional — VectorMemoryModule falls back to numpy brute-force search
-- Framework tests (625) are mock-based — real hardware integration tests need S100P
+- Framework tests (640) are mock-based — real hardware integration tests need S100P

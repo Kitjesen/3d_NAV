@@ -10,10 +10,28 @@ conftest.py — semantic_planner 测试共享夹具
 
 import asyncio
 import json
+import os
+import sys
 import unittest.mock as mock
 
 import numpy as np
 import pytest
+
+# Ensure semantic package namespaces are on sys.path for direct pytest runs
+# (i.e. without PYTHONPATH set). Mirrors what core/tests/conftest.py does.
+_here = os.path.dirname(os.path.abspath(__file__))
+_repo = os.path.abspath(os.path.join(_here, "..", "..", "..", ".."))
+_src = os.path.join(_repo, "src")
+
+for _p in [
+    _repo,
+    _src,
+    os.path.join(_src, "semantic", "planner"),
+    os.path.join(_src, "semantic", "perception"),
+    os.path.join(_src, "semantic", "common"),
+]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

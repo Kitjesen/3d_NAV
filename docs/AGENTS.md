@@ -15,7 +15,7 @@ LingTu (灵途) is an autonomous navigation system for quadruped robots in outdo
 
 ```bash
 # Framework tests (no ROS2 needed, runs on any machine)
-python -m pytest src/core/tests/ -q       # 625 tests
+python -m pytest src/core/tests/ -q       # 640 tests
 
 # CLI with interactive REPL (profile-based)
 python lingtu.py                          # interactive profile selector
@@ -174,12 +174,12 @@ lingtu/
 
 | Directory          | Role                                                                                                             |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `core/`            | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (625)               |
+| `core/`            | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (640)               |
 | `core/msgs/`       | Message types: geometry, nav, sensor, semantic (replaces ROS2 msg types)                                         |
 | `core/transport/`  | Backends: Local (callback), DDS (cyclonedds), SHM, Adapter                                                       |
 | `core/blueprints/` | System blueprints: `full_stack.py` calls 9 stack factories                                                       |
 | `core/spec/`       | Protocol interfaces (16 specs)                                                                                   |
-| `core/tests/`      | 625 framework tests (pytest, no ROS2 dependency)                                                                 |
+| `core/tests/`      | 640 framework tests (pytest, no ROS2 dependency)                                                                 |
 | `nav/`             | NavigationModule, SafetyRing, GlobalPlannerService, WaypointTracker, OccupancyGrid, ESDF, ElevationMap           |
 | `semantic/`        | perception/ (Detector+Encoder+SceneGraph), planner/ (SemanticPlanner+LLM+VisualServo+AgentLoop), reconstruction/ |
 | `memory/`          | SemanticMapper, EpisodicMemory, TaggedLocations, VectorMemory, RoomObjectKG, TopologySemGraph                    |
@@ -220,7 +220,7 @@ lingtu/
 
 ```bash
 # Framework tests (primary, no ROS2 needed)
-python -m pytest src/core/tests/ -q                    # 625 tests, ~50s
+python -m pytest src/core/tests/ -q                    # 640 tests, ~5s
 
 # ROS2 build (for C++ nodes on S100P only)
 source /opt/ros/humble/setup.bash
@@ -632,7 +632,7 @@ Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state 
 - S100P has no CUDA — Open3D GPU features unavailable, use C++ terrain_analysis instead
 - Kimi API key may expire — Slow Path unavailable without valid LLM key
 - ChromaDB optional — VectorMemoryModule falls back to numpy brute-force search
-- Framework tests (625) are mock-based — real hardware integration tests need S100P
+- Framework tests (640) are mock-based — real hardware integration tests need S100P
 
 ## 25. Related Documentation
 
@@ -1045,7 +1045,7 @@ bp.wire("VisualServoModule", "cmd_vel", driver_name, "cmd_vel")
 
 | Category         | Location                         | Count       | ROS2? | Hardware? | Command                                              |
 | ---------------- | -------------------------------- | ----------- | ----- | --------- | ---------------------------------------------------- |
-| Core framework   | `src/core/tests/`                | ~625        | No    | No        | `python -m pytest src/core/tests/ -q`                |
+| Core framework   | `src/core/tests/`                | ~640        | No    | No        | `python -m pytest src/core/tests/ -q`                |
 | Semantic planner | `src/semantic/planner/test/`     | ~30 files   | No    | No        | `python -m pytest src/semantic/planner/test/ -q`     |
 | Perception       | `src/semantic/perception/tests/` | ~15 files   | No    | No        | `python -m pytest src/semantic/perception/tests/ -q` |
 | Planning logic   | `tests/planning/`                | ~5 files    | No    | No        | `python3 tests/planning/test_pct_adapter_logic.py`   |
