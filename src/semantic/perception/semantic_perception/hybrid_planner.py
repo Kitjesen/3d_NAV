@@ -74,14 +74,25 @@ class HybridPlanner:
     - 可以并行规划多个路径段 (未来优化)
     """
 
-    def __init__(self, topology_graph, tomogram):
+    def __init__(self, topology_graph, tomogram, planner_fn=None):
         """
         Args:
             topology_graph: TopologySemGraph 实例
             tomogram: Tomogram 实例
+            planner_fn: 可选，callable(start, goal) → List[np.ndarray]。
+                注入 GlobalPlannerService.plan 或任何兼容的 A* 函数。
+                若为 None，则使用直线插值回退。
+
+        注意：语义感知层（semantic/perception）不直接导入 nav/，
+        通过回调注入避免硬依赖。在 Blueprint 组装时传入：
+            planner_svc = GlobalPlannerService(...)
+            planner_svc.setup()
+            hybrid = HybridPlanner(tsg, tomogram,
+                                   planner_fn=lambda s, g: planner_svc.plan(s, g)[0])
         """
         self.tsg = topology_graph
         self.tomogram = tomogram
+        self._planner_fn = planner_fn  # callable(start, goal) -> List[np.ndarray]
 
     def plan_path(
         self,
@@ -340,22 +351,41 @@ class HybridPlanner:
         Returns:
             路径点列表 或 None
         """
-        # TODO: 集成 PCT Planner 的 A* 实现
-        # 这里使用简化版本: 直线路径 + 碰撞检测
-
-        # 检查起点和终点是否在搜索区域内
+        # 检查起点和终点是否在搜索区域内（仅打 warning，不拒绝）
         if not self._point_in_bbox(start[:2], search_bbox):
-            logger.warning(f"Start point {start[:2]} outside search bbox")
+            logger.warning("Start point %s outside search bbox", start[:2])
         if not self._point_in_bbox(goal[:2], search_bbox):
-            logger.warning(f"Goal point {goal[:2]} outside search bbox")
+            logger.warning("Goal point %s outside search bbox", goal[:2])
 
-        # 简化版本: 生成直线路径
+        # ── 优先路径：使用注入的 A* 规划函数 ──────────────────────────────
+        if self._planner_fn is not None:
+            try:
+                path = self._planner_fn(start, goal)
+                if path and len(path) >= 2:
+                    # 裁剪：只保留 search_bbox 内的路径点，末端强制保留 goal
+                    filtered = [
+                        wp for wp in path
+                        if self._point_in_bbox(wp[:2], search_bbox)
+                    ]
+                    if not filtered:
+                        filtered = path  # bbox 过小时保留全段
+                    if not np.allclose(filtered[-1][:2], goal[:2], atol=0.1):
+                        filtered.append(goal.copy())
+                    logger.debug(
+                        "A* path: %d waypoints → %d after bbox filter",
+                        len(path), len(filtered),
+                    )
+                    return filtered
+                logger.warning("A* planner returned empty path, falling back to straight-line")
+            except Exception as e:
+                logger.warning("A* planner failed (%s), falling back to straight-line", e)
+
+        # ── 回退路径：直线插值 ─────────────────────────────────────────────
         num_waypoints = max(3, int(np.linalg.norm(goal - start) / 0.5))
         waypoints = []
         for i in range(num_waypoints):
             t = i / (num_waypoints - 1)
-            waypoint = start * (1 - t) + goal * t
-            waypoints.append(waypoint)
+            waypoints.append(start * (1 - t) + goal * t)
 
         return waypoints
 

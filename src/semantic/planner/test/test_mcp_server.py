@@ -1,226 +1,247 @@
-﻿"""MCP Server 单元测试 — JSON-RPC 协议，不启动 HTTP server。
-不依赖 ROS2，纯 Python 可运行。
+﻿"""test_mcp_server.py — MCPServerModule 单元测试
 
-运行:
-    cd src/semantic_planner && python -m pytest test/test_mcp_server.py -v
+测试 gateway/mcp_server.py 中的 MCPServerModule（Module-First 实现）。
+不启动 HTTP server，不依赖 ROS2，不依赖真实 LLM。
 
-NOTE: mcp_server was migrated to gateway/mcp_server.py (GatewayModule-First).
-The legacy semantic_planner/mcp_server module is deprecated. These tests are
-skipped until migrated to test the new MCPServerModule in gateway/.
+覆盖：
+  - 端口声明（In/Out 类型）
+  - setup() 订阅回调注册
+  - _on_odom / _on_sg / _on_safety / _on_mission 状态缓存
+  - on_system_modules() 动态技能注册
+  - _execute_tool() 各内置工具的返回结构
+  - health() 汇总格式
 """
 
+import json
+import sys
+import os
+
+# path setup
+_here = os.path.dirname(os.path.abspath(__file__))
+_repo = os.path.abspath(os.path.join(_here, "..", "..", "..", ".."))
+_src = os.path.join(_repo, "src")
+for _p in [_repo, _src]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import pytest
+from unittest.mock import MagicMock
 
-pytest.importorskip(
-    "semantic.planner.semantic_planner.mcp_server",
-    reason="mcp_server migrated to gateway/mcp_server.py (MCPServerModule). "
-           "Update tests to use the new gateway MCPServerModule.",
-)
-
-from semantic.planner.semantic_planner.mcp_server import (  # noqa: E402
-    _handle_initialize,
-    _handle_request,
-    _handle_tools_call,
-    _handle_tools_list,
-    _jsonrpc_error,
-    _jsonrpc_result,
-    _jsonrpc_result_text,
-)
-from semantic.planner.semantic_planner.skill_registry import LingTuNavigationSkills, SkillRegistry  # noqa: E402
+from core.stream import In, Out
+from core.msgs.geometry import PoseStamped, Twist
+from core.msgs.nav import Odometry
+from core.msgs.semantic import SceneGraph, SafetyState
+from gateway.mcp_server import MCPServerModule
 
 
 # ---------------------------------------------------------------------------
-# 辅助: 构建测试用 SkillRegistry
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _make_registry() -> SkillRegistry:
-    registry = SkillRegistry()
-    nav = LingTuNavigationSkills()
-    registry.register_instance(nav)
-    return registry
+def _make_module(**kw) -> MCPServerModule:
+    mod = MCPServerModule(**kw)
+    mod.setup()
+    return mod
 
 
-# ---------------------------------------------------------------------------
-# JSON-RPC helpers 测试
-# ---------------------------------------------------------------------------
+def _make_odom(x=1.0, y=2.0, z=0.0):
+    from core.msgs.geometry import Pose, Vector3
+    od = Odometry()
+    od.pose = Pose(position=Vector3(x, y, z))
+    return od
 
-class TestJsonRpcHelpers:
-    def test_jsonrpc_result_structure(self):
-        resp = _jsonrpc_result(1, {"key": "val"})
-        assert resp["jsonrpc"] == "2.0"
-        assert resp["id"] == 1
-        assert resp["result"] == {"key": "val"}
 
-    def test_jsonrpc_result_text_structure(self):
-        resp = _jsonrpc_result_text(2, "hello")
-        assert resp["id"] == 2
-        content = resp["result"]["content"]
-        assert len(content) == 1
-        assert content[0]["type"] == "text"
-        assert content[0]["text"] == "hello"
-
-    def test_jsonrpc_error_structure(self):
-        resp = _jsonrpc_error(3, -32601, "method not found")
-        assert resp["jsonrpc"] == "2.0"
-        assert resp["id"] == 3
-        assert resp["error"]["code"] == -32601
-        assert "not found" in resp["error"]["message"]
+def _make_scene_graph():
+    from core.msgs.semantic import Detection3D, Region
+    from core.msgs.geometry import Vector3
+    return SceneGraph(
+        objects=[Detection3D(id="1", label="chair", position=Vector3(1, 2, 0))],
+        regions=[Region(name="office", object_ids=["1"], center=Vector3(1, 2, 0))],
+    )
 
 
 # ---------------------------------------------------------------------------
-# initialize
+# 1. 端口声明
 # ---------------------------------------------------------------------------
 
-class TestInitialize:
-    def test_initialize_returns_protocol_version(self):
-        resp = _handle_initialize(1)
-        assert "protocolVersion" in resp["result"]
-        assert resp["result"]["protocolVersion"] == "2025-11-25"
+class TestMCPServerModulePorts:
+    def test_layer(self):
+        assert MCPServerModule._layer == 6
 
-    def test_initialize_returns_capabilities(self):
-        resp = _handle_initialize(1)
-        assert "capabilities" in resp["result"]
-        assert "tools" in resp["result"]["capabilities"]
+    def test_in_ports(self):
+        mod = MCPServerModule()
+        assert isinstance(mod.odometry, In)
+        assert isinstance(mod.scene_graph, In)
+        assert isinstance(mod.safety_state, In)
+        assert isinstance(mod.mission_status, In)
 
-    def test_initialize_returns_server_info(self):
-        resp = _handle_initialize(1)
-        assert "serverInfo" in resp["result"]
-        assert resp["result"]["serverInfo"]["name"] == "lingtu"
+    def test_out_ports(self):
+        mod = MCPServerModule()
+        assert isinstance(mod.goal_pose, Out)
+        assert isinstance(mod.cmd_vel, Out)
+        assert isinstance(mod.stop_cmd, Out)
+        assert isinstance(mod.instruction, Out)
+        assert isinstance(mod.mode_cmd, Out)
 
-    def test_initialize_preserves_request_id(self):
-        resp = _handle_initialize("abc-123")
-        assert resp["id"] == "abc-123"
+    def test_default_port(self):
+        mod = MCPServerModule()
+        assert mod._port == 8090
+
+    def test_custom_port(self):
+        mod = MCPServerModule(port=9000)
+        assert mod._port == 9000
 
 
 # ---------------------------------------------------------------------------
-# tools/list
+# 2. 状态缓存
 # ---------------------------------------------------------------------------
 
-class TestToolsList:
+class TestMCPServerStateCache:
+    def test_odom_cached(self):
+        mod = _make_module()
+        mod._on_odom(_make_odom(3.5, 7.2))
+        assert mod._odom is not None
+        assert abs(mod._odom["x"] - 3.5) < 1e-6
+        assert abs(mod._odom["y"] - 7.2) < 1e-6
+
+    def test_scene_graph_cached(self):
+        mod = _make_module()
+        sg = _make_scene_graph()
+        mod._on_sg(sg)
+        data = json.loads(mod._sg_json)
+        assert "objects" in data or "object_count" in data or data  # 非空 JSON
+
+    def test_safety_state_cached(self):
+        mod = _make_module()
+        ss = SafetyState(level="safe", issues=[])
+        mod._on_safety(ss)
+        assert mod._safety is not None
+
+    def test_mission_status_cached(self):
+        mod = _make_module()
+        mod._on_mission({"state": "NAVIGATING", "goal": [1, 2]})
+        assert mod._mission is not None
+        assert mod._mission["state"] == "NAVIGATING"
+
+
+# ---------------------------------------------------------------------------
+# 3. 动态技能注册 (on_system_modules)
+# ---------------------------------------------------------------------------
+
+class TestMCPDynamicSkills:
+    def test_skills_from_module_registered(self):
+        """on_system_modules 应把其他模块的 @skill 注册到 _skill_registry。"""
+        mod = _make_module()
+
+        # 构造一个带 @skill 的 mock 模块
+        from core.module import Module, skill
+
+        class FakeNav(Module, layer=5):
+            @skill
+            def navigate_to(self, x: float, y: float) -> str:
+                """Go to (x, y)."""
+                return f"navigating to {x},{y}"
+
+        nav = FakeNav()
+        mod.on_system_modules({"FakeNav": nav})
+
+        assert "navigate_to" in mod._skill_registry
+        assert len(mod._dynamic_tools) >= 1
+
+    def test_dynamic_tool_descriptor(self):
+        """动态工具描述符应包含 name / description / inputSchema。"""
+        mod = _make_module()
+
+        from core.module import Module, skill
+
+        class FakeSkillMod(Module, layer=4):
+            @skill
+            def find_object(self, label: str) -> str:
+                """Detect and navigate to an object."""
+                return label
+
+        mod.on_system_modules({"FakeSkillMod": FakeSkillMod()})
+        tool = next(t for t in mod._dynamic_tools if t["name"] == "find_object")
+        assert "description" in tool
+        assert "inputSchema" in tool
+
+    def test_empty_system_modules(self):
+        """无模块时 skill_registry 应为空，不崩溃。"""
+        mod = _make_module()
+        mod.on_system_modules({})
+        assert mod._skill_registry == {}
+        assert mod._dynamic_tools == []
+
+
+# ---------------------------------------------------------------------------
+# 4. _execute_tool 内置工具
+# ---------------------------------------------------------------------------
+
+class TestMCPExecuteTool:
     def setup_method(self):
-        self.registry = _make_registry()
+        self.mod = _make_module()
+        self.mod._on_odom(_make_odom(1.0, 2.0))
+        self.mod._on_sg(_make_scene_graph())
 
-    def test_tools_list_returns_all_skills(self):
-        resp = _handle_tools_list(1, self.registry)
-        tools = resp["result"]["tools"]
-        assert len(tools) == 11
+    def test_navigate_to_returns_status(self):
+        result = self.mod._execute_tool("navigate_to", {"x": 3.0, "y": 4.0})
+        data = json.loads(result)
+        assert data.get("status") == "navigating"
+        assert data["goal"] == [3.0, 4.0]
 
-    def test_tools_list_schema_has_name_and_description(self):
-        resp = _handle_tools_list(1, self.registry)
-        for tool in resp["result"]["tools"]:
-            assert "name" in tool
-            assert "description" in tool
+    def test_stop_returns_stopped(self):
+        result = self.mod._execute_tool("stop", {})
+        data = json.loads(result)
+        assert data.get("status") == "stopped"
 
-    def test_tools_list_schema_has_input_schema(self):
-        resp = _handle_tools_list(1, self.registry)
-        for tool in resp["result"]["tools"]:
-            assert "inputSchema" in tool
-            assert tool["inputSchema"]["type"] == "object"
+    def test_get_navigation_status_with_odom(self):
+        result = self.mod._execute_tool("get_navigation_status", {})
+        data = json.loads(result)
+        assert "position" in data
 
-    def test_tools_list_navigate_to_has_required_param(self):
-        resp = _handle_tools_list(1, self.registry)
-        nav_tool = next(t for t in resp["result"]["tools"] if t["name"] == "navigate_to")
-        assert "required" in nav_tool["inputSchema"]
-        assert "target" in nav_tool["inputSchema"]["required"]
+    def test_get_robot_position(self):
+        result = self.mod._execute_tool("get_robot_position", {})
+        data = json.loads(result)
+        assert "x" in data
+        assert abs(data["x"] - 1.0) < 1e-6
 
-    def test_tools_list_preserves_request_id(self):
-        resp = _handle_tools_list(42, self.registry)
-        assert resp["id"] == 42
+    def test_get_scene_graph_returns_json(self):
+        result = self.mod._execute_tool("get_scene_graph", {})
+        parsed = json.loads(result)
+        assert isinstance(parsed, (dict, list))
 
+    def test_send_instruction_publishes(self):
+        published = []
+        self.mod.instruction.subscribe(lambda t: published.append(t))
+        result = self.mod._execute_tool("send_instruction", {"text": "go to kitchen"})
+        data = json.loads(result)
+        assert data.get("status") == "sent"
+        assert published == ["go to kitchen"]
 
-# ---------------------------------------------------------------------------
-# tools/call
-# ---------------------------------------------------------------------------
+    def test_navigate_to_publishes_goal_pose(self):
+        published = []
+        self.mod.goal_pose.subscribe(lambda p: published.append(p))
+        self.mod._execute_tool("navigate_to", {"x": 5.0, "y": 6.0})
+        assert len(published) == 1
+        assert isinstance(published[0], PoseStamped)
 
-class TestToolsCall:
-    def setup_method(self):
-        self.registry = _make_registry()
+    def test_set_mode(self):
+        result = self.mod._execute_tool("set_mode", {"mode": "manual"})
+        data = json.loads(result)
+        assert "mode" in data
 
-    def test_tools_call_returns_text_content(self):
-        params = {"name": "stop", "arguments": {}}
-        resp = _handle_tools_call(1, params, self.registry)
-        content = resp["result"]["content"]
-        assert content[0]["type"] == "text"
-
-    def test_tools_call_navigate_to(self):
-        """调用 navigate_to skill，应返回字符串结果（未就绪消息）。"""
-        params = {"name": "navigate_to", "arguments": {"target": "体育馆"}}
-        resp = _handle_tools_call(1, params, self.registry)
-        text = resp["result"]["content"][0]["text"]
-        assert isinstance(text, str)
-        assert len(text) > 0
-
-    def test_tools_call_with_callback(self):
-        """注入回调后调用 skill，应返回回调的结果。"""
-        nav = LingTuNavigationSkills()
-        nav.set_callbacks(navigate=lambda t: f"前往 {t}")
-        registry = SkillRegistry()
-        registry.register_instance(nav)
-
-        params = {"name": "navigate_to", "arguments": {"target": "门口"}}
-        resp = _handle_tools_call(1, params, registry)
-        text = resp["result"]["content"][0]["text"]
-        assert "门口" in text
-
-    def test_tool_not_found_returns_error_text(self):
-        """调用不存在的 tool → 返回错误文本（不是 JSON-RPC error 对象）。"""
-        params = {"name": "nonexistent_tool", "arguments": {}}
-        resp = _handle_tools_call(1, params, self.registry)
-        text = resp["result"]["content"][0]["text"]
-        assert "未找到" in text or "not found" in text.lower()
-
-    def test_tools_call_preserves_request_id(self):
-        params = {"name": "stop", "arguments": {}}
-        resp = _handle_tools_call(99, params, self.registry)
-        assert resp["id"] == 99
+    def test_unknown_tool_returns_error(self):
+        result = self.mod._execute_tool("nonexistent_tool_xyz", {})
+        assert "error" in result.lower() or "unknown" in result.lower()
 
 
 # ---------------------------------------------------------------------------
-# _handle_request (统一入口)
+# 5. health()
 # ---------------------------------------------------------------------------
 
-class TestHandleRequest:
-    def setup_method(self):
-        self.registry = _make_registry()
-
-    def test_initialize_via_handle_request(self):
-        body = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-        resp = _handle_request(body, self.registry)
-        assert resp is not None
-        assert "protocolVersion" in resp["result"]
-
-    def test_tools_list_via_handle_request(self):
-        body = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
-        resp = _handle_request(body, self.registry)
-        assert resp is not None
-        assert "tools" in resp["result"]
-
-    def test_tools_call_via_handle_request(self):
-        body = {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "stop", "arguments": {}},
-        }
-        resp = _handle_request(body, self.registry)
-        assert resp is not None
-        assert "content" in resp["result"]
-
-    def test_notification_no_id_returns_none(self):
-        """无 id 的请求（JSON-RPC notification）不应返回响应。"""
-        body = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
-        resp = _handle_request(body, self.registry)
-        assert resp is None
-
-    def test_unknown_method_returns_error_32601(self):
-        """未知方法应返回 JSON-RPC 错误码 -32601。"""
-        body = {"jsonrpc": "2.0", "id": 5, "method": "unknown/method", "params": {}}
-        resp = _handle_request(body, self.registry)
-        assert resp is not None
-        assert "error" in resp
-        assert resp["error"]["code"] == -32601
-
-    def test_unknown_method_preserves_id(self):
-        body = {"jsonrpc": "2.0", "id": "xyz", "method": "bad/method"}
-        resp = _handle_request(body, self.registry)
-        assert resp["id"] == "xyz"
+class TestMCPHealth:
+    def test_health_contains_mcp_section(self):
+        mod = _make_module()
+        h = mod.health()
+        assert isinstance(h, dict)
+        assert "mcp" in h or "port" in str(h) or "running" in str(h)
