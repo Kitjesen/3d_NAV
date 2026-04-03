@@ -397,7 +397,7 @@ class TestMultiSourceFusion(unittest.TestCase):
         """
         # \u65e0 CLIP \u65f6, \u5b8c\u5168\u5339\u914d + \u9ad8\u68c0\u6d4b\u5206 \u5e94\u7ed9\u51fa\u9ad8\u5206
         # label=1.0, det=0.9*1.0=0.9, spatial=0.0
-        # fused = 0.55*1.0 + 0.25*0.9 + 0.20*0.0 = 0.775
+        # fused = 0.75*1.0 + 0.15*0.9 + 0.10*0.0 = 0.885
         sg_data = {
             "timestamp": 0, "object_count": 1,
             "objects": [
@@ -411,8 +411,8 @@ class TestMultiSourceFusion(unittest.TestCase):
 
         result = self.resolver.fast_resolve("go to chair", sg)
         self.assertIsNotNone(result)
-        self.assertAlmostEqual(result.confidence, 0.775, places=2,
-            msg=f"No-CLIP fused score should be ~0.775, got {result.confidence:.3f}")
+        self.assertAlmostEqual(result.confidence, 0.885, places=2,
+            msg=f"No-CLIP fused score should be ~0.885, got {result.confidence:.3f}")
 
     def test_spatial_relation_boost(self):
         """

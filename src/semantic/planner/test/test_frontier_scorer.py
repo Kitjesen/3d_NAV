@@ -22,6 +22,11 @@ from semantic.planner.semantic_planner.frontier_scorer import (
     Frontier,
     FrontierScorer,
 )
+from semantic.planner.semantic_planner.frontier_types import (
+    angle_to_label,
+    angle_diff,
+    cooccurrence_score,
+)
 
 
 class TestCostmapUpdate(unittest.TestCase):
@@ -137,23 +142,23 @@ class TestHelperMethods(unittest.TestCase):
     """辅助方法测试。"""
 
     def test_angle_diff(self):
-        self.assertAlmostEqual(FrontierScorer._angle_diff(0, 0), 0)
+        self.assertAlmostEqual(angle_diff(0, 0), 0)
         self.assertAlmostEqual(
-            FrontierScorer._angle_diff(math.pi, -math.pi), 0, places=5
+            angle_diff(math.pi, -math.pi), 0, places=5
         )
-        diff = FrontierScorer._angle_diff(0.1, -0.1)
+        diff = angle_diff(0.1, -0.1)
         self.assertAlmostEqual(diff, 0.2, places=5)
 
     def test_angle_to_label(self):
-        self.assertEqual(FrontierScorer._angle_to_label(0), "east")
-        self.assertEqual(FrontierScorer._angle_to_label(math.pi / 2), "north")
+        self.assertEqual(angle_to_label(0), "east")
+        self.assertEqual(angle_to_label(math.pi / 2), "north")
 
     def test_cooccurrence_score(self):
-        score = FrontierScorer._cooccurrence_score(
+        score = cooccurrence_score(
             {"fire extinguisher", "find"}, "door"
         )
         self.assertGreater(score, 0)
-        score_none = FrontierScorer._cooccurrence_score({"cat", "find"}, "door")
+        score_none = cooccurrence_score({"cat", "find"}, "door")
         self.assertEqual(score_none, 0.0)
 
     def test_frontiers_summary_json(self):
