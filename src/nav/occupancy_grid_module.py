@@ -54,6 +54,7 @@ class OccupancyGridModule(Module, layer=2):
         z_min: float = 0.10,              # ignore points below this height
         z_max: float = 2.00,              # ignore points above this height
         inflation_radius: float = 0.50,   # obstacle inflation radius (m)
+        robot_clear_radius: float = 0.60, # clear self footprint from local costmap
         publish_hz: float = 2.0,
         **kw,
     ):
@@ -63,6 +64,7 @@ class OccupancyGridModule(Module, layer=2):
         self._z_min = z_min
         self._z_max = z_max
         self._inf_radius = inflation_radius
+        self._robot_clear_radius = robot_clear_radius
         self._interval = 1.0 / publish_hz
         self._robot_xy = np.zeros(2, dtype=np.float64)
         self._gs = int(2 * map_radius / resolution)  # grid side (cells)
@@ -92,18 +94,28 @@ class OccupancyGridModule(Module, layer=2):
         origin_xy = self._robot_xy - self._radius   # bottom-left corner
         gs = self._gs
 
+        # LiDAR often sees the robot's own legs/body in sim; filter near-body
+        # returns and clear a local free-space disk around the robot center.
+        d_robot = np.linalg.norm(pts2d - self._robot_xy[None, :], axis=1)
+        pts2d = pts2d[d_robot >= self._robot_clear_radius]
+        if pts2d.shape[0] == 0:
+            return
+
         ix = np.floor((pts2d[:, 0] - origin_xy[0]) / self._res).astype(np.int32)
         iy = np.floor((pts2d[:, 1] - origin_xy[1]) / self._res).astype(np.int32)
         valid = (ix >= 0) & (ix < gs) & (iy >= 0) & (iy < gs)
         ix, iy = ix[valid], iy[valid]
 
         binary = np.zeros((gs, gs), dtype=np.bool_)
-        binary[ix, iy] = True
+        binary[iy, ix] = True
+        clear_mask = self._robot_clear_mask(origin_xy)
+        binary[clear_mask] = False
 
         inflated = self._inflate(binary)
         # occupied cells stay at 100; inflated fringe scaled by proximity
         cost = (inflated.astype(np.float32) * 100.0).clip(0, 100)
         cost[binary] = 100.0
+        cost[clear_mask] = 0.0
         grid_int8 = cost.astype(np.int8)
 
         origin_pose = Pose(
@@ -139,6 +151,14 @@ class OccupancyGridModule(Module, layer=2):
             windows = sliding_window_view(padded, (k, k))
             return windows.max(axis=(-2, -1))
 
+    def _robot_clear_mask(self, origin_xy: np.ndarray) -> np.ndarray:
+        gs = self._gs
+        rx = int(np.floor((self._robot_xy[0] - origin_xy[0]) / self._res))
+        ry = int(np.floor((self._robot_xy[1] - origin_xy[1]) / self._res))
+        r = max(1, int(np.ceil(self._robot_clear_radius / self._res)))
+        yy, xx = np.ogrid[:gs, :gs]
+        return (xx - rx) ** 2 + (yy - ry) ** 2 <= r ** 2
+
     @staticmethod
     def _make_circle_kernel(radius_m: float, res: float) -> np.ndarray:
         r = max(1, int(np.ceil(radius_m / res)))
@@ -153,5 +173,6 @@ class OccupancyGridModule(Module, layer=2):
             "grid_size":     self._gs,
             "z_range":       [self._z_min, self._z_max],
             "inflation_m":   self._inf_radius,
+            "robot_clear_m": self._robot_clear_radius,
         }
         return info

@@ -60,8 +60,10 @@ class RobotConfig:
     ])
 
     # Body names
-    base_body_name: str = "base_link"
-    lidar_body_name: str = "lidar_link"
+    # The real NOVA Dog MuJoCo model uses "trunk" as the root body and does
+    # not define a separate lidar_link body.
+    base_body_name: str = "trunk"
+    lidar_body_name: str = "trunk"
 
     # Actuator offset (first 8 actuators are arm; legs start at index 8)
     leg_act_offset: int = 8

@@ -147,7 +147,7 @@ class MuJoCoLidar:
         mujoco.mj_multiRay(
             self._model, self._data,
             pos, dirs_world.flatten(),
-            self._geomgroup, 1, -1,
+            self._geomgroup, 1, body_id,
             geomid_out, dist_out, None,
             n_rays, self._config.range_max
         )

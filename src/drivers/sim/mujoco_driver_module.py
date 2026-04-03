@@ -186,7 +186,10 @@ class MujocoDriverModule(Module, layer=1):
             self._engine = MuJoCoEngine(
                 robot_config=robot_cfg,
                 world_config=world_cfg,
-                lidar_config=LidarConfig(geom_group=0),
+                lidar_config=LidarConfig(
+                    body_name=robot_cfg.lidar_body_name,
+                    geom_group=0,
+                ),
                 camera_configs=camera_cfgs,
                 headless=not self._render,
             )

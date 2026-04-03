@@ -280,14 +280,17 @@ class MuJoCoEngine(SimEngine):
         """
         import mujoco
 
-        self._base_body_id = mujoco.mj_name2id(
-            self._model, mujoco.mjtObj.mjOBJ_BODY,
-            self._robot_cfg.base_body_name
+        self._base_body_id, resolved_base = self._resolve_body_id(
+            self._robot_cfg.base_body_name,
+            aliases=["trunk", "base_link", "robot_placeholder"],
         )
-        self._lidar_body_id = mujoco.mj_name2id(
-            self._model, mujoco.mjtObj.mjOBJ_BODY,
-            self._lidar_cfg.body_name
+        self._robot_cfg.base_body_name = resolved_base
+
+        self._lidar_body_id, resolved_lidar = self._resolve_body_id(
+            self._lidar_cfg.body_name,
+            aliases=[self._robot_cfg.base_body_name, "trunk", "lidar_link"],
         )
+        self._lidar_cfg.body_name = resolved_lidar
         self._leg_joint_ids = [
             mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, n)
             for n in LEG_JOINT_NAMES
@@ -295,6 +298,31 @@ class MuJoCoEngine(SimEngine):
         missing = [n for n, jid in zip(LEG_JOINT_NAMES, self._leg_joint_ids) if jid < 0]
         if missing:
             print(f'[MuJoCoEngine] Warning: joints not found: {missing}')
+
+    def _resolve_body_id(self, preferred_name: str, aliases: List[str]) -> tuple[int, str]:
+        """Resolve a MuJoCo body name with a few safe fallbacks."""
+        import mujoco
+
+        candidates = []
+        for name in [preferred_name, *aliases]:
+            if name and name not in candidates:
+                candidates.append(name)
+
+        for name in candidates:
+            body_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if body_id >= 0:
+                if name != preferred_name:
+                    print(
+                        f'[MuJoCoEngine] Body "{preferred_name}" not found, '
+                        f'using "{name}" instead'
+                    )
+                return body_id, name
+
+        print(
+            f'[MuJoCoEngine] Warning: bodies not found for {candidates}, '
+            'falling back to world body'
+        )
+        return 0, preferred_name or "world"
 
     def reset(self) -> RobotState:
         """Reset simulation to initial state."""
