@@ -1,22 +1,22 @@
-﻿"""test_mcp_server.py — MCPServerModule 单元测试
+﻿"""test_mcp_server.py — MCPServerModule unit tests
 
-测试 gateway/mcp_server.py 中的 MCPServerModule（Module-First 实现）。
-不启动 HTTP server，不依赖 ROS2，不依赖真实 LLM。
+Tests the MCPServerModule in gateway/mcp_server.py (Module-First implementation).
+Does not start an HTTP server, requires no ROS2, and requires no real LLM.
 
-覆盖：
-  - 端口声明（In/Out 类型）
-  - setup() 订阅回调注册
-  - _on_odom / _on_sg / _on_safety / _on_mission 状态缓存
-  - on_system_modules() 动态技能注册
-  - _execute_tool() 各内置工具的返回结构
-  - health() 汇总格式
+Coverage:
+  - Port declarations (In/Out types)
+  - setup() subscription registration
+  - _on_odom / _on_sg / _on_safety / _on_mission state caching
+  - on_system_modules() dynamic skill registration
+  - _execute_tool() return structure for all built-in tools
+  - health() summary format
 """
 
 import json
 import sys
 import os
 
-# path setup
+# Path setup
 _here = os.path.dirname(os.path.abspath(__file__))
 _repo = os.path.abspath(os.path.join(_here, "..", "..", "..", ".."))
 _src = os.path.join(_repo, "src")
@@ -61,7 +61,7 @@ def _make_scene_graph():
 
 
 # ---------------------------------------------------------------------------
-# 1. 端口声明
+# 1. Port declarations
 # ---------------------------------------------------------------------------
 
 class TestMCPServerModulePorts:
@@ -93,7 +93,7 @@ class TestMCPServerModulePorts:
 
 
 # ---------------------------------------------------------------------------
-# 2. 状态缓存
+# 2. State caching
 # ---------------------------------------------------------------------------
 
 class TestMCPServerStateCache:
@@ -109,7 +109,7 @@ class TestMCPServerStateCache:
         sg = _make_scene_graph()
         mod._on_sg(sg)
         data = json.loads(mod._sg_json)
-        assert "objects" in data or "object_count" in data or data  # 非空 JSON
+        assert "objects" in data or "object_count" in data or data  # non-empty JSON
 
     def test_safety_state_cached(self):
         mod = _make_module()
@@ -125,15 +125,14 @@ class TestMCPServerStateCache:
 
 
 # ---------------------------------------------------------------------------
-# 3. 动态技能注册 (on_system_modules)
+# 3. Dynamic skill registration (on_system_modules)
 # ---------------------------------------------------------------------------
 
 class TestMCPDynamicSkills:
     def test_skills_from_module_registered(self):
-        """on_system_modules 应把其他模块的 @skill 注册到 _skill_registry。"""
+        """on_system_modules must register @skill methods into _skill_registry."""
         mod = _make_module()
 
-        # 构造一个带 @skill 的 mock 模块
         from core.module import Module, skill
 
         class FakeNav(Module, layer=5):
@@ -149,7 +148,7 @@ class TestMCPDynamicSkills:
         assert len(mod._dynamic_tools) >= 1
 
     def test_dynamic_tool_descriptor(self):
-        """动态工具描述符应包含 name / description / inputSchema。"""
+        """Each dynamic tool descriptor must contain name, description, and inputSchema."""
         mod = _make_module()
 
         from core.module import Module, skill
@@ -166,7 +165,7 @@ class TestMCPDynamicSkills:
         assert "inputSchema" in tool
 
     def test_empty_system_modules(self):
-        """无模块时 skill_registry 应为空，不崩溃。"""
+        """No modules → skill_registry empty, no crash."""
         mod = _make_module()
         mod.on_system_modules({})
         assert mod._skill_registry == {}
@@ -174,7 +173,7 @@ class TestMCPDynamicSkills:
 
 
 # ---------------------------------------------------------------------------
-# 4. _execute_tool 内置工具
+# 4. _execute_tool built-in tools
 # ---------------------------------------------------------------------------
 
 class TestMCPExecuteTool:

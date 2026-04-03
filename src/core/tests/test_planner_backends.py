@@ -1,20 +1,20 @@
-"""test_planner_backends.py — _PCTBackend 和 _AStarBackend 单元测试
+"""test_planner_backends.py — _PCTBackend and _AStarBackend unit tests
 
-覆盖：
+Coverage:
   _PCTBackend:
-    - ele_planner.so 不可用时 available=False，plan() 返回 []，不崩溃
-    - tomogram 文件不存在时 available=False，日志清晰
-    - 注册名为 "pct"
+    - available=False when ele_planner.so is missing, plan() returns [], no crash
+    - available=False when tomogram file does not exist, with a clear log message
+    - Registered under the name "pct"
 
   _AStarBackend:
-    - 基本路径规划（开放 grid）
-    - 起点包含在路径中（修复前的 bug：起点丢失）
-    - A* 失败返回 []（不返回直线）
-    - update_map() 热更新
-    - 注册名为 "astar"
-    - Euclidean 启发（不再是 Manhattan）
+    - Basic path planning on an open grid
+    - Start point is included in the path (regression: start was previously dropped)
+    - A* failure returns [] (not a straight-line fallback)
+    - update_map() hot-swap works
+    - Registered under the name "astar"
+    - Euclidean heuristic (no longer Manhattan)
 
-不依赖 scipy / ROS2 / ele_planner.so。
+No scipy / ROS2 / ele_planner.so dependencies.
 """
 
 import math
@@ -34,24 +34,24 @@ from core.registry import get, snapshot, restore
 
 @pytest.fixture(autouse=True)
 def registry_isolation():
-    """每个测试前保存注册表，测试后恢复，避免污染。"""
+    """Save registry state before each test, restore after to prevent pollution."""
     saved = snapshot()
-    # 触发 @register 装饰器（import 时执行）
+    # Trigger @register decorators (executed at import time)
     import global_planning.pct_adapters.src.global_planner_module  # noqa: F401
     yield
     restore(saved)
-    # 重新注册（restore 清空后需要重新注册供其他测试使用）
+    # Re-register after restore clears the registry
     import importlib
     importlib.reload(global_planning.pct_adapters.src.global_planner_module)
 
 
 def _make_open_grid(rows=50, cols=50, obs_thr=49.9):
-    """全通行 grid，trav[row, col] < obs_thr。"""
+    """Fully traversable grid — all cells below obs_thr."""
     return np.zeros((rows, cols), dtype=np.float32)
 
 
 def _make_blocked_grid(rows=50, cols=50):
-    """中间横墙，完全封堵。"""
+    """Grid with a solid horizontal wall through the middle — no gap."""
     g = np.zeros((rows, cols), dtype=np.float32)
     g[rows // 2, :] = 100.0
     return g
@@ -59,7 +59,7 @@ def _make_blocked_grid(rows=50, cols=50):
 
 def _make_tomogram_pickle(trav: np.ndarray, resolution: float = 0.2,
                            center=(0.0, 0.0)) -> str:
-    """写一个最小格式的 tomogram.pickle，供 _load_tomogram 读取。"""
+    """Write a minimal-format tomogram.pickle for _load_tomogram to read."""
     rows, cols = trav.shape
     # data shape: (5, n_slices, H, W) — channel 0 = traversability
     data = np.zeros((5, 1, rows, cols), dtype=np.float32)
@@ -93,12 +93,12 @@ class TestPCTBackend:
         assert cls is _PCTBackend
 
     def test_unavailable_on_missing_so(self):
-        """ele_planner.so 不可用时 available=False，不崩溃。"""
+        """ele_planner.so not available → available=False, no crash."""
         b = self._backend(tomogram_path="nonexistent.pickle")
         assert not b.available
 
     def test_plan_returns_empty_when_unavailable(self):
-        """unavailable 时 plan() 返回 []，不 raise。"""
+        """plan() returns [] when unavailable — must not raise."""
         b = self._backend()
         result = b.plan(np.array([0.0, 0.0, 0.0]), np.array([5.0, 0.0, 0.0]))
         assert result == [], "PCTBackend unavailable must return [], not crash"
@@ -109,7 +109,7 @@ class TestPCTBackend:
         assert result == []
 
     def test_load_error_message_present(self):
-        """unavailable 时 _load_error 应有清晰说明，便于排查。"""
+        """_load_error must be non-empty when unavailable for easier debugging."""
         b = self._backend(tomogram_path="not_a_real_file.pickle")
         assert len(b._load_error) > 0
 
@@ -148,14 +148,14 @@ class TestAStarBackend:
         assert len(path) >= 2, "Should find a path on open grid"
 
     def test_start_point_included_in_path(self):
-        """Bug fix: 修复前起点不在路径里（came_from 回溯不含 start）。"""
+        """Regression: before fix, start was dropped (came_from did not include start)."""
         trav = _make_open_grid(50, 50)
         b = self._backend(trav, resolution=0.2, center=(0.0, 0.0))
         start = np.array([-2.0, -2.0, 0.0])
         goal  = np.array([ 2.0,  2.0, 0.0])
         path = b.plan(start, goal)
         assert len(path) >= 2
-        # 第一个路径点应在 start 附近（1格内，即 0.2m）
+        # First path point must be within one cell width of start (0.2 m)
         dx = abs(path[0][0] - float(start[0]))
         dy = abs(path[0][1] - float(start[1]))
         assert dx <= 0.3 and dy <= 0.3, (
@@ -163,10 +163,10 @@ class TestAStarBackend:
         )
 
     def test_blocked_grid_returns_empty(self):
-        """完全堵死时返回 []，不返回直线路径。"""
+        """Fully blocked path returns [] — no straight-line fallback."""
         trav = _make_blocked_grid(50, 50)
         b = self._backend(trav, resolution=0.2, center=(0.0, 0.0))
-        # start 在墙的一侧，goal 在另一侧
+        # start on one side of the wall, goal on the other
         path = b.plan(np.array([-2.0, 0.0, 0.0]), np.array([2.0, 0.0, 0.0]))
         assert path == [], "Blocked path MUST return [], not straight-line fallback"
 
@@ -186,7 +186,7 @@ class TestAStarBackend:
         assert b._grid.shape == (30, 30)
 
     def test_load_tomogram_pickle(self):
-        """从 .pickle 文件加载，能规划路径。"""
+        """Loading from a .pickle file should enable path planning."""
         trav = _make_open_grid(50, 50)
         path = _make_tomogram_pickle(trav, resolution=0.2, center=(0.0, 0.0))
         try:
@@ -198,7 +198,7 @@ class TestAStarBackend:
             os.unlink(path)
 
     def test_path_points_in_free_space(self):
-        """所有路径点对应的格子应在可行区域内。"""
+        """All path points must map to traversable grid cells."""
         trav = _make_open_grid(50, 50)
         b = self._backend(trav, resolution=0.2, center=(0.0, 0.0))
         path = b.plan(np.array([-1.0, -1.0, 0.0]), np.array([1.0, 1.0, 0.0]))
@@ -215,20 +215,20 @@ class TestAStarBackend:
             assert trav[row, col] < 49.9, f"Path goes through obstacle at ({col},{row})"
 
     def test_euclidean_heuristic_not_manhattan(self):
-        """启发函数应是 Euclidean（admissible），比 Manhattan 更精确。
-        间接测试：对角线路径代价应 ≈ sqrt(2)*格数，而非 2*格数。"""
+        """Heuristic must be Euclidean (admissible) — indirect check via path length.
+
+        A diagonal path (0,0)→(5,5) with Euclidean heuristic produces a total
+        length ≈ 5*sqrt(2) ≈ 7.07, much closer to optimal than Manhattan (10).
+        """
         trav = _make_open_grid(20, 20)
         b = self._backend(trav, resolution=1.0, center=(10.0, 10.0))
-        # 对角线：从 (0,0) 到 (5,5)，理想代价 ≈ 5*sqrt(2) ≈ 7.07
         path = b.plan(np.array([0.0, 0.0, 0.0]), np.array([5.0, 5.0, 0.0]))
         assert len(path) >= 2
-        # 路径长度应 ≈ 对角线长度，不超过 Manhattan 距离 10 太多
         total_dist = sum(
             math.hypot(path[i+1][0] - path[i][0], path[i+1][1] - path[i][1])
             for i in range(len(path) - 1)
         )
-        manhattan = 5.0 + 5.0  # = 10
-        diagonal  = 5.0 * math.sqrt(2)  # ≈ 7.07
-        # 路径长度应在 [diagonal, manhattan] 之间（对角线走法）
+        manhattan = 5.0 + 5.0   # = 10.0 (upper bound for this grid)
+        # Path length should be no more than Manhattan distance + small margin
         assert total_dist <= manhattan + 0.5, \
             f"Path length {total_dist:.2f} > Manhattan {manhattan}"

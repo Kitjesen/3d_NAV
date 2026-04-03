@@ -1,18 +1,18 @@
-﻿"""test_planner_node_init.py — SemanticPlannerModule 初始化与端口回归测试
+﻿"""test_planner_node_init.py — SemanticPlannerModule init and port regression tests
 
-原 test_planner_node_init.py 测试的是已删除的 ROS2 SemanticPlannerNode。
-本文件改写为测试 Module-First 版本 SemanticPlannerModule 的初始化正确性。
+The original test_planner_node_init.py tested the deleted ROS2 SemanticPlannerNode.
+This file has been rewritten to test the Module-First SemanticPlannerModule.
 
-覆盖：
-  - __init__ 参数默认值
-  - In/Out 端口声明
-  - setup() 不崩溃
-  - stop() 正常清理
-  - instruction → goal_pose 端到端路由（mock LLM 下）
-  - agent_instruction 触发 AgentLoop 路径
-  - planner_status 输出
-  - mission_status 触发 LERa recovery
-  - health() 结构
+Coverage:
+  - __init__ parameter defaults
+  - In/Out port declarations
+  - setup() does not crash
+  - stop() cleans up correctly
+  - instruction → goal_pose end-to-end routing (under mock LLM)
+  - agent_instruction triggers AgentLoop path
+  - planner_status output
+  - mission_status triggers LERa recovery
+  - health() structure
 """
 
 import sys
@@ -73,7 +73,7 @@ def _collect(port_out, n=1, timeout=0.5):
 
 
 # ---------------------------------------------------------------------------
-# 1. 初始化 / 端口声明
+# 1. Init / port declarations
 # ---------------------------------------------------------------------------
 
 class TestSemanticPlannerInit:
@@ -99,7 +99,7 @@ class TestSemanticPlannerInit:
 
     def test_default_params(self):
         mod = SemanticPlannerModule()
-        # SemanticPlannerModule 内部存储为 _fast_threshold
+        # Internally stored as _fast_threshold (not _fast_path_threshold)
         assert mod._fast_threshold == 0.75
 
     def test_custom_params(self):
@@ -125,7 +125,7 @@ class TestSemanticPlannerInit:
 
 
 # ---------------------------------------------------------------------------
-# 2. 状态更新
+# 2. State updates
 # ---------------------------------------------------------------------------
 
 class TestSemanticPlannerStateUpdate:
@@ -148,17 +148,17 @@ class TestSemanticPlannerStateUpdate:
 
     def test_detections_cached(self):
         dets = [Detection3D(id="99", label="box", position=Vector3(1, 1, 0))]
-        # _on_detections 接受 list，只验证不崩溃
+        # _on_detections accepts a list — just verify it does not crash
         self.mod._on_detections(dets)
 
 
 # ---------------------------------------------------------------------------
-# 3. instruction → planner_status 流程（快路径，不依赖 LLM）
+# 3. instruction → planner_status flow (fast path, no LLM dependency)
 # ---------------------------------------------------------------------------
 
 class TestSemanticPlannerInstruction:
     def setup_method(self):
-        # 注入一个已知场景图让 Fast Path 能命中
+        # Inject a scene graph so Fast Path has something to match
         self.mod = _make_module()
         sg = _make_scene_graph(["chair", "door"])
         self.mod._on_odom(_make_odom(0.0, 0.0))
@@ -168,7 +168,7 @@ class TestSemanticPlannerInstruction:
         self.mod.stop()
 
     def test_instruction_triggers_status(self):
-        """发送指令后 planner_status 应发布（成功或失败均可，不能静默挂起）。"""
+        """After an instruction, planner_status must be published (success or failure — not silent)."""
         statuses = []
         self.mod.planner_status._add_callback(lambda s: statuses.append(s))
         self.mod._on_instruction("go to chair")
@@ -178,39 +178,39 @@ class TestSemanticPlannerInstruction:
         assert len(statuses) > 0
 
     def test_instruction_empty_sg_no_crash(self):
-        """空场景图下发送指令不崩溃。"""
+        """Sending an instruction with an empty scene graph must not crash."""
         self.mod._on_scene_graph(SceneGraph(objects=[], regions=[]))
         self.mod._on_instruction("find the table")
-        # 给后台线程一点时间
+        # Give background thread a moment to run
         time.sleep(0.1)
 
 
 # ---------------------------------------------------------------------------
-# 4. mission_status LERa 冷却
+# 4. mission_status LERa cooldown
 # ---------------------------------------------------------------------------
 
 class TestSemanticPlannerRecovery:
     def test_stuck_triggers_lera_if_instruction_active(self):
-        """STUCK 状态且有当前指令时，应触发 LERa（不崩溃即可）。"""
+        """STUCK with an active instruction must trigger LERa (no crash is sufficient)."""
         mod = _make_module()
         mod._on_scene_graph(_make_scene_graph())
         mod._on_odom(_make_odom())
-        # 模拟有活动指令
+        # Simulate an active instruction
         mod._current_instruction = "find the coffee machine"
-        # 发送 STUCK
+        # Deliver STUCK
         mod._on_mission_status({"state": "STUCK"})
-        # LERa 在后台线程运行，只验证不崩溃
+        # LERa runs in a background thread — just verify no crash
         time.sleep(0.05)
         mod.stop()
 
     def test_cooldown_prevents_double_lera(self):
-        """连续两次 STUCK 触发，第二次应被冷却阻止。"""
+        """A second STUCK immediately after the first must be blocked by the cooldown."""
         mod = _make_module()
         mod._current_instruction = "find exit"
         mod._on_mission_status({"state": "STUCK"})
         last = mod._last_lera_time
         mod._on_mission_status({"state": "STUCK"})
-        # 第二次因冷却，_last_lera_time 不应变化
+        # Second trigger is blocked by cooldown: _last_lera_time must not change
         assert mod._last_lera_time == last
         mod.stop()
 

@@ -1,13 +1,13 @@
-"""test_hybrid_planner.py — HybridPlanner 单元测试
+"""test_hybrid_planner.py — HybridPlanner unit tests
 
-测试 hybrid_planner.py 的正确失败语义：
-  - A* 找不到路径 → plan_path success=False，带 failure_reason
-  - 无 traversability grid → success=False（不崩溃）
-  - 拓扑图无路径 → success=False
-  - A* 成功 → success=True，waypoints 非空且无直线虚假路径
+Tests the correct failure semantics of hybrid_planner.py:
+  - A* finds no path → plan_path success=False with failure_reason
+  - No traversability grid → success=False (no crash)
+  - Topology graph has no path → success=False
+  - A* succeeds → success=True, non-empty waypoints, no fake straight-line path
 
-不依赖 scipy、ROS2、torch、或任何重型库。
-完全使用 numpy + 内联 mock 对象。
+No scipy, ROS2, torch, or other heavy dependencies.
+Uses only numpy + inline mock objects.
 """
 
 import math
@@ -25,7 +25,7 @@ from semantic.perception.semantic_perception.hybrid_planner import (
 )
 
 
-# ── Mock 拓扑图 ────────────────────────────────────────────────────────────────
+# ── Mock topology graph ───────────────────────────────────────────────────────
 
 class MockRoom:
     def __init__(self, node_id, cx, cy, bbox=None):
@@ -36,12 +36,12 @@ class MockRoom:
 
 
 class MockTSG:
-    """极简拓扑图 mock：只实现 HybridPlanner 用到的接口。"""
+    """Minimal topology-graph mock — only implements the interface HybridPlanner uses."""
 
     def __init__(self, rooms, edges):
         """
         rooms: list of MockRoom
-        edges: dict {(from_id, to_id): cost}  — 双向
+        edges: dict {(from_id, to_id): cost}  — bidirectional
         """
         self._rooms = {r.node_id: r for r in rooms}
         self._edges = {}
@@ -63,7 +63,7 @@ class MockTSG:
         return None
 
     def shortest_path(self, src, dst):
-        """Dijkstra — 返回 (cost, [node_id, ...]) 或 (inf, [])。"""
+        """Dijkstra — returns (cost, [node_id, ...]) or (inf, [])."""
         import heapq
         dist = {src: 0.0}
         prev = {}
@@ -90,32 +90,32 @@ class MockTSG:
         return math.inf, []
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_open_trav(nx=100, ny=100, obs_thr=49.9):
-    """全部可通行的 traversability grid。"""
+    """Fully traversable grid — all cells below obs_thr."""
     return np.zeros((nx, ny), dtype=np.float32)
 
 
 def _make_walled_trav(nx=50, ny=50, obs_thr=49.9):
-    """中间有一堵墙（横向阻断），两端留通道。"""
+    """Grid with a wall across the middle, leaving a 3-cell gap."""
     trav = np.zeros((nx, ny), dtype=np.float32)
     mid = nx // 2
-    # 竖墙（沿 i=mid），留一个 3 格宽的缺口
+    # Horizontal wall at row mid, with a gap in the center
     trav[mid, :] = 100.0
-    trav[mid, ny // 2 - 1: ny // 2 + 2] = 0.0  # 缺口
+    trav[mid, ny // 2 - 1: ny // 2 + 2] = 0.0  # gap
     return trav
 
 
 def _make_blocked_trav(nx=50, ny=50):
-    """完全封死：墙穿整个中间，没有缺口。"""
+    """Grid with a solid wall across the middle — no gap."""
     trav = np.zeros((nx, ny), dtype=np.float32)
-    trav[nx // 2, :] = 100.0  # 无缺口
+    trav[nx // 2, :] = 100.0  # no gap
     return trav
 
 
 def _simple_planner(tsg, trav, **kw):
-    """构造一个两房间一边的简单 HybridPlanner。"""
+    """Build a minimal two-room HybridPlanner for testing."""
     return HybridPlanner(
         topology_graph=tsg,
         trav=trav,
@@ -126,7 +126,7 @@ def _simple_planner(tsg, trav, **kw):
     )
 
 
-# ── A* 底层函数测试 ────────────────────────────────────────────────────────────
+# ── A* low-level function tests ───────────────────────────────────────────────
 
 class TestAstarOnGrid:
     def test_direct_path_open_grid(self):
@@ -137,14 +137,14 @@ class TestAstarOnGrid:
         assert path[-1] == (10, 10)
 
     def test_returns_none_when_blocked(self):
-        """目标被完全封堵 → None（不是直线！）。"""
+        """Fully blocked goal → None, not a straight line."""
         trav = _make_blocked_trav(20, 20)
         path = _astar_on_grid(trav, (0, 5), (15, 5), obs_thr=49.9)
         assert path is None, "A* should return None for blocked path, not a straight line"
 
     def test_timeout_returns_none(self):
-        """超时返回 None，不抛异常。"""
-        # 大格子 + 极短超时
+        """Timeout returns None without raising an exception."""
+        # Large grid + very short timeout
         trav = np.zeros((200, 200), dtype=np.float32)
         path = _astar_on_grid(trav, (0, 0), (199, 199), obs_thr=49.9, timeout_sec=0.0001)
         assert path is None
@@ -156,19 +156,19 @@ class TestAstarOnGrid:
         assert path == [(5, 5)]
 
     def test_path_avoids_obstacle(self):
-        """路径应绕过障碍物。"""
+        """Path must go around the obstacle, not through it."""
         trav = _make_walled_trav(30, 30)
         path = _astar_on_grid(trav, (5, 5), (20, 5), obs_thr=49.9)
         assert path is not None
         mid = 30 // 2
-        # 路径上不应有 i==mid 的格（墙）
+        # No cell in the path should be in the wall row
         for ci, cj in path:
             assert trav[ci, cj] < 49.9, "path goes through obstacle"
 
     def test_no_path_through_wall_without_gap(self):
-        """没有缺口的墙 → None，永远不会绕过。"""
+        """Solid wall with no gap → None."""
         trav = np.zeros((20, 20), dtype=np.float32)
-        trav[10, :] = 100.0  # 完全封堵
+        trav[10, :] = 100.0  # solid wall
         path = _astar_on_grid(trav, (0, 10), (15, 10), obs_thr=49.9)
         assert path is None
 
@@ -179,7 +179,7 @@ class TestAstarHelpers:
         for wx, wy in [(1.0, 2.0), (-3.0, 0.5), (0.0, 0.0)]:
             ix, iy = _w2g(wx, wy, cx, cy, res, ox, oy, nx, ny)
             rx, ry = _g2w(ix, iy, cx, cy, res, ox, oy)
-            # 精度在一格内（0.2m）
+            # Round-trip accuracy within one cell width (0.2 m)
             assert abs(rx - wx) <= res + 1e-9
             assert abs(ry - wy) <= res + 1e-9
 
@@ -190,37 +190,37 @@ class TestAstarHelpers:
 
     def test_find_nearest_free_on_obstacle(self):
         trav = np.full((10, 10), 100.0, dtype=np.float32)
-        trav[5, 7] = 0.0  # 唯一自由格
+        trav[5, 7] = 0.0  # only free cell
         ni, nj = _find_nearest_free(trav, 5, 5, obs_thr=49.9, radius=5)
         assert (ni, nj) == (5, 7)
 
     def test_downsample_removes_close_points(self):
         cells = [(i, 0) for i in range(20)]
         result = _downsample_cells(cells, min_dist=3)
-        # 末尾点总是强制保留，不受最小距离约束；
-        # 检查除最后一段外所有相邻保留点的间距 >= min_dist
+        # The last point is always kept regardless of spacing;
+        # all other consecutive kept-points must be >= min_dist apart.
         for k in range(len(result) - 2):
             dx = result[k + 1][0] - result[k][0]
             dy = result[k + 1][1] - result[k][1]
             assert math.hypot(dx, dy) >= 3 - 1e-9
-        # 首点和末点必须保留
+        # First and last points must always be preserved
         assert result[0] == cells[0]
         assert result[-1] == cells[-1]
 
 
-# ── HybridPlanner 失败语义测试 ─────────────────────────────────────────────────
+# ── HybridPlanner failure semantics tests ────────────────────────────────────
 
 class TestHybridPlannerFailureSemantic:
-    """核心测试：确保 success=False 而非直线路径。"""
+    """Core tests: success=False must be returned instead of a fake straight-line path."""
 
     def test_no_trav_grid_returns_failure(self):
-        """无 traversability grid → success=False，不崩溃，不返回直线。"""
-        # 两个房间足够远，使 get_room_by_position(radius=5) 不会交叉命中
+        """No traversability grid → success=False, no crash, no straight-line path."""
+        # Rooms are far enough apart that get_room_by_position(radius=5) cannot cross-match
         rooms = [MockRoom(1, 0.0, 0.0), MockRoom(2, 30.0, 0.0)]
         tsg = MockTSG(rooms, {(1, 2): 30.0})
         planner = HybridPlanner(topology_graph=tsg, trav=None)
 
-        # 起点在 room1 附近，终点在 room2 附近（各自 radius 内）
+        # Start near room1, goal near room2 (each within their own radius)
         result = planner.plan_path(np.array([0.0, 0.0, 0.0]), np.array([30.0, 0.0, 0.0]))
 
         assert not result.success, "Must return failure when no trav grid"
@@ -228,9 +228,9 @@ class TestHybridPlannerFailureSemantic:
         assert result.failure_reason != "", "Must include failure_reason"
 
     def test_blocked_path_returns_failure_not_straight_line(self):
-        """A* 无法穿越的障碍 → success=False，不是直线兜底。"""
-        # 使用 100×100 格子，分辨率 0.5m → 总宽 50m
-        # room1 中心在 (5,25)，room2 在 (45,25)，相互不会落在对方 radius=5 内
+        """A* cannot cross obstacle → success=False, NOT a straight-line fallback."""
+        # 100×100 grid at 0.5 m/cell → 50 m wide
+        # room1 center at (5, 0), room2 at (45, 0), far enough to avoid radius overlap
         nx, ny = 100, 100
         rooms = [
             MockRoom(1,  5.0, 0.0, {"x_min":  0, "x_max": 20, "y_min": -10, "y_max": 10}),
@@ -239,9 +239,9 @@ class TestHybridPlannerFailureSemantic:
         tsg = MockTSG(rooms, {(1, 2): 40.0})
 
         trav = np.zeros((nx, ny), dtype=np.float32)
-        trav[50, :] = 100.0  # 格 i=50 作墙，无缺口
+        trav[50, :] = 100.0  # solid wall at grid row 50, no gap
 
-        # 分辨率 0.5m，cx=25m，cy=0m → 格 (50,50) 对应世界 (25m,0m)
+        # res=0.5 m, cx=25 m, cy=0 → grid cell (50,50) = world (25 m, 0 m)
         planner = HybridPlanner(
             topology_graph=tsg,
             trav=trav,
@@ -250,8 +250,8 @@ class TestHybridPlannerFailureSemantic:
             trav_cy=0.0,
         )
 
-        start = np.array([5.0, 0.0, 0.0])   # room1 附近
-        goal  = np.array([45.0, 0.0, 0.0])  # room2 附近（穿越 i=50 的墙）
+        start = np.array([5.0,  0.0, 0.0])   # near room1
+        goal  = np.array([45.0, 0.0, 0.0])   # near room2 (must cross the wall)
         result = planner.plan_path(start, goal)
 
         assert not result.success, \
@@ -260,9 +260,9 @@ class TestHybridPlannerFailureSemantic:
         assert len(result.failure_reason) > 0
 
     def test_no_topo_path_returns_failure(self):
-        """拓扑图中两房间不连通 → success=False。"""
+        """Two disconnected rooms in the topology → success=False."""
         rooms = [MockRoom(1, 0.0, 0.0), MockRoom(2, 20.0, 0.0)]
-        tsg = MockTSG(rooms, {})  # 无边，不连通
+        tsg = MockTSG(rooms, {})  # no edges — disconnected
         trav = _make_open_trav()
         planner = _simple_planner(tsg, trav)
 
@@ -271,8 +271,8 @@ class TestHybridPlannerFailureSemantic:
         assert len(result.waypoints) == 0
 
     def test_missing_room_returns_failure(self):
-        """起点/终点无法定位到任何房间 → success=False。"""
-        tsg = MockTSG([], {})  # 无房间
+        """Start/goal cannot be matched to any room → success=False."""
+        tsg = MockTSG([], {})  # no rooms
         trav = _make_open_trav()
         planner = _simple_planner(tsg, trav)
 
@@ -280,7 +280,7 @@ class TestHybridPlannerFailureSemantic:
         assert not result.success
 
 
-# ── HybridPlanner 成功路径测试 ─────────────────────────────────────────────────
+# ── HybridPlanner success tests ───────────────────────────────────────────────
 
 class TestHybridPlannerSuccess:
     def _two_room_planner(self, trav=None):
@@ -295,19 +295,19 @@ class TestHybridPlannerSuccess:
             topology_graph=tsg,
             trav=trav,
             trav_res=0.2,
-            trav_cx=8.0,  # 居中
+            trav_cx=8.0,  # centered on the map
             trav_cy=0.0,
         )
 
     def test_open_corridor_success(self):
-        """两个房间、全开放地图 → success=True，waypoints 不为空。"""
+        """Two rooms, fully open grid → success=True with non-empty waypoints."""
         planner = self._two_room_planner()
         result = planner.plan_path(np.array([0.0, 0.0, 0.0]), np.array([8.0, 0.0, 0.0]))
         assert result.success
         assert len(result.waypoints) >= 2
 
     def test_waypoints_start_and_end_correct(self):
-        """首末路径点应精确等于 start 和 goal。"""
+        """First and last waypoints must exactly equal start and goal."""
         planner = self._two_room_planner()
         start = np.array([0.0, 0.0, 0.0])
         goal  = np.array([8.0, 0.0, 0.0])
@@ -317,7 +317,7 @@ class TestHybridPlannerSuccess:
             np.testing.assert_allclose(result.waypoints[-1], goal, atol=1e-6)
 
     def test_path_stays_in_free_space(self):
-        """所有路径点对应的 grid 格必须是可通行的。"""
+        """Every waypoint must map to a traversable grid cell."""
         planner = self._two_room_planner()
         result = planner.plan_path(np.array([0.0, 0.0, 0.0]), np.array([8.0, 0.0, 0.0]))
         if not result.success:
@@ -334,10 +334,10 @@ class TestHybridPlannerSuccess:
                 f"Waypoint {wp} maps to obstacle grid ({ix},{iy})"
 
     def test_update_traversability(self):
-        """热更新 trav grid 后能重新规划。"""
+        """Hot-swapping the trav grid via update_traversability() should work."""
         rooms = [MockRoom(1, 0.0, 0.0), MockRoom(2, 8.0, 0.0)]
         tsg = MockTSG(rooms, {(1, 2): 8.0})
-        # 显式构造 trav=None 版本
+        # Explicitly create with trav=None
         planner = HybridPlanner(topology_graph=tsg, trav=None)
         assert planner._trav is None
 
@@ -347,7 +347,7 @@ class TestHybridPlannerSuccess:
         assert planner._nx == 200
 
     def test_same_room_single_segment(self):
-        """起点终点在同一房间 → room_sequence 长度为 1，仍成功。"""
+        """Start and goal in the same room → room_sequence length 1, still succeeds."""
         rooms = [MockRoom(1, 0.0, 0.0, {"x_min": -5, "x_max": 5, "y_min": -5, "y_max": 5})]
         tsg = MockTSG(rooms, {})
         trav = _make_open_trav(100, 100)
@@ -359,14 +359,14 @@ class TestHybridPlannerSuccess:
             trav_cy=0.0,
         )
         result = planner.plan_path(np.array([0.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]))
-        # 同一房间，shortest_path 直接返回 [1]，无段规划
-        # 结果可能是 success=True（无几何段）或 success=False（无段）
-        # 重要：绝对不能有直线路径
+        # Same room: shortest_path returns [1], no geometry segments needed.
+        # Result may be success=True (no segments) or success=False.
+        # Important: must never produce a straight-line path.
         if result.success:
             assert len(result.waypoints) >= 1
 
 
-# ── HybridPath 数据类测试 ──────────────────────────────────────────────────────
+# ── HybridPath dataclass tests ────────────────────────────────────────────────
 
 class TestHybridPath:
     def test_failure_has_empty_waypoints(self):
@@ -378,7 +378,7 @@ class TestHybridPath:
 
     def test_failure_reason_propagated(self):
         rooms = [MockRoom(1, 0.0, 0.0), MockRoom(2, 100.0, 0.0)]
-        tsg = MockTSG(rooms, {})  # 不连通
+        tsg = MockTSG(rooms, {})  # disconnected
         planner = HybridPlanner(topology_graph=tsg, trav=_make_open_trav())
         result = planner.plan_path(np.array([0, 0, 0]), np.array([100, 0, 0]))
         assert not result.success

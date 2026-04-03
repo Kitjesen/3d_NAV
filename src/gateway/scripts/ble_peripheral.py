@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-ble_peripheral.py - BLE 外设服务 (BlueZ D-Bus)
+ble_peripheral.py - BLE peripheral service (BlueZ D-Bus)
 
-在机器人端运行，作为 BLE Peripheral (GATT Server) 响应客户端命令。
+Runs on the robot as a BLE Peripheral (GATT Server), responding to client commands.
 
-协议与 Flutter 端 BleProtocol / BleRobotClient 一致:
+Protocol matches the Flutter-side BleProtocol / BleRobotClient:
   Service UUID:     0000FFF0-0000-1000-8000-00805F9B34FB
-  Command Char:     0000FFF1  (Write)     - 接收客户端命令
-  Status Char:      0000FFF2  (Read/Notify) - 发送状态数据
-  WiFi Config Char: 0000FFF3  (Write)     - WiFi 配置
+  Command Char:     0000FFF1  (Write)      - receive commands from client
+  Status Char:      0000FFF2  (Read/Notify) - send status data to client
+  WiFi Config Char: 0000FFF3  (Write)      - WiFi configuration
 
-数据包格式: [0xA5] [CMD] [LEN_LO] [LEN_HI] [PAYLOAD...] [CRC8]
+Packet format: [0xA5] [CMD] [LEN_LO] [LEN_HI] [PAYLOAD...] [CRC8]
 
-依赖:
+Dependencies:
   sudo apt-get install -y bluetooth bluez python3-dbus python3-gi
   pip3 install dbus-python PyGObject
 
-用法:
+Usage:
   sudo python3 ble_peripheral.py
 
-systemd 服务:
+systemd service:
   sudo cp ble_peripheral.service /etc/systemd/system/
   sudo systemctl enable --now ble_peripheral
 """
@@ -40,7 +40,7 @@ logging.basicConfig(
 log = logging.getLogger("ble_peripheral")
 
 # ============================================================
-# 协议常量
+# Protocol constants
 # ============================================================
 HEADER = 0xA5
 CMD_PING          = 0x01
@@ -89,7 +89,7 @@ def build_packet(cmd: int, payload: bytes = b"") -> bytes:
 
 
 def parse_packet(data: bytes):
-    """解析数据包，返回 (cmd, payload) 或 None"""
+    """Parse a packet; returns (cmd, payload) or None on error."""
     if len(data) < 5 or data[0] != HEADER:
         return None
     cmd = data[1]
@@ -104,7 +104,7 @@ def parse_packet(data: bytes):
 
 
 # ============================================================
-# 机器人状态模拟 (替换为实际 SDK 调用)
+# Robot state (replace with real SDK calls as needed)
 # ============================================================
 class RobotState:
     def __init__(self):
@@ -162,7 +162,6 @@ class RobotState:
 
     def configure_wifi(self, ssid: str, password: str):
         log.info(f"WiFi config: SSID='{ssid}'")
-        # 使用 nmcli 配置 WiFi
         try:
             subprocess.run(
                 ["nmcli", "dev", "wifi", "connect", ssid,
@@ -180,10 +179,10 @@ robot_state = RobotState()
 
 
 # ============================================================
-# 命令处理
+# Command dispatcher
 # ============================================================
 def handle_command(data: bytes, notify_func) -> None:
-    """处理收到的 BLE 命令"""
+    """Dispatch an incoming BLE command packet."""
     result = parse_packet(data)
     if result is None:
         log.warning(f"Invalid packet: {data.hex()}")
@@ -227,11 +226,11 @@ def handle_command(data: bytes, notify_func) -> None:
 
 
 # ============================================================
-# BlueZ Advertisement & GATT Server (bluetoothctl 简化版)
+# BlueZ advertisement & GATT server
 # ============================================================
 
 def setup_advertising():
-    """使用 bluetoothctl 设置 BLE 广播"""
+    """Configure BLE advertising via bluetoothctl."""
     cmds = [
         "power on",
         "discoverable on",
@@ -254,35 +253,24 @@ def setup_advertising():
 
 
 def main():
-    """
-    简化的 BLE peripheral 实现。
-    
-    完整实现需要使用 BlueZ D-Bus API 注册 GATT 服务。
-    此脚本提供了核心协议处理逻辑，实际 GATT 注册需要:
-    
-    方案 A: 使用 Python bluezero 库
-        pip3 install bluezero
-        from bluezero import peripheral
-    
-    方案 B: 使用 BlueZ D-Bus API (python3-dbus)
-        import dbus
-        # 注册 GATT Application + Advertisement
-    
-    方案 C: 使用 btgatt-server (C 程序)
-        编译 BlueZ 源码中的 tools/btgatt-server
-    
-    以下是启动流程的框架代码:
+    """BLE peripheral daemon entry point.
+
+    Registers a GATT server using the bluezero library if available,
+    otherwise falls back to stub mode (keeps the process alive for signals).
+
+    GATT registration options:
+      Option A: pip3 install bluezero  (used here)
+      Option B: BlueZ D-Bus API via python3-dbus
+      Option C: btgatt-server C tool from BlueZ source tree
     """
     log.info("=" * 50)
     log.info("BLE Peripheral Daemon starting...")
     log.info(f"Service UUID: {SERVICE_UUID}")
     log.info("=" * 50)
 
-    # 尝试设置广播
     setup_advertising()
 
     try:
-        # 尝试导入 bluezero
         from bluezero import peripheral as ble_peripheral
 
         robot_ble = ble_peripheral.Peripheral(
@@ -290,10 +278,9 @@ def main():
             local_name="DaSuanRobot",
         )
 
-        # 添加服务
         robot_ble.add_service(srv_id=1, uuid=SERVICE_UUID, primary=True)
 
-        # Command 特征 (Write)
+        # Command characteristic (Write)
         robot_ble.add_characteristic(
             srv_id=1, chr_id=1, uuid=COMMAND_CHAR_UUID,
             value=[], notifying=False,
@@ -301,7 +288,7 @@ def main():
             write_callback=on_command_write,
         )
 
-        # Status 特征 (Read + Notify)
+        # Status characteristic (Read + Notify)
         robot_ble.add_characteristic(
             srv_id=1, chr_id=2, uuid=STATUS_CHAR_UUID,
             value=list(build_packet(CMD_STATUS_RESP,
@@ -312,7 +299,7 @@ def main():
             notify_callback=on_status_notify,
         )
 
-        # WiFi Config 特征 (Write)
+        # WiFi config characteristic (Write)
         robot_ble.add_characteristic(
             srv_id=1, chr_id=3, uuid=WIFI_CHAR_UUID,
             value=[], notifying=False,
@@ -328,7 +315,7 @@ def main():
         log.info("Install: pip3 install bluezero")
         log.info("Daemon running (waiting for signals)...")
 
-        # 在 stub 模式下保持运行，等待信号终止
+        # Stub mode: keep alive until SIGTERM/SIGINT
         def sigterm_handler(signum, frame):
             log.info("Received SIGTERM, shutting down...")
             sys.exit(0)
@@ -344,13 +331,13 @@ def main():
         sys.exit(1)
 
 
-# ---- bluezero 回调 ----
+# ---- bluezero callbacks ----
 
 _notify_characteristic = None
 
 
 def get_adapter_address() -> str:
-    """获取蓝牙适配器地址"""
+    """Return the local Bluetooth adapter MAC address."""
     try:
         result = subprocess.run(
             ["hciconfig", "hci0"],
@@ -365,12 +352,11 @@ def get_adapter_address() -> str:
 
 
 def on_command_write(value, options):
-    """Command 特征写入回调"""
+    """bluezero callback: Command characteristic written by client."""
     data = bytes(value)
     log.info(f"Command write: {data.hex()}")
 
     def notify(resp_data):
-        # 更新 Status 特征并发送通知
         global _notify_characteristic
         if _notify_characteristic:
             _notify_characteristic.set_value(list(resp_data))
@@ -381,13 +367,13 @@ def on_command_write(value, options):
 
 
 def on_status_read():
-    """Status 特征读取回调"""
+    """bluezero callback: Status characteristic read by client."""
     resp = build_packet(CMD_STATUS_RESP, robot_state.get_status_payload())
     return list(resp)
 
 
 def on_status_notify(notifying, characteristic):
-    """Status 特征 Notify 开启/关闭回调"""
+    """bluezero callback: Status characteristic notification toggled."""
     global _notify_characteristic
     if notifying:
         _notify_characteristic = characteristic
@@ -398,7 +384,7 @@ def on_status_notify(notifying, characteristic):
 
 
 def on_wifi_write(value, options):
-    """WiFi Config 特征写入回调"""
+    """bluezero callback: WiFi Config characteristic written by client."""
     data = bytes(value)
     log.info(f"WiFi config write: {data.hex()}")
 

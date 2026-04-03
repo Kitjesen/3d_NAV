@@ -1,23 +1,25 @@
 """EXPERIMENTAL — not used in production navigation stack.
-混合路径规划器 (Hybrid Planner) — 拓扑图辅助的分层路径规划。
+Hybrid Planner — topology-assisted hierarchical path planning.
 
-核心思想:
-  将全局路径规划分解为两个层次:
-  1. 拓扑层: 在拓扑图上做 Dijkstra，获得房间序列
-  2. 几何层: 对每对相邻房间，在 Tomogram traversability grid 上做局部 A*
+Core idea:
+  Decompose global planning into two layers:
+  1. Topology layer: Dijkstra on the topology graph → room sequence
+  2. Geometry layer: local A* on the Tomogram traversability grid for each adjacent room pair
 
-优势:
-  - 减少 A* 搜索空间 (只在房间对之间搜索，比全局 A* 快 3-10 倍)
-  - 利用拓扑图的高层连通性
+Advantages:
+  - Smaller A* search space (only between room pairs; ~3-10x faster than global A*)
+  - Exploits high-level connectivity from the topology graph
 
-失败语义 (重要):
-  - A* 返回 None → 段规划失败 → 整条路径 success=False。
-  - 绝不用直线兜底: 直线路径可能穿墙/过障碍物，让机器人以为有路但实际没有。
-  - 调用方收到 success=False 后应触发 LERa 恢复或重新规划，而不是盲目执行。
+Failure semantics (important):
+  - A* returns None → segment fails → whole path success=False.
+  - Never fall back to straight-line: a straight path may cross walls or obstacles,
+    making the robot believe there is a route when there is none.
+  - On success=False, the caller must trigger LERa recovery or replan rather than
+    executing the path blindly.
 
-参考:
-  - TopoNav (2025): 拓扑图作为空间记忆
-  - Hierarchical Planning: 分层规划减少搜索空间
+References:
+  - TopoNav (2025): topology graph as spatial memory
+  - Hierarchical Planning: layered planning reduces search space
   - src/global_planning/PCT_planner/planner/scripts/pct_planner_astar.py
 """
 
@@ -32,14 +34,14 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# ── A* 在 traversability grid 上的纯 Python 实现 ─────────────────────────────
+# ── Pure Python A* on traversability grid ───────────────────────────────────
 #
-# 移植自 src/global_planning/PCT_planner/planner/scripts/pct_planner_astar.py，
-# 去除 ROS2 依赖，直接在 2D traversability grid 上做 8-连通 A*。
+# Ported from src/global_planning/PCT_planner/planner/scripts/pct_planner_astar.py,
+# with ROS2 dependency removed. Performs 8-connected A* directly on a 2D trav grid.
 
 def _w2g(wx: float, wy: float, cx: float, cy: float,
          res: float, ox: int, oy: int, nx: int, ny: int) -> Tuple[int, int]:
-    """世界坐标 (m) → 格坐标 (clipped)。"""
+    """World coordinates (m) → grid index (clipped to grid bounds)."""
     ix = int(round((wx - cx) / res)) + ox
     iy = int(round((wy - cy) / res)) + oy
     return int(np.clip(ix, 0, nx - 1)), int(np.clip(iy, 0, ny - 1))
@@ -47,13 +49,14 @@ def _w2g(wx: float, wy: float, cx: float, cy: float,
 
 def _g2w(ix: int, iy: int, cx: float, cy: float,
          res: float, ox: int, oy: int) -> Tuple[float, float]:
-    """格坐标 → 世界坐标 (m)。"""
+    """Grid index → world coordinates (m)."""
     return (ix - ox) * res + cx, (iy - oy) * res + cy
 
 
 def _find_nearest_free(trav: np.ndarray, ci: int, cj: int,
                        obs_thr: float, radius: int = 5) -> Tuple[int, int]:
-    """在 radius 格范围内找最近可行格，找不到就返回原位置（让 A* 自己报 None）。"""
+    """Find the nearest free cell within radius cells; return the original position if none found
+    (A* will then report None itself)."""
     if trav[ci, cj] < obs_thr:
         return ci, cj
     best, best_dist = (ci, cj), float('inf')
@@ -70,19 +73,19 @@ def _find_nearest_free(trav: np.ndarray, ci: int, cj: int,
 
 def _astar_on_grid(trav: np.ndarray, start: Tuple[int, int], goal: Tuple[int, int],
                    obs_thr: float, timeout_sec: float = 5.0) -> Optional[List[Tuple[int, int]]]:
-    """8-连通 A* 在 traversability grid 上规划路径。
+    """8-connected A* on a traversability grid.
 
     Args:
-        trav:        2D float array，trav[i,j] < obs_thr 表示可行
-        start/goal:  (ix, iy) 格坐标
-        obs_thr:     障碍阈值（与 PCT 一致，默认 49.9）
-        timeout_sec: 超时秒数，超时返回 None（而不是 raise，调用方统一处理）
+        trav:        2D float array; trav[i,j] < obs_thr means traversable
+        start/goal:  (ix, iy) grid coordinates
+        obs_thr:     obstacle threshold (same as PCT default: 49.9)
+        timeout_sec: seconds before giving up; returns None on timeout (no exception)
 
     Returns:
-        List[(ix, iy)] 路径，或 None（不可达 / 超时）
+        List[(ix, iy)] path, or None if unreachable or timed out
     """
     deadline = time.monotonic() + timeout_sec
-    h = lambda a, b: abs(a[0] - b[0]) + abs(a[1] - b[1])  # Manhattan 启发
+    h = lambda a, b: abs(a[0] - b[0]) + abs(a[1] - b[1])  # Manhattan heuristic
     open_q = [(h(start, goal), 0.0, start, [])]
     visited: dict = {}
 
@@ -104,11 +107,11 @@ def _astar_on_grid(trav: np.ndarray, start: Tuple[int, int], goal: Tuple[int, in
                 if trav[ni, nj] < obs_thr and (ni, nj) not in visited:
                     cost = g + (1.414 if dx and dy else 1.0)
                     heapq.heappush(open_q, (cost + h((ni, nj), goal), cost, (ni, nj), path))
-    return None  # 不可达
+    return None  # unreachable
 
 
 def _downsample_cells(cells: list, min_dist: int = 3) -> list:
-    """等距降采样：相邻保留点距离 >= min_dist 格。"""
+    """Uniform downsampling: consecutive kept points are >= min_dist cells apart."""
     if len(cells) <= 2:
         return cells
     kept = [cells[0]]
@@ -121,24 +124,24 @@ def _downsample_cells(cells: list, min_dist: int = 3) -> list:
     return kept
 
 
-# ── 数据类 ────────────────────────────────────────────────────────────────────
+# ── Data classes ─────────────────────────────────────────────────────────────
 
 @dataclass
 class PathSegment:
-    """路径段 (连接两个房间的局部路径)。"""
+    """One geometry segment connecting two adjacent rooms."""
     from_room_id: int
     to_room_id: int
-    waypoints: List[np.ndarray]  # 路径点序列 [[x, y, z], ...]
-    cost: float                   # 路径代价 (欧氏距离之和)
-    planning_time: float          # 规划时间 (秒)
+    waypoints: List[np.ndarray]  # sequence of waypoints [[x, y, z], ...]
+    cost: float                   # total Euclidean length (m)
+    planning_time: float          # wall-clock planning time (s)
 
 
 @dataclass
 class HybridPath:
-    """混合路径规划结果。
+    """Result of a hybrid path plan.
 
-    success=False 意味着至少一个局部 A* 段无法规划，
-    调用方不应执行此路径，应触发恢复策略。
+    success=False means at least one local A* segment could not be planned.
+    The caller must not execute this path; trigger a recovery strategy instead.
     """
     success: bool
     waypoints: List[np.ndarray]
@@ -150,30 +153,31 @@ class HybridPath:
     geometry_planning_time: float
     num_waypoints: int
     num_rooms: int
-    # 失败时携带诊断信息，帮助 LERa 决策
+    # Diagnostic message on failure — helps LERa decide the recovery action
     failure_reason: str = ""
 
 
-# ── 主规划器 ──────────────────────────────────────────────────────────────────
+# ── Main planner ─────────────────────────────────────────────────────────────
 
 class HybridPlanner:
     """
-    混合路径规划器 — 拓扑图辅助的分层路径规划。
+    Hybrid planner — topology-assisted hierarchical path planning.
 
-    算法流程:
+    Algorithm:
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    Input: 起点 start, 终点 goal, 拓扑图 TSG, traversability grid
-    Output: HybridPath (success=True 才可执行)
+    Input: start, goal (world coords), topology graph TSG, traversability grid
+    Output: HybridPath (execute only when success=True)
 
-    1. 定位起点和终点所在的房间
-    2. 拓扑图 Dijkstra → 房间序列 [R1, R2, ..., Rn]
-    3. for each 相邻房间对 (Ri, Ri+1):
-    4.     在 traversability grid 上做 8-连通 A*（限制在 search_bbox 内）
-    5.     任意段失败 → 整条路径 success=False，立即返回
-    6. 返回完整路径
+    1. Locate the rooms containing start and goal
+    2. Dijkstra on topology graph → room sequence [R1, R2, ..., Rn]
+    3. For each adjacent room pair (Ri, Ri+1):
+    4.     8-connected A* on the traversability grid (bounded by search_bbox)
+    5.     Any segment failure → whole path success=False, return immediately
+    6. Return the complete path
 
-    直线兜底 (fallback) 已被彻底删除。
-    A* 失败的唯一正确处理是向上报告，由 SemanticPlannerModule 的 LERa 决策。
+    Straight-line fallback has been removed entirely.
+    The only correct response to A* failure is to propagate it upward;
+    SemanticPlannerModule LERa decides the recovery action.
     """
 
     def __init__(
@@ -189,25 +193,25 @@ class HybridPlanner:
     ):
         """
         Args:
-            topology_graph:    TopologySemGraph 实例，提供 Dijkstra 最短路
-            trav:              可选，2D float32 traversability grid (shape: [nx, ny])
-                               trav[i,j] < obstacle_thr 表示可行。
-                               来自 Tomogram.layers_t[slice_idx] 或 _load_tomogram()[0]。
-                               若为 None，局部段规划直接返回 None（路径总是失败）。
-            trav_res:          栅格分辨率 (m/格)，默认 0.2m
-            trav_cx/trav_cy:   栅格中心世界坐标 (m)
-            obstacle_thr:      障碍阈值（与 PCT 一致，49.9）
-            astar_timeout_sec: 每个局部 A* 的超时时间
-            min_downsample_dist: 路径点降采样最小间距（格数）
+            topology_graph:    TopologySemGraph providing Dijkstra shortest paths
+            trav:              optional 2D float32 traversability grid (shape: [nx, ny])
+                               trav[i,j] < obstacle_thr means traversable.
+                               Source: Tomogram.layers_t[slice_idx] or _load_tomogram()[0].
+                               If None, segment planning always returns None (path always fails).
+            trav_res:          grid resolution (m/cell), default 0.2 m
+            trav_cx/trav_cy:   world coordinates of the grid center (m)
+            obstacle_thr:      obstacle threshold (same as PCT default: 49.9)
+            astar_timeout_sec: per-segment A* timeout (seconds)
+            min_downsample_dist: minimum cell distance between consecutive kept waypoints
 
-        注意：不再接受 planner_fn 回调参数。调用方直接传入 traversability grid，
-        HybridPlanner 内部完成 A*。这样：
-          1. 失败语义清晰：A* None → plan_path success=False → 调用方 LERa
-          2. 无隐式直线兜底
-          3. 无 semantic→nav 跨层导入
+        Note: the planner_fn callback parameter has been removed. Pass the traversability
+        grid directly; A* runs internally. Benefits:
+          1. Clear failure semantics: A* None → plan_path success=False → caller LERa
+          2. No implicit straight-line fallback
+          3. No cross-layer semantic→nav import
         """
         self.tsg = topology_graph
-        self._trav = trav                          # None → 无地图，所有段失败
+        self._trav = trav                          # None → no map, all segments fail
         self._trav_res = trav_res
         self._trav_cx = trav_cx
         self._trav_cy = trav_cy
@@ -228,7 +232,7 @@ class HybridPlanner:
         cx: float,
         cy: float,
     ) -> None:
-        """热更新 traversability grid（地图更新时调用，线程不安全，调用方加锁）。"""
+        """Hot-swap the traversability grid (call when map updates; not thread-safe, caller must lock)."""
         self._trav = trav
         self._trav_res = res
         self._trav_cx = cx
@@ -243,15 +247,15 @@ class HybridPlanner:
         search_radius_factor: float = 1.5,
         max_planning_time: float = 5.0,
     ) -> HybridPath:
-        """规划从起点到终点的混合路径。
+        """Plan a hybrid path from start to goal.
 
         Returns:
-            HybridPath。success=False 时 waypoints 为空，failure_reason 说明原因。
-            调用方必须检查 success 字段再决定是否执行。
+            HybridPath. On success=False waypoints is empty and failure_reason explains why.
+            The caller must check the success field before executing the path.
         """
         t0 = time.time()
 
-        # 1. 定位房间
+        # 1. Locate rooms
         start_room = self._locate_room(start[:2])
         goal_room = self._locate_room(goal[:2])
 
@@ -263,7 +267,7 @@ class HybridPlanner:
             logger.warning(reason)
             return self._failed(reason)
 
-        # 2. 拓扑层 Dijkstra
+        # 2. Topology layer: Dijkstra
         t_topo = time.time()
         cost, room_seq = self.tsg.shortest_path(start_room, goal_room)
         topo_time = time.time() - t_topo
@@ -275,7 +279,7 @@ class HybridPlanner:
 
         logger.info("Topo path: %s cost=%.2f (%.1fms)", room_seq, cost, topo_time * 1000)
 
-        # 3. 几何层 A*
+        # 3. Geometry layer: A*
         t_geom = time.time()
         segments: List[PathSegment] = []
         waypoints: List[np.ndarray] = [start.copy()]
@@ -324,7 +328,7 @@ class HybridPlanner:
             num_rooms=len(room_seq),
         )
 
-    # ── 内部方法 ──────────────────────────────────────────────────────────────
+    # ── Internal helpers ─────────────────────────────────────────────────────
 
     def _plan_local_segment(
         self,
@@ -334,11 +338,11 @@ class HybridPlanner:
         goal_pos: Optional[np.ndarray],
         search_radius_factor: float,
     ) -> Optional[PathSegment]:
-        """规划两个房间之间的局部路径段。
+        """Plan the local geometry segment between two adjacent rooms.
 
         Returns:
-            PathSegment，或 None（A* 不可达/超时/无地图）。
-            绝不返回直线路径——None 就是 None。
+            PathSegment, or None if A* finds no path, times out, or there is no map.
+            Never returns a straight-line path — None means None.
         """
         t0 = time.time()
 
@@ -356,14 +360,14 @@ class HybridPlanner:
             )
             return None
 
-        # 目标位置（最后一段用真实 goal，中间段用目标房间中心）
+        # Goal position: real goal for the last segment, room center for intermediate segments
         if goal_pos is None:
             goal_pos = np.array([to_room.center[0], to_room.center[1], start_pos[2]])
 
-        # 搜索区域 bbox
+        # Search region bounding box
         search_bbox = self._compute_search_bbox(from_room, to_room, search_radius_factor)
 
-        # 世界坐标 → 格坐标
+        # World → grid coordinates
         si, sj = _w2g(start_pos[0], start_pos[1],
                        self._trav_cx, self._trav_cy, self._trav_res,
                        self._ox, self._oy, self._nx, self._ny)
@@ -371,11 +375,11 @@ class HybridPlanner:
                        self._trav_cx, self._trav_cy, self._trav_res,
                        self._ox, self._oy, self._nx, self._ny)
 
-        # 若起/终点在障碍格内，尝试在附近找最近可行格
+        # Snap start/goal to nearest free cell if they land on an obstacle
         si, sj = _find_nearest_free(self._trav, si, sj, self._obs_thr)
         gi, gj = _find_nearest_free(self._trav, gi, gj, self._obs_thr)
 
-        # bbox 裁剪：只在 search_bbox 对应的格范围内搜索（创建子视图）
+        # Clip to search_bbox: run A* only within the bounding box sub-grid
         bi_min, bj_min = _w2g(search_bbox["x_min"], search_bbox["y_min"],
                                self._trav_cx, self._trav_cy, self._trav_res,
                                self._ox, self._oy, self._nx, self._ny)
@@ -385,7 +389,7 @@ class HybridPlanner:
         bi_min, bi_max = min(bi_min, bi_max), max(bi_min, bi_max)
         bj_min, bj_max = min(bj_min, bj_max), max(bj_min, bj_max)
 
-        # 把全局格坐标映射到子视图坐标
+        # Map global grid coords to sub-grid local coords
         si_loc = int(np.clip(si - bi_min, 0, bi_max - bi_min))
         sj_loc = int(np.clip(sj - bj_min, 0, bj_max - bj_min))
         gi_loc = int(np.clip(gi - bi_min, 0, bi_max - bi_min))
@@ -411,7 +415,7 @@ class HybridPlanner:
             )
             return None
 
-        # 降采样 + 格坐标 → 世界坐标
+        # Downsample and convert grid coords → world coords
         cells = _downsample_cells(cells, self._min_ds)
         z = float(start_pos[2])
         pts: List[np.ndarray] = []
@@ -421,7 +425,7 @@ class HybridPlanner:
                           self._trav_res, self._ox, self._oy)
             pts.append(np.array([wx, wy, z]))
 
-        # 强制首末点精确
+        # Force exact start and goal endpoints
         pts[0] = start_pos.copy()
         pts[-1] = goal_pos.copy()
 
@@ -439,7 +443,7 @@ class HybridPlanner:
         )
 
     def _locate_room(self, position: np.ndarray) -> Optional[int]:
-        """定位位置所在的房间（三级查询：get_room_by_position → 凸包 → 最近邻）。"""
+        """Locate the room containing a position (three-stage lookup: get_room_by_position → convex hull → nearest centroid)."""
         room_id = self.tsg.get_room_by_position(position[0], position[1], radius=5.0)
         if room_id is not None:
             return room_id
@@ -456,7 +460,7 @@ class HybridPlanner:
         return nearest.node_id
 
     def _compute_search_bbox(self, from_room, to_room, radius_factor: float) -> dict:
-        """计算两个房间合并后的 bbox，再按 radius_factor 扩展。"""
+        """Compute the merged bbox of two rooms, expanded by radius_factor."""
         if from_room.bounding_box and to_room.bounding_box:
             x_min = min(from_room.bounding_box["x_min"], to_room.bounding_box["x_min"])
             x_max = max(from_room.bounding_box["x_max"], to_room.bounding_box["x_max"])
@@ -485,7 +489,7 @@ class HybridPlanner:
         topo_time: float = 0.0,
         geom_time: float = 0.0,
     ) -> HybridPath:
-        """构造 success=False 的路径，携带失败原因。"""
+        """Construct a failed HybridPath with a diagnostic reason string."""
         return HybridPath(
             success=False,
             waypoints=[],
@@ -502,7 +506,7 @@ class HybridPlanner:
 
     @staticmethod
     def _point_in_polygon(point: np.ndarray, polygon: np.ndarray) -> bool:
-        """Ray casting 算法：检查点是否在多边形内。"""
+        """Ray casting algorithm: check whether a point lies inside a polygon."""
         x, y = point[0], point[1]
         n = len(polygon)
         inside = False
@@ -525,11 +529,11 @@ class HybridPlanner:
                 bbox["y_min"] <= point[1] <= bbox["y_max"])
 
 
-# ── 性能对比工具 ──────────────────────────────────────────────────────────────
+# ── Planner comparison utilities ─────────────────────────────────────────────
 
 @dataclass
 class PlannerComparison:
-    """规划器性能对比结果。"""
+    """Performance comparison result between two planners."""
     hybrid_time: float
     baseline_time: float
     speedup: float
@@ -547,15 +551,15 @@ def compare_planners(
     baseline_planner,
     test_cases: List[Tuple[np.ndarray, np.ndarray]],
 ) -> List[PlannerComparison]:
-    """对比混合规划器和基线规划器的性能。
+    """Compare the HybridPlanner against a baseline planner.
 
     Args:
-        hybrid_planner:   HybridPlanner 实例
-        baseline_planner: 基线规划器 (需要有 plan_path 方法)
+        hybrid_planner:   HybridPlanner instance
+        baseline_planner: baseline planner (must implement plan_path())
         test_cases:       [(start, goal), ...]
 
     Returns:
-        对比结果列表（含 success 字段，失败的 case 也会记录）
+        List of comparison results; failed cases are included with success=False
     """
     results = []
     for i, (start, goal) in enumerate(test_cases):
