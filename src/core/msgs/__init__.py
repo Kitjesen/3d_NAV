@@ -1,4 +1,4 @@
-"""lingtu.core.msgs — 统一消息类型，所有模块间数据流的契约。"""
+"""lingtu.core.msgs — unified message types; contract for inter-module data flow."""
 
 from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from .nav import OccupancyGrid, Odometry, Path

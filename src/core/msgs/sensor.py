@@ -1,14 +1,14 @@
-"""lingtu.core.msgs.sensor — 传感器数据类型，供感知与 SLAM 模块使用。
+"""lingtu.core.msgs.sensor — sensor data types for perception and SLAM modules.
 
 Classes
 -------
-ImageFormat   — 图像像素格式枚举
-Image         — NumPy 图像容器 (BGR/RGB/RGBA/GRAY/Depth)
-CameraIntrinsics — 相机内参 (fx, fy, cx, cy)
-PointField    — PointCloud2 字段描述符
-PointCloud2   — N×3/N×4 点云 (纯 numpy, 无 Open3D, 带 ROS2 兼容元数据)
-PointCloud    — PointCloud2 兼容别名
-Imu           — 惯性测量单元数据
+ImageFormat   — image pixel format enum
+Image         — NumPy image container (BGR/RGB/RGBA/GRAY/Depth)
+CameraIntrinsics — camera intrinsics (fx, fy, cx, cy)
+PointField    — PointCloud2 field descriptor
+PointCloud2   — N×3 / N×4 point cloud (pure NumPy, no Open3D, ROS2-compatible metadata)
+PointCloud    — alias compatible with PointCloud2
+Imu           — inertial measurement unit data
 """
 
 from __future__ import annotations
