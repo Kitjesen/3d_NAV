@@ -106,16 +106,28 @@ High layers depend on low layers only. L5→L2 (waypoint→PathFollower) is comm
 | Planner | `astar` (pure Python), `pct` (C++ ele_planner.so) |
 | PathFollower | `nav_core` (C++ nanobind), `pure_pursuit`, `pid` |
 
-### Profiles
+### Profiles (Complete)
 
-| Profile | Driver | SLAM | Native | Semantic | Use Case |
-|---------|--------|------|--------|----------|----------|
-| `stub` | stub | none | no | no | Framework testing |
-| `dev` | stub | none | no | yes | Semantic pipeline dev |
-| `sim` | sim_ros2 | bridge | yes | yes | MuJoCo full simulation |
-| `map` | sim_ros2 | fastlio2 | no | no | Build map with SLAM |
-| `s100p` | sim_ros2 | localizer | no | yes | Real robot navigation |
-| `explore` | thunder | fastlio2 | yes | yes | Exploration (no map) |
+| Profile | Driver | SLAM | LLM | Planner | Native | Semantic | Gateway | Use Case |
+|---------|--------|------|-----|---------|--------|----------|---------|----------|
+| `stub` | stub | none | mock | astar | no | no | yes | Framework testing |
+| `dev` | stub | none | mock | astar | no | yes | yes | Semantic pipeline dev |
+| `sim` | sim_mujoco | bridge | mock | astar | yes | yes | yes | MuJoCo full simulation |
+| `map` | s100p | fastlio2 | mock | astar | no | no | yes | Build map with SLAM |
+| `nav` | s100p | localizer | qwen | astar | no | yes | yes | Navigate with pre-built map |
+| `explore` | s100p | fastlio2 | qwen | astar | no | yes | yes | Exploration (no map) |
+
+### Robot Presets
+
+Robot presets provide hardware-specific defaults that get merged into profiles via `--robot`:
+
+| Preset | `robot` | `slam_profile` | `detector` | `encoder` | Extra |
+|--------|---------|----------------|------------|-----------|-------|
+| `stub` | stub | none | yoloe | mobileclip | — |
+| `sim` | sim_mujoco | bridge | yoloe | mobileclip | — |
+| `ros2` | sim_ros2 | bridge | yoloe | mobileclip | — |
+| `s100p` | sim_ros2 | localizer | bpu | mobileclip | — |
+| `thunder` | thunder | localizer | bpu | mobileclip | `dog_host=192.168.66.190`, `dog_port=13145` |
 
 ## 4. Repository Layout
 
@@ -441,17 +453,111 @@ WebSocket joystick at `ws://<robot>:5060/teleop`:
 - 3s idle → auto-releases to autonomous navigation
 - cmd_vel priority: Teleop > VisualServo > PathFollower
 
-## 20. REPL Commands
+## 20. CLI Reference (`cli/`)
 
+### Entry Points
+
+| Entry | Role |
+|-------|------|
+| `lingtu.py` | Primary entry — sets project root, calls `cli.bootstrap.init`, then `cli.main.main` |
+| `main_nav.py` | Backward-compatible alias (same as `lingtu.py`) |
+| `lingtu_cli.py` | Target of pip console script (`pyproject.toml` → `lingtu = "lingtu_cli:main"`) |
+
+### CLI Arguments
+
+```bash
+lingtu [profile] [options]
 ```
-Navigation:  go/navigate <target> | stop | cancel | status
-Map:         map list | save <name> | use <name> | build <name> | delete <name>
-Semantic:    smap status | rooms | save | load <dir> | query <text>
-Vector:      vmem query <text> | vmem stats
-Agent:       agent <multi-step instruction>
-Teleop:      teleop status | teleop release
-Monitor:     health | watch <port> | module <name> | connections | log | config
+
+| Argument | Type | Effect |
+|----------|------|--------|
+| `profile` | positional | Profile name (`stub`, `dev`, `sim`, `map`, `nav`, `explore`) |
+| `stop` | positional | Stop running daemon (SIGTERM to PID from `.lingtu/run.json`) |
+| `doctor` | positional | Run `scripts/doctor.py` diagnostics |
+| `rerun` | positional | Run `scripts/rerun_live.py` visualization |
+| `--list` | flag | List all profiles and exit |
+| `--daemon` / `-d` | flag | Fork as Unix daemon (implies no REPL) |
+| `--robot` | str | Override robot preset (`stub`, `sim`, `ros2`, `s100p`, `thunder`) |
+| `--dog-host` | str | Override Thunder robot host IP |
+| `--dog-port` | int | Override Thunder robot gRPC port |
+| `--detector` | str | Override detector backend (`yoloe`, `bpu`, `yolo_world`, `grounding_dino`) |
+| `--encoder` | str | Override encoder backend (`clip`, `mobileclip`) |
+| `--llm` | str | Override LLM backend (`kimi`, `openai`, `claude`, `qwen`, `mock`) |
+| `--planner` | str | Override planner backend (`astar`, `pct`) |
+| `--tomogram` | str | Override tomogram pickle path |
+| `--gateway-port` | int | Override gateway HTTP port (default 5050) |
+| `--no-semantic` | flag | Disable semantic pipeline |
+| `--no-gateway` | flag | Disable HTTP/WS/MCP gateway |
+| `--no-native` | flag | Disable C++ autonomy stack (use Python simple/pid) |
+| `--rerun` | flag | Enable Rerun visualization bridge |
+| `--no-repl` | flag | No interactive REPL; block on signal |
+| `--log-level` | str | Root log level (default `INFO`) |
+
+### Profile Resolution Order
+
+1. Profile dict from `PROFILES[name]` (or interactive picker if no positional arg)
+2. Robot preset from `ROBOT_PRESETS[robot_key]` merged in (profile fields take priority)
+3. CLI overrides (`--llm`, `--detector`, etc.) override everything
+4. Resulting dict passed to `full_stack_blueprint(**cfg)`
+
+### CLI Source Files
+
+| File | Role |
+|------|------|
+| `cli/__init__.py` | Package entry |
+| `cli/bootstrap.py` | `init()`: prepend `src/`, semantic subdirs to `sys.path` |
+| `cli/main.py` | Argparse, profile resolution, blueprint build, REPL/daemon loop |
+| `cli/profiles_data.py` | `ROBOT_PRESETS`, `PROFILES`, `_ACTIVE_TOMOGRAM` |
+| `cli/repl.py` | `LingTuREPL` (cmd.Cmd subclass) — interactive commands |
+| `cli/ui.py` | Banner, interactive profile picker, `list_profiles`, `cmd_stop` |
+| `cli/run_state.py` | PID file + `.lingtu/run.json` for daemon lifecycle |
+| `cli/runtime_extra.py` | `preflight`, `kill_residual_ports`, `health_check`, `daemonize` |
+| `cli/logging_util.py` | `setup_logging` — stderr + `logs/<timestamp>_<profile>/lingtu.log` |
+| `cli/paths.py` | Project root, `.lingtu/` dir, `logs/` base |
+| `cli/term.py` | TTY detection, ANSI color helpers |
+
+### Environment Variables
+
+| Variable | Default | Used By |
+|----------|---------|---------|
+| `NAV_MAP_DIR` | `~/data/nova/maps` | `profiles_data.py` (`_ACTIVE_TOMOGRAM`), `repl.py` (map commands) |
+| `MOONSHOT_API_KEY` | — | Kimi LLM backend |
+| `OPENAI_API_KEY` | — | OpenAI LLM backend |
+| `ANTHROPIC_API_KEY` | — | Claude LLM backend |
+| `DASHSCOPE_API_KEY` | — | Qwen LLM backend |
+
+### REPL Commands
+
+| Command | Alias | Usage |
+|---------|-------|-------|
+| `navigate` | `nav` | `navigate x y [z]` — pose goal to NavigationModule |
+| `go` | — | `go <natural language>` — semantic instruction |
+| `stop` | — | Emergency stop (value 2 to all stop_signal ports) |
+| `cancel` | — | Cancel current navigation mission |
+| `status` | `s` | Module list + mission state |
+| `health` | `h` | System health report |
+| `map` | — | `list` / `save <name>` / `use <name>` / `build <name>` / `delete <name>` |
+| `smap` | — | `status` / `rooms` / `save` / `load <dir>` / `query <text>` (semantic map) |
+| `agent` | — | `agent <multi-step instruction>` (AgentLoop) |
+| `vmem` | — | `query <text>` / `stats` (vector memory) |
+| `teleop` | — | `status` / `release` |
+| `rerun` | — | `on` / `off` / `status` (Rerun visualization bridge) |
+| `watch` | `w` | `watch [interval]` — auto-refresh status (default 2s) |
+| `live` | — | Full-screen dashboard with hotkeys (`s/g/x/n/q`) |
+| `module` | `m` | `module <name>` — inspect one module (tab completion) |
+| `connections` | `c` | List all wires |
+| `log` | — | `log debug\|info\|warning\|error` — set log level |
+| `config` | — | Print current profile configuration |
+| `quit` | `q`, `exit` | Exit REPL |
+
+### Daemon Mode
+
+```bash
+python lingtu.py s100p --daemon    # fork to background, log to logs/
+python lingtu.py stop              # SIGTERM to running daemon
 ```
+
+Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state to `.lingtu/run.json`. On startup, `kill_residual_ports` cleans ports 5050, 8090, 5060 via `fuser -k`.
 
 ## 21. Configuration Files
 
