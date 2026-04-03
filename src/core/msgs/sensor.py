@@ -5,7 +5,9 @@ Classes
 ImageFormat   — 图像像素格式枚举
 Image         — NumPy 图像容器 (BGR/RGB/RGBA/GRAY/Depth)
 CameraIntrinsics — 相机内参 (fx, fy, cx, cy)
-PointCloud    — N×3/N×4 点云 (纯 numpy, 无 Open3D)
+PointField    — PointCloud2 字段描述符
+PointCloud2   — N×3/N×4 点云 (纯 numpy, 无 Open3D, 带 ROS2 兼容元数据)
+PointCloud    — PointCloud2 兼容别名
 Imu           — 惯性测量单元数据
 """
 
@@ -16,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, ClassVar, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -356,7 +358,7 @@ class CameraIntrinsics:
 
 
 # ---------------------------------------------------------------------------
-# PointCloud
+# PointCloud2
 # ---------------------------------------------------------------------------
 
 # Header: num_points(u32) + cols(u32) + ts(f64) + frame_len(u32) + frame_str
@@ -364,15 +366,53 @@ _PC_HDR = struct.Struct("<IId")  # 16 bytes fixed part
 
 
 @dataclass
-class PointCloud:
+class PointField:
+    """Minimal ROS2-compatible PointField descriptor."""
+
+    INT8: ClassVar[int] = 1
+    UINT8: ClassVar[int] = 2
+    INT16: ClassVar[int] = 3
+    UINT16: ClassVar[int] = 4
+    INT32: ClassVar[int] = 5
+    UINT32: ClassVar[int] = 6
+    FLOAT32: ClassVar[int] = 7
+    FLOAT64: ClassVar[int] = 8
+
+    name: str
+    offset: int
+    datatype: int
+    count: int = 1
+
+
+def _default_point_fields(cols: int) -> list[PointField]:
+    fields = [
+        PointField("x", 0, PointField.FLOAT32),
+        PointField("y", 4, PointField.FLOAT32),
+        PointField("z", 8, PointField.FLOAT32),
+    ]
+    if cols == 4:
+        fields.append(PointField("intensity", 12, PointField.FLOAT32))
+    return fields
+
+
+@dataclass
+class PointCloud2:
     """Lightweight point cloud — ``(N, 3)`` XYZ or ``(N, 4)`` XYZ+intensity.
 
-    All operations are pure NumPy (no Open3D dependency).
+    The payload stays NumPy-native, while the metadata mirrors the common
+    ROS2 ``sensor_msgs/PointCloud2`` fields used by bridge code.
     """
 
     points: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
     ts: float = field(default_factory=time.time)
     frame_id: str = field(default="map")
+    height: int = 1
+    width: int = 0
+    fields: list[PointField] = field(default_factory=list)
+    is_dense: bool = True
+    is_bigendian: bool = False
+    point_step: int = 0
+    row_step: int = 0
 
     def __post_init__(self) -> None:
         self.points = np.asarray(self.points, dtype=np.float32)
@@ -380,16 +420,62 @@ class PointCloud:
             self.points = self.points.reshape(0, 3)
         if self.points.ndim != 2 or self.points.shape[1] not in (3, 4):
             raise ValueError(f"points must be (N,3) or (N,4), got {self.points.shape}")
+        if self.height <= 0:
+            raise ValueError(f"height must be positive, got {self.height}")
+
+        num_points = int(self.points.shape[0])
+        if self.width <= 0:
+            if self.height == 1:
+                self.width = num_points
+            elif num_points == 0:
+                self.width = 0
+            elif num_points % self.height == 0:
+                self.width = num_points // self.height
+            else:
+                raise ValueError(
+                    f"cannot infer width from {num_points} points and height={self.height}"
+                )
+        elif self.height * self.width != num_points:
+            raise ValueError(
+                f"height*width must match num_points, got {self.height}*{self.width} != {num_points}"
+            )
+
+        if self.fields:
+            norm_fields: list[PointField] = []
+            for spec in self.fields:
+                if isinstance(spec, PointField):
+                    norm_fields.append(spec)
+                elif isinstance(spec, dict):
+                    norm_fields.append(PointField(**spec))
+                else:
+                    norm_fields.append(
+                        PointField(
+                            name=str(getattr(spec, "name")),
+                            offset=int(getattr(spec, "offset")),
+                            datatype=int(getattr(spec, "datatype")),
+                            count=int(getattr(spec, "count", 1)),
+                        )
+                    )
+            self.fields = norm_fields
+        else:
+            self.fields = _default_point_fields(int(self.points.shape[1]))
+
+        if self.point_step <= 0:
+            self.point_step = int(self.points.shape[1] * np.dtype(np.float32).itemsize)
+        if self.row_step <= 0:
+            self.row_step = int(self.point_step * self.width)
+        if self.is_dense and not np.isfinite(self.points).all():
+            self.is_dense = False
 
     # -- factory methods -----------------------------------------------------
 
     @classmethod
-    def from_numpy(cls, points: np.ndarray, frame_id: str = "map") -> PointCloud:
-        return cls(points=points, frame_id=frame_id)
+    def from_numpy(cls, points: np.ndarray, frame_id: str = "map", **kw) -> PointCloud2:
+        return cls(points=points, frame_id=frame_id, **kw)
 
     @classmethod
     def from_depth(cls, depth: np.ndarray, intrinsics: CameraIntrinsics,
-                   frame_id: str = "camera") -> PointCloud:
+                   frame_id: str = "camera") -> PointCloud2:
         """Back-project a depth image to a 3-D point cloud.
 
         Parameters
@@ -423,9 +509,14 @@ class PointCloud:
     def is_empty(self) -> bool:
         return self.num_points == 0
 
+    @property
+    def data(self) -> bytes:
+        """Raw point bytes laid out like a dense PointCloud2 payload."""
+        return self.points.tobytes()
+
     # -- transforms ----------------------------------------------------------
 
-    def transform(self, matrix: np.ndarray) -> PointCloud:
+    def transform(self, matrix: np.ndarray) -> PointCloud2:
         """Apply a 4×4 homogeneous transform, returning a **new** cloud."""
         matrix = np.asarray(matrix, dtype=np.float64)
         if matrix.shape != (4, 4):
@@ -440,19 +531,48 @@ class PointCloud:
             # preserve intensity column
             transformed = np.hstack([transformed, self.points[:, 3:4]])
 
-        return PointCloud(points=transformed, ts=self.ts, frame_id=self.frame_id)
+        return PointCloud2(
+            points=transformed,
+            ts=self.ts,
+            frame_id=self.frame_id,
+            height=self.height,
+            width=self.width,
+            fields=list(self.fields),
+            is_dense=self.is_dense,
+            is_bigendian=self.is_bigendian,
+            point_step=self.point_step,
+            row_step=self.row_step,
+        )
 
-    def voxel_downsample(self, voxel_size: float) -> PointCloud:
+    def voxel_downsample(self, voxel_size: float) -> PointCloud2:
         """Grid-based voxel down-sampling (pure NumPy)."""
         if self.is_empty or voxel_size <= 0:
-            return PointCloud(self.points.copy(), self.ts, self.frame_id)
+            return PointCloud2(
+                self.points.copy(),
+                self.ts,
+                self.frame_id,
+                height=self.height,
+                width=self.width,
+                fields=list(self.fields),
+                is_dense=self.is_dense,
+                is_bigendian=self.is_bigendian,
+                point_step=self.point_step,
+                row_step=self.row_step,
+            )
 
         xyz = self.points[:, :3]
         keys = np.floor(xyz / voxel_size).astype(np.int64)
         # unique voxel keys → keep first point per voxel
         _, idx = np.unique(keys, axis=0, return_index=True)
         idx.sort()  # preserve original ordering
-        return PointCloud(points=self.points[idx].copy(), ts=self.ts, frame_id=self.frame_id)
+        return PointCloud2(
+            points=self.points[idx].copy(),
+            ts=self.ts,
+            frame_id=self.frame_id,
+            fields=list(self.fields),
+            is_dense=self.is_dense,
+            is_bigendian=self.is_bigendian,
+        )
 
     # -- serialisation -------------------------------------------------------
 
@@ -467,7 +587,7 @@ class PointCloud:
         return bytes(buf)
 
     @classmethod
-    def decode(cls, raw: bytes) -> PointCloud:
+    def decode(cls, raw: bytes) -> PointCloud2:
         off = 0
         n, cols, ts = _PC_HDR.unpack_from(raw, off); off += _PC_HDR.size
         frame_len = struct.unpack_from("<I", raw, off)[0]; off += 4
@@ -489,14 +609,36 @@ class PointCloud:
             }
         return {
             "num_points": self.num_points,
+            "height": self.height,
+            "width": self.width,
             "cols": int(self.points.shape[1]),
             "frame_id": self.frame_id,
             "ts": self.ts,
+            "fields": [
+                {
+                    "name": f.name,
+                    "offset": f.offset,
+                    "datatype": f.datatype,
+                    "count": f.count,
+                }
+                for f in self.fields
+            ],
+            "is_dense": self.is_dense,
+            "is_bigendian": self.is_bigendian,
+            "point_step": self.point_step,
+            "row_step": self.row_step,
             "bounds": bounds,
         }
 
     def __repr__(self) -> str:
-        return f"PointCloud({self.num_points} pts, frame='{self.frame_id}')"
+        return (
+            f"PointCloud2({self.num_points} pts, {self.height}x{self.width}, "
+            f"frame='{self.frame_id}')"
+        )
+
+
+# Backward-compatible alias during migration to ROS2 naming.
+PointCloud = PointCloud2
 
 
 # ---------------------------------------------------------------------------

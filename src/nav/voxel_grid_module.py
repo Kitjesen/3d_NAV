@@ -2,11 +2,11 @@
 
 Maintains a numpy hash-map of voxel occupancy counts, with exponential
 decay to forget stale space.  Publishes occupied voxel centres as a
-PointCloud and a stats dict.
+PointCloud2 and a stats dict.
 
 Ports:
-  In:  map_cloud (PointCloud), odometry (Odometry)
-  Out: voxel_map (dict), voxel_cloud (PointCloud)
+  In:  map_cloud (PointCloud2), odometry (Odometry)
+  Out: voxel_map (dict), voxel_cloud (PointCloud2)
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import numpy as np
 
 from core.module import Module, skill
 from core.stream import In, Out
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.msgs.nav import Odometry
 from core.registry import register
 
@@ -43,11 +43,11 @@ class VoxelGridModule(Module, layer=2):
     the min/max iz so callers can distinguish ground from obstacles.
     """
 
-    map_cloud:   In[PointCloud]
+    map_cloud:   In[PointCloud2]
     odometry:    In[Odometry]
 
     voxel_map:   Out[dict]
-    voxel_cloud: Out[PointCloud]
+    voxel_cloud: Out[PointCloud2]
 
     def __init__(
         self,
@@ -100,7 +100,7 @@ class VoxelGridModule(Module, layer=2):
         self._robot_xyz[1] = odom.y
         self._robot_xyz[2] = odom.z
 
-    def _on_cloud(self, cloud: PointCloud) -> None:
+    def _on_cloud(self, cloud: PointCloud2) -> None:
         if cloud.is_empty:
             return
 
@@ -183,7 +183,7 @@ class VoxelGridModule(Module, layer=2):
             "column_count": len(col_map),
         }
 
-        cloud = PointCloud(points=centres, frame_id="map")
+        cloud = PointCloud2(points=centres, frame_id="map")
         self.voxel_map.publish(stats)
         self.voxel_cloud.publish(cloud)
 

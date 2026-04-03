@@ -39,6 +39,15 @@ class CameraData:
     intrinsics: tuple     # (fx, fy, cx, cy)
     timestamp: float = 0.0
 
+    @property
+    def K(self) -> np.ndarray:
+        """Compatibility helper for bridge code expecting a 3x3 intrinsic matrix."""
+        fx, fy, cx, cy = self.intrinsics
+        return np.array(
+            [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+
 
 @dataclass
 class VelocityCommand:

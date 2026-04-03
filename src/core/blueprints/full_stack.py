@@ -63,12 +63,20 @@ def full_stack_blueprint(
     # Legacy alias support
     planner_backend = planner or planner_backend
     semantic_save_dir = config.get("semantic_save_dir", DEFAULT_SEMANTIC_DIR)
+    _drv = driver_name(robot)
+
+    driver_config = dict(config)
+    if enable_semantic and _drv == "MujocoDriverModule":
+        driver_config.setdefault("enable_camera", True)
+
+    perception_config = dict(config)
+    perception_config["_driver_cls_name"] = _drv
 
     bp = autoconnect(
-        driver(robot, **config),
+        driver(robot, **driver_config),
         slam(slam_profile),
         maps(**config)         if enable_map_modules else Blueprint(),
-        perception(detector, encoder, **config)
+        perception(detector, encoder, **perception_config)
                                if enable_semantic else Blueprint(),
         memory(semantic_save_dir)
                                if enable_semantic else Blueprint(),
@@ -81,24 +89,40 @@ def full_stack_blueprint(
     )
 
     # ── Cross-stack critical wires ──────────────────────────────────────
-    _drv = driver_name(robot)
     _slam = slam_module_name(slam_profile)
 
     # map_cloud routing — SLAM module publishes map_cloud to map consumers.
     # When SLAM is active, explicitly wire to avoid ambiguity with driver's lidar_cloud.
     # Only wire to modules actually in the blueprint.
     _bp_names = {e.name for e in bp._entries}
+    _map_consumers = [
+        "OccupancyGridModule", "ElevationMapModule", "TerrainModule",
+        "VoxelGridModule", "RerunBridgeModule",
+    ]
     if _slam:
-        for consumer in ["OccupancyGridModule", "ElevationMapModule", "TerrainModule", "VoxelGridModule", "RerunBridgeModule"]:
+        for consumer in _map_consumers:
             if consumer in _bp_names:
                 bp.wire(_slam, "map_cloud", consumer, "map_cloud")
+    else:
+        driver_map_port = ""
+        if _drv == "ROS2SimDriverModule":
+            driver_map_port = "map_cloud"
+        elif _drv == "MujocoDriverModule":
+            driver_map_port = "lidar_cloud"
+        if driver_map_port:
+            for consumer in _map_consumers:
+                if consumer in _bp_names:
+                    bp.wire(_drv, driver_map_port, consumer, "map_cloud")
 
     # depth_image routing — Driver or CameraBridge provides depth.
     if enable_semantic:
-        _depth_src = "CameraBridgeModule" if "CameraBridgeModule" in _bp_names else _drv
-        for consumer in ["ReconstructionModule", "VisualServoModule"]:
-            if consumer in _bp_names and _depth_src in _bp_names:
-                bp.wire(_depth_src, "depth_image", consumer, "depth_image")
+        _camera_src = "CameraBridgeModule" if "CameraBridgeModule" in _bp_names else _drv
+        _color_out = "color_image" if _camera_src == "CameraBridgeModule" else "camera_image"
+        for consumer in ["PerceptionModule", "ReconstructionModule", "VisualServoModule"]:
+            if consumer in _bp_names and _camera_src in _bp_names:
+                bp.wire(_camera_src, _color_out, consumer, "color_image")
+                bp.wire(_camera_src, "depth_image", consumer, "depth_image")
+                bp.wire(_camera_src, "camera_info", consumer, "camera_info")
 
     # Safety → all actuators
     bp.wire("SafetyRingModule", "stop_cmd", _drv, "stop_signal")
@@ -123,21 +147,24 @@ def full_stack_blueprint(
     _w("GatewayModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
     _w("VisualServoModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
 
-    # Odometry routing — SLAM → Nav (high accuracy), Driver → everything else
-    if _slam and _slam in _bp_names:
-        bp.wire(_slam, "odometry", "NavigationModule", "odometry")
-        for consumer in [
-            "OccupancyGridModule", "ElevationMapModule", "TerrainModule",
-            "VoxelGridModule", "WavefrontFrontierExplorer", "RerunBridgeModule",
-            "LocalPlannerModule", "PathFollowerModule",
-            "SemanticMapperModule", "EpisodicMemoryModule", "TaggedLocationsModule",
-            "VectorMemoryModule", "TemporalMemoryModule",
-            "SemanticPlannerModule", "VisualServoModule",
-            "ReconstructionModule", "SafetyRingModule", "GeofenceManagerModule",
-            "GatewayModule", "MCPServerModule",
-        ]:
-            if consumer in _bp_names:
-                bp.wire(_drv, "odometry", consumer, "odometry")
+    # Odometry routing — prefer SLAM for NavigationModule, always use driver
+    # odometry for local modules that need fast feedback in dev/sim.
+    _w("PerceptionModule", "detections_3d", "SemanticPlannerModule", "detections")
+
+    _nav_odom_src = _slam if (_slam and _slam in _bp_names) else _drv
+    _w(_nav_odom_src, "odometry", "NavigationModule", "odometry")
+    _w(_nav_odom_src, "odometry", "PerceptionModule", "odometry")
+    for consumer in [
+        "OccupancyGridModule", "ElevationMapModule", "TerrainModule",
+        "VoxelGridModule", "WavefrontFrontierExplorer", "RerunBridgeModule",
+        "LocalPlannerModule", "PathFollowerModule",
+        "SemanticMapperModule", "EpisodicMemoryModule", "TaggedLocationsModule",
+        "VectorMemoryModule", "TemporalMemoryModule",
+        "SemanticPlannerModule", "VisualServoModule",
+        "ReconstructionModule", "SafetyRingModule", "GeofenceManagerModule",
+        "GatewayModule", "MCPServerModule",
+    ]:
+        _w(_drv, "odometry", consumer, "odometry")
 
     # Goal routing from sim driver
     try:
@@ -148,18 +175,16 @@ def full_stack_blueprint(
         pass
 
     # Autonomy chain
-    if enable_native:
-        _w("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
-        _w("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
-        _w("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
-        _w("PathFollowerModule", "cmd_vel", _drv, "cmd_vel")
+    _w("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
+    _w("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
+    _w("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
+    _w("PathFollowerModule", "cmd_vel", _drv, "cmd_vel")
 
     # Visual servo — dual channel
     _w("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target")
     _w("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
     _w("VisualServoModule", "nav_stop", "NavigationModule", "stop_signal")
-    if enable_native:
-        _w("VisualServoModule", "cmd_vel", _drv, "cmd_vel")
+    _w("VisualServoModule", "cmd_vel", _drv, "cmd_vel")
 
     # Teleop — joystick cmd_vel + pause autonomy
     _w("TeleopModule", "cmd_vel", _drv, "cmd_vel")

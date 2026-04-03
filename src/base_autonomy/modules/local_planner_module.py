@@ -28,7 +28,7 @@ from core.module import Module
 from core.stream import In, Out
 from core.msgs.nav import Odometry, Path
 from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -319,7 +319,7 @@ class LocalPlannerModule(Module, layer=2):
 
     # -- Inputs --
     odometry:    In[Odometry]
-    terrain_map: In[PointCloud]
+    terrain_map: In[PointCloud2]
     waypoint:    In[PoseStamped]
 
     # -- Outputs --
@@ -436,7 +436,7 @@ class LocalPlannerModule(Module, layer=2):
                 self._last_cmu_py_time = now
                 self._run_cmu_py()
 
-    def _on_terrain(self, cloud: PointCloud):
+    def _on_terrain(self, cloud: PointCloud2):
         """Store terrain obstacle points for local planning."""
         if cloud.points is not None:
             self._terrain_points = cloud.points

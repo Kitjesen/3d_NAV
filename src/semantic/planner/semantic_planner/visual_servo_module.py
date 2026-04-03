@@ -174,14 +174,14 @@ class VisualServoModule(Module, layer=4):
 
     def _on_color(self, img: Image) -> None:
         """Main processing loop — triggered on each color frame."""
-        self._latest_rgb = img.data
+        self._latest_rgb = img.to_rgb().data if hasattr(img, "to_rgb") else img.data
 
         if self._mode == MODE_IDLE:
             return
-        if self._latest_depth is None or self._intrinsics is None:
-            return
 
         if self._mode == MODE_FIND:
+            if self._latest_depth is None or self._intrinsics is None:
+                return
             self._tick_find()
         elif self._mode == MODE_FOLLOW:
             self._tick_follow()
@@ -253,8 +253,10 @@ class VisualServoModule(Module, layer=4):
                 if score > best_score:
                     best_score = score
                     # Extract bbox from Detection3D
-                    bbox = getattr(obj, "bbox", None)
-                    if bbox is not None:
+                    bbox = getattr(obj, "bbox_2d", None)
+                    if (bbox is None or len(bbox) == 0) and hasattr(obj, "bbox"):
+                        bbox = getattr(obj, "bbox", None)
+                    if bbox is not None and len(bbox) > 0:
                         best_bbox = list(bbox)
 
         return best_bbox
@@ -270,6 +272,9 @@ class VisualServoModule(Module, layer=4):
         # Build scene_objects list for PersonTracker.update()
         scene_objects = []
         for obj in sg.objects:
+            bbox = getattr(obj, "bbox_2d", None)
+            if (bbox is None or len(bbox) == 0) and hasattr(obj, "bbox"):
+                bbox = getattr(obj, "bbox", None)
             scene_objects.append({
                 "id": obj.id,
                 "label": obj.label or "",
@@ -278,7 +283,7 @@ class VisualServoModule(Module, layer=4):
                     float(getattr(obj.position, "y", 0)),
                     float(getattr(obj.position, "z", 0)),
                 ] if obj.position else [0, 0, 0],
-                "bbox": list(getattr(obj, "bbox", [])),
+                "bbox": list(bbox) if bbox is not None else [],
                 "confidence": float(getattr(obj, "confidence", 0.5)),
             })
 
@@ -309,6 +314,7 @@ class VisualServoModule(Module, layer=4):
         """Exit close-range servo: stop cmd_vel, release NavigationModule."""
         if self._servo_active:
             self._servo_active = False
+            self.nav_stop.publish(0)
             # Zero velocity
             self.cmd_vel.publish(Twist())
             logger.debug("VisualServo: servo released, planning stack resumed")

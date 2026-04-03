@@ -24,7 +24,7 @@ import numpy as np
 from core.module import Module, skill
 from core.stream import In, Out
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class RerunBridgeModule(Module, layer=6):
 
     # Module ports (auto-wired from SLAM / Driver)
     odometry: In[Odometry]
-    map_cloud: In[PointCloud]
+    map_cloud: In[PointCloud2]
 
     # Output: whether rerun is active (for UI/status)
     rerun_active: Out[bool]
@@ -195,7 +195,7 @@ class RerunBridgeModule(Module, layer=6):
         except Exception:
             pass
 
-    def _on_cloud(self, cloud: PointCloud) -> None:
+    def _on_cloud(self, cloud: PointCloud2) -> None:
         self._counts["cloud"] += 1
         if not self._active or self._rr is None:
             return

@@ -1,6 +1,6 @@
 """ElevationMapModule — real-time elevation (height) map from LiDAR.
 
-Subscribes to SLAMModule.map_cloud (PointCloud).
+Subscribes to SLAMModule.map_cloud (PointCloud2).
 Bins 3-D points by XY cell and computes per-cell height statistics:
 
   min_z     — lowest point per cell  (ground surface estimate)
@@ -9,7 +9,7 @@ Bins 3-D points by XY cell and computes per-cell height statistics:
   valid     — bool mask (True = at least one point hit this cell)
 
 Ports:
-  In:  map_cloud (PointCloud), odometry (Odometry)
+  In:  map_cloud (PointCloud2), odometry (Odometry)
   Out: elevation_map (dict)
 """
 
@@ -24,7 +24,7 @@ import numpy as np
 from core.module import Module
 from core.stream import In, Out
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class ElevationMapModule(Module, layer=2):
     - Foot placement: min_z surface for quadruped planner
     """
 
-    map_cloud:     In[PointCloud]
+    map_cloud:     In[PointCloud2]
     odometry:      In[Odometry]
 
     elevation_map: Out[dict]
@@ -76,7 +76,7 @@ class ElevationMapModule(Module, layer=2):
         self._robot_xy[0] = odom.x
         self._robot_xy[1] = odom.y
 
-    def _on_cloud(self, cloud: PointCloud) -> None:
+    def _on_cloud(self, cloud: PointCloud2) -> None:
         if cloud.is_empty:
             return
         pts = cloud.points[:, :3]

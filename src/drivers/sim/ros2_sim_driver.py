@@ -27,7 +27,7 @@ from core.module import Module
 from core.stream import In, Out
 from core.msgs.geometry import Twist, Vector3, Pose, Quaternion, PoseStamped
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud, Image, ImageFormat
+from core.msgs.sensor import PointCloud2, Image, ImageFormat, CameraIntrinsics
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -57,10 +57,11 @@ class ROS2SimDriverModule(Module, layer=1):
 
     # -- Outputs --
     odometry: Out[Odometry]
-    lidar_cloud: Out[PointCloud]
-    map_cloud: Out[PointCloud]   # alias for lidar_cloud → feeds OccupancyGrid/Terrain
+    lidar_cloud: Out[PointCloud2]
+    map_cloud: Out[PointCloud2]   # alias for lidar_cloud → feeds OccupancyGrid/Terrain
     camera_image: Out[Image]
     depth_image: Out[Image]
+    camera_info: Out[CameraIntrinsics]
     goal_pose: Out[PoseStamped]
     alive: Out[bool]
 
@@ -71,6 +72,8 @@ class ROS2SimDriverModule(Module, layer=1):
         odom_topic: str = "/nav/odometry",
         cloud_topic: str = "/nav/registered_cloud",
         image_topic: str = "/camera/color/image_raw",
+        depth_topic: str = "/camera/depth/image_raw",
+        info_topic: str = "/camera/color/camera_info",
         cmd_vel_topic: str = "/nav/cmd_vel",
         qos_depth: int = 10,
         **kw,
@@ -81,6 +84,8 @@ class ROS2SimDriverModule(Module, layer=1):
         self._odom_topic = odom_topic
         self._cloud_topic = cloud_topic
         self._image_topic = image_topic
+        self._depth_topic = depth_topic
+        self._info_topic = info_topic
         self._cmd_vel_topic = cmd_vel_topic
         self._qos_depth = qos_depth
 
@@ -104,7 +109,7 @@ class ROS2SimDriverModule(Module, layer=1):
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from nav_msgs.msg import Odometry as ROS2Odom
-            from sensor_msgs.msg import PointCloud2, Image as ROS2Image
+            from sensor_msgs.msg import PointCloud2, Image as ROS2Image, CameraInfo
             from geometry_msgs.msg import TwistStamped
 
             if not rclpy.ok():
@@ -121,6 +126,10 @@ class ROS2SimDriverModule(Module, layer=1):
                 PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos)
             self._node.create_subscription(
                 ROS2Image, self._image_topic, self._on_ros2_image, qos)
+            self._node.create_subscription(
+                ROS2Image, self._depth_topic, self._on_ros2_depth, qos)
+            self._node.create_subscription(
+                CameraInfo, self._info_topic, self._on_ros2_info, qos)
 
             # Goal pose subscriber — bridges ROS2 /nav/goal_pose to Module port
             from geometry_msgs.msg import PoseStamped as ROS2PoseStamped
@@ -204,7 +213,7 @@ class ROS2SimDriverModule(Module, layer=1):
         self.odometry.publish(odom)
 
     def _on_ros2_cloud(self, msg) -> None:
-        """Convert ROS2 sensor_msgs/PointCloud2 (XYZI, 16 bytes/pt) → Module PointCloud."""
+        """Convert ROS2 sensor_msgs/PointCloud2 (XYZI, 16 bytes/pt) → Module PointCloud2."""
         try:
             n_pts = msg.width * msg.height
             if n_pts == 0:
@@ -238,7 +247,7 @@ class ROS2SimDriverModule(Module, layer=1):
             if pts.shape[0] == 0:
                 return
 
-            cloud = PointCloud(
+            cloud = PointCloud2(
                 points=pts,
                 frame_id=msg.header.frame_id or "body",
                 ts=time.time(),
@@ -277,6 +286,48 @@ class ROS2SimDriverModule(Module, layer=1):
             ))
         except Exception as e:
             logger.error("ROS2SimDriverModule: image conversion error: %s", e)
+
+    def _on_ros2_depth(self, msg) -> None:
+        """Convert ROS2 depth image to Module Image."""
+        try:
+            encoding = getattr(msg, "encoding", "16uc1").lower()
+            h, w = msg.height, msg.width
+            raw = bytes(msg.data)
+
+            if encoding in ("16uc1",):
+                arr = np.frombuffer(raw, dtype=np.uint16).reshape(h, w)
+                fmt = ImageFormat.DEPTH_U16
+            elif encoding in ("32fc1",):
+                arr = np.frombuffer(raw, dtype=np.float32).reshape(h, w)
+                fmt = ImageFormat.DEPTH_F32
+            else:
+                arr = np.frombuffer(raw, dtype=np.uint16).reshape(h, w)
+                fmt = ImageFormat.DEPTH_U16
+
+            self.depth_image.publish(Image(
+                data=arr.copy(),
+                format=fmt,
+                ts=time.time(),
+                frame_id=msg.header.frame_id or "camera",
+            ))
+        except Exception as e:
+            logger.error("ROS2SimDriverModule: depth conversion error: %s", e)
+
+    def _on_ros2_info(self, msg) -> None:
+        """Convert ROS2 CameraInfo to Module CameraIntrinsics."""
+        try:
+            k = msg.k
+            self.camera_info.publish(CameraIntrinsics(
+                fx=float(k[0]),
+                fy=float(k[4]),
+                cx=float(k[2]),
+                cy=float(k[5]),
+                width=int(msg.width),
+                height=int(msg.height),
+                depth_scale=1.0,
+            ))
+        except Exception as e:
+            logger.error("ROS2SimDriverModule: camera info conversion error: %s", e)
 
     def _on_ros2_goal(self, msg) -> None:
         """Convert ROS2 geometry_msgs/PoseStamped → Module PoseStamped → goal_pose port."""

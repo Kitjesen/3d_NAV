@@ -17,12 +17,13 @@ def navigation(
 ) -> Blueprint:
     """Global planning + local autonomy (terrain → local planner → path follower)."""
     bp = Blueprint()
+    enable_ros2_bridge = bool(config.get("enable_ros2_bridge", False))
 
     from nav.navigation_module import NavigationModule
     bp.add(NavigationModule,
            planner=planner_backend,
            tomogram=tomogram,
-           enable_ros2_bridge=not enable_native)
+           enable_ros2_bridge=enable_ros2_bridge)
 
     if config.get("enable_frontier", False):
         try:
@@ -38,11 +39,17 @@ def navigation(
         except ImportError as e:
             logger.warning("FrontierExplorer not available: %s", e)
 
-    if enable_native:
-        try:
-            from base_autonomy.modules.autonomy_module import add_autonomy_stack
+    try:
+        from base_autonomy.modules.autonomy_module import add_autonomy_stack
+        if enable_native:
             add_autonomy_stack(bp, backend="cmu", path_follower_backend="nav_core")
-        except ImportError as e:
-            logger.warning("Autonomy stack not available: %s", e)
+        else:
+            add_autonomy_stack(
+                bp,
+                backend=config.get("python_autonomy_backend", "simple"),
+                path_follower_backend=config.get("python_path_follower_backend", "pid"),
+            )
+    except ImportError as e:
+        logger.warning("Autonomy stack not available: %s", e)
 
     return bp

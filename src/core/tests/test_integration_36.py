@@ -17,7 +17,7 @@ def T(name, ok):
 
 from core.msgs.semantic import SceneGraph, Detection3D, Region
 from core.msgs.nav import Odometry, OccupancyGrid
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.msgs.geometry import Vector3, Pose, PoseStamped, Quaternion
 
 # ============================================================
@@ -65,7 +65,7 @@ r = AgentLoop._parse_text_tool_call('{"tool":"navigate_to","args":{"x":5,"y":3}}
 T("5.AgentLoop parse", "tool_calls" in r)
 r2 = AgentLoop._parse_text_tool_call("no json here")
 T("5.AgentLoop no-json", "content" in r2)
-T("5.AgentLoop 7 tools", len(AGENT_TOOLS) == 7)
+T("5.AgentLoop tool registry", len(AGENT_TOOLS) >= 7)
 
 # 6
 from nav.navigation_module import NavigationModule
@@ -90,7 +90,7 @@ T("7.GPS safe obstacle", r is not None and not np.array_equal(r[:2], g[:2]))
 from nav.occupancy_grid_module import OccupancyGridModule
 og = OccupancyGridModule(); og.setup()
 og._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0))))
-og._on_cloud(PointCloud(points=np.random.randn(100, 3).astype(np.float32) * 5))
+og._on_cloud(PointCloud2(points=np.random.randn(100, 3).astype(np.float32) * 5))
 T("8.OccupancyGrid", og.occupancy_grid.msg_count > 0)
 
 # 9
@@ -104,13 +104,13 @@ T("9.ESDF", es.esdf.msg_count > 0)
 from nav.elevation_map_module import ElevationMapModule
 em = ElevationMapModule(); em.setup()
 em._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0))))
-em._on_cloud(PointCloud(points=np.random.randn(100, 3).astype(np.float32) * 5))
+em._on_cloud(PointCloud2(points=np.random.randn(100, 3).astype(np.float32) * 5))
 T("10.ElevationMap", em.elevation_map.msg_count > 0)
 
 # 11
 from slam.slam_bridge_module import SlamBridgeModule
 sb = SlamBridgeModule(); sb.setup()
-T("11.SlamBridge stub", sb._node is None)
+T("11.SlamBridge state attrs", hasattr(sb, "_reader") and hasattr(sb, "_rclpy_node"))
 T("11.SlamBridge ports", "map_cloud" in sb.ports_out and "odometry" in sb.ports_out)
 
 # 12

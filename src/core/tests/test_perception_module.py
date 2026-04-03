@@ -298,8 +298,47 @@ class TestGracefulDegradation:
 
         assert len(det_received) == 1
         assert len(sg_received) == 1
-        # Scene graph should be empty when tracker is None
-        assert len(sg_received[0].objects) == 0
+        # Fallback scene_graph should still preserve the latest detections.
+        assert len(sg_received[0].objects) == 1
+        assert sg_received[0].objects[0].bbox_2d == [300.0, 220.0, 340.0, 260.0]
+
+
+class TestSceneGraphMetadata:
+    def test_tracker_scene_graph_preserves_latest_bbox_metadata(self):
+        mod = PerceptionModule()
+        mod._latest_core_detections = [
+            CoreDetection3D(
+                id="det-1",
+                label="chair",
+                confidence=0.9,
+                position=Vector3(1.0, 2.0, 0.5),
+                bbox_2d=[10.0, 20.0, 30.0, 40.0],
+            )
+        ]
+
+        class _FakeTracker:
+            def get_scene_graph_json(self):
+                return """
+                {
+                  "objects": [
+                    {
+                      "id": "track-1",
+                      "label": "chair",
+                      "score": 0.95,
+                      "position": {"x": 1.0, "y": 2.0, "z": 0.5}
+                    }
+                  ],
+                  "relations": [],
+                  "rooms": []
+                }
+                """
+
+        mod._tracker = _FakeTracker()
+
+        sg = mod._build_scene_graph()
+
+        assert len(sg.objects) == 1
+        assert sg.objects[0].bbox_2d == [10.0, 20.0, 30.0, 40.0]
 
 
 # -- Autoconnect integration test ----------------------------------------------

@@ -30,7 +30,7 @@ from core.module import Module
 from core.stream import In, Out
 from core.msgs.geometry import Twist, Vector3, Pose, Quaternion, PoseStamped
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud, Image
+from core.msgs.sensor import PointCloud2, Image, ImageFormat, CameraIntrinsics
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 # Resolve sim/ directory relative to this file
 _SIM_ROOT = Path(__file__).resolve().parents[3] / "sim"
 _WORLDS_DIR = _SIM_ROOT / "worlds"
-_ROBOT_XML = _SIM_ROOT / "robot" / "robot.xml"
+_ROBOTS_DIR = _SIM_ROOT / "robots" / "nova_dog"
+_ROBOT_XML = _ROBOTS_DIR / "robot_with_camera.xml"
+_POLICY_ONNX = _ROBOTS_DIR / "policy.onnx"
 
 # Known worlds
 WORLDS = {
@@ -66,15 +68,17 @@ class MujocoDriverModule(Module, layer=1):
 
     # -- Outputs --
     odometry: Out[Odometry]
-    lidar_cloud: Out[PointCloud]
+    lidar_cloud: Out[PointCloud2]
     camera_image: Out[Image]
     depth_image: Out[Image]
+    camera_info: Out[CameraIntrinsics]
     alive: Out[bool]
 
     def __init__(
         self,
         world: str = "building_scene",
         render: bool = False,
+        enable_camera: bool = False,
         sim_rate: float = 50.0,
         policy_path: str = "",
         robot_xml: str = "",
@@ -85,8 +89,10 @@ class MujocoDriverModule(Module, layer=1):
         super().__init__(**kw)
         self._world_name = world
         self._render = render
+        self._enable_camera = bool(enable_camera or render)
         self._sim_rate = sim_rate
-        self._policy_path = policy_path or str(_SIM_ROOT / "robot" / "policy.onnx")
+        default_policy = str(_POLICY_ONNX) if _POLICY_ONNX.exists() else ""
+        self._policy_path = policy_path or default_policy
         self._robot_xml = robot_xml or str(_ROBOT_XML)
         self._start_pos = start_pos
         self._obstacles = obstacles or []
@@ -120,9 +126,13 @@ class MujocoDriverModule(Module, layer=1):
             if not world_path.exists():
                 logger.error("World not found: %s", world_path)
                 return
+            if not Path(self._robot_xml).exists():
+                logger.error("Robot XML not found: %s", self._robot_xml)
+                return
 
             robot_cfg = RobotConfig.default_nova_dog()
             robot_cfg.resolve_paths(base_dir=str(_SIM_ROOT))
+            robot_cfg.robot_xml = self._robot_xml
             if self._policy_path:
                 robot_cfg.policy_onnx = self._policy_path
 
@@ -133,11 +143,12 @@ class MujocoDriverModule(Module, layer=1):
                     obs_cfgs.append(ObstacleConfig(**o))
                 else:
                     obs_cfgs.append(o)
-            world_cfg = WorldConfig(obstacles=obs_cfgs)
+            world_cfg = WorldConfig(scene_xml=str(world_path), obstacles=obs_cfgs)
 
-            # Only create camera when rendering is enabled (requires OpenGL)
+            # Camera capture is independent from the on-screen viewer so the
+            # semantic stack can run in headless simulation.
             camera_cfgs = []
-            if self._render:
+            if self._enable_camera:
                 camera_cfg = CameraConfig(
                     name="front_camera", width=640, height=480,
                     fovy=60.0, render_depth=True)
@@ -150,26 +161,18 @@ class MujocoDriverModule(Module, layer=1):
                 camera_configs=camera_cfgs,
                 headless=not self._render,
             )
-            # building_scene.xml etc. are standalone scenes without robot include.
-            # Pass xml_path only if the scene XML contains actuators (merged robot).
-            # Otherwise let engine generate a flat scene that includes robot.xml.
-            import mujoco as _mj
-            _scene_content = world_path.read_text(encoding="utf-8", errors="ignore")
-            _has_robot = '<actuator>' in _scene_content and 'joint' in _scene_content
-            if _has_robot:
-                self._engine.load(str(world_path))
-            else:
-                # Generate flat ground with real robot, add obstacles later
-                logger.info("MujocoDriverModule: scene '%s' has no robot, using dynamic merge",
-                            self._world_name)
-                self._engine.load()  # uses SimWorld → <include robot.xml>
+            # Let MuJoCoEngine decide whether to use the scene directly or merge
+            # the selected world geometry into the robot model.
+            self._engine.load(str(world_path))
             self._engine.reset()  # stabilize + warm up policy history
             logger.info("MujocoDriverModule: loaded world '%s', robot at %s",
                         self._world_name, self._start_pos)
 
         except ImportError as e:
+            self._engine = None
             logger.error("MujocoDriverModule: MuJoCo not available: %s", e)
         except Exception as e:
+            self._engine = None
             logger.error("MujocoDriverModule: setup failed: %s", e)
 
     def start(self):
@@ -257,7 +260,7 @@ class MujocoDriverModule(Module, layer=1):
                     try:
                         pts = self._engine.get_lidar_points()
                         if pts is not None and len(pts) > 0:
-                            self.lidar_cloud.publish(PointCloud(
+                            self.lidar_cloud.publish(PointCloud2(
                                 points=pts.astype(np.float32),
                                 frame_id="lidar",
                                 ts=ts,
@@ -270,11 +273,31 @@ class MujocoDriverModule(Module, layer=1):
                     try:
                         cam = self._engine.get_camera_data("front_camera")
                         if cam is not None:
+                            h, w = (cam.rgb.shape[:2] if cam.rgb is not None
+                                    else cam.depth.shape[:2])
                             self.camera_image.publish(Image(
-                                data=cam.rgb, ts=ts))
+                                data=cam.rgb,
+                                format=ImageFormat.RGB,
+                                ts=ts,
+                                frame_id="camera_link",
+                            ))
                             if cam.depth is not None:
                                 self.depth_image.publish(Image(
-                                    data=cam.depth, ts=ts))
+                                    data=cam.depth,
+                                    format=ImageFormat.DEPTH_F32,
+                                    ts=ts,
+                                    frame_id="camera_link",
+                                ))
+                            fx, fy, cx, cy = cam.intrinsics
+                            self.camera_info.publish(CameraIntrinsics(
+                                fx=float(fx),
+                                fy=float(fy),
+                                cx=float(cx),
+                                cy=float(cy),
+                                width=int(w),
+                                height=int(h),
+                                depth_scale=1.0,
+                            ))
                     except Exception:
                         pass
 

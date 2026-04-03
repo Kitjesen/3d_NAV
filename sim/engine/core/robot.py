@@ -117,6 +117,8 @@ class RobotConfig:
     def default_nova_dog(cls) -> "RobotConfig":
         """Return default NOVA Dog config (paths must be resolved at runtime)."""
         cfg = cls()
-        cfg.robot_xml = "robot/robot.xml"
-        cfg.policy_onnx = "robot/policy.onnx"
+        cfg.robot_xml = "robots/nova_dog/robot_with_camera.xml"
+        # Policy is optional; callers can inject a concrete checkpoint when one
+        # is available in the target environment.
+        cfg.policy_onnx = ""
         return cfg

@@ -1,6 +1,6 @@
 """OccupancyGridModule — real-time 2D occupancy grid + costmap from LiDAR.
 
-Subscribes to SLAMModule.map_cloud (PointCloud).  Projects 3-D points into a
+Subscribes to SLAMModule.map_cloud (PointCloud2).  Projects 3-D points into a
 robot-centric 2-D grid, marks occupied cells, inflates obstacles with a
 circular kernel, then publishes:
 
@@ -8,7 +8,7 @@ circular kernel, then publishes:
   costmap        → NavigationModule.costmap  (dict: grid/resolution/origin)
 
 Ports:
-  In:  map_cloud (PointCloud), odometry (Odometry)
+  In:  map_cloud (PointCloud2), odometry (Odometry)
   Out: occupancy_grid (OccupancyGrid), costmap (dict)
 """
 
@@ -24,7 +24,7 @@ from core.module import Module
 from core.stream import In, Out
 from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import OccupancyGrid, Odometry
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class OccupancyGridModule(Module, layer=2):
     scipy.ndimage.binary_dilation (falls back to pure-numpy if scipy absent).
     """
 
-    map_cloud: In[PointCloud]
+    map_cloud: In[PointCloud2]
     odometry:  In[Odometry]
 
     occupancy_grid: Out[OccupancyGrid]  # typed msg → ESDFModule
@@ -78,7 +78,7 @@ class OccupancyGridModule(Module, layer=2):
         self._robot_xy[0] = odom.x
         self._robot_xy[1] = odom.y
 
-    def _on_cloud(self, cloud: PointCloud) -> None:
+    def _on_cloud(self, cloud: PointCloud2) -> None:
         if cloud.is_empty:
             return
         pts = cloud.points[:, :3]

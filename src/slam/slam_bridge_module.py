@@ -21,7 +21,7 @@ import numpy as np
 from core.module import Module
 from core.stream import Out
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.msgs.geometry import Pose, Vector3, Quaternion
 from core.registry import register
 
@@ -36,7 +36,7 @@ class SlamBridgeModule(Module, layer=1):
     On systems without either, starts silently in stub mode.
     """
 
-    map_cloud: Out[PointCloud]
+    map_cloud: Out[PointCloud2]
     odometry:  Out[Odometry]
     alive:     Out[bool]
 
@@ -132,7 +132,7 @@ class SlamBridgeModule(Module, layer=1):
             logger.debug("SlamBridge dds odom error: %s", e)
 
     def _on_dds_cloud(self, msg) -> None:
-        """DDS_PointCloud2 → Module PointCloud."""
+        """DDS_PointCloud2 → Module PointCloud2."""
         try:
             n = msg.width * msg.height
             if n == 0:
@@ -147,7 +147,7 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.map_cloud.publish(PointCloud.from_numpy(xyz, frame_id="map"))
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
         except Exception as e:
             logger.debug("SlamBridge dds cloud error: %s", e)
 
@@ -187,6 +187,6 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.map_cloud.publish(PointCloud.from_numpy(xyz, frame_id="map"))
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
         except Exception as e:
             logger.debug("SlamBridge rclpy cloud error: %s", e)

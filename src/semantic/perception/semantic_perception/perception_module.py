@@ -86,6 +86,7 @@ class PerceptionModule(Module, layer=3):
         self._latest_depth: Optional[np.ndarray] = None
         self._latest_intrinsics: Optional[Any] = None
         self._latest_odom_matrix: Optional[np.ndarray] = None
+        self._latest_core_detections: List[CoreDetection3D] = []
 
     # == Lifecycle =============================================================
 
@@ -191,7 +192,7 @@ class PerceptionModule(Module, layer=3):
 
     def _process_frame(self, color_img: Image, tf_camera_to_world: np.ndarray) -> None:
         """USS-Nav style single-frame processing: detect -> project -> track -> publish."""
-        bgr = color_img.data
+        bgr = color_img.to_bgr().data if hasattr(color_img, "to_bgr") else color_img.data
         depth = self._latest_depth
 
         # Laplacian blur detection (optional import)
@@ -226,6 +227,7 @@ class PerceptionModule(Module, layer=3):
 
         # Publish detections
         core_dets = self._convert_detections(detections_3d)
+        self._latest_core_detections = core_dets
         self.detections_3d.publish(core_dets)
 
         # Publish scene graph
@@ -397,12 +399,12 @@ class PerceptionModule(Module, layer=3):
     def _build_scene_graph(self) -> SceneGraph:
         """Build core SceneGraph message from InstanceTracker state."""
         if self._tracker is None:
-            return SceneGraph()
+            return self._build_detection_scene_graph()
         try:
             sg_json = self._tracker.get_scene_graph_json()
             data = json.loads(sg_json)
         except Exception:
-            return SceneGraph()
+            return self._build_detection_scene_graph()
 
         objects = []
         for obj in data.get("objects", []):
@@ -413,11 +415,21 @@ class PerceptionModule(Module, layer=3):
                 px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
             else:
                 px, py, pz = 0.0, 0.0, 0.0
+            label = str(obj.get("label", ""))
+            matched_det = self._match_detection_metadata(label, px, py, pz)
+            bbox_2d = []
+            clip_feature = None
+            if matched_det is not None:
+                bbox_2d = [float(x) for x in matched_det.bbox_2d]
+                if matched_det.clip_feature is not None:
+                    clip_feature = np.array(matched_det.clip_feature, copy=True)
             objects.append(CoreDetection3D(
                 id=str(obj.get("id", "")),
-                label=str(obj.get("label", "")),
+                label=label,
                 confidence=float(obj.get("confidence", obj.get("score", 0))),
                 position=Vector3(px, py, pz),
+                bbox_2d=bbox_2d,
+                clip_feature=clip_feature,
             ))
 
         relations = []
@@ -437,6 +449,48 @@ class PerceptionModule(Module, layer=3):
 
         return SceneGraph(
             objects=objects, relations=relations, regions=regions, frame_id="map",
+        )
+
+    def _build_detection_scene_graph(self) -> SceneGraph:
+        """Fallback scene graph when tracker state is unavailable."""
+        return SceneGraph(
+            objects=[self._clone_core_detection(det) for det in self._latest_core_detections],
+            frame_id="map",
+        )
+
+    def _match_detection_metadata(
+        self, label: str, px: float, py: float, pz: float,
+    ) -> Optional[CoreDetection3D]:
+        best_det: Optional[CoreDetection3D] = None
+        best_dist = 1.5
+        label_lower = label.lower()
+
+        for det in self._latest_core_detections:
+            if label_lower and det.label.lower() != label_lower:
+                continue
+            dx = det.position.x - px
+            dy = det.position.y - py
+            dz = det.position.z - pz
+            dist = float(np.sqrt(dx * dx + dy * dy + dz * dz))
+            if dist < best_dist:
+                best_dist = dist
+                best_det = det
+
+        return best_det
+
+    @staticmethod
+    def _clone_core_detection(det: CoreDetection3D) -> CoreDetection3D:
+        clip_feature = None
+        if det.clip_feature is not None:
+            clip_feature = np.array(det.clip_feature, copy=True)
+        return CoreDetection3D(
+            id=det.id,
+            label=det.label,
+            confidence=det.confidence,
+            position=Vector3(det.position.x, det.position.y, det.position.z),
+            bbox_2d=[float(x) for x in det.bbox_2d],
+            clip_feature=clip_feature,
+            ts=det.ts,
         )
 
     # == Query API =============================================================

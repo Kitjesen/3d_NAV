@@ -35,9 +35,10 @@ def driver(robot: str = "thunder", **config) -> Blueprint:
         robot = auto_select("driver", platform=platform.machine().lower()) or "stub"
 
     DriverCls = get("driver", robot)
-    bp.add(DriverCls,
-           dog_host=config.get("dog_host", cfg.driver.dog_host),
-           dog_port=config.get("dog_port", cfg.driver.dog_port))
+    driver_config = dict(config)
+    driver_config.setdefault("dog_host", cfg.driver.dog_host)
+    driver_config.setdefault("dog_port", cfg.driver.dog_port)
+    bp.add(DriverCls, **driver_config)
 
     # Camera bridge moved to perception() stack — only loaded when needed
     return bp

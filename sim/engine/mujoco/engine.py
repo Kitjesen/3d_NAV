@@ -93,6 +93,7 @@ class MuJoCoEngine(SimEngine):
         self._leg_joint_ids: List[int] = []
         self._base_body_id: int = 0
         self._lidar_body_id: int = 0
+        self._leg_actuator_offset: int = 0
 
         # cmd_vel (thread-safe)
         self._cmd_vel = np.zeros(3, dtype=np.float64)  # [vx, vy, wz]
@@ -137,44 +138,48 @@ class MuJoCoEngine(SimEngine):
                 # Scene already has robot (actuators present) — use as-is
                 self._model = mujoco.MjModel.from_xml_path(xml_path)
             elif _has_floor and not _has_actuators:
-                # Scene has floor but no robot — merge robot into scene
-                # Strategy: load robot.xml as base, extract scene worldbody
-                # geometry and inject as extra bodies
-                import re
-                # Extract everything inside <worldbody>...</worldbody> from scene
-                _wb_match = re.search(
-                    r'<worldbody>(.*?)</worldbody>', _xml_content, re.DOTALL)
-                if _wb_match:
-                    _scene_bodies = _wb_match.group(1)
-                    # Remove placeholder robot body
-                    _scene_bodies = re.sub(
-                        r'<body name="robot_placeholder".*?</body>',
-                        '', _scene_bodies, flags=re.DOTALL)
-                    _scene_bodies = re.sub(
-                        r'<body name="base_link".*?</body>',
-                        '', _scene_bodies, flags=re.DOTALL)
+                # Scene has floor but no robot — merge robot into scene using
+                # structured XML editing so nested placeholder bodies are
+                # removed safely.
+                import copy
+                import xml.etree.ElementTree as ET
 
-                    # Extract scene <asset> contents (materials, textures)
-                    _asset_match = re.search(
-                        r'<asset>(.*?)</asset>', _xml_content, re.DOTALL)
-                    _scene_assets = _asset_match.group(1) if _asset_match else ''
+                scene_root = ET.fromstring(_xml_content)
+                robot_root = ET.fromstring(
+                    Path(robot_xml).read_text(encoding="utf-8", errors="ignore")
+                )
 
-                    # Read robot.xml and inject scene assets + bodies
-                    _robot_content = Path(robot_xml).read_text(
-                        encoding="utf-8", errors="ignore")
+                scene_worldbody = scene_root.find("worldbody")
+                robot_worldbody = robot_root.find("worldbody")
+                if scene_worldbody is None or robot_worldbody is None:
+                    self._model = mujoco.MjModel.from_xml_path(xml_path)
+                else:
+                    scene_asset = scene_root.find("asset")
+                    robot_asset = robot_root.find("asset")
+                    if scene_asset is not None and len(scene_asset) > 0:
+                        if robot_asset is None:
+                            robot_asset = ET.Element("asset")
+                            robot_root.append(robot_asset)
+                        existing_asset_keys = {
+                            (child.tag, child.attrib.get("name"))
+                            for child in list(robot_asset)
+                        }
+                        for child in list(scene_asset):
+                            asset_key = (child.tag, child.attrib.get("name"))
+                            if asset_key in existing_asset_keys:
+                                continue
+                            robot_asset.append(copy.deepcopy(child))
+                            existing_asset_keys.add(asset_key)
 
-                    # Inject scene assets into robot's <asset> block
-                    if _scene_assets.strip():
-                        _robot_content = _robot_content.replace(
-                            '</asset>',
-                            '\n    <!-- scene assets -->\n%s\n  </asset>'
-                            % _scene_assets)
+                    for child in list(scene_worldbody):
+                        if (
+                            child.tag == "body"
+                            and child.attrib.get("name") in {"robot_placeholder", "base_link"}
+                        ):
+                            continue
+                        robot_worldbody.append(copy.deepcopy(child))
 
-                    # Inject scene bodies into robot's <worldbody>
-                    _merged = _robot_content.replace(
-                        '</worldbody>',
-                        '\n    <!-- ══ Scene geometry (from %s) ══ -->\n%s\n  </worldbody>'
-                        % (Path(xml_path).name, _scene_bodies))
+                    _merged = ET.tostring(robot_root, encoding="unicode")
                     _robot_dir = str(Path(robot_xml).parent)
                     _tmp = tempfile.NamedTemporaryFile(
                         suffix=".xml", delete=False, dir=_robot_dir,
@@ -185,9 +190,6 @@ class MuJoCoEngine(SimEngine):
                         self._model = mujoco.MjModel.from_xml_path(_tmp.name)
                     finally:
                         Path(_tmp.name).unlink(missing_ok=True)
-                else:
-                    # Fallback: just load scene as-is
-                    self._model = mujoco.MjModel.from_xml_path(xml_path)
             else:
                 # Auto-inject ground: insert floor geom after <worldbody>
                 _robot_dir = str(Path(xml_path).parent)
@@ -215,7 +217,10 @@ class MuJoCoEngine(SimEngine):
         else:
             # Generate scene XML dynamically from WorldConfig
             world = SimWorld(self._world_cfg)
-            scene_xml_str = world.get_scene_xml(robot_xml)
+            # MuJoCo is sensitive to Windows-style include paths. Use a normalized
+            # absolute POSIX path inside the generated XML so headless startup
+            # resolves robot.xml consistently.
+            scene_xml_str = world.get_scene_xml(Path(robot_xml).resolve().as_posix())
             # Write to temp file (MuJoCo needs file path to handle <include>)
             robot_dir = str(Path(robot_xml).parent)
             tmp = tempfile.NamedTemporaryFile(
@@ -234,6 +239,11 @@ class MuJoCoEngine(SimEngine):
 
         # Resolve body/joint IDs
         self._resolve_ids()
+        valid_leg_joints = len([jid for jid in self._leg_joint_ids if jid >= 0])
+        if valid_leg_joints > 0 and self._model is not None:
+            self._leg_actuator_offset = max(0, int(self._model.nu) - valid_leg_joints)
+        else:
+            self._leg_actuator_offset = self._robot_cfg.leg_act_offset
 
         # Initialize LiDAR
         self._lidar = MuJoCoLidar(self._model, self._data, self._lidar_cfg)
@@ -247,16 +257,21 @@ class MuJoCoEngine(SimEngine):
 
         # Initialize policy
         policy_path = self._robot_cfg.policy_onnx
-        if policy_path and Path(policy_path).exists():
-            self._policy = PolicyRunner(policy_path)
+        if policy_path:
+            if Path(policy_path).exists():
+                self._policy = PolicyRunner(policy_path)
+            else:
+                print(f'[MuJoCoEngine] Policy not found at {policy_path}, '
+                      f'running PD-only mode')
+                self._policy = None
         else:
-            print(f'[MuJoCoEngine] Policy not found at {policy_path}, '
-                  f'running PD-only mode')
+            print('[MuJoCoEngine] No policy configured, running PD-only mode')
             self._policy = None
 
         self._running = True
         print(f'[MuJoCoEngine] Loaded. dt={self._physics_dt:.4f}s, '
               f'joints={len(self._leg_joint_ids)}, '
+              f'ctrl_offset={self._leg_actuator_offset}, '
               f'cameras={list(self._cameras.keys())}')
 
     def _resolve_ids(self) -> None:
@@ -300,7 +315,7 @@ class MuJoCoEngine(SimEngine):
         self._apply_standing_pose()
 
         # Zero arm joints ctrl (required by original bridge)
-        offset = self._robot_cfg.leg_act_offset
+        offset = self._leg_actuator_offset
         for i in range(offset):
             if i < len(self._data.ctrl):
                 self._data.ctrl[i] = 0.0
@@ -342,7 +357,7 @@ class MuJoCoEngine(SimEngine):
 
         standing_dart = self._robot_cfg.standing_pose_array
         standing_mj = standing_dart[self._robot_cfg.dart_to_mj_array]
-        offset = self._robot_cfg.leg_act_offset
+        offset = self._leg_actuator_offset
 
         for i, jid in enumerate(self._leg_joint_ids):
             if jid < 0:
@@ -428,14 +443,16 @@ class MuJoCoEngine(SimEngine):
             action_dart = self._policy.infer(obs)     # (16,) Dart order
             # Dart -> MuJoCo order
             action_mj = action_dart[DART_TO_MJ]
-            offset = self._robot_cfg.leg_act_offset
-            self._data.ctrl[offset:offset + 16] = action_mj
+            offset = self._leg_actuator_offset
+            ctrl_span = min(len(action_mj), max(0, len(self._data.ctrl) - offset))
+            self._data.ctrl[offset:offset + ctrl_span] = action_mj[:ctrl_span]
         else:
             # No policy: hold standing pose
             standing_dart = self._robot_cfg.standing_pose_array
             action_mj = standing_dart[DART_TO_MJ]
-            offset = self._robot_cfg.leg_act_offset
-            self._data.ctrl[offset:offset + 16] = action_mj
+            offset = self._leg_actuator_offset
+            ctrl_span = min(len(action_mj), max(0, len(self._data.ctrl) - offset))
+            self._data.ctrl[offset:offset + ctrl_span] = action_mj[:ctrl_span]
 
     # ──────────────────────────────────────────────────────────────
     # State reading
@@ -537,8 +554,9 @@ class MuJoCoEngine(SimEngine):
         """Directly set joint target positions (bypasses ONNX policy)."""
         if len(positions) < 16:
             raise ValueError(f"Expected 16 joint positions, got {len(positions)}")
-        offset = self._robot_cfg.leg_act_offset
-        self._data.ctrl[offset:offset + 16] = positions[:16]
+        offset = self._leg_actuator_offset
+        ctrl_span = min(16, max(0, len(self._data.ctrl) - offset))
+        self._data.ctrl[offset:offset + ctrl_span] = positions[:ctrl_span]
 
     # ──────────────────────────────────────────────────────────────
     # Scene manipulation

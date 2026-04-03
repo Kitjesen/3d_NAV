@@ -1,4 +1,4 @@
-"""Tests for lingtu.core.msgs.sensor — Image, CameraIntrinsics, PointCloud, Imu."""
+"""Tests for lingtu.core.msgs.sensor — Image, CameraIntrinsics, PointCloud2, Imu."""
 
 import numpy as np
 import pytest
@@ -8,6 +8,7 @@ from core.msgs.sensor import (
     Image,
     ImageFormat,
     Imu,
+    PointCloud2,
     PointCloud,
 )
 from core.msgs.geometry import Quaternion, Vector3
@@ -101,24 +102,24 @@ class TestCameraIntrinsics:
 
 
 # ---------------------------------------------------------------------------
-# PointCloud
+# PointCloud2
 # ---------------------------------------------------------------------------
 
-class TestPointCloud:
+class TestPointCloud2:
     def test_from_numpy(self):
         pts = np.random.rand(100, 3).astype(np.float32)
-        pc = PointCloud.from_numpy(pts)
+        pc = PointCloud2.from_numpy(pts)
         assert pc.num_points == 100
         assert not pc.is_empty
 
     def test_empty_cloud(self):
-        pc = PointCloud()
+        pc = PointCloud2()
         assert pc.is_empty
         assert pc.num_points == 0
 
     def test_transform_identity(self):
         pts = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
-        pc = PointCloud.from_numpy(pts)
+        pc = PointCloud2.from_numpy(pts)
         pc2 = pc.transform(np.eye(4))
         np.testing.assert_allclose(pc2.points, pts, atol=1e-5)
 
@@ -126,31 +127,44 @@ class TestPointCloud:
         pts = np.array([[0, 0, 0]], dtype=np.float32)
         T = np.eye(4)
         T[:3, 3] = [1, 2, 3]
-        pc2 = PointCloud.from_numpy(pts).transform(T)
+        pc2 = PointCloud2.from_numpy(pts).transform(T)
         np.testing.assert_allclose(pc2.points[0, :3], [1, 2, 3], atol=1e-5)
 
     def test_voxel_downsample(self):
         # 1000 points in a 1m cube → voxel_size=0.5 should give ≤8 voxels
         pts = np.random.rand(1000, 3).astype(np.float32)
-        pc = PointCloud.from_numpy(pts).voxel_downsample(0.5)
+        pc = PointCloud2.from_numpy(pts).voxel_downsample(0.5)
         assert pc.num_points <= 8
         assert pc.num_points > 0
 
     def test_encode_decode_roundtrip(self):
         pts = np.random.rand(50, 4).astype(np.float32)  # with intensity
-        pc = PointCloud(points=pts, ts=99.0, frame_id="lidar")
+        pc = PointCloud2(points=pts, ts=99.0, frame_id="lidar")
         raw = pc.encode()
-        pc2 = PointCloud.decode(raw)
+        pc2 = PointCloud2.decode(raw)
         assert pc2.frame_id == "lidar"
         assert abs(pc2.ts - 99.0) < 1e-9
         np.testing.assert_array_equal(pc2.points, pts)
 
     def test_to_dict_bounds(self):
         pts = np.array([[0, 0, 0], [1, 2, 3]], dtype=np.float32)
-        d = PointCloud.from_numpy(pts).to_dict()
+        d = PointCloud2.from_numpy(pts).to_dict()
         assert d["num_points"] == 2
         np.testing.assert_allclose(d["bounds"]["min"], [0, 0, 0])
         np.testing.assert_allclose(d["bounds"]["max"], [1, 2, 3])
+
+    def test_ros2_metadata_defaults(self):
+        pts = np.random.rand(5, 4).astype(np.float32)
+        pc = PointCloud2(points=pts, frame_id="lidar")
+        assert pc.height == 1
+        assert pc.width == 5
+        assert pc.point_step == 16
+        assert pc.row_step == 80
+        assert pc.is_dense
+        assert [f.name for f in pc.fields] == ["x", "y", "z", "intensity"]
+
+    def test_pointcloud_alias(self):
+        assert PointCloud is PointCloud2
 
 
 # ---------------------------------------------------------------------------

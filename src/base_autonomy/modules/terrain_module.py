@@ -24,7 +24,7 @@ import numpy as np
 from core.module import Module
 from core.stream import In, Out
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -44,10 +44,10 @@ class TerrainModule(Module, layer=2):
 
     # -- Inputs --
     odometry: In[Odometry]
-    map_cloud: In[PointCloud]
+    map_cloud: In[PointCloud2]
 
     # -- Outputs --
-    terrain_map: Out[PointCloud]
+    terrain_map: Out[PointCloud2]
     traversability: Out[dict]
     elevation_map: Out[np.ndarray]
     alive: Out[bool]
@@ -159,7 +159,7 @@ class TerrainModule(Module, layer=2):
         if self._backend == "simple":
             self.traversability.publish({"status": "passthrough"})
 
-    def _on_cloud(self, cloud: PointCloud):
+    def _on_cloud(self, cloud: PointCloud2):
         if self._backend == "simple":
             self.terrain_map.publish(cloud)
             return
@@ -167,7 +167,7 @@ class TerrainModule(Module, layer=2):
         if self._backend == "nanobind" and self._core is not None:
             self._process_nanobind(cloud)
 
-    def _process_nanobind(self, cloud: PointCloud):
+    def _process_nanobind(self, cloud: PointCloud2):
         """Process point cloud through C++ terrain_core. GIL released during C++."""
         pts = cloud.points  # numpy Nx3 or Nx4
         if pts is None or len(pts) == 0:
@@ -191,7 +191,7 @@ class TerrainModule(Module, layer=2):
         # Publish terrain cloud
         if result.n_points > 0:
             arr = np.array(result.terrain_points, dtype=np.float32).reshape(-1, 4)
-            self.terrain_map.publish(PointCloud(
+            self.terrain_map.publish(PointCloud2(
                 points=arr[:, :3],
                 frame_id="map",
                 ts=ts,

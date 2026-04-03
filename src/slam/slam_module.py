@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 from core.module import Module
 from core.stream import In, Out
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ class SLAMModule(Module, layer=1):
 
     # -- Outputs --
     odometry: Out[Odometry]
-    map_cloud: Out[PointCloud]
+    map_cloud: Out[PointCloud2]
     alive: Out[bool]
 
     def __init__(self, backend: str = "fastlio2", **kw):
