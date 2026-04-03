@@ -322,6 +322,8 @@ class LocalPlannerModule(Module, layer=2):
     odometry:    In[Odometry]
     terrain_map: In[PointCloud2]
     waypoint:    In[PoseStamped]
+    boundary:    In[PointCloud2]
+    added_obstacles: In[PointCloud2]
 
     # -- Outputs --
     local_path: Out[Path]
@@ -335,6 +337,8 @@ class LocalPlannerModule(Module, layer=2):
         self._robot_yaw = 0.0
         self._latest_waypoint: Optional[PoseStamped] = None
         self._terrain_points: Optional[np.ndarray] = None
+        self._boundary_points: Optional[np.ndarray] = None
+        self._added_obstacle_points: Optional[np.ndarray] = None
         self._last_cmu_py_time: float = 0.0
 
         # cmu_py state
@@ -348,6 +352,8 @@ class LocalPlannerModule(Module, layer=2):
         self.odometry.subscribe(self._on_odom)
         self.terrain_map.subscribe(self._on_terrain)
         self.waypoint.subscribe(self._on_waypoint)
+        self.boundary.subscribe(self._on_boundary)
+        self.added_obstacles.subscribe(self._on_added_obstacles)
 
         if self._backend == "nanobind":
             self._setup_nanobind()
@@ -487,6 +493,16 @@ class LocalPlannerModule(Module, layer=2):
         if cloud.points is not None:
             self._terrain_points = cloud.points
 
+    def _on_boundary(self, cloud: PointCloud2):
+        """Store geofence boundary points (treated as hard obstacles)."""
+        if cloud.points is not None:
+            self._boundary_points = cloud.points
+
+    def _on_added_obstacles(self, cloud: PointCloud2):
+        """Store externally injected obstacle points."""
+        if cloud.points is not None:
+            self._added_obstacle_points = cloud.points
+
     def _on_waypoint(self, wp: PoseStamped):
         """Store waypoint; simple backend generates path immediately."""
         self._latest_waypoint = wp
@@ -510,6 +526,40 @@ class LocalPlannerModule(Module, layer=2):
     # nanobind C++ scorer (full CMU algorithm, in-process)                 #
     # ------------------------------------------------------------------ #
 
+    def _merge_obstacle_clouds(self) -> np.ndarray:
+        """Merge terrain + boundary + added_obstacles into single Nx4 array.
+
+        Boundary points get intensity=100 (hard obstacle, matches C++ boundaryHandler).
+        Added obstacle points get intensity=200 (matches C++ addedObstaclesHandler).
+        """
+        clouds = []
+        if self._terrain_points is not None and self._terrain_points.shape[0] > 0:
+            pts = self._terrain_points.astype(np.float32)
+            if pts.shape[1] == 3:
+                buf = np.zeros((len(pts), 4), dtype=np.float32)
+                buf[:, :3] = pts
+                clouds.append(buf)
+            elif pts.shape[1] >= 4:
+                clouds.append(pts[:, :4].astype(np.float32, copy=False))
+
+        if self._boundary_points is not None and self._boundary_points.shape[0] > 0:
+            bpts = self._boundary_points.astype(np.float32)
+            buf = np.zeros((len(bpts), 4), dtype=np.float32)
+            buf[:, :min(3, bpts.shape[1])] = bpts[:, :min(3, bpts.shape[1])]
+            buf[:, 3] = 100.0
+            clouds.append(buf)
+
+        if self._added_obstacle_points is not None and self._added_obstacle_points.shape[0] > 0:
+            apts = self._added_obstacle_points.astype(np.float32)
+            buf = np.zeros((len(apts), 4), dtype=np.float32)
+            buf[:, :min(3, apts.shape[1])] = apts[:, :min(3, apts.shape[1])]
+            buf[:, 3] = 200.0
+            clouds.append(buf)
+
+        if not clouds:
+            return np.zeros((0, 4), dtype=np.float32)
+        return np.concatenate(clouds, axis=0)
+
     def _run_nanobind(self, timestamp: float):
         """Run C++ LocalPlannerCore.plan() and publish result."""
         wp = self._latest_waypoint
@@ -521,18 +571,8 @@ class LocalPlannerModule(Module, layer=2):
             self._robot_yaw)
         self._core.set_goal(wp.pose.position.x, wp.pose.position.y)
 
-        if self._terrain_points is not None and self._terrain_points.shape[0] > 0:
-            pts = self._terrain_points.astype(np.float32)
-            if pts.shape[1] == 3:
-                flat = np.zeros((len(pts), 4), dtype=np.float32)
-                flat[:, :3] = pts
-            elif pts.shape[1] >= 4:
-                flat = pts[:, :4].astype(np.float32, copy=False)
-            else:
-                flat = np.zeros((0, 4), dtype=np.float32)
-            obs_flat = flat.ravel().tolist()
-        else:
-            obs_flat = []
+        merged = self._merge_obstacle_clouds()
+        obs_flat = merged.ravel().tolist() if merged.shape[0] > 0 else []
 
         result = self._core.plan(obs_flat, timestamp)
 
