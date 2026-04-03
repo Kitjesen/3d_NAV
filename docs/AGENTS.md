@@ -504,3 +504,405 @@ Monitor:     health | watch <port> | module <name> | connections | log | config
 | `src/base_autonomy/TERRAIN_ANALYSIS_EXPLAINED.md` | Terrain analysis deep dive |
 | `src/remote_monitoring/README.md` | gRPC Gateway documentation |
 | `src/robot_proto/proto/control.proto` | Task control protocol definition |
+
+---
+
+## 26. Feature-by-Feature Breakdown and Quick Verification
+
+### 26.1 Localization (定位)
+
+**What it does**: Matches live LiDAR scans against a pre-built PCD map using ICP to produce a corrected `map→odom` TF transform. Requires Fast-LIO2 running as the odometry source.
+
+**Key source files**:
+
+| File | Role |
+|------|------|
+| `src/slam/localizer/` | C++ ICP localizer node |
+| `src/slam/localizer/config/localizer.yaml` | `static_map_path`, ICP resolutions, `update_hz` |
+| `src/slam/localizer/launch/localizer_launch.py` | Launches Fast-LIO2 + localizer + RViz |
+| `src/slam/slam_module.py` | Python `SLAMModule` — `_setup_localizer()` starts LIO + localizer via NativeModule |
+| `src/slam/slam_bridge_module.py` | `SlamBridgeModule` — subscribes to `/nav/odometry` + `/nav/map_cloud` via DDS/rclpy |
+| `src/core/blueprints/stacks/slam.py` | `slam("localizer")` — ensures systemd services, adds `SlamBridgeModule` |
+
+**Data flow**:
+```
+Livox LiDAR → Fast-LIO2 (/cloud_registered + /Odometry)
+                 ↓
+           Localizer (ICP match against PCD)
+                 ↓
+           TF: map→odom + /localization_quality
+                 ↓
+           SlamBridgeModule → Python odometry/map_cloud ports
+```
+
+**Quick verification**:
+
+| Method | Command | Needs |
+|--------|---------|-------|
+| Framework ports/registry | `python -m pytest src/core/tests/test_new_modules.py::TestSLAMModule -q` | Nothing |
+| Bridge module smoke | `python -m pytest src/core/tests/test_integration_36.py -q` | Nothing |
+| Profile build check | `python -c "from core.blueprints.stacks import slam; bp = slam('localizer'); print('OK')"` | Nothing |
+| Full ROS2 localizer | `ros2 launch localizer localizer_launch.py` + `ros2 service call /relocalize ...` | ROS2 + LiDAR |
+| Check localization quality | `ros2 topic echo /localization_quality` | Running localizer |
+
+**Key parameters** (`localizer.yaml`):
+- `static_map_path` — PCD map file (empty = no auto-load, must call `/relocalize`)
+- `update_hz` — ICP update rate
+- Rough/refine ICP resolutions and score thresholds
+
+---
+
+### 26.2 Mapping (建图)
+
+**What it does**: Builds a 3D point cloud map using Fast-LIO2 (LiDAR-Inertial odometry) with optional PGO loop closure. The map is saved as PCD and then processed offline into a Tomogram for planning.
+
+**Key source files**:
+
+| File | Role |
+|------|------|
+| `src/slam/fastlio2/` | C++ Fast-LIO2 SLAM node |
+| `src/slam/pgo/` | C++ Pose Graph Optimization (loop closure) |
+| `src/slam/slam_module.py` | `_setup_fastlio2()` — starts Livox + LIO + PGO |
+| `src/core/blueprints/stacks/slam.py` | `slam("fastlio2")` — ensures `slam` + `slam_pgo` services |
+| `src/global_planning/PCT_planner/tomography/` | Offline PCD → Tomogram conversion |
+
+**Data flow**:
+```
+Livox LiDAR → Fast-LIO2 (/cloud_map + /Odometry)
+                 ↓
+              PGO (loop closure, optional)
+                 ↓
+           /pgo/save_maps → map.pcd
+                 ↓ (offline)
+           tomography.py → tomogram.pickle
+```
+
+**Quick verification**:
+
+| Method | Command | Needs |
+|--------|---------|-------|
+| Framework smoke | `python -m pytest src/core/tests/test_new_modules.py::TestSLAMModule -q` | Nothing |
+| Profile `map` check | `python -c "from core.blueprints.full_stack import full_stack_blueprint; bp = full_stack_blueprint(slam_profile='fastlio2', enable_semantic=False); print('OK')"` | Nothing |
+| Map REPL | `python lingtu.py map` then `map save test_map` | ROS2 + LiDAR |
+| ROS2 direct | `ros2 launch fastlio2 lio_launch.py` + `ros2 service call /save_map ...` | ROS2 + LiDAR |
+| Tomogram generation | `cd src/global_planning/PCT_planner && python3 tomography/scripts/tomography.py --scene Common` | Saved PCD |
+
+**Key parameters**:
+- `lio.yaml`: `lidar_type`, `scan_line`, `map_resolution`, `max_map_points`, extrinsics (`t_il`, `r_il`)
+- `pgo.yaml`: keyframe deltas, loop search radius, score thresholds
+- Map storage: `~/data/nova/maps/<name>/map.pcd` (default `NAV_MAP_DIR`)
+
+---
+
+### 26.3 Global Navigation (全局导航)
+
+**What it does**: Given a `goal_pose`, plans a global path using A* (or PCT) on a 2D costmap or tomogram, then dispatches waypoints to the local planner. Handles mission FSM (IDLE→PLANNING→EXECUTING→SUCCESS/STUCK/FAILED), stuck detection, and replanning.
+
+**Key source files**:
+
+| File | Role |
+|------|------|
+| `src/nav/navigation_module.py` | `NavigationModule` — mission FSM, goal handling, replan logic |
+| `src/nav/global_planner_service.py` | `GlobalPlannerService` — A*/PCT backend, `_find_safe_goal` BFS, path downsample |
+| `src/nav/waypoint_tracker.py` | `WaypointTracker` — 2D arrival detection, stuck timeout |
+| `src/nav/occupancy_grid_module.py` | `OccupancyGridModule` — LiDAR → 2D costmap (feeds live A* replanning) |
+| `src/nav/esdf_module.py` | `ESDFModule` — signed distance field from occupancy |
+| `src/nav/elevation_map_module.py` | `ElevationMapModule` — per-cell height |
+| `src/global_planning/pct_adapters/src/global_planner_module.py` | Registers `_AStarBackend` and `_PCTBackend` |
+| `src/core/blueprints/stacks/navigation.py` | `navigation()` stack factory |
+
+**Data flow**:
+```
+goal_pose (from Gateway/MCP/SemanticPlanner)
+    ↓
+NavigationModule._on_goal → _plan()
+    ↓
+GlobalPlannerService.plan(start, goal)
+    ↓ _find_safe_goal (BFS snap to free cell)
+    ↓ _AStarBackend.plan (2D A* on costmap/tomogram)
+    ↓ _downsample (sparse waypoints, 2m apart)
+    ↓
+WaypointTracker.reset(path) → first waypoint
+    ↓
+NavigationModule publishes waypoint (PoseStamped)
+    ↓
+LocalPlannerModule → PathFollowerModule → cmd_vel → Driver
+
+Parallel: OccupancyGridModule → costmap → GlobalPlannerService.update_map
+          (live replanning when new obstacles detected, ≥3s cooldown)
+```
+
+**Mission states**: `IDLE` → `PLANNING` → `EXECUTING` → `SUCCESS` | `STUCK` (replan up to 3x) | `FAILED` | `CANCELLED`
+
+**Quick verification**:
+
+| Method | Command | Needs |
+|--------|---------|-------|
+| NavigationModule FSM | `python -m pytest src/core/tests/test_new_modules.py::TestNavigationModule -q` | Nothing |
+| Safe goal + planner | `python -m pytest src/core/tests/test_integration_36.py -q` | Nothing |
+| WaypointTracker stuck | `python -m pytest src/core/tests/test_new_features.py -q` | Nothing |
+| Full wiring check | `python -m pytest src/core/tests/test_cross_module_integration.py -q` | Nothing |
+| Non-native blueprint | `python -m pytest src/core/tests/test_non_native_navigation_blueprint.py -q` | Nothing |
+| PCT adapter logic | `python3 tests/planning/test_pct_adapter_logic.py` | Nothing |
+| Stub profile (live) | `python lingtu.py stub` then REPL: `go 10 5` | Nothing |
+| Sim profile (live) | `python lingtu.py sim` then REPL: `go 10 5` | MuJoCo deps |
+
+**Key parameters** (`NavigationModule`):
+- `planner`: `"astar"` or `"pct"` (registry backend)
+- `tomogram`: path to `.pickle` (PCT/A* map source)
+- `waypoint_threshold`: 1.5m (arrival distance)
+- `stuck_timeout`: 10s / `stuck_dist_thre`: 0.15m
+- `max_replan_count`: 3
+- `downsample_dist`: 2.0m (waypoint spacing)
+- `allow_direct_goal_fallback`: True (single-waypoint if no map)
+
+---
+
+### 26.4 Local Planning (局部规划)
+
+**What it does**: Receives a global waypoint + terrain map, selects a collision-free local path from a pre-computed path library (CMU-style) or simple straight-line, then follows it with Pure Pursuit to produce `cmd_vel`.
+
+**Key source files**:
+
+| File | Role |
+|------|------|
+| `src/base_autonomy/modules/terrain_module.py` | `TerrainModule` — point cloud → terrain map + traversability |
+| `src/base_autonomy/modules/local_planner_module.py` | `LocalPlannerModule` — waypoint + terrain → local path |
+| `src/base_autonomy/modules/path_follower_module.py` | `PathFollowerModule` — local path → cmd_vel |
+| `src/base_autonomy/modules/autonomy_module.py` | `add_autonomy_stack()` — adds all three modules |
+| `src/base_autonomy/terrain_analysis/` | C++ terrain analysis node |
+| `src/base_autonomy/local_planner/` | C++ local planner + pathFollower |
+
+**Data flow**:
+```
+NavigationModule → waypoint (PoseStamped)
+    ↓
+LocalPlannerModule (In: waypoint + terrain_map + odometry)
+    ↓ score candidate paths against obstacle grid
+    ↓ select best group, lowest penalty
+    ↓
+local_path (Path) → PathFollowerModule
+    ↓ Pure Pursuit: lookahead + yaw rate limiting
+    ↓
+cmd_vel (Twist) → Driver
+```
+
+**Backends**:
+- Terrain: `nanobind` (C++ `_nav_core.TerrainAnalysisCore`), `native` (subprocess), `simple`
+- Local planner: `cmu` (CMU-style 12,348 candidate paths), `simple` (straight line)
+- Path follower: `nav_core` (C++ nanobind), `pure_pursuit` (native), `pid`
+
+**Quick verification**:
+
+| Method | Command | Needs |
+|--------|---------|-------|
+| Module smoke (simple/pid) | `python -m pytest src/core/tests/test_new_modules.py::TestLocalPlannerModule -q` | Nothing |
+| PathFollower smoke | `python -m pytest src/core/tests/test_new_modules.py::TestPathFollowerModule -q` | Nothing |
+| Wiring Nav→Local→Follow→Driver | `python -m pytest src/core/tests/test_cross_module_integration.py -q` | Nothing |
+| Non-native stack | `python -m pytest src/core/tests/test_non_native_navigation_blueprint.py -q` | Nothing |
+| C++ nodes (ROS2) | `ros2 launch local_planner local_planner.launch` | ROS2 + built C++ |
+| Stub planning pipeline | `bash tests/integration/test_planning_stub.sh` | ROS2 + `make build` |
+
+**Key parameters**:
+- `LocalPlannerModule`: `_PATH_RANGE=3.5m`, `_OBSTACLE_HEIGHT_THRE=0.5m`, `_DIR_THRE=90deg`
+- `PathFollowerModule`: `max_speed`, `lookahead`, `yaw_rate_limit`
+- C++ `localPlanner`: `vehicleHeight`, `vehicleWidth`, `adjacentRange`
+- C++ `pathFollower`: `baseLookAheadDis_`, `lookAheadRatio_`, `slowRate1/2/3`
+
+---
+
+### 26.5 Semantic Navigation (语义导航)
+
+**What it does**: Resolves natural language instructions ("go to the red chair") into `goal_pose` through a 5-level fallback chain: tag lookup → fast scene-graph matching → vector memory search → frontier exploration → visual servo. Includes LERa failure recovery.
+
+**Key source files**:
+
+| File | Role |
+|------|------|
+| `src/semantic/planner/semantic_planner/semantic_planner_module.py` | Unified planner: instruction → `_try_resolve` → goal_pose |
+| `src/semantic/planner/semantic_planner/goal_resolver.py` | `GoalResolver` — fusion weights, KG reload |
+| `src/semantic/planner/semantic_planner/fast_path.py` | `fast_resolve()` — System 1 matching (~0.17ms) |
+| `src/semantic/planner/semantic_planner/slow_path.py` | `async resolve()` — tag + AdaCoT + LLM (~2s) |
+| `src/semantic/planner/semantic_planner/agent_loop.py` | Multi-turn LLM tool calling (7 tools, 10 steps max) |
+| `src/semantic/planner/semantic_planner/task_decomposer.py` | Rules-based instruction decomposition |
+| `src/semantic/planner/semantic_planner/action_executor.py` | LERa failure recovery strategies |
+| `src/semantic/perception/semantic_perception/perception_module.py` | RGB-D + odom → scene graph |
+| `src/semantic/perception/semantic_perception/instance_tracker.py` | Multi-object tracking, scene graph builder |
+| `src/memory/modules/semantic_mapper_module.py` | Scene graph → RoomObjectKG + TopologySemGraph |
+| `src/memory/modules/vector_memory_module.py` | CLIP + ChromaDB vector search |
+| `src/memory/modules/tagged_locations_module.py` | Named location store |
+| `src/memory/modules/episodic_module.py` | Episodic memory for LLM context |
+
+**Data flow**:
+```
+instruction (str) from Gateway/MCP
+    ↓
+SemanticPlannerModule._on_instruction
+    ↓ optional TaskDecomposer
+    ↓
+_try_resolve(instruction, scene_graph_json):
+    ├─ Level 2: GoalResolver.fast_resolve() — keyword + CLIP fusion
+    │   weights: label 35%, CLIP 35%, detector 15%, spatial 15%
+    │   if confidence ≥ 0.75 → goal_pose ✓
+    │
+    ├─ Level 3: VectorMemoryModule.query_location(instruction)
+    │   CLIP embedding search → if score ≥ 0.3 → goal_pose ✓
+    │
+    ├─ Level 4: FrontierScorer.get_best_frontier()
+    │   topology graph information gain → goal_pose (EXPLORING)
+    │
+    └─ Level 5: servo_target.publish("find:<instruction>")
+        → VisualServoModule (see Tracking below)
+
+LERa Recovery (on mission_status STUCK/FAILED):
+    ActionExecutor.lera_recover → retry_different_path | expand_search | requery_goal | abort
+```
+
+**Agent loop** (triggered by `agent_instruction` port):
+```
+agent_instruction → AgentLoop(llm_client, 7 tools, max_steps=10, timeout=120s)
+    ↓ observe→think→act cycle
+    tools: navigate_to, navigate_to_object, detect_object,
+           query_memory, tag_location, say, done
+```
+
+**Quick verification**:
+
+| Method | Command | Needs |
+|--------|---------|-------|
+| Planner module wiring | `python -m pytest src/core/tests/test_semantic_planner_modules.py -q` | Nothing |
+| Visual servo integration | `python -m pytest src/core/tests/test_visual_servo_semantic_integration.py -q` | Nothing |
+| Full semantic pipeline | `python -m pytest src/core/tests/test_sim_semantic_pipeline_blueprint.py -q` | Nothing |
+| GoalResolver unit tests | `python -m pytest src/semantic/planner/test/test_goal_resolver.py -q` | `semantic_common` |
+| Fast resolve tests | `python -m pytest src/semantic/planner/test/test_fast_resolve.py -q` | `semantic_common` |
+| BBoxNavigator tests | `python -m pytest src/semantic/planner/test/test_bbox_navigator.py -q` | `semantic_common` |
+| PersonTracker tests | `python -m pytest src/semantic/planner/test/test_person_tracker.py -q` | `semantic_common` |
+| Instance tracker tests | `python -m pytest src/semantic/perception/tests/test_instance_tracker.py -q` | `semantic_common` |
+| Dev profile (live) | `python lingtu.py dev` then REPL: `go red chair` | Nothing (mock LLM) |
+| Dev with real LLM | `python lingtu.py dev --llm kimi` then REPL: `go red chair` | `MOONSHOT_API_KEY` |
+
+**Key parameters**:
+- `SemanticPlannerModule`: `fast_path_threshold=0.75`, `lera_cooldown=15s`, `save_dir`
+- `GoalResolver`: confidence weights (label/CLIP/detector/spatial), KG reload interval (120s)
+- `PerceptionModule`: `detector_type`, `confidence_threshold`, `skip_frames`
+- `VectorMemoryModule`: `store_interval`, `max_results`, `persist_dir`
+
+---
+
+### 26.6 Tracking and Following (跟踪)
+
+**What it does**: Tracks and follows objects or people using visual servo. Two modes: **Find** (detect and approach a named object) and **Follow** (track a specific person). Dual output channels: far-range publishes `goal_pose` to NavigationModule, close-range publishes `cmd_vel` directly to driver with PD control.
+
+**Key source files**:
+
+| File | Role |
+|------|------|
+| `src/semantic/planner/semantic_planner/visual_servo_module.py` | `VisualServoModule` — dual-channel servo controller |
+| `src/semantic/planner/semantic_planner/bbox_navigator.py` | `BBoxNavigator` — bbox + depth → 3D → PD control |
+| `src/semantic/planner/semantic_planner/person_tracker.py` | `PersonTracker` — VLM select + CLIP Re-ID |
+
+**Data flow — Find mode** (object tracking):
+```
+servo_target = "find:red chair"
+    ↓
+VisualServoModule._tick_find
+    ↓ match label in scene_graph.objects
+    ↓ BBoxNavigator.update(bbox, depth)
+    ↓ compute 3D position + distance
+    │
+    ├─ distance > 3m (far): goal_pose → NavigationModule → planning stack
+    │
+    └─ distance ≤ 3m (near): cmd_vel → Driver directly (PD servo)
+                              + nav_stop → NavigationModule (pause planner)
+```
+
+**Data flow — Follow mode** (person following):
+```
+servo_target = "follow:person_description"
+    ↓
+VisualServoModule._tick_follow
+    ↓ PersonTracker.update(scene_objects, rgb_frame)
+    ↓ get_follow_waypoint → goal_pose
+    ↓
+NavigationModule → planning stack (always far-range for follow)
+```
+
+**Mutual exclusion**: When close-range servo is active, `nav_stop=1` is published to pause NavigationModule so PathFollower stops producing conflicting `cmd_vel`.
+
+**Wiring in `full_stack.py`**:
+```python
+bp.wire("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target")
+bp.wire("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
+bp.wire("VisualServoModule", "nav_stop", "NavigationModule", "stop_signal")
+bp.wire("VisualServoModule", "cmd_vel", driver_name, "cmd_vel")
+```
+
+**Quick verification**:
+
+| Method | Command | Needs |
+|--------|---------|-------|
+| Servo integration test | `python -m pytest src/core/tests/test_visual_servo_semantic_integration.py -q` | Nothing |
+| BBoxNavigator unit | `python -m pytest src/semantic/planner/test/test_bbox_navigator.py -q` | `semantic_common` |
+| PersonTracker unit | `python -m pytest src/semantic/planner/test/test_person_tracker.py -q` | `semantic_common` |
+| Full wiring check | `python -m pytest src/core/tests/test_cross_module_integration.py -q` | Nothing |
+| MCP tools | `python -m pytest src/semantic/planner/test/test_mcp_server.py -q` | `semantic_common` |
+
+**Key parameters**:
+- `VisualServoModule`: `servo_takeover_distance=3.0m`, `follow_distance`, `lost_timeout`
+- `BBoxNavigator` (`BBoxNavConfig`): `target_distance`, `max_linear_speed`, `max_angular_speed`, `lost_timeout`
+- cmd_vel priority: Teleop > VisualServo > PathFollower
+
+---
+
+## 27. Testing Infrastructure Summary
+
+### Test Categories
+
+| Category | Location | Count | ROS2? | Hardware? | Command |
+|----------|----------|-------|-------|-----------|---------|
+| Core framework | `src/core/tests/` | ~625 | No | No | `python -m pytest src/core/tests/ -q` |
+| Semantic planner | `src/semantic/planner/test/` | ~30 files | No | No | `python -m pytest src/semantic/planner/test/ -q` |
+| Perception | `src/semantic/perception/tests/` | ~15 files | No | No | `python -m pytest src/semantic/perception/tests/ -q` |
+| Planning logic | `tests/planning/` | ~5 files | No | No | `python3 tests/planning/test_pct_adapter_logic.py` |
+| Integration | `tests/integration/` | ~10 scripts | Yes | Some | `make test-integration` |
+| Benchmark | `tests/benchmark/` | 3 scripts | Yes | No | `make benchmark` |
+| ROS2 colcon | Various `package.xml` | — | Yes | No | `make test` |
+
+### Quick Verification Ladder (fastest to most complete)
+
+```bash
+# 1. Framework only (no deps, ~50s) — validates Module/Blueprint/Registry/Transport
+python -m pytest src/core/tests/ -q
+
+# 2. Semantic planner (may skip without semantic_common)
+python -m pytest src/semantic/planner/test/ -q
+
+# 3. Perception (may skip without semantic_common/cv2)
+python -m pytest src/semantic/perception/tests/ -q
+
+# 4. Stub profile (live REPL, no hardware)
+python lingtu.py stub
+
+# 5. Dev profile (semantic pipeline, no hardware, mock LLM)
+python lingtu.py dev
+
+# 6. Sim profile (MuJoCo + full stack)
+python lingtu.py sim
+
+# 7. ROS2 stub pipeline (needs built workspace)
+bash tests/integration/test_planning_stub.sh
+
+# 8. Full integration (needs ROS2 + built workspace)
+make test-integration
+```
+
+### Profile-Based Verification
+
+| Profile | What it exercises | How to start |
+|---------|------------------|--------------|
+| `stub` | Framework, Blueprint wiring, Gateway, A* planner (no semantic, no hardware) | `python lingtu.py stub` |
+| `dev` | All of `stub` + perception + memory + semantic planner + visual servo (mock LLM) | `python lingtu.py dev` |
+| `sim` | Full algorithm stack with MuJoCo physics simulation + native C++ autonomy | `python lingtu.py sim` |
+| `map` | SLAM mapping mode (Fast-LIO2 + PGO) | `python lingtu.py map` |
+| `s100p` | Real robot with localizer + semantic + BPU detector | `python lingtu.py s100p` |
+| `explore` | Real robot with SLAM + full native + semantic (no pre-built map) | `python lingtu.py explore` |
