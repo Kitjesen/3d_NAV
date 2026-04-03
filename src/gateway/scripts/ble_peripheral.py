@@ -140,9 +140,25 @@ class RobotState:
     def emergency_stop(self):
         log.warning("EMERGENCY STOP received!")
         self.mode = MODE_ESTOP
-        # TODO: 调用实际急停逻辑
-        # subprocess.run(["ros2", "topic", "pub", "--once", "/stop",
-        #                 "std_msgs/msg/Bool", "{data: true}"])
+        # Call GatewayModule HTTP stop endpoint (best-effort, non-blocking)
+        import threading
+        threading.Thread(target=self._send_estop_http, daemon=True).start()
+
+    def _send_estop_http(self, gateway_url: str = "http://127.0.0.1:5050"):
+        """POST /api/v1/stop to the GatewayModule HTTP server."""
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                f"{gateway_url}/api/v1/stop",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                log.info("E-stop sent to gateway: HTTP %d", resp.status)
+        except Exception as e:
+            log.error("E-stop HTTP call failed: %s — "
+                      "ensure GatewayModule is running on %s", e, gateway_url)
 
     def configure_wifi(self, ssid: str, password: str):
         log.info(f"WiFi config: SSID='{ssid}'")
