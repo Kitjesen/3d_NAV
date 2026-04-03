@@ -21,13 +21,19 @@ from core.registry import register
 
 logger = logging.getLogger(__name__)
 
-# Path to the PCT_planner lib/ directory (contains planner_wrapper.py and .so files)
-_PCT_LIB = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "PCT_planner", "planner", "lib")
+# Paths needed by planner_wrapper.py and the C++ .so bindings.
+#
+# planner_wrapper.py uses:
+#   from lib import a_star, ele_planner, traj_opt   ← needs _PCT_PLANNER in sys.path
+#   from utils import *                              ← utils.py is in scripts/
+#
+# The .so files (ele_planner, a_star, traj_opt) are inside lib/, so lib/ must
+# also be on sys.path for Python to find them as extension modules.
+_PCT_PLANNER = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "PCT_planner", "planner")
 )
-_PCT_SCRIPTS = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "PCT_planner", "planner", "scripts")
-)
+_PCT_LIB = os.path.join(_PCT_PLANNER, "lib")
+_PCT_SCRIPTS = os.path.join(_PCT_PLANNER, "scripts")
 
 
 # ---------------------------------------------------------------------------
@@ -65,9 +71,11 @@ class _PCTBackend:
         Sets self._available = True only when both the .so and the tomogram
         are successfully loaded.
         """
-        # Add lib/ and scripts/ to sys.path so planner_wrapper.py can
-        # import ele_planner, a_star, traj_opt from the same directory.
-        for p in [_PCT_LIB, _PCT_SCRIPTS]:
+        # sys.path setup required by planner_wrapper.py:
+        #   _PCT_PLANNER  → enables  `from lib import a_star, ele_planner, traj_opt`
+        #   _PCT_LIB      → Python finds the .so extension modules inside lib/
+        #   _PCT_SCRIPTS  → enables  `from utils import *`  (utils.py lives here)
+        for p in [_PCT_PLANNER, _PCT_LIB, _PCT_SCRIPTS]:
             if p not in sys.path:
                 sys.path.insert(0, p)
 
