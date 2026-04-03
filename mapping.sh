@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# Thin wrapper — implementation: scripts/ws/mapping.sh
+# Thin wrapper — implementation: scripts/build/mapping.sh
 set -e
-exec "$(dirname "$0")/scripts/ws/mapping.sh" "$@"
+exec "$(dirname "$0")/scripts/build/mapping.sh" "$@"
