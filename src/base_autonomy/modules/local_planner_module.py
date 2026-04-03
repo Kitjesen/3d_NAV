@@ -622,27 +622,17 @@ class LocalPlannerModule(Module, layer=2):
         # Clamp to avoid reverse paths
         joy_dir_deg = max(-95.0, min(95.0, joy_dir_deg))
 
-        # Build obstacle array in body frame from terrain points
+        # Merge all obstacle sources and convert to body frame
+        merged = self._merge_obstacle_clouds()
         obs_pts: np.ndarray
-        if self._terrain_points is not None and self._terrain_points.shape[0] > 0:
-            pts = self._terrain_points.astype(np.float32)
-            # terrain_points are in world frame — convert to body frame
-            if pts.shape[1] >= 2:
-                dx = pts[:, 0] - self._robot_pos[0]
-                dy = pts[:, 1] - self._robot_pos[1]
-                bx = dx * cos_yaw + dy * sin_yaw
-                by = -dx * sin_yaw + dy * cos_yaw
-                if pts.shape[1] >= 3:
-                    bz = pts[:, 2]
-                else:
-                    bz = np.zeros(len(dx), dtype=np.float32)
-                if pts.shape[1] >= 4:
-                    intensity = pts[:, 3]
-                    obs_pts = np.stack([bx, by, bz, intensity], axis=1).astype(np.float32)
-                else:
-                    obs_pts = np.stack([bx, by, bz], axis=1).astype(np.float32)
-            else:
-                obs_pts = np.zeros((0, 3), dtype=np.float32)
+        if merged.shape[0] > 0:
+            dx = merged[:, 0] - self._robot_pos[0]
+            dy = merged[:, 1] - self._robot_pos[1]
+            bx = dx * cos_yaw + dy * sin_yaw
+            by = -dx * sin_yaw + dy * cos_yaw
+            bz = merged[:, 2] if merged.shape[1] >= 3 else np.zeros(len(dx), dtype=np.float32)
+            intensity = merged[:, 3]
+            obs_pts = np.stack([bx, by, bz, intensity], axis=1).astype(np.float32)
         else:
             obs_pts = np.zeros((0, 3), dtype=np.float32)
 

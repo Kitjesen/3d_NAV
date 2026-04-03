@@ -446,9 +446,9 @@ class TestSLAMModule(unittest.TestCase):
     def test_ports(self):
         from slam.slam_module import SLAMModule
         m = SLAMModule(backend="fastlio2")
-        self.assertIn("odometry", m.ports_out)
-        self.assertIn("map_cloud", m.ports_out)
         self.assertIn("alive", m.ports_out)
+        self.assertNotIn("odometry", m.ports_out)
+        self.assertNotIn("map_cloud", m.ports_out)
 
     def test_layer(self):
         from slam.slam_module import SLAMModule
