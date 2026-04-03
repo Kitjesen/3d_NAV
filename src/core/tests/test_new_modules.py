@@ -81,6 +81,80 @@ class TestNavigationModule(unittest.TestCase):
         self.assertIn("navigation", h)
         self.assertEqual(h["navigation"]["planner"], "astar")
 
+    def test_no_map_uses_direct_goal_fallback(self):
+        m = self._make(enable_ros2_bridge=False)
+
+        class _NoMapBackend:
+            _grid = None
+
+            def plan(self, start, goal):
+                return []
+
+        m._planner_svc._backend = _NoMapBackend()
+        m._robot_pos = np.array([0.0, 0.0, 0.0])
+        waypoints = []
+        statuses = []
+        m.waypoint._add_callback(waypoints.append)
+        m.adapter_status._add_callback(statuses.append)
+
+        m._on_goal(PoseStamped(
+            pose=Pose(position=Vector3(4.0, 2.0, 0.0), orientation=Quaternion()),
+            frame_id="map", ts=time.time(),
+        ))
+
+        self.assertEqual(m._state, "EXECUTING")
+        self.assertEqual(len(waypoints), 1)
+        self.assertAlmostEqual(waypoints[0].pose.position.x, 4.0)
+        self.assertAlmostEqual(waypoints[0].pose.position.y, 2.0)
+        self.assertTrue(any(s.get("event") == "direct_goal_fallback" for s in statuses))
+
+    def test_empty_path_with_map_still_fails(self):
+        m = self._make(enable_ros2_bridge=False)
+
+        class _MappedBackend:
+            _grid = np.zeros((10, 10), dtype=np.float32)
+
+            def plan(self, start, goal):
+                return []
+
+        m._planner_svc._backend = _MappedBackend()
+        m._robot_pos = np.array([0.0, 0.0, 0.0])
+
+        m._on_goal(PoseStamped(
+            pose=Pose(position=Vector3(4.0, 2.0, 0.0), orientation=Quaternion()),
+            frame_id="map", ts=time.time(),
+        ))
+
+        self.assertEqual(m._state, "FAILED")
+        self.assertIn("empty path", m._failure_reason)
+
+    def test_duplicate_goal_update_is_ignored_while_executing(self):
+        m = self._make(enable_ros2_bridge=False)
+
+        class _NoMapBackend:
+            _grid = None
+
+            def plan(self, start, goal):
+                return []
+
+        m._planner_svc._backend = _NoMapBackend()
+        m._robot_pos = np.array([0.0, 0.0, 0.0])
+        events = []
+        m.adapter_status._add_callback(events.append)
+
+        pose = PoseStamped(
+            pose=Pose(position=Vector3(4.0, 2.0, 0.0), orientation=Quaternion()),
+            frame_id="map", ts=time.time(),
+        )
+        m._on_goal(pose)
+        first_path_len = m._tracker.path_length
+        first_state = m._state
+        m._on_goal(pose)
+
+        self.assertEqual(first_state, "EXECUTING")
+        self.assertEqual(m._tracker.path_length, first_path_len)
+        self.assertTrue(any(e.get("event") == "goal_update_ignored" for e in events))
+
 
 # ============================================================================
 # SafetyRingModule

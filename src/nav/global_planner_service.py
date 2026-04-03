@@ -43,6 +43,13 @@ class GlobalPlannerService:
     def is_ready(self) -> bool:
         return self._backend is not None
 
+    @property
+    def has_map(self) -> bool:
+        if self._backend is None:
+            return False
+        grid = getattr(self._backend, "_grid", None)
+        return grid is not None and hasattr(grid, "shape") and getattr(grid, "size", 0) > 0
+
     def plan(
         self,
         start: np.ndarray,

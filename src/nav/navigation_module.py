@@ -89,10 +89,14 @@ class NavigationModule(Module, layer=5):
         max_replan_count: int = 3,
         downsample_dist: float = 2.0,
         enable_ros2_bridge: bool = True,
+        allow_direct_goal_fallback: bool = True,
+        goal_update_epsilon: float = 0.25,
         **kw,
     ):
         super().__init__(**kw)
         self._enable_ros2_bridge = enable_ros2_bridge
+        self._allow_direct_goal_fallback = allow_direct_goal_fallback
+        self._goal_update_epsilon = goal_update_epsilon
 
         self._planner_svc = GlobalPlannerService(
             planner_name=planner,
@@ -180,13 +184,32 @@ class NavigationModule(Module, layer=5):
     # ── Input handlers ────────────────────────────────────────────────────
 
     def _on_goal(self, goal: PoseStamped) -> None:
-        self._goal = np.array([
+        new_goal = np.array([
             goal.pose.position.x,
             goal.pose.position.y,
             goal.pose.position.z,
         ])
+        if self._should_ignore_goal_update(new_goal):
+            return
+        self._goal = new_goal
         self._replan_count = 0
         self._plan()
+
+    def _should_ignore_goal_update(self, new_goal: np.ndarray) -> bool:
+        if self._goal is None:
+            return False
+        if self._state not in (MissionState.PLANNING, MissionState.EXECUTING, MissionState.PATROLLING):
+            return False
+        dist = float(np.linalg.norm(new_goal[:2] - self._goal[:2]))
+        if dist > self._goal_update_epsilon:
+            return False
+        self.adapter_status.publish({
+            "event": "goal_update_ignored",
+            "distance": dist,
+            "goal": [float(new_goal[0]), float(new_goal[1]), float(new_goal[2])],
+            "ts": time.time(),
+        })
+        return True
 
     def _on_instruction(self, text: str) -> None:
         logger.info("NavigationModule received instruction: %s", text[:50])
@@ -303,7 +326,7 @@ class NavigationModule(Module, layer=5):
     # ── Planning ──────────────────────────────────────────────────────────
 
     def _plan(self) -> None:
-        if self._goal is None or not self._planner_svc.is_ready:
+        if self._goal is None:
             self._set_state(MissionState.FAILED)
             return
 
@@ -311,18 +334,49 @@ class NavigationModule(Module, layer=5):
         self._mission_start_time = time.time()
         self._last_costmap_replan_time = time.time()
 
-        try:
-            path, _ = self._planner_svc.plan(self._robot_pos, self._goal)
-        except Exception as exc:
-            logger.error("Planning failed: %s", exc)
-            self._failure_reason = str(exc)
-            self._set_state(MissionState.FAILED)
-            return
+        path = None
+        if not self._planner_svc.is_ready:
+            if self._allow_direct_goal_fallback:
+                path = self._direct_goal_path(reason="planner backend not ready")
+            else:
+                self._failure_reason = "planner backend not ready"
+                self._set_state(MissionState.FAILED)
+                return
+        else:
+            try:
+                path, _ = self._planner_svc.plan(self._robot_pos, self._goal)
+            except Exception as exc:
+                if self._should_use_direct_goal_fallback(exc):
+                    path = self._direct_goal_path(reason=str(exc))
+                else:
+                    logger.error("Planning failed: %s", exc)
+                    self._failure_reason = str(exc)
+                    self._set_state(MissionState.FAILED)
+                    return
 
+        self._failure_reason = ""
         self._tracker.reset(path, self._robot_pos)
         self.global_path.publish(path)
         self._set_state(MissionState.EXECUTING)
         self._publish_waypoint()
+
+    def _should_use_direct_goal_fallback(self, exc: Exception) -> bool:
+        if not self._allow_direct_goal_fallback:
+            return False
+        return not self._planner_svc.has_map
+
+    def _direct_goal_path(self, reason: str = "") -> List[np.ndarray]:
+        logger.warning(
+            "NavigationModule: using direct-goal fallback waypoint (reason=%s)",
+            reason or "planner unavailable",
+        )
+        self.adapter_status.publish({
+            "event": "direct_goal_fallback",
+            "reason": reason or "planner unavailable",
+            "goal": [float(self._goal[0]), float(self._goal[1]), float(self._goal[2])],
+            "ts": time.time(),
+        })
+        return [self._goal.copy()]
 
     def _advance_patrol(self) -> bool:
         """Advance to next patrol goal. Returns True if more goals remain."""
