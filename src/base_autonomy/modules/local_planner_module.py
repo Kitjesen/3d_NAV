@@ -3,14 +3,15 @@
 Takes terrain map + waypoint + odometry, produces obstacle-free local path.
 
 Backends:
-  "cmu"    — C++ local_planner (NativeModule, obstacle avoidance + path scoring)
-  "cmu_py" — Pure-Python CMU scoring via _nav_core nanobind bindings
-  "simple" — straight-line path for testing
+  "nanobind" — C++ LocalPlannerCore via nanobind (full CMU scoring, zero ROS2) [PREFERRED]
+  "cmu"      — C++ local_planner (NativeModule subprocess, needs ROS2)
+  "cmu_py"   — Pure-Python CMU scoring via numpy (slower fallback, no ROS2)
+  "simple"   — straight-line path for testing
 
 Usage::
 
-    bp.add(LocalPlannerModule, backend="cmu")
-    bp.add(LocalPlannerModule, backend="cmu_py")   # Python CMU scorer
+    bp.add(LocalPlannerModule, backend="nanobind")  # C++ in-process, no ROS2
+    bp.add(LocalPlannerModule, backend="cmu")        # C++ subprocess, needs ROS2
 """
 
 from __future__ import annotations
@@ -340,12 +341,17 @@ class LocalPlannerModule(Module, layer=2):
         self._path_data: Optional[Dict] = None
         self._nav_core = None
 
+        # nanobind state
+        self._core = None  # _nav_core.LocalPlannerCore
+
     def setup(self):
         self.odometry.subscribe(self._on_odom)
         self.terrain_map.subscribe(self._on_terrain)
         self.waypoint.subscribe(self._on_waypoint)
 
-        if self._backend == "cmu":
+        if self._backend == "nanobind":
+            self._setup_nanobind()
+        elif self._backend == "cmu":
             self._setup_cmu()
         elif self._backend == "cmu_py":
             self._setup_cmu_py()
@@ -355,6 +361,44 @@ class LocalPlannerModule(Module, layer=2):
     # ------------------------------------------------------------------ #
     # Backend setup                                                        #
     # ------------------------------------------------------------------ #
+
+    def _setup_nanobind(self):
+        """C++ LocalPlannerCore via nanobind — full CMU scoring in-process, zero ROS2."""
+        try:
+            import _nav_core
+            params = _nav_core.LocalPlannerParams()
+            try:
+                from core.config import get_config
+                cfg = get_config()
+                params.vehicle_length = cfg.geometry.vehicle_length
+                params.vehicle_width = cfg.geometry.vehicle_width
+                params.sensor_offset_x = cfg.geometry.sensor_offset_x
+                params.sensor_offset_y = cfg.geometry.sensor_offset_y
+                params.obstacle_height_thre = cfg.safety.obstacle_height_thre
+                params.ground_height_thre = cfg.safety.ground_height_thre
+                params.max_speed = cfg.speed.max_speed
+                params.autonomy_speed = cfg.speed.autonomy_speed
+            except (ImportError, AttributeError):
+                pass
+
+            self._core = _nav_core.LocalPlannerCore(params)
+
+            paths_dir = os.path.join(
+                os.path.dirname(__file__), "..", "local_planner", "paths")
+            paths_dir = os.path.normpath(paths_dir)
+            if not self._core.load_paths(paths_dir):
+                logger.error("LocalPlannerModule [nanobind]: failed to load paths from %s", paths_dir)
+                self._core = None
+                self._backend = "cmu_py"
+                self._setup_cmu_py()
+                return
+
+            logger.info("LocalPlannerModule [nanobind]: C++ LocalPlannerCore loaded (343 paths × 36 dirs)")
+        except ImportError:
+            logger.warning(
+                "LocalPlannerModule: _nav_core not available, falling back to cmu_py")
+            self._backend = "cmu_py"
+            self._setup_cmu_py()
 
     def _setup_cmu(self):
         try:
@@ -418,6 +462,7 @@ class LocalPlannerModule(Module, layer=2):
             except Exception:
                 pass
             self._node = None
+        self._core = None
         self.alive.publish(False)
         super().stop()
 
@@ -429,8 +474,9 @@ class LocalPlannerModule(Module, layer=2):
         self._robot_pos = np.array([odom.x, odom.y, getattr(odom, "z", 0.0)])
         self._robot_yaw = getattr(odom, "yaw", 0.0)
 
-        if self._backend == "cmu_py" and self._latest_waypoint is not None:
-            # Rate-limit cmu_py to ~1 Hz (compute_control needs stable reference frame)
+        if self._backend == "nanobind" and self._core is not None and self._latest_waypoint is not None:
+            self._run_nanobind(odom.ts if hasattr(odom, "ts") else time.time())
+        elif self._backend == "cmu_py" and self._latest_waypoint is not None:
             now = time.time()
             if now - self._last_cmu_py_time >= 1.0:
                 self._last_cmu_py_time = now
@@ -458,6 +504,53 @@ class LocalPlannerModule(Module, layer=2):
                 )
                 for p in path_points
             ]
+            self.local_path.publish(Path(poses=poses))
+
+    # ------------------------------------------------------------------ #
+    # nanobind C++ scorer (full CMU algorithm, in-process)                 #
+    # ------------------------------------------------------------------ #
+
+    def _run_nanobind(self, timestamp: float):
+        """Run C++ LocalPlannerCore.plan() and publish result."""
+        wp = self._latest_waypoint
+        if wp is None or self._core is None:
+            return
+
+        self._core.set_vehicle(
+            self._robot_pos[0], self._robot_pos[1], self._robot_pos[2],
+            self._robot_yaw)
+        self._core.set_goal(wp.pose.position.x, wp.pose.position.y)
+
+        if self._terrain_points is not None and self._terrain_points.shape[0] > 0:
+            pts = self._terrain_points.astype(np.float32)
+            if pts.shape[1] == 3:
+                flat = np.zeros((len(pts), 4), dtype=np.float32)
+                flat[:, :3] = pts
+            elif pts.shape[1] >= 4:
+                flat = pts[:, :4].astype(np.float32, copy=False)
+            else:
+                flat = np.zeros((0, 4), dtype=np.float32)
+            obs_flat = flat.ravel().tolist()
+        else:
+            obs_flat = []
+
+        result = self._core.plan(obs_flat, timestamp)
+
+        if result.path:
+            poses = []
+            cos_yaw = math.cos(self._robot_yaw)
+            sin_yaw = math.sin(self._robot_yaw)
+            for v in result.path:
+                wx = v.x * cos_yaw - v.y * sin_yaw + self._robot_pos[0]
+                wy = v.x * sin_yaw + v.y * cos_yaw + self._robot_pos[1]
+                wz = v.z + self._robot_pos[2]
+                poses.append(PoseStamped(
+                    pose=Pose(
+                        position=Vector3(wx, wy, wz),
+                        orientation=Quaternion(0, 0, 0, 1),
+                    ),
+                    frame_id="map",
+                ))
             self.local_path.publish(Path(poses=poses))
 
     # ------------------------------------------------------------------ #
@@ -600,10 +693,11 @@ class LocalPlannerModule(Module, layer=2):
         info = super().port_summary()
         info["local_planner"] = {
             "backend":       self._backend,
-            "paths_loaded":  self._path_data is not None,
+            "paths_loaded":  self._path_data is not None or (self._core is not None and self._core.paths_loaded()),
             "terrain_pts":   (self._terrain_points.shape[0]
                               if self._terrain_points is not None else 0),
-            "running":       (self._node is not None
+            "running":       (self._core is not None) or
+                             (self._node is not None
                               and getattr(self._node, "_process", None) is not None),
         }
         return info
