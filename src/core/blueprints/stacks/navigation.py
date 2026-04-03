@@ -46,8 +46,8 @@ def navigation(
         else:
             add_autonomy_stack(
                 bp,
-                backend=config.get("python_autonomy_backend", "simple"),
-                path_follower_backend=config.get("python_path_follower_backend", "pid"),
+                backend=config.get("python_autonomy_backend", "nanobind"),
+                path_follower_backend=config.get("python_path_follower_backend", "nav_core"),
             )
     except ImportError as e:
         logger.warning("Autonomy stack not available: %s", e)

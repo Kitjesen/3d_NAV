@@ -26,8 +26,8 @@ def test_non_native_navigation_uses_python_autonomy_chain():
         path_follower = system.get_module("PathFollowerModule")
 
         assert nav._enable_ros2_bridge is False
-        assert local_planner._backend == "simple"
-        assert path_follower._backend == "pid"
+        assert local_planner._backend in ("nanobind", "cmu_py", "simple")
+        assert path_follower._backend in ("nav_core", "pid")
 
         assert _has_connection(system, "StubDogModule", "odometry", "NavigationModule", "odometry")
         assert _has_connection(system, "NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")

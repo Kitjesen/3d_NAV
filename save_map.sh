@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
-# Thin wrapper — implementation: scripts/ws/save_map.sh
+# Thin wrapper — implementation: scripts/build/save_map.sh
 set -e
-exec "$(dirname "$0")/scripts/ws/save_map.sh" "$@"
+exec "$(dirname "$0")/scripts/build/save_map.sh" "$@"

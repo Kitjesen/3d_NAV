@@ -1,4 +1,4 @@
-"""SLAM stack: C++ runs as systemd service, Python only bridges data."""
+"""SLAM stack: C++ runs as systemd service, Python bridges data via DDS."""
 
 from __future__ import annotations
 
@@ -47,7 +47,14 @@ def slam(profile: str = "fastlio2") -> Blueprint:
             pass  # assume SLAM already running
 
     except Exception as e:
-        logger.warning("SLAM service manager: %s", e)
+        if profile in ("fastlio2", "localizer"):
+            logger.warning(
+                "SLAM service manager unavailable (no systemd?): %s. "
+                "SLAM C++ nodes will not be started automatically. "
+                "On S100P, ensure systemd services are configured. "
+                "On dev machines, SLAM is not needed (stub/dev profiles).", e)
+        else:
+            logger.debug("SLAM service manager: %s", e)
 
     # Bridge ROS2 topics into Python Module ports
     try:

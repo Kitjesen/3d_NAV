@@ -88,7 +88,7 @@ class NavigationModule(Module, layer=5):
         stuck_dist_thre: float = 0.15,
         max_replan_count: int = 3,
         downsample_dist: float = 2.0,
-        enable_ros2_bridge: bool = True,
+        enable_ros2_bridge: bool = False,
         allow_direct_goal_fallback: bool = True,
         goal_update_epsilon: float = 0.25,
         **kw,

@@ -1,11 +1,17 @@
-"""SLAMModule — LiDAR-inertial SLAM / localization as a pluggable Module.
+"""SLAMModule — C++ SLAM subprocess lifecycle manager.
 
-Produces odometry + map point cloud from LiDAR + IMU.
+Manages C++ SLAM executables (Fast-LIO2, Point-LIO, Localizer) as NativeModule
+subprocesses. Does NOT produce data directly — SLAM data flows through
+SlamBridgeModule which subscribes to DDS topics published by the C++ nodes.
+
+Architecture:
+    SLAMModule (this)          → starts/stops C++ subprocesses
+    SlamBridgeModule (separate) → subscribes to DDS topics → Out[odometry], Out[map_cloud]
 
 Backends:
-  "fastlio2"   — Fast-LIO2 SLAM (build map + localize simultaneously)
+  "fastlio2"   — Livox driver + Fast-LIO2 SLAM + PGO (mapping mode)
   "pointlio"   — Point-LIO SLAM (alternative)
-  "localizer"  — ICP Localizer (localize against pre-built map, no mapping)
+  "localizer"  — Livox driver + Fast-LIO2 + ICP Localizer (navigation mode)
 
 Usage::
 
@@ -19,9 +25,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from core.module import Module
-from core.stream import In, Out
-from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud2
+from core.stream import Out
 from core.registry import register
 
 logger = logging.getLogger(__name__)
@@ -31,23 +35,21 @@ logger = logging.getLogger(__name__)
 @register("slam", "pointlio", description="Point-LIO alternative SLAM")
 @register("slam", "localizer", description="ICP localizer against pre-built map")
 class SLAMModule(Module, layer=1):
-    """LiDAR-inertial SLAM / localization — produces odometry + map.
+    """C++ SLAM subprocess lifecycle manager.
 
-    All backends are C++ executables managed via NativeModule.
+    Starts/stops C++ SLAM executables via NativeModule. Data output is handled
+    by SlamBridgeModule (DDS subscription), not by this module's ports.
     """
 
-    # -- Outputs --
-    odometry: Out[Odometry]
-    map_cloud: Out[PointCloud2]
     alive: Out[bool]
 
     def __init__(self, backend: str = "fastlio2", **kw):
         super().__init__(**kw)
         self._backend = backend
         self._node = None
-        self._lio_node = None    # localizer mode: Fast-LIO2 companion
-        self._pgo_node = None    # fastlio2 mode: PGO for map saving
-        self._lidar_node = None  # Livox driver (all modes that need LiDAR)
+        self._lio_node = None
+        self._pgo_node = None
+        self._lidar_node = None
 
     def setup(self):
         if self._backend == "fastlio2":
@@ -57,7 +59,8 @@ class SLAMModule(Module, layer=1):
         elif self._backend == "localizer":
             self._setup_localizer()
         else:
-            raise ValueError(f"Unknown SLAM backend: {self._backend}. Available: fastlio2, pointlio, localizer")
+            raise ValueError(f"Unknown SLAM backend: {self._backend}. "
+                             f"Available: fastlio2, pointlio, localizer")
 
     def _setup_lidar_driver(self):
         """Start Livox LiDAR driver (shared by all SLAM modes)."""
@@ -95,13 +98,12 @@ class SLAMModule(Module, layer=1):
             logger.warning("SLAMModule [pointlio]: not available: %s", e)
 
     def _setup_localizer(self):
-        """Livox driver + Fast-LIO2 (odometry source) + localizer_node (ICP map matching)."""
+        """Livox driver + Fast-LIO2 (odometry source) + ICP localizer (map matching)."""
         self._setup_lidar_driver()
         try:
             from core.config import get_config
             from core.native_factories import slam_fastlio2, slam_localizer
             cfg = get_config()
-            # Fast-LIO2 provides /cloud_registered + /Odometry that localizer subscribes to
             self._lio_node = slam_fastlio2(cfg)
             self._lio_node.setup()
             self._node = slam_localizer(cfg)
@@ -111,6 +113,7 @@ class SLAMModule(Module, layer=1):
 
     def start(self):
         super().start()
+        started = 0
         for name, node in [("Livox driver", self._lidar_node),
                            ("Fast-LIO2 companion", self._lio_node),
                            ("PGO", self._pgo_node),
@@ -118,6 +121,7 @@ class SLAMModule(Module, layer=1):
             if node:
                 try:
                     node.start()
+                    started += 1
                     logger.info("SLAMModule: %s started", name)
                 except Exception as e:
                     logger.error("SLAMModule: %s start failed: %s", name, e)
