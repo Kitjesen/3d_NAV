@@ -1,16 +1,10 @@
 ﻿"""
 test_planner_node_init.py — SemanticPlannerNode 初始化回归测试 (Round 14)
 
-验证之前修复的关键属性在 __init__ 后正确存在，不会导致 AttributeError。
-无需 ROS2 环境，使用 unittest.mock 模拟所有 ROS2 依赖。
-
-覆盖:
-  - _follow_person_pub 在 __init__ 后存在（不是 None）
-  - _monitor_timer 在 __init__ 后已创建
-  - _make_twist_stamped() 返回 TwistStamped 对象（不崩溃）
-  - FOLLOW_PERSON 模式不会因缺少属性而 AttributeError
-  - _person_tracker 在 __init__ 后可用
-  - _pub_cmd_vel 在 __init__ 后存在（TwistStamped 发布器）
+NOTE: SemanticPlannerNode (ROS2 node) was replaced by SemanticPlannerModule
+(Module-First, no ROS2) in the Module-First refactoring. The planner_node.py
+module no longer exists. These tests are preserved for historical reference
+and skipped automatically when planner_node is absent.
 """
 
 import json
@@ -18,6 +12,14 @@ import sys
 import types
 import unittest
 from unittest.mock import MagicMock, patch
+
+import pytest
+# Skip entire module if planner_node no longer exists
+pytest.importorskip(
+    "semantic.planner.semantic_planner.planner_node",
+    reason="SemanticPlannerNode was replaced by SemanticPlannerModule "
+           "(Module-First). planner_node.py no longer exists.",
+)
 
 
 # ---------------------------------------------------------------------------
