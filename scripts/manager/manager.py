@@ -90,7 +90,7 @@ def _start_lingtu(profile: str, extra_args: str = "") -> bool:
     if state.lingtu_pid and _pid_alive(state.lingtu_pid):
         _stop_lingtu()
 
-    cmd = f"cd {NAV_DIR} && python3 main_nav.py {profile} --no-repl {extra_args}"
+    cmd = f"cd {NAV_DIR} && python3 lingtu.py {profile} --no-repl {extra_args}"
     try:
         proc = subprocess.Popen(
             ["bash", "-c", cmd],

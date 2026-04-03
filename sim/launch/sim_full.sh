@@ -52,4 +52,4 @@ echo "  Autonomy OK (PID $AUTONOMY_PID)"
 # 3. Python full stack
 echo "[3/3] Starting Python navigation stack..."
 echo ""
-PYTHONPATH="src:." python3 main_nav.py sim
+PYTHONPATH="src:." python3 lingtu.py sim

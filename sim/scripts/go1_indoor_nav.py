@@ -448,7 +448,9 @@ def main():
         cam.azimuth = 150
         cam.lookat[:] = [START_POS[0], START_POS[1], 0.3]
 
-        out_path = str(_REPO_ROOT / "go1_indoor_nav.mp4")
+        _media = _REPO_ROOT / "assets" / "media"
+        _media.mkdir(parents=True, exist_ok=True)
+        out_path = str(_media / "go1_indoor_nav.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         video = cv2.VideoWriter(out_path, fourcc, FPS, (VIDEO_W, VIDEO_H))
         print(f"Video output: {out_path}")
@@ -582,7 +584,7 @@ def main():
     print(f"\nFinal: pos=({rx:.2f},{ry:.2f}) dist={dist:.1f} scans={mapper.scans}")
     if video:
         video.release()
-        print(f"Video saved: {_REPO_ROOT / 'go1_indoor_nav.mp4'}")
+        print(f"Video saved: {_REPO_ROOT / 'assets' / 'media' / 'go1_indoor_nav.mp4'}")
     system.stop()
 
 

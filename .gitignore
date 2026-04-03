@@ -41,6 +41,7 @@ env/
 mobileclip2_b.ts
 
 # ── Large data / media files ──
+assets/media/*.mp4
 *.tar
 *.tar.gz
 *.tgz
@@ -51,9 +52,6 @@ mobileclip2_b.ts
 
 # ── Maps & 3D assets (keep example files) ──
 maps/*.pcd
-tools/meshes/*.pcd
-tools/meshes/*.obj
-tools/meshes/*.ply
 tools/videos/*.mp4
 tools/videos/*.gif
 !src/global_planning/PCT_planner/rsc/PCD/example.pcd
@@ -112,11 +110,8 @@ det_*.png
 # ── Vendored libs (use system install) ──
 src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/
 
-# ── HBM conversion build artifacts ──
-tools/hbm_convert/calib_data/
-tools/hbm_convert/model_output/*.hbm
-tools/hbm_convert/model_output/*.bc
-tools/hbm_convert/model_output/.hb_compile_tmp/
+# ── Sim output (videos, benchmarks — too large for git) ──
+sim/output/
 
 # ── Sim datasets (too large for git) ──
 sim/datasets/legkilo_all/
@@ -124,6 +119,9 @@ sim/datasets/legkilo_all/
 # ── Research reference repos (clone manually, see research/README.md) ──
 research/semantic_map_refs/
 !research/README.md
+
+# ── MuJoCo temp XML ──
+sim/robots/*/tmp*.xml
 
 # ── Misc generated ──
 generate_paper_figures*.py

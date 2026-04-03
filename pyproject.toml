@@ -29,7 +29,7 @@ py-modules = ["lingtu_cli"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["src*", "cli*"]
 
 [tool.pytest.ini_options]
 testpaths = ["src/core/tests"]

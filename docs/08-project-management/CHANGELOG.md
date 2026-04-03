@@ -743,7 +743,7 @@ Flutter UI → RuntimeConfigGateway.pushToServer()
 - **Pre-commit hooks**: `.pre-commit-config.yaml` — 提交前自动检查 clang-format、trailing whitespace、YAML 校验、dart format/analyze、protobuf lint
 - **C++ 单元测试**: 给 `remote_monitoring` 核心模块添加 gtest 骨架 — `IdempotencyCache`、`FlightRecorder`、`EventBuffer`、`LeaseManager` 四个模块完整覆盖。CI 增加 `colcon test` 步骤
 - **版本同步**: 所有 `package.xml` + `pubspec.yaml` 统一到 `1.3.0`；新增 `scripts/sync_versions.sh` 一键从 `VERSION` 文件同步到所有清单
-- **日志清理**: `deploy/logrotate.d/nav-system` (EventBuffer 日志轮转) + `deploy/cron.d/nav-cleanup` (FlightRecorder dump 保留最新 30 个、ROS bag 7 天清理)
+- **日志清理**: `scripts/deploy/infra/stack/logrotate.d/nav-system` (EventBuffer 日志轮转) + `scripts/deploy/infra/stack/cron.d/nav-cleanup` (FlightRecorder dump 保留最新 30 个、ROS bag 7 天清理)
 - **Dart 依赖锁定**: `han_dog_message` 从 `ref: main` 锁定到具体 commit hash
 - **部署自动化**: `install_services.sh` 新增 logrotate/cron 自动安装和运行时目录创建
 

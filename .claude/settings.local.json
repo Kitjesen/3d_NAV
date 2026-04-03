@@ -35,7 +35,10 @@
       "WebFetch(domain:deepwiki.com)",
       "WebFetch(domain:playground.mujoco.org)",
       "WebFetch(domain:hackmd.io)",
-      "WebFetch(domain:colab.research.google.com)"
+      "WebFetch(domain:colab.research.google.com)",
+      "mcp__plugin_oh-my-claudecode_t__lsp_diagnostics",
+      "WebFetch(domain:isprs-archives.copernicus.org)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }

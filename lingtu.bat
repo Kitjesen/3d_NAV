@@ -1,2 +1,2 @@
 @echo off
-python "%~dp0main_nav.py" %*
+python "%~dp0lingtu.py" %*

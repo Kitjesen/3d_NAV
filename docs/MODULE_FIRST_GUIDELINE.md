@@ -7,7 +7,7 @@
 ### 1. Module 是唯一运行单元
 
 ```
-正确:  Module(算法 + In/Out 端口) → Blueprint 编排 → main_nav.py 启动
+正确:  Module(算法 + In/Out 端口) → Blueprint 编排 → lingtu.py 启动
 错误:  Module(算法) + ROS2 Node(适配器) + launch 文件 → 三层维护
 ```
 
@@ -37,7 +37,7 @@ autoconnect(
 ).build().start()
 ```
 
-`main_nav.py` 是一个带 CLI 参数的便利脚本，不是架构约束。
+`lingtu.py` 是一个带 CLI 参数的便利脚本，不是架构约束。
 不使用 `ros2 launch`。不使用 `ros2 run`。
 
 ### 3. 通信走 In/Out + Transport，不走 ROS2 topic
@@ -102,7 +102,7 @@ ROS2 消息类型只在 NativeModule 的 C++ 子进程内部使用。
 bp.add(DetectorModule, detector="bpu", confidence=0.5)
 
 # 正确: CLI 参数
-python main_nav.py --detector bpu
+python lingtu.py --detector bpu
 
 # 错误: ROS2 declare_parameter / get_parameter
 self.declare_parameter("detector", "yoloe")
@@ -145,7 +145,7 @@ src/drivers/thunder/
 
 **不再保留的文件模式:**
 - `xxx_node.py` — ROS2 Node 入口，由 Module 替代
-- `xxx.launch.py` — launch 文件，由 main_nav.py 替代
+- `xxx.launch.py` — launch 文件，由 lingtu.py 替代
 - `xxx_mixin.py` — ROS2 mixin，逻辑应在 Module 或 Service 里
 
 ### 保留 ROS2 Node 的唯一例外
@@ -194,7 +194,7 @@ SLAM (Fast-LIO2 / Point-LIO) — 这是 C++ 且深度耦合 ROS2 TF/PCL。
 | `semantic/reconstruction/reconstruction_node.py` | 已有 ReconstructionModule | 删除 |
 | `drivers/thunder/driver_node.py` | 已有 ThunderDriver | 删除 |
 | `memory/logging/mission_logger.py` | ROS2 Node 版本 | 新建 Module 后删除 |
-| `launch/subsystems/*.launch.py` | 全部由 main_nav.py 替代 | 归档到 launch/legacy/ |
+| `launch/subsystems/*.launch.py` | 全部由 lingtu.py 替代 | 归档到 launch/legacy/ |
 | `scripts/services/*.sh` | ros2 run 脚本 | 归档到 scripts/legacy/ |
 
 ---
@@ -205,6 +205,6 @@ SLAM (Fast-LIO2 / Point-LIO) — 这是 C++ 且深度耦合 ROS2 TF/PCL。
 
 1. `grep -r "import rclpy" src/` — 只出现在 C++ 包的 Python binding 和 legacy/ 目录
 2. `grep -r "class.*Node" src/` — 只出现在 legacy/ 或 NativeModule 启动的 C++ 节点
-3. `python main_nav.py --robot stub` — 全栈启动，零 ROS2 依赖
-4. `python main_nav.py --robot thunder` — S100P 真机启动，SLAM 走 NativeModule
+3. `python lingtu.py --robot stub` — 全栈启动，零 ROS2 依赖
+4. `python lingtu.py --robot thunder` — S100P 真机启动，SLAM 走 NativeModule
 5. 644+ tests pass (不依赖 rclpy)

@@ -18,19 +18,19 @@ LingTu (灵途) is an autonomous navigation system for quadruped robots in outdo
 python -m pytest src/core/tests/ -q       # 625 tests
 
 # CLI with interactive REPL (profile-based, recommended)
-python main_nav.py                        # interactive profile selector
-python main_nav.py stub                   # no hardware, framework testing
-python main_nav.py sim                    # MuJoCo simulation (full stack)
-python main_nav.py dev                    # semantic pipeline, no C++ nodes
-python main_nav.py s100p                  # real S100P robot (BPU + Kimi)
-python main_nav.py explore                # exploration, no pre-built map
-python main_nav.py map                    # mapping mode (SLAM + save)
-python main_nav.py --list                 # list all profiles
+python lingtu.py                          # interactive profile selector
+python lingtu.py stub                     # no hardware, framework testing
+python lingtu.py sim                      # MuJoCo simulation (full stack)
+python lingtu.py dev                      # semantic pipeline, no C++ nodes
+python lingtu.py s100p                    # real S100P robot (BPU + Kimi)
+python lingtu.py explore                  # exploration, no pre-built map
+python lingtu.py map                      # mapping mode (SLAM + save)
+python lingtu.py --list                   # list all profiles
 
 # Override any profile flag
-python main_nav.py s100p --llm mock       # real robot but mock LLM
-python main_nav.py s100p --daemon         # background daemon (S100P)
-python main_nav.py stop                   # stop running daemon
+python lingtu.py s100p --llm mock         # real robot but mock LLM
+python lingtu.py s100p --daemon           # background daemon (S100P)
+python lingtu.py stop                     # stop running daemon
 
 # Composable factory API (each line = one functional stack)
 from core.blueprint import autoconnect
@@ -141,7 +141,8 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 
 | File | Purpose |
 |------|---------|
-| `main_nav.py` | CLI entry point — profiles + REPL |
+| `docs/REPO_LAYOUT.md` | Top-level directory map (where `src/`, `scripts/`, `tools/`, … live) |
+| `lingtu.py` | CLI entry point — profiles + REPL (`main_nav.py` kept as alias) |
 | `src/core/blueprints/full_stack.py` | Top-level blueprint (~60 lines, calls 9 stack factories) |
 | `src/core/blueprints/stacks/` | 9 composable factory functions |
 | `src/core/module.py` | Module base class (In/Out, @skill, @rpc, layer tags) |
