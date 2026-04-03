@@ -535,8 +535,8 @@ class SemanticPlannerModule(Module, layer=4):
     def _run_agent_loop_sync(self, instruction: str) -> None:
         """Run agent loop in a background thread (wraps async)."""
         import asyncio
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.new_event_loop()
             state = loop.run_until_complete(self._run_agent_loop(instruction))
             if state.completed:
                 self.planner_status.publish("AGENT_DONE")
@@ -546,6 +546,8 @@ class SemanticPlannerModule(Module, layer=4):
         except Exception:
             logger.exception("Agent loop failed")
             self.planner_status.publish("AGENT_FAILED")
+        finally:
+            loop.close()
 
     async def _run_agent_loop(self, instruction: str):
         """Build AgentLoop with tool bindings and run."""

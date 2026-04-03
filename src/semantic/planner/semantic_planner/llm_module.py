@@ -199,10 +199,16 @@ class LLMModule(Module, layer=4):
 
     def stop(self):
         """Shutdown async loop and client."""
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(loop.stop)
         if self._loop_thread:
             self._loop_thread.join(timeout=3.0)
+        if loop is not None:
+            try:
+                loop.close()
+            except Exception:
+                pass
         self._loop = None
         self._loop_thread = None
         super().stop()

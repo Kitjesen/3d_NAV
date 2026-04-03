@@ -1,7 +1,7 @@
 """Tests for core.registry — plugin registration and lookup."""
 
 import pytest
-from core.registry import register, get, list_plugins, list_categories, auto_select, get_metadata, clear
+from core.registry import register, get, list_plugins, list_categories, auto_select, get_metadata, clear, snapshot, restore
 from core.module import Module
 
 
@@ -9,10 +9,11 @@ class TestRegister:
     """Test @register decorator and get() lookup."""
 
     def setup_method(self):
+        self._saved = snapshot()
         clear()
 
     def teardown_method(self):
-        clear()
+        restore(self._saved)
 
     def test_register_and_get(self):
         @register("driver", "test_bot")
@@ -67,10 +68,11 @@ class TestAutoSelect:
     """Test auto_select with priority and platform filtering."""
 
     def setup_method(self):
+        self._saved = snapshot()
         clear()
 
     def teardown_method(self):
-        clear()
+        restore(self._saved)
 
     def test_auto_select_highest_priority(self):
         @register("driver", "low", priority=1)
@@ -112,10 +114,11 @@ class TestMetadata:
     """Test metadata storage and retrieval."""
 
     def setup_method(self):
+        self._saved = snapshot()
         clear()
 
     def teardown_method(self):
-        clear()
+        restore(self._saved)
 
     def test_get_metadata(self):
         @register("driver", "bot", priority=5, platforms={"aarch64"}, description="Test bot")
