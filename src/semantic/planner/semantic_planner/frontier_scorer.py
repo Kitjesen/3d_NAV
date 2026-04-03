@@ -1,4 +1,4 @@
-"""
+﻿"""
 Frontier 评分探索 — 统一目标 Grounding 与 Frontier 选择。
 
 参考论文:
@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-from semantic_common import safe_json_dumps
+from semantic.common.semantic_common import safe_json_dumps
 
 from .frontier_types import (
     # 常量 (向后兼容重新导出)

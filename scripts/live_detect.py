@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Live detection web viewer — MJPEG stream with BPU YOLO boxes.
 
 Usage (on S100P):
@@ -39,7 +39,7 @@ def camera_loop():
     import rclpy
     from rclpy.node import Node
     from sensor_msgs.msg import Image as RosImage
-    from semantic_perception.bpu_detector import BPUDetector
+    from semantic.perception.semantic_perception.bpu_detector import BPUDetector
 
     det = BPUDetector(
         confidence=0.3,

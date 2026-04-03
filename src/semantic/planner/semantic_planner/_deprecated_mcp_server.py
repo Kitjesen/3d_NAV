@@ -1,4 +1,4 @@
-# Copyright 2025-2026 穹沛科技 (Qiongpei Technology)
+﻿# Copyright 2025-2026 穹沛科技 (Qiongpei Technology)
 # Inspired by DimOS mcp_server.py (dimensionalOS/dimos), Apache 2.0 License
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,7 +40,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from semantic_planner.skill_registry import SkillRegistry
+    from semantic.planner.semantic_planner.skill_registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 

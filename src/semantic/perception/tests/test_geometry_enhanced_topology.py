@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 几何增强拓扑图测试脚本
 
@@ -17,7 +17,7 @@ import numpy as np
 # 添加模块路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.geometry_extractor import GeometryExtractor
+from semantic.perception.semantic_perception.geometry_extractor import GeometryExtractor
 from memory.spatial.topology_graph import TopoNode, TopologySemGraph
 
 

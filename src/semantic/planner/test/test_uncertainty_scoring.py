@@ -1,4 +1,4 @@
-"""语义不确定性驱动 frontier 评分测试。
+﻿"""语义不确定性驱动 frontier 评分测试。
 
 验证:
 1. 高 entropy 方向的 frontier 得分更高
@@ -18,7 +18,7 @@ for _pkg in ("semantic_common", "semantic_planner"):
 import numpy as np
 import pytest
 
-from semantic_planner.frontier_scorer import Frontier, FrontierScorer
+from semantic.planner.semantic_planner.frontier_scorer import Frontier, FrontierScorer
 
 
 def _make_scorer(**kwargs) -> FrontierScorer:

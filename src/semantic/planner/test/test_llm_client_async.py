@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_llm_client_async.py — LLM 客户端异步调用回归测试 (Round 14)
 
 验证 asyncio 事件循环使用的正确性，防止 DeprecationWarning 和死锁。
@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 # semantic_planner 包路径
 sys.path.insert(0, "D:/inovxio/brain/lingtu/src/semantic_planner")
 
-from semantic_planner.llm_client import (
+from semantic.planner.semantic_planner.llm_client import (
     LLMConfig,
     LLMError,
     MockLLMClient,
@@ -160,7 +160,7 @@ class TestLLMTimeout(unittest.TestCase):
 
         # Mock OpenAI 客户端使其超时
         with patch.dict("sys.modules", {"openai": MagicMock()}):
-            from semantic_planner.llm_client import OpenAIClient
+            from semantic.planner.semantic_planner.llm_client import OpenAIClient
             client = OpenAIClient(config)
 
             # 模拟 _client.chat.completions.create 抛超时

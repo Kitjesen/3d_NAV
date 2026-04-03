@@ -1,4 +1,4 @@
-"""
+﻿"""
 动作执行器 — 将子目标动作映射为具体的机器人行为。
 
 参考论文:
@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from semantic_common import safe_json_loads
+from semantic.common.semantic_common import safe_json_loads
 
 logger = logging.getLogger(__name__)
 

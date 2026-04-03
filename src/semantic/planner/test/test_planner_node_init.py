@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_planner_node_init.py — SemanticPlannerNode 初始化回归测试 (Round 14)
 
 验证之前修复的关键属性在 __init__ 后正确存在，不会导致 AttributeError。
@@ -130,7 +130,7 @@ def _build_node():
         if "planner_node" in key:
             del sys.modules[key]
 
-    from semantic_planner.planner_node import SemanticPlannerNode
+    from semantic.planner.semantic_planner.planner_node import SemanticPlannerNode
     node = SemanticPlannerNode()
     return node
 

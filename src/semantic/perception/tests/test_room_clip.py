@@ -1,4 +1,4 @@
-"""OneMap Room 级 CLIP 特征聚合测试。
+﻿"""OneMap Room 级 CLIP 特征聚合测试。
 
 验证:
 1. compute_rooms 正确聚合物体 CLIP 特征到 RoomNode
@@ -19,7 +19,7 @@ for _pkg in ("semantic_common", "semantic_perception"):
 import numpy as np
 import pytest
 
-from semantic_perception.instance_tracker import (
+from semantic.perception.semantic_perception.instance_tracker import (
     InstanceTracker,
     RoomNode,
     Region,

@@ -1,4 +1,4 @@
-"""
+﻿"""
 BA-HSG 信念系统离线单元测试。
 
 验证:
@@ -23,15 +23,15 @@ import numpy as np
 sys.path.insert(0, "src/semantic_perception")
 sys.path.insert(0, "src/semantic_planner")
 
-from semantic_perception.instance_tracker import (
+from semantic.perception.semantic_perception.instance_tracker import (
     TrackedObject, InstanceTracker, Region,
     BELIEF_FRESHNESS_TAU,
 )
-from semantic_perception.projection import Detection3D
-from semantic_planner.goal_resolver import (
+from semantic.perception.semantic_perception.projection import Detection3D
+from semantic.planner.semantic_planner.goal_resolver import (
     TargetBeliefManager, TargetHypothesis, GoalResult,
 )
-from semantic_planner.voi_scheduler import (
+from semantic.planner.semantic_planner.voi_scheduler import (
     VoIScheduler, VoIConfig, SchedulerState, SchedulerAction,
 )
 
@@ -418,7 +418,7 @@ class TestFollowMode:
 
     def test_follow_pattern_chinese(self):
         """中文跟随指令应被模板匹配。"""
-        from semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
+        from semantic.planner.semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
 
         decomposer = TaskDecomposer()
 
@@ -429,7 +429,7 @@ class TestFollowMode:
 
     def test_follow_pattern_english(self):
         """英文跟随指令应被模板匹配。"""
-        from semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
+        from semantic.planner.semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
 
         decomposer = TaskDecomposer()
 
@@ -440,7 +440,7 @@ class TestFollowMode:
 
     def test_nav_is_not_follow(self):
         """普通导航指令不应触发跟随。"""
-        from semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
+        from semantic.planner.semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
 
         decomposer = TaskDecomposer()
 

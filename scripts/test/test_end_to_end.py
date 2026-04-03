@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 End-to-end integration test script.
 
@@ -33,11 +33,11 @@ print()
 # ============================================================================
 print("Test 1: Module imports...")
 try:
-    from semantic_perception.yolo_world_detector import YOLOWorldDetector
-    from semantic_perception.clip_encoder import CLIPEncoder
-    from semantic_perception.instance_tracker import InstanceTracker
-    from semantic_planner.goal_resolver import GoalResolver
-    from semantic_planner.chinese_tokenizer import extract_keywords
+    from semantic.perception.semantic_perception.yolo_world_detector import YOLOWorldDetector
+    from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
+    from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
+    from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+    from semantic.planner.semantic_planner.chinese_tokenizer import extract_keywords
     print("[OK] All modules imported successfully")
 except ImportError as e:
     print(f"[FAIL] Module import failed: {e}")
@@ -74,7 +74,7 @@ try:
     tracker = InstanceTracker()
 
     # Simulate detection results
-    from semantic_perception.projection import Detection3D
+    from semantic.perception.semantic_perception.projection import Detection3D
 
     det1 = Detection3D(
         label="chair",
@@ -149,7 +149,7 @@ try:
     }
 
     # Test Fast Path (no LLM required)
-    from semantic_planner.goal_resolver import GoalResolver
+    from semantic.planner.semantic_planner.goal_resolver import GoalResolver
 
     resolver = GoalResolver(llm_config=None)
 
@@ -182,7 +182,7 @@ print()
 # ============================================================================
 print("Test 5: Action executor...")
 try:
-    from semantic_planner.action_executor import ActionExecutor, ActionCommand
+    from semantic.planner.semantic_planner.action_executor import ActionExecutor, ActionCommand
 
     executor = ActionExecutor()
 
@@ -218,7 +218,7 @@ print()
 # ============================================================================
 print("Test 6: Task decomposer...")
 try:
-    from semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
+    from semantic.planner.semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
 
     decomposer = TaskDecomposer()
 
@@ -250,7 +250,7 @@ print()
 # ============================================================================
 print("Test 7: Topological memory...")
 try:
-    from semantic_planner.topological_memory import TopologicalMemory
+    from semantic.planner.semantic_planner.topological_memory import TopologicalMemory
 
     memory = TopologicalMemory()
 

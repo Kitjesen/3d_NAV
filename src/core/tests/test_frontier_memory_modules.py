@@ -1,4 +1,4 @@
-"""Tests for FrontierModule, TopologicalMemoryModule, EpisodicMemoryModule,
+﻿"""Tests for FrontierModule, TopologicalMemoryModule, EpisodicMemoryModule,
 TaggedLocationsModule -- frontier exploration and memory Module conversions.
 """
 
@@ -10,10 +10,10 @@ from core.msgs.nav import Odometry
 from core.msgs.geometry import Pose, PoseStamped, Vector3, Quaternion
 from core.msgs.semantic import Detection3D, SceneGraph
 
-from semantic_planner.frontier_module import FrontierModule
-from semantic_planner.topological_memory_module import TopologicalMemoryModule
-from semantic_planner.episodic_memory_module import EpisodicMemoryModule
-from semantic_planner.tagged_locations_module import TaggedLocationsModule
+from semantic.planner.semantic_planner.frontier_module import FrontierModule
+from semantic.planner.semantic_planner.topological_memory_module import TopologicalMemoryModule
+from semantic.planner.semantic_planner.episodic_memory_module import EpisodicMemoryModule
+from semantic.planner.semantic_planner.tagged_locations_module import TaggedLocationsModule
 
 
 def _make_odom(x, y, z=0.0):

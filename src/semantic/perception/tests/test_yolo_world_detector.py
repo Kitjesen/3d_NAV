@@ -1,4 +1,4 @@
-"""
+﻿"""
 YOLO-World检测器单元测试 (与实际 yolo_world_detector.py API 对齐)
 
 测试内容:
@@ -19,8 +19,8 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from semantic_perception.yolo_world_detector import YOLOWorldDetector
-from semantic_perception.detector_base import Detection2D
+from semantic.perception.semantic_perception.yolo_world_detector import YOLOWorldDetector
+from semantic.perception.semantic_perception.detector_base import Detection2D
 
 
 class TestYOLOWorldDetectorInit(unittest.TestCase):

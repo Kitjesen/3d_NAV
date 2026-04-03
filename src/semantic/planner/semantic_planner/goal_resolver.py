@@ -1,4 +1,4 @@
-"""
+﻿"""
 目标解析器 — 将自然语言指令 + 场景图 → 3D 目标坐标。
 
 核心流程 (VLingNav 2026 双进程 + ESCA 选择性 Grounding):
@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from semantic_common import safe_json_loads, sanitize_position
+from semantic.common.semantic_common import safe_json_loads, sanitize_position
 
 from .adacot import AdaCoTRouter, AdaCoTConfig, AdaCoTDecision
 from .fast_path import FastPathMixin

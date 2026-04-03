@@ -1,4 +1,4 @@
-"""
+﻿"""
 Frontier 数据类型 + 常量 + 纯函数辅助 — 供 frontier_scorer.py 和其他模块共享。
 
 从 frontier_scorer.py 中提取, 保持向后兼容。
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-from semantic_common import sanitize_float
+from semantic.common.semantic_common import sanitize_float
 
 logger = logging.getLogger(__name__)
 

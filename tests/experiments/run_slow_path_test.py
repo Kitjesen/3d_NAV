@@ -1,4 +1,4 @@
-"""
+﻿"""
 Slow Path (System 2) end-to-end validation script.
 
 Validates using the Moonshot / Kimi API:
@@ -21,9 +21,9 @@ from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_planner"))
 
-from semantic_planner.llm_client import LLMConfig, create_llm_client, LLMError
-from semantic_planner.goal_resolver import GoalResolver, GoalResult
-from semantic_planner.prompt_templates import build_goal_resolution_prompt
+from semantic.planner.semantic_planner.llm_client import LLMConfig, create_llm_client, LLMError
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver, GoalResult
+from semantic.planner.semantic_planner.prompt_templates import build_goal_resolution_prompt
 
 
 SCENE_GRAPH = {

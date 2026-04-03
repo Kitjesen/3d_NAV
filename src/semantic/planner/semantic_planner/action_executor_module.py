@@ -1,4 +1,4 @@
-"""ActionExecutorModule -- action execution as independent Module.
+﻿"""ActionExecutorModule -- action execution as independent Module.
 
 Wraps ActionExecutor into lingtu.core.Module with In/Out ports.
 Converts GoalResult into PoseStamped (goal_pose) or Twist (cmd_vel).
@@ -63,7 +63,7 @@ class ActionExecutorModule(Module, layer=4):
         if self._executor is not None:
             return
         try:
-            from semantic_planner.action_executor import ActionExecutor
+            from semantic.planner.semantic_planner.action_executor import ActionExecutor
             self._executor = ActionExecutor(
                 approach_distance=self._approach_distance,
                 nav_timeout=self._nav_timeout,

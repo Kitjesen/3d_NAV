@@ -1,9 +1,9 @@
-"""PersonTracker 单元测试。"""
+﻿"""PersonTracker 单元测试。"""
 import time
 import math
 import pytest
 
-from semantic_planner.person_tracker import PersonTracker, TrackedPerson
+from semantic.planner.semantic_planner.person_tracker import PersonTracker, TrackedPerson
 
 
 # ── helpers ──

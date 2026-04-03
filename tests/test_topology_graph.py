@@ -1,4 +1,4 @@
-"""
+﻿"""
 拓扑语义图 (TSG) 综合测试。
 
 覆盖:
@@ -23,7 +23,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_perception"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_planner"))
 
-from semantic_perception.topology_graph import (
+from semantic.perception.semantic_perception.topology_graph import (
     TopologySemGraph,
     TopoNode,
     TopoEdge,
@@ -326,7 +326,7 @@ class TestInformationGain:
         sys.path.insert(0, str(
             Path(__file__).resolve().parent.parent / "src" / "semantic_planner"
         ))
-        from semantic_planner.semantic_prior import SemanticPriorEngine
+        from semantic.planner.semantic_planner.semantic_prior import SemanticPriorEngine
         engine = SemanticPriorEngine()
 
         ig_with_engine = tsg.compute_information_gain(

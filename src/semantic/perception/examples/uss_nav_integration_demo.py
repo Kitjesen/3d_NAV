@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 USS-Nav 空间表示系统集成示例
 
@@ -17,14 +17,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.geometry_extractor import GeometryExtractor
-from semantic_perception.hybrid_planner import HybridPlanner
-from semantic_perception.leiden_segmentation import LeidenConfig, LeidenSegmenter
-from semantic_perception.polyhedron_expansion import (
+from semantic.perception.semantic_perception.geometry_extractor import GeometryExtractor
+from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner
+from semantic.perception.semantic_perception.leiden_segmentation import LeidenConfig, LeidenSegmenter
+from semantic.perception.semantic_perception.polyhedron_expansion import (
     PolyhedronExpander,
     PolyhedronExpansionConfig,
 )
-from semantic_perception.scg_builder import SCGBuilder, SCGConfig
+from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
 from memory.spatial.topology_graph import TopologySemGraph
 
 

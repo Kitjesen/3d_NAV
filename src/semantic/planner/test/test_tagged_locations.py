@@ -1,4 +1,4 @@
-"""Tagged Locations 单元测试。
+﻿"""Tagged Locations 单元测试。
 不依赖 ROS2，纯 Python 可运行。
 
 运行:
@@ -11,7 +11,7 @@ import tempfile
 
 import pytest
 
-from semantic_planner.tagged_locations import TaggedLocationStore
+from semantic.planner.semantic_planner.tagged_locations import TaggedLocationStore
 
 
 # ---------------------------------------------------------------------------

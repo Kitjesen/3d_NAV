@@ -1,4 +1,4 @@
-"""
+﻿"""
 Transport Mixin + Agent TaggedLocations 集成测试
 
 测试范围:
@@ -186,7 +186,7 @@ class TestAgentTaggedLocations(unittest.TestCase):
     def test_tagged_location_store_load(self):
         """TaggedLocationStore 加载 JSON。"""
         sys.path.insert(0, os.path.join(_repo, "src", "semantic_planner"))
-        from semantic_planner.tagged_locations import TaggedLocationStore
+        from semantic.planner.semantic_planner.tagged_locations import TaggedLocationStore
 
         store = TaggedLocationStore(self._tags_path)
         self.assertEqual(len(store.list_all()), 2)
@@ -198,7 +198,7 @@ class TestAgentTaggedLocations(unittest.TestCase):
     def test_tagged_location_fuzzy_query(self):
         """模糊查询：指令包含标签名。"""
         sys.path.insert(0, os.path.join(_repo, "src", "semantic_planner"))
-        from semantic_planner.tagged_locations import TaggedLocationStore
+        from semantic.planner.semantic_planner.tagged_locations import TaggedLocationStore
 
         store = TaggedLocationStore(self._tags_path)
 
@@ -214,7 +214,7 @@ class TestAgentTaggedLocations(unittest.TestCase):
     def test_tagged_location_tag_and_save(self):
         """标记新地点并持久化。"""
         sys.path.insert(0, os.path.join(_repo, "src", "semantic_planner"))
-        from semantic_planner.tagged_locations import TaggedLocationStore
+        from semantic.planner.semantic_planner.tagged_locations import TaggedLocationStore
 
         store = TaggedLocationStore(self._tags_path)
         store.tag("餐厅", 10.0, 15.0, 0.0, yaw=3.14)
@@ -230,7 +230,7 @@ class TestAgentTaggedLocations(unittest.TestCase):
     def test_three_tier_degradation_logic(self):
         """三层降级: tagged → instruction → semantic。"""
         sys.path.insert(0, os.path.join(_repo, "src", "semantic_planner"))
-        from semantic_planner.tagged_locations import TaggedLocationStore
+        from semantic.planner.semantic_planner.tagged_locations import TaggedLocationStore
 
         store = TaggedLocationStore(self._tags_path)
 

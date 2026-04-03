@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_exploration_strategy.py — Frontier 探索策略纯逻辑测试
 """
 
@@ -9,8 +9,8 @@ import numpy as np
 
 import pytest
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_planner.frontier_scorer import FrontierScorer, FREE_CELL, UNKNOWN_CELL
-from semantic_planner.exploration_strategy import (
+from semantic.planner.semantic_planner.frontier_scorer import FrontierScorer, FREE_CELL, UNKNOWN_CELL
+from semantic.planner.semantic_planner.exploration_strategy import (
     extract_frontier_scene_data,
     generate_frontier_goal,
 )

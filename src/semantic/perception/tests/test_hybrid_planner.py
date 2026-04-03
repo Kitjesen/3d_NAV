@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 混合路径规划器测试脚本
 
@@ -16,8 +16,8 @@ import numpy as np
 # 添加模块路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.geometry_extractor import GeometryExtractor
-from semantic_perception.hybrid_planner import HybridPlanner, compare_planners
+from semantic.perception.semantic_perception.geometry_extractor import GeometryExtractor
+from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner, compare_planners
 from memory.spatial.topology_graph import TopologySemGraph
 
 

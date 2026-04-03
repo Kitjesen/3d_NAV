@@ -1,8 +1,8 @@
-"""
+﻿"""
 validation.py — 图像 / 深度 / 内参 / 四元数校验器
 
 用法:
-    from semantic_common import validate_bgr, validate_depth, validate_intrinsics
+    from semantic.common.semantic_common import validate_bgr, validate_depth, validate_intrinsics
 
     bgr = validate_bgr(raw_img)        # None if invalid, auto-converts BGRA→BGR
     depth = validate_depth(raw_depth)    # None if invalid

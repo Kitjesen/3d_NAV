@@ -1,4 +1,4 @@
-"""
+﻿"""
 Semantic Perception API - 工厂类
 
 用于创建各种感知组件的实例
@@ -44,7 +44,7 @@ class PerceptionFactory:
             ConfigurationError: 配置错误
 
         Example:
-            >>> from semantic_perception.api import PerceptionFactory
+            >>> from semantic.perception.semantic_perception.api import PerceptionFactory
             >>> perception = PerceptionFactory.create_perception(
             ...     detector_type="yolo_world",
             ...     encoder_type="clip",

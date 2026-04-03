@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 全局覆盖掩码 (GCM) 测试脚本
 
@@ -18,8 +18,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.global_coverage_mask import GlobalCoverageMask, CoverageCell
-from semantic_perception.polyhedron_expansion import (
+from semantic.perception.semantic_perception.global_coverage_mask import GlobalCoverageMask, CoverageCell
+from semantic.perception.semantic_perception.polyhedron_expansion import (
     Polyhedron,
     PolyhedronExpander,
     PolyhedronExpansionConfig,

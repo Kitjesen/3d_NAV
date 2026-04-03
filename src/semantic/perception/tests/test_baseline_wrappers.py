@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 基线方法包装器测试脚本
 
@@ -17,7 +17,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.baseline_wrappers import (
+from semantic.perception.semantic_perception.baseline_wrappers import (
     PCTAStarPlanner,
     USSNavPlanner,
     create_planner,

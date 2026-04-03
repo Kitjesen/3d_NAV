@@ -1,4 +1,4 @@
-"""GoalResolverModule -- Fast-Slow goal resolution as independent Module.
+﻿"""GoalResolverModule -- Fast-Slow goal resolution as independent Module.
 
 Wraps GoalResolver (mixin-based) into lingtu.core.Module with In/Out ports.
 Does NOT rewrite GoalResolver logic -- imports and delegates to goal_resolver.py.
@@ -65,8 +65,8 @@ class GoalResolverModule(Module, layer=4):
         if self._resolver is not None:
             return
         try:
-            from semantic_planner.goal_resolver import GoalResolver
-            from semantic_planner.llm_client import LLMConfig
+            from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+            from semantic.planner.semantic_planner.llm_client import LLMConfig
             primary = LLMConfig(backend="mock", model="mock")
             self._resolver = GoalResolver(
                 primary_config=primary,

@@ -1,4 +1,4 @@
-"""Scene graph data types — shared between semantic/ and memory/.
+﻿"""Scene graph data types — shared between semantic/ and memory/.
 
 Pure data classes + constants. No algorithm logic, no external dependencies.
 Extracted from semantic/perception/tracked_objects.py for cross-module sharing.
@@ -229,7 +229,7 @@ class ViewNode:
 def __getattr__(name: str):
     """Backward-compatible lazy export for symbols moved out of core.msgs.scene."""
     if name == "TrackedObject":
-        from semantic_perception.tracked_objects import TrackedObject
+        from semantic.perception.semantic_perception.tracked_objects import TrackedObject
 
         return TrackedObject
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

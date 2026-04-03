@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 SCG ROS2 集成测试 — 纯 Python，无需 ROS2 运行时。
 
@@ -20,9 +20,9 @@ import pytest
 _pkg_root = Path(__file__).parent.parent
 sys.path.insert(0, str(_pkg_root))
 
-from semantic_perception.scg_builder import SCGBuilder, SCGConfig
-from semantic_perception.scg_path_planner import SCGPathPlanner, SCGPath
-from semantic_perception.polyhedron_expansion import (
+from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
+from semantic.perception.semantic_perception.scg_path_planner import SCGPathPlanner, SCGPath
+from semantic.perception.semantic_perception.polyhedron_expansion import (
     PolyhedronExpander,
     PolyhedronExpansionConfig,
     Polyhedron,

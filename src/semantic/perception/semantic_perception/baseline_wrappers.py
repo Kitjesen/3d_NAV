@@ -1,4 +1,4 @@
-"""
+﻿"""
 基线方法包装器 (Baseline Wrappers) — 统一的基线方法接口。
 
 支持的基线方法:
@@ -326,10 +326,10 @@ class USSNavPlanner(BasePlanner):
         """初始化 USS-Nav 规划器。"""
         # 导入 USS-Nav 组件
         try:
-            from semantic_perception.scg_builder import SCGBuilder, SCGConfig
-            from semantic_perception.global_coverage_mask import GlobalCoverageMask
-            from semantic_perception.local_rolling_grid import LocalRollingGrid
-            from semantic_perception.scg_path_planner import SCGPathPlanner
+            from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
+            from semantic.perception.semantic_perception.global_coverage_mask import GlobalCoverageMask
+            from semantic.perception.semantic_perception.local_rolling_grid import LocalRollingGrid
+            from semantic.perception.semantic_perception.scg_path_planner import SCGPathPlanner
 
             # 创建组件
             self.scg_builder = SCGBuilder(SCGConfig())

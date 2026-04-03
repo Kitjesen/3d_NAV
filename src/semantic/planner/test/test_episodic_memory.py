@@ -1,8 +1,8 @@
-"""测试 EpisodicMemory"""
+﻿"""测试 EpisodicMemory"""
 import time
 import numpy as np
 import pytest
-from semantic_planner.episodic_memory import EpisodicMemory, MemoryRecord
+from semantic.planner.semantic_planner.episodic_memory import EpisodicMemory, MemoryRecord
 
 
 class TestEpisodicMemoryBasic:

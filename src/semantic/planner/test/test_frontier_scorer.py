@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_frontier_scorer.py — Frontier 评分器单元测试
 
 覆盖:
@@ -15,7 +15,7 @@ import numpy as np
 
 import pytest
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_planner.frontier_scorer import (
+from semantic.planner.semantic_planner.frontier_scorer import (
     FREE_CELL,
     OCCUPIED_CELL,
     UNKNOWN_CELL,
@@ -234,7 +234,7 @@ class TestKGRoomScore(unittest.TestCase):
     """P2: KG 目标-房间概率评分测试。"""
 
     def test_kg_room_score_with_kg(self):
-        from semantic_planner.room_object_kg import RoomObjectKG
+        from semantic.planner.semantic_planner.room_object_kg import RoomObjectKG
 
         kg = RoomObjectKG()
         for _ in range(10):

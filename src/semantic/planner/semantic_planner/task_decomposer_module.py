@@ -1,4 +1,4 @@
-"""TaskDecomposerModule -- task decomposition as independent Module.
+﻿"""TaskDecomposerModule -- task decomposition as independent Module.
 
 Wraps TaskDecomposer into lingtu.core.Module with In/Out ports.
 Uses decompose_with_rules() for offline rule-based decomposition.
@@ -37,7 +37,7 @@ class TaskDecomposerModule(Module, layer=4):
         if self._decomposer is not None:
             return
         try:
-            from semantic_planner.task_decomposer import TaskDecomposer
+            from semantic.planner.semantic_planner.task_decomposer import TaskDecomposer
             self._decomposer = TaskDecomposer()
         except Exception as e:
             logger.warning("TaskDecomposer init failed: %s", e)

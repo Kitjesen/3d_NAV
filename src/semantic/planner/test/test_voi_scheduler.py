@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_voi_scheduler.py — VoIScheduler 单元测试 (Shannon 信息论版本)
 
 覆盖:
@@ -21,7 +21,7 @@ import math
 import time
 import unittest
 
-from semantic_planner.voi_scheduler import (
+from semantic.planner.semantic_planner.voi_scheduler import (
     SchedulerAction,
     SchedulerState,
     VoIConfig,

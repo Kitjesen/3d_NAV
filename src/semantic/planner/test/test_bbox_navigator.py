@@ -1,4 +1,4 @@
-"""BBox Navigator 单元测试 — PD 控制器 + 3D 投影。
+﻿"""BBox Navigator 单元测试 — PD 控制器 + 3D 投影。
 不依赖 ROS2，纯 Python + numpy 可运行。
 
 运行:
@@ -10,7 +10,7 @@ import time
 import numpy as np
 import pytest
 
-from semantic_planner.bbox_navigator import (
+from semantic.planner.semantic_planner.bbox_navigator import (
     BBoxNavConfig,
     BBoxNavigator,
     STATE_ARRIVED,

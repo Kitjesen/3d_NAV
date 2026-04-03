@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 定量实验测试脚本
 
@@ -23,7 +23,7 @@ from examples.run_quantitative_experiments import (
     StatisticalAnalyzer,
     ExperimentReportGenerator,
 )
-from semantic_perception.evaluation_framework import (
+from semantic.perception.semantic_perception.evaluation_framework import (
     BenchmarkResult,
     MemoryMetrics,
     UpdateMetrics,

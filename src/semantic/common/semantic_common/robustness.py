@@ -1,8 +1,8 @@
-"""
+﻿"""
 robustness.py — 超时 / 重试 / GPU 安全装饰器
 
 用法:
-    from semantic_common import async_timeout, gpu_safe, retry
+    from semantic.common.semantic_common import async_timeout, gpu_safe, retry
 
     @async_timeout(30.0)
     async def resolve_goal(self, ...):

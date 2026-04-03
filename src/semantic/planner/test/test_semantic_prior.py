@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_semantic_prior.py — SemanticPriorEngine 单元测试
 
 覆盖:
@@ -14,7 +14,7 @@ test_semantic_prior.py — SemanticPriorEngine 单元测试
 
 import unittest
 
-from semantic_planner.semantic_prior import (
+from semantic.planner.semantic_planner.semantic_prior import (
     RoomPrior,
     SemanticPriorEngine,
     TopologyEdge,

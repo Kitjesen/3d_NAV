@@ -1,4 +1,4 @@
-"""
+﻿"""
 conftest.py — semantic_planner 测试共享夹具
 
 提供:
@@ -107,7 +107,7 @@ def mock_llm_no_result():
 @pytest.fixture
 def mock_llm_error():
     """返回 LLM 客户端，其 chat 总是抛出异常。"""
-    from semantic_planner.llm_client import LLMError
+    from semantic.planner.semantic_planner.llm_client import LLMError
     llm = mock.MagicMock()
     llm.chat = mock.AsyncMock(side_effect=LLMError("Mock API error"))
     return llm
@@ -134,7 +134,7 @@ def make_goal_resolver(mock_llm):
     """返回预配置好 mock LLM 的 GoalResolver 工厂。"""
     def _factory(**kwargs):
         try:
-            from semantic_planner.goal_resolver import GoalResolver
+            from semantic.planner.semantic_planner.goal_resolver import GoalResolver
             resolver = GoalResolver(**kwargs)
             resolver._primary = mock_llm
             return resolver

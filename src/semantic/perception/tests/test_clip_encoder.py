@@ -1,4 +1,4 @@
-"""
+﻿"""
 CLIP编码器单元测试 (与实际 clip_encoder.py API 对齐)
 
 测试内容:
@@ -21,7 +21,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_perception.clip_encoder import CLIPEncoder
+from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
 
 
 class TestCLIPEncoderInit(unittest.TestCase):

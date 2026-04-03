@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_goal_resolver.py — 目标解析器单元测试
 
 注: LLM 调用使用 mock, 不发起真实 API 请求。
@@ -9,7 +9,7 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from semantic_planner.llm_client import (
+from semantic.planner.semantic_planner.llm_client import (
     LLMConfig,
     LLMClientBase,
     LLMError,
@@ -20,8 +20,8 @@ from semantic_planner.llm_client import (
 )
 import pytest
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_planner.goal_resolver import GoalResolver, GoalResult
-from semantic_planner.prompt_templates import (
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver, GoalResult
+from semantic.planner.semantic_planner.prompt_templates import (
     build_goal_resolution_prompt,
     build_exploration_prompt,
 )

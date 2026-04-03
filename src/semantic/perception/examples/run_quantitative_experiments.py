@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 定量实验脚本 (Quantitative Experiments)
 
@@ -32,9 +32,9 @@ from scipy import stats
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.end_to_end_evaluation import EndToEndEvaluator
-from semantic_perception.evaluation_framework import BenchmarkResult
-from semantic_perception.visualization_tools import (
+from semantic.perception.semantic_perception.end_to_end_evaluation import EndToEndEvaluator
+from semantic.perception.semantic_perception.evaluation_framework import BenchmarkResult
+from semantic.perception.semantic_perception.visualization_tools import (
     PerformanceVisualizer,
     ComprehensiveVisualizer,
 )
@@ -310,7 +310,7 @@ def run_quantitative_experiments(
     evaluator = EndToEndEvaluator()
 
     # 获取场景列表
-    from semantic_perception.dataset_loader import HM3DDatasetLoader
+    from semantic.perception.semantic_perception.dataset_loader import HM3DDatasetLoader
     loader = HM3DDatasetLoader(dataset_root)
     available_scenes = loader.list_scenes()[:num_scenes]
 

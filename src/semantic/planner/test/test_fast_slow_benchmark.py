@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 test_fast_slow_benchmark.py \u2014 Fast-Slow \u53cc\u8fdb\u7a0b\u8bda\u5b9e\u6027\u80fd\u57fa\u51c6\u6d4b\u8bd5
 
@@ -23,10 +23,10 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from semantic_planner.llm_client import LLMConfig
+from semantic.planner.semantic_planner.llm_client import LLMConfig
 import pytest
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_planner.goal_resolver import GoalResolver
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver
 
 
 # ============================================================

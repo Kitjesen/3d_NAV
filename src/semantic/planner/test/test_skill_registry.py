@@ -1,11 +1,11 @@
-"""Skill Registry 单元测试 — 不依赖 ROS2，纯 Python 可运行。
+﻿"""Skill Registry 单元测试 — 不依赖 ROS2，纯 Python 可运行。
 
 运行:
     cd src/semantic_planner && python -m pytest test/test_skill_registry.py -v
 """
 
 import pytest
-from semantic_planner.skill_registry import (
+from semantic.planner.semantic_planner.skill_registry import (
     SkillRegistry,
     LingTuNavigationSkills,
     skill,

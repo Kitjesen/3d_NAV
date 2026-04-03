@@ -1,4 +1,4 @@
-"""
+﻿"""
 slow_path.py — Slow Path (System 2) LLM 推理 Mixin。
 
 从 goal_resolver.py 提取，GoalResolver 通过多继承使用:
@@ -80,7 +80,7 @@ class SlowPathMixin:
         Returns:
             GoalResult
         """
-        from semantic_common import safe_json_loads
+        from semantic.common.semantic_common import safe_json_loads
         from .goal_resolver import GoalResult
         from .adacot import AdaCoTDecision
         from .prompt_templates import build_goal_resolution_prompt
@@ -203,7 +203,7 @@ class SlowPathMixin:
           - L3MVN (IROS 2023): LLM-guided frontier scoring
           - SG-Nav: 子图评分插值到 frontier
         """
-        from semantic_common import safe_json_loads
+        from semantic.common.semantic_common import safe_json_loads
         from .goal_resolver import GoalResult
         from .prompt_templates import build_exploration_prompt
 
@@ -340,7 +340,7 @@ class SlowPathMixin:
         如果 TSG 可用且返回高置信度探索目标, 直接返回 GoalResult;
         否则返回 None 让调用者 fallback 到 LLM。
         """
-        from semantic_common import safe_json_loads
+        from semantic.common.semantic_common import safe_json_loads
         from .goal_resolver import GoalResult
 
         if self._tsg is None or not scene_graph_json:
@@ -579,7 +579,7 @@ class SlowPathMixin:
         Returns:
             过滤后的场景图 JSON
         """
-        from semantic_common import safe_json_loads
+        from semantic.common.semantic_common import safe_json_loads
         from typing import Dict as _Dict
 
         sg = safe_json_loads(scene_graph_json, default=None)
@@ -815,7 +815,7 @@ class SlowPathMixin:
 
     def _parse_llm_response(self, response_text, scene_graph: Optional[dict] = None) -> "GoalResult":
         """解析 LLM JSON 响应。"""
-        from semantic_common import sanitize_position
+        from semantic.common.semantic_common import sanitize_position
         from .goal_resolver import GoalResult
 
         try:

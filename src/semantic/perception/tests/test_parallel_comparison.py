@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 并行对比测试框架 — 在相同场景下对比三套路径规划器。
 
@@ -234,8 +234,8 @@ def _build_mock_scg_for_scenario(scenario: dict):
 
     返回已调用过 build_edges 的 SCGBuilder。
     """
-    from semantic_perception.scg_builder import SCGBuilder, SCGConfig
-    from semantic_perception.polyhedron_expansion import Polyhedron
+    from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
+    from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
 
     start = scenario["start"]
     goal = scenario["goal"]
@@ -320,7 +320,7 @@ class PCTBaselineWrapper:
         self._planner = None
         self._available = False
         try:
-            from semantic_perception.baseline_wrappers import PCTAStarPlanner
+            from semantic.perception.semantic_perception.baseline_wrappers import PCTAStarPlanner
             self._planner = PCTAStarPlanner()
             # 使用足够大的栅格覆盖所有测试场景（25m × 20m，分辨率 0.5m）
             self._planner.initialize(
@@ -393,7 +393,7 @@ class HybridPlannerWrapper:
     def __init__(self):
         self._available = False
         try:
-            from semantic_perception.hybrid_planner import HybridPlanner  # noqa: F401
+            from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner  # noqa: F401
             self._available = True
         except Exception as exc:
             self._error = str(exc)
@@ -414,7 +414,7 @@ class HybridPlannerWrapper:
 
         t0 = time.perf_counter()
         try:
-            from semantic_perception.hybrid_planner import HybridPlanner
+            from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner
 
             tsg = _build_mock_tsg_for_scenario(scenario)
             tomogram = MockTomogram()
@@ -468,8 +468,8 @@ class SCGPlannerWrapper:
     def __init__(self):
         self._available = False
         try:
-            from semantic_perception.scg_path_planner import SCGPathPlanner  # noqa: F401
-            from semantic_perception.scg_builder import SCGBuilder  # noqa: F401
+            from semantic.perception.semantic_perception.scg_path_planner import SCGPathPlanner  # noqa: F401
+            from semantic.perception.semantic_perception.scg_builder import SCGBuilder  # noqa: F401
             self._available = True
         except Exception as exc:
             self._error = str(exc)
@@ -490,7 +490,7 @@ class SCGPlannerWrapper:
 
         t0 = time.perf_counter()
         try:
-            from semantic_perception.scg_path_planner import SCGPathPlanner
+            from semantic.perception.semantic_perception.scg_path_planner import SCGPathPlanner
 
             scg = _build_mock_scg_for_scenario(scenario)
             planner = SCGPathPlanner(scg)

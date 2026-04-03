@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 test_fast_slow_efficiency.py — Fast-Slow 双进程推理效率量化
 
@@ -26,10 +26,10 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
-from semantic_planner.llm_client import LLMConfig
+from semantic.planner.semantic_planner.llm_client import LLMConfig
 import pytest
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_planner.goal_resolver import GoalResolver
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver
 
 
 # ============================================================

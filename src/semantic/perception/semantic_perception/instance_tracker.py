@@ -1,4 +1,4 @@
-"""
+﻿"""
 实例追踪器 — 跨帧目标匹配 + 去重 + 位置平滑 + 空间关系图。
 
 参考论文:
@@ -31,7 +31,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from semantic_common import sanitize_position, safe_json_dumps
+from semantic.common.semantic_common import sanitize_position, safe_json_dumps
 from core.utils.sanitize import safe_json_dump
 
 from .projection import Detection3D

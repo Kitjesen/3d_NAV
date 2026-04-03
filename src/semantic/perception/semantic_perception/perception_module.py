@@ -1,4 +1,4 @@
-"""perception_module.py -- semantic perception Module wrapper (core framework).
+﻿"""perception_module.py -- semantic perception Module wrapper (core framework).
 
 Wraps the PURE ALGORITHM parts of SemanticPerceptionNode as a Module,
 fully decoupled from ROS2.  No algorithm is rewritten -- all real work
@@ -97,7 +97,7 @@ class PerceptionModule(Module, layer=3):
         """Lazy-import real algorithms, register port subscriptions."""
         # Instance tracker (core algorithm)
         try:
-            from semantic_perception.instance_tracker import InstanceTracker
+            from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
             self._tracker = InstanceTracker(
                 merge_distance=self._merge_distance,
                 iou_threshold=self._confidence_threshold,
@@ -147,7 +147,7 @@ class PerceptionModule(Module, layer=3):
         if self._latest_intrinsics is not None:
             return
         try:
-            from semantic_perception.projection import (
+            from semantic.perception.semantic_perception.projection import (
                 CameraIntrinsics as ProjIntrinsics,
             )
             self._latest_intrinsics = ProjIntrinsics(
@@ -202,7 +202,7 @@ class PerceptionModule(Module, layer=3):
         # backend derives detections from world metadata and should not be blocked by image sharpness.
         if self._sim_scene_observer is None:
             try:
-                from semantic_perception.laplacian_filter import is_blurry
+                from semantic.perception.semantic_perception.laplacian_filter import is_blurry
                 if is_blurry(bgr, threshold=self._laplacian_threshold):
                     return
             except ImportError:
@@ -250,19 +250,19 @@ class PerceptionModule(Module, layer=3):
         """Lazy-import detector backend."""
         try:
             if self._detector_type == "yoloe":
-                from semantic_perception.yoloe_detector import YOLOEDetector
+                from semantic.perception.semantic_perception.yoloe_detector import YOLOEDetector
                 det = YOLOEDetector(confidence=self._confidence_threshold)
                 det.load_model()
                 logger.info("YOLOEDetector loaded")
                 return det
             elif self._detector_type == "yolo_world":
-                from semantic_perception.yolo_world_detector import YOLOWorldDetector
+                from semantic.perception.semantic_perception.yolo_world_detector import YOLOWorldDetector
                 det = YOLOWorldDetector(confidence=self._confidence_threshold)
                 det.load_model()
                 logger.info("YOLOWorldDetector loaded")
                 return det
             elif self._detector_type == "sim_scene":
-                from semantic_perception.sim_scene_observer import SimSceneObserver
+                from semantic.perception.semantic_perception.sim_scene_observer import SimSceneObserver
                 self._sim_scene_observer = SimSceneObserver(world=self._world)
                 logger.info("SimSceneObserver loaded (world=%s)", self._world or "")
                 return self._sim_scene_observer
@@ -273,7 +273,7 @@ class PerceptionModule(Module, layer=3):
     def _init_clip_encoder(self):
         """Lazy-import CLIP encoder."""
         try:
-            from semantic_perception.mobileclip_encoder import MobileCLIPEncoder
+            from semantic.perception.semantic_perception.mobileclip_encoder import MobileCLIPEncoder
             enc = MobileCLIPEncoder()
             enc.load_model()
             logger.info("MobileCLIPEncoder loaded")
@@ -299,7 +299,7 @@ class PerceptionModule(Module, layer=3):
     ) -> list:
         """Project 2D detections to 3D (delegates to projection module)."""
         try:
-            from semantic_perception.projection import (
+            from semantic.perception.semantic_perception.projection import (
                 Detection3D as ProjDetection3D,
                 bbox_center_depth,
                 mask_to_pointcloud,

@@ -1,4 +1,4 @@
-"""测试 InstanceTracker 增量更新功能 (DovSG 局部更新)。
+﻿"""测试 InstanceTracker 增量更新功能 (DovSG 局部更新)。
 
 覆盖:
   - update_local(): 只处理 robot_pos 附近 update_radius 范围内的物体
@@ -21,8 +21,8 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_perception.instance_tracker import InstanceTracker, TrackedObject
-from semantic_perception.projection import Detection3D
+from semantic.perception.semantic_perception.instance_tracker import InstanceTracker, TrackedObject
+from semantic.perception.semantic_perception.projection import Detection3D
 
 
 # ─────────────────────────────────────────────

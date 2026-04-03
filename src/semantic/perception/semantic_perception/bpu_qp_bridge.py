@@ -1,4 +1,4 @@
-"""
+﻿"""
 BPU → qp_perception 桥接层
 
 将 LingTu 的 BPU YOLO 检测器适配为 qp_perception 的 Detector 接口，
@@ -12,7 +12,7 @@ BPU → qp_perception 桥接层
     → TargetObservation (给 PersonTracker / 导航用)
 
 用法:
-    from semantic_perception.bpu_qp_bridge import create_perception_pipeline
+    from semantic.perception.semantic_perception.bpu_qp_bridge import create_perception_pipeline
     pipeline = create_perception_pipeline()
     target = pipeline.process(frame, timestamp)
 """

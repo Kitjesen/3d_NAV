@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 简化的可视化工具测试 - 验证核心功能
 """
@@ -15,8 +15,8 @@ from scipy.spatial import ConvexHull
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.polyhedron_expansion import Polyhedron
-from semantic_perception.scg_builder import SCGBuilder, SCGConfig
+from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
+from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
 
 
 def test_polyhedron_creation():
@@ -90,7 +90,7 @@ def test_visualization_import():
     """测试可视化模块导入。"""
     print("测试 3: 可视化模块导入")
 
-    from semantic_perception.visualization_tools import (
+    from semantic.perception.semantic_perception.visualization_tools import (
         PathVisualizer,
         SCGVisualizer,
         PerformanceVisualizer,

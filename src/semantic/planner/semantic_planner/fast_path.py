@@ -1,4 +1,4 @@
-"""
+﻿"""
 fast_path.py — Fast Path (System 1) 目标解析 Mixin。
 
 从 goal_resolver.py 提取，GoalResolver 通过多继承使用:
@@ -96,7 +96,7 @@ class FastPathMixin:
         Returns:
             GoalResult or None (None = 需要 Slow Path)
         """
-        from semantic_common import safe_json_loads
+        from semantic.common.semantic_common import safe_json_loads
         from .goal_resolver import GoalResult
 
         sg = safe_json_loads(scene_graph_json, default=None)

@@ -1,11 +1,11 @@
-"""
+﻿"""
 Semantic Perception API - 使用示例
 
 展示如何使用新的API接口
 """
 
 import numpy as np
-from semantic_perception.api import PerceptionFactory, PerceptionConfig, CameraInfo
+from semantic.perception.semantic_perception.api import PerceptionFactory, PerceptionConfig, CameraInfo
 
 
 def example_1_basic_usage():
@@ -159,7 +159,7 @@ def example_6_error_handling():
     """示例6: 错误处理"""
     print("\n=== 示例6: 错误处理 ===")
 
-    from semantic_perception.api.exceptions import (
+    from semantic.perception.semantic_perception.api.exceptions import (
         InvalidImageError,
         DetectorError,
         PerceptionAPIError

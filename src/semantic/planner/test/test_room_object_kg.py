@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_room_object_kg.py — 持久化房间-物体知识图谱单元测试
 """
 
@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 
-from semantic_planner.room_object_kg import (
+from semantic.planner.semantic_planner.room_object_kg import (
     RoomObjectKG,
     extract_room_objects_from_scene_graph,
 )
@@ -198,7 +198,7 @@ class TestSemanticPriorIntegration(unittest.TestCase):
     """SemanticPriorEngine 与 KG 集成测试。"""
 
     def test_load_learned_priors(self):
-        from semantic_planner.semantic_prior import SemanticPriorEngine
+        from semantic.planner.semantic_planner.semantic_prior import SemanticPriorEngine
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "kg.json")
@@ -218,7 +218,7 @@ class TestSemanticPriorIntegration(unittest.TestCase):
             self.assertIn("lathe", engine._priors["workshop"])
 
     def test_fallback_without_kg(self):
-        from semantic_planner.semantic_prior import SemanticPriorEngine
+        from semantic.planner.semantic_planner.semantic_prior import SemanticPriorEngine
 
         # Without KG, should use hand-coded priors
         engine = SemanticPriorEngine()
@@ -227,7 +227,7 @@ class TestSemanticPriorIntegration(unittest.TestCase):
         self.assertTrue(len(predictions) > 0)
 
     def test_reload_priors(self):
-        from semantic_planner.semantic_prior import SemanticPriorEngine
+        from semantic.planner.semantic_planner.semantic_prior import SemanticPriorEngine
 
         engine = SemanticPriorEngine()
         custom = {"testroom": {"sonar": 0.9}}
@@ -240,7 +240,7 @@ class TestSemanticPriorIntegration(unittest.TestCase):
         self.assertIn("sonar", engine._inverse_index)
 
     def test_kg_path_nonexistent_uses_defaults(self):
-        from semantic_planner.semantic_prior import SemanticPriorEngine
+        from semantic.planner.semantic_planner.semantic_prior import SemanticPriorEngine
 
         # Non-existent KG path should fall back to hand-coded priors
         engine = SemanticPriorEngine(kg_path="/nonexistent/kg.json")
@@ -253,8 +253,8 @@ class TestKGBackedRoomPrediction(unittest.TestCase):
 
     def test_predict_adjacent_with_kg(self):
         """有 KG 邻接数据时, 应使用学习到的邻接关系。"""
-        from semantic_planner.goal_resolver import GoalResolver
-        from semantic_planner.llm_client import LLMConfig
+        from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+        from semantic.planner.semantic_planner.llm_client import LLMConfig
 
         config = LLMConfig(backend="openai", model="gpt-4o-mini")
         resolver = GoalResolver(config)
@@ -274,8 +274,8 @@ class TestKGBackedRoomPrediction(unittest.TestCase):
 
     def test_predict_adjacent_without_kg_uses_hardcoded(self):
         """无 KG 时回退到 hand-coded 邻接。"""
-        from semantic_planner.goal_resolver import GoalResolver
-        from semantic_planner.llm_client import LLMConfig
+        from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+        from semantic.planner.semantic_planner.llm_client import LLMConfig
 
         config = LLMConfig(backend="openai", model="gpt-4o-mini")
         resolver = GoalResolver(config)
@@ -286,8 +286,8 @@ class TestKGBackedRoomPrediction(unittest.TestCase):
 
     def test_predict_adjacent_kg_empty_uses_hardcoded(self):
         """KG 存在但该房间类型无邻接数据时, 回退到 hand-coded。"""
-        from semantic_planner.goal_resolver import GoalResolver
-        from semantic_planner.llm_client import LLMConfig
+        from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+        from semantic.planner.semantic_planner.llm_client import LLMConfig
 
         config = LLMConfig(backend="openai", model="gpt-4o-mini")
         resolver = GoalResolver(config)
@@ -306,7 +306,7 @@ class TestTopologicalMemoryPersistence(unittest.TestCase):
 
     def test_save_and_load(self):
         import numpy as np
-        from semantic_planner.topological_memory import TopologicalMemory
+        from semantic.planner.semantic_planner.topological_memory import TopologicalMemory
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "topo.json")
@@ -336,7 +336,7 @@ class TestTopologicalMemoryPersistence(unittest.TestCase):
             self.assertIn("desk", labels)
 
     def test_load_nonexistent(self):
-        from semantic_planner.topological_memory import TopologicalMemory
+        from semantic.planner.semantic_planner.topological_memory import TopologicalMemory
 
         mem = TopologicalMemory()
         self.assertFalse(mem.load_from_file("/nonexistent.json"))

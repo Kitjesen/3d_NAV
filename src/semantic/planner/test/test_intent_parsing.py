@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Intent Parsing 全覆盖测试 — 验证 task_decomposer 的意图识别和槽位提取。
 
@@ -24,7 +24,7 @@ import unittest
 # Add parent to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
+from semantic.planner.semantic_planner.task_decomposer import TaskDecomposer, SubGoalAction
 
 
 class TestIntentParsing(unittest.TestCase):
@@ -793,7 +793,7 @@ class TestIntentParsing(unittest.TestCase):
 
     def test_intent_classification_prompt(self):
         """验证 LLM intent classification prompt 可以正常构建。"""
-        from semantic_planner.prompt_templates import build_intent_classification_prompt
+        from semantic.planner.semantic_planner.prompt_templates import build_intent_classification_prompt
         prompt = build_intent_classification_prompt(
             instruction="巡逻完了去充电桩",
             robot_state="IDLE",
@@ -807,7 +807,7 @@ class TestIntentParsing(unittest.TestCase):
 
     def test_compound_decomposition_prompt(self):
         """验证复合指令分解 prompt 可以正常构建。"""
-        from semantic_planner.prompt_templates import build_compound_decomposition_prompt
+        from semantic.planner.semantic_planner.prompt_templates import build_compound_decomposition_prompt
         prompt = build_compound_decomposition_prompt(
             instruction="先保存地图再去大门",
             robot_state="NAVIGATING",

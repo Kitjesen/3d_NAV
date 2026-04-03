@@ -1,4 +1,4 @@
-"""Tests for PerceptionModule -- core Module wrapper around semantic_perception.
+﻿"""Tests for PerceptionModule -- core Module wrapper around semantic_perception.
 
 Covers:
 - Port declarations (4 In, 2 Out)
@@ -25,7 +25,7 @@ from core.msgs.semantic import Detection3D as CoreDetection3D, SceneGraph
 from core.msgs.nav import Odometry
 from core.msgs.geometry import Pose, Quaternion, Vector3
 
-from semantic_perception.perception_module import (
+from semantic.perception.semantic_perception.perception_module import (
     PerceptionModule,
     _quat_to_rotation,
 )

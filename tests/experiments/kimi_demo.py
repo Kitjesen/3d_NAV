@@ -1,4 +1,4 @@
-"""
+﻿"""
 Kimi-k2.5 detailed reasoning demo.
 Shows complete Fast Path and Slow Path output including raw LLM reasoning.
 """
@@ -11,9 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_planner"))
 
-from semantic_planner.llm_client import LLMConfig, create_llm_client
-from semantic_planner.goal_resolver import GoalResolver
-from semantic_planner.prompt_templates import build_goal_resolution_prompt
+from semantic.planner.semantic_planner.llm_client import LLMConfig, create_llm_client
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+from semantic.planner.semantic_planner.prompt_templates import build_goal_resolution_prompt
 
 SCENE_GRAPH = {
     "summary": "Two-floor office building. Floor 1: corridor + main office. 15 objects total.",

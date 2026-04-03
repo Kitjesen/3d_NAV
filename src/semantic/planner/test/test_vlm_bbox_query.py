@@ -1,4 +1,4 @@
-"""VLM BBox Query 单元测试 — JSON 解析容错。
+﻿"""VLM BBox Query 单元测试 — JSON 解析容错。
 不依赖 ROS2，不需要网络/LLM，纯 Python 可运行。
 
 运行:
@@ -7,7 +7,7 @@
 
 import pytest
 
-from semantic_planner.vlm_bbox_query import (
+from semantic.planner.semantic_planner.vlm_bbox_query import (
     _build_bbox_prompt,
     _extract_bbox_from_response,
     _parse_json_tolerant,

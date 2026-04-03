@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_slow_path_llm.py — Slow Path LLM推理测试
 
 目标:
@@ -16,10 +16,10 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
-from semantic_planner.llm_client import LLMConfig
+from semantic.planner.semantic_planner.llm_client import LLMConfig
 import pytest
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_planner.goal_resolver import GoalResolver
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver
 
 
 def make_scene_graph(objects, relations=None):

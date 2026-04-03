@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 SCG-based 路径规划器测试脚本
 
@@ -18,9 +18,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.scg_path_planner import SCGPathPlanner, PathSmoother
-from semantic_perception.scg_builder import SCGBuilder, SCGConfig
-from semantic_perception.polyhedron_expansion import (
+from semantic.perception.semantic_perception.scg_path_planner import SCGPathPlanner, PathSmoother
+from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
+from semantic.perception.semantic_perception.polyhedron_expansion import (
     PolyhedronExpander,
     PolyhedronExpansionConfig,
 )

@@ -1,4 +1,4 @@
-"""DetectorModule — pluggable object detector as an independent Module.
+﻿"""DetectorModule — pluggable object detector as an independent Module.
 
 Wraps any DetectorBase implementation (YOLO-World, YOLO-E, GroundingDINO,
 BPU) into a core Module with typed In/Out ports. Swapping detectors is
@@ -7,7 +7,7 @@ a one-line Blueprint change.
 Usage::
 
     from core.blueprints import Blueprint
-    from semantic_perception.semantic_perception.detector_module import DetectorModule
+    from semantic.perception.semantic_perception.semantic_perception.detector_module import DetectorModule
 
     # YOLO-World on GPU
     bp.add(DetectorModule, detector="yolo_world", model_size="l")

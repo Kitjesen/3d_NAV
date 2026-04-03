@@ -1,4 +1,4 @@
-"""
+﻿"""
 NaviMind Habitat Agent — BA-HSG + Fast-Slow 零样本 ObjectNav 评测。
 
 感知策略 (按优先级):
@@ -42,11 +42,11 @@ for _pkg in [
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from semantic_common import sanitize_position, safe_json_loads
-from semantic_perception.projection import Detection3D
-from semantic_perception.instance_tracker import InstanceTracker
-from semantic_planner.goal_resolver import GoalResolver, GoalResult
-from semantic_planner.llm_client import LLMConfig
+from semantic.common.semantic_common import sanitize_position, safe_json_loads
+from semantic.perception.semantic_perception.projection import Detection3D
+from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver, GoalResult
+from semantic.planner.semantic_planner.llm_client import LLMConfig
 
 logger = logging.getLogger(__name__)
 

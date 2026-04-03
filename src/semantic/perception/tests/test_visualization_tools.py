@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 可视化工具测试脚本
 
@@ -20,7 +20,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.visualization_tools import (
+from semantic.perception.semantic_perception.visualization_tools import (
     PathVisualizer,
     SCGVisualizer,
     PerformanceVisualizer,
@@ -52,8 +52,8 @@ def create_test_occupancy_grid():
 
 def create_test_scg():
     """创建测试 SCG。"""
-    from semantic_perception.scg_builder import SCGBuilder, SCGConfig
-    from semantic_perception.polyhedron_expansion import Polyhedron
+    from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
+    from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
     from scipy.spatial import ConvexHull
 
     config = SCGConfig()
@@ -94,7 +94,7 @@ def create_test_scg():
 
 def create_test_results():
     """创建测试评估结果。"""
-    from semantic_perception.evaluation_framework import (
+    from semantic.perception.semantic_perception.evaluation_framework import (
         BenchmarkResult,
         MemoryMetrics,
         UpdateMetrics,

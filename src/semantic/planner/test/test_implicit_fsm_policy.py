@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_implicit_fsm_policy.py — 隐式 FSM 策略测试
 """
 
@@ -8,7 +8,7 @@ import unittest
 
 import numpy as np
 
-from semantic_planner.implicit_fsm_policy import (
+from semantic.planner.semantic_planner.implicit_fsm_policy import (
     ImplicitFSMObservation,
     ImplicitFSMPolicy,
 )

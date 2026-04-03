@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 多面体扩展算法测试脚本
 
@@ -16,7 +16,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.polyhedron_expansion import (
+from semantic.perception.semantic_perception.polyhedron_expansion import (
     CollisionChecker,
     ConvexHullComputer,
     PolyhedronExpander,

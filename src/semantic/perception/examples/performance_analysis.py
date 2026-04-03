@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 性能分析和优化脚本
 
@@ -27,13 +27,13 @@ from io import StringIO
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.polyhedron_expansion import (
+from semantic.perception.semantic_perception.polyhedron_expansion import (
     PolyhedronExpander,
     PolyhedronExpansionConfig,
 )
-from semantic_perception.scg_builder import SCGBuilder, SCGConfig
-from semantic_perception.uncertainty_model import UncertaintyModel
-from semantic_perception.local_rolling_grid import LocalRollingGrid
+from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
+from semantic.perception.semantic_perception.uncertainty_model import UncertaintyModel
+from semantic.perception.semantic_perception.local_rolling_grid import LocalRollingGrid
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -117,7 +117,7 @@ class PerformanceAnalyzer:
         print("=" * 60)
 
         # 创建测试多面体
-        from semantic_perception.polyhedron_expansion import Polyhedron
+        from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
         from scipy.spatial import ConvexHull
 
         config = SCGConfig()
@@ -178,7 +178,7 @@ class PerformanceAnalyzer:
         print("=" * 60)
 
         # 创建测试数据
-        from semantic_perception.global_coverage_mask import GlobalCoverageMask
+        from semantic.perception.semantic_perception.global_coverage_mask import GlobalCoverageMask
 
         gcm = GlobalCoverageMask(resolution=0.1, origin=np.array([0, 0, 0]))
 
@@ -240,7 +240,7 @@ class PerformanceAnalyzer:
         print(f"局部滚动栅格 (80×80×40): {rolling_size:.2f} MB")
 
         # GCM (稀疏存储)
-        from semantic_perception.global_coverage_mask import GlobalCoverageMask
+        from semantic.perception.semantic_perception.global_coverage_mask import GlobalCoverageMask
         gcm = GlobalCoverageMask(resolution=0.1, origin=np.array([0, 0, 0]))
         for i in range(1000):
             gcm.mark_covered(i % 100, i // 100, 0)
@@ -248,7 +248,7 @@ class PerformanceAnalyzer:
         print(f"GCM (1000 单元格): {gcm_size:.2f} KB")
 
         # SCG
-        from semantic_perception.scg_builder import SCGBuilder, SCGConfig
+        from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
         scg_builder = SCGBuilder(SCGConfig())
         scg_size = sys.getsizeof(scg_builder.nodes) / 1024
         print(f"SCG (空): {scg_size:.2f} KB")

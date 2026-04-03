@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_sgnav_reasoner.py — SG-Nav 对齐推理器测试
 """
 
@@ -10,8 +10,8 @@ import numpy as np
 
 import pytest
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_planner.frontier_scorer import Frontier
-from semantic_planner.sgnav_reasoner import SGNavReasoner
+from semantic.planner.semantic_planner.frontier_scorer import Frontier
+from semantic.planner.semantic_planner.sgnav_reasoner import SGNavReasoner
 
 
 class TestSGNavReasoner(unittest.TestCase):

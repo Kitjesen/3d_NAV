@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 端到端评估测试脚本
 
@@ -16,7 +16,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.end_to_end_evaluation import EndToEndEvaluator
+from semantic.perception.semantic_perception.end_to_end_evaluation import EndToEndEvaluator
 
 
 def create_mock_hm3d_dataset(root_dir: Path):

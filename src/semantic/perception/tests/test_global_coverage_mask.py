@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_global_coverage_mask.py — GlobalCoverageMask 单元测试
 
 覆盖:
@@ -16,7 +16,7 @@ import unittest
 
 import numpy as np
 
-from semantic_perception.global_coverage_mask import CoverageCell, GlobalCoverageMask
+from semantic.perception.semantic_perception.global_coverage_mask import CoverageCell, GlobalCoverageMask
 
 
 class TestGlobalCoverageMaskInit(unittest.TestCase):

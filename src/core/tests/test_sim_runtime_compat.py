@@ -1,4 +1,4 @@
-import importlib.util
+﻿import importlib.util
 import sys
 
 import numpy as np
@@ -30,9 +30,9 @@ def test_semantic_namespace_wrappers_expose_runtime_import_paths():
     assert importlib.util.find_spec("semantic_planner.llm_client") is not None
 
     from core.msgs import scene as scene_msgs
-    from semantic_common import sanitize_position
-    from semantic_perception.instance_tracker import InstanceTracker
-    from semantic_perception.tracked_objects import TrackedObject
+    from semantic.common.semantic_common import sanitize_position
+    from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
+    from semantic.perception.semantic_perception.tracked_objects import TrackedObject
 
     assert callable(sanitize_position)
     assert InstanceTracker is not None
@@ -196,7 +196,7 @@ def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
 
 
 def test_sim_scene_observer_emits_building_scene_stairs():
-    from semantic_perception.sim_scene_observer import SimSceneObserver
+    from semantic.perception.semantic_perception.sim_scene_observer import SimSceneObserver
 
     class _Intrinsics:
         fx = 415.7
@@ -221,7 +221,7 @@ def test_sim_scene_observer_emits_building_scene_stairs():
 
 
 def test_sim_scene_observer_respects_live_forward_axis_convention():
-    from semantic_perception.sim_scene_observer import SimSceneObserver
+    from semantic.perception.semantic_perception.sim_scene_observer import SimSceneObserver
 
     class _Intrinsics:
         fx = 415.7

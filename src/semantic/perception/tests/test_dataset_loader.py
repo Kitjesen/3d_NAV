@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 数据集加载器测试脚本
 
@@ -18,7 +18,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic_perception.dataset_loader import (
+from semantic.perception.semantic_perception.dataset_loader import (
     HM3DLoader,
     GibsonLoader,
     create_dataset_loader,

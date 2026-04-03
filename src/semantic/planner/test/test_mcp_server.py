@@ -1,4 +1,4 @@
-"""MCP Server 单元测试 — JSON-RPC 协议，不启动 HTTP server。
+﻿"""MCP Server 单元测试 — JSON-RPC 协议，不启动 HTTP server。
 不依赖 ROS2，纯 Python 可运行。
 
 运行:
@@ -7,7 +7,7 @@
 
 import pytest
 
-from semantic_planner.mcp_server import (
+from semantic.planner.semantic_planner.mcp_server import (
     _handle_initialize,
     _handle_request,
     _handle_tools_call,
@@ -16,7 +16,7 @@ from semantic_planner.mcp_server import (
     _jsonrpc_result,
     _jsonrpc_result_text,
 )
-from semantic_planner.skill_registry import LingTuNavigationSkills, SkillRegistry
+from semantic.planner.semantic_planner.skill_registry import LingTuNavigationSkills, SkillRegistry
 
 
 # ---------------------------------------------------------------------------

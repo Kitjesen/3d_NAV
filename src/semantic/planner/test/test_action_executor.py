@@ -1,4 +1,4 @@
-"""
+﻿"""
 test_action_executor.py — 动作执行器单元测试
 
 覆盖:
@@ -15,7 +15,7 @@ import numpy as np
 
 import pytest
 pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
-from semantic_planner.action_executor import (
+from semantic.planner.semantic_planner.action_executor import (
     ActionCommand,
     ActionExecutor,
     ActionStatus,

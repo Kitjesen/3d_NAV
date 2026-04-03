@@ -1,4 +1,4 @@
-"""Tests for 7 new unified modules — NavigationModule, SafetyRingModule,
+﻿"""Tests for 7 new unified modules — NavigationModule, SafetyRingModule,
 AutonomyModule, GatewayModule, MCPServerModule, RerunModule, SemanticPlannerModule.
 
 All external deps mocked. No GPU/FastAPI/Rerun/C++ required.
@@ -479,7 +479,7 @@ class TestSemanticPlannerModule(unittest.TestCase):
     def _make(self):
         import sys, os
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "semantic", "planner"))
-        from semantic_planner.semantic_planner_module import SemanticPlannerModule
+        from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
         return SemanticPlannerModule()
 
     def test_ports_in(self):
