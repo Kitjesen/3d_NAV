@@ -164,11 +164,11 @@ from core.blueprint import Blueprint
 from core.stream import Out, In
 from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud
+from core.msgs.sensor import PointCloud2
 
 
 class LiveMapper(Module, layer=3):
-    lidar_in: In[PointCloud]
+    lidar_in: In[PointCloud2]
     odom_in: In[Odometry]
     costmap_out: Out[dict]
     goal_cmd: Out[PoseStamped]

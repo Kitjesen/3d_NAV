@@ -40,6 +40,7 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
             detector_type=detector,
             confidence_threshold=config.get("confidence", 0.3),
             skip_frames=config.get("perception_skip_frames", 1),
+            world=config.get("world", ""),
         )
         bp.add(EncoderModule, encoder=encoder)
     except ImportError as e:

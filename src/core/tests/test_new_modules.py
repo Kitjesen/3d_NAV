@@ -518,6 +518,34 @@ class TestSemanticPlannerModule(unittest.TestCase):
         m._on_mission_status({"state": "STUCK"})  # same state, must be dropped
         self.assertEqual(m._lera_count, count_after_first)
 
+    def test_fast_resolve_uses_target_xyz_when_position_missing(self):
+        m = self._make()
+
+        class _Result:
+            confidence = 0.9
+            target_x = 16.25
+            target_y = 2.9
+            target_z = 0.937
+            frame_id = 'map'
+
+        class _Resolver:
+            def maybe_reload_kg(self):
+                return None
+
+            def fast_resolve(self, instruction, sg_json):
+                return _Result()
+
+        m._goal_resolver = _Resolver()
+        goals = []
+        m.goal_pose._add_callback(goals.append)
+
+        m._try_resolve('find the stairs', '{"objects": []}')
+
+        self.assertEqual(len(goals), 1)
+        self.assertAlmostEqual(goals[0].pose.position.x, 16.25)
+        self.assertAlmostEqual(goals[0].pose.position.y, 2.9)
+        self.assertAlmostEqual(goals[0].pose.position.z, 0.937)
+
     def test_scene_graph_stored_as_object(self):
         """_on_scene_graph must persist the SceneGraph object, not just JSON."""
         from core.msgs.semantic import SceneGraph, Detection3D

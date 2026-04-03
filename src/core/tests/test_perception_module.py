@@ -79,6 +79,25 @@ class FakeDetector:
         self._shutdown_called = True
 
 
+class FakeSimObserver:
+    def __init__(self, detections=None):
+        self._dets = detections or [type('Det', (), {
+            'position': np.array([16.25, 2.9, 0.9375], dtype=np.float32),
+            'label': 'stairs',
+            'score': 1.0,
+            'bbox_2d': np.array([435.7, 173.6, 547.1, 285.0], dtype=np.float32),
+            'depth': 13.0,
+            'features': np.array([]),
+            'points': np.empty((0, 3), dtype=np.float32),
+        })()]
+
+    def observe(self, tf_camera_to_world, intrinsics, text_prompt=''):
+        return list(self._dets)
+
+    def shutdown(self):
+        pass
+
+
 # -- Port declaration tests ----------------------------------------------------
 
 class TestPortDeclarations:
@@ -249,6 +268,27 @@ class TestPipeline:
         mod.detections_3d._add_callback(received.append)
         mod.color_image._deliver(_make_bgr())
         assert len(received) == 0
+
+    def test_sim_scene_backend_bypasses_blur_filter(self):
+        mod = PerceptionModule(detector_type='sim_scene')
+        mod.setup()
+        mod._tracker = None
+        mod._sim_scene_observer = FakeSimObserver()
+        mod.camera_info._deliver(_make_intrinsics())
+        mod.depth_image._deliver(_make_depth(depth_mm=10000))
+        mod.odometry._deliver(_make_odom(2.0, 3.0, 0.5))
+
+        received = []
+        mod.detections_3d._add_callback(received.append)
+
+        blurry = Image(
+            data=np.full((480, 640, 3), 127, dtype=np.uint8),
+            format=ImageFormat.BGR,
+        )
+        mod.color_image._deliver(blurry)
+
+        assert len(received) == 1
+        assert received[0][0].label == 'stairs'
 
     def test_fallback_projection_position(self):
         """Fallback 3D projection produces reasonable world-frame positions."""

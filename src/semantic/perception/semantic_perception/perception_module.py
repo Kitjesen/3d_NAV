@@ -64,6 +64,7 @@ class PerceptionModule(Module, layer=3):
         max_objects: int = 200,
         default_classes: str = "door . chair . person . desk . stairs . elevator . sign",
         skip_frames: int = 1,
+        world: str = "",
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
@@ -77,11 +78,13 @@ class PerceptionModule(Module, layer=3):
         self._max_objects = max_objects
         self._default_classes = default_classes
         self._skip_frames = max(skip_frames, 1)
+        self._world = world
 
         # runtime state (populated during setup)
         self._tracker = None
         self._detector = None
         self._clip_encoder = None
+        self._sim_scene_observer = None
         self._frame_count: int = 0
         self._latest_depth: Optional[np.ndarray] = None
         self._latest_intrinsics: Optional[Any] = None
@@ -195,21 +198,28 @@ class PerceptionModule(Module, layer=3):
         bgr = color_img.to_bgr().data if hasattr(color_img, "to_bgr") else color_img.data
         depth = self._latest_depth
 
-        # Laplacian blur detection (optional import)
-        try:
-            from semantic_perception.laplacian_filter import is_blurry
-            if is_blurry(bgr, threshold=self._laplacian_threshold):
+        # Laplacian blur detection is useful for real RGB streams, but the sim-scene
+        # backend derives detections from world metadata and should not be blocked by image sharpness.
+        if self._sim_scene_observer is None:
+            try:
+                from semantic_perception.laplacian_filter import is_blurry
+                if is_blurry(bgr, threshold=self._laplacian_threshold):
+                    return
+            except ImportError:
+                pass
+
+        detections_3d = []
+        if self._sim_scene_observer is not None:
+            detections_3d = self._sim_scene_observer.observe(
+                tf_camera_to_world=tf_camera_to_world,
+                intrinsics=self._latest_intrinsics,
+                text_prompt=self._default_classes,
+            )
+        else:
+            detections_2d = self._run_detector(bgr)
+            if not detections_2d:
                 return
-        except ImportError:
-            pass
-
-        # Detection
-        detections_2d = self._run_detector(bgr)
-        if not detections_2d:
-            return
-
-        # 2D -> 3D projection
-        detections_3d = self._project_to_3d(detections_2d, depth, tf_camera_to_world)
+            detections_3d = self._project_to_3d(detections_2d, depth, tf_camera_to_world)
         if not detections_3d:
             return
 
@@ -251,6 +261,11 @@ class PerceptionModule(Module, layer=3):
                 det.load_model()
                 logger.info("YOLOWorldDetector loaded")
                 return det
+            elif self._detector_type == "sim_scene":
+                from semantic_perception.sim_scene_observer import SimSceneObserver
+                self._sim_scene_observer = SimSceneObserver(world=self._world)
+                logger.info("SimSceneObserver loaded (world=%s)", self._world or "")
+                return self._sim_scene_observer
         except (ImportError, Exception) as e:
             logger.warning("Detector %r unavailable: %s", self._detector_type, e)
         return None

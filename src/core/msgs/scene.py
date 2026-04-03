@@ -6,7 +6,7 @@ Extracted from semantic/perception/tracked_objects.py for cross-module sharing.
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -224,3 +224,13 @@ class ViewNode:
     room_id: int = -1
     object_ids: List[int] = field(default_factory=list)
     key_labels: List[str] = field(default_factory=list)
+
+
+def __getattr__(name: str):
+    """Backward-compatible lazy export for symbols moved out of core.msgs.scene."""
+    if name == "TrackedObject":
+        from semantic_perception.tracked_objects import TrackedObject
+
+        return TrackedObject
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+

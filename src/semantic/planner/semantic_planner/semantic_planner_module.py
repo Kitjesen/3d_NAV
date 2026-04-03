@@ -408,8 +408,8 @@ class SemanticPlannerModule(Module, layer=4):
             if (result and hasattr(result, "confidence")
                     and result.confidence >= self._fast_threshold):
                 self._resolve_count += 1
-                pos = result.position if hasattr(result, "position") else [0, 0, 0]
-                if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                pos = self._goal_result_position(result)
+                if pos is not None:
                     pose = PoseStamped(
                         pose=Pose(
                             position=Vector3(
@@ -418,7 +418,7 @@ class SemanticPlannerModule(Module, layer=4):
                             ),
                             orientation=Quaternion(0, 0, 0, 1),
                         ),
-                        frame_id="map",
+                        frame_id=getattr(result, "frame_id", "map") or "map",
                         ts=time.time(),
                     )
                     self._current_goal_pose = pose
@@ -436,6 +436,29 @@ class SemanticPlannerModule(Module, layer=4):
         self._explore_frontier(instruction)
 
     # ── Vector Memory Search ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _goal_result_position(result: Any) -> Optional[List[float]]:
+        pos = getattr(result, "position", None)
+        if isinstance(pos, dict):
+            return [
+                float(pos.get("x", 0.0)),
+                float(pos.get("y", 0.0)),
+                float(pos.get("z", 0.0)),
+            ]
+        if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+            return [
+                float(pos[0]),
+                float(pos[1]),
+                float(pos[2]) if len(pos) > 2 else 0.0,
+            ]
+
+        tx = getattr(result, "target_x", None)
+        ty = getattr(result, "target_y", None)
+        if tx is None or ty is None:
+            return None
+        tz = getattr(result, "target_z", 0.0)
+        return [float(tx), float(ty), float(tz or 0.0)]
 
     def _try_vector_memory(self, instruction: str) -> bool:
         """Query VectorMemoryModule for fuzzy location match. Returns True if navigating."""

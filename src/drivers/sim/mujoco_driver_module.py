@@ -41,6 +41,32 @@ _WORLDS_DIR = _SIM_ROOT / "worlds"
 _ROBOTS_DIR = _SIM_ROOT / "robots" / "nova_dog"
 _ROBOT_XML = _ROBOTS_DIR / "robot_with_camera.xml"
 _POLICY_ONNX = _ROBOTS_DIR / "policy.onnx"
+_DEFAULT_START_POS = (0.0, 0.0, 0.35)
+
+
+def _is_default_start_pos(start_pos: tuple) -> bool:
+    return tuple(float(v) for v in start_pos[:3]) == _DEFAULT_START_POS
+
+
+def _scene_placeholder_start(scene_xml: Path) -> Optional[list[float]]:
+    try:
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(scene_xml.read_text(encoding="utf-8", errors="ignore"))
+        worldbody = root.find("worldbody")
+        if worldbody is None:
+            return None
+        for body in worldbody.findall("body"):
+            if body.attrib.get("name") != "robot_placeholder":
+                continue
+            pos_str = body.attrib.get("pos", "")
+            parts = [float(v) for v in pos_str.split()]
+            if len(parts) >= 3:
+                return parts[:3]
+    except Exception:
+        logger.debug("Failed to parse robot_placeholder pose from %s", scene_xml, exc_info=True)
+    return None
+
 
 # Known worlds
 WORLDS = {
@@ -133,6 +159,9 @@ class MujocoDriverModule(Module, layer=1):
             robot_cfg = RobotConfig.default_nova_dog()
             robot_cfg.resolve_paths(base_dir=str(_SIM_ROOT))
             robot_cfg.robot_xml = self._robot_xml
+            scene_start = _scene_placeholder_start(world_path)
+            start_pos = scene_start if scene_start is not None and _is_default_start_pos(self._start_pos) else list(self._start_pos)
+            robot_cfg.init_position = [float(v) for v in start_pos[:3]]
             if self._policy_path:
                 robot_cfg.policy_onnx = self._policy_path
 
@@ -166,7 +195,7 @@ class MujocoDriverModule(Module, layer=1):
             self._engine.load(str(world_path))
             self._engine.reset()  # stabilize + warm up policy history
             logger.info("MujocoDriverModule: loaded world '%s', robot at %s",
-                        self._world_name, self._start_pos)
+                        self._world_name, tuple(robot_cfg.init_position))
 
         except ImportError as e:
             self._engine = None
@@ -325,3 +354,4 @@ class MujocoDriverModule(Module, layer=1):
             "render": self._render,
         }
         return info
+

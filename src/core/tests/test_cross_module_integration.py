@@ -51,6 +51,33 @@ def test(num, name, passed, detail=""):
         msg += "  [%s]" % detail
     print(msg, flush=True)
 
+# ==== Test 20: Non-native stack builds Python autonomy chain ====
+try:
+    nav = system.get_module("NavigationModule")
+    lp = system.get_module("LocalPlannerModule")
+    pf = system.get_module("PathFollowerModule")
+    wp_conns = [c for c in system.connections
+                if c[0] == "NavigationModule" and c[1] == "waypoint"
+                   and c[2] == "LocalPlannerModule" and c[3] == "waypoint"]
+    path_conns = [c for c in system.connections
+                  if c[0] == "LocalPlannerModule" and c[1] == "local_path"
+                     and c[2] == "PathFollowerModule" and c[3] == "local_path"]
+    cmd_conns = [c for c in system.connections
+                 if c[0] == "PathFollowerModule" and c[1] == "cmd_vel"
+                    and c[2] == "StubDogModule" and c[3] == "cmd_vel"]
+    test(20, "Non-native stack uses Python autonomy chain",
+         nav._enable_ros2_bridge is False
+         and lp._backend == "simple"
+         and pf._backend == "pid"
+         and len(wp_conns) > 0
+         and len(path_conns) > 0
+         and len(cmd_conns) > 0,
+         "nav_ros2=%s lp=%s pf=%s wires=%d/%d/%d" % (
+             nav._enable_ros2_bridge, lp._backend, pf._backend,
+             len(wp_conns), len(path_conns), len(cmd_conns)))
+except Exception as e:
+    test(20, "Non-native stack uses Python autonomy chain", False, str(e))
+
 # ==== Test 21: SceneGraph fan-out ====
 # PerceptionModule (scene_graph Out) is not in full_stack; DetectorModule
 # publishes detections, not scene_graph.  So we simulate fan-out by creating
@@ -140,11 +167,11 @@ except Exception as e:
 # ==== Test 24: Costmap chain ====
 try:
     from nav.occupancy_grid_module import OccupancyGridModule
-    from core.msgs.sensor import PointCloud
+    from core.msgs.sensor import PointCloud2
     ogm = OccupancyGridModule(resolution=0.5, map_radius=5.0, z_min=0.1, z_max=2.0)
     ogm.setup()
     pts = np.array([[1.0, 1.0, 0.5], [1.5, 1.5, 0.8], [2.0, 2.0, 1.0], [-1.0, -1.0, 0.3]], dtype=np.float32)
-    cloud = PointCloud(points=pts)
+    cloud = PointCloud2(points=pts)
     before_cost = ogm.costmap.msg_count
     ogm._on_cloud(cloud)
     after_cost = ogm.costmap.msg_count
