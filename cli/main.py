@@ -54,6 +54,7 @@ def main() -> None:
     parser.add_argument("--gateway-port", type=int, default=None, dest="gateway_port")
     parser.add_argument("--no-semantic", action="store_true")
     parser.add_argument("--no-gateway", action="store_true")
+    parser.add_argument("--native", action="store_true", help="Force C++ autonomy stack (terrain+local_planner+pathFollower)")
     parser.add_argument("--no-native", action="store_true")
     parser.add_argument("--rerun", action="store_true", help="Enable Rerun 3D visualization on startup")
     parser.add_argument("--no-repl", action="store_true", help="Foreground daemon (no interactive REPL)")
@@ -135,6 +136,8 @@ def main() -> None:
         cfg["enable_semantic"] = False
     if args.no_gateway:
         cfg["enable_gateway"] = False
+    if args.native:
+        cfg["enable_native"] = True
     if args.no_native:
         cfg["enable_native"] = False
     if args.rerun:
