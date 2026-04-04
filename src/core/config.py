@@ -60,6 +60,24 @@ class SafetyConfig:
 
 
 @dataclass
+class LidarConfig:
+    """LiDAR sensor mounting extrinsics and publish settings.
+
+    offset_x/y/z + roll/pitch/yaw define the body→lidar static transform
+    used by static_transform_publisher and C++ coordinate transforms.
+    """
+    frame_id: str = "livox_frame"
+    publish_freq: float = 10.0
+    offset_x: float = -0.011
+    offset_y: float = -0.02329
+    offset_z: float = 0.04412
+    roll: float = 0.0
+    pitch: float = 0.0
+    yaw: float = 0.0
+    camera_offset_z: float = 0.0
+
+
+@dataclass
 class RobotConfig:
     """Top-level robot configuration, mirroring config/robot_config.yaml.
 
@@ -71,6 +89,7 @@ class RobotConfig:
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
     driver: DriverConfig = field(default_factory=DriverConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    lidar: LidarConfig = field(default_factory=LidarConfig)
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -104,6 +123,7 @@ def load_config(path: Optional[str] = None) -> RobotConfig:
         geometry=_fill_dataclass(GeometryConfig, raw.get("geometry", {})),
         driver=_fill_dataclass(DriverConfig, raw.get("driver", {})),
         safety=_fill_dataclass(SafetyConfig, raw.get("safety", {})),
+        lidar=_fill_dataclass(LidarConfig, raw.get("lidar", {})),
         raw=raw,
     )
 
