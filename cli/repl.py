@@ -91,171 +91,222 @@ class LingTuREPL(cmd.Cmd):
         print("  Mission cancelled")
 
     def do_map(self, arg):
-        """Map management: map list | map save <name> | map use <name> | map build <name> | map delete <name>"""
+        """Map management: map list | save <name> | use <name> | build <name> | delete <name> | rename <old> <new>"""
         parts = arg.split()
         if not parts:
-            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name>")
+            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name> | rename <old> <new>")
             return
 
         subcmd = parts[0]
-        name = parts[1] if len(parts) > 1 else ""
+        name  = parts[1] if len(parts) > 1 else ""
+        name2 = parts[2] if len(parts) > 2 else ""
 
         if subcmd == "list":
-            self._map_list()
+            self._map_cmd({"action": "list"})
         elif subcmd == "save" and name:
-            self._map_save(name)
+            print(f"  Saving map '{name}'... (calls /pgo/save_maps — may take 10–30s)")
+            self._map_cmd({"action": "save", "name": name})
         elif subcmd == "use" and name:
-            self._map_use(name)
+            self._map_cmd({"action": "set_active", "name": name})
         elif subcmd == "build" and name:
-            self._map_build_tomogram(name)
+            print(f"  Building tomogram for '{name}'...")
+            self._map_cmd({"action": "build_tomogram", "name": name})
         elif subcmd == "delete" and name:
-            self._map_delete(name)
+            self._map_cmd({"action": "delete", "name": name})
+        elif subcmd == "rename" and name and name2:
+            self._map_cmd({"action": "rename", "name": name, "new_name": name2})
         else:
-            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name>")
+            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name> | rename <old> <new>")
 
-    def _map_list(self):
-        import os
+    def _map_cmd(self, cmd: dict) -> None:
+        """Send a command to MapManagerModule and print the result.
 
-        from cli.profiles_data import _default_map_dir
+        Routes through the Module port when MapManagerModule is running.
+        Falls back to direct filesystem operations for list/use/delete
+        when the module is not in the blueprint (e.g. stub profile).
+        """
+        import json as _json
 
-        map_dir = _default_map_dir()
-        if not os.path.isdir(map_dir):
-            print(f"  No maps directory: {map_dir}")
+        mod = self._get_module("MapManagerModule")
+        if mod is not None:
+            # Collect response via a one-shot callback
+            result_holder: list = []
+            orig_cb = None
+            # Temporarily subscribe a capture callback
+            mod.map_response._add_callback(result_holder.append)
+            try:
+                mod.map_command._deliver(_json.dumps(cmd))
+            finally:
+                # Remove our callback — port stores list of callbacks
+                try:
+                    cbs = mod.map_response._callbacks
+                    if result_holder.append in cbs:
+                        cbs.remove(result_holder.append)
+                except Exception:
+                    pass
+
+            resp = result_holder[0] if result_holder else {"success": False, "message": "no response"}
+            self._map_print_response(cmd.get("action", ""), resp)
             return
-        active_link = os.path.join(map_dir, "active")
-        active_name = ""
-        if os.path.islink(active_link):
-            active_name = os.path.basename(os.readlink(active_link))
 
-        maps = sorted(
-            d for d in os.listdir(map_dir) if os.path.isdir(os.path.join(map_dir, d)) and d != "active"
-        )
-        if not maps:
-            print("  No maps found")
+        # --- Fallback: no MapManagerModule (stub/dev) ---
+        self._map_fallback(cmd)
+
+    def _map_print_response(self, action: str, resp: dict) -> None:
+        """Render a MapManagerModule response to the terminal."""
+        if not resp.get("success"):
+            print(f"  {T.red('Error')}: {resp.get('message', '?')}")
             return
-        for m in maps:
-            has_pcd = os.path.exists(os.path.join(map_dir, m, "map.pcd"))
-            has_tomo = os.path.exists(os.path.join(map_dir, m, "tomogram.pickle"))
-            marker = " *" if m == active_name else ""
-            status = []
-            if has_pcd:
-                status.append("pcd")
-            if has_tomo:
-                status.append("tomogram")
-            print(f"  {m}{marker}  [{', '.join(status) or 'empty'}]")
 
-    def _map_save(self, name):
-        import subprocess
+        if action == "list":
+            maps = resp.get("maps", [])
+            active = resp.get("active", "")
+            if not maps:
+                print("  No maps found")
+                return
+            for m in maps:
+                name = m["name"]
+                marker = T.green(" *") if name == active else ""
+                parts = []
+                if m.get("has_pcd"):
+                    parts.append("pcd")
+                if m.get("has_tomogram"):
+                    parts.append("tomogram")
+                print(f"  {name}{marker}  [{', '.join(parts) or 'empty'}]")
 
-        map_dir = os.path.join(
-            os.environ.get("NAV_MAP_DIR") or os.path.expanduser("~/data/lingtu/maps"), name
-        )
-        os.makedirs(map_dir, exist_ok=True)
-        pcd_path = os.path.join(map_dir, "map.pcd")
-        print(f"  Saving map to {pcd_path}...")
-        try:
-            result = subprocess.run(
-                [
-                    "ros2",
-                    "service",
-                    "call",
-                    "/pgo/save_maps",
-                    "interface/srv/SaveMaps",
-                    f"{{file_path: '{pcd_path}'}}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                print(f"  PCD saved: {pcd_path}")
-                self._map_build_tomogram(name)
+        elif action == "save":
+            pcd = resp.get("pcd", "?")
+            tomo_ok = resp.get("tomogram_ok", False)
+            print(f"  Saved: {pcd}")
+            if tomo_ok:
+                print(f"  Tomogram: {resp.get('tomogram', '?')}")
             else:
-                print(f"  Save failed: {result.stderr[:200]}")
-        except FileNotFoundError:
-            print("  Error: ros2 not found. Run on robot with ROS2.")
-        except subprocess.TimeoutExpired:
-            print("  Error: save_maps service timed out")
+                print(f"  {T.yellow('Tomogram build failed')} — run: map build <name>")
+            # Offer to set as active
+            name = os.path.basename(os.path.dirname(pcd))
+            print(f"  Tip: run  {T.bold(f'map use {name}')}  to activate this map")
 
-    def _map_use(self, name):
-        import os
-        import shutil
-
-        from cli.profiles_data import _default_map_dir
-
-        map_dir = _default_map_dir()
-        map_path = os.path.join(map_dir, name)
-        if not os.path.isdir(map_path):
-            print(f"  Map not found: {name}")
-            return
-        active_link = os.path.join(map_dir, "active")
-        if os.path.islink(active_link):
-            os.unlink(active_link)
-        elif os.path.exists(active_link):
-            shutil.rmtree(active_link)
-        os.symlink(map_path, active_link)
-
-        tomogram = os.path.join(map_path, "tomogram.pickle")
-        nav = self._get_module("NavigationModule")
-        if nav and os.path.exists(tomogram) and hasattr(nav, "_planner_backend"):
-            if hasattr(nav._planner_backend, "_load_tomogram"):
-                nav._planner_backend._load_tomogram(tomogram)
-                print(f"  Active map: {name} (tomogram loaded)")
-            elif hasattr(nav._planner_backend, "update_map"):
-                import pickle
-
-                with open(tomogram, "rb") as f:
-                    data = pickle.load(f)
-                if "grid" in data:
-                    nav._planner_backend.update_map(data["grid"], data.get("resolution", 0.2))
-                print(f"  Active map: {name} (costmap loaded)")
+        elif action == "set_active":
+            name = resp.get("active", "?")
+            tomogram = resp.get("tomogram", "")
+            nav = self._get_module("NavigationModule")
+            if nav and tomogram and os.path.exists(tomogram) and hasattr(nav, "_planner_backend"):
+                self._reload_planner_tomogram(nav, tomogram, name)
             else:
-                print(f"  Active map: {name} (planner reload not supported)")
+                print(f"  Active map: {T.green(name)}")
+                if tomogram and not os.path.exists(tomogram):
+                    print(f"  {T.yellow('No tomogram')} — run: map build {name}")
+
+        elif action == "build_tomogram":
+            print(f"  Tomogram: {resp.get('tomogram', '?')}")
+
+        elif action == "delete":
+            print(f"  {resp.get('message', 'deleted')}")
+
+        elif action == "rename":
+            print(f"  {resp.get('message', 'renamed')}")
+
         else:
-            if not os.path.exists(tomogram):
-                print(f"  Active map: {name} (no tomogram — run: map build {name})")
-            else:
-                print(f"  Active map: {name}")
+            print(f"  {resp}")
 
-    def _map_build_tomogram(self, name):
-        import os
-        import sys
+    def _reload_planner_tomogram(self, nav, tomogram: str, name: str) -> None:
+        """Hot-reload the planner's tomogram after map switch."""
+        pb = nav._planner_backend
+        if hasattr(pb, "_load_tomogram"):
+            pb._load_tomogram(tomogram)
+            print(f"  Active map: {T.green(name)} (tomogram hot-reloaded)")
+        elif hasattr(pb, "update_map"):
+            import pickle
+            with open(tomogram, "rb") as f:
+                data = pickle.load(f)
+            if "grid" in data:
+                pb.update_map(data["grid"], data.get("resolution", 0.2))
+            print(f"  Active map: {T.green(name)} (costmap reloaded)")
+        else:
+            print(f"  Active map: {T.green(name)} (restart required to apply new tomogram)")
 
-        from cli.profiles_data import _default_map_dir
-
-        map_dir = _default_map_dir()
-        pcd_path = os.path.join(map_dir, name, "map.pcd")
-        tomogram_path = os.path.join(map_dir, name, "tomogram.pickle")
-        if not os.path.exists(pcd_path):
-            print(f"  No PCD file: {pcd_path}")
-            return
-        print(f"  Building tomogram from {pcd_path}...")
-        try:
-            tomo_dir = project_root() / "src" / "global_planning" / "PCT_planner" / "tomography" / "scripts"
-            tds = str(tomo_dir)
-            if tds not in sys.path:
-                sys.path.insert(0, tds)
-            from global_planning.PCT_planner.tomography.scripts.build_tomogram import (  # noqa: PLC0415
-                build_tomogram_from_pcd,
-            )
-
-            build_tomogram_from_pcd(pcd_path, tomogram_path)
-            print(f"  Tomogram built: {tomogram_path}")
-        except Exception as e:
-            print(f"  Build failed: {e}")
-
-    def _map_delete(self, name):
-        import os
+    def _map_fallback(self, cmd: dict) -> None:
+        """Direct filesystem fallback when MapManagerModule is not running."""
         import shutil
+        from cli.profiles_data import _default_map_dir
+        action = cmd.get("action", "")
+        map_dir = _default_map_dir()
 
-        map_dir = os.path.join(
-            os.environ.get("NAV_MAP_DIR") or os.path.expanduser("~/data/lingtu/maps"), name
-        )
-        if not os.path.isdir(map_dir):
-            print(f"  Map not found: {name}")
-            return
-        shutil.rmtree(map_dir)
-        print(f"  Deleted: {name}")
+        if action == "list":
+            if not os.path.isdir(map_dir):
+                print(f"  No maps directory: {map_dir}")
+                return
+            active_link = os.path.join(map_dir, "active")
+            active_name = os.path.basename(os.readlink(active_link)) if os.path.islink(active_link) else ""
+            maps = sorted(d for d in os.listdir(map_dir)
+                          if os.path.isdir(os.path.join(map_dir, d)) and d != "active")
+            if not maps:
+                print("  No maps found")
+                return
+            for m in maps:
+                marker = T.green(" *") if m == active_name else ""
+                parts = []
+                if os.path.exists(os.path.join(map_dir, m, "map.pcd")):
+                    parts.append("pcd")
+                if os.path.exists(os.path.join(map_dir, m, "tomogram.pickle")):
+                    parts.append("tomogram")
+                print(f"  {m}{marker}  [{', '.join(parts) or 'empty'}]")
+
+        elif action == "set_active":
+            name = cmd.get("name", "")
+            map_path = os.path.join(map_dir, name)
+            if not os.path.isdir(map_path):
+                print(f"  Map not found: {name}")
+                return
+            active_link = os.path.join(map_dir, "active")
+            if os.path.islink(active_link):
+                os.unlink(active_link)
+            elif os.path.exists(active_link):
+                shutil.rmtree(active_link)
+            os.symlink(map_path, active_link)
+            tomogram = os.path.join(map_path, "tomogram.pickle")
+            nav = self._get_module("NavigationModule")
+            if nav and os.path.exists(tomogram):
+                self._reload_planner_tomogram(nav, tomogram, name)
+            else:
+                msg = "" if os.path.exists(tomogram) else f" (no tomogram — run: map build {name})"
+                print(f"  Active map: {T.green(name)}{msg}")
+
+        elif action == "build_tomogram":
+            import sys
+            name = cmd.get("name", "")
+            pcd_path = os.path.join(map_dir, name, "map.pcd")
+            tomogram_path = os.path.join(map_dir, name, "tomogram.pickle")
+            if not os.path.exists(pcd_path):
+                print(f"  No PCD file: {pcd_path}")
+                return
+            print(f"  Building tomogram from {pcd_path}...")
+            try:
+                tomo_dir = project_root() / "src" / "global_planning" / "PCT_planner" / "tomography" / "scripts"
+                tds = str(tomo_dir)
+                if tds not in sys.path:
+                    sys.path.insert(0, tds)
+                from global_planning.PCT_planner.tomography.scripts.build_tomogram import build_tomogram_from_pcd  # noqa: PLC0415
+                build_tomogram_from_pcd(pcd_path, tomogram_path)
+                print(f"  Tomogram: {tomogram_path}")
+            except Exception as e:
+                print(f"  Build failed: {e}")
+
+        elif action == "delete":
+            name = cmd.get("name", "")
+            map_path = os.path.join(map_dir, name)
+            if not os.path.isdir(map_path):
+                print(f"  Map not found: {name}")
+                return
+            shutil.rmtree(map_path)
+            print(f"  Deleted: {name}")
+
+        elif action == "save":
+            print("  MapManagerModule not running — cannot call ROS2 save_maps service")
+            print("  Start with a map-enabled profile (e.g. lingtu map)")
+
+        else:
+            print(f"  MapManagerModule not running (action: {action})")
 
     def do_smap(self, arg):
         """Semantic map: smap status | rooms | save | load <dir> | query <text>"""
@@ -1081,7 +1132,7 @@ class LingTuREPL(cmd.Cmd):
                     if os.name != "nt":
                         tty.setcbreak(sys.stdin.fileno())
                     if name:
-                        self._map_save(name)
+                        self._map_cmd({"action": "save", "name": name})
                         time.sleep(2)
                 elif key == "g":
                     print("\n  Go to: ", end="", flush=True)

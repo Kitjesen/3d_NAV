@@ -33,62 +33,74 @@ base_autonomy/
 
 ### TerrainModule (layer=2)
 
-| Direction | Port | Type | Description |
-|-----------|------|------|-------------|
-| In | `odometry` | `Odometry` | Robot pose for rolling map center |
-| In | `map_cloud` | `PointCloud2` | Registered LiDAR point cloud |
-| Out | `terrain_map` | `PointCloud2` | Filtered obstacle + height map |
-| Out | `traversability` | `dict` | Traversability summary |
-| Out | `elevation_map` | `np.ndarray` | 2D elevation grid |
-| Out | `alive` | `bool` | Backend health signal |
+
+| Direction | Port             | Type          | Description                       |
+| --------- | ---------------- | ------------- | --------------------------------- |
+| In        | `odometry`       | `Odometry`    | Robot pose for rolling map center |
+| In        | `map_cloud`      | `PointCloud2` | Registered LiDAR point cloud      |
+| Out       | `terrain_map`    | `PointCloud2` | Filtered obstacle + height map    |
+| Out       | `traversability` | `dict`        | Traversability summary            |
+| Out       | `elevation_map`  | `np.ndarray`  | 2D elevation grid                 |
+| Out       | `alive`          | `bool`        | Backend health signal             |
+
 
 **Backends** (set via `backend=` constructor arg):
 
-| Backend | Requires | Description |
-|---------|----------|-------------|
-| `nanobind` *(default)* | `_nav_core.so` | C++ `TerrainAnalysisCore` in-process, zero ROS2 |
-| `native` | ROS2 + colcon build | C++ `terrainAnalysis` subprocess via NativeModule |
-| `simple` | nothing | Passthrough for testing |
+
+| Backend                | Requires            | Description                                       |
+| ---------------------- | ------------------- | ------------------------------------------------- |
+| `nanobind` *(default)* | `_nav_core.so`      | C++ `TerrainAnalysisCore` in-process, zero ROS2   |
+| `native`               | ROS2 + colcon build | C++ `terrainAnalysis` subprocess via NativeModule |
+| `simple`               | nothing             | Passthrough for testing                           |
+
 
 ### LocalPlannerModule (layer=2)
 
-| Direction | Port | Type | Description |
-|-----------|------|------|-------------|
-| In | `odometry` | `Odometry` | Robot pose + yaw |
-| In | `terrain_map` | `PointCloud2` | Obstacle cloud from TerrainModule |
-| In | `waypoint` | `PoseStamped` | Current navigation waypoint |
-| In | `boundary` | `PointCloud2` | Geofence boundary (hard obstacles) |
-| In | `added_obstacles` | `PointCloud2` | Externally injected obstacles |
-| Out | `local_path` | `Path` | Best obstacle-free path segment |
-| Out | `alive` | `bool` | Backend health signal |
+
+| Direction | Port              | Type          | Description                        |
+| --------- | ----------------- | ------------- | ---------------------------------- |
+| In        | `odometry`        | `Odometry`    | Robot pose + yaw                   |
+| In        | `terrain_map`     | `PointCloud2` | Obstacle cloud from TerrainModule  |
+| In        | `waypoint`        | `PoseStamped` | Current navigation waypoint        |
+| In        | `boundary`        | `PointCloud2` | Geofence boundary (hard obstacles) |
+| In        | `added_obstacles` | `PointCloud2` | Externally injected obstacles      |
+| Out       | `local_path`      | `Path`        | Best obstacle-free path segment    |
+| Out       | `alive`           | `bool`        | Backend health signal              |
+
 
 **Backends:**
 
-| Backend | Requires | Description |
-|---------|----------|-------------|
-| `nanobind` *(preferred)* | `_nav_core.so` | C++ `LocalPlannerCore`, full CMU scoring in-process |
-| `cmu_py` *(auto-fallback)* | numpy | Pure-Python CMU scorer (same algorithm, ~10× slower) |
-| `cmu` | ROS2 + colcon build | C++ `localPlanner` subprocess via NativeModule |
-| `simple` | nothing | Straight-line path for testing |
+
+| Backend                    | Requires            | Description                                          |
+| -------------------------- | ------------------- | ---------------------------------------------------- |
+| `nanobind` *(preferred)*   | `_nav_core.so`      | C++ `LocalPlannerCore`, full CMU scoring in-process  |
+| `cmu_py` *(auto-fallback)* | numpy               | Pure-Python CMU scorer (same algorithm, ~10× slower) |
+| `cmu`                      | ROS2 + colcon build | C++ `localPlanner` subprocess via NativeModule       |
+| `simple`                   | nothing             | Straight-line path for testing                       |
+
 
 The `nanobind` backend auto-falls back to `cmu_py` if `_nav_core.so` is missing.
 
 ### PathFollowerModule (layer=2)
 
-| Direction | Port | Type | Description |
-|-----------|------|------|-------------|
-| In | `odometry` | `Odometry` | Robot pose |
-| In | `local_path` | `Path` | Path from LocalPlannerModule |
-| Out | `cmd_vel` | `Twist` | Velocity command to driver |
-| Out | `alive` | `bool` | Backend health signal |
+
+| Direction | Port         | Type       | Description                  |
+| --------- | ------------ | ---------- | ---------------------------- |
+| In        | `odometry`   | `Odometry` | Robot pose                   |
+| In        | `local_path` | `Path`     | Path from LocalPlannerModule |
+| Out       | `cmd_vel`    | `Twist`    | Velocity command to driver   |
+| Out       | `alive`      | `bool`     | Backend health signal        |
+
 
 **Backends:**
 
-| Backend | Requires | Description |
-|---------|----------|-------------|
-| `nav_core` *(default)* | `_nav_core.so` | C++ `compute_control`: adaptive lookahead, two-way drive, accel limiting |
-| `pure_pursuit` | ROS2 + colcon build | C++ `pathFollower` subprocess via NativeModule |
-| `pid` | nothing | Python PID fallback for testing |
+
+| Backend                | Requires            | Description                                                              |
+| ---------------------- | ------------------- | ------------------------------------------------------------------------ |
+| `nav_core` *(default)* | `_nav_core.so`      | C++ `compute_control`: adaptive lookahead, two-way drive, accel limiting |
+| `pure_pursuit`         | ROS2 + colcon build | C++ `pathFollower` subprocess via NativeModule                           |
+| `pid`                  | nothing             | Python PID fallback for testing                                          |
+
 
 ## Usage
 
@@ -134,13 +146,15 @@ The Python `nanobind` / `cmu_py` / `pid` backends read the same config via `core
 
 When a joystick is connected and the `TeleopModule` is active:
 
-| Axis / Button | Effect |
-|---------------|--------|
-| LT pressed (axes[2] < −0.1) | Switch to manual mode — autonomy paused |
-| LT released (axes[2] > −0.1) | Return to autonomy mode (dead-man switch) |
-| RT released | Obstacle avoidance enabled (default, safe) |
-| RT pressed (axes[5]) | Obstacle avoidance disabled (force-through) |
-| Button 5 | Clear nearby point cloud (reset local map) |
+
+| Axis / Button                | Effect                                      |
+| ---------------------------- | ------------------------------------------- |
+| LT pressed (axes[2] < −0.1)  | Switch to manual mode — autonomy paused     |
+| LT released (axes[2] > −0.1) | Return to autonomy mode (dead-man switch)   |
+| RT released                  | Obstacle avoidance enabled (default, safe)  |
+| RT pressed (axes[5])         | Obstacle avoidance disabled (force-through) |
+| Button 5                     | Clear nearby point cloud (reset local map)  |
+
 
 Joystick cmd_vel does **not** bypass the path follower directly; it goes through
 `TeleopModule → Driver.cmd_vel`. The local planner uses the joystick direction as a
@@ -150,8 +164,11 @@ reference goal direction. Priority: Teleop > VisualServo > PathFollower.
 
 Controlled via `config/robot_config.yaml → path_follower.no_rot_at_stop / no_rot_at_goal`:
 
-| Setting | Value | Behaviour |
-|---------|-------|-----------|
+
+| Setting          | Value               | Behaviour                                                         |
+| ---------------- | ------------------- | ----------------------------------------------------------------- |
 | `no_rot_at_stop` | `false` *(default)* | Robot may rotate in-place to avoid obstacles after emergency stop |
-| `no_rot_at_stop` | `true` | Full lock on emergency stop — wait for human intervention |
-| `no_rot_at_goal` | `true` *(default)* | Stop precisely at goal, no in-place spin |
+| `no_rot_at_stop` | `true`              | Full lock on emergency stop — wait for human intervention         |
+| `no_rot_at_goal` | `true` *(default)*  | Stop precisely at goal, no in-place spin                          |
+
+
