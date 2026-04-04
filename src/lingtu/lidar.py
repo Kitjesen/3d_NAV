@@ -39,7 +39,7 @@ class LiDAR:
             return self
         try:
             from core.config import get_config
-            from core.native_factories import livox_driver
+            from slam.native_factories import livox_driver
             cfg = get_config()
             self._native = livox_driver(cfg)
             self._native.setup()

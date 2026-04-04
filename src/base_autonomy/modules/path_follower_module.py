@@ -143,7 +143,7 @@ class PathFollowerModule(Module, layer=2):
     def _setup_native(self):
         try:
             from core.config import get_config
-            from core.native_factories import path_follower
+            from base_autonomy.native_factories import path_follower
 
             cfg = get_config()
             self._node = path_follower(cfg)

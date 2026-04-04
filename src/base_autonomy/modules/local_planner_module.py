@@ -417,7 +417,7 @@ class LocalPlannerModule(Module, layer=2):
     def _setup_cmu(self):
         try:
             from core.config import get_config
-            from core.native_factories import local_planner
+            from base_autonomy.native_factories import local_planner
 
             cfg = get_config()
             self._node = local_planner(cfg)

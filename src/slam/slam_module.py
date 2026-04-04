@@ -66,7 +66,7 @@ class SLAMModule(Module, layer=1):
         """Start Livox LiDAR driver (shared by all SLAM modes)."""
         try:
             from core.config import get_config
-            from core.native_factories import livox_driver
+            from slam.native_factories import livox_driver
             cfg = get_config()
             self._lidar_node = livox_driver(cfg)
             self._lidar_node.setup()
@@ -78,7 +78,7 @@ class SLAMModule(Module, layer=1):
         self._setup_lidar_driver()
         try:
             from core.config import get_config
-            from core.native_factories import slam_fastlio2, slam_pgo
+            from slam.native_factories import slam_fastlio2, slam_pgo
             cfg = get_config()
             self._node = slam_fastlio2(cfg)
             self._node.setup()
@@ -90,7 +90,7 @@ class SLAMModule(Module, layer=1):
     def _setup_pointlio(self):
         try:
             from core.config import get_config
-            from core.native_factories import slam_pointlio
+            from slam.native_factories import slam_pointlio
             cfg = get_config()
             self._node = slam_pointlio(cfg)
             self._node.setup()
@@ -102,7 +102,7 @@ class SLAMModule(Module, layer=1):
         self._setup_lidar_driver()
         try:
             from core.config import get_config
-            from core.native_factories import slam_fastlio2, slam_localizer
+            from slam.native_factories import slam_fastlio2, slam_localizer
             cfg = get_config()
             self._lio_node = slam_fastlio2(cfg)
             self._lio_node.setup()
