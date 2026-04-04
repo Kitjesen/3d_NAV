@@ -185,11 +185,34 @@ class TeleopModule(Module, layer=6):
 
         async def _serve():
             self._loop = asyncio.get_event_loop()
-            async with websockets.serve(_handler, "0.0.0.0", self._port):
-                # Idle check loop
-                while self._running:
-                    self._check_idle()
-                    await asyncio.sleep(0.5)
+            # Retry binding up to 5 times with 1-second back-off.
+            # The port may still be in TIME_WAIT after a previous run was
+            # killed (fuser -k) less than ~1 s ago.
+            max_attempts = 5
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    async with websockets.serve(_handler, "0.0.0.0", self._port):
+                        logger.info(
+                            "TeleopModule: WebSocket server ready on port %d", self._port
+                        )
+                        while self._running:
+                            self._check_idle()
+                            await asyncio.sleep(0.5)
+                    return
+                except OSError as exc:
+                    if attempt < max_attempts:
+                        logger.warning(
+                            "TeleopModule: port %d busy (attempt %d/%d), retrying in 1 s — %s",
+                            self._port, attempt, max_attempts, exc,
+                        )
+                        await asyncio.sleep(1.0)
+                    else:
+                        logger.error(
+                            "TeleopModule: cannot bind port %d after %d attempts. "
+                            "Teleop disabled. Kill the process holding the port: "
+                            "fuser -k %d/tcp",
+                            self._port, max_attempts, self._port,
+                        )
 
         asyncio.run(_serve())
 
