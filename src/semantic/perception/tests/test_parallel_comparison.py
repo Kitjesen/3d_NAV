@@ -417,8 +417,9 @@ class HybridPlannerWrapper:
             from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner
 
             tsg = _build_mock_tsg_for_scenario(scenario)
-            tomogram = MockTomogram()
-            planner = HybridPlanner(tsg, tomogram)
+            mock_tomo = MockTomogram()
+            trav_grid = mock_tomo.inflated_cost[0]  # 2D float32 [nx, ny]
+            planner = HybridPlanner(tsg, trav_grid, trav_res=mock_tomo.resolution)
 
             result = planner.plan_path(start, goal)
             elapsed_ms = (time.perf_counter() - t0) * 1000

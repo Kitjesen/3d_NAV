@@ -8,6 +8,25 @@ conftest.py — semantic_perception 测试共享夹具
   - IndustrialKnowledgeGraph 单例 (避免重复构建)
 """
 
+import os
+import sys
+
+# Ensure all lingtu package namespaces are importable when running pytest
+# directly inside this directory (without PYTHONPATH set).
+_here = os.path.dirname(os.path.abspath(__file__))
+_repo = os.path.abspath(os.path.join(_here, "..", "..", "..", ".."))
+_src  = os.path.join(_repo, "src")
+
+for _p in [
+    _repo,
+    _src,
+    os.path.join(_src, "semantic", "perception"),
+    os.path.join(_src, "semantic", "planner"),
+    os.path.join(_src, "semantic", "common"),
+]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 import numpy as np
 import pytest
 

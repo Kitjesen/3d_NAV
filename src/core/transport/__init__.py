@@ -34,7 +34,10 @@ from .abc import (
 )
 from .factory import create_publisher, create_subscriber, create_transport
 from .adapter import TransportAdapter
-from .ros2_mixin import TransportMixin
+try:
+    from .ros2_mixin import TransportMixin
+except ImportError:
+    pass  # rclpy not available
 
 # --- conditional backend imports ---
 try:

@@ -89,7 +89,7 @@ def test_basic_planning():
     print("=" * 60)
 
     tsg, tomogram = create_test_environment()
-    planner = HybridPlanner(tsg, tomogram)
+    planner = HybridPlanner(tsg, tomogram.inflated_cost[0], trav_res=tomogram.resolution)
 
     # 测试用例: 从房间 1 到房间 4
     start = np.array([0.0, 0.0, 0.0])
@@ -153,7 +153,7 @@ def test_room_location():
     print("=" * 60)
 
     tsg, tomogram = create_test_environment()
-    planner = HybridPlanner(tsg, tomogram)
+    planner = HybridPlanner(tsg, tomogram.inflated_cost[0], trav_res=tomogram.resolution)
 
     test_positions = [
         (np.array([0.0, 0.0]), 1, "corridor_1"),
@@ -182,7 +182,7 @@ def test_performance_comparison():
     print("=" * 60)
 
     tsg, tomogram = create_test_environment()
-    hybrid_planner = HybridPlanner(tsg, tomogram)
+    hybrid_planner = HybridPlanner(tsg, tomogram.inflated_cost[0], trav_res=tomogram.resolution)
 
     # 创建简单的基线规划器 (直线路径)
     class BaselinePlanner:

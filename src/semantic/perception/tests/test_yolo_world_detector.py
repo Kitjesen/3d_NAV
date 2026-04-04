@@ -164,6 +164,8 @@ class TestYOLOWorldDetectorDetection(unittest.TestCase):
 
     def test_detect_returns_detection2d_list(self):
         """detect() 应返回 Detection2D 列表"""
+        import pytest as _pytest
+        torch = _pytest.importorskip("torch", reason="torch not installed")
         detector = YOLOWorldDetector()
         detector._model = Mock()
 
