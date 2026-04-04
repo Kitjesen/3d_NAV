@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 import threading
 import time
 from typing import Any, Dict, Optional, Set
@@ -56,6 +57,7 @@ class TeleopModule(Module, layer=6):
     def __init__(
         self,
         port: int = 5060,
+        port_fallback_range: int = 50,
         max_speed: float = 0.5,
         max_yaw_rate: float = 1.0,
         release_timeout: float = 3.0,
@@ -65,6 +67,7 @@ class TeleopModule(Module, layer=6):
     ):
         super().__init__(**kw)
         self._port = port
+        self._port_fallback_range = max(0, int(port_fallback_range))
         self._max_speed = max_speed
         self._max_yaw_rate = max_yaw_rate
         self._release_timeout = release_timeout
@@ -185,39 +188,53 @@ class TeleopModule(Module, layer=6):
 
         async def _serve():
             self._loop = asyncio.get_event_loop()
-            # Retry binding up to 5 times with 1-second back-off.
-            # The port may still be in TIME_WAIT after a previous run was
-            # killed (fuser -k) less than ~1 s ago.
-            max_attempts = 5
-            for attempt in range(1, max_attempts + 1):
+            # Prefer the configured port, but fall back to nearby ports when it's
+            # genuinely occupied by another process (not just TIME_WAIT). This
+            # prevents teleop from being disabled when port 5060 is taken by an
+            # unrelated process on the robot.
+            candidates = [self._port]
+            for i in range(1, self._port_fallback_range + 1):
+                candidates.append(self._port + i)
+
+            last_exc: Optional[BaseException] = None
+            for port in candidates:
                 try:
                     # reuse_address=True sets SO_REUSEADDR on the socket, allowing
                     # the port to be reused even while a previous socket is in
                     # TIME_WAIT (typically 60 s after the process is killed).
                     async with websockets.serve(
-                        _handler, "0.0.0.0", self._port, reuse_address=True
+                        _handler,
+                        "0.0.0.0",
+                        port,
+                        reuse_address=True,
+                        reuse_port=False,
                     ):
-                        logger.info(
-                            "TeleopModule: WebSocket server ready on port %d", self._port
-                        )
+                        if port != self._port:
+                            logger.warning(
+                                "TeleopModule: port %d busy, using fallback port %d",
+                                self._port,
+                                port,
+                            )
+                            self._port = port
+                        logger.info("TeleopModule: WebSocket server ready on port %d", self._port)
                         while self._running:
                             self._check_idle()
                             await asyncio.sleep(0.5)
                     return
                 except OSError as exc:
-                    if attempt < max_attempts:
-                        logger.warning(
-                            "TeleopModule: port %d busy (attempt %d/%d), retrying in 1 s — %s",
-                            self._port, attempt, max_attempts, exc,
-                        )
-                        await asyncio.sleep(1.0)
-                    else:
-                        logger.error(
-                            "TeleopModule: cannot bind port %d after %d attempts. "
-                            "Teleop disabled. Kill the process holding the port: "
-                            "fuser -k %d/tcp",
-                            self._port, max_attempts, self._port,
-                        )
+                    last_exc = exc
+                    continue
+
+            logger.error(
+                "TeleopModule: cannot bind any port in [%d..%d]. "
+                "Teleop disabled. Kill the process holding the ports, e.g.: "
+                "fuser -k %d/tcp",
+                self._port,
+                self._port + self._port_fallback_range,
+                self._port,
+            )
+            if last_exc:
+                logger.error("TeleopModule: last bind error: %s", last_exc)
 
         asyncio.run(_serve())
 

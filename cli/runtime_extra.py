@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from . import term as T
+from .profiles_data import _default_map_dir
 
 # Built-in sample tomogram (relative to project root, ships in repo)
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -146,7 +147,7 @@ def preflight(profile_name: str, cfg: dict) -> None:
 
     # For nav/explore profiles that use slam=localizer, offer interactive map selection.
     if slam == "localizer":
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        map_dir = _default_map_dir()
         _select_map_interactive(cfg, map_dir)
 
         # Post-selection warning if still no valid tomogram

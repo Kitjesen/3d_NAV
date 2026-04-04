@@ -4,6 +4,28 @@ from __future__ import annotations
 
 import os
 
+def _default_map_dir() -> str:
+    """Return the default on-robot map storage directory.
+
+    Maps are runtime data (often large) and should live outside the repo so they
+    survive code updates and can be shared across profiles.
+
+    Order:
+      1) $NAV_MAP_DIR, if set
+      2) legacy: ~/data/nova/maps (kept for backwards compatibility)
+      3) new default: ~/data/lingtu/maps
+    """
+    env = os.environ.get("NAV_MAP_DIR")
+    if env:
+        return env
+
+    legacy = os.path.expanduser("~/data/nova/maps")
+    if os.path.isdir(legacy):
+        return legacy
+
+    return os.path.expanduser("~/data/lingtu/maps")
+
+
 def _resolve_tomogram() -> str:
     """Return the active tomogram path, falling back to the built-in sample map.
 
@@ -15,7 +37,7 @@ def _resolve_tomogram() -> str:
     can be verified. In production the real map should be in place.
     """
     active = os.path.join(
-        os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+        _default_map_dir(),
         "active",
         "tomogram.pickle",
     )

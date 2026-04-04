@@ -116,7 +116,9 @@ class LingTuREPL(cmd.Cmd):
     def _map_list(self):
         import os
 
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        from cli.profiles_data import _default_map_dir
+
+        map_dir = _default_map_dir()
         if not os.path.isdir(map_dir):
             print(f"  No maps directory: {map_dir}")
             return
@@ -146,7 +148,7 @@ class LingTuREPL(cmd.Cmd):
         import subprocess
 
         map_dir = os.path.join(
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")), name
+            os.environ.get("NAV_MAP_DIR") or os.path.expanduser("~/data/lingtu/maps"), name
         )
         os.makedirs(map_dir, exist_ok=True)
         pcd_path = os.path.join(map_dir, "map.pcd")
@@ -179,7 +181,9 @@ class LingTuREPL(cmd.Cmd):
         import os
         import shutil
 
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        from cli.profiles_data import _default_map_dir
+
+        map_dir = _default_map_dir()
         map_path = os.path.join(map_dir, name)
         if not os.path.isdir(map_path):
             print(f"  Map not found: {name}")
@@ -217,7 +221,9 @@ class LingTuREPL(cmd.Cmd):
         import os
         import sys
 
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        from cli.profiles_data import _default_map_dir
+
+        map_dir = _default_map_dir()
         pcd_path = os.path.join(map_dir, name, "map.pcd")
         tomogram_path = os.path.join(map_dir, name, "tomogram.pickle")
         if not os.path.exists(pcd_path):
@@ -243,7 +249,7 @@ class LingTuREPL(cmd.Cmd):
         import shutil
 
         map_dir = os.path.join(
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")), name
+            os.environ.get("NAV_MAP_DIR") or os.path.expanduser("~/data/lingtu/maps"), name
         )
         if not os.path.isdir(map_dir):
             print(f"  Map not found: {name}")
