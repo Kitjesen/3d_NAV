@@ -161,18 +161,18 @@ class MissionLoggerModule(Module, layer=3):
                 except OSError:
                     pass
 
-    # -- query API (used by REPL and MCP @skill) --
+    # ---------------------------------------------------------------------------
+    # Query API
+    #
+    # Rule: @skill methods return JSON str (for MCP/agent consumption).
+    #       The REPL (cli/repl.py) calls _list_missions_raw / _stats_raw which
+    #       return native Python dicts/lists — no JSON parsing overhead.
+    # ---------------------------------------------------------------------------
 
-    def list_missions(self, count: int = 10) -> List[Dict[str, Any]]:
-        """Return summaries (no trajectory) of the most recent missions."""
-        return self._mission_summaries(count)
+    # -- REPL helpers (native types) --
 
-    @skill
-    def list_missions_mcp(self, count: int = 10) -> str:
-        """List recent navigation missions (summary only, no full trajectory)."""
-        return json.dumps({"missions": self._mission_summaries(count)})
-
-    def _mission_summaries(self, count: int = 10) -> List[Dict[str, Any]]:
+    def _list_missions_raw(self, count: int = 10) -> List[Dict[str, Any]]:
+        """Return summary dicts of the most recent *count* missions."""
         files = sorted(self._log_dir.glob("*.json"), reverse=True)
         results: List[Dict[str, Any]] = []
         for f in files[:count]:
@@ -194,36 +194,8 @@ class MissionLoggerModule(Module, layer=3):
                 logger.warning("Failed to read mission record %s: %s", f.name, exc)
         return results
 
-    def get_mission(self, mission_id: str) -> Optional[Dict[str, Any]]:
-        """Return full detail (including trajectory) for a mission by ID."""
-        if not mission_id:
-            return None
-        safe_name = mission_id.replace(":", "-")
-        candidates = list(self._log_dir.glob(f"{safe_name}*.json"))
-        if not candidates:
-            for f in self._log_dir.glob("*.json"):
-                try:
-                    data = json.loads(f.read_text(encoding="utf-8"))
-                    if data.get("id") == mission_id:
-                        return data
-                except Exception:
-                    continue
-            return None
-        try:
-            return json.loads(candidates[0].read_text(encoding="utf-8"))
-        except Exception:
-            return None
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Return aggregate statistics over all stored missions."""
-        return self._compute_stats()
-
-    @skill
-    def get_mission_stats(self) -> str:
-        """Return aggregate statistics for recorded navigation missions."""
-        return json.dumps(self._compute_stats())
-
-    def _compute_stats(self) -> Dict[str, Any]:
+    def _stats_raw(self) -> Dict[str, Any]:
+        """Return aggregate statistics dict."""
         files = list(self._log_dir.glob("*.json"))
         total = len(files)
         success = failed = 0
@@ -250,3 +222,47 @@ class MissionLoggerModule(Module, layer=3):
             "total_duration_sec": round(total_dur, 1),
             "log_dir": str(self._log_dir),
         }
+
+    # -- MCP @skill (JSON str) — names exposed to AI agents --
+
+    @skill
+    def list_missions(self, count: int = 10) -> str:
+        """List the *count* most recent navigation missions (summary, no trajectory).
+
+        Args:
+            count: Number of missions to return (default 10)
+        """
+        return json.dumps({"missions": self._list_missions_raw(count)})
+
+    @skill
+    def get_mission_stats(self) -> str:
+        """Return aggregate statistics for all recorded navigation missions."""
+        return json.dumps(self._stats_raw())
+
+    # -- Backward-compat shims for tests / REPL that expect native dicts --
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return aggregate statistics dict (REPL / direct call compat)."""
+        return self._stats_raw()
+
+    # -- Full detail (REPL only, not exposed as @skill — trajectory is large) --
+
+    def get_mission(self, mission_id: str) -> Optional[Dict[str, Any]]:
+        """Return full detail (including trajectory) for a mission by ID."""
+        if not mission_id:
+            return None
+        safe_name = mission_id.replace(":", "-")
+        candidates = list(self._log_dir.glob(f"{safe_name}*.json"))
+        if not candidates:
+            for f in self._log_dir.glob("*.json"):
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    if data.get("id") == mission_id:
+                        return data
+                except Exception:
+                    continue
+            return None
+        try:
+            return json.loads(candidates[0].read_text(encoding="utf-8"))
+        except Exception:
+            return None

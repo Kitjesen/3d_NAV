@@ -692,15 +692,27 @@ class TestMissionLoggerModule(unittest.TestCase):
         self.assertEqual(len(m.ports_out), 0)
 
     def test_empty_list(self):
+        import json
         m = self._make()
-        self.assertEqual(m.list_missions(), [])
+        # @skill list_missions returns JSON str
+        result = json.loads(m.list_missions())
+        self.assertEqual(result["missions"], [])
+
+    def test_empty_list_raw(self):
+        m = self._make()
+        self.assertEqual(m._list_missions_raw(), [])
 
     def test_empty_stats(self):
         m = self._make()
-        s = m.get_stats()
+        s = m._stats_raw()
         self.assertEqual(s["total"], 0)
         self.assertEqual(s["success"], 0)
         self.assertEqual(s["failed"], 0)
+
+    def test_empty_stats_get_stats_compat(self):
+        m = self._make()
+        s = m.get_stats()
+        self.assertEqual(s["total"], 0)
 
     def test_mission_lifecycle_saved(self):
         import tempfile, os
@@ -739,9 +751,13 @@ class TestMissionLoggerModule(unittest.TestCase):
             m._on_mission_status({"state": "PLANNING", "goal": "test"})
             m._on_mission_status({"state": result})
 
-        missions = m.list_missions()
-        self.assertEqual(len(missions), 3)
-        s = m.get_stats()
+        import json
+        missions_raw = m._list_missions_raw()
+        self.assertEqual(len(missions_raw), 3)
+        # @skill JSON path
+        missions_json = json.loads(m.list_missions())
+        self.assertEqual(len(missions_json["missions"]), 3)
+        s = m._stats_raw()
         self.assertEqual(s["total"], 3)
         self.assertEqual(s["success"], 2)
         self.assertEqual(s["failed"], 1)
@@ -756,8 +772,12 @@ class TestMissionLoggerModule(unittest.TestCase):
         m._on_mission_status({"state": "REPLANNING"})
         m._on_mission_status({"state": "SUCCESS"})
 
-        missions = m.list_missions()
+        import json
+        missions = m._list_missions_raw()
         self.assertEqual(missions[0]["replan_count"], 2)
+        # also verify via @skill JSON path
+        missions_json = json.loads(m.list_missions())
+        self.assertEqual(missions_json["missions"][0]["replan_count"], 2)
 
 
 if __name__ == "__main__":

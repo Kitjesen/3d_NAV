@@ -1262,7 +1262,7 @@ class LingTuREPL(cmd.Cmd):
             count = 10
             if rest and rest.isdigit():
                 count = int(rest)
-            missions = mod.list_missions(count)
+            missions = mod._list_missions_raw(count)
             if not missions:
                 print("  No mission records found")
                 return
@@ -1287,7 +1287,7 @@ class LingTuREPL(cmd.Cmd):
             print()
 
         elif subcmd == "stats":
-            s = mod.get_stats()
+            s = mod._stats_raw()
             total = s["total"]
             if total == 0:
                 print("  No mission records yet")
