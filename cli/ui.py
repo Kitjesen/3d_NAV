@@ -99,24 +99,12 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
 
     # Wait briefly for TeleopModule to finish binding its port
     import time as _time
-    teleop_port = None
-    for _ in range(10):
-        try:
-            st = system.get_module("TeleopModule").get_teleop_status()
-            if st.get("port"):
-                teleop_port = st["port"]
-                break
-        except Exception:
-            break
-        _time.sleep(0.1)
-
     tomogram  = cfg.get("tomogram", "")
     tomo_note = T.yellow(" ⚠ sample map") if (tomogram and "building2_9.pickle" in str(tomogram)) else ""
 
     icon, _, color = _PROFILE_META.get(profile_name, ("·", desc, T.dim))
     W = 58
 
-    # Resolve the machine's LAN IP so the user can copy-paste the URL
     lan_ip = _local_ip()
 
     _print_logo()
@@ -141,8 +129,12 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
         _row("map",      T.dim(tomo_short) + tomo_note)
     if cfg.get("enable_gateway"):
         _row("gateway",  T.cyan(f"http://{lan_ip}:{gw}"))
-    if teleop_port:
-        _row("teleop",   T.cyan(f"ws://{lan_ip}:{teleop_port}/teleop"))
+        # Teleop is served by GatewayModule on the same port
+        try:
+            system.get_module("TeleopModule")
+            _row("teleop",   T.cyan(f"ws://{lan_ip}:{gw}/ws/teleop"))
+        except (KeyError, Exception):
+            pass
     _row("health",   T.green(f"✓ {n} modules") + T.dim(f"  {nc} connections"))
     _row("logs",     T.dim(log_dir))
 

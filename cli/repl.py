@@ -850,7 +850,7 @@ class LingTuREPL(cmd.Cmd):
             active = "ACTIVE" if s["active"] else "idle"
             print(f"  Status:  {active}")
             print(f"  Clients: {s['clients']}")
-            print(f"  Port:    ws://0.0.0.0:{s['port']}/teleop")
+            print(f"  URL:     ws://0.0.0.0:{s['port']}/ws/teleop")
         elif subcmd == "release":
             print(f"  {mod.force_release()}")
         else:
@@ -980,7 +980,7 @@ class LingTuREPL(cmd.Cmd):
                 tp_port = st.get("port", "?")
                 clients = st.get("clients", 0)
                 active_str = T.green("ACTIVE") if st.get("active") else T.dim("idle")
-                print(f"  Teleop     ws://0.0.0.0:{tp_port}/teleop  {active_str}  ({clients} clients)")
+                print(f"  Teleop     ws://0.0.0.0:{tp_port}/ws/teleop  {active_str}  ({clients} clients)")
             except Exception:
                 pass
 

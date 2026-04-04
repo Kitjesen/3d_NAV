@@ -291,19 +291,18 @@ class TestGatewayModule(unittest.TestCase):
         m = self._make()
         odom = Odometry(pose=Pose(position=Vector3(1, 2, 0)), ts=time.time())
         m._on_odometry(odom)
-        self.assertIsNotNone(m._latest_odom)
-        self.assertAlmostEqual(m._latest_odom["x"], 1.0)
+        self.assertIsNotNone(m._odom)
+        self.assertAlmostEqual(m._odom["x"], 1.0)
 
     def test_check_lease_open(self):
         m = self._make()
-        self.assertTrue(m._check_lease("anyone"))
+        self.assertTrue(m._lease.check("anyone"))
 
     def test_check_lease_held(self):
         m = self._make()
-        m._lease_holder = "client_a"
-        m._lease_expiry = time.time() + 30
-        self.assertTrue(m._check_lease("client_a"))
-        self.assertFalse(m._check_lease("client_b"))
+        m._lease.acquire("client_a", ttl=30.0)
+        self.assertTrue(m._lease.check("client_a"))
+        self.assertFalse(m._lease.check("client_b"))
 
     def test_layer(self):
         m = self._make()

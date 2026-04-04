@@ -46,7 +46,7 @@ def full_stack_blueprint(
     planner_backend: str = "astar",
     tomogram: str = "",
     gateway_port: int = 5050,
-    teleop_port: int = 5060,
+    teleop_port: int = 5050,  # teleop is now on /ws/teleop of the main gateway port
     enable_native: bool = True,
     enable_semantic: bool = True,
     enable_gateway: bool = True,
