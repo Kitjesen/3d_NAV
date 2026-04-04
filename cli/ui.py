@@ -73,6 +73,19 @@ def _panel(lines: list[str], *, color) -> None:
     print(f"  {color(bot)}")
 
 
+def _local_ip() -> str:
+    """Best-effort local LAN IP (not 127.0.0.1)."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "localhost"
+
+
 def print_banner(profile_name, cfg, system, log_dir: str) -> None:
     n   = len(system.modules)
     nc  = len(system.connections)
@@ -84,17 +97,27 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
     detector = cfg.get("detector", "?")
     llm      = cfg.get("llm", "?")
 
+    # Wait briefly for TeleopModule to finish binding its port
+    import time as _time
     teleop_port = None
-    try:
-        teleop_port = system.get_module("TeleopModule").get_teleop_status().get("port")
-    except Exception:
-        pass
+    for _ in range(10):
+        try:
+            st = system.get_module("TeleopModule").get_teleop_status()
+            if st.get("port"):
+                teleop_port = st["port"]
+                break
+        except Exception:
+            break
+        _time.sleep(0.1)
 
     tomogram  = cfg.get("tomogram", "")
     tomo_note = T.yellow(" ⚠ sample map") if (tomogram and "building2_9.pickle" in str(tomogram)) else ""
 
     icon, _, color = _PROFILE_META.get(profile_name, ("·", desc, T.dim))
-    W = 56
+    W = 58
+
+    # Resolve the machine's LAN IP so the user can copy-paste the URL
+    lan_ip = _local_ip()
 
     _print_logo()
 
@@ -114,13 +137,12 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
     else:
         _row("semantic", T.dim("disabled"))
     if tomogram:
-        import os as _os
-        tomo_short = _os.path.basename(tomogram)
+        tomo_short = os.path.basename(tomogram)
         _row("map",      T.dim(tomo_short) + tomo_note)
     if cfg.get("enable_gateway"):
-        _row("gateway",  T.cyan(f"http://localhost:{gw}"))
+        _row("gateway",  T.cyan(f"http://{lan_ip}:{gw}"))
     if teleop_port:
-        _row("teleop",   T.cyan(f"ws://0.0.0.0:{teleop_port}/teleop"))
+        _row("teleop",   T.cyan(f"ws://{lan_ip}:{teleop_port}/teleop"))
     _row("health",   T.green(f"✓ {n} modules") + T.dim(f"  {nc} connections"))
     _row("logs",     T.dim(log_dir))
 
