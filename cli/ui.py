@@ -130,6 +130,38 @@ def ask_bool(prompt: str, *, default: bool | None = None) -> bool:
         print(f"  {T.red('?')} Please enter y or n")
 
 
+def wizard_interactive(profile_name: str, cfg: dict) -> None:
+    """TTY wizard: toggle semantic / gateway / teleop before build.
+
+    Mutates cfg in place. Teleop requires gateway (HTTP stack).
+    """
+    if not sys.stdin.isatty():
+        return
+
+    print(f"\n  {T.bold('LingTu — startup options')}")
+    print(f"  {T.dim('(press Enter to keep profile defaults)')}\n")
+
+    sem_def = bool(cfg.get("enable_semantic", True))
+    gw_def = bool(cfg.get("enable_gateway", True))
+    tp_def = bool(cfg.get("enable_teleop", True))
+
+    cfg["enable_semantic"] = ask_bool(
+        "Enable semantic stack (perception, memory, LLM planner)?",
+        default=sem_def,
+    )
+    cfg["enable_gateway"] = ask_bool(
+        "Enable gateway (HTTP API + MCP)?",
+        default=gw_def,
+    )
+    if cfg["enable_gateway"]:
+        cfg["enable_teleop"] = ask_bool(
+            "Enable teleop WebSocket (joystick + camera stream)?",
+            default=tp_def,
+        )
+    else:
+        cfg["enable_teleop"] = False
+
+
 def list_profiles():
     print(f"\n  {T.bold('Available profiles:')}\n")
     for name, p in PROFILES.items():
