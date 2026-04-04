@@ -44,7 +44,10 @@ PROFILES = {
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
         tomogram=_ACTIVE_TOMOGRAM,
-        enable_native=True,
+        # enable_native=False: C++ local_planner requires the 'local_planner'
+        # ROS2 package installed via colcon. Use Python autonomy chain instead.
+        # Switch to True only after running: make build && ros2 pkg list | grep local_planner
+        enable_native=False,
         enable_semantic=True,
         enable_gateway=True,
         gateway_port=5050,
@@ -55,7 +58,7 @@ PROFILES = {
         slam_profile="fastlio2",
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
-        enable_native=True,
+        enable_native=False,    # same reason as nav profile above
         enable_semantic=True,
         enable_gateway=True,
         enable_frontier=True,
