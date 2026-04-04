@@ -23,7 +23,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_perception"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_planner"))
 
-from semantic.perception.semantic_perception.topology_graph import (
+from memory.spatial.topology_graph import (
     TopologySemGraph,
     TopoNode,
     TopoEdge,

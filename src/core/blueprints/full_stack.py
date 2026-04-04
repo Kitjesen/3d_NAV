@@ -46,7 +46,7 @@ def full_stack_blueprint(
     planner_backend: str = "astar",
     tomogram: str = "",
     gateway_port: int = 5050,
-    teleop_port: int = 5060,
+    teleop_port: int = 5050,  # teleop is now on /ws/teleop of the main gateway port
     enable_native: bool = True,
     enable_semantic: bool = True,
     enable_gateway: bool = True,
@@ -166,12 +166,15 @@ def full_stack_blueprint(
         "VoxelGridModule", "WavefrontFrontierExplorer", "RerunBridgeModule",
         "LocalPlannerModule", "PathFollowerModule",
         "SemanticMapperModule", "EpisodicMemoryModule", "TaggedLocationsModule",
-        "VectorMemoryModule", "TemporalMemoryModule",
+        "VectorMemoryModule", "TemporalMemoryModule", "MissionLoggerModule",
         "SemanticPlannerModule", "VisualServoModule",
         "ReconstructionModule", "SafetyRingModule", "GeofenceManagerModule",
         "GatewayModule", "MCPServerModule",
     ]:
         _w(_drv, "odometry", consumer, "odometry")
+
+    # Mission history — NavigationModule state changes go to MissionLoggerModule
+    _w("NavigationModule", "mission_status", "MissionLoggerModule", "mission_status")
 
     # Goal routing from sim driver
     try:

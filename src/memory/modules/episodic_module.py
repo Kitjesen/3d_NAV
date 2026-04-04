@@ -10,12 +10,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional
 
 import numpy as np
 
-from core import Module, In, Out
+from core import Module, In, Out, skill
 from core.msgs import Odometry, SceneGraph
 
 from memory.spatial.episodic import EpisodicMemory
@@ -88,3 +89,18 @@ class EpisodicMemoryModule(Module, layer=3):
     def memory(self) -> EpisodicMemory:
         """访问内部 EpisodicMemory (测试/查询用)。"""
         return self._memory
+
+    @skill
+    def get_recent_observations(self, count: int = 10) -> str:
+        """Return the most recent episodic observations (labels + position)."""
+        raw = self._memory.recent_n(count)
+        out = []
+        for r in raw:
+            pos = r.position.tolist() if hasattr(r.position, "tolist") else list(r.position)
+            out.append({
+                "timestamp": r.timestamp,
+                "labels": r.labels,
+                "position": pos,
+                "description": r.description,
+            })
+        return json.dumps({"observations": out}, ensure_ascii=False)

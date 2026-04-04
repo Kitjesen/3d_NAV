@@ -31,7 +31,7 @@ class TestCLIPEncoderInit(unittest.TestCase):
         """默认参数初始化应该成功"""
         encoder = CLIPEncoder()
         self.assertEqual(encoder._model_name, "ViT-B/32")
-        self.assertEqual(encoder._device, "cuda")
+        self.assertIn(encoder._device, ("cuda", "cpu"))  # cuda when GPU available, cpu otherwise
         self.assertTrue(encoder._enable_cache)
         self.assertEqual(encoder._cache_size, 1000)
         self.assertEqual(encoder._batch_size, 32)
@@ -117,6 +117,7 @@ class TestCLIPEncoderTextImageSimilarity(unittest.TestCase):
 
     def test_similarity_with_mock_model(self):
         """使用 mock 模型验证相似度计算"""
+        torch = pytest.importorskip("torch", reason="torch not installed")
         encoder = CLIPEncoder()
         # 模拟已加载的模型
         text_feat = np.random.randn(512).astype(np.float32)
@@ -159,6 +160,7 @@ class TestCLIPEncoderEncodeImageCrops(unittest.TestCase):
 
     def test_invalid_bbox_returns_empty_array(self):
         """无效 bbox (x2<=x1) 返回空数组"""
+        pytest.importorskip("torch", reason="torch not installed")
         encoder = CLIPEncoder()
         encoder._model = Mock()  # 需要模型存在
         rgb = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)

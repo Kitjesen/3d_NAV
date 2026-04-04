@@ -216,7 +216,7 @@ def kill_residual_ports(cfg: dict) -> None:
 
     if platform.system() != "Linux":
         return
-    ports = [cfg.get("gateway_port", 5050), 8090, 5060]
+    ports = [cfg.get("gateway_port", 5050), 8090]
     for port in ports:
         try:
             result = subprocess.run(

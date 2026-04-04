@@ -32,7 +32,9 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from core.module import Module
+import json as _json
+
+from core.module import Module, skill
 from core.stream import In, Out
 from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
 from core.msgs.nav import Odometry
@@ -637,6 +639,50 @@ class SemanticPlannerModule(Module, layer=4):
     def _tool_say(self, text: str) -> str:
         logger.info("Agent says: %s", text)
         return f"Said: {text}"
+
+    # ── MCP @skill ────────────────────────────────────────────────────────────
+
+    @skill
+    def send_instruction(self, text: str) -> str:
+        """Send a natural language navigation instruction to the semantic planner.
+
+        Args:
+            text: Instruction in natural language, e.g. "go to the kitchen"
+        """
+        self.instruction.publish(text)
+        return _json.dumps({"status": "sent", "instruction": text})
+
+    @skill
+    def get_planner_status(self) -> str:
+        """Return current semantic planner state and counters."""
+        return _json.dumps({
+            "state": self._last_nav_state or "IDLE",
+            "current_instruction": self._current_instruction[:80] if self._current_instruction else "",
+            "resolve_count": self._resolve_count,
+            "frontier_explores": self._frontier_count,
+            "lera_triggers": self._lera_count,
+            "failure_count": self._failure_count,
+            "position": [round(float(self._robot_pos[0]), 3),
+                         round(float(self._robot_pos[1]), 3)],
+        })
+
+    @skill
+    def decompose_task(self, instruction: str) -> str:
+        """Decompose a complex instruction into ordered sub-goals.
+
+        Args:
+            instruction: High-level task description, e.g. "fetch coffee from the kitchen"
+        """
+        if self._task_decomposer is None:
+            return _json.dumps({"error": "task decomposer not loaded"})
+        try:
+            subtasks = self._task_decomposer.decompose(instruction)
+            return _json.dumps({
+                "instruction": instruction,
+                "subtasks": subtasks if isinstance(subtasks, list) else list(subtasks),
+            })
+        except Exception as exc:
+            return _json.dumps({"error": str(exc)})
 
     # ── Visual Servo Fallback ────────────────────────────────────────────────
 

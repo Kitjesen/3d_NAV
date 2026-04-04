@@ -32,7 +32,13 @@ where = ["."]
 include = ["src*", "cli*"]
 
 [tool.pytest.ini_options]
-testpaths = ["src/core/tests"]
+testpaths = [
+    "src/core/tests",
+    "src/semantic/perception/tests",
+    "src/semantic/planner/test",
+]
+# tests/ directory has root-level integration tests run separately:
+#   python -m pytest tests/test_belief_system.py tests/test_goal_resolver.py ... -q
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

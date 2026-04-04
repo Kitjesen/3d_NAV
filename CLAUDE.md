@@ -15,7 +15,7 @@ LingTu (灵途) is an autonomous navigation system for quadruped robots in outdo
 
 ```bash
 # Framework tests (no ROS2 needed, runs on any machine)
-python -m pytest src/core/tests/ -q       # 640 tests
+python -m pytest src/core/tests/ -q       # 682 tests
 
 # CLI with interactive REPL (profile-based, recommended)
 python lingtu.py                          # interactive profile selector
@@ -127,7 +127,7 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 
 | Directory | Role |
 |-----------|------|
-| `core/` | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (640) |
+| `core/` | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (682) |
 | `nav/` | NavigationModule, SafetyRing, GlobalPlannerService, WaypointTracker, OccupancyGrid, ESDF, ElevationMap |
 | `semantic/` | perception/ (Detector+Encoder), planner/ (SemanticPlanner+LLM+VisualServo+AgentLoop), reconstruction/ |
 | `memory/` | SemanticMapper, EpisodicMemory, TaggedLocations, VectorMemory, RoomObjectKG, TopologySemGraph |
@@ -168,7 +168,7 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 
 ```bash
 # Framework tests (primary, no ROS2 needed)
-python -m pytest src/core/tests/ -q                    # 640 tests, ~5s
+python -m pytest src/core/tests/ -q                    # 682 tests, ~5s
 
 # ROS2 build (for C++ nodes on S100P only)
 source /opt/ros/humble/setup.bash
@@ -292,7 +292,7 @@ claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 
 ## Teleop (Remote Control)
 
-WebSocket joystick at `ws://<robot>:5060/teleop`:
+WebSocket joystick at `ws://<robot>:5050/ws/teleop`:
 - Phone/browser sends `{"type": "joy", "lx": 0.5, "ly": 0.0, "az": -0.3}`
 - Robot streams JPEG camera frames back
 - 3s idle → auto-releases to autonomous navigation
@@ -343,4 +343,4 @@ bp.wire("TeleopModule", "cmd_vel", driver_name, "cmd_vel")
 - S100P has no CUDA — Open3D GPU features unavailable, use C++ terrain_analysis instead
 - Kimi API key may expire — Slow Path unavailable without valid LLM key
 - ChromaDB optional — VectorMemoryModule falls back to numpy brute-force search
-- Framework tests (640) are mock-based — real hardware integration tests need S100P
+- Framework tests (682) are mock-based — real hardware integration tests need S100P

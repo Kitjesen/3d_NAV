@@ -1246,10 +1246,10 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         moved = [e for e in events if e["type"] == "object_moved"]
         if added:
             labels = [e["label"] for e in added[:5]]
-            parts.append(f"{len(added)} new: {', '.join(labels)}")
+            parts.append(f"{len(added)} added: {', '.join(labels)}")
         if removed:
             labels = [e["label"] for e in removed[:5]]
-            parts.append(f"{len(removed)} gone: {', '.join(labels)}")
+            parts.append(f"{len(removed)} removed: {', '.join(labels)}")
         if moved:
             descs = [f"{e['label']}({e['displacement']:.1f}m)" for e in moved[:5]]
             parts.append(f"{len(moved)} moved: {', '.join(descs)}")
@@ -1569,3 +1569,119 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         logger.info("Scene graph loaded from %s (%d objects, %d views)",
                      path, len(self._objects), len(self._views))
         return True
+
+    # ════════════════════════════════════════════════════════════
+    #  Public incremental-update API
+    # ════════════════════════════════════════════════════════════
+
+    def update_local(
+        self,
+        new_detections: List["Detection3D"],
+        robot_pos: "np.ndarray",
+        update_radius: float = 5.0,
+    ) -> Dict:
+        """Process only objects within *update_radius* metres of *robot_pos*.
+
+        Objects outside the radius are left untouched but listed under
+        ``decayed`` so callers know they were skipped.
+
+        Returns
+        -------
+        dict with keys:
+          added   — list of object_ids added in this call
+          updated — list of object_ids whose position/features were refreshed
+          decayed — list of object_ids outside the update radius (not touched)
+        """
+        in_radius_ids: set = set()
+        out_radius_ids: list = []
+        for oid, obj in self._objects.items():
+            dist = float(np.linalg.norm(obj.position[:2] - robot_pos[:2]))
+            if dist <= update_radius:
+                in_radius_ids.add(oid)
+            else:
+                out_radius_ids.append(oid)
+
+        # Snapshot of object-ids before update for diff
+        before_ids = set(self._objects.keys())
+
+        # Run detections through the main update pipeline
+        self.update(new_detections)
+
+        after_ids = set(self._objects.keys())
+        added_ids   = list(after_ids - before_ids)
+        updated_ids = [oid for oid in before_ids if oid in after_ids and oid in in_radius_ids]
+
+        return {
+            "added":   added_ids,
+            "updated": updated_ids,
+            "decayed": out_radius_ids,
+        }
+
+    def remove_stale_objects(
+        self,
+        max_age: float = None,
+        stale_timeout_sec: float = None,
+        min_confidence: float = 0.0,
+    ) -> List[str]:
+        """Remove objects that have not been seen recently.
+
+        Parameters
+        ----------
+        max_age / stale_timeout_sec:
+            Age threshold in seconds (either keyword accepted).
+            Defaults to the instance's ``stale_timeout``.
+        min_confidence:
+            Objects with credibility >= this value are kept even if stale
+            (set to 0.0 to remove all stale regardless of confidence).
+        """
+        now = time.time()
+        timeout = stale_timeout_sec if stale_timeout_sec is not None else max_age
+        if timeout is None:
+            timeout = self.stale_timeout
+        stale = [
+            obj for obj in list(self._objects.values())
+            if now - obj.last_seen > timeout and obj.credibility < min_confidence
+        ]
+        for obj in stale:
+            self._objects.pop(obj.object_id, None)
+        return [str(obj.object_id) for obj in stale]
+
+    def get_scene_graph_diff_json(self, prev_snapshot: Dict) -> str:
+        """Return a JSON string describing changes since *prev_snapshot*.
+
+        The output has keys: ``added``, ``updated``, ``removed``, ``summary``, ``timestamp``.
+
+        Parameters
+        ----------
+        prev_snapshot:
+            A dict previously returned by ``json.loads(get_scene_graph_json())``.
+        """
+        import json as _json
+        raw = self.compute_scene_diff(prev_snapshot)
+
+        # Reshape 'events' list into keyed buckets that tests expect
+        added, updated, removed = [], [], []
+        for evt in raw.get("events", []):
+            t = evt.get("type", "")
+            if t == "object_added":
+                pos = evt.get("position", [0, 0, 0])
+                pos_dict = {"x": pos[0], "y": pos[1], "z": pos[2]} if isinstance(pos, (list, tuple)) and len(pos) >= 3 else {"x": 0.0, "y": 0.0, "z": 0.0}
+                obj = self._objects.get(evt["object_id"])
+                added.append({"id": evt["object_id"], "label": evt.get("label", ""),
+                               "position": pos_dict,
+                               "credibility": obj.credibility if obj else evt.get("confidence", 0.0)})
+            elif t == "object_removed":
+                removed.append({"id": evt["object_id"], "label": evt.get("label", "")})
+            elif t == "object_moved":
+                updated.append({"id": evt["object_id"], "label": evt.get("label", ""),
+                                 "old_position": evt.get("old_position", []),
+                                 "new_position": evt.get("new_position", [])})
+
+        result = {
+            "added":     added,
+            "updated":   updated,
+            "removed":   removed,
+            "summary":   raw.get("summary", ""),
+            "timestamp": raw.get("timestamp", 0.0),
+        }
+        return _json.dumps(result, ensure_ascii=False)

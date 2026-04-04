@@ -470,7 +470,7 @@ claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 
 ## 19. Teleop (Remote Control)
 
-WebSocket joystick at `ws://<robot>:5060/teleop`:
+WebSocket joystick at `ws://<robot>:5050/ws/teleop`:
 
 - Phone/browser sends `{"type": "joy", "lx": 0.5, "ly": 0.0, "az": -0.3}`
 - Robot streams JPEG camera frames back
@@ -591,7 +591,7 @@ python lingtu.py s100p --daemon    # fork to background, log to logs/
 python lingtu.py stop              # SIGTERM to running daemon
 ```
 
-Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state to `.lingtu/run.json`. On startup, `kill_residual_ports` cleans ports 5050, 8090, 5060 via `fuser -k`.
+Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state to `.lingtu/run.json`. On startup, `kill_residual_ports` cleans ports 5050, 8090 via `fuser -k`.
 
 ## 21. Configuration Files
 

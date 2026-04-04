@@ -1,35 +1,37 @@
-"""TeleopModule — WebSocket joystick remote control + live camera stream.
+"""TeleopModule — joystick remote control with live camera stream.
 
-Phone/browser connects via WebSocket:
-  ws://<robot>:5060/teleop
+Teleop WebSocket is served by GatewayModule at ws://<robot>:5050/ws/teleop
+(same port as the REST/SSE gateway — one process, one port).
 
-Receives JSON joystick commands:
-  {"type": "joy", "lx": 0.5, "ly": 0.0, "az": -0.3}
+This module handles:
+  - Encoding camera frames as JPEG and pushing them to GatewayModule
+  - Being the Module port bridge: cmd_vel Out + nav_stop Out
+  - Providing @skill methods for REPL / MCP
 
-Sends camera frames as JPEG:
-  binary WebSocket messages (JPEG bytes)
+GatewayModule.configure_teleop() injects speed/timeout config into the WS
+handler, and calls TeleopModule.cmd_vel and nav_stop via on_system_modules().
 
-When teleop is active, publishes cmd_vel with higher priority than autonomy.
-Publishes stop_signal to pause NavigationModule during manual control.
-Releases autonomy when joystick goes idle for > release_timeout seconds.
+Protocol (ws://<robot>:5050/ws/teleop)
+  Client → server  JSON text:
+    {"type": "joy",  "lx": 0.5, "ly": 0.0, "az": -0.3}
+    {"type": "stop"}
+  Server → client  binary:
+    raw JPEG bytes  (camera frame, ~10 fps)
+    OR JSON text:
+    {"type": "pong", "ts": 1234567890.0}
 
-Ports:
-  In:  color_image (Image) — camera stream to forward to client
-  Out: cmd_vel (Twist)     — joystick → velocity command
-       nav_stop (int)      — 1=pause autonomy, 0=release
+Ports
+  In:  color_image (Image) — camera frames to encode + forward
+  Out: cmd_vel  (Twist)    — joystick → driver
+       nav_stop (int)      — 1=pause autonomy, 0=resume
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import socket
 import threading
 import time
-from typing import Any, Dict, Optional, Set
-
-import numpy as np
+from typing import Any, Dict, Optional
 
 from core.module import Module, skill
 from core.stream import In, Out
@@ -40,13 +42,16 @@ from core.registry import register
 logger = logging.getLogger(__name__)
 
 
-@register("teleop", "default", description="WebSocket joystick teleop + camera stream")
+@register("teleop", "default", description="Joystick teleop + camera stream via Gateway WS")
 class TeleopModule(Module, layer=6):
-    """WebSocket-based remote control with live camera feedback.
+    """Camera encoder + joystick bridge — WS served by GatewayModule.
 
-    Joystick input → cmd_vel (direct to driver).
-    Camera frames → JPEG → WebSocket → phone/browser.
-    Auto-releases autonomy when joystick idle.
+    Subscribes to camera frames, encodes them as JPEG, and pushes the bytes
+    to GatewayModule.push_jpeg() so the WS handler can forward them to
+    connected clients.
+
+    cmd_vel and nav_stop are published by GatewayModule's WS handler, which
+    obtains references to these ports through on_system_modules().
     """
 
     color_image: In[Image]
@@ -56,31 +61,31 @@ class TeleopModule(Module, layer=6):
 
     def __init__(
         self,
-        port: int = 5060,
-        port_fallback_range: int = 50,
         max_speed: float = 0.5,
         max_yaw_rate: float = 1.0,
         release_timeout: float = 3.0,
         jpeg_quality: int = 60,
         stream_fps: float = 10.0,
+        # Legacy: port kept for backwards compat / REPL status display
+        port: int = 5050,
         **kw,
     ):
         super().__init__(**kw)
-        self._port = port
-        self._port_fallback_range = max(0, int(port_fallback_range))
         self._max_speed = max_speed
         self._max_yaw_rate = max_yaw_rate
         self._release_timeout = release_timeout
         self._jpeg_quality = jpeg_quality
-        self._stream_interval = 1.0 / stream_fps
+        self._stream_interval = 1.0 / max(1.0, stream_fps)
+        self._port = port  # informational only (same as GatewayModule port)
 
-        self._active = False
-        self._last_joy_time = 0.0
-        self._clients: Set = set()
-        self._latest_jpeg: Optional[bytes] = None
-        self._server_thread: Optional[threading.Thread] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._gateway = None  # set by on_system_modules()
+        self._encode_thread: Optional[threading.Thread] = None
         self._running = False
+        self._latest_raw: Optional[Any] = None   # latest Image.data
+        self._raw_lock = threading.Lock()
+        self._new_frame = threading.Event()
+
+    # -- lifecycle ----------------------------------------------------------
 
     def setup(self) -> None:
         self.color_image.subscribe(self._on_image)
@@ -89,176 +94,104 @@ class TeleopModule(Module, layer=6):
     def start(self) -> None:
         super().start()
         self._running = True
-        self._server_thread = threading.Thread(
-            target=self._run_server, name="teleop_ws", daemon=True)
-        self._server_thread.start()
-        logger.info("TeleopModule: WebSocket server starting on port %d", self._port)
+        self._encode_thread = threading.Thread(
+            target=self._encode_loop, name="teleop-encode", daemon=True
+        )
+        self._encode_thread.start()
+        logger.info("TeleopModule started (JPEG encoder active)")
 
     def stop(self) -> None:
         self._running = False
-        if self._loop and self._loop.is_running():
-            try:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-            except RuntimeError:
-                pass  # loop already closed
-        if self._server_thread:
-            self._server_thread.join(timeout=3.0)
-        self._release_autonomy()
+        self._new_frame.set()  # unblock encode loop
+        if self._encode_thread:
+            self._encode_thread.join(timeout=3.0)
+        self._gateway = None
         super().stop()
 
-    # ── Camera stream ─────────────────────────────────────────────────────────
+    def on_system_modules(self, modules: Dict[str, Any]) -> None:
+        """Inject GatewayModule reference + share port config."""
+        gw = modules.get("GatewayModule")
+        if gw is not None:
+            self._gateway = gw
+            # Give GatewayModule the port config and our cmd_vel/nav_stop ports
+            gw.configure_teleop(
+                max_speed=self._max_speed,
+                max_yaw=self._max_yaw_rate,
+                release_timeout=self._release_timeout,
+            )
+            # Inject our Out ports so GatewayModule can publish on our behalf
+            gw._teleop_cmd_vel_port  = self.cmd_vel
+            gw._teleop_nav_stop_port = self.nav_stop
+            logger.info("TeleopModule: wired into GatewayModule")
+        else:
+            logger.warning(
+                "TeleopModule: GatewayModule not found — "
+                "teleop WebSocket will not be available"
+            )
+
+    # -- camera frame handling ----------------------------------------------
 
     def _on_image(self, img: Image) -> None:
-        if not self._clients:
-            return
+        if self._gateway is None:
+            return  # no clients to serve, skip encoding
+        with self._raw_lock:
+            self._latest_raw = img.data
+        self._new_frame.set()
+
+    def _encode_loop(self) -> None:
+        """Dedicated thread: encode raw frames to JPEG at stream_fps."""
         try:
             import cv2
-            _, buf = cv2.imencode(".jpg", img.data,
-                                  [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality])
-            self._latest_jpeg = buf.tobytes()
+            have_cv2 = True
         except ImportError:
-            pass  # no cv2 = no stream
+            have_cv2 = False
+            logger.warning("TeleopModule: cv2 not available — camera stream disabled")
 
-    # ── Joystick handling ─────────────────────────────────────────────────────
-
-    def _on_joy(self, data: dict) -> None:
-        lx = float(data.get("lx", 0.0))
-        ly = float(data.get("ly", 0.0))
-        az = float(data.get("az", 0.0))
-
-        lx = max(-1.0, min(1.0, lx)) * self._max_speed
-        ly = max(-1.0, min(1.0, ly)) * self._max_speed
-        az = max(-1.0, min(1.0, az)) * self._max_yaw_rate
-
-        self.cmd_vel.publish(Twist(
-            linear=Vector3(x=lx, y=ly, z=0.0),
-            angular=Vector3(x=0.0, y=0.0, z=az),
-        ))
-
-        now = time.time()
-        self._last_joy_time = now
-
-        if not self._active:
-            self._active = True
-            self.nav_stop.publish(1)
-            logger.info("TeleopModule: manual control engaged")
-
-    def _check_idle(self) -> None:
-        if not self._active:
-            return
-        if time.time() - self._last_joy_time > self._release_timeout:
-            self._release_autonomy()
-
-    def _release_autonomy(self) -> None:
-        if self._active:
-            self._active = False
-            self.cmd_vel.publish(Twist())  # zero velocity
-            self.nav_stop.publish(0)
-            logger.info("TeleopModule: manual control released, autonomy resumed")
-
-    # ── WebSocket server ──────────────────────────────────────────────────────
-
-    def _run_server(self) -> None:
-        try:
-            import websockets
-        except ImportError:
-            logger.warning("TeleopModule: websockets not installed, teleop disabled")
-            return
-
-        async def _handler(ws, path=None):
-            self._clients.add(ws)
-            logger.info("TeleopModule: client connected (%d total)", len(self._clients))
-            try:
-                # Start camera stream task
-                stream_task = asyncio.ensure_future(self._stream_camera(ws))
-                async for msg in ws:
-                    try:
-                        data = json.loads(msg)
-                        if data.get("type") == "joy":
-                            self._on_joy(data)
-                        elif data.get("type") == "stop":
-                            self._release_autonomy()
-                    except json.JSONDecodeError:
-                        pass
-                stream_task.cancel()
-            finally:
-                self._clients.discard(ws)
-                self._check_idle()
-                logger.info("TeleopModule: client disconnected (%d total)", len(self._clients))
-
-        async def _serve():
-            self._loop = asyncio.get_event_loop()
-            # Prefer the configured port, but fall back to nearby ports when it's
-            # genuinely occupied by another process (not just TIME_WAIT). This
-            # prevents teleop from being disabled when port 5060 is taken by an
-            # unrelated process on the robot.
-            candidates = [self._port]
-            for i in range(1, self._port_fallback_range + 1):
-                candidates.append(self._port + i)
-
-            last_exc: Optional[BaseException] = None
-            for port in candidates:
-                try:
-                    # reuse_address=True sets SO_REUSEADDR on the socket, allowing
-                    # the port to be reused even while a previous socket is in
-                    # TIME_WAIT (typically 60 s after the process is killed).
-                    async with websockets.serve(
-                        _handler,
-                        "0.0.0.0",
-                        port,
-                        reuse_address=True,
-                        reuse_port=False,
-                    ):
-                        if port != self._port:
-                            logger.warning(
-                                "TeleopModule: port %d busy, using fallback port %d",
-                                self._port,
-                                port,
-                            )
-                            self._port = port
-                        logger.info("TeleopModule: WebSocket server ready on port %d", self._port)
-                        while self._running:
-                            self._check_idle()
-                            await asyncio.sleep(0.5)
-                    return
-                except OSError as exc:
-                    last_exc = exc
-                    continue
-
-            logger.error(
-                "TeleopModule: cannot bind any port in [%d..%d]. "
-                "Teleop disabled. Kill the process holding the ports, e.g.: "
-                "fuser -k %d/tcp",
-                self._port,
-                self._port + self._port_fallback_range,
-                self._port,
-            )
-            if last_exc:
-                logger.error("TeleopModule: last bind error: %s", last_exc)
-
-        asyncio.run(_serve())
-
-    async def _stream_camera(self, ws) -> None:
-        import websockets
         while self._running:
-            if self._latest_jpeg:
-                try:
-                    await ws.send(self._latest_jpeg)
-                except websockets.exceptions.ConnectionClosed:
-                    break
-            await asyncio.sleep(self._stream_interval)
+            triggered = self._new_frame.wait(timeout=self._stream_interval)
+            self._new_frame.clear()
+            if not triggered or not self._running:
+                continue
 
-    # ── @skill methods ────────────────────────────────────────────────────────
+            gw = self._gateway
+            if gw is None:
+                continue
+
+            with self._raw_lock:
+                raw = self._latest_raw
+
+            if raw is None:
+                continue
+
+            if have_cv2:
+                try:
+                    ok, buf = cv2.imencode(
+                        ".jpg", raw,
+                        [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality],
+                    )
+                    if ok:
+                        gw.push_jpeg(buf.tobytes())
+                except Exception:
+                    pass
+
+    # -- @skill methods (REPL / MCP) ----------------------------------------
 
     @skill
     def get_teleop_status(self) -> dict:
+        """Return current teleop status."""
+        gw = self._gateway
+        if gw is None:
+            return {"active": False, "clients": 0, "port": self._port}
         return {
-            "active": self._active,
-            "clients": len(self._clients),
-            "port": self._port,
+            "active":  gw._teleop_active,
+            "clients": gw._teleop_clients,
+            "port":    gw._port,
         }
 
     @skill
     def force_release(self) -> str:
-        self._release_autonomy()
+        """Force-release teleop control and resume autonomy."""
+        gw = self._gateway
+        if gw:
+            gw._teleop_release()
         return "Teleop released, autonomy resumed"

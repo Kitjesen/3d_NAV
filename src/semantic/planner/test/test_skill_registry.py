@@ -5,7 +5,7 @@
 """
 
 import pytest
-from semantic.planner.semantic_planner.skill_registry import (
+from semantic_planner.legacy.skill_registry import (
     SkillRegistry,
     LingTuNavigationSkills,
     skill,

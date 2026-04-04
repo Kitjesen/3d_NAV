@@ -38,19 +38,17 @@ T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
-# Out[T] — 输出端口
+# Out[T] — typed output port
 # ---------------------------------------------------------------------------
 
 class Out(Generic[T]):
-    """类型化输出端口。
+    """Typed output port.
 
-    支持两种消息传递路径:
-    1. 本地回调链 — 通过 _add_callback() 注册，publish() 直接调用
-    2. 外部传输层 — 通过 _bind_transport() 绑定，publish() 时额外发送
+    Two message delivery paths:
+      1. Local callback chain — registered via _add_callback(), called by publish()
+      2. External transport — bound via _bind_transport(), additionally sent by publish()
 
-    统计:
-    - msg_count: 已发布消息总数
-    - last_ts: 最后一次发布时间戳 (time.time())
+    Counters: msg_count (total published), last_ts (last publish timestamp).
     """
 
     __slots__ = (
@@ -69,11 +67,10 @@ class Out(Generic[T]):
         self._last_ts: float = 0.0
         self._lock = threading.Lock()
 
-    # -- 核心 API ----------------------------------------------------------------
+    # -- core API ------------------------------------------------------------------
 
     def publish(self, msg: T) -> None:
-        """发布一条消息到所有本地订阅者和外部传输层。"""
-        # 本地回调
+        """Publish a message to all local subscribers and external transport."""
         with self._lock:
             self._msg_count += 1
             self._last_ts = time.time()
@@ -83,14 +80,14 @@ class Out(Generic[T]):
                 cb(msg)
             except Exception:
                 logger.exception("Out[%s] callback error", self._name)
-        # 外部传输
+        # External transport
         if self._transport and self._transport_topic:
             try:
                 self._transport.publish(self._transport_topic, msg)
             except Exception:
                 logger.exception("Out[%s] transport publish error", self._name)
 
-    # -- 公开 API ----------------------------------------------------------------
+    # -- public API ----------------------------------------------------------------
 
     def subscribe(self, cb: Callable[[T], Any]) -> Callable[[], None]:
         """Subscribe to this output. Returns an unsubscribe callable.
@@ -102,21 +99,21 @@ class Out(Generic[T]):
             self._remove_callback(cb)
         return unsubscribe
 
-    # -- 连接 API (由 Blueprint 调用) --------------------------------------------
+    # -- wiring API (called by Blueprint) -----------------------------------------
 
     def _add_callback(self, cb: Callable[[T], None]) -> None:
-        """注册本地回调 (用于 Out→In 直连)。"""
+        """Register a local callback (for Out→In direct wiring)."""
         with self._lock:
             self._callbacks.append(cb)
 
     def _remove_callback(self, cb: Callable[[T], None]) -> None:
-        """移除本地回调。"""
+        """Remove a local callback."""
         with self._lock:
             if cb in self._callbacks:
                 self._callbacks.remove(cb)
 
     def _bind_transport(self, transport: Transport, topic: Optional[str] = None) -> None:
-        """绑定外部传输层。topic 默认使用端口名。"""
+        """Bind an external transport layer. topic defaults to the port name."""
         self._transport = transport
         self._transport_topic = topic or self._name
 
@@ -127,7 +124,7 @@ class Out(Generic[T]):
         self._transport = None
         self._transport_topic = None
 
-    # -- 属性 -------------------------------------------------------------------
+    # -- properties ----------------------------------------------------------------
 
     @property
     def name(self) -> str:
@@ -156,7 +153,7 @@ class Out(Generic[T]):
 
 
 # ---------------------------------------------------------------------------
-# In[T] — 输入端口
+# In[T] — typed input port
 # ---------------------------------------------------------------------------
 
 class In(Generic[T]):
@@ -304,7 +301,7 @@ class In(Generic[T]):
         finally:
             self._in_callback = False
 
-    # -- 属性 -------------------------------------------------------------------
+    # -- properties ----------------------------------------------------------------
 
     @property
     def name(self) -> str:

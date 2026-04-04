@@ -59,6 +59,16 @@ driver:
 lidar:
   frame_id: "livox_frame"
   publish_freq: 10.0          # Hz
+  # LiDAR 安装外参 (body → lidar TF, 单位 m / rad)
+  # 用于 static_transform_publisher 和 C++ 坐标变换
+  offset_x:  -0.011
+  offset_y:  -0.02329
+  offset_z:   0.04412
+  roll:       0.0
+  pitch:      0.0
+  yaw:        0.0
+  # 相机相对于 LiDAR 的 Z 偏移 (for visualization TF)
+  camera_offset_z: 0.0
 
 # ── gRPC 服务 ──
 grpc:

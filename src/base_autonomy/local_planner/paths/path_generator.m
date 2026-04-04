@@ -1,3 +1,23 @@
+% path_generator.m — ONE-TIME PATH GENERATION TOOL (offline, not part of build)
+%
+% This MATLAB script was used to pre-compute the candidate path set for the
+% CMU local planner.  It generates the three PLY data files in this directory:
+%   paths.ply          — 343 candidate paths × 36 rotation directions
+%   pathList.ply       — group_id mapping for each path_id
+%   startPaths.ply     — start-segment for each of the 7 path groups
+%   correspondences.txt — voxel_id → [blocked path_ids] mapping
+%
+% The generated files are committed to the repository and consumed at runtime
+% by both the C++ LocalPlannerCore (via local_planner_core.hpp load_paths())
+% and the Python cmu_py fallback backend (_load_paths in local_planner_module.py).
+%
+% To regenerate the path set (e.g. after changing vehicle geometry):
+%   1. Open MATLAB, run this script.
+%   2. Commit the updated PLY files.
+%   3. Rebuild nav_core: bash scripts/build_nav_core.sh
+%
+% DO NOT delete this file — it is the canonical specification of the path set.
+
 clc;
 clear all;
 close all;

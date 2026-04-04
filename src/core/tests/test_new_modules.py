@@ -291,19 +291,18 @@ class TestGatewayModule(unittest.TestCase):
         m = self._make()
         odom = Odometry(pose=Pose(position=Vector3(1, 2, 0)), ts=time.time())
         m._on_odometry(odom)
-        self.assertIsNotNone(m._latest_odom)
-        self.assertAlmostEqual(m._latest_odom["x"], 1.0)
+        self.assertIsNotNone(m._odom)
+        self.assertAlmostEqual(m._odom["x"], 1.0)
 
     def test_check_lease_open(self):
         m = self._make()
-        self.assertTrue(m._check_lease("anyone"))
+        self.assertTrue(m._lease.check("anyone"))
 
     def test_check_lease_held(self):
         m = self._make()
-        m._lease_holder = "client_a"
-        m._lease_expiry = time.time() + 30
-        self.assertTrue(m._check_lease("client_a"))
-        self.assertFalse(m._check_lease("client_b"))
+        m._lease.acquire("client_a", ttl=30.0)
+        self.assertTrue(m._lease.check("client_a"))
+        self.assertFalse(m._lease.check("client_b"))
 
     def test_layer(self):
         m = self._make()
@@ -340,67 +339,110 @@ class TestMCPServerModule(unittest.TestCase):
         self.assertIn("instruction", m.ports_out)
         self.assertIn("mode_cmd", m.ports_out)
 
-    def test_tools_count(self):
-        from gateway.mcp_server import TOOLS
-        self.assertEqual(len(TOOLS), 16)
+    def test_tools_discovered_via_skill(self):
+        """@skill methods on MCPServerModule itself appear in _tool_registry after on_system_modules."""
+        import json
+        from core.module import Module, skill
 
-    def test_execute_stop(self):
+        class FakeNav(Module, layer=5):
+            @skill
+            def navigate_to(self, x: float, y: float) -> str:
+                """Go to map coordinates (x, y)."""
+                return json.dumps({"status": "navigating", "goal": [x, y]})
+
+        m = self._make()
+        m.on_system_modules({"MCPServerModule": m, "NavigationModule": FakeNav()})
+        # Built-in MCP tools + navigation skills when NavigationModule is present
+        self.assertGreaterEqual(len(m._tool_list), 12)
+        names = [t["name"] for t in m._tool_list]
+        self.assertIn("stop", names)
+        self.assertIn("navigate_to", names)
+        self.assertIn("get_health", names)
+        self.assertIn("get_config", names)
+
+    def test_stop_via_skill(self):
+        import json
         m = self._make()
         stops = []
         m.stop_cmd._add_callback(stops.append)
-        m._execute_tool("stop", {})
+        result = json.loads(m.stop())
+        self.assertEqual(result["status"], "stopped")
         self.assertEqual(stops, [2])
 
-    def test_execute_get_position_no_odom(self):
+    def test_get_position_no_odom(self):
         import json
         m = self._make()
-        result = json.loads(m._execute_tool("get_robot_position", {}))
+        result = json.loads(m.get_robot_position())
         self.assertIn("error", result)
 
-    def test_execute_get_position_with_odom(self):
+    def test_get_position_with_odom(self):
         import json
         m = self._make()
         m._odom = {"x": 1.0, "y": 2.0, "z": 0.0, "yaw": 0.5}
-        result = json.loads(m._execute_tool("get_robot_position", {}))
+        result = json.loads(m.get_robot_position())
         self.assertAlmostEqual(result["x"], 1.0)
 
-    def test_execute_tag_location(self):
+    def test_tag_location_via_skill(self):
         import json
+        from memory.modules.tagged_locations_module import TaggedLocationsModule
         m = self._make()
         m._odom = {"x": 5.0, "y": 3.0, "z": 0.0}
-        result = json.loads(m._execute_tool("tag_location", {"name": "office"}))
+        tl = TaggedLocationsModule()
+        m._tagged_locations_mod = tl
+        result = json.loads(m.tag_location("office"))
         self.assertEqual(result["tagged"], "office")
-        # Verify via TaggedLocationStore
-        from gateway.mcp_server import _get_tagged_store
-        store = _get_tagged_store()
-        self.assertIsNotNone(store.query("office"))
+        self.assertIsNotNone(tl.store.query("office"))
 
-    def test_execute_navigate_to(self):
+    def test_navigate_to_resolves_to_navigation_named_module(self):
         import json
+        from core.module import Module, skill
+
+        class FakeNav(Module, layer=5):
+            def __init__(self):
+                super().__init__()
+                self.calls = []
+
+            @skill
+            def navigate_to(self, x: float, y: float, yaw: float = 0.0) -> str:
+                """Navigate to (x, y) in map frame."""
+                self.calls.append((x, y, yaw))
+                return json.dumps({"status": "navigating", "goal": [x, y], "yaw": yaw})
+
         m = self._make()
-        goals = []
-        m.goal_pose._add_callback(goals.append)
-        result = json.loads(m._execute_tool("navigate_to", {"x": 5, "y": 3}))
+        nav = FakeNav()
+        m.on_system_modules({"MCPServerModule": m, "NavigationModule": nav})
+        fn = m._tool_registry.get("navigate_to")
+        self.assertIsNotNone(fn)
+        self.assertEqual(getattr(fn, "__self__", None), nav)
+        result = json.loads(fn(5.0, 3.0))
         self.assertEqual(result["status"], "navigating")
-        self.assertEqual(len(goals), 1)
+        self.assertEqual(nav.calls, [(5.0, 3.0, 0.0)])
 
-    def test_execute_set_mode(self):
+    def test_set_mode_via_skill(self):
         import json
         m = self._make()
-        result = json.loads(m._execute_tool("set_mode", {"mode": "autonomous"}))
+        result = json.loads(m.set_mode("autonomous"))
         self.assertEqual(result["mode"], "autonomous")
 
-    def test_execute_unknown_tool(self):
+    def test_set_mode_invalid(self):
         import json
         m = self._make()
-        result = json.loads(m._execute_tool("nonexistent", {}))
+        result = json.loads(m.set_mode("unknown"))
+        self.assertIn("error", result)
+
+    def test_get_health_no_handle(self):
+        import json
+        m = self._make()
+        result = json.loads(m.get_health())
         self.assertIn("error", result)
 
     def test_health(self):
         m = self._make()
+        m.on_system_modules({"MCPServerModule": m})
         h = m.health()
         self.assertIn("mcp", h)
-        self.assertEqual(h["mcp"]["tools"], 16)
+        self.assertEqual(h["mcp"]["tools"], len(m._tool_list))
+        self.assertGreaterEqual(h["mcp"]["tools"], 13)
 
 
 # ============================================================================
@@ -629,6 +671,113 @@ class TestSemanticPlannerModule(unittest.TestCase):
         m._on_scene_graph(sg)
         self.assertIsNotNone(m._current_scene_graph)
         self.assertEqual(m._current_scene_graph.objects[0].label, "chair")
+
+
+# ============================================================================
+# MissionLoggerModule
+# ============================================================================
+
+class TestMissionLoggerModule(unittest.TestCase):
+
+    def _make(self, tmp_path=None):
+        import tempfile
+        from memory.modules.mission_logger_module import MissionLoggerModule
+        log_dir = tmp_path or tempfile.mkdtemp(prefix="lingtu_test_missions_")
+        return MissionLoggerModule(log_dir=log_dir)
+
+    def test_ports(self):
+        m = self._make()
+        self.assertIn("mission_status", m.ports_in)
+        self.assertIn("odometry", m.ports_in)
+        self.assertEqual(len(m.ports_out), 0)
+
+    def test_empty_list(self):
+        import json
+        m = self._make()
+        # @skill list_missions returns JSON str
+        result = json.loads(m.list_missions())
+        self.assertEqual(result["missions"], [])
+
+    def test_empty_list_raw(self):
+        m = self._make()
+        self.assertEqual(m._list_missions_raw(), [])
+
+    def test_empty_stats(self):
+        m = self._make()
+        s = m._stats_raw()
+        self.assertEqual(s["total"], 0)
+        self.assertEqual(s["success"], 0)
+        self.assertEqual(s["failed"], 0)
+
+    def test_empty_stats_get_stats_compat(self):
+        m = self._make()
+        s = m.get_stats()
+        self.assertEqual(s["total"], 0)
+
+    def test_mission_lifecycle_saved(self):
+        import tempfile, os
+        tmp = tempfile.mkdtemp(prefix="lingtu_test_missions_")
+        m = self._make(tmp_path=tmp)
+
+        m._on_mission_status({"state": "PLANNING", "goal": "kitchen"})
+        self.assertIsNotNone(m._current)
+        self.assertEqual(m._current["goal"], "kitchen")
+
+        from core.msgs.geometry import Pose, Vector3, Quaternion
+        def _odom(x, y):
+            return Odometry(pose=Pose(position=Vector3(x=x, y=y, z=0.0)))
+        m._on_odom(_odom(1.0, 2.0))
+        odom2 = _odom(4.0, 6.0)
+        m._on_odom(odom2)
+
+        m._on_mission_status({"state": "SUCCESS"})
+        self.assertIsNone(m._current)
+
+        from pathlib import Path as PPath
+        files = list(PPath(tmp).glob("*.json"))
+        self.assertEqual(len(files), 1)
+        import json
+        data = json.loads(files[0].read_text())
+        self.assertEqual(data["result"], "SUCCESS")
+        self.assertEqual(data["goal"], "kitchen")
+        self.assertGreater(data["distance_m"], 0)
+
+    def test_list_and_stats_after_missions(self):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="lingtu_test_missions_")
+        m = self._make(tmp_path=tmp)
+
+        for result in ("SUCCESS", "FAILED", "SUCCESS"):
+            m._on_mission_status({"state": "PLANNING", "goal": "test"})
+            m._on_mission_status({"state": result})
+
+        import json
+        missions_raw = m._list_missions_raw()
+        self.assertEqual(len(missions_raw), 3)
+        # @skill JSON path
+        missions_json = json.loads(m.list_missions())
+        self.assertEqual(len(missions_json["missions"]), 3)
+        s = m._stats_raw()
+        self.assertEqual(s["total"], 3)
+        self.assertEqual(s["success"], 2)
+        self.assertEqual(s["failed"], 1)
+
+    def test_replan_count_tracked(self):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="lingtu_test_missions_")
+        m = self._make(tmp_path=tmp)
+
+        m._on_mission_status({"state": "PLANNING", "goal": "go far"})
+        m._on_mission_status({"state": "REPLANNING"})
+        m._on_mission_status({"state": "REPLANNING"})
+        m._on_mission_status({"state": "SUCCESS"})
+
+        import json
+        missions = m._list_missions_raw()
+        self.assertEqual(missions[0]["replan_count"], 2)
+        # also verify via @skill JSON path
+        missions_json = json.loads(m.list_missions())
+        self.assertEqual(missions_json["missions"][0]["replan_count"], 2)
 
 
 if __name__ == "__main__":

@@ -110,7 +110,7 @@ class TerrainModule(Module, layer=2):
         """Setup C++ NativeModule backends (legacy)."""
         try:
             from core.config import get_config
-            from core.native_factories import terrain_analysis, terrain_analysis_ext
+            from base_autonomy.native_factories import terrain_analysis, terrain_analysis_ext
             cfg = get_config()
             self._nodes = {
                 "terrain": terrain_analysis(cfg),
