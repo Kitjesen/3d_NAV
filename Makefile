@@ -1,7 +1,7 @@
 # MapPilot 3D NAV - 快捷命令
 # 用途: 简化常用操作，提升开发效率
 
-.PHONY: help build test clean install health benchmark format lint
+.PHONY: help build nav_core test clean install health benchmark format lint
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -34,6 +34,11 @@ build:
 	@echo "🔨 编译工作空间..."
 	@bash -c "source /opt/ros/humble/setup.bash && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release"
 	@echo "✅ 编译完成"
+
+nav_core:
+	@echo "🔨 Building _nav_core.so (nanobind, no ROS2 needed)..."
+	@bash scripts/build_nav_core.sh
+	@echo "✅ _nav_core.so ready"
 
 build-debug:
 	@echo "🔨 编译工作空间 (Debug 模式)..."

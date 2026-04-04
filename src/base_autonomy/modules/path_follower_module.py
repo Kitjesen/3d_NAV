@@ -27,6 +27,7 @@ from core.stream import In, Out
 from core.msgs.nav import Odometry, Path
 from core.msgs.geometry import Twist, Vector3
 from core.registry import register
+from base_autonomy.modules._nav_core_loader import try_import_nav_core, nav_core_build_hint
 
 logger = logging.getLogger(__name__)
 
@@ -97,24 +98,32 @@ class PathFollowerModule(Module, layer=2):
 
     def _setup_nav_core(self):
         """Import _nav_core and create PathFollowerParams/State."""
+        _nav_core = try_import_nav_core()
+        if _nav_core is None:
+            logger.info(
+                "PathFollowerModule: _nav_core.so not found — using pid backend.\n"
+                "  To enable C++ path follower:\n  %s", nav_core_build_hint()
+            )
+            self._backend = "pid"
+            self._nc = None
+            return
         try:
-            import _nav_core
             self._nc = _nav_core
 
             params = _nav_core.PathFollowerParams()
             params.max_speed = self._max_speed
-            params.base_look_ahead_dis = self._lookahead * 0.2   # scale from legacy lookahead
+            params.base_look_ahead_dis = self._lookahead * 0.2
             params.min_look_ahead_dis = 0.2
             params.max_look_ahead_dis = min(self._lookahead, 2.0)
             params.look_ahead_ratio = 0.5
             params.yaw_rate_gain = 7.5
             params.stop_yaw_rate_gain = 7.5
-            params.max_yaw_rate = 45.0   # degrees
+            params.max_yaw_rate = 45.0
             params.max_accel = 1.0
             params.switch_time_thre = 1.0
-            params.dir_diff_thre = 0.1   # ~5.7 deg
+            params.dir_diff_thre = 0.1
             params.omni_dir_goal_thre = 1.0
-            params.omni_dir_diff_thre = 1.5  # ~86 deg
+            params.omni_dir_diff_thre = 1.5
             params.stop_dis_thre = 0.2
             params.slow_dwn_dis_thre = 1.0
             params.two_way_drive = True
@@ -124,9 +133,8 @@ class PathFollowerModule(Module, layer=2):
             self._nc_state = _nav_core.PathFollowerState()
 
             logger.info("PathFollowerModule [nav_core]: C++ compute_control loaded")
-        except ImportError:
-            logger.info("PathFollowerModule: _nav_core.so not built yet — using pid backend "
-                        "(run 'make build' on S100P to enable C++ path follower)")
+        except Exception as e:
+            logger.warning("PathFollowerModule: _nav_core error: %s — using pid backend", e)
             self._backend = "pid"
             self._nc = None
 

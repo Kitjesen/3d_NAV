@@ -31,6 +31,7 @@ from core.msgs.nav import Odometry, Path
 from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from base_autonomy.modules._nav_core_loader import try_import_nav_core, nav_core_build_hint
 
 logger = logging.getLogger(__name__)
 
@@ -370,8 +371,16 @@ class LocalPlannerModule(Module, layer=2):
 
     def _setup_nanobind(self):
         """C++ LocalPlannerCore via nanobind — full CMU scoring in-process, zero ROS2."""
+        _nav_core = try_import_nav_core()
+        if _nav_core is None:
+            logger.info(
+                "LocalPlannerModule: _nav_core.so not found — using cmu_py backend.\n"
+                "  To enable C++ local planner:\n  %s", nav_core_build_hint()
+            )
+            self._backend = "cmu_py"
+            self._setup_cmu_py()
+            return
         try:
-            import _nav_core
             params = _nav_core.LocalPlannerParams()
             try:
                 from core.config import get_config
@@ -400,9 +409,8 @@ class LocalPlannerModule(Module, layer=2):
                 return
 
             logger.info("LocalPlannerModule [nanobind]: C++ LocalPlannerCore loaded (343 paths × 36 dirs)")
-        except ImportError:
-            logger.info("LocalPlannerModule: _nav_core.so not built yet — using cmu_py backend "
-                        "(run 'make build' on S100P to enable C++ local planner)")
+        except Exception as e:
+            logger.warning("LocalPlannerModule: _nav_core error: %s — using cmu_py backend", e)
             self._backend = "cmu_py"
             self._setup_cmu_py()
 
@@ -422,13 +430,13 @@ class LocalPlannerModule(Module, layer=2):
             logger.warning("LocalPlannerModule: C++ backend not available: %s", e)
 
     def _setup_cmu_py(self):
-        # Try to import _nav_core nanobind module
-        try:
-            import _nav_core as nav_core
-            self._nav_core = nav_core
-            logger.info("LocalPlannerModule [cmu_py]: _nav_core loaded")
-        except ImportError:
-            logger.info("LocalPlannerModule [cmu_py]: _nav_core.so not built — using numpy scorer")
+        # Try to use _nav_core for accelerated scoring even in cmu_py mode
+        _nav_core = try_import_nav_core()
+        if _nav_core is not None:
+            self._nav_core = _nav_core
+            logger.info("LocalPlannerModule [cmu_py]: _nav_core scoring acceleration loaded")
+        else:
+            logger.info("LocalPlannerModule [cmu_py]: using numpy-only scorer")
 
         # Load pre-computed path files
         paths_dir = os.path.join(
