@@ -166,7 +166,8 @@ def preflight(profile_name: str, cfg: dict) -> None:
         if not shutil.which("ros2"):
             print(f"  {T.yellow('!')} ros2 not in PATH — SLAM won't start")
             print(f"    Fix: {T.bold('source /opt/ros/humble/setup.bash')}")
-            print(f"    Permanent: {T.dim('echo \"source /opt/ros/humble/setup.bash\" >> ~/.bashrc')}")
+            _bashrc_cmd = 'echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc'
+            print(f"    Permanent: {T.dim(_bashrc_cmd)}")
 
     # Warn if _nav_core C++ extension is missing (affects terrain/local_planner/path_follower)
     if not _nav_core_available() and cfg.get("enable_native", False):
