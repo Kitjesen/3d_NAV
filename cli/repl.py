@@ -355,19 +355,406 @@ class LingTuREPL(cmd.Cmd):
             print(f"    {r['room']:20s} {bar} {r['probability']:.2f}")
 
     def do_agent(self, arg):
-        """Multi-turn agent: agent <instruction>"""
+        """Multi-turn LLM agent with live step output: agent <instruction>
+
+        The LLM observes the robot state, decides actions, and executes them
+        step by step. Each tool call and result is printed in real time.
+
+        Example:
+          agent find the chair and tag it as 'chair'
+          agent go to the kitchen and describe what you see
+        """
         if not arg.strip():
             print("  Usage: agent <instruction>")
+            print("  Example: agent find the red chair")
             return
-        mod = self._get_module("SemanticPlannerModule")
-        if mod is None:
-            print("  SemanticPlannerModule not running")
+
+        llm_mod = self._get_module("LLMModule")
+        if llm_mod is None:
+            print("  LLMModule not running — start with a semantic-enabled profile")
             return
-        if not hasattr(mod, "agent_instruction"):
-            print("  agent_instruction port not available")
+
+        # Get LLM client from the module
+        llm_client = getattr(llm_mod, "_client", None)
+        if llm_client is None:
+            print("  LLM client not initialized")
             return
-        mod.agent_instruction._deliver(arg.strip())
-        print(f"  Agent loop started: '{arg.strip()}'")
+
+        # Check if LLM is available
+        backend = getattr(llm_mod, "_backend", "?")
+        if backend == "mock":
+            print(f"  {T.yellow('!')} LLM backend is 'mock' — responses will be simulated")
+            print(f"    Set a real API key and restart with --llm kimi/qwen/openai")
+            print()
+
+        # Build context function from live modules
+        nav = self._get_module("NavigationModule")
+        smap = self._get_module("SemanticMapperModule")
+        vmem = self._get_module("VectorMemoryModule")
+        sem = self._get_module("SemanticPlannerModule")
+
+        def _context():
+            ctx = {
+                "robot_x": 0.0, "robot_y": 0.0,
+                "visible_objects": "none",
+                "nav_status": "IDLE",
+                "memory_context": "none",
+                "camera_image": None,
+                "scene_graph": None,
+                "camera_available": False,
+            }
+            if nav and hasattr(nav, "_robot_pos"):
+                ctx["robot_x"] = float(nav._robot_pos[0])
+                ctx["robot_y"] = float(nav._robot_pos[1])
+                ctx["nav_status"] = getattr(nav, "_state", "IDLE")
+            if sem and hasattr(sem, "_current_scene_graph") and sem._current_scene_graph:
+                sg = sem._current_scene_graph
+                try:
+                    labels = [o.label for o in sg.objects[:8]] if hasattr(sg, "objects") else []
+                    ctx["visible_objects"] = ", ".join(labels) if labels else "none"
+                    ctx["scene_graph"] = {"objects": [{"label": l} for l in labels]}
+                except Exception:
+                    pass
+            if sem and hasattr(sem, "_latest_rgb") and sem._latest_rgb is not None:
+                ctx["camera_image"] = sem._latest_rgb
+                ctx["camera_available"] = True
+            return ctx
+
+        # Build tool handlers that publish to module ports
+        def _navigate_to(x, y, **_):
+            if nav and hasattr(nav, "goal_pose"):
+                from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
+                goal = PoseStamped(pose=Pose(
+                    position=Vector3(x=float(x), y=float(y), z=0.0),
+                    orientation=Quaternion(x=0, y=0, z=0, w=1),
+                ))
+                nav.goal_pose._deliver(goal)
+                return f"Navigating to ({x:.1f}, {y:.1f})"
+            return "NavigationModule not available"
+
+        def _navigate_to_object(label, **_):
+            if sem and hasattr(sem, "instruction"):
+                sem.instruction._deliver(f"go to {label}")
+                return f"Searching for '{label}' and navigating"
+            return "SemanticPlannerModule not available"
+
+        def _detect_object(label, **_):
+            if sem and hasattr(sem, "_current_scene_graph") and sem._current_scene_graph:
+                try:
+                    labels = [o.label.lower() for o in sem._current_scene_graph.objects]
+                    found = [l for l in labels if label.lower() in l]
+                    return f"Found: {found}" if found else f"'{label}' not visible"
+                except Exception:
+                    pass
+            return "Scene graph not available"
+
+        def _query_memory(text, **_):
+            if vmem and hasattr(vmem, "query_location"):
+                try:
+                    r = vmem.query_location(text)
+                    if r.get("found"):
+                        results = r.get("results", [])[:3]
+                        return "; ".join(
+                            f"({x['x']:.1f},{x['y']:.1f}) score={x['score']:.2f}"
+                            for x in results
+                        )
+                    return "No matching memory"
+                except Exception as e:
+                    return f"Memory query error: {e}"
+            return "VectorMemoryModule not available"
+
+        def _tag_location(name, **_):
+            if nav and hasattr(nav, "_robot_pos"):
+                x, y = nav._robot_pos[0], nav._robot_pos[1]
+                if vmem and hasattr(vmem, "store_observation"):
+                    try:
+                        vmem.store_observation(x, y, [name])
+                        return f"Tagged ({x:.1f}, {y:.1f}) as '{name}'"
+                    except Exception:
+                        pass
+            return f"Tagged current position as '{name}'"
+
+        def _say(text, **_):
+            print(f"\n  {T.cyan('Robot:')} {text}")
+            return "said"
+
+        tool_handlers = {
+            "navigate_to": _navigate_to,
+            "navigate_to_object": _navigate_to_object,
+            "detect_object": _detect_object,
+            "query_memory": _query_memory,
+            "tag_location": _tag_location,
+            "say": _say,
+        }
+
+        # Run the agent loop with live output
+        import asyncio
+        import threading
+
+        instruction = arg.strip()
+        print(f"\n  {T.bold('Agent')} {T.dim('starting:')} {instruction}")
+        print(f"  {T.dim('LLM backend:')} {backend}  {T.dim('(Ctrl+C to abort)')}\n")
+
+        # Patch AgentLoop to print each step live
+        try:
+            from semantic.planner.semantic_planner.agent_loop import AgentLoop, AGENT_TOOLS
+        except ImportError:
+            print("  AgentLoop not available — check semantic stack is enabled")
+            return
+
+        class _LiveAgentLoop(AgentLoop):
+            async def _execute_tool(self_inner, tool_call, state):
+                fn = tool_call.get("function", {})
+                name = fn.get("name", "")
+                try:
+                    import json as _json
+                    args = _json.loads(fn.get("arguments", "{}"))
+                except Exception:
+                    args = {}
+                args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+                step_color = T.cyan if name != "done" else T.green
+                print(f"  {T.dim(f'step {state.step}:')} {step_color(name)}({args_str})")
+                result = await super()._execute_tool(tool_call, state)
+                print(f"  {T.dim('result:')} {result[:120]}")
+                if state.completed and name == "done":
+                    print(f"\n  {T.green('Done:')} {state.summary}")
+                return result
+
+        loop_obj = _LiveAgentLoop(
+            llm_client=llm_client,
+            tool_handlers=tool_handlers,
+            context_fn=_context,
+            max_steps=10,
+            timeout=120.0,
+        )
+
+        result_holder = {}
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                state = loop.run_until_complete(loop_obj.run(instruction))
+                result_holder["state"] = state
+            except Exception as e:
+                result_holder["error"] = str(e)
+            finally:
+                loop.close()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        try:
+            t.join(timeout=130.0)
+        except KeyboardInterrupt:
+            print(f"\n  {T.yellow('Aborted by user')}")
+            return
+
+        if "error" in result_holder:
+            print(f"\n  {T.red('Agent error:')} {result_holder['error']}")
+        elif "state" not in result_holder:
+            print(f"\n  {T.yellow('Agent timed out')}")
+        print()
+
+    def do_chat(self, arg):
+        """Chat directly with the LLM about the robot's current state.
+
+        The LLM sees the robot's position, visible objects, and navigation status.
+        It can answer questions and suggest actions, but does not execute them
+        automatically (use 'agent' for autonomous execution).
+
+        Example:
+          chat what do you see around you?
+          chat where should I go to find the kitchen?
+          chat explain the current navigation status
+        """
+        if not arg.strip():
+            print("  Usage: chat <question>")
+            print("  Example: chat what can you see?")
+            return
+
+        llm_mod = self._get_module("LLMModule")
+        if llm_mod is None:
+            print("  LLMModule not running")
+            return
+
+        llm_client = getattr(llm_mod, "_client", None)
+        if llm_client is None:
+            print("  LLM client not initialized")
+            return
+
+        backend = getattr(llm_mod, "_backend", "?")
+        if backend == "mock":
+            print(f"  {T.yellow('!')} Using mock LLM — set a real API key for actual responses")
+
+        # Build system prompt with current robot state
+        nav = self._get_module("NavigationModule")
+        sem = self._get_module("SemanticPlannerModule")
+
+        x, y, z = 0.0, 0.0, 0.0
+        nav_state = "IDLE"
+        visible = "none"
+
+        if nav and hasattr(nav, "_robot_pos"):
+            x, y, z = nav._robot_pos
+            nav_state = getattr(nav, "_state", "IDLE")
+
+        if sem and hasattr(sem, "_current_scene_graph") and sem._current_scene_graph:
+            try:
+                labels = [o.label for o in sem._current_scene_graph.objects[:10]]
+                visible = ", ".join(labels) if labels else "none"
+            except Exception:
+                pass
+
+        system_prompt = (
+            f"You are the AI assistant for a quadruped navigation robot (LingTu).\n"
+            f"Current robot state:\n"
+            f"  Position: x={x:.2f}, y={y:.2f}, z={z:.2f}\n"
+            f"  Navigation status: {nav_state}\n"
+            f"  Visible objects: {visible}\n\n"
+            f"Answer questions about the robot's environment and status. "
+            f"If the user wants the robot to do something, suggest using the 'agent' command."
+        )
+
+        import asyncio
+
+        print(f"  {T.dim(f'[{backend}]')} thinking...", end="", flush=True)
+
+        result_holder = {}
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                resp = loop.run_until_complete(
+                    llm_client.chat(arg.strip(), system_prompt=system_prompt)
+                )
+                result_holder["response"] = resp
+            except Exception as e:
+                result_holder["error"] = str(e)
+            finally:
+                loop.close()
+
+        import threading
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        try:
+            t.join(timeout=30.0)
+        except KeyboardInterrupt:
+            print(f"\r  {T.yellow('Cancelled')}")
+            return
+
+        print(f"\r  {T.dim(f'[{backend}]')}          ")  # clear "thinking..."
+
+        if "error" in result_holder:
+            print(f"  {T.red('Error:')} {result_holder['error']}")
+        elif "response" in result_holder:
+            resp = result_holder["response"]
+            print()
+            for line in resp.splitlines():
+                print(f"  {line}")
+            print()
+        else:
+            print(f"  {T.yellow('No response (timeout)')}")
+
+    def do_llm(self, arg):
+        """LLM backend status and connectivity test: llm status | llm test | llm backends
+
+        Examples:
+          llm status    — show current backend, model, API key status
+          llm test      — send a test message and measure latency
+          llm backends  — list all available backends and how to enable them
+        """
+        subcmd = arg.strip().lower()
+
+        llm_mod = self._get_module("LLMModule")
+        if llm_mod is None:
+            print("  LLMModule not running — start with a semantic-enabled profile")
+            return
+
+        if subcmd in ("", "status"):
+            backend  = getattr(llm_mod, "_backend", "?")
+            model    = getattr(llm_mod, "_model",   "?")
+            client   = getattr(llm_mod, "_client",  None)
+            req_cnt  = llm_mod.request.msg_count  if hasattr(llm_mod, "request")  else 0
+            resp_cnt = llm_mod.response.msg_count if hasattr(llm_mod, "response") else 0
+
+            key_env  = getattr(getattr(client, "config", None), "api_key_env", "?")
+            import os
+            key_set  = bool(os.environ.get(key_env, ""))
+            key_str  = T.green("set") if key_set else T.red("not set")
+
+            print(f"\n  LLM backend:  {T.bold(backend)}")
+            print(f"  Model:        {model or T.dim('(default)')}")
+            print(f"  API key ({key_env}): {key_str}")
+            print(f"  Requests:     {req_cnt} sent, {resp_cnt} responses")
+
+            if not key_set and backend != "mock":
+                print(f"\n  To set the key:")
+                print(f"    export {key_env}=your_key_here")
+                print(f"    then restart lingtu")
+
+            print()
+
+        elif subcmd == "test":
+            client = getattr(llm_mod, "_client", None)
+            if client is None:
+                print("  LLM client not initialized")
+                return
+
+            backend = getattr(llm_mod, "_backend", "?")
+            print(f"  Testing {backend}...", end="", flush=True)
+
+            import asyncio, threading, time as _time
+
+            result_holder = {}
+            t0 = _time.time()
+
+            def _run():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    resp = loop.run_until_complete(
+                        client.chat("Reply with exactly: OK",
+                                    system_prompt="You are a test assistant. Reply only with 'OK'.")
+                    )
+                    result_holder["response"] = resp
+                except Exception as e:
+                    result_holder["error"] = str(e)
+                finally:
+                    loop.close()
+
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            t.join(timeout=15.0)
+            elapsed = _time.time() - t0
+
+            if "error" in result_holder:
+                print(f"\r  {T.red('Failed')} ({elapsed:.1f}s): {result_holder['error']}")
+            elif "response" in result_holder:
+                print(f"\r  {T.green('OK')} ({elapsed:.1f}s): {result_holder['response'][:60]}")
+            else:
+                print(f"\r  {T.yellow('Timeout')} after {elapsed:.1f}s")
+            print()
+
+        elif subcmd == "backends":
+            print(f"\n  Available LLM backends:\n")
+            backends = [
+                ("kimi",   "MOONSHOT_API_KEY",  "Kimi K2 (Moonshot AI, China-direct, recommended)"),
+                ("qwen",   "DASHSCOPE_API_KEY", "Qwen (Alibaba, China-direct fallback)"),
+                ("openai", "OPENAI_API_KEY",    "GPT-4o (OpenAI, needs VPN in China)"),
+                ("claude", "ANTHROPIC_API_KEY", "Claude (Anthropic, needs VPN in China)"),
+                ("mock",   "",                  "Mock (offline testing, no real LLM)"),
+            ]
+            import os
+            current = getattr(llm_mod, "_backend", "?")
+            for name, env, desc in backends:
+                key_ok = bool(os.environ.get(env)) if env else True
+                marker = T.green("*") if name == current else " "
+                key_str = T.green("key set") if key_ok else T.dim("no key")
+                print(f"  {marker} {T.bold(name):<10} {key_str:<20} {T.dim(desc)}")
+            print()
+            print(f"  Switch backend: restart with  {T.bold('python3 lingtu.py nav --llm kimi')}")
+            print()
 
     def do_vmem(self, arg):
         """Vector memory: vmem query <text> | vmem stats"""
