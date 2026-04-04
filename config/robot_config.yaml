@@ -55,27 +55,19 @@ driver:
   reconnect_interval: 3.0     # 秒
   slam_reset_interval: 5.0    # SLAM 位置重置间隔 (秒)，防止航位推算漂移
 
-# ── LiDAR sensor (Livox MID-360) ──────────────────────────────────────────────
-# Network: lidar_ip must match MID360_config.json → lidar_configs[0].ip
-#          host_ip  must match MID360_config.json → host_net_info.*_ip
-# To change: edit BOTH this file and config/MID360_config.json; run 'make build'.
+# ── LiDAR 传感器 ──
 lidar:
-  frame_id:       "livox_frame"
-  publish_freq:   10.0            # Hz (0.5..100)
-  lidar_ip:       "192.168.1.115" # MID-360 device IP  (factory default)
-  host_ip:        "192.168.1.5"   # S100P NIC IP on the lidar subnet
-
-  # Body-to-LiDAR extrinsics (m / rad) — used by SLAM TF and terrain analysis.
-  # The driver's MID360_config.json extrinsic_parameter is intentionally kept
-  # at zero so SLAM handles all coordinate transforms uniformly.
+  frame_id: "livox_frame"
+  publish_freq: 10.0          # Hz
+  # LiDAR 安装外参 (body → lidar TF, 单位 m / rad)
+  # 用于 static_transform_publisher 和 C++ 坐标变换
   offset_x:  -0.011
   offset_y:  -0.02329
   offset_z:   0.04412
   roll:       0.0
   pitch:      0.0
   yaw:        0.0
-
-  # Camera Z offset relative to LiDAR origin (for visualization TF only)
+  # 相机相对于 LiDAR 的 Z 偏移 (for visualization TF)
   camera_offset_z: 0.0
 
 # ── gRPC 服务 ──
