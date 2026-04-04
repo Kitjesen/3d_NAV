@@ -9,18 +9,15 @@ Consolidates all transport implementations under core:
   TransportStrategy     — backend selection enum
   TopicConfig           — per-topic configuration
 
-Backends (conditionally imported):
+Backends (conditionally imported when deps are available):
   SHMTransport   — POSIX SharedMemory (high-speed same-machine)
-  DDSTransport   — ROS2 CycloneDDS (default, ecosystem-compatible)
+  DDSTransport   — ROS2 CycloneDDS
   DualTransport  — SHM + DDS dual-write
 
 Factory:
   create_transport()  — instantiate a backend by strategy
   create_publisher()  — shortcut for one-off publisher
   create_subscriber() — shortcut for one-off subscriber
-
-ROS2 integration:
-  TransportMixin — mixin giving any ROS2 Node fast-transport helpers
 """
 
 # --- always-available core types ---
@@ -34,47 +31,33 @@ from .abc import (
 )
 from .factory import create_publisher, create_subscriber, create_transport
 from .adapter import TransportAdapter
-try:
-    from .ros2_mixin import TransportMixin
-except ImportError:
-    pass  # rclpy not available
 
 # --- conditional backend imports ---
 try:
     from .shm import SHMTransport, SHMPublisher, SHMSubscriber
 except ImportError:
-    pass  # numpy not available
+    pass
 
 try:
     from .dds import DDSTransport, DDSPublisher, DDSSubscriber
 except ImportError:
-    pass  # rclpy not available
+    pass
 
 try:
     from .dual import DualTransport, DualPublisher, DualSubscriber
 except ImportError:
-    pass  # depends on SHM + DDS
+    pass
 
 __all__ = [
-    # Protocol-based
     "Transport",
     "LocalTransport",
-    # ABC-based
     "TransportABC",
     "Publisher",
     "Subscriber",
     "TransportStrategy",
     "TopicConfig",
-    # Factory
     "create_transport",
     "create_publisher",
     "create_subscriber",
-    # Adapter
     "TransportAdapter",
-    # ROS2 mixin
-    "TransportMixin",
-    # Backends (conditional)
-    "SHMTransport",
-    "DDSTransport",
-    "DualTransport",
 ]
