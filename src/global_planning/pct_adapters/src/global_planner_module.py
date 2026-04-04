@@ -90,7 +90,13 @@ class _PCTBackend:
             logger.warning("PCT backend unavailable: %s", self._load_error)
             return
 
-        if not tomogram_path or not os.path.exists(tomogram_path):
+        # Resolve to absolute path before passing to loadTomogram().
+        # planner_wrapper.py resolves relative paths relative to its own script
+        # directory (PCT_planner/planner/scripts/), which would produce a wrong
+        # doubled path when a relative path is passed from outside.
+        tomogram_path = os.path.abspath(tomogram_path)
+
+        if not os.path.exists(tomogram_path):
             self._load_error = (
                 f"Tomogram file not found: '{tomogram_path}'. "
                 f"Set tomogram= in your profile or copy the map to "
