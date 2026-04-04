@@ -12,33 +12,67 @@ from .profiles_data import PROFILES
 from .run_state import clear_run_state, is_pid_alive, read_run_state
 
 
+LOGO = r"""\
+  _     _             _____
+ | |   (_)           |_   _|
+ | |    _ _ __   __ _  | |  _   _
+ | |   | | '_ \ / _` | | | | | | |
+ | |___| | | | | (_| |_| |_| |_| |
+ \_____/_|_| |_|\__, |_____|\__,_|
+                  __/ |
+                 |___/
+"""
+
+
 def print_banner(profile_name, cfg, system, log_dir: str) -> None:
     n = len(system.modules)
     c = len(system.connections)
     desc = cfg.get("_desc", "custom")
     gw = cfg.get("gateway_port", 5050)
 
-    print(f"\n{T.bold('=' * 56)}")
+    robot = cfg.get("robot", "?")
+    planner = cfg.get("planner", "?")
+    detector = cfg.get("detector", "?")
+    llm = cfg.get("llm", "?")
+
+    teleop_port = None
+    try:
+        teleop_port = system.get_module("TeleopModule").get_teleop_status().get("port")
+    except Exception:
+        pass
+
+    tomogram = cfg.get("tomogram", "")
+    tomo_note = ""
+    if tomogram and "building2_9.pickle" in str(tomogram):
+        tomo_note = T.yellow(" (sample)")
+
+    print()
+    for line in LOGO.splitlines():
+        if line.strip():
+            print(f"{T.blue(line)}")
+    print(f"{T.bold('=' * 56)}")
     print(f"  {T.bold('LingTu Navigation System')}")
     print(f"{T.bold('=' * 56)}")
-    print(f"  Profile:     {T.green(profile_name)} — {desc}")
-    print(f"  Modules:     {n}    Connections: {c}")
-    print(f"  Robot:       {cfg.get('robot', '?'):12s}  Planner: {cfg.get('planner', '?')}")
-    print(f"  Detector:    {cfg.get('detector', '?'):12s}  LLM:     {cfg.get('llm', '?')}")
+    print(f"  Profile:   {T.green(profile_name)} — {desc}")
+    print(f"  Robot:     {robot:12s}  Planner: {planner}")
+    if cfg.get("enable_semantic"):
+        print(f"  Semantic:  detector={detector:10s}  llm={llm}")
+    else:
+        print(f"  Semantic:  {T.dim('disabled')}")
     if cfg.get("enable_gateway"):
-        print(f"  Gateway:     http://localhost:{gw}")
-    if cfg.get("enable_rerun"):
-        print("  Rerun:       http://localhost:9090")
+        print(f"  Gateway:   http://localhost:{gw}")
+    if teleop_port:
+        print(f"  Teleop:    ws://0.0.0.0:{teleop_port}/teleop")
+    if tomogram:
+        print(f"  Map:       {T.dim(str(tomogram))}{tomo_note}")
     if cfg.get("dog_host") and cfg["dog_host"] != "127.0.0.1":
-        print(f"  Robot host:  {cfg['dog_host']}:{cfg.get('dog_port', 13145)}")
-    print(f"  Logs:        {T.dim(log_dir)}")
-    print(f"  PID:         {os.getpid()}")
+        print(f"  Robot host:{cfg['dog_host']}:{cfg.get('dog_port', 13145)}")
+    print(f"  Health:    {n} modules, {c} connections")
+    print(f"  Logs:      {T.dim(log_dir)}")
+    print(f"  PID:       {os.getpid()}")
     print(f"{T.bold('-' * 56)}")
-    for name, mod in sorted(system.modules.items(), key=lambda x: x[1].layer or 0):
-        layer = f"L{mod.layer}" if mod.layer is not None else "L?"
-        print(f"  [{layer}] {name}")
-    print(f"{T.bold('=' * 56)}")
-    print(f"  Type {T.bold('help')} for commands, {T.bold('Ctrl+C')} to stop.\n")
+    print(f"  Commands:  {T.bold('help')}, {T.bold('status')}, {T.bold('teleop status')}, {T.bold('map list')}")
+    print(f"  Stop:      {T.bold('Ctrl+C')}\n")
 
 
 def select_interactive():
