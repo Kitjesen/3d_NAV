@@ -366,14 +366,17 @@ class TestMCPServerModule(unittest.TestCase):
 
     def test_execute_tag_location(self):
         import json
+        from memory.modules.tagged_locations_module import TaggedLocationsModule
         m = self._make()
         m._odom = {"x": 5.0, "y": 3.0, "z": 0.0}
+
+        # Inject a running TaggedLocationsModule so the tool has a store
+        tl = TaggedLocationsModule()
+        m._tagged_locations_mod = tl
+
         result = json.loads(m._execute_tool("tag_location", {"name": "office"}))
         self.assertEqual(result["tagged"], "office")
-        # Verify via TaggedLocationStore
-        from gateway.mcp_server import _get_tagged_store
-        store = _get_tagged_store()
-        self.assertIsNotNone(store.query("office"))
+        self.assertIsNotNone(tl.store.query("office"))
 
     def test_execute_navigate_to(self):
         import json

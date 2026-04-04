@@ -57,40 +57,6 @@ from core.registry import register
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded memory backends (avoid hard import dependency)
-_tagged_store = None
-_episodic_mem = None
-_topo_mem = None
-
-
-def _get_tagged_store():
-    global _tagged_store
-    if _tagged_store is None:
-        try:
-            from memory.spatial.tagged_locations import TaggedLocationStore
-            _tagged_store = TaggedLocationStore()
-            logger.info("MCP: TaggedLocationStore connected (in-memory)")
-        except ImportError:
-            pass
-    return _tagged_store
-
-
-def _get_memories():
-    global _episodic_mem, _topo_mem
-    if _episodic_mem is None:
-        try:
-            from memory.spatial.episodic import EpisodicMemory
-            _episodic_mem = EpisodicMemory()
-        except ImportError:
-            pass
-    if _topo_mem is None:
-        try:
-            from memory.spatial.topological import TopologicalMemory
-            _topo_mem = TopologicalMemory()
-        except ImportError:
-            pass
-    return _episodic_mem, _topo_mem
-
 MCP_PROTOCOL_VERSION = "2025-11-25"
 
 
@@ -287,54 +253,64 @@ class MCPServerModule(Module, layer=6):
         self._server_thread: Optional[threading.Thread] = None
 
         # Cached state from subscriptions
-        self._odom: Optional[Dict] = None
+        self._odom:    Optional[Dict] = None
         self._sg_json: str = "{}"
-        self._safety: Optional[Dict] = None
+        self._safety:  Optional[Dict] = None
         self._mission: Optional[Dict] = None
-        self._system_handle = None  # set externally for health queries
-        self._skill_registry: Dict[str, Any] = {}   # skill_name -> bound method
-        self._dynamic_tools: List[Dict] = []         # populated by on_system_modules
+
+        # Set by Blueprint.build() via on_system_modules()
+        self._system_handle = None
+        self._skill_registry: Dict[str, Any] = {}
+        self._dynamic_tools:  List[Dict] = []
+
+        # Memory module references (set by on_system_modules)
+        self._tagged_locations_mod = None   # TaggedLocationsModule
+        self._vector_memory_mod    = None   # VectorMemoryModule
+        self._episodic_mod         = None   # EpisodicMemoryModule
 
     def set_system_handle(self, handle):
         """Inject SystemHandle for health/module queries."""
         self._system_handle = handle
 
     def on_system_modules(self, modules: Dict[str, Any]) -> None:
-        """Auto-discover all @skill methods from all system modules.
+        """Auto-discover @skill methods and grab memory module references.
 
-        Called by Blueprint after build(). Populates dynamic tools list so
-        MCPServerModule exposes ALL @skill methods without manual registration.
+        Called by Blueprint after build().  Populates:
+          - _skill_registry  {func_name: bound_method}
+          - _dynamic_tools   MCP tool descriptors for every @skill
+          - _*_mod           direct references to running memory modules
         """
         self._skill_registry = {}
-        self._dynamic_tools = []
+        self._dynamic_tools  = []
+
+        # Grab memory module references so _execute_tool can delegate to them
+        self._tagged_locations_mod = modules.get("TaggedLocationsModule")
+        self._vector_memory_mod    = modules.get("VectorMemoryModule")
+        self._episodic_mod         = modules.get("EpisodicMemoryModule")
 
         for mod_name, mod in modules.items():
-            if not hasattr(mod, 'get_skill_infos'):
+            if not hasattr(mod, "get_skill_infos"):
                 continue
             try:
                 infos = mod.get_skill_infos()
             except Exception:
                 continue
             for info in infos:
-                # Register method in skill_registry
                 method = getattr(mod, info.func_name, None)
                 if method is not None:
                     self._skill_registry[info.func_name] = method
-
-                # Build MCP tool descriptor
                 import json as _j
                 schema = _j.loads(info.args_schema)
                 desc = schema.pop("description", "")
-                tool = {
+                self._dynamic_tools.append({
                     "name": info.func_name,
                     "description": f"[{info.class_name}] {desc}".strip(),
                     "inputSchema": schema,
-                }
-                self._dynamic_tools.append(tool)
+                })
 
         logger.info(
-            "MCP dynamic tools: %d from %d modules",
-            len(self._dynamic_tools), len(modules)
+            "MCP: %d dynamic tools from %d modules",
+            len(self._dynamic_tools), len(modules),
         )
 
     def setup(self):
@@ -425,51 +401,72 @@ class MCPServerModule(Module, layer=6):
         if name == "get_robot_position":
             return json.dumps(self._odom or {"error": "no odometry"})
 
-        # Memory — connected to TaggedLocationStore + EpisodicMemory/TopologicalMemory
+        # Memory — delegates to running Module instances from on_system_modules()
         if name == "query_memory":
             query = args["query"]
             results = []
-            episodic, topo = _get_memories()
-            if topo:
+
+            # Vector memory (CLIP + ChromaDB) — highest quality matches
+            vm = self._vector_memory_mod
+            if vm and hasattr(vm, "query_location"):
                 try:
-                    nodes = topo.query_by_text(query, top_k=3)
-                    for n in nodes:
-                        results.append({"source": "topological", "label": n.label,
-                                        "position": list(n.position), "score": getattr(n, 'score', 0)})
+                    r = vm.query_location(query)
+                    for hit in r.get("results", [])[:3]:
+                        results.append({
+                            "source": "vector",
+                            "position": [hit.get("x", 0), hit.get("y", 0)],
+                            "score": hit.get("score", 0),
+                            "labels": hit.get("labels", ""),
+                        })
                 except Exception:
                     pass
-            if episodic:
+
+            # Episodic memory — scene-graph snapshots
+            em = self._episodic_mod
+            if em and hasattr(em, "memory"):
                 try:
-                    records = episodic.query_by_text(query, top_k=3)
+                    records = em.memory.query_by_text(query, top_k=3)
                     for r in records:
-                        results.append({"source": "episodic", "label": getattr(r, 'label', ''),
-                                        "position": list(getattr(r, 'position', [0, 0, 0])),
-                                        "ts": getattr(r, 'timestamp', 0)})
+                        results.append({
+                            "source": "episodic",
+                            "label": getattr(r, "label", ""),
+                            "position": list(getattr(r, "position", [0, 0, 0])),
+                            "ts": getattr(r, "timestamp", 0),
+                        })
                 except Exception:
                     pass
-            store = _get_tagged_store()
-            if store:
-                match = store.query_fuzzy(query)
-                if match:
-                    results.append({"source": "tagged", "label": match["name"],
-                                    "position": match["position"]})
+
+            # Tagged locations — exact/fuzzy named places
+            tl = self._tagged_locations_mod
+            if tl and hasattr(tl, "store"):
+                try:
+                    match = tl.store.query_fuzzy(query)
+                    if match:
+                        results.append({
+                            "source": "tagged",
+                            "label": match["name"],
+                            "position": match["position"],
+                        })
+                except Exception:
+                    pass
+
             return json.dumps({"query": query, "results": results, "count": len(results)})
 
         if name == "list_tagged_locations":
-            store = _get_tagged_store()
-            locs = store.list_all() if store else []
+            tl = self._tagged_locations_mod
+            locs = tl.store.list_all() if (tl and hasattr(tl, "store")) else []
             return json.dumps({"locations": locs})
 
         if name == "tag_location":
             if not self._odom:
-                return json.dumps({"error": "no odometry, can't tag"})
-            store = _get_tagged_store()
-            if not store:
-                return json.dumps({"error": "TaggedLocationStore not available"})
-            store.tag(args["name"],
-                      x=self._odom["x"], y=self._odom["y"],
-                      z=self._odom.get("z", 0))
-            entry = store.query(args["name"])
+                return json.dumps({"error": "no odometry — cannot tag location"})
+            tl = self._tagged_locations_mod
+            if not (tl and hasattr(tl, "store")):
+                return json.dumps({"error": "TaggedLocationsModule not running"})
+            tl.store.tag(args["name"],
+                         x=self._odom["x"], y=self._odom["y"],
+                         z=self._odom.get("z", 0))
+            entry = tl.store.query(args["name"])
             return json.dumps({"tagged": args["name"], "position": entry})
 
         # Planning
@@ -587,9 +584,12 @@ class MCPServerModule(Module, layer=6):
 
     def health(self) -> Dict[str, Any]:
         info = super().port_summary()
+        tl = self._tagged_locations_mod
+        n_tagged = len(tl.store.list_all()) if (tl and hasattr(tl, "store")) else 0
         info["mcp"] = {
-            "port": self._port,
-            "tools": len(TOOLS),
-            "tagged_locations": len(_get_tagged_store().list_all()) if _get_tagged_store() else 0,
+            "port":             self._port,
+            "tools":            len(self._dynamic_tools) or len(TOOLS),
+            "dynamic_tools":    len(self._dynamic_tools),
+            "tagged_locations": n_tagged,
         }
         return info
