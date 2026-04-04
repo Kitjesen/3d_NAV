@@ -90,6 +90,12 @@ class WaypointTracker:
         self._stuck_warn_sent = False
         self._stuck_sent = False
 
+    def pause(self) -> None:
+        """Pause tracking — reset stuck timer but keep waypoint state."""
+        self._last_progress_time = time.time()
+        self._stuck_warn_sent = False
+        self._stuck_sent = False
+
     def update(self, robot_pos: np.ndarray) -> TrackerStatus:
         """Process a new odometry position.
 

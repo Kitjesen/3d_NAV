@@ -145,6 +145,10 @@ def full_stack_blueprint(
         if out_mod in _bp_names and in_mod in _bp_names:
             bp.wire(out_mod, out_port, in_mod, in_port)
 
+    # Localization health → Safety + Navigation
+    _w("SlamBridgeModule", "localization_status", "SafetyRingModule", "localization_status")
+    _w("SlamBridgeModule", "localization_status", "NavigationModule", "localization_status")
+
     # Instruction + goal routing — Gateway/MCP both publish instruction/goal_pose,
     # causing auto_wire ambiguity. Explicitly fan-in both sources to consumers.
     _w("GatewayModule", "instruction", "SemanticPlannerModule", "instruction")

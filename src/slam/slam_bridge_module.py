@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
+import time as _time
 import numpy as np
+from typing import Any, Dict, Optional
 
 from core.module import Module
 from core.stream import Out
@@ -26,6 +29,12 @@ from core.msgs.geometry import Pose, Vector3, Quaternion
 from core.registry import register
 
 logger = logging.getLogger(__name__)
+
+# Localization health states
+LOC_UNINIT = "UNINIT"        # No data received yet
+LOC_TRACKING = "TRACKING"    # Receiving data, quality OK
+LOC_DEGRADED = "DEGRADED"    # Receiving data, quality poor (cloud timeout)
+LOC_LOST = "LOST"            # No odometry for > timeout
 
 
 @register("slam_bridge", "default", description="DDS SLAM → Python Module bridge")
@@ -39,6 +48,7 @@ class SlamBridgeModule(Module, layer=1):
     map_cloud: Out[PointCloud2]
     odometry:  Out[Odometry]
     alive:     Out[bool]
+    localization_status: Out[dict]
 
     def __init__(
         self,
@@ -51,6 +61,16 @@ class SlamBridgeModule(Module, layer=1):
         self._odom_topic = odom_topic
         self._reader = None
         self._rclpy_node = None  # fallback
+
+        # Localization health watchdog
+        self._last_odom_time: float = 0.0
+        self._last_cloud_time: float = 0.0
+        self._loc_state: str = LOC_UNINIT
+        self._odom_timeout: float = kw.get("odom_timeout", 2.0)
+        self._cloud_timeout: float = kw.get("cloud_timeout", 5.0)
+        self._watchdog_hz: float = kw.get("watchdog_hz", 2.0)
+        self._shutdown_event = threading.Event()
+        self._watchdog_thread: Optional[threading.Thread] = None
 
     def setup(self) -> None:
         # Try cyclonedds first (lightweight, no ROS2 env needed)
@@ -101,8 +121,18 @@ class SlamBridgeModule(Module, layer=1):
             self.alive.publish(True)
         else:
             self.alive.publish(False)
+        # Start localization health watchdog
+        self._shutdown_event.clear()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, daemon=True,
+            name="slam-bridge-watchdog")
+        self._watchdog_thread.start()
 
     def stop(self) -> None:
+        self._shutdown_event.set()
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            self._watchdog_thread.join(timeout=2.0)
+        self._watchdog_thread = None
         if self._reader:
             self._reader.stop()
         if self._rclpy_node:
@@ -128,6 +158,7 @@ class SlamBridgeModule(Module, layer=1):
                 wx=t.angular.x, wy=t.angular.y, wz=t.angular.z,
                 ts=stamp,
             ))
+            self._last_odom_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
 
@@ -148,6 +179,7 @@ class SlamBridgeModule(Module, layer=1):
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge dds cloud error: %s", e)
 
@@ -166,6 +198,7 @@ class SlamBridgeModule(Module, layer=1):
                 vx=float(t.linear.x), vy=float(t.linear.y), vz=float(t.linear.z),
                 wx=float(t.angular.x), wy=float(t.angular.y), wz=float(t.angular.z),
             ))
+            self._last_odom_time = _time.time()
         except Exception as e:
             logger.warning("SlamBridge rclpy odom error: %s", e)
 
@@ -188,5 +221,55 @@ class SlamBridgeModule(Module, layer=1):
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge rclpy cloud error: %s", e)
+
+    # ── Localization health watchdog ──────────────────────────────��──────
+
+    def _watchdog_loop(self) -> None:
+        """Periodic localization health check."""
+        interval = 1.0 / self._watchdog_hz
+        while not self._shutdown_event.is_set():
+            now = _time.time()
+            odom_age = (now - self._last_odom_time) if self._last_odom_time > 0 else float("inf")
+            cloud_age = (now - self._last_cloud_time) if self._last_cloud_time > 0 else float("inf")
+
+            if self._last_odom_time == 0.0:
+                new_state = LOC_UNINIT
+                confidence = 0.0
+            elif odom_age > self._odom_timeout:
+                new_state = LOC_LOST
+                confidence = 0.0
+            elif cloud_age > self._cloud_timeout:
+                new_state = LOC_DEGRADED
+                confidence = 0.3
+            else:
+                new_state = LOC_TRACKING
+                confidence = max(0.0, 1.0 - odom_age / self._odom_timeout)
+
+            if new_state != self._loc_state:
+                if new_state == LOC_LOST:
+                    logger.warning("Localization LOST: no odometry for %.1fs", odom_age)
+                elif new_state == LOC_TRACKING and self._loc_state in (LOC_LOST, LOC_DEGRADED):
+                    logger.info("Localization recovered → TRACKING")
+                self._loc_state = new_state
+
+            self.localization_status.publish({
+                "state": self._loc_state,
+                "odom_age_ms": round(odom_age * 1000, 1),
+                "cloud_age_ms": round(cloud_age * 1000, 1),
+                "confidence": round(confidence, 2),
+            })
+
+            self._shutdown_event.wait(timeout=interval)
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        now = _time.time()
+        info["localization"] = {
+            "state": self._loc_state,
+            "odom_age_ms": round((now - self._last_odom_time) * 1000, 1) if self._last_odom_time else -1,
+            "cloud_age_ms": round((now - self._last_cloud_time) * 1000, 1) if self._last_cloud_time else -1,
+        }
+        return info

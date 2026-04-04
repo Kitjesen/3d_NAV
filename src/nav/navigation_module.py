@@ -70,6 +70,7 @@ class NavigationModule(Module, layer=5):
     stop_signal:  In[int]
     patrol_goals: In[list]
     cancel:       In[str]
+    localization_status: In[dict]
 
     # -- Outputs --
     waypoint:       Out[PoseStamped]
@@ -119,6 +120,11 @@ class NavigationModule(Module, layer=5):
         self._failure_reason = ""
         self._mission_start_time = 0.0
         self._mission_timeout = kw.get("mission_timeout", 300.0)
+
+        # Localization-aware pause/resume
+        self._loc_state: str = "UNINIT"
+        self._paused_for_localization: bool = False
+        self._pre_pause_state: Optional[str] = None
         self._planning_timeout = kw.get("planning_timeout", 30.0)
 
         # Cooldown for costmap-triggered replanning (3s minimum between replans)
@@ -143,6 +149,7 @@ class NavigationModule(Module, layer=5):
         self.stop_signal.subscribe(self._on_stop)
         self.patrol_goals.subscribe(self._on_patrol_goals)
         self.cancel.subscribe(self._on_cancel)
+        self.localization_status.subscribe(self._on_localization_status)
 
         if self._enable_ros2_bridge:
             try:
@@ -245,6 +252,25 @@ class NavigationModule(Module, layer=5):
         self._set_state(MissionState.CANCELLED)
         logger.info("Mission cancelled: %s", msg)
 
+    def _on_localization_status(self, msg: dict) -> None:
+        prev = self._loc_state
+        self._loc_state = msg.get("state", "UNINIT")
+
+        if self._loc_state == "LOST" and prev != "LOST":
+            if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
+                self._pre_pause_state = self._state
+                self._paused_for_localization = True
+                self._tracker.pause()
+                self._set_state(MissionState.IDLE)
+                logger.warning("Navigation PAUSED: localization lost")
+
+        elif self._loc_state == "TRACKING" and self._paused_for_localization:
+            self._paused_for_localization = False
+            if self._pre_pause_state and self._goal is not None:
+                self._set_state(self._pre_pause_state)
+                self._pre_pause_state = None
+                logger.info("Navigation RESUMED: localization recovered")
+
     def _on_patrol_goals(self, goals: list) -> None:
         if not goals:
             return
@@ -278,6 +304,9 @@ class NavigationModule(Module, layer=5):
             odom.pose.position.y,
             odom.pose.position.z,
         ])
+
+        if self._paused_for_localization:
+            return
 
         if self._state not in (MissionState.EXECUTING, MissionState.PATROLLING):
             return
