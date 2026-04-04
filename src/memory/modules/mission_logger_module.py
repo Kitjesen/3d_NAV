@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core import In, Module, Out
+from core import In, Module, Out, skill
 from core.msgs import Odometry
 
 logger = logging.getLogger(__name__)
@@ -161,10 +161,18 @@ class MissionLoggerModule(Module, layer=3):
                 except OSError:
                     pass
 
-    # -- query API (used by REPL and @skill) --
+    # -- query API (used by REPL and MCP @skill) --
 
     def list_missions(self, count: int = 10) -> List[Dict[str, Any]]:
         """Return summaries (no trajectory) of the most recent missions."""
+        return self._mission_summaries(count)
+
+    @skill
+    def list_missions_mcp(self, count: int = 10) -> str:
+        """List recent navigation missions (summary only, no full trajectory)."""
+        return json.dumps({"missions": self._mission_summaries(count)})
+
+    def _mission_summaries(self, count: int = 10) -> List[Dict[str, Any]]:
         files = sorted(self._log_dir.glob("*.json"), reverse=True)
         results: List[Dict[str, Any]] = []
         for f in files[:count]:
@@ -208,6 +216,14 @@ class MissionLoggerModule(Module, layer=3):
 
     def get_stats(self) -> Dict[str, Any]:
         """Return aggregate statistics over all stored missions."""
+        return self._compute_stats()
+
+    @skill
+    def get_mission_stats(self) -> str:
+        """Return aggregate statistics for recorded navigation missions."""
+        return json.dumps(self._compute_stats())
+
+    def _compute_stats(self) -> Dict[str, Any]:
         files = list(self._log_dir.glob("*.json"))
         total = len(files)
         success = failed = 0

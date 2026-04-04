@@ -328,18 +328,6 @@ class MCPServerModule(Module, layer=6):
         return json.dumps({"tagged": name, "position": entry})
 
     @skill
-    def navigate_to(self, x: float, y: float, z: float = 0.0) -> str:
-        """Navigate to map coordinates (x, y, z). Returns immediately."""
-        self.goal_pose.publish(PoseStamped(
-            pose=Pose(
-                position=Vector3(x, y, z),
-                orientation=Quaternion(0, 0, 0, 1),
-            ),
-            frame_id="map",
-        ))
-        return json.dumps({"status": "navigating", "goal": [x, y, z]})
-
-    @skill
     def navigate_to_object(self, instruction: str) -> str:
         """Navigate to a described object or place using semantic understanding."""
         self.instruction.publish(instruction)
@@ -367,15 +355,6 @@ class MCPServerModule(Module, layer=6):
         if mode == "estop":
             self.stop_cmd.publish(2)
         return json.dumps({"mode": mode})
-
-    @skill
-    def get_navigation_status(self) -> str:
-        """Return current navigation state, robot position, and mission progress."""
-        return json.dumps({
-            "position": self._odom,
-            "mission":  self._mission,
-            "safety":   self._safety,
-        })
 
     # -- FastAPI + MCP JSON-RPC endpoint -----------------------------------
 

@@ -342,13 +342,18 @@ class TestMCPServerModule(unittest.TestCase):
     def test_tools_discovered_via_skill(self):
         """@skill methods on MCPServerModule itself appear in _tool_registry after on_system_modules."""
         import json
+        from core.module import Module, skill
+
+        class FakeNav(Module, layer=5):
+            @skill
+            def navigate_to(self, x: float, y: float) -> str:
+                """Go to map coordinates (x, y)."""
+                return json.dumps({"status": "navigating", "goal": [x, y]})
+
         m = self._make()
-        m.on_system_modules({"MCPServerModule": m})
-        # MCPServerModule declares: get_health, list_modules, get_config,
-        # get_robot_position, get_scene_graph, detect_objects, query_memory,
-        # list_tagged_locations, tag_location, navigate_to, navigate_to_object,
-        # send_instruction, stop, set_mode, get_navigation_status
-        self.assertGreaterEqual(len(m._tool_list), 14)
+        m.on_system_modules({"MCPServerModule": m, "NavigationModule": FakeNav()})
+        # Built-in MCP tools + navigation skills when NavigationModule is present
+        self.assertGreaterEqual(len(m._tool_list), 12)
         names = [t["name"] for t in m._tool_list]
         self.assertIn("stop", names)
         self.assertIn("navigate_to", names)
@@ -388,14 +393,30 @@ class TestMCPServerModule(unittest.TestCase):
         self.assertEqual(result["tagged"], "office")
         self.assertIsNotNone(tl.store.query("office"))
 
-    def test_navigate_to_via_skill(self):
+    def test_navigate_to_resolves_to_navigation_named_module(self):
         import json
+        from core.module import Module, skill
+
+        class FakeNav(Module, layer=5):
+            def __init__(self):
+                super().__init__()
+                self.calls = []
+
+            @skill
+            def navigate_to(self, x: float, y: float, yaw: float = 0.0) -> str:
+                """Navigate to (x, y) in map frame."""
+                self.calls.append((x, y, yaw))
+                return json.dumps({"status": "navigating", "goal": [x, y], "yaw": yaw})
+
         m = self._make()
-        goals = []
-        m.goal_pose._add_callback(goals.append)
-        result = json.loads(m.navigate_to(5.0, 3.0))
+        nav = FakeNav()
+        m.on_system_modules({"MCPServerModule": m, "NavigationModule": nav})
+        fn = m._tool_registry.get("navigate_to")
+        self.assertIsNotNone(fn)
+        self.assertEqual(getattr(fn, "__self__", None), nav)
+        result = json.loads(fn(5.0, 3.0))
         self.assertEqual(result["status"], "navigating")
-        self.assertEqual(len(goals), 1)
+        self.assertEqual(nav.calls, [(5.0, 3.0, 0.0)])
 
     def test_set_mode_via_skill(self):
         import json
@@ -420,7 +441,8 @@ class TestMCPServerModule(unittest.TestCase):
         m.on_system_modules({"MCPServerModule": m})
         h = m.health()
         self.assertIn("mcp", h)
-        self.assertGreaterEqual(h["mcp"]["tools"], 14)
+        self.assertEqual(h["mcp"]["tools"], len(m._tool_list))
+        self.assertGreaterEqual(h["mcp"]["tools"], 13)
 
 
 # ============================================================================

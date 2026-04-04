@@ -1,20 +1,20 @@
 ﻿"""test_mcp_server.py — MCPServerModule unit tests
 
-Tests the MCPServerModule in gateway/mcp_server.py (Module-First implementation).
-Does not start an HTTP server, requires no ROS2, and requires no real LLM.
+Tests gateway/mcp_server.py (Module-First implementation).
+Does not start an HTTP server; no ROS2 or LLM required.
 
 Coverage:
   - Port declarations (In/Out types)
   - setup() subscription registration
-  - _on_odom / _on_sg / _on_safety / _on_mission state caching
-  - on_system_modules() dynamic skill registration
-  - _execute_tool() return structure for all built-in tools
-  - health() summary format
+  - Telemetry callbacks (_on_odom / _on_sg / _on_safety / _on_mission)
+  - on_system_modules() dynamic @skill registration
+  - Calling tools via _tool_registry (same dispatch as JSON-RPC tools/call)
+  - health() summary
 """
 
 import json
-import sys
 import os
+import sys
 
 # Path setup
 _here = os.path.dirname(os.path.abspath(__file__))
@@ -24,19 +24,12 @@ for _p in [_repo, _src]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import pytest
-from unittest.mock import MagicMock
-
 from core.stream import In, Out
-from core.msgs.geometry import PoseStamped, Twist
+from core.msgs.geometry import PoseStamped
 from core.msgs.nav import Odometry
 from core.msgs.semantic import SceneGraph, SafetyState
 from gateway.mcp_server import MCPServerModule
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _make_module(**kw) -> MCPServerModule:
     mod = MCPServerModule(**kw)
@@ -46,6 +39,7 @@ def _make_module(**kw) -> MCPServerModule:
 
 def _make_odom(x=1.0, y=2.0, z=0.0):
     from core.msgs.geometry import Pose, Vector3
+
     od = Odometry()
     od.pose = Pose(position=Vector3(x, y, z))
     return od
@@ -54,15 +48,12 @@ def _make_odom(x=1.0, y=2.0, z=0.0):
 def _make_scene_graph():
     from core.msgs.semantic import Detection3D, Region
     from core.msgs.geometry import Vector3
+
     return SceneGraph(
         objects=[Detection3D(id="1", label="chair", position=Vector3(1, 2, 0))],
         regions=[Region(name="office", object_ids=["1"], center=Vector3(1, 2, 0))],
     )
 
-
-# ---------------------------------------------------------------------------
-# 1. Port declarations
-# ---------------------------------------------------------------------------
 
 class TestMCPServerModulePorts:
     def test_layer(self):
@@ -92,10 +83,6 @@ class TestMCPServerModulePorts:
         assert mod._port == 9000
 
 
-# ---------------------------------------------------------------------------
-# 2. State caching
-# ---------------------------------------------------------------------------
-
 class TestMCPServerStateCache:
     def test_odom_cached(self):
         mod = _make_module()
@@ -109,7 +96,7 @@ class TestMCPServerStateCache:
         sg = _make_scene_graph()
         mod._on_sg(sg)
         data = json.loads(mod._sg_json)
-        assert "objects" in data or "object_count" in data or data  # non-empty JSON
+        assert "objects" in data or "object_count" in data or data
 
     def test_safety_state_cached(self):
         mod = _make_module()
@@ -124,13 +111,8 @@ class TestMCPServerStateCache:
         assert mod._mission["state"] == "NAVIGATING"
 
 
-# ---------------------------------------------------------------------------
-# 3. Dynamic skill registration (on_system_modules)
-# ---------------------------------------------------------------------------
-
 class TestMCPDynamicSkills:
     def test_skills_from_module_registered(self):
-        """on_system_modules must register @skill methods into _skill_registry."""
         mod = _make_module()
 
         from core.module import Module, skill
@@ -139,16 +121,14 @@ class TestMCPDynamicSkills:
             @skill
             def navigate_to(self, x: float, y: float) -> str:
                 """Go to (x, y)."""
-                return f"navigating to {x},{y}"
+                return json.dumps({"status": "ok", "x": x, "y": y})
 
-        nav = FakeNav()
-        mod.on_system_modules({"FakeNav": nav})
+        mod.on_system_modules({"FakeNav": FakeNav()})
 
-        assert "navigate_to" in mod._skill_registry
-        assert len(mod._dynamic_tools) >= 1
+        assert "navigate_to" in mod._tool_registry
+        assert any(t["name"] == "navigate_to" for t in mod._tool_list)
 
     def test_dynamic_tool_descriptor(self):
-        """Each dynamic tool descriptor must contain name, description, and inputSchema."""
         mod = _make_module()
 
         from core.module import Module, skill
@@ -160,87 +140,62 @@ class TestMCPDynamicSkills:
                 return label
 
         mod.on_system_modules({"FakeSkillMod": FakeSkillMod()})
-        tool = next(t for t in mod._dynamic_tools if t["name"] == "find_object")
+        tool = next(t for t in mod._tool_list if t["name"] == "find_object")
         assert "description" in tool
         assert "inputSchema" in tool
 
     def test_empty_system_modules(self):
-        """No modules → skill_registry empty, no crash."""
         mod = _make_module()
         mod.on_system_modules({})
-        assert mod._skill_registry == {}
-        assert mod._dynamic_tools == []
+        assert mod._tool_registry == {}
+        assert mod._tool_list == []
 
 
-# ---------------------------------------------------------------------------
-# 4. _execute_tool built-in tools
-# ---------------------------------------------------------------------------
-
-class TestMCPExecuteTool:
+class TestMCPToolCall:
     def setup_method(self):
         self.mod = _make_module()
+        self.mod.on_system_modules({"MCPServerModule": self.mod})
         self.mod._on_odom(_make_odom(1.0, 2.0))
         self.mod._on_sg(_make_scene_graph())
 
-    def test_navigate_to_returns_status(self):
-        result = self.mod._execute_tool("navigate_to", {"x": 3.0, "y": 4.0})
-        data = json.loads(result)
-        assert data.get("status") == "navigating"
-        assert data["goal"] == [3.0, 4.0]
-
-    def test_stop_returns_stopped(self):
-        result = self.mod._execute_tool("stop", {})
-        data = json.loads(result)
+    def test_stop_via_registry(self):
+        stops = []
+        self.mod.stop_cmd._add_callback(stops.append)
+        fn = self.mod._tool_registry["stop"]
+        data = json.loads(fn())
         assert data.get("status") == "stopped"
+        assert stops == [2]
 
-    def test_get_navigation_status_with_odom(self):
-        result = self.mod._execute_tool("get_navigation_status", {})
-        data = json.loads(result)
-        assert "position" in data
-
-    def test_get_robot_position(self):
-        result = self.mod._execute_tool("get_robot_position", {})
-        data = json.loads(result)
-        assert "x" in data
+    def test_get_robot_position_via_registry(self):
+        fn = self.mod._tool_registry["get_robot_position"]
+        data = json.loads(fn())
         assert abs(data["x"] - 1.0) < 1e-6
 
-    def test_get_scene_graph_returns_json(self):
-        result = self.mod._execute_tool("get_scene_graph", {})
-        parsed = json.loads(result)
+    def test_get_scene_graph_via_registry(self):
+        fn = self.mod._tool_registry["get_scene_graph"]
+        parsed = json.loads(fn())
         assert isinstance(parsed, (dict, list))
 
-    def test_send_instruction_publishes(self):
+    def test_send_instruction_publishes_via_registry(self):
         published = []
         self.mod.instruction.subscribe(lambda t: published.append(t))
-        result = self.mod._execute_tool("send_instruction", {"text": "go to kitchen"})
-        data = json.loads(result)
+        fn = self.mod._tool_registry["send_instruction"]
+        data = json.loads(fn(text="go to kitchen"))
         assert data.get("status") == "sent"
         assert published == ["go to kitchen"]
 
-    def test_navigate_to_publishes_goal_pose(self):
-        published = []
-        self.mod.goal_pose.subscribe(lambda p: published.append(p))
-        self.mod._execute_tool("navigate_to", {"x": 5.0, "y": 6.0})
-        assert len(published) == 1
-        assert isinstance(published[0], PoseStamped)
+    def test_set_mode_via_registry(self):
+        fn = self.mod._tool_registry["set_mode"]
+        data = json.loads(fn(mode="manual"))
+        assert data.get("mode") == "manual"
 
-    def test_set_mode(self):
-        result = self.mod._execute_tool("set_mode", {"mode": "manual"})
-        data = json.loads(result)
-        assert "mode" in data
+    def test_unknown_tool_not_in_registry(self):
+        assert self.mod._tool_registry.get("nonexistent_tool_xyz") is None
 
-    def test_unknown_tool_returns_error(self):
-        result = self.mod._execute_tool("nonexistent_tool_xyz", {})
-        assert "error" in result.lower() or "unknown" in result.lower()
-
-
-# ---------------------------------------------------------------------------
-# 5. health()
-# ---------------------------------------------------------------------------
 
 class TestMCPHealth:
     def test_health_contains_mcp_section(self):
         mod = _make_module()
         h = mod.health()
         assert isinstance(h, dict)
-        assert "mcp" in h or "port" in str(h) or "running" in str(h)
+        assert "mcp" in h
