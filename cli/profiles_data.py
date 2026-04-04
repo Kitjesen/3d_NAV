@@ -122,7 +122,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "dev": dict(
-        _desc="Development mode (no hardware)",
+        _desc="Test perception & planning without a robot",
         _default_robot="stub",
         llm="mock",
         planner="astar",

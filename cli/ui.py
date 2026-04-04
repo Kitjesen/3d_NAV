@@ -31,12 +31,24 @@ _TAGLINE = "  Autonomous Navigation for Quadruped Robots"
 
 # Profile icons and accent colors
 _PROFILE_META = {
-    "nav":     ("◉", "Navigate using a saved map",      T.green),
-    "explore": ("◎", "Explore unknown area",             T.cyan),
-    "map":     ("⊕", "Build a new map",                  T.yellow),
-    "sim":     ("◈", "MuJoCo simulation",                T.blue),
-    "dev":     ("◇", "Development mode (no hardware)",   T.navy),
-    "stub":    ("○", "Framework testing only",           T.dim),
+    "nav":     ("◉", "Navigate using a saved map",                  T.green),
+    "explore": ("◎", "Explore unknown area",                         T.cyan),
+    "map":     ("⊕", "Build a new map",                              T.yellow),
+    "sim":     ("◈", "MuJoCo simulation",                            T.blue),
+    "dev":     ("◇", "Test perception & planning without a robot",   T.navy),
+    "stub":    ("○", "Framework testing only",                       T.dim),
+}
+
+# Which wizard questions are relevant per profile.
+# Keys: "semantic", "gateway", "teleop"
+_PROFILE_WIZARD: dict[str, tuple[bool, bool, bool]] = {
+    #                  semantic  gateway  teleop
+    "nav":     (True,  True,  True),   # full stack
+    "explore": (True,  True,  False),  # exploring — no joystick needed
+    "map":     (False, True,  False),  # mapping — no semantics, no joystick
+    "sim":     (True,  True,  True),   # full stack in sim
+    "dev":     (True,  True,  False),  # no robot → no teleop
+    "stub":    (False, True,  False),  # bare framework
 }
 
 
@@ -202,11 +214,19 @@ def ask_bool(prompt: str, *, default: bool | None = None) -> bool:
 
 
 def wizard_interactive(profile_name: str, cfg: dict) -> None:
-    """TTY wizard: toggle semantic / gateway / teleop before build.
+    """TTY wizard: show only the toggles that make sense for this profile.
 
-    Mutates cfg in place. Teleop requires gateway (HTTP stack).
+    Mutates cfg in place.
     """
     if not sys.stdin.isatty():
+        return
+
+    ask_sem, ask_gw, ask_tp = _PROFILE_WIZARD.get(
+        profile_name, (True, True, True)
+    )
+
+    # Nothing to ask — skip the wizard entirely
+    if not (ask_sem or ask_gw or ask_tp):
         return
 
     icon, _, color = _PROFILE_META.get(profile_name, ("·", "", T.dim))
@@ -218,7 +238,8 @@ def wizard_interactive(profile_name: str, cfg: dict) -> None:
     profile_row = f"  profile: {profile_val}"
     print(T.navy("  │") + profile_row + " " * max(0, W - _vlen(profile_row)) + T.navy("│"))
     print(T.navy(f"  ├{'─' * W}┤"))
-    print(T.navy("  │") + T.dim(f"  Press Enter to accept defaults shown in [brackets]") + " " * 3 + T.navy("│"))
+    hint_row = T.dim("  Press Enter to accept defaults shown in [brackets]")
+    print(T.navy("  │") + hint_row + " " * max(0, W - _vlen(hint_row)) + T.navy("│"))
     print(T.navy(f"  └{'─' * W}┘"))
     print()
 
@@ -226,17 +247,21 @@ def wizard_interactive(profile_name: str, cfg: dict) -> None:
     gw_def  = bool(cfg.get("enable_gateway",  True))
     tp_def  = bool(cfg.get("enable_teleop",   True))
 
-    cfg["enable_semantic"] = ask_bool(
-        f"  {T.cyan('◈')} Semantic stack  {T.dim('(perception · memory · LLM planner)')}",
-        default=sem_def,
-    )
-    cfg["enable_gateway"] = ask_bool(
-        f"  {T.cyan('◈')} Gateway         {T.dim('(HTTP API · MCP tools)')}",
-        default=gw_def,
-    )
-    if cfg["enable_gateway"]:
+    if ask_sem:
+        cfg["enable_semantic"] = ask_bool(
+            f"  {T.cyan('◈')} Semantic  {T.dim('(object detection · memory · LLM reasoning)')}",
+            default=sem_def,
+        )
+
+    if ask_gw:
+        cfg["enable_gateway"] = ask_bool(
+            f"  {T.cyan('◈')} Gateway   {T.dim('(HTTP API · MCP tools for external control)')}",
+            default=gw_def,
+        )
+
+    if ask_tp and cfg.get("enable_gateway", gw_def):
         cfg["enable_teleop"] = ask_bool(
-            f"  {T.cyan('◈')} Teleop          {T.dim('(WebSocket joystick · camera stream)')}",
+            f"  {T.cyan('◈')} Teleop    {T.dim('(joystick remote control · live camera)')}",
             default=tp_def,
         )
     else:
