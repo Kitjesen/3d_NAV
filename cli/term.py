@@ -20,13 +20,24 @@ def green(t: str) -> str:
     return c("0;32", t)
 
 
+def cyan(t: str) -> str:
+    return c("0;36", t)
+
+
 def blue(t: str) -> str:
     return c("0;34", t)
 
 
+def navy(t: str) -> str:
+    return c("38;5;27", t)
+
+
 def deep_blue(t: str) -> str:
-    # 256-color "navy" like blue. Falls back to plain text when not TTY.
     return c("38;5;18", t)
+
+
+def white(t: str) -> str:
+    return c("1;37", t)
 
 
 def yellow(t: str) -> str:
@@ -39,3 +50,20 @@ def red(t: str) -> str:
 
 def dim(t: str) -> str:
     return c("2", t)
+
+
+def italic(t: str) -> str:
+    return c("3", t)
+
+
+def underline(t: str) -> str:
+    return c("4", t)
+
+
+# Background helpers
+def bg_navy(t: str) -> str:
+    return c("48;5;17;1;37", t)
+
+
+def bg_dark(t: str) -> str:
+    return c("48;5;235;37", t)
