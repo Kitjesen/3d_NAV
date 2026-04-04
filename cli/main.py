@@ -17,7 +17,7 @@ from .repl import LingTuREPL
 from .run_state import clear_run_state, save_run_state
 from .runtime_extra import daemonize, health_check, kill_residual_ports, preflight
 from .term import IS_TTY
-from .ui import cmd_stop, list_profiles, print_banner, select_interactive
+from .ui import cmd_stop, list_profiles, print_banner, select_interactive, wizard_interactive
 
 logger = logging.getLogger("lingtu")
 
@@ -142,6 +142,12 @@ def main() -> None:
         cfg["enable_native"] = False
     if args.rerun:
         cfg["enable_rerun"] = True
+
+    # Optional interactive wizard: only when user didn't pin a profile via argv
+    # and the session is TTY. The wizard lets users toggle high-level features
+    # without remembering flags.
+    if args.profile is None and IS_TTY:
+        wizard_interactive(profile_name, cfg)
 
     if args.daemon:
         args.no_repl = True

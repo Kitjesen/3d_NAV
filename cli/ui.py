@@ -99,6 +99,37 @@ def select_interactive():
         print(f"  {T.red('?')} Invalid: {choice}")
 
 
+def ask_bool(prompt: str, *, default: bool | None = None) -> bool:
+    """Ask a yes/no question in TTY, returning a boolean.
+
+    Inputs accepted: y/yes, n/no, empty (uses default if provided).
+    """
+    if not sys.stdin.isatty():
+        return bool(default) if default is not None else False
+
+    suffix = ""
+    if default is True:
+        suffix = " [Y/n]"
+    elif default is False:
+        suffix = " [y/N]"
+    else:
+        suffix = " [y/n]"
+
+    while True:
+        try:
+            raw = input(f"  {prompt}{suffix}: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        if raw == "" and default is not None:
+            return default
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        print(f"  {T.red('?')} Please enter y or n")
+
+
 def list_profiles():
     print(f"\n  {T.bold('Available profiles:')}\n")
     for name, p in PROFILES.items():

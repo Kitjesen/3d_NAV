@@ -46,9 +46,11 @@ def full_stack_blueprint(
     planner_backend: str = "astar",
     tomogram: str = "",
     gateway_port: int = 5050,
+    teleop_port: int = 5060,
     enable_native: bool = True,
     enable_semantic: bool = True,
     enable_gateway: bool = True,
+    enable_teleop: bool = True,
     enable_map_modules: bool = True,
     enable_rerun: bool = False,
     # Legacy alias
@@ -84,7 +86,12 @@ def full_stack_blueprint(
                                if enable_semantic else Blueprint(),
         navigation(planner_backend, tomogram, enable_native, **config),
         safety(),
-        gateway(gateway_port, enable_rerun=enable_rerun)
+        gateway(
+            gateway_port,
+            teleop_port=teleop_port,
+            enable_teleop=enable_teleop,
+            enable_rerun=enable_rerun,
+        )
                                if enable_gateway else Blueprint(),
     )
 
