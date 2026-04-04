@@ -12,20 +12,17 @@ from .profiles_data import PROFILES
 from .run_state import clear_run_state, is_pid_alive, read_run_state
 
 
-LOGO = r"""\
-   _      _           _______           _______
-  | |    (_)         |__   __|         |__   __|
-  | |     _ _ __   __ _ | |  _   _ ______ | |  _   _
-  | |    | | '_ \ / _` || | | | | |______|| | | | | |
-  | |____| | | | | (_| || | | |_| |      | | | |_| |
-  |______|_|_| |_|\__,_||_|  \__,_|      |_|  \__,_|
-          _______                         _______
-         |__   __|                       |__   __|
-            | |   _ __ __ _ _ __   ___      | | ___  __ _ _ __ ___
-            | |  | '__/ _` | '_ \ / __|     | |/ _ \/ _` | '_ ` _ \
-            | |  | | | (_| | | | | (__      | |  __/ (_| | | | | | |
-            |_|  |_|  \__,_|_| |_|\___|     |_|\___|\__,_|_| |_| |_|
-"""
+def _panel(lines: list[str], *, color) -> None:
+    """Print a compact config panel (dimos-style)."""
+    if not lines:
+        return
+    width = max(len(x) for x in lines)
+    top = f"┌{'─' * (width + 2)}┐"
+    bot = f"└{'─' * (width + 2)}┘"
+    print(f"  {color(top)}")
+    for line in lines:
+        print(f"  {color('│')}{' '}{line:<{width}}{' '}{color('│')}")
+    print(f"  {color(bot)}")
 
 
 def print_banner(profile_name, cfg, system, log_dir: str) -> None:
@@ -50,33 +47,32 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
     if tomogram and "building2_9.pickle" in str(tomogram):
         tomo_note = T.yellow(" (sample)")
 
-    print()
-    for line in LOGO.splitlines():
-        if line.strip():
-            print(f"{T.navy(line)}")
-    print(f"{T.bold('=' * 56)}")
-    print(f"  {T.bold('LingTu Navigation System')}")
-    print(f"{T.bold('=' * 56)}")
-    print(f"  Profile:   {T.green(profile_name)} — {desc}")
-    print(f"  Robot:     {robot:12s}  Planner: {planner}")
+    navy = getattr(T, "navy", T.blue)
+
+    title = f"{T.bold('LingTu')} {T.dim('Navigation System')}"
+    subtitle = f"{T.green(profile_name)} {T.dim('— ' + desc)}"
+
+    lines: list[str] = []
+    lines.append(f"{title}")
+    lines.append(f"mode:    {subtitle}")
+    lines.append(f"robot:   {robot:12s}   planner: {planner}")
     if cfg.get("enable_semantic"):
-        print(f"  Semantic:  detector={detector:10s}  llm={llm}")
+        lines.append(f"semantic:{detector:10s}   llm:     {llm}")
     else:
-        print(f"  Semantic:  {T.dim('disabled')}")
-    if cfg.get("enable_gateway"):
-        print(f"  Gateway:   http://localhost:{gw}")
-    if teleop_port:
-        print(f"  Teleop:    ws://0.0.0.0:{teleop_port}/teleop")
+        lines.append(f"semantic:{T.dim('disabled')}")
     if tomogram:
-        print(f"  Map:       {T.dim(str(tomogram))}{tomo_note}")
-    if cfg.get("dog_host") and cfg["dog_host"] != "127.0.0.1":
-        print(f"  Robot host:{cfg['dog_host']}:{cfg.get('dog_port', 13145)}")
-    print(f"  Health:    {n} modules, {c} connections")
-    print(f"  Logs:      {T.dim(log_dir)}")
-    print(f"  PID:       {os.getpid()}")
-    print(f"{T.bold('-' * 56)}")
-    print(f"  Commands:  {T.bold('help')}, {T.bold('status')}, {T.bold('teleop status')}, {T.bold('map list')}")
-    print(f"  Stop:      {T.bold('Ctrl+C')}\n")
+        lines.append(f"map:     {T.dim(str(tomogram))}{tomo_note}")
+    if cfg.get("enable_gateway"):
+        lines.append(f"gateway: http://localhost:{gw}")
+    if teleop_port:
+        lines.append(f"teleop:  ws://0.0.0.0:{teleop_port}/teleop")
+    lines.append(f"health:  {n} modules, {c} connections")
+    lines.append(f"logs:    {T.dim(log_dir)}")
+
+    print()
+    _panel(lines, color=navy)
+    print(f"  {T.dim('commands:')} {T.bold('help')}, {T.bold('status')}, {T.bold('teleop status')}, {T.bold('map list')}")
+    print(f"  {T.dim('stop:')}     {T.bold('Ctrl+C')}\n")
 
 
 def select_interactive():
