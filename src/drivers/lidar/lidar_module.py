@@ -1,38 +1,52 @@
-"""LidarModule — Livox MID-360 driver as a Module-First component.
+"""LidarModule — Livox MID-360 as a first-class Blueprint Module.
 
-Manages the livox_ros_driver2 lifecycle and bridges raw scans into
-the Module port pipeline for downstream consumers (SLAM, terrain, etc.).
+Decouples LiDAR from SLAM: LiDAR is an independent hardware resource
+that can be started, stopped, and subscribed to without running SLAM.
 
 Blueprint usage::
 
-    bp.add(LidarModule)
-    bp.wire("LidarModule", "scan", "SlamBridgeModule", "raw_scan")
+    from drivers.lidar import LidarModule
+
+    bp.add(LidarModule)                             # default config
+    bp.add(LidarModule, ip="192.168.1.120")         # override IP
+    bp.wire("LidarModule", "scan", "TerrainModule", "cloud")
+
+Stack factory usage (in blueprints/stacks/)::
+
+    from drivers.lidar import LidarModule
+    bp.add(LidarModule, ip=ip)
+    # SLAMModule no longer starts the driver — it subscribes via DDS topics
+    # that LidarModule's native driver publishes.
 """
 
 from __future__ import annotations
 
 import logging
-
-import numpy as np
+from typing import Any, Dict, Optional
 
 from core.module import Module
-from core.msgs.sensor import PointCloud2
+from core.msgs.sensor import Imu, PointCloud2
 from core.registry import register
 from core.stream import Out
 
-from .lidar import Lidar
+from .lidar import Lidar, LidarState
 
 logger = logging.getLogger(__name__)
 
 
-@register("driver", "lidar_mid360")
+@register("driver", "lidar_mid360", description="Livox MID-360 LiDAR driver")
 class LidarModule(Module, layer=1):
-    """Livox MID-360 driver module.
+    """Livox MID-360 driver as a Module in the Blueprint system.
 
-    Starts livox_ros_driver2 and exposes raw point cloud on the ``scan`` port.
-    Downstream modules (SLAM, terrain analysis) subscribe to this port.
+    Owns the Livox driver lifecycle (start/stop/health) and bridges raw
+    point cloud + IMU data into Module output ports.
 
-    Config (robot_config.yaml)::
+    Ports:
+        scan (Out[PointCloud2]): Raw LiDAR point cloud per frame.
+        imu  (Out[Imu]):         IMU readings from the LiDAR unit.
+        alive (Out[bool]):       Driver health status.
+
+    Config from robot_config.yaml::
 
         lidar:
           lidar_ip: "192.168.1.115"
@@ -40,28 +54,53 @@ class LidarModule(Module, layer=1):
           publish_freq: 10.0
     """
 
-    scan: Out[PointCloud2]
+    scan:  Out[PointCloud2]
+    imu:   Out[Imu]
+    alive: Out[bool]
 
-    def __init__(self, ip: str | None = None, **kw):
+    def __init__(
+        self,
+        ip: Optional[str] = None,
+        scan_topic: str = "/lidar/scan",
+        imu_topic: str = "/imu/data",
+        **kw,
+    ):
         super().__init__(**kw)
-        self._lidar = Lidar(ip=ip)
+        self._lidar = Lidar(ip=ip, scan_topic=scan_topic, imu_topic=imu_topic)
 
     def setup(self) -> None:
         self._lidar.on_cloud(self._on_cloud)
-        self._lidar.connect()
+        self._lidar.on_imu(self._on_imu)
 
-    def teardown(self) -> None:
+    def start(self) -> None:
+        super().start()
+        try:
+            self._lidar.connect()
+            self.alive.send(True)
+        except Exception as e:
+            self.alive.send(False)
+            logger.error("LidarModule start failed: %s", e)
+
+    def stop(self) -> None:
         self._lidar.disconnect()
+        self.alive.send(False)
+        super().stop()
 
-    def _on_cloud(self, pts: np.ndarray) -> None:
-        """Forward numpy (N, 4) cloud to the scan port as PointCloud2."""
-        # Wrap in a minimal PointCloud2 compatible with downstream consumers.
-        msg = PointCloud2(
-            width=len(pts),
-            height=1,
-            data=pts.tobytes(),
-            point_step=16,           # 4 × float32
-            row_step=16 * len(pts),
-            fields=["x", "y", "z", "intensity"],
-        )
-        self.scan.send(msg)
+    def _on_cloud(self, pts) -> None:
+        """Forward numpy (N,4) → PointCloud2 on the scan port."""
+        cloud = PointCloud2.from_numpy(pts, frame_id="livox_frame")
+        self.scan.send(cloud)
+
+    def _on_imu(self, imu_msg: Imu) -> None:
+        """Forward Imu to the imu port."""
+        self.imu.send(imu_msg)
+
+    def health(self) -> Dict[str, Any]:
+        """Report driver health for monitoring."""
+        base = super().port_summary()
+        h = self._lidar.health
+        base["lidar"] = h.to_dict()
+        return base
+
+    def __repr__(self) -> str:
+        return f"LidarModule(ip={self._lidar.ip!r}, state={self._lidar.state.value})"

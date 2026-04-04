@@ -5,18 +5,22 @@ subprocesses. Does NOT produce data directly — SLAM data flows through
 SlamBridgeModule which subscribes to DDS topics published by the C++ nodes.
 
 Architecture:
-    SLAMModule (this)          → starts/stops C++ subprocesses
+    LidarModule (drivers.lidar) → starts Livox driver, publishes /lidar/scan
+    SLAMModule  (this)          → starts SLAM C++ nodes, consumes /lidar/scan
     SlamBridgeModule (separate) → subscribes to DDS topics → Out[odometry], Out[map_cloud]
 
+LiDAR driver is NOT managed here — it is an independent hardware resource
+owned by LidarModule. Start LidarModule before SLAMModule in your Blueprint.
+
 Backends:
-  "fastlio2"   — Livox driver + Fast-LIO2 SLAM + PGO (mapping mode)
+  "fastlio2"   — Fast-LIO2 SLAM + PGO (mapping mode)
   "pointlio"   — Point-LIO SLAM (alternative)
-  "localizer"  — Livox driver + Fast-LIO2 + ICP Localizer (navigation mode)
+  "localizer"  — Fast-LIO2 + ICP Localizer (navigation mode)
 
 Usage::
 
-    bp.add(SLAMModule, backend="fastlio2")   # mapping mode
-    bp.add(SLAMModule, backend="localizer")  # navigation mode (has map)
+    bp.add(LidarModule)                     # LiDAR driver (independent)
+    bp.add(SLAMModule, backend="fastlio2")  # SLAM (subscribes to /lidar/scan)
 """
 
 from __future__ import annotations
@@ -49,7 +53,6 @@ class SLAMModule(Module, layer=1):
         self._node = None
         self._lio_node = None
         self._pgo_node = None
-        self._lidar_node = None
 
     def setup(self):
         if self._backend == "fastlio2":
@@ -62,20 +65,8 @@ class SLAMModule(Module, layer=1):
             raise ValueError(f"Unknown SLAM backend: {self._backend}. "
                              f"Available: fastlio2, pointlio, localizer")
 
-    def _setup_lidar_driver(self):
-        """Start Livox LiDAR driver (shared by all SLAM modes)."""
-        try:
-            from core.config import get_config
-            from slam.native_factories import livox_driver
-            cfg = get_config()
-            self._lidar_node = livox_driver(cfg)
-            self._lidar_node.setup()
-        except (ImportError, FileNotFoundError, PermissionError) as e:
-            logger.warning("SLAMModule: Livox driver not available: %s", e)
-
     def _setup_fastlio2(self):
-        """Livox driver + Fast-LIO2 SLAM + PGO."""
-        self._setup_lidar_driver()
+        """Fast-LIO2 SLAM + PGO.  Expects /lidar/scan from LidarModule."""
         try:
             from core.config import get_config
             from slam.native_factories import slam_fastlio2, slam_pgo
@@ -88,6 +79,7 @@ class SLAMModule(Module, layer=1):
             logger.warning("SLAMModule [fastlio2]: not available: %s", e)
 
     def _setup_pointlio(self):
+        """Point-LIO SLAM.  Expects /lidar/scan from LidarModule."""
         try:
             from core.config import get_config
             from slam.native_factories import slam_pointlio
@@ -98,8 +90,7 @@ class SLAMModule(Module, layer=1):
             logger.warning("SLAMModule [pointlio]: not available: %s", e)
 
     def _setup_localizer(self):
-        """Livox driver + Fast-LIO2 (odometry source) + ICP localizer (map matching)."""
-        self._setup_lidar_driver()
+        """Fast-LIO2 (odometry) + ICP localizer (map matching).  Expects /lidar/scan from LidarModule."""
         try:
             from core.config import get_config
             from slam.native_factories import slam_fastlio2, slam_localizer
@@ -114,8 +105,7 @@ class SLAMModule(Module, layer=1):
     def start(self):
         super().start()
         started = 0
-        for name, node in [("Livox driver", self._lidar_node),
-                           ("Fast-LIO2 companion", self._lio_node),
+        for name, node in [("Fast-LIO2 companion", self._lio_node),
                            ("PGO", self._pgo_node),
                            (self._backend, self._node)]:
             if node:
@@ -128,7 +118,7 @@ class SLAMModule(Module, layer=1):
         self.alive.publish(self._node is not None)
 
     def stop(self):
-        for node in [self._node, self._pgo_node, self._lio_node, self._lidar_node]:
+        for node in [self._node, self._pgo_node, self._lio_node]:
             if node:
                 try:
                     node.stop()
@@ -137,7 +127,6 @@ class SLAMModule(Module, layer=1):
         self._node = None
         self._pgo_node = None
         self._lio_node = None
-        self._lidar_node = None
         self.alive.publish(False)
         super().stop()
 

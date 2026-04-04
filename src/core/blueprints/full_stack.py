@@ -28,7 +28,7 @@ from typing import Any
 
 from core.blueprint import Blueprint, autoconnect
 
-from .stacks import driver, slam, maps, perception, memory, navigation, safety, gateway
+from .stacks import driver, lidar, slam, maps, perception, memory, navigation, safety, gateway
 from .stacks import planner as planner_stack
 from .stacks.driver import driver_name
 from .stacks.slam import slam_module_name
@@ -74,8 +74,13 @@ def full_stack_blueprint(
     perception_config = dict(config)
     perception_config["_driver_cls_name"] = _drv
 
+    # LiDAR enabled when SLAM needs it (not for stub/dev/sim that don't use real hardware)
+    _needs_lidar = slam_profile not in ("", "none", "bridge")
+    _lidar_ip = config.get("lidar_ip")
+
     bp = autoconnect(
         driver(robot, **driver_config),
+        lidar(ip=_lidar_ip, enabled=_needs_lidar),
         slam(slam_profile),
         maps(**config)         if enable_map_modules else Blueprint(),
         perception(detector, encoder, **perception_config)

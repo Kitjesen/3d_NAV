@@ -1,6 +1,7 @@
 """Composable blueprint factory functions — dimos-style one-liner per stack."""
 
 from .driver import driver
+from .lidar import lidar
 from .slam import slam
 from .maps import maps
 from .perception import perception
@@ -11,6 +12,6 @@ from .safety import safety
 from .gateway import gateway
 
 __all__ = [
-    "driver", "slam", "maps", "perception", "memory",
+    "driver", "lidar", "slam", "maps", "perception", "memory",
     "planner", "navigation", "safety", "gateway",
 ]
