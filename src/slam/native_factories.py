@@ -22,21 +22,22 @@ from typing import Optional
 from core.config import RobotConfig, get_config
 from core.native_install import DDS_ENV, exe, share
 from core.native_module import NativeModule, NativeModuleConfig
+from core.utils.livox_config import ensure_mid360_config_file
 
 
 def livox_driver(cfg: Optional[RobotConfig] = None) -> NativeModule:
     """Livox MID-360 ROS2 driver — /lidar/scan (CustomMsg) + /imu/data."""
     cfg = cfg or get_config()
-    config_path = cfg.raw.get("lidar", {}).get(
-        "livox_config",
-        share(cfg, "livox_ros_driver2", "config", "MID360_config.json"),
-    )
+    # Enterprise rule: single source of truth.
+    # Generate a fresh driver JSON from config/robot_config.yaml (cfg.lidar) to
+    # avoid drift between repo files and deployed machines.
+    config_path = ensure_mid360_config_file(cfg)
     return NativeModule(NativeModuleConfig(
         executable=exe(cfg, "livox_ros_driver2", "livox_ros_driver2_node"),
         name="livox_driver",
         parameters={
             "xfer_format":      1,    # 1 = Livox CustomMsg
-            "multi_topic":      0,
+            "multi_topic":      0,    # trimmed driver: single topic only
             "data_src":         0,    # 0 = LiDAR hardware
             "publish_freq":     cfg.lidar.publish_freq,
             "output_data_type": 0,

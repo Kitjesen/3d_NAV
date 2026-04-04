@@ -68,6 +68,9 @@ class LidarConfig:
     """
     frame_id: str = "livox_frame"
     publish_freq: float = 10.0
+    # Network (Livox MID-360). These are consumed by the Livox driver JSON generator.
+    lidar_ip: str = "192.168.1.115"
+    host_ip: str = "192.168.1.5"
     offset_x: float = -0.011
     offset_y: float = -0.02329
     offset_z: float = 0.04412
