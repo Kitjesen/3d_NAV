@@ -1,124 +1,104 @@
-# MapPilot 3D NAV - 快捷命令
-# 用途: 简化常用操作，提升开发效率
+# LingTu Navigation — build shortcuts
 
 .PHONY: help build nav_core test clean install health benchmark format lint
 
-# 默认目标
 .DEFAULT_GOAL := help
 
 help:
-	@echo "=========================================="
-	@echo "  MapPilot 3D NAV - 可用命令"
-	@echo "=========================================="
+	@echo "LingTu Navigation — available targets"
 	@echo ""
-	@echo "构建与测试:"
-	@echo "  make build      - 编译整个工作空间"
-	@echo "  make test       - 运行所有测试"
-	@echo "  make clean      - 清理编译产物"
+	@echo "  Build:"
+	@echo "    make build       - colcon build (full workspace, needs ROS2)"
+	@echo "    make nav_core    - build _nav_core.so only (no ROS2 needed)"
+	@echo "    make build-debug - colcon build in Debug mode"
 	@echo ""
-	@echo "部署与运维:"
-	@echo "  make install    - 安装 systemd 服务"
-	@echo "  make health     - 系统健康检查"
-	@echo "  make benchmark  - 性能基准测试"
+	@echo "  Test:"
+	@echo "    make test        - colcon test"
+	@echo "    make test-integration - integration tests"
 	@echo ""
-	@echo "代码质量:"
-	@echo "  make format     - 格式化代码 (clang-format)"
-	@echo "  make lint       - 代码检查 (clang-tidy)"
+	@echo "  Ops:"
+	@echo "    make install     - install systemd services"
+	@echo "    make health      - system health check"
+	@echo "    make clean       - remove build/ install/ log/"
 	@echo ""
-	@echo "快速启动:"
-	@echo "  make mapping    - 启动建图模式"
-	@echo "  make navigation - 启动导航模式"
+	@echo "  Code quality:"
+	@echo "    make format      - clang-format all C++ sources"
+	@echo "    make lint        - clang-tidy"
+	@echo ""
+	@echo "  Launch (legacy ROS2 launch files):"
+	@echo "    make mapping     - start mapping mode"
+	@echo "    make navigation  - start navigation mode"
 	@echo ""
 
 build:
-	@echo "🔨 编译工作空间..."
+	@echo "Building workspace..."
 	@bash -c "source /opt/ros/humble/setup.bash && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release"
-	@echo "✅ 编译完成"
+	@echo "Done."
 
 nav_core:
-	@echo "🔨 Building _nav_core.so (nanobind, no ROS2 needed)..."
+	@echo "Building _nav_core.so (nanobind, no ROS2 needed)..."
 	@bash scripts/build_nav_core.sh
-	@echo "✅ _nav_core.so ready"
 
 build-debug:
-	@echo "🔨 编译工作空间 (Debug 模式)..."
+	@echo "Building workspace (Debug)..."
 	@bash -c "source /opt/ros/humble/setup.bash && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Debug"
-	@echo "✅ 编译完成"
+	@echo "Done."
 
 test:
-	@echo "🧪 运行测试..."
+	@echo "Running tests..."
 	@bash -c "source /opt/ros/humble/setup.bash && source install/setup.bash && colcon test"
 	@bash -c "source /opt/ros/humble/setup.bash && colcon test-result --verbose"
 
 test-integration:
-	@echo "🧪 运行集成测试..."
+	@echo "Running integration tests..."
 	@bash tests/integration/run_all.sh
 
 clean:
-	@echo "🧹 清理编译产物..."
+	@echo "Cleaning build artifacts..."
 	@rm -rf build/ install/ log/
-	@echo "✅ 清理完成"
+	@echo "Done."
 
 install:
-	@echo "📦 安装系统服务..."
+	@echo "Installing systemd services..."
 	@bash scripts/install_services.sh
-	@echo "✅ 安装完成"
+	@echo "Done."
 
 health:
-	@echo "🏥 系统健康检查..."
 	@bash scripts/health_check.sh
 
 benchmark:
-	@echo "⚡ 性能基准测试..."
 	@bash tests/benchmark/run_all.sh
 
 format:
-	@echo "🎨 格式化代码..."
+	@echo "Formatting C++ sources..."
 	@find src -name "*.cpp" -o -name "*.hpp" | xargs clang-format -i
-	@echo "✅ 格式化完成"
+	@echo "Done."
 
 lint:
-	@echo "🔍 代码检查..."
+	@echo "Running clang-tidy..."
 	@bash -c "source /opt/ros/humble/setup.bash && colcon build --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 	@find src -name "*.cpp" | xargs clang-tidy -p build/
-	@echo "✅ 检查完成"
+	@echo "Done."
 
 mapping:
-	@echo "🗺️  启动建图模式..."
 	@bash -c "source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch launch/navigation_bringup.launch.py"
 
 navigation:
-	@echo "🚀 启动导航模式..."
 	@bash -c "source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch launch/navigation_run.launch.py"
 
-# 版本同步
 sync-version:
-	@echo "🔄 同步版本号..."
 	@bash scripts/sync_versions.sh
-	@echo "✅ 版本同步完成"
 
-# Docker 相关
 docker-build:
-	@echo "🐳 构建 Docker 镜像..."
 	@docker build -f docker/Dockerfile -t mappilot-nav:latest .
-	@echo "✅ Docker 镜像构建完成"
 
 docker-run:
-	@echo "🐳 启动 Docker 容器..."
 	@docker-compose up -d
-	@echo "✅ Docker 容器已启动"
 
 docker-stop:
-	@echo "🐳 停止 Docker 容器..."
 	@docker-compose down
-	@echo "✅ Docker 容器已停止"
 
-# 文档生成
 docs:
-	@echo "📚 生成文档..."
-	@doxygen Doxyfile 2>/dev/null || echo "⚠️  Doxygen 未安装，跳过文档生成"
-	@echo "✅ 文档生成完成"
+	@doxygen Doxyfile 2>/dev/null || echo "Doxygen not installed, skipping."
 
-# 快速检查（编译 + 测试 + 健康检查）
 check: build test health
-	@echo "✅ 所有检查通过"
