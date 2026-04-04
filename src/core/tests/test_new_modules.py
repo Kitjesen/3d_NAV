@@ -631,5 +631,92 @@ class TestSemanticPlannerModule(unittest.TestCase):
         self.assertEqual(m._current_scene_graph.objects[0].label, "chair")
 
 
+# ============================================================================
+# MissionLoggerModule
+# ============================================================================
+
+class TestMissionLoggerModule(unittest.TestCase):
+
+    def _make(self, tmp_path=None):
+        import tempfile
+        from memory.modules.mission_logger_module import MissionLoggerModule
+        log_dir = tmp_path or tempfile.mkdtemp(prefix="lingtu_test_missions_")
+        return MissionLoggerModule(log_dir=log_dir)
+
+    def test_ports(self):
+        m = self._make()
+        self.assertIn("mission_status", m.ports_in)
+        self.assertIn("odometry", m.ports_in)
+        self.assertEqual(len(m.ports_out), 0)
+
+    def test_empty_list(self):
+        m = self._make()
+        self.assertEqual(m.list_missions(), [])
+
+    def test_empty_stats(self):
+        m = self._make()
+        s = m.get_stats()
+        self.assertEqual(s["total"], 0)
+        self.assertEqual(s["success"], 0)
+        self.assertEqual(s["failed"], 0)
+
+    def test_mission_lifecycle_saved(self):
+        import tempfile, os
+        tmp = tempfile.mkdtemp(prefix="lingtu_test_missions_")
+        m = self._make(tmp_path=tmp)
+
+        m._on_mission_status({"state": "PLANNING", "goal": "kitchen"})
+        self.assertIsNotNone(m._current)
+        self.assertEqual(m._current["goal"], "kitchen")
+
+        from core.msgs.geometry import Pose, Vector3, Quaternion
+        def _odom(x, y):
+            return Odometry(pose=Pose(position=Vector3(x=x, y=y, z=0.0)))
+        m._on_odom(_odom(1.0, 2.0))
+        odom2 = _odom(4.0, 6.0)
+        m._on_odom(odom2)
+
+        m._on_mission_status({"state": "SUCCESS"})
+        self.assertIsNone(m._current)
+
+        from pathlib import Path as PPath
+        files = list(PPath(tmp).glob("*.json"))
+        self.assertEqual(len(files), 1)
+        import json
+        data = json.loads(files[0].read_text())
+        self.assertEqual(data["result"], "SUCCESS")
+        self.assertEqual(data["goal"], "kitchen")
+        self.assertGreater(data["distance_m"], 0)
+
+    def test_list_and_stats_after_missions(self):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="lingtu_test_missions_")
+        m = self._make(tmp_path=tmp)
+
+        for result in ("SUCCESS", "FAILED", "SUCCESS"):
+            m._on_mission_status({"state": "PLANNING", "goal": "test"})
+            m._on_mission_status({"state": result})
+
+        missions = m.list_missions()
+        self.assertEqual(len(missions), 3)
+        s = m.get_stats()
+        self.assertEqual(s["total"], 3)
+        self.assertEqual(s["success"], 2)
+        self.assertEqual(s["failed"], 1)
+
+    def test_replan_count_tracked(self):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="lingtu_test_missions_")
+        m = self._make(tmp_path=tmp)
+
+        m._on_mission_status({"state": "PLANNING", "goal": "go far"})
+        m._on_mission_status({"state": "REPLANNING"})
+        m._on_mission_status({"state": "REPLANNING"})
+        m._on_mission_status({"state": "SUCCESS"})
+
+        missions = m.list_missions()
+        self.assertEqual(missions[0]["replan_count"], 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

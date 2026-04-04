@@ -47,4 +47,10 @@ def memory(save_dir: str = "", **config) -> Blueprint:
     except ImportError:
         pass
 
+    try:
+        from memory.modules.mission_logger_module import MissionLoggerModule
+        bp.add(MissionLoggerModule)
+    except ImportError:
+        pass
+
     return bp

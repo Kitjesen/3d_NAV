@@ -166,12 +166,15 @@ def full_stack_blueprint(
         "VoxelGridModule", "WavefrontFrontierExplorer", "RerunBridgeModule",
         "LocalPlannerModule", "PathFollowerModule",
         "SemanticMapperModule", "EpisodicMemoryModule", "TaggedLocationsModule",
-        "VectorMemoryModule", "TemporalMemoryModule",
+        "VectorMemoryModule", "TemporalMemoryModule", "MissionLoggerModule",
         "SemanticPlannerModule", "VisualServoModule",
         "ReconstructionModule", "SafetyRingModule", "GeofenceManagerModule",
         "GatewayModule", "MCPServerModule",
     ]:
         _w(_drv, "odometry", consumer, "odometry")
+
+    # Mission history — NavigationModule state changes go to MissionLoggerModule
+    _w("NavigationModule", "mission_status", "MissionLoggerModule", "mission_status")
 
     # Goal routing from sim driver
     try:

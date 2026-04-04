@@ -1189,6 +1189,108 @@ class LingTuREPL(cmd.Cmd):
                 print(f"  {k:20s} {v}")
         print()
 
+    def do_history(self, arg):
+        """Mission history: history [list [N]] | history detail <id> | history stats
+
+        Examples:
+          history            — list 10 most recent missions
+          history list 20    — list 20 most recent missions
+          history stats      — aggregate statistics (total, success rate, distance)
+          history detail <id>  — full detail including trajectory waypoints
+        """
+        parts = arg.split(None, 1)
+        subcmd = parts[0].strip().lower() if parts else "list"
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        mod = self._get_module("MissionLoggerModule")
+        if mod is None:
+            print("  MissionLoggerModule not running — start with a semantic-enabled profile")
+            return
+
+        if subcmd in ("", "list"):
+            count = 10
+            if rest and rest.isdigit():
+                count = int(rest)
+            missions = mod.list_missions(count)
+            if not missions:
+                print("  No mission records found")
+                return
+            print(f"\n  {T.bold('Mission history')} (most recent {len(missions)}):\n")
+            for m in missions:
+                start = m.get("start_time", "?")[:19].replace("T", " ")
+                dur = f"{m['duration_sec']:.0f}s" if m.get("duration_sec") else "?"
+                dist = f"{m['distance_m']:.1f}m" if m.get("distance_m") else "?"
+                result = m.get("result", "?")
+                if result in ("COMPLETE", "SUCCESS"):
+                    result_str = T.green(result)
+                elif result == "FAILED":
+                    result_str = T.red(result)
+                elif result == "IN_PROGRESS":
+                    result_str = T.yellow(result)
+                else:
+                    result_str = T.dim(result)
+                goal = m.get("goal", "")
+                goal_str = f"  {T.dim(goal[:40])}" if goal else ""
+                replans = f" ({m['replan_count']}x replan)" if m.get("replan_count") else ""
+                print(f"  {start}  {result_str:<20} {dur:>6}  {dist:>7}{replans}{goal_str}")
+            print()
+
+        elif subcmd == "stats":
+            s = mod.get_stats()
+            total = s["total"]
+            if total == 0:
+                print("  No mission records yet")
+                return
+            srate = f"{s['success'] / total * 100:.0f}%" if total > 0 else "?"
+            print(f"\n  {T.bold('Mission statistics')}")
+            print(f"  Total missions : {total}")
+            print(f"  Successful     : {s['success']}  ({srate})")
+            print(f"  Failed         : {s['failed']}")
+            if s["in_progress"]:
+                print(f"  In progress    : {T.yellow('1')}")
+            print(f"  Total distance : {s['total_distance_m']:.0f} m")
+            print(f"  Total time     : {s['total_duration_sec'] / 60:.1f} min")
+            print(f"  Log dir        : {T.dim(s['log_dir'])}")
+            print()
+
+        elif subcmd == "detail":
+            if not rest:
+                print("  Usage: history detail <mission-id>")
+                return
+            data = mod.get_mission(rest)
+            if data is None:
+                print(f"  Mission not found: {rest}")
+                return
+            result = data.get("result", "?")
+            if result in ("COMPLETE", "SUCCESS"):
+                result_str = T.green(result)
+            elif result == "FAILED":
+                result_str = T.red(result)
+            else:
+                result_str = T.yellow(result)
+            print(f"\n  {T.bold('Mission detail')}")
+            print(f"  ID         : {data.get('id', '?')}")
+            print(f"  Goal       : {data.get('goal', '?')}")
+            print(f"  Result     : {result_str}")
+            print(f"  Start      : {data.get('start_time', '?')[:19].replace('T', ' ')}")
+            print(f"  End        : {(data.get('end_time') or '?')[:19].replace('T', ' ')}")
+            print(f"  Duration   : {data.get('duration_sec', '?')} s")
+            print(f"  Distance   : {data.get('distance_m', '?')} m")
+            print(f"  Replans    : {data.get('replan_count', 0)}")
+            traj = data.get("trajectory", [])
+            if traj:
+                print(f"  Trajectory : {len(traj)} points")
+                for pt in traj[:5]:
+                    print(f"    ({pt[0]:.2f}, {pt[1]:.2f})  t={pt[2]:.1f}")
+                if len(traj) > 5:
+                    print(f"    ... {len(traj) - 5} more points")
+            print()
+
+        else:
+            print("  Usage: history [list [N]] | history stats | history detail <id>")
+
+    do_hist = do_history
+
     def do_quit(self, arg):
         """Graceful shutdown."""
         return True
