@@ -4,11 +4,35 @@ from __future__ import annotations
 
 import os
 
-_ACTIVE_TOMOGRAM = os.path.join(
-    os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
-    "active",
-    "tomogram.pickle",
-)
+def _resolve_tomogram() -> str:
+    """Return the active tomogram path, falling back to the built-in sample map.
+
+    Priority:
+      1. $NAV_MAP_DIR/active/tomogram.pickle  (user's real map, built via 'map build')
+      2. src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle  (sample)
+
+    The fallback lets the nav profile start without a user-built map so PCT
+    can be verified. In production the real map should be in place.
+    """
+    active = os.path.join(
+        os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+        "active",
+        "tomogram.pickle",
+    )
+    if os.path.isfile(active):
+        return active
+
+    # Fallback: built-in sample tomogram (relative to project root)
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sample = os.path.join(
+        _repo,
+        "src", "global_planning", "PCT_planner",
+        "rsc", "tomogram", "building2_9.pickle",
+    )
+    return sample
+
+
+_ACTIVE_TOMOGRAM = _resolve_tomogram()
 
 ROBOT_PRESETS = {
     "stub": dict(robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip"),

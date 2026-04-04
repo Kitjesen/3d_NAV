@@ -191,7 +191,12 @@ class TeleopModule(Module, layer=6):
             max_attempts = 5
             for attempt in range(1, max_attempts + 1):
                 try:
-                    async with websockets.serve(_handler, "0.0.0.0", self._port):
+                    # reuse_address=True sets SO_REUSEADDR on the socket, allowing
+                    # the port to be reused even while a previous socket is in
+                    # TIME_WAIT (typically 60 s after the process is killed).
+                    async with websockets.serve(
+                        _handler, "0.0.0.0", self._port, reuse_address=True
+                    ):
                         logger.info(
                             "TeleopModule: WebSocket server ready on port %d", self._port
                         )
