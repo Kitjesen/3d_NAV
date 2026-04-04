@@ -147,7 +147,7 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
     _row("logs",     T.dim(log_dir))
 
     print(T.navy(f"  ├{'─' * W}┤"))
-    hint_raw = "help · status · map list · teleop status · Ctrl+C to quit"
+    hint_raw = "info · status · map list · teleop status · help · Ctrl+C"
     hint_pad = max(0, W - len(hint_raw))
     lpad = hint_pad // 2
     rpad = hint_pad - lpad

@@ -448,6 +448,108 @@ class LingTuREPL(cmd.Cmd):
         else:
             print("  Usage: rerun on | off | status")
 
+    def do_info(self, arg):
+        """System summary — startup status, sensor data flow, position, map progress."""
+        import time as _time
+
+        s = self._system
+        if not s.started:
+            print("  System not started")
+            return
+
+        now = _time.strftime("%H:%M:%S")
+        profile = self._cfg.get("slam_profile", "?")
+        print(f"\n  [{now}]  profile: {self._cfg.get('_desc', profile)}\n")
+
+        # ── Startup ──────────────────────────────────────────────────────────
+        n_mods = len(s.modules)
+        n_conn = len(s.connections)
+        active = sum(
+            1 for mod in s.modules.values()
+            if sum(p.msg_count for p in list(mod.ports_in.values()) +
+                   list(mod.ports_out.values())) > 0
+        )
+        print(f"  Startup    {n_mods} modules loaded, {n_conn} connections")
+        print(f"             {active} modules have received/sent data")
+
+        # ── SLAM / Localization ───────────────────────────────────────────────
+        slam = self._get_module("SlamBridgeModule") or self._get_module("SLAMModule")
+        if slam:
+            odom_n  = slam.odometry.msg_count  if hasattr(slam, "odometry")  else 0
+            cloud_n = slam.map_cloud.msg_count if hasattr(slam, "map_cloud") else 0
+            odom_ok  = T.green("flowing") if odom_n  > 0 else T.yellow("no data yet")
+            cloud_ok = T.green("flowing") if cloud_n > 0 else T.yellow("no data yet")
+            print(f"\n  SLAM")
+            print(f"    odometry   {odom_ok}  ({odom_n} msgs)")
+            print(f"    point cloud {cloud_ok}  ({cloud_n} msgs)")
+        else:
+            print(f"\n  SLAM       {T.dim('not in this profile')}")
+
+        # ── Robot position ────────────────────────────────────────────────────
+        nav = self._get_module("NavigationModule")
+        if nav and hasattr(nav, "_robot_pos"):
+            x, y, z = nav._robot_pos
+            state = getattr(nav, "_state", "?")
+            state_color = T.green if state in ("IDLE", "SUCCESS") else T.yellow if state == "EXECUTING" else T.red
+            print(f"\n  Navigation")
+            print(f"    position   x={x:.2f}  y={y:.2f}  z={z:.2f}")
+            print(f"    state      {state_color(state)}")
+
+        # ── Map modules ───────────────────────────────────────────────────────
+        occ = self._get_module("OccupancyGridModule")
+        if occ:
+            n = sum(p.msg_count for p in occ.ports_in.values())
+            ok = T.green("building") if n > 0 else T.yellow("waiting for point cloud")
+            print(f"\n  Map building")
+            print(f"    occupancy grid  {ok}  ({n} cloud updates)")
+
+        elev = self._get_module("ElevationMapModule")
+        if elev:
+            n = sum(p.msg_count for p in elev.ports_in.values())
+            ok = T.green("building") if n > 0 else T.yellow("waiting")
+            print(f"    elevation map   {ok}  ({n} updates)")
+
+        # ── C++ backends ─────────────────────────────────────────────────────
+        terrain = self._get_module("TerrainModule")
+        lp      = self._get_module("LocalPlannerModule")
+        pf      = self._get_module("PathFollowerModule")
+        if terrain or lp or pf:
+            print(f"\n  C++ backends")
+            if terrain:
+                be = getattr(terrain, "_backend", "?")
+                ok = T.green("nanobind") if be == "nanobind" else T.yellow(be)
+                print(f"    terrain        {ok}")
+            if lp:
+                be = getattr(lp, "_backend", "?")
+                ok = T.green("nanobind") if be == "nanobind" else T.yellow(be)
+                print(f"    local planner  {ok}")
+            if pf:
+                be = getattr(pf, "_backend", "?")
+                ok = T.green("nav_core") if be == "nav_core" else T.yellow(be)
+                print(f"    path follower  {ok}")
+
+        # ── Gateway ───────────────────────────────────────────────────────────
+        gw = self._get_module("GatewayModule")
+        if gw:
+            port = getattr(gw, "_port", 5050)
+            print(f"\n  Gateway    http://localhost:{port}  (accessible from LAN)")
+
+        # ── Teleop ────────────────────────────────────────────────────────────
+        tp = self._get_module("TeleopModule")
+        if tp:
+            try:
+                st = tp.get_teleop_status()
+                tp_port = st.get("port", "?")
+                clients = st.get("clients", 0)
+                active_str = T.green("ACTIVE") if st.get("active") else T.dim("idle")
+                print(f"  Teleop     ws://0.0.0.0:{tp_port}/teleop  {active_str}  ({clients} clients)")
+            except Exception:
+                pass
+
+        print()
+
+    do_i = do_info
+
     def do_status(self, arg):
         """Module overview with layer tags and message counts."""
         s = self._system
