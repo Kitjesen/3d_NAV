@@ -191,6 +191,13 @@ def main() -> None:
         print(f"\n  {T.red('Start failed')}: {e}")
         sys.exit(1)
 
+    # Inject SystemHandle so MCPServerModule can serve get_health / list_modules
+    for _mod_name in ("MCPServerModule",):
+        try:
+            system.get_module(_mod_name).set_system_handle(system)
+        except (KeyError, AttributeError):
+            pass
+
     if cfg.get("enable_rerun"):
         rerun_mod = None
         try:

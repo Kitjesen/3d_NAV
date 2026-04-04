@@ -1,54 +1,30 @@
 """LingTu MCP Server — Model Context Protocol for AI agent control.
 
 Exposes robot capabilities as MCP tools so Claude/GPT can control the robot.
-Standard MCP JSON-RPC over HTTP POST /mcp endpoint.
+Standard MCP JSON-RPC 2.0 over HTTP POST /mcp.
 
-Tools provided (15+, beyond dimos's ~5):
+Tools are auto-discovered from @skill methods on all system modules at
+build() time via on_system_modules().  No hardcoded tool list — every
+@skill automatically becomes an MCP tool with a JSON Schema derived from
+the method signature and docstring.
 
-  Navigation:
-    navigate_to          — go to coordinates (x, y, z)
-    navigate_to_object   — semantic navigation ("go to the kitchen")
-    stop                 — emergency stop
-    get_navigation_status — current state (IDLE/NAVIGATING/STUCK/ARRIVED)
-    set_mode             — manual / autonomous / estop
+Gateway usage::
 
-  Perception:
-    get_scene_graph      — current detected objects with positions
-    detect_objects       — query specific objects in scene
-    get_robot_position   — current pose (x, y, z, yaw)
-
-  Memory (unique to LingTu):
-    query_memory         — search episodic/spatial memory
-    list_tagged_locations — named locations (office, kitchen, etc.)
-    tag_location         — save current position with a name
-
-  Planning (unique to LingTu):
-    send_instruction     — natural language command
-    decompose_task       — break instruction into subtasks
-
-  System:
-    get_health           — full system health report
-    list_modules         — deployed modules + status
-    get_config           — robot configuration
-
-Usage:
-    # As Module in Blueprint:
-    system = autoconnect(..., MCPServerModule.blueprint(port=8090)).build()
-
-    # Claude Code connects:
     claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
+
+Module blueprint usage::
+
+    bp.add(MCPServerModule, port=8090)
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import threading
-import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from core.module import Module
+from core.module import Module, skill
 from core.stream import In, Out
 from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion, Twist
 from core.msgs.nav import Odometry
@@ -61,159 +37,16 @@ MCP_PROTOCOL_VERSION = "2025-11-25"
 
 
 # ---------------------------------------------------------------------------
-# MCP Tool definitions
+# JSON-RPC 2.0 helpers
 # ---------------------------------------------------------------------------
 
-TOOLS = [
-    # Navigation
-    {
-        "name": "navigate_to",
-        "description": "Navigate the robot to specific coordinates. Returns immediately, robot moves asynchronously.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "number", "description": "X coordinate in meters (map frame)"},
-                "y": {"type": "number", "description": "Y coordinate in meters (map frame)"},
-                "z": {"type": "number", "description": "Z coordinate (default 0)", "default": 0},
-            },
-            "required": ["x", "y"],
-        },
-    },
-    {
-        "name": "navigate_to_object",
-        "description": "Navigate to a described object or location using semantic understanding. Example: 'go to the red chair' or 'find the kitchen'.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "instruction": {"type": "string", "description": "Natural language navigation instruction"},
-            },
-            "required": ["instruction"],
-        },
-    },
-    {
-        "name": "stop",
-        "description": "Emergency stop. Immediately halts all robot motion.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_navigation_status",
-        "description": "Get current navigation state: IDLE, NAVIGATING, STUCK, ARRIVED, or ESTOP. Includes position and progress.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "set_mode",
-        "description": "Set robot operating mode.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "mode": {"type": "string", "enum": ["manual", "autonomous", "estop"]},
-            },
-            "required": ["mode"],
-        },
-    },
-    # Perception
-    {
-        "name": "get_scene_graph",
-        "description": "Get current scene graph — all detected objects with labels, positions, confidence scores, and spatial relations.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "detect_objects",
-        "description": "Query specific objects in the current scene. Returns matching objects with positions and confidence.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Object to search for, e.g. 'chair', 'person', 'door'"},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "get_robot_position",
-        "description": "Get the robot's current position (x, y, z) and orientation (yaw) in the map frame.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    # Memory
-    {
-        "name": "query_memory",
-        "description": "Search the robot's episodic and spatial memory. Returns past observations matching the query.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Search query, e.g. 'where did I see a fire extinguisher'"},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "list_tagged_locations",
-        "description": "List all named/tagged locations the robot knows about (e.g. 'office', 'kitchen', 'charging_station').",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "tag_location",
-        "description": "Save the robot's current position with a name for future reference.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Location name, e.g. 'meeting_room_3'"},
-            },
-            "required": ["name"],
-        },
-    },
-    # Planning
-    {
-        "name": "send_instruction",
-        "description": "Send a natural language instruction to the robot. The semantic planner will decompose and execute it.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string", "description": "Instruction, e.g. 'patrol the office then return to base'"},
-            },
-            "required": ["text"],
-        },
-    },
-    {
-        "name": "decompose_task",
-        "description": "Break a complex instruction into subtasks without executing. Useful for planning review.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "instruction": {"type": "string", "description": "Complex instruction to decompose"},
-            },
-            "required": ["instruction"],
-        },
-    },
-    # System
-    {
-        "name": "get_health",
-        "description": "Get full system health: all modules, connections, C++ processes, safety state.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "list_modules",
-        "description": "List all deployed modules with their layer, running status, and port counts.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_config",
-        "description": "Get robot configuration: speed limits, geometry, safety thresholds.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-]
-
-
-# ---------------------------------------------------------------------------
-# JSON-RPC helpers
-# ---------------------------------------------------------------------------
-
-def _ok(req_id, result):
+def _ok(req_id: Any, result: Any) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
-def _text(req_id, text):
-    return _ok(req_id, {"content": [{"type": "text", "text": text}]})
+def _text(req_id: Any, text: str) -> dict:
+    return _ok(req_id, {"content": [{"type": "text", "text": str(text)}]})
 
-def _error(req_id, code, msg):
+def _error(req_id: Any, code: int, msg: str) -> dict:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": msg}}
 
 
@@ -223,28 +56,29 @@ def _error(req_id, code, msg):
 
 @register("mcp", "server", description="MCP server for AI agent robot control")
 class MCPServerModule(Module, layer=6):
-    """MCP Server — exposes robot as AI-controllable tools.
+    """MCP Server — exposes every robot @skill as an AI-callable tool.
 
-    Standard MCP JSON-RPC over HTTP. Claude Code / GPT can connect and
-    control the robot via tool calls.
+    Tools are discovered at build() time via on_system_modules().
+    No static list — modules register their own capabilities through @skill.
+
+    Built-in system tools (get_health, list_modules, get_config) are
+    implemented as @skill methods on this module so they appear automatically.
     """
 
-    # Keep in main process: binds an HTTP server and must receive RPCClient
-    # proxies via on_system_modules() so it can call @skill methods on workers.
     _run_in_main: bool = True
 
-    # Receive from modules (for queries)
-    odometry: In[Odometry]
-    scene_graph: In[SceneGraph]
-    safety_state: In[SafetyState]
+    # -- receive telemetry for read-only queries ----------------------------
+    odometry:       In[Odometry]
+    scene_graph:    In[SceneGraph]
+    safety_state:   In[SafetyState]
     mission_status: In[dict]
 
-    # Publish to modules (for commands)
-    goal_pose: Out[PoseStamped]
-    cmd_vel: Out[Twist]
-    stop_cmd: Out[int]
+    # -- outgoing commands --------------------------------------------------
+    goal_pose:   Out[PoseStamped]
+    cmd_vel:     Out[Twist]
+    stop_cmd:    Out[int]
     instruction: Out[str]
-    mode_cmd: Out[str]
+    mode_cmd:    Out[str]
 
     def __init__(self, port: int = 8090, host: str = "0.0.0.0", **kw):
         super().__init__(**kw)
@@ -252,42 +86,45 @@ class MCPServerModule(Module, layer=6):
         self._host = host
         self._server_thread: Optional[threading.Thread] = None
 
-        # Cached state from subscriptions
+        # Cached telemetry (written by subscriptions)
         self._odom:    Optional[Dict] = None
         self._sg_json: str = "{}"
         self._safety:  Optional[Dict] = None
         self._mission: Optional[Dict] = None
 
-        # Set by Blueprint.build() via on_system_modules()
+        # Injected after system.start() by cli/main.py
         self._system_handle = None
-        self._skill_registry: Dict[str, Any] = {}
-        self._dynamic_tools:  List[Dict] = []
 
-        # Memory module references (set by on_system_modules)
-        self._tagged_locations_mod = None   # TaggedLocationsModule
-        self._vector_memory_mod    = None   # VectorMemoryModule
-        self._episodic_mod         = None   # EpisodicMemoryModule
+        # Populated by on_system_modules() — all @skill across all modules
+        self._tool_registry: Dict[str, Any] = {}   # func_name → bound method
+        self._tool_list:     List[Dict] = []        # MCP tool descriptors
 
-    def set_system_handle(self, handle):
-        """Inject SystemHandle for health/module queries."""
+        # Memory / perception module references (for built-in query tools)
+        self._tagged_locations_mod = None
+        self._vector_memory_mod    = None
+        self._episodic_mod         = None
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def set_system_handle(self, handle: Any) -> None:
+        """Inject SystemHandle so get_health / list_modules work."""
         self._system_handle = handle
 
     def on_system_modules(self, modules: Dict[str, Any]) -> None:
-        """Auto-discover @skill methods and grab memory module references.
+        """Auto-discover every @skill method from every running module.
 
-        Called by Blueprint after build().  Populates:
-          - _skill_registry  {func_name: bound_method}
-          - _dynamic_tools   MCP tool descriptors for every @skill
-          - _*_mod           direct references to running memory modules
+        Called by Blueprint.build() after all modules are instantiated.
+        Builds _tool_list (MCP descriptors) and _tool_registry (call table).
         """
-        self._skill_registry = {}
-        self._dynamic_tools  = []
+        self._tool_registry = {}
+        self._tool_list = []
 
-        # Grab memory module references so _execute_tool can delegate to them
+        # Grab module references for built-in tools
         self._tagged_locations_mod = modules.get("TaggedLocationsModule")
         self._vector_memory_mod    = modules.get("VectorMemoryModule")
         self._episodic_mod         = modules.get("EpisodicMemoryModule")
 
+        # Discover @skill from every module (including self)
         for mod_name, mod in modules.items():
             if not hasattr(mod, "get_skill_infos"):
                 continue
@@ -297,247 +134,271 @@ class MCPServerModule(Module, layer=6):
                 continue
             for info in infos:
                 method = getattr(mod, info.func_name, None)
-                if method is not None:
-                    self._skill_registry[info.func_name] = method
-                import json as _j
-                schema = _j.loads(info.args_schema)
+                if method is None:
+                    continue
+                self._tool_registry[info.func_name] = method
+                schema = json.loads(info.args_schema)
                 desc = schema.pop("description", "")
-                self._dynamic_tools.append({
+                self._tool_list.append({
                     "name": info.func_name,
                     "description": f"[{info.class_name}] {desc}".strip(),
                     "inputSchema": schema,
                 })
 
+        # Deduplicate: if a module @skill has the same name as a built-in,
+        # the module-native version takes priority (last write in _tool_registry wins).
+        # Rebuild _tool_list to reflect the deduplicated registry.
+        seen: dict = {}
+        for tool in self._tool_list:
+            seen[tool["name"]] = tool  # last one wins (matches _tool_registry)
+        self._tool_list = list(seen.values())
+
         logger.info(
-            "MCP: %d dynamic tools from %d modules",
-            len(self._dynamic_tools), len(modules),
+            "MCP: %d tools from %d modules",
+            len(self._tool_list), len(modules),
         )
 
-    def setup(self):
+    def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.scene_graph.subscribe(self._on_sg)
         self.safety_state.subscribe(self._on_safety)
         self.mission_status.subscribe(self._on_mission)
 
-    def start(self):
+    def start(self) -> None:
         super().start()
         self._server_thread = threading.Thread(
-            target=self._run_server, daemon=True, name="mcp-server")
+            target=self._run_server, daemon=True, name="mcp-server"
+        )
         self._server_thread.start()
         logger.info("MCP Server at http://%s:%d/mcp", self._host, self._port)
 
-    def stop(self):
+    def stop(self) -> None:
         self._server_thread = None
         super().stop()
 
-    # -- Subscriptions -------------------------------------------------------
+    # -- subscription callbacks --------------------------------------------
 
-    def _on_odom(self, odom: Odometry):
-        self._odom = {"x": odom.x, "y": odom.y, "z": getattr(odom, 'z', 0.0),
-                      "yaw": odom.yaw, "vx": odom.vx, "vy": odom.vy, "ts": odom.ts}
+    def _on_odom(self, odom: Odometry) -> None:
+        self._odom = {
+            "x": odom.x, "y": odom.y, "z": getattr(odom, "z", 0.0),
+            "yaw": odom.yaw, "vx": odom.vx, "vy": odom.vy, "ts": odom.ts,
+        }
 
-    def _on_sg(self, sg: SceneGraph):
-        self._sg_json = sg.to_json() if hasattr(sg, 'to_json') else str(sg)
+    def _on_sg(self, sg: SceneGraph) -> None:
+        self._sg_json = sg.to_json() if hasattr(sg, "to_json") else str(sg)
 
-    def _on_safety(self, state: SafetyState):
-        self._safety = {"level": state.level if hasattr(state, 'level') else 0,
-                        "ts": time.time()}
+    def _on_safety(self, state: SafetyState) -> None:
+        import time
+        self._safety = {"level": getattr(state, "level", 0), "ts": time.time()}
 
-    def _on_mission(self, status: dict):
+    def _on_mission(self, status: dict) -> None:
         self._mission = status
 
-    # -- Tool execution ------------------------------------------------------
+    # -- built-in @skill tools (system + perception read) ------------------
 
-    def _execute_tool(self, name: str, args: dict) -> str:
-        """Execute an MCP tool and return result as string."""
+    @skill
+    def get_health(self) -> str:
+        """Return full system health: modules, connections, message counts."""
+        if self._system_handle is None:
+            return json.dumps({"error": "system handle not yet injected"})
+        return json.dumps(self._system_handle.health(), default=str)
 
-        # Navigation
-        if name == "navigate_to":
-            pose = PoseStamped(
-                pose=Pose(position=Vector3(args["x"], args["y"], args.get("z", 0)),
-                          orientation=Quaternion(0, 0, 0, 1)),
-                frame_id="map", ts=time.time())
-            self.goal_pose.publish(pose)
-            return json.dumps({"status": "navigating", "goal": [args["x"], args["y"]]})
+    @skill
+    def list_modules(self) -> str:
+        """List all deployed modules with layer, port counts, and running state."""
+        if self._system_handle is None:
+            return json.dumps({"error": "system handle not yet injected"})
+        modules = {}
+        for n, m in self._system_handle.modules.items():
+            modules[n] = {
+                "layer":     m.layer,
+                "running":   m.running,
+                "ports_in":  list(m.ports_in.keys()),
+                "ports_out": list(m.ports_out.keys()),
+            }
+        return json.dumps({"modules": modules})
 
-        if name == "navigate_to_object":
-            self.instruction.publish(args["instruction"])
-            return json.dumps({"status": "processing", "instruction": args["instruction"]})
-
-        if name == "stop":
-            self.stop_cmd.publish(2)
-            self.cmd_vel.publish(Twist())
-            return json.dumps({"status": "stopped"})
-
-        if name == "get_navigation_status":
+    @skill
+    def get_config(self) -> str:
+        """Return robot configuration: speed limits, geometry, safety thresholds."""
+        try:
+            from core.config import get_config
+            cfg = get_config()
             return json.dumps({
-                "position": self._odom,
-                "mission": self._mission,
-                "safety": self._safety,
+                "speed":    {"max_linear": cfg.speed.max_linear,
+                             "max_angular": cfg.speed.max_angular,
+                             "max_speed": cfg.speed.max_speed},
+                "geometry": {"height": cfg.geometry.vehicle_height,
+                             "width":  cfg.geometry.vehicle_width,
+                             "length": cfg.geometry.vehicle_length},
+                "safety":   {"stop_distance":  cfg.safety.stop_distance,
+                             "tilt_limit_deg": cfg.safety.tilt_limit_deg,
+                             "obstacle_height_thre": cfg.safety.obstacle_height_thre},
             })
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
 
-        if name == "set_mode":
-            mode = args["mode"]
-            self.mode_cmd.publish(mode)
-            if mode == "estop":
-                self.stop_cmd.publish(2)
-            return json.dumps({"mode": mode})
+    @skill
+    def get_robot_position(self) -> str:
+        """Return the robot's current position (x, y, z) and yaw in map frame."""
+        return json.dumps(self._odom or {"error": "no odometry yet"})
 
-        # Perception
-        if name == "get_scene_graph":
-            return self._sg_json
+    @skill
+    def get_scene_graph(self) -> str:
+        """Return the current scene graph — detected objects with positions and labels."""
+        return self._sg_json
 
-        if name == "detect_objects":
-            query = args["query"].lower()
+    @skill
+    def detect_objects(self, query: str) -> str:
+        """Search the current scene for objects matching *query* (case-insensitive)."""
+        q = query.lower()
+        try:
+            sg = json.loads(self._sg_json)
+            matches = [o for o in sg.get("objects", [])
+                       if q in o.get("label", "").lower()]
+            return json.dumps({"query": q, "matches": matches, "count": len(matches)})
+        except Exception:
+            return json.dumps({"query": q, "matches": [], "count": 0})
+
+    @skill
+    def query_memory(self, query: str) -> str:
+        """Search episodic, spatial, and vector memory for past observations."""
+        results = []
+
+        vm = self._vector_memory_mod
+        if vm and hasattr(vm, "query_location"):
             try:
-                sg = json.loads(self._sg_json)
-                matches = [o for o in sg.get("objects", [])
-                           if query in o.get("label", "").lower()]
-                return json.dumps({"query": query, "matches": matches,
-                                   "count": len(matches)})
+                r = vm.query_location(query)
+                for hit in r.get("results", [])[:3]:
+                    results.append({
+                        "source":   "vector",
+                        "position": [hit.get("x", 0), hit.get("y", 0)],
+                        "score":    hit.get("score", 0),
+                        "labels":   hit.get("labels", ""),
+                    })
             except Exception:
-                return json.dumps({"query": query, "matches": [], "count": 0})
+                pass
 
-        if name == "get_robot_position":
-            return json.dumps(self._odom or {"error": "no odometry"})
-
-        # Memory — delegates to running Module instances from on_system_modules()
-        if name == "query_memory":
-            query = args["query"]
-            results = []
-
-            # Vector memory (CLIP + ChromaDB) — highest quality matches
-            vm = self._vector_memory_mod
-            if vm and hasattr(vm, "query_location"):
-                try:
-                    r = vm.query_location(query)
-                    for hit in r.get("results", [])[:3]:
-                        results.append({
-                            "source": "vector",
-                            "position": [hit.get("x", 0), hit.get("y", 0)],
-                            "score": hit.get("score", 0),
-                            "labels": hit.get("labels", ""),
-                        })
-                except Exception:
-                    pass
-
-            # Episodic memory — scene-graph snapshots
-            em = self._episodic_mod
-            if em and hasattr(em, "memory"):
-                try:
-                    records = em.memory.query_by_text(query, top_k=3)
-                    for r in records:
-                        results.append({
-                            "source": "episodic",
-                            "label": getattr(r, "label", ""),
-                            "position": list(getattr(r, "position", [0, 0, 0])),
-                            "ts": getattr(r, "timestamp", 0),
-                        })
-                except Exception:
-                    pass
-
-            # Tagged locations — exact/fuzzy named places
-            tl = self._tagged_locations_mod
-            if tl and hasattr(tl, "store"):
-                try:
-                    match = tl.store.query_fuzzy(query)
-                    if match:
-                        results.append({
-                            "source": "tagged",
-                            "label": match["name"],
-                            "position": match["position"],
-                        })
-                except Exception:
-                    pass
-
-            return json.dumps({"query": query, "results": results, "count": len(results)})
-
-        if name == "list_tagged_locations":
-            tl = self._tagged_locations_mod
-            locs = tl.store.list_all() if (tl and hasattr(tl, "store")) else []
-            return json.dumps({"locations": locs})
-
-        if name == "tag_location":
-            if not self._odom:
-                return json.dumps({"error": "no odometry — cannot tag location"})
-            tl = self._tagged_locations_mod
-            if not (tl and hasattr(tl, "store")):
-                return json.dumps({"error": "TaggedLocationsModule not running"})
-            tl.store.tag(args["name"],
-                         x=self._odom["x"], y=self._odom["y"],
-                         z=self._odom.get("z", 0))
-            entry = tl.store.query(args["name"])
-            return json.dumps({"tagged": args["name"], "position": entry})
-
-        # Planning
-        if name == "send_instruction":
-            self.instruction.publish(args["text"])
-            return json.dumps({"status": "sent", "instruction": args["text"]})
-
-        if name == "decompose_task":
-            # Would call TaskDecomposer if wired
-            return json.dumps({"instruction": args["instruction"],
-                               "subtasks": [args["instruction"]],
-                               "note": "rule-based decomposition"})
-
-        # System
-        if name == "get_health":
-            if self._system_handle:
-                return json.dumps(self._system_handle.health(), default=str)
-            return json.dumps({"error": "system handle not connected"})
-
-        if name == "list_modules":
-            if self._system_handle:
-                modules = {}
-                for n, m in self._system_handle.modules.items():
-                    modules[n] = {
-                        "layer": m.layer,
-                        "running": m.running,
-                        "ports_in": list(m.ports_in.keys()),
-                        "ports_out": list(m.ports_out.keys()),
-                    }
-                return json.dumps({"modules": modules})
-            return json.dumps({"error": "system handle not connected"})
-
-        if name == "get_config":
+        em = self._episodic_mod
+        if em and hasattr(em, "memory"):
             try:
-                from core.config import get_config
-                cfg = get_config()
-                return json.dumps({
-                    "speed": {"max_linear": cfg.speed.max_linear,
-                              "max_angular": cfg.speed.max_angular},
-                    "geometry": {"height": cfg.geometry.vehicle_height,
-                                 "width": cfg.geometry.vehicle_width},
-                    "safety": {"stop_distance": cfg.safety.stop_distance,
-                               "tilt_limit_deg": cfg.safety.tilt_limit_deg},
-                })
+                for r in em.memory.query_by_text(query, top_k=3):
+                    results.append({
+                        "source":   "episodic",
+                        "label":    getattr(r, "label", ""),
+                        "position": list(getattr(r, "position", [0, 0, 0])),
+                        "ts":       getattr(r, "timestamp", 0),
+                    })
             except Exception:
-                return json.dumps({"error": "config not available"})
+                pass
 
-        return json.dumps({"error": f"unknown tool: {name}"})
+        tl = self._tagged_locations_mod
+        if tl and hasattr(tl, "store"):
+            try:
+                match = tl.store.query_fuzzy(query)
+                if match:
+                    results.append({
+                        "source":   "tagged",
+                        "label":    match["name"],
+                        "position": match["position"],
+                    })
+            except Exception:
+                pass
 
-    # -- FastAPI + MCP JSON-RPC ----------------------------------------------
+        return json.dumps({"query": query, "results": results, "count": len(results)})
 
-    def _run_server(self):
+    @skill
+    def list_tagged_locations(self) -> str:
+        """List all named locations tagged by the robot or user."""
+        tl = self._tagged_locations_mod
+        locs = tl.store.list_all() if (tl and hasattr(tl, "store")) else []
+        return json.dumps({"locations": locs})
+
+    @skill
+    def tag_location(self, name: str) -> str:
+        """Save the robot's current position under *name* for future navigation."""
+        if not self._odom:
+            return json.dumps({"error": "no odometry — cannot tag location"})
+        tl = self._tagged_locations_mod
+        if not (tl and hasattr(tl, "store")):
+            return json.dumps({"error": "TaggedLocationsModule not running"})
+        tl.store.tag(name, x=self._odom["x"], y=self._odom["y"],
+                     z=self._odom.get("z", 0))
+        entry = tl.store.query(name)
+        return json.dumps({"tagged": name, "position": entry})
+
+    @skill
+    def navigate_to(self, x: float, y: float, z: float = 0.0) -> str:
+        """Navigate to map coordinates (x, y, z). Returns immediately."""
+        self.goal_pose.publish(PoseStamped(
+            pose=Pose(
+                position=Vector3(x, y, z),
+                orientation=Quaternion(0, 0, 0, 1),
+            ),
+            frame_id="map",
+        ))
+        return json.dumps({"status": "navigating", "goal": [x, y, z]})
+
+    @skill
+    def navigate_to_object(self, instruction: str) -> str:
+        """Navigate to a described object or place using semantic understanding."""
+        self.instruction.publish(instruction)
+        return json.dumps({"status": "processing", "instruction": instruction})
+
+    @skill
+    def send_instruction(self, text: str) -> str:
+        """Send a natural language instruction to the semantic planner."""
+        self.instruction.publish(text)
+        return json.dumps({"status": "sent", "instruction": text})
+
+    @skill
+    def stop(self) -> str:
+        """Emergency stop — immediately halts all robot motion."""
+        self.stop_cmd.publish(2)
+        self.cmd_vel.publish(Twist())
+        return json.dumps({"status": "stopped"})
+
+    @skill
+    def set_mode(self, mode: str) -> str:
+        """Set robot operating mode: manual | autonomous | estop."""
+        if mode not in ("manual", "autonomous", "estop"):
+            return json.dumps({"error": f"invalid mode: {mode!r}"})
+        self.mode_cmd.publish(mode)
+        if mode == "estop":
+            self.stop_cmd.publish(2)
+        return json.dumps({"mode": mode})
+
+    @skill
+    def get_navigation_status(self) -> str:
+        """Return current navigation state, robot position, and mission progress."""
+        return json.dumps({
+            "position": self._odom,
+            "mission":  self._mission,
+            "safety":   self._safety,
+        })
+
+    # -- FastAPI + MCP JSON-RPC endpoint -----------------------------------
+
+    def _run_server(self) -> None:
         try:
             from fastapi import FastAPI
             from fastapi.middleware.cors import CORSMiddleware
             from fastapi.responses import JSONResponse
             import uvicorn
         except ImportError:
-            logger.error("FastAPI not installed. Run: pip install fastapi uvicorn")
+            logger.error("FastAPI not installed — run: pip install fastapi uvicorn")
             return
 
         app = FastAPI(title="LingTu MCP Server")
         app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                          allow_methods=["*"], allow_headers=["*"])
+                           allow_methods=["*"], allow_headers=["*"])
         mcp = self
 
         @app.post("/mcp")
         async def mcp_endpoint(request: dict):
-            method = request.get("method", "")
-            params = request.get("params", {}) or {}
-            req_id = request.get("id")
+            method  = request.get("method", "")
+            params  = request.get("params") or {}
+            req_id  = request.get("id")
 
             if req_id is None:
                 return JSONResponse(status_code=204, content=None)
@@ -545,51 +406,49 @@ class MCPServerModule(Module, layer=6):
             if method == "initialize":
                 return JSONResponse(_ok(req_id, {
                     "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "lingtu", "version": "2.0.0"},
+                    "capabilities":    {"tools": {}},
+                    "serverInfo":      {"name": "lingtu", "version": "2.0.0"},
                 }))
 
             if method == "notifications/initialized":
                 return JSONResponse(status_code=204, content=None)
 
             if method == "tools/list":
-                tools = mcp._dynamic_tools if mcp._dynamic_tools else TOOLS
-                return JSONResponse(_ok(req_id, {"tools": tools}))
+                return JSONResponse(_ok(req_id, {"tools": mcp._tool_list}))
 
             if method == "tools/call":
-                name = params.get("name", "")
-                args = params.get("arguments") or {}
+                name   = params.get("name", "")
+                args   = params.get("arguments") or {}
+                fn     = mcp._tool_registry.get(name)
+                if fn is None:
+                    return JSONResponse(_text(req_id, f"Unknown tool: {name!r}"))
                 try:
-                    # Try dynamic skill registry first (auto-discovered @skill methods)
-                    skill_method = mcp._skill_registry.get(name)
-                    if skill_method is not None:
-                        result = skill_method(**args)
-                        out = str(result) if result is not None else "Done."
-                    else:
-                        # Fall back to static hardcoded tools
-                        out = mcp._execute_tool(name, args)
-                    return JSONResponse(_text(req_id, out))
-                except Exception as e:
+                    result = fn(**args)
+                    return JSONResponse(_text(req_id, result if result is not None else "Done."))
+                except Exception as exc:
                     logger.exception("MCP tool error: %s", name)
-                    return JSONResponse(_text(req_id, f"Error calling '{name}': {e}"))
+                    return JSONResponse(_text(req_id, f"Error in '{name}': {exc}"))
 
             return JSONResponse(_error(req_id, -32601, f"Unknown method: {method}"))
 
         @app.get("/health")
         async def health():
-            n = len(mcp._dynamic_tools) if mcp._dynamic_tools else len(TOOLS)
-            return {"status": "ok", "tools": n, "dynamic": bool(mcp._dynamic_tools), "port": mcp._port}
+            return {
+                "status":  "ok",
+                "tools":   len(mcp._tool_list),
+                "port":    mcp._port,
+                "has_handle": mcp._system_handle is not None,
+            }
 
         uvicorn.run(app, host=self._host, port=self._port, log_level="warning")
 
+    # -- Module health summary ---------------------------------------------
+
     def health(self) -> Dict[str, Any]:
         info = super().port_summary()
-        tl = self._tagged_locations_mod
-        n_tagged = len(tl.store.list_all()) if (tl and hasattr(tl, "store")) else 0
         info["mcp"] = {
-            "port":             self._port,
-            "tools":            len(self._dynamic_tools) or len(TOOLS),
-            "dynamic_tools":    len(self._dynamic_tools),
-            "tagged_locations": n_tagged,
+            "port":       self._port,
+            "tools":      len(self._tool_list),
+            "has_handle": self._system_handle is not None,
         }
         return info

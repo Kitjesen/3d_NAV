@@ -339,70 +339,88 @@ class TestMCPServerModule(unittest.TestCase):
         self.assertIn("instruction", m.ports_out)
         self.assertIn("mode_cmd", m.ports_out)
 
-    def test_tools_count(self):
-        from gateway.mcp_server import TOOLS
-        self.assertEqual(len(TOOLS), 16)
+    def test_tools_discovered_via_skill(self):
+        """@skill methods on MCPServerModule itself appear in _tool_registry after on_system_modules."""
+        import json
+        m = self._make()
+        m.on_system_modules({"MCPServerModule": m})
+        # MCPServerModule declares: get_health, list_modules, get_config,
+        # get_robot_position, get_scene_graph, detect_objects, query_memory,
+        # list_tagged_locations, tag_location, navigate_to, navigate_to_object,
+        # send_instruction, stop, set_mode, get_navigation_status
+        self.assertGreaterEqual(len(m._tool_list), 14)
+        names = [t["name"] for t in m._tool_list]
+        self.assertIn("stop", names)
+        self.assertIn("navigate_to", names)
+        self.assertIn("get_health", names)
+        self.assertIn("get_config", names)
 
-    def test_execute_stop(self):
+    def test_stop_via_skill(self):
+        import json
         m = self._make()
         stops = []
         m.stop_cmd._add_callback(stops.append)
-        m._execute_tool("stop", {})
+        result = json.loads(m.stop())
+        self.assertEqual(result["status"], "stopped")
         self.assertEqual(stops, [2])
 
-    def test_execute_get_position_no_odom(self):
+    def test_get_position_no_odom(self):
         import json
         m = self._make()
-        result = json.loads(m._execute_tool("get_robot_position", {}))
+        result = json.loads(m.get_robot_position())
         self.assertIn("error", result)
 
-    def test_execute_get_position_with_odom(self):
+    def test_get_position_with_odom(self):
         import json
         m = self._make()
         m._odom = {"x": 1.0, "y": 2.0, "z": 0.0, "yaw": 0.5}
-        result = json.loads(m._execute_tool("get_robot_position", {}))
+        result = json.loads(m.get_robot_position())
         self.assertAlmostEqual(result["x"], 1.0)
 
-    def test_execute_tag_location(self):
+    def test_tag_location_via_skill(self):
         import json
         from memory.modules.tagged_locations_module import TaggedLocationsModule
         m = self._make()
         m._odom = {"x": 5.0, "y": 3.0, "z": 0.0}
-
-        # Inject a running TaggedLocationsModule so the tool has a store
         tl = TaggedLocationsModule()
         m._tagged_locations_mod = tl
-
-        result = json.loads(m._execute_tool("tag_location", {"name": "office"}))
+        result = json.loads(m.tag_location("office"))
         self.assertEqual(result["tagged"], "office")
         self.assertIsNotNone(tl.store.query("office"))
 
-    def test_execute_navigate_to(self):
+    def test_navigate_to_via_skill(self):
         import json
         m = self._make()
         goals = []
         m.goal_pose._add_callback(goals.append)
-        result = json.loads(m._execute_tool("navigate_to", {"x": 5, "y": 3}))
+        result = json.loads(m.navigate_to(5.0, 3.0))
         self.assertEqual(result["status"], "navigating")
         self.assertEqual(len(goals), 1)
 
-    def test_execute_set_mode(self):
+    def test_set_mode_via_skill(self):
         import json
         m = self._make()
-        result = json.loads(m._execute_tool("set_mode", {"mode": "autonomous"}))
+        result = json.loads(m.set_mode("autonomous"))
         self.assertEqual(result["mode"], "autonomous")
 
-    def test_execute_unknown_tool(self):
+    def test_set_mode_invalid(self):
         import json
         m = self._make()
-        result = json.loads(m._execute_tool("nonexistent", {}))
+        result = json.loads(m.set_mode("unknown"))
+        self.assertIn("error", result)
+
+    def test_get_health_no_handle(self):
+        import json
+        m = self._make()
+        result = json.loads(m.get_health())
         self.assertIn("error", result)
 
     def test_health(self):
         m = self._make()
+        m.on_system_modules({"MCPServerModule": m})
         h = m.health()
         self.assertIn("mcp", h)
-        self.assertEqual(h["mcp"]["tools"], 16)
+        self.assertGreaterEqual(h["mcp"]["tools"], 14)
 
 
 # ============================================================================
