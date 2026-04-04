@@ -23,9 +23,6 @@ _QUIET_PREFIXES = (
     "semantic.perception.semantic_perception.encoder_module",
     "semantic.perception.semantic_perception.perception_module",
     "semantic.planner.semantic_planner.person_tracker",
-    "base_autonomy.modules.terrain_module",
-    "base_autonomy.modules.local_planner_module",
-    "base_autonomy.modules.path_follower_module",
     "drivers.sim.ros2_sim_driver",
     "gateway.mcp_server",
     "memory.modules.vector_memory_module",
@@ -34,8 +31,12 @@ _QUIET_PREFIXES = (
 )
 
 # Loggers whose WARNING/ERROR messages are also not useful on screen.
+# These are "graceful degradation" notices — the system handles them automatically.
 _MUTE_PREFIXES = (
     "semantic.planner.semantic_planner.llm_client",  # "API key not found"
+    "base_autonomy.modules.terrain_module",           # "_nav_core not available, falling back"
+    "base_autonomy.modules.local_planner_module",     # "_nav_core not available, falling back"
+    "base_autonomy.modules.path_follower_module",     # "_nav_core not available, falling back"
 )
 
 
