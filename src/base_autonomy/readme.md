@@ -26,9 +26,7 @@ base_autonomy/
 │   └── test/                  C++ unit tests (gtest — voxel grid, path scoring, pure pursuit)
 ├── terrain_analysis/          C++ ROS2 package — ground estimation + obstacle map
 ├── terrain_analysis_ext/      C++ ROS2 package — connectivity + 2.5D height map
-├── sensor_scan_generation/    C++ ROS2 package — LiDAR scan preprocessing
-└── visualization_tools/       C++ ROS2 package — RViz metric/trajectory tools
-    └── legacy/realTimePlot.py ROS2 real-time plot script (archived, not used at runtime)
+└── sensor_scan_generation/    C++ ROS2 package — LiDAR scan preprocessing
 ```
 
 ## Module ports
