@@ -34,9 +34,8 @@
 # room_manager.py           房间边界估计，房间-物体归属，动态合并/分裂
 # leiden_segmentation.py    Leiden 图聚类 → 语义房间区域
 
-# --- Belief 贝叶斯置信 (belief_network / belief_propagation) ---
-# belief_network.py     物体存在概率推断，时序衰减，跨传感器融合
-# belief_propagation.py Loopy BP 场景图语义标签后验推断
+# --- Belief (belief_propagation) ---
+# belief_propagation.py  Loopy BP scene-graph semantic label inference (optional)
 
 # --- KnowledgeGraph 知识图谱 (knowledge_graph / knowledge_data / bpu_qp_bridge) ---
 # knowledge_graph.py    室内场景本体，三元组，SPARQL 风格查询

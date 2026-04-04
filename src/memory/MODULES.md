@@ -89,7 +89,7 @@
 
 | 文件 | 行数 | 职责 |
 |------|-----:|------|
-| `logging/mission_logger.py` | 270 | **MissionLogger**：导航任务历史记录；记录每次任务的生命周期（开始/结束时间、轨迹、里程、结果），支持 JSON 历史查询指令 |
+| `modules/mission_logger_module.py` | 210 | **MissionLoggerModule**：导航任务历史记录 (Module 模式)；记录每次任务的生命周期（开始/结束时间、轨迹、里程、结果），持久化到 JSON 文件 |
 
 ---
 
@@ -106,7 +106,7 @@ knowledge/        — RoomObjectKG / SemanticPriorEngine / BeliefPropagationMixi
 storage/          — SQLiteStore / TimeSeriesStore
 
 scheduling/       — VoIScheduler  ← 被 semantic/planner/ 调用（不在 Module 链上）
-logging/          — MissionLogger ← 可接入 NavigationModule 的 mission_status 端口
+modules/          — MissionLoggerModule ← 已接入 NavigationModule.mission_status 端口
 ```
 
 ### 外部依赖关系

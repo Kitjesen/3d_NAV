@@ -29,7 +29,7 @@ has_backend = hasattr(enc, "_backend") and enc._backend is not None if enc else 
 print("FIX2 CLIP: backend_loaded=%s" % has_backend)
 
 # Fix 3: Ports open (no conflict)
-for port in [5050, 8090, 5060]:
+for port in [5050, 8090]:
     s = socket.socket()
     s.settimeout(1)
     try:

@@ -113,11 +113,11 @@ import socket
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.settimeout(1)
 try:
-    s.connect(("127.0.0.1", 5060))
-    T("teleop_port", True, "ws://5060 open")
+    s.connect(("127.0.0.1", 5050))
+    T("teleop_port", True, "ws://5050/ws/teleop reachable")
     s.close()
 except Exception:
-    T("teleop_port", False, "ws://5060 closed")
+    T("teleop_port", False, "ws://5050/ws/teleop not reachable (gateway not running)")
 
 # ROS2 bridge check
 print("\n=== ROS2 Bridges ===")
