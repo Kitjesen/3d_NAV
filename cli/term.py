@@ -24,6 +24,11 @@ def blue(t: str) -> str:
     return c("0;34", t)
 
 
+def deep_blue(t: str) -> str:
+    # 256-color "navy" like blue. Falls back to plain text when not TTY.
+    return c("38;5;18", t)
+
+
 def yellow(t: str) -> str:
     return c("1;33", t)
 
