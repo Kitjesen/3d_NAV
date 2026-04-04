@@ -73,7 +73,7 @@ ROBOT_PRESETS = {
 
 PROFILES = {
     "map": dict(
-        _desc="Build map — SLAM + PGO, then 'map save <name>'",
+        _desc="Build a new map of the environment",
         _default_robot="s100p",
         slam_profile="fastlio2",
         llm="mock",
@@ -85,7 +85,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "nav": dict(
-        _desc="Navigate with pre-built map (localizer + full stack)",
+        _desc="Navigate using a saved map",
         _default_robot="s100p",
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
@@ -99,7 +99,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "explore": dict(
-        _desc="Explore unknown area (SLAM + frontier, no map needed)",
+        _desc="Explore unknown area (no map needed)",
         _default_robot="s100p",
         slam_profile="fastlio2",
         llm="qwen",
@@ -111,7 +111,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "sim": dict(
-        _desc="MuJoCo simulation (full algorithm stack)",
+        _desc="MuJoCo simulation",
         _default_robot="sim",
         llm="mock",
         planner="astar",
@@ -122,7 +122,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "dev": dict(
-        _desc="Semantic pipeline dev (no hardware)",
+        _desc="Development mode (no hardware)",
         _default_robot="stub",
         llm="mock",
         planner="astar",
@@ -132,7 +132,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "stub": dict(
-        _desc="Framework testing (no hardware, no semantic)",
+        _desc="Framework testing only",
         _default_robot="stub",
         llm="mock",
         planner="astar",

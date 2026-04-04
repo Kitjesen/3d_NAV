@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import sys
 import time
@@ -10,6 +11,11 @@ import time
 from . import term as T
 from .profiles_data import PROFILES
 from .run_state import clear_run_state, is_pid_alive, read_run_state
+
+
+def _vlen(s: str) -> int:
+    """Visible length of a string — strips ANSI escape codes."""
+    return len(re.sub(r'\033\[[0-9;]*m', '', s))
 
 # ── LOGO ──────────────────────────────────────────────────────────────────────
 # figlet font: "ANSI Shadow"
@@ -25,12 +31,12 @@ _TAGLINE = "  Autonomous Navigation for Quadruped Robots"
 
 # Profile icons and accent colors
 _PROFILE_META = {
-    "nav":     ("◉", "Navigate with pre-built map",    T.green),
-    "explore": ("◎", "Explore unknown terrain",         T.cyan),
-    "map":     ("⊕", "Build a new map (SLAM + PGO)",    T.yellow),
-    "sim":     ("◈", "MuJoCo simulation (full stack)",  T.blue),
-    "dev":     ("◇", "Semantic pipeline (no hardware)", T.navy),
-    "stub":    ("○", "Framework testing only",          T.dim),
+    "nav":     ("◉", "Navigate using a saved map",      T.green),
+    "explore": ("◎", "Explore unknown area",             T.cyan),
+    "map":     ("⊕", "Build a new map",                  T.yellow),
+    "sim":     ("◈", "MuJoCo simulation",                T.blue),
+    "dev":     ("◇", "Development mode (no hardware)",   T.navy),
+    "stub":    ("○", "Framework testing only",           T.dim),
 }
 
 
@@ -42,15 +48,16 @@ def _print_logo() -> None:
 
 
 def _panel(lines: list[str], *, color) -> None:
-    """Print a compact config panel (dimos-style)."""
+    """Print a compact config panel — ANSI-aware width."""
     if not lines:
         return
-    width = max(len(x) for x in lines)
+    width = max(_vlen(x) for x in lines)
     top = f"┌{'─' * (width + 2)}┐"
     bot = f"└{'─' * (width + 2)}┘"
     print(f"  {color(top)}")
     for line in lines:
-        print(f"  {color('│')}{' '}{line:<{width}}{' '}{color('│')}")
+        pad = width - _vlen(line)
+        print(f"  {color('│')} {line}{' ' * pad} {color('│')}")
     print(f"  {color(bot)}")
 
 
@@ -85,9 +92,7 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
 
     def _row(label: str, value: str) -> None:
         inner = f"  {T.dim(f'{label:<10}')} {value}"
-        import re as _re
-        vis = _re.sub(r'\033\[[0-9;]*m', '', inner)
-        pad = max(0, W - len(vis))
+        pad = max(0, W - _vlen(inner))
         print(T.navy("  │") + inner + " " * pad + T.navy("│"))
 
     _row("profile",  color(f"{icon} {profile_name}") + T.dim(f"  {desc}"))
@@ -108,8 +113,12 @@ def print_banner(profile_name, cfg, system, log_dir: str) -> None:
     _row("logs",     T.dim(log_dir))
 
     print(T.navy(f"  ├{'─' * W}┤"))
-    hint = f"  help · status · map list · teleop status · Ctrl+C to quit"
-    print(T.navy("  │") + T.dim(f"{hint:^{W}}") + T.navy("│"))
+    hint_raw = "help · status · map list · teleop status · Ctrl+C to quit"
+    hint_pad = max(0, W - len(hint_raw))
+    lpad = hint_pad // 2
+    rpad = hint_pad - lpad
+    hint_line = T.dim(" " * lpad + hint_raw + " " * rpad)
+    print(T.navy("  │") + hint_line + T.navy("│"))
     print(T.navy(f"  └{'─' * W}┘"))
     print()
 
@@ -130,12 +139,8 @@ def select_interactive() -> str:
         num  = T.dim(f" {i} ")
         tag  = color(f" {icon} {name:<9}")
         body = T.dim(f" {desc}")
-        # right-pad to fill card width
         inner = f"{num}{tag}{body}"
-        # strip ANSI for length calc
-        import re as _re
-        visible = _re.sub(r'\033\[[0-9;]*m', '', inner)
-        pad = max(0, W - len(visible))
+        pad = max(0, W - _vlen(inner))
         print(T.navy("  │") + inner + " " * pad + T.navy("│"))
 
     print(T.navy(f"  └{'─' * W}┘"))
@@ -209,7 +214,9 @@ def wizard_interactive(profile_name: str, cfg: dict) -> None:
     print(T.navy(f"  ┌{'─' * W}┐"))
     print(T.navy("  │") + T.bold(f"{'  Configure launch options':^{W}}") + T.navy("│"))
     print(T.navy(f"  ├{'─' * W}┤"))
-    print(T.navy("  │") + f"  profile: {color(f'{icon} {profile_name}')}" + " " * (W - 12 - len(profile_name)) + T.navy("│"))
+    profile_val = color(f"{icon} {profile_name}")
+    profile_row = f"  profile: {profile_val}"
+    print(T.navy("  │") + profile_row + " " * max(0, W - _vlen(profile_row)) + T.navy("│"))
     print(T.navy(f"  ├{'─' * W}┤"))
     print(T.navy("  │") + T.dim(f"  Press Enter to accept defaults shown in [brackets]") + " " * 3 + T.navy("│"))
     print(T.navy(f"  └{'─' * W}┘"))
