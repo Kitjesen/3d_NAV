@@ -95,7 +95,8 @@ class TerrainModule(Module, layer=2):
             self._core = _nav_core.TerrainAnalysisCore(params)
             logger.info("TerrainModule [nanobind]: C++ terrain_core loaded")
         except ImportError:
-            logger.warning("TerrainModule: _nav_core not available, falling back to simple")
+            logger.info("TerrainModule: _nav_core.so not built yet — using simple backend "
+                        "(run 'make build' on S100P to enable C++ terrain analysis)")
             self._backend = "simple"
 
     def _setup_native(self):

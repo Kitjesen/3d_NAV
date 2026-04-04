@@ -136,14 +136,67 @@ def _select_map_interactive(cfg: dict, map_dir: str) -> None:
     print()
 
 
+def _check_port_accessible(port: int) -> bool:
+    """Return True if the port is reachable from localhost (i.e. not firewalled internally)."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.3)
+        s.connect(("127.0.0.1", port))
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def _nav_core_available() -> bool:
+    """Check if _nav_core nanobind extension is importable."""
+    try:
+        import importlib
+        return importlib.util.find_spec("_nav_core") is not None
+    except Exception:
+        return False
+
+
 def preflight(profile_name: str, cfg: dict) -> None:
     slam = cfg.get("slam_profile", "none")
 
     if slam in ("fastlio2", "pointlio") and os.name != "nt":
         import shutil
         if not shutil.which("ros2"):
-            print(f"  {T.yellow('WARN')}: ros2 not in PATH — SLAM won't start")
-            print("        Source: source /opt/ros/humble/setup.bash")
+            print(f"  {T.yellow('!')} ros2 not in PATH — SLAM won't start")
+            print(f"    Fix: {T.bold('source /opt/ros/humble/setup.bash')}")
+            print(f"    Permanent: {T.dim('echo \"source /opt/ros/humble/setup.bash\" >> ~/.bashrc')}")
+
+    # Warn if _nav_core C++ extension is missing (affects terrain/local_planner/path_follower)
+    if not _nav_core_available() and cfg.get("enable_native", False):
+        print(f"  {T.yellow('!')} C++ nav_core not compiled — terrain/local_planner will use Python fallbacks")
+        print(f"    Fix: {T.bold('make build')}  (needs ROS2 + colcon on S100P)")
+
+    # Check if gateway port will be reachable from LAN (firewall check)
+    if cfg.get("enable_gateway"):
+        gw_port = cfg.get("gateway_port", 5050)
+        import platform
+        if platform.system() == "Linux":
+            # Check if iptables is likely blocking the port
+            try:
+                result = subprocess.run(
+                    ["iptables", "-L", "INPUT", "-n", "--line-numbers"],
+                    capture_output=True, text=True, timeout=2
+                )
+                rules = result.stdout
+                # If there's a DROP/REJECT default policy and no ACCEPT for our port, warn
+                if "policy DROP" in rules or "policy REJECT" in rules:
+                    port_open = any(
+                        str(gw_port) in line and "ACCEPT" in line
+                        for line in rules.splitlines()
+                    )
+                    if not port_open:
+                        print(f"  {T.yellow('!')} Firewall may block port {gw_port} from LAN")
+                        print(f"    Fix: {T.bold(f'sudo iptables -I INPUT -p tcp --dport {gw_port} -j ACCEPT')}")
+                        print(f"    Also: {T.bold(f'sudo iptables -I INPUT -p tcp --dport 8090 -j ACCEPT')}")
+            except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
+                pass
 
     # For nav/explore profiles that use slam=localizer, offer interactive map selection.
     if slam == "localizer":
@@ -153,7 +206,7 @@ def preflight(profile_name: str, cfg: dict) -> None:
         # Post-selection warning if still no valid tomogram
         tomogram = cfg.get("tomogram", "")
         if not tomogram or not os.path.isfile(tomogram):
-            print(f"  {T.yellow('WARN')}: Tomogram not found: {tomogram or '(none)'}")
+            print(f"  {T.yellow('!')}: Tomogram not found: {tomogram or '(none)'}")
             print("        Navigation will start but PCT planner will be unavailable.")
 
 

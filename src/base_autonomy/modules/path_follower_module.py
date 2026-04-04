@@ -124,10 +124,9 @@ class PathFollowerModule(Module, layer=2):
             self._nc_state = _nav_core.PathFollowerState()
 
             logger.info("PathFollowerModule [nav_core]: C++ compute_control loaded")
-        except ImportError as e:
-            logger.warning(
-                "PathFollowerModule: _nav_core not available (%s), falling back to pid", e
-            )
+        except ImportError:
+            logger.info("PathFollowerModule: _nav_core.so not built yet — using pid backend "
+                        "(run 'make build' on S100P to enable C++ path follower)")
             self._backend = "pid"
             self._nc = None
 

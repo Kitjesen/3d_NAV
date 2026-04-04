@@ -401,8 +401,8 @@ class LocalPlannerModule(Module, layer=2):
 
             logger.info("LocalPlannerModule [nanobind]: C++ LocalPlannerCore loaded (343 paths × 36 dirs)")
         except ImportError:
-            logger.warning(
-                "LocalPlannerModule: _nav_core not available, falling back to cmu_py")
+            logger.info("LocalPlannerModule: _nav_core.so not built yet — using cmu_py backend "
+                        "(run 'make build' on S100P to enable C++ local planner)")
             self._backend = "cmu_py"
             self._setup_cmu_py()
 
@@ -428,10 +428,7 @@ class LocalPlannerModule(Module, layer=2):
             self._nav_core = nav_core
             logger.info("LocalPlannerModule [cmu_py]: _nav_core loaded")
         except ImportError:
-            logger.warning(
-                "LocalPlannerModule [cmu_py]: _nav_core not available, "
-                "falling back to numpy-only scorer"
-            )
+            logger.info("LocalPlannerModule [cmu_py]: _nav_core.so not built — using numpy scorer")
 
         # Load pre-computed path files
         paths_dir = os.path.join(
