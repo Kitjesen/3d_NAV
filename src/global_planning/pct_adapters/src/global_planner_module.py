@@ -1,10 +1,21 @@
 """Planner backends — A* (dev/sim) and PCT C++ (S100P production).
 
+FROZEN — this module is stable and should not need changes.
+New planner backends (e.g. RRT*) should be registered in separate files
+via @register("planner_backend", "name"), not added here.
+
 Used by GlobalPlannerService (nav/global_planner_service.py) via Registry:
     backend = get("planner_backend", "pct")    # S100P: ele_planner.so
     backend = get("planner_backend", "astar")  # dev/sim: pure Python fallback
 
 See docs/02-architecture/PLANNER_SELECTION.md for the selection rationale.
+
+TODOs (low priority, only if needed):
+  - A* has no path smoothing (jagged 8-connected grid paths). If visual
+    servo or demo needs smoother trajectories, add post-plan Ramer-Douglas-Peucker
+    or cubic spline in GlobalPlannerService, not here.
+  - A* obstacle_thr is hardcoded 49.9. If OccupancyGridModule changes its
+    cost scale, this threshold needs to match.
 """
 
 from __future__ import annotations
