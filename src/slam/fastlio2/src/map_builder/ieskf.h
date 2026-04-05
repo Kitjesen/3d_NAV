@@ -13,6 +13,21 @@ using M21X12D = Eigen::Matrix<double, 21, 12>;
 M3D Jr(const V3D &inp);
 M3D JrInv(const V3D &inp);
 
+// Degeneracy detection result — DALI-SLAM inspired Jacobian remapping
+struct DegeneracyInfo
+{
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    bool detected = false;           // true if any DOF is degenerate
+    double condition_number = 0.0;   // H condition number (high = bad)
+    double min_eigenvalue = 0.0;     // smallest eigenvalue of H_pose (6x6)
+    double max_eigenvalue = 0.0;     // largest eigenvalue
+    double effective_ratio = 1.0;    // ratio of well-conditioned DOFs (0~1)
+    int degenerate_dof_count = 0;    // number of degenerate DOFs (0~6)
+    Eigen::Matrix<double, 6, 1> eigenvalues = Eigen::Matrix<double, 6, 1>::Zero();
+    // Per-DOF degeneracy mask: 1.0 = well-constrained, 0.0 = degenerate
+    Eigen::Matrix<double, 6, 1> dof_mask = Eigen::Matrix<double, 6, 1>::Ones();
+};
+
 struct SharedState
 {
 public:
@@ -22,6 +37,7 @@ public:
     double res = 1e10;
     bool valid = false;
     size_t iter_num = 0;
+    DegeneracyInfo degeneracy;
 };
 struct Input
 {
@@ -73,6 +89,8 @@ public:
 
     M21D &P() { return m_P; }
 
+    const DegeneracyInfo &degeneracy() const { return m_degeneracy; }
+
 private:
     size_t m_max_iter = 10;
     State m_x;
@@ -81,4 +99,5 @@ private:
     stop_func m_stop_func;
     M21D m_F;
     M21X12D m_G;
+    DegeneracyInfo m_degeneracy;
 };

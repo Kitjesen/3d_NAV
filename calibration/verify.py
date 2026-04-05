@@ -250,6 +250,131 @@ def check_consistency(cfg: dict, result: CheckResult) -> None:
                 )
 
 
+def check_lidar_camera_projection(cfg: dict, result: CheckResult, verbose: bool) -> None:
+    """Validate LiDAR→camera projection chain using synthetic test points.
+
+    Computes T_body_lidar and T_body_camera from config, then projects
+    synthetic 3D LiDAR points into camera pixels. Verifies:
+    1. Points in front of LiDAR project into image bounds
+    2. Points behind camera project to negative Z (correctly rejected)
+    3. Projection is not degenerate (matrix invertible)
+    """
+    logger.info(f"\n{BOLD}== LiDAR→Camera Projection =={RESET}")
+
+    cam = cfg.get("camera", {})
+    lidar = cfg.get("lidar", {})
+
+    if not cam or not lidar:
+        result.warn("Cannot check projection — missing camera or lidar config")
+        return
+
+    fx = cam.get("fx", 0)
+    fy = cam.get("fy", 0)
+    cx = cam.get("cx", 0)
+    cy = cam.get("cy", 0)
+    w = cam.get("width", 0)
+    h = cam.get("height", 0)
+
+    if fx <= 0 or fy <= 0 or w <= 0 or h <= 0:
+        result.warn("Cannot check projection — invalid intrinsics")
+        return
+
+    K = np.array([[fx, 0, cx],
+                  [0, fy, cy],
+                  [0,  0,  1]], dtype=np.float64)
+
+    # Build T_body_lidar (LiDAR → body transform)
+    def _rpy_to_R(roll, pitch, yaw):
+        cr, sr = np.cos(roll), np.sin(roll)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        cy_, sy = np.cos(yaw), np.sin(yaw)
+        Rz = np.array([[cy_, -sy, 0], [sy, cy_, 0], [0, 0, 1]])
+        Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+        Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+        return Rz @ Ry @ Rx
+
+    T_body_lidar = np.eye(4)
+    T_body_lidar[:3, :3] = _rpy_to_R(
+        lidar.get("roll", 0), lidar.get("pitch", 0), lidar.get("yaw", 0))
+    T_body_lidar[:3, 3] = [
+        lidar.get("offset_x", 0), lidar.get("offset_y", 0), lidar.get("offset_z", 0)]
+
+    T_body_camera = np.eye(4)
+    T_body_camera[:3, :3] = _rpy_to_R(
+        cam.get("roll", 0), cam.get("pitch", 0), cam.get("yaw", 0))
+    T_body_camera[:3, 3] = [
+        cam.get("position_x", 0), cam.get("position_y", 0), cam.get("position_z", 0)]
+
+    # T_camera_lidar = T_camera_body @ T_body_lidar
+    T_camera_body = np.linalg.inv(T_body_camera)
+    T_cam_lidar = T_camera_body @ T_body_lidar
+
+    # Synthetic test: points at 5m in front of LiDAR along +X (robot forward)
+    # In LiDAR frame, the forward direction is typically +X
+    test_points_lidar = np.array([
+        [5.0, 0.0, 0.0],   # center, 5m ahead
+        [5.0, -1.0, 0.0],  # 1m right
+        [5.0, 1.0, 0.0],   # 1m left
+        [5.0, 0.0, -0.5],  # 0.5m above (LiDAR Z up → camera Z out convention)
+        [5.0, 0.0, 0.5],   # 0.5m below
+        [-2.0, 0.0, 0.0],  # behind the robot (should NOT project into image)
+    ], dtype=np.float64)
+
+    projected_in_image = 0
+    projected_behind = 0
+    proj_results = []
+
+    for i, pt_l in enumerate(test_points_lidar):
+        # Transform to camera frame
+        pt_l_h = np.array([*pt_l, 1.0])
+        pt_c = (T_cam_lidar @ pt_l_h)[:3]
+
+        # Camera convention: Z is depth (forward), X right, Y down
+        # If Z <= 0, point is behind camera
+        if pt_c[2] <= 0:
+            projected_behind += 1
+            proj_results.append(f"  pt[{i}] lidar=({pt_l[0]:.1f},{pt_l[1]:.1f},{pt_l[2]:.1f}) → behind camera (Z={pt_c[2]:.2f})")
+            continue
+
+        # Project to pixels
+        u = fx * pt_c[0] / pt_c[2] + cx
+        v = fy * pt_c[1] / pt_c[2] + cy
+        in_image = 0 <= u <= w and 0 <= v <= h
+        if in_image:
+            projected_in_image += 1
+        proj_results.append(
+            f"  pt[{i}] lidar=({pt_l[0]:.1f},{pt_l[1]:.1f},{pt_l[2]:.1f}) → "
+            f"cam=({pt_c[0]:.2f},{pt_c[1]:.2f},{pt_c[2]:.2f}) → "
+            f"pixel=({u:.0f},{v:.0f}) {'IN' if in_image else 'OUT'}"
+        )
+
+    if verbose:
+        for line in proj_results:
+            logger.info(line)
+
+    # Forward points (first 5) should mostly project into image
+    # The behind point (last one) should correctly be rejected
+    forward_in = projected_in_image
+    if forward_in >= 3:
+        result.ok(f"LiDAR→camera projection: {forward_in}/5 forward points project into {w}x{h}")
+    elif forward_in >= 1:
+        result.warn(
+            f"LiDAR→camera projection: only {forward_in}/5 forward points in image — "
+            f"check camera-body or LiDAR-body extrinsics"
+        )
+    else:
+        result.fail(
+            f"LiDAR→camera projection: 0/5 forward points in image — "
+            f"extrinsic chain is likely wrong"
+        )
+
+    # The point behind the robot should not project to positive Z
+    if projected_behind >= 1:
+        result.ok("Rear point correctly rejected (behind camera)")
+    elif verbose:
+        result.warn("Rear point not rejected — camera may face backward?")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Verify sensor calibration")
     parser.add_argument("--config", default=str(ROBOT_CONFIG),
@@ -269,6 +394,7 @@ def main():
     check_lidar(cfg, result, args.verbose)
     check_imu(result, args.verbose)
     check_consistency(cfg, result)
+    check_lidar_camera_projection(cfg, result, args.verbose)
 
     # Summary
     logger.info(f"\n{BOLD}== Summary =={RESET}")

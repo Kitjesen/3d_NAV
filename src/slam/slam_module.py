@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 @register("slam", "fastlio2", description="Fast-LIO2 LiDAR-inertial SLAM")
 @register("slam", "pointlio", description="Point-LIO alternative SLAM")
 @register("slam", "localizer", description="ICP localizer against pre-built map")
+@register("slam", "genz", description="GenZ-ICP degeneracy-robust LiDAR odometry")
 class SLAMModule(Module, layer=1):
     """C++ SLAM subprocess lifecycle manager.
 
@@ -61,9 +62,11 @@ class SLAMModule(Module, layer=1):
             self._setup_pointlio()
         elif self._backend == "localizer":
             self._setup_localizer()
+        elif self._backend == "genz":
+            self._setup_genz_icp()
         else:
             raise ValueError(f"Unknown SLAM backend: {self._backend}. "
-                             f"Available: fastlio2, pointlio, localizer")
+                             f"Available: fastlio2, pointlio, localizer, genz")
 
     def _setup_fastlio2(self):
         """Fast-LIO2 SLAM + PGO.  Expects /lidar/scan from LidarModule."""
@@ -88,6 +91,20 @@ class SLAMModule(Module, layer=1):
             self._node.setup()
         except (ImportError, FileNotFoundError, PermissionError) as e:
             logger.warning("SLAMModule [pointlio]: not available: %s", e)
+
+    def _setup_genz_icp(self):
+        """GenZ-ICP — degeneracy-robust LiDAR odometry (no IMU).
+
+        Can run standalone OR alongside Fast-LIO2 as comparison/fallback.
+        """
+        try:
+            from core.config import get_config
+            from slam.native_factories import slam_genz_icp
+            cfg = get_config()
+            self._node = slam_genz_icp(cfg)
+            self._node.setup()
+        except (ImportError, FileNotFoundError, PermissionError) as e:
+            logger.warning("SLAMModule [genz]: not available: %s", e)
 
     def _setup_localizer(self):
         """Fast-LIO2 (odometry) + ICP localizer (map matching).  Expects /lidar/scan from LidarModule."""

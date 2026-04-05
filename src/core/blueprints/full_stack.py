@@ -27,6 +27,7 @@ import logging
 from typing import Any
 
 from core.blueprint import Blueprint, autoconnect
+from core.utils.calibration_check import run_calibration_check
 
 from .stacks import driver, lidar, slam, maps, perception, memory, navigation, safety, gateway
 from .stacks import planner as planner_stack
@@ -66,6 +67,19 @@ def full_stack_blueprint(
     planner_backend = planner or planner_backend
     semantic_save_dir = config.get("semantic_save_dir", DEFAULT_SEMANTIC_DIR)
     _drv = driver_name(robot)
+
+    # ── Startup calibration self-check ─────────────────────────────────
+    _needs_camera = enable_semantic or slam_profile not in ("", "none")
+    _needs_slam = slam_profile not in ("", "none")
+    calib = run_calibration_check(
+        require_camera=_needs_camera,
+        require_slam=_needs_slam,
+    )
+    if not calib.ok:
+        raise RuntimeError(
+            f"Calibration self-check failed ({len(calib.errors)} error(s)): "
+            + "; ".join(calib.errors)
+        )
 
     driver_config = dict(config)
     if enable_semantic and _drv == "MujocoDriverModule":

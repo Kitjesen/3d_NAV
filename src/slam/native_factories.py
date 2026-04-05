@@ -72,6 +72,8 @@ def slam_fastlio2(cfg: Optional[RobotConfig] = None) -> NativeModule:
             "/imu/data":         "/nav/imu",
             "/lidar/scan":       "/nav/lidar_scan",
             "save_map":          "/nav/save_map",
+            "/slam/degeneracy":  "/slam/degeneracy",
+            "/slam/degeneracy_detail": "/slam/degeneracy_detail",
         },
         env=DDS_ENV,
         auto_restart=True,
@@ -132,6 +134,47 @@ def slam_localizer(cfg: Optional[RobotConfig] = None) -> NativeModule:
             "/cloud_registered": "/nav/registered_cloud",
             "/Odometry":         "/nav/odometry",
             "map_cloud":         "/nav/map_cloud",
+        },
+        env=DDS_ENV,
+        auto_restart=True,
+        max_restarts=3,
+    ))
+
+
+def slam_genz_icp(cfg: Optional[RobotConfig] = None) -> NativeModule:
+    """GenZ-ICP — degeneracy-robust LiDAR odometry (RA-L 2025).
+
+    Adaptive P2Plane + P2Point weighting for corridor/tunnel robustness.
+    Standalone LiDAR-only odometry (no IMU fusion).
+    Use as primary backend in known degenerate environments, or as
+    secondary backend that runs alongside Fast-LIO2 for comparison.
+
+    Publishes: /nav/odometry, /nav/map_cloud (remapped from genz/ topics)
+    Subscribes: /nav/lidar_scan (PointCloud2)
+    """
+    cfg = cfg or get_config()
+    slam_cfg = cfg.raw.get("slam", {})
+    config_path = slam_cfg.get(
+        "genz_config",
+        os.path.join(
+            os.path.dirname(__file__), "genz_icp", "ros", "config", "s100p.yaml"
+        ),
+    )
+    return NativeModule(NativeModuleConfig(
+        executable=exe(cfg, "genz_icp", "odometry_node"),
+        name="slam_genz_icp",
+        parameters={
+            "config_file": config_path,
+            "odom_frame": "odom",
+            "base_frame": "body",
+            "publish_odom_tf": "false",  # Fast-LIO2 handles TF
+            "deskew": "true",
+            "visualize": "false",
+        },
+        remappings={
+            "/pointcloud_topic": "/nav/lidar_scan",
+            "/genz/odometry":    "/nav/genz_odometry",
+            "/genz/local_map":   "/nav/genz_map",
         },
         env=DDS_ENV,
         auto_restart=True,

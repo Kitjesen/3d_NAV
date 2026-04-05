@@ -88,6 +88,7 @@ class DepthVisualOdomModule(Module, layer=1):
         self._intrinsics: Optional[CameraIntrinsics] = None
         self._K: Optional[np.ndarray] = None  # 3x3 camera matrix
         self._D: Optional[np.ndarray] = None  # distortion coeffs
+        self._undistort_maps: Optional[tuple] = None  # (map1, map2) for cv2.remap
 
         # Frame tracking
         self._prev_gray: Optional[np.ndarray] = None
@@ -125,6 +126,14 @@ class DepthVisualOdomModule(Module, layer=1):
             self._D = np.array(info.D_vector, dtype=np.float64)
         else:
             self._D = np.zeros(5, dtype=np.float64)
+        # Pre-compute undistortion maps for cv2.remap (fast per-frame undistort)
+        if info.has_distortion and np.any(self._D != 0):
+            self._undistort_maps = cv2.initUndistortRectifyMap(
+                self._K, self._D, None, self._K,
+                (info.width, info.height), cv2.CV_16SC2,
+            )
+            logger.info("DepthVisualOdom: undistortion maps computed (D=%s)",
+                         np.array2string(self._D, precision=4))
         logger.info("DepthVisualOdom: intrinsics received (%.0fx%.0f, fx=%.1f)",
                      info.width, info.height, info.fx)
 
@@ -191,6 +200,12 @@ class DepthVisualOdomModule(Module, layer=1):
         depth = self._latest_depth
         if depth is None:
             return
+
+        # Undistort images so ORB/LK/PnP operate under pinhole model
+        if self._undistort_maps is not None:
+            map1, map2 = self._undistort_maps
+            gray = cv2.remap(gray, map1, map2, cv2.INTER_LINEAR)
+            depth = cv2.remap(depth, map1, map2, cv2.INTER_NEAREST)
 
         # First frame: detect ORB keypoints as initial tracking set
         if self._prev_gray is None:
@@ -334,8 +349,9 @@ class DepthVisualOdomModule(Module, layer=1):
 
     def _solve_pnp(self, pts_3d: np.ndarray, pts_2d: np.ndarray) -> Optional[np.ndarray]:
         """Solve PnP with RANSAC, return 4x4 transform or None."""
+        # distCoeffs=None because images are already undistorted in _process_frame
         success, rvec, tvec, inliers = cv2.solvePnPRansac(
-            pts_3d, pts_2d, self._K, self._D,
+            pts_3d, pts_2d, self._K, None,
             iterationsCount=200,
             reprojectionError=3.0,
             flags=cv2.SOLVEPNP_ITERATIVE,

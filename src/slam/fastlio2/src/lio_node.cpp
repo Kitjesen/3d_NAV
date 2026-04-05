@@ -20,6 +20,8 @@
 #include <nav_msgs/msg/path.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <yaml-cpp/yaml.h>
+#include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp>
 #include "interface/srv/save_maps.hpp"
 
 using namespace std::chrono_literals;
@@ -68,6 +70,8 @@ public:
         m_world_cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_map", 10);
         m_path_pub = this->create_publisher<nav_msgs::msg::Path>("/path", 10);
         m_odom_pub = this->create_publisher<nav_msgs::msg::Odometry>("/Odometry", 100);
+        m_degen_pub = this->create_publisher<std_msgs::msg::Float32>("/slam/degeneracy", 10);
+        m_degen_detail_pub = this->create_publisher<std_msgs::msg::Float32MultiArray>("/slam/degeneracy_detail", 10);
         m_tf_broadcaster = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
 
         m_state_data.path.poses.clear();
@@ -356,6 +360,40 @@ public:
         publishCloud(m_world_cloud_pub, world_cloud, m_node_config.world_frame, m_package.cloud_end_time);
 
         publishPath(m_path_pub, m_node_config.world_frame, m_package.cloud_end_time);
+
+        publishDegeneracy();
+    }
+
+    void publishDegeneracy()
+    {
+        const auto &degen = m_kf->degeneracy();
+
+        // Publish effective_ratio as simple Float32 (for SlamBridgeModule)
+        // effective_ratio: 1.0 = all DOFs well-constrained, 0.0 = fully degenerate
+        std_msgs::msg::Float32 ratio_msg;
+        ratio_msg.data = static_cast<float>(degen.effective_ratio);
+        m_degen_pub->publish(ratio_msg);
+
+        // Publish detailed degeneracy info as Float32MultiArray
+        // [condition_number, min_eigenvalue, max_eigenvalue, effective_ratio,
+        //  degen_dof_count, mask_rx, mask_ry, mask_rz, mask_tx, mask_ty, mask_tz]
+        std_msgs::msg::Float32MultiArray detail_msg;
+        detail_msg.data.resize(11);
+        detail_msg.data[0]  = static_cast<float>(degen.condition_number);
+        detail_msg.data[1]  = static_cast<float>(degen.min_eigenvalue);
+        detail_msg.data[2]  = static_cast<float>(degen.max_eigenvalue);
+        detail_msg.data[3]  = static_cast<float>(degen.effective_ratio);
+        detail_msg.data[4]  = static_cast<float>(degen.degenerate_dof_count);
+        for (int d = 0; d < 6; ++d)
+            detail_msg.data[5 + d] = static_cast<float>(degen.dof_mask(d));
+        m_degen_detail_pub->publish(detail_msg);
+
+        if (degen.detected)
+        {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "DEGENERACY DETECTED: %d/6 DOFs degenerate, cond=%.1f, eff_ratio=%.2f",
+                degen.degenerate_dof_count, degen.condition_number, degen.effective_ratio);
+        }
     }
 
 private:
@@ -367,6 +405,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_world_cloud_pub;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr m_path_pub;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr m_odom_pub;
+    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr m_degen_pub;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr m_degen_detail_pub;
 
     rclcpp::TimerBase::SharedPtr m_timer;
     StateData m_state_data;

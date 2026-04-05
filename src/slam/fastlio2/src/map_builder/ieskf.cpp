@@ -104,6 +104,70 @@ void IESKF::update()
         H.block<12, 12>(0, 0) += shared_data.H;
         b.block<12, 1>(0, 0) += shared_data.b;
 
+        // ── Degeneracy detection (DALI-SLAM / Zhang 2016 approach) ──────
+        // Analyze the 6x6 pose block of the LiDAR Hessian (rotation + translation)
+        // to detect degenerate directions where LiDAR provides no constraint.
+        // When degenerate, remap the solution to suppress updates along those axes.
+        if (i == 0)  // Only compute on first iteration (H structure is stable)
+        {
+            Eigen::Matrix<double, 6, 6> H_pose = shared_data.H.block<6, 6>(0, 0);
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> solver(H_pose);
+            auto &evals = solver.eigenvalues();   // sorted ascending
+            auto &evecs = solver.eigenvectors();
+
+            shared_data.degeneracy.eigenvalues = evals;
+            shared_data.degeneracy.min_eigenvalue = evals(0);
+            shared_data.degeneracy.max_eigenvalue = evals(5);
+            shared_data.degeneracy.condition_number =
+                (evals(0) > 1e-10) ? evals(5) / evals(0) : 1e12;
+
+            // Threshold: eigenvalue < 1% of max → degenerate
+            // Based on Zhang 2016 "On Degeneracy of Optimization-based State Estimation"
+            const double degen_thresh = evals(5) * 0.01;
+            int degen_count = 0;
+            Eigen::Matrix<double, 6, 1> mask = Eigen::Matrix<double, 6, 1>::Ones();
+
+            for (int d = 0; d < 6; ++d)
+            {
+                if (evals(d) < degen_thresh)
+                {
+                    degen_count++;
+                    mask(d) = 0.0;
+                }
+            }
+            shared_data.degeneracy.degenerate_dof_count = degen_count;
+            shared_data.degeneracy.dof_mask = mask;
+            shared_data.degeneracy.effective_ratio =
+                (6.0 - degen_count) / 6.0;
+            shared_data.degeneracy.detected = (degen_count > 0);
+
+            // Solution remapping: project H update to well-constrained subspace
+            // This prevents the solver from hallucinating motion along degenerate axes
+            if (degen_count > 0 && degen_count < 6)
+            {
+                // Build projection matrix: V_good * V_good^T
+                // Keeps only well-constrained eigenvector directions
+                Eigen::Matrix<double, 6, 6> P_good = Eigen::Matrix<double, 6, 6>::Zero();
+                for (int d = 0; d < 6; ++d)
+                {
+                    if (evals(d) >= degen_thresh)
+                        P_good += evecs.col(d) * evecs.col(d).transpose();
+                }
+                // Remap: H_pose = P_good * H_pose * P_good + (I - P_good) * lambda * (I - P_good)
+                // The second term adds regularization along degenerate axes (IMU prior dominates)
+                Eigen::Matrix<double, 6, 6> P_bad = Eigen::Matrix<double, 6, 6>::Identity() - P_good;
+                double regularize = evals(5) * 0.001;  // Weak regularization
+                shared_data.H.block<6, 6>(0, 0) = P_good * H_pose * P_good + P_bad * regularize;
+                // Zero out gradient along degenerate directions
+                shared_data.b.head<6>() = P_good * shared_data.b.head<6>();
+
+                // Re-accumulate into full H
+                H.block<12, 12>(0, 0) = shared_data.H;
+                b.block<12, 1>(0, 0) = shared_data.b;
+                // Re-add prior (already in H from P^-1 above)
+            }
+        }
+
         delta = -H.ldlt().solve(b);
 
         m_x += delta;
@@ -112,6 +176,9 @@ void IESKF::update()
         if (m_stop_func(delta))
             break;
     }
+
+    // Store degeneracy info for external access (ROS2 publisher)
+    m_degeneracy = shared_data.degeneracy;
 
     M21D L = M21D::Identity();
     // L.block<3, 3>(0, 0) = JrInv(delta.segment<3>(0));
