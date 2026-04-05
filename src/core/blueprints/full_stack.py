@@ -145,9 +145,20 @@ def full_stack_blueprint(
         if out_mod in _bp_names and in_mod in _bp_names:
             bp.wire(out_mod, out_port, in_mod, in_port)
 
-    # Localization health → Safety + Navigation
+    # Localization health → Safety + Navigation + DepthVisualOdom
     _w("SlamBridgeModule", "localization_status", "SafetyRingModule", "localization_status")
     _w("SlamBridgeModule", "localization_status", "NavigationModule", "localization_status")
+    _w("SlamBridgeModule", "localization_status", "DepthVisualOdomModule", "localization_status")
+
+    # Visual odometry fusion: DepthVisualOdom → SlamBridge (selective DOF blend)
+    _w("DepthVisualOdomModule", "visual_odometry", "SlamBridgeModule", "visual_odom")
+
+    # Depth camera feed to visual odometry
+    _camera_for_vodom = "CameraBridgeModule" if "CameraBridgeModule" in _bp_names else _drv
+    _color_port = "color_image" if _camera_for_vodom == "CameraBridgeModule" else "camera_image"
+    _w(_camera_for_vodom, _color_port, "DepthVisualOdomModule", "color_image")
+    _w(_camera_for_vodom, "depth_image", "DepthVisualOdomModule", "depth_image")
+    _w(_camera_for_vodom, "camera_info", "DepthVisualOdomModule", "camera_info")
 
     # Instruction + goal routing — Gateway/MCP both publish instruction/goal_pose,
     # causing auto_wire ambiguity. Explicitly fan-in both sources to consumers.

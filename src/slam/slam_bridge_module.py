@@ -22,7 +22,7 @@ import numpy as np
 from typing import Any, Dict, Optional
 
 from core.module import Module
-from core.stream import Out
+from core.stream import In, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.msgs.geometry import Pose, Vector3, Quaternion
@@ -55,6 +55,9 @@ class SlamBridgeModule(Module, layer=1):
     odometry:  Out[Odometry]
     alive:     Out[bool]
     localization_status: Out[dict]
+
+    # Visual odometry input for selective DOF fusion during degeneracy
+    visual_odom: In[Odometry]
 
     def __init__(
         self,
@@ -93,7 +96,20 @@ class SlamBridgeModule(Module, layer=1):
         self._feature_ratio_critical: float = kw.get("feature_ratio_critical", 0.1)
         self._eigen_ratio_warn: float = kw.get("eigen_ratio_warn", 100.0)  # condition number
 
+        # Selective DOF fusion — visual odometry during degeneracy
+        # Based on Selective KF (arXiv 2412.17235): only fuse degenerate DOFs
+        self._visual_odom_fusion: bool = kw.get("visual_odom_fusion", True)
+        self._visual_alpha: float = kw.get("visual_alpha", 0.6)  # visual blend weight during CRITICAL
+        self._last_slam_odom: Optional[Odometry] = None
+        self._last_visual_odom: Optional[Odometry] = None
+        self._visual_anchor_T: Optional[np.ndarray] = None  # SLAM pose when visual odom activated
+        self._visual_fused_count: int = 0
+
     def setup(self) -> None:
+        # Visual odometry input for selective fusion
+        if self._visual_odom_fusion:
+            self.visual_odom.subscribe(self._on_visual_odom)
+
         # Try cyclonedds first (lightweight, no ROS2 env needed)
         if self._try_cyclonedds():
             return
@@ -179,21 +195,26 @@ class SlamBridgeModule(Module, layer=1):
     # ── cyclonedds callbacks (parsed CDR) ────────────────────────────────
 
     def _on_dds_odom(self, msg) -> None:
-        """DDS_Odometry → Module Odometry."""
+        """DDS_Odometry → Module Odometry (with selective visual fusion)."""
         try:
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             t = msg.twist.twist
             stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self.odometry.publish(Odometry(
+            from core.msgs.geometry import Twist
+            slam_odom = Odometry(
                 pose=Pose(
                     position=Vector3(x=p.x, y=p.y, z=p.z),
                     orientation=Quaternion(x=q.x, y=q.y, z=q.z, w=q.w),
                 ),
-                vx=t.linear.x, vy=t.linear.y, vz=t.linear.z,
-                wx=t.angular.x, wy=t.angular.y, wz=t.angular.z,
+                twist=Twist(
+                    linear=Vector3(x=t.linear.x, y=t.linear.y, z=t.linear.z),
+                    angular=Vector3(x=t.angular.x, y=t.angular.y, z=t.angular.z),
+                ),
                 ts=stamp,
-            ))
+            )
+            fused = self._fuse_odometry(slam_odom)
+            self.odometry.publish(fused)
             self._last_odom_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
@@ -226,14 +247,19 @@ class SlamBridgeModule(Module, layer=1):
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             t = msg.twist.twist
-            self.odometry.publish(Odometry(
+            from core.msgs.geometry import Twist
+            slam_odom = Odometry(
                 pose=Pose(
                     position=Vector3(x=float(p.x), y=float(p.y), z=float(p.z)),
                     orientation=Quaternion(x=float(q.x), y=float(q.y), z=float(q.z), w=float(q.w)),
                 ),
-                vx=float(t.linear.x), vy=float(t.linear.y), vz=float(t.linear.z),
-                wx=float(t.angular.x), wy=float(t.angular.y), wz=float(t.angular.z),
-            ))
+                twist=Twist(
+                    linear=Vector3(x=float(t.linear.x), y=float(t.linear.y), z=float(t.linear.z)),
+                    angular=Vector3(x=float(t.angular.x), y=float(t.angular.y), z=float(t.angular.z)),
+                ),
+            )
+            fused = self._fuse_odometry(slam_odom)
+            self.odometry.publish(fused)
             self._last_odom_time = _time.time()
         except Exception as e:
             logger.warning("SlamBridge rclpy odom error: %s", e)
@@ -302,6 +328,100 @@ class SlamBridgeModule(Module, layer=1):
         elif level == DEGEN_NONE and prev != DEGEN_NONE:
             logger.info("SLAM degeneracy cleared: %s -> NONE", prev)
 
+    # ── Visual odometry selective DOF fusion ────────────────────────────
+
+    def _on_visual_odom(self, odom: Odometry) -> None:
+        """Receive visual odometry from DepthVisualOdomModule.
+
+        Based on Selective KF (arXiv 2412.17235):
+        Only fuse visual odometry for degenerate DOF directions.
+        When SLAM is healthy, visual odom is ignored.
+        """
+        self._last_visual_odom = odom
+
+    def _fuse_odometry(self, slam_odom: Odometry) -> Odometry:
+        """Selectively blend visual odometry into degenerate DOF directions.
+
+        When degeneracy is NONE/MILD: pass SLAM odom unchanged.
+        When SEVERE: blend visual at alpha=0.3 for degenerate directions.
+        When CRITICAL: blend visual at alpha=0.6 for degenerate directions.
+
+        Degenerate direction detection (simplified):
+        - Corridor → X (along-corridor) is degenerate
+        - Open field → X,Y (horizontal plane) are degenerate
+        - We use ICP fitness + effective_ratio as proxy:
+          * High fitness + low ratio → full translational degeneracy
+          * High fitness + moderate ratio → partial (along-corridor)
+        """
+        if not self._visual_odom_fusion:
+            return slam_odom
+        if self._degen_level not in (DEGEN_SEVERE, DEGEN_CRITICAL):
+            self._last_slam_odom = slam_odom
+            return slam_odom
+        if self._last_visual_odom is None:
+            return slam_odom
+
+        # Determine blend alpha based on severity
+        if self._degen_level == DEGEN_CRITICAL:
+            alpha = self._visual_alpha  # 0.6
+        else:
+            alpha = self._visual_alpha * 0.5  # 0.3 for SEVERE
+
+        # Anchor: record SLAM pose when fusion first activates
+        slam_pos = np.array([
+            slam_odom.pose.position.x,
+            slam_odom.pose.position.y,
+            slam_odom.pose.position.z,
+        ])
+        vis_pos = np.array([
+            self._last_visual_odom.pose.position.x,
+            self._last_visual_odom.pose.position.y,
+            self._last_visual_odom.pose.position.z,
+        ])
+
+        # Detect degenerate axes by comparing eigenvalue-like proxy
+        # Simple heuristic: if effective_ratio is very low, all translational
+        # DOFs are degenerate; otherwise only along-corridor (X in body frame)
+        if self._effective_ratio < self._feature_ratio_critical:
+            # Full translational degeneracy — blend all XYZ
+            degen_mask = np.array([alpha, alpha, alpha * 0.3])
+        elif self._icp_fitness > self._fitness_critical:
+            # Corridor-like: blend XY, keep Z from SLAM
+            degen_mask = np.array([alpha, alpha, 0.0])
+        else:
+            # Partial: blend X (along-axis of highest uncertainty)
+            degen_mask = np.array([alpha, alpha * 0.3, 0.0])
+
+        # Selective blend: fused = slam * (1 - mask) + visual * mask
+        fused_pos = slam_pos * (1.0 - degen_mask) + vis_pos * degen_mask
+
+        self._visual_fused_count += 1
+        if self._visual_fused_count % 50 == 1:
+            logger.info(
+                "Visual-SLAM fusion active: alpha=%.2f, degen=%s, "
+                "slam_xy=(%.2f,%.2f), vis_xy=(%.2f,%.2f), fused_xy=(%.2f,%.2f)",
+                alpha, self._degen_level,
+                slam_pos[0], slam_pos[1],
+                vis_pos[0], vis_pos[1],
+                fused_pos[0], fused_pos[1],
+            )
+
+        # Build fused odometry (keep SLAM orientation + twist)
+        fused_odom = Odometry(
+            pose=Pose(
+                position=Vector3(
+                    x=float(fused_pos[0]),
+                    y=float(fused_pos[1]),
+                    z=float(fused_pos[2]),
+                ),
+                orientation=slam_odom.pose.orientation,
+            ),
+            twist=slam_odom.twist,
+            ts=slam_odom.ts,
+        )
+        self._last_slam_odom = fused_odom
+        return fused_odom
+
     # ── Localization health watchdog ──────────────────────────────��──────
 
     def _watchdog_loop(self) -> None:
@@ -329,10 +449,17 @@ class SlamBridgeModule(Module, layer=1):
                 confidence = max(0.0, 1.0 - odom_age / self._odom_timeout)
 
             # Reduce confidence based on degeneracy
+            # Boost confidence when visual fusion is active
+            visual_active = (self._last_visual_odom is not None
+                             and self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL))
             if self._degen_level == DEGEN_SEVERE:
-                confidence = min(confidence, 0.4)
+                confidence = min(confidence, 0.6 if visual_active else 0.4)
             elif self._degen_level == DEGEN_MILD:
                 confidence = min(confidence, 0.7)
+            elif self._degen_level == DEGEN_CRITICAL:
+                if visual_active:
+                    # Visual fusion compensates for CRITICAL — upgrade to DEGRADED not LOST
+                    confidence = max(confidence, 0.3)
 
             if new_state != self._loc_state:
                 if new_state == LOC_LOST:
@@ -366,5 +493,7 @@ class SlamBridgeModule(Module, layer=1):
             "degeneracy": self._degen_level,
             "icp_fitness": round(self._icp_fitness, 4),
             "effective_ratio": round(self._effective_ratio, 3),
+            "visual_fusion_active": self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL) and self._last_visual_odom is not None,
+            "visual_fused_count": self._visual_fused_count,
         }
         return info
