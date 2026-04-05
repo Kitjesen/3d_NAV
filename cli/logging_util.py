@@ -126,6 +126,15 @@ def setup_logging(
             "%(asctime)s\t%(levelname)s\t%(name)s\t%(message)s",
         ))
 
+    # --- secret redaction (applied to all handlers) ---
+    try:
+        from core.utils.redact import RedactSecretsFilter
+        _redact = RedactSecretsFilter()
+        stderr_h.addFilter(_redact)
+        file_h.addFilter(_redact)
+    except ImportError:
+        pass  # core not on sys.path (e.g. standalone script)
+
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
     root.addHandler(stderr_h)

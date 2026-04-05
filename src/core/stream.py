@@ -208,6 +208,8 @@ class In(Generic[T]):
     Set the policy after construction via ``set_policy("latest")``.
     """
 
+    _LATENCY_WINDOW = 256  # circular buffer size for percentile computation
+
     __slots__ = (
         "_name", "_msg_type", "owner", "_callback", "_msg_count",
         "_last_ts", "_latest", "_lock", "_policy", "_in_callback",
@@ -216,6 +218,7 @@ class In(Generic[T]):
         "_rate_window_start", "_rate_window_count", "_rate_hz",
         "_deliver_count", "_callback_errors",
         "_max_callback_ms", "_total_callback_ms",
+        "_latency_ring", "_latency_idx",
     )
 
     def __init__(self, msg_type: type, name: str, owner: Any = None) -> None:
@@ -247,6 +250,9 @@ class In(Generic[T]):
         self._callback_errors: int = 0
         self._max_callback_ms: float = 0.0
         self._total_callback_ms: float = 0.0
+        # Circular buffer for recent callback latencies (percentile computation)
+        self._latency_ring: List[float] = []
+        self._latency_idx: int = 0
 
     # -- Core API ----------------------------------------------------------------
 
@@ -351,6 +357,7 @@ class In(Generic[T]):
                 self._total_callback_ms += dt_ms
                 if dt_ms > self._max_callback_ms:
                     self._max_callback_ms = dt_ms
+                self._record_latency(dt_ms)
                 self._in_callback = False
             return
 
@@ -368,6 +375,7 @@ class In(Generic[T]):
             self._total_callback_ms += dt_ms
             if dt_ms > self._max_callback_ms:
                 self._max_callback_ms = dt_ms
+            self._record_latency(dt_ms)
             self._in_callback = False
 
     # -- properties ----------------------------------------------------------------
@@ -441,6 +449,36 @@ class In(Generic[T]):
         if self._last_ts == 0.0:
             return -1.0
         return (time.time() - self._last_ts) * 1000.0
+
+    # -- latency percentile tracking -------------------------------------------
+
+    def _record_latency(self, ms: float) -> None:
+        """Append to rolling circular buffer (hot path — no allocation after warmup)."""
+        ring = self._latency_ring
+        if len(ring) < self._LATENCY_WINDOW:
+            ring.append(ms)
+        else:
+            ring[self._latency_idx % self._LATENCY_WINDOW] = ms
+        self._latency_idx += 1
+
+    def latency_percentiles(self) -> dict:
+        """Return p50/p95/p99/max from the last _LATENCY_WINDOW callbacks.
+
+        Returns empty dict if no data yet. Sorts a copy of the buffer
+        on-demand (called via health(), not on the hot path).
+        """
+        ring = self._latency_ring
+        n = len(ring)
+        if n == 0:
+            return {}
+        s = sorted(ring)
+        return {
+            "p50_ms": round(s[n * 50 // 100], 2),
+            "p95_ms": round(s[min(n - 1, n * 95 // 100)], 2),
+            "p99_ms": round(s[min(n - 1, n * 99 // 100)], 2),
+            "max_ms": round(s[-1], 2),
+            "samples": n,
+        }
 
     def __repr__(self) -> str:
         status = "connected" if self._callback else "idle"
