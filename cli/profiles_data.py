@@ -133,6 +133,8 @@ PROFILES = {
         enable_gateway=True,
         enable_map_modules=True,
         gateway_port=5050,
+        python_autonomy_backend="simple",
+        python_path_follower_backend="pid",
     ),
     "dev": dict(
         _desc="Test perception & planning without a robot",

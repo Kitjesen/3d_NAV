@@ -356,6 +356,8 @@ class NavigationModule(Module, layer=5):
 
         self._failure_reason = ""
         self._tracker.reset(path, self._robot_pos)
+        # Advance past any waypoints the robot is already at (e.g. the start)
+        self._tracker.update(self._robot_pos)
         self.global_path.publish(path)
         self._set_state(MissionState.EXECUTING)
         self._publish_waypoint()

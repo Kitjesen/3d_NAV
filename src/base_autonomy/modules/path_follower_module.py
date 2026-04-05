@@ -190,7 +190,12 @@ class PathFollowerModule(Module, layer=2):
         if self._backend == "nav_core" and self._nc_path:
             self._nav_core_step(odom.ts)
         elif self._backend == "pid" and self._path_points is not None:
-            self._pid_step()
+            # Guard against synchronous cmd_vel→odom→pid_step recursion
+            # in callback transport (no issue with DDS/shm transport).
+            if not getattr(self, '_in_pid', False):
+                self._in_pid = True
+                self._pid_step()
+                self._in_pid = False
 
     def _on_path(self, path: Path):
         if self._backend == "nav_core":
@@ -220,6 +225,9 @@ class PathFollowerModule(Module, layer=2):
             for ps in path.poses:
                 pts.append([ps.pose.position.x, ps.pose.position.y])
             self._path_points = np.array(pts) if len(pts) >= 2 else None
+            # Kick off the cmd_vel → odom loop immediately
+            if self._path_points is not None:
+                self._pid_step()
 
     # ── nav_core control step ──────────────────────────────────────────────
 

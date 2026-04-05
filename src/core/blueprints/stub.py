@@ -15,6 +15,7 @@ Usage::
 from __future__ import annotations
 
 import math
+import threading
 import time
 from typing import Any, Dict
 
@@ -36,16 +37,20 @@ class StubDogModule(Module, layer=1):
     odometry: Out[Odometry]
     alive: Out[bool]
 
-    def __init__(self, **kw: Any) -> None:
+    def __init__(self, initial_x: float = 0.0, initial_y: float = 0.0,
+                 initial_yaw: float = 0.0, **kw: Any) -> None:
         super().__init__(**kw)
         self._vx = 0.0
         self._vy = 0.0
         self._wz = 0.0
-        self._pos_x = 0.0
-        self._pos_y = 0.0
-        self._yaw = 0.0
+        self._pos_x = initial_x
+        self._pos_y = initial_y
+        self._yaw = initial_yaw
         self._last_ts: float = 0.0
         self._stopped = False
+        self._odom_hz = 50.0
+        self._odom_thread: threading.Thread | None = None
+        self._running = False
 
     def setup(self) -> None:
         self.cmd_vel.subscribe(self._on_cmd)
@@ -54,34 +59,23 @@ class StubDogModule(Module, layer=1):
     def start(self) -> None:
         super().start()
         self._last_ts = time.time()
+        self._running = True
         self.alive.publish(True)
+        self._publish_initial_odom()
+        # Periodic odom loop (like a real robot)
+        self._odom_thread = threading.Thread(target=self._odom_loop, daemon=True)
+        self._odom_thread.start()
 
     def stop(self) -> None:
+        self._running = False
+        if self._odom_thread:
+            self._odom_thread.join(timeout=1.0)
         self.alive.publish(False)
         super().stop()
 
-    # -- Port callbacks ------------------------------------------------
-
-    def _on_cmd(self, twist: Twist) -> None:
-        """Integrate position from cmd_vel (simple dead reckoning)."""
-        self._vx = twist.linear.x
-        self._vy = twist.linear.y
-        self._wz = twist.angular.z
-        self._stopped = False
-
+    def _publish_initial_odom(self) -> None:
         now = time.time()
-        dt = now - self._last_ts if self._last_ts > 0 else 0.0
-        dt = min(dt, 1.0)  # clamp to avoid jumps
-        self._last_ts = now
-
-        if dt > 0:
-            cos_y = math.cos(self._yaw)
-            sin_y = math.sin(self._yaw)
-            self._pos_x += (self._vx * cos_y - self._vy * sin_y) * dt
-            self._pos_y += (self._vx * sin_y + self._vy * cos_y) * dt
-            self._yaw += self._wz * dt
-
-        odom = Odometry(
+        self.odometry.publish(Odometry(
             pose=Pose(
                 position=Vector3(self._pos_x, self._pos_y, 0.0),
                 orientation=Quaternion(
@@ -90,15 +84,48 @@ class StubDogModule(Module, layer=1):
                     math.cos(self._yaw / 2),
                 ),
             ),
-            twist=Twist(
-                linear=Vector3(self._vx, self._vy, 0.0),
-                angular=Vector3(0.0, 0.0, self._wz),
-            ),
-            ts=now,
-            frame_id="odom",
-            child_frame_id="body",
-        )
-        self.odometry.publish(odom)
+            twist=Twist(linear=Vector3(0, 0, 0), angular=Vector3(0, 0, 0)),
+            ts=now, frame_id="odom", child_frame_id="body",
+        ))
+
+    # -- Port callbacks ------------------------------------------------
+
+    def _on_cmd(self, twist: Twist) -> None:
+        """Accept velocity command — integration happens in _odom_loop."""
+        self._vx = twist.linear.x
+        self._vy = twist.linear.y
+        self._wz = twist.angular.z
+        self._stopped = False
+
+    def _odom_loop(self) -> None:
+        """Periodic dead-reckoning integration + odom publish (like a real robot)."""
+        dt = 1.0 / self._odom_hz
+        while self._running:
+            now = time.time()
+            cos_y = math.cos(self._yaw)
+            sin_y = math.sin(self._yaw)
+            self._pos_x += (self._vx * cos_y - self._vy * sin_y) * dt
+            self._pos_y += (self._vx * sin_y + self._vy * cos_y) * dt
+            self._yaw += self._wz * dt
+
+            self.odometry.publish(Odometry(
+                pose=Pose(
+                    position=Vector3(self._pos_x, self._pos_y, 0.0),
+                    orientation=Quaternion(
+                        0.0, 0.0,
+                        math.sin(self._yaw / 2),
+                        math.cos(self._yaw / 2),
+                    ),
+                ),
+                twist=Twist(
+                    linear=Vector3(self._vx, self._vy, 0.0),
+                    angular=Vector3(0.0, 0.0, self._wz),
+                ),
+                ts=now,
+                frame_id="odom",
+                child_frame_id="body",
+            ))
+            time.sleep(dt)
 
     def _on_stop(self, level: int) -> None:
         if level >= 1:
