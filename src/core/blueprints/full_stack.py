@@ -28,7 +28,7 @@ from typing import Any
 
 from core.blueprint import Blueprint, autoconnect
 
-from .stacks import driver, lidar, slam, maps, perception, memory, navigation, safety, gateway
+from .stacks import driver, lidar, sim_lidar, slam, maps, perception, memory, navigation, safety, gateway
 from .stacks import planner as planner_stack
 from .stacks.driver import driver_name
 from .stacks.slam import slam_module_name
@@ -53,6 +53,7 @@ def full_stack_blueprint(
     enable_teleop: bool = True,
     enable_map_modules: bool = True,
     enable_rerun: bool = False,
+    scene_xml: str = "",
     # Legacy alias
     planner: str = "",
     **config: Any,
@@ -81,6 +82,7 @@ def full_stack_blueprint(
     bp = autoconnect(
         driver(robot, **driver_config),
         lidar(ip=_lidar_ip, enabled=_needs_lidar),
+        sim_lidar(scene_xml=scene_xml),
         slam(slam_profile),
         maps(**config)         if enable_map_modules else Blueprint(),
         perception(detector, encoder, **perception_config)
@@ -115,6 +117,12 @@ def full_stack_blueprint(
         for consumer in _map_consumers:
             if consumer in _bp_names:
                 bp.wire(_slam, "map_cloud", consumer, "map_cloud")
+    elif scene_xml and "SimPointCloudProvider" in _bp_names:
+        for consumer in _map_consumers:
+            if consumer in _bp_names:
+                bp.wire("SimPointCloudProvider", "map_cloud", consumer, "map_cloud")
+        # SimPointCloudProvider needs odometry to trigger periodic re-publish
+        bp.wire(_drv, "odometry", "SimPointCloudProvider", "odometry")
     else:
         driver_map_port = ""
         if _drv == "ROS2SimDriverModule":
