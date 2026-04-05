@@ -83,11 +83,17 @@ class SlamBridgeModule(Module, layer=1):
 
         # SLAM degeneracy detection
         self._degeneracy_topic: str = kw.get("degeneracy_topic", "/slam/degeneracy")
+        self._degeneracy_detail_topic: str = kw.get(
+            "degeneracy_detail_topic", "/slam/degeneracy_detail")
         self._quality_topic: str = kw.get("quality_topic", "/localization_quality")
         self._degen_level: str = DEGEN_NONE
         self._icp_fitness: float = 0.0
         self._effective_ratio: float = 1.0  # effective features / total features
         self._eigenvalue_ratio: float = 0.0  # min/max eigenvalue of Hessian
+        self._condition_number: float = 0.0
+        self._degenerate_dof_count: int = 0
+        self._eigenvalues: Optional[np.ndarray] = None  # 6-DOF eigenvalues
+        self._dof_mask: Optional[np.ndarray] = None  # 1.0=constrained, 0.0=degenerate
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
         self._fitness_warn: float = kw.get("fitness_warn", 0.15)
@@ -152,15 +158,30 @@ class SlamBridgeModule(Module, layer=1):
             return False
 
     def _subscribe_degeneracy_rclpy(self, node, qos) -> None:
-        """Subscribe to SLAM degeneracy metrics via rclpy (best-effort)."""
+        """Subscribe to SLAM degeneracy metrics via rclpy (best-effort).
+
+        Topics:
+          /localization_quality     — Float32: ICP fitness score (lower=better)
+          /slam/degeneracy          — Float32: effective_ratio (1.0=healthy)
+          /slam/degeneracy_detail   — Float32MultiArray: 11-float detailed metrics
+            [0]  effective_ratio
+            [1]  condition_number
+            [2]  min_eigenvalue
+            [3]  max_eigenvalue
+            [4]  degenerate_dof_count
+            [5..10] eigenvalues (6 DOFs, ascending)
+        """
         try:
             from rclpy.qos import QoSProfile, ReliabilityPolicy
-            from std_msgs.msg import Float32
+            from std_msgs.msg import Float32, Float32MultiArray
             sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
             node.create_subscription(
                 Float32, self._quality_topic, self._on_rclpy_quality, sensor_qos)
             node.create_subscription(
                 Float32, self._degeneracy_topic, self._on_rclpy_degeneracy, sensor_qos)
+            node.create_subscription(
+                Float32MultiArray, self._degeneracy_detail_topic,
+                self._on_rclpy_degeneracy_detail, sensor_qos)
         except Exception as e:
             logger.debug("Degeneracy subscription unavailable: %s", e)
 
@@ -301,17 +322,59 @@ class SlamBridgeModule(Module, layer=1):
         self._last_degen_time = _time.time()
         self._update_degeneracy_level()
 
+    def _on_rclpy_degeneracy_detail(self, msg) -> None:
+        """Detailed degeneracy metrics from Hessian eigenvalue analysis.
+
+        Float32MultiArray with 11 floats:
+          [0]  effective_ratio
+          [1]  condition_number
+          [2]  min_eigenvalue
+          [3]  max_eigenvalue
+          [4]  degenerate_dof_count
+          [5..10] eigenvalues (6 DOFs, sorted ascending)
+        """
+        d = msg.data
+        if len(d) < 11:
+            return
+        self._effective_ratio = float(d[0])
+        self._condition_number = float(d[1])
+        self._eigenvalue_ratio = float(d[1])  # condition_number = max/min
+        self._degenerate_dof_count = int(d[4])
+        self._eigenvalues = np.array([float(d[5 + i]) for i in range(6)])
+        # Derive DOF mask: eigenvalue < 1% of max → degenerate (0.0)
+        max_eig = float(d[3])
+        if max_eig > 0:
+            threshold = max_eig * 0.01
+            self._dof_mask = np.where(self._eigenvalues >= threshold, 1.0, 0.0)
+        self._last_degen_time = _time.time()
+        self._update_degeneracy_level()
+
     def _update_degeneracy_level(self) -> None:
-        """Classify degeneracy severity from SLAM quality metrics."""
+        """Classify degeneracy severity from SLAM quality metrics.
+
+        Uses multiple signals:
+          - ICP fitness score (localizer quality)
+          - effective_ratio (Hessian-based, from C++ eigenvalue analysis)
+          - condition_number (max_eig / min_eig, from degeneracy_detail)
+          - degenerate_dof_count (how many of 6 DOFs are degenerate)
+        """
         prev = self._degen_level
 
-        # Critical: ICP fitness very bad OR almost no features
+        # Hessian-based criteria (from degeneracy_detail)
+        hessian_critical = (self._degenerate_dof_count >= 3
+                            or self._condition_number > 10000)
+        hessian_severe = (self._degenerate_dof_count >= 1
+                          or self._condition_number > self._eigen_ratio_warn)
+
+        # Critical: ICP fitness very bad OR almost no features OR Hessian critical
         if (self._icp_fitness > self._fitness_critical
-                or self._effective_ratio < self._feature_ratio_critical):
+                or self._effective_ratio < self._feature_ratio_critical
+                or hessian_critical):
             level = DEGEN_CRITICAL
-        # Severe: ICP poor OR low features
+        # Severe: ICP poor OR low features OR Hessian severe
         elif (self._icp_fitness > self._fitness_warn
-              or self._effective_ratio < self._feature_ratio_warn):
+              or self._effective_ratio < self._feature_ratio_warn
+              or hessian_severe):
             level = DEGEN_SEVERE
         # Mild: borderline but still usable
         elif (self._icp_fitness > self._fitness_warn * 0.7
@@ -323,8 +386,10 @@ class SlamBridgeModule(Module, layer=1):
         self._degen_level = level
         if level != prev and level != DEGEN_NONE:
             logger.warning(
-                "SLAM degeneracy: %s -> %s (fitness=%.3f, feat_ratio=%.2f)",
-                prev, level, self._icp_fitness, self._effective_ratio)
+                "SLAM degeneracy: %s -> %s (fitness=%.3f, feat_ratio=%.2f, "
+                "cond=%.0f, degen_dofs=%d)",
+                prev, level, self._icp_fitness, self._effective_ratio,
+                self._condition_number, self._degenerate_dof_count)
         elif level == DEGEN_NONE and prev != DEGEN_NONE:
             logger.info("SLAM degeneracy cleared: %s -> NONE", prev)
 
@@ -379,10 +444,18 @@ class SlamBridgeModule(Module, layer=1):
             self._last_visual_odom.pose.position.z,
         ])
 
-        # Detect degenerate axes by comparing eigenvalue-like proxy
-        # Simple heuristic: if effective_ratio is very low, all translational
-        # DOFs are degenerate; otherwise only along-corridor (X in body frame)
-        if self._effective_ratio < self._feature_ratio_critical:
+        # Detect degenerate translational axes.
+        # If Hessian DOF mask is available (from degeneracy_detail), use it
+        # directly: first 3 DOFs are translational (tx, ty, tz).
+        # Otherwise fall back to heuristic based on fitness/ratio.
+        if self._dof_mask is not None and len(self._dof_mask) >= 3:
+            # DOF mask: 1.0 = constrained, 0.0 = degenerate
+            # Invert: degenerate axes get alpha, constrained get 0
+            trans_mask = self._dof_mask[:3]  # tx, ty, tz
+            degen_mask = np.where(trans_mask < 0.5, alpha, 0.0)
+            # Always reduce Z fusion weight (vertical usually stable from IMU)
+            degen_mask[2] *= 0.3
+        elif self._effective_ratio < self._feature_ratio_critical:
             # Full translational degeneracy — blend all XYZ
             degen_mask = np.array([alpha, alpha, alpha * 0.3])
         elif self._icp_fitness > self._fitness_critical:
@@ -479,6 +552,8 @@ class SlamBridgeModule(Module, layer=1):
                 "degeneracy": self._degen_level,
                 "icp_fitness": round(self._icp_fitness, 4),
                 "effective_ratio": round(self._effective_ratio, 3),
+                "condition_number": round(self._condition_number, 1),
+                "degenerate_dof_count": self._degenerate_dof_count,
             })
 
             self._shutdown_event.wait(timeout=interval)
@@ -493,6 +568,9 @@ class SlamBridgeModule(Module, layer=1):
             "degeneracy": self._degen_level,
             "icp_fitness": round(self._icp_fitness, 4),
             "effective_ratio": round(self._effective_ratio, 3),
+            "condition_number": round(self._condition_number, 1),
+            "degenerate_dof_count": self._degenerate_dof_count,
+            "dof_mask": self._dof_mask.tolist() if self._dof_mask is not None else None,
             "visual_fusion_active": self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL) and self._last_visual_odom is not None,
             "visual_fused_count": self._visual_fused_count,
         }

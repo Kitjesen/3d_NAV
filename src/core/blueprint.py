@@ -540,22 +540,46 @@ class SystemHandle:
         self._connections = connections
         self._startup_order = startup_order
         self._started = False
+        self._failed_modules: Dict[str, str] = {}
 
     # -- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
-        """setup() then start() all modules in topological order."""
+        """setup() then start() all modules in topological order.
+
+        Module-level error isolation: if a module's setup() or start()
+        fails, the module is marked as failed and skipped. Other modules
+        continue starting. This prevents one broken module from taking
+        down the entire system.
+        """
         if self._started:
             logger.warning("SystemHandle.start() called but system is already running")
             return
+        failed: dict = {}
         for name in self._startup_order:
-            self._modules[name].setup()
+            try:
+                self._modules[name].setup()
+            except Exception as e:
+                logger.error("Module %s setup() FAILED: %s", name, e, exc_info=True)
+                failed[name] = f"setup: {e}"
         for name in self._startup_order:
-            self._modules[name].start()
+            if name in failed:
+                continue
+            try:
+                self._modules[name].start()
+            except Exception as e:
+                logger.error("Module %s start() FAILED: %s", name, e, exc_info=True)
+                failed[name] = f"start: {e}"
         self._started = True
+        self._failed_modules = failed
+        if failed:
+            logger.warning(
+                "System started with %d/%d modules failed: %s",
+                len(failed), len(self._modules), list(failed.keys()),
+            )
         logger.info(
-            "System started: %d modules, %d connections",
-            len(self._modules), len(self._connections),
+            "System started: %d modules (%d failed), %d connections",
+            len(self._modules), len(failed), len(self._connections),
         )
 
     def stop(self) -> None:
@@ -610,6 +634,7 @@ class SystemHandle:
             "module_count":      len(self._modules),
             "connection_count":  len(self._connections),
             "startup_order":     self._startup_order,
+            "failed_modules":    dict(self._failed_modules),
             "layer_violations":  [],
             "total_messages_in": total_in,
             "total_messages_out": total_out,
