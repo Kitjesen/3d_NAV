@@ -1,4 +1,4 @@
-﻿"""DetectorModule — pluggable object detector as an independent Module.
+"""DetectorModule — pluggable object detector as an independent Module.
 
 Wraps any DetectorBase implementation (YOLO-World, YOLO-E, GroundingDINO,
 BPU) into a core Module with typed In/Out ports. Swapping detectors is
@@ -79,6 +79,9 @@ class DetectorModule(Module, layer=3):
         detector: str = "yoloe",
         text_prompt: str = "",
         confidence: float = 0.3,
+        iou_threshold: float = 0.45,
+        max_detections: int = 64,
+        min_box_size_px: int = 12,
         model_size: str = "l",
         model_path: str = "",
         device: str = "",
@@ -88,6 +91,9 @@ class DetectorModule(Module, layer=3):
         self._detector_name = detector
         self._text_prompt = text_prompt
         self._confidence = confidence
+        self._iou_threshold = iou_threshold
+        self._max_detections = max_detections
+        self._min_box_size_px = min_box_size_px
         self._model_size = model_size
         self._model_path = model_path
         self._device = device
@@ -115,6 +121,7 @@ class DetectorModule(Module, layer=3):
             return YOLOWorldDetector(
                 model_size=self._model_size,
                 confidence=self._confidence,
+                iou_threshold=self._iou_threshold,
                 device=self._device,
             )
         elif name == "yoloe":
@@ -122,6 +129,9 @@ class DetectorModule(Module, layer=3):
             return YOLOEDetector(
                 model_size=self._model_size,
                 confidence=self._confidence,
+                iou_threshold=self._iou_threshold,
+                device=self._device,
+                max_detections=self._max_detections,
             )
         elif name == "grounding_dino":
             from .grounding_dino_detector import GroundingDINODetector
@@ -131,6 +141,9 @@ class DetectorModule(Module, layer=3):
             return BPUDetector(
                 model_path=self._model_path,
                 confidence=self._confidence,
+                iou_threshold=self._iou_threshold,
+                max_detections=self._max_detections,
+                min_box_size_px=self._min_box_size_px,
             )
         else:
             raise ValueError(

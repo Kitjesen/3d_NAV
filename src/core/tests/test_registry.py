@@ -1,8 +1,18 @@
 """Tests for core.registry — plugin registration and lookup."""
 
+import copy
+
 import pytest
 from core.registry import register, get, list_plugins, list_categories, auto_select, get_metadata, clear, snapshot, restore
 from core.module import Module
+
+
+def _snapshot_registry():
+    return snapshot()
+
+
+def _restore_registry(snap):
+    restore(snap)
 
 
 class TestRegister:

@@ -27,6 +27,7 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
 
     try:
         from drivers.thunder.camera_bridge_module import CameraBridgeModule
+
         if needs_camera_bridge:
             bp.add(CameraBridgeModule)
     except ImportError:
@@ -35,10 +36,33 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     try:
         from semantic.perception.semantic_perception.perception_module import PerceptionModule
         from semantic.perception.semantic_perception.encoder_module import EncoderModule
+
         bp.add(
             PerceptionModule,
             detector_type=detector,
             confidence_threshold=config.get("confidence", 0.3),
+            tracking_iou_threshold=config.get(
+                "tracking_iou_threshold",
+                config.get("iou_threshold", 0.3),
+            ),
+            detector_iou_threshold=config.get(
+                "detector_iou_threshold",
+                config.get("iou_threshold", 0.45),
+            ),
+            detector_max_detections=config.get(
+                "detector_max_detections",
+                config.get("max_detections", 64),
+            ),
+            detector_min_box_size_px=config.get(
+                "detector_min_box_size_px",
+                config.get("min_box_size_px", 12),
+            ),
+            detector_model_size=config.get("model_size", "l"),
+            detector_device=config.get("device", ""),
+            detector_model_path=config.get(
+                "detector_model_path",
+                config.get("model_path", ""),
+            ),
             skip_frames=config.get("perception_skip_frames", 1),
             world=config.get("world", ""),
         )

@@ -203,5 +203,74 @@ class TestPluggableSwap(unittest.TestCase):
         handle.stop()
 
 
+
+
+class TestDetectorBackendConfiguration(unittest.TestCase):
+
+    @patch("semantic.perception.semantic_perception.yoloe_detector.YOLOEDetector")
+    def test_yoloe_backend_receives_recall_parameters(self, yoloe_cls):
+        mod = DetectorModule(
+            detector="yoloe",
+            confidence=0.18,
+            iou_threshold=0.41,
+            max_detections=96,
+            model_size="m",
+            device="cuda:0",
+        )
+
+        backend = mod._create_backend()
+
+        yoloe_cls.assert_called_once_with(
+            model_size="m",
+            confidence=0.18,
+            iou_threshold=0.41,
+            device="cuda:0",
+            max_detections=96,
+        )
+        self.assertIs(backend, yoloe_cls.return_value)
+
+    @patch("semantic.perception.semantic_perception.yolo_world_detector.YOLOWorldDetector")
+    def test_yolo_world_backend_receives_iou_parameters(self, yolo_world_cls):
+        mod = DetectorModule(
+            detector="yolo_world",
+            confidence=0.20,
+            iou_threshold=0.44,
+            model_size="s",
+            device="cpu",
+        )
+
+        backend = mod._create_backend()
+
+        yolo_world_cls.assert_called_once_with(
+            model_size="s",
+            confidence=0.20,
+            iou_threshold=0.44,
+            device="cpu",
+        )
+        self.assertIs(backend, yolo_world_cls.return_value)
+
+    @patch("semantic.perception.semantic_perception.bpu_detector.BPUDetector")
+    def test_bpu_backend_receives_recall_parameters(self, bpu_cls):
+        mod = DetectorModule(
+            detector="bpu",
+            model_path="D:/models/person.hbm",
+            confidence=0.22,
+            iou_threshold=0.45,
+            max_detections=72,
+            min_box_size_px=10,
+        )
+
+        backend = mod._create_backend()
+
+        bpu_cls.assert_called_once_with(
+            model_path="D:/models/person.hbm",
+            confidence=0.22,
+            iou_threshold=0.45,
+            max_detections=72,
+            min_box_size_px=10,
+        )
+        self.assertIs(backend, bpu_cls.return_value)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

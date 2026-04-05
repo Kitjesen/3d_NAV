@@ -1,14 +1,14 @@
 """
-BPU YOLO 检测器 — D-Robotics Nash BPU 加速的 COCO-80 检测 + 实例分割。
+BPU YOLO 濡偓濞村娅?閳?D-Robotics Nash BPU 閸旂娀鈧喓娈?COCO-80 濡偓濞?+ 鐎圭偘绶ラ崚鍡楀閵?
 
-在 S100P (128 TOPS) 上通过 HB_HBMRuntime 运行 .hbm 模型，
-替代 YOLO-World/YOLO-E CPU 推理 (~500ms → ~45ms/帧)。
+閸?S100P (128 TOPS) 娑撳﹪鈧俺绻?HB_HBMRuntime 鏉╂劘 .hbm 濡€崇€烽敍?
+閺囧じ鍞?YOLO-World/YOLO-E CPU 閹恒劎鎮?(~500ms 閳?~45ms/鐢?閵?
 
-支持:
-  - YOLO v8n/11n/11s/12n/12s detect (纯检测)
-  - YOLO 11s seg (检测 + 实例分割 mask)
-  - 自动发现最优模型 (seg > detect)
-  - COCO 80 类 → text_prompt 标签映射 (兼容开放词汇接口)
+閺€瀵?
+  - YOLO v8n/11n/11s/12n/12s detect (缁惧ù?
+  - YOLO 11s seg (濡偓濞?+ 鐎圭偘绶ラ崚鍡楀 mask)
+  - 閼峰З閸欐垹骞囬張鈧导妯荒侀崹?(seg > detect)
+  - COCO 80 缁?閳?text_prompt 閺嶅洨閺勭姴鐨?(閸忕厧瀵偓閺€鎹愮槤濮瑰洦甯撮崣?
 """
 
 import os
@@ -20,7 +20,7 @@ import numpy as np
 from .detector_base import Detection2D, DetectorBase
 
 
-# COCO 80 类名 (与 ultralytics/YOLO 一致)
+# COCO 80 缁鎮?(娑?ultralytics/YOLO 娑撯偓閼?
 COCO_NAMES = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
     "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -37,10 +37,10 @@ COCO_NAMES = [
     "scissors", "teddy bear", "hair drier", "toothbrush",
 ]
 
-# COCO 名 → class_id 反向索引
+# COCO 閸?閳?class_id 閸欏秴鎮滅槐銏犵穿
 _COCO_NAME_TO_ID = {name: i for i, name in enumerate(COCO_NAMES)}
 
-# 双向同义词组 — 任一词匹配时自动扩展到同组所有词
+# 閸欏苯鎮滈崥灞肩疅鐠囧秶绮?閳?娴犺绔寸拠宥呭爱闁板秵妞傞懛濮╅幍鈺佺潔閸掓澘鎮撶紒鍕閺堝鐦?
 _SYNONYM_GROUPS = [
     {"person", "people", "human", "pedestrian"},
     {"desk", "table", "dining table"},
@@ -52,15 +52,15 @@ _SYNONYM_GROUPS = [
     {"motorbike", "motorcycle"},
     {"aeroplane", "airplane"},
     {"bin", "trash can", "recycling bin"},
-    {"bus", "truck"},  # bus.jpg 里的 bus 被检测为 truck
+    {"bus", "truck"},  # bus.jpg 闁插瞼娈?bus 鐞氬ù瀣╄礋 truck
 ]
-# 预计算: word → 同组所有词
+# 妫板嫯缁? word 閳?閸氬瞼绮嶉幍鈧張澶庣槤
 _SYNONYM_EXPAND: dict = {}
 for _group in _SYNONYM_GROUPS:
     for _word in _group:
         _SYNONYM_EXPAND[_word] = _group
 
-# 常用同义词 → COCO 类名 (导航场景中的非 COCO 词汇)
+# 鐢摜鏁ら崥灞肩疅鐠?閳?COCO 缁鎮?(鐎佃壈鍩呴崷鐑樻珯娑撴畱闂?COCO 鐠囧秵鐪?
 _SYNONYMS = {
     "desk": "dining table",
     "table": "dining table",
@@ -72,7 +72,7 @@ _SYNONYMS = {
     "phone": "cell phone",
     "mobile": "cell phone",
     "fridge": "refrigerator",
-    "bin": "trash can",      # trash can 不在 COCO, 但保留映射
+    "bin": "trash can",      # trash can 娑撳秴婀?COCO, 娴ｅ棔绻氶悾娆愭Ё鐏?
     "motorbike": "motorcycle",
     "aeroplane": "airplane",
     "couch": "couch",
@@ -82,17 +82,17 @@ _SYNONYMS = {
 
 
 class BPUDetector(DetectorBase):
-    """D-Robotics Nash BPU YOLO 检测器 (DetectorBase 适配)。
+    """D-Robotics Nash BPU YOLO 濡偓濞村娅?(DetectorBase 闁倿鍘?閵?
 
-    闭词汇 COCO-80 检测器，通过 text_prompt 标签匹配过滤输出，
-    兼容 perception_node.py 的开放词汇检测接口。
+    闂傜槤濮?COCO-80 濡偓濞村娅掗敍宀勨偓姘崇箖 text_prompt 閺嶅洨閸栧綊鍘ゆ潻鍥ㄦ姢鏉堟挸鍤敍?
+    閸忕厧 perception_node.py 閻ㄥ嫬绱戦弨鎹愮槤濮瑰洦濞村甯撮崣锝冣偓?
     """
 
     MODEL_CANDIDATES = [
-        # YOLO-E 26s (导航 125 类词汇表, 最优先) — yoloe26s_seg_nav125
-        # NOTE: yolov8s-worldv2 无法转 .hbm (Einsum op 不支持 Nash BPU)
+        # YOLO-E 26s (鐎佃壈鍩?125 缁槒鐦濆Ч鍥€? 閺堚偓娴兼ê鍘? 閳?yoloe26s_seg_nav125
+        # NOTE: yolov8s-worldv2 閺冪姵纭舵潪?.hbm (Einsum op 娑撳秵鏁幐?Nash BPU)
         "/home/sunrise/models/yoloe26s_seg_nav125_nashe_640x640_nv12.hbm",
-        # 标准 YOLO (COCO-80 闭词汇, 降级)
+        # 閺嶅洤鍣?YOLO (COCO-80 闂傜槤濮? 闂勫秶楠?
         "/home/sunrise/models/yolo11s_seg_nashe_640x640_nv12.hbm",
         "/home/sunrise/models/yolo12s_detect_nashe_640x640_nv12.hbm",
         "/home/sunrise/models/yolo12n_detect_nashe_640x640_nv12.hbm",
@@ -108,12 +108,14 @@ class BPUDetector(DetectorBase):
         confidence: float = 0.25,
         iou_threshold: float = 0.45,
         model_path: Optional[str] = None,
-        max_detections: int = 30,
+        max_detections: int = 64,
+        min_box_size_px: int = 12,
     ):
         self._conf_thr = confidence
         self._iou_thr = iou_threshold
         self._model_path = model_path
-        self._max_detections = max_detections
+        self._max_detections = max(int(max_detections), 0)
+        self._min_box_size_px = max(int(min_box_size_px), 1)
         self._rt = None
         self._mname = None
         self._output_map = []
@@ -122,12 +124,12 @@ class BPUDetector(DetectorBase):
         self._dfl_weights = np.arange(16, dtype=np.float32)
         self.has_seg = False
         self._model_name_short = ""
-        # 缓存: text_prompt → allowed COCO class_id set
+        # 缂傛挸鐡? text_prompt 閳?allowed COCO class_id set
         self._prompt_cache_key = ""
         self._allowed_cids: set = set()
 
     def load_model(self) -> None:
-        """加载 BPU .hbm 模型。"""
+        """Load the BPU .hbm model."""
         import glob as _glob
         from hbm_runtime import HB_HBMRuntime
 
@@ -137,7 +139,7 @@ class BPUDetector(DetectorBase):
                 if "*" in pattern:
                     matches = sorted(_glob.glob(pattern))
                     if matches:
-                        path = matches[-1]  # 取最新的
+                        path = matches[-1]  # 閸欐牗娓堕弬鎵畱
                         break
                 elif os.path.exists(pattern):
                     path = pattern
@@ -147,12 +149,12 @@ class BPUDetector(DetectorBase):
                     f"No BPU YOLO model found. Searched: {self.MODEL_CANDIDATES}"
                 )
 
-        # 自动加载词汇表 (YOLO-World 导出时生成的 _vocab.json)
+        # 閼峰З閸旂姾娴囩拠宥嗙湽鐞?(YOLO-World 鐎电厧鍤弮鍓佹晸閹存劗娈?_vocab.json)
         self._custom_vocab = None
         vocab_pattern = path.replace(".hbm", "").replace("_nashe_640x640_nv12", "") + "*_vocab.json"
         vocab_matches = _glob.glob(vocab_pattern)
         if not vocab_matches:
-            # 尝试同目录下任何 *_vocab.json
+            # 鐏忔繆鐦崥宀€娲拌ぐ鏇氱瑓娴犺缍?*_vocab.json
             model_dir = os.path.dirname(path)
             vocab_matches = _glob.glob(os.path.join(model_dir, "*_vocab.json"))
         if vocab_matches:
@@ -177,40 +179,40 @@ class BPUDetector(DetectorBase):
         self._rt = HB_HBMRuntime(path)
         self._mname = self._rt.model_names[0]
 
-        # 跑一次 dummy 推理发现输出结构
+        # 鐠烘垳绔村▎?dummy 閹恒劎鎮婇崣鎴犲箛鏉堟挸鍤紒鎾寸€?
         y = np.zeros((1, self.INPUT_SIZE, self.INPUT_SIZE, 1), dtype=np.uint8)
         uv = np.zeros(
             (1, self.INPUT_SIZE // 2, self.INPUT_SIZE // 2, 2), dtype=np.uint8
         )
         dummy_out = self._rt.run({"images_y": y, "images_uv": uv})[self._mname]
 
-        # 类别数: 从模型实际输出推断（不依赖 vocab 文件，避免 vocab/model 不匹配）
-        # 先扫描输出找最可能的 cls 通道数
+        # 缁鍩嗛弫? 娴犲孩膩閸ㄥ鐤勯梽鍛扮翻閸戠儤甯归弬绱欐稉宥勭贩鐠?vocab 閺傚洣娆㈤敍宀勪缉閸?vocab/model 娑撳秴灏柊宥忕礆
+        # 閸忓牊澹傞幓蹇氱翻閸戠儤澹橀張鈧崣鍏橀惃?cls 闁岸浜鹃弫?
         _candidate_cls_ch = set()
         for name, arr in dummy_out.items():
             ch = arr.shape[-1]
             if ch not in (64, 32, 1) and ch != self.INPUT_SIZE // 4:
                 _candidate_cls_ch.add(ch)
-        # 优先匹配自定义词汇表，否则取非 64/32 的通道数
+        # 娴兼ê鍘涢崠褰掑帳閼风暰娑斿鐦濆Ч鍥€冮敍灞芥儊閸掓瑥褰囬棃?64/32 閻ㄥ嫰鈧岸浜鹃弫?
         if self._custom_vocab and len(self._custom_vocab) in _candidate_cls_ch:
             self._num_classes = len(self._custom_vocab)
         elif 80 in _candidate_cls_ch:
             self._num_classes = 80
             if self._custom_vocab:
-                print(f"[BPU] WARNING: vocab has {len(self._custom_vocab)} classes but model has 80 → using COCO-80")
+                print(f"[BPU] WARNING: vocab has {len(self._custom_vocab)} classes but model has 80 閳?using COCO-80")
                 self._custom_vocab = None
         elif _candidate_cls_ch:
             self._num_classes = max(_candidate_cls_ch)
         else:
             self._num_classes = 80
 
-        # 检测输出格式: YOLOE 端到端 vs YOLO 多尺度
+        # 濡偓濞村绶崙鐑樼壐瀵? YOLOE 缁斿煂缁?vs YOLO 婢舵艾鏄傛惔?
         self._is_yoloe = False
         self._yoloe_det_name = None
         self._yoloe_proto_name = None
 
         for name, arr in dummy_out.items():
-            # YOLOE 端到端: output0=[1, 300, 38], output1=[1, 32, 160, 160]
+            # YOLOE 缁斿煂缁? output0=[1, 300, 38], output1=[1, 32, 160, 160]
             if arr.ndim == 3 and arr.shape[1] <= 300 and arr.shape[2] > 4:
                 self._is_yoloe = True
                 self._yoloe_det_name = name
@@ -219,7 +221,7 @@ class BPUDetector(DetectorBase):
                 print(f"[BPU] YOLOE end-to-end format: {name} shape={arr.shape}")
 
         if self._is_yoloe:
-            # 找 proto mask
+            # 閹?proto mask
             for name, arr in dummy_out.items():
                 if name != self._yoloe_det_name and arr.ndim == 4:
                     self._yoloe_proto_name = name
@@ -227,9 +229,9 @@ class BPUDetector(DetectorBase):
             self._output_map = []
             self._proto_name = self._yoloe_proto_name
         else:
-            cls_outs = {}   # grid_size → name (ch=num_classes)
-            bbox_outs = {}  # grid_size → name (ch=64)
-            mask_outs = {}  # grid_size → name (ch=32, mask coefficients)
+            cls_outs = {}   # grid_size 閳?name (ch=num_classes)
+            bbox_outs = {}  # grid_size 閳?name (ch=64)
+            mask_outs = {}  # grid_size 閳?name (ch=32, mask coefficients)
             self._proto_name = None
             for name, arr in dummy_out.items():
                 gs = arr.shape[1]
@@ -239,7 +241,7 @@ class BPUDetector(DetectorBase):
                 elif ch == 64:
                     bbox_outs[gs] = name
                 elif ch == 32:
-                    if gs == self.INPUT_SIZE // 4:  # 160×160 = proto
+                    if gs == self.INPUT_SIZE // 4:  # 160鑴?60 = proto
                         self._proto_name = name
                     else:
                         mask_outs[gs] = name
@@ -250,7 +252,7 @@ class BPUDetector(DetectorBase):
                 mc = mask_outs.get(gs)
                 self._output_map.append((cls_outs[gs], bbox_outs[gs], mc))
 
-        # 量化 scale (v8n 的 int32 bbox)
+        # 闁插繐瀵?scale (v8n 閻?int32 bbox)
         self._bbox_scales = {}
         try:
             oq = self._rt.output_quants[self._mname]
@@ -268,66 +270,66 @@ class BPUDetector(DetectorBase):
 
     def detect(self, rgb: np.ndarray, text_prompt: str) -> List[Detection2D]:
         """
-        BPU 推理 + COCO 标签过滤。
+        BPU 閹恒劎鎮?+ COCO 閺嶅洨鏉╁洦鎶ら妴?
 
         Args:
-            rgb: HxWx3 uint8 BGR 图像
-            text_prompt: ". " 分隔的目标标签列表 (e.g. "door . chair . person")
+            rgb: HxWx3 uint8 BGR 閸ユ儳鍎?
+            text_prompt: ". " 閸掑棝娈ч惃鍕窗閺嶅洦鐖ｇ粵鎯у灙鐞?(e.g. "door . chair . person")
 
         Returns:
-            匹配 text_prompt 中 COCO 类的 Detection2D 列表
+            閸栧綊鍘?text_prompt 娑?COCO 缁崵娈?Detection2D 閸掓銆?
         """
         if self._rt is None:
             return []
 
-        # 解析 text_prompt → 允许的 class_id 集合 (有缓存)
+        # 鐟欙絾鐎?text_prompt 閳?閸忎浇閻?class_id 闂嗗棗鎮?(閺堝绱︾€?
         allowed = self._parse_prompt(text_prompt)
 
-        bgr = rgb  # perception_node 传 bgr
+        bgr = rgb  # perception_node 娴?bgr
         h0, w0 = bgr.shape[:2]
 
-        # 预处理: letterbox + NV12
+        # 妫板嫬閻? letterbox + NV12
         y_plane, uv_plane, scale, pad_x, pad_y = self._preprocess(bgr)
 
-        # BPU 推理
+        # BPU 閹恒劎鎮?
         outputs = self._rt.run({"images_y": y_plane, "images_uv": uv_plane})[
             self._mname
         ]
 
-        # YOLOE 端到端: 直接解析 NMS 后的输出
+        # YOLOE 缁斿煂缁? 閻╁瓨甯寸憴锝嗙€?NMS 閸氬海娈戞潏鎾冲毉
         if self._is_yoloe:
             return self._detect_yoloe(outputs, allowed, scale, pad_x, pad_y, h0, w0)
 
-        # 标准 YOLO: 多尺度解码 + NMS
+        # 閺嶅洤鍣?YOLO: 婢舵艾鏄傛惔锕佇掗惍?+ NMS
         raw, kept_mc = self._postprocess(outputs, scale, pad_x, pad_y, h0, w0)
         if not raw:
             return []
 
-        # 实例分割 mask 生成 (seg 模型, batched matmul)
+        # 鐎圭偘绶ラ崚鍡楀 mask 閻㈢喐鍨?(seg 濡€崇€? batched matmul)
         masks_list = self._generate_masks(raw, kept_mc, outputs, scale, pad_x, pad_y)
 
-        # 转换为 Detection2D, 按 text_prompt 过滤
+        # 鏉炲床娑?Detection2D, 閹?text_prompt 鏉╁洦鎶?
         results: List[Detection2D] = []
         frame_area = h0 * w0
         for i, (box, score, cid) in enumerate(raw):
             cid = int(cid)
-            # 过滤: 仅保留 text_prompt 中能匹配的 COCO 类
+            # 鏉╁洦鎶? 娴犲懍绻氶悾?text_prompt 娑撳厴閸栧綊鍘ら惃?COCO 缁?
             if allowed and cid not in allowed:
                 continue
             x1, y1, x2, y2 = box.astype(int).tolist()
             bw, bh = x2 - x1, y2 - y1
-            # 跳过过小的检测 (<20px)
-            if bw < 20 or bh < 20:
+            # Keep smaller far-field targets instead of hard-coding a 20px cutoff.
+            if not self._is_box_large_enough(bw, bh):
                 continue
 
-            # 构造 mask (full-frame bool HxW)
+            # 閺嬪嫰鈧?mask (full-frame bool HxW)
             mask = None
             if masks_list[i] is not None:
                 mask_crop, mx, my = masks_list[i]
-                # 展开为 full-frame mask (Detection2D.mask 是 HxW bool)
+                # 鐏炴洖绱戞稉?full-frame mask (Detection2D.mask 閺?HxW bool)
                 full_mask = np.zeros((h0, w0), dtype=bool)
                 mh, mw = mask_crop.shape[:2]
-                # 裁剪到图像边界
+                # 鐟佷礁澹€閸掓澘娴橀崓蹇氱珶閻?
                 ix1 = max(0, mx)
                 iy1 = max(0, my)
                 ix2 = min(w0, mx + mw)
@@ -338,7 +340,7 @@ class BPUDetector(DetectorBase):
                     ]
                 mask = full_mask
 
-            # 使用自定义词汇表或 COCO 默认名
+            # 娴ｈ法鏁ら懛鐣炬稊澶庣槤濮瑰洩銆冮幋?COCO 姒涙閸?
             if self._custom_vocab and cid in self._custom_vocab:
                 label = self._custom_vocab[cid]
             elif cid < len(COCO_NAMES):
@@ -355,21 +357,42 @@ class BPUDetector(DetectorBase):
                     mask=mask,
                 )
             )
-            if len(results) >= self._max_detections:
-                break
 
-        return results
+        return self._limit_detection_results(results)
+
+    def _is_box_large_enough(self, width: float, height: float) -> bool:
+        """Keep smaller far-field targets instead of hard-coding a 20px cutoff."""
+        return width >= self._min_box_size_px and height >= self._min_box_size_px
+
+    def _limit_detection_results(self, results: List[Detection2D]) -> List[Detection2D]:
+        """Sort globally by confidence before truncation to avoid class-order bias."""
+        if not results:
+            return []
+
+        ranked = sorted(results, key=lambda det: float(det.score), reverse=True)
+        if self._max_detections > 0:
+            return ranked[: self._max_detections]
+        return ranked
+
+    def _sort_and_limit_indices(self, scores: np.ndarray, keep: list[int]) -> list[int]:
+        if not keep:
+            return []
+
+        ranked = sorted(keep, key=lambda idx: float(scores[idx]), reverse=True)
+        if self._max_detections > 0:
+            return ranked[: self._max_detections]
+        return ranked
 
     def shutdown(self) -> None:
-        """释放 BPU 资源。"""
+        """Release BPU runtime resources."""
         self._rt = None
 
     # ================================================================
-    #  text_prompt → COCO class_id 映射
+    #  text_prompt 閳?COCO class_id 閺勭姴鐨?
     # ================================================================
 
     def _detect_yoloe(self, outputs, allowed, scale, pad_x, pad_y, h0, w0):
-        """YOLOE 端到端输出解析: [1, 300, 38] → Detection2D 列表。"""
+        """Decode YOLOE end-to-end output [1, 300, 38] into detections."""
         det_out = outputs[self._yoloe_det_name][0]  # (300, 38)
         # 38 = 4(bbox xyxy) + 1(score) + 1(class_id) + 32(mask_coeffs)
         results: List[Detection2D] = []
@@ -381,7 +404,7 @@ class BPUDetector(DetectorBase):
                 continue
 
             cid = int(row[5])
-            # letterbox 逆变换
+            # letterbox 闁棗褰夐幑?
             x1 = (float(row[0]) - pad_x) / scale
             y1 = (float(row[1]) - pad_y) / scale
             x2 = (float(row[2]) - pad_x) / scale
@@ -393,14 +416,14 @@ class BPUDetector(DetectorBase):
             y2 = max(0, min(y2, h0))
 
             bw, bh = x2 - x1, y2 - y1
-            if bw < 10 or bh < 10:
+            if not self._is_box_large_enough(bw, bh):
                 continue
 
-            # 过滤: 仅保留 text_prompt 中能匹配的类
+            # 鏉╁洦鎶? 娴犲懍绻氶悾?text_prompt 娑撳厴閸栧綊鍘ら惃鍕
             if allowed and cid not in allowed:
                 continue
 
-            # 标签
+            # 閺嶅洨
             if self._custom_vocab and cid in self._custom_vocab:
                 label = self._custom_vocab[cid]
             elif cid < len(COCO_NAMES):
@@ -408,7 +431,7 @@ class BPUDetector(DetectorBase):
             else:
                 label = f"class_{cid}"
 
-            # mask 生成 (如果有 proto)
+            # mask 閻㈢喐鍨?(婵″倹鐏夐張?proto)
             mask = None
             if self._yoloe_proto_name and self._yoloe_proto_name in outputs:
                 mask_coeffs = row[6:38]  # 32 coefficients
@@ -420,7 +443,7 @@ class BPUDetector(DetectorBase):
                     mask_raw = mask_raw.reshape(ph, pw)
                     np.clip(mask_raw, -50, 50, out=mask_raw)
                     mask_prob = 1.0 / (1.0 + np.exp(-mask_raw))
-                    # 裁剪到 bbox 区域并 resize
+                    # 鐟佷礁澹€閸?bbox 閸栧搫鐓欓獮?resize
                     bx1 = max(0, int((x1 * scale + pad_x) / 4))
                     by1 = max(0, int((y1 * scale + pad_y) / 4))
                     bx2 = min(pw, int((x2 * scale + pad_x) / 4) + 1)
@@ -446,26 +469,24 @@ class BPUDetector(DetectorBase):
                 class_id=cid,
                 mask=mask,
             ))
-            if len(results) >= self._max_detections:
-                break
 
-        return results
+        return self._limit_detection_results(results)
 
     def _parse_prompt(self, text_prompt: str) -> set:
-        """解析 ". " 分隔的 text_prompt, 返回匹配到的 COCO class_id 集合。
+        """鐟欙絾鐎?". " 閸掑棝娈ч惃?text_prompt, 鏉╂柨娲栭崠褰掑帳閸掓壆娈?COCO class_id 闂嗗棗鎮庨妴?
 
-        匹配策略 (按优先级):
-        1. 精确匹配 COCO 类名
-        2. 同义词映射 (_SYNONYMS)
-        3. 子串模糊匹配
-        空集表示不过滤 (返回所有检测)。
+        閸栧綊鍘ょ粵鏍殣 (閹稿绱崗鍫㈤獓):
+        1. 缁墽鈥橀崠褰掑帳 COCO 缁鎮?
+        2. 閸氬奔绠熺拠宥嗘Ё鐏?(_SYNONYMS)
+        3. 鐎涙劒瑕嗗Ο锛勭ˇ閸栧綊鍘?
+        缁屾椽娉︾悰銊с仛娑撳秷绻冨?(鏉╂柨娲栭幍鈧張澶嬪ù?閵?
         """
         if text_prompt == self._prompt_cache_key:
             return self._allowed_cids
 
         self._prompt_cache_key = text_prompt
         labels = [l.strip().lower() for l in text_prompt.split(".") if l.strip()]
-        # 自动扩展同义词
+        # 閼峰З閹碘晛鐫嶉崥灞肩疅鐠?
         expanded = set(labels)
         for l in labels:
             if l in _SYNONYM_EXPAND:
@@ -475,7 +496,7 @@ class BPUDetector(DetectorBase):
             self._allowed_cids = set()
             return self._allowed_cids
 
-        # 构建名称→ID 索引 (优先自定义词汇表)
+        # 閺嬪嫬缂撻崥宥囆為埆鎵濪 缁便垹绱?(娴兼ê鍘涢懛鐣炬稊澶庣槤濮瑰洩銆?
         if self._custom_vocab:
             name_to_id = {v.lower(): k for k, v in self._custom_vocab.items()}
         else:
@@ -483,17 +504,17 @@ class BPUDetector(DetectorBase):
 
         matched = set()
         for label in labels:
-            # 1. 精确匹配
+            # 1. 缁墽鈥橀崠褰掑帳
             if label in name_to_id:
                 matched.add(name_to_id[label])
                 continue
-            # 2. 同义词映射 (仅 COCO 模式)
+            # 2. 閸氬奔绠熺拠宥嗘Ё鐏?(娴?COCO 濡€崇础)
             if not self._custom_vocab and label in _SYNONYMS:
                 syn = _SYNONYMS[label]
                 if syn in name_to_id:
                     matched.add(name_to_id[syn])
                     continue
-            # 3. 子串模糊匹配
+            # 3. 鐎涙劒瑕嗗Ο锛勭ˇ閸栧綊鍘?
             for name, cid in name_to_id.items():
                 if label in name or name in label:
                     matched.add(cid)
@@ -502,7 +523,7 @@ class BPUDetector(DetectorBase):
         return self._allowed_cids
 
     # ================================================================
-    #  预处理: letterbox + BGR → NV12
+    #  妫板嫬閻? letterbox + BGR 閳?NV12
     # ================================================================
 
     def _preprocess(self, bgr):
@@ -531,7 +552,7 @@ class BPUDetector(DetectorBase):
         )
 
     # ================================================================
-    #  后处理: 多尺度解码 + NMS
+    #  閸氬骸閻? 婢舵艾鏄傛惔锕佇掗惍?+ NMS
     # ================================================================
 
     def _postprocess(self, outputs, scale, pad_x, pad_y, orig_h, orig_w):
@@ -599,7 +620,7 @@ class BPUDetector(DetectorBase):
         classes = np.concatenate(all_classes)
         mask_coeffs = np.concatenate(all_mask_coeffs) if all_mask_coeffs else None
 
-        keep = self._nms(boxes, scores, classes)
+        keep = self._sort_and_limit_indices(scores, self._nms(boxes, scores, classes))
         results = [(boxes[i], scores[i], classes[i]) for i in keep]
         kept_mc = mask_coeffs[keep] if mask_coeffs is not None else None
         return results, kept_mc
@@ -638,11 +659,11 @@ class BPUDetector(DetectorBase):
         return inter / np.maximum(a1 + a2 - inter, 1e-6)
 
     # ================================================================
-    #  实例分割 mask 生成 (batched matmul)
+    #  鐎圭偘绶ラ崚鍡楀 mask 閻㈢喐鍨?(batched matmul)
     # ================================================================
 
     def _generate_masks(self, raw, kept_mc, outputs, scale, pad_x, pad_y):
-        """从 proto × coefficients 生成实例 mask。返回 list, 每项为 (mask_crop, x, y) 或 None。"""
+        """Generate instance masks from proto and coefficient tensors."""
         masks_list = [None] * len(raw)
         if kept_mc is None or not self._proto_name or self._proto_name not in outputs:
             return masks_list

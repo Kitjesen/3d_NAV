@@ -35,3 +35,4 @@ Write-Host "  sunrise HEAD: $result"
 
 Write-Host ""
 Write-Host "=== 同步完成 ===" -ForegroundColor Green
+    

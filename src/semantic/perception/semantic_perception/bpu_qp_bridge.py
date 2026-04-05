@@ -1,4 +1,4 @@
-﻿"""
+"""
 BPU → qp_perception 桥接层
 
 将 LingTu 的 BPU YOLO 检测器适配为 qp_perception 的 Detector 接口，
@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 def create_perception_pipeline(
-    bpu_confidence: float = 0.3,
+    bpu_confidence: float = 0.22,
+    bpu_iou_threshold: float = 0.45,
+    bpu_max_detections: int = 64,
+    bpu_min_box_size_px: int = 12,
     bpu_model_path: Optional[str] = None,
     class_whitelist: Optional[List[str]] = None,
     frame_width: int = 640,
@@ -39,9 +42,12 @@ def create_perception_pipeline(
     创建完整的 BPU + qp_perception 感知管线。
 
     Args:
-        bpu_confidence: BPU 检测置信度阈值
+        bpu_confidence: BPU detection confidence threshold.
+        bpu_iou_threshold: BPU NMS IoU threshold.
+        bpu_max_detections: Max detections kept after NMS.
+        bpu_min_box_size_px: Smallest bbox edge kept for tracking.
         bpu_model_path: BPU .hbm 模型路径 (None=自动发现)
-        class_whitelist: 只保留这些类别 (None=全部, ["person"]=仅人)
+        class_whitelist: 只保留这些类别 (None=默认 person, ["person"]=仅人)
         frame_width: 帧宽度 (用于目标选择器)
         frame_height: 帧高度
         reid_backbone: Re-ID 模型 ("osnet_x1_0" 或 "mobilenet")
@@ -50,11 +56,17 @@ def create_perception_pipeline(
     Returns:
         PerceptionPipeline 实例
     """
-    # BPU 检测器
+    # BPU detector tuned for crowded person scenes by default.
+    if class_whitelist is None:
+        class_whitelist = ["person"]
+
     from .bpu_detector import BPUDetector
     bpu = BPUDetector(
         confidence=bpu_confidence,
+        iou_threshold=bpu_iou_threshold,
         model_path=bpu_model_path,
+        max_detections=bpu_max_detections,
+        min_box_size_px=bpu_min_box_size_px,
     )
     bpu.load_model()
 

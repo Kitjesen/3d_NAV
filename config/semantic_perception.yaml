@@ -1,104 +1,68 @@
-# ═══════════════════════════════════════════════════════════════
-# semantic_perception_node 配置 (USS-Nav 风格 15Hz 管线)
-#
-# USS-Nav pipeline:
-#   YOLO-E (2025)         → 实例分割 mask, 15+ FPS on Jetson
-#   Mobile-CLIP (2024)    → 文本标签编码, 缓存后零开销
-#   mask + depth → 点云   → 精确物体 3D 重建
-#   双指标融合            → 语义 + 几何优先级匹配
-#
-# 性能: 15Hz on Jetson Orin NX (vs 原 5Hz)
-#
-# 参考:
-#   USS-Nav (2026): YOLO-E + Mobile-CLIP + 点云融合
-#   YOLOE (2025):   Real-Time Seeing Anything
-#   MobileCLIP:     2.3x faster, CVPR 2024
-# ═══════════════════════════════════════════════════════════════
-
+# Semantic perception defaults tuned for higher person recall.
 semantic_perception_node:
   ros__parameters:
-    # ── 检测器后端 ──
-    detector_type: "bpu"                 # bpu (S100P BPU 加速) | yoloe | yolo_world | grounding_dino
+    detector_type: "bpu"
 
-    # ── YOLO-E 实例分割 (USS-Nav 默认) ──
     yoloe:
-      model_size: "l"                    # s (最快) / m / l (平衡, 推荐)
-      confidence: 0.3                    # 检测置信度阈值
-      iou_threshold: 0.5                # NMS IoU 阈值
-      tensorrt: false                    # true = TensorRT FP16 加速 (首次编译慢)
-      max_detections: 30                 # 单帧最大检测数
+      model_size: "l"
+      confidence: 0.25
+      iou_threshold: 0.45
+      tensorrt: false
+      max_detections: 64
 
-    # ── BPU YOLO 参数 (D-Robotics Nash, S100P 专用) ──
     bpu:
-      model_path: ""                       # 空 = 自动发现 /home/sunrise/models/ 下最优模型
-      confidence: 0.25                     # 检测置信度阈值
-      iou_threshold: 0.45                  # NMS IoU 阈值
-      max_detections: 30                   # 单帧最大检测数
+      model_path: ""
+      confidence: 0.22
+      iou_threshold: 0.45
+      max_detections: 64
+      min_box_size_px: 12
 
-    # ── YOLO-World 参数 (S100P CPU 部署) ──
     yolo_world:
-      model_size: "s"                     # S100P 用 small 模型 (yolov8s-worldv2)
-      confidence: 0.4                     # 提高阈值减少虚检 (0.3→0.4)
+      model_size: "s"
+      confidence: 0.40
       iou_threshold: 0.45
       tensorrt: false
 
-    # ── 语义编码 (USS-Nav: text-only Mobile-CLIP) ──
-    # BPU 模式下禁用 — COCO-80 闭词汇检测不需要 CLIP, 且 S100P 无法下载 HF 模型
     clip:
       enable: false
-      model: "ViT-B/32"                 # 文本编码器 (text-only 模式下仅加载文本分支)
-      text_only: true                    # USS-Nav: true = 仅编码标签文本 (15Hz)
-                                         #          false = 编码图像裁剪 (legacy, ~5Hz)
+      model: "ViT-B/32"
+      text_only: true
 
-    # ── GroundingDINO 参数 (可选后端) ──
     grounding_dino:
       config_path: ""
       weights_path: ""
       box_threshold: 0.35
       text_threshold: 0.25
 
-    # ── 默认检测类别 (英文, 用 . 分隔, 导航相关 COCO 类 + 工业安全) ──
     default_classes: "door . chair . fire extinguisher . person . desk . stairs . elevator . sign . trash can . sofa . car . truck . bus . bicycle . motorcycle . bench . backpack . laptop . tv . traffic light . stop sign . potted plant . bed . toilet . bottle . cup . dog . cat"
 
-    # ── Laplacian 模糊过滤 ──
     laplacian_threshold: 100.0
 
-    # ── 3D 投影 ──
-    depth_scale: 0.001                   # Orbbec depth 单位 → 米
-    max_depth: 6.0                       # 超过此深度的检测忽略 (m)
-    min_depth: 0.3                       # 过近的检测忽略 (m)
+    depth_scale: 0.001
+    max_depth: 6.0
+    min_depth: 0.3
 
-    # ── USS-Nav 双指标融合 ──
     iou_threshold: 0.3
-    clip_similarity_threshold: 0.75      # Ωsem 阈值 (USS-Nav Eq.2)
-    merge_distance: 1.5                  # fallback 距离阈值 (m) — CPU ~0.5s/帧, 需更大容差
+    clip_similarity_threshold: 0.75
+    merge_distance: 1.5
 
-    # ── 场景图 ──
     scene_graph:
       enable: true
-      publish_rate: 2.0                  # 场景图发布频率 (Hz), 提升至 2Hz
+      publish_rate: 2.0
       max_objects: 200
 
-    # ── 语义地图渲染 ──
     semantic_map:
       enable: true
-
-    # ── 语义地图持久化 ──
-    # 非空路径：启动时加载上次保存的物体场景图，关闭时自动保存
-    # 路径需与 semantic_planner.yaml 的 semantic_data_dir 一致
-    # 注意：使用预建地图模式（navigation_run.launch.py）时坐标系一致，探索模式下谨慎使用
     semantic_map_path: "maps/semantic/scene_graph.json"
 
-    # ── 性能 (USS-Nav 15Hz) ──
-    target_fps: 15.0                     # USS-Nav: 15Hz on Jetson Orin NX
-    skip_frames: 1                       # 处理每帧 (不跳帧)
+    target_fps: 15.0
+    skip_frames: 1
 
-# ── reconstruction_node 参数 ──
 reconstruction_node:
   ros__parameters:
-    publish_rate: 1.0                    # 彩色点云发布频率 (Hz)
-    voxel_size: 0.05                     # 体素分辨率 (m)，越小越精细但越占内存
-    camera_frame: "camera_color_optical_frame"  # Orbbec 彩色相机坐标系
-    world_frame: "map"                   # SLAM 世界坐标系
-    save_dir: "maps/reconstruction"      # PLY 保存目录
-    min_points_to_publish: 1000          # 低于此点数不发布（避免噪声帧）
+    publish_rate: 1.0
+    voxel_size: 0.05
+    camera_frame: "camera_color_optical_frame"
+    world_frame: "map"
+    save_dir: "maps/reconstruction"
+    min_points_to_publish: 1000

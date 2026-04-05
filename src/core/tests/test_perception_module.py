@@ -444,3 +444,101 @@ class TestQuatToRotation:
         R = _quat_to_rotation(0.0, 0.0, qz, qw)
         expected = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=float)
         np.testing.assert_allclose(R, expected, atol=1e-10)
+
+
+
+class TestDetectorConfiguration:
+    @patch("semantic.perception.semantic_perception.instance_tracker.InstanceTracker")
+    def test_setup_uses_tracking_iou_threshold(self, instance_tracker_cls):
+        mod = PerceptionModule(
+            merge_distance=0.8,
+            max_objects=33,
+            tracking_iou_threshold=0.27,
+            confidence_threshold=0.91,
+        )
+        mod._init_detector = MagicMock(return_value=None)
+        mod._init_clip_encoder = MagicMock(return_value=None)
+
+        mod.setup()
+
+        instance_tracker_cls.assert_called_once_with(
+            merge_distance=0.8,
+            iou_threshold=0.27,
+            max_objects=33,
+        )
+
+    @patch("semantic.perception.semantic_perception.yoloe_detector.YOLOEDetector")
+    def test_init_yoloe_detector_forwards_recall_params(self, yoloe_cls):
+        backend = MagicMock()
+        yoloe_cls.return_value = backend
+
+        mod = PerceptionModule(
+            detector_type="yoloe",
+            confidence_threshold=0.18,
+            detector_iou_threshold=0.41,
+            detector_max_detections=96,
+            detector_model_size="m",
+            detector_device="cuda:0",
+        )
+
+        created = mod._init_detector()
+
+        yoloe_cls.assert_called_once_with(
+            model_size="m",
+            confidence=0.18,
+            iou_threshold=0.41,
+            device="cuda:0",
+            max_detections=96,
+        )
+        backend.load_model.assert_called_once_with()
+        assert created is backend
+
+    @patch("semantic.perception.semantic_perception.yolo_world_detector.YOLOWorldDetector")
+    def test_init_yolo_world_detector_forwards_iou(self, yolo_world_cls):
+        backend = MagicMock()
+        yolo_world_cls.return_value = backend
+
+        mod = PerceptionModule(
+            detector_type="yolo_world",
+            confidence_threshold=0.2,
+            detector_iou_threshold=0.44,
+            detector_model_size="s",
+            detector_device="cpu",
+        )
+
+        created = mod._init_detector()
+
+        yolo_world_cls.assert_called_once_with(
+            model_size="s",
+            confidence=0.2,
+            iou_threshold=0.44,
+            device="cpu",
+        )
+        backend.load_model.assert_called_once_with()
+        assert created is backend
+
+    @patch("semantic.perception.semantic_perception.bpu_detector.BPUDetector")
+    def test_init_bpu_detector_forwards_recall_params(self, bpu_cls):
+        backend = MagicMock()
+        bpu_cls.return_value = backend
+
+        mod = PerceptionModule(
+            detector_type="bpu",
+            confidence_threshold=0.22,
+            detector_iou_threshold=0.45,
+            detector_max_detections=72,
+            detector_min_box_size_px=10,
+            detector_model_path="D:/models/people.hbm",
+        )
+
+        created = mod._init_detector()
+
+        bpu_cls.assert_called_once_with(
+            model_path="D:/models/people.hbm",
+            confidence=0.22,
+            iou_threshold=0.45,
+            max_detections=72,
+            min_box_size_px=10,
+        )
+        backend.load_model.assert_called_once_with()
+        assert created is backend

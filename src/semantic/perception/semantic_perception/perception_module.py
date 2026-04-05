@@ -1,4 +1,4 @@
-﻿"""perception_module.py -- semantic perception Module wrapper (core framework).
+"""perception_module.py -- semantic perception Module wrapper (core framework).
 
 Wraps the PURE ALGORITHM parts of SemanticPerceptionNode as a Module,
 fully decoupled from ROS2.  No algorithm is rewritten -- all real work
@@ -71,6 +71,13 @@ class PerceptionModule(Module, layer=3):
         default_classes: str = "door . chair . person . desk . stairs . elevator . sign",
         skip_frames: int = 1,
         world: str = "",
+        tracking_iou_threshold: float = 0.3,
+        detector_iou_threshold: float = 0.45,
+        detector_max_detections: int = 64,
+        detector_min_box_size_px: int = 12,
+        detector_model_size: str = "l",
+        detector_device: str = "",
+        detector_model_path: str = "",
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
@@ -86,6 +93,13 @@ class PerceptionModule(Module, layer=3):
         self._default_classes = default_classes
         self._skip_frames = max(skip_frames, 1)
         self._world = world
+        self._tracking_iou_threshold = tracking_iou_threshold
+        self._detector_iou_threshold = detector_iou_threshold
+        self._detector_max_detections = detector_max_detections
+        self._detector_min_box_size_px = detector_min_box_size_px
+        self._detector_model_size = detector_model_size
+        self._detector_device = detector_device
+        self._detector_model_path = detector_model_path
 
         # runtime state (populated during setup)
         self._tracker = None
@@ -164,10 +178,14 @@ class PerceptionModule(Module, layer=3):
             from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
             self._tracker = InstanceTracker(
                 merge_distance=self._merge_distance,
-                iou_threshold=self._confidence_threshold,
+                iou_threshold=self._tracking_iou_threshold,
                 max_objects=self._max_objects,
             )
-            logger.info("InstanceTracker initialized (merge_dist=%.2f)", self._merge_distance)
+            logger.info(
+                "InstanceTracker initialized (merge_dist=%.2f, iou=%.2f)",
+                self._merge_distance,
+                self._tracking_iou_threshold,
+            )
         except ImportError:
             logger.warning(
                 "semantic_perception.instance_tracker not available -- "
@@ -311,15 +329,38 @@ class PerceptionModule(Module, layer=3):
         try:
             if self._detector_type == "yoloe":
                 from semantic.perception.semantic_perception.yoloe_detector import YOLOEDetector
-                det = YOLOEDetector(confidence=self._confidence_threshold)
+                det = YOLOEDetector(
+                    model_size=self._detector_model_size,
+                    confidence=self._confidence_threshold,
+                    iou_threshold=self._detector_iou_threshold,
+                    device=self._detector_device,
+                    max_detections=self._detector_max_detections,
+                )
                 det.load_model()
                 logger.info("YOLOEDetector loaded")
                 return det
             elif self._detector_type == "yolo_world":
                 from semantic.perception.semantic_perception.yolo_world_detector import YOLOWorldDetector
-                det = YOLOWorldDetector(confidence=self._confidence_threshold)
+                det = YOLOWorldDetector(
+                    model_size=self._detector_model_size,
+                    confidence=self._confidence_threshold,
+                    iou_threshold=self._detector_iou_threshold,
+                    device=self._detector_device,
+                )
                 det.load_model()
                 logger.info("YOLOWorldDetector loaded")
+                return det
+            elif self._detector_type == "bpu":
+                from semantic.perception.semantic_perception.bpu_detector import BPUDetector
+                det = BPUDetector(
+                    model_path=self._detector_model_path,
+                    confidence=self._confidence_threshold,
+                    iou_threshold=self._detector_iou_threshold,
+                    max_detections=self._detector_max_detections,
+                    min_box_size_px=self._detector_min_box_size_px,
+                )
+                det.load_model()
+                logger.info("BPUDetector loaded")
                 return det
             elif self._detector_type == "sim_scene":
                 from semantic.perception.semantic_perception.sim_scene_observer import SimSceneObserver
