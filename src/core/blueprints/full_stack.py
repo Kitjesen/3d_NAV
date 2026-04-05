@@ -27,6 +27,7 @@ import logging
 from typing import Any
 
 from core.blueprint import Blueprint, autoconnect
+from core.utils.calibration_check import run_calibration_check
 
 from .stacks import driver, lidar, sim_lidar, slam, maps, perception, memory, navigation, safety, gateway
 from .stacks import planner as planner_stack
@@ -67,6 +68,19 @@ def full_stack_blueprint(
     planner_backend = planner or planner_backend
     semantic_save_dir = config.get("semantic_save_dir", DEFAULT_SEMANTIC_DIR)
     _drv = driver_name(robot)
+
+    # ── Startup calibration self-check ─────────────────────────────────
+    _needs_camera = enable_semantic or slam_profile not in ("", "none")
+    _needs_slam = slam_profile not in ("", "none")
+    calib = run_calibration_check(
+        require_camera=_needs_camera,
+        require_slam=_needs_slam,
+    )
+    if not calib.ok:
+        raise RuntimeError(
+            f"Calibration self-check failed ({len(calib.errors)} error(s)): "
+            + "; ".join(calib.errors)
+        )
 
     driver_config = dict(config)
     if enable_semantic and _drv == "MujocoDriverModule":
@@ -152,6 +166,21 @@ def full_stack_blueprint(
     def _w(out_mod, out_port, in_mod, in_port):
         if out_mod in _bp_names and in_mod in _bp_names:
             bp.wire(out_mod, out_port, in_mod, in_port)
+
+    # Localization health → Safety + Navigation + DepthVisualOdom
+    _w("SlamBridgeModule", "localization_status", "SafetyRingModule", "localization_status")
+    _w("SlamBridgeModule", "localization_status", "NavigationModule", "localization_status")
+    _w("SlamBridgeModule", "localization_status", "DepthVisualOdomModule", "localization_status")
+
+    # Visual odometry fusion: DepthVisualOdom → SlamBridge (selective DOF blend)
+    _w("DepthVisualOdomModule", "visual_odometry", "SlamBridgeModule", "visual_odom")
+
+    # Depth camera feed to visual odometry
+    _camera_for_vodom = "CameraBridgeModule" if "CameraBridgeModule" in _bp_names else _drv
+    _color_port = "color_image" if _camera_for_vodom == "CameraBridgeModule" else "camera_image"
+    _w(_camera_for_vodom, _color_port, "DepthVisualOdomModule", "color_image")
+    _w(_camera_for_vodom, "depth_image", "DepthVisualOdomModule", "depth_image")
+    _w(_camera_for_vodom, "camera_info", "DepthVisualOdomModule", "camera_info")
 
     # Instruction + goal routing — Gateway/MCP both publish instruction/goal_pose,
     # causing auto_wire ambiguity. Explicitly fan-in both sources to consumers.

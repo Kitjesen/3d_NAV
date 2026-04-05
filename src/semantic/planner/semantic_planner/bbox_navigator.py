@@ -31,12 +31,15 @@ BBox 视觉伺服导航 — 看到目标就追
 """
 
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
+
+from core.config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +86,9 @@ class BBoxNavigator:
         self._target_bbox: Optional[list] = None
         self._target_3d: Optional[np.ndarray] = None   # [x, y, z] 世界坐标
         self._lock = threading.Lock()
+        # Camera→body rotation from factory calibration
+        cam_cfg = get_config().camera
+        self._R_body_camera = cam_cfg.T_body_camera[:3, :3]
 
     # ── 公开接口 ─────────────────────────────────────────────────────────────
 
@@ -174,19 +180,18 @@ class BBoxNavigator:
             # 返回相机坐标系 (调用方自行转换)
             return np.array([X_c, Y_c, Z_c], dtype=float)
 
-        # 转换到世界坐标系
-        # 假设: 相机朝前安装，光学 Z_c = 机体前向 x，光学 X_c = 机体左向 -y
+        # 转换到世界坐标系: camera 3D → body frame → world frame
         rx, ry, yaw = robot_pose
         cos_y = np.cos(yaw)
         sin_y = np.sin(yaw)
 
-        # 机体坐标系: forward = Z_c, left = -X_c, up = -Y_c
-        body_x = Z_c       # 前向
-        body_y = -X_c      # 左向
+        # Camera optical → body frame via calibrated rotation
+        cam_pt = np.array([X_c, Y_c, Z_c])
+        body_pt = self._R_body_camera @ cam_pt
 
-        wx = rx + cos_y * body_x - sin_y * body_y
-        wy = ry + sin_y * body_x + cos_y * body_y
-        wz = -Y_c          # 高度 (世界坐标系 z = 相机 -Y)
+        wx = rx + cos_y * body_pt[0] - sin_y * body_pt[1]
+        wy = ry + sin_y * body_pt[0] + cos_y * body_pt[1]
+        wz = body_pt[2]
 
         return np.array([wx, wy, wz], dtype=float)
 

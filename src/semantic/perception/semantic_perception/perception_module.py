@@ -30,6 +30,7 @@ from core.msgs.semantic import (
 )
 from core.msgs.nav import Odometry
 from core.msgs.geometry import Vector3
+from core.config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,10 @@ class PerceptionModule(Module, layer=3):
         self._detector_device = detector_device
         self._detector_model_path = detector_model_path
 
+        # Camera extrinsics from factory calibration
+        cam_cfg = get_config().camera
+        self._T_body_camera = cam_cfg.T_body_camera
+
         # runtime state (populated during setup)
         self._tracker = None
         self._detector = None
@@ -135,6 +140,46 @@ class PerceptionModule(Module, layer=3):
         self.depth_image.subscribe(self._on_depth)
         self.camera_info.subscribe(self._on_camera_info)
         self.odometry.subscribe(self._on_odometry)
+
+        # Sanity-check factory calibration
+        self._check_calibration()
+
+    def _check_calibration(self) -> None:
+        """Warn at startup if camera calibration looks wrong."""
+        cfg = get_config().camera
+        # Camera position sanity: should be within reasonable robot body bounds
+        pos = (cfg.position_x, cfg.position_y, cfg.position_z)
+        if all(v == 0.0 for v in pos):
+            logger.warning(
+                "Camera extrinsics position is all zeros — 3D projections will be wrong. "
+                "Check config/robot_config.yaml camera section."
+            )
+        if abs(cfg.position_x) > 2.0 or abs(cfg.position_y) > 2.0 or abs(cfg.position_z) > 3.0:
+            logger.warning(
+                "Camera position (%.2f, %.2f, %.2f) looks too large for a quadruped. "
+                "Check config/robot_config.yaml camera section.",
+                cfg.position_x, cfg.position_y, cfg.position_z,
+            )
+        # Default intrinsics check
+        if cfg.fx <= 0 or cfg.fy <= 0:
+            logger.warning(
+                "Camera default intrinsics have non-positive focal length (fx=%.1f, fy=%.1f). "
+                "Runtime CameraInfo must provide valid values.",
+                cfg.fx, cfg.fy,
+            )
+        # LiDAR sanity
+        lidar_cfg = get_config().lidar
+        offset_mag = (lidar_cfg.offset_x**2 + lidar_cfg.offset_y**2 + lidar_cfg.offset_z**2) ** 0.5
+        if offset_mag > 1.0:
+            logger.warning(
+                "LiDAR offset magnitude %.3fm seems large for body-mounted sensor. "
+                "Check config/robot_config.yaml lidar section.",
+                offset_mag,
+            )
+        logger.info(
+            "Calibration OK: camera at (%.3f, %.3f, %.3f), LiDAR offset %.4fm",
+            cfg.position_x, cfg.position_y, cfg.position_z, offset_mag,
+        )
 
     def _setup_via_factory(self) -> None:
         """Create detector + encoder + tracker through api/factory.py."""
@@ -258,14 +303,16 @@ class PerceptionModule(Module, layer=3):
         if self._latest_intrinsics is None or self._latest_depth is None:
             return
 
-        tf_matrix = self._latest_odom_matrix
-        if tf_matrix is None:
-            # Static fallback when no SLAM/TF
-            tf_matrix = np.eye(4)
-            tf_matrix[:3, 3] = [0.15, 0.0, 0.45]
+        tf_body_world = self._latest_odom_matrix
+        if tf_body_world is None:
+            # Static fallback when no SLAM/TF — use camera extrinsics as world pose
+            tf_camera_world = self._T_body_camera.copy()
+        else:
+            # Correct transform chain: T_camera_world = T_body_world @ T_body_camera
+            tf_camera_world = tf_body_world @ self._T_body_camera
 
         try:
-            self._process_frame(img, tf_matrix)
+            self._process_frame(img, tf_camera_world)
         except Exception as e:
             logger.error("Frame processing error (frame=%d): %s", self._frame_count, e)
 

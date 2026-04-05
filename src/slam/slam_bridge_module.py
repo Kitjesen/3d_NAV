@@ -16,16 +16,31 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
+import time as _time
 import numpy as np
+from typing import Any, Dict, Optional
 
 from core.module import Module
-from core.stream import Out
+from core.stream import In, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.msgs.geometry import Pose, Vector3, Quaternion
 from core.registry import register
 
 logger = logging.getLogger(__name__)
+
+# Localization health states
+LOC_UNINIT = "UNINIT"        # No data received yet
+LOC_TRACKING = "TRACKING"    # Receiving data, quality OK
+LOC_DEGRADED = "DEGRADED"    # Receiving data, quality poor (cloud timeout or degeneracy)
+LOC_LOST = "LOST"            # No odometry for > timeout
+
+# Degeneracy severity levels (from SLAM quality metrics)
+DEGEN_NONE = "NONE"              # Normal operation
+DEGEN_MILD = "MILD"              # Feature count low but usable
+DEGEN_SEVERE = "SEVERE"          # Severe feature loss, high covariance
+DEGEN_CRITICAL = "CRITICAL"      # Complete degeneracy (corridor/void)
 
 
 @register("slam_bridge", "default", description="DDS SLAM → Python Module bridge")
@@ -40,6 +55,10 @@ class SlamBridgeModule(Module, layer=1):
     odometry:              Out[Odometry]
     localization_quality:  Out[float]
     alive:                 Out[bool]
+    localization_status:   Out[dict]
+
+    # Visual odometry input for selective DOF fusion during degeneracy
+    visual_odom: In[Odometry]
 
     def __init__(
         self,
@@ -55,7 +74,50 @@ class SlamBridgeModule(Module, layer=1):
         self._reader = None
         self._rclpy_node = None  # fallback
 
+        # Localization health watchdog
+        self._last_odom_time: float = 0.0
+        self._last_cloud_time: float = 0.0
+        self._loc_state: str = LOC_UNINIT
+        self._odom_timeout: float = kw.get("odom_timeout", 2.0)
+        self._cloud_timeout: float = kw.get("cloud_timeout", 5.0)
+        self._watchdog_hz: float = kw.get("watchdog_hz", 2.0)
+        self._shutdown_event = threading.Event()
+        self._watchdog_thread: Optional[threading.Thread] = None
+
+        # SLAM degeneracy detection
+        self._degeneracy_topic: str = kw.get("degeneracy_topic", "/slam/degeneracy")
+        self._degeneracy_detail_topic: str = kw.get(
+            "degeneracy_detail_topic", "/slam/degeneracy_detail")
+        self._degen_level: str = DEGEN_NONE
+        self._icp_fitness: float = 0.0
+        self._effective_ratio: float = 1.0  # effective features / total features
+        self._eigenvalue_ratio: float = 0.0  # min/max eigenvalue of Hessian
+        self._condition_number: float = 0.0
+        self._degenerate_dof_count: int = 0
+        self._eigenvalues: Optional[np.ndarray] = None  # 6-DOF eigenvalues
+        self._dof_mask: Optional[np.ndarray] = None  # 1.0=constrained, 0.0=degenerate
+        self._last_degen_time: float = 0.0
+        # Degeneracy thresholds (tunable)
+        self._fitness_warn: float = kw.get("fitness_warn", 0.15)
+        self._fitness_critical: float = kw.get("fitness_critical", 0.3)
+        self._feature_ratio_warn: float = kw.get("feature_ratio_warn", 0.3)
+        self._feature_ratio_critical: float = kw.get("feature_ratio_critical", 0.1)
+        self._eigen_ratio_warn: float = kw.get("eigen_ratio_warn", 100.0)  # condition number
+
+        # Selective DOF fusion — visual odometry during degeneracy
+        # Based on Selective KF (arXiv 2412.17235): only fuse degenerate DOFs
+        self._visual_odom_fusion: bool = kw.get("visual_odom_fusion", True)
+        self._visual_alpha: float = kw.get("visual_alpha", 0.6)  # visual blend weight during CRITICAL
+        self._last_slam_odom: Optional[Odometry] = None
+        self._last_visual_odom: Optional[Odometry] = None
+        self._visual_anchor_T: Optional[np.ndarray] = None  # SLAM pose when visual odom activated
+        self._visual_fused_count: int = 0
+
     def setup(self) -> None:
+        # Visual odometry input for selective fusion
+        if self._visual_odom_fusion:
+            self.visual_odom.subscribe(self._on_visual_odom)
+
         # Try cyclonedds first (lightweight, no ROS2 env needed)
         if self._try_cyclonedds():
             return
@@ -91,12 +153,41 @@ class SlamBridgeModule(Module, layer=1):
             get_shared_executor().add_node(self._rclpy_node)
             self._rclpy_node.create_subscription(PointCloud2, self._cloud_topic, self._on_rclpy_cloud, qos)
             self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
-            self._rclpy_node.create_subscription(Float32, self._quality_topic, self._on_rclpy_quality, qos)
+            # Subscribe to degeneracy metrics if available
+            self._subscribe_degeneracy_rclpy(self._rclpy_node, qos)
             logger.info("SlamBridgeModule: using rclpy (fallback)")
             return True
         except (ImportError, Exception) as e:
             logger.debug("SlamBridgeModule: rclpy unavailable: %s", e)
             return False
+
+    def _subscribe_degeneracy_rclpy(self, node, qos) -> None:
+        """Subscribe to SLAM degeneracy metrics via rclpy (best-effort).
+
+        Topics:
+          /localization_quality     — Float32: ICP fitness score (lower=better)
+          /slam/degeneracy          — Float32: effective_ratio (1.0=healthy)
+          /slam/degeneracy_detail   — Float32MultiArray: 11-float detailed metrics
+            [0]  effective_ratio
+            [1]  condition_number
+            [2]  min_eigenvalue
+            [3]  max_eigenvalue
+            [4]  degenerate_dof_count
+            [5..10] eigenvalues (6 DOFs, ascending)
+        """
+        try:
+            from rclpy.qos import QoSProfile, ReliabilityPolicy
+            from std_msgs.msg import Float32, Float32MultiArray
+            sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
+            node.create_subscription(
+                Float32, self._quality_topic, self._on_rclpy_quality, sensor_qos)
+            node.create_subscription(
+                Float32, self._degeneracy_topic, self._on_rclpy_degeneracy, sensor_qos)
+            node.create_subscription(
+                Float32MultiArray, self._degeneracy_detail_topic,
+                self._on_rclpy_degeneracy_detail, sensor_qos)
+        except Exception as e:
+            logger.debug("Degeneracy subscription unavailable: %s", e)
 
     def start(self) -> None:
         super().start()
@@ -107,8 +198,18 @@ class SlamBridgeModule(Module, layer=1):
             self.alive.publish(True)
         else:
             self.alive.publish(False)
+        # Start localization health watchdog
+        self._shutdown_event.clear()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, daemon=True,
+            name="slam-bridge-watchdog")
+        self._watchdog_thread.start()
 
     def stop(self) -> None:
+        self._shutdown_event.set()
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            self._watchdog_thread.join(timeout=2.0)
+        self._watchdog_thread = None
         if self._reader:
             self._reader.stop()
         if self._rclpy_node:
@@ -121,26 +222,36 @@ class SlamBridgeModule(Module, layer=1):
     def _on_dds_quality(self, msg) -> None:
         """DDS_Float32 → localization quality (lower = better)."""
         try:
-            self.localization_quality.publish(float(msg.data))
+            val = float(msg.data)
+            self.localization_quality.publish(val)
+            self._icp_fitness = val
+            self._last_degen_time = _time.time()
+            self._update_degeneracy_level()
         except Exception as e:
             logger.debug("SlamBridge dds quality error: %s", e)
 
     def _on_dds_odom(self, msg) -> None:
-        """DDS_Odometry → Module Odometry."""
+        """DDS_Odometry → Module Odometry (with selective visual fusion)."""
         try:
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             t = msg.twist.twist
             stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self.odometry.publish(Odometry(
+            from core.msgs.geometry import Twist
+            slam_odom = Odometry(
                 pose=Pose(
                     position=Vector3(x=p.x, y=p.y, z=p.z),
                     orientation=Quaternion(x=q.x, y=q.y, z=q.z, w=q.w),
                 ),
-                vx=t.linear.x, vy=t.linear.y, vz=t.linear.z,
-                wx=t.angular.x, wy=t.angular.y, wz=t.angular.z,
+                twist=Twist(
+                    linear=Vector3(x=t.linear.x, y=t.linear.y, z=t.linear.z),
+                    angular=Vector3(x=t.angular.x, y=t.angular.y, z=t.angular.z),
+                ),
                 ts=stamp,
-            ))
+            )
+            fused = self._fuse_odometry(slam_odom)
+            self.odometry.publish(fused)
+            self._last_odom_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
 
@@ -161,6 +272,7 @@ class SlamBridgeModule(Module, layer=1):
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge dds cloud error: %s", e)
 
@@ -171,22 +283,22 @@ class SlamBridgeModule(Module, layer=1):
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             t = msg.twist.twist
-            self.odometry.publish(Odometry(
+            from core.msgs.geometry import Twist
+            slam_odom = Odometry(
                 pose=Pose(
                     position=Vector3(x=float(p.x), y=float(p.y), z=float(p.z)),
                     orientation=Quaternion(x=float(q.x), y=float(q.y), z=float(q.z), w=float(q.w)),
                 ),
-                vx=float(t.linear.x), vy=float(t.linear.y), vz=float(t.linear.z),
-                wx=float(t.angular.x), wy=float(t.angular.y), wz=float(t.angular.z),
-            ))
+                twist=Twist(
+                    linear=Vector3(x=float(t.linear.x), y=float(t.linear.y), z=float(t.linear.z)),
+                    angular=Vector3(x=float(t.angular.x), y=float(t.angular.y), z=float(t.angular.z)),
+                ),
+            )
+            fused = self._fuse_odometry(slam_odom)
+            self.odometry.publish(fused)
+            self._last_odom_time = _time.time()
         except Exception as e:
             logger.warning("SlamBridge rclpy odom error: %s", e)
-
-    def _on_rclpy_quality(self, msg) -> None:
-        try:
-            self.localization_quality.publish(float(msg.data))
-        except Exception as e:
-            logger.debug("SlamBridge rclpy quality error: %s", e)
 
     def _on_rclpy_cloud(self, msg) -> None:
         try:
@@ -207,5 +319,276 @@ class SlamBridgeModule(Module, layer=1):
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge rclpy cloud error: %s", e)
+
+    # ── Degeneracy metric callbacks ─────────────────────────────────────────
+
+    def _on_rclpy_quality(self, msg) -> None:
+        """ICP fitness score from localizer (lower = better)."""
+        val = float(msg.data)
+        self._icp_fitness = val
+        self.localization_quality.publish(val)
+        self._last_degen_time = _time.time()
+        self._update_degeneracy_level()
+
+    def _on_rclpy_degeneracy(self, msg) -> None:
+        """Effective feature ratio from SLAM (1.0 = all features valid)."""
+        self._effective_ratio = float(msg.data)
+        self._last_degen_time = _time.time()
+        self._update_degeneracy_level()
+
+    def _on_rclpy_degeneracy_detail(self, msg) -> None:
+        """Detailed degeneracy metrics from Hessian eigenvalue analysis.
+
+        Float32MultiArray with 11 floats:
+          [0]  effective_ratio
+          [1]  condition_number
+          [2]  min_eigenvalue
+          [3]  max_eigenvalue
+          [4]  degenerate_dof_count
+          [5..10] eigenvalues (6 DOFs, sorted ascending)
+        """
+        d = msg.data
+        if len(d) < 11:
+            return
+        self._effective_ratio = float(d[0])
+        self._condition_number = float(d[1])
+        self._eigenvalue_ratio = float(d[1])  # condition_number = max/min
+        self._degenerate_dof_count = int(d[4])
+        self._eigenvalues = np.array([float(d[5 + i]) for i in range(6)])
+        # Derive DOF mask: eigenvalue < 1% of max → degenerate (0.0)
+        max_eig = float(d[3])
+        if max_eig > 0:
+            threshold = max_eig * 0.01
+            self._dof_mask = np.where(self._eigenvalues >= threshold, 1.0, 0.0)
+        self._last_degen_time = _time.time()
+        self._update_degeneracy_level()
+
+    def _update_degeneracy_level(self) -> None:
+        """Classify degeneracy severity from SLAM quality metrics.
+
+        Uses multiple signals:
+          - ICP fitness score (localizer quality)
+          - effective_ratio (Hessian-based, from C++ eigenvalue analysis)
+          - condition_number (max_eig / min_eig, from degeneracy_detail)
+          - degenerate_dof_count (how many of 6 DOFs are degenerate)
+        """
+        prev = self._degen_level
+
+        # Hessian-based criteria (from degeneracy_detail)
+        hessian_critical = (self._degenerate_dof_count >= 3
+                            or self._condition_number > 10000)
+        hessian_severe = (self._degenerate_dof_count >= 1
+                          or self._condition_number > self._eigen_ratio_warn)
+
+        # Critical: ICP fitness very bad OR almost no features OR Hessian critical
+        if (self._icp_fitness > self._fitness_critical
+                or self._effective_ratio < self._feature_ratio_critical
+                or hessian_critical):
+            level = DEGEN_CRITICAL
+        # Severe: ICP poor OR low features OR Hessian severe
+        elif (self._icp_fitness > self._fitness_warn
+              or self._effective_ratio < self._feature_ratio_warn
+              or hessian_severe):
+            level = DEGEN_SEVERE
+        # Mild: borderline but still usable
+        elif (self._icp_fitness > self._fitness_warn * 0.7
+              or self._effective_ratio < self._feature_ratio_warn * 1.5):
+            level = DEGEN_MILD
+        else:
+            level = DEGEN_NONE
+
+        self._degen_level = level
+        if level != prev and level != DEGEN_NONE:
+            logger.warning(
+                "SLAM degeneracy: %s -> %s (fitness=%.3f, feat_ratio=%.2f, "
+                "cond=%.0f, degen_dofs=%d)",
+                prev, level, self._icp_fitness, self._effective_ratio,
+                self._condition_number, self._degenerate_dof_count)
+        elif level == DEGEN_NONE and prev != DEGEN_NONE:
+            logger.info("SLAM degeneracy cleared: %s -> NONE", prev)
+
+    # ── Visual odometry selective DOF fusion ────────────────────────────
+
+    def _on_visual_odom(self, odom: Odometry) -> None:
+        """Receive visual odometry from DepthVisualOdomModule.
+
+        Based on Selective KF (arXiv 2412.17235):
+        Only fuse visual odometry for degenerate DOF directions.
+        When SLAM is healthy, visual odom is ignored.
+        """
+        self._last_visual_odom = odom
+
+    def _fuse_odometry(self, slam_odom: Odometry) -> Odometry:
+        """Selectively blend visual odometry into degenerate DOF directions.
+
+        When degeneracy is NONE/MILD: pass SLAM odom unchanged.
+        When SEVERE: blend visual at alpha=0.3 for degenerate directions.
+        When CRITICAL: blend visual at alpha=0.6 for degenerate directions.
+
+        Degenerate direction detection (simplified):
+        - Corridor → X (along-corridor) is degenerate
+        - Open field → X,Y (horizontal plane) are degenerate
+        - We use ICP fitness + effective_ratio as proxy:
+          * High fitness + low ratio → full translational degeneracy
+          * High fitness + moderate ratio → partial (along-corridor)
+        """
+        if not self._visual_odom_fusion:
+            return slam_odom
+        if self._degen_level not in (DEGEN_SEVERE, DEGEN_CRITICAL):
+            self._last_slam_odom = slam_odom
+            return slam_odom
+        if self._last_visual_odom is None:
+            return slam_odom
+
+        # Determine blend alpha based on severity
+        if self._degen_level == DEGEN_CRITICAL:
+            alpha = self._visual_alpha  # 0.6
+        else:
+            alpha = self._visual_alpha * 0.5  # 0.3 for SEVERE
+
+        # Anchor: record SLAM pose when fusion first activates
+        slam_pos = np.array([
+            slam_odom.pose.position.x,
+            slam_odom.pose.position.y,
+            slam_odom.pose.position.z,
+        ])
+        vis_pos = np.array([
+            self._last_visual_odom.pose.position.x,
+            self._last_visual_odom.pose.position.y,
+            self._last_visual_odom.pose.position.z,
+        ])
+
+        # Detect degenerate translational axes.
+        # If Hessian DOF mask is available (from degeneracy_detail), use it
+        # directly: first 3 DOFs are translational (tx, ty, tz).
+        # Otherwise fall back to heuristic based on fitness/ratio.
+        if self._dof_mask is not None and len(self._dof_mask) >= 3:
+            # DOF mask: 1.0 = constrained, 0.0 = degenerate
+            # Invert: degenerate axes get alpha, constrained get 0
+            trans_mask = self._dof_mask[:3]  # tx, ty, tz
+            degen_mask = np.where(trans_mask < 0.5, alpha, 0.0)
+            # Always reduce Z fusion weight (vertical usually stable from IMU)
+            degen_mask[2] *= 0.3
+        elif self._effective_ratio < self._feature_ratio_critical:
+            # Full translational degeneracy — blend all XYZ
+            degen_mask = np.array([alpha, alpha, alpha * 0.3])
+        elif self._icp_fitness > self._fitness_critical:
+            # Corridor-like: blend XY, keep Z from SLAM
+            degen_mask = np.array([alpha, alpha, 0.0])
+        else:
+            # Partial: blend X (along-axis of highest uncertainty)
+            degen_mask = np.array([alpha, alpha * 0.3, 0.0])
+
+        # Selective blend: fused = slam * (1 - mask) + visual * mask
+        fused_pos = slam_pos * (1.0 - degen_mask) + vis_pos * degen_mask
+
+        self._visual_fused_count += 1
+        if self._visual_fused_count % 50 == 1:
+            logger.info(
+                "Visual-SLAM fusion active: alpha=%.2f, degen=%s, "
+                "slam_xy=(%.2f,%.2f), vis_xy=(%.2f,%.2f), fused_xy=(%.2f,%.2f)",
+                alpha, self._degen_level,
+                slam_pos[0], slam_pos[1],
+                vis_pos[0], vis_pos[1],
+                fused_pos[0], fused_pos[1],
+            )
+
+        # Build fused odometry (keep SLAM orientation + twist)
+        fused_odom = Odometry(
+            pose=Pose(
+                position=Vector3(
+                    x=float(fused_pos[0]),
+                    y=float(fused_pos[1]),
+                    z=float(fused_pos[2]),
+                ),
+                orientation=slam_odom.pose.orientation,
+            ),
+            twist=slam_odom.twist,
+            ts=slam_odom.ts,
+        )
+        self._last_slam_odom = fused_odom
+        return fused_odom
+
+    # ── Localization health watchdog ──────────────────────────────��──────
+
+    def _watchdog_loop(self) -> None:
+        """Periodic localization health check."""
+        interval = 1.0 / self._watchdog_hz
+        while not self._shutdown_event.is_set():
+            now = _time.time()
+            odom_age = (now - self._last_odom_time) if self._last_odom_time > 0 else float("inf")
+            cloud_age = (now - self._last_cloud_time) if self._last_cloud_time > 0 else float("inf")
+
+            if self._last_odom_time == 0.0:
+                new_state = LOC_UNINIT
+                confidence = 0.0
+            elif odom_age > self._odom_timeout:
+                new_state = LOC_LOST
+                confidence = 0.0
+            elif cloud_age > self._cloud_timeout:
+                new_state = LOC_DEGRADED
+                confidence = 0.3
+            elif self._degen_level == DEGEN_CRITICAL:
+                new_state = LOC_DEGRADED
+                confidence = 0.1
+            else:
+                new_state = LOC_TRACKING
+                confidence = max(0.0, 1.0 - odom_age / self._odom_timeout)
+
+            # Reduce confidence based on degeneracy
+            # Boost confidence when visual fusion is active
+            visual_active = (self._last_visual_odom is not None
+                             and self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL))
+            if self._degen_level == DEGEN_SEVERE:
+                confidence = min(confidence, 0.6 if visual_active else 0.4)
+            elif self._degen_level == DEGEN_MILD:
+                confidence = min(confidence, 0.7)
+            elif self._degen_level == DEGEN_CRITICAL:
+                if visual_active:
+                    # Visual fusion compensates for CRITICAL — upgrade to DEGRADED not LOST
+                    confidence = max(confidence, 0.3)
+
+            if new_state != self._loc_state:
+                if new_state == LOC_LOST:
+                    logger.warning("Localization LOST: no odometry for %.1fs", odom_age)
+                elif new_state == LOC_DEGRADED and self._degen_level != DEGEN_NONE:
+                    logger.warning("Localization DEGRADED: SLAM degeneracy %s",
+                                   self._degen_level)
+                elif new_state == LOC_TRACKING and self._loc_state in (LOC_LOST, LOC_DEGRADED):
+                    logger.info("Localization recovered -> TRACKING")
+                self._loc_state = new_state
+
+            self.localization_status.publish({
+                "state": self._loc_state,
+                "odom_age_ms": round(odom_age * 1000, 1),
+                "cloud_age_ms": round(cloud_age * 1000, 1),
+                "confidence": round(confidence, 2),
+                "degeneracy": self._degen_level,
+                "icp_fitness": round(self._icp_fitness, 4),
+                "effective_ratio": round(self._effective_ratio, 3),
+                "condition_number": round(self._condition_number, 1),
+                "degenerate_dof_count": self._degenerate_dof_count,
+            })
+
+            self._shutdown_event.wait(timeout=interval)
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        now = _time.time()
+        info["localization"] = {
+            "state": self._loc_state,
+            "odom_age_ms": round((now - self._last_odom_time) * 1000, 1) if self._last_odom_time else -1,
+            "cloud_age_ms": round((now - self._last_cloud_time) * 1000, 1) if self._last_cloud_time else -1,
+            "degeneracy": self._degen_level,
+            "icp_fitness": round(self._icp_fitness, 4),
+            "effective_ratio": round(self._effective_ratio, 3),
+            "condition_number": round(self._condition_number, 1),
+            "degenerate_dof_count": self._degenerate_dof_count,
+            "dof_mask": self._dof_mask.tolist() if self._dof_mask is not None else None,
+            "visual_fusion_active": self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL) and self._last_visual_odom is not None,
+            "visual_fused_count": self._visual_fused_count,
+        }
+        return info

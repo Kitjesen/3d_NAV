@@ -1,4 +1,9 @@
-"""SLAM stack: C++ runs as systemd service, Python bridges data via DDS."""
+"""SLAM stack: C++ runs as systemd service, Python bridges data via DDS.
+
+Optionally includes DepthVisualOdomModule for degeneracy-resilient fusion.
+When SLAM detects corridor/open-field degeneracy (SEVERE/CRITICAL),
+visual odometry from the depth camera selectively fuses into degenerate DOFs.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +14,15 @@ from core.blueprint import Blueprint
 logger = logging.getLogger(__name__)
 
 
-def slam(profile: str = "fastlio2") -> Blueprint:
+def slam(profile: str = "fastlio2", enable_visual_backup: bool = True) -> Blueprint:
     """SLAM / localization stack.
 
     C++ SLAM always runs as a separate systemd service (correct DDS isolation).
     Python only bridges ROS2 topics into Module ports.
+
+    Args:
+        profile: SLAM backend profile
+        enable_visual_backup: Add DepthVisualOdomModule for degeneracy fallback
 
     Profiles:
       "fastlio2"  → start slam + slam_pgo services (mapping mode)
@@ -62,6 +71,15 @@ def slam(profile: str = "fastlio2") -> Blueprint:
         bp.add(SlamBridgeModule)
     except ImportError as e:
         logger.warning("SlamBridgeModule not available: %s", e)
+
+    # Depth camera visual odometry for degeneracy fallback
+    if enable_visual_backup:
+        try:
+            from slam.depth_visual_odom_module import DepthVisualOdomModule
+            bp.add(DepthVisualOdomModule)
+            logger.info("SLAM stack: DepthVisualOdomModule enabled for degeneracy backup")
+        except ImportError as e:
+            logger.debug("DepthVisualOdomModule not available: %s", e)
 
     return bp
 

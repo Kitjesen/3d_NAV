@@ -60,6 +60,65 @@ class SafetyConfig:
 
 
 @dataclass
+class CameraConfig:
+    """Camera mounting extrinsics and default intrinsics.
+
+    Extrinsics define the body→camera static transform (position + rotation).
+    Intrinsics are factory defaults; runtime CameraInfo from ROS2 overrides them.
+    Distortion uses Brown-Conrady (plumb_bob) model: k1, k2, p1, p2, k3.
+    """
+    # Extrinsics: camera position in body frame (m)
+    position_x: float = 0.15
+    position_y: float = 0.0
+    position_z: float = 0.45
+    # Extrinsics: camera rotation relative to body forward (rad)
+    roll: float = 0.0
+    pitch: float = 0.0
+    yaw: float = 0.0
+    # Default intrinsics (overridden by ROS2 CameraInfo at runtime)
+    fx: float = 615.0
+    fy: float = 615.0
+    cx: float = 320.0
+    cy: float = 240.0
+    width: int = 640
+    height: int = 480
+    depth_scale: float = 0.001
+    # Distortion coefficients (Brown-Conrady / plumb_bob)
+    dist_k1: float = 0.0
+    dist_k2: float = 0.0
+    dist_p1: float = 0.0
+    dist_p2: float = 0.0
+    dist_k3: float = 0.0
+
+    @property
+    def T_body_camera(self) -> 'np.ndarray':
+        """4x4 body→camera static transform from factory calibration.
+
+        Uses cv2.Rodrigues for rotation (falls back to numpy if cv2 unavailable).
+        Rotation is specified as ZYX Euler angles (yaw, pitch, roll) in radians.
+        """
+        import numpy as np
+        rvec = np.array([self.roll, self.pitch, self.yaw], dtype=np.float64)
+        try:
+            import cv2
+            R, _ = cv2.Rodrigues(rvec)
+        except ImportError:
+            # Fallback: if angles are all zero, R is identity (common case)
+            if np.allclose(rvec, 0):
+                R = np.eye(3)
+            else:
+                # Rodrigues formula: R = I + sin(θ)·K + (1-cos(θ))·K²
+                theta = np.linalg.norm(rvec)
+                k = rvec / theta
+                K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+                R = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
+        T = np.eye(4)
+        T[:3, :3] = R
+        T[:3, 3] = [self.position_x, self.position_y, self.position_z]
+        return T
+
+
+@dataclass
 class LidarConfig:
     """LiDAR sensor mounting extrinsics and publish settings.
 
@@ -93,6 +152,7 @@ class RobotConfig:
     driver: DriverConfig = field(default_factory=DriverConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     lidar: LidarConfig = field(default_factory=LidarConfig)
+    camera: CameraConfig = field(default_factory=CameraConfig)
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -127,6 +187,7 @@ def load_config(path: Optional[str] = None) -> RobotConfig:
         driver=_fill_dataclass(DriverConfig, raw.get("driver", {})),
         safety=_fill_dataclass(SafetyConfig, raw.get("safety", {})),
         lidar=_fill_dataclass(LidarConfig, raw.get("lidar", {})),
+        camera=_fill_dataclass(CameraConfig, raw.get("camera", {})),
         raw=raw,
     )
 

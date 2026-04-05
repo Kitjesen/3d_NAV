@@ -1,0 +1,5 @@
+imu_topic: "/camera/imu"
+imu_rate: 200
+measure_rate: 200 # Rate to which imu data is subsampled
+sequence_duration: 10800 # duration of the sequence (in seconds)
+sequence_offset: 0 # sequence start within the recorded data (in seconds)

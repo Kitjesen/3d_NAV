@@ -70,6 +70,34 @@ lidar:
   # 相机相对于 LiDAR 的 Z 偏移 (for visualization TF)
   camera_offset_z: 0.0
 
+# ── 相机传感器 ──
+# 出厂标定值 — 客户无需修改
+camera:
+  # 相机安装外参 (body → camera 静态变换)
+  # position: 相机在机体坐标系下的位置 (m)
+  position_x:  0.15          # 前方 15cm (机头方向)
+  position_y:  0.00          # 中线
+  position_z:  0.45          # 离地 45cm
+  # rotation: 相机光轴相对于机体前向的旋转 (rad)
+  # 默认: 相机朝前安装, 光学坐标 Z 轴 = 机体 X 轴(前)
+  roll:         0.0
+  pitch:        0.0
+  yaw:          0.0
+  # 内参默认值 (ROS2 CameraInfo 到达后会覆盖)
+  fx: 615.0
+  fy: 615.0
+  cx: 320.0
+  cy: 240.0
+  width: 640
+  height: 480
+  depth_scale: 0.001         # 原始深度值 → 米 (1mm 单位)
+  # 畸变系数 (Brown-Conrady / plumb_bob 模型)
+  dist_k1: 0.0
+  dist_k2: 0.0
+  dist_p1: 0.0
+  dist_p2: 0.0
+  dist_k3: 0.0
+
 # ── gRPC 服务 ──
 grpc:
   port: 50051

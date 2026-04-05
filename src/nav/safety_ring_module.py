@@ -62,6 +62,7 @@ class SafetyRingModule(Module, layer=0):
     path: In[Path]
     cmd_vel: In[Twist]
     mission_status: In[dict]
+    localization_status: In[dict]
 
     # -- Outputs --
     stop_cmd: Out[int]           # 0=clear, 1=soft, 2=hard
@@ -107,6 +108,10 @@ class SafetyRingModule(Module, layer=0):
         self._last_distance = float("inf")
         self._assessment = Assessment.IDLE
 
+        # Localization state
+        self._loc_state: str = "UNINIT"
+        self._loc_confidence: float = 0.0
+
         # Ring 3 state
         self._latest_mission: Optional[dict] = None
         self._instruction = ""
@@ -116,18 +121,23 @@ class SafetyRingModule(Module, layer=0):
         self.path.subscribe(self._on_path)
         self.cmd_vel.subscribe(self._on_cmdvel)
         self.mission_status.subscribe(self._on_mission)
+        self.localization_status.subscribe(self._on_localization_status)
 
     # -- Ring 1: Reflex Safety -----------------------------------------------
 
     def _check_links(self) -> SafetyLevel:
-        """Check communication link health."""
+        """Check communication link health + localization status."""
         now = time.time()
         odom_alive = (now - self._last_odom_time) < self._odom_timeout
         cmd_alive = (now - self._last_cmdvel_time) < self._cmdvel_timeout
 
         if not odom_alive:
             return SafetyLevel.STOP
+        if self._loc_state == "LOST":
+            return SafetyLevel.STOP
         if not cmd_alive:
+            return SafetyLevel.WARN
+        if self._loc_state == "DEGRADED":
             return SafetyLevel.WARN
         return SafetyLevel.SAFE
 
@@ -221,6 +231,7 @@ class SafetyRingModule(Module, layer=0):
             "assessment": self._assessment.value,
             "mission": mission.get("state", "IDLE"),
             "instruction": self._instruction,
+            "localization": self._loc_state,
             "ts": time.time(),
         })
 
@@ -261,6 +272,11 @@ class SafetyRingModule(Module, layer=0):
     def _on_mission(self, status: dict):
         self._latest_mission = status
 
+    def _on_localization_status(self, msg: dict) -> None:
+        self._loc_state = msg.get("state", "UNINIT")
+        self._loc_confidence = msg.get("confidence", 0.0)
+        self._publish_safety()
+
     # -- AI-callable skills -----------------------------------------------
 
     @skill
@@ -287,5 +303,7 @@ class SafetyRingModule(Module, layer=0):
             "level": self._safety_level.name,
             "assessment": self._assessment.value,
             "has_path": self._path_points is not None,
+            "localization_state": self._loc_state,
+            "localization_confidence": self._loc_confidence,
         }
         return info

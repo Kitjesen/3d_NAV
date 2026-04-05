@@ -391,6 +391,13 @@ class Module:
                     "type": port.msg_type.__name__,
                     "msg_count": port.msg_count,
                     "connected": port.connected,
+                    "rate_hz": round(port.rate_hz, 1),
+                    "drop_count": port.drop_count,
+                    "deliver_count": port.deliver_count,
+                    "callback_errors": port.callback_errors,
+                    "avg_callback_ms": round(port.avg_callback_ms, 2),
+                    "max_callback_ms": round(port.max_callback_ms, 2),
+                    "stale_ms": round(port.stale_ms, 1),
                 }
                 for name, port in self._ports_in.items()
             },
@@ -399,6 +406,9 @@ class Module:
                     "type": port.msg_type.__name__,
                     "msg_count": port.msg_count,
                     "callbacks": port.callback_count,
+                    "rate_hz": round(port.rate_hz, 1),
+                    "publish_errors": port.publish_errors,
+                    "stale_ms": round(port.stale_ms, 1),
                 }
                 for name, port in self._ports_out.items()
             },
