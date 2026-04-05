@@ -4,7 +4,7 @@
 #   scan_resolution:  0.15 → 0.25  (fewer points per frame, ~2x reduction)
 #   lidar_filter_num: 6    → 8     (more aggressive pre-filter from raw CustomMsg)
 #   near_search_num:  5    → 3     (faster KNN, stable for outdoor ≤1m/s)
-#   ieskf_max_iter:   5    → 3     (converges for slow quadruped motion)
+#   ieskf_max_iter:   kept at 5    (preserve convergence quality)
 #   max_map_points:   5M   → 1M    (smaller ikd-tree, critical for ARM KNN)
 #
 # Target: ≥8Hz SLAM on S100P (was ~3Hz with desktop config)
@@ -40,7 +40,7 @@ nbg: 0.0001
 
 imu_init_num: 20
 near_search_num: 3
-ieskf_max_iter: 3
+ieskf_max_iter: 5
 
 gravity_align: true
 esti_il: false
