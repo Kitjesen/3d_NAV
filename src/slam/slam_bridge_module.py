@@ -36,19 +36,22 @@ class SlamBridgeModule(Module, layer=1):
     On systems without either, starts silently in stub mode.
     """
 
-    map_cloud: Out[PointCloud2]
-    odometry:  Out[Odometry]
-    alive:     Out[bool]
+    map_cloud:             Out[PointCloud2]
+    odometry:              Out[Odometry]
+    localization_quality:  Out[float]
+    alive:                 Out[bool]
 
     def __init__(
         self,
         cloud_topic: str = "/nav/map_cloud",
         odom_topic: str = "/nav/odometry",
+        quality_topic: str = "/localization_quality",
         **kw,
     ):
         super().__init__(**kw)
         self._cloud_topic = cloud_topic
         self._odom_topic = odom_topic
+        self._quality_topic = quality_topic
         self._reader = None
         self._rclpy_node = None  # fallback
 
@@ -67,6 +70,7 @@ class SlamBridgeModule(Module, layer=1):
             self._reader = ROS2TopicReader()
             self._reader.on_odometry(self._odom_topic, self._on_dds_odom)
             self._reader.on_pointcloud2(self._cloud_topic, self._on_dds_cloud)
+            self._reader.on_float32(self._quality_topic, self._on_dds_quality)
             logger.info("SlamBridgeModule: using cyclonedds (lightweight)")
             return True
         except ImportError:
@@ -78,6 +82,7 @@ class SlamBridgeModule(Module, layer=1):
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from sensor_msgs.msg import PointCloud2
             from nav_msgs.msg import Odometry as ROS2Odom
+            from std_msgs.msg import Float32
             from core.ros2_context import ensure_rclpy, get_shared_executor
 
             ensure_rclpy()
@@ -86,6 +91,7 @@ class SlamBridgeModule(Module, layer=1):
             get_shared_executor().add_node(self._rclpy_node)
             self._rclpy_node.create_subscription(PointCloud2, self._cloud_topic, self._on_rclpy_cloud, qos)
             self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
+            self._rclpy_node.create_subscription(Float32, self._quality_topic, self._on_rclpy_quality, qos)
             logger.info("SlamBridgeModule: using rclpy (fallback)")
             return True
         except (ImportError, Exception) as e:
@@ -111,6 +117,13 @@ class SlamBridgeModule(Module, layer=1):
         super().stop()
 
     # ── cyclonedds callbacks (parsed CDR) ────────────────────────────────
+
+    def _on_dds_quality(self, msg) -> None:
+        """DDS_Float32 → localization quality (lower = better)."""
+        try:
+            self.localization_quality.publish(float(msg.data))
+        except Exception as e:
+            logger.debug("SlamBridge dds quality error: %s", e)
 
     def _on_dds_odom(self, msg) -> None:
         """DDS_Odometry → Module Odometry."""
@@ -168,6 +181,12 @@ class SlamBridgeModule(Module, layer=1):
             ))
         except Exception as e:
             logger.warning("SlamBridge rclpy odom error: %s", e)
+
+    def _on_rclpy_quality(self, msg) -> None:
+        try:
+            self.localization_quality.publish(float(msg.data))
+        except Exception as e:
+            logger.debug("SlamBridge rclpy quality error: %s", e)
 
     def _on_rclpy_cloud(self, msg) -> None:
         try:

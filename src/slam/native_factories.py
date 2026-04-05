@@ -17,10 +17,13 @@ Usage::
 from __future__ import annotations
 
 import os
+import platform
 from typing import Optional
 
 from core.config import RobotConfig, get_config
 from core.native_install import DDS_ENV, exe, share
+
+_IS_AARCH64 = platform.machine() in ("aarch64", "arm64")
 from core.native_module import NativeModule, NativeModuleConfig
 from core.utils.livox_config import ensure_mid360_config_file
 
@@ -56,9 +59,11 @@ def livox_driver(cfg: Optional[RobotConfig] = None) -> NativeModule:
 def slam_fastlio2(cfg: Optional[RobotConfig] = None) -> NativeModule:
     """Fast-LIO2 — LiDAR-inertial odometry + mapping."""
     cfg = cfg or get_config()
+    # Auto-select optimized config on S100P (aarch64 ARM CPU)
+    default_yaml = "lio_s100p.yaml" if _IS_AARCH64 else "lio.yaml"
     config_path = cfg.raw.get("slam", {}).get(
         "fastlio2_config",
-        share(cfg, "fastlio2", "config", "lio.yaml"),
+        share(cfg, "fastlio2", "config", default_yaml),
     )
     return NativeModule(NativeModuleConfig(
         executable=exe(cfg, "fastlio2", "lio_node"),
@@ -136,6 +141,28 @@ def slam_localizer(cfg: Optional[RobotConfig] = None) -> NativeModule:
         env=DDS_ENV,
         auto_restart=True,
         max_restarts=3,
+    ))
+
+
+def slam_hba(cfg: Optional[RobotConfig] = None) -> NativeModule:
+    """HBA — Hierarchical Bundle Adjustment for map refinement.
+
+    Post-processing step: loads PGO patches + poses, runs multi-iteration BA,
+    produces refined poses.  Not a real-time module — start on demand after
+    mapping is complete, call refine_map / save_poses services, then stop.
+    """
+    cfg = cfg or get_config()
+    config_path = cfg.raw.get("slam", {}).get(
+        "hba_config",
+        share(cfg, "hba", "config", "hba.yaml"),
+    )
+    return NativeModule(NativeModuleConfig(
+        executable=exe(cfg, "hba", "hba_node"),
+        name="hba",
+        parameters={"config_path": config_path},
+        env=DDS_ENV,
+        auto_restart=False,
+        max_restarts=0,
     ))
 
 

@@ -49,6 +49,10 @@ try:
         stamp: DDS_Time
         frame_id: str
 
+    @dataclass
+    class DDS_Float32(IdlStruct, typename="std_msgs::msg::dds_::Float32_"):
+        data: types.float32
+
     # ── geometry_msgs ──
 
     @dataclass
@@ -351,3 +355,7 @@ class ROS2TopicReader(DDSReader):
     def on_tf(self, topic: str, callback: Callable):
         if _HAS_CYCLONEDDS:
             self.subscribe(topic, DDS_TFMessage, callback)
+
+    def on_float32(self, topic: str, callback: Callable):
+        if _HAS_CYCLONEDDS:
+            self.subscribe(topic, DDS_Float32, callback)

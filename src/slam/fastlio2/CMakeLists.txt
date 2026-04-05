@@ -17,7 +17,7 @@ endif()
 add_compile_definitions(SOPHUS_USE_BASIC_LOGGING)
 
 add_definitions(-DMP_EN)
-add_definitions(-DMP_PROC_NUM=2)
+add_definitions(-DMP_PROC_NUM=4)
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
