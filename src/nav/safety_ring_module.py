@@ -132,6 +132,8 @@ class SafetyRingModule(Module, layer=0):
         cmd_alive = (now - self._last_cmdvel_time) < self._cmdvel_timeout
 
         if not odom_alive:
+            self._path_points = None
+            self._goal_xy = None
             return SafetyLevel.STOP
         if self._loc_state == "LOST":
             return SafetyLevel.STOP

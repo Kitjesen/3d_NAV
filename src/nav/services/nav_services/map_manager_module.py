@@ -27,11 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core import Module, In, Out, skill
-
-try:
-    import yaml
-except ImportError:
-    yaml = None  # type: ignore[assignment]
+from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
 
 class MapManagerModule(Module, layer=6):
@@ -65,10 +61,10 @@ class MapManagerModule(Module, layer=6):
         self._poi_file = self._data_dir / "pois.yaml"
         self._active_map_file = self._data_dir / "active_map.yaml"
 
-        self._pois: Dict[str, Dict[str, float]] = self._load_yaml(
+        self._pois: Dict[str, Dict[str, float]] = load_yaml(
             self._poi_file, default={}
         )
-        self._active_map: str = self._load_yaml(
+        self._active_map: str = load_yaml(
             self._active_map_file, default={}
         ).get("active", "")
 
@@ -320,7 +316,7 @@ class MapManagerModule(Module, layer=6):
         }
 
     def _save_active_map(self) -> None:
-        self._save_yaml(self._active_map_file, {"active": self._active_map})
+        save_yaml(self._active_map_file, {"active": self._active_map})
 
     # -- public helpers for other modules ---------------------------------------
 
@@ -367,7 +363,7 @@ class MapManagerModule(Module, layer=6):
             "y": float(cmd.get("y", 0.0)),
             "z": float(cmd.get("z", 0.0)),
         }
-        self._save_yaml(self._poi_file, self._pois)
+        save_yaml(self._poi_file, self._pois)
         return {"action": "poi_set", "success": True, "message": f"POI set: {name}"}
 
     def _poi_delete(self, name: str) -> Dict[str, Any]:
@@ -378,38 +374,9 @@ class MapManagerModule(Module, layer=6):
                 "message": f"POI not found: {name}",
             }
         del self._pois[name]
-        self._save_yaml(self._poi_file, self._pois)
+        save_yaml(self._poi_file, self._pois)
         return {"action": "poi_delete", "success": True, "message": f"POI deleted: {name}"}
 
     def _poi_list(self) -> Dict[str, Any]:
         return {"action": "poi_list", "success": True, "pois": dict(self._pois)}
 
-    # -- YAML helpers -----------------------------------------------------------
-
-    @staticmethod
-    def _load_yaml(path: Path, default: Any = None) -> Any:
-        if default is None:
-            default = {}
-        if not path.exists():
-            return default
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                if yaml is not None:
-                    data = yaml.safe_load(f)
-                else:
-                    data = json.load(f)
-                return data if data is not None else default
-        except Exception:
-            return default
-
-    @staticmethod
-    def _save_yaml(path: Path, data: Any) -> None:
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                if yaml is not None:
-                    yaml.safe_dump(data, f, allow_unicode=True, default_flow_style=False)
-                else:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
