@@ -277,8 +277,27 @@ class CameraIntrinsics:
     width: int = 0
     height: int = 0
     depth_scale: float = 1.0
+    # Distortion coefficients (Brown-Conrady / plumb_bob model)
+    dist_k1: float = 0.0
+    dist_k2: float = 0.0
+    dist_p1: float = 0.0
+    dist_p2: float = 0.0
+    dist_k3: float = 0.0
 
     # -- properties ----------------------------------------------------------
+
+    @property
+    def D_vector(self) -> np.ndarray:
+        """5-element distortion vector ``[k1, k2, p1, p2, k3]`` (OpenCV order)."""
+        return np.array([self.dist_k1, self.dist_k2, self.dist_p1,
+                         self.dist_p2, self.dist_k3], dtype=np.float64)
+
+    @property
+    def has_distortion(self) -> bool:
+        """True if any distortion coefficient is non-zero."""
+        return any(abs(v) > 1e-12 for v in
+                   [self.dist_k1, self.dist_k2, self.dist_p1,
+                    self.dist_p2, self.dist_k3])
 
     @property
     def K_matrix(self) -> np.ndarray:
@@ -315,10 +334,16 @@ class CameraIntrinsics:
         width = data.get("image_width", 0)
         height = data.get("image_height", 0)
         K = data.get("camera_matrix", {}).get("data", [0.0] * 9)
+        D = data.get("distortion_coefficients", {}).get("data", [0.0] * 5)
         depth_scale = data.get("depth_scale", 1.0)
         return cls(
             fx=K[0], fy=K[4], cx=K[2], cy=K[5],
             width=width, height=height, depth_scale=depth_scale,
+            dist_k1=D[0] if len(D) > 0 else 0.0,
+            dist_k2=D[1] if len(D) > 1 else 0.0,
+            dist_p1=D[2] if len(D) > 2 else 0.0,
+            dist_p2=D[3] if len(D) > 3 else 0.0,
+            dist_k3=D[4] if len(D) > 4 else 0.0,
         )
 
     @classmethod
@@ -327,6 +352,11 @@ class CameraIntrinsics:
             fx=d["fx"], fy=d["fy"], cx=d["cx"], cy=d["cy"],
             width=d["width"], height=d["height"],
             depth_scale=d.get("depth_scale", 1.0),
+            dist_k1=d.get("dist_k1", 0.0),
+            dist_k2=d.get("dist_k2", 0.0),
+            dist_p1=d.get("dist_p1", 0.0),
+            dist_p2=d.get("dist_p2", 0.0),
+            dist_k3=d.get("dist_k3", 0.0),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -335,6 +365,9 @@ class CameraIntrinsics:
             "cx": self.cx, "cy": self.cy,
             "width": self.width, "height": self.height,
             "depth_scale": self.depth_scale,
+            "dist_k1": self.dist_k1, "dist_k2": self.dist_k2,
+            "dist_p1": self.dist_p1, "dist_p2": self.dist_p2,
+            "dist_k3": self.dist_k3,
         }
 
     # -- binary encode / decode ----------------------------------------------
