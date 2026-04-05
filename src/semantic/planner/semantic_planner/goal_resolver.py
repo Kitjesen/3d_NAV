@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from semantic.common.semantic_common import safe_json_loads, sanitize_position
+from core.utils.sanitize import safe_json_loads, sanitize_position
 
 from .adacot import AdaCoTRouter, AdaCoTConfig, AdaCoTDecision
 from .fast_path import FastPathMixin

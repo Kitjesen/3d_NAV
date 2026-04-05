@@ -96,7 +96,7 @@ class FastPathMixin:
         Returns:
             GoalResult or None (None = 需要 Slow Path)
         """
-        from semantic.common.semantic_common import safe_json_loads
+        from core.utils.sanitize import safe_json_loads
         from .goal_resolver import GoalResult
 
         sg = safe_json_loads(scene_graph_json, default=None)

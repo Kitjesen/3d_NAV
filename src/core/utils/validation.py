@@ -1,8 +1,11 @@
 ﻿"""
 validation.py — 图像 / 深度 / 内参 / 四元数校验器
 
+Canonical location: core.utils.validation
+Backward compat re-export: semantic.common.semantic_common
+
 用法:
-    from semantic.common.semantic_common import validate_bgr, validate_depth, validate_intrinsics
+    from core.utils.validation import validate_bgr, validate_depth, validate_intrinsics
 
     bgr = validate_bgr(raw_img)        # None if invalid, auto-converts BGRA→BGR
     depth = validate_depth(raw_depth)    # None if invalid
@@ -88,6 +91,9 @@ def validate_depth(
     return img
 
 
+_depth_pair_warned: set = set()  # per-caller warn-once tracking
+
+
 def validate_depth_pair(
     bgr: np.ndarray,
     depth: np.ndarray,
@@ -105,15 +111,15 @@ def validate_depth_pair(
     if bgr.shape[:2] == depth.shape[:2]:
         return depth
 
-    # 仅首次警告，避免 30Hz 日志刷屏
-    if not getattr(validate_depth_pair, "_warned_resize", False):
+    # Warn once per caller (not once globally — avoids test interference)
+    if caller not in _depth_pair_warned:
         logger.warning(
             "%sDepth %s != BGR %s, resizing depth (subsequent warnings suppressed)",
             tag,
             depth.shape[:2],
             bgr.shape[:2],
         )
-        validate_depth_pair._warned_resize = True
+        _depth_pair_warned.add(caller)
 
     if not resize_depth:
         return None

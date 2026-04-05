@@ -25,12 +25,21 @@ def test_default_nova_dog_resolves_real_robot_model():
 
 
 def test_semantic_namespace_wrappers_expose_runtime_import_paths():
-    assert importlib.util.find_spec("semantic_common.validation") is not None
+    # semantic_common package re-exports from core.utils (no submodule files)
+    assert importlib.util.find_spec("semantic_common") is not None
     assert importlib.util.find_spec("semantic_perception.instance_tracker") is not None
     assert importlib.util.find_spec("semantic_planner.llm_client") is not None
 
+    # Canonical imports from core.utils
+    from core.utils.sanitize import sanitize_position
+    from core.utils.validation import validate_bgr
+    from core.utils.robustness import retry
+
+    # Backward compat re-exports still work
+    from semantic.common.semantic_common import sanitize_position as sp2
+    assert sp2 is sanitize_position
+
     from core.msgs import scene as scene_msgs
-    from semantic.common.semantic_common import sanitize_position
     from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
     from semantic.perception.semantic_perception.tracked_objects import TrackedObject
 
