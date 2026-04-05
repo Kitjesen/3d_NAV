@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>allan_variance_ros2</name>
+  <version>0.0.1</version>
+  <description>
+     Allan Variance ROS2 based on https://github.com/ori-drs/allan_variance_ros
+  </description>
+  
+  <author email="russell@robots.ox.ac.uk">Russell Buchanan</author>
+  <author email="christian-nils.boda@autoliv.com">Russell Buchanan</author>
+  <maintainer email="christian-nils.boda@autoliv.com">Christian-Nils Åkerberg Boda</maintainer>
+
+  <license>BSD-3</license>
+
+  <url type="repository">https://github.com/christian-nils/allan_variance_ros2</url>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>sensor_msgs</depend>
+  <depend>yaml-cpp</depend>
+  <depend>rosbag2_cpp</depend>
+  <depend>rosbag2_storage_mcap</depend>
+  <depend>python3-matplotlib</depend>
+  <depend>python3-scipy</depend>
+  <build_depend>libboost-dev</build_depend>
+  <build_depend>libboost-filesystem-dev</build_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
+

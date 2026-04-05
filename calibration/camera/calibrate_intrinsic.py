@@ -3,16 +3,19 @@
 
 Usage:
     # Capture mode — save checkerboard images from live camera
-    python scripts/calibrate_camera.py capture --device 0 --out calibration_imgs/
+    python calibration/camera/calibrate_intrinsic.py capture --device 0 --out calibration_imgs/
 
     # Calibrate from saved images
-    python scripts/calibrate_camera.py calibrate --images calibration_imgs/ --out config/camera_calib.yaml
+    python calibration/camera/calibrate_intrinsic.py calibrate --images calibration_imgs/ --out calibration/camera/output/camera_calib.yaml
 
     # One-shot — capture + calibrate interactively
-    python scripts/calibrate_camera.py auto --device 0
+    python calibration/camera/calibrate_intrinsic.py auto --device 0
 
     # Verify existing calibration
-    python scripts/calibrate_camera.py verify --calib config/camera_calib.yaml --device 0
+    python calibration/camera/calibrate_intrinsic.py verify --calib calibration/camera/output/camera_calib.yaml --device 0
+
+    # From ROS2 bag (no GUI needed)
+    python calibration/camera/calibrate_intrinsic.py from-bag --bag camera_bag/ --topic /camera/color/image_raw --out calibration/camera/output/camera_calib.yaml
 
 Output format is OpenCV-compatible YAML, directly loadable by
 CameraIntrinsics.from_yaml() and robot_config.yaml.
@@ -318,6 +321,96 @@ def cmd_verify(args):
     cv2.destroyAllWindows()
 
 
+def cmd_from_bag(args):
+    """Extract checkerboard images from a ROS2 bag and calibrate (headless)."""
+    try:
+        from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
+        from rclpy.serialization import deserialize_message
+        from sensor_msgs.msg import Image as RosImage
+    except ImportError:
+        logger.error(
+            "ROS2 rosbag2_py not available. Install with:\n"
+            "  sudo apt install ros-humble-rosbag2-default-plugins\n"
+            "Or run inside a sourced ROS2 environment."
+        )
+        sys.exit(1)
+
+    storage = StorageOptions(uri=args.bag, storage_id="mcap")
+    converter = ConverterOptions(
+        input_serialization_format="cdr",
+        output_serialization_format="cdr",
+    )
+
+    reader = SequentialReader()
+    reader.open(storage, converter)
+
+    # Filter to image topic
+    from rosbag2_py import StorageFilter
+    reader.set_filter(StorageFilter(topics=[args.topic]))
+
+    board_size = (args.cols, args.rows)
+    img_dir = os.path.join(os.path.dirname(args.out), "extracted_frames")
+    os.makedirs(img_dir, exist_ok=True)
+
+    count = 0
+    saved = 0
+    sample_interval = max(1, args.skip)
+
+    logger.info("Extracting frames from %s topic=%s ...", args.bag, args.topic)
+
+    while reader.has_next():
+        topic, data, ts = reader.read_next()
+        count += 1
+        if count % sample_interval != 0:
+            continue
+
+        msg = deserialize_message(data, RosImage)
+        # Convert ROS Image to OpenCV
+        if msg.encoding in ("rgb8", "bgr8"):
+            dtype = np.uint8
+            channels = 3
+        elif msg.encoding == "mono8":
+            dtype = np.uint8
+            channels = 1
+        else:
+            continue
+
+        img = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, channels)
+        if msg.encoding == "rgb8":
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+        # Check for checkerboard
+        found, corners = find_checkerboard(img, board_size)
+        if found:
+            path = os.path.join(img_dir, f"bag_{saved:03d}.png")
+            cv2.imwrite(path, img)
+            saved += 1
+            if saved % 5 == 0:
+                logger.info("  Found %d boards in %d frames...", saved, count)
+
+    logger.info("Extracted %d checkerboard frames from %d total", saved, count)
+
+    if saved < 5:
+        logger.error("Not enough checkerboard frames (%d). Need at least 5.", saved)
+        sys.exit(1)
+
+    # Run calibration on extracted images
+    patterns = ["*.png"]
+    paths = []
+    for pat in patterns:
+        paths.extend(glob.glob(os.path.join(img_dir, pat)))
+
+    result = calibrate_from_images(paths, board_size, args.square_size)
+
+    logger.info("\n── Calibration Result ──")
+    logger.info("  RMS reprojection error: %.4f px", result["rms"])
+    logger.info("  fx=%.1f  fy=%.1f", result["K"][0, 0], result["K"][1, 1])
+    logger.info("  cx=%.1f  cy=%.1f", result["K"][0, 2], result["K"][1, 2])
+    logger.info("  Distortion: %s", np.array2string(result["D"], precision=6))
+
+    save_calibration_yaml(result, args.out)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Camera calibration tool (OpenCV checkerboard)",
@@ -341,13 +434,24 @@ def main():
     # calibrate
     p_cal = sub.add_parser("calibrate", help="Calibrate from saved images")
     p_cal.add_argument("--images", required=True, help="Directory with checkerboard images")
-    p_cal.add_argument("--out", default="config/camera_calib.yaml", help="Output YAML")
+    p_cal.add_argument("--out", default="calibration/camera/output/camera_calib.yaml",
+                        help="Output YAML")
 
     # auto
     p_auto = sub.add_parser("auto", help="Interactive capture + calibrate")
     p_auto.add_argument("--device", type=int, default=0, help="Camera device index")
-    p_auto.add_argument("--calib-out", default="config/camera_calib.yaml",
+    p_auto.add_argument("--calib-out", default="calibration/camera/output/camera_calib.yaml",
                         help="Output calibration YAML")
+
+    # from-bag (headless, for S100P)
+    p_bag = sub.add_parser("from-bag", help="Extract from ROS2 bag + calibrate (headless)")
+    p_bag.add_argument("--bag", required=True, help="Path to ROS2 bag directory")
+    p_bag.add_argument("--topic", default="/camera/color/image_raw",
+                       help="Image topic in bag")
+    p_bag.add_argument("--skip", type=int, default=10,
+                       help="Process every Nth frame (default: 10)")
+    p_bag.add_argument("--out", default="calibration/camera/output/camera_calib.yaml",
+                       help="Output YAML")
 
     # verify
     p_ver = sub.add_parser("verify", help="Verify calibration with live undistortion")
@@ -360,7 +464,7 @@ def main():
         sys.exit(0)
 
     {"capture": cmd_capture, "calibrate": cmd_calibrate,
-     "auto": cmd_auto, "verify": cmd_verify}[args.command](args)
+     "auto": cmd_auto, "from-bag": cmd_from_bag, "verify": cmd_verify}[args.command](args)
 
 
 if __name__ == "__main__":
