@@ -87,7 +87,7 @@ def create_test_scg():
 
     # 构建边
     occupancy_grid = create_test_occupancy_grid()
-    scg_builder.build_edges(occupancy_grid, resolution=0.1, origin=np.array([0, 0, 0]))
+    scg_builder.build_edges(occupancy_grid, 0.1, np.array([0.0, 0.0, 0.0]))
 
     return scg_builder
 

@@ -28,7 +28,7 @@ from typing import Any
 
 from core.blueprint import Blueprint, autoconnect
 
-from .stacks import driver, slam, maps, perception, memory, navigation, safety, gateway
+from .stacks import driver, lidar, slam, maps, perception, memory, navigation, safety, gateway
 from .stacks import planner as planner_stack
 from .stacks.driver import driver_name
 from .stacks.slam import slam_module_name
@@ -46,9 +46,11 @@ def full_stack_blueprint(
     planner_backend: str = "astar",
     tomogram: str = "",
     gateway_port: int = 5050,
+    teleop_port: int = 5050,  # teleop is now on /ws/teleop of the main gateway port
     enable_native: bool = True,
     enable_semantic: bool = True,
     enable_gateway: bool = True,
+    enable_teleop: bool = True,
     enable_map_modules: bool = True,
     enable_rerun: bool = False,
     # Legacy alias
@@ -72,8 +74,13 @@ def full_stack_blueprint(
     perception_config = dict(config)
     perception_config["_driver_cls_name"] = _drv
 
+    # LiDAR enabled when SLAM needs it (not for stub/dev/sim that don't use real hardware)
+    _needs_lidar = slam_profile not in ("", "none", "bridge")
+    _lidar_ip = config.get("lidar_ip")
+
     bp = autoconnect(
         driver(robot, **driver_config),
+        lidar(ip=_lidar_ip, enabled=_needs_lidar),
         slam(slam_profile),
         maps(**config)         if enable_map_modules else Blueprint(),
         perception(detector, encoder, **perception_config)
@@ -84,7 +91,12 @@ def full_stack_blueprint(
                                if enable_semantic else Blueprint(),
         navigation(planner_backend, tomogram, enable_native, **config),
         safety(),
-        gateway(gateway_port, enable_rerun=enable_rerun)
+        gateway(
+            gateway_port,
+            teleop_port=teleop_port,
+            enable_teleop=enable_teleop,
+            enable_rerun=enable_rerun,
+        )
                                if enable_gateway else Blueprint(),
     )
 
@@ -159,12 +171,15 @@ def full_stack_blueprint(
         "VoxelGridModule", "WavefrontFrontierExplorer", "RerunBridgeModule",
         "LocalPlannerModule", "PathFollowerModule",
         "SemanticMapperModule", "EpisodicMemoryModule", "TaggedLocationsModule",
-        "VectorMemoryModule", "TemporalMemoryModule",
+        "VectorMemoryModule", "TemporalMemoryModule", "MissionLoggerModule",
         "SemanticPlannerModule", "VisualServoModule",
         "ReconstructionModule", "SafetyRingModule", "GeofenceManagerModule",
         "GatewayModule", "MCPServerModule",
     ]:
         _w(_drv, "odometry", consumer, "odometry")
+
+    # Mission history — NavigationModule state changes go to MissionLoggerModule
+    _w("NavigationModule", "mission_status", "MissionLoggerModule", "mission_status")
 
     # Goal routing from sim driver
     try:

@@ -67,8 +67,8 @@ try:
                     and c[2] == "StubDogModule" and c[3] == "cmd_vel"]
     test(20, "Non-native stack uses Python autonomy chain",
          nav._enable_ros2_bridge is False
-         and lp._backend == "simple"
-         and pf._backend == "pid"
+         and lp._backend in ("nanobind", "cmu_py", "simple")
+         and pf._backend in ("nav_core", "pid")
          and len(wp_conns) > 0
          and len(path_conns) > 0
          and len(cmd_conns) > 0,

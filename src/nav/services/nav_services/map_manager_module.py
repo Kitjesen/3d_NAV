@@ -26,7 +26,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core import Module, In, Out
+from core import Module, In, Out, skill
 
 try:
     import yaml
@@ -333,6 +333,28 @@ class MapManagerModule(Module, layer=6):
         if active.exists():
             return str(active)
         return None
+
+    # -- MCP @skill (same logic as map_command handlers, JSON string results) --
+
+    @skill
+    def list_maps(self) -> str:
+        """List saved maps and which one is active."""
+        return json.dumps(self._map_list(), default=str)
+
+    @skill
+    def save_map(self, name: str) -> str:
+        """Save current SLAM map as *name* (ROS2 SaveMaps) and build tomogram."""
+        return json.dumps(self._map_save(name), default=str)
+
+    @skill
+    def use_map(self, name: str) -> str:
+        """Activate *name* as the current map (symlink + planner index path)."""
+        return json.dumps(self._map_set_active(name), default=str)
+
+    @skill
+    def build_tomogram(self, name: str) -> str:
+        """Build tomogram.pickle from map.pcd for map *name*."""
+        return json.dumps(self._build_tomogram(name), default=str)
 
     # -- POI operations ---------------------------------------------------------
 

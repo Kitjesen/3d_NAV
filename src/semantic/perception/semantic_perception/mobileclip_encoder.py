@@ -48,10 +48,7 @@ class MobileCLIPEncoder:
         pretrained: str = "openai",
     ):
         self._model_name = model_name
-        if device == "auto":
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._device = device
+        self._device = device  # resolved lazily in load_model()
         self._pretrained = pretrained
 
         self._model = None
@@ -71,8 +68,19 @@ class MobileCLIPEncoder:
         total = self._cache_hits + self._cache_misses
         return self._cache_hits / total if total > 0 else 0.0
 
+    def _resolve_device(self) -> str:
+        """Resolve 'auto' device string to 'cuda' or 'cpu'."""
+        if self._device != "auto":
+            return self._device
+        try:
+            import torch
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            return "cpu"
+
     def load_model(self) -> None:
         """加载文本编码器 (尝试 MobileCLIP → fallback open_clip)。"""
+        self._device = self._resolve_device()
         if self._try_load_mobileclip():
             return
         self._load_openclip_text_only()

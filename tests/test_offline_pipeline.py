@@ -3079,9 +3079,13 @@ class TestPhantomNodeDataclass:
 # ═══════════════════════════════════════════════════════════════
 
 class TestBeliefNetwork:
-    """KG-BELIEF GCN 模型测试。"""
+    """KG-BELIEF GCN model tests (requires belief_network module)."""
 
     def setup_method(self):
+        pytest.importorskip(
+            "semantic.perception.semantic_perception.belief_network",
+            reason="belief_network module not available",
+        )
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_perception"))
         from semantic.perception.semantic_perception.knowledge_graph import IndustrialKnowledgeGraph
         from semantic.perception.semantic_perception.belief_network import (
@@ -3436,9 +3440,13 @@ class TestBeliefTraining:
 
 
 class TestModelIntegration:
-    """GCN 模型与 InstanceTracker 集成测试。"""
+    """GCN model + InstanceTracker integration tests (requires belief_network)."""
 
     def setup_method(self):
+        pytest.importorskip(
+            "semantic.perception.semantic_perception.belief_network",
+            reason="belief_network module not available",
+        )
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src" / "semantic_perception"))
         from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
         from semantic.perception.semantic_perception.projection import Detection3D

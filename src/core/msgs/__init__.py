@@ -1,7 +1,12 @@
-"""lingtu.core.msgs — 统一消息类型，所有模块间数据流的契约。"""
+"""core.msgs — unified message types for inter-module data flow.
 
-from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+All Module In/Out ports use these types. No ROS2 dependency.
+"""
+
+from .geometry import Pose, PoseStamped, Quaternion, Transform, Twist, TwistStamped, Vector3
 from .nav import OccupancyGrid, Odometry, Path
+from .sensor import CameraIntrinsics, Image, ImageFormat, Imu, PointCloud2, PointField
+from .robot import BatteryState, FootForces, JointState, RobotState
 from .semantic import (
     Detection3D,
     DialogueState,
@@ -17,9 +22,14 @@ from .semantic import (
 
 __all__ = [
     # geometry
-    "Vector3", "Quaternion", "Pose", "PoseStamped", "Twist",
+    "Vector3", "Quaternion", "Pose", "PoseStamped",
+    "Twist", "TwistStamped", "Transform",
     # nav
     "Odometry", "Path", "OccupancyGrid",
+    # sensor
+    "Image", "ImageFormat", "CameraIntrinsics", "PointCloud2", "PointField", "Imu",
+    # robot
+    "JointState", "BatteryState", "FootForces", "RobotState",
     # semantic
     "Detection3D", "Relation", "Region", "SceneGraph",
     "GoalResult", "NavigationCommand", "SafetyState", "MissionStatus",

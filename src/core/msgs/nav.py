@@ -1,6 +1,6 @@
-"""lingtu.core.msgs.nav — 导航消息类型 (Odometry, Path, OccupancyGrid)。
+"""lingtu.core.msgs.nav — navigation message types (Odometry, Path, OccupancyGrid).
 
-参考 dimos nav_msgs 设计，适配 LingTu /nav/* ROS2 话题契约。
+Follows dimos nav_msgs design, aligned with LingTu /nav/* ROS2 topic contracts.
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 
 @dataclass
 class Odometry:
-    """里程计消息 — pose + twist + 帧信息。
+    """Odometry message — pose + twist + frame metadata.
 
-    对应 ROS2 nav_msgs/Odometry，映射到 /nav/odometry 话题。
+    Maps to ROS2 nav_msgs/Odometry and /nav/odometry topic.
     """
 
     pose: Pose = field(default_factory=Pose)
@@ -37,7 +37,7 @@ class Odometry:
         if self.ts == 0.0:
             self.ts = time.time()
 
-    # -- 位置便捷属性 --------------------------------------------------------
+    # -- position convenience properties ------------------------------------
 
     @property
     def x(self) -> float:
@@ -55,7 +55,7 @@ class Odometry:
     def yaw(self) -> float:
         return self.pose.yaw
 
-    # -- 速度便捷属性 --------------------------------------------------------
+    # -- velocity convenience properties ------------------------------------
 
     @property
     def vx(self) -> float:
@@ -69,7 +69,7 @@ class Odometry:
     def wz(self) -> float:
         return self.twist.angular.z
 
-    # -- 序列化 --------------------------------------------------------------
+    # -- serialisation -------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,7 +91,7 @@ class Odometry:
         )
 
     def encode(self) -> bytes:
-        """二进制编码: ts(8) + frame_ids + pose(56) + twist(48)."""
+        """Binary encode: ts(8) + frame_ids + pose(56) + twist(48)."""
         f1 = self.frame_id.encode("utf-8")
         f2 = self.child_frame_id.encode("utf-8")
         header = struct.pack("<dHH", self.ts, len(f1), len(f2)) + f1 + f2
@@ -125,9 +125,9 @@ class Odometry:
 
 @dataclass
 class Path:
-    """路径消息 — PoseStamped 序列。
+    """Path message — sequence of PoseStamped.
 
-    对应 ROS2 nav_msgs/Path，映射到 /nav/global_path、/nav/local_path。
+    Maps to ROS2 nav_msgs/Path and /nav/global_path, /nav/local_path topics.
     """
 
     poses: List[PoseStamped] = field(default_factory=list)
@@ -138,7 +138,7 @@ class Path:
         if self.ts == 0.0:
             self.ts = time.time()
 
-    # -- 类列表接口 ----------------------------------------------------------
+    # -- list-like interface -------------------------------------------------
 
     def __len__(self) -> int:
         return len(self.poses)
@@ -152,22 +152,22 @@ class Path:
     def __iter__(self) -> Iterator[PoseStamped]:
         return iter(self.poses)
 
-    # -- 查询 ----------------------------------------------------------------
+    # -- queries -------------------------------------------------------------
 
     def head(self) -> Optional[PoseStamped]:
-        """第一个航点，空路径返回 None。"""
+        """First waypoint, or None if path is empty."""
         return self.poses[0] if self.poses else None
 
     def last(self) -> Optional[PoseStamped]:
-        """最后一个航点，空路径返回 None。"""
+        """Last waypoint, or None if path is empty."""
         return self.poses[-1] if self.poses else None
 
     def reverse(self) -> Path:
-        """返回逆序新路径（不可变）。"""
+        """Return a new path with poses reversed (immutable)."""
         return Path(poses=list(reversed(self.poses)), ts=self.ts, frame_id=self.frame_id)
 
     def total_length(self) -> float:
-        """路径总长度 — 相邻航点欧氏距离之和。"""
+        """Total path length — sum of Euclidean distances between consecutive poses."""
         if len(self.poses) < 2:
             return 0.0
         total = 0.0
@@ -179,7 +179,7 @@ class Path:
             total += math.sqrt(dx * dx + dy * dy + dz * dz)
         return total
 
-    # -- 序列化 --------------------------------------------------------------
+    # -- serialisation -------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -197,7 +197,7 @@ class Path:
         )
 
     def encode(self) -> bytes:
-        """二进制编码: header + N * pose_stamped。"""
+        """Binary encode: header + N × pose_stamped."""
         fb = self.frame_id.encode("utf-8")
         parts = [struct.pack("<dIH", self.ts, len(self.poses), len(fb)), fb]
         for ps in self.poses:
@@ -231,10 +231,10 @@ class Path:
 
 @dataclass
 class OccupancyGrid:
-    """占据栅格地图。
+    """Occupancy grid map.
 
-    对应 ROS2 nav_msgs/OccupancyGrid。
-    grid 值: FREE=0, OCCUPIED=100, UNKNOWN=-1。
+    Maps to ROS2 nav_msgs/OccupancyGrid.
+    Cell values: FREE=0, OCCUPIED=100, UNKNOWN=-1.
     """
 
     FREE: int = 0
@@ -253,7 +253,7 @@ class OccupancyGrid:
         if self.grid.dtype != np.int8:
             self.grid = self.grid.astype(np.int8)
 
-    # -- 维度属性 ------------------------------------------------------------
+    # -- dimension properties ------------------------------------------------
 
     @property
     def height(self) -> int:
@@ -263,28 +263,28 @@ class OccupancyGrid:
     def width(self) -> int:
         return int(self.grid.shape[1]) if self.grid.ndim == 2 else 0
 
-    # -- 坐标转换 ------------------------------------------------------------
+    # -- coordinate transforms -----------------------------------------------
 
     def world_to_grid(self, x: float, y: float) -> tuple[int, int]:
-        """世界坐标 → 栅格坐标 (row, col)。"""
+        """World coordinates → grid indices (row, col)."""
         col = int((x - self.origin.x) / self.resolution)
         row = int((y - self.origin.y) / self.resolution)
         return (row, col)
 
     def grid_to_world(self, row: int, col: int) -> tuple[float, float]:
-        """栅格坐标 → 世界坐标 (x, y)。"""
+        """Grid indices → world coordinates (x, y)."""
         x = self.origin.x + col * self.resolution
         y = self.origin.y + row * self.resolution
         return (x, y)
 
     def cell_value(self, x: float, y: float) -> int:
-        """查询世界坐标处的栅格值，越界返回 UNKNOWN (-1)。"""
+        """Cell value at world (x, y); out of bounds returns UNKNOWN (-1)."""
         row, col = self.world_to_grid(x, y)
         if 0 <= row < self.height and 0 <= col < self.width:
             return int(self.grid[row, col])
         return self.UNKNOWN
 
-    # -- 序列化 --------------------------------------------------------------
+    # -- serialisation -------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -310,7 +310,7 @@ class OccupancyGrid:
         )
 
     def encode(self) -> bytes:
-        """二进制编码: header + origin(56) + grid data。"""
+        """Binary encode: header + origin(56) + grid data."""
         fb = self.frame_id.encode("utf-8")
         header = struct.pack("<dffIIH", self.ts, self.resolution,
                              0.0,  # reserved

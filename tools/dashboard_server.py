@@ -517,7 +517,7 @@ def service_action(req: ServiceAction):
 
 CORTEX_PORTS = {
     "cortex-arbiter": 5050,
-    "cortex-safety": 5060,
+    "cortex-safety": 5051,
     "cortex-control": 5070,
     "cortex-telemetry": 5080,
     "cortex-nav-gw": 5090,

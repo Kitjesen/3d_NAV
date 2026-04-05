@@ -52,9 +52,15 @@ class PerceptionModule(Module, layer=3):
     scene_graph: Out[SceneGraph]
     detections_3d: Out[list]  # List[CoreDetection3D]
 
+    # Backends that api/factory.py's PerceptionFactory supports natively.
+    # All others (yoloe, bpu, sim_scene) fall back to the direct-import path.
+    _FACTORY_DETECTORS = {"yolo_world"}
+    _FACTORY_ENCODERS = {"clip"}
+
     def __init__(
         self,
         detector_type: str = "yoloe",
+        encoder_type: str = "mobileclip",
         merge_distance: float = 0.5,
         confidence_threshold: float = 0.3,
         max_depth: float = 6.0,
@@ -69,6 +75,7 @@ class PerceptionModule(Module, layer=3):
     ) -> None:
         super().__init__(**kw)
         self._detector_type = detector_type
+        self._encoder_type = encoder_type
         self._merge_distance = merge_distance
         self._confidence_threshold = confidence_threshold
         self._max_depth = max_depth
@@ -94,8 +101,65 @@ class PerceptionModule(Module, layer=3):
     # == Lifecycle =============================================================
 
     def setup(self) -> None:
-        """Lazy-import real algorithms, register port subscriptions."""
-        # Instance tracker (core algorithm)
+        """Lazy-import real algorithms, register port subscriptions.
+
+        Components are created through two paths depending on detector_type:
+          - Factory path  (yolo_world / clip):  api/factory.py → impl/ adapters
+          - Direct path   (yoloe / bpu / sim_scene / mobileclip): legacy lazy imports
+
+        Both paths produce objects with the same duck-typed interface (detect /
+        load_model / shutdown for detectors; encode_text / load_model / shutdown
+        for encoders), so the rest of the module is unchanged.
+        """
+        if self._detector_type in self._FACTORY_DETECTORS:
+            self._setup_via_factory()
+        else:
+            self._setup_direct()
+
+        # Wire port callbacks
+        self.color_image.subscribe(self._on_color_frame)
+        self.depth_image.subscribe(self._on_depth)
+        self.camera_info.subscribe(self._on_camera_info)
+        self.odometry.subscribe(self._on_odometry)
+
+    def _setup_via_factory(self) -> None:
+        """Create detector + encoder + tracker through api/factory.py."""
+        try:
+            from semantic.perception.semantic_perception.api.factory import PerceptionFactory
+            from semantic.perception.semantic_perception.api.types import PerceptionConfig
+
+            cfg = PerceptionConfig(
+                detector_type=self._detector_type,
+                encoder_type=self._encoder_type if self._encoder_type in self._FACTORY_ENCODERS else "clip",
+                confidence_threshold=self._confidence_threshold,
+                iou_threshold=self._confidence_threshold,
+                merge_distance=self._merge_distance,
+                max_depth=self._max_depth,
+                min_depth=self._min_depth,
+            )
+
+            # Tracker via factory (always "instance")
+            self._tracker = PerceptionFactory.create_tracker("instance", cfg)
+            logger.info("InstanceTracker created via factory")
+
+            # Detector via factory
+            self._detector = PerceptionFactory.create_detector(self._detector_type, cfg)
+            logger.info("Detector %r created via factory", self._detector_type)
+
+            # Encoder via factory (only "clip" supported; fall back to mobileclip otherwise)
+            enc_type = self._encoder_type if self._encoder_type in self._FACTORY_ENCODERS else "clip"
+            self._clip_encoder = PerceptionFactory.create_encoder(enc_type, cfg)
+            logger.info("Encoder %r created via factory", enc_type)
+
+        except Exception as e:
+            logger.warning(
+                "Factory setup failed (%s) — falling back to direct import path", e
+            )
+            self._setup_direct()
+
+    def _setup_direct(self) -> None:
+        """Create components via direct lazy imports (original path)."""
+        # Instance tracker
         try:
             from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
             self._tracker = InstanceTracker(
@@ -113,27 +177,23 @@ class PerceptionModule(Module, layer=3):
         # Detector backend (optional -- graceful degrade)
         self._detector = self._init_detector()
 
-        # CLIP encoder (optional)
+        # Encoder (optional)
         self._clip_encoder = self._init_clip_encoder()
-
-        # Wire port callbacks
-        self.color_image.subscribe(self._on_color_frame)
-        self.depth_image.subscribe(self._on_depth)
-        self.camera_info.subscribe(self._on_camera_info)
-        self.odometry.subscribe(self._on_odometry)
 
     def stop(self) -> None:
         """Release GPU resources."""
-        if self._detector is not None:
-            try:
-                self._detector.shutdown()
-            except Exception as e:
-                logger.warning("Detector shutdown error: %s", e)
-        if self._clip_encoder is not None:
-            try:
-                self._clip_encoder.shutdown()
-            except Exception as e:
-                logger.warning("CLIP shutdown error: %s", e)
+        for attr, name in [("_detector", "Detector"), ("_clip_encoder", "Encoder")]:
+            obj = getattr(self, attr, None)
+            if obj is None:
+                continue
+            for method in ("shutdown", "close", "reset"):
+                fn = getattr(obj, method, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception as e:
+                        logger.warning("%s %s() error: %s", name, method, e)
+                    break
         super().stop()
 
     # == Port callbacks ========================================================
@@ -271,15 +331,23 @@ class PerceptionModule(Module, layer=3):
         return None
 
     def _init_clip_encoder(self):
-        """Lazy-import CLIP encoder."""
+        """Lazy-import encoder backend based on encoder_type."""
         try:
-            from semantic.perception.semantic_perception.mobileclip_encoder import MobileCLIPEncoder
-            enc = MobileCLIPEncoder()
-            enc.load_model()
-            logger.info("MobileCLIPEncoder loaded")
-            return enc
+            if self._encoder_type == "clip":
+                from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
+                enc = CLIPEncoder()
+                enc.load_model()
+                logger.info("CLIPEncoder loaded")
+                return enc
+            else:
+                # Default: MobileCLIP (USS-Nav style text-only, fast)
+                from semantic.perception.semantic_perception.mobileclip_encoder import MobileCLIPEncoder
+                enc = MobileCLIPEncoder()
+                enc.load_model()
+                logger.info("MobileCLIPEncoder loaded")
+                return enc
         except (ImportError, Exception) as e:
-            logger.warning("CLIP encoder unavailable: %s", e)
+            logger.warning("Encoder %r unavailable: %s", self._encoder_type, e)
         return None
 
     def _run_detector(self, bgr: np.ndarray) -> list:

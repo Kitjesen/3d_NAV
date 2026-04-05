@@ -1,7 +1,7 @@
-"""lingtu.core.msgs.semantic — 语义导航消息类型。
+"""lingtu.core.msgs.semantic — semantic navigation message types.
 
-覆盖 Detection3D, SceneGraph, GoalResult, NavigationCommand,
-SafetyState, MissionStatus，对齐 LingTu 语义感知/规划话题契约。
+Defines Detection3D, SceneGraph, GoalResult, NavigationCommand,
+SafetyState, MissionStatus — aligned with LingTu semantic perception/planning port contracts.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 
 @dataclass
 class Detection3D:
-    """三维检测结果，对应 /nav/semantic/detections_3d。"""
+    """3D detection result."""
 
     id: str = ""
     label: str = ""
@@ -39,13 +39,13 @@ class Detection3D:
             self.ts = time.time()
 
     def distance_to(self, other: Detection3D) -> float:
-        """到另一个检测的欧氏距离。"""
+        """Euclidean distance to another detection."""
         dx = self.position.x - other.position.x
         dy = self.position.y - other.position.y
         dz = self.position.z - other.position.z
         return math.sqrt(dx * dx + dy * dy + dz * dz)
 
-    # -- 序列化 --------------------------------------------------------------
+    # -- serialization ---------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,7 +76,7 @@ class Detection3D:
         )
 
     def encode(self) -> bytes:
-        """二进制编码。"""
+        """Binary encoding."""
         id_b = self.id.encode("utf-8")
         label_b = self.label.encode("utf-8")
         bbox = self.bbox_2d + [0.0] * max(0, 4 - len(self.bbox_2d))
@@ -131,12 +131,12 @@ class Detection3D:
 
 
 # ---------------------------------------------------------------------------
-# Relation / Region (SceneGraph 子结构)
+# Relation / Region (SceneGraph sub-structures)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class Relation:
-    """场景图关系边。"""
+    """Scene graph relation edge."""
 
     subject_id: str = ""
     predicate: str = ""  # near, on, left_of, right_of, ...
@@ -166,7 +166,7 @@ class Relation:
 
 @dataclass
 class Region:
-    """场景区域。"""
+    """Scene region."""
 
     name: str = ""
     object_ids: List[str] = field(default_factory=list)
@@ -199,7 +199,7 @@ class Region:
 
 @dataclass
 class SceneGraph:
-    """场景图，对应 /nav/semantic/scene_graph (JSON)。"""
+    """Scene graph — the primary perception output."""
 
     objects: List[Detection3D] = field(default_factory=list)
     relations: List[Relation] = field(default_factory=list)
@@ -211,20 +211,20 @@ class SceneGraph:
         if self.ts == 0.0:
             self.ts = time.time()
 
-    # -- 查询 ----------------------------------------------------------------
+    # -- query -----------------------------------------------------------------
 
     def get_object_by_id(self, obj_id: str) -> Optional[Detection3D]:
-        """根据 ID 获取物体。"""
+        """Get object by ID."""
         for obj in self.objects:
             if obj.id == obj_id:
                 return obj
         return None
 
     def get_objects_by_label(self, label: str) -> List[Detection3D]:
-        """根据标签获取物体列表（不区分大小写）。"""
+        """Get objects by label (case-insensitive)."""
         return [o for o in self.objects if o.label.lower() == label.lower()]
 
-    # -- 序列化 --------------------------------------------------------------
+    # -- serialization ---------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -246,16 +246,16 @@ class SceneGraph:
         )
 
     def to_json(self, **kwargs: Any) -> str:
-        """序列化为 JSON 字符串。"""
+        """Serialize to JSON string."""
         return json.dumps(self.to_dict(), ensure_ascii=False, **kwargs)
 
     @classmethod
     def from_json(cls, s: str) -> SceneGraph:
-        """从 JSON 字符串反序列化。"""
+        """Deserialize from JSON string."""
         return cls.from_dict(json.loads(s))
 
     def encode(self) -> bytes:
-        """二进制编码 — 使用 JSON 中间格式。"""
+        """Binary encoding via JSON intermediate."""
         payload = self.to_json().encode("utf-8")
         return struct.pack("<I", len(payload)) + payload
 
@@ -278,7 +278,7 @@ class SceneGraph:
 
 @dataclass
 class GoalResult:
-    """目标解析结果，来自 goal_resolver Fast/Slow Path。"""
+    """Goal resolution result from Fast/Slow Path."""
 
     action: str = "navigate"  # "navigate" | "explore"
     target_label: str = ""
@@ -292,10 +292,10 @@ class GoalResult:
     hint_room: str = ""
     score_entropy: float = 0.0
 
-    # -- 转换 ----------------------------------------------------------------
+    # -- conversion ------------------------------------------------------------
 
     def as_pose_stamped(self, frame_id: str = "map") -> PoseStamped:
-        """转为 PoseStamped，朝向默认为单位四元数。"""
+        """Convert to PoseStamped (identity quaternion orientation)."""
         return PoseStamped(
             pose=Pose(
                 position=Vector3(self.target_x, self.target_y, self.target_z),
@@ -304,7 +304,7 @@ class GoalResult:
             frame_id=frame_id,
         )
 
-    # -- 序列化 --------------------------------------------------------------
+    # -- serialization ---------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -359,7 +359,7 @@ class GoalResult:
 
 @dataclass
 class NavigationCommand:
-    """导航指令，可转为 Twist 发布到 /nav/cmd_vel。"""
+    """Navigation command — convertible to Twist for cmd_vel."""
 
     command_type: str = "velocity"  # velocity | goto | label
     target_position: Optional[Vector3] = None
@@ -370,7 +370,7 @@ class NavigationCommand:
     confidence: float = 1.0
 
     def to_twist(self) -> Twist:
-        """转为 Twist 速度指令。"""
+        """Convert to Twist velocity command."""
         return Twist(
             linear=Vector3(self.linear_x, self.linear_y, 0.0),
             angular=Vector3(0.0, 0.0, self.angular_z),
@@ -418,7 +418,7 @@ class NavigationCommand:
 
 @dataclass
 class SafetyState:
-    """安全状态，对应 /nav/safety_state。"""
+    """Safety state for Gateway telemetry."""
 
     level: str = "safe"  # safe | warn | danger | estop
     issues: List[str] = field(default_factory=list)
@@ -453,7 +453,7 @@ class SafetyState:
 
 @dataclass
 class MissionStatus:
-    """任务状态，对应 /nav/semantic/status。"""
+    """Mission status — corresponds to NavigationModule.mission_status Out port."""
 
     state: str = "idle"  # idle | planning | executing | success | failed
     goal: Optional[str] = None
@@ -485,23 +485,23 @@ class MissionStatus:
 
 
 # ---------------------------------------------------------------------------
-# ExecutionEval — Ring 2 评估结果
+# ExecutionEval — Ring 2 closed-loop assessment
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ExecutionEval:
-    """闭环执行评估结果，对应 /nav/execution_eval。
+    """Execution evaluation — closed-loop assessment from SafetyRingModule.
 
-    由 Evaluator (Ring 2) 产生，对比执行效果与规划预期。
+    Produced by SafetyRingModule (Ring 2), compares execution vs plan.
     """
 
     assessment: str = "IDLE"  # IDLE | ON_TRACK | DRIFTING | STALLED | REGRESSING
-    cross_track_error: float = 0.0      # m, 偏离规划路径距离
-    distance_to_goal: float = 0.0       # m, 到目标距离
-    progress_rate: float = 0.0          # m/s, 负值=接近目标
-    heading_error_deg: float = 0.0      # deg, 航向偏差
-    stall_time: float = 0.0             # s, 无进展时长
-    velocity_efficiency: float = 1.0    # actual/cmd 速度比
+    cross_track_error: float = 0.0      # m — cross-track error
+    distance_to_goal: float = 0.0       # m — distance to goal
+    progress_rate: float = 0.0          # m/s — negative means approaching goal
+    heading_error_deg: float = 0.0      # deg — heading error
+    stall_time: float = 0.0             # s — time without progress
+    velocity_efficiency: float = 1.0    # actual/commanded speed ratio
     ts: float = 0.0
 
     def __post_init__(self) -> None:
@@ -543,27 +543,27 @@ class ExecutionEval:
 
 
 # ---------------------------------------------------------------------------
-# DialogueState — Ring 3 对话状态
+# DialogueState — Ring 3 user-facing dialogue state
 # ---------------------------------------------------------------------------
 
 @dataclass
 class DialogueState:
-    """统一对话状态，对应 /nav/dialogue_state。
+    """Dialogue state — unified conversation state for Gateway SSE.
 
-    由 DialogueManager (Ring 3) 聚合安全 + 评估 + 任务状态，
-    面向终端用户（Flutter App / gRPC / 日志）。
+    Aggregated by DialogueManager (Ring 3): safety + eval + mission state.
+    Aimed at end-user UI (Flutter App / Gateway / logs).
     """
 
-    understood: Optional[str] = None       # 用户意图
-    doing: str = "待命中"                    # 当前动作描述
-    progress_pct: float = 0.0              # 进度百分比
-    distance_m: Optional[float] = None     # 到目标距离
-    issue: Optional[str] = None            # 当前问题
-    safety: str = "OK"                     # 安全级别
-    safety_text: str = "安全"               # 安全描述
-    eta_sec: Optional[float] = None        # 预估到达时间
-    mission_state: str = "IDLE"            # 任务 FSM 状态
-    response: Optional[str] = None         # 语音回复
+    understood: Optional[str] = None       # user intent
+    doing: str = "idle"                    # current action description
+    progress_pct: float = 0.0              # progress percentage
+    distance_m: Optional[float] = None     # distance to goal
+    issue: Optional[str] = None            # current issue
+    safety: str = "OK"                     # safety level
+    safety_text: str = "safe"               # safety description
+    eta_sec: Optional[float] = None        # estimated time of arrival
+    mission_state: str = "IDLE"            # mission FSM state
+    response: Optional[str] = None         # voice response
     position_x: float = 0.0
     position_y: float = 0.0
     ts: float = 0.0
@@ -593,12 +593,12 @@ class DialogueState:
         pos = d.get("position", {})
         return cls(
             understood=d.get("understood"),
-            doing=str(d.get("doing", "待命中")),
+            doing=str(d.get("doing", "idle")),
             progress_pct=float(d.get("progress_pct", 0)),
             distance_m=d.get("distance_m"),
             issue=d.get("issue"),
             safety=str(d.get("safety", "OK")),
-            safety_text=str(d.get("safety_text", "安全")),
+            safety_text=str(d.get("safety_text", "safe")),
             eta_sec=d.get("eta_sec"),
             mission_state=str(d.get("mission_state", "IDLE")),
             response=d.get("response"),

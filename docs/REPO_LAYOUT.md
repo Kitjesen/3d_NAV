@@ -13,7 +13,7 @@ brain/lingtu/
 ├── tests/                 # Integration & planning tests
 ├── tools/                 # Robot-side helpers (dashboard, BPU export, …)
 ├── scripts/
-│   ├── ws/                # ROS workspace helpers (see scripts/ws/README.md)
+│   ├── build/             # ROS workspace build helpers (see scripts/build/README.md)
 │   ├── deploy/            # Installers, systemd, OTA, monitoring bots
 │   │   └── infra/stack/   # Docker + extra systemd + cron/logrotate (was top-level deploy/)
 │   ├── ota/               # Package & push to robot

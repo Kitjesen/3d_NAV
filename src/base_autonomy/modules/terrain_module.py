@@ -26,6 +26,7 @@ from core.stream import In, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from base_autonomy.modules._nav_core_loader import try_import_nav_core, nav_core_build_hint
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +76,15 @@ class TerrainModule(Module, layer=2):
 
     def _setup_nanobind(self):
         """Setup C++ terrain_core via nanobind binding."""
+        _nav_core = try_import_nav_core()
+        if _nav_core is None:
+            logger.info(
+                "TerrainModule: _nav_core.so not found — using simple backend.\n"
+                "  To enable C++ terrain analysis:\n  %s", nav_core_build_hint()
+            )
+            self._backend = "simple"
+            return
         try:
-            import _nav_core
             params = _nav_core.TerrainParams()
             # Load from robot config if available
             try:
@@ -94,15 +102,15 @@ class TerrainModule(Module, layer=2):
 
             self._core = _nav_core.TerrainAnalysisCore(params)
             logger.info("TerrainModule [nanobind]: C++ terrain_core loaded")
-        except ImportError:
-            logger.warning("TerrainModule: _nav_core not available, falling back to simple")
+        except Exception as e:
+            logger.warning("TerrainModule: _nav_core error: %s — using simple backend", e)
             self._backend = "simple"
 
     def _setup_native(self):
         """Setup C++ NativeModule backends (legacy)."""
         try:
             from core.config import get_config
-            from core.native_factories import terrain_analysis, terrain_analysis_ext
+            from base_autonomy.native_factories import terrain_analysis, terrain_analysis_ext
             cfg = get_config()
             self._nodes = {
                 "terrain": terrain_analysis(cfg),

@@ -7,8 +7,8 @@
  *   - Better ndarray zero-copy with numpy
  *   - Free-threaded Python support (future)
  *
- * 编译: cmake -B build && cmake --build build
- * 使用: import _nav_core
+ * Build: cmake -B build && cmake --build build
+ * Usage: import _nav_core
  */
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
@@ -18,6 +18,7 @@
 #include "nav_core/path_follower_core.hpp"
 #include "nav_core/pct_adapter_core.hpp"
 #include "nav_core/local_planner_core.hpp"
+#include "nav_core/local_planner_full.hpp"
 #include "nav_core/terrain_core.hpp"
 
 namespace nb = nanobind;
@@ -26,7 +27,7 @@ using namespace nav_core;
 NB_MODULE(_nav_core, m) {
   m.doc() = "nav_core -- ROS2-free navigation core algorithms (C++ to Python, nanobind)";
 
-  // ── 基础类型 ──
+  // ── Core types ──
   nb::class_<Vec3>(m, "Vec3")
     .def(nb::init<>())
     .def("__init__", [](Vec3* v, double x, double y, double z) {
@@ -159,6 +160,67 @@ NB_MODULE(_nav_core, m) {
   m.def("ang_diff_deg", &angDiffDeg);
   m.def("compute_rot_dir_w", &computeRotDirW);
   m.def("compute_group_dir_w", &computeGroupDirW);
+
+  // ── LocalPlannerCore (full scoring loop, zero ROS2) ──
+  nb::class_<LocalPlannerParams>(m, "LocalPlannerParams")
+    .def(nb::init<>())
+    .def_rw("vehicle_length", &LocalPlannerParams::vehicleLength)
+    .def_rw("vehicle_width", &LocalPlannerParams::vehicleWidth)
+    .def_rw("sensor_offset_x", &LocalPlannerParams::sensorOffsetX)
+    .def_rw("sensor_offset_y", &LocalPlannerParams::sensorOffsetY)
+    .def_rw("two_way_drive", &LocalPlannerParams::twoWayDrive)
+    .def_rw("adjacent_range", &LocalPlannerParams::adjacentRange)
+    .def_rw("obstacle_height_thre", &LocalPlannerParams::obstacleHeightThre)
+    .def_rw("ground_height_thre", &LocalPlannerParams::groundHeightThre)
+    .def_rw("check_obstacle", &LocalPlannerParams::checkObstacle)
+    .def_rw("check_rot_obstacle", &LocalPlannerParams::checkRotObstacle)
+    .def_rw("use_terrain_analysis", &LocalPlannerParams::useTerrainAnalysis)
+    .def_rw("point_per_path_thre", &LocalPlannerParams::pointPerPathThre)
+    .def_rw("min_rel_z", &LocalPlannerParams::minRelZ)
+    .def_rw("max_rel_z", &LocalPlannerParams::maxRelZ)
+    .def_rw("dir_weight", &LocalPlannerParams::dirWeight)
+    .def_rw("dir_thre", &LocalPlannerParams::dirThre)
+    .def_rw("path_scale", &LocalPlannerParams::pathScale)
+    .def_rw("min_path_scale", &LocalPlannerParams::minPathScale)
+    .def_rw("path_scale_step", &LocalPlannerParams::pathScaleStep)
+    .def_rw("path_scale_by_speed", &LocalPlannerParams::pathScaleBySpeed)
+    .def_rw("min_path_range", &LocalPlannerParams::minPathRange)
+    .def_rw("path_range_step", &LocalPlannerParams::pathRangeStep)
+    .def_rw("path_range_by_speed", &LocalPlannerParams::pathRangeBySpeed)
+    .def_rw("path_crop_by_goal", &LocalPlannerParams::pathCropByGoal)
+    .def_rw("max_speed", &LocalPlannerParams::maxSpeed)
+    .def_rw("autonomy_speed", &LocalPlannerParams::autonomySpeed)
+    .def_rw("slope_weight", &LocalPlannerParams::slopeWeight)
+    .def_rw("goal_clear_range", &LocalPlannerParams::goalClearRange)
+    .def_rw("near_field_stop_dis", &LocalPlannerParams::nearFieldStopDis)
+    .def_rw("recovery_blocked_thre", &LocalPlannerParams::recoveryBlockedThre)
+    .def_rw("recovery_rotate_time", &LocalPlannerParams::recoveryRotateTime)
+    .def_rw("recovery_backup_time", &LocalPlannerParams::recoveryBackupTime)
+    .def_rw("recovery_max_cycles", &LocalPlannerParams::recoveryMaxCycles);
+
+  nb::class_<LocalPlanResult>(m, "LocalPlanResult")
+    .def(nb::init<>())
+    .def_rw("path", &LocalPlanResult::path)
+    .def_rw("slow_down", &LocalPlanResult::slowDown)
+    .def_rw("path_found", &LocalPlanResult::pathFound)
+    .def_rw("near_field_stop", &LocalPlanResult::nearFieldStop)
+    .def_rw("recovery_state", &LocalPlanResult::recoveryState);
+
+  nb::class_<LocalPlannerCore>(m, "LocalPlannerCore")
+    .def(nb::init<const LocalPlannerParams&>(),
+         nb::arg("params") = LocalPlannerParams())
+    .def("load_paths", &LocalPlannerCore::loadPaths, nb::arg("paths_dir"))
+    .def("paths_loaded", &LocalPlannerCore::pathsLoaded)
+    .def("set_vehicle", &LocalPlannerCore::setVehicle,
+         nb::arg("x"), nb::arg("y"), nb::arg("z"), nb::arg("yaw"))
+    .def("set_goal", &LocalPlannerCore::setGoal,
+         nb::arg("gx"), nb::arg("gy"))
+    .def("plan", [](LocalPlannerCore& self,
+                     const std::vector<float>& obstacle_flat,
+                     double timestamp) {
+      int n = (int)obstacle_flat.size() / 4;
+      return self.plan(obstacle_flat.data(), n, timestamp);
+    }, nb::arg("obstacle_xyzi"), nb::arg("timestamp"));
 
   // ── Terrain Analysis ──
   nb::class_<TerrainParams>(m, "TerrainParams")

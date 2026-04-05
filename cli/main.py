@@ -17,7 +17,7 @@ from .repl import LingTuREPL
 from .run_state import clear_run_state, save_run_state
 from .runtime_extra import daemonize, health_check, kill_residual_ports, preflight
 from .term import IS_TTY
-from .ui import cmd_stop, list_profiles, print_banner, select_interactive
+from .ui import cmd_stop, list_profiles, print_banner, select_interactive, wizard_interactive
 
 logger = logging.getLogger("lingtu")
 
@@ -54,6 +54,7 @@ def main() -> None:
     parser.add_argument("--gateway-port", type=int, default=None, dest="gateway_port")
     parser.add_argument("--no-semantic", action="store_true")
     parser.add_argument("--no-gateway", action="store_true")
+    parser.add_argument("--native", action="store_true", help="Force C++ autonomy stack (terrain+local_planner+pathFollower)")
     parser.add_argument("--no-native", action="store_true")
     parser.add_argument("--rerun", action="store_true", help="Enable Rerun 3D visualization on startup")
     parser.add_argument("--no-repl", action="store_true", help="Foreground daemon (no interactive REPL)")
@@ -135,10 +136,18 @@ def main() -> None:
         cfg["enable_semantic"] = False
     if args.no_gateway:
         cfg["enable_gateway"] = False
+    if args.native:
+        cfg["enable_native"] = True
     if args.no_native:
         cfg["enable_native"] = False
     if args.rerun:
         cfg["enable_rerun"] = True
+
+    # Optional interactive wizard: only when user didn't pin a profile via argv
+    # and the session is TTY. The wizard lets users toggle high-level features
+    # without remembering flags.
+    if args.profile is None and IS_TTY:
+        wizard_interactive(profile_name, cfg)
 
     if args.daemon:
         args.no_repl = True
@@ -181,6 +190,13 @@ def main() -> None:
         logger.error("Start failed: %s", e, exc_info=True)
         print(f"\n  {T.red('Start failed')}: {e}")
         sys.exit(1)
+
+    # Inject SystemHandle so MCPServerModule can serve get_health / list_modules
+    for _mod_name in ("MCPServerModule",):
+        try:
+            system.get_module(_mod_name).set_system_handle(system)
+        except (KeyError, AttributeError):
+            pass
 
     if cfg.get("enable_rerun"):
         rerun_mod = None

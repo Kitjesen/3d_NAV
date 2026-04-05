@@ -1,8 +1,9 @@
-"""Map stack: OccupancyGrid + ESDF + ElevationMap."""
+"""Map stack: OccupancyGrid + ESDF + ElevationMap + MapManagerModule."""
 
 from __future__ import annotations
 
 import logging
+import os
 
 from core.blueprint import Blueprint
 
@@ -10,7 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 def maps(**config) -> Blueprint:
-    """Real-time map layers from LiDAR point cloud. Params from robot_config.yaml."""
+    """Real-time map layers from LiDAR point cloud, plus map lifecycle management.
+
+    Params sourced from robot_config.yaml (occupancy_grid / voxel_grid sections).
+    MapManagerModule is always included — it handles list/save/use/delete/build
+    commands arriving via its map_command In port.
+    """
     bp = Blueprint()
     try:
         from nav.occupancy_grid_module import OccupancyGridModule
@@ -44,4 +50,18 @@ def maps(**config) -> Blueprint:
                map_radius=config.get("elev_radius", 15.0))
     except ImportError as e:
         logger.warning("Map modules not available: %s", e)
+
+    # MapManagerModule: map lifecycle (list/save/use/build/delete).
+    # Always included so the REPL and Gateway can issue map_command messages
+    # without needing a direct subprocess call.
+    try:
+        from nav.services.nav_services.map_manager_module import MapManagerModule
+        map_dir = config.get(
+            "map_dir",
+            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/lingtu/maps")),
+        )
+        bp.add(MapManagerModule, map_dir=map_dir)
+    except ImportError as e:
+        logger.warning("MapManagerModule not available: %s", e)
+
     return bp

@@ -91,165 +91,222 @@ class LingTuREPL(cmd.Cmd):
         print("  Mission cancelled")
 
     def do_map(self, arg):
-        """Map management: map list | map save <name> | map use <name> | map build <name> | map delete <name>"""
+        """Map management: map list | save <name> | use <name> | build <name> | delete <name> | rename <old> <new>"""
         parts = arg.split()
         if not parts:
-            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name>")
+            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name> | rename <old> <new>")
             return
 
         subcmd = parts[0]
-        name = parts[1] if len(parts) > 1 else ""
+        name  = parts[1] if len(parts) > 1 else ""
+        name2 = parts[2] if len(parts) > 2 else ""
 
         if subcmd == "list":
-            self._map_list()
+            self._map_cmd({"action": "list"})
         elif subcmd == "save" and name:
-            self._map_save(name)
+            print(f"  Saving map '{name}'... (calls /pgo/save_maps — may take 10–30s)")
+            self._map_cmd({"action": "save", "name": name})
         elif subcmd == "use" and name:
-            self._map_use(name)
+            self._map_cmd({"action": "set_active", "name": name})
         elif subcmd == "build" and name:
-            self._map_build_tomogram(name)
+            print(f"  Building tomogram for '{name}'...")
+            self._map_cmd({"action": "build_tomogram", "name": name})
         elif subcmd == "delete" and name:
-            self._map_delete(name)
+            self._map_cmd({"action": "delete", "name": name})
+        elif subcmd == "rename" and name and name2:
+            self._map_cmd({"action": "rename", "name": name, "new_name": name2})
         else:
-            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name>")
+            print("  Usage: map list | save <name> | use <name> | build <name> | delete <name> | rename <old> <new>")
 
-    def _map_list(self):
-        import os
+    def _map_cmd(self, cmd: dict) -> None:
+        """Send a command to MapManagerModule and print the result.
 
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-        if not os.path.isdir(map_dir):
-            print(f"  No maps directory: {map_dir}")
+        Routes through the Module port when MapManagerModule is running.
+        Falls back to direct filesystem operations for list/use/delete
+        when the module is not in the blueprint (e.g. stub profile).
+        """
+        import json as _json
+
+        mod = self._get_module("MapManagerModule")
+        if mod is not None:
+            # Collect response via a one-shot callback
+            result_holder: list = []
+            orig_cb = None
+            # Temporarily subscribe a capture callback
+            mod.map_response._add_callback(result_holder.append)
+            try:
+                mod.map_command._deliver(_json.dumps(cmd))
+            finally:
+                # Remove our callback — port stores list of callbacks
+                try:
+                    cbs = mod.map_response._callbacks
+                    if result_holder.append in cbs:
+                        cbs.remove(result_holder.append)
+                except Exception:
+                    pass
+
+            resp = result_holder[0] if result_holder else {"success": False, "message": "no response"}
+            self._map_print_response(cmd.get("action", ""), resp)
             return
-        active_link = os.path.join(map_dir, "active")
-        active_name = ""
-        if os.path.islink(active_link):
-            active_name = os.path.basename(os.readlink(active_link))
 
-        maps = sorted(
-            d for d in os.listdir(map_dir) if os.path.isdir(os.path.join(map_dir, d)) and d != "active"
-        )
-        if not maps:
-            print("  No maps found")
+        # --- Fallback: no MapManagerModule (stub/dev) ---
+        self._map_fallback(cmd)
+
+    def _map_print_response(self, action: str, resp: dict) -> None:
+        """Render a MapManagerModule response to the terminal."""
+        if not resp.get("success"):
+            print(f"  {T.red('Error')}: {resp.get('message', '?')}")
             return
-        for m in maps:
-            has_pcd = os.path.exists(os.path.join(map_dir, m, "map.pcd"))
-            has_tomo = os.path.exists(os.path.join(map_dir, m, "tomogram.pickle"))
-            marker = " *" if m == active_name else ""
-            status = []
-            if has_pcd:
-                status.append("pcd")
-            if has_tomo:
-                status.append("tomogram")
-            print(f"  {m}{marker}  [{', '.join(status) or 'empty'}]")
 
-    def _map_save(self, name):
-        import subprocess
+        if action == "list":
+            maps = resp.get("maps", [])
+            active = resp.get("active", "")
+            if not maps:
+                print("  No maps found")
+                return
+            for m in maps:
+                name = m["name"]
+                marker = T.green(" *") if name == active else ""
+                parts = []
+                if m.get("has_pcd"):
+                    parts.append("pcd")
+                if m.get("has_tomogram"):
+                    parts.append("tomogram")
+                print(f"  {name}{marker}  [{', '.join(parts) or 'empty'}]")
 
-        map_dir = os.path.join(
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")), name
-        )
-        os.makedirs(map_dir, exist_ok=True)
-        pcd_path = os.path.join(map_dir, "map.pcd")
-        print(f"  Saving map to {pcd_path}...")
-        try:
-            result = subprocess.run(
-                [
-                    "ros2",
-                    "service",
-                    "call",
-                    "/pgo/save_maps",
-                    "interface/srv/SaveMaps",
-                    f"{{file_path: '{pcd_path}'}}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                print(f"  PCD saved: {pcd_path}")
-                self._map_build_tomogram(name)
+        elif action == "save":
+            pcd = resp.get("pcd", "?")
+            tomo_ok = resp.get("tomogram_ok", False)
+            print(f"  Saved: {pcd}")
+            if tomo_ok:
+                print(f"  Tomogram: {resp.get('tomogram', '?')}")
             else:
-                print(f"  Save failed: {result.stderr[:200]}")
-        except FileNotFoundError:
-            print("  Error: ros2 not found. Run on robot with ROS2.")
-        except subprocess.TimeoutExpired:
-            print("  Error: save_maps service timed out")
+                print(f"  {T.yellow('Tomogram build failed')} — run: map build <name>")
+            # Offer to set as active
+            name = os.path.basename(os.path.dirname(pcd))
+            print(f"  Tip: run  {T.bold(f'map use {name}')}  to activate this map")
 
-    def _map_use(self, name):
-        import os
-        import shutil
-
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-        map_path = os.path.join(map_dir, name)
-        if not os.path.isdir(map_path):
-            print(f"  Map not found: {name}")
-            return
-        active_link = os.path.join(map_dir, "active")
-        if os.path.islink(active_link):
-            os.unlink(active_link)
-        elif os.path.exists(active_link):
-            shutil.rmtree(active_link)
-        os.symlink(map_path, active_link)
-
-        tomogram = os.path.join(map_path, "tomogram.pickle")
-        nav = self._get_module("NavigationModule")
-        if nav and os.path.exists(tomogram) and hasattr(nav, "_planner_backend"):
-            if hasattr(nav._planner_backend, "_load_tomogram"):
-                nav._planner_backend._load_tomogram(tomogram)
-                print(f"  Active map: {name} (tomogram loaded)")
-            elif hasattr(nav._planner_backend, "update_map"):
-                import pickle
-
-                with open(tomogram, "rb") as f:
-                    data = pickle.load(f)
-                if "grid" in data:
-                    nav._planner_backend.update_map(data["grid"], data.get("resolution", 0.2))
-                print(f"  Active map: {name} (costmap loaded)")
+        elif action == "set_active":
+            name = resp.get("active", "?")
+            tomogram = resp.get("tomogram", "")
+            nav = self._get_module("NavigationModule")
+            if nav and tomogram and os.path.exists(tomogram) and hasattr(nav, "_planner_backend"):
+                self._reload_planner_tomogram(nav, tomogram, name)
             else:
-                print(f"  Active map: {name} (planner reload not supported)")
+                print(f"  Active map: {T.green(name)}")
+                if tomogram and not os.path.exists(tomogram):
+                    print(f"  {T.yellow('No tomogram')} — run: map build {name}")
+
+        elif action == "build_tomogram":
+            print(f"  Tomogram: {resp.get('tomogram', '?')}")
+
+        elif action == "delete":
+            print(f"  {resp.get('message', 'deleted')}")
+
+        elif action == "rename":
+            print(f"  {resp.get('message', 'renamed')}")
+
         else:
-            if not os.path.exists(tomogram):
-                print(f"  Active map: {name} (no tomogram — run: map build {name})")
-            else:
-                print(f"  Active map: {name}")
+            print(f"  {resp}")
 
-    def _map_build_tomogram(self, name):
-        import os
-        import sys
+    def _reload_planner_tomogram(self, nav, tomogram: str, name: str) -> None:
+        """Hot-reload the planner's tomogram after map switch."""
+        pb = nav._planner_backend
+        if hasattr(pb, "_load_tomogram"):
+            pb._load_tomogram(tomogram)
+            print(f"  Active map: {T.green(name)} (tomogram hot-reloaded)")
+        elif hasattr(pb, "update_map"):
+            import pickle
+            with open(tomogram, "rb") as f:
+                data = pickle.load(f)
+            if "grid" in data:
+                pb.update_map(data["grid"], data.get("resolution", 0.2))
+            print(f"  Active map: {T.green(name)} (costmap reloaded)")
+        else:
+            print(f"  Active map: {T.green(name)} (restart required to apply new tomogram)")
 
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-        pcd_path = os.path.join(map_dir, name, "map.pcd")
-        tomogram_path = os.path.join(map_dir, name, "tomogram.pickle")
-        if not os.path.exists(pcd_path):
-            print(f"  No PCD file: {pcd_path}")
-            return
-        print(f"  Building tomogram from {pcd_path}...")
-        try:
-            tomo_dir = project_root() / "src" / "global_planning" / "PCT_planner" / "tomography" / "scripts"
-            tds = str(tomo_dir)
-            if tds not in sys.path:
-                sys.path.insert(0, tds)
-            from global_planning.PCT_planner.tomography.scripts.build_tomogram import (  # noqa: PLC0415
-                build_tomogram_from_pcd,
-            )
-
-            build_tomogram_from_pcd(pcd_path, tomogram_path)
-            print(f"  Tomogram built: {tomogram_path}")
-        except Exception as e:
-            print(f"  Build failed: {e}")
-
-    def _map_delete(self, name):
-        import os
+    def _map_fallback(self, cmd: dict) -> None:
+        """Direct filesystem fallback when MapManagerModule is not running."""
         import shutil
+        from cli.profiles_data import _default_map_dir
+        action = cmd.get("action", "")
+        map_dir = _default_map_dir()
 
-        map_dir = os.path.join(
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")), name
-        )
-        if not os.path.isdir(map_dir):
-            print(f"  Map not found: {name}")
-            return
-        shutil.rmtree(map_dir)
-        print(f"  Deleted: {name}")
+        if action == "list":
+            if not os.path.isdir(map_dir):
+                print(f"  No maps directory: {map_dir}")
+                return
+            active_link = os.path.join(map_dir, "active")
+            active_name = os.path.basename(os.readlink(active_link)) if os.path.islink(active_link) else ""
+            maps = sorted(d for d in os.listdir(map_dir)
+                          if os.path.isdir(os.path.join(map_dir, d)) and d != "active")
+            if not maps:
+                print("  No maps found")
+                return
+            for m in maps:
+                marker = T.green(" *") if m == active_name else ""
+                parts = []
+                if os.path.exists(os.path.join(map_dir, m, "map.pcd")):
+                    parts.append("pcd")
+                if os.path.exists(os.path.join(map_dir, m, "tomogram.pickle")):
+                    parts.append("tomogram")
+                print(f"  {m}{marker}  [{', '.join(parts) or 'empty'}]")
+
+        elif action == "set_active":
+            name = cmd.get("name", "")
+            map_path = os.path.join(map_dir, name)
+            if not os.path.isdir(map_path):
+                print(f"  Map not found: {name}")
+                return
+            active_link = os.path.join(map_dir, "active")
+            if os.path.islink(active_link):
+                os.unlink(active_link)
+            elif os.path.exists(active_link):
+                shutil.rmtree(active_link)
+            os.symlink(map_path, active_link)
+            tomogram = os.path.join(map_path, "tomogram.pickle")
+            nav = self._get_module("NavigationModule")
+            if nav and os.path.exists(tomogram):
+                self._reload_planner_tomogram(nav, tomogram, name)
+            else:
+                msg = "" if os.path.exists(tomogram) else f" (no tomogram — run: map build {name})"
+                print(f"  Active map: {T.green(name)}{msg}")
+
+        elif action == "build_tomogram":
+            import sys
+            name = cmd.get("name", "")
+            pcd_path = os.path.join(map_dir, name, "map.pcd")
+            tomogram_path = os.path.join(map_dir, name, "tomogram.pickle")
+            if not os.path.exists(pcd_path):
+                print(f"  No PCD file: {pcd_path}")
+                return
+            print(f"  Building tomogram from {pcd_path}...")
+            try:
+                tomo_dir = project_root() / "src" / "global_planning" / "PCT_planner" / "tomography" / "scripts"
+                tds = str(tomo_dir)
+                if tds not in sys.path:
+                    sys.path.insert(0, tds)
+                from global_planning.PCT_planner.tomography.scripts.build_tomogram import build_tomogram_from_pcd  # noqa: PLC0415
+                build_tomogram_from_pcd(pcd_path, tomogram_path)
+                print(f"  Tomogram: {tomogram_path}")
+            except Exception as e:
+                print(f"  Build failed: {e}")
+
+        elif action == "delete":
+            name = cmd.get("name", "")
+            map_path = os.path.join(map_dir, name)
+            if not os.path.isdir(map_path):
+                print(f"  Map not found: {name}")
+                return
+            shutil.rmtree(map_path)
+            print(f"  Deleted: {name}")
+
+        elif action == "save":
+            print("  MapManagerModule not running — cannot call ROS2 save_maps service")
+            print("  Start with a map-enabled profile (e.g. lingtu map)")
+
+        else:
+            print(f"  MapManagerModule not running (action: {action})")
 
     def do_smap(self, arg):
         """Semantic map: smap status | rooms | save | load <dir> | query <text>"""
@@ -349,19 +406,406 @@ class LingTuREPL(cmd.Cmd):
             print(f"    {r['room']:20s} {bar} {r['probability']:.2f}")
 
     def do_agent(self, arg):
-        """Multi-turn agent: agent <instruction>"""
+        """Multi-turn LLM agent with live step output: agent <instruction>
+
+        The LLM observes the robot state, decides actions, and executes them
+        step by step. Each tool call and result is printed in real time.
+
+        Example:
+          agent find the chair and tag it as 'chair'
+          agent go to the kitchen and describe what you see
+        """
         if not arg.strip():
             print("  Usage: agent <instruction>")
+            print("  Example: agent find the red chair")
             return
-        mod = self._get_module("SemanticPlannerModule")
-        if mod is None:
-            print("  SemanticPlannerModule not running")
+
+        llm_mod = self._get_module("LLMModule")
+        if llm_mod is None:
+            print("  LLMModule not running — start with a semantic-enabled profile")
             return
-        if not hasattr(mod, "agent_instruction"):
-            print("  agent_instruction port not available")
+
+        # Get LLM client from the module
+        llm_client = getattr(llm_mod, "_client", None)
+        if llm_client is None:
+            print("  LLM client not initialized")
             return
-        mod.agent_instruction._deliver(arg.strip())
-        print(f"  Agent loop started: '{arg.strip()}'")
+
+        # Check if LLM is available
+        backend = getattr(llm_mod, "_backend", "?")
+        if backend == "mock":
+            print(f"  {T.yellow('!')} LLM backend is 'mock' — responses will be simulated")
+            print(f"    Set a real API key and restart with --llm kimi/qwen/openai")
+            print()
+
+        # Build context function from live modules
+        nav = self._get_module("NavigationModule")
+        smap = self._get_module("SemanticMapperModule")
+        vmem = self._get_module("VectorMemoryModule")
+        sem = self._get_module("SemanticPlannerModule")
+
+        def _context():
+            ctx = {
+                "robot_x": 0.0, "robot_y": 0.0,
+                "visible_objects": "none",
+                "nav_status": "IDLE",
+                "memory_context": "none",
+                "camera_image": None,
+                "scene_graph": None,
+                "camera_available": False,
+            }
+            if nav and hasattr(nav, "_robot_pos"):
+                ctx["robot_x"] = float(nav._robot_pos[0])
+                ctx["robot_y"] = float(nav._robot_pos[1])
+                ctx["nav_status"] = getattr(nav, "_state", "IDLE")
+            if sem and hasattr(sem, "_current_scene_graph") and sem._current_scene_graph:
+                sg = sem._current_scene_graph
+                try:
+                    labels = [o.label for o in sg.objects[:8]] if hasattr(sg, "objects") else []
+                    ctx["visible_objects"] = ", ".join(labels) if labels else "none"
+                    ctx["scene_graph"] = {"objects": [{"label": l} for l in labels]}
+                except Exception:
+                    pass
+            if sem and hasattr(sem, "_latest_rgb") and sem._latest_rgb is not None:
+                ctx["camera_image"] = sem._latest_rgb
+                ctx["camera_available"] = True
+            return ctx
+
+        # Build tool handlers that publish to module ports
+        def _navigate_to(x, y, **_):
+            if nav and hasattr(nav, "goal_pose"):
+                from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
+                goal = PoseStamped(pose=Pose(
+                    position=Vector3(x=float(x), y=float(y), z=0.0),
+                    orientation=Quaternion(x=0, y=0, z=0, w=1),
+                ))
+                nav.goal_pose._deliver(goal)
+                return f"Navigating to ({x:.1f}, {y:.1f})"
+            return "NavigationModule not available"
+
+        def _navigate_to_object(label, **_):
+            if sem and hasattr(sem, "instruction"):
+                sem.instruction._deliver(f"go to {label}")
+                return f"Searching for '{label}' and navigating"
+            return "SemanticPlannerModule not available"
+
+        def _detect_object(label, **_):
+            if sem and hasattr(sem, "_current_scene_graph") and sem._current_scene_graph:
+                try:
+                    labels = [o.label.lower() for o in sem._current_scene_graph.objects]
+                    found = [l for l in labels if label.lower() in l]
+                    return f"Found: {found}" if found else f"'{label}' not visible"
+                except Exception:
+                    pass
+            return "Scene graph not available"
+
+        def _query_memory(text, **_):
+            if vmem and hasattr(vmem, "query_location"):
+                try:
+                    r = vmem.query_location(text)
+                    if r.get("found"):
+                        results = r.get("results", [])[:3]
+                        return "; ".join(
+                            f"({x['x']:.1f},{x['y']:.1f}) score={x['score']:.2f}"
+                            for x in results
+                        )
+                    return "No matching memory"
+                except Exception as e:
+                    return f"Memory query error: {e}"
+            return "VectorMemoryModule not available"
+
+        def _tag_location(name, **_):
+            if nav and hasattr(nav, "_robot_pos"):
+                x, y = nav._robot_pos[0], nav._robot_pos[1]
+                if vmem and hasattr(vmem, "store_observation"):
+                    try:
+                        vmem.store_observation(x, y, [name])
+                        return f"Tagged ({x:.1f}, {y:.1f}) as '{name}'"
+                    except Exception:
+                        pass
+            return f"Tagged current position as '{name}'"
+
+        def _say(text, **_):
+            print(f"\n  {T.cyan('Robot:')} {text}")
+            return "said"
+
+        tool_handlers = {
+            "navigate_to": _navigate_to,
+            "navigate_to_object": _navigate_to_object,
+            "detect_object": _detect_object,
+            "query_memory": _query_memory,
+            "tag_location": _tag_location,
+            "say": _say,
+        }
+
+        # Run the agent loop with live output
+        import asyncio
+        import threading
+
+        instruction = arg.strip()
+        print(f"\n  {T.bold('Agent')} {T.dim('starting:')} {instruction}")
+        print(f"  {T.dim('LLM backend:')} {backend}  {T.dim('(Ctrl+C to abort)')}\n")
+
+        # Patch AgentLoop to print each step live
+        try:
+            from semantic.planner.semantic_planner.agent_loop import AgentLoop, AGENT_TOOLS
+        except ImportError:
+            print("  AgentLoop not available — check semantic stack is enabled")
+            return
+
+        class _LiveAgentLoop(AgentLoop):
+            async def _execute_tool(self_inner, tool_call, state):
+                fn = tool_call.get("function", {})
+                name = fn.get("name", "")
+                try:
+                    import json as _json
+                    args = _json.loads(fn.get("arguments", "{}"))
+                except Exception:
+                    args = {}
+                args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+                step_color = T.cyan if name != "done" else T.green
+                print(f"  {T.dim(f'step {state.step}:')} {step_color(name)}({args_str})")
+                result = await super()._execute_tool(tool_call, state)
+                print(f"  {T.dim('result:')} {result[:120]}")
+                if state.completed and name == "done":
+                    print(f"\n  {T.green('Done:')} {state.summary}")
+                return result
+
+        loop_obj = _LiveAgentLoop(
+            llm_client=llm_client,
+            tool_handlers=tool_handlers,
+            context_fn=_context,
+            max_steps=10,
+            timeout=120.0,
+        )
+
+        result_holder = {}
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                state = loop.run_until_complete(loop_obj.run(instruction))
+                result_holder["state"] = state
+            except Exception as e:
+                result_holder["error"] = str(e)
+            finally:
+                loop.close()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        try:
+            t.join(timeout=130.0)
+        except KeyboardInterrupt:
+            print(f"\n  {T.yellow('Aborted by user')}")
+            return
+
+        if "error" in result_holder:
+            print(f"\n  {T.red('Agent error:')} {result_holder['error']}")
+        elif "state" not in result_holder:
+            print(f"\n  {T.yellow('Agent timed out')}")
+        print()
+
+    def do_chat(self, arg):
+        """Chat directly with the LLM about the robot's current state.
+
+        The LLM sees the robot's position, visible objects, and navigation status.
+        It can answer questions and suggest actions, but does not execute them
+        automatically (use 'agent' for autonomous execution).
+
+        Example:
+          chat what do you see around you?
+          chat where should I go to find the kitchen?
+          chat explain the current navigation status
+        """
+        if not arg.strip():
+            print("  Usage: chat <question>")
+            print("  Example: chat what can you see?")
+            return
+
+        llm_mod = self._get_module("LLMModule")
+        if llm_mod is None:
+            print("  LLMModule not running")
+            return
+
+        llm_client = getattr(llm_mod, "_client", None)
+        if llm_client is None:
+            print("  LLM client not initialized")
+            return
+
+        backend = getattr(llm_mod, "_backend", "?")
+        if backend == "mock":
+            print(f"  {T.yellow('!')} Using mock LLM — set a real API key for actual responses")
+
+        # Build system prompt with current robot state
+        nav = self._get_module("NavigationModule")
+        sem = self._get_module("SemanticPlannerModule")
+
+        x, y, z = 0.0, 0.0, 0.0
+        nav_state = "IDLE"
+        visible = "none"
+
+        if nav and hasattr(nav, "_robot_pos"):
+            x, y, z = nav._robot_pos
+            nav_state = getattr(nav, "_state", "IDLE")
+
+        if sem and hasattr(sem, "_current_scene_graph") and sem._current_scene_graph:
+            try:
+                labels = [o.label for o in sem._current_scene_graph.objects[:10]]
+                visible = ", ".join(labels) if labels else "none"
+            except Exception:
+                pass
+
+        system_prompt = (
+            f"You are the AI assistant for a quadruped navigation robot (LingTu).\n"
+            f"Current robot state:\n"
+            f"  Position: x={x:.2f}, y={y:.2f}, z={z:.2f}\n"
+            f"  Navigation status: {nav_state}\n"
+            f"  Visible objects: {visible}\n\n"
+            f"Answer questions about the robot's environment and status. "
+            f"If the user wants the robot to do something, suggest using the 'agent' command."
+        )
+
+        import asyncio
+
+        print(f"  {T.dim(f'[{backend}]')} thinking...", end="", flush=True)
+
+        result_holder = {}
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                resp = loop.run_until_complete(
+                    llm_client.chat(arg.strip(), system_prompt=system_prompt)
+                )
+                result_holder["response"] = resp
+            except Exception as e:
+                result_holder["error"] = str(e)
+            finally:
+                loop.close()
+
+        import threading
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        try:
+            t.join(timeout=30.0)
+        except KeyboardInterrupt:
+            print(f"\r  {T.yellow('Cancelled')}")
+            return
+
+        print(f"\r  {T.dim(f'[{backend}]')}          ")  # clear "thinking..."
+
+        if "error" in result_holder:
+            print(f"  {T.red('Error:')} {result_holder['error']}")
+        elif "response" in result_holder:
+            resp = result_holder["response"]
+            print()
+            for line in resp.splitlines():
+                print(f"  {line}")
+            print()
+        else:
+            print(f"  {T.yellow('No response (timeout)')}")
+
+    def do_llm(self, arg):
+        """LLM backend status and connectivity test: llm status | llm test | llm backends
+
+        Examples:
+          llm status    — show current backend, model, API key status
+          llm test      — send a test message and measure latency
+          llm backends  — list all available backends and how to enable them
+        """
+        subcmd = arg.strip().lower()
+
+        llm_mod = self._get_module("LLMModule")
+        if llm_mod is None:
+            print("  LLMModule not running — start with a semantic-enabled profile")
+            return
+
+        if subcmd in ("", "status"):
+            backend  = getattr(llm_mod, "_backend", "?")
+            model    = getattr(llm_mod, "_model",   "?")
+            client   = getattr(llm_mod, "_client",  None)
+            req_cnt  = llm_mod.request.msg_count  if hasattr(llm_mod, "request")  else 0
+            resp_cnt = llm_mod.response.msg_count if hasattr(llm_mod, "response") else 0
+
+            key_env  = getattr(getattr(client, "config", None), "api_key_env", "?")
+            import os
+            key_set  = bool(os.environ.get(key_env, ""))
+            key_str  = T.green("set") if key_set else T.red("not set")
+
+            print(f"\n  LLM backend:  {T.bold(backend)}")
+            print(f"  Model:        {model or T.dim('(default)')}")
+            print(f"  API key ({key_env}): {key_str}")
+            print(f"  Requests:     {req_cnt} sent, {resp_cnt} responses")
+
+            if not key_set and backend != "mock":
+                print(f"\n  To set the key:")
+                print(f"    export {key_env}=your_key_here")
+                print(f"    then restart lingtu")
+
+            print()
+
+        elif subcmd == "test":
+            client = getattr(llm_mod, "_client", None)
+            if client is None:
+                print("  LLM client not initialized")
+                return
+
+            backend = getattr(llm_mod, "_backend", "?")
+            print(f"  Testing {backend}...", end="", flush=True)
+
+            import asyncio, threading, time as _time
+
+            result_holder = {}
+            t0 = _time.time()
+
+            def _run():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    resp = loop.run_until_complete(
+                        client.chat("Reply with exactly: OK",
+                                    system_prompt="You are a test assistant. Reply only with 'OK'.")
+                    )
+                    result_holder["response"] = resp
+                except Exception as e:
+                    result_holder["error"] = str(e)
+                finally:
+                    loop.close()
+
+            t = threading.Thread(target=_run, daemon=True)
+            t.start()
+            t.join(timeout=15.0)
+            elapsed = _time.time() - t0
+
+            if "error" in result_holder:
+                print(f"\r  {T.red('Failed')} ({elapsed:.1f}s): {result_holder['error']}")
+            elif "response" in result_holder:
+                print(f"\r  {T.green('OK')} ({elapsed:.1f}s): {result_holder['response'][:60]}")
+            else:
+                print(f"\r  {T.yellow('Timeout')} after {elapsed:.1f}s")
+            print()
+
+        elif subcmd == "backends":
+            print(f"\n  Available LLM backends:\n")
+            backends = [
+                ("kimi",   "MOONSHOT_API_KEY",  "Kimi K2 (Moonshot AI, China-direct, recommended)"),
+                ("qwen",   "DASHSCOPE_API_KEY", "Qwen (Alibaba, China-direct fallback)"),
+                ("openai", "OPENAI_API_KEY",    "GPT-4o (OpenAI, needs VPN in China)"),
+                ("claude", "ANTHROPIC_API_KEY", "Claude (Anthropic, needs VPN in China)"),
+                ("mock",   "",                  "Mock (offline testing, no real LLM)"),
+            ]
+            import os
+            current = getattr(llm_mod, "_backend", "?")
+            for name, env, desc in backends:
+                key_ok = bool(os.environ.get(env)) if env else True
+                marker = T.green("*") if name == current else " "
+                key_str = T.green("key set") if key_ok else T.dim("no key")
+                print(f"  {marker} {T.bold(name):<10} {key_str:<20} {T.dim(desc)}")
+            print()
+            print(f"  Switch backend: restart with  {T.bold('python3 lingtu.py nav --llm kimi')}")
+            print()
 
     def do_vmem(self, arg):
         """Vector memory: vmem query <text> | vmem stats"""
@@ -406,7 +850,7 @@ class LingTuREPL(cmd.Cmd):
             active = "ACTIVE" if s["active"] else "idle"
             print(f"  Status:  {active}")
             print(f"  Clients: {s['clients']}")
-            print(f"  Port:    ws://0.0.0.0:{s['port']}/teleop")
+            print(f"  URL:     ws://0.0.0.0:{s['port']}/ws/teleop")
         elif subcmd == "release":
             print(f"  {mod.force_release()}")
         else:
@@ -441,6 +885,108 @@ class LingTuREPL(cmd.Cmd):
             print(f"  Counts:  odom={s['counts'].get('odom', 0)} cloud={s['counts'].get('cloud', 0)}")
         else:
             print("  Usage: rerun on | off | status")
+
+    def do_info(self, arg):
+        """System summary — startup status, sensor data flow, position, map progress."""
+        import time as _time
+
+        s = self._system
+        if not s.started:
+            print("  System not started")
+            return
+
+        now = _time.strftime("%H:%M:%S")
+        profile = self._cfg.get("slam_profile", "?")
+        print(f"\n  [{now}]  profile: {self._cfg.get('_desc', profile)}\n")
+
+        # ── Startup ──────────────────────────────────────────────────────────
+        n_mods = len(s.modules)
+        n_conn = len(s.connections)
+        active = sum(
+            1 for mod in s.modules.values()
+            if sum(p.msg_count for p in list(mod.ports_in.values()) +
+                   list(mod.ports_out.values())) > 0
+        )
+        print(f"  Startup    {n_mods} modules loaded, {n_conn} connections")
+        print(f"             {active} modules have received/sent data")
+
+        # ── SLAM / Localization ───────────────────────────────────────────────
+        slam = self._get_module("SlamBridgeModule") or self._get_module("SLAMModule")
+        if slam:
+            odom_n  = slam.odometry.msg_count  if hasattr(slam, "odometry")  else 0
+            cloud_n = slam.map_cloud.msg_count if hasattr(slam, "map_cloud") else 0
+            odom_ok  = T.green("flowing") if odom_n  > 0 else T.yellow("no data yet")
+            cloud_ok = T.green("flowing") if cloud_n > 0 else T.yellow("no data yet")
+            print(f"\n  SLAM")
+            print(f"    odometry   {odom_ok}  ({odom_n} msgs)")
+            print(f"    point cloud {cloud_ok}  ({cloud_n} msgs)")
+        else:
+            print(f"\n  SLAM       {T.dim('not in this profile')}")
+
+        # ── Robot position ────────────────────────────────────────────────────
+        nav = self._get_module("NavigationModule")
+        if nav and hasattr(nav, "_robot_pos"):
+            x, y, z = nav._robot_pos
+            state = getattr(nav, "_state", "?")
+            state_color = T.green if state in ("IDLE", "SUCCESS") else T.yellow if state == "EXECUTING" else T.red
+            print(f"\n  Navigation")
+            print(f"    position   x={x:.2f}  y={y:.2f}  z={z:.2f}")
+            print(f"    state      {state_color(state)}")
+
+        # ── Map modules ───────────────────────────────────────────────────────
+        occ = self._get_module("OccupancyGridModule")
+        if occ:
+            n = sum(p.msg_count for p in occ.ports_in.values())
+            ok = T.green("building") if n > 0 else T.yellow("waiting for point cloud")
+            print(f"\n  Map building")
+            print(f"    occupancy grid  {ok}  ({n} cloud updates)")
+
+        elev = self._get_module("ElevationMapModule")
+        if elev:
+            n = sum(p.msg_count for p in elev.ports_in.values())
+            ok = T.green("building") if n > 0 else T.yellow("waiting")
+            print(f"    elevation map   {ok}  ({n} updates)")
+
+        # ── C++ backends ─────────────────────────────────────────────────────
+        terrain = self._get_module("TerrainModule")
+        lp      = self._get_module("LocalPlannerModule")
+        pf      = self._get_module("PathFollowerModule")
+        if terrain or lp or pf:
+            print(f"\n  C++ backends")
+            if terrain:
+                be = getattr(terrain, "_backend", "?")
+                ok = T.green("nanobind") if be == "nanobind" else T.yellow(be)
+                print(f"    terrain        {ok}")
+            if lp:
+                be = getattr(lp, "_backend", "?")
+                ok = T.green("nanobind") if be == "nanobind" else T.yellow(be)
+                print(f"    local planner  {ok}")
+            if pf:
+                be = getattr(pf, "_backend", "?")
+                ok = T.green("nav_core") if be == "nav_core" else T.yellow(be)
+                print(f"    path follower  {ok}")
+
+        # ── Gateway ───────────────────────────────────────────────────────────
+        gw = self._get_module("GatewayModule")
+        if gw:
+            port = getattr(gw, "_port", 5050)
+            print(f"\n  Gateway    http://localhost:{port}  (accessible from LAN)")
+
+        # ── Teleop ────────────────────────────────────────────────────────────
+        tp = self._get_module("TeleopModule")
+        if tp:
+            try:
+                st = tp.get_teleop_status()
+                tp_port = st.get("port", "?")
+                clients = st.get("clients", 0)
+                active_str = T.green("ACTIVE") if st.get("active") else T.dim("idle")
+                print(f"  Teleop     ws://0.0.0.0:{tp_port}/ws/teleop  {active_str}  ({clients} clients)")
+            except Exception:
+                pass
+
+        print()
+
+    do_i = do_info
 
     def do_status(self, arg):
         """Module overview with layer tags and message counts."""
@@ -586,7 +1132,7 @@ class LingTuREPL(cmd.Cmd):
                     if os.name != "nt":
                         tty.setcbreak(sys.stdin.fileno())
                     if name:
-                        self._map_save(name)
+                        self._map_cmd({"action": "save", "name": name})
                         time.sleep(2)
                 elif key == "g":
                     print("\n  Go to: ", end="", flush=True)
@@ -693,6 +1239,108 @@ class LingTuREPL(cmd.Cmd):
             if not k.startswith("_"):
                 print(f"  {k:20s} {v}")
         print()
+
+    def do_history(self, arg):
+        """Mission history: history [list [N]] | history detail <id> | history stats
+
+        Examples:
+          history            — list 10 most recent missions
+          history list 20    — list 20 most recent missions
+          history stats      — aggregate statistics (total, success rate, distance)
+          history detail <id>  — full detail including trajectory waypoints
+        """
+        parts = arg.split(None, 1)
+        subcmd = parts[0].strip().lower() if parts else "list"
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        mod = self._get_module("MissionLoggerModule")
+        if mod is None:
+            print("  MissionLoggerModule not running — start with a semantic-enabled profile")
+            return
+
+        if subcmd in ("", "list"):
+            count = 10
+            if rest and rest.isdigit():
+                count = int(rest)
+            missions = mod._list_missions_raw(count)
+            if not missions:
+                print("  No mission records found")
+                return
+            print(f"\n  {T.bold('Mission history')} (most recent {len(missions)}):\n")
+            for m in missions:
+                start = m.get("start_time", "?")[:19].replace("T", " ")
+                dur = f"{m['duration_sec']:.0f}s" if m.get("duration_sec") else "?"
+                dist = f"{m['distance_m']:.1f}m" if m.get("distance_m") else "?"
+                result = m.get("result", "?")
+                if result in ("COMPLETE", "SUCCESS"):
+                    result_str = T.green(result)
+                elif result == "FAILED":
+                    result_str = T.red(result)
+                elif result == "IN_PROGRESS":
+                    result_str = T.yellow(result)
+                else:
+                    result_str = T.dim(result)
+                goal = m.get("goal", "")
+                goal_str = f"  {T.dim(goal[:40])}" if goal else ""
+                replans = f" ({m['replan_count']}x replan)" if m.get("replan_count") else ""
+                print(f"  {start}  {result_str:<20} {dur:>6}  {dist:>7}{replans}{goal_str}")
+            print()
+
+        elif subcmd == "stats":
+            s = mod._stats_raw()
+            total = s["total"]
+            if total == 0:
+                print("  No mission records yet")
+                return
+            srate = f"{s['success'] / total * 100:.0f}%" if total > 0 else "?"
+            print(f"\n  {T.bold('Mission statistics')}")
+            print(f"  Total missions : {total}")
+            print(f"  Successful     : {s['success']}  ({srate})")
+            print(f"  Failed         : {s['failed']}")
+            if s["in_progress"]:
+                print(f"  In progress    : {T.yellow('1')}")
+            print(f"  Total distance : {s['total_distance_m']:.0f} m")
+            print(f"  Total time     : {s['total_duration_sec'] / 60:.1f} min")
+            print(f"  Log dir        : {T.dim(s['log_dir'])}")
+            print()
+
+        elif subcmd == "detail":
+            if not rest:
+                print("  Usage: history detail <mission-id>")
+                return
+            data = mod.get_mission(rest)
+            if data is None:
+                print(f"  Mission not found: {rest}")
+                return
+            result = data.get("result", "?")
+            if result in ("COMPLETE", "SUCCESS"):
+                result_str = T.green(result)
+            elif result == "FAILED":
+                result_str = T.red(result)
+            else:
+                result_str = T.yellow(result)
+            print(f"\n  {T.bold('Mission detail')}")
+            print(f"  ID         : {data.get('id', '?')}")
+            print(f"  Goal       : {data.get('goal', '?')}")
+            print(f"  Result     : {result_str}")
+            print(f"  Start      : {data.get('start_time', '?')[:19].replace('T', ' ')}")
+            print(f"  End        : {(data.get('end_time') or '?')[:19].replace('T', ' ')}")
+            print(f"  Duration   : {data.get('duration_sec', '?')} s")
+            print(f"  Distance   : {data.get('distance_m', '?')} m")
+            print(f"  Replans    : {data.get('replan_count', 0)}")
+            traj = data.get("trajectory", [])
+            if traj:
+                print(f"  Trajectory : {len(traj)} points")
+                for pt in traj[:5]:
+                    print(f"    ({pt[0]:.2f}, {pt[1]:.2f})  t={pt[2]:.1f}")
+                if len(traj) > 5:
+                    print(f"    ... {len(traj) - 5} more points")
+            print()
+
+        else:
+            print("  Usage: history [list [N]] | history stats | history detail <id>")
+
+    do_hist = do_history
 
     def do_quit(self, arg):
         """Graceful shutdown."""

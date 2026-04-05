@@ -53,7 +53,7 @@ check("CAN Bus", os.path.exists("/sys/class/net/can0"))
 # 3. Ports
 print("\n  --- Ports ---")
 check("brainstem gRPC :13145", port_open("127.0.0.1", 13145))
-for name, port in [("Gateway :5050", 5050), ("MCP :8090", 8090), ("Teleop :5060", 5060)]:
+for name, port in [("Gateway :5050", 5050), ("MCP :8090", 8090)]:
     if port_open("127.0.0.1", port):
         check(name, True)
     else:

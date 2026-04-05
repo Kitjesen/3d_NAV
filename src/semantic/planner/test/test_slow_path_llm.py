@@ -219,21 +219,21 @@ class TestSlowPathLLM(unittest.TestCase):
         测试Fast Path失败后自动切换到Slow Path
 
         场景:
-        1. Fast Path置信度不够（<0.75）
+        1. Fast Path因阈值设为 0.99 而无法满足（强制失败）
         2. 自动进入Slow Path
         3. LLM成功解析
         """
         objects = [
             {
                 "id": 0,
-                "label": "chair near door",  # 复杂的空间关系
+                "label": "workstation",  # 不直接匹配指令关键词
                 "position": {"x": 3, "y": 2, "z": 0},
                 "score": 0.7,
                 "detection_count": 3,
             },
             {
                 "id": 1,
-                "label": "door",
+                "label": "monitor",
                 "position": {"x": 3, "y": 3, "z": 0},
                 "score": 0.8,
                 "detection_count": 4,
@@ -241,23 +241,23 @@ class TestSlowPathLLM(unittest.TestCase):
         ]
 
         sg = make_scene_graph(objects)
-        instruction = "go to the chair near the door"
+        instruction = "go to the place where I can code"
 
         # Mock LLM响应
         mock_llm_response = json.dumps({
             "action": "navigate",
             "target": {"x": 3.0, "y": 2.0, "z": 0.0},
-            "target_label": "chair near door",
+            "target_label": "workstation",
             "confidence": 0.88,
-            "reasoning": "The instruction asks for 'chair near the door', found matching object",
+            "reasoning": "A workstation with a monitor is where one can code",
         })
 
         self.resolver._primary = MagicMock()
         self.resolver._primary.is_available.return_value = True
         self.resolver._primary.chat = AsyncMock(return_value=mock_llm_response)
 
-        # 降低Fast Path阈值，让它更容易失败
-        self.resolver._fast_path_threshold = 0.75
+        # 设置极高阈值，强制 Fast Path 失败
+        self.resolver._fast_path_threshold = 0.99
 
         # 运行测试
         result = self.loop.run_until_complete(
@@ -271,7 +271,7 @@ class TestSlowPathLLM(unittest.TestCase):
         # 验证结果
         self.assertTrue(result.is_valid)
         self.assertEqual(result.path, "slow")  # 应该走了Slow Path
-        self.assertEqual(result.target_label, "chair near door")
+        self.assertEqual(result.target_label, "workstation")
 
         print("\n=== Fast-to-Slow Fallback Test ===")
         print(f"Instruction: {instruction}")

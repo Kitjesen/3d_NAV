@@ -4,11 +4,57 @@ from __future__ import annotations
 
 import os
 
-_ACTIVE_TOMOGRAM = os.path.join(
-    os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
-    "active",
-    "tomogram.pickle",
-)
+def _default_map_dir() -> str:
+    """Return the default on-robot map storage directory.
+
+    Maps are runtime data (often large) and should live outside the repo so they
+    survive code updates and can be shared across profiles.
+
+    Order:
+      1) $NAV_MAP_DIR, if set
+      2) legacy: ~/data/nova/maps (kept for backwards compatibility)
+      3) new default: ~/data/lingtu/maps
+    """
+    env = os.environ.get("NAV_MAP_DIR")
+    if env:
+        return env
+
+    legacy = os.path.expanduser("~/data/nova/maps")
+    if os.path.isdir(legacy):
+        return legacy
+
+    return os.path.expanduser("~/data/lingtu/maps")
+
+
+def _resolve_tomogram() -> str:
+    """Return the active tomogram path, falling back to the built-in sample map.
+
+    Priority:
+      1. $NAV_MAP_DIR/active/tomogram.pickle  (user's real map, built via 'map build')
+      2. src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle  (sample)
+
+    The fallback lets the nav profile start without a user-built map so PCT
+    can be verified. In production the real map should be in place.
+    """
+    active = os.path.join(
+        _default_map_dir(),
+        "active",
+        "tomogram.pickle",
+    )
+    if os.path.isfile(active):
+        return active
+
+    # Fallback: built-in sample tomogram (relative to project root)
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sample = os.path.join(
+        _repo,
+        "src", "global_planning", "PCT_planner",
+        "rsc", "tomogram", "building2_9.pickle",
+    )
+    return sample
+
+
+_ACTIVE_TOMOGRAM = _resolve_tomogram()
 
 ROBOT_PRESETS = {
     "stub": dict(robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip"),
@@ -27,7 +73,7 @@ ROBOT_PRESETS = {
 
 PROFILES = {
     "map": dict(
-        _desc="Build map — SLAM + PGO, then 'map save <name>'",
+        _desc="Build a new map of the environment",
         _default_robot="s100p",
         slam_profile="fastlio2",
         llm="mock",
@@ -39,30 +85,33 @@ PROFILES = {
         gateway_port=5050,
     ),
     "nav": dict(
-        _desc="Navigate with pre-built map (localizer + full stack)",
+        _desc="Navigate using a saved map",
         _default_robot="s100p",
         llm="qwen",
-        planner="astar",
+        planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
         tomogram=_ACTIVE_TOMOGRAM,
+        # enable_native=False: C++ local_planner requires the 'local_planner'
+        # ROS2 package installed via colcon. Use Python autonomy chain instead.
+        # Switch to True only after running: make build && ros2 pkg list | grep local_planner
         enable_native=False,
         enable_semantic=True,
         enable_gateway=True,
         gateway_port=5050,
     ),
     "explore": dict(
-        _desc="Explore unknown area (SLAM + frontier, no map needed)",
+        _desc="Explore unknown area (no map needed)",
         _default_robot="s100p",
         slam_profile="fastlio2",
         llm="qwen",
-        planner="astar",
-        enable_native=False,
+        planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
+        enable_native=False,    # same reason as nav profile above
         enable_semantic=True,
         enable_gateway=True,
         enable_frontier=True,
         gateway_port=5050,
     ),
     "sim": dict(
-        _desc="MuJoCo simulation (full algorithm stack)",
+        _desc="MuJoCo simulation",
         _default_robot="sim",
         llm="mock",
         planner="astar",
@@ -73,7 +122,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "dev": dict(
-        _desc="Semantic pipeline dev (no hardware)",
+        _desc="Test perception & planning without a robot",
         _default_robot="stub",
         llm="mock",
         planner="astar",
@@ -83,7 +132,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "stub": dict(
-        _desc="Framework testing (no hardware, no semantic)",
+        _desc="Framework testing only",
         _default_robot="stub",
         llm="mock",
         planner="astar",

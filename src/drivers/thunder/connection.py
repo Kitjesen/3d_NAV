@@ -1,19 +1,20 @@
 """
-Han Dog Module — dimos 风格的四足机器人桥接模块。
+NovaDogConnection — Quadruped robot gRPC bridge module.
 
-替代 han_dog_bridge.py (ROS2 Node 版本)。
-用 src/core 的 Module/In/Out 声明端口，gRPC 连接 brainstem CMS。
+Replaces legacy/han_dog_bridge.py (ROS2 Node version).
+Uses core Module/In/Out ports, connects to brainstem CMS via gRPC.
 
-端口:
-  In:  cmd_vel      (Twist)       — 速度指令 → gRPC Walk()
+Ports:
+  In:  cmd_vel      (Twist)       — velocity command → gRPC Walk()
        stop_signal  (int)         — 0=normal, 1=soft_stop, 2=hard_stop
-       slam_odom    (Odometry)    — SLAM 位置重置（防积分漂移）
-  Out: odometry     (Odometry)    — IMU 姿态 + cmd_vel 位置积分
-       alive        (bool)        — gRPC 连接状态
+       slam_odom    (Odometry)    — SLAM position reset (prevent integration drift)
+  Out: odometry     (Odometry)    — IMU orientation + cmd_vel position integration
+       alive        (bool)        — gRPC connection status
 
-用法:
+Usage::
+
     from core import autoconnect
-    from drivers.thunder.han_dog_module import NovaDogConnection
+    from drivers.thunder.connection import NovaDogConnection
 
     handle = autoconnect(
         NovaDogConnection.blueprint(dog_host="192.168.66.190"),
@@ -45,14 +46,13 @@ logger = logging.getLogger(__name__)
 
 @register("driver", "nova_dog", priority=10, platforms={"aarch64"}, description="NOVA quadruped via brainstem gRPC")
 class NovaDogConnection(Module, layer=1):
-    """
-    四足机器人 gRPC 桥接模块。
+    """Quadruped robot gRPC bridge module.
 
-    In:  cmd_vel → 归一化 → gRPC Walk()
-    Out: odometry ← IMU 姿态 + 位置积分
+    In:  cmd_vel → normalize to [-1,1] → gRPC Walk()
+    Out: odometry ← IMU orientation + dead-reckoning position integration
     """
 
-    # ── 端口声明 ──
+    # -- Ports --
     cmd_vel: In[Twist]
     stop_signal: In[int]
     slam_odom: In[Odometry]
@@ -87,7 +87,6 @@ class NovaDogConnection(Module, layer=1):
         self._odom_skip = max(1, int(control_rate / odom_pub_rate))
         self._slam_reset_interval = slam_reset_interval
 
-        # 内部状态
         self._cmd_vx = 0.0
         self._cmd_vy = 0.0
         self._cmd_wz = 0.0
@@ -98,17 +97,17 @@ class NovaDogConnection(Module, layer=1):
         self._enabled = False
         self._shutdown = False
 
-        # gRPC (在 asyncio 线程初始化)
+        # gRPC (initialized in asyncio thread)
         self._channel = None
         self._stub = None
 
-        # 位置积分
+        # Dead-reckoning position
         self._pos_x = 0.0
         self._pos_y = 0.0
         self._last_odom_time: Optional[float] = None
         self._last_slam_reset = time.time()
 
-        # IMU 缓存
+        # IMU cache
         self._latest_quat = (0.0, 0.0, 0.0, 1.0)  # x, y, z, w
         self._latest_gyro = (0.0, 0.0, 0.0)
 
@@ -116,26 +115,22 @@ class NovaDogConnection(Module, layer=1):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._grpc_thread: Optional[threading.Thread] = None
 
-    # ── 生命周期 ──
+    # -- Lifecycle --
 
     def setup(self):
-        """注册端口回调。"""
         self.cmd_vel.subscribe(self._on_cmd_vel)
         self.stop_signal.subscribe(self._on_stop)
         self.slam_odom.subscribe(self._on_slam_odom)
 
     def start(self):
-        """启动 gRPC 连接 + 看门狗。"""
         super().start()
         self._shutdown = False
 
-        # 启动 asyncio 事件循环 (独立线程)
         self._loop = asyncio.new_event_loop()
         self._grpc_thread = threading.Thread(
             target=self._run_async_loop, daemon=True)
         self._grpc_thread.start()
 
-        # 看门狗线程
         self._watchdog_thread = threading.Thread(
             target=self._watchdog_loop, daemon=True)
         self._watchdog_thread.start()
@@ -146,26 +141,31 @@ class NovaDogConnection(Module, layer=1):
         )
 
     def stop(self):
-        """安全关机：零速 → 坐下 → 断开。"""
         self._shutdown = True
-        if self._connected and self._standing and self._loop:
+        loop = self._loop
+        if self._connected and self._standing and loop:
             try:
                 fut = asyncio.run_coroutine_threadsafe(
-                    self._safe_shutdown(), self._loop)
+                    self._safe_shutdown(), loop)
                 fut.result(timeout=5.0)
             except Exception as e:
                 logger.warning("Shutdown cleanup failed: %s", e)
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        if loop:
+            loop.call_soon_threadsafe(loop.stop)
         if self._grpc_thread:
             self._grpc_thread.join(timeout=3.0)
+        if loop:
+            try:
+                loop.close()
+            except Exception:
+                pass
+        self._loop = None
         self.alive.publish(False)
         super().stop()
 
-    # ── 端口回调 ──
+    # -- Port callbacks --
 
     def _on_cmd_vel(self, twist: Twist):
-        """收到速度指令 → 缓存 + 异步发送 Walk。"""
         self._last_cmd_time = time.time()
         self._cmd_vx = twist.linear.x
         self._cmd_vy = twist.linear.y
@@ -181,7 +181,6 @@ class NovaDogConnection(Module, layer=1):
                 self._send_walk(walk), self._loop)
 
     def _on_stop(self, level: int):
-        """收到停止信号。"""
         if level == 2 and self._loop:
             logger.warning("Hard stop → SitDown")
             asyncio.run_coroutine_threadsafe(self._sit_down(), self._loop)
@@ -191,7 +190,7 @@ class NovaDogConnection(Module, layer=1):
                 self._send_walk_zero(), self._loop)
 
     def _on_slam_odom(self, odom: Odometry):
-        """SLAM 位置重置（防积分漂移）。"""
+        """Reset dead-reckoning position from SLAM to prevent drift accumulation."""
         now = time.time()
         if now - self._last_slam_reset >= self._slam_reset_interval:
             sx, sy = odom.x, odom.y
@@ -200,19 +199,19 @@ class NovaDogConnection(Module, layer=1):
                 self._pos_y = sy
                 self._last_slam_reset = now
 
-    # ── Twist → Walk 转换 ──
+    # -- Twist normalization --
 
     def _twist_to_walk(self, vx: float, vy: float, wz: float) -> tuple:
-        """m/s, rad/s → [-1,1] 归一化 Walk 指令。"""
+        """Convert m/s, rad/s → [-1,1] normalized Walk command."""
         nx = max(-1.0, min(1.0, vx / self._max_linear)) if self._max_linear > 0 else 0.0
         ny = max(-1.0, min(1.0, vy / self._max_linear)) if self._max_linear > 0 else 0.0
         nz = max(-1.0, min(1.0, wz / self._max_angular)) if self._max_angular > 0 else 0.0
         return (nx, ny, nz)
 
-    # ── 里程计合成 ──
+    # -- Odometry synthesis --
 
     def _publish_odometry(self):
-        """IMU 姿态 + cmd_vel 位置积分 → Odometry 消息。"""
+        """Fuse IMU orientation + cmd_vel dead-reckoning → Odometry message."""
         from core.msgs.geometry import Pose, PoseStamped
 
         now = time.time()
@@ -249,10 +248,10 @@ class NovaDogConnection(Module, layer=1):
         )
         self.odometry.publish(odom)
 
-    # ── 看门狗 ──
+    # -- Watchdog --
 
     def _watchdog_loop(self):
-        """50Hz 看门狗循环。"""
+        """Control-rate watchdog: zero velocity on cmd_vel timeout, periodic odom publish."""
         odom_counter = 0
         while not self._shutdown:
             elapsed = time.time() - self._last_cmd_time
@@ -273,7 +272,7 @@ class NovaDogConnection(Module, layer=1):
 
             time.sleep(1.0 / self._control_rate)
 
-    # ── gRPC 异步逻辑 ──
+    # -- gRPC async logic --
 
     def _run_async_loop(self):
         asyncio.set_event_loop(self._loop)
@@ -299,23 +298,23 @@ class NovaDogConnection(Module, layer=1):
             logger.error("grpc/han_dog_message not available — running in stub mode")
             self._connected = False
             self.alive.publish(False)
-            await asyncio.sleep(999999)  # block forever in stub mode
+            await asyncio.sleep(999999)
             return
 
         addr = f"{self._dog_host}:{self._dog_port}"
-        logger.info("Connecting to Han Dog CMS at %s...", addr)
+        logger.info("Connecting to brainstem CMS at %s...", addr)
 
         async with grpc_aio.insecure_channel(addr) as channel:
             self._stub = dog_msg.CmsStub(channel)
             self._connected = True
             self.alive.publish(True)
-            logger.info("Connected to Han Dog CMS at %s", addr)
+            logger.info("Connected to brainstem CMS at %s", addr)
 
             if self._auto_enable:
                 try:
                     await self._stub.Enable(dog_msg.Empty())
                     self._enabled = True
-                    logger.info("Dog motors ENABLED")
+                    logger.info("Motors ENABLED")
                 except Exception as e:
                     logger.error("Enable failed: %s", e)
 
@@ -324,7 +323,7 @@ class NovaDogConnection(Module, layer=1):
                     try:
                         await self._stub.StandUp(dog_msg.Empty())
                         self._standing = True
-                        logger.info("Dog STANDING UP")
+                        logger.info("Robot STANDING UP")
                         break
                     except Exception as e:
                         logger.error("StandUp attempt %d/3 failed: %s", attempt, e)
@@ -339,7 +338,7 @@ class NovaDogConnection(Module, layer=1):
             )
 
     async def _listen_imu(self, dog_msg):
-        """订阅 IMU 数据流 → 更新内部状态。"""
+        """Subscribe to IMU data stream and update internal state."""
         async for imu in self._stub.ListenImu(dog_msg.Empty()):
             gx = float(imu.gyroscope.x) if math.isfinite(imu.gyroscope.x) else 0.0
             gy = float(imu.gyroscope.y) if math.isfinite(imu.gyroscope.y) else 0.0
@@ -369,7 +368,7 @@ class NovaDogConnection(Module, layer=1):
             await self._send_walk_zero()
             await self._stub.SitDown(dog_msg.Empty())
             self._standing = False
-            logger.info("Dog SITTING DOWN")
+            logger.info("Robot SITTING DOWN")
         except Exception as e:
             logger.error("SitDown failed: %s", e)
 
@@ -383,7 +382,7 @@ class NovaDogConnection(Module, layer=1):
         except Exception:
             pass
 
-    # ── 健康报告 ──
+    # -- Health --
 
     def health(self) -> Dict[str, Any]:
         stats = super().port_summary()

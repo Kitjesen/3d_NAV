@@ -1,9 +1,9 @@
-"""lingtu.core.msgs.geometry — 基础几何消息类型。
+"""lingtu.core.msgs.geometry — core geometry message types.
 
-所有导航模块共用的 Vector3 / Quaternion / Pose / PoseStamped / Twist /
-TwistStamped / Transform。零外部依赖（仅 numpy + math + struct）。
+Vector3 / Quaternion / Pose / PoseStamped / Twist / TwistStamped / Transform
+shared by all navigation modules. No external deps beyond numpy, math, and struct.
 
-编码格式: little-endian double ('<d')。
+Encoding: little-endian double ('<d').
 """
 from __future__ import annotations
 
@@ -20,16 +20,16 @@ import numpy as np
 
 
 class Vector3:
-    """3-D 向量，支持完整数学运算与二进制序列化。
+    """3-D vector with full math ops and binary serialisation.
 
-    构造方式::
+    Construction::
 
         Vector3()                      # (0, 0, 0)
-        Vector3(1, 2, 3)               # 三个标量
+        Vector3(1, 2, 3)               # three scalars
         Vector3([1, 2, 3])             # list / tuple
         Vector3(np.array([1, 2, 3]))   # numpy
-        Vector3(other_vec3)            # 拷贝
-        Vector3(x=1, y=2, z=3)         # 关键字
+        Vector3(other_vec3)            # copy
+        Vector3(x=1, y=2, z=3)         # keywords
     """
 
     __slots__ = ("x", "y", "z")
@@ -138,7 +138,7 @@ class Vector3:
         return (self - _to_vec3(other)).length()
 
     def angle(self, other: Any) -> float:
-        """两向量夹角 (弧度)。"""
+        """Angle between two vectors (radians)."""
         o = _to_vec3(other)
         n1, n2 = self.length(), o.length()
         if n1 < 1e-12 or n2 < 1e-12:
@@ -188,7 +188,7 @@ class Vector3:
 
 
 def _to_vec3(v: Any) -> Vector3:
-    """便捷转换: list / tuple / ndarray → Vector3。"""
+    """Convenience: list / tuple / ndarray → Vector3."""
     return v if isinstance(v, Vector3) else Vector3(v)
 
 
@@ -198,15 +198,15 @@ def _to_vec3(v: Any) -> Vector3:
 
 
 class Quaternion:
-    """四元数 (x, y, z, w)，w=1 为恒等旋转。Hamilton 乘法、旋转、欧拉角互转。
+    """Quaternion (x, y, z, w); w=1 is identity rotation. Hamilton product, rotate vectors, Euler interop.
 
-    构造方式::
+    Construction::
 
         Quaternion()                          # identity (0,0,0,1)
-        Quaternion(x, y, z, w)                # 四标量
+        Quaternion(x, y, z, w)                # four scalars
         Quaternion([x, y, z, w])              # list / tuple / ndarray
-        Quaternion(other_quat)                # 拷贝
-        Quaternion(x=0, y=0, z=0, w=1)       # 关键字
+        Quaternion(other_quat)                # copy
+        Quaternion(x=0, y=0, z=0, w=1)       # keywords
     """
 
     __slots__ = ("x", "y", "z", "w")
@@ -276,7 +276,7 @@ class Quaternion:
         return Quaternion(self.x / n, self.y / n, self.z / n, self.w / n)
 
     def rotate_vector(self, v: Vector3) -> Vector3:
-        """q * v * q^* (旋转向量)。"""
+        """q * v * q^* (rotate vector)."""
         vq = Quaternion(v.x, v.y, v.z, 0.0)
         r = self * vq * self.conjugate()
         return Vector3(r.x, r.y, r.z)
@@ -284,7 +284,7 @@ class Quaternion:
     # -- Euler (ZYX intrinsic) -----------------------------------------------
 
     def to_euler(self) -> Vector3:
-        """返回 Vector3(roll, pitch, yaw) 弧度，ZYX 内旋。"""
+        """Return Vector3(roll, pitch, yaw) in radians, ZYX intrinsic."""
         sinr = 2.0 * (self.w * self.x + self.y * self.z)
         cosr = 1.0 - 2.0 * (self.x * self.x + self.y * self.y)
         roll = math.atan2(sinr, cosr)
@@ -300,7 +300,7 @@ class Quaternion:
 
     @classmethod
     def from_euler(cls, roll: float, pitch: float, yaw: float) -> Quaternion:
-        """从 (roll, pitch, yaw) 弧度构造四元数 (ZYX 内旋)。"""
+        """Build quaternion from (roll, pitch, yaw) radians (ZYX intrinsic)."""
         cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
         cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
         cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
@@ -313,11 +313,11 @@ class Quaternion:
 
     @classmethod
     def from_yaw(cls, yaw: float) -> Quaternion:
-        """从偏航角 (rad) 构造四元数。"""
+        """Build quaternion from yaw (rad)."""
         return cls(0.0, 0.0, math.sin(yaw * 0.5), math.cos(yaw * 0.5))
 
     def to_rotation_matrix(self) -> np.ndarray:
-        """返回 3x3 旋转矩阵。"""
+        """Return 3×3 rotation matrix."""
         x, y, z, w = self.x, self.y, self.z, self.w
         return np.array([
             [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
@@ -392,16 +392,16 @@ class Quaternion:
 
 
 class Pose:
-    """位姿 = 位置 (Vector3) + 朝向 (Quaternion)。
+    """Pose = position (Vector3) + orientation (Quaternion).
 
-    构造方式::
+    Construction::
 
-        Pose()                                     # 原点 + identity
-        Pose(x, y, z)                              # 位置, identity 朝向
-        Pose(x, y, z, qx, qy, qz, qw)            # 完整七参数
-        Pose(Vector3, Quaternion)                  # 直接传对象
-        Pose(other_pose)                           # 拷贝
-        Pose(position=vec, orientation=quat)       # 关键字
+        Pose()                                     # origin + identity
+        Pose(x, y, z)                              # position, identity orientation
+        Pose(x, y, z, qx, qy, qz, qw)            # full seven parameters
+        Pose(Vector3, Quaternion)                  # pass objects directly
+        Pose(other_pose)                           # copy
+        Pose(position=vec, orientation=quat)       # keywords
     """
 
     __slots__ = ("position", "orientation")
@@ -471,7 +471,7 @@ class Pose:
     # -- composition ---------------------------------------------------------
 
     def __add__(self, other: Any) -> Pose:
-        """位姿复合: 在 self 坐标系下施加 other 变换。"""
+        """Pose compose: apply *other* transform in *self* frame."""
         if isinstance(other, Transform):
             op, oq = other.translation, other.rotation
         elif isinstance(other, Pose):
@@ -483,7 +483,7 @@ class Pose:
         return Pose(new_p, new_q)
 
     def __sub__(self, other: Pose) -> Pose:
-        """位姿差: delta = self - other。"""
+        """Pose delta: delta = self - other."""
         dp = self.position - other.position
         dq = self.orientation * other.orientation.inverse()
         return Pose(dp, dq)
@@ -543,7 +543,7 @@ class Pose:
 
 
 class PoseStamped:
-    """带时间戳和坐标帧的位姿 (组合模式, 含 .pose 字段)。"""
+    """Pose with timestamp and frame id (composition; includes .pose)."""
 
     __slots__ = ("pose", "ts", "frame_id")
 
@@ -641,7 +641,7 @@ class PoseStamped:
 
 
 class Twist:
-    """线速度 + 角速度。"""
+    """Linear + angular velocity."""
 
     __slots__ = ("linear", "angular")
 
@@ -719,7 +719,7 @@ class Twist:
 
 
 class TwistStamped(Twist):
-    """带时间戳与坐标系的 Twist。"""
+    """Twist with timestamp and frame id."""
 
     __slots__ = ("ts", "frame_id")
 
@@ -792,7 +792,7 @@ class TwistStamped(Twist):
 
 
 class Transform:
-    """刚体变换: 平移 (Vector3) + 旋转 (Quaternion) + 坐标系元信息。"""
+    """Rigid transform: translation (Vector3) + rotation (Quaternion) + frame metadata."""
 
     __slots__ = ("translation", "rotation", "frame_id", "child_frame_id", "ts")
 
@@ -825,7 +825,7 @@ class Transform:
     # -- composition ---------------------------------------------------------
 
     def __add__(self, other: Transform) -> Transform:
-        """变换复合: self * other (先 self 后 other)。"""
+        """Compose transforms: self * other (apply self then other)."""
         if not isinstance(other, Transform):
             raise TypeError(f"Cannot compose Transform with {type(other)}")
         new_r = self.rotation * other.rotation
@@ -838,7 +838,7 @@ class Transform:
         )
 
     def inverse(self) -> Transform:
-        """逆变换: 若 self 是 A->B，返回 B->A。"""
+        """Inverse: if self is A→B, returns B→A."""
         inv_r = self.rotation.inverse()
         inv_t = -(inv_r.rotate_vector(self.translation))
         return Transform(
@@ -852,7 +852,7 @@ class Transform:
         return self.inverse()
 
     def to_matrix(self) -> np.ndarray:
-        """返回 4x4 齐次变换矩阵。"""
+        """Return 4×4 homogeneous transform matrix."""
         m = np.eye(4)
         m[:3, :3] = self.rotation.to_rotation_matrix()
         m[:3, 3] = [self.translation.x, self.translation.y, self.translation.z]

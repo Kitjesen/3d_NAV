@@ -1,6 +1,6 @@
-"""lingtu.core.module — dimos 风格 Module 基类，自动扫描 In/Out 端口。
+"""lingtu.core.module — dimos-style Module base class with automatic In/Out port scanning.
 
-使用方式::
+Usage::
 
     class PerceptionModule(Module):
         scene_graph: Out[SceneGraph]
@@ -11,13 +11,13 @@
             self.image.subscribe(self._on_image)
 
         def _on_image(self, img: Image):
-            # 处理图像 → 发布场景图
+            # process image → publish scene graph
             self.scene_graph.publish(sg)
 
-端口通过 type hints 自动发现和实例化。Module.__init__ 会扫描所有
-In[T] / Out[T] 类型标注，创建对应端口对象并注册到 ports_in / ports_out。
+Ports are discovered and instantiated from type hints. Module.__init__ scans all
+In[T] / Out[T] annotations, creates port objects, and registers them in ports_in / ports_out.
 
-生命周期: __init__ → setup() → start() → [运行中] → stop()
+Lifecycle: __init__ → setup() → start() → [running] → stop()
 """
 
 from __future__ import annotations
@@ -114,20 +114,20 @@ def _build_skill_schema(method) -> dict:
 
 
 class Module:
-    """模块基类 — LingTu 编排框架的核心构件。
+    """Module base class — core building block of the LingTu orchestration framework.
 
-    子类声明 ``In[T]`` / ``Out[T]`` 类型标注，基类自动扫描并实例化端口。
-    支持 layer 标签用于依赖图层级校验。
+    Subclasses declare ``In[T]`` / ``Out[T]`` annotations; the base class scans and instantiates ports.
+    Optional layer tag for dependency-graph level checks.
 
     Attributes:
-        _config: 构造时传入的配置字典
-        _ports_in: 输入端口注册表 {name: In[T]}
-        _ports_out: 输出端口注册表 {name: Out[T]}
-        _running: 模块运行状态
-        _layer: 所属层级 (L0-L6)，用于依赖校验
+        _config: config dict passed at construction
+        _ports_in: input port registry {name: In[T]}
+        _ports_out: output port registry {name: Out[T]}
+        _running: whether the module is running
+        _layer: layer (L0–L6) for dependency validation
     """
 
-    # 类级别层级标签，子类可覆盖
+    # class-level layer tag; subclasses may override
     _layer: Optional[int] = None
 
     # Modules that host network servers (HTTP, WebSocket) set this True so
@@ -135,20 +135,20 @@ class Module:
     # can receive RPCClient proxies via on_system_modules() directly.
     _run_in_main: bool = False
 
-    # -- dimos 风格 __init_subclass__: 在类定义时设置 None 占位 -----------
+    # -- dimos-style __init_subclass__: set None placeholders at class definition ---
 
     def __init_subclass__(cls, layer: Optional[int] = None, **kwargs: Any) -> None:
-        """子类定义钩子 — 设置 In/Out 类级别占位属性。
+        """Subclass hook — set class-level In/Out placeholder attributes.
 
-        dimos 需要这个是因为 Dask Actor proxy 在类级别查找属性。
-        我们保留此模式以确保 hasattr() 在类级别就能发现端口。
+        dimos needs this because Dask Actor proxies look up attributes on the class.
+        We keep this pattern so hasattr() finds ports at class level.
         """
         super().__init_subclass__(**kwargs)
 
         if layer is not None:
             cls._layer = layer
 
-        # 收集 MRO 中所有模块的命名空间，确保前向引用能解析
+        # merge namespaces from MRO modules so forward refs resolve
         globalns: Dict[str, Any] = {}
         for c in reversed(cls.__mro__):
             mod = sys.modules.get(c.__module__)
@@ -166,7 +166,7 @@ class Module:
                 if not hasattr(cls, name) or getattr(cls, name) is None:
                     setattr(cls, name, None)
 
-    # -- 实例初始化 -------------------------------------------------------
+    # -- instance initialisation ---------------------------------------------
 
     def __init__(self, **config: Any) -> None:
         self._config = config
@@ -176,7 +176,7 @@ class Module:
         self._closed = False
         self._closed_lock = __import__("threading").Lock()
 
-        # 扫描类型标注，实例化端口
+        # scan type hints and instantiate ports
         globalns: Dict[str, Any] = {}
         for c in reversed(type(self).__mro__):
             mod = sys.modules.get(c.__module__)
@@ -201,14 +201,14 @@ class Module:
                 setattr(self, name, port)
                 self._ports_in[name] = port
 
-    # -- 生命周期 ---------------------------------------------------------
+    # -- lifecycle -----------------------------------------------------------
 
     def setup(self) -> None:
-        """配置阶段 — 注册订阅者、加载资源。子类覆盖。"""
+        """Configuration phase — register subscribers, load resources. Override in subclasses."""
         pass
 
     def start(self) -> None:
-        """启动模块。"""
+        """Start the module."""
         self._running = True
         logger.debug("Module %s started", type(self).__name__)
 
@@ -233,21 +233,21 @@ class Module:
         for port in self._ports_in.values():
             port._clear_subscriber()
 
-    # -- 端口访问 ---------------------------------------------------------
+    # -- port access ---------------------------------------------------------
 
     @property
     def ports_in(self) -> Dict[str, In[Any]]:
-        """只读输入端口字典副本。"""
+        """Read-only copy of the input port dict."""
         return dict(self._ports_in)
 
     @property
     def ports_out(self) -> Dict[str, Out[Any]]:
-        """只读输出端口字典副本。"""
+        """Read-only copy of the output port dict."""
         return dict(self._ports_out)
 
     @property
     def all_ports(self) -> Dict[str, Any]:
-        """所有端口 (In + Out)。"""
+        """All ports (In + Out)."""
         return {**self._ports_in, **self._ports_out}
 
     @property
@@ -370,18 +370,18 @@ class Module:
         else:
             raise ValueError(f"direction must be In or Out, got {direction}")
 
-    # -- Blueprint 工厂 ---------------------------------------------------
+    # -- Blueprint factory ---------------------------------------------------
 
     @classmethod
     def blueprint(cls, **kwargs: Any) -> "Blueprint":
-        """创建仅包含本模块的 Blueprint。"""
+        """Create a Blueprint containing only this module."""
         from .blueprint import Blueprint
         return Blueprint().add(cls, **kwargs)
 
-    # -- 信息 -------------------------------------------------------------
+    # -- diagnostics ---------------------------------------------------------
 
     def port_summary(self) -> Dict[str, Any]:
-        """返回端口摘要信息，用于调试和健康检查。"""
+        """Port summary for debugging and health checks."""
         return {
             "module": type(self).__name__,
             "layer": self._layer,

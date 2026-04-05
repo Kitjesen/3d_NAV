@@ -131,7 +131,7 @@ teleop status          遥控状态（客户端数、端口）
 teleop release         释放手动控制
 ```
 
-手机/浏览器连接：`ws://<机器人IP>:5060/teleop`
+手机/浏览器连接：`ws://<机器人IP>:5050/ws/teleop`
 
 发送 JSON：`{"type": "joy", "lx": 0.5, "ly": 0.0, "az": -0.3}`
 
@@ -182,7 +182,7 @@ claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 |------|------|------|
 | 5050 | Gateway | HTTP/WebSocket/SSE API |
 | 8090 | MCP | AI Agent JSON-RPC |
-| 5060 | Teleop | 手机遥控 WebSocket |
+| 5050 | Teleop | /ws/teleop (同 Gateway 端口) |
 
 ## 参数覆盖
 

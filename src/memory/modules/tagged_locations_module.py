@@ -11,11 +11,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+import json
+from typing import Any, List, Optional
 
 import numpy as np
 
-from core import Module, In, Out
+from core import Module, In, Out, skill
 from core.msgs import Odometry, PoseStamped
 from core.msgs.geometry import Pose, Quaternion, Vector3
 
@@ -132,3 +133,33 @@ class TaggedLocationsModule(Module, layer=3):
     def store(self) -> TaggedLocationStore:
         """访问内部 TaggedLocationStore (测试用)。"""
         return self._store
+
+    @skill
+    def list_tags(self) -> str:
+        """List all saved location tags with positions."""
+        entries: List[dict] = self._store.list_all()
+        return json.dumps({"tags": entries}, ensure_ascii=False)
+
+    @skill
+    def go_to_tag(self, name: str) -> str:
+        """Navigate to a tagged location by name (publishes saved_location if found)."""
+        if not name:
+            return json.dumps({"success": False, "error": "empty name"})
+        entry = self._store.query(name)
+        if entry is None:
+            entry = self._store.query_fuzzy(name)
+        if entry is None:
+            return json.dumps({"success": False, "error": f"not found: {name}"})
+        pos = entry["position"]
+        goal = PoseStamped(
+            pose=Pose(
+                position=Vector3(float(pos[0]), float(pos[1]), float(pos[2])),
+                orientation=Quaternion(),
+            ),
+            frame_id="map",
+        )
+        self.saved_location.publish(goal)
+        return json.dumps(
+            {"success": True, "name": entry["name"], "position": list(pos)},
+            ensure_ascii=False,
+        )

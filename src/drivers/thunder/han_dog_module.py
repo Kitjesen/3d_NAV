@@ -113,7 +113,6 @@ class ThunderDriver(Module, layer=1):
         s.settimeout(1)
         try:
             s.connect((self._dog_host, self._dog_port))
-            s.close()
             logger.info("brainstem reachable at %s:%d", self._dog_host, self._dog_port)
             return True
         except (ConnectionRefusedError, OSError):
@@ -124,6 +123,8 @@ class ThunderDriver(Module, layer=1):
                 self._dog_host, self._dog_port,
             )
             return False
+        finally:
+            s.close()
 
     # ── 生命周期 ──
 
@@ -157,17 +158,24 @@ class ThunderDriver(Module, layer=1):
     def stop(self):
         """安全关机：零速 → 坐下 → 断开。"""
         self._shutdown = True
-        if self._connected and self._standing and self._loop:
+        loop = self._loop
+        if self._connected and self._standing and loop:
             try:
                 fut = asyncio.run_coroutine_threadsafe(
-                    self._safe_shutdown(), self._loop)
+                    self._safe_shutdown(), loop)
                 fut.result(timeout=5.0)
             except Exception as e:
                 logger.warning("Shutdown cleanup failed: %s", e)
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        if loop:
+            loop.call_soon_threadsafe(loop.stop)
         if self._grpc_thread:
             self._grpc_thread.join(timeout=3.0)
+        if loop:
+            try:
+                loop.close()
+            except Exception:
+                pass
+        self._loop = None
         self.alive.publish(False)
         super().stop()
 

@@ -1,28 +1,46 @@
 ﻿"""
-conftest.py — semantic_planner 测试共享夹具
+conftest.py — shared fixtures for semantic_planner tests
 
-提供:
-  - 标准场景图 JSON 字符串工厂
-  - LLM mock 工厂
-  - GoalResolver 工厂 (带 mock LLM)
-  - 基础 CLIP 特征工厂
+Provides:
+  - Standard scene graph JSON string factory
+  - LLM mock factory
+  - GoalResolver factory (with mock LLM)
+  - Base CLIP feature factory
 """
 
 import asyncio
 import json
+import os
+import sys
 import unittest.mock as mock
 
 import numpy as np
 import pytest
 
+# Ensure semantic package namespaces are on sys.path for direct pytest runs
+# (i.e. without PYTHONPATH set). Mirrors what core/tests/conftest.py does.
+_here = os.path.dirname(os.path.abspath(__file__))
+_repo = os.path.abspath(os.path.join(_here, "..", "..", "..", ".."))
+_src = os.path.join(_repo, "src")
+
+for _p in [
+    _repo,
+    _src,
+    os.path.join(_src, "semantic", "planner"),
+    os.path.join(_src, "semantic", "perception"),
+    os.path.join(_src, "semantic", "common"),
+]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CLIP 特征工厂
+#  CLIP feature factory
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def make_clip_feature():
-    """返回归一化 512-dim CLIP 特征工厂函数。"""
+    """Return a factory that produces normalised 512-dim CLIP feature vectors."""
     def _factory(seed=None):
         rng = np.random.RandomState(seed)
         f = rng.rand(512).astype(np.float32)
@@ -31,12 +49,12 @@ def make_clip_feature():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  场景图 JSON 工厂
+#  Scene-graph JSON factory
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def make_scene_graph_json(make_clip_feature):
-    """返回场景图 JSON 字符串工厂。"""
+    """Return a factory that builds a scene-graph JSON string."""
     def _factory(objects=None, relations=None, regions=None):
         if objects is None:
             objects = [
@@ -75,38 +93,38 @@ def make_scene_graph_json(make_clip_feature):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Mock LLM 工厂
+#  Mock LLM factories
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def mock_llm():
-    """返回 AsyncMock LLM 客户端。"""
+    """Return an AsyncMock LLM client that returns a successful target result."""
     llm = mock.MagicMock()
     llm.chat = mock.AsyncMock(return_value=json.dumps({
         "object_id": "obj_001",
         "label": "chair",
         "confidence": 0.85,
-        "reasoning": "目标是椅子，直接匹配",
+        "reasoning": "Target is the chair — direct match",
     }))
     return llm
 
 
 @pytest.fixture
 def mock_llm_no_result():
-    """返回 LLM 客户端，其 chat 结果为找不到目标。"""
+    """Return an LLM client whose chat response reports no target found."""
     llm = mock.MagicMock()
     llm.chat = mock.AsyncMock(return_value=json.dumps({
         "object_id": None,
         "label": None,
         "confidence": 0.0,
-        "reasoning": "未找到目标物体",
+        "reasoning": "Target object not found",
     }))
     return llm
 
 
 @pytest.fixture
 def mock_llm_error():
-    """返回 LLM 客户端，其 chat 总是抛出异常。"""
+    """Return an LLM client whose chat always raises an exception."""
     from semantic.planner.semantic_planner.llm_client import LLMError
     llm = mock.MagicMock()
     llm.chat = mock.AsyncMock(side_effect=LLMError("Mock API error"))
@@ -126,12 +144,12 @@ def event_loop():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  GoalResolver 工厂
+#  GoalResolver factory
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def make_goal_resolver(mock_llm):
-    """返回预配置好 mock LLM 的 GoalResolver 工厂。"""
+    """Return a factory that builds a GoalResolver pre-configured with a mock LLM."""
     def _factory(**kwargs):
         try:
             from semantic.planner.semantic_planner.goal_resolver import GoalResolver

@@ -182,6 +182,13 @@ class EpisodicMemory:
         summaries = [f"  {r.description}" for r in recent]
         return "【近期探索记忆】\n" + "\n".join(summaries)
 
+    def recent_n(self, n: int = 10) -> List[MemoryRecord]:
+        """Return the last *n* records (oldest first within the slice)."""
+        if n <= 0:
+            return []
+        with self._lock:
+            return list(self._records[-n:])
+
     def __len__(self) -> int:
         with self._lock:
             return len(self._records)

@@ -1,122 +1,144 @@
-# Semantic Planner — 模块组织索引
+# Semantic Planner — Module Index
 
-> 文件均位于 `src/semantic_planner/semantic_planner/`
-> 共 39 个 .py 文件，18 071 行
-> 本文档说明各文件的功能归属，便于导航和维护。
-
----
-
-## 根节点 (2)
-
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `planner_node.py` | 497 | ROS2 主节点：订阅 /nav/semantic/instruction，协调 Fast-Slow 目标解析、LERa 恢复、EpisodicMemory 更新 |
-| `planner_state.py` | 20 | 枚举：PlannerState (IDLE / PLANNING / EXECUTING / STUCK / ERROR) |
+> Source: `src/semantic/planner/semantic_planner/`  
+> Architecture: **Module-First** — every runtime unit is a `core.Module`.  
+> No standalone ROS2 nodes. C++ / ROS2 integration is handled by `NativeModule` wrappers in `src/slam/` and `src/base_autonomy/`.
 
 ---
 
-## Agent — LLM Agent + Skill + MCP (3)
+## Runtime Modules (instantiated by Blueprint)
 
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `agent_node.py` | 664 | ROS2 Agent 节点：多轮对话、工具调用、会话管理 |
-| `skill_registry.py` | 547 | @skill 装饰器 + 注册中心；动态发现并注册导航技能 |
-| `mcp_server.py` | 284 | MCP 协议服务端：将导航 ROS2 服务暴露为 MCP 工具 |
-
----
-
-## Goal — 目标解析 (4)
-
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `goal_resolver.py` | 376 | Fast-Slow 协调器：路由 Fast/Slow Path，AdaNav 熵触发，OmniNav 层次子目标 |
-| `fast_path.py` | 939 | System 1 快速路径：关键词 + 场景图匹配，置信度融合 (label 35% + CLIP 35% + det 15% + spatial 15%)，目标 <200ms |
-| `slow_path.py` | 945 | System 2 慢速路径：ESCA 选择性接地 (200→~15 objects)，LLM 推理，OmniNav 房间提示，目标 ~2s |
-| `adacot.py` | 208 | AdaCoT 自适应推理路由：7 维规则 + 熵判断，输出 FAST/SLOW/AUTO 决策 |
+| File | Layer | Ports (In → Out) | Role |
+|------|------:|-------------------|------|
+| `semantic_planner_module.py` | L4 | `instruction, agent_instruction, scene_graph, odometry, detections, mission_status` → `goal_pose, task_plan, planner_status, cancel, servo_target` | Unified planner: decompose → resolve → explore → execute. Embeds GoalResolver, FrontierScorer, TaskDecomposer, ActionExecutor as internal strategies. LERa 3-step recovery on STUCK/FAILED. **@skill**: `send_instruction`, `get_planner_status`, `decompose_task`. |
+| `visual_servo_module.py` | L4 | `servo_target, image, detections, depth, odometry` → `goal_pose, cmd_vel, servo_status` | Visual servo: BBoxNavigator (far ≥3 m → goal_pose, near <3 m → cmd_vel). PersonTracker with Kalman + Re-ID. **@skill**: `find_object`, `follow_person`, `stop_servo`, `get_servo_status`. |
+| `llm_module.py` | L4 | `llm_request` → `llm_response` | Multi-backend LLM wrapper (kimi / openai / claude / qwen). Stateless; exposes `chat()` as an `@rpc`. |
+| `goal_resolver_module.py` | L4 | `instruction, scene_graph, odometry` → `goal_pose, resolver_status` | Thin Module wrapper around `GoalResolver` (Fast-Slow dual process). |
+| `task_decomposer_module.py` | L4 | `instruction` → `task_plan` | Thin Module wrapper around `TaskDecomposer`. |
+| `frontier_module.py` | L3 | `occupancy_grid, scene_graph, odometry` → `frontier_goal, frontier_status` | Frontier-exploration sub-module used by `SemanticPlannerModule`. |
+| `action_executor_module.py` | L4 | `subtask, mission_status` → `goal_pose, exec_status` | Executes decomposed subtasks; drives LERa retry/expand/requery/abort. |
 
 ---
 
-## Execution — 执行 + 导航动作 (5)
+## Goal Resolution Algorithms (strategy objects, not Modules)
 
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `action_executor.py` | 382 | 动作原语执行器；LERa 3 步失败恢复 (retry / expand / requery / abort) |
-| `bbox_navigator.py` | 379 | 基于检测框的视觉伺服导航；发布 /nav/way_point |
-| `vlm_bbox_query.py` | 365 | 向 VLM 查询目标包围框；多轮追问 + 置信过滤 |
-| `person_tracker.py` | 480 | 行人跟踪器：卡尔曼滤波 + ReID 特征匹配，跟随模式 |
-| `exploration_strategy.py` | 125 | 探索策略：frontier 选择 + 覆盖优先级调度 |
+These are plain Python classes instantiated **inside** `SemanticPlannerModule` — not separate runtime units.
 
----
-
-## Task — 任务分解 (2)
-
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `task_decomposer.py` | 337 | SayCan 风格任务分解：自然语言指令 → 有序子目标序列 |
-| `task_rules.py` | 871 | 规则库：场所-技能映射、常见任务模板、约束条件 |
+| File | Role |
+|------|------|
+| `goal_resolver.py` | Fast-Slow coordinator: routes to Fast Path / Slow Path, applies AdaNav entropy trigger, integrates OmniNav hierarchical sub-goals. |
+| `fast_path.py` | System 1 (~0.17 ms): keyword + scene-graph match, confidence fusion (label 35% + CLIP 35% + detector 15% + spatial 15%). Target >70 % hit rate, threshold 0.75. |
+| `slow_path.py` | System 2 (~2 s): ESCA selective grounding (200→~15 objects, 92.5% token reduction), LLM reasoning, OmniNav room hint. |
+| `adacot.py` | AdaCoT routing: 7-dim rules + Shannon entropy → FAST / SLOW / AUTO decision. |
 
 ---
 
-## Memory — 空间与情节记忆 (4)
+## Execution Strategies (used inside SemanticPlannerModule)
 
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `episodic_memory.py` | 205 | ReMEmbR 风格情节记忆：500 条 FIFO，按文本/位置检索，输出 LLM 上下文 |
-| `topological_memory.py` | 762 | 拓扑地图：TopoNode + FSR-VLN Jaccard 加权边 + VLingMem 区域摘要 |
-| `tagged_locations.py` | 138 | 带标签的位置记录：持久化命名地点，支持 "去上次的充电站" |
-| `semantic_prior.py` | 615 | 语义先验：场所 CLIP 描述、predict_room_type_from_labels()、房间-物体共现统计 |
-
----
-
-## Frontier — Frontier 探索与场景推理 (3)
-
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `frontier_scorer.py` | 596 | Frontier 评分：MTU3D 接地潜力 + L3MVN 自然语言描述 + TSP 排序 |
-| `frontier_types.py` | 402 | 数据类型：FrontierNode、FrontierCluster、ScoredFrontier |
-| `sgnav_reasoner.py` | 801 | SGNav 场景图推理：多视角 ObservationRecord 累积 + 一致性投票 |
+| File | Role |
+|------|------|
+| `action_executor.py` | Primitive executor; LERa 3-step failure recovery (retry_different_path → expand_search → requery_goal → abort). |
+| `bbox_navigator.py` | BBox → 3D → PD servo (far: goal_pose, near: cmd_vel). |
+| `vlm_bbox_query.py` | VLM open-vocabulary bbox query; multi-round probing + confidence filter. |
+| `person_tracker.py` | Kalman + CLIP Re-ID person following; dual-channel (far / near) same as BBoxNavigator. |
+| `exploration_strategy.py` | Frontier selection + coverage priority scheduling. |
 
 ---
 
-## LLM — 大模型客户端 + Prompt (3)
+## Task Decomposition
 
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `llm_client.py` | 741 | 多后端 LLM 客户端：kimi / openai / claude / qwen，自动 fallback，重试，流式 |
-| `prompt_templates.py` | 715 | Prompt 模板：H-CoT 4 步推理、frontier_descriptions、explored_summaries |
-| `chinese_tokenizer.py` | 508 | jieba 分词封装：中文关键词提取、停用词过滤、与 Fast Path 集成 |
-
----
-
-## Mixin — Planner 内部 Mixin (8)
-
-> 这些文件仅供 `planner_node.py` 通过多重继承组合使用，不对外暴露。
-
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `init_mixin.py` | 632 | 初始化 Mixin：ROS2 订阅/发布声明，参数读取，子模块实例化 |
-| `nav2_mixin.py` | 872 | Nav2 接口 Mixin：ActionClient (NavigateToPose)，目标发送/取消/状态查询 |
-| `subgoal_mixin.py` | 605 | 子目标推进 Mixin：航点队列管理，OmniNav 层次子目标切换 |
-| `bbox_nav_mixin.py` | 223 | 包围框 Mixin：BBoxNavigator 生命周期管理，视觉伺服触发条件 |
-| `operational_mixin.py` | 266 | 运营 Mixin：健康检查，metrics 上报，watchdog |
-| `goal_mixin.py` | 382 | 解析 Mixin：goal_resolver 调用封装，结果路由到 Nav2 / frontier / bbox |
-| `callbacks_mixin.py` | 302 | 回调 Mixin：scene_graph / odometry / instruction ROS2 回调实现 |
-| `state_mixin.py` | 373 | 状态 Mixin：PlannerState FSM 转换，/nav/semantic/status 发布 |
+| File | Role |
+|------|------|
+| `task_decomposer.py` | SayCan-style decomposer: natural-language instruction → ordered sub-goals. |
+| `task_rules.py` | Rule library: place-skill mapping, task templates, pre/post-condition constraints. |
 
 ---
 
-## Viz — 可视化 (1)
+## Memory (strategy objects — Module wrappers live in `src/memory/modules/`)
 
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `rerun_viewer.py` | 443 | Rerun SDK 可视化：场景图、轨迹、frontier、置信度实时渲染 |
+| File | Role |
+|------|------|
+| `episodic_memory.py` | Local copy / alias of `memory.spatial.episodic.EpisodicMemory`. Used by SemanticPlannerModule internally. |
+| `topological_memory.py` | Topology graph: TopoNode + FSR-VLN Jaccard edges + VLingMem region summaries. |
+| `tagged_locations.py` | Local copy / alias of `memory.spatial.tagged_locations.TaggedLocationStore`. |
+| `semantic_prior.py` | Semantic priors: place CLIP descriptions, `predict_room_type_from_labels()`, room-object co-occurrence. |
 
 ---
 
-## Utils — 通用工具 (3)
+## Frontier & Scene Reasoning
 
-| 文件 | 行数 | 职责 |
-|------|-----:|------|
-| `implicit_fsm_policy.py` | 298 | 隐式 FSM 导航策略 (LOVON 风格)：无显式状态机的策略执行 |
-| `voi_scheduler.py` | 315 | VOI (Value of Information) 调度：决定何时触发感知、LLM 查询 |
-| `room_object_kg.py` | 457 | 房间-物体知识图谱：先验共现关系，支持 predict_room_type 和 ESCA 过滤 |
+| File | Role |
+|------|------|
+| `frontier_scorer.py` | Frontier scoring: MTU3D grounding potential + L3MVN NL description + TSP ordering. |
+| `frontier_types.py` | Data types: `FrontierNode`, `FrontierCluster`, `ScoredFrontier`. |
+| `sgnav_reasoner.py` | SGNav scene-graph reasoning: multi-view `ObservationRecord` accumulation + consistency voting. |
+
+---
+
+## LLM Client & Prompts
+
+| File | Role |
+|------|------|
+| `llm_client.py` | Multi-backend async LLM client (kimi / openai / claude / qwen), auto-fallback, retry, streaming. |
+| `prompt_templates.py` | Prompt templates: H-CoT 4-step reasoning, frontier descriptions, explored summaries. |
+| `chinese_tokenizer.py` | jieba tokenizer wrapper: Chinese keyword extraction, stop-word filtering, Fast Path integration. |
+
+---
+
+## Planner State
+
+| File | Role |
+|------|------|
+| `planner_state.py` | Enum: `PlannerState` (IDLE / PLANNING / EXECUTING / STUCK / ERROR). |
+
+---
+
+## Utilities
+
+| File | Role |
+|------|------|
+| `implicit_fsm_policy.py` | LOVON-style implicit FSM navigation policy (no explicit state machine). |
+| `voi_scheduler.py` | VOI (Value of Information) scheduler: decides when to trigger perception / LLM queries. |
+| `room_object_kg.py` | Room-object knowledge graph: prior co-occurrence relations, `predict_room_type`, ESCA filter. |
+| `vlm_scene_agent.py` | VLM-based scene agent: open-ended visual question answering over the scene graph. |
+| `agent_loop.py` | Multi-turn agent loop (observe → think → act), 7 tool calls, max 10 steps / 120 s timeout. |
+
+---
+
+## Legacy (do not import in new code)
+
+| File | Role |
+|------|------|
+| `legacy/skill_registry.py` | Old `@skill` decorator + LangChain `StructuredTool` registry. Superseded by `core.module.skill` + `MCPServerModule` auto-discovery. |
+
+---
+
+## MCP Skill Summary
+
+Tools auto-discovered by `MCPServerModule.on_system_modules()`:
+
+| Tool name | Source module |
+|-----------|--------------|
+| `send_instruction` | `SemanticPlannerModule` |
+| `get_planner_status` | `SemanticPlannerModule` |
+| `decompose_task` | `SemanticPlannerModule` |
+| `find_object` | `VisualServoModule` |
+| `follow_person` | `VisualServoModule` |
+| `stop_servo` | `VisualServoModule` |
+| `get_servo_status` | `VisualServoModule` |
+| `navigate_to` | `NavigationModule` (L5) |
+| `stop_navigation` | `NavigationModule` (L5) |
+| `cancel_mission` | `NavigationModule` (L5) |
+| `get_navigation_status` | `NavigationModule` (L5) |
+| `start_patrol` | `NavigationModule` (L5) |
+| `list_missions` | `MissionLoggerModule` |
+| `get_mission_stats` | `MissionLoggerModule` |
+| `list_maps` | `MapManagerModule` |
+| `save_map` | `MapManagerModule` |
+| `use_map` | `MapManagerModule` |
+| `build_tomogram` | `MapManagerModule` |
+| `list_tags` | `TaggedLocationsModule` |
+| `go_to_tag` | `TaggedLocationsModule` |
+| `get_recent_observations` | `EpisodicMemoryModule` |
+| `query_location` | `VectorMemoryModule` |
+| `add_observation` | `VectorMemoryModule` |

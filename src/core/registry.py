@@ -109,3 +109,15 @@ def get_metadata(category: str, name: str) -> Dict[str, Any]:
 def clear():
     """Clear all registrations (for testing only)."""
     _registry.clear()
+
+
+def snapshot() -> Dict[str, Dict[str, tuple]]:
+    """Return a deep copy of the current registry (for test save/restore)."""
+    return {cat: dict(plugins) for cat, plugins in _registry.items()}
+
+
+def restore(state: Dict[str, Dict[str, tuple]]) -> None:
+    """Restore registry to a previously snapshotted state (for testing only)."""
+    _registry.clear()
+    for cat, plugins in state.items():
+        _registry[cat] = dict(plugins)
