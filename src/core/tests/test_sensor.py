@@ -9,7 +9,6 @@ from core.msgs.sensor import (
     ImageFormat,
     Imu,
     PointCloud2,
-    PointCloud,
 )
 from core.msgs.geometry import Quaternion, Vector3
 
@@ -162,9 +161,6 @@ class TestPointCloud2:
         assert pc.row_step == 80
         assert pc.is_dense
         assert [f.name for f in pc.fields] == ["x", "y", "z", "intensity"]
-
-    def test_pointcloud_alias(self):
-        assert PointCloud is PointCloud2
 
 
 # ---------------------------------------------------------------------------

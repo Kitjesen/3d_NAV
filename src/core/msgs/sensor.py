@@ -7,7 +7,6 @@ Image         — NumPy image container (BGR/RGB/RGBA/GRAY/Depth)
 CameraIntrinsics — camera intrinsics (fx, fy, cx, cy)
 PointField    — PointCloud2 field descriptor
 PointCloud2   — N×3 / N×4 point cloud (pure NumPy, no Open3D, ROS2-compatible metadata)
-PointCloud    — alias compatible with PointCloud2
 Imu           — inertial measurement unit data
 """
 
@@ -636,9 +635,6 @@ class PointCloud2:
             f"frame='{self.frame_id}')"
         )
 
-
-# Backward-compatible alias during migration to ROS2 naming.
-PointCloud = PointCloud2
 
 
 # ---------------------------------------------------------------------------
