@@ -84,6 +84,11 @@ class SlamBridgeModule(Module, layer=1):
         self._shutdown_event = threading.Event()
         self._watchdog_thread: Optional[threading.Thread] = None
 
+        # Auto-recovery
+        self._reconnect_timeout: float = kw.get("reconnect_timeout", 10.0)
+        self._max_reconnects: int = kw.get("max_reconnects", 10)
+        self._reconnect_count: int = 0
+
         # SLAM degeneracy detection
         self._degeneracy_topic: str = kw.get("degeneracy_topic", "/slam/degeneracy")
         self._degeneracy_detail_topic: str = kw.get(
@@ -559,7 +564,14 @@ class SlamBridgeModule(Module, layer=1):
                                    self._degen_level)
                 elif new_state == LOC_TRACKING and self._loc_state in (LOC_LOST, LOC_DEGRADED):
                     logger.info("Localization recovered -> TRACKING")
+                    self._reconnect_count = 0  # reset on recovery
                 self._loc_state = new_state
+
+            # Auto-recovery: reconnect DDS/rclpy if LOST for too long
+            if (new_state == LOC_LOST
+                    and odom_age > self._reconnect_timeout
+                    and self._reconnect_count < self._max_reconnects):
+                self._attempt_reconnect()
 
             self.localization_status.publish({
                 "state": self._loc_state,
@@ -574,6 +586,44 @@ class SlamBridgeModule(Module, layer=1):
             })
 
             self._shutdown_event.wait(timeout=interval)
+
+    def _attempt_reconnect(self) -> None:
+        """Try to reconnect DDS/rclpy backend after data loss."""
+        self._reconnect_count += 1
+        backoff = min(2.0 ** self._reconnect_count, 30.0)
+        logger.warning(
+            "SlamBridge: attempting reconnect (%d/%d, backoff %.0fs)",
+            self._reconnect_count, self._max_reconnects, backoff)
+
+        # Destroy old connections
+        if self._reader:
+            try:
+                self._reader.stop()
+            except Exception:
+                pass
+            self._reader = None
+        if self._rclpy_node:
+            try:
+                self._rclpy_node.destroy_node()
+            except Exception:
+                pass
+            self._rclpy_node = None
+
+        self._shutdown_event.wait(timeout=backoff)
+        if self._shutdown_event.is_set():
+            return
+
+        # Try to reconnect
+        if self._try_cyclonedds():
+            self._reader.spin_background()
+            logger.info("SlamBridge: cyclonedds reconnected")
+            self.alive.publish(True)
+        elif self._try_rclpy():
+            logger.info("SlamBridge: rclpy reconnected")
+            self.alive.publish(True)
+        else:
+            logger.warning("SlamBridge: reconnect failed")
+            self.alive.publish(False)
 
     def health(self) -> Dict[str, Any]:
         info = super().port_summary()

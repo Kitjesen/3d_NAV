@@ -1,10 +1,20 @@
-"""Structured logging for CLI runs."""
+"""Structured logging for CLI runs.
+
+Two log sinks per run:
+  1. stderr — human-friendly, filtered (noisy loggers silenced)
+  2. file   — JSON lines (machine-parseable) OR plain text
+
+Set ``log_format="json"`` (or ``--log-format json`` on CLI) to get JSON file logs.
+Default is plain text for backward compatibility.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from .paths import logs_base_dir
@@ -59,13 +69,44 @@ class _StderrFilter(logging.Filter):
         return True
 
 
-def setup_logging(level: str, profile_name: str) -> str:
-    """Stderr (filtered) + full per-run file. Returns log directory path."""
+class _JsonFormatter(logging.Formatter):
+    """Emit one JSON object per log record (JSON Lines / NDJSON)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        obj = {
+            "ts": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S.") +
+                  f"{int(record.msecs):03d}Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[1] is not None:
+            obj["exception"] = traceback.format_exception(*record.exc_info)
+        # Extra structured fields — modules can pass extra={"module": ...}
+        for key in ("module", "port", "latency_ms", "state", "event"):
+            val = getattr(record, key, None)
+            if val is not None:
+                obj[key] = val
+        return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+def setup_logging(
+    level: str,
+    profile_name: str,
+    log_format: str = "text",
+) -> str:
+    """Stderr (filtered) + full per-run file. Returns log directory path.
+
+    Args:
+        level: Log level (DEBUG / INFO / WARNING / ERROR).
+        profile_name: Profile name for log directory.
+        log_format: ``"text"`` (default) or ``"json"`` for JSON Lines file.
+    """
     ts = time.strftime("%Y%m%d_%H%M%S")
     log_dir = logs_base_dir() / f"{ts}_{profile_name}"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "lingtu.log"
 
+    # --- stderr: always human-friendly ---
     stderr_h = logging.StreamHandler(sys.stderr)
     stderr_h.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -73,10 +114,17 @@ def setup_logging(level: str, profile_name: str) -> str:
     ))
     stderr_h.addFilter(_StderrFilter())
 
-    file_h = logging.FileHandler(str(log_file), encoding="utf-8")
-    file_h.setFormatter(logging.Formatter(
-        "%(asctime)s\t%(levelname)s\t%(name)s\t%(message)s",
-    ))
+    # --- file: JSON or plain text ---
+    if log_format == "json":
+        log_file = log_dir / "lingtu.jsonl"
+        file_h = logging.FileHandler(str(log_file), encoding="utf-8")
+        file_h.setFormatter(_JsonFormatter())
+    else:
+        log_file = log_dir / "lingtu.log"
+        file_h = logging.FileHandler(str(log_file), encoding="utf-8")
+        file_h.setFormatter(logging.Formatter(
+            "%(asctime)s\t%(levelname)s\t%(name)s\t%(message)s",
+        ))
 
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))

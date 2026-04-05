@@ -72,13 +72,27 @@ class CameraBridgeModule(Module, layer=1):
 
         self._node = None
         self._running = False
+        self._rclpy_available = False
 
         # Undistortion maps — computed once on first camera_info with nonzero distortion
         self._undistort_maps: Optional[Tuple[np.ndarray, np.ndarray]] = None
         self._undistorted_intrinsics: Optional[CameraIntrinsics] = None
         self._K: Optional[np.ndarray] = None  # 3x3 camera matrix (undistorted)
 
+        # Auto-recovery: monitor data freshness, reconnect if stale
+        self._last_color_ts: float = 0.0
+        self._last_depth_ts: float = 0.0
+        self._stale_timeout: float = kw.get("stale_timeout", 5.0)
+        self._max_reconnects: int = kw.get("max_reconnects", 10)
+        self._reconnect_count: int = 0
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._shutdown_event = threading.Event()
+
     def setup(self) -> None:
+        self._create_ros2_node()
+
+    def _create_ros2_node(self) -> bool:
+        """Create ROS2 node and subscriptions. Returns True on success."""
         try:
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -86,11 +100,19 @@ class CameraBridgeModule(Module, layer=1):
             from core.ros2_context import ensure_rclpy, get_shared_executor
 
             ensure_rclpy()
+            self._rclpy_available = True
 
             qos = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
                 depth=self._qos_depth,
             )
+
+            # Destroy old node if exists (reconnection path)
+            if self._node is not None:
+                try:
+                    self._node.destroy_node()
+                except Exception:
+                    pass
 
             self._node = Node(self._node_name)
             get_shared_executor().add_node(self._node)
@@ -105,10 +127,13 @@ class CameraBridgeModule(Module, layer=1):
                 "CameraBridgeModule: node '%s' — color=%s depth=%s info=%s",
                 self._node_name, self._color_topic, self._depth_topic, self._info_topic,
             )
+            return True
         except ImportError:
             logger.info("CameraBridgeModule: rclpy not available, running in stub mode")
+            return False
         except Exception as e:
             logger.warning("CameraBridgeModule: setup failed: %s", e)
+            return False
 
     def start(self) -> None:
         super().start()
@@ -117,13 +142,72 @@ class CameraBridgeModule(Module, layer=1):
             return
         self._running = True
         self.alive.publish(True)
+        # Start stale-data watchdog for auto-recovery
+        self._shutdown_event.clear()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, daemon=True,
+            name="camera-bridge-watchdog")
+        self._watchdog_thread.start()
 
     def stop(self) -> None:
         self._running = False
+        self._shutdown_event.set()
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            self._watchdog_thread.join(timeout=2.0)
+        self._watchdog_thread = None
         if self._node:
-            self._node.destroy_node()
+            try:
+                self._node.destroy_node()
+            except Exception:
+                pass
             self._node = None
         super().stop()
+
+    # ── Auto-recovery watchdog ────────────────────────────────────────────────
+
+    def _watchdog_loop(self) -> None:
+        """Monitor data freshness. Reconnect ROS2 node if camera goes stale."""
+        while not self._shutdown_event.is_set():
+            self._shutdown_event.wait(timeout=2.0)
+            if not self._running or not self._rclpy_available:
+                continue
+
+            now = time.time()
+            # Only check staleness after we've received at least one frame
+            if self._last_color_ts == 0.0:
+                continue
+
+            color_age = now - self._last_color_ts
+            if color_age > self._stale_timeout:
+                if self._reconnect_count >= self._max_reconnects:
+                    if self._reconnect_count == self._max_reconnects:
+                        logger.error(
+                            "CameraBridge: max reconnects (%d) reached, giving up",
+                            self._max_reconnects)
+                        self.alive.publish(False)
+                        self._reconnect_count += 1  # prevent repeated logs
+                    continue
+
+                self._reconnect_count += 1
+                backoff = min(2.0 ** self._reconnect_count, 30.0)
+                logger.warning(
+                    "CameraBridge: camera stale %.1fs, reconnecting (%d/%d, backoff %.0fs)",
+                    color_age, self._reconnect_count, self._max_reconnects, backoff)
+                self._shutdown_event.wait(timeout=backoff)
+                if self._shutdown_event.is_set():
+                    break
+
+                if self._create_ros2_node():
+                    logger.info("CameraBridge: reconnected successfully")
+                    self.alive.publish(True)
+                else:
+                    self.alive.publish(False)
+            else:
+                # Healthy — reset reconnect counter
+                if self._reconnect_count > 0:
+                    logger.info("CameraBridge: data resumed after %d reconnect(s)",
+                                self._reconnect_count)
+                    self._reconnect_count = 0
 
     # ── ROS2 callbacks ────────────────────────────────────────────────────────
 
@@ -148,9 +232,11 @@ class CameraBridgeModule(Module, layer=1):
                 import cv2
                 arr = cv2.remap(arr, *self._undistort_maps, cv2.INTER_LINEAR)
 
+            now = time.time()
+            self._last_color_ts = now
             self.color_image.publish(Image(
                 data=arr.copy(), format=fmt,
-                ts=time.time(), frame_id=msg.header.frame_id or "camera",
+                ts=now, frame_id=msg.header.frame_id or "camera",
             ))
         except Exception as e:
             logger.debug("CameraBridge: color parse error: %s", e)
@@ -176,9 +262,11 @@ class CameraBridgeModule(Module, layer=1):
                 import cv2
                 arr = cv2.remap(arr, *self._undistort_maps, cv2.INTER_NEAREST)
 
+            now = time.time()
+            self._last_depth_ts = now
             self.depth_image.publish(Image(
                 data=arr.copy(), format=fmt,
-                ts=time.time(), frame_id=msg.header.frame_id or "camera",
+                ts=now, frame_id=msg.header.frame_id or "camera",
             ))
         except Exception as e:
             logger.debug("CameraBridge: depth parse error: %s", e)
