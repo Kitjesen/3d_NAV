@@ -92,18 +92,26 @@ class CameraConfig:
 
     @property
     def T_body_camera(self) -> 'np.ndarray':
-        """4x4 body→camera static transform from factory calibration."""
+        """4x4 body→camera static transform from factory calibration.
+
+        Uses cv2.Rodrigues for rotation (falls back to numpy if cv2 unavailable).
+        Rotation is specified as ZYX Euler angles (yaw, pitch, roll) in radians.
+        """
         import numpy as np
-        import math
-        cr, sr = math.cos(self.roll), math.sin(self.roll)
-        cp, sp = math.cos(self.pitch), math.sin(self.pitch)
-        cy, sy = math.cos(self.yaw), math.sin(self.yaw)
-        # ZYX Euler rotation
-        R = np.array([
-            [cy*cp,  cy*sp*sr - sy*cr,  cy*sp*cr + sy*sr],
-            [sy*cp,  sy*sp*sr + cy*cr,  sy*sp*cr - cy*sr],
-            [  -sp,            cp*sr,            cp*cr   ],
-        ])
+        rvec = np.array([self.roll, self.pitch, self.yaw], dtype=np.float64)
+        try:
+            import cv2
+            R, _ = cv2.Rodrigues(rvec)
+        except ImportError:
+            # Fallback: if angles are all zero, R is identity (common case)
+            if np.allclose(rvec, 0):
+                R = np.eye(3)
+            else:
+                # Rodrigues formula: R = I + sin(θ)·K + (1-cos(θ))·K²
+                theta = np.linalg.norm(rvec)
+                k = rvec / theta
+                K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+                R = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
         T = np.eye(4)
         T[:3, :3] = R
         T[:3, 3] = [self.position_x, self.position_y, self.position_z]

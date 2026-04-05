@@ -167,10 +167,17 @@ class CameraBridgeModule(Module, layer=1):
     def _on_ros2_info(self, msg) -> None:
         try:
             k = msg.k  # 3x3 intrinsic matrix, row-major
+            # Parse distortion coefficients (plumb_bob: k1, k2, p1, p2, k3)
+            d = getattr(msg, "d", None) or []
             self.camera_info.publish(CameraIntrinsics(
                 fx=float(k[0]), fy=float(k[4]),
                 cx=float(k[2]), cy=float(k[5]),
                 width=int(msg.width), height=int(msg.height),
+                dist_k1=float(d[0]) if len(d) > 0 else 0.0,
+                dist_k2=float(d[1]) if len(d) > 1 else 0.0,
+                dist_p1=float(d[2]) if len(d) > 2 else 0.0,
+                dist_p2=float(d[3]) if len(d) > 3 else 0.0,
+                dist_k3=float(d[4]) if len(d) > 4 else 0.0,
             ))
         except Exception as e:
             logger.debug("CameraBridge: info parse error: %s", e)

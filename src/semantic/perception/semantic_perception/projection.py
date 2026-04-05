@@ -77,17 +77,55 @@ def bbox_center_depth(
     return float(np.median(valid))
 
 
+def undistort_points(
+    us: np.ndarray,
+    vs: np.ndarray,
+    K: np.ndarray,
+    D: np.ndarray,
+) -> tuple:
+    """Undistort pixel coordinates using OpenCV.
+
+    Returns (undistorted_us, undistorted_vs) as float64 arrays.
+    Falls back to identity if cv2 is unavailable or D is all zeros.
+    """
+    if D is None or np.allclose(D, 0):
+        return us.astype(np.float64), vs.astype(np.float64)
+    try:
+        import cv2
+        pts = np.stack([us.astype(np.float64), vs.astype(np.float64)], axis=-1)
+        pts = pts.reshape(-1, 1, 2)
+        undist = cv2.undistortPoints(pts, K, D, P=K)
+        undist = undist.reshape(-1, 2)
+        return undist[:, 0], undist[:, 1]
+    except ImportError:
+        return us.astype(np.float64), vs.astype(np.float64)
+
+
 def project_to_3d(
     pixel_u: float,
     pixel_v: float,
     depth_m: float,
     intrinsics: CameraIntrinsics,
+    K: np.ndarray = None,
+    D: np.ndarray = None,
 ) -> np.ndarray:
-    """单点 2D → 3D 投影 (相机坐标系)。"""
+    """单点 2D → 3D 投影 (相机坐标系), with optional undistortion.
+
+    If K and D are provided and D is non-zero, pixel coordinates are
+    undistorted before back-projection using cv2.undistortPoints.
+    """
     if intrinsics.fx == 0.0 or intrinsics.fy == 0.0:
         return np.array([0.0, 0.0, depth_m])
-    x = (pixel_u - intrinsics.cx) * depth_m / intrinsics.fx
-    y = (pixel_v - intrinsics.cy) * depth_m / intrinsics.fy
+
+    u, v = pixel_u, pixel_v
+    if D is not None and K is not None and not np.allclose(D, 0):
+        u_arr, v_arr = undistort_points(
+            np.array([pixel_u]), np.array([pixel_v]), K, D,
+        )
+        u, v = float(u_arr[0]), float(v_arr[0])
+
+    x = (u - intrinsics.cx) * depth_m / intrinsics.fx
+    y = (v - intrinsics.cy) * depth_m / intrinsics.fy
     z = depth_m
     return np.array([x, y, z])
 
@@ -112,6 +150,8 @@ def mask_to_pointcloud(
     max_depth: float = 6.0,
     max_points: int = POINTCLOUD_MAX_POINTS,
     voxel_size: float = POINTCLOUD_VOXEL_SIZE,
+    K: np.ndarray = None,
+    D: np.ndarray = None,
 ) -> Optional[np.ndarray]:
     """
     USS-Nav §IV-C: 将 instance mask + depth 反投影为世界坐标系 3D 点云。
@@ -172,9 +212,15 @@ def mask_to_pointcloud(
     fx = intrinsics.fx if intrinsics.fx != 0.0 else 1.0
     fy = intrinsics.fy if intrinsics.fy != 0.0 else 1.0
 
+    # Undistort pixel coordinates if distortion is available
+    us_f = us.astype(np.float64)
+    vs_f = vs.astype(np.float64)
+    if K is not None and D is not None:
+        us_f, vs_f = undistort_points(us_f, vs_f, K, D)
+
     # 批量反投影: pixel (u,v,d) → camera 3D (vectorized)
-    x_cam = (us.astype(np.float64) - intrinsics.cx) * depths / fx
-    y_cam = (vs.astype(np.float64) - intrinsics.cy) * depths / fy
+    x_cam = (us_f - intrinsics.cx) * depths / fx
+    y_cam = (vs_f - intrinsics.cy) * depths / fy
     z_cam = depths
 
     points_cam = np.stack([x_cam, y_cam, z_cam], axis=1)  # (N, 3)
