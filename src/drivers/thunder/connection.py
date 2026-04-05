@@ -279,16 +279,28 @@ class NovaDogConnection(Module, layer=1):
         self._loop.run_until_complete(self._async_main())
 
     async def _async_main(self):
+        import random
+        backoff = self._reconnect_interval
+        max_backoff = 30.0
+        consecutive_failures = 0
         while not self._shutdown:
             try:
                 await self._connect_and_run()
+                # Connection was live and then dropped — reset backoff
+                backoff = self._reconnect_interval
+                consecutive_failures = 0
             except Exception as e:
                 self._connected = False
                 self.alive.publish(False)
+                consecutive_failures += 1
+                # Exponential backoff with jitter
+                jitter = random.uniform(0, backoff * 0.3)
+                wait = min(backoff + jitter, max_backoff)
                 logger.error(
-                    "gRPC connection lost: %s. Reconnecting in %.0fs...",
-                    e, self._reconnect_interval)
-                await asyncio.sleep(self._reconnect_interval)
+                    "gRPC connection lost: %s. Reconnecting in %.1fs "
+                    "(attempt %d)...", e, wait, consecutive_failures)
+                await asyncio.sleep(wait)
+                backoff = min(backoff * 2, max_backoff)
 
     async def _connect_and_run(self):
         try:

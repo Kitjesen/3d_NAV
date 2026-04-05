@@ -33,8 +33,14 @@ logger = logging.getLogger(__name__)
 # Localization health states
 LOC_UNINIT = "UNINIT"        # No data received yet
 LOC_TRACKING = "TRACKING"    # Receiving data, quality OK
-LOC_DEGRADED = "DEGRADED"    # Receiving data, quality poor (cloud timeout)
+LOC_DEGRADED = "DEGRADED"    # Receiving data, quality poor (cloud timeout or degeneracy)
 LOC_LOST = "LOST"            # No odometry for > timeout
+
+# Degeneracy severity levels (from SLAM quality metrics)
+DEGEN_NONE = "NONE"              # Normal operation
+DEGEN_MILD = "MILD"              # Feature count low but usable
+DEGEN_SEVERE = "SEVERE"          # Severe feature loss, high covariance
+DEGEN_CRITICAL = "CRITICAL"      # Complete degeneracy (corridor/void)
 
 
 @register("slam_bridge", "default", description="DDS SLAM → Python Module bridge")
@@ -72,6 +78,21 @@ class SlamBridgeModule(Module, layer=1):
         self._shutdown_event = threading.Event()
         self._watchdog_thread: Optional[threading.Thread] = None
 
+        # SLAM degeneracy detection
+        self._degeneracy_topic: str = kw.get("degeneracy_topic", "/slam/degeneracy")
+        self._quality_topic: str = kw.get("quality_topic", "/localization_quality")
+        self._degen_level: str = DEGEN_NONE
+        self._icp_fitness: float = 0.0
+        self._effective_ratio: float = 1.0  # effective features / total features
+        self._eigenvalue_ratio: float = 0.0  # min/max eigenvalue of Hessian
+        self._last_degen_time: float = 0.0
+        # Degeneracy thresholds (tunable)
+        self._fitness_warn: float = kw.get("fitness_warn", 0.15)
+        self._fitness_critical: float = kw.get("fitness_critical", 0.3)
+        self._feature_ratio_warn: float = kw.get("feature_ratio_warn", 0.3)
+        self._feature_ratio_critical: float = kw.get("feature_ratio_critical", 0.1)
+        self._eigen_ratio_warn: float = kw.get("eigen_ratio_warn", 100.0)  # condition number
+
     def setup(self) -> None:
         # Try cyclonedds first (lightweight, no ROS2 env needed)
         if self._try_cyclonedds():
@@ -106,11 +127,26 @@ class SlamBridgeModule(Module, layer=1):
             get_shared_executor().add_node(self._rclpy_node)
             self._rclpy_node.create_subscription(PointCloud2, self._cloud_topic, self._on_rclpy_cloud, qos)
             self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
+            # Subscribe to degeneracy metrics if available
+            self._subscribe_degeneracy_rclpy(self._rclpy_node, qos)
             logger.info("SlamBridgeModule: using rclpy (fallback)")
             return True
         except (ImportError, Exception) as e:
             logger.debug("SlamBridgeModule: rclpy unavailable: %s", e)
             return False
+
+    def _subscribe_degeneracy_rclpy(self, node, qos) -> None:
+        """Subscribe to SLAM degeneracy metrics via rclpy (best-effort)."""
+        try:
+            from rclpy.qos import QoSProfile, ReliabilityPolicy
+            from std_msgs.msg import Float32
+            sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
+            node.create_subscription(
+                Float32, self._quality_topic, self._on_rclpy_quality, sensor_qos)
+            node.create_subscription(
+                Float32, self._degeneracy_topic, self._on_rclpy_degeneracy, sensor_qos)
+        except Exception as e:
+            logger.debug("Degeneracy subscription unavailable: %s", e)
 
     def start(self) -> None:
         super().start()
@@ -225,6 +261,47 @@ class SlamBridgeModule(Module, layer=1):
         except Exception as e:
             logger.debug("SlamBridge rclpy cloud error: %s", e)
 
+    # ── Degeneracy metric callbacks ─────────────────────────────────────────
+
+    def _on_rclpy_quality(self, msg) -> None:
+        """ICP fitness score from localizer (lower = better)."""
+        self._icp_fitness = float(msg.data)
+        self._last_degen_time = _time.time()
+        self._update_degeneracy_level()
+
+    def _on_rclpy_degeneracy(self, msg) -> None:
+        """Effective feature ratio from SLAM (1.0 = all features valid)."""
+        self._effective_ratio = float(msg.data)
+        self._last_degen_time = _time.time()
+        self._update_degeneracy_level()
+
+    def _update_degeneracy_level(self) -> None:
+        """Classify degeneracy severity from SLAM quality metrics."""
+        prev = self._degen_level
+
+        # Critical: ICP fitness very bad OR almost no features
+        if (self._icp_fitness > self._fitness_critical
+                or self._effective_ratio < self._feature_ratio_critical):
+            level = DEGEN_CRITICAL
+        # Severe: ICP poor OR low features
+        elif (self._icp_fitness > self._fitness_warn
+              or self._effective_ratio < self._feature_ratio_warn):
+            level = DEGEN_SEVERE
+        # Mild: borderline but still usable
+        elif (self._icp_fitness > self._fitness_warn * 0.7
+              or self._effective_ratio < self._feature_ratio_warn * 1.5):
+            level = DEGEN_MILD
+        else:
+            level = DEGEN_NONE
+
+        self._degen_level = level
+        if level != prev and level != DEGEN_NONE:
+            logger.warning(
+                "SLAM degeneracy: %s -> %s (fitness=%.3f, feat_ratio=%.2f)",
+                prev, level, self._icp_fitness, self._effective_ratio)
+        elif level == DEGEN_NONE and prev != DEGEN_NONE:
+            logger.info("SLAM degeneracy cleared: %s -> NONE", prev)
+
     # ── Localization health watchdog ──────────────────────────────��──────
 
     def _watchdog_loop(self) -> None:
@@ -244,15 +321,27 @@ class SlamBridgeModule(Module, layer=1):
             elif cloud_age > self._cloud_timeout:
                 new_state = LOC_DEGRADED
                 confidence = 0.3
+            elif self._degen_level == DEGEN_CRITICAL:
+                new_state = LOC_DEGRADED
+                confidence = 0.1
             else:
                 new_state = LOC_TRACKING
                 confidence = max(0.0, 1.0 - odom_age / self._odom_timeout)
 
+            # Reduce confidence based on degeneracy
+            if self._degen_level == DEGEN_SEVERE:
+                confidence = min(confidence, 0.4)
+            elif self._degen_level == DEGEN_MILD:
+                confidence = min(confidence, 0.7)
+
             if new_state != self._loc_state:
                 if new_state == LOC_LOST:
                     logger.warning("Localization LOST: no odometry for %.1fs", odom_age)
+                elif new_state == LOC_DEGRADED and self._degen_level != DEGEN_NONE:
+                    logger.warning("Localization DEGRADED: SLAM degeneracy %s",
+                                   self._degen_level)
                 elif new_state == LOC_TRACKING and self._loc_state in (LOC_LOST, LOC_DEGRADED):
-                    logger.info("Localization recovered → TRACKING")
+                    logger.info("Localization recovered -> TRACKING")
                 self._loc_state = new_state
 
             self.localization_status.publish({
@@ -260,6 +349,9 @@ class SlamBridgeModule(Module, layer=1):
                 "odom_age_ms": round(odom_age * 1000, 1),
                 "cloud_age_ms": round(cloud_age * 1000, 1),
                 "confidence": round(confidence, 2),
+                "degeneracy": self._degen_level,
+                "icp_fitness": round(self._icp_fitness, 4),
+                "effective_ratio": round(self._effective_ratio, 3),
             })
 
             self._shutdown_event.wait(timeout=interval)
@@ -271,5 +363,8 @@ class SlamBridgeModule(Module, layer=1):
             "state": self._loc_state,
             "odom_age_ms": round((now - self._last_odom_time) * 1000, 1) if self._last_odom_time else -1,
             "cloud_age_ms": round((now - self._last_cloud_time) * 1000, 1) if self._last_cloud_time else -1,
+            "degeneracy": self._degen_level,
+            "icp_fitness": round(self._icp_fitness, 4),
+            "effective_ratio": round(self._effective_ratio, 3),
         }
         return info

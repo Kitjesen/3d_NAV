@@ -54,6 +54,8 @@ class Out(Generic[T]):
     __slots__ = (
         "_name", "_msg_type", "owner", "_callbacks", "_transport",
         "_transport_topic", "_msg_count", "_last_ts", "_lock",
+        "_rate_window_start", "_rate_window_count", "_rate_hz",
+        "_publish_errors",
     )
 
     def __init__(self, msg_type: type, name: str, owner: Any = None) -> None:
@@ -66,25 +68,41 @@ class Out(Generic[T]):
         self._msg_count: int = 0
         self._last_ts: float = 0.0
         self._lock = threading.Lock()
+        # Rate estimation (2-second sliding window)
+        self._rate_window_start: float = 0.0
+        self._rate_window_count: int = 0
+        self._rate_hz: float = 0.0
+        # Error counting
+        self._publish_errors: int = 0
 
     # -- core API ------------------------------------------------------------------
 
     def publish(self, msg: T) -> None:
         """Publish a message to all local subscribers and external transport."""
+        now = time.time()
         with self._lock:
             self._msg_count += 1
-            self._last_ts = time.time()
+            self._last_ts = now
+            # Rate estimation: reset window every 2 seconds
+            self._rate_window_count += 1
+            elapsed = now - self._rate_window_start
+            if elapsed >= 2.0:
+                self._rate_hz = self._rate_window_count / elapsed if elapsed > 0 else 0.0
+                self._rate_window_start = now
+                self._rate_window_count = 0
             cbs = list(self._callbacks)
         for cb in cbs:
             try:
                 cb(msg)
             except Exception:
+                self._publish_errors += 1
                 logger.exception("Out[%s] callback error", self._name)
         # External transport
         if self._transport and self._transport_topic:
             try:
                 self._transport.publish(self._transport_topic, msg)
             except Exception:
+                self._publish_errors += 1
                 logger.exception("Out[%s] transport publish error", self._name)
 
     # -- public API ----------------------------------------------------------------
@@ -143,13 +161,31 @@ class Out(Generic[T]):
         return self._last_ts
 
     @property
+    def rate_hz(self) -> float:
+        """Estimated publish rate in Hz (2-second window)."""
+        return self._rate_hz
+
+    @property
+    def publish_errors(self) -> int:
+        """Number of callback/transport errors during publish."""
+        return self._publish_errors
+
+    @property
     def callback_count(self) -> int:
         with self._lock:
             return len(self._callbacks)
 
+    @property
+    def stale_ms(self) -> float:
+        """Milliseconds since last publish. -1 if never published."""
+        if self._last_ts == 0.0:
+            return -1.0
+        return (time.time() - self._last_ts) * 1000.0
+
     def __repr__(self) -> str:
         transport_str = f", transport={self._transport_topic}" if self._transport else ""
-        return f"Out('{self._name}', {self._msg_type.__name__}, n={self._msg_count}{transport_str})"
+        rate_str = f", {self._rate_hz:.1f}Hz" if self._rate_hz > 0 else ""
+        return f"Out('{self._name}', {self._msg_type.__name__}, n={self._msg_count}{rate_str}{transport_str})"
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +213,9 @@ class In(Generic[T]):
         "_last_ts", "_latest", "_lock", "_policy", "_in_callback",
         "_drop_count", "_throttle_interval", "_last_deliver_ts",
         "_sample_n", "_sample_counter", "_buffer_size", "_buffer",
+        "_rate_window_start", "_rate_window_count", "_rate_hz",
+        "_deliver_count", "_callback_errors",
+        "_max_callback_ms", "_total_callback_ms",
     )
 
     def __init__(self, msg_type: type, name: str, owner: Any = None) -> None:
@@ -200,6 +239,14 @@ class In(Generic[T]):
         # Buffer state
         self._buffer_size: int = 1
         self._buffer: List = []
+        # Rate + latency stats
+        self._rate_window_start: float = 0.0
+        self._rate_window_count: int = 0
+        self._rate_hz: float = 0.0
+        self._deliver_count: int = 0  # messages actually delivered to callback
+        self._callback_errors: int = 0
+        self._max_callback_ms: float = 0.0
+        self._total_callback_ms: float = 0.0
 
     # -- Core API ----------------------------------------------------------------
 
@@ -248,9 +295,18 @@ class In(Generic[T]):
 
     def _deliver(self, msg: T) -> None:
         """Deliver a message (called by Out callback or Transport)."""
+        now = time.time()
         self._msg_count += 1
-        self._last_ts = time.time()
+        self._last_ts = now
         self._latest = msg
+
+        # Rate estimation (2-second sliding window)
+        self._rate_window_count += 1
+        elapsed = now - self._rate_window_start
+        if elapsed >= 2.0:
+            self._rate_hz = self._rate_window_count / elapsed if elapsed > 0 else 0.0
+            self._rate_window_start = now
+            self._rate_window_count = 0
 
         if not self._callback:
             return
@@ -262,7 +318,6 @@ class In(Generic[T]):
 
         # -- Policy: throttle (rate limit) --
         if self._policy == "throttle":
-            now = time.time()
             if now - self._last_deliver_ts < self._throttle_interval:
                 self._drop_count += 1
                 return
@@ -283,22 +338,36 @@ class In(Generic[T]):
                 return
             batch = list(self._buffer)
             self._buffer.clear()
+            self._deliver_count += 1
             self._in_callback = True
+            t0 = time.time()
             try:
                 self._callback(batch)
             except Exception:
+                self._callback_errors += 1
                 logger.exception("In[%s] buffer callback error", self._name)
             finally:
+                dt_ms = (time.time() - t0) * 1000.0
+                self._total_callback_ms += dt_ms
+                if dt_ms > self._max_callback_ms:
+                    self._max_callback_ms = dt_ms
                 self._in_callback = False
             return
 
         # -- Policy: all / latest / throttle / sample → deliver single --
+        self._deliver_count += 1
         self._in_callback = True
+        t0 = time.time()
         try:
             self._callback(msg)
         except Exception:
+            self._callback_errors += 1
             logger.exception("In[%s] callback error", self._name)
         finally:
+            dt_ms = (time.time() - t0) * 1000.0
+            self._total_callback_ms += dt_ms
+            if dt_ms > self._max_callback_ms:
+                self._max_callback_ms = dt_ms
             self._in_callback = False
 
     # -- properties ----------------------------------------------------------------
@@ -339,8 +408,43 @@ class In(Generic[T]):
         """Number of messages dropped due to backpressure (latest policy)."""
         return self._drop_count
 
+    @property
+    def rate_hz(self) -> float:
+        """Estimated receive rate in Hz (2-second window)."""
+        return self._rate_hz
+
+    @property
+    def deliver_count(self) -> int:
+        """Number of messages actually delivered to callback."""
+        return self._deliver_count
+
+    @property
+    def callback_errors(self) -> int:
+        """Number of exceptions raised by callback."""
+        return self._callback_errors
+
+    @property
+    def max_callback_ms(self) -> float:
+        """Maximum callback execution time in milliseconds."""
+        return self._max_callback_ms
+
+    @property
+    def avg_callback_ms(self) -> float:
+        """Average callback execution time in milliseconds."""
+        if self._deliver_count == 0:
+            return 0.0
+        return self._total_callback_ms / self._deliver_count
+
+    @property
+    def stale_ms(self) -> float:
+        """Milliseconds since last message. -1 if never received."""
+        if self._last_ts == 0.0:
+            return -1.0
+        return (time.time() - self._last_ts) * 1000.0
+
     def __repr__(self) -> str:
         status = "connected" if self._callback else "idle"
         policy_str = f", policy={self._policy}" if self._policy != "all" else ""
         drop_str = f", dropped={self._drop_count}" if self._drop_count else ""
-        return f"In('{self._name}', {self._msg_type.__name__}, n={self._msg_count}, {status}{policy_str}{drop_str})"
+        rate_str = f", {self._rate_hz:.1f}Hz" if self._rate_hz > 0 else ""
+        return f"In('{self._name}', {self._msg_type.__name__}, n={self._msg_count}, {status}{policy_str}{drop_str}{rate_str})"

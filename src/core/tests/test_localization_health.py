@@ -327,5 +327,132 @@ class TestWaypointTrackerPause(unittest.TestCase):
         self.assertEqual(t._wp_index, 0)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# SLAM degeneracy detection tests
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestSlamDegeneracyDetection(unittest.TestCase):
+
+    def _make(self, **kw):
+        from slam.slam_bridge_module import SlamBridgeModule
+        defaults = {"odom_timeout": 0.1, "cloud_timeout": 0.2, "watchdog_hz": 20}
+        defaults.update(kw)
+        return SlamBridgeModule(**defaults)
+
+    def test_initial_degeneracy_is_none(self):
+        from slam.slam_bridge_module import DEGEN_NONE
+        m = self._make()
+        self.assertEqual(m._degen_level, DEGEN_NONE)
+
+    def test_high_icp_fitness_triggers_critical(self):
+        from slam.slam_bridge_module import DEGEN_CRITICAL
+        m = self._make()
+        m._icp_fitness = 0.5  # Above fitness_critical (0.3)
+        m._update_degeneracy_level()
+        self.assertEqual(m._degen_level, DEGEN_CRITICAL)
+
+    def test_moderate_icp_fitness_triggers_severe(self):
+        from slam.slam_bridge_module import DEGEN_SEVERE
+        m = self._make()
+        m._icp_fitness = 0.2  # Above fitness_warn (0.15)
+        m._effective_ratio = 0.5  # Not critical
+        m._update_degeneracy_level()
+        self.assertEqual(m._degen_level, DEGEN_SEVERE)
+
+    def test_low_feature_ratio_triggers_critical(self):
+        from slam.slam_bridge_module import DEGEN_CRITICAL
+        m = self._make()
+        m._icp_fitness = 0.0
+        m._effective_ratio = 0.05  # Below feature_ratio_critical (0.1)
+        m._update_degeneracy_level()
+        self.assertEqual(m._degen_level, DEGEN_CRITICAL)
+
+    def test_good_metrics_clears_degeneracy(self):
+        from slam.slam_bridge_module import DEGEN_NONE, DEGEN_CRITICAL
+        m = self._make()
+        m._icp_fitness = 0.5
+        m._update_degeneracy_level()
+        self.assertEqual(m._degen_level, DEGEN_CRITICAL)
+        # Now restore good metrics
+        m._icp_fitness = 0.0
+        m._effective_ratio = 1.0
+        m._update_degeneracy_level()
+        self.assertEqual(m._degen_level, DEGEN_NONE)
+
+    def test_degeneracy_affects_watchdog_confidence(self):
+        from slam.slam_bridge_module import DEGEN_CRITICAL
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        # Fresh odom + cloud, but critical degeneracy
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time()
+        m._degen_level = DEGEN_CRITICAL
+        time.sleep(0.15)
+        m.stop()
+        # Should get DEGRADED with low confidence
+        degraded = [r for r in received if r["state"] == "DEGRADED"]
+        self.assertTrue(len(degraded) > 0, f"Expected DEGRADED, got states: {[r['state'] for r in received]}")
+        self.assertLessEqual(degraded[0]["confidence"], 0.2)
+
+    def test_localization_status_includes_degeneracy_fields(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        time.sleep(0.1)
+        m.stop()
+        self.assertTrue(len(received) > 0)
+        self.assertIn("degeneracy", received[0])
+        self.assertIn("icp_fitness", received[0])
+        self.assertIn("effective_ratio", received[0])
+
+    def test_health_includes_degeneracy(self):
+        m = self._make()
+        m._icp_fitness = 0.2
+        m._effective_ratio = 0.5
+        h = m.health()
+        self.assertEqual(h["localization"]["icp_fitness"], 0.2)
+        self.assertEqual(h["localization"]["effective_ratio"], 0.5)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Navigation degeneracy speed limiting tests
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestNavigationDegeneracyResponse(unittest.TestCase):
+
+    def _make(self):
+        from nav.navigation_module import NavigationModule, MissionState
+        m = NavigationModule(planner="astar")
+        m.setup()
+        return m, MissionState
+
+    def test_severe_degeneracy_limits_speed(self):
+        m, MS = self._make()
+        m._on_localization_status({
+            "state": "TRACKING", "confidence": 0.4,
+            "degeneracy": "SEVERE",
+        })
+        self.assertAlmostEqual(m._speed_scale, 0.4)
+
+    def test_mild_degeneracy_limits_speed(self):
+        m, MS = self._make()
+        m._on_localization_status({
+            "state": "TRACKING", "confidence": 0.7,
+            "degeneracy": "MILD",
+        })
+        self.assertAlmostEqual(m._speed_scale, 0.7)
+
+    def test_no_degeneracy_full_speed(self):
+        m, MS = self._make()
+        m._on_localization_status({
+            "state": "TRACKING", "confidence": 1.0,
+            "degeneracy": "NONE",
+        })
+        self.assertAlmostEqual(m._speed_scale, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

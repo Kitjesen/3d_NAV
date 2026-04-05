@@ -616,6 +616,63 @@ class SystemHandle:
             "modules": {n: m.port_summary() for n, m in self._modules.items()},
         }
 
+    def comm_health(self) -> Dict[str, Any]:
+        """Aggregate communication health across all modules.
+
+        Returns per-connection stats: rate, drops, errors, latency.
+        Flags unhealthy links (stale, high error rate, high latency).
+        """
+        links = []
+        warnings = []
+        total_drops = 0
+        total_errors = 0
+
+        for src_mod, src_port, dst_mod, dst_port in self._connections:
+            src_m = self._modules.get(src_mod)
+            dst_m = self._modules.get(dst_mod)
+            if not src_m or not dst_m:
+                continue
+            out_p = src_m.ports_out.get(src_port)
+            in_p = dst_m.ports_in.get(dst_port)
+            if not out_p or not in_p:
+                continue
+
+            drops = in_p.drop_count
+            errors = in_p.callback_errors + out_p.publish_errors
+            total_drops += drops
+            total_errors += errors
+
+            link = {
+                "src": f"{src_mod}.{src_port}",
+                "dst": f"{dst_mod}.{dst_port}",
+                "out_rate_hz": round(out_p.rate_hz, 1),
+                "in_rate_hz": round(in_p.rate_hz, 1),
+                "out_count": out_p.msg_count,
+                "in_count": in_p.msg_count,
+                "drops": drops,
+                "errors": errors,
+                "avg_cb_ms": round(in_p.avg_callback_ms, 2),
+                "max_cb_ms": round(in_p.max_callback_ms, 2),
+                "stale_ms": round(in_p.stale_ms, 1),
+            }
+            links.append(link)
+
+            # Flag unhealthy links
+            if in_p.stale_ms > 5000 and in_p.msg_count > 0:
+                warnings.append(f"{link['src']}→{link['dst']}: stale {in_p.stale_ms:.0f}ms")
+            if errors > 0:
+                warnings.append(f"{link['src']}→{link['dst']}: {errors} errors")
+            if in_p.max_callback_ms > 500:
+                warnings.append(f"{link['src']}→{link['dst']}: slow callback {in_p.max_callback_ms:.0f}ms")
+
+        return {
+            "link_count": len(links),
+            "total_drops": total_drops,
+            "total_errors": total_errors,
+            "warnings": warnings,
+            "links": links,
+        }
+
     def __repr__(self) -> str:
         status = "running" if self._started else "stopped"
         return (

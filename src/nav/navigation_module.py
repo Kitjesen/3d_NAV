@@ -123,9 +123,12 @@ class NavigationModule(Module, layer=5):
 
         # Localization-aware pause/resume
         self._loc_state: str = "UNINIT"
+        self._loc_confidence: float = 0.0
+        self._degen_level: str = "NONE"
         self._paused_for_localization: bool = False
         self._pre_pause_state: Optional[str] = None
         self._planning_timeout = kw.get("planning_timeout", 30.0)
+        self._speed_scale: float = 1.0  # degeneracy-based speed multiplier
 
         # Cooldown for costmap-triggered replanning (3s minimum between replans)
         self._last_costmap_replan_time = 0.0
@@ -185,6 +188,8 @@ class NavigationModule(Module, layer=5):
             "replan_count": self._replan_count,
             "wp_index": self._tracker.wp_index,
             "wp_total": self._tracker.path_length,
+            "speed_scale": self._speed_scale,
+            "degeneracy": self._degen_level,
             "ts": time.time(),
         })
 
@@ -255,6 +260,8 @@ class NavigationModule(Module, layer=5):
     def _on_localization_status(self, msg: dict) -> None:
         prev = self._loc_state
         self._loc_state = msg.get("state", "UNINIT")
+        self._loc_confidence = msg.get("confidence", 0.0)
+        self._degen_level = msg.get("degeneracy", "NONE")
 
         if self._loc_state == "LOST" and prev != "LOST":
             if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
@@ -270,6 +277,32 @@ class NavigationModule(Module, layer=5):
                 self._set_state(self._pre_pause_state)
                 self._pre_pause_state = None
                 logger.info("Navigation RESUMED: localization recovered")
+
+        # Degeneracy-aware speed scaling
+        self._apply_degeneracy_speed_limit()
+
+    def _apply_degeneracy_speed_limit(self) -> None:
+        """Scale navigation speed based on SLAM degeneracy level.
+
+        NONE     → 1.0x (full speed)
+        MILD     → 0.7x (slight reduction)
+        SEVERE   → 0.4x (cautious)
+        CRITICAL → pause (handled by DEGRADED→LOST path above)
+        """
+        prev_scale = self._speed_scale
+        if self._degen_level == "SEVERE":
+            self._speed_scale = 0.4
+        elif self._degen_level == "MILD":
+            self._speed_scale = 0.7
+        else:
+            self._speed_scale = 1.0
+
+        if self._speed_scale != prev_scale and self._state == MissionState.EXECUTING:
+            if self._speed_scale < 1.0:
+                logger.info("Navigation speed scaled to %.0f%% (degeneracy: %s)",
+                            self._speed_scale * 100, self._degen_level)
+            else:
+                logger.info("Navigation speed restored to 100%%")
 
     def _on_patrol_goals(self, goals: list) -> None:
         if not goals:
