@@ -9,7 +9,7 @@ Cloud LLM 客户端抽象层。
 
 所有客户端都使用异步接口, 便于在 ROS2 回调中不阻塞。
 
-Note: semantic_common.retry_async is available for simple retry patterns.
+Note: core.utils.robustness.retry_async is available for simple retry patterns.
 The retry logic here is intentionally custom because it differentiates
 status codes (429 rate-limit, 5xx server error, timeout) with different
 backoff strategies and error messages per backend.

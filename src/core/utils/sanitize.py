@@ -2,7 +2,6 @@
 sanitize.py — NaN 清理 / JSON 安全序列化
 
 Canonical location: core.utils.sanitize
-Backward compat re-export: semantic.common.semantic_common
 
 用法:
     from core.utils.sanitize import safe_json_dumps, safe_json_loads, sanitize_position

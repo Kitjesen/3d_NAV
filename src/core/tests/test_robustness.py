@@ -213,38 +213,5 @@ class TestGpuSafe(unittest.TestCase):
             f()
 
 
-# ── backward compat re-export ────────────────────────────────────────────────
-
-class TestBackwardCompat(unittest.TestCase):
-
-    def test_semantic_common_reexports(self):
-        """semantic.common.semantic_common still re-exports from core.utils."""
-        from semantic.common.semantic_common import (
-            async_timeout as at,
-            gpu_safe as gs,
-            retry as r,
-            retry_async as ra,
-        )
-        from core.utils.robustness import (
-            async_timeout,
-            gpu_safe,
-            retry,
-            retry_async,
-        )
-        self.assertIs(at, async_timeout)
-        self.assertIs(gs, gpu_safe)
-        self.assertIs(r, retry)
-        self.assertIs(ra, retry_async)
-
-    def test_sanitize_reexports(self):
-        from semantic.common.semantic_common import (
-            safe_json_dumps as sjd,
-            sanitize_position as sp,
-        )
-        from core.utils.sanitize import safe_json_dumps, sanitize_position
-        self.assertIs(sjd, safe_json_dumps)
-        self.assertIs(sp, sanitize_position)
-
-
 if __name__ == "__main__":
     unittest.main()

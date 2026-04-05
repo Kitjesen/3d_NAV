@@ -1,7 +1,7 @@
 ﻿"""VoI 调度策略对比实验 — FixedInterval vs OldVoI vs NewVoI (Shannon 熵)。
 
 模拟 50 步导航场景，对比三种策略的触发效率。
-PYTHONPATH: src/semantic_common:src/semantic_planner
+PYTHONPATH: src/semantic_planner
 """
 
 import math
@@ -9,7 +9,6 @@ import sys
 import time
 
 # ── 路径设置 ──
-sys.path.insert(0, "src/semantic_common")
 sys.path.insert(0, "src/semantic_planner")
 
 from semantic.planner.semantic_planner.voi_scheduler import (

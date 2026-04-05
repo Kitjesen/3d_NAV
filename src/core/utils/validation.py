@@ -2,7 +2,6 @@
 validation.py — 图像 / 深度 / 内参 / 四元数校验器
 
 Canonical location: core.utils.validation
-Backward compat re-export: semantic.common.semantic_common
 
 用法:
     from core.utils.validation import validate_bgr, validate_depth, validate_intrinsics

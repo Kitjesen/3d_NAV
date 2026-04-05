@@ -2,7 +2,6 @@
 robustness.py — 超时 / 重试 / GPU 安全装饰器
 
 Canonical location: core.utils.robustness
-Backward compat re-export: semantic.common.semantic_common
 
 用法:
     from core.utils.robustness import async_timeout, gpu_safe, retry
