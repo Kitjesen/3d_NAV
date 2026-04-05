@@ -17,6 +17,7 @@ from typing import Any, List, Optional
 import numpy as np
 
 from core import Module, In, Out, skill
+from core.registry import register
 from core.msgs import Odometry, PoseStamped
 from core.msgs.geometry import Pose, Quaternion, Vector3
 
@@ -25,6 +26,7 @@ from memory.spatial.tagged_locations import TaggedLocationStore
 logger = logging.getLogger(__name__)
 
 
+@register("memory", "tagged_locations", description="Named location tagging with save/recall/fuzzy-match lookup")
 class TaggedLocationsModule(Module, layer=3):
     """标签地点记忆模块。
 

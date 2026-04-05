@@ -17,6 +17,7 @@ from typing import Any, Optional
 import numpy as np
 
 from core import Module, In, Out, skill
+from core.registry import register
 from core.msgs import Odometry, SceneGraph
 
 from memory.spatial.episodic import EpisodicMemory
@@ -24,6 +25,7 @@ from memory.spatial.episodic import EpisodicMemory
 logger = logging.getLogger(__name__)
 
 
+@register("memory", "episodic", description="Spatio-temporal episodic memory recording exploration history")
 class EpisodicMemoryModule(Module, layer=3):
     """时空情节记忆模块。
 
