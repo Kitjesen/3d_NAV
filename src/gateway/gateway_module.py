@@ -54,8 +54,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from core.module import Module
 from core.stream import In, Out
+import numpy as np
+
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
+from core.msgs.sensor import PointCloud2
 from core.msgs.semantic import ExecutionEval, SafetyState, SceneGraph
 from core.registry import register
 
@@ -196,6 +199,7 @@ class GatewayModule(Module, layer=6):
 
     # -- Inputs (module → cache) --------------------------------------------
     odometry:       In[Odometry]
+    map_cloud:      In[PointCloud2]
     scene_graph:    In[SceneGraph]
     safety_state:   In[SafetyState]
     mission_status: In[dict]
@@ -243,6 +247,12 @@ class GatewayModule(Module, layer=6):
         # All modules dict (set by on_system_modules)
         self._all_modules: Dict[str, Any] = {}
 
+        # Map cloud accumulator for /map/viewer
+        self._map_points: Optional[np.ndarray] = None
+        self._map_cloud_lock = threading.Lock()
+        self._map_cloud_count: int = 0
+        self._map_voxel_size: float = 0.15
+
         self._app   = None
         self._server_thread: Optional[threading.Thread] = None
 
@@ -250,6 +260,7 @@ class GatewayModule(Module, layer=6):
 
     def setup(self) -> None:
         self.odometry.subscribe(self._on_odometry)
+        self.map_cloud.subscribe(self._on_map_cloud)
         self.scene_graph.subscribe(self._on_scene_graph)
         self.safety_state.subscribe(self._on_safety)
         self.mission_status.subscribe(self._on_mission)
@@ -312,6 +323,28 @@ class GatewayModule(Module, layer=6):
         with self._state_lock:
             self._odom = d
         self.push_event({"type": "odometry", "data": d})
+
+    def _on_map_cloud(self, cloud: PointCloud2) -> None:
+        """Accumulate map point cloud for /map/viewer."""
+        pts = cloud.points if hasattr(cloud, "points") else None
+        if pts is None or len(pts) == 0:
+            return
+        with self._map_cloud_lock:
+            if self._map_points is None:
+                self._map_points = np.array(pts, dtype=np.float32)
+            else:
+                self._map_points = np.vstack([self._map_points, np.array(pts, dtype=np.float32)])
+            self._map_cloud_count += 1
+            # Downsample every 20 frames to prevent unbounded growth
+            if self._map_cloud_count % 20 == 0 and len(self._map_points) > 50000:
+                self._map_points = self._voxel_downsample(self._map_points, self._map_voxel_size)
+
+    @staticmethod
+    def _voxel_downsample(pts: np.ndarray, voxel: float) -> np.ndarray:
+        """Fast numpy voxel grid downsample."""
+        keys = (pts[:, :3] / voxel).astype(np.int32)
+        _, idx = np.unique(keys, axis=0, return_index=True)
+        return pts[idx]
 
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         with self._state_lock:
@@ -651,6 +684,33 @@ class GatewayModule(Module, layer=6):
                 status_code=status_code,
             )
 
+        # ── Map 3D Viewer ─────────────────────────────────────────────────
+
+        @app.get("/api/v1/map/points", summary="Map point cloud as JSON")
+        async def get_map_points(max_points: int = 80000):
+            with gw._map_cloud_lock:
+                pts = gw._map_points
+            if pts is None or len(pts) == 0:
+                return {"count": 0, "points": []}
+            if len(pts) > max_points:
+                idx = np.random.choice(len(pts), max_points, replace=False)
+                pts = pts[idx]
+            return {
+                "count": len(pts),
+                "bounds": {
+                    "x": [float(pts[:, 0].min()), float(pts[:, 0].max())],
+                    "y": [float(pts[:, 1].min()), float(pts[:, 1].max())],
+                    "z": [float(pts[:, 2].min()), float(pts[:, 2].max())],
+                },
+                "points": pts[:, :3].tolist(),
+            }
+
+        @app.get("/map/viewer", summary="Interactive 3D map viewer")
+        async def map_viewer():
+            from starlette.responses import HTMLResponse
+            html = gw._generate_viewer_html()
+            return HTMLResponse(html)
+
         # ── WebSocket teleop ───────────────────────────────────────────────
 
         @app.websocket("/ws/teleop")
@@ -740,6 +800,8 @@ class GatewayModule(Module, layer=6):
         info = super().port_summary()
         with self._sse_lock:
             n_sse = len(self._sse_queues)
+        with self._map_cloud_lock:
+            map_pts = len(self._map_points) if self._map_points is not None else 0
         info["gateway"] = {
             "port":        self._port,
             "sse_clients": n_sse,
@@ -747,5 +809,93 @@ class GatewayModule(Module, layer=6):
             "teleop_active": self._teleop_active,
             "has_odom":    self._odom is not None,
             "has_sg":      self._sg_json != "{}",
+            "map_points":  map_pts,
         }
         return info
+
+    # -- Map 3D viewer HTML generation ----------------------------------------
+
+    def _generate_viewer_html(self) -> str:
+        with self._map_cloud_lock:
+            pts = self._map_points
+        if pts is None or len(pts) == 0:
+            return "<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>No map data yet</h2><p>Start mapping first, then refresh.</p></body></html>"
+
+        # Subsample for browser performance
+        max_pts = 80000
+        if len(pts) > max_pts:
+            idx = np.random.choice(len(pts), max_pts, replace=False)
+            pts = pts[idx]
+
+        z = pts[:, 2]
+        zmin, zmax = float(z.min()), float(z.max())
+        n = len(pts)
+
+        # Inline point data as compact JS array
+        coords = ",".join(f"{pts[i,0]:.3f},{pts[i,1]:.3f},{pts[i,2]:.3f}" for i in range(n))
+
+        cx = float(pts[:, 0].mean())
+        cy = float(pts[:, 1].mean())
+
+        return f'''<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>LingTu Map Viewer</title>
+<style>
+body {{ margin:0; background:#0a0a0f; overflow:hidden; }}
+#info {{ position:absolute; top:10px; left:10px; color:#00ff88; font-family:monospace;
+         font-size:13px; z-index:10; background:rgba(0,0,0,0.6); padding:10px; border-radius:6px; }}
+#info a {{ color:#4af; }}
+</style></head><body>
+<div id="info">
+LingTu SLAM — {n:,} points<br>
+<span style="color:#888">Drag=rotate | Scroll=zoom | RightDrag=pan</span><br>
+<a href="/api/v1/map/points">Raw JSON</a>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a0f);
+scene.fog = new THREE.FogExp2(0x0a0a0f, 0.008);
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 500);
+camera.position.set({cx+5:.1f}, {cy-25:.1f}, 25);
+camera.up.set(0, 0, 1);
+const renderer = new THREE.WebGLRenderer({{antialias:true}});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.target.set({cx:.1f}, {cy:.1f}, 1.5);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.update();
+
+const geo = new THREE.BufferGeometry();
+const pos = new Float32Array({n*3});
+const col = new Float32Array({n*3});
+const pts = [{coords}];
+const zmin={zmin:.2f}, zmax={zmax:.2f}, zr=zmax-zmin||1;
+for(let i=0;i<{n};i++){{
+  pos[i*3]=pts[i*3]; pos[i*3+1]=pts[i*3+1]; pos[i*3+2]=pts[i*3+2];
+  let t=(pts[i*3+2]-zmin)/zr;
+  col[i*3]   = t<0.5 ? t*2 : 1;
+  col[i*3+1] = 1-Math.abs(t-0.5)*2;
+  col[i*3+2] = t>0.5 ? (1-t)*2 : 1;
+}}
+geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+scene.add(new THREE.Points(geo, new THREE.PointsMaterial({{
+  size:0.04, vertexColors:true, sizeAttenuation:true, transparent:true, opacity:0.85
+}})));
+const grid = new THREE.GridHelper(40, 40, 0x1a1a2e, 0x111122);
+grid.rotation.x = Math.PI/2;
+grid.position.set({cx:.1f}, {cy:.1f}, {zmin:.1f});
+scene.add(grid);
+scene.add(new THREE.AxesHelper(2));
+addEventListener('resize', ()=>{{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}});
+(function a(){{requestAnimationFrame(a); controls.update(); renderer.render(scene,camera);}})();
+</script></body></html>'''
