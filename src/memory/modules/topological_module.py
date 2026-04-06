@@ -20,13 +20,14 @@ from core import Module, In, Out
 from core.registry import register
 from core.msgs import Odometry, SceneGraph
 
+from memory.modules._odom_mixin import OdomTrackingMixin
 from memory.spatial.topological import TopologicalMemory
 
 logger = logging.getLogger(__name__)
 
 
 @register("memory", "topological", description="Topological memory graph tracking explored regions and connectivity")
-class TopologicalMemoryModule(Module, layer=3):
+class TopologicalMemoryModule(OdomTrackingMixin, Module, layer=3):
     """拓扑记忆模块。
 
     每次收到里程计和场景图更新时，维护拓扑记忆图。
@@ -52,7 +53,6 @@ class TopologicalMemoryModule(Module, layer=3):
 
         super().__init__(**config)
         self._memory = TopologicalMemory(**mem_kwargs)
-        self._last_odom: Optional[Odometry] = None
         self._last_sg: Optional[SceneGraph] = None
 
     # -- 生命周期 --
@@ -60,11 +60,6 @@ class TopologicalMemoryModule(Module, layer=3):
     def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.scene_graph.subscribe(self._on_scene_graph)
-
-    def _on_odom(self, odom: Odometry) -> None:
-        if not (np.isfinite(odom.x) and np.isfinite(odom.y)):
-            return
-        self._last_odom = odom
 
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         self._last_sg = sg
