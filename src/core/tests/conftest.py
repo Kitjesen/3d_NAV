@@ -1,8 +1,4 @@
-"""conftest.py for src/core/tests/ -- add semantic package paths to sys.path.
-
-Required because some Module tests import from semantic_planner which
-transitively depends on semantic_common (a ROS2 package not installed).
-"""
+"""conftest.py for src/core/tests/ -- add semantic package paths to sys.path."""
 
 import os
 import sys
@@ -15,7 +11,6 @@ _paths = [
     _src,
     os.path.join(_src, "semantic", "planner"),
     os.path.join(_src, "semantic", "perception"),
-    os.path.join(_src, "semantic", "common"),
 ]
 
 for _p in _paths:

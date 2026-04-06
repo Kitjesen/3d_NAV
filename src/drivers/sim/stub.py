@@ -72,7 +72,10 @@ class StubConnection(Module, layer=1):
 
 
 def stub_blueprint(**config) -> "Blueprint":
-    """Test blueprint -- StubConnection + new module architecture."""
+    """Test blueprint -- StubConnection + new module architecture.
+
+    NOTE: Blueprint factory — cross-layer imports are intentional here (see CLAUDE.md).
+    """
     from core.blueprint import Blueprint
     from nav.navigation_module import NavigationModule
     from nav.safety_ring_module import SafetyRingModule

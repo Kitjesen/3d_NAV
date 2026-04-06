@@ -242,4 +242,7 @@ def full_stack_blueprint(
     _w("TeleopModule", "cmd_vel", _drv, "cmd_vel")
     _w("TeleopModule", "nav_stop", "NavigationModule", "stop_signal")
 
+    # Recovery cmd_vel — direct motor control during stuck recovery
+    _w("NavigationModule", "recovery_cmd_vel", _drv, "cmd_vel")
+
     return bp

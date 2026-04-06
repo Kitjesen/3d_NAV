@@ -639,7 +639,8 @@ class GatewayModule(Module, layer=6):
                     if frame:
                         try:
                             await ws.send_bytes(frame)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug("teleop frame send failed: %s", e)
                             break
                     await asyncio.sleep(0.1)
 

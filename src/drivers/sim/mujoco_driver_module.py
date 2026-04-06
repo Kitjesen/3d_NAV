@@ -126,6 +126,7 @@ class MujocoDriverModule(Module, layer=1):
         self._engine = None
         self._sim_thread: Optional[threading.Thread] = None
         self._running = False
+        self._cmd_lock = threading.Lock()
         self._cmd_vx = 0.0
         self._cmd_vy = 0.0
         self._cmd_wz = 0.0
@@ -237,15 +238,17 @@ class MujocoDriverModule(Module, layer=1):
             return
         # MuJoCo engine: linear_x = forward, linear_y = lateral (verified by Step 2 test)
         # Nav stack: vx = forward, vy = lateral — same convention, direct passthrough
-        self._cmd_vx = twist.linear.x if hasattr(twist.linear, 'x') else 0.0
-        self._cmd_vy = twist.linear.y if hasattr(twist.linear, 'y') else 0.0
-        self._cmd_wz = twist.angular.z if hasattr(twist.angular, 'z') else 0.0
+        with self._cmd_lock:
+            self._cmd_vx = twist.linear.x if hasattr(twist.linear, 'x') else 0.0
+            self._cmd_vy = twist.linear.y if hasattr(twist.linear, 'y') else 0.0
+            self._cmd_wz = twist.angular.z if hasattr(twist.angular, 'z') else 0.0
 
     def _on_stop(self, level: int):
         if level >= 1:
-            self._cmd_vx = 0.0
-            self._cmd_vy = 0.0
-            self._cmd_wz = 0.0
+            with self._cmd_lock:
+                self._cmd_vx = 0.0
+                self._cmd_vy = 0.0
+                self._cmd_wz = 0.0
             self._stopped = True
 
     def _sim_loop(self):
@@ -260,8 +263,12 @@ class MujocoDriverModule(Module, layer=1):
 
             try:
                 # Step physics with current command
+                with self._cmd_lock:
+                    cmd_vx = self._cmd_vx
+                    cmd_vy = self._cmd_vy
+                    cmd_wz = self._cmd_wz
                 cmd = VelocityCommand(
-                    linear_x=self._cmd_vx, linear_y=self._cmd_vy, angular_z=self._cmd_wz)
+                    linear_x=cmd_vx, linear_y=cmd_vy, angular_z=cmd_wz)
                 state = self._engine.step(cmd)
 
                 # Publish odometry

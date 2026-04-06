@@ -18,11 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from core import Module, In, Out
 from core.msgs.nav import Odometry
-
-try:
-    import yaml
-except ImportError:
-    yaml = None  # type: ignore[assignment]
+from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
 
 class GeofenceManagerModule(Module, layer=6):
@@ -184,27 +180,8 @@ class GeofenceManagerModule(Module, layer=6):
     # -- persistence ------------------------------------------------------------
 
     def _load_fences(self) -> Dict[str, Dict[str, Any]]:
-        if not self._geofence_file.exists():
-            return {}
-        try:
-            with open(self._geofence_file, "r", encoding="utf-8") as f:
-                if yaml is not None:
-                    data = yaml.safe_load(f)
-                else:
-                    data = json.load(f)
-                return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+        data = load_yaml(self._geofence_file)
+        return data if isinstance(data, dict) else {}
 
     def _save_fences(self) -> None:
-        try:
-            self._geofence_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._geofence_file, "w", encoding="utf-8") as f:
-                if yaml is not None:
-                    yaml.safe_dump(
-                        self._fences, f, allow_unicode=True, default_flow_style=False
-                    )
-                else:
-                    json.dump(self._fences, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        save_yaml(self._geofence_file, self._fences)

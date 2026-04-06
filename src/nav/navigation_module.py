@@ -26,7 +26,7 @@ import numpy as np
 
 from core.module import Module, skill
 from core.stream import In, Out
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
+from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion, Twist
 from core.msgs.nav import Odometry
 from core.registry import register
 from nav.global_planner_service import GlobalPlannerService
@@ -78,6 +78,7 @@ class NavigationModule(Module, layer=5):
     planner_status: Out[str]
     mission_status: Out[dict]
     adapter_status: Out[dict]
+    recovery_cmd_vel: Out[Twist]  # direct cmd_vel for backup/rotate recovery
 
     def __init__(
         self,
@@ -369,8 +370,10 @@ class NavigationModule(Module, layer=5):
         elif status.event == EV_STUCK:
             if self._replan_count < self._max_replan:
                 self._replan_count += 1
+                # Try backup motion before replanning (back up briefly, then rotate)
+                self._execute_recovery_motion()
                 logger.warning(
-                    "Stuck detected, replanning (%d/%d)",
+                    "Stuck detected, recovery motion + replan (%d/%d)",
                     self._replan_count, self._max_replan,
                 )
                 self._plan()
@@ -384,6 +387,48 @@ class NavigationModule(Module, layer=5):
             self._failure_reason = f"mission timeout ({self._mission_timeout}s)"
             self._set_state(MissionState.FAILED)
             logger.warning("Mission timeout after %.0fs", self._mission_timeout)
+
+    # ── Recovery motion ───────────────────────────────────────────────────
+
+    def _execute_recovery_motion(self) -> None:
+        """Execute backup + rotate recovery before replanning.
+
+        Publishes direct cmd_vel via recovery_cmd_vel port:
+        1. Back up at -0.2 m/s for 1.5s
+        2. Rotate in place at 0.5 rad/s for 1.5s
+        This clears the robot from the stuck position.
+        """
+        backup_speed = -0.2  # m/s backward
+        rotate_speed = 0.5   # rad/s
+        step_duration = 1.5  # seconds per step
+        step_hz = 10
+
+        logger.info("Recovery: backing up at %.1f m/s for %.1fs", backup_speed, step_duration)
+        steps = int(step_duration * step_hz)
+        for _ in range(steps):
+            if self._state != MissionState.EXECUTING:
+                return
+            self.recovery_cmd_vel.publish(Twist(
+                linear=Vector3(backup_speed, 0.0, 0.0),
+                angular=Vector3(0.0, 0.0, 0.0),
+            ))
+            time.sleep(1.0 / step_hz)
+
+        # Alternate rotate direction based on replan count
+        direction = 1.0 if self._replan_count % 2 == 1 else -1.0
+        rot = rotate_speed * direction
+        logger.info("Recovery: rotating at %.1f rad/s for %.1fs", rot, step_duration)
+        for _ in range(steps):
+            if self._state != MissionState.EXECUTING:
+                return
+            self.recovery_cmd_vel.publish(Twist(
+                linear=Vector3(0.0, 0.0, 0.0),
+                angular=Vector3(0.0, 0.0, rot),
+            ))
+            time.sleep(1.0 / step_hz)
+
+        # Stop
+        self.recovery_cmd_vel.publish(Twist.zero())
 
     # ── Planning ──────────────────────────────────────────────────────────
 

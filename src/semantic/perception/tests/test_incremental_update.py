@@ -20,7 +20,6 @@ _SRC_DIR = os.path.join(_REPO_ROOT, "src", "semantic_perception")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
 from semantic.perception.semantic_perception.instance_tracker import InstanceTracker, TrackedObject
 from semantic.perception.semantic_perception.projection import Detection3D
 

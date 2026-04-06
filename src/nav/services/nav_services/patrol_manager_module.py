@@ -21,11 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from core import Module, In, Out
 from core.msgs.nav import Odometry
-
-try:
-    import yaml
-except ImportError:
-    yaml = None  # type: ignore[assignment]
+from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
 
 class PatrolManagerModule(Module, layer=6):
@@ -106,7 +102,7 @@ class PatrolManagerModule(Module, layer=6):
             "created": datetime.now(timezone.utc).isoformat(),
         }
         path = self._routes_dir / f"{name}.yaml"
-        self._save_yaml(path, route_data)
+        save_yaml(path, route_data)
         return {
             "action": "save",
             "success": True,
@@ -119,13 +115,13 @@ class PatrolManagerModule(Module, layer=6):
         path = self._routes_dir / f"{name}.yaml"
         if not path.exists():
             return {"action": "load", "success": False, "message": f"route not found: {name}"}
-        data = self._load_yaml(path)
+        data = load_yaml(path)
         return {"action": "load", "success": True, "route": data}
 
     def _list_routes(self) -> Dict[str, Any]:
         routes: List[Dict[str, Any]] = []
         for f in sorted(self._routes_dir.glob("*.yaml")):
-            data = self._load_yaml(f)
+            data = load_yaml(f)
             if data:
                 routes.append({
                     "name": data.get("name", f.stem),
@@ -155,7 +151,7 @@ class PatrolManagerModule(Module, layer=6):
         path = self._routes_dir / f"{name}.yaml"
         if not path.exists():
             return {"action": "start", "success": False, "message": f"route not found: {name}"}
-        data = self._load_yaml(path)
+        data = load_yaml(path)
         if not data or not data.get("waypoints"):
             return {"action": "start", "success": False, "message": f"invalid route data: {name}"}
 
@@ -174,32 +170,3 @@ class PatrolManagerModule(Module, layer=6):
         self._active_route = None
         return {"action": "stop", "success": True, "message": f"patrol stopped: {route_name}"}
 
-    # -- YAML helpers -----------------------------------------------------------
-
-    @staticmethod
-    def _load_yaml(path: Path, default: Any = None) -> Any:
-        if default is None:
-            default = {}
-        if not path.exists():
-            return default
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                if yaml is not None:
-                    data = yaml.safe_load(f)
-                else:
-                    data = json.load(f)
-                return data if data is not None else default
-        except Exception:
-            return default
-
-    @staticmethod
-    def _save_yaml(path: Path, data: Any) -> None:
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                if yaml is not None:
-                    yaml.safe_dump(data, f, allow_unicode=True, default_flow_style=False)
-                else:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass

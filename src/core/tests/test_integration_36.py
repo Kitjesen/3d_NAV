@@ -3,7 +3,7 @@ import sys, os, time, io, logging
 import numpy as np
 
 sys.path.insert(0, "src")
-for d in ["src/semantic/perception", "src/semantic/planner", "src/semantic/common"]:
+for d in ["src/semantic/perception", "src/semantic/planner"]:
     if os.path.isdir(d):
         sys.path.insert(0, d)
 for k in ["MOONSHOT_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY"]:
@@ -191,8 +191,7 @@ T("29.MCP skills", mcp is not None and len(getattr(mcp, "_dynamic_tools", [])) >
 # 30 Profile builds
 for pname, kw in [
     ("stub", dict(robot="stub", slam_profile="none", enable_native=False, enable_semantic=False, enable_gateway=True)),
-    ("sim", dict(robot="sim_ros2", slam_profile="bridge", enable_native=True, enable_semantic=True, enable_gateway=True)),
-]:
+    ("sim", dict(robot="sim_ros2", slam_profile="bridge", enable_native=True, enable_semantic=True, enable_gateway=True))]:
     try:
         full_stack_blueprint(**kw).build()
         T(f"30.Profile {pname}", True)

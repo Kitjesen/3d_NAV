@@ -3,7 +3,7 @@
 
 import sys, os
 sys.path.insert(0, 'src')
-for d in ['src/semantic/perception', 'src/semantic/planner', 'src/semantic/common']:
+for d in ['src/semantic/perception', 'src/semantic/planner']:
     if os.path.isdir(d): sys.path.insert(0, d)
 for k in ['MOONSHOT_API_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY','DASHSCOPE_API_KEY']:
     os.environ.pop(k, None)

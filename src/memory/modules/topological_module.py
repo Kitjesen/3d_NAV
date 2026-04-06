@@ -17,6 +17,7 @@ from typing import Any, Optional
 import numpy as np
 
 from core import Module, In, Out
+from core.registry import register
 from core.msgs import Odometry, SceneGraph
 
 from memory.spatial.topological import TopologicalMemory
@@ -24,6 +25,7 @@ from memory.spatial.topological import TopologicalMemory
 logger = logging.getLogger(__name__)
 
 
+@register("memory", "topological", description="Topological memory graph tracking explored regions and connectivity")
 class TopologicalMemoryModule(Module, layer=3):
     """拓扑记忆模块。
 

@@ -18,11 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core import Module, In, Out
-
-try:
-    import yaml
-except ImportError:
-    yaml = None  # type: ignore[assignment]
+from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
 
 class TaskSchedulerModule(Module, layer=6):
@@ -187,27 +183,8 @@ class TaskSchedulerModule(Module, layer=6):
     # -- persistence ------------------------------------------------------------
 
     def _load_schedules(self) -> Dict[str, Dict[str, Any]]:
-        if not self._schedule_file.exists():
-            return {}
-        try:
-            with open(self._schedule_file, "r", encoding="utf-8") as f:
-                if yaml is not None:
-                    data = yaml.safe_load(f)
-                else:
-                    data = json.load(f)
-                return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
+        data = load_yaml(self._schedule_file)
+        return data if isinstance(data, dict) else {}
 
     def _save_schedules(self) -> None:
-        try:
-            self._schedule_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._schedule_file, "w", encoding="utf-8") as f:
-                if yaml is not None:
-                    yaml.safe_dump(
-                        self._schedules, f, allow_unicode=True, default_flow_style=False
-                    )
-                else:
-                    json.dump(self._schedules, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        save_yaml(self._schedule_file, self._schedules)

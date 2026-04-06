@@ -203,6 +203,23 @@ class Module:
 
     # -- lifecycle -----------------------------------------------------------
 
+    def preflight(self) -> Optional[str]:
+        """Pre-startup check — verify required resources are available.
+
+        Called before setup(). Return ``None`` if all checks pass, or a string
+        describing what is missing/wrong.  Returning a non-None value causes
+        the module to be marked as *failed* in SystemHandle.start() (same
+        treatment as a setup() exception).
+
+        Override in subclasses that need pre-flight validation::
+
+            def preflight(self) -> Optional[str]:
+                if not os.path.exists(self._model_path):
+                    return f"Model file not found: {self._model_path}"
+                return None
+        """
+        return None
+
     def setup(self) -> None:
         """Configuration phase — register subscribers, load resources. Override in subclasses."""
         pass
@@ -397,6 +414,7 @@ class Module:
                     "callback_errors": port.callback_errors,
                     "avg_callback_ms": round(port.avg_callback_ms, 2),
                     "max_callback_ms": round(port.max_callback_ms, 2),
+                    "latency": port.latency_percentiles(),
                     "stale_ms": round(port.stale_ms, 1),
                 }
                 for name, port in self._ports_in.items()

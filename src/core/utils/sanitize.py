@@ -1,8 +1,10 @@
 ﻿"""
 sanitize.py — NaN 清理 / JSON 安全序列化
 
+Canonical location: core.utils.sanitize
+
 用法:
-    from semantic.common.semantic_common import safe_json_dumps, safe_json_loads, sanitize_position
+    from core.utils.sanitize import safe_json_dumps, safe_json_loads, sanitize_position
 
     json_str = safe_json_dumps(data)           # NaN/Inf → 0.0, 永远合法 JSON
     data = safe_json_loads(raw_str, default={}) # 永远不抛异常

@@ -267,6 +267,10 @@ class TestPathFollowerModule(unittest.TestCase):
 # GatewayModule
 # ============================================================================
 
+@unittest.skipUnless(
+    __import__("importlib").util.find_spec("pydantic"),
+    "pydantic not installed",
+)
 class TestGatewayModule(unittest.TestCase):
 
     def _make(self):

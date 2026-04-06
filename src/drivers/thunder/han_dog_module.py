@@ -76,6 +76,7 @@ class ThunderDriver(Module, layer=1):
         self._slam_reset_interval = slam_reset_interval
 
         # 内部状态
+        self._cmd_lock = threading.Lock()
         self._cmd_vx = 0.0
         self._cmd_vy = 0.0
         self._cmd_wz = 0.0
@@ -184,16 +185,18 @@ class ThunderDriver(Module, layer=1):
     def _on_cmd_vel(self, twist: Twist):
         """收到速度指令 → 缓存 + 异步发送 Walk。"""
         self._last_cmd_time = time.time()
-        self._cmd_vx = twist.linear.x
-        self._cmd_vy = twist.linear.y
-        self._cmd_wz = twist.angular.z
+        with self._cmd_lock:
+            self._cmd_vx = twist.linear.x
+            self._cmd_vy = twist.linear.y
+            self._cmd_wz = twist.angular.z
 
         if self._watchdog_triggered:
             self._watchdog_triggered = False
             logger.info("Watchdog cleared: cmd_vel resumed")
 
         if self._connected and self._standing:
-            walk = self._twist_to_walk(self._cmd_vx, self._cmd_vy, self._cmd_wz)
+            with self._cmd_lock:
+                walk = self._twist_to_walk(self._cmd_vx, self._cmd_vy, self._cmd_wz)
             asyncio.run_coroutine_threadsafe(
                 self._send_walk(walk), self._loop)
 
@@ -233,6 +236,10 @@ class ThunderDriver(Module, layer=1):
         from core.msgs.geometry import Pose, PoseStamped
 
         now = time.time()
+        with self._cmd_lock:
+            cmd_vx = self._cmd_vx
+            cmd_vy = self._cmd_vy
+
         if self._last_odom_time is not None:
             dt = now - self._last_odom_time
             if 0.0 < dt < 1.0:
@@ -240,8 +247,8 @@ class ThunderDriver(Module, layer=1):
                 yaw = math.atan2(
                     2.0 * (qw * qz + qx * qy),
                     1.0 - 2.0 * (qy * qy + qz * qz))
-                self._pos_x += (self._cmd_vx * math.cos(yaw) - self._cmd_vy * math.sin(yaw)) * dt
-                self._pos_y += (self._cmd_vx * math.sin(yaw) + self._cmd_vy * math.cos(yaw)) * dt
+                self._pos_x += (cmd_vx * math.cos(yaw) - cmd_vy * math.sin(yaw)) * dt
+                self._pos_y += (cmd_vx * math.sin(yaw) + cmd_vy * math.cos(yaw)) * dt
                 if not math.isfinite(self._pos_x):
                     self._pos_x = 0.0
                 if not math.isfinite(self._pos_y):
@@ -257,7 +264,7 @@ class ThunderDriver(Module, layer=1):
                 orientation=Quaternion(qx, qy, qz, qw),
             ),
             twist=Twist(
-                linear=Vector3(self._cmd_vx, self._cmd_vy, 0.0),
+                linear=Vector3(cmd_vx, cmd_vy, 0.0),
                 angular=Vector3(gx, gy, gz),
             ),
             ts=now,

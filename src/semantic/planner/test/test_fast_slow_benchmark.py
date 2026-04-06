@@ -25,7 +25,6 @@ import numpy as np
 
 from semantic.planner.semantic_planner.llm_client import LLMConfig
 import pytest
-pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
 from semantic.planner.semantic_planner.goal_resolver import GoalResolver
 
 

@@ -10,7 +10,7 @@ import os
 import sys
 
 _repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-for _pkg in ("semantic_common", "semantic_planner"):
+for _pkg in ("semantic_planner",):
     _p = os.path.join(_repo, _pkg)
     if _p not in sys.path:
         sys.path.insert(0, _p)
