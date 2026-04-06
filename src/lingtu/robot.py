@@ -84,8 +84,8 @@ class Robot:
             if sub:
                 try:
                     sub.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Robot: subsystem cleanup error: %s", e)
         self._started = False
 
     # Navigation

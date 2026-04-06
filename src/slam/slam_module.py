@@ -139,8 +139,8 @@ class SLAMModule(Module, layer=1):
             if node:
                 try:
                     node.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("SLAMModule: node cleanup error: %s", e)
         self._node = None
         self._pgo_node = None
         self._lio_node = None
