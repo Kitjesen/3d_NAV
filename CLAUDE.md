@@ -15,7 +15,7 @@ LingTu (灵途) is an autonomous navigation system for quadruped robots in outdo
 
 ```bash
 # Framework tests (no ROS2 needed, runs on any machine)
-python -m pytest src/core/tests/ -q       # 682 tests
+python -m pytest src/core/tests/ -q       # 948 tests
 
 # CLI with interactive REPL (profile-based, recommended)
 python lingtu.py                          # interactive profile selector
@@ -56,7 +56,7 @@ Module is the only runtime unit. Blueprint composes Modules. Factory functions b
 ### Layer Hierarchy
 
 ```
-L0  Safety       — SafetyRingModule + GeofenceManagerModule
+L0  Safety       — SafetyRingModule + GeofenceManagerModule + CmdVelMux
 L1  Hardware     — Driver + CameraBridge + SLAM (managed/bridge/localizer)
 L2  Maps         — OccupancyGrid + ESDF + ElevationMap + Terrain + LocalPlanner + PathFollower
 L3  Perception   — Detector + Encoder + Reconstruction + SemanticMapper + Episodic + Tagged + VectorMemory
@@ -127,8 +127,8 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 
 | Directory | Role |
 |-----------|------|
-| `core/` | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (682) |
-| `nav/` | NavigationModule, SafetyRing, GlobalPlannerService, WaypointTracker, OccupancyGrid, ESDF, ElevationMap |
+| `core/` | Framework: Module, Blueprint, Transport, NativeModule, Registry, stacks/, utils, msgs, tests (948) |
+| `nav/` | NavigationModule, SafetyRing, CmdVelMux, GlobalPlannerService, WaypointTracker, OccupancyGrid, ESDF, ElevationMap |
 | `semantic/` | perception/ (Detector+Encoder), planner/ (SemanticPlanner+LLM+VisualServo+AgentLoop), reconstruction/ |
 | `memory/` | SemanticMapper, EpisodicMemory, TaggedLocations, VectorMemory, RoomObjectKG, TopologySemGraph |
 | `drivers/` | thunder/ (ThunderDriver + CameraBridge), sim/ (stub, MuJoCo, ROS2), TeleopModule |
@@ -153,6 +153,7 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 | `src/nav/global_planner_service.py` | A*/PCT backend + _find_safe_goal BFS |
 | `src/nav/waypoint_tracker.py` | Arrival + stuck detection |
 | `src/nav/safety_ring_module.py` | Safety reflex + evaluator + dialogue |
+| `src/nav/cmd_vel_mux_module.py` | Priority-based cmd_vel arbitration (L0) |
 | `src/semantic/planner/.../semantic_planner_module.py` | 5-level fallback + multi-turn AgentLoop |
 | `src/semantic/planner/.../goal_resolver.py` | Fast-Slow dual-process + KG hot-reload |
 | `src/semantic/planner/.../visual_servo_module.py` | BBoxNavigator + PersonTracker (dual channel) |
@@ -168,7 +169,7 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 
 ```bash
 # Framework tests (primary, no ROS2 needed)
-python -m pytest src/core/tests/ -q                    # 682 tests, ~5s
+python -m pytest src/core/tests/ -q                    # 948 tests, ~5s
 
 # ROS2 build (for C++ nodes on S100P only)
 source /opt/ros/humble/setup.bash
@@ -228,7 +229,7 @@ Instruction: "去上次放背包的地方"
 
 Two output channels based on distance:
 - Far (> 3m): `goal_pose → NavigationModule → planning stack`
-- Near (< 3m): `cmd_vel → Driver directly (PD servo, bypasses planner)`
+- Near (< 3m): `cmd_vel → CmdVelMux → Driver (PD servo, bypasses planner)`
 
 Components: BBoxNavigator (bbox+depth→3D→PD), PersonTracker (VLM select+CLIP Re-ID), vlm_bbox_query (open-vocab detection).
 
@@ -294,9 +295,26 @@ claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 
 WebSocket joystick at `ws://<robot>:5050/ws/teleop`:
 - Phone/browser sends `{"type": "joy", "lx": 0.5, "ly": 0.0, "az": -0.3}`
+- GatewayModule forwards raw WS joy messages to TeleopModule via `joy_input` port
+- TeleopModule manages all teleop state (active/idle/release) and joy scaling
+- TeleopModule publishes `teleop_active: Out[bool]` for NavigationModule pause/resume
+- cmd_vel goes through CmdVelMux (priority-based arbitration), not directly to driver
+- 3s idle auto-release runs in TeleopModule's background thread
 - Robot streams JPEG camera frames back
-- 3s idle → auto-releases to autonomous navigation
-- cmd_vel priority: Teleop > VisualServo > PathFollower
+
+## cmd_vel Priority Arbitration (CmdVelMux)
+
+All cmd_vel sources are routed through CmdVelMux (L0) for priority-based arbitration:
+
+| Source | Priority | Timeout |
+|--------|----------|---------|
+| Teleop (joystick) | 100 | 0.5s |
+| VisualServo (PD tracking) | 80 | 0.5s |
+| Recovery (stuck backup) | 60 | 0.5s |
+| PathFollower (autonomy) | 40 | 0.5s |
+
+Highest-priority active source wins. A source is "active" if it published within 0.5s.
+When a source times out, the mux falls through to the next lower-priority source.
 
 ## Explicit Wires (Cross-Stack, in `full_stack.py`)
 
@@ -312,14 +330,20 @@ bp.wire(slam_module_name, "odometry", "NavigationModule", "odometry")
 bp.wire("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
 bp.wire("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
 bp.wire("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
-bp.wire("PathFollowerModule", "cmd_vel", driver_name, "cmd_vel")
 
 # Visual servo dual channel
 bp.wire("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target")
 bp.wire("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
 
-# Teleop
-bp.wire("TeleopModule", "cmd_vel", driver_name, "cmd_vel")
+# CmdVelMux — priority-based velocity arbitration
+bp.wire("TeleopModule",      "cmd_vel",          "CmdVelMux", "teleop_cmd_vel")
+bp.wire("VisualServoModule", "cmd_vel",          "CmdVelMux", "visual_servo_cmd_vel")
+bp.wire("NavigationModule",  "recovery_cmd_vel", "CmdVelMux", "recovery_cmd_vel")
+bp.wire("PathFollowerModule", "cmd_vel",         "CmdVelMux", "path_follower_cmd_vel")
+bp.wire("CmdVelMux", "driver_cmd_vel", driver_name, "cmd_vel")
+
+# Teleop active → Navigation pause/resume
+bp.wire("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
 ```
 
 ## S100P Deployment
@@ -343,4 +367,4 @@ bp.wire("TeleopModule", "cmd_vel", driver_name, "cmd_vel")
 - S100P has no CUDA — Open3D GPU features unavailable, use C++ terrain_analysis instead
 - Kimi API key may expire — Slow Path unavailable without valid LLM key
 - ChromaDB optional — VectorMemoryModule falls back to numpy brute-force search
-- Framework tests (682) are mock-based — real hardware integration tests need S100P
+- Framework tests (948) are mock-based — real hardware integration tests need S100P

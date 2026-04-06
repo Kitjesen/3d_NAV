@@ -163,6 +163,12 @@ class MissionLoggerModule(Module, layer=3):
                 except OSError:
                     pass
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["logged_entries"] = len(list(self._log_dir.glob("*.json")))
+        info["buffer_size"] = 1 if self._current is not None else 0
+        return info
+
     # ---------------------------------------------------------------------------
     # Query API
     #
