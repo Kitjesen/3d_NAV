@@ -76,14 +76,14 @@ class LidarModule(Module, layer=1):
         super().start()
         try:
             self._lidar.connect()
-            self.alive.send(True)
+            self.alive.publish(True)
         except Exception as e:
-            self.alive.send(False)
+            self.alive.publish(False)
             logger.error("LidarModule start failed: %s", e)
 
     def stop(self) -> None:
         self._lidar.disconnect()
-        self.alive.send(False)
+        self.alive.publish(False)
         super().stop()
 
     def _on_cloud(self, pts) -> None:
