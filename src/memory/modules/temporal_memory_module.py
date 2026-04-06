@@ -28,6 +28,8 @@ from core.registry import register
 from core.msgs.semantic import SceneGraph
 from core.msgs.nav import Odometry
 
+from memory.modules._odom_mixin import OdomTrackingMixin
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,7 +70,7 @@ class TemporalRecord:
 # ---------------------------------------------------------------------------
 
 @register("memory", "temporal", description="Temporal scene memory with time-indexed observations")
-class TemporalMemoryModule(Module, layer=3):
+class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
     """Time-indexed scene memory module.
 
     Maintains a circular buffer of scene observations indexed by time.
@@ -110,7 +112,6 @@ class TemporalMemoryModule(Module, layer=3):
         self._buffer: Deque[TemporalRecord] = deque(maxlen=max_records)
         self._lock = threading.Lock()
 
-        self._last_odom: Optional[Odometry] = None
         self._last_record_ts: float = 0.0
         self._last_summary_ts: float = 0.0
 
@@ -139,11 +140,6 @@ class TemporalMemoryModule(Module, layer=3):
             self._summary_timer = None
 
     # -- Port callbacks --------------------------------------------------------
-
-    def _on_odom(self, odom: Odometry) -> None:
-        if not (np.isfinite(odom.x) and np.isfinite(odom.y)):
-            return
-        self._last_odom = odom
 
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         now = time.time()

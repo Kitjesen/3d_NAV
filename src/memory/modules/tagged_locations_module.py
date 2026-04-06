@@ -21,13 +21,14 @@ from core.registry import register
 from core.msgs import Odometry, PoseStamped
 from core.msgs.geometry import Pose, Quaternion, Vector3
 
+from memory.modules._odom_mixin import OdomTrackingMixin
 from memory.spatial.tagged_locations import TaggedLocationStore
 
 logger = logging.getLogger(__name__)
 
 
 @register("memory", "tagged_locations", description="Named location tagging with save/recall/fuzzy-match lookup")
-class TaggedLocationsModule(Module, layer=3):
+class TaggedLocationsModule(OdomTrackingMixin, Module, layer=3):
     """标签地点记忆模块。
 
     通过 tag_command 端口接收命令:
@@ -51,18 +52,11 @@ class TaggedLocationsModule(Module, layer=3):
         json_path = config.pop("json_path", "")
         super().__init__(**config)
         self._store = TaggedLocationStore(json_path=json_path)
-        self._last_odom: Optional[Odometry] = None
-
     # -- 生命周期 --
 
     def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.tag_command.subscribe(self._on_command)
-
-    def _on_odom(self, odom: Odometry) -> None:
-        if not (np.isfinite(odom.x) and np.isfinite(odom.y)):
-            return
-        self._last_odom = odom
 
     def _on_command(self, command: str) -> None:
         """处理标签命令。"""
