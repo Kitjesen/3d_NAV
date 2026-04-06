@@ -215,6 +215,9 @@ def full_stack_blueprint(
     ]:
         _w(_drv, "odometry", consumer, "odometry")
 
+    # Costmap → NavigationModule (live obstacle data for _find_safe_goal BFS)
+    _w("OccupancyGridModule", "costmap", "NavigationModule", "costmap")
+
     # Mission history — NavigationModule state changes go to MissionLoggerModule
     _w("NavigationModule", "mission_status", "MissionLoggerModule", "mission_status")
 

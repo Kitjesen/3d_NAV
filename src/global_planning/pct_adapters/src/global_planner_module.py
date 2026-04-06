@@ -74,6 +74,16 @@ class _PCTBackend:
         self._available = False
         self._load_error: str = ""
 
+        # 2D ground-floor grid for _find_safe_goal BFS (extracted from tomogram)
+        self._grid: Optional[np.ndarray] = None
+        self._resolution: float = 0.2
+        self._origin: np.ndarray = np.zeros(2)
+
+        # Live costmap overlay for dynamic obstacle avoidance
+        self._costmap: Optional[np.ndarray] = None
+        self._costmap_resolution: float = 0.2
+        self._costmap_origin: np.ndarray = np.zeros(2)
+
         self._try_load(tomogram_path)
 
     def _try_load(self, tomogram_path: str) -> None:
@@ -139,6 +149,8 @@ class _PCTBackend:
                 getattr(planner, "map_dim", "?"),
                 getattr(planner, "n_slice", "?"),
             )
+            # Extract 2D ground-floor grid for _find_safe_goal BFS
+            self._extract_grid(tomogram_path)
         except Exception as e:
             self._load_error = f"TomogramPlanner.loadTomogram failed: {e}"
             logger.exception("PCT backend failed to load tomogram: %s", tomogram_path)
@@ -146,6 +158,105 @@ class _PCTBackend:
     @property
     def available(self) -> bool:
         return self._available
+
+    def _extract_grid(self, tomogram_path: str) -> None:
+        """Extract 2D ground-floor traversability grid from the tomogram pickle.
+
+        This grid is used by GlobalPlannerService._find_safe_goal() BFS to
+        verify goals are in free space before sending them to the 3D planner.
+        """
+        import pickle
+        try:
+            with open(tomogram_path, "rb") as f:
+                raw = pickle.load(f)
+        except Exception:
+            logger.warning("PCT: could not load tomogram pickle for grid extraction")
+            return
+
+        if not isinstance(raw, dict):
+            return
+
+        tomo_data = raw.get("data")
+        res = float(raw.get("resolution", 0.2))
+
+        if tomo_data is not None and hasattr(tomo_data, "ndim") and tomo_data.ndim == 4:
+            # data shape: (5, n_slices, H, W) — channel 0 = traversability
+            self._grid = np.asarray(tomo_data[0, 0], dtype=np.float32)
+            center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
+            h, w = self._grid.shape
+            self._origin = center - np.array([w * res / 2, h * res / 2])
+        else:
+            grid = raw.get("grid", raw.get("traversability"))
+            if grid is not None:
+                self._grid = np.asarray(grid, dtype=np.float32)
+            self._origin = np.array(raw.get("origin", [0, 0])[:2], dtype=np.float64)
+
+        self._resolution = res
+        self._static_grid: Optional[np.ndarray] = None
+        if self._grid is not None:
+            self._static_grid = self._grid.copy()
+            logger.info(
+                "PCT: extracted 2D grid for goal safety BFS: shape=%s res=%.3f",
+                self._grid.shape, res,
+            )
+
+    def update_map(self, grid: np.ndarray, resolution: float = 0.2,
+                   origin: Optional[np.ndarray] = None) -> None:
+        """Accept live costmap for dynamic obstacle checking in _find_safe_goal.
+
+        The costmap is stored separately and merged with the static tomogram
+        grid when GlobalPlannerService calls _find_safe_goal(). The 3D PCT
+        planner itself still uses the pre-built tomogram for path planning.
+        """
+        self._costmap = np.asarray(grid, dtype=np.float32)
+        self._costmap_resolution = resolution
+        if origin is not None:
+            self._costmap_origin = np.array(origin[:2], dtype=np.float64)
+
+        # Merge costmap obstacles into _grid so _find_safe_goal sees them
+        if self._grid is not None:
+            self._merge_costmap()
+
+    def _merge_costmap(self) -> None:
+        """Overlay dynamic costmap obstacles onto the static tomogram grid.
+
+        Resets _grid from _static_grid first, then overlays costmap obstacles.
+        Works even when costmap and tomogram have different resolutions/origins.
+        """
+        if self._costmap is None or self._static_grid is None:
+            return
+
+        # Reset to clean static grid before merging
+        self._grid = self._static_grid.copy()
+
+        cm = self._costmap
+        cm_res = self._costmap_resolution
+        cm_ox, cm_oy = self._costmap_origin[0], self._costmap_origin[1]
+        g_res = self._resolution
+        g_ox, g_oy = self._origin[0], self._origin[1]
+        gh, gw = self._grid.shape
+        ch, cw = cm.shape
+
+        # Find costmap cells that are obstacles
+        obs_rows, obs_cols = np.where(cm >= self._obstacle_thr)
+        if len(obs_rows) == 0:
+            return
+
+        # Convert costmap obstacle cells to world coords, then to grid coords
+        world_x = cm_ox + obs_cols * cm_res
+        world_y = cm_oy + obs_rows * cm_res
+        grid_cols = np.round((world_x - g_ox) / g_res).astype(int)
+        grid_rows = np.round((world_y - g_oy) / g_res).astype(int)
+
+        # Filter in-bounds and mark obstacles
+        mask = (grid_cols >= 0) & (grid_cols < gw) & (grid_rows >= 0) & (grid_rows < gh)
+        valid_rows = grid_rows[mask]
+        valid_cols = grid_cols[mask]
+        if len(valid_rows) > 0:
+            self._grid[valid_rows, valid_cols] = np.maximum(
+                self._grid[valid_rows, valid_cols],
+                cm[obs_rows[mask], obs_cols[mask]],
+            )
 
     def plan(self, start: np.ndarray, goal: np.ndarray) -> list:
         """Plan a 3D path from start to goal.
