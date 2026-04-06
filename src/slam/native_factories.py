@@ -47,8 +47,8 @@ def livox_driver(cfg: Optional[RobotConfig] = None) -> NativeModule:
             "user_config_path": config_path,
         },
         remappings={
-            "/livox/lidar": "/lidar/scan",
-            "/livox/imu":   "/imu/data",
+            "/livox/lidar": "/nav/lidar_scan",
+            "/livox/imu":   "/nav/imu",
         },
         env=DDS_ENV,
         auto_restart=True,
