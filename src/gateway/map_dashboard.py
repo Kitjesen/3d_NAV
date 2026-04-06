@@ -218,7 +218,7 @@ async function loadMaps(){
   let maps=[], active='';
 
   if(r&&r.maps){
-    maps=r.maps; active=r.active||'';
+    maps=r.maps.filter(m=>m.has_pcd); active=r.active||'';
   } else {
     // Fallback: MapManagerModule API
     r=await F('/api/v1/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'list'})});
