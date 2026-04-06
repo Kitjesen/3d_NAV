@@ -1,5 +1,9 @@
 """Thunder blueprints — three tiers using new 10-module architecture.
 
+# NOTE: Blueprint factory — cross-layer imports are intentional here (see CLAUDE.md).
+# This file imports from nav/, semantic/, and gateway/ to compose full-stack blueprints.
+# These are lazy imports inside factory functions, not module-level dependencies.
+
 Usage::
 
     from drivers.thunder.blueprints import thunder_basic, thunder_nav, thunder_semantic

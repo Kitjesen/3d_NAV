@@ -9,9 +9,9 @@
 import os
 import sys
 
-# 确保 semantic_common 和 semantic_perception 可导入
+# 确保 semantic_perception 可导入
 _repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-for _pkg in ("semantic_common", "semantic_perception"):
+for _pkg in ("semantic_perception",):
     _p = os.path.join(_repo, _pkg)
     if _p not in sys.path:
         sys.path.insert(0, _p)

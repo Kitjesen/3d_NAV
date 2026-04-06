@@ -556,7 +556,20 @@ class SystemHandle:
             logger.warning("SystemHandle.start() called but system is already running")
             return
         failed: dict = {}
+        # Phase 0: preflight checks
         for name in self._startup_order:
+            try:
+                reason = self._modules[name].preflight()
+                if reason:
+                    logger.error("Module %s preflight FAILED: %s", name, reason)
+                    failed[name] = f"preflight: {reason}"
+            except Exception as e:
+                logger.error("Module %s preflight FAILED: %s", name, e, exc_info=True)
+                failed[name] = f"preflight: {e}"
+        # Phase 1: setup
+        for name in self._startup_order:
+            if name in failed:
+                continue
             try:
                 self._modules[name].setup()
             except Exception as e:
@@ -582,23 +595,45 @@ class SystemHandle:
             len(self._modules), len(failed), len(self._connections),
         )
 
-    def stop(self) -> None:
-        """stop() all modules in reverse topological order, then close transport."""
+    def stop(self, timeout_per_module: float = 5.0) -> None:
+        """stop() all modules in reverse topological order, then close transport.
+
+        Each module gets *timeout_per_module* seconds to stop gracefully.
+        If a module hangs, it is skipped with a warning and shutdown continues.
+        """
         if not self._started:
             return
+        import threading as _th
+        hung_modules: List[str] = []
+        stop_errors: Dict[str, str] = {}
+
+        def _safe_stop(mod_ref, mod_name):
+            try:
+                mod_ref.stop()
+            except Exception as exc:
+                stop_errors[mod_name] = str(exc)
+                logger.exception("Error stopping module %s", mod_name)
+
         for name in reversed(self._startup_order):
             mod = self._modules.get(name)
             if mod is None:
                 continue
-            try:
-                mod.stop()
-            except Exception:
-                logger.exception("Error stopping module %s", name)
+            t = _th.Thread(target=_safe_stop, args=(mod, name),
+                           daemon=True, name=f"stop-{name}")
+            t.start()
+            t.join(timeout=timeout_per_module)
+            if t.is_alive():
+                hung_modules.append(name)
+                logger.warning(
+                    "Module %s did not stop within %.1fs — skipping",
+                    name, timeout_per_module)
         if hasattr(self._transport, "close"):
             try:
                 self._transport.close()
             except Exception:
                 logger.exception("Error closing transport")
+        if hung_modules:
+            logger.warning("Hung modules during shutdown: %s", hung_modules)
         self._modules.clear()
         self._connections.clear()
         self._started = False

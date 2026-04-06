@@ -26,6 +26,9 @@ REST
   GET  /api/v1/state         full snapshot (odom, safety, mission, mode, lease)
   GET  /api/v1/scene_graph
   GET  /api/v1/health
+Probes
+  GET  /health               liveness probe (always 200 if alive)
+  GET  /ready                readiness probe (200 if all modules ok, 503 if degraded)
 SSE
   GET  /api/v1/events        event stream  (application/x-ndjson, chunked)
 WebSocket
@@ -244,6 +247,8 @@ class GatewayModule(Module, layer=6):
 
         # Reference to MapManagerModule (set by on_system_modules)
         self._map_mgr = None
+        # All modules dict (set by on_system_modules)
+        self._all_modules: Dict[str, Any] = {}
 
         self._app   = None
         self._server_thread: Optional[threading.Thread] = None
@@ -273,6 +278,7 @@ class GatewayModule(Module, layer=6):
 
     def on_system_modules(self, modules: Dict[str, Any]) -> None:
         self._map_mgr = modules.get("MapManagerModule")
+        self._all_modules = modules
 
     # -- teleop config injection (called by TeleopModule) -------------------
 
@@ -622,6 +628,40 @@ class GatewayModule(Module, layer=6):
                 "has_map_mgr": gw._map_mgr is not None,
             }
 
+        # ── Liveness / Readiness probes ────────────────────────────────────
+
+        @app.get("/health", summary="Liveness probe")
+        async def liveness_health():
+            return {"status": "ok", "ts": time.time()}
+
+        @app.get("/ready", summary="Readiness probe")
+        async def readiness_ready():
+            if not gw._all_modules:
+                return JSONResponse(
+                    {"status": "not_started", "modules": {}},
+                    status_code=503,
+                )
+
+            module_health: Dict[str, Any] = {}
+            all_ok = True
+            for name, mod in gw._all_modules.items():
+                try:
+                    h = mod.health() if hasattr(mod, "health") else {}
+                    module_health[name] = {"ok": True, "detail": h}
+                except Exception as e:
+                    module_health[name] = {"ok": False, "error": str(e)}
+                    all_ok = False
+
+            status_code = 200 if all_ok else 503
+            return JSONResponse(
+                {
+                    "status": "ready" if all_ok else "degraded",
+                    "modules": module_health,
+                    "ts": time.time(),
+                },
+                status_code=status_code,
+            )
+
         # ── WebSocket teleop ───────────────────────────────────────────────
 
         @app.websocket("/ws/teleop")
@@ -639,7 +679,8 @@ class GatewayModule(Module, layer=6):
                     if frame:
                         try:
                             await ws.send_bytes(frame)
-                        except Exception:
+                        except Exception as e:
+                            logger.debug("teleop frame send failed: %s", e)
                             break
                     await asyncio.sleep(0.1)
 

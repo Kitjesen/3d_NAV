@@ -1,6 +1,14 @@
+# DEPRECATED: Use StubDogModule from core/blueprints/stub.py instead.
+# StubDogModule is the canonical stub driver registered as ("driver", "stub")
+# in the registry, with periodic odom publishing and health reporting.
+# This file is kept for backward compatibility.
+# TODO: Remove once all consumers are migrated.
 """Stub connection -- no hardware, dead-reckoning odometry for CI/testing.
 
-Same port interface as NovaDogConnection so it drops into any blueprint.
+DEPRECATED: Superseded by StubDogModule in core/blueprints/stub.py, which is
+registered in the plugin registry and used by all current profiles/blueprints.
+
+Same port interface as ThunderDriver so it drops into any blueprint.
 """
 
 from __future__ import annotations
@@ -74,7 +82,10 @@ class StubConnection(Module, layer=1):
 
 
 def stub_blueprint(**config) -> "Blueprint":
-    """Test blueprint -- StubConnection + new module architecture."""
+    """Test blueprint -- StubConnection + new module architecture.
+
+    NOTE: Blueprint factory — cross-layer imports are intentional here (see CLAUDE.md).
+    """
     from core.blueprint import Blueprint
     from nav.navigation_module import NavigationModule
     from nav.safety_ring_module import SafetyRingModule

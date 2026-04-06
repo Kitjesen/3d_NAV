@@ -17,14 +17,17 @@ from typing import Any, Optional
 import numpy as np
 
 from core import Module, In, Out, skill
+from core.registry import register
 from core.msgs import Odometry, SceneGraph
 
+from memory.modules._odom_mixin import OdomTrackingMixin
 from memory.spatial.episodic import EpisodicMemory
 
 logger = logging.getLogger(__name__)
 
 
-class EpisodicMemoryModule(Module, layer=3):
+@register("memory", "episodic", description="Spatio-temporal episodic memory recording exploration history")
+class EpisodicMemoryModule(OdomTrackingMixin, Module, layer=3):
     """时空情节记忆模块。
 
     每次收到场景图更新时，将当前位置和可见标签记录到情节记忆中。
@@ -52,18 +55,11 @@ class EpisodicMemoryModule(Module, layer=3):
         if min_distance_m is not None:
             self._memory.MIN_DISTANCE_M = min_distance_m
 
-        self._last_odom: Optional[Odometry] = None
-
     # -- 生命周期 --
 
     def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.scene_graph.subscribe(self._on_scene_graph)
-
-    def _on_odom(self, odom: Odometry) -> None:
-        if not (np.isfinite(odom.x) and np.isfinite(odom.y)):
-            return
-        self._last_odom = odom
 
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         if self._last_odom is None:

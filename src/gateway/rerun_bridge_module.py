@@ -192,8 +192,8 @@ class RerunBridgeModule(Module, layer=6):
                 if dt > 0:
                     rr.log("metrics/slam_hz", rr.Scalars(1.0 / dt))
             self._last_odom_t = now
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun odom log failed: %s", e)
 
     def _on_cloud(self, cloud: PointCloud2) -> None:
         self._counts["cloud"] += 1
@@ -233,8 +233,8 @@ class RerunBridgeModule(Module, layer=6):
                 half_sizes=np.full((len(centers), 3), half, dtype=np.float32),
                 colors=colors,
             ))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun point cloud log failed: %s", e)
 
     # ── ROS2 subscriptions (camera, TF, costmap, detections, path) ───────
 
@@ -305,8 +305,8 @@ class RerunBridgeModule(Module, layer=6):
                     img = img[:, :, ::-1]
                 img = self._crop_square(np.rot90(img, k=1))
                 self._rr.log("camera/color", self._rr.Image(img))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun color frame log failed: %s", e)
 
     def _on_ros2_depth(self, msg) -> None:
         self._depth_count += 1
@@ -325,8 +325,8 @@ class RerunBridgeModule(Module, layer=6):
                 img = np.frombuffer(msg.data, dtype=np.float32).reshape(h, w)
                 img = self._crop_square(np.rot90(img, k=1))
                 self._rr.log("camera/depth", self._rr.DepthImage(img, meter=1.0))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun depth frame log failed: %s", e)
 
     # ── ROS2 TF callback ─────────────────────────────────────────────────
 
@@ -343,8 +343,8 @@ class RerunBridgeModule(Module, layer=6):
                     translation=[t.x, t.y, t.z],
                     rotation=rr.Quaternion(xyzw=[q.x, q.y, q.z, q.w]),
                 ))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun TF log failed: %s", e)
 
     def _on_ros2_tf_static(self, msg) -> None:
         if not self._active or self._rr is None:
@@ -359,8 +359,8 @@ class RerunBridgeModule(Module, layer=6):
                     translation=[t.x, t.y, t.z],
                     rotation=rr.Quaternion(xyzw=[q.x, q.y, q.z, q.w]),
                 ), static=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun TF static log failed: %s", e)
 
     # ── ROS2 costmap callback ────────────────────────────────────────────
 
@@ -398,8 +398,8 @@ class RerunBridgeModule(Module, layer=6):
                 vertex_texcoords=np.array([[0, 1], [1, 1], [1, 0], [0, 0]], dtype=np.float32),
                 albedo_texture=img,
             ))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun costmap log failed: %s", e)
 
     # ── ROS2 detections callback ─────────────────────────────────────────
 
@@ -425,8 +425,8 @@ class RerunBridgeModule(Module, layer=6):
                 self._rr.log("world/detections", self._rr.Points3D(
                     positions, labels=labels, colors=colors, radii=0.12,
                 ))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun detections log failed: %s", e)
 
     # ── ROS2 path callback ───────────────────────────────────────────────
 
@@ -440,5 +440,5 @@ class RerunBridgeModule(Module, layer=6):
                 self._rr.log("world/nav_path", self._rr.LineStrips3D(
                     [pts], colors=[[0, 255, 100]], radii=0.04,
                 ))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("rerun nav path log failed: %s", e)

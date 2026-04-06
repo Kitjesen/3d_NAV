@@ -71,6 +71,8 @@ class VectorMemoryModule(Module, layer=3):
         self._np_embeddings: List[np.ndarray] = []
         self._np_metadata: List[dict] = []
 
+        self._max_np_entries: int = kw.get("max_np_entries", 10000)
+
         self._robot_xy = (0.0, 0.0)
         self._latest_labels: List[str] = []
         self._latest_image: Optional[np.ndarray] = None
@@ -159,6 +161,10 @@ class VectorMemoryModule(Module, layer=3):
         else:
             self._np_embeddings.append(embedding)
             self._np_metadata.append(meta)
+            # LRU eviction: drop oldest entries when over limit
+            while len(self._np_embeddings) > self._max_np_entries:
+                self._np_embeddings.pop(0)
+                self._np_metadata.pop(0)
 
     def _encode_text(self, text: str) -> Optional[np.ndarray]:
         if self._encoder is not None and hasattr(self._encoder, "encode_text"):
@@ -269,4 +275,5 @@ class VectorMemoryModule(Module, layer=3):
             "entries": count,
             "store_count": self._store_count,
             "persist_dir": self._persist_dir,
+            "max_np_entries": self._max_np_entries,
         }

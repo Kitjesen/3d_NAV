@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -114,6 +115,26 @@ class LLMModule(Module, layer=4):
         self._total_latency_ms = 0.0
         self._error_count = 0
 
+        # Circuit breaker — fail fast under sustained LLM failure
+        self._cb_threshold: int = kw.get("circuit_breaker_threshold", 5)
+        self._cb_cooldown: float = kw.get("circuit_breaker_cooldown", 60.0)
+        self._consecutive_failures: int = 0
+        self._circuit_open_until: float = 0.0  # time.time() when circuit re-closes
+
+    def preflight(self):
+        """Check API key availability before startup."""
+        if self._backend_name == "mock":
+            return None
+        defaults = {
+            "kimi": "MOONSHOT_API_KEY", "openai": "OPENAI_API_KEY",
+            "claude": "ANTHROPIC_API_KEY", "qwen": "DASHSCOPE_API_KEY",
+        }
+        env_var = self._api_key_env or defaults.get(self._backend_name, "")
+        if env_var and not os.environ.get(env_var):
+            return (f"API key env var '{env_var}' not set for backend "
+                    f"'{self._backend_name}'. Set it or use backend='mock'.")
+        return None
+
     def setup(self):
         """Create LLM client and start async event loop."""
         self._client = self._create_client()
@@ -161,16 +182,36 @@ class LLMModule(Module, layer=4):
                 error="LLM client not initialized"))
             return
 
+        # Circuit breaker — fail fast when backend is down
+        now = time.time()
+        if self._consecutive_failures >= self._cb_threshold:
+            if now < self._circuit_open_until:
+                self.response.publish(LLMResponse(
+                    text="", request_id=req.request_id, model=self._model,
+                    error=f"Circuit breaker open ({self._consecutive_failures} "
+                          f"consecutive failures, retry in "
+                          f"{self._circuit_open_until - now:.0f}s)"))
+                return
+            # Cooldown elapsed — allow one probe request (half-open)
+            logger.info("LLMModule: circuit half-open, probing backend")
+
         future = asyncio.run_coroutine_threadsafe(
             self._async_chat(req), self._loop)
         # Non-blocking: response published from async callback
         future.add_done_callback(lambda f: self._handle_result(f, req))
 
+    def _is_transient_error(self, error: Exception) -> bool:
+        """Transient errors should count toward circuit breaker but with lower weight."""
+        msg = str(error).lower()
+        transient_patterns = ("timeout", "timed out", "429", "rate limit",
+                              "connection", "temporary", "unavailable", "503")
+        return any(p in msg for p in transient_patterns)
+
     async def _async_chat(self, req: LLMRequest) -> str:
-        """Run the actual LLM call."""
-        return await self._client.chat(
-            req.messages,
-            temperature=req.temperature,
+        """Run the actual LLM call with enforced timeout."""
+        return await asyncio.wait_for(
+            self._client.chat(req.messages, temperature=req.temperature),
+            timeout=self._timeout_sec,
         )
 
     def _handle_result(self, future, req: LLMRequest):
@@ -181,6 +222,12 @@ class LLMModule(Module, layer=4):
             latency_ms = (time.time() - t0) * 1000
             self._call_count += 1
             self._total_latency_ms += latency_ms
+            # Success — close circuit
+            if self._consecutive_failures > 0:
+                logger.info("LLMModule: backend recovered after %d failures",
+                            self._consecutive_failures)
+            self._consecutive_failures = 0
+            self._circuit_open_until = 0.0
             self.response.publish(LLMResponse(
                 text=text,
                 request_id=req.request_id,
@@ -189,7 +236,20 @@ class LLMModule(Module, layer=4):
             ))
         except Exception as e:
             self._error_count += 1
-            logger.error("LLMModule: call failed: %s", e)
+            if self._is_transient_error(e):
+                self._consecutive_failures += 1
+            else:
+                # Permanent errors (401, 403, bad model) open circuit immediately
+                self._consecutive_failures = self._cb_threshold
+            # Open circuit after threshold consecutive failures
+            if self._consecutive_failures >= self._cb_threshold:
+                self._circuit_open_until = time.time() + self._cb_cooldown
+                logger.warning(
+                    "LLMModule: circuit breaker OPEN after %d consecutive "
+                    "failures (cooldown %.0fs)",
+                    self._consecutive_failures, self._cb_cooldown)
+            logger.error("LLMModule: call failed (%d/%d): %s",
+                         self._consecutive_failures, self._cb_threshold, e)
             self.response.publish(LLMResponse(
                 text="",
                 request_id=req.request_id,
@@ -217,11 +277,16 @@ class LLMModule(Module, layer=4):
         info = super().port_summary()
         avg_ms = (self._total_latency_ms / self._call_count
                   if self._call_count > 0 else 0.0)
+        circuit_state = "closed"
+        if self._consecutive_failures >= self._cb_threshold:
+            circuit_state = "half-open" if time.time() >= self._circuit_open_until else "open"
         info["llm"] = {
             "backend": self._backend_name,
             "model": self._model,
             "calls": self._call_count,
             "errors": self._error_count,
             "avg_ms": round(avg_ms, 1),
+            "circuit_breaker": circuit_state,
+            "consecutive_failures": self._consecutive_failures,
         }
         return info

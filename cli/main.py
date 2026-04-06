@@ -59,6 +59,8 @@ def main() -> None:
     parser.add_argument("--rerun", action="store_true", help="Enable Rerun 3D visualization on startup")
     parser.add_argument("--no-repl", action="store_true", help="Foreground daemon (no interactive REPL)")
     parser.add_argument("--log-level", default="INFO", dest="log_level")
+    parser.add_argument("--log-format", default="text", choices=["text", "json"],
+                        dest="log_format", help="Log file format: text (default) or json")
     args = parser.parse_args()
 
     if args.list:
@@ -154,7 +156,7 @@ def main() -> None:
     if not IS_TTY:
         args.no_repl = True
 
-    log_dir = setup_logging(args.log_level, profile_name)
+    log_dir = setup_logging(args.log_level, profile_name, args.log_format)
 
     if args.daemon:
         log_file = str(Path(log_dir) / "lingtu.log")

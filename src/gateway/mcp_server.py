@@ -130,7 +130,8 @@ class MCPServerModule(Module, layer=6):
                 continue
             try:
                 infos = mod.get_skill_infos()
-            except Exception:
+            except Exception as e:
+                logger.debug("failed to get skill infos from %s: %s", mod_name, e)
                 continue
             for info in infos:
                 method = getattr(mod, info.func_name, None)
@@ -257,7 +258,8 @@ class MCPServerModule(Module, layer=6):
             matches = [o for o in sg.get("objects", [])
                        if q in o.get("label", "").lower()]
             return json.dumps({"query": q, "matches": matches, "count": len(matches)})
-        except Exception:
+        except Exception as e:
+            logger.warning("scene graph JSON parse failed: %s", e)
             return json.dumps({"query": q, "matches": [], "count": 0})
 
     @skill
@@ -276,8 +278,8 @@ class MCPServerModule(Module, layer=6):
                         "score":    hit.get("score", 0),
                         "labels":   hit.get("labels", ""),
                     })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("vector memory query failed: %s", e)
 
         em = self._episodic_mod
         if em and hasattr(em, "memory"):
@@ -289,8 +291,8 @@ class MCPServerModule(Module, layer=6):
                         "position": list(getattr(r, "position", [0, 0, 0])),
                         "ts":       getattr(r, "timestamp", 0),
                     })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("episodic memory query failed: %s", e)
 
         tl = self._tagged_locations_mod
         if tl and hasattr(tl, "store"):
@@ -302,8 +304,8 @@ class MCPServerModule(Module, layer=6):
                         "label":    match["name"],
                         "position": match["position"],
                     })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("tagged location query failed: %s", e)
 
         return json.dumps({"query": query, "results": results, "count": len(results)})
 

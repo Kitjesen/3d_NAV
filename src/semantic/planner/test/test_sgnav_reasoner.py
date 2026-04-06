@@ -9,7 +9,6 @@ import unittest
 import numpy as np
 
 import pytest
-pytest.importorskip("semantic_common", reason="semantic_common 仅在 S100P ROS2 环境可用")
 from semantic.planner.semantic_planner.frontier_scorer import Frontier
 from semantic.planner.semantic_planner.sgnav_reasoner import SGNavReasoner
 

@@ -1,8 +1,14 @@
+# DEPRECATED: Use ThunderDriver from han_dog_module.py instead.
+# This file is kept for backward compatibility with legacy blueprints.
+# TODO: Remove once all consumers are migrated.
 """
 NovaDogConnection — Quadruped robot gRPC bridge module.
 
-Replaces legacy/han_dog_bridge.py (ROS2 Node version).
-Uses core Module/In/Out ports, connects to brainstem CMS via gRPC.
+DEPRECATED: This module is superseded by ThunderDriver in han_dog_module.py,
+which is the canonical driver registered as ("driver", "thunder") in the
+registry and used by all current blueprints. ThunderDriver includes
+thread-safe cmd_vel handling and brainstem reachability checks that this
+module lacks.
 
 Ports:
   In:  cmd_vel      (Twist)       — velocity command → gRPC Walk()
@@ -13,14 +19,11 @@ Ports:
 
 Usage::
 
-    from core import autoconnect
-    from drivers.thunder.connection import NovaDogConnection
+    # Prefer ThunderDriver instead:
+    from drivers.thunder.han_dog_module import ThunderDriver
 
-    handle = autoconnect(
-        NovaDogConnection.blueprint(dog_host="192.168.66.190"),
-        PlannerModule.blueprint(),
-    ).build()
-    handle.start()
+    # Legacy usage (deprecated):
+    from drivers.thunder.connection import NovaDogConnection
 """
 
 from __future__ import annotations
@@ -212,7 +215,7 @@ class NovaDogConnection(Module, layer=1):
 
     def _publish_odometry(self):
         """Fuse IMU orientation + cmd_vel dead-reckoning → Odometry message."""
-        from core.msgs.geometry import Pose, PoseStamped
+        from core.msgs.geometry import Pose
 
         now = time.time()
         if self._last_odom_time is not None:

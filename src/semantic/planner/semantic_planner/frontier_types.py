@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-from semantic.common.semantic_common import sanitize_float
+from core.utils.sanitize import sanitize_float
 
 logger = logging.getLogger(__name__)
 

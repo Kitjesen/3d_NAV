@@ -1,8 +1,10 @@
 ﻿"""
 robustness.py — 超时 / 重试 / GPU 安全装饰器
 
+Canonical location: core.utils.robustness
+
 用法:
-    from semantic.common.semantic_common import async_timeout, gpu_safe, retry
+    from core.utils.robustness import async_timeout, gpu_safe, retry
 
     @async_timeout(30.0)
     async def resolve_goal(self, ...):
@@ -20,6 +22,7 @@ robustness.py — 超时 / 重试 / GPU 安全装饰器
 import asyncio
 import functools
 import logging
+import random
 import time
 from typing import Any, Callable, Optional, Sequence, Type, TypeVar
 
@@ -142,14 +145,16 @@ def retry(
     backoff: float = 1.0,
     on: Sequence[Type[Exception]] = (Exception,),
     *,
+    jitter: bool = True,
     log_level: int = logging.WARNING,
 ):
-    """同步函数重试装饰器，指数退避。
+    """同步函数重试装饰器，指数退避 + 随机抖动。
 
     Args:
         max_attempts: 最大尝试次数 (含首次)
         backoff: 首次重试等待秒数 (后续 ×2)
         on: 捕获的异常类型
+        jitter: 是否加随机抖动 (±25%) 防 thundering herd
         log_level: 重试日志级别
     """
 
@@ -164,6 +169,8 @@ def retry(
                     last_exc = e
                     if attempt < max_attempts - 1:
                         wait = backoff * (2**attempt)
+                        if jitter:
+                            wait *= 0.75 + random.random() * 0.5  # ±25%
                         logger.log(
                             log_level,
                             "%s attempt %d/%d failed: %s — retrying in %.1fs",
@@ -186,9 +193,10 @@ def retry_async(
     backoff: float = 1.0,
     on: Sequence[Type[Exception]] = (Exception,),
     *,
+    jitter: bool = True,
     log_level: int = logging.WARNING,
 ):
-    """异步函数重试装饰器，指数退避。"""
+    """异步函数重试装饰器，指数退避 + 随机抖动。"""
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
@@ -201,6 +209,8 @@ def retry_async(
                     last_exc = e
                     if attempt < max_attempts - 1:
                         wait = backoff * (2**attempt)
+                        if jitter:
+                            wait *= 0.75 + random.random() * 0.5  # ±25%
                         logger.log(
                             log_level,
                             "%s attempt %d/%d failed: %s — retrying in %.1fs",

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core import In, Module, Out, skill
+from core.registry import register
 from core.msgs import Odometry
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ MAX_RECORDS = 500
 TRAJECTORY_SAMPLE_INTERVAL = 1.0  # seconds
 
 
+@register("memory", "mission_logger", description="Records navigation mission lifecycle and trajectory to disk")
 class MissionLoggerModule(Module, layer=3):
     """Records mission history to JSON files on disk.
 

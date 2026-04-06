@@ -117,6 +117,10 @@ class WavefrontFrontierExplorer(Module, layer=2):
         self._goal_timeout   = goal_timeout
         self._rate           = explore_rate
 
+        # Costmap freshness
+        self._costmap_ts: float = 0.0
+        self._costmap_max_age: float = kw.get("costmap_max_age", 30.0)
+
         # Sensor state (updated by subscribers, read by exploration thread)
         self._costmap_data: Optional[dict] = None
         self._robot_x: float = 0.0
@@ -165,6 +169,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
     def _on_costmap(self, data: dict) -> None:
         with self._state_lock:
             self._costmap_data = data
+            self._costmap_ts = time.time()
 
     def _on_odometry(self, odom: Odometry) -> None:
         with self._state_lock:
@@ -247,7 +252,17 @@ class WavefrontFrontierExplorer(Module, layer=2):
             # Snapshot sensor state
             with self._state_lock:
                 costmap_data = self._costmap_data
+                costmap_ts = self._costmap_ts
                 rx, ry, ryaw = self._robot_x, self._robot_y, self._robot_yaw
+
+            # Costmap freshness check
+            if costmap_ts > 0 and time.time() - costmap_ts > self._costmap_max_age:
+                logger.warning(
+                    "FrontierExplorer: costmap stale (%.1fs > %.1fs) — skipping cycle",
+                    time.time() - costmap_ts, self._costmap_max_age,
+                )
+                self._stop_event.wait(timeout=period)
+                continue
 
             if costmap_data is None:
                 logger.debug("FrontierExplorer: waiting for costmap...")
@@ -642,8 +657,4 @@ class WavefrontFrontierExplorer(Module, layer=2):
 
 def _wrap_angle(a: float) -> float:
     """Wrap angle to [-pi, pi]."""
-    while a > math.pi:
-        a -= 2.0 * math.pi
-    while a < -math.pi:
-        a += 2.0 * math.pi
-    return a
+    return (a + math.pi) % (2.0 * math.pi) - math.pi
