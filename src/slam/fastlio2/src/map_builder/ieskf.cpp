@@ -85,6 +85,8 @@ void IESKF::update()
     M21D H = M21D::Identity();
     V21D b;
 
+    bool skip_lidar_update = false;
+
     for (size_t i = 0; i < m_max_iter; i++)
     {
         m_loss_func(m_x, shared_data);
@@ -141,30 +143,39 @@ void IESKF::update()
                 (6.0 - degen_count) / 6.0;
             shared_data.degeneracy.detected = (degen_count > 0);
 
-            // Solution remapping: project H update to well-constrained subspace
-            // This prevents the solver from hallucinating motion along degenerate axes
-            if (degen_count > 0 && degen_count < 6)
+            // ── Severe degeneracy: skip LiDAR update entirely ──────────
+            // When >= 3 DOFs are degenerate or condition number is extreme,
+            // LiDAR provides too few constraints — IMU prediction is safer.
+            if (degen_count >= 3 || shared_data.degeneracy.condition_number > 1e8)
             {
+                skip_lidar_update = true;
+                break;
+            }
+
+            // ── Partial degeneracy (1-2 DOFs): project to well-constrained subspace
+            if (degen_count > 0)
+            {
+                // Save prior contribution (must not be overwritten)
+                M21D H_prior = J.transpose() * P_ldlt.solve(J);
+                V21D b_prior = J.transpose() * P_ldlt.solve(delta);
+
                 // Build projection matrix: V_good * V_good^T
-                // Keeps only well-constrained eigenvector directions
                 Eigen::Matrix<double, 6, 6> P_good = Eigen::Matrix<double, 6, 6>::Zero();
                 for (int d = 0; d < 6; ++d)
                 {
                     if (evals(d) >= degen_thresh)
                         P_good += evecs.col(d) * evecs.col(d).transpose();
                 }
-                // Remap: H_pose = P_good * H_pose * P_good + (I - P_good) * lambda * (I - P_good)
-                // The second term adds regularization along degenerate axes (IMU prior dominates)
                 Eigen::Matrix<double, 6, 6> P_bad = Eigen::Matrix<double, 6, 6>::Identity() - P_good;
-                double regularize = evals(5) * 0.001;  // Weak regularization
-                shared_data.H.block<6, 6>(0, 0) = P_good * H_pose * P_good + P_bad * regularize;
-                // Zero out gradient along degenerate directions
-                shared_data.b.head<6>() = P_good * shared_data.b.head<6>();
+                double regularize = evals(5) * 0.01;  // Stronger regularization
+                Eigen::Matrix<double, 6, 6> H_lidar_remapped =
+                    P_good * H_pose * P_good + P_bad * regularize;
+                Eigen::Matrix<double, 6, 1> b_lidar_remapped =
+                    P_good * shared_data.b.head<6>();
 
-                // Re-accumulate into full H
-                H.block<12, 12>(0, 0) = shared_data.H;
-                b.block<12, 1>(0, 0) = shared_data.b;
-                // Re-add prior (already in H from P^-1 above)
+                // Reconstruct H = prior + remapped LiDAR (preserving prior!)
+                H.block<6, 6>(0, 0) = H_prior.block<6, 6>(0, 0) + H_lidar_remapped;
+                b.block<6, 1>(0, 0) = b_prior.block<6, 1>(0, 0) + b_lidar_remapped;
             }
         }
 
@@ -180,9 +191,14 @@ void IESKF::update()
     // Store degeneracy info for external access (ROS2 publisher)
     m_degeneracy = shared_data.degeneracy;
 
+    // Severe degeneracy: revert to IMU prediction, don't update covariance
+    if (skip_lidar_update)
+    {
+        m_x = predict_x;
+        return;
+    }
+
     M21D L = M21D::Identity();
-    // L.block<3, 3>(0, 0) = JrInv(delta.segment<3>(0));
-    // L.block<3, 3>(6, 6) = JrInv(delta.segment<3>(6));
     L.block<3, 3>(0, 0) = Jr(delta.segment<3>(0));
     L.block<3, 3>(6, 6) = Jr(delta.segment<3>(6));
     m_P = L * H.ldlt().solve(L.transpose());  // P = L * H^{-1} * L^T
