@@ -89,11 +89,11 @@ class LidarModule(Module, layer=1):
     def _on_cloud(self, pts) -> None:
         """Forward numpy (N,4) → PointCloud2 on the scan port."""
         cloud = PointCloud2.from_numpy(pts, frame_id="livox_frame")
-        self.scan.send(cloud)
+        self.scan.publish(cloud)
 
     def _on_imu(self, imu_msg: Imu) -> None:
         """Forward Imu to the imu port."""
-        self.imu.send(imu_msg)
+        self.imu.publish(imu_msg)
 
     def health(self) -> Dict[str, Any]:
         """Report driver health for monitoring."""
