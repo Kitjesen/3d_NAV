@@ -220,3 +220,79 @@ TEST(SelectBestGroup, RotObstacleFilter) {
   EXPECT_EQ(result.selectedGroupID, 15 * groupNum + 3);
   EXPECT_DOUBLE_EQ(result.maxScore, 50.0);
 }
+
+// ── RotLUT precomputed weights ──
+
+TEST(RotLUT, PrecomputedRotDirW) {
+  const auto& lut = rotLUT();
+  // Verify precomputed matches runtime calculation
+  for (int i = 0; i < 36; i++) {
+    EXPECT_DOUBLE_EQ(lut.rotDirW[i], computeRotDirW(i))
+        << "rotDirW mismatch at index " << i;
+    double w = computeRotDirW(i);
+    EXPECT_DOUBLE_EQ(lut.rotDirW4[i], w * w * w * w)
+        << "rotDirW4 mismatch at index " << i;
+  }
+}
+
+TEST(RotLUT, PrecomputedGroupDirW) {
+  const auto& lut = rotLUT();
+  for (int g = 0; g < 7; g++) {
+    double w = computeGroupDirW(g);
+    EXPECT_DOUBLE_EQ(lut.groupDirW[g], w);
+    EXPECT_DOUBLE_EQ(lut.groupDirW2[g], w * w);
+  }
+}
+
+TEST(RotLUT, Pow025LUT) {
+  const auto& lut = rotLUT();
+  // pow025[0] = 0
+  EXPECT_FLOAT_EQ(lut.pow025[0], 0.0f);
+  // pow025[100] = pow(1.0, 0.25) = 1.0
+  EXPECT_NEAR(lut.pow025[100], 1.0f, 1e-5f);
+  // Check a few random values
+  for (int i = 1; i < RotLUT::kPow025Size; i += 37) {
+    float expected = static_cast<float>(std::sqrt(std::sqrt(i * 0.01)));
+    EXPECT_NEAR(lut.pow025[i], expected, 1e-5f)
+        << "pow025 mismatch at index " << i;
+  }
+}
+
+// ── scorePathFast ──
+
+TEST(ScorePathFast, MatchesScorePath) {
+  const auto& lut = rotLUT();
+  PathScoreParams p;
+  p.dirWeight = 0.02;
+  p.slopeWeight = 3.0;
+  p.omniDirGoalThre = 5.0;
+
+  // Test across multiple parameter combinations
+  for (int rotDir : {0, 9, 18, 27, 35}) {
+    for (int grp : {0, 3, 6}) {
+      for (double dirDiff : {0.0, 10.0, 30.0, 45.0}) {
+        for (double goalDis : {2.0, 10.0}) {
+          double orig = scorePath(dirDiff, lut.rotDirW[rotDir], lut.groupDirW[grp],
+                                  0.05, goalDis, p);
+          double fast = scorePathFast(dirDiff, lut.rotDirW4[rotDir], lut.groupDirW2[grp],
+                                      0.05f, goalDis, p, lut);
+          // Allow small LUT quantization error
+          if (orig > 0)
+            EXPECT_NEAR(fast, orig, std::fabs(orig) * 0.02 + 1e-6)
+                << "rotDir=" << rotDir << " grp=" << grp
+                << " dirDiff=" << dirDiff << " goalDis=" << goalDis;
+        }
+      }
+    }
+  }
+}
+
+TEST(ScorePathFast, PerfectAlignment) {
+  const auto& lut = rotLUT();
+  PathScoreParams p;
+  p.dirWeight = 0.02;
+  // dirDiff=0 → LUT index 0 → sqrtSqrtDw=0 → score = rotDirW4
+  double s = scorePathFast(0.0, lut.rotDirW4[18], lut.groupDirW2[3],
+                           0.0f, 10.0, p, lut);
+  EXPECT_NEAR(s, 10000.0, 1.0);  // rotDirW[18]=10, 10^4=10000
+}

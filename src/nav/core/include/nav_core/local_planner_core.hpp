@@ -23,11 +23,37 @@ namespace nav_core {
 
 struct RotLUT {
   std::array<double, 36> s, c;
+  std::array<double, 36> rotDirW;       // precomputed per-rotation weight
+  std::array<double, 7>  groupDirW;     // precomputed per-group weight
+  std::array<double, 36> rotDirW4;      // rotDirW^4 (normal mode)
+  std::array<double, 7>  groupDirW2;    // groupDirW^2 (near-goal mode)
+  std::array<float, 36>  rotAngDeg;     // 10*d - 180
+  // pow(x, 0.25) LUT for dirWeight*dirDiff in [0, 3.6] (dirWeight=0.02, max dirDiff=180)
+  // 360 entries at 0.01 resolution covers the full range.
+  static constexpr int kPow025Size = 361;
+  std::array<float, kPow025Size> pow025;  // pow025[i] = pow(i * 0.01, 0.25)
+
   RotLUT() {
     for (int i = 0; i < 36; i++) {
       double a = (10.0 * i - 180.0) * M_PI / 180.0;
       s[i] = std::sin(a);
       c[i] = std::cos(a);
+      rotAngDeg[i] = 10.0f * i - 180.0f;
+      // rotDirW (localPlanner.cpp:1132-1133)
+      double w = (i < 18) ? std::fabs(std::fabs(i - 9.0) + 1.0)
+                           : std::fabs(std::fabs(i - 27.0) + 1.0);
+      rotDirW[i] = w;
+      rotDirW4[i] = w * w * w * w;
+    }
+    for (int g = 0; g < 7; g++) {
+      double w = 4.0 - std::fabs(g - 3.0);
+      groupDirW[g] = w;
+      groupDirW2[g] = w * w;
+    }
+    // pow(x, 0.25) LUT
+    pow025[0] = 0.0f;
+    for (int i = 1; i < kPow025Size; i++) {
+      pow025[i] = static_cast<float>(std::sqrt(std::sqrt(i * 0.01)));
     }
   }
 };
@@ -108,14 +134,38 @@ inline double scorePath(double dirDiffDeg,
 
   double score;
   if (relativeGoalDis < p.omniDirGoalThre) {
-    // 近目标: groupDirW² (localPlanner.cpp:1145)
     score = (1.0 - sqrtSqrtDw) * groupDirW * groupDirW * terrainFactor;
   } else {
-    // 正常: rotDirW⁴ = (rotDirW²)² (localPlanner.cpp:1144)
     double rotDirW2 = rotDirW * rotDirW;
     score = (1.0 - sqrtSqrtDw) * rotDirW2 * rotDirW2 * terrainFactor;
   }
   return score;
+}
+
+/// Fast scoring with precomputed LUT — avoids sqrt(sqrt()) per call.
+/// rotDirW4: precomputed rotDirW^4,  groupDirW2: precomputed groupDirW^2.
+inline double scorePathFast(double dirDiffDeg,
+                            double rotDirW4_val,
+                            double groupDirW2_val,
+                            float  terrainPenalty,
+                            double relativeGoalDis,
+                            const PathScoreParams& p,
+                            const RotLUT& lut) {
+  float dw = static_cast<float>(std::fabs(p.dirWeight * dirDiffDeg));
+  // LUT lookup: index = dw / 0.01, clamped to [0, 360]
+  int idx = static_cast<int>(dw * 100.0f);
+  if (idx >= RotLUT::kPow025Size) idx = RotLUT::kPow025Size - 1;
+  float sqrtSqrtDw = lut.pow025[idx];
+
+  double base = 1.0 - static_cast<double>(sqrtSqrtDw);
+  if (base <= 0.0) return 0.0;
+
+  double terrainFactor = (p.slopeWeight > 0.0)
+      ? std::max(0.0, 1.0 - p.slopeWeight * terrainPenalty)
+      : 1.0;
+
+  return base * ((relativeGoalDis < p.omniDirGoalThre)
+                 ? groupDirW2_val : rotDirW4_val) * terrainFactor;
 }
 
 // ── rotDirW 计算 (localPlanner.cpp:1132-1133) ──

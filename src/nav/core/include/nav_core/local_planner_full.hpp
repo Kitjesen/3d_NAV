@@ -242,9 +242,21 @@ private:
   int gridVoxelNum_  = gridVoxelNumX_ * gridVoxelNumY_;
   std::vector<std::vector<int>> correspondences_;
 
-  // Per-frame scratch buffers (body frame)
-  struct BodyPoint { float x, y, z, intensity; };
-  std::vector<BodyPoint> plannerCloud_;
+  // Per-frame scratch buffers — SoA layout for SIMD-friendly access
+  struct PlannerCloudSoA {
+    std::vector<float> x, y, h;  // body-frame x, y + terrain height
+    int size = 0;
+    void clear() { x.clear(); y.clear(); h.clear(); size = 0; }
+    void reserve(int n) { x.reserve(n); y.reserve(n); h.reserve(n); }
+    void push(float bx, float by, float bh) {
+      x.push_back(bx); y.push_back(by); h.push_back(bh);
+      size++;
+    }
+  } cloud_;
+
+  // Pre-filtered valid rotation indices (avoids branch in inner loop)
+  std::array<int, kRotDirs> validRotDirs_{};
+  int nValidRotDirs_ = 0;
 
   // Scoring arrays
   std::vector<int>   clearPathList_;
@@ -372,17 +384,21 @@ private:
   }
 
   void buildPlannerCloud(const float* pts, int n) {
-    plannerCloud_.clear();
-    plannerCloud_.reserve(n);
-    double adjRangeSq = p_.adjacentRange * p_.adjacentRange;
+    cloud_.clear();
+    cloud_.reserve(n);
+    float adjRangeSq = static_cast<float>(p_.adjacentRange * p_.adjacentRange);
+    float cosY = static_cast<float>(cosYaw_), sinY = static_cast<float>(sinYaw_);
+    float fx = static_cast<float>(vx_), fy = static_cast<float>(vy_), fz = static_cast<float>(vz_);
+    float minZ = static_cast<float>(p_.minRelZ), maxZ = static_cast<float>(p_.maxRelZ);
+    bool useTerrain = p_.useTerrainAnalysis;
     for (int i = 0; i < n; i++) {
       float px = pts[i*4], py = pts[i*4+1], pz = pts[i*4+2], h = pts[i*4+3];
-      float dx = px - (float)vx_, dy = py - (float)vy_, dz = pz - (float)vz_;
+      float dx = px - fx, dy = py - fy, dz = pz - fz;
       if (dx*dx + dy*dy >= adjRangeSq) continue;
-      if (!((dz > p_.minRelZ && dz < p_.maxRelZ) || p_.useTerrainAnalysis)) continue;
-      float bx = dx * (float)cosYaw_ + dy * (float)sinYaw_;
-      float by = -dx * (float)sinYaw_ + dy * (float)cosYaw_;
-      plannerCloud_.push_back({bx, by, dz, h});
+      if (!((dz > minZ && dz < maxZ) || useTerrain)) continue;
+      float bx = dx * cosY + dy * sinY;
+      float by = -dx * sinY + dy * cosY;
+      cloud_.push(bx, by, h);
     }
   }
 
@@ -392,93 +408,122 @@ private:
     int totalPaths = kRotDirs * kPathNum;
     int totalGroups = kRotDirs * kGroupNum;
 
+    // Single memset pass: clear all scoring arrays at once
     std::memset(clearPathList_.data(), 0, sizeof(int) * totalPaths);
     std::memset(pathPenaltyList_.data(), 0, sizeof(float) * totalPaths);
     std::memset(clearPathPerGroupScore_.data(), 0, sizeof(double) * totalGroups);
     std::memset(clearPathPerGroupNum_.data(), 0, sizeof(int) * totalGroups);
     std::memset(pathPenaltyPerGroupScore_.data(), 0, sizeof(float) * totalGroups);
 
-    // Precompute direction validity
-    std::array<float, kRotDirs> angDiffList;
-    std::array<bool, kRotDirs> rotDirValid;
+    // Pre-filter valid rotation directions into compact array (no branch in hot loop)
+    nValidRotDirs_ = 0;
     for (int d = 0; d < kRotDirs; d++) {
-      float a = std::fabs((float)joyDir - (10.0f * d - 180.0f));
-      angDiffList[d] = (a > 180.0f) ? 360.0f - a : a;
-      float rotAngDeg = 10.0f * d - 180.0f;
+      float a = std::fabs(static_cast<float>(joyDir) - lut.rotAngDeg[d]);
+      if (a > 180.0f) a = 360.0f - a;
       float rotDeg = 10.0f * d;
-      bool skip = (angDiffList[d] > p_.dirThre && !p_.dirToVehicle) ||
-                  (std::fabs(rotAngDeg) > p_.dirThre && std::fabs(joyDir) <= 90.0 && p_.dirToVehicle) ||
+      bool skip = (a > p_.dirThre && !p_.dirToVehicle) ||
+                  (std::fabs(lut.rotAngDeg[d]) > p_.dirThre && std::fabs(joyDir) <= 90.0 && p_.dirToVehicle) ||
                   ((rotDeg > p_.dirThre && 360.0f - rotDeg > p_.dirThre) && std::fabs(joyDir) > 90.0 && p_.dirToVehicle);
-      rotDirValid[d] = !skip;
+      if (!skip) {
+        validRotDirs_[nValidRotDirs_++] = d;
+      }
     }
 
-    // Voxel grid constants
-    double invGS = 1.0 / 0.02;  // gridVoxelSize
-    double offXH = 3.2 + 0.02 * 0.5;
-    double offYH = 4.5 + 0.02 * 0.5;
-    double scaleA = 0.45 / 4.5;
-    double scaleB = 1.0 / 3.2;
-    double pathRangeScaleSq = (pathRange / pathScale) * (pathRange / pathScale);
-    double goalClearScaleSq = ((relGoalDis + p_.goalClearRange) / pathScale)
-                             * ((relGoalDis + p_.goalClearRange) / pathScale);
+    // Voxel grid constants (precomputed as float for inner loop)
+    float invPS = 1.0f / static_cast<float>(pathScale);
+    float invGS = 1.0f / 0.02f;
+    float offXH = 3.2f + 0.02f * 0.5f;
+    float offYH = 4.5f + 0.02f * 0.5f;
+    float scaleA = 0.45f / 4.5f;
+    float scaleB = 1.0f / 3.2f;
+    float pathRangeScaleSq = static_cast<float>((pathRange / pathScale) * (pathRange / pathScale));
+    float goalClearScaleSq = static_cast<float>(((relGoalDis + p_.goalClearRange) / pathScale)
+                             * ((relGoalDis + p_.goalClearRange) / pathScale));
+    float obsThre = static_cast<float>(p_.obstacleHeightThre);
+    float gndThre = static_cast<float>(p_.groundHeightThre);
+    bool useTerrain = p_.useTerrainAnalysis;
+    bool cropByGoal = p_.pathCropByGoal;
+    int pptThre = p_.pointPerPathThre;
 
-    // Score obstacle points against all paths in all rotations
-    int cloudSize = (int)plannerCloud_.size();
-    for (int i = 0; i < cloudSize; i++) {
-      float x = plannerCloud_[i].x / (float)pathScale;
-      float y = plannerCloud_[i].y / (float)pathScale;
-      float h = plannerCloud_[i].intensity;
-      float disSq = x*x + y*y;
+    // ── Obstacle scoring: ROTATION-MAJOR loop order ──
+    // Outer: rotation direction → inner: all cloud points
+    // Cache benefit: clearPathList_[kPathNum*d + pathID] has sequential d access
+    int cloudSize = cloud_.size;
+    if (p_.checkObstacle && cloudSize > 0) {
+      // Pre-scale cloud points (avoid per-rotation division)
+      const float* cx = cloud_.x.data();
+      const float* cy = cloud_.y.data();
+      const float* ch = cloud_.h.data();
 
-      if (disSq < pathRangeScaleSq && (disSq <= goalClearScaleSq || !p_.pathCropByGoal) && p_.checkObstacle) {
-        for (int d = 0; d < kRotDirs; d++) {
-          if (!rotDirValid[d]) continue;
-          float x2 = (float)lut.c[d] * x + (float)lut.s[d] * y;
-          float y2 = -(float)lut.s[d] * x + (float)lut.c[d] * y;
+      for (int vi = 0; vi < nValidRotDirs_; vi++) {
+        int d = validRotDirs_[vi];
+        float cosD = static_cast<float>(lut.c[d]);
+        float sinD = static_cast<float>(lut.s[d]);
+        int base = kPathNum * d;  // base index for this rotation
 
-          double sy = x2 * scaleB + scaleA * (3.2 - x2) * scaleB;
-          if (std::fabs(sy) < 1e-6) continue;
+        for (int i = 0; i < cloudSize; i++) {
+          float x = cx[i] * invPS;
+          float y = cy[i] * invPS;
+          float disSq = x * x + y * y;
+          if (disSq >= pathRangeScaleSq) continue;
+          if (cropByGoal && disSq > goalClearScaleSq) continue;
 
-          int indX = (int)((offXH - x2) * invGS);
-          int indY = (int)((offYH - y2 / sy) * invGS);
-          if (indX >= 0 && indX < gridVoxelNumX_ && indY >= 0 && indY < gridVoxelNumY_) {
-            int ind = gridVoxelNumY_ * indX + indY;
-            for (int pathID : correspondences_[ind]) {
-              int idx = kPathNum * d + pathID;
-              if (h > (float)p_.obstacleHeightThre || !p_.useTerrainAnalysis) {
-                clearPathList_[idx]++;
-              } else if (h > (float)p_.groundHeightThre) {
-                if (pathPenaltyList_[idx] < h) pathPenaltyList_[idx] = h;
-              }
+          float x2 = cosD * x + sinD * y;
+          float y2 = -sinD * x + cosD * y;
+
+          float sy = x2 * scaleB + scaleA * (3.2f - x2) * scaleB;
+          if (std::fabs(sy) < 1e-6f) continue;
+
+          int indX = static_cast<int>((offXH - x2) * invGS);
+          int indY = static_cast<int>((offYH - y2 / sy) * invGS);
+          if (indX < 0 || indX >= gridVoxelNumX_ || indY < 0 || indY >= gridVoxelNumY_)
+            continue;
+
+          float h = ch[i];
+          int ind = gridVoxelNumY_ * indX + indY;
+          for (int pathID : correspondences_[ind]) {
+            int idx = base + pathID;
+            if (h > obsThre || !useTerrain) {
+              clearPathList_[idx]++;
+            } else if (h > gndThre) {
+              if (pathPenaltyList_[idx] < h) pathPenaltyList_[idx] = h;
             }
           }
         }
       }
     }
 
-    // Aggregate into group scores
+    // ── Aggregate: nested loops (no division/modulo) + hoisted angDiffDeg ──
     PathScoreParams sp;
     sp.dirWeight = p_.dirWeight;
     sp.slopeWeight = p_.slopeWeight;
     sp.omniDirGoalThre = p_.omniDirGoalThre;
 
-    for (int i = 0; i < totalPaths; i++) {
-      int rotDir = i / kPathNum;
-      if (!rotDirValid[rotDir]) continue;
-      if (clearPathList_[i] >= p_.pointPerPathThre) continue;
+    for (int vi = 0; vi < nValidRotDirs_; vi++) {
+      int rotDir = validRotDirs_[vi];
+      int pathBase = kPathNum * rotDir;
+      int groupBase = kGroupNum * rotDir;
+      double rotW4 = lut.rotDirW4[rotDir];
+      float rotAng = lut.rotAngDeg[rotDir];
 
-      int pathIdx = i % kPathNum;
-      float rotAngDeg = 10.0f * rotDir - 180.0f;
-      double dirDiff = angDiffDeg(joyDir, endDirPathList_[pathIdx] + rotAngDeg);
-      double rotDirW = computeRotDirW(rotDir);
-      double groupDirW = computeGroupDirW(pathList_[pathIdx]);
-      double score = scorePath(dirDiff, rotDirW, groupDirW,
-                               pathPenaltyList_[i], relGoalDis, sp);
-      if (score > 0) {
-        int groupIdx = kGroupNum * rotDir + pathList_[pathIdx];
-        clearPathPerGroupScore_[groupIdx] += score;
-        clearPathPerGroupNum_[groupIdx]++;
-        pathPenaltyPerGroupScore_[groupIdx] += pathPenaltyList_[i];
+      for (int pathIdx = 0; pathIdx < kPathNum; pathIdx++) {
+        int flatIdx = pathBase + pathIdx;
+        if (clearPathList_[flatIdx] >= pptThre) continue;
+
+        // angDiffDeg hoisted: only rotAng changes per outer loop
+        double dirDiff = angDiffDeg(joyDir,
+                                    static_cast<double>(endDirPathList_[pathIdx]) + rotAng);
+        int grp = pathList_[pathIdx];
+        double grpW2 = lut.groupDirW2[grp];
+        double score = scorePathFast(dirDiff, rotW4, grpW2,
+                                     pathPenaltyList_[flatIdx], relGoalDis,
+                                     sp, lut);
+        if (score > 0) {
+          int groupIdx = groupBase + grp;
+          clearPathPerGroupScore_[groupIdx] += score;
+          clearPathPerGroupNum_[groupIdx]++;
+          pathPenaltyPerGroupScore_[groupIdx] += pathPenaltyList_[flatIdx];
+        }
       }
     }
 
@@ -564,15 +609,16 @@ private:
       while (relAngle < -M_PI) relAngle += 2.0 * M_PI;
       double turnDir = (relAngle >= 0) ? 1.0 : -1.0;
 
-      // Check rotation safety
+      // Check rotation safety (using SoA cloud)
       bool safe = true;
-      for (auto& pt : plannerCloud_) {
-        double dist = std::hypot(pt.x, pt.y);
+      for (int ci = 0; ci < cloud_.size; ci++) {
+        float px = cloud_.x[ci], py = cloud_.y[ci];
+        double dist = std::hypot(px, py);
         if (dist < 0.9 && dist > 0.1) {
-          double ptAngle = std::atan2(pt.y, pt.x);
+          double ptAngle = std::atan2(py, px);
           bool inSweep = turnDir > 0 ? (ptAngle > 0 && ptAngle < 1.5)
                                      : (ptAngle < 0 && ptAngle > -1.5);
-          if (inSweep && (pt.intensity > p_.obstacleHeightThre * 0.5 || !p_.useTerrainAnalysis)) {
+          if (inSweep && (cloud_.h[ci] > p_.obstacleHeightThre * 0.5 || !p_.useTerrainAnalysis)) {
             safe = false;
             break;
           }
@@ -586,9 +632,10 @@ private:
     } else if (recoveryState_ == 2) {
       // Backup: check rear safety
       bool safe = true;
-      for (auto& pt : plannerCloud_) {
-        if (pt.x < -0.1f && pt.x > -1.2f && std::fabs(pt.y) < 0.35f) {
-          if (pt.intensity > p_.obstacleHeightThre * 0.5 || !p_.useTerrainAnalysis) {
+      for (int ci = 0; ci < cloud_.size; ci++) {
+        float px = cloud_.x[ci];
+        if (px < -0.1f && px > -1.2f && std::fabs(cloud_.y[ci]) < 0.35f) {
+          if (cloud_.h[ci] > p_.obstacleHeightThre * 0.5 || !p_.useTerrainAnalysis) {
             safe = false; break;
           }
         }

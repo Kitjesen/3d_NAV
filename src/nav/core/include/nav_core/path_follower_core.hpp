@@ -206,8 +206,16 @@ inline PathFollowerOutput computeControl(
   out.cmd.wz = vehicleYawRate;
   if (std::fabs(state.vehicleSpeed) > p.maxAccel / 100.0) {
     if (p.omniDirGoalThre > 0) {
+      // sincos fusion: single trig computation for both sin and cos
+#if defined(__GLIBC__) || defined(__APPLE__)
+      double sinD, cosD;
+      sincos(dirDiff, &sinD, &cosD);
+      out.cmd.vx =  cosD * state.vehicleSpeed;
+      out.cmd.vy = -sinD * state.vehicleSpeed;
+#else
       out.cmd.vx =  std::cos(dirDiff) * state.vehicleSpeed;
       out.cmd.vy = -std::sin(dirDiff) * state.vehicleSpeed;
+#endif
     } else {
       out.cmd.vx = state.vehicleSpeed;
     }

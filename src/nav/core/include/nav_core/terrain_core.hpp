@@ -158,18 +158,23 @@ public:
 
     // 1. Crop points by height + distance
     cropped_.clear();
+    float fvx = static_cast<float>(vx_), fvy = static_cast<float>(vy_), fvz = static_cast<float>(vz_);
+    float maxDis = static_cast<float>(p_.terrainVoxelSize * (p_.terrainVoxelHalfWidth + 1));
+    float maxDisSq = maxDis * maxDis;
+    float fRelTime = static_cast<float>(relTime);
     for (int i = 0; i < n_points; i++) {
       float px = cloud_xyzi[i*4 + 0];
       float py = cloud_xyzi[i*4 + 1];
       float pz = cloud_xyzi[i*4 + 2];
-      float rx = px - (float)vx_;
-      float ry = py - (float)vy_;
-      float dis = std::hypot(rx, ry);
-      float relz = pz - (float)vz_;
+      float rx = px - fvx;
+      float ry = py - fvy;
+      float disSq = rx * rx + ry * ry;
+      if (disSq >= maxDisSq) continue;
+      float dis = std::sqrt(disSq);
+      float relz = pz - fvz;
       if (relz > p_.minRelZ - p_.disRatioZ * dis &&
-          relz < p_.maxRelZ + p_.disRatioZ * dis &&
-          dis < p_.terrainVoxelSize * (p_.terrainVoxelHalfWidth + 1)) {
-        cropped_.push_back({px, py, pz, (float)relTime});
+          relz < p_.maxRelZ + p_.disRatioZ * dis) {
+        cropped_.push_back({px, py, pz, fRelTime});
       }
     }
 
@@ -328,12 +333,18 @@ private:
       auto& vc = terrainVoxelCloud_[idx];
       std::vector<Point4> filtered;
       filtered.reserve(vc.size() / 2);
+      float fvx = static_cast<float>(vx_), fvy = static_cast<float>(vy_), fvz = static_cast<float>(vz_);
+      float noDecayDisSq = static_cast<float>(p_.noDecayDis * p_.noDecayDis);
+      float decayTime = static_cast<float>(p_.decayTime);
+      float fRelTime = static_cast<float>(relTime);
       for (auto& pt : vc) {
-        float dis = std::hypot(pt.x - (float)vx_, pt.y - (float)vy_);
-        float relz = pt.z - (float)vz_;
+        float dx = pt.x - fvx, dy = pt.y - fvy;
+        float disSq = dx * dx + dy * dy;
+        float dis = std::sqrt(disSq);  // needed for disRatioZ
+        float relz = pt.z - fvz;
         if (relz > p_.minRelZ - p_.disRatioZ * dis &&
             relz < p_.maxRelZ + p_.disRatioZ * dis &&
-            (relTime - pt.t < p_.decayTime || dis < p_.noDecayDis)) {
+            (fRelTime - pt.t < decayTime || disSq < noDecayDisSq)) {
           filtered.push_back(pt);
         }
       }
@@ -373,12 +384,20 @@ private:
       for (int i = 0; i < planarVoxelNum_; i++) {
         auto& elev = planarPointElev_[i];
         if (elev.empty()) continue;
-        std::sort(elev.begin(), elev.end());
-        int qid = std::clamp((int)(p_.quantileZ * (int)elev.size()), 0, (int)elev.size() - 1);
-        if (p_.limitGroundLift && elev[qid] > elev[0] + p_.maxGroundLift)
-          planarVoxelElev_[i] = elev[0] + (float)p_.maxGroundLift;
-        else
+        int qid = std::clamp(static_cast<int>(p_.quantileZ * elev.size()),
+                             0, static_cast<int>(elev.size()) - 1);
+        // O(n) partial sort: only need the qid-th element, not full sort
+        std::nth_element(elev.begin(), elev.begin() + qid, elev.end());
+        if (p_.limitGroundLift) {
+          // Need min element for ground lift check — O(n) scan
+          float minVal = *std::min_element(elev.begin(), elev.begin() + qid + 1);
+          if (elev[qid] > minVal + p_.maxGroundLift)
+            planarVoxelElev_[i] = minVal + (float)p_.maxGroundLift;
+          else
+            planarVoxelElev_[i] = elev[qid];
+        } else {
           planarVoxelElev_[i] = elev[qid];
+        }
       }
     } else {
       for (int i = 0; i < planarVoxelNum_; i++) {
