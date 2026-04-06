@@ -219,6 +219,16 @@ def full_stack_blueprint(
     # Mission history — NavigationModule state changes go to MissionLoggerModule
     _w("NavigationModule", "mission_status", "MissionLoggerModule", "mission_status")
 
+    # Gateway + MCP state feeds — explicit wires to avoid auto-wire ambiguity
+    _w("PerceptionModule", "scene_graph", "GatewayModule", "scene_graph")
+    _w("PerceptionModule", "scene_graph", "MCPServerModule", "scene_graph")
+    _w("SafetyRingModule", "safety_state", "GatewayModule", "safety_state")
+    _w("SafetyRingModule", "safety_state", "MCPServerModule", "safety_state")
+    _w("NavigationModule", "mission_status", "GatewayModule", "mission_status")
+    _w("NavigationModule", "mission_status", "MCPServerModule", "mission_status")
+    _w("SafetyRingModule", "execution_eval", "GatewayModule", "execution_eval")
+    _w("SafetyRingModule", "dialogue_state", "GatewayModule", "dialogue_state")
+
     # Goal routing from sim driver
     try:
         from core.registry import get as _get_plugin
