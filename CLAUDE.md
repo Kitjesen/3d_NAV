@@ -137,6 +137,8 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 | `slam/` | SLAMModule (Fast-LIO2/Point-LIO/Localizer), SlamBridgeModule, C++ SLAM nodes |
 | `global_planning/` | PCT_planner (C++ ele_planner.so) + _AStarBackend / _PCTBackend (via Registry) |
 
+Note: `calibration/` lives at repo root (not under `src/`). See [Sensor Calibration](#sensor-calibration-calibration) section.
+
 ## Key Files
 
 | File | Purpose |
@@ -171,10 +173,44 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 # Framework tests (primary, no ROS2 needed)
 python -m pytest src/core/tests/ -q                    # 1226 tests, ~5s
 
+# C++ nav_core tests (standalone, no ROS2)
+cd src/nav/core && mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
+./test_benchmark                                       # 12 benchmarks
+./test_local_planner_core                              # 30 tests
+./test_path_follower_core                              # 15 tests
+# ... 7 test suites, 96 tests total
+
 # ROS2 build (for C++ nodes on S100P only)
 source /opt/ros/humble/setup.bash
 make build                                              # colcon release build
 ```
+
+## C++ Performance (nav_core)
+
+`src/nav/core/` 是 header-only C++ 算法库，通过 nanobind 暴露给 Python。aarch64 部署时性能关键。
+
+### 加速库
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| xsimd | 13.0.0 | 便携 SIMD (ARM NEON / x86 AVX 自动切换) |
+| taskflow | 3.8.0 | 任务并行 (备用，当前用 OpenMP) |
+| OpenMP | — | 并行 for (terrain + scoring) |
+
+### 关键优化
+
+| 优化 | 文件 | 效果 |
+|------|------|------|
+| SoA 内存布局 | local_planner_full.hpp | SIMD 友好，消除 stride-4 访存 |
+| CSR 稀疏格式 | local_planner_full.hpp | cache 连续，消除指针追踪 |
+| scorePathFast LUT | local_planner_core.hpp | **2.08x** (pow025 查表替代 sqrt(sqrt)) |
+| OpenMP 并行评分 | local_planner_full.hpp | 36 旋转方向并行 |
+| terrain 并行化 | terrain_core.hpp | 2601 voxel nth_element 并行 |
+| SIMD 批量旋转 | simd_accel.hpp | rotateCloud + distSqBatch |
+| LTO + fast-math | CMakeLists.txt | 跨函数内联 + 放松浮点 |
+
+CMakeLists.txt 确保 ROS2 ament_cmake 和 standalone 两个路径都启用 xsimd + OpenMP + LTO。
 
 ## Critical Files — Do Not Break
 
@@ -354,6 +390,56 @@ bp.wire("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
 - **CycloneDDS**: Built from source at `~/cyclonedds/install/` (Unitree approach)
 - **Python**: 3.10.12, cyclonedds==0.10.5
 
+## Sensor Calibration (`calibration/`)
+
+出厂标定工具箱，覆盖 S100P 全部传感器。标定结果统一写入 `config/robot_config.yaml`。
+
+### 标定流程 (SOP)
+
+| Step | 内容 | 工具 | 时间 |
+|------|------|------|------|
+| 1 | 相机内参 (棋盘格 9×6) | `calibration/camera/calibrate_intrinsic.py` (OpenCV) | ~5 min |
+| 2 | IMU 噪声 (Allan Variance) | `calibration/imu/allan_variance_ros2/` (Autoliv) | ~2-3 hr |
+| 3 | LiDAR-IMU 外参 (8 字运动) | `calibration/lidar_imu/LiDAR_IMU_Init/` (HKU-MARS) | ~2 min |
+| 4 | 相机-LiDAR 外参 (target-less) | `calibration/camera_lidar/direct_visual_lidar_calibration/` (koide3) | ~10 min |
+| 5 | 一键应用 | `calibration/apply_calibration.py` → robot_config.yaml + SLAM configs | 秒级 |
+| 6 | 一键验证 | `calibration/verify.py` (焦距/畸变/旋转/投影链 sanity check) | 秒级 |
+
+### 标定参数输出
+
+```yaml
+# config/robot_config.yaml
+camera:
+  fx, fy, cx, cy              # Step 1 相机内参
+  dist_k1..k3, dist_p1..p2    # Step 1 畸变系数
+  position_x/y/z              # Step 4 相机-LiDAR 外参
+  roll, pitch, yaw            # Step 4 旋转
+
+lidar:
+  offset_x/y/z                # Step 3 LiDAR-IMU 外参 (t_il)
+  roll, pitch, yaw            # Step 3 旋转 (r_il)
+```
+
+`apply_calibration.py` 同时同步到 `src/slam/fastlio2/config/lio.yaml` 和 `config/pointlio.yaml` (na, ng, nba, nbg, r_il, t_il)。
+
+### 运行时校验
+
+`src/core/utils/calibration_check.py` 在 `full_stack_blueprint()` 启动时校验标定参数：
+- FAIL 级 (如焦距为 0、旋转矩阵非正交) → 阻止启动
+- WARN 级 (如畸变系数全零) → 日志警告，不阻断
+
+### 关键文件
+
+| File | Purpose |
+|------|---------|
+| `calibration/README.md` | 完整 SOP 文档 (含命令行示例) |
+| `calibration/apply_calibration.py` | 将 4 类标定结果写入 robot_config + SLAM 配置 |
+| `calibration/verify.py` | 一键验证: 参数范围 + 投影链 + 跨配置一致性 |
+| `calibration/camera/calibrate_intrinsic.py` | 相机内参 (capture/calibrate/verify 三合一) |
+| `calibration/lidar_imu/ros2_adapter/` | ROS2→ROS1 bridge 适配层 (rosbag 回放) |
+| `src/core/utils/calibration_check.py` | 运行时标定参数校验 (启动时调用) |
+| `config/robot_config.yaml` | 标定参数最终归宿 (single source of truth) |
+
 ## Code Style
 
 - **C++**: Google style (`.clang-format`, 2-space indent, 100 col)
@@ -367,4 +453,5 @@ bp.wire("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
 - S100P has no CUDA — Open3D GPU features unavailable, use C++ terrain_analysis instead
 - Kimi API key may expire — Slow Path unavailable without valid LLM key
 - ChromaDB optional — VectorMemoryModule falls back to numpy brute-force search
-- Framework tests (948) are mock-based — real hardware integration tests need S100P
+- Framework tests (1226) are mock-based — real hardware integration tests need S100P
+- C++ test_validation 6 tests fail under `-ffast-math` (NaN/Inf IEEE compliance) — expected

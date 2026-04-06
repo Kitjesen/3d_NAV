@@ -22,8 +22,10 @@
 
 #include "nav_core/types.hpp"
 #include "nav_core/local_planner_core.hpp"
+#include "nav_core/simd_accel.hpp"
 #include <cmath>
 #include <cstring>
+#include <atomic>
 #include <vector>
 #include <array>
 #include <string>
@@ -236,15 +238,34 @@ private:
   std::array<int, kPathNum> pathList_{};
   std::array<float, kPathNum> endDirPathList_{};
 
-  // Correspondences: voxel_id → path_ids
+  // Correspondences: voxel_id → path_ids (CSR format for cache locality)
   int gridVoxelNumX_ = 161;
   int gridVoxelNumY_ = 451;
   int gridVoxelNum_  = gridVoxelNumX_ * gridVoxelNumY_;
-  std::vector<std::vector<int>> correspondences_;
+  // CSR: corrOffset_[i] .. corrOffset_[i+1] index into corrData_
+  std::vector<int> corrOffset_;   // size = gridVoxelNum_ + 1
+  std::vector<int> corrData_;     // flat array of all path IDs
 
-  // Per-frame scratch buffers (body frame)
-  struct BodyPoint { float x, y, z, intensity; };
-  std::vector<BodyPoint> plannerCloud_;
+  // Per-frame scratch buffers — SoA layout for SIMD-friendly access
+  struct PlannerCloudSoA {
+    std::vector<float> x, y, h;  // body-frame x, y + terrain height
+    int size = 0;
+    void clear() { x.clear(); y.clear(); h.clear(); size = 0; }
+    void reserve(int n) { x.reserve(n); y.reserve(n); h.reserve(n); }
+    void push(float bx, float by, float bh) {
+      x.push_back(bx); y.push_back(by); h.push_back(bh);
+      size++;
+    }
+  } cloud_;
+
+  // Pre-filtered valid rotation indices (avoids branch in inner loop)
+  std::array<int, kRotDirs> validRotDirs_{};
+  int nValidRotDirs_ = 0;
+
+  // SIMD scratch buffers (reused across frames, no per-frame alloc)
+  std::vector<float> scaledX_, scaledY_, disSqBuf_;
+  std::vector<float> rotX_, rotY_;
+  std::vector<float> parRotBufs_;  // parallel per-rotation scratch
 
   // Scoring arrays
   std::vector<int>   clearPathList_;
@@ -316,8 +337,9 @@ private:
   bool loadCorrespondences(const std::string& filename) {
     std::ifstream f(filename);
     if (!f.is_open()) return false;
-    correspondences_.clear();
-    correspondences_.resize(gridVoxelNum_);
+
+    // First pass: load into temporary vector-of-vectors
+    std::vector<std::vector<int>> tmp(gridVoxelNum_);
     for (int i = 0; i < gridVoxelNum_; i++) {
       int gridVoxelID;
       f >> gridVoxelID;
@@ -326,10 +348,25 @@ private:
         if (pathID == -1) break;
         if (gridVoxelID >= 0 && gridVoxelID < gridVoxelNum_ &&
             pathID >= 0 && pathID < kPathNum) {
-          correspondences_[gridVoxelID].push_back(pathID);
+          tmp[gridVoxelID].push_back(pathID);
         }
       }
     }
+
+    // Convert to CSR (Compressed Sparse Row) — single contiguous array
+    corrOffset_.resize(gridVoxelNum_ + 1);
+    corrOffset_[0] = 0;
+    int totalEntries = 0;
+    for (int i = 0; i < gridVoxelNum_; i++) {
+      totalEntries += static_cast<int>(tmp[i].size());
+      corrOffset_[i + 1] = totalEntries;
+    }
+    corrData_.resize(totalEntries);
+    for (int i = 0; i < gridVoxelNum_; i++) {
+      std::copy(tmp[i].begin(), tmp[i].end(),
+                corrData_.begin() + corrOffset_[i]);
+    }
+
     // Allocate scoring arrays
     int total = kRotDirs * kPathNum;
     clearPathList_.resize(total);
@@ -372,19 +409,51 @@ private:
   }
 
   void buildPlannerCloud(const float* pts, int n) {
-    plannerCloud_.clear();
-    plannerCloud_.reserve(n);
-    double adjRangeSq = p_.adjacentRange * p_.adjacentRange;
-    for (int i = 0; i < n; i++) {
-      float px = pts[i*4], py = pts[i*4+1], pz = pts[i*4+2], h = pts[i*4+3];
-      float dx = px - (float)vx_, dy = py - (float)vy_, dz = pz - (float)vz_;
-      if (dx*dx + dy*dy >= adjRangeSq) continue;
-      if (!((dz > p_.minRelZ && dz < p_.maxRelZ) || p_.useTerrainAnalysis)) continue;
-      float bx = dx * (float)cosYaw_ + dy * (float)sinYaw_;
-      float by = -dx * (float)sinYaw_ + dy * (float)cosYaw_;
-      plannerCloud_.push_back({bx, by, dz, h});
+    cloud_.clear();
+    cloud_.reserve(n);
+    float adjRangeSq = static_cast<float>(p_.adjacentRange * p_.adjacentRange);
+    float cosY = static_cast<float>(cosYaw_), sinY = static_cast<float>(sinYaw_);
+    float fx = static_cast<float>(vx_), fy = static_cast<float>(vy_), fz = static_cast<float>(vz_);
+    float minZ = static_cast<float>(p_.minRelZ), maxZ = static_cast<float>(p_.maxRelZ);
+    bool useTerrain = p_.useTerrainAnalysis;
+
+    // Two-pass: 1) gather dx/dy into temp SoA, 2) SIMD batch disSq + rotate
+    // For small clouds, scalar is fine. For large clouds, avoid AoS stride-4 penalty.
+    if (n >= 256 && useTerrain) {
+      // Phase 1: gather from AoS → SoA, apply range filter
+      bpcDx_.resize(n); bpcDy_.resize(n); bpcH_.resize(n);
+      int kept = 0;
+      for (int i = 0; i < n; i++) {
+        float dx = pts[i*4] - fx, dy = pts[i*4+1] - fy;
+        if (dx*dx + dy*dy >= adjRangeSq) continue;
+        bpcDx_[kept] = dx;
+        bpcDy_[kept] = dy;
+        bpcH_[kept] = pts[i*4+3];
+        kept++;
+      }
+      // Phase 2: SIMD batch rotation on the kept points
+      cloud_.x.resize(kept);
+      cloud_.y.resize(kept);
+      cloud_.h.resize(kept);
+      cloud_.size = kept;
+      simd::rotateCloud(bpcDx_.data(), bpcDy_.data(), cosY, sinY,
+                        cloud_.x.data(), cloud_.y.data(), kept);
+      std::memcpy(cloud_.h.data(), bpcH_.data(), kept * sizeof(float));
+    } else {
+      for (int i = 0; i < n; i++) {
+        float px = pts[i*4], py = pts[i*4+1], pz = pts[i*4+2], h = pts[i*4+3];
+        float dx = px - fx, dy = py - fy, dz = pz - fz;
+        if (dx*dx + dy*dy >= adjRangeSq) continue;
+        if (!((dz > minZ && dz < maxZ) || useTerrain)) continue;
+        float bx = dx * cosY + dy * sinY;
+        float by = -dx * sinY + dy * cosY;
+        cloud_.push(bx, by, h);
+      }
     }
   }
+
+  // Scratch buffers for buildPlannerCloud SIMD path
+  std::vector<float> bpcDx_, bpcDy_, bpcH_;
 
   int scoreAndSelect(double pathScale, double pathRange, double relGoalDis,
                      double joyDir, double joySpeed, int& slowDown) {
@@ -392,93 +461,169 @@ private:
     int totalPaths = kRotDirs * kPathNum;
     int totalGroups = kRotDirs * kGroupNum;
 
+    // Single memset pass: clear all scoring arrays at once
     std::memset(clearPathList_.data(), 0, sizeof(int) * totalPaths);
     std::memset(pathPenaltyList_.data(), 0, sizeof(float) * totalPaths);
     std::memset(clearPathPerGroupScore_.data(), 0, sizeof(double) * totalGroups);
     std::memset(clearPathPerGroupNum_.data(), 0, sizeof(int) * totalGroups);
     std::memset(pathPenaltyPerGroupScore_.data(), 0, sizeof(float) * totalGroups);
 
-    // Precompute direction validity
-    std::array<float, kRotDirs> angDiffList;
-    std::array<bool, kRotDirs> rotDirValid;
+    // Pre-filter valid rotation directions into compact array (no branch in hot loop)
+    nValidRotDirs_ = 0;
     for (int d = 0; d < kRotDirs; d++) {
-      float a = std::fabs((float)joyDir - (10.0f * d - 180.0f));
-      angDiffList[d] = (a > 180.0f) ? 360.0f - a : a;
-      float rotAngDeg = 10.0f * d - 180.0f;
+      float a = std::fabs(static_cast<float>(joyDir) - lut.rotAngDeg[d]);
+      if (a > 180.0f) a = 360.0f - a;
       float rotDeg = 10.0f * d;
-      bool skip = (angDiffList[d] > p_.dirThre && !p_.dirToVehicle) ||
-                  (std::fabs(rotAngDeg) > p_.dirThre && std::fabs(joyDir) <= 90.0 && p_.dirToVehicle) ||
+      bool skip = (a > p_.dirThre && !p_.dirToVehicle) ||
+                  (std::fabs(lut.rotAngDeg[d]) > p_.dirThre && std::fabs(joyDir) <= 90.0 && p_.dirToVehicle) ||
                   ((rotDeg > p_.dirThre && 360.0f - rotDeg > p_.dirThre) && std::fabs(joyDir) > 90.0 && p_.dirToVehicle);
-      rotDirValid[d] = !skip;
+      if (!skip) {
+        validRotDirs_[nValidRotDirs_++] = d;
+      }
     }
 
-    // Voxel grid constants
-    double invGS = 1.0 / 0.02;  // gridVoxelSize
-    double offXH = 3.2 + 0.02 * 0.5;
-    double offYH = 4.5 + 0.02 * 0.5;
-    double scaleA = 0.45 / 4.5;
-    double scaleB = 1.0 / 3.2;
-    double pathRangeScaleSq = (pathRange / pathScale) * (pathRange / pathScale);
-    double goalClearScaleSq = ((relGoalDis + p_.goalClearRange) / pathScale)
-                             * ((relGoalDis + p_.goalClearRange) / pathScale);
+    // Voxel grid constants (precomputed as float for inner loop)
+    float invPS = 1.0f / static_cast<float>(pathScale);
+    float invGS = 1.0f / 0.02f;
+    float offXH = 3.2f + 0.02f * 0.5f;
+    float offYH = 4.5f + 0.02f * 0.5f;
+    float scaleA = 0.45f / 4.5f;
+    float scaleB = 1.0f / 3.2f;
+    float pathRangeScaleSq = static_cast<float>((pathRange / pathScale) * (pathRange / pathScale));
+    float goalClearScaleSq = static_cast<float>(((relGoalDis + p_.goalClearRange) / pathScale)
+                             * ((relGoalDis + p_.goalClearRange) / pathScale));
+    float obsThre = static_cast<float>(p_.obstacleHeightThre);
+    float gndThre = static_cast<float>(p_.groundHeightThre);
+    bool useTerrain = p_.useTerrainAnalysis;
+    bool cropByGoal = p_.pathCropByGoal;
+    int pptThre = p_.pointPerPathThre;
 
-    // Score obstacle points against all paths in all rotations
-    int cloudSize = (int)plannerCloud_.size();
-    for (int i = 0; i < cloudSize; i++) {
-      float x = plannerCloud_[i].x / (float)pathScale;
-      float y = plannerCloud_[i].y / (float)pathScale;
-      float h = plannerCloud_[i].intensity;
-      float disSq = x*x + y*y;
+    // ── Obstacle scoring: ROTATION-MAJOR loop with SIMD batch rotation ──
+    int cloudSize = cloud_.size;
+    if (p_.checkObstacle && cloudSize > 0) {
+      const float* ch = cloud_.h.data();
 
-      if (disSq < pathRangeScaleSq && (disSq <= goalClearScaleSq || !p_.pathCropByGoal) && p_.checkObstacle) {
-        for (int d = 0; d < kRotDirs; d++) {
-          if (!rotDirValid[d]) continue;
-          float x2 = (float)lut.c[d] * x + (float)lut.s[d] * y;
-          float y2 = -(float)lut.s[d] * x + (float)lut.c[d] * y;
+      // Pre-scale cloud by invPS once (reused across all rotations)
+      scaledX_.resize(cloudSize);
+      scaledY_.resize(cloudSize);
+      disSqBuf_.resize(cloudSize);
+      {
+        const float* cx = cloud_.x.data();
+        const float* cy = cloud_.y.data();
+        float* sx = scaledX_.data();
+        float* sy = scaledY_.data();
+        for (int i = 0; i < cloudSize; i++) {
+          sx[i] = cx[i] * invPS;
+          sy[i] = cy[i] * invPS;
+        }
+        simd::distSqBatch(sx, sy, disSqBuf_.data(), cloudSize);
+      }
 
-          double sy = x2 * scaleB + scaleA * (3.2 - x2) * scaleB;
-          if (std::fabs(sy) < 1e-6) continue;
+      // Per-rotation scoring lambda (each rotation writes to non-overlapping
+      // clearPathList_[kPathNum*d..kPathNum*(d+1)], so parallel-safe)
+      const float* sxp = scaledX_.data();
+      const float* syp = scaledY_.data();
+      const float* dsqp = disSqBuf_.data();
+      const int* corrOff = corrOffset_.data();
+      const int* corrDat = corrData_.data();
+      int* clearArr = clearPathList_.data();
+      float* penArr = pathPenaltyList_.data();
+      int gvnx = gridVoxelNumX_, gvny = gridVoxelNumY_;
 
-          int indX = (int)((offXH - x2) * invGS);
-          int indY = (int)((offYH - y2 / sy) * invGS);
-          if (indX >= 0 && indX < gridVoxelNumX_ && indY >= 0 && indY < gridVoxelNumY_) {
-            int ind = gridVoxelNumY_ * indX + indY;
-            for (int pathID : correspondences_[ind]) {
-              int idx = kPathNum * d + pathID;
-              if (h > (float)p_.obstacleHeightThre || !p_.useTerrainAnalysis) {
-                clearPathList_[idx]++;
-              } else if (h > (float)p_.groundHeightThre) {
-                if (pathPenaltyList_[idx] < h) pathPenaltyList_[idx] = h;
-              }
+      auto scoreRotation = [&](int d, float* rxBuf, float* ryBuf) {
+        float cosD = static_cast<float>(lut.c[d]);
+        float sinD = static_cast<float>(lut.s[d]);
+        int base = kPathNum * d;
+
+        // SIMD batch rotation
+        simd::rotateCloud(sxp, syp, cosD, sinD, rxBuf, ryBuf, cloudSize);
+
+        // Voxel lookup (sequential, cache-friendly CSR)
+        for (int i = 0; i < cloudSize; i++) {
+          float disSq = dsqp[i];
+          if (disSq >= pathRangeScaleSq) continue;
+          if (cropByGoal && disSq > goalClearScaleSq) continue;
+
+          float x2 = rxBuf[i];
+          float y2 = ryBuf[i];
+          float sy = x2 * scaleB + scaleA * (3.2f - x2) * scaleB;
+          if (std::fabs(sy) < 1e-6f) continue;
+
+          int indX = static_cast<int>((offXH - x2) * invGS);
+          int indY = static_cast<int>((offYH - y2 / sy) * invGS);
+          if (indX < 0 || indX >= gvnx || indY < 0 || indY >= gvny) continue;
+
+          float h = ch[i];
+          int ind = gvny * indX + indY;
+          // Prefetch next iteration's CSR offset (reduces cache miss stalls)
+          #if defined(__GNUC__) || defined(__clang__)
+          if (i + 1 < cloudSize)
+            __builtin_prefetch(corrOff + ind + 2, 0, 1);
+          #endif
+          const int* pb = corrDat + corrOff[ind];
+          const int* pe = corrDat + corrOff[ind + 1];
+          for (const int* pp = pb; pp != pe; ++pp) {
+            int idx = base + *pp;
+            if (h > obsThre || !useTerrain) {
+              clearArr[idx]++;
+            } else if (h > gndThre) {
+              if (penArr[idx] < h) penArr[idx] = h;
             }
           }
+        }
+      };
+
+      // Parallel execution: each rotation has its own scratch buffers
+      if (nValidRotDirs_ >= 4 && cloudSize >= 100) {
+        // Allocate per-thread scratch (one pair per rotation)
+        parRotBufs_.resize(nValidRotDirs_ * 2 * cloudSize);
+        #pragma omp parallel for schedule(dynamic) if(nValidRotDirs_ >= 6)
+        for (int vi = 0; vi < nValidRotDirs_; vi++) {
+          float* rxBuf = parRotBufs_.data() + vi * 2 * cloudSize;
+          float* ryBuf = rxBuf + cloudSize;
+          scoreRotation(validRotDirs_[vi], rxBuf, ryBuf);
+        }
+      } else {
+        // Sequential: reuse single buffer pair
+        rotX_.resize(cloudSize);
+        rotY_.resize(cloudSize);
+        for (int vi = 0; vi < nValidRotDirs_; vi++) {
+          scoreRotation(validRotDirs_[vi], rotX_.data(), rotY_.data());
         }
       }
     }
 
-    // Aggregate into group scores
+    // ── Aggregate: nested loops (no division/modulo) + hoisted angDiffDeg ──
     PathScoreParams sp;
     sp.dirWeight = p_.dirWeight;
     sp.slopeWeight = p_.slopeWeight;
     sp.omniDirGoalThre = p_.omniDirGoalThre;
 
-    for (int i = 0; i < totalPaths; i++) {
-      int rotDir = i / kPathNum;
-      if (!rotDirValid[rotDir]) continue;
-      if (clearPathList_[i] >= p_.pointPerPathThre) continue;
+    for (int vi = 0; vi < nValidRotDirs_; vi++) {
+      int rotDir = validRotDirs_[vi];
+      int pathBase = kPathNum * rotDir;
+      int groupBase = kGroupNum * rotDir;
+      double rotW4 = lut.rotDirW4[rotDir];
+      float rotAng = lut.rotAngDeg[rotDir];
 
-      int pathIdx = i % kPathNum;
-      float rotAngDeg = 10.0f * rotDir - 180.0f;
-      double dirDiff = angDiffDeg(joyDir, endDirPathList_[pathIdx] + rotAngDeg);
-      double rotDirW = computeRotDirW(rotDir);
-      double groupDirW = computeGroupDirW(pathList_[pathIdx]);
-      double score = scorePath(dirDiff, rotDirW, groupDirW,
-                               pathPenaltyList_[i], relGoalDis, sp);
-      if (score > 0) {
-        int groupIdx = kGroupNum * rotDir + pathList_[pathIdx];
-        clearPathPerGroupScore_[groupIdx] += score;
-        clearPathPerGroupNum_[groupIdx]++;
-        pathPenaltyPerGroupScore_[groupIdx] += pathPenaltyList_[i];
+      for (int pathIdx = 0; pathIdx < kPathNum; pathIdx++) {
+        int flatIdx = pathBase + pathIdx;
+        if (clearPathList_[flatIdx] >= pptThre) continue;
+
+        // angDiffDeg hoisted: only rotAng changes per outer loop
+        double dirDiff = angDiffDeg(joyDir,
+                                    static_cast<double>(endDirPathList_[pathIdx]) + rotAng);
+        int grp = pathList_[pathIdx];
+        double grpW2 = lut.groupDirW2[grp];
+        double score = scorePathFast(dirDiff, rotW4, grpW2,
+                                     pathPenaltyList_[flatIdx], relGoalDis,
+                                     sp, lut);
+        if (score > 0) {
+          int groupIdx = groupBase + grp;
+          clearPathPerGroupScore_[groupIdx] += score;
+          clearPathPerGroupNum_[groupIdx]++;
+          pathPenaltyPerGroupScore_[groupIdx] += pathPenaltyList_[flatIdx];
+        }
       }
     }
 
@@ -564,15 +709,16 @@ private:
       while (relAngle < -M_PI) relAngle += 2.0 * M_PI;
       double turnDir = (relAngle >= 0) ? 1.0 : -1.0;
 
-      // Check rotation safety
+      // Check rotation safety (using SoA cloud)
       bool safe = true;
-      for (auto& pt : plannerCloud_) {
-        double dist = std::hypot(pt.x, pt.y);
+      for (int ci = 0; ci < cloud_.size; ci++) {
+        float px = cloud_.x[ci], py = cloud_.y[ci];
+        double dist = std::hypot(px, py);
         if (dist < 0.9 && dist > 0.1) {
-          double ptAngle = std::atan2(pt.y, pt.x);
+          double ptAngle = std::atan2(py, px);
           bool inSweep = turnDir > 0 ? (ptAngle > 0 && ptAngle < 1.5)
                                      : (ptAngle < 0 && ptAngle > -1.5);
-          if (inSweep && (pt.intensity > p_.obstacleHeightThre * 0.5 || !p_.useTerrainAnalysis)) {
+          if (inSweep && (cloud_.h[ci] > p_.obstacleHeightThre * 0.5 || !p_.useTerrainAnalysis)) {
             safe = false;
             break;
           }
@@ -586,9 +732,10 @@ private:
     } else if (recoveryState_ == 2) {
       // Backup: check rear safety
       bool safe = true;
-      for (auto& pt : plannerCloud_) {
-        if (pt.x < -0.1f && pt.x > -1.2f && std::fabs(pt.y) < 0.35f) {
-          if (pt.intensity > p_.obstacleHeightThre * 0.5 || !p_.useTerrainAnalysis) {
+      for (int ci = 0; ci < cloud_.size; ci++) {
+        float px = cloud_.x[ci];
+        if (px < -0.1f && px > -1.2f && std::fabs(cloud_.y[ci]) < 0.35f) {
+          if (cloud_.h[ci] > p_.obstacleHeightThre * 0.5 || !p_.useTerrainAnalysis) {
             safe = false; break;
           }
         }

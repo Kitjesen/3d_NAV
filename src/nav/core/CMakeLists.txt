@@ -8,9 +8,30 @@ if(MSVC)
   add_compile_options(/utf-8)
 endif()
 
+# ── Performance flags (all non-MSVC platforms including aarch64) ──
+if(NOT MSVC)
+  add_compile_options(-ffast-math -funroll-loops)
+  include(CheckIPOSupported)
+  check_ipo_supported(RESULT ipo_supported)
+  if(ipo_supported)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+  endif()
+endif()
+
+# ── Acceleration libraries (used by both ROS2 and standalone) ──
+include(FetchContent)
+
+FetchContent_Declare(xsimd
+  GIT_REPOSITORY https://github.com/xtensor-stack/xsimd.git
+  GIT_TAG        13.0.0)
+FetchContent_MakeAvailable(xsimd)
+
+# OpenMP (optional, for terrain/scoring parallelization)
+find_package(OpenMP QUIET)
+
 # ── 双模式: ament_cmake (ROS2) 或 standalone (Windows/CI) ──
 if(DEFINED ENV{AMENT_PREFIX_PATH})
-  # ── ROS2 模式 ──
+  # ── ROS2 模式 (S100P / sunrise aarch64) ──
   find_package(ament_cmake REQUIRED)
 
   # header-only library
@@ -18,6 +39,10 @@ if(DEFINED ENV{AMENT_PREFIX_PATH})
   target_include_directories(${PROJECT_NAME} INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
+  target_link_libraries(${PROJECT_NAME} INTERFACE xsimd)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(${PROJECT_NAME} INTERFACE OpenMP::OpenMP_CXX)
+  endif()
 
   ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET)
   install(DIRECTORY include/ DESTINATION include)
@@ -31,33 +56,44 @@ if(DEFINED ENV{AMENT_PREFIX_PATH})
   # gtest
   if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
-    ament_add_gtest(test_path_follower_core test/test_path_follower_core.cpp)
-    target_include_directories(test_path_follower_core PRIVATE include)
-    ament_add_gtest(test_pct_adapter_core test/test_pct_adapter_core.cpp)
-    target_include_directories(test_pct_adapter_core PRIVATE include)
-    ament_add_gtest(test_local_planner_core test/test_local_planner_core.cpp)
-    target_include_directories(test_local_planner_core PRIVATE include)
-    ament_add_gtest(test_param_sensitivity test/test_param_sensitivity.cpp)
-    target_include_directories(test_param_sensitivity PRIVATE include)
-    ament_add_gtest(test_path_edge_cases test/test_path_edge_cases.cpp)
-    target_include_directories(test_path_edge_cases PRIVATE include)
-    ament_add_gtest(test_benchmark test/test_benchmark.cpp)
-    target_include_directories(test_benchmark PRIVATE include)
-    ament_add_gtest(test_validation test/test_validation.cpp)
-    target_include_directories(test_validation PRIVATE include)
+
+    # Helper: add test with xsimd + OpenMP
+    macro(nav_core_add_test target src)
+      ament_add_gtest(${target} ${src})
+      target_include_directories(${target} PRIVATE include)
+      target_link_libraries(${target} xsimd)
+      if(OpenMP_CXX_FOUND)
+        target_link_libraries(${target} OpenMP::OpenMP_CXX)
+      endif()
+    endmacro()
+
+    nav_core_add_test(test_path_follower_core test/test_path_follower_core.cpp)
+    nav_core_add_test(test_pct_adapter_core test/test_pct_adapter_core.cpp)
+    nav_core_add_test(test_local_planner_core test/test_local_planner_core.cpp)
+    nav_core_add_test(test_param_sensitivity test/test_param_sensitivity.cpp)
+    nav_core_add_test(test_path_edge_cases test/test_path_edge_cases.cpp)
+    nav_core_add_test(test_benchmark test/test_benchmark.cpp)
+    nav_core_add_test(test_validation test/test_validation.cpp)
   endif()
 
   ament_package()
 
 else()
-  # ── Standalone 模式 (Windows / CI) ──
-  include(FetchContent)
+  # ── Standalone 模式 (Windows / CI / 本地开发) ──
 
   FetchContent_Declare(googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
     GIT_TAG        v1.14.0)
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-  FetchContent_MakeAvailable(googletest)
+
+  FetchContent_Declare(taskflow
+    GIT_REPOSITORY https://github.com/taskflow/taskflow.git
+    GIT_TAG        v3.8.0)
+
+  FetchContent_MakeAvailable(googletest taskflow)
+
+  # OpenMP (optional, for baseline comparison)
+  find_package(OpenMP QUIET)
 
   enable_testing()
   include(GoogleTest)
@@ -74,7 +110,7 @@ else()
 
   add_executable(test_local_planner_core test/test_local_planner_core.cpp)
   target_include_directories(test_local_planner_core PRIVATE include)
-  target_link_libraries(test_local_planner_core GTest::gtest_main)
+  target_link_libraries(test_local_planner_core GTest::gtest_main xsimd)
   gtest_discover_tests(test_local_planner_core)
 
   add_executable(test_param_sensitivity test/test_param_sensitivity.cpp)
@@ -89,7 +125,10 @@ else()
 
   add_executable(test_benchmark test/test_benchmark.cpp)
   target_include_directories(test_benchmark PRIVATE include)
-  target_link_libraries(test_benchmark GTest::gtest_main)
+  target_link_libraries(test_benchmark GTest::gtest_main xsimd Taskflow)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(test_benchmark OpenMP::OpenMP_CXX)
+  endif()
   gtest_discover_tests(test_benchmark)
 
   add_executable(test_validation test/test_validation.cpp)

@@ -26,6 +26,10 @@
 #include <algorithm>
 #include <cstring>
 
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -158,18 +162,42 @@ public:
 
     // 1. Crop points by height + distance
     cropped_.clear();
-    for (int i = 0; i < n_points; i++) {
-      float px = cloud_xyzi[i*4 + 0];
-      float py = cloud_xyzi[i*4 + 1];
-      float pz = cloud_xyzi[i*4 + 2];
-      float rx = px - (float)vx_;
-      float ry = py - (float)vy_;
-      float dis = std::hypot(rx, ry);
-      float relz = pz - (float)vz_;
-      if (relz > p_.minRelZ - p_.disRatioZ * dis &&
-          relz < p_.maxRelZ + p_.disRatioZ * dis &&
-          dis < p_.terrainVoxelSize * (p_.terrainVoxelHalfWidth + 1)) {
-        cropped_.push_back({px, py, pz, (float)relTime});
+    float fvx = static_cast<float>(vx_), fvy = static_cast<float>(vy_), fvz = static_cast<float>(vz_);
+    float maxDis = static_cast<float>(p_.terrainVoxelSize * (p_.terrainVoxelHalfWidth + 1));
+    float maxDisSq = maxDis * maxDis;
+    float fRelTime = static_cast<float>(relTime);
+    float minRelZ = static_cast<float>(p_.minRelZ);
+    float maxRelZ = static_cast<float>(p_.maxRelZ);
+    float disRatioZ = static_cast<float>(p_.disRatioZ);
+
+    // Quick reject: if disRatioZ==0, avoid sqrt entirely
+    if (disRatioZ == 0.0f) {
+      for (int i = 0; i < n_points; i++) {
+        float px = cloud_xyzi[i*4 + 0];
+        float py = cloud_xyzi[i*4 + 1];
+        float pz = cloud_xyzi[i*4 + 2];
+        float rx = px - fvx, ry = py - fvy;
+        if (rx * rx + ry * ry >= maxDisSq) continue;
+        float relz = pz - fvz;
+        if (relz > minRelZ && relz < maxRelZ) {
+          cropped_.push_back({px, py, pz, fRelTime});
+        }
+      }
+    } else {
+      // Use fast inverse-sqrt approximation to avoid per-point sqrt
+      for (int i = 0; i < n_points; i++) {
+        float px = cloud_xyzi[i*4 + 0];
+        float py = cloud_xyzi[i*4 + 1];
+        float pz = cloud_xyzi[i*4 + 2];
+        float rx = px - fvx, ry = py - fvy;
+        float disSq = rx * rx + ry * ry;
+        if (disSq >= maxDisSq) continue;
+        float dis = std::sqrt(disSq);
+        float relz = pz - fvz;
+        float margin = disRatioZ * dis;
+        if (relz > minRelZ - margin && relz < maxRelZ + margin) {
+          cropped_.push_back({px, py, pz, fRelTime});
+        }
       }
     }
 
@@ -318,22 +346,35 @@ private:
   }
 
   void filterVoxels(double relTime) {
-    // Simple voxel-grid downsample by keeping one point per scanVoxelSize cube
-    // (PCL-free: we just thin by distance threshold)
+    // Hoist constants outside the loop
+    float fvx = static_cast<float>(vx_), fvy = static_cast<float>(vy_), fvz = static_cast<float>(vz_);
+    float noDecayDisSq = static_cast<float>(p_.noDecayDis * p_.noDecayDis);
+    float decayTime = static_cast<float>(p_.decayTime);
+    float fRelTime = static_cast<float>(relTime);
+    float minRelZ = static_cast<float>(p_.minRelZ);
+    float maxRelZ = static_cast<float>(p_.maxRelZ);
+    float disRatioZ = static_cast<float>(p_.disRatioZ);
+    int pointThre = p_.voxelPointUpdateThre;
+    double timeThre = p_.voxelTimeUpdateThre;
+
+    // Each voxel is independent — parallel-safe (no shared writes)
+    #pragma omp parallel for schedule(dynamic, 16) if(terrainVoxelNum_ >= 100)
     for (int idx = 0; idx < terrainVoxelNum_; idx++) {
-      if (terrainVoxelUpdateNum_[idx] < p_.voxelPointUpdateThre &&
-          relTime - terrainVoxelUpdateTime_[idx] < p_.voxelTimeUpdateThre)
+      if (terrainVoxelUpdateNum_[idx] < pointThre &&
+          relTime - terrainVoxelUpdateTime_[idx] < timeThre)
         continue;
 
       auto& vc = terrainVoxelCloud_[idx];
       std::vector<Point4> filtered;
       filtered.reserve(vc.size() / 2);
       for (auto& pt : vc) {
-        float dis = std::hypot(pt.x - (float)vx_, pt.y - (float)vy_);
-        float relz = pt.z - (float)vz_;
-        if (relz > p_.minRelZ - p_.disRatioZ * dis &&
-            relz < p_.maxRelZ + p_.disRatioZ * dis &&
-            (relTime - pt.t < p_.decayTime || dis < p_.noDecayDis)) {
+        float dx = pt.x - fvx, dy = pt.y - fvy;
+        float disSq = dx * dx + dy * dy;
+        float dis = std::sqrt(disSq);
+        float relz = pt.z - fvz;
+        if (relz > minRelZ - disRatioZ * dis &&
+            relz < maxRelZ + disRatioZ * dis &&
+            (fRelTime - pt.t < decayTime || disSq < noDecayDisSq)) {
           filtered.push_back(pt);
         }
       }
@@ -370,17 +411,29 @@ private:
     }
 
     if (p_.useSorting) {
+      float quantileZ = static_cast<float>(p_.quantileZ);
+      bool limitLift = p_.limitGroundLift;
+      float maxLift = static_cast<float>(p_.maxGroundLift);
+      // 2601 voxels, each nth_element is independent — embarrassingly parallel
+      #pragma omp parallel for schedule(dynamic, 64) if(planarVoxelNum_ >= 256)
       for (int i = 0; i < planarVoxelNum_; i++) {
         auto& elev = planarPointElev_[i];
         if (elev.empty()) continue;
-        std::sort(elev.begin(), elev.end());
-        int qid = std::clamp((int)(p_.quantileZ * (int)elev.size()), 0, (int)elev.size() - 1);
-        if (p_.limitGroundLift && elev[qid] > elev[0] + p_.maxGroundLift)
-          planarVoxelElev_[i] = elev[0] + (float)p_.maxGroundLift;
-        else
+        int qid = std::clamp(static_cast<int>(quantileZ * elev.size()),
+                             0, static_cast<int>(elev.size()) - 1);
+        std::nth_element(elev.begin(), elev.begin() + qid, elev.end());
+        if (limitLift) {
+          float minVal = *std::min_element(elev.begin(), elev.begin() + qid + 1);
+          if (elev[qid] > minVal + maxLift)
+            planarVoxelElev_[i] = minVal + maxLift;
+          else
+            planarVoxelElev_[i] = elev[qid];
+        } else {
           planarVoxelElev_[i] = elev[qid];
+        }
       }
     } else {
+      #pragma omp parallel for schedule(dynamic, 64) if(planarVoxelNum_ >= 256)
       for (int i = 0; i < planarVoxelNum_; i++) {
         auto& elev = planarPointElev_[i];
         if (!elev.empty())

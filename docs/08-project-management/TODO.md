@@ -28,6 +28,8 @@
 ### 构建 & 测试
 - 🔲 colcon 全量构建验证（ROS 2 端 17 个包 + proto 生成）
 - 🔲 端到端集成测试（gRPC 通道 → 导航节点 → Flutter App 闭环）
+- 🔲 sunrise 实机标定验证（6 步 SOP 跑通 + verify.py 全绿）
+- 🔲 sunrise 实机 C++ 性能基准 (ARM NEON xsimd + OpenMP 实际收益测量)
 
 ### 字体跨平台
 - ✅ Windows: Microsoft YaHei（微软雅黑）
@@ -49,6 +51,9 @@
 ### 导航 & 感知
 - 🔲 定位质量阈值标定（ICP fitness score → 速度映射曲线实测调优）
 - 🔲 围栏编辑 UI（地图上拖拽设置电子围栏多边形）
+- 🔲 GenZ-ICP TransformPoints SIMD 批量化 (SE3 变换加速)
+- 🔲 ikd-Tree 节点内存池 (减少 malloc 碎片，稳定延迟)
+- 🔲 terrainAnalysis.cpp ROS2 节点迁移到 nav_core TerrainAnalysisCore (消除重复代码)
 
 ### App 体验
 - ✅ 运行参数页：参数搜索功能（130+ 参数快速定位）
@@ -93,8 +98,11 @@
    **已完成** — 全局切换为 Microsoft YaHei（微软雅黑），清晰易读。
 
 7. ~~局部路径规划器性能优化~~
-   **已完成** — 20 项 CPU 热路径优化 (O1-O14, P1-P6)，RotLUT + 平方距离 + memset +
-   rotDirValid 预计算等，100Hz 主循环显著提速，55 个算法单元测试 + 性能验证套件。
+   **已完成** — 两阶段优化：
+   - Phase 1 (v1.7): 20 项热路径优化 (O1-O14, P1-P6)
+   - Phase 2 (v2.1): SoA 内存布局 + CSR 稀疏格式 + xsimd NEON/AVX + OpenMP 并行 +
+     LUT scorePathFast (2.08x) + nth_element + sincos 融合 + LTO + fast-math。
+     96 C++ tests + 12 benchmarks 全通过。CMake 修复确保 aarch64 ROS2 部署路径生效。
 
 8. ~~全 App 中英双语切换~~
    **已完成** — 15 个页面全部双语化，Android/iOS/Linux 字体回退链，侧边栏/设置双入口。
@@ -117,3 +125,11 @@
 13. ~~深色模式审查~~
     **已完成** — 修复 home_screen.dart 3 处硬编码浅色：运行状态文字 → AppColors.success，
     MANUAL 徽章 → isDark 自适应（背景/文字），KPI 图标背景 → 深色下降至 20% 透明度。
+
+14. ~~Enterprise Hardening — 测试覆盖~~
+    **已完成** — 新增 278 Python tests (memory 103 + semantic 83 + nav 92)，总计 1226。
+    Silent exception 清理 (3 文件)，health() 方法补全 (4 模块)。
+
+15. ~~传感器标定文档完善~~
+    **已完成** — CLAUDE.md 新增标定工具箱章节 (SOP 6 步 + 参数输出映射 + 运行时校验说明)，
+    REPO_LAYOUT.md 新增 calibration/ 目录树。
