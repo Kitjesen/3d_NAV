@@ -233,6 +233,7 @@ def full_stack_blueprint(
     _w("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
     _w("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
     _w("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
+    _w("LocalPlannerModule", "local_path", "SafetyRingModule", "path")
     _w("PathFollowerModule", "cmd_vel", _drv, "cmd_vel")
 
     # Visual servo — dual channel

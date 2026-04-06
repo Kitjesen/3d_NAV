@@ -349,6 +349,10 @@ class LocalPlannerModule(Module, layer=2):
         # nanobind state
         self._core = None  # _nav_core.LocalPlannerCore
 
+        # One-shot warning flags
+        self._warned_no_core: bool = False
+        self._warned_no_path_data: bool = False
+
     def setup(self):
         self.odometry.subscribe(self._on_odom)
         self.terrain_map.subscribe(self._on_terrain)
@@ -485,8 +489,16 @@ class LocalPlannerModule(Module, layer=2):
         self._robot_pos = np.array([odom.x, odom.y, getattr(odom, "z", 0.0)])
         self._robot_yaw = getattr(odom, "yaw", 0.0)
 
-        if self._backend == "nanobind" and self._core is not None and self._latest_waypoint is not None:
-            self._run_nanobind(odom.ts if hasattr(odom, "ts") else time.time())
+        if self._backend == "nanobind" and self._latest_waypoint is not None:
+            if self._core is not None:
+                self._run_nanobind(odom.ts if hasattr(odom, "ts") else time.time())
+            else:
+                if not self._warned_no_core:
+                    logger.warning(
+                        "LocalPlannerModule: nanobind _core is None — "
+                        "publishing straight-line fallback path")
+                    self._warned_no_core = True
+                self._publish_straight_line()
         elif self._backend == "cmu_py" and self._latest_waypoint is not None:
             now = time.time()
             if now - self._last_cmu_py_time >= 1.0:
@@ -568,7 +580,13 @@ class LocalPlannerModule(Module, layer=2):
     def _run_nanobind(self, timestamp: float):
         """Run C++ LocalPlannerCore.plan() and publish result."""
         wp = self._latest_waypoint
-        if wp is None or self._core is None:
+        if wp is None:
+            return
+        if self._core is None:
+            if not self._warned_no_core:
+                logger.warning("LocalPlannerModule: _core lost at runtime, publishing fallback")
+                self._warned_no_core = True
+            self._publish_straight_line()
             return
 
         self._core.set_vehicle(
@@ -598,6 +616,38 @@ class LocalPlannerModule(Module, layer=2):
                 ))
             self.local_path.publish(Path(poses=poses))
 
+    def _publish_straight_line(self) -> None:
+        """Fallback: publish a straight-line path toward the current waypoint.
+
+        Used when the planning backend is unavailable (_core None, _path_data
+        None) so PathFollowerModule still gets *some* path rather than nothing.
+        No obstacle avoidance — just go toward the goal.
+        """
+        wp = self._latest_waypoint
+        if wp is None:
+            return
+        gx = wp.pose.position.x
+        gy = wp.pose.position.y
+        gz = getattr(wp.pose.position, "z", 0.0)
+        rx, ry, rz = self._robot_pos
+
+        # Interpolate a few points along the straight line
+        dist = math.sqrt((gx - rx) ** 2 + (gy - ry) ** 2)
+        n_pts = max(2, int(dist / 0.5))
+        poses = []
+        for i in range(n_pts):
+            t = (i + 1) / n_pts
+            poses.append(PoseStamped(
+                pose=Pose(
+                    position=Vector3(rx + t * (gx - rx),
+                                     ry + t * (gy - ry),
+                                     rz + t * (gz - rz)),
+                    orientation=Quaternion(0, 0, 0, 1),
+                ),
+                frame_id="map",
+            ))
+        self.local_path.publish(Path(poses=poses))
+
     # ------------------------------------------------------------------ #
     # CMU Python scorer                                                    #
     # ------------------------------------------------------------------ #
@@ -605,7 +655,15 @@ class LocalPlannerModule(Module, layer=2):
     def _run_cmu_py(self):
         """Run the CMU local planner scoring algorithm and publish best path."""
         wp = self._latest_waypoint
-        if wp is None or self._path_data is None:
+        if wp is None:
+            return
+        if self._path_data is None:
+            if not self._warned_no_path_data:
+                logger.warning(
+                    "LocalPlannerModule [cmu_py]: _path_data is None — "
+                    "publishing straight-line fallback")
+                self._warned_no_path_data = True
+            self._publish_straight_line()
             return
 
         pd = self._path_data
