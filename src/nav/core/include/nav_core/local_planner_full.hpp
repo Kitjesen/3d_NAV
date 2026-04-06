@@ -22,6 +22,7 @@
 
 #include "nav_core/types.hpp"
 #include "nav_core/local_planner_core.hpp"
+#include "nav_core/simd_accel.hpp"
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -258,6 +259,10 @@ private:
   std::array<int, kRotDirs> validRotDirs_{};
   int nValidRotDirs_ = 0;
 
+  // SIMD scratch buffers (reused across frames, no per-frame alloc)
+  std::vector<float> scaledX_, scaledY_, disSqBuf_;
+  std::vector<float> rotX_, rotY_;
+
   // Scoring arrays
   std::vector<int>   clearPathList_;
   std::vector<float> pathPenaltyList_;
@@ -445,31 +450,52 @@ private:
     bool cropByGoal = p_.pathCropByGoal;
     int pptThre = p_.pointPerPathThre;
 
-    // ── Obstacle scoring: ROTATION-MAJOR loop order ──
-    // Outer: rotation direction → inner: all cloud points
-    // Cache benefit: clearPathList_[kPathNum*d + pathID] has sequential d access
+    // ── Obstacle scoring: ROTATION-MAJOR loop with SIMD batch rotation ──
     int cloudSize = cloud_.size;
     if (p_.checkObstacle && cloudSize > 0) {
-      // Pre-scale cloud points (avoid per-rotation division)
       const float* cx = cloud_.x.data();
       const float* cy = cloud_.y.data();
       const float* ch = cloud_.h.data();
+
+      // Pre-scale cloud by invPS once (reused across all rotations)
+      scaledX_.resize(cloudSize);
+      scaledY_.resize(cloudSize);
+      disSqBuf_.resize(cloudSize);
+      {
+        float* sx = scaledX_.data();
+        float* sy = scaledY_.data();
+        // Batch scale
+        for (int i = 0; i < cloudSize; i++) {
+          sx[i] = cx[i] * invPS;
+          sy[i] = cy[i] * invPS;
+        }
+        // Batch squared distance (SIMD)
+        simd::distSqBatch(sx, sy, disSqBuf_.data(), cloudSize);
+      }
+
+      // Scratch buffers for SIMD-rotated coordinates
+      rotX_.resize(cloudSize);
+      rotY_.resize(cloudSize);
 
       for (int vi = 0; vi < nValidRotDirs_; vi++) {
         int d = validRotDirs_[vi];
         float cosD = static_cast<float>(lut.c[d]);
         float sinD = static_cast<float>(lut.s[d]);
-        int base = kPathNum * d;  // base index for this rotation
+        int base = kPathNum * d;
 
+        // SIMD batch rotation: transform entire cloud for this direction
+        simd::rotateCloud(scaledX_.data(), scaledY_.data(),
+                          cosD, sinD,
+                          rotX_.data(), rotY_.data(), cloudSize);
+
+        // Voxel lookup on pre-rotated points (sequential, cache-friendly)
         for (int i = 0; i < cloudSize; i++) {
-          float x = cx[i] * invPS;
-          float y = cy[i] * invPS;
-          float disSq = x * x + y * y;
+          float disSq = disSqBuf_[i];
           if (disSq >= pathRangeScaleSq) continue;
           if (cropByGoal && disSq > goalClearScaleSq) continue;
 
-          float x2 = cosD * x + sinD * y;
-          float y2 = -sinD * x + cosD * y;
+          float x2 = rotX_[i];
+          float y2 = rotY_[i];
 
           float sy = x2 * scaleB + scaleA * (3.2f - x2) * scaleB;
           if (std::fabs(sy) < 1e-6f) continue;

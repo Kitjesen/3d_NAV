@@ -15,6 +15,7 @@
 #include "nav_core/local_planner_full.hpp"
 #include "nav_core/terrain_core.hpp"
 #include "nav_core/pct_adapter_core.hpp"
+#include "nav_core/simd_accel.hpp"
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -304,4 +305,146 @@ TEST(Benchmark, TerrainAnalysis) {
 
   EXPECT_LT(elapsed_us / 1000.0, 5000.0)  // 5s for 100 iterations
       << "Terrain should process 2000 pts in reasonable time";
+}
+
+// ═══════════════════════════════════════════════════
+//  SIMD vs Scalar: 2D Rotation Benchmark
+// ═══════════════════════════════════════════════════
+
+// Prevent compiler from optimizing away the result
+static void doNotOptimize(const void* p) {
+  asm volatile("" : : "r"(p) : "memory");
+}
+
+TEST(Benchmark, SimdRotation) {
+  constexpr int N = 1000;
+  constexpr int kReps = 10000;
+
+  std::mt19937 rng(99);
+  std::uniform_real_distribution<float> dist(-3.0f, 3.0f);
+
+  std::vector<float> cx(N), cy(N), ox(N), oy(N);
+  for (int i = 0; i < N; i++) { cx[i] = dist(rng); cy[i] = dist(rng); }
+
+  float cosD = 0.866f, sinD = 0.5f;  // 30 degrees
+
+  // Scalar baseline
+  auto t0 = std::chrono::high_resolution_clock::now();
+  for (int r = 0; r < kReps; r++) {
+    for (int i = 0; i < N; i++) {
+      ox[i] = cosD * cx[i] + sinD * cy[i];
+      oy[i] = -sinD * cx[i] + cosD * cy[i];
+    }
+    doNotOptimize(ox.data());
+    doNotOptimize(oy.data());
+  }
+  auto t1 = std::chrono::high_resolution_clock::now();
+
+  // SIMD (xsimd via simd::rotateCloud)
+  for (int r = 0; r < kReps; r++) {
+    nav_core::simd::rotateCloud(cx.data(), cy.data(), cosD, sinD,
+                                ox.data(), oy.data(), N);
+    doNotOptimize(ox.data());
+    doNotOptimize(oy.data());
+  }
+  auto t2 = std::chrono::high_resolution_clock::now();
+
+  auto scalar_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  auto simd_us   = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
+  double speedup = (simd_us > 0) ? static_cast<double>(scalar_us) / simd_us : 999.0;
+
+  std::printf("[BENCHMARK] Rotation %d pts x %d reps:\n", N, kReps);
+  std::printf("  Scalar: %ld us (%.2f ns/pt)\n", scalar_us,
+              1000.0 * scalar_us / (N * kReps));
+  std::printf("  SIMD:   %ld us (%.2f ns/pt)\n", simd_us,
+              1000.0 * simd_us / (N * kReps));
+  std::printf("  Speedup: %.2fx\n", speedup);
+#if NAV_CORE_HAS_XSIMD
+  std::printf("  xsimd ENABLED (batch width = %zu floats)\n",
+              nav_core::simd::kFloatWidth);
+#else
+  std::printf("  xsimd DISABLED (scalar fallback)\n");
+#endif
+}
+
+// ═══════════════════════════════════════════════════
+//  SIMD Squared Distance Benchmark
+// ═══════════════════════════════════════════════════
+
+TEST(Benchmark, SimdDistSq) {
+  constexpr int N = 1000;
+  constexpr int kReps = 10000;
+
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<float> dist(-5.0f, 5.0f);
+
+  std::vector<float> x(N), y(N), dsq(N);
+  for (int i = 0; i < N; i++) { x[i] = dist(rng); y[i] = dist(rng); }
+
+  // Scalar
+  auto t0 = std::chrono::high_resolution_clock::now();
+  for (int r = 0; r < kReps; r++) {
+    for (int i = 0; i < N; i++)
+      dsq[i] = x[i] * x[i] + y[i] * y[i];
+    doNotOptimize(dsq.data());
+  }
+  auto t1 = std::chrono::high_resolution_clock::now();
+
+  // SIMD
+  for (int r = 0; r < kReps; r++) {
+    nav_core::simd::distSqBatch(x.data(), y.data(), dsq.data(), N);
+    doNotOptimize(dsq.data());
+  }
+  auto t2 = std::chrono::high_resolution_clock::now();
+
+  auto scalar_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  auto simd_us   = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
+  double speedup = (simd_us > 0) ? static_cast<double>(scalar_us) / simd_us : 999.0;
+
+  std::printf("[BENCHMARK] DistSq %d pts x %d reps:\n", N, kReps);
+  std::printf("  Scalar: %ld us (%.2f ns/pt)\n", scalar_us,
+              1000.0 * scalar_us / (N * kReps));
+  std::printf("  SIMD:   %ld us (%.2f ns/pt)\n", simd_us,
+              1000.0 * simd_us / (N * kReps));
+  std::printf("  Speedup: %.2fx\n", speedup);
+}
+
+// ═══════════════════════════════════════════════════
+//  SIMD Correctness Check
+// ═══════════════════════════════════════════════════
+
+TEST(Benchmark, SimdCorrectness) {
+  constexpr int N = 128;
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<float> dist(-3.0f, 3.0f);
+
+  std::vector<float> cx(N), cy(N);
+  for (int i = 0; i < N; i++) { cx[i] = dist(rng); cy[i] = dist(rng); }
+
+  float cosD = 0.6f, sinD = 0.8f;
+
+  // Scalar reference
+  std::vector<float> sx(N), sy(N);
+  for (int i = 0; i < N; i++) {
+    sx[i] = cosD * cx[i] + sinD * cy[i];
+    sy[i] = -sinD * cx[i] + cosD * cy[i];
+  }
+
+  // SIMD
+  std::vector<float> ox(N), oy(N);
+  nav_core::simd::rotateCloud(cx.data(), cy.data(), cosD, sinD,
+                              ox.data(), oy.data(), N);
+
+  for (int i = 0; i < N; i++) {
+    EXPECT_NEAR(ox[i], sx[i], 1e-5f) << "x2 mismatch at " << i;
+    EXPECT_NEAR(oy[i], sy[i], 1e-5f) << "y2 mismatch at " << i;
+  }
+
+  // DistSq
+  std::vector<float> dsq_ref(N), dsq_simd(N);
+  for (int i = 0; i < N; i++)
+    dsq_ref[i] = cx[i] * cx[i] + cy[i] * cy[i];
+  nav_core::simd::distSqBatch(cx.data(), cy.data(), dsq_simd.data(), N);
+  for (int i = 0; i < N; i++)
+    EXPECT_NEAR(dsq_simd[i], dsq_ref[i], 1e-5f) << "dsq mismatch at " << i;
 }

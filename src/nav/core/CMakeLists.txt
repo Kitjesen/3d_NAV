@@ -57,7 +57,19 @@ else()
     GIT_REPOSITORY https://github.com/google/googletest.git
     GIT_TAG        v1.14.0)
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-  FetchContent_MakeAvailable(googletest)
+
+  # ── Acceleration libraries (header-only) ──
+  FetchContent_Declare(xsimd
+    GIT_REPOSITORY https://github.com/xtensor-stack/xsimd.git
+    GIT_TAG        13.0.0)
+  FetchContent_Declare(taskflow
+    GIT_REPOSITORY https://github.com/taskflow/taskflow.git
+    GIT_TAG        v3.8.0)
+
+  FetchContent_MakeAvailable(googletest xsimd taskflow)
+
+  # OpenMP (optional, for baseline comparison)
+  find_package(OpenMP QUIET)
 
   enable_testing()
   include(GoogleTest)
@@ -74,7 +86,7 @@ else()
 
   add_executable(test_local_planner_core test/test_local_planner_core.cpp)
   target_include_directories(test_local_planner_core PRIVATE include)
-  target_link_libraries(test_local_planner_core GTest::gtest_main)
+  target_link_libraries(test_local_planner_core GTest::gtest_main xsimd)
   gtest_discover_tests(test_local_planner_core)
 
   add_executable(test_param_sensitivity test/test_param_sensitivity.cpp)
@@ -89,7 +101,10 @@ else()
 
   add_executable(test_benchmark test/test_benchmark.cpp)
   target_include_directories(test_benchmark PRIVATE include)
-  target_link_libraries(test_benchmark GTest::gtest_main)
+  target_link_libraries(test_benchmark GTest::gtest_main xsimd Taskflow)
+  if(OpenMP_CXX_FOUND)
+    target_link_libraries(test_benchmark OpenMP::OpenMP_CXX)
+  endif()
   gtest_discover_tests(test_benchmark)
 
   add_executable(test_validation test/test_validation.cpp)
