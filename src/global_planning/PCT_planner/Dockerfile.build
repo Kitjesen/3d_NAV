@@ -1,0 +1,64 @@
+# Multi-stage build for PCT planner — produces .so for the host platform.
+#
+# Usage:
+#   # x86_64 (dev machine / sim)
+#   docker build -f Dockerfile.build -t pct-build .
+#   docker run --rm -v $(pwd)/planner/lib:/output pct-build
+#
+#   # aarch64 (S100P cross-compile, requires buildx)
+#   docker buildx build --platform linux/arm64 -f Dockerfile.build -t pct-build-arm64 .
+#   docker run --rm -v $(pwd)/planner/lib:/output pct-build-arm64
+
+FROM python:3.10-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake libeigen3-dev libboost-all-dev \
+    libtbb-dev git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy source
+COPY planner/lib/3rdparty /build/3rdparty
+COPY planner/lib/src /build/src
+COPY planner/lib/CMakeLists.txt /build/CMakeLists.txt
+
+# Build gtsam
+RUN cd /build/3rdparty/gtsam-4.1.1 && \
+    mkdir -p build install && cd build && \
+    cmake .. \
+      -DCMAKE_INSTALL_PREFIX="../install" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGTSAM_USE_SYSTEM_EIGEN=ON \
+      -DGTSAM_BUILD_TESTS=OFF \
+      -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+      -DGTSAM_BUILD_UNSTABLE=OFF \
+    && make -j$(nproc) && make install
+
+# Build osqp
+RUN cd /build/3rdparty/osqp && \
+    mkdir -p build install && cd build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX="../install" -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) && make install
+
+# Build PCT planner modules
+RUN mkdir -p /build/build && cd /build/build && \
+    cmake .. \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_PREFIX_PATH="/build/3rdparty/gtsam-4.1.1/install;/build/3rdparty/osqp/install" \
+    && make -j$(nproc)
+
+# Collect artifacts
+RUN mkdir -p /artifacts && \
+    cp /build/build/src/a_star/a_star*.so /artifacts/ && \
+    cp /build/build/src/ele_planner/ele_planner*.so /artifacts/ && \
+    cp /build/build/src/trajectory_optimization/traj_opt*.so /artifacts/ && \
+    cp /build/build/src/map_manager/py_map_manager*.so /artifacts/ && \
+    cp /build/build/src/common/smoothing/libcommon_smoothing.so /artifacts/ && \
+    cp /build/3rdparty/gtsam-4.1.1/install/lib/libgtsam*.so* /artifacts/ 2>/dev/null; \
+    echo "=== Artifacts ===" && ls -la /artifacts/
+
+# Output stage — copy to /output volume mount
+FROM python:3.10-slim
+COPY --from=builder /artifacts /artifacts
+CMD ["sh", "-c", "cp /artifacts/*.so /output/ && echo 'PCT .so files copied to /output/' && ls -la /output/*.so"]

@@ -40,10 +40,30 @@ logger = logging.getLogger(__name__)
 #
 # The .so files (ele_planner, a_star, traj_opt) are inside lib/, so lib/ must
 # also be on sys.path for Python to find them as extension modules.
+#
+# Platform auto-detection: if lib/{arch}/ exists with .so files, prefer that
+# over the default lib/ (which may contain a different architecture).
 _PCT_PLANNER = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "PCT_planner", "planner")
 )
-_PCT_LIB = os.path.join(_PCT_PLANNER, "lib")
+_PCT_LIB_BASE = os.path.join(_PCT_PLANNER, "lib")
+
+def _resolve_pct_lib() -> str:
+    """Return the lib directory with .so files matching the current platform."""
+    import platform
+    arch = platform.machine().lower()
+    # Canonical mapping
+    arch_map = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
+    canonical = arch_map.get(arch, arch)
+    # Prefer platform-specific subdirectory if it has .so files
+    platform_dir = os.path.join(_PCT_LIB_BASE, canonical)
+    if os.path.isdir(platform_dir) and any(f.endswith(".so") for f in os.listdir(platform_dir)):
+        logger.info("PCT lib: using platform-specific %s/", canonical)
+        return platform_dir
+    # Fall back to default lib/ (original aarch64 .so files)
+    return _PCT_LIB_BASE
+
+_PCT_LIB = _resolve_pct_lib()
 _PCT_SCRIPTS = os.path.join(_PCT_PLANNER, "scripts")
 
 
