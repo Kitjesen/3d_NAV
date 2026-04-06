@@ -157,7 +157,16 @@ body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI',
 
 <script>
 function T(msg,t='info'){const e=document.getElementById('toast');e.textContent=msg;e.className='toast '+t+' show';setTimeout(()=>e.classList.remove('show'),3000);}
-async function F(u,o={}){try{const r=await fetch(u,o);return await r.json();}catch(e){return null;}}
+async function F(u,o={}){
+  try{
+    const c=new AbortController();
+    const t=setTimeout(()=>c.abort(),5000);
+    o.signal=c.signal;
+    const r=await fetch(u,o);
+    clearTimeout(t);
+    return await r.json();
+  }catch(e){console.warn('API error:',u,e.message);return null;}
+}
 
 // SLAM status
 async function pollSlam(){
@@ -265,8 +274,9 @@ async function saveMap(){
   else T('保存失败: '+(r?.error||r?.message||'未知'),'err');
 }
 
-// Init + polling
-pollSlam(); loadMaps();
-setInterval(pollSlam,4000);
+// Init + polling (independent, non-blocking)
+try{pollSlam();}catch(e){console.error('pollSlam init:',e);}
+try{loadMaps();}catch(e){console.error('loadMaps init:',e);}
+setInterval(()=>{try{pollSlam();}catch(e){}},4000);
 </script>
 </body></html>'''
