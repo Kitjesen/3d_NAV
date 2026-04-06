@@ -11,7 +11,7 @@ Ports:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from core.module import Module
 from core.stream import In, Out
@@ -42,6 +42,12 @@ class TaskDecomposerModule(Module, layer=4):
         except Exception as e:
             logger.warning("TaskDecomposer init failed: %s", e)
             self._decomposer = None
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["last_decompose_time"] = getattr(self, "_last_decompose_time", None)
+        info["subtask_count"] = getattr(self, "_subtask_count", 0)
+        return info
 
     def _on_instruction(self, instruction: str) -> None:
         if not instruction or not instruction.strip():

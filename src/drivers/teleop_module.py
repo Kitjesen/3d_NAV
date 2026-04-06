@@ -237,6 +237,15 @@ class TeleopModule(Module, layer=6):
                 except Exception:
                     pass
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["active"] = self._active
+        info["clients"] = self._clients
+        info["last_joy_age_ms"] = round(
+            (time.monotonic() - self._last_joy_time) * 1000
+        ) if self._last_joy_time > 0 else None
+        return info
+
     # -- @skill methods (REPL / MCP) ----------------------------------------
 
     @skill

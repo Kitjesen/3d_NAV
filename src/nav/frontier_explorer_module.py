@@ -328,6 +328,13 @@ class WavefrontFrontierExplorer(Module, layer=2):
         self.exploring.publish(False)
         logger.info("WavefrontFrontierExplorer: exploration loop exited")
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        exploring = self._explore_thread is not None and self._explore_thread.is_alive()
+        info["exploration_state"] = "exploring" if exploring else "idle"
+        info["frontier_count"] = len(self._visited_goals)
+        return info
+
     # -------------------------------------------------------------------------
     # Costmap parsing
     # -------------------------------------------------------------------------

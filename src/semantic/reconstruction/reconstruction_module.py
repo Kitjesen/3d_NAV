@@ -186,6 +186,12 @@ class ReconstructionModule(Module, layer=3):
         except Exception as exc:
             return {"success": False, "message": f"save failed: {exc}"}
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["mesh_vertices"] = self._projector.voxel_count if self._projector else 0
+        info["last_update_time"] = getattr(self, "_last_update_time", None)
+        return info
+
     @property
     def voxel_count(self) -> int:
         return self._projector.voxel_count
