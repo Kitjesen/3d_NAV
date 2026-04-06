@@ -684,6 +684,56 @@ class GatewayModule(Module, layer=6):
                 status_code=status_code,
             )
 
+        # ── Dashboard + SLAM Control ──────────────────────────────────────
+
+        @app.get("/dashboard", summary="Map management dashboard")
+        async def dashboard():
+            from starlette.responses import HTMLResponse
+            from gateway.map_dashboard import generate_dashboard_html
+            return HTMLResponse(generate_dashboard_html())
+
+        @app.get("/api/v1/slam/status", summary="SLAM service status")
+        async def slam_status():
+            try:
+                from core.service_manager import get_service_manager
+                svc = get_service_manager()
+                services = svc.status("lidar", "slam", "slam_pgo", "localizer")
+            except Exception:
+                services = {"lidar": "unknown", "slam": "unknown", "slam_pgo": "unknown", "localizer": "unknown"}
+
+            if services.get("slam_pgo") in ("running", "active"):
+                mode = "fastlio2"
+            elif services.get("localizer") in ("running", "active"):
+                mode = "localizer"
+            elif services.get("slam") in ("running", "active"):
+                mode = "slam_only"
+            else:
+                mode = "stopped"
+            return {"mode": mode, "services": services}
+
+        @app.post("/api/v1/slam/switch", summary="Hot-switch SLAM profile")
+        async def slam_switch(body: dict):
+            profile = body.get("profile", "")
+            if profile not in ("fastlio2", "localizer", "stop"):
+                return JSONResponse({"success": False, "message": f"Unknown profile: {profile}"}, status_code=400)
+            try:
+                from core.service_manager import get_service_manager
+                svc = get_service_manager()
+                if profile == "fastlio2":
+                    svc.stop("localizer")
+                    svc.ensure("slam", "slam_pgo")
+                    ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
+                elif profile == "localizer":
+                    svc.stop("slam_pgo")
+                    svc.ensure("slam", "localizer")
+                    ok = svc.wait_ready("slam", "localizer", timeout=10.0)
+                else:
+                    svc.stop("slam_pgo", "localizer", "slam")
+                    ok = True
+                return {"success": ok, "profile": profile, "message": f"Switched to {profile}" if ok else "Services not ready after 10s"}
+            except Exception as e:
+                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
         # ── Map 3D Viewer ─────────────────────────────────────────────────
 
         @app.get("/api/v1/map/points", summary="Map point cloud as JSON")
