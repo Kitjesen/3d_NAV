@@ -7,7 +7,15 @@ brain/lingtu/
 ├── lingtu_cli.py          # pip console script `lingtu`
 ├── cli/                   # CLI implementation (profiles, REPL, daemon)
 ├── src/                   # Python packages + ROS2 packages (colcon)
-├── config/                # YAML / DDS / robot params
+├── config/                # YAML / DDS / robot params (incl. calibration output)
+├── calibration/           # Sensor calibration toolbox (see below)
+│   ├── camera/            # Camera intrinsics (OpenCV checkerboard)
+│   ├── imu/               # IMU noise (Allan Variance, Autoliv)
+│   ├── lidar_imu/         # LiDAR-IMU extrinsics (HKU-MARS LI-Init)
+│   ├── camera_lidar/      # Camera-LiDAR extrinsics (target-less, koide3)
+│   ├── apply_calibration.py  # One-click apply → robot_config.yaml + SLAM configs
+│   ├── verify.py          # One-click verify (sanity checks + projection chain)
+│   └── README.md          # Full SOP with command-line examples
 ├── launch/                # ROS2 launch (legacy / bridge stacks)
 ├── sim/                   # MuJoCo simulation assets + scripts
 ├── tests/                 # Integration & planning tests
