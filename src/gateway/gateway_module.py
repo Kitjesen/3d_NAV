@@ -711,6 +711,39 @@ class GatewayModule(Module, layer=6):
                 mode = "stopped"
             return {"mode": mode, "services": services}
 
+        @app.get("/api/v1/slam/maps", summary="List maps from filesystem")
+        async def slam_maps():
+            """Filesystem scan fallback — works even without MapManagerModule."""
+            import os, pathlib
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+            maps = []
+            active_target = ""
+            active_link = pathlib.Path(map_dir) / "active"
+            if active_link.is_symlink():
+                active_target = active_link.resolve().name
+
+            if os.path.isdir(map_dir):
+                for d in sorted(os.listdir(map_dir)):
+                    full = os.path.join(map_dir, d)
+                    if not os.path.isdir(full) or d.startswith("_") or d == "active":
+                        continue
+                    pcd = os.path.join(full, "map.pcd")
+                    has_pcd = os.path.isfile(pcd)
+                    size = ""
+                    if has_pcd:
+                        sz = os.path.getsize(pcd)
+                        size = f"{sz/1024/1024:.1f}MB" if sz > 1024*1024 else f"{sz/1024:.0f}KB"
+                    patches_dir = os.path.join(full, "patches")
+                    kf = len(os.listdir(patches_dir)) if os.path.isdir(patches_dir) else 0
+                    maps.append({
+                        "name": d,
+                        "has_pcd": has_pcd,
+                        "size": size,
+                        "patches": kf,
+                        "active": d == active_target,
+                    })
+            return {"maps": maps, "active": active_target, "map_dir": map_dir}
+
         @app.post("/api/v1/slam/switch", summary="Hot-switch SLAM profile")
         async def slam_switch(body: dict):
             profile = body.get("profile", "")
