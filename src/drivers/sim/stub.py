@@ -24,12 +24,13 @@ class StubConnection(Module, layer=1):
     odometry: Out[Odometry]
     alive: Out[bool]
 
-    def __init__(self, dt: float = 0.02, **kw):
+    def __init__(self, dt: float = 0.02, initial_x: float = 0.0,
+                 initial_y: float = 0.0, initial_yaw: float = 0.0, **kw):
         super().__init__(**kw)
         self._dt = dt
-        self._x = 0.0
-        self._y = 0.0
-        self._yaw = 0.0
+        self._x = initial_x
+        self._y = initial_y
+        self._yaw = initial_yaw
         self._vx = 0.0
         self._vy = 0.0
         self._wz = 0.0
@@ -41,6 +42,7 @@ class StubConnection(Module, layer=1):
     def start(self):
         super().start()
         self.alive.publish(True)
+        self._publish_odom()  # bootstrap: let consumers know initial position
 
     def stop(self):
         self.alive.publish(False)
