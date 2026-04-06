@@ -15,7 +15,7 @@ LingTu (灵途) is an autonomous navigation system for quadruped robots in outdo
 
 ```bash
 # Framework tests (no ROS2 needed, runs on any machine)
-python -m pytest src/core/tests/ -q       # 1198 tests
+python -m pytest src/core/tests/ -q       # 1226 tests
 
 # CLI with interactive REPL (profile-based, recommended)
 python lingtu.py                          # interactive profile selector
@@ -169,7 +169,7 @@ bp.wire("SLAM", "cloud", "Terrain", "cloud", transport="shm")                   
 
 ```bash
 # Framework tests (primary, no ROS2 needed)
-python -m pytest src/core/tests/ -q                    # 1198 tests, ~5s
+python -m pytest src/core/tests/ -q                    # 1226 tests, ~5s
 
 # ROS2 build (for C++ nodes on S100P only)
 source /opt/ros/humble/setup.bash
