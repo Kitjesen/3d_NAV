@@ -242,9 +242,9 @@ async function loadMaps(){
       '<div class="nm">'+name+'</div>' +
       '<div class="mt">'+(size?'<span>'+size+'</span>':'')+(kf?'<span>'+kf+' 关键帧</span>':'')+'</div>' +
       '<div class="acts">' +
-        (!isAct?'<button class="btn btn-g btn-sm" onclick="setAct(\''+name+'\')">设为当前</button>':'')+
-        '<button class="btn btn-b btn-sm" onclick="document.getElementById(\'vFrame\').src=\'/map/viewer?map='+encodeURIComponent(name)+'\'">3D 查看</button>'+
-        '<button class="btn btn-r btn-sm" onclick="delMap(\''+name+'\')">删除</button>'+
+        (!isAct?'<button class="btn btn-g btn-sm" onclick="setAct(&quot;'+name+'&quot;)">设为当前</button>':'')+
+        '<button class="btn btn-b btn-sm" onclick="document.getElementById(&quot;vFrame&quot;).src=&quot;/map/viewer?map='+encodeURIComponent(name)+'&quot;">3D 查看</button>'+
+        '<button class="btn btn-r btn-sm" onclick="delMap(&quot;'+name+'&quot;)">删除</button>'+
       '</div></div>';
   }).join('');
 }
