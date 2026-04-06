@@ -192,9 +192,7 @@ def full_stack_blueprint(
     _w("MCPServerModule", "goal_pose", "NavigationModule", "goal_pose")
     _w("SemanticPlannerModule", "goal_pose", "NavigationModule", "goal_pose")
 
-    # cmd_vel monitoring — SafetyRing needs to see all cmd_vel sources
-    _w("GatewayModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
-    _w("VisualServoModule", "cmd_vel", "SafetyRingModule", "cmd_vel")
+    # cmd_vel monitoring — SafetyRing gets mux output (see CmdVelMux wiring below)
 
     # Odometry routing — prefer SLAM for NavigationModule, always use driver
     # odometry for local modules that need fast feedback in dev/sim.
@@ -215,6 +213,9 @@ def full_stack_blueprint(
     ]:
         _w(_drv, "odometry", consumer, "odometry")
 
+    # Costmap → NavigationModule (live obstacle data for _find_safe_goal BFS)
+    _w("OccupancyGridModule", "costmap", "NavigationModule", "costmap")
+
     # Mission history — NavigationModule state changes go to MissionLoggerModule
     _w("NavigationModule", "mission_status", "MissionLoggerModule", "mission_status")
 
@@ -230,19 +231,26 @@ def full_stack_blueprint(
     _w("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
     _w("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
     _w("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
-    _w("PathFollowerModule", "cmd_vel", _drv, "cmd_vel")
+    _w("LocalPlannerModule", "local_path", "SafetyRingModule", "path")
 
     # Visual servo — dual channel
     _w("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target")
     _w("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
     _w("VisualServoModule", "nav_stop", "NavigationModule", "stop_signal")
-    _w("VisualServoModule", "cmd_vel", _drv, "cmd_vel")
 
-    # Teleop — joystick cmd_vel + pause autonomy
-    _w("TeleopModule", "cmd_vel", _drv, "cmd_vel")
-    _w("TeleopModule", "nav_stop", "NavigationModule", "stop_signal")
+    # Teleop — joystick → TeleopModule → CmdVelMux, active signal → Nav
+    _w("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
 
-    # Recovery cmd_vel — direct motor control during stuck recovery
-    _w("NavigationModule", "recovery_cmd_vel", _drv, "cmd_vel")
+    # ── CmdVelMux: priority-based velocity arbitration ──
+    # All cmd_vel sources → CmdVelMux (separate input ports per source)
+    _w("TeleopModule",      "cmd_vel",          "CmdVelMux", "teleop_cmd_vel")
+    _w("VisualServoModule", "cmd_vel",          "CmdVelMux", "visual_servo_cmd_vel")
+    _w("NavigationModule",  "recovery_cmd_vel", "CmdVelMux", "recovery_cmd_vel")
+    _w("PathFollowerModule", "cmd_vel",         "CmdVelMux", "path_follower_cmd_vel")
+    # CmdVelMux → driver (single cmd_vel output)
+    bp.wire("CmdVelMux", "driver_cmd_vel", _drv, "cmd_vel")
+
+    # SafetyRing monitors mux output (sees all sources via winner)
+    _w("CmdVelMux", "driver_cmd_vel", "SafetyRingModule", "cmd_vel")
 
     return bp

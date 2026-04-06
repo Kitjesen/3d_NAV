@@ -12,6 +12,9 @@ log/
 *.db3
 *.mcap
 
+# ── Runtime state ──
+.lingtu/
+
 # ── Python ──
 __pycache__/
 *.pyc

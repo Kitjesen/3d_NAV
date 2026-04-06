@@ -11,7 +11,7 @@ Module In/Out 端口接口，供 Blueprint autoconnect 使用。
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -147,6 +147,12 @@ class FrontierModule(Module, layer=4):
             "best_description": getattr(best, "description", ""),
         }
         self.frontier_scores.publish(scores_dict)
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["frontier_count"] = len(getattr(self._scorer, "_frontiers", []))
+        info["exploration_active"] = self._last_instruction != ""
+        return info
 
     # -- 外部 API --
 

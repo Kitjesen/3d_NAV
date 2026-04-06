@@ -222,6 +222,13 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
         }
         self.temporal_summary.publish(summary_dict)
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        with self._lock:
+            info["buffer_size"] = len(self._buffer)
+        info["timer_active"] = self._summary_timer is not None and self._summary_timer.is_alive()
+        return info
+
     # -- Query methods ---------------------------------------------------------
 
     def query_by_time(self, start_t: float, end_t: float) -> List[TemporalRecord]:

@@ -118,6 +118,13 @@ class ActionExecutorModule(Module, layer=4):
             "target_y": goal.target_y,
         }))
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["executing"] = self._executor is not None and getattr(self, "_current", None) is not None
+        info["step_count"] = getattr(self, "_step_count", 0)
+        info["error_count"] = self._failure_count
+        return info
+
     def lera_recover(self, failed_action: str, original_goal: str) -> str:
         self._failure_count += 1
         if self._failure_count >= self._max_lera_retries:

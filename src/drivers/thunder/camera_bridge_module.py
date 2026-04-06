@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -162,6 +162,17 @@ class CameraBridgeModule(Module, layer=1):
                 pass
             self._node = None
         super().stop()
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["frame_count"] = getattr(self, "_frame_count", 0)
+        now = time.time()
+        if self._last_color_ts > 0:
+            dt = now - self._last_color_ts
+            info["fps"] = round(1.0 / dt, 1) if dt > 0 else 0.0
+        else:
+            info["fps"] = 0.0
+        return info
 
     # ── Auto-recovery watchdog ────────────────────────────────────────────────
 

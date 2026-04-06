@@ -262,6 +262,19 @@ class VectorMemoryModule(Module, layer=3):
             "results": results[:3],
         }
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        if self._use_chromadb and self._collection is not None:
+            entry_count = self._collection.count()
+        else:
+            entry_count = len(self._np_embeddings)
+        info["entry_count"] = entry_count
+        info["backend"] = "chromadb" if self._use_chromadb else "numpy"
+        info["store_count"] = self._store_count
+        info["encoder_ready"] = self._encoder is not None
+        info["persist_dir"] = self._persist_dir
+        return info
+
     @skill
     def get_memory_stats(self) -> dict:
         """Return vector memory statistics."""

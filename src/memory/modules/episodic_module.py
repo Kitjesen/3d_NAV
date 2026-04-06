@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -85,6 +85,13 @@ class EpisodicMemoryModule(OdomTrackingMixin, Module, layer=3):
     def memory(self) -> EpisodicMemory:
         """访问内部 EpisodicMemory (测试/查询用)。"""
         return self._memory
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        records = self._memory.records if hasattr(self._memory, "records") else getattr(self._memory, "_records", [])
+        info["record_count"] = len(records)
+        info["oldest_ts"] = records[0].timestamp if records else None
+        return info
 
     @skill
     def get_recent_observations(self, count: int = 10) -> str:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import json
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -122,6 +122,12 @@ class TaggedLocationsModule(OdomTrackingMixin, Module, layer=3):
         entries = self._store.list_all()
         names = [e["name"] for e in entries]
         self.tag_status.publish(f"locations:{','.join(names)}" if names else "locations:")
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["location_count"] = len(self._store.list_all())
+        info["last_save_time"] = getattr(self._store, "_last_save_time", None)
+        return info
 
     # -- 外部 API --
 

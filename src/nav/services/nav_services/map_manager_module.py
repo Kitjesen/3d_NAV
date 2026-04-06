@@ -380,3 +380,17 @@ class MapManagerModule(Module, layer=6):
     def _poi_list(self) -> Dict[str, Any]:
         return {"action": "poi_list", "success": True, "pois": dict(self._pois)}
 
+    # -- health ----------------------------------------------------------------
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        maps = [
+            e.name for e in sorted(self._map_dir.iterdir())
+            if e.is_dir() and e.name != "active"
+        ] if self._map_dir.exists() else []
+        info["map_count"] = len(maps)
+        info["active_map"] = self._active_map
+        info["poi_count"] = len(self._pois)
+        info["map_dir"] = str(self._map_dir)
+        return info
+

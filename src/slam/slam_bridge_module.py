@@ -599,14 +599,14 @@ class SlamBridgeModule(Module, layer=1):
         if self._reader:
             try:
                 self._reader.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("SlamBridge: reader.stop() cleanup error: %s", e)
             self._reader = None
         if self._rclpy_node:
             try:
                 self._rclpy_node.destroy_node()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("SlamBridge: rclpy node cleanup error: %s", e)
             self._rclpy_node = None
 
         self._shutdown_event.wait(timeout=backoff)

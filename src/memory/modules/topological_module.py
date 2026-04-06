@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -105,6 +105,12 @@ class TopologicalMemoryModule(OdomTrackingMixin, Module, layer=3):
         except (json.JSONDecodeError, TypeError):
             graph_dict = {}
         self.topo_graph.publish(graph_dict)
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["node_count"] = getattr(self._memory, "node_count", len(getattr(self._memory, "_nodes", [])))
+        info["edge_count"] = getattr(self._memory, "edge_count", len(getattr(self._memory, "_edges", [])))
+        return info
 
     # -- 外部 API --
 

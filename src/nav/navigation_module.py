@@ -70,6 +70,7 @@ class NavigationModule(Module, layer=5):
     stop_signal:  In[int]
     patrol_goals: In[list]
     cancel:       In[str]
+    teleop_active: In[bool]
     localization_status: In[dict]
 
     # -- Outputs --
@@ -131,6 +132,11 @@ class NavigationModule(Module, layer=5):
         self._planning_timeout = kw.get("planning_timeout", 30.0)
         self._speed_scale: float = 1.0  # degeneracy-based speed multiplier
 
+        # Teleop pause/resume
+        self._paused_for_teleop: bool = False
+        self._pre_teleop_goal: Optional[np.ndarray] = None
+        self._pre_teleop_state: Optional[str] = None
+
         # Cooldown for costmap-triggered replanning (3s minimum between replans)
         self._last_costmap_replan_time = 0.0
 
@@ -153,6 +159,7 @@ class NavigationModule(Module, layer=5):
         self.stop_signal.subscribe(self._on_stop)
         self.patrol_goals.subscribe(self._on_patrol_goals)
         self.cancel.subscribe(self._on_cancel)
+        self.teleop_active.subscribe(self._on_teleop_active)
         self.localization_status.subscribe(self._on_localization_status)
 
         if self._enable_ros2_bridge:
@@ -231,6 +238,33 @@ class NavigationModule(Module, layer=5):
         if level >= 1:
             self._tracker.clear()
             self._set_state(MissionState.IDLE)
+
+    def _on_teleop_active(self, active: bool) -> None:
+        """Pause navigation when teleop engages, resume when released."""
+        if active and not self._paused_for_teleop:
+            # Save current mission state so we can resume
+            if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
+                self._pre_teleop_goal = self._goal.copy() if self._goal is not None else None
+                self._pre_teleop_state = self._state.value
+                self._tracker.clear()
+                self._set_state(MissionState.IDLE)
+                logger.info("NavigationModule: paused for teleop (saved goal)")
+            self._paused_for_teleop = True
+
+        elif not active and self._paused_for_teleop:
+            self._paused_for_teleop = False
+            # Resume previous mission if we had one
+            if (self._pre_teleop_goal is not None
+                    and self._state == MissionState.IDLE):
+                logger.info("NavigationModule: teleop released, resuming navigation")
+                self._goal = self._pre_teleop_goal
+                self._pre_teleop_goal = None
+                self._pre_teleop_state = None
+                self._plan()
+            else:
+                logger.info("NavigationModule: teleop released, no mission to resume")
+                self._pre_teleop_goal = None
+                self._pre_teleop_state = None
 
     def _on_costmap(self, data: dict) -> None:
         grid = data.get("grid")

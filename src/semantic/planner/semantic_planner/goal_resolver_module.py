@@ -180,6 +180,12 @@ class GoalResolverModule(Module, layer=4):
             reasoning="offline keyword match: " + str(best_obj.get("label", "")),
             is_valid=True, path="fast")
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["fast_hits"] = getattr(self, "_fast_hits", 0)
+        info["slow_calls"] = getattr(self, "_slow_calls", 0)
+        return info
+
     @staticmethod
     def _convert_result(raw: Any) -> MsgGoalResult:
         return MsgGoalResult(

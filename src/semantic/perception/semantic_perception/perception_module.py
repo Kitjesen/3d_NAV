@@ -666,6 +666,28 @@ class PerceptionModule(Module, layer=3):
 
     # == Query API =============================================================
 
+    # == Health ================================================================
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["frame_count"] = self._frame_count
+        info["detector_type"] = self._detector_type
+        info["encoder_type"] = self._encoder_type
+        info["detector_ready"] = self._detector is not None
+        info["encoder_ready"] = self._clip_encoder is not None
+        info["tracker_ready"] = self._tracker is not None
+        tracked = 0
+        if self._tracker is not None:
+            try:
+                tracked = len(self._tracker.get_objects())
+            except Exception:
+                pass
+        info["tracked_objects"] = tracked
+        info["latest_detections"] = len(self._latest_core_detections)
+        return info
+
+    # == Query API =============================================================
+
     @property
     def tracker(self):
         """Access underlying InstanceTracker (for external queries / tests)."""

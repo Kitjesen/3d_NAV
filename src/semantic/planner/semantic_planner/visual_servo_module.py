@@ -368,6 +368,17 @@ class VisualServoModule(Module, layer=4):
 
         self.servo_status.publish(status)
 
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["tracking_active"] = self._mode != MODE_IDLE
+        if self._mode == MODE_IDLE:
+            info["mode"] = "idle"
+        elif self._servo_active:
+            info["mode"] = "near"
+        else:
+            info["mode"] = "far"
+        return info
+
     # ── @skill methods (MCP-exposed) ──────────────────────────────────────────
 
     @skill

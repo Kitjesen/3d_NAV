@@ -34,6 +34,7 @@ class GlobalPlannerService:
         self._obstacle_thr = obstacle_thr
         self._downsample_dist = downsample_dist
         self._backend = None
+        self._warned_no_grid: bool = False
 
     def setup(self) -> None:
         """Create the planner backend. Must be called before plan()."""
@@ -126,6 +127,14 @@ class GlobalPlannerService:
         origin = getattr(self._backend, "_origin", None)
 
         if grid is None or not hasattr(grid, "shape") or grid.ndim != 2:
+            if not self._warned_no_grid:
+                logger.warning(
+                    "GlobalPlannerService: _find_safe_goal bypassed — "
+                    "backend '%s' has no 2D _grid attribute. "
+                    "Goal safety checking is DISABLED.",
+                    self._planner_name,
+                )
+                self._warned_no_grid = True
             return None
 
         # Convert world → grid coordinates

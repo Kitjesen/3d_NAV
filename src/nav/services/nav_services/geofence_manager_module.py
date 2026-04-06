@@ -177,6 +177,17 @@ class GeofenceManagerModule(Module, layer=6):
             j = i
         return inside
 
+    # -- health ----------------------------------------------------------------
+
+    def health(self) -> Dict[str, Any]:
+        info = super().port_summary()
+        info["zone_count"] = len(self._fences)
+        enabled = sum(1 for f in self._fences.values() if f.get("enabled", True))
+        info["enabled_count"] = enabled
+        info["violations"] = len(self.check_intrusion())
+        info["robot_position"] = {"x": self._robot_x, "y": self._robot_y}
+        return info
+
     # -- persistence ------------------------------------------------------------
 
     def _load_fences(self) -> Dict[str, Dict[str, Any]]:
