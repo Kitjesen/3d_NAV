@@ -797,6 +797,31 @@ class GatewayModule(Module, layer=6):
                 html = gw._generate_viewer_html()
             return HTMLResponse(html)
 
+        @app.post("/api/v1/map/rename", summary="Rename a saved map")
+        async def rename_map(body: dict):
+            import os, pathlib
+            old = body.get("old_name", "")
+            new = body.get("new_name", "")
+            if not old or not new:
+                return JSONResponse({"success": False, "message": "需要 old_name 和 new_name"}, status_code=400)
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+            old_path = os.path.join(map_dir, old)
+            new_path = os.path.join(map_dir, new)
+            if not os.path.isdir(old_path):
+                return JSONResponse({"success": False, "message": f"地图不存在: {old}"}, status_code=404)
+            if os.path.exists(new_path):
+                return JSONResponse({"success": False, "message": f"名称已占用: {new}"}, status_code=409)
+            try:
+                os.rename(old_path, new_path)
+                # Update active symlink if it pointed to old name
+                active_link = pathlib.Path(map_dir) / "active"
+                if active_link.is_symlink() and active_link.resolve().name == old:
+                    active_link.unlink()
+                    active_link.symlink_to(new_path)
+                return {"success": True, "old_name": old, "new_name": new}
+            except Exception as e:
+                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
         @app.post("/api/v1/map/save", summary="Save current SLAM map")
         async def save_map_now(body: dict = {}):
             """One-click map save — calls ROS2 save_map service via subprocess."""

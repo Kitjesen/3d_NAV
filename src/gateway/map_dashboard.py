@@ -244,6 +244,7 @@ async function loadMaps(){
       '<div class="acts">' +
         (!isAct?'<button class="btn btn-g btn-sm" onclick="setAct(&quot;'+name+'&quot;)">设为当前</button>':'')+
         '<button class="btn btn-b btn-sm" onclick="document.getElementById(&quot;vFrame&quot;).src=&quot;/map/viewer?map='+encodeURIComponent(name)+'&quot;">3D 查看</button>'+
+        '<button class="btn btn-sm" style="background:rgba(188,140,255,0.15);color:var(--purple);border:1px solid rgba(188,140,255,0.25)" onclick="renameMap(&quot;'+name+'&quot;)">重命名</button>'+
         '<button class="btn btn-r btn-sm" onclick="delMap(&quot;'+name+'&quot;)">删除</button>'+
       '</div></div>';
   }).join('');
@@ -254,6 +255,15 @@ async function setAct(n){
   const r=await F('/api/v1/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_active',name:n})});
   if(r&&r.success!==false){T(n+' 已设为当前地图','ok');loadMaps();}
   else T('失败: '+(r?.error||'未知'),'err');
+}
+
+async function renameMap(n){
+  const nn=prompt('新名称:',n);
+  if(!nn||nn===n)return;
+  T('重命名: '+n+' → '+nn,'info');
+  const r=await F('/api/v1/map/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_name:n,new_name:nn})});
+  if(r&&r.success){T('已重命名: '+nn,'ok');loadMaps();}
+  else T('重命名失败: '+(r?.message||'未知'),'err');
 }
 
 async function delMap(n){
