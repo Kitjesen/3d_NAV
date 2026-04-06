@@ -308,6 +308,109 @@ class LingTuREPL(cmd.Cmd):
         else:
             print(f"  MapManagerModule not running (action: {action})")
 
+    # ── SLAM hot-switch ─────────────────────────────────────────────────
+
+    def do_slam(self, arg):
+        """SLAM control: slam status | fastlio2 | localizer | stop"""
+        parts = arg.split()
+        subcmd = parts[0] if parts else "status"
+
+        if subcmd == "status":
+            self._slam_status()
+        elif subcmd in ("fastlio2", "mapping"):
+            self._slam_switch("fastlio2")
+        elif subcmd in ("localizer", "nav"):
+            self._slam_switch("localizer")
+        elif subcmd == "stop":
+            self._slam_stop()
+        else:
+            print("  Usage: slam status | fastlio2 | localizer | stop")
+
+    def complete_slam(self, text, line, begidx, endidx):
+        options = ["status", "fastlio2", "localizer", "stop", "mapping", "nav"]
+        return [o for o in options if o.startswith(text)]
+
+    def _slam_status(self):
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
+            st = svc.status("lidar", "slam", "slam_pgo", "localizer")
+        except Exception:
+            st = {"lidar": "?", "slam": "?", "slam_pgo": "?", "localizer": "?"}
+
+        # Determine current mode
+        if st.get("slam_pgo") == "running":
+            mode = "fastlio2 (mapping)"
+        elif st.get("localizer") == "running":
+            mode = "localizer (navigation)"
+        elif st.get("slam") == "running":
+            mode = "slam only (no PGO/localizer)"
+        else:
+            mode = "stopped"
+
+        print(f"  SLAM mode: {mode}")
+        for name, state in st.items():
+            icon = "●" if state == "running" else "○"
+            print(f"    {icon} {name}: {state}")
+
+        # Show SlamBridge health if available
+        bridge = self._get_module("SlamBridgeModule")
+        if bridge:
+            try:
+                h = bridge.health()
+                print(f"  Bridge: alive={h.get('slam', {}).get('alive', '?')}")
+            except Exception:
+                pass
+
+    def _slam_switch(self, profile: str):
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
+        except Exception as e:
+            print(f"  ServiceManager not available: {e}")
+            return
+
+        # Check current state
+        pgo_running = svc.is_running("slam_pgo")
+        loc_running = svc.is_running("localizer")
+
+        if profile == "fastlio2" and pgo_running:
+            print("  Already in fastlio2 (mapping) mode")
+            return
+        if profile == "localizer" and loc_running:
+            print("  Already in localizer (navigation) mode")
+            return
+
+        print(f"  Switching to {profile}...")
+
+        # Stop conflicting services
+        if profile == "fastlio2":
+            svc.stop("localizer")
+            svc.ensure("slam", "slam_pgo")
+        elif profile == "localizer":
+            svc.stop("slam_pgo")
+            svc.ensure("slam", "localizer")
+
+        # Wait for readiness
+        target = "slam_pgo" if profile == "fastlio2" else "localizer"
+        if svc.wait_ready("slam", target, timeout=10.0):
+            print(f"  Switched to {profile} — bridge reconnects in ~3s")
+        else:
+            print(f"  Warning: services not ready after 10s, check: journalctl -u slam -f")
+
+        # Update config
+        if hasattr(self, '_cfg') and self._cfg:
+            self._cfg["slam_profile"] = profile
+
+    def _slam_stop(self):
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
+            svc.stop("slam_pgo", "localizer", "slam")
+            print("  All SLAM services stopped")
+        except Exception as e:
+            print(f"  Failed: {e}")
+
     def do_smap(self, arg):
         """Semantic map: smap status | rooms | save | load <dir> | query <text>"""
         parts = arg.split(None, 1)

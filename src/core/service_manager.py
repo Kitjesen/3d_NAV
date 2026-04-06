@@ -81,6 +81,10 @@ class ServiceManager:
         for svc in list(self._started):
             self.stop(svc)
 
+    def status(self, *services: str) -> dict:
+        """Batch query service status. Returns {name: "running"|"stopped"}."""
+        return {svc: "running" if self.is_running(svc) else "stopped" for svc in services}
+
     def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
         """Wait until all services are active."""
         deadline = time.time() + timeout
@@ -106,5 +110,7 @@ def get_service_manager() -> ServiceManager:
 # Service groups — what each mode needs
 SERVICES_LIDAR = ["lidar"]
 SERVICES_SLAM = ["slam"]
+SERVICES_SLAM_MAPPING = ["slam", "slam_pgo"]
+SERVICES_SLAM_NAV = ["slam", "localizer"]
 SERVICES_CAMERA = ["camera"]
 SERVICES_HARDWARE = SERVICES_LIDAR + SERVICES_CAMERA

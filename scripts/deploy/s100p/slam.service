@@ -1,0 +1,37 @@
+[Unit]
+Description=S100P SLAM (Fast-LIO2)
+After=lidar.service
+Wants=lidar.service
+
+[Service]
+Type=simple
+User=sunrise
+WorkingDirectory=/home/sunrise/data/SLAM/navigation
+ExecStart=/bin/bash -c '\
+  source /opt/ros/humble/setup.bash && \
+  source ~/data/SLAM/navigation/install/setup.bash && \
+  exec ros2 run fastlio2 lio_node \
+    --ros-args \
+    -p config_path:=/home/sunrise/data/SLAM/navigation/install/fastlio2/share/fastlio2/config/lio_s100p.yaml \
+    -r /cloud_registered:=/nav/registered_cloud \
+    -r /cloud_map:=/nav/map_cloud \
+    -r /Odometry:=/nav/odometry \
+    -r /path:=/lio_path \
+    -r /imu/data:=/nav/imu \
+    -r /lidar/scan:=/nav/lidar_scan \
+    -r save_map:=/nav/save_map'
+Restart=on-failure
+RestartSec=3
+OOMScoreAdjust=-500
+MemoryMax=4G
+KillMode=control-group
+KillSignal=SIGINT
+SuccessExitStatus=130 SIGINT
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=slam
+Environment=HOME=/home/sunrise
+Environment=ROS_DOMAIN_ID=0
+
+[Install]
+WantedBy=multi-user.target
