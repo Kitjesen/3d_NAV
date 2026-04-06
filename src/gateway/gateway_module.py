@@ -232,18 +232,11 @@ class GatewayModule(Module, layer=6):
         self._sse_lock:   threading.Lock = threading.Lock()
         self._sse_queues: List[asyncio.Queue] = []
 
-        # Teleop state (for /ws/teleop)
-        self._teleop_active:    bool = False
+        # Teleop: delegate to TeleopModule (set by on_system_modules)
+        self._teleop_module = None
         self._teleop_clients:   int  = 0
-        self._teleop_last_joy:  float = 0.0
-        self._teleop_release_timeout: float = 3.0
-        self._teleop_max_speed:  float = 0.5
-        self._teleop_max_yaw:    float = 1.0
         self._latest_jpeg:  Optional[bytes] = None
         self._jpeg_lock: threading.Lock = threading.Lock()
-        # Injected by TeleopModule.on_system_modules() — publish on its behalf
-        self._teleop_cmd_vel_port  = None
-        self._teleop_nav_stop_port = None
 
         # Reference to MapManagerModule (set by on_system_modules)
         self._map_mgr = None
@@ -280,7 +273,13 @@ class GatewayModule(Module, layer=6):
         self._map_mgr = modules.get("MapManagerModule")
         self._all_modules = modules
 
-    # -- teleop config injection (called by TeleopModule) -------------------
+    # -- teleop helpers (delegate to TeleopModule) ---------------------------
+
+    @property
+    def _teleop_active(self) -> bool:
+        """Proxy for teleop active state (lives in TeleopModule now)."""
+        tm = self._teleop_module
+        return tm._active if tm is not None else False
 
     def configure_teleop(
         self,
@@ -288,7 +287,7 @@ class GatewayModule(Module, layer=6):
         max_yaw: float,
         release_timeout: float,
     ) -> None:
-        """Called by TeleopModule during its setup() to share config."""
+        """Called by TeleopModule during setup() — config stored for display."""
         self._teleop_max_speed = max_speed
         self._teleop_max_yaw   = max_yaw
         self._teleop_release_timeout = release_timeout
@@ -367,39 +366,29 @@ class GatewayModule(Module, layer=6):
             except ValueError:
                 pass
 
-    # -- teleop internals ---------------------------------------------------
+    # -- teleop internals (forwarded to TeleopModule) -------------------------
 
     def _teleop_on_joy(self, lx: float, ly: float, az: float) -> None:
-        lx = max(-1.0, min(1.0, lx)) * self._teleop_max_speed
-        ly = max(-1.0, min(1.0, ly)) * self._teleop_max_speed
-        az = max(-1.0, min(1.0, az)) * self._teleop_max_yaw
-        twist = Twist(
-            linear=Vector3(x=lx, y=ly, z=0.0),
-            angular=Vector3(x=0.0, y=0.0, z=az),
-        )
-        # Publish on TeleopModule's cmd_vel port (higher priority / correct wiring)
-        if self._teleop_cmd_vel_port is not None:
-            self._teleop_cmd_vel_port.publish(twist)
+        """Forward raw joystick input to TeleopModule via joy_input port."""
+        tm = self._teleop_module
+        if tm is not None and hasattr(tm, "joy_input"):
+            tm.joy_input.publish({"lx": lx, "ly": ly, "az": az})
         else:
-            self.cmd_vel.publish(twist)  # fallback if no TeleopModule present
-        self._teleop_last_joy = time.monotonic()
-        if not self._teleop_active:
-            self._teleop_active = True
-            if self._teleop_nav_stop_port is not None:
-                self._teleop_nav_stop_port.publish(1)
-            logger.debug("GatewayModule: teleop engaged")
+            # Fallback: publish directly (no TeleopModule present)
+            lx = max(-1.0, min(1.0, lx)) * getattr(self, "_teleop_max_speed", 0.5)
+            ly = max(-1.0, min(1.0, ly)) * getattr(self, "_teleop_max_speed", 0.5)
+            az = max(-1.0, min(1.0, az)) * getattr(self, "_teleop_max_yaw", 1.0)
+            self.cmd_vel.publish(Twist(
+                linear=Vector3(x=lx, y=ly, z=0.0),
+                angular=Vector3(x=0.0, y=0.0, z=az),
+            ))
 
     def _teleop_release(self) -> None:
-        if self._teleop_active:
-            self._teleop_active = False
-            zero = Twist()
-            if self._teleop_cmd_vel_port is not None:
-                self._teleop_cmd_vel_port.publish(zero)
-            else:
-                self.cmd_vel.publish(zero)
-            if self._teleop_nav_stop_port is not None:
-                self._teleop_nav_stop_port.publish(0)
-            logger.info("GatewayModule: teleop released, autonomy resumed")
+        tm = self._teleop_module
+        if tm is not None:
+            tm.force_release()
+        else:
+            self.cmd_vel.publish(Twist())
 
     # -- FastAPI app --------------------------------------------------------
 
@@ -668,8 +657,10 @@ class GatewayModule(Module, layer=6):
         async def ws_teleop(ws: WebSocket):
             await ws.accept()
             gw._teleop_clients += 1
+            tm = gw._teleop_module
+            if tm is not None:
+                tm.on_client_connect()
             logger.info("Teleop WS connected (%d clients)", gw._teleop_clients)
-            release_timeout = gw._teleop_release_timeout
 
             async def _send_frames():
                 """Push JPEG frames to this client at ~10 fps."""
@@ -684,16 +675,7 @@ class GatewayModule(Module, layer=6):
                             break
                     await asyncio.sleep(0.1)
 
-            async def _check_idle():
-                """Release autonomy if joystick goes quiet."""
-                while True:
-                    await asyncio.sleep(0.5)
-                    if (gw._teleop_active
-                            and time.monotonic() - gw._teleop_last_joy > release_timeout):
-                        gw._teleop_release()
-
             frame_task = asyncio.create_task(_send_frames())
-            idle_task  = asyncio.create_task(_check_idle())
             try:
                 while True:
                     msg = await ws.receive()
@@ -715,14 +697,18 @@ class GatewayModule(Module, layer=6):
                         )
                     elif t == "stop":
                         gw.stop_cmd.publish(2)
-                        gw.cmd_vel.publish(Twist())
+                        if tm is not None:
+                            tm.force_release()
+                        else:
+                            gw.cmd_vel.publish(Twist())
             except WebSocketDisconnect:
                 pass
             finally:
                 frame_task.cancel()
-                idle_task.cancel()
                 gw._teleop_clients = max(0, gw._teleop_clients - 1)
-                if gw._teleop_clients == 0:
+                if tm is not None:
+                    tm.on_client_disconnect()
+                elif gw._teleop_clients == 0:
                     gw._teleop_release()
                 logger.info("Teleop WS disconnected (%d clients)", gw._teleop_clients)
 

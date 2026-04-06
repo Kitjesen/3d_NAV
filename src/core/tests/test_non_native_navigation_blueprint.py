@@ -32,6 +32,8 @@ def test_non_native_navigation_uses_python_autonomy_chain():
         assert _has_connection(system, "StubDogModule", "odometry", "NavigationModule", "odometry")
         assert _has_connection(system, "NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
         assert _has_connection(system, "LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
-        assert _has_connection(system, "PathFollowerModule", "cmd_vel", "StubDogModule", "cmd_vel")
+        # cmd_vel goes through CmdVelMux for priority arbitration
+        assert _has_connection(system, "PathFollowerModule", "cmd_vel", "CmdVelMux", "path_follower_cmd_vel")
+        assert _has_connection(system, "CmdVelMux", "driver_cmd_vel", "StubDogModule", "cmd_vel")
     finally:
         system.stop()
