@@ -125,7 +125,7 @@ def full_stack_blueprint(
     _bp_names = {e.name for e in bp._entries}
     _map_consumers = [
         "OccupancyGridModule", "ElevationMapModule", "TerrainModule",
-        "VoxelGridModule", "RerunBridgeModule",
+        "VoxelGridModule", "RerunBridgeModule", "GatewayModule",
     ]
     if _slam:
         for consumer in _map_consumers:
