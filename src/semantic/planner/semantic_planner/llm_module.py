@@ -200,11 +200,18 @@ class LLMModule(Module, layer=4):
         # Non-blocking: response published from async callback
         future.add_done_callback(lambda f: self._handle_result(f, req))
 
+    def _is_transient_error(self, error: Exception) -> bool:
+        """Transient errors should count toward circuit breaker but with lower weight."""
+        msg = str(error).lower()
+        transient_patterns = ("timeout", "timed out", "429", "rate limit",
+                              "connection", "temporary", "unavailable", "503")
+        return any(p in msg for p in transient_patterns)
+
     async def _async_chat(self, req: LLMRequest) -> str:
-        """Run the actual LLM call."""
-        return await self._client.chat(
-            req.messages,
-            temperature=req.temperature,
+        """Run the actual LLM call with enforced timeout."""
+        return await asyncio.wait_for(
+            self._client.chat(req.messages, temperature=req.temperature),
+            timeout=self._timeout_sec,
         )
 
     def _handle_result(self, future, req: LLMRequest):
@@ -229,7 +236,11 @@ class LLMModule(Module, layer=4):
             ))
         except Exception as e:
             self._error_count += 1
-            self._consecutive_failures += 1
+            if self._is_transient_error(e):
+                self._consecutive_failures += 1
+            else:
+                # Permanent errors (401, 403, bad model) open circuit immediately
+                self._consecutive_failures = self._cb_threshold
             # Open circuit after threshold consecutive failures
             if self._consecutive_failures >= self._cb_threshold:
                 self._circuit_open_until = time.time() + self._cb_cooldown

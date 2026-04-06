@@ -181,7 +181,7 @@ def load_config(path: Optional[str] = None) -> RobotConfig:
     except (FileNotFoundError, OSError):
         raw = {}
 
-    return RobotConfig(
+    cfg = RobotConfig(
         speed=_fill_dataclass(SpeedConfig, raw.get("speed", {})),
         geometry=_fill_dataclass(GeometryConfig, raw.get("geometry", {})),
         driver=_fill_dataclass(DriverConfig, raw.get("driver", {})),
@@ -190,6 +190,56 @@ def load_config(path: Optional[str] = None) -> RobotConfig:
         camera=_fill_dataclass(CameraConfig, raw.get("camera", {})),
         raw=raw,
     )
+
+    errors = validate_config(cfg)
+    if errors:
+        import logging
+        _logger = logging.getLogger(__name__)
+        for err in errors:
+            _logger.warning("Config validation: %s", err)
+
+    return cfg
+
+
+def validate_config(cfg: RobotConfig) -> list[str]:
+    """Validate robot config, return list of error messages (empty = OK).
+
+    Checks required ranges for safety-critical parameters.
+    """
+    errors = []
+
+    # Speed limits must be positive
+    if cfg.speed.max_linear <= 0:
+        errors.append(f"speed.max_linear must be > 0, got {cfg.speed.max_linear}")
+    if cfg.speed.max_angular <= 0:
+        errors.append(f"speed.max_angular must be > 0, got {cfg.speed.max_angular}")
+
+    # Geometry must be positive
+    if cfg.geometry.vehicle_width <= 0:
+        errors.append(f"geometry.vehicle_width must be > 0, got {cfg.geometry.vehicle_width}")
+    if cfg.geometry.vehicle_length <= 0:
+        errors.append(f"geometry.vehicle_length must be > 0, got {cfg.geometry.vehicle_length}")
+    if cfg.geometry.vehicle_height <= 0:
+        errors.append(f"geometry.vehicle_height must be > 0, got {cfg.geometry.vehicle_height}")
+
+    # Safety distances must be positive and ordered
+    if cfg.safety.stop_distance <= 0:
+        errors.append(f"safety.stop_distance must be > 0, got {cfg.safety.stop_distance}")
+    if cfg.safety.slow_distance <= cfg.safety.stop_distance:
+        errors.append(f"safety.slow_distance ({cfg.safety.slow_distance}) must be > "
+                      f"stop_distance ({cfg.safety.stop_distance})")
+
+    # Driver control rate must be positive
+    if cfg.driver.control_rate <= 0:
+        errors.append(f"driver.control_rate must be > 0, got {cfg.driver.control_rate}")
+
+    # Camera intrinsics must be positive
+    if cfg.camera.fx <= 0 or cfg.camera.fy <= 0:
+        errors.append(f"camera.fx/fy must be > 0, got fx={cfg.camera.fx}, fy={cfg.camera.fy}")
+    if cfg.camera.width <= 0 or cfg.camera.height <= 0:
+        errors.append(f"camera.width/height must be > 0, got {cfg.camera.width}x{cfg.camera.height}")
+
+    return errors
 
 
 # ---------------------------------------------------------------------------
