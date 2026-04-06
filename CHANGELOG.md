@@ -6,6 +6,57 @@ Format: [Semantic Versioning](https://semver.org/) — `MAJOR.MINOR.PATCH`
 
 ---
 
+## [2.1.0] — 2026-04-06 (Enterprise 加固 + C++ 性能优化 + 标定文档)
+
+### Enterprise Hardening
+
+- **278 新增 Python 测试** — 总计 1226 tests (core/tests/)，覆盖之前缺失的模块：
+  - `test_memory_modules.py` (103 tests) — SemanticMapper, EpisodicMemory, TaggedLocations, VectorMemory, RoomObjectKG
+  - `test_semantic_modules.py` (83 tests) — SemanticPlanner, GoalResolver, VisualServo, AgentLoop, LLM backends
+  - `test_nav_services.py` (92 tests) — NavigationModule FSM, WaypointTracker, GlobalPlannerService, SafetyRing, CmdVelMux
+- **Silent exception 清理** — slam_bridge_module.py, slam_module.py, robot.py 中 bare `except: pass` 全部替换为具体异常类型 + 日志
+- **health() 方法补全** — MapManagerModule, PerceptionModule, VectorMemoryModule, GeofenceManagerModule 新增健康检查
+
+### C++ nav_core 性能优化 (5 commits)
+
+架构级：
+- **SoA 内存布局** — `plannerCloud_` 从 AoS `{x,y,z,h}` → 分离 `x[], y[], h[]` 数组，SIMD 友好
+- **CSR 稀疏格式** — `vector<vector<int>>` 对应关系 → `corrOffset[] + corrData[]` 扁平数组，消除指针追踪
+- **旋转主序循环** — 外层遍历旋转方向、内层遍历点云，写入连续 cache 命中
+
+算术加速：
+- **scorePathFast LUT** — 361 项 `pow(x, 0.25)` 查表替代 `sqrt(sqrt())`，**2.08x** 加速
+- **预计算权重** — `rotDirW⁴`, `groupDirW²` 在 RotLUT 初始化时算好
+- **nth_element** — 地形 ground quantile: `O(n log n)` sort → `O(n)` partial sort
+- **sincos 融合** — PathFollower 单次调用替代分开的 sin + cos
+
+SIMD + 并行：
+- **xsimd v13.0.0** — 便携 SIMD (ARM NEON / x86 AVX 自动切换)，批量旋转 + 批量距离
+- **OpenMP 并行评分** — 36 个旋转方向 scoreRotation 并行执行
+- **terrain 并行化** — estimateGround 2601 voxel + filterVoxels 441 voxel OpenMP parallel
+- **buildPlannerCloud SIMD** — ≥256 点时 AoS→SoA 收集 + 批量旋转
+
+编译器级：
+- **LTO** — 跨函数内联 (Link-Time Optimization)
+- **-ffast-math + -funroll-loops** — 放松浮点语义，循环展开
+- **CSR prefetch** — `__builtin_prefetch` 减少 cache miss
+
+CMake 修复：
+- **ROS2 ament_cmake 路径** — 之前 xsimd / OpenMP / LTO / fast-math 仅在 standalone 模式生效，sunrise aarch64 部署路径完全缺失。已修复，两个路径统一
+
+### 测试覆盖
+
+- **96 C++ tests** (7 test suites) + **12 benchmarks** (含 SIMD 正确性验证)
+- **1226 Python tests** — 全部通过
+
+### 文档
+
+- **CLAUDE.md** — 新增传感器标定工具箱章节 (SOP 6 步 + 参数输出 + 运行时校验 + 关键文件)
+- **REPO_LAYOUT.md** — 新增 `calibration/` 目录树
+- **CHANGELOG.md** — 本条目
+
+---
+
 ## [2.0.0] — 2026-03-25 (架构全面模块化重构 + 10 大模块 + MCP 服务)
 
 ### 架构重构

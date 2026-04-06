@@ -173,10 +173,44 @@ Note: `calibration/` lives at repo root (not under `src/`). See [Sensor Calibrat
 # Framework tests (primary, no ROS2 needed)
 python -m pytest src/core/tests/ -q                    # 1226 tests, ~5s
 
+# C++ nav_core tests (standalone, no ROS2)
+cd src/nav/core && mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
+./test_benchmark                                       # 12 benchmarks
+./test_local_planner_core                              # 30 tests
+./test_path_follower_core                              # 15 tests
+# ... 7 test suites, 96 tests total
+
 # ROS2 build (for C++ nodes on S100P only)
 source /opt/ros/humble/setup.bash
 make build                                              # colcon release build
 ```
+
+## C++ Performance (nav_core)
+
+`src/nav/core/` 是 header-only C++ 算法库，通过 nanobind 暴露给 Python。aarch64 部署时性能关键。
+
+### 加速库
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| xsimd | 13.0.0 | 便携 SIMD (ARM NEON / x86 AVX 自动切换) |
+| taskflow | 3.8.0 | 任务并行 (备用，当前用 OpenMP) |
+| OpenMP | — | 并行 for (terrain + scoring) |
+
+### 关键优化
+
+| 优化 | 文件 | 效果 |
+|------|------|------|
+| SoA 内存布局 | local_planner_full.hpp | SIMD 友好，消除 stride-4 访存 |
+| CSR 稀疏格式 | local_planner_full.hpp | cache 连续，消除指针追踪 |
+| scorePathFast LUT | local_planner_core.hpp | **2.08x** (pow025 查表替代 sqrt(sqrt)) |
+| OpenMP 并行评分 | local_planner_full.hpp | 36 旋转方向并行 |
+| terrain 并行化 | terrain_core.hpp | 2601 voxel nth_element 并行 |
+| SIMD 批量旋转 | simd_accel.hpp | rotateCloud + distSqBatch |
+| LTO + fast-math | CMakeLists.txt | 跨函数内联 + 放松浮点 |
+
+CMakeLists.txt 确保 ROS2 ament_cmake 和 standalone 两个路径都启用 xsimd + OpenMP + LTO。
 
 ## Critical Files — Do Not Break
 
@@ -419,4 +453,5 @@ lidar:
 - S100P has no CUDA — Open3D GPU features unavailable, use C++ terrain_analysis instead
 - Kimi API key may expire — Slow Path unavailable without valid LLM key
 - ChromaDB optional — VectorMemoryModule falls back to numpy brute-force search
-- Framework tests (948) are mock-based — real hardware integration tests need S100P
+- Framework tests (1226) are mock-based — real hardware integration tests need S100P
+- C++ test_validation 6 tests fail under `-ffast-math` (NaN/Inf IEEE compliance) — expected
