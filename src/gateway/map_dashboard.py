@@ -204,14 +204,15 @@ async function doSwitch(p){
 let activeName='';
 
 async function loadMaps(){
-  let r=await F('/api/v1/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'list'})});
+  // Primary: filesystem scan (has size, patches, active info)
+  let r=await F('/api/v1/slam/maps');
   let maps=[], active='';
 
-  if(r&&r.maps&&r.maps.length>0){
+  if(r&&r.maps){
     maps=r.maps; active=r.active||'';
   } else {
-    // Fallback: scan via /api/v1/slam/maps (filesystem scan endpoint)
-    r=await F('/api/v1/slam/maps');
+    // Fallback: MapManagerModule API
+    r=await F('/api/v1/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'list'})});
     if(r&&r.maps) { maps=r.maps; active=r.active||''; }
   }
 
