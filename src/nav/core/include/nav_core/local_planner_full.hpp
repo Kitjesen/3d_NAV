@@ -25,6 +25,7 @@
 #include "nav_core/simd_accel.hpp"
 #include <cmath>
 #include <cstring>
+#include <atomic>
 #include <vector>
 #include <array>
 #include <string>
@@ -237,11 +238,13 @@ private:
   std::array<int, kPathNum> pathList_{};
   std::array<float, kPathNum> endDirPathList_{};
 
-  // Correspondences: voxel_id → path_ids
+  // Correspondences: voxel_id → path_ids (CSR format for cache locality)
   int gridVoxelNumX_ = 161;
   int gridVoxelNumY_ = 451;
   int gridVoxelNum_  = gridVoxelNumX_ * gridVoxelNumY_;
-  std::vector<std::vector<int>> correspondences_;
+  // CSR: corrOffset_[i] .. corrOffset_[i+1] index into corrData_
+  std::vector<int> corrOffset_;   // size = gridVoxelNum_ + 1
+  std::vector<int> corrData_;     // flat array of all path IDs
 
   // Per-frame scratch buffers — SoA layout for SIMD-friendly access
   struct PlannerCloudSoA {
@@ -262,6 +265,7 @@ private:
   // SIMD scratch buffers (reused across frames, no per-frame alloc)
   std::vector<float> scaledX_, scaledY_, disSqBuf_;
   std::vector<float> rotX_, rotY_;
+  std::vector<float> parRotBufs_;  // parallel per-rotation scratch
 
   // Scoring arrays
   std::vector<int>   clearPathList_;
@@ -333,8 +337,9 @@ private:
   bool loadCorrespondences(const std::string& filename) {
     std::ifstream f(filename);
     if (!f.is_open()) return false;
-    correspondences_.clear();
-    correspondences_.resize(gridVoxelNum_);
+
+    // First pass: load into temporary vector-of-vectors
+    std::vector<std::vector<int>> tmp(gridVoxelNum_);
     for (int i = 0; i < gridVoxelNum_; i++) {
       int gridVoxelID;
       f >> gridVoxelID;
@@ -343,10 +348,25 @@ private:
         if (pathID == -1) break;
         if (gridVoxelID >= 0 && gridVoxelID < gridVoxelNum_ &&
             pathID >= 0 && pathID < kPathNum) {
-          correspondences_[gridVoxelID].push_back(pathID);
+          tmp[gridVoxelID].push_back(pathID);
         }
       }
     }
+
+    // Convert to CSR (Compressed Sparse Row) — single contiguous array
+    corrOffset_.resize(gridVoxelNum_ + 1);
+    corrOffset_[0] = 0;
+    int totalEntries = 0;
+    for (int i = 0; i < gridVoxelNum_; i++) {
+      totalEntries += static_cast<int>(tmp[i].size());
+      corrOffset_[i + 1] = totalEntries;
+    }
+    corrData_.resize(totalEntries);
+    for (int i = 0; i < gridVoxelNum_; i++) {
+      std::copy(tmp[i].begin(), tmp[i].end(),
+                corrData_.begin() + corrOffset_[i]);
+    }
+
     // Allocate scoring arrays
     int total = kRotDirs * kPathNum;
     clearPathList_.resize(total);
@@ -453,8 +473,6 @@ private:
     // ── Obstacle scoring: ROTATION-MAJOR loop with SIMD batch rotation ──
     int cloudSize = cloud_.size;
     if (p_.checkObstacle && cloudSize > 0) {
-      const float* cx = cloud_.x.data();
-      const float* cy = cloud_.y.data();
       const float* ch = cloud_.h.data();
 
       // Pre-scale cloud by invPS once (reused across all rotations)
@@ -462,59 +480,82 @@ private:
       scaledY_.resize(cloudSize);
       disSqBuf_.resize(cloudSize);
       {
+        const float* cx = cloud_.x.data();
+        const float* cy = cloud_.y.data();
         float* sx = scaledX_.data();
         float* sy = scaledY_.data();
-        // Batch scale
         for (int i = 0; i < cloudSize; i++) {
           sx[i] = cx[i] * invPS;
           sy[i] = cy[i] * invPS;
         }
-        // Batch squared distance (SIMD)
         simd::distSqBatch(sx, sy, disSqBuf_.data(), cloudSize);
       }
 
-      // Scratch buffers for SIMD-rotated coordinates
-      rotX_.resize(cloudSize);
-      rotY_.resize(cloudSize);
+      // Per-rotation scoring lambda (each rotation writes to non-overlapping
+      // clearPathList_[kPathNum*d..kPathNum*(d+1)], so parallel-safe)
+      const float* sxp = scaledX_.data();
+      const float* syp = scaledY_.data();
+      const float* dsqp = disSqBuf_.data();
+      const int* corrOff = corrOffset_.data();
+      const int* corrDat = corrData_.data();
+      int* clearArr = clearPathList_.data();
+      float* penArr = pathPenaltyList_.data();
+      int gvnx = gridVoxelNumX_, gvny = gridVoxelNumY_;
 
-      for (int vi = 0; vi < nValidRotDirs_; vi++) {
-        int d = validRotDirs_[vi];
+      auto scoreRotation = [&](int d, float* rxBuf, float* ryBuf) {
         float cosD = static_cast<float>(lut.c[d]);
         float sinD = static_cast<float>(lut.s[d]);
         int base = kPathNum * d;
 
-        // SIMD batch rotation: transform entire cloud for this direction
-        simd::rotateCloud(scaledX_.data(), scaledY_.data(),
-                          cosD, sinD,
-                          rotX_.data(), rotY_.data(), cloudSize);
+        // SIMD batch rotation
+        simd::rotateCloud(sxp, syp, cosD, sinD, rxBuf, ryBuf, cloudSize);
 
-        // Voxel lookup on pre-rotated points (sequential, cache-friendly)
+        // Voxel lookup (sequential, cache-friendly CSR)
         for (int i = 0; i < cloudSize; i++) {
-          float disSq = disSqBuf_[i];
+          float disSq = dsqp[i];
           if (disSq >= pathRangeScaleSq) continue;
           if (cropByGoal && disSq > goalClearScaleSq) continue;
 
-          float x2 = rotX_[i];
-          float y2 = rotY_[i];
-
+          float x2 = rxBuf[i];
+          float y2 = ryBuf[i];
           float sy = x2 * scaleB + scaleA * (3.2f - x2) * scaleB;
           if (std::fabs(sy) < 1e-6f) continue;
 
           int indX = static_cast<int>((offXH - x2) * invGS);
           int indY = static_cast<int>((offYH - y2 / sy) * invGS);
-          if (indX < 0 || indX >= gridVoxelNumX_ || indY < 0 || indY >= gridVoxelNumY_)
-            continue;
+          if (indX < 0 || indX >= gvnx || indY < 0 || indY >= gvny) continue;
 
           float h = ch[i];
-          int ind = gridVoxelNumY_ * indX + indY;
-          for (int pathID : correspondences_[ind]) {
-            int idx = base + pathID;
+          int ind = gvny * indX + indY;
+          const int* pb = corrDat + corrOff[ind];
+          const int* pe = corrDat + corrOff[ind + 1];
+          for (const int* pp = pb; pp != pe; ++pp) {
+            int idx = base + *pp;
             if (h > obsThre || !useTerrain) {
-              clearPathList_[idx]++;
+              clearArr[idx]++;
             } else if (h > gndThre) {
-              if (pathPenaltyList_[idx] < h) pathPenaltyList_[idx] = h;
+              if (penArr[idx] < h) penArr[idx] = h;
             }
           }
+        }
+      };
+
+      // Parallel execution: each rotation has its own scratch buffers
+      if (nValidRotDirs_ >= 4 && cloudSize >= 100) {
+        // Allocate per-thread scratch (one pair per rotation)
+        parRotBufs_.resize(nValidRotDirs_ * 2 * cloudSize);
+        #pragma omp parallel for schedule(dynamic) if(nValidRotDirs_ >= 6)
+        for (int vi = 0; vi < nValidRotDirs_; vi++) {
+          float* rxBuf = parRotBufs_.data() + vi * 2 * cloudSize;
+          float* ryBuf = rxBuf + cloudSize;
+          scoreRotation(validRotDirs_[vi], rxBuf, ryBuf);
+        }
+      } else {
+        // Sequential: reuse single buffer pair
+        rotX_.resize(cloudSize);
+        rotY_.resize(cloudSize);
+        for (int vi = 0; vi < nValidRotDirs_; vi++) {
+          scoreRotation(validRotDirs_[vi], rotX_.data(), rotY_.data());
         }
       }
     }

@@ -51,6 +51,18 @@ if(DEFINED ENV{AMENT_PREFIX_PATH})
 
 else()
   # ── Standalone 模式 (Windows / CI) ──
+
+  # Performance flags
+  if(NOT MSVC)
+    add_compile_options(-ffast-math -funroll-loops)
+    # LTO (Link-Time Optimization)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ipo_supported)
+    if(ipo_supported)
+      set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+    endif()
+  endif()
+
   include(FetchContent)
 
   FetchContent_Declare(googletest

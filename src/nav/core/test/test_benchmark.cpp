@@ -413,6 +413,57 @@ TEST(Benchmark, SimdDistSq) {
 //  SIMD Correctness Check
 // ═══════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════
+//  End-to-end: scoreAndSelect with synthetic paths
+// ═══════════════════════════════════════════════════
+
+TEST(Benchmark, ScoreAndSelectEndToEnd) {
+  // Create a planner with synthetic path data
+  LocalPlannerParams lpp;
+  lpp.adjacentRange = 3.5;
+  lpp.checkObstacle = true;
+  lpp.useTerrainAnalysis = true;
+  lpp.dirWeight = 0.02;
+  lpp.twoWayDrive = true;
+  lpp.pathScale = 1.0;
+  lpp.minPathScale = 0.75;
+
+  LocalPlannerCore planner(lpp);
+  planner.setVehicle(0, 0, 0, 0);
+  planner.setGoal(5, 0);
+
+  // Generate 500 obstacle points (typical outdoor scene)
+  std::mt19937 rng(42);
+  std::uniform_real_distribution<float> posR(-3.0f, 3.0f);
+  std::uniform_real_distribution<float> zR(-0.3f, 0.3f);
+  std::uniform_real_distribution<float> hR(0.0f, 0.4f);
+
+  constexpr int nPts = 500;
+  std::vector<float> cloud(nPts * 4);
+  for (int i = 0; i < nPts; i++) {
+    cloud[i*4+0] = posR(rng);
+    cloud[i*4+1] = posR(rng);
+    cloud[i*4+2] = zR(rng);
+    cloud[i*4+3] = hR(rng);
+  }
+
+  // Measure plan() cycle (without loaded paths, tests buildPlannerCloud + checkNearField)
+  constexpr int kReps = 5000;
+  auto t0 = std::chrono::high_resolution_clock::now();
+  for (int i = 0; i < kReps; i++) {
+    planner.setVehicle(0.001 * (i % 100), 0, 0, 0.01 * (i % 36));
+    planner.plan(cloud.data(), nPts, i * 0.01);
+  }
+  auto t1 = std::chrono::high_resolution_clock::now();
+
+  auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+  double avg_us = static_cast<double>(elapsed_us) / kReps;
+  std::printf("[BENCHMARK] E2E plan(%d pts): %d reps in %ld us "
+              "(avg %.2f us/call, %.0f Hz)\n",
+              nPts, kReps, elapsed_us, avg_us,
+              avg_us > 0 ? 1e6 / avg_us : 999999.0);
+}
+
 TEST(Benchmark, SimdCorrectness) {
   constexpr int N = 128;
   std::mt19937 rng(7);
