@@ -789,10 +789,65 @@ class GatewayModule(Module, layer=6):
             }
 
         @app.get("/map/viewer", summary="Interactive 3D map viewer")
-        async def map_viewer():
+        async def map_viewer(map: str = ""):
             from starlette.responses import HTMLResponse
-            html = gw._generate_viewer_html()
+            if map:
+                html = gw._generate_viewer_from_pcd(map)
+            else:
+                html = gw._generate_viewer_html()
             return HTMLResponse(html)
+
+        @app.post("/api/v1/map/save", summary="Save current SLAM map")
+        async def save_map_now(body: dict = {}):
+            """One-click map save — calls ROS2 save_map service via subprocess."""
+            import subprocess, os
+            name = body.get("name", "")
+            if not name:
+                from datetime import datetime
+                name = "map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+            save_dir = os.path.join(map_dir, name)
+            os.makedirs(save_dir, exist_ok=True)
+            pcd_path = os.path.join(save_dir, "map.pcd")
+            errors = []
+
+            # Save via Fast-LIO2
+            try:
+                r = subprocess.run(
+                    ["bash", "-c",
+                     f"source /opt/ros/humble/setup.bash && "
+                     f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                     f"ros2 service call /nav/save_map interface/srv/SaveMaps "
+                     f"\"{{file_path: '{pcd_path}'}}\""],
+                    capture_output=True, text=True, timeout=30)
+                if "success=True" in r.stdout:
+                    pass
+                else:
+                    errors.append(f"Fast-LIO2: {r.stdout[-100:]}")
+            except Exception as e:
+                errors.append(f"Fast-LIO2: {e}")
+
+            # Save via PGO (patches + poses)
+            try:
+                r = subprocess.run(
+                    ["bash", "-c",
+                     f"source /opt/ros/humble/setup.bash && "
+                     f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                     f"ros2 service call /pgo/save_maps interface/srv/SaveMaps "
+                     f"\"{{file_path: '{save_dir}', save_patches: true}}\""],
+                    capture_output=True, text=True, timeout=30)
+            except Exception:
+                pass  # PGO save is optional
+
+            has_pcd = os.path.isfile(pcd_path)
+            if has_pcd:
+                size = os.path.getsize(pcd_path)
+                return {"success": True, "name": name, "path": save_dir,
+                        "size": f"{size/1024/1024:.1f}MB"}
+            else:
+                return JSONResponse(
+                    {"success": False, "name": name, "errors": errors},
+                    status_code=500)
 
         # ── WebSocket teleop ───────────────────────────────────────────────
 
@@ -897,6 +952,41 @@ class GatewayModule(Module, layer=6):
         return info
 
     # -- Map 3D viewer HTML generation ----------------------------------------
+
+    def _generate_viewer_from_pcd(self, map_name: str) -> str:
+        """Load a saved PCD file and generate viewer HTML."""
+        import os, struct
+        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+        if not os.path.isfile(pcd_path):
+            return f"<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>地图不存在: {map_name}</h2><p>找不到 {pcd_path}</p></body></html>"
+
+        # Parse PCD binary
+        with open(pcd_path, "rb") as f:
+            n_points = 0
+            point_step = 16
+            while True:
+                line = f.readline().decode("ascii", errors="ignore").strip()
+                if "POINTS" in line:
+                    n_points = int(line.split()[-1])
+                if "SIZE" in line:
+                    point_step = sum(int(s) for s in line.split()[1:])
+                if line.startswith("DATA"):
+                    break
+            data = f.read(n_points * point_step)
+
+        pts = np.frombuffer(data[:n_points * point_step], dtype=np.float32).reshape(n_points, point_step // 4)[:, :3]
+        # Filter valid + reasonable range
+        valid = np.isfinite(pts).all(axis=1)
+        pts = pts[valid]
+        if len(pts) > 0:
+            med = np.median(pts, axis=0)
+            dist = np.abs(pts - med).max(axis=1)
+            pts = pts[dist < 100]
+
+        with self._map_cloud_lock:
+            self._map_points = pts
+        return self._generate_viewer_html()
 
     def _generate_viewer_html(self) -> str:
         with self._map_cloud_lock:

@@ -266,12 +266,12 @@ async function delMap(n){
 async function saveMap(){
   const n=prompt('地图名称:','map_'+new Date().toISOString().slice(0,16).replace(/[T:]/g,'_'));
   if(!n)return;
-  T('正在保存 "'+n+'" (可能需要10-30秒)...','info');
+  T('正在保存 "'+n+'" (约10-30秒)...','info');
   document.getElementById('bSave').disabled=true;
-  const r=await F('/api/v1/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'save',name:n})});
+  const r=await F('/api/v1/map/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
   document.getElementById('bSave').disabled=false;
-  if(r&&r.success!==false){T('地图已保存: '+n,'ok');loadMaps();}
-  else T('保存失败: '+(r?.error||r?.message||'未知'),'err');
+  if(r&&r.success){T('已保存: '+n+' ('+r.size+')','ok');loadMaps();}
+  else T('保存失败: '+(r?.errors?.join(', ')||r?.message||'SLAM 未运行'),'err');
 }
 
 // Init + polling (independent, non-blocking)
