@@ -60,7 +60,9 @@ ROBOT_PRESETS = {
     "stub": dict(robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip"),
     "sim": dict(robot="sim_mujoco", slam_profile="bridge", detector="yoloe", encoder="mobileclip"),
     "ros2": dict(robot="sim_ros2", slam_profile="bridge", detector="yoloe", encoder="mobileclip"),
+    # S100P hardware preset (RDK X5, Nash BPU, Livox MID-360)
     "s100p": dict(robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip"),
+    "navigate": dict(robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip"),  # alias
     "thunder": dict(
         robot="thunder",
         slam_profile="localizer",
