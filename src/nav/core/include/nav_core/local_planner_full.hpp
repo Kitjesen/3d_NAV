@@ -416,16 +416,44 @@ private:
     float fx = static_cast<float>(vx_), fy = static_cast<float>(vy_), fz = static_cast<float>(vz_);
     float minZ = static_cast<float>(p_.minRelZ), maxZ = static_cast<float>(p_.maxRelZ);
     bool useTerrain = p_.useTerrainAnalysis;
-    for (int i = 0; i < n; i++) {
-      float px = pts[i*4], py = pts[i*4+1], pz = pts[i*4+2], h = pts[i*4+3];
-      float dx = px - fx, dy = py - fy, dz = pz - fz;
-      if (dx*dx + dy*dy >= adjRangeSq) continue;
-      if (!((dz > minZ && dz < maxZ) || useTerrain)) continue;
-      float bx = dx * cosY + dy * sinY;
-      float by = -dx * sinY + dy * cosY;
-      cloud_.push(bx, by, h);
+
+    // Two-pass: 1) gather dx/dy into temp SoA, 2) SIMD batch disSq + rotate
+    // For small clouds, scalar is fine. For large clouds, avoid AoS stride-4 penalty.
+    if (n >= 256 && useTerrain) {
+      // Phase 1: gather from AoS → SoA, apply range filter
+      bpcDx_.resize(n); bpcDy_.resize(n); bpcH_.resize(n);
+      int kept = 0;
+      for (int i = 0; i < n; i++) {
+        float dx = pts[i*4] - fx, dy = pts[i*4+1] - fy;
+        if (dx*dx + dy*dy >= adjRangeSq) continue;
+        bpcDx_[kept] = dx;
+        bpcDy_[kept] = dy;
+        bpcH_[kept] = pts[i*4+3];
+        kept++;
+      }
+      // Phase 2: SIMD batch rotation on the kept points
+      cloud_.x.resize(kept);
+      cloud_.y.resize(kept);
+      cloud_.h.resize(kept);
+      cloud_.size = kept;
+      simd::rotateCloud(bpcDx_.data(), bpcDy_.data(), cosY, sinY,
+                        cloud_.x.data(), cloud_.y.data(), kept);
+      std::memcpy(cloud_.h.data(), bpcH_.data(), kept * sizeof(float));
+    } else {
+      for (int i = 0; i < n; i++) {
+        float px = pts[i*4], py = pts[i*4+1], pz = pts[i*4+2], h = pts[i*4+3];
+        float dx = px - fx, dy = py - fy, dz = pz - fz;
+        if (dx*dx + dy*dy >= adjRangeSq) continue;
+        if (!((dz > minZ && dz < maxZ) || useTerrain)) continue;
+        float bx = dx * cosY + dy * sinY;
+        float by = -dx * sinY + dy * cosY;
+        cloud_.push(bx, by, h);
+      }
     }
   }
+
+  // Scratch buffers for buildPlannerCloud SIMD path
+  std::vector<float> bpcDx_, bpcDy_, bpcH_;
 
   int scoreAndSelect(double pathScale, double pathRange, double relGoalDis,
                      double joyDir, double joySpeed, int& slowDown) {
@@ -527,6 +555,11 @@ private:
 
           float h = ch[i];
           int ind = gvny * indX + indY;
+          // Prefetch next iteration's CSR offset (reduces cache miss stalls)
+          #if defined(__GNUC__) || defined(__clang__)
+          if (i + 1 < cloudSize)
+            __builtin_prefetch(corrOff + ind + 2, 0, 1);
+          #endif
           const int* pb = corrDat + corrOff[ind];
           const int* pe = corrDat + corrOff[ind + 1];
           for (const int* pp = pb; pp != pe; ++pp) {
