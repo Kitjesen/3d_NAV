@@ -770,8 +770,9 @@ class GatewayModule(Module, layer=6):
 
         # ── Map 3D Viewer ─────────────────────────────────────────────────
 
-        @app.get("/api/v1/map/points", summary="Map point cloud as JSON")
+        @app.get("/api/v1/map/points", summary="Map point cloud as JSON (from ikd-tree snapshot)")
         async def get_map_points(max_points: int = 80000):
+            # Read from latest snapshot (same source as viewer)
             with gw._map_cloud_lock:
                 pts = gw._map_points
             if pts is None or len(pts) == 0:
@@ -1176,38 +1177,8 @@ addEventListener('resize', ()=>{{
   renderer.setSize(innerWidth, innerHeight);
 }});
 
-// Live update: fetch new points every 6s, replace geometry, keep camera
-let isLive = !window.location.search.includes('map=');
-let lastCount = {n};
-async function liveUpdate(){{
-  if(!isLive) return;
-  try{{
-    const r = await fetch('/api/v1/map/points?max_points=80000');
-    const d = await r.json();
-    if(!d.points || d.count <= lastCount) return;
-    lastCount = d.count;
-    const N = d.points.length;
-    const p2 = new Float32Array(N*3);
-    const c2 = new Float32Array(N*3);
-    const zn = d.bounds.z[0], zx = d.bounds.z[1], zr2 = zx-zn||1;
-    for(let i=0;i<N;i++){{
-      p2[i*3]=d.points[i][0]; p2[i*3+1]=d.points[i][1]; p2[i*3+2]=d.points[i][2];
-      let t=(d.points[i][2]-zn)/zr2;
-      c2[i*3]   = t<0.5 ? t*2 : 1;
-      c2[i*3+1] = 1-Math.abs(t-0.5)*2;
-      c2[i*3+2] = t>0.5 ? (1-t)*2 : 1;
-    }}
-    geo.setAttribute('position', new THREE.BufferAttribute(p2, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(c2, 3));
-    geo.attributes.position.needsUpdate = true;
-    geo.attributes.color.needsUpdate = true;
-    geo.computeBoundingSphere();
-    document.getElementById('info').innerHTML =
-      'LingTu SLAM — '+N.toLocaleString()+' 点 (实时)<br>'+
-      '<span style="color:#888">拖拽旋转 | 滚轮缩放 | 右键平移</span>';
-  }}catch(e){{}}
-}}
-setInterval(liveUpdate, 6000);
+// No auto-update — viewer shows ikd-tree snapshot at load time.
+// User clicks "查看实时建图" in Dashboard to get a fresh snapshot.
 
 (function a(){{requestAnimationFrame(a); controls.update(); renderer.render(scene,camera);}})();
 </script></body></html>'''
