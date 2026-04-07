@@ -801,6 +801,40 @@ class GatewayModule(Module, layer=6):
                 html = gw._generate_viewer_live()
             return HTMLResponse(html)
 
+        @app.get("/api/v1/camera/snapshot", summary="Camera JPEG snapshot")
+        async def camera_snapshot():
+            """Grab one JPEG frame from /camera/color/image_raw/compressed via ROS2 (fastrtps)."""
+            import subprocess
+            from starlette.responses import Response
+            try:
+                r = subprocess.run(
+                    ["bash", "-c",
+                     "source /opt/ros/humble/setup.bash && "
+                     "timeout 3 ros2 topic echo /camera/color/image_raw/compressed --once --no-arr 2>/dev/null | "
+                     "grep 'format:' | head -1"],
+                    capture_output=True, text=True, timeout=5)
+                # Simpler: save one frame to file via a small Python script
+                r2 = subprocess.run(
+                    ["bash", "-c",
+                     "source /opt/ros/humble/setup.bash && "
+                     "python3 -c \""
+                     "import rclpy; from sensor_msgs.msg import CompressedImage; "
+                     "rclpy.init(); n=rclpy.create_node('snap'); "
+                     "msg=[None]; "
+                     "n.create_subscription(CompressedImage,'/camera/color/image_raw/compressed',lambda m:msg.__setitem__(0,m),1); "
+                     "import time; t=time.time(); "
+                     "while msg[0] is None and time.time()-t<2: rclpy.spin_once(n,timeout_sec=0.1); "
+                     "n.destroy_node(); rclpy.shutdown(); "
+                     "import sys; sys.stdout.buffer.write(msg[0].data if msg[0] else b'') "
+                     "\""],
+                    capture_output=True, timeout=5)
+                if r2.stdout and len(r2.stdout) > 100:
+                    return Response(content=r2.stdout, media_type="image/jpeg")
+                else:
+                    return JSONResponse({"error": "no frame"}, status_code=503)
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
         @app.post("/api/v1/map/activate", summary="Set active map (symlink)")
         async def activate_map(body: dict):
             import os

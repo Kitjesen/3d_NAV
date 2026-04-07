@@ -257,28 +257,20 @@ function toggle(id){
 // Uptime
 function up(){const s=Math.floor((Date.now()-t0)/1000);return String(s/3600|0).padStart(2,'0')+':'+String((s%3600)/60|0).padStart(2,'0')+':'+String(s%60).padStart(2,'0');}
 
-// Camera WebSocket
-let camWs=null, camVisible=true;
-function startCam(){
-  try{
-    const proto=location.protocol==='https:'?'wss:':'ws:';
-    camWs=new WebSocket(proto+'//'+location.host+'/ws/teleop');
-    camWs.binaryType='arraybuffer';
-    camWs.onmessage=e=>{
-      if(e.data instanceof ArrayBuffer){
-        const blob=new Blob([e.data],{type:'image/jpeg'});
-        document.getElementById('camImg').src=URL.createObjectURL(blob);
-      }
-    };
-    camWs.onclose=()=>setTimeout(startCam,3000);
-  }catch(e){}
+// Camera snapshot polling (cross-RMW via subprocess)
+let camVisible=true;
+function fetchCam(){
+  if(!camVisible)return;
+  const img=document.getElementById('camImg');
+  img.src='/api/v1/camera/snapshot?t='+Date.now();
 }
 function toggleCam(){
   const p=document.getElementById('cameraPip');
   camVisible=!camVisible;
   p.style.display=camVisible?'block':'none';
 }
-startCam();
+fetchCam();
+setInterval(fetchCam, 2000);
 
 // Poll
 async function poll(){
