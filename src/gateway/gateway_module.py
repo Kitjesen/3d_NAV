@@ -979,8 +979,8 @@ class GatewayModule(Module, layer=6):
     # -- Map 3D viewer HTML generation ----------------------------------------
 
     def _generate_viewer_from_pcd(self, map_name: str) -> str:
-        """Load a saved PCD file and generate viewer HTML."""
-        import os, struct
+        """Load a saved PCD file and generate viewer HTML (does NOT touch live data)."""
+        import os
         map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
         pcd_path = os.path.join(map_dir, map_name, "map.pcd")
         if not os.path.isfile(pcd_path):
@@ -1001,7 +1001,6 @@ class GatewayModule(Module, layer=6):
             data = f.read(n_points * point_step)
 
         pts = np.frombuffer(data[:n_points * point_step], dtype=np.float32).reshape(n_points, point_step // 4)[:, :3]
-        # Filter valid + reasonable range
         valid = np.isfinite(pts).all(axis=1)
         pts = pts[valid]
         if len(pts) > 0:
@@ -1009,13 +1008,15 @@ class GatewayModule(Module, layer=6):
             dist = np.abs(pts - med).max(axis=1)
             pts = pts[dist < 100]
 
-        with self._map_cloud_lock:
-            self._map_points = pts
-        return self._generate_viewer_html()
+        # Generate viewer with loaded data directly (no shared state modification)
+        return self._generate_viewer_html(override_pts=pts)
 
-    def _generate_viewer_html(self) -> str:
-        with self._map_cloud_lock:
-            pts = self._map_points
+    def _generate_viewer_html(self, override_pts=None) -> str:
+        if override_pts is not None:
+            pts = override_pts
+        else:
+            with self._map_cloud_lock:
+                pts = self._map_points
         if pts is None or len(pts) == 0:
             return "<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>No map data yet</h2><p>Start mapping first, then refresh.</p></body></html>"
 
