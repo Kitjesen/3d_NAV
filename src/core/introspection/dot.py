@@ -20,7 +20,7 @@ import subprocess
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-_LAYER_LABELS: Dict[Optional[int], str] = {
+_LAYER_LABELS: dict[int | None, str] = {
     0: "L0 · Safety",
     1: "L1 · Driver",
     2: "L2 · Base Autonomy",
@@ -30,7 +30,7 @@ _LAYER_LABELS: Dict[Optional[int], str] = {
     6: "L6 · Gateway",
 }
 
-_LAYER_COLORS: Dict[Optional[int], str] = {
+_LAYER_COLORS: dict[int | None, str] = {
     0: "#ff6b6b",
     1: "#4ecdc4",
     2: "#45b7d1",
@@ -59,8 +59,8 @@ def _node_id(s: str) -> str:
 def render(
     handle: Any,
     *,
-    ignored_streams: Optional[Set[Tuple[str, str]]] = None,
-    ignored_modules: Optional[Set[str]] = None,
+    ignored_streams: set[tuple[str, str]] | None = None,
+    ignored_modules: set[str] | None = None,
 ) -> str:
     """Generate a Graphviz DOT string from a SystemHandle.
 
@@ -81,12 +81,12 @@ def render(
     connections = handle.connections  # List[Tuple[str, str, str, str]]
 
     # Layer map — safe for RPCClient proxies
-    module_layers: Dict[str, Optional[int]] = {
+    module_layers: dict[str, int | None] = {
         name: getattr(mod, "layer", None) for name, mod in modules.items()
     }
 
     # Port → type name lookup (best-effort; RPCClient has no port info)
-    port_type: Dict[Tuple[str, str], str] = {}
+    port_type: dict[tuple[str, str], str] = {}
     for name, mod in modules.items():
         try:
             for pname, port in mod.ports_out.items():
@@ -96,8 +96,8 @@ def render(
             pass
 
     # Collect producers / consumers keyed by (port_name, type_name)
-    producers: Dict[Tuple[str, str], List[str]] = defaultdict(list)
-    consumers: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+    producers: dict[tuple[str, str], list[str]] = defaultdict(list)
+    consumers: dict[tuple[str, str], list[str]] = defaultdict(list)
     for out_mod, out_port, in_mod, in_port in connections:
         if out_mod in ignored_modules or in_mod in ignored_modules:
             continue
@@ -108,13 +108,13 @@ def render(
             consumers[key].append(in_mod)
 
     # Active channels: have both a producer and a consumer
-    active: Dict[Tuple[str, str], str] = {}
+    active: dict[tuple[str, str], str] = {}
     for key in producers:
         if key in consumers:
             active[key] = _color_for(_CHAN_COLORS, f"{key[0]}:{key[1]}")
 
     # Group modules by layer
-    by_layer: Dict[Optional[int], List[str]] = defaultdict(list)
+    by_layer: dict[int | None, list[str]] = defaultdict(list)
     for name in modules:
         if name not in ignored_modules:
             by_layer[module_layers[name]].append(name)

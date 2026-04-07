@@ -21,7 +21,6 @@ import os
 import re
 from typing import List, Tuple
 
-
 # Env var name patterns that indicate secrets
 _SECRET_PATTERNS = re.compile(
     r".*(_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIAL)$", re.IGNORECASE,
@@ -31,7 +30,7 @@ _SECRET_PATTERNS = re.compile(
 _MIN_SECRET_LEN = 8
 
 
-def _collect_secrets() -> List[Tuple[str, str]]:
+def _collect_secrets() -> list[tuple[str, str]]:
     """Scan environment for secret values to redact."""
     secrets = []
     for name, value in os.environ.items():
@@ -49,7 +48,7 @@ class RedactSecretsFilter(logging.Filter):
 
     def __init__(self, name: str = ""):
         super().__init__(name)
-        self._secrets: List[Tuple[str, str]] = []
+        self._secrets: list[tuple[str, str]] = []
         self.refresh()
 
     def refresh(self) -> None:

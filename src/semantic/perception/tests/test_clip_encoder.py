@@ -11,13 +11,14 @@ CLIP编码器单元测试 (与实际 clip_encoder.py API 对齐)
 - shutdown
 """
 
-import unittest
-import numpy as np
-from unittest.mock import Mock, patch, MagicMock
-
-import sys
 import os
+import sys
+import unittest
+from unittest.mock import MagicMock, Mock, patch
+
+import numpy as np
 import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder

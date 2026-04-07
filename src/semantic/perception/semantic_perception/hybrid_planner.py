@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # with ROS2 dependency removed. Performs 8-connected A* directly on a 2D trav grid.
 
 def _w2g(wx: float, wy: float, cx: float, cy: float,
-         res: float, ox: int, oy: int, nx: int, ny: int) -> Tuple[int, int]:
+         res: float, ox: int, oy: int, nx: int, ny: int) -> tuple[int, int]:
     """World coordinates (m) → grid index (clipped to grid bounds)."""
     ix = int(round((wx - cx) / res)) + ox
     iy = int(round((wy - cy) / res)) + oy
@@ -48,13 +48,13 @@ def _w2g(wx: float, wy: float, cx: float, cy: float,
 
 
 def _g2w(ix: int, iy: int, cx: float, cy: float,
-         res: float, ox: int, oy: int) -> Tuple[float, float]:
+         res: float, ox: int, oy: int) -> tuple[float, float]:
     """Grid index → world coordinates (m)."""
     return (ix - ox) * res + cx, (iy - oy) * res + cy
 
 
 def _find_nearest_free(trav: np.ndarray, ci: int, cj: int,
-                       obs_thr: float, radius: int = 5) -> Tuple[int, int]:
+                       obs_thr: float, radius: int = 5) -> tuple[int, int]:
     """Find the nearest free cell within radius cells; return the original position if none found
     (A* will then report None itself)."""
     if trav[ci, cj] < obs_thr:
@@ -71,8 +71,8 @@ def _find_nearest_free(trav: np.ndarray, ci: int, cj: int,
     return best
 
 
-def _astar_on_grid(trav: np.ndarray, start: Tuple[int, int], goal: Tuple[int, int],
-                   obs_thr: float, timeout_sec: float = 5.0) -> Optional[List[Tuple[int, int]]]:
+def _astar_on_grid(trav: np.ndarray, start: tuple[int, int], goal: tuple[int, int],
+                   obs_thr: float, timeout_sec: float = 5.0) -> list[tuple[int, int]] | None:
     """8-connected A* on a traversability grid.
 
     Args:
@@ -131,7 +131,7 @@ class PathSegment:
     """One geometry segment connecting two adjacent rooms."""
     from_room_id: int
     to_room_id: int
-    waypoints: List[np.ndarray]  # sequence of waypoints [[x, y, z], ...]
+    waypoints: list[np.ndarray]  # sequence of waypoints [[x, y, z], ...]
     cost: float                   # total Euclidean length (m)
     planning_time: float          # wall-clock planning time (s)
 
@@ -144,9 +144,9 @@ class HybridPath:
     The caller must not execute this path; trigger a recovery strategy instead.
     """
     success: bool
-    waypoints: List[np.ndarray]
-    room_sequence: List[int]
-    segments: List[PathSegment]
+    waypoints: list[np.ndarray]
+    room_sequence: list[int]
+    segments: list[PathSegment]
     total_cost: float
     total_planning_time: float
     topology_planning_time: float
@@ -183,7 +183,7 @@ class HybridPlanner:
     def __init__(
         self,
         topology_graph,
-        trav: Optional[np.ndarray] = None,
+        trav: np.ndarray | None = None,
         trav_res: float = 0.2,
         trav_cx: float = 0.0,
         trav_cy: float = 0.0,
@@ -281,8 +281,8 @@ class HybridPlanner:
 
         # 3. Geometry layer: A*
         t_geom = time.time()
-        segments: List[PathSegment] = []
-        waypoints: List[np.ndarray] = [start.copy()]
+        segments: list[PathSegment] = []
+        waypoints: list[np.ndarray] = [start.copy()]
 
         for i in range(len(room_seq) - 1):
             if time.time() - t0 > max_planning_time:
@@ -335,9 +335,9 @@ class HybridPlanner:
         from_room_id: int,
         to_room_id: int,
         start_pos: np.ndarray,
-        goal_pos: Optional[np.ndarray],
+        goal_pos: np.ndarray | None,
         search_radius_factor: float,
-    ) -> Optional[PathSegment]:
+    ) -> PathSegment | None:
         """Plan the local geometry segment between two adjacent rooms.
 
         Returns:
@@ -418,7 +418,7 @@ class HybridPlanner:
         # Downsample and convert grid coords → world coords
         cells = _downsample_cells(cells, self._min_ds)
         z = float(start_pos[2])
-        pts: List[np.ndarray] = []
+        pts: list[np.ndarray] = []
         for (ci, cj) in cells:
             wx, wy = _g2w(ci + bi_min, cj + bj_min,
                           self._trav_cx, self._trav_cy,
@@ -442,7 +442,7 @@ class HybridPlanner:
             planning_time=time.time() - t0,
         )
 
-    def _locate_room(self, position: np.ndarray) -> Optional[int]:
+    def _locate_room(self, position: np.ndarray) -> int | None:
         """Locate the room containing a position (three-stage lookup: get_room_by_position → convex hull → nearest centroid)."""
         room_id = self.tsg.get_room_by_position(position[0], position[1], radius=5.0)
         if room_id is not None:
@@ -484,8 +484,8 @@ class HybridPlanner:
     @staticmethod
     def _failed(
         reason: str,
-        segments: Optional[List[PathSegment]] = None,
-        waypoints: Optional[List[np.ndarray]] = None,
+        segments: list[PathSegment] | None = None,
+        waypoints: list[np.ndarray] | None = None,
         topo_time: float = 0.0,
         geom_time: float = 0.0,
     ) -> HybridPath:
@@ -549,8 +549,8 @@ class PlannerComparison:
 def compare_planners(
     hybrid_planner: HybridPlanner,
     baseline_planner,
-    test_cases: List[Tuple[np.ndarray, np.ndarray]],
-) -> List[PlannerComparison]:
+    test_cases: list[tuple[np.ndarray, np.ndarray]],
+) -> list[PlannerComparison]:
     """Compare the HybridPlanner against a baseline planner.
 
     Args:

@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Callable, Dict, List, Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Any, Dict, List, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class LocalTransport:
     """
 
     def __init__(self) -> None:
-        self._bus: Dict[str, List[Callable[[Any], None]]] = {}
+        self._bus: dict[str, list[Callable[[Any], None]]] = {}
         self._lock = threading.Lock()
 
     def publish(self, topic: str, msg: Any) -> None:
@@ -86,7 +87,7 @@ class LocalTransport:
             self._bus.clear()
 
     @property
-    def topics(self) -> List[str]:
+    def topics(self) -> list[str]:
         """Return a list of currently active topics."""
         with self._lock:
             return list(self._bus.keys())

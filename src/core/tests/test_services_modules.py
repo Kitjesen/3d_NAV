@@ -7,22 +7,20 @@ Covers:
 """
 
 import json
-import tempfile
 import os
+import tempfile
 
 import pytest
 
-from core import In, Out, Module
+from core import In, Module, Out
 from core.msgs.nav import Odometry
-from core.msgs.sensor import Image, CameraIntrinsics
 from core.msgs.semantic import SceneGraph
-
+from core.msgs.sensor import CameraIntrinsics, Image
+from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
 from nav.services.nav_services.map_manager_module import MapManagerModule
 from nav.services.nav_services.patrol_manager_module import PatrolManagerModule
-from nav.services.nav_services.geofence_manager_module import GeofenceManagerModule
 from nav.services.nav_services.task_scheduler_module import TaskSchedulerModule
 from semantic.reconstruction.reconstruction_module import ReconstructionModule
-
 
 # ============================================================================
 # Helpers

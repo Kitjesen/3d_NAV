@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+
 def _default_map_dir() -> str:
     """Return the default on-robot map storage directory.
 

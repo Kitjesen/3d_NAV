@@ -19,7 +19,6 @@ from typing import Optional
 
 import numpy as np
 
-
 # ── USS-Nav 点云参数 ──
 POINTCLOUD_MAX_POINTS = 512       # 每个物体最大点数 (降采样后)
 POINTCLOUD_VOXEL_SIZE = 0.02      # 体素降采样分辨率 (m)
@@ -55,7 +54,7 @@ def bbox_center_depth(
     bbox: np.ndarray,
     depth_scale: float = 0.001,
     kernel_size: int = 5,
-) -> Optional[float]:
+) -> float | None:
     """计算 bbox 中心区域的中值深度 (保留向后兼容)。"""
     x1, y1, x2, y2 = bbox.astype(int)
     cx = (x1 + x2) // 2
@@ -152,7 +151,7 @@ def mask_to_pointcloud(
     voxel_size: float = POINTCLOUD_VOXEL_SIZE,
     K: np.ndarray = None,
     D: np.ndarray = None,
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """
     USS-Nav §IV-C: 将 instance mask + depth 反投影为世界坐标系 3D 点云。
 

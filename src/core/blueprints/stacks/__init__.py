@@ -1,18 +1,27 @@
 """Composable blueprint factory functions — dimos-style one-liner per stack."""
 
 from .driver import driver
+from .gateway import gateway
 from .lidar import lidar
+from .maps import maps
+from .memory import memory
+from .navigation import navigation
+from .perception import perception
+from .planner import planner
+from .safety import safety
 from .sim_lidar import sim_lidar
 from .slam import slam
-from .maps import maps
-from .perception import perception
-from .memory import memory
-from .planner import planner
-from .navigation import navigation
-from .safety import safety
-from .gateway import gateway
 
 __all__ = [
-    "driver", "lidar", "sim_lidar", "slam", "maps", "perception", "memory",
-    "planner", "navigation", "safety", "gateway",
+    "driver",
+    "gateway",
+    "lidar",
+    "maps",
+    "memory",
+    "navigation",
+    "perception",
+    "planner",
+    "safety",
+    "sim_lidar",
+    "slam",
 ]

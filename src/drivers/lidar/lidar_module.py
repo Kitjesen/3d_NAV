@@ -60,7 +60,7 @@ class LidarModule(Module, layer=1):
 
     def __init__(
         self,
-        ip: Optional[str] = None,
+        ip: str | None = None,
         scan_topic: str = "/lidar/scan",
         imu_topic: str = "/imu/data",
         **kw,
@@ -95,7 +95,7 @@ class LidarModule(Module, layer=1):
         """Forward Imu to the imu port."""
         self.imu.publish(imu_msg)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         """Report driver health for monitoring."""
         base = super().port_summary()
         h = self._lidar.health

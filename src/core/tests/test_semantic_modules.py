@@ -10,10 +10,9 @@ import math
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # 1. VisualServoModule
@@ -479,8 +478,8 @@ class TestFrontierModuleOdomFiltering(unittest.TestCase):
         return FrontierModule()
 
     def _odom(self, x, y):
-        from core.msgs.nav import Odometry
         from core.msgs.geometry import Pose, Vector3
+        from core.msgs.nav import Odometry
         return Odometry(pose=Pose(x, y, 0.0))
 
     def test_valid_odom_is_cached(self):
@@ -550,8 +549,8 @@ class TestFrontierModuleEvaluation(unittest.TestCase):
         m._evaluate()
 
     def test_evaluate_no_instruction_returns_early(self):
-        from core.msgs.nav import Odometry
         from core.msgs.geometry import Pose
+        from core.msgs.nav import Odometry
         from core.msgs.semantic import SceneGraph
         m = self._make()
         m._last_odom = Odometry(pose=Pose(0.0, 0.0, 0.0))

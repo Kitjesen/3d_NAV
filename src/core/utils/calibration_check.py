@@ -31,9 +31,9 @@ FASTLIO2_CONFIG = REPO_ROOT / "src" / "slam" / "fastlio2" / "config" / "lio.yaml
 @dataclass
 class CalibrationReport:
     """Structured calibration check results."""
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
-    info: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    info: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -221,7 +221,7 @@ def _check_lidar_imu_consistency(
 
     try:
         import yaml
-        with open(FASTLIO2_CONFIG, "r") as f:
+        with open(FASTLIO2_CONFIG) as f:
             lio = yaml.safe_load(f) or {}
     except Exception:
         return
@@ -263,7 +263,7 @@ def _check_rotation_validity(report: CalibrationReport) -> None:
 
     try:
         import yaml
-        with open(FASTLIO2_CONFIG, "r") as f:
+        with open(FASTLIO2_CONFIG) as f:
             lio = yaml.safe_load(f) or {}
     except Exception:
         return

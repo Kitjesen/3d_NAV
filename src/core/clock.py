@@ -10,8 +10,8 @@ Usage::
     clock.set_real_time()    # switch back to wall clock
 """
 
-import time
 import threading
+import time
 
 
 class Clock:

@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import sys
+
 from . import term as T
 from .profiles_data import _default_map_dir
 
@@ -264,7 +265,7 @@ def daemonize(log_file: str) -> bool:
 
     sys.stdout.flush()
     sys.stderr.flush()
-    devnull = open(os.devnull, "r")
+    devnull = open(os.devnull)
     os.dup2(devnull.fileno(), sys.stdin.fileno())
     log_f = open(log_file, "a")
     os.dup2(log_f.fileno(), sys.stdout.fileno())

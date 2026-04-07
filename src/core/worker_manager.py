@@ -30,9 +30,9 @@ class WorkerManager:
 
     def __init__(self, n_workers: int = 4):
         self._n_workers = n_workers
-        self._workers: Dict[int, Worker] = {}
-        self._cmd_queues: Dict[int, multiprocessing.Queue] = {}
-        self._resp_queues: Dict[int, multiprocessing.Queue] = {}
+        self._workers: dict[int, Worker] = {}
+        self._cmd_queues: dict[int, multiprocessing.Queue] = {}
+        self._resp_queues: dict[int, multiprocessing.Queue] = {}
         self._started = False
 
     def start(self) -> None:
@@ -70,7 +70,7 @@ class WorkerManager:
         return resp
 
     def deploy(self, worker_id: int, module_cls: type, module_id: str,
-               args: tuple = (), kwargs: Optional[dict] = None) -> None:
+               args: tuple = (), kwargs: dict | None = None) -> None:
         """Instantiate a Module class inside a worker process."""
         self._send(worker_id, ("DEPLOY", module_cls, module_id, args, kwargs or {}))
 
@@ -87,7 +87,7 @@ class WorkerManager:
         self._send(worker_id, ("STOP", module_id))
 
     def rpc_call(self, worker_id: int, module_id: str, method: str,
-                 kwargs: Optional[dict] = None,
+                 kwargs: dict | None = None,
                  timeout: float = _DEFAULT_TIMEOUT) -> Any:
         """Call an @rpc method on a module running in a worker.
 
@@ -105,12 +105,12 @@ class WorkerManager:
         resp = self._send(worker_id, ("HEALTH", module_id))
         return resp[1] if resp[0] == "RESULT" else {}
 
-    def list_modules(self, worker_id: int) -> List[str]:
+    def list_modules(self, worker_id: int) -> list[str]:
         """Return list of module_ids deployed to a worker."""
         resp = self._send(worker_id, ("LIST",))
         return resp[1] if resp[0] == "RESULT" else []
 
-    def get_skills(self, worker_id: int, module_id: str) -> List[dict]:
+    def get_skills(self, worker_id: int, module_id: str) -> list[dict]:
         """Return serialized SkillInfo list for a module in a worker."""
         resp = self._send(worker_id, ("GET_SKILLS", module_id))
         return resp[1] if resp[0] == "RESULT" else []
@@ -142,7 +142,7 @@ class WorkerManager:
         self._started = False
         logger.info("WorkerManager: all workers shut down")
 
-    def get_pid(self, worker_id: int) -> Optional[int]:
+    def get_pid(self, worker_id: int) -> int | None:
         """Return the OS PID of a worker process, or None if not started."""
         w = self._workers.get(worker_id)
         return w.pid if w is not None else None

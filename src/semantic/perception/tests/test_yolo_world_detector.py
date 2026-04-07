@@ -11,16 +11,17 @@ YOLO-World检测器单元测试 (与实际 yolo_world_detector.py API 对齐)
 - 错误处理
 """
 
-import unittest
-import numpy as np
-from unittest.mock import Mock, patch, MagicMock
-
-import sys
 import os
+import sys
+import unittest
+from unittest.mock import MagicMock, Mock, patch
+
+import numpy as np
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from semantic.perception.semantic_perception.yolo_world_detector import YOLOWorldDetector
 from semantic.perception.semantic_perception.detector_base import Detection2D
+from semantic.perception.semantic_perception.yolo_world_detector import YOLOWorldDetector
 
 
 class TestYOLOWorldDetectorInit(unittest.TestCase):

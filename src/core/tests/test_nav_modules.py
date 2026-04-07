@@ -14,13 +14,12 @@ import numpy as np
 
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import OccupancyGrid, Odometry, Path
-from core.msgs.sensor import PointCloud2
 from core.msgs.semantic import ExecutionEval, SafetyState
+from core.msgs.sensor import PointCloud2
 
 # ---------------------------------------------------------------------------
 # 1. WaypointTracker
 # ---------------------------------------------------------------------------
-
 from nav.waypoint_tracker import (
     EV_PATH_COMPLETE,
     EV_STUCK,

@@ -6,12 +6,11 @@
 
 import pytest
 from semantic_planner.legacy.skill_registry import (
-    SkillRegistry,
     LingTuNavigationSkills,
-    skill,
+    SkillRegistry,
     _extract_parameters,
+    skill,
 )
-
 
 # ---------------------------------------------------------------------------
 # 辅助: 最小 skill 类
@@ -304,7 +303,7 @@ class TestToLangchainTools:
     def test_langchain_tools_count_if_available(self):
         """如果 langchain_core 可用，tools 数量应等于已注册 skill 数量。"""
         try:
-            import langchain_core  # noqa: F401
+            import langchain_core
             tools = self.registry.to_langchain_tools()
             assert len(tools) == 11
         except ImportError:

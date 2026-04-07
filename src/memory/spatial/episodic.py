@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 import logging
-import time
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -21,9 +21,9 @@ class MemoryRecord:
     timestamp: float          # Unix 时间戳
     position: np.ndarray      # shape (2,) 或 (3,), [x, y] 或 [x, y, z]
     description: str          # 自然语言描述
-    labels: List[str]         # 可见标签列表
+    labels: list[str]         # 可见标签列表
     room_type: str = ""       # 推测房间类型
-    embedding: Optional[np.ndarray] = None  # 文本嵌入（可选）
+    embedding: np.ndarray | None = None  # 文本嵌入（可选）
 
 
 class EpisodicMemory:
@@ -39,7 +39,7 @@ class EpisodicMemory:
     MIN_DISTANCE_M = 1.0   # 同一位置 1m 内不重复记录
 
     def __init__(self, clip_encoder: object | None = None) -> None:
-        self._records: List[MemoryRecord] = []
+        self._records: list[MemoryRecord] = []
         self._clip = clip_encoder
         self._lock = threading.Lock()
 
@@ -48,9 +48,9 @@ class EpisodicMemory:
     def add(
         self,
         position: np.ndarray,
-        labels: List[str],
+        labels: list[str],
         room_type: str = "",
-        description: Optional[str] = None,
+        description: str | None = None,
     ) -> None:
         """添加一条记忆记录"""
         pos = np.array(position, dtype=float)
@@ -104,8 +104,8 @@ class EpisodicMemory:
         self,
         query: str,
         top_k: int = 3,
-        max_age_sec: Optional[float] = None,
-    ) -> List[MemoryRecord]:
+        max_age_sec: float | None = None,
+    ) -> list[MemoryRecord]:
         """语义文本检索"""
         with self._lock:
             candidates = self._filter_by_age(max_age_sec)
@@ -139,7 +139,7 @@ class EpisodicMemory:
         position: np.ndarray,
         radius: float = 3.0,
         top_k: int = 5,
-    ) -> List[MemoryRecord]:
+    ) -> list[MemoryRecord]:
         """空间范围检索"""
         pos = np.array(position, dtype=float)
         if not np.isfinite(pos[:2]).all():
@@ -156,7 +156,7 @@ class EpisodicMemory:
 
     # ---------- 格式化 ----------
 
-    def format_for_llm(self, records: List[MemoryRecord]) -> str:
+    def format_for_llm(self, records: list[MemoryRecord]) -> str:
         """格式化为 LLM 可读字符串"""
         if not records:
             return "（无相关历史记忆）"
@@ -182,7 +182,7 @@ class EpisodicMemory:
         summaries = [f"  {r.description}" for r in recent]
         return "【近期探索记忆】\n" + "\n".join(summaries)
 
-    def recent_n(self, n: int = 10) -> List[MemoryRecord]:
+    def recent_n(self, n: int = 10) -> list[MemoryRecord]:
         """Return the last *n* records (oldest first within the slice)."""
         if n <= 0:
             return []
@@ -195,7 +195,7 @@ class EpisodicMemory:
 
     # ---------- 内部 ----------
 
-    def _filter_by_age(self, max_age_sec: Optional[float]) -> List[MemoryRecord]:
+    def _filter_by_age(self, max_age_sec: float | None) -> list[MemoryRecord]:
         if max_age_sec is None:
             return list(self._records)
         cutoff = time.time() - max_age_sec

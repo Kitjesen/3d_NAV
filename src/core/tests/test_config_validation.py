@@ -1,5 +1,7 @@
 import unittest
-from core.config import RobotConfig, SpeedConfig, SafetyConfig, GeometryConfig, validate_config
+
+from core.config import GeometryConfig, RobotConfig, SafetyConfig, SpeedConfig, validate_config
+
 
 class TestConfigValidation(unittest.TestCase):
     def test_default_config_valid(self):

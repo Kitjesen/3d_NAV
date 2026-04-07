@@ -3,8 +3,19 @@
 import copy
 
 import pytest
-from core.registry import register, get, list_plugins, list_categories, auto_select, get_metadata, clear, snapshot, restore
+
 from core.module import Module
+from core.registry import (
+    auto_select,
+    clear,
+    get,
+    get_metadata,
+    list_categories,
+    list_plugins,
+    register,
+    restore,
+    snapshot,
+)
 
 
 def _snapshot_registry():

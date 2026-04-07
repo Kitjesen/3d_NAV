@@ -39,12 +39,12 @@ class SLAM:
         self._latest_cloud = None
         self._started = False
 
-    def start(self) -> "SLAM":
+    def start(self) -> SLAM:
         if self._started:
             return self
         try:
-            from slam.slam_module import SLAMModule
             from slam.slam_bridge_module import SlamBridgeModule
+            from slam.slam_module import SLAMModule
 
             if self._mode != "bridge":
                 self._slam_module = SLAMModule(backend=self._mode)
@@ -79,7 +79,7 @@ class SLAM:
         o = self._latest_odom
         return (o.x, o.y, o.z, o.yaw)
 
-    def get_map_cloud(self) -> Optional[np.ndarray]:
+    def get_map_cloud(self) -> np.ndarray | None:
         """Latest map point cloud (N,3)."""
         return self._latest_cloud
 

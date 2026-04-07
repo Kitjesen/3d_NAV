@@ -17,18 +17,18 @@ Or standalone:
 from __future__ import annotations
 
 import logging
-import time
 import threading
+import time
 from typing import Any, Dict, Optional
 
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
-from core.msgs.nav import Odometry, Path
 from core.msgs.geometry import PoseStamped, Twist
-from core.msgs.semantic import SceneGraph, SafetyState
+from core.msgs.nav import Odometry, Path
+from core.msgs.semantic import SafetyState, SceneGraph
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ class RerunModule(Module, layer=6):
 
     # -- Health ---------------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["rerun"] = {
             "available": _RERUN_AVAILABLE,

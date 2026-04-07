@@ -17,9 +17,10 @@ import threading
 from typing import Any, Dict, Optional
 
 from core.module import Module
-from core.stream import In, Out
 from core.msgs.nav import Odometry
-from core.msgs.semantic import GoalResult as MsgGoalResult, SceneGraph
+from core.msgs.semantic import GoalResult as MsgGoalResult
+from core.msgs.semantic import SceneGraph
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,9 @@ class GoalResolverModule(Module, layer=4):
         self._confidence_threshold: float = config.get("confidence_threshold", 0.6)
         self._entropy_threshold: float = config.get("entropy_threshold", 1.5)
         self._use_slow_path: bool = config.get("use_slow_path", True)
-        self._resolver: Optional[Any] = None
-        self._latest_sg: Optional[SceneGraph] = None
-        self._latest_odom: Optional[Odometry] = None
+        self._resolver: Any | None = None
+        self._latest_sg: SceneGraph | None = None
+        self._latest_odom: Odometry | None = None
         self._lock = threading.Lock()
 
     def setup(self) -> None:
@@ -180,7 +181,7 @@ class GoalResolverModule(Module, layer=4):
             reasoning="offline keyword match: " + str(best_obj.get("label", "")),
             is_valid=True, path="fast")
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["fast_hits"] = getattr(self, "_fast_hits", 0)
         info["slow_calls"] = getattr(self, "_slow_calls", 0)

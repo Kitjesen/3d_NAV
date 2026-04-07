@@ -1,19 +1,22 @@
 from __future__ import annotations
-import a_star
+
 import typing
+
+import a_star
 import numpy
-_Shape = typing.Tuple[int, ...]
+
+_Shape = tuple[int, ...]
 
 __all__ = [
-    "Astar",
     "DIAGONAL",
     "EUCLIDEAN",
-    "HeuristicType",
-    "MANHATTAN"
+    "MANHATTAN",
+    "Astar",
+    "HeuristicType"
 ]
 
 
-class Astar():
+class Astar:
     def __init__(self, h_type: HeuristicType = HeuristicType.DIAGONAL) -> None: ...
     def debug(self) -> None: ...
     def get_cost_layer(self, arg0: int) -> numpy.ndarray[numpy.float64, _Shape[m, n]]: ...
@@ -23,7 +26,7 @@ class Astar():
     def init(self, arg0: float, arg1: int, arg2: float, arg3: numpy.ndarray[numpy.float64, _Shape[m, n]], arg4: numpy.ndarray[numpy.float64, _Shape[m, n]], arg5: numpy.ndarray[numpy.float64, _Shape[m, n]]) -> None: ...
     def search(self, arg0: numpy.ndarray[numpy.int32, _Shape[3, 1]], arg1: numpy.ndarray[numpy.int32, _Shape[3, 1]]) -> bool: ...
     pass
-class HeuristicType():
+class HeuristicType:
     """
     Members:
 

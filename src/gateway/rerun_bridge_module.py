@@ -22,10 +22,10 @@ from typing import Any, Optional
 import numpy as np
 
 from core.module import Module, skill
-from core.stream import In, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -243,12 +243,12 @@ class RerunBridgeModule(Module, layer=6):
         try:
             from core.ros2_context import ensure_rclpy, get_shared_executor
             ensure_rclpy()
+            from nav_msgs.msg import OccupancyGrid, Path
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from sensor_msgs.msg import Image
-            from nav_msgs.msg import OccupancyGrid, Path
-            from visualization_msgs.msg import MarkerArray
             from tf2_msgs.msg import TFMessage
+            from visualization_msgs.msg import MarkerArray
 
             qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=5)
             qos_be = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=5)

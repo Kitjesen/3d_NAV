@@ -29,8 +29,8 @@ import logging
 from typing import Any, Dict, Optional
 
 from core.module import Module
-from core.stream import Out
 from core.registry import register
+from core.stream import Out
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ class SLAMModule(Module, layer=1):
         self.alive.publish(False)
         super().stop()
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         node_info = {}
         if self._node:

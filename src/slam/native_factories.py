@@ -28,7 +28,7 @@ from core.native_module import NativeModule, NativeModuleConfig
 from core.utils.livox_config import ensure_mid360_config_file
 
 
-def livox_driver(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def livox_driver(cfg: RobotConfig | None = None) -> NativeModule:
     """Livox MID-360 ROS2 driver — /lidar/scan (CustomMsg) + /imu/data."""
     cfg = cfg or get_config()
     # Enterprise rule: single source of truth.
@@ -56,7 +56,7 @@ def livox_driver(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def slam_fastlio2(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def slam_fastlio2(cfg: RobotConfig | None = None) -> NativeModule:
     """Fast-LIO2 — LiDAR-inertial odometry + mapping."""
     cfg = cfg or get_config()
     # Auto-select optimized config on S100P (aarch64 ARM CPU)
@@ -86,7 +86,7 @@ def slam_fastlio2(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def slam_pgo(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def slam_pgo(cfg: RobotConfig | None = None) -> NativeModule:
     """PGO node — Pose Graph Optimization for map saving.
 
     Must run alongside Fast-LIO2; provides /pgo/save_maps service.
@@ -110,7 +110,7 @@ def slam_pgo(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def slam_localizer(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def slam_localizer(cfg: RobotConfig | None = None) -> NativeModule:
     """ICP Localizer — localization against a pre-built PCD map.
 
     Requires Fast-LIO2 for real-time LiDAR odometry.
@@ -146,7 +146,7 @@ def slam_localizer(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def slam_hba(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def slam_hba(cfg: RobotConfig | None = None) -> NativeModule:
     """HBA — Hierarchical Bundle Adjustment for map refinement.
 
     Post-processing step: loads PGO patches + poses, runs multi-iteration BA,
@@ -168,7 +168,7 @@ def slam_hba(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def slam_genz_icp(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def slam_genz_icp(cfg: RobotConfig | None = None) -> NativeModule:
     """GenZ-ICP — degeneracy-robust LiDAR odometry (RA-L 2025).
 
     Adaptive P2Plane + P2Point weighting for corridor/tunnel robustness.
@@ -209,7 +209,7 @@ def slam_genz_icp(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def slam_pointlio(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def slam_pointlio(cfg: RobotConfig | None = None) -> NativeModule:
     """Point-LIO SLAM — alternative to Fast-LIO2."""
     cfg = cfg or get_config()
     config_path = cfg.raw.get("slam", {}).get(

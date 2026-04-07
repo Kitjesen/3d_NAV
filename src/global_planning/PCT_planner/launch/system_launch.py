@@ -73,15 +73,16 @@
     ================================================================================
 """
 
-from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution, LaunchConfiguration, PythonExpression
-from launch.actions import DeclareLaunchArgument
-from launch_ros.substitutions import FindPackageShare
 import os
+
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
 
 def generate_launch_description():
     """
@@ -107,65 +108,65 @@ def generate_launch_description():
         description='地图文件路径（不含扩展名）。PCT使用基础名称，Localizer加载.pcd文件'
     )
     map_path = LaunchConfiguration('map_path')
-    
+
     # Tomogram地图构建参数（仅在.pickle不存在时从PCD构建时使用）
     tomogram_resolution_arg = DeclareLaunchArgument(
-        'tomogram_resolution', 
-        default_value='0.2', 
+        'tomogram_resolution',
+        default_value='0.2',
         description='体素网格分辨率 (米)，用于从PCD构建Tomogram'
     )
     tomogram_slice_dh_arg = DeclareLaunchArgument(
-        'tomogram_slice_dh', 
-        default_value='0.5', 
+        'tomogram_slice_dh',
+        default_value='0.5',
         description='层高步长 (米)，用于分层处理3D地图'
     )
     tomogram_ground_h_arg = DeclareLaunchArgument(
-        'tomogram_ground_h', 
-        default_value='0.0', 
+        'tomogram_ground_h',
+        default_value='0.0',
         description='地面高度基准 (米)'
     )
     tomogram_resolution = LaunchConfiguration('tomogram_resolution')
     tomogram_slice_dh = LaunchConfiguration('tomogram_slice_dh')
     tomogram_ground_h = LaunchConfiguration('tomogram_ground_h')
-    
+
     # 生成Localizer的PCD地图路径：map_path + ".pcd"
     static_map_path_pcd = PythonExpression(['"', map_path, '" + ".pcd"'])
-    
+
     # --- 初始位姿参数 ---
     # 用于Localizer的初始定位位置（相对于地图坐标系）
     x_arg = DeclareLaunchArgument(
-        'x', 
-        default_value='0.0', 
+        'x',
+        default_value='0.0',
         description='初始X坐标 (米)'
     )
     y_arg = DeclareLaunchArgument(
-        'y', 
-        default_value='0.0', 
+        'y',
+        default_value='0.0',
         description='初始Y坐标 (米)'
     )
     z_arg = DeclareLaunchArgument(
-        'z', 
-        default_value='0.0', 
+        'z',
+        default_value='0.0',
         description='初始Z坐标 (米)'
     )
     yaw_arg = DeclareLaunchArgument(
-        'yaw', 
-        default_value='0.0', 
+        'yaw',
+        default_value='0.0',
         description='初始偏航角 (弧度)'
     )
-    
+
     initial_x = LaunchConfiguration('x')
     initial_y = LaunchConfiguration('y')
     initial_z = LaunchConfiguration('z')
     initial_yaw = LaunchConfiguration('yaw')
 
     # ==================== 配置文件路径 ====================
-    
+
     # FASTLIO2配置文件
     lio_config_path = PathJoinSubstitution([
         FindPackageShare("fastlio2"), "config", "lio.yaml"
     ])
-    
+
     # Localizer配置文件
     localizer_config_path = PathJoinSubstitution([
         FindPackageShare("localizer"), "config", "localizer.yaml"
@@ -229,26 +230,26 @@ def generate_launch_description():
         'sensorOffsetX': 0.3,              # 传感器X偏移 (米)
         'sensorOffsetY': 0.0,              # 传感器Y偏移 (米)
         'twoWayDrive': True,               # 支持双向行驶
-        
+
         # --- 点云处理参数 ---
         'laserVoxelSize': 0.05,            # 激光点云体素大小 (米)
         'terrainVoxelSize': 0.2,           # 地形体素大小 (米)
         'useTerrainAnalysis': True,        # 使用地形分析
-        
+
         # --- 障碍物检测参数 ---
         'checkObstacle': True,             # 启用障碍物检测
         'checkRotObstacle': False,         # 检测旋转时的障碍物
         'adjacentRange': 3.5,              # 检测范围 (米)
         'obstacleHeightThre': 0.2,         # 障碍物高度阈值 (米)
         'groundHeightThre': 0.1,           # 地面高度阈值 (米)
-        
+
         # --- 代价函数参数 ---
         'costHeightThre1': 0.15,           # 代价高度阈值1 (米)
         'costHeightThre2': 0.1,            # 代价高度阈值2 (米)
         'useCost': False,                  # 使用代价地图
         'slowPathNumThre': 5,              # 触发减速的路径数量阈值
         'slowGroupNumThre': 1,             # 触发减速的路径组阈值
-        
+
         # --- 路径选择参数 ---
         'pointPerPathThre': 2,             # 每条路径点数阈值
         'minRelZ': -0.5,                   # 最小相对高度 (米)
@@ -259,7 +260,7 @@ def generate_launch_description():
         'pathScale': 1.0,                  # 路径缩放比例
         'minPathScale': 0.75,              # 最小路径缩放
         'pathScaleStep': 0.25,             # 路径缩放步长
-        
+
         # --- 速度控制参数 ---
         'maxSpeed': 0.5,                   # 最大速度 (米/秒)
         'pathScaleBySpeed': True,          # 根据速度缩放路径
@@ -267,7 +268,7 @@ def generate_launch_description():
         'pathRangeStep': 0.5,              # 路径范围步长 (米)
         'pathRangeBySpeed': True,          # 根据速度调整路径范围
         'pathCropByGoal': True,            # 根据目标裁剪路径
-        
+
         # --- 自主模式参数 ---
         'autonomyMode': True,              # 启用自主导航模式
         'autonomySpeed': 0.5,              # 自主模式速度 (米/秒)
@@ -288,7 +289,7 @@ def generate_launch_description():
         'sensorOffsetX': 0.0,              # 传感器X偏移 (米)
         'sensorOffsetY': 0.0,              # 传感器Y偏移 (米)
         'pubSkipNum': 1,                   # 发布跳帧数
-        
+
         # --- 运动控制参数 ---
         'twoWayDrive': True,               # 支持双向行驶
         'lookAheadDis': 0.5,               # 前瞻距离 (米)
@@ -319,7 +320,7 @@ def generate_launch_description():
         'stopTime': 5.0,                   # 停止持续时间 (秒)
         'noRotAtStop': False,              # 停止时不旋转
         'noRotAtGoal': True,               # 到达目标不旋转
-        
+
         # --- 自主模式参数 ---
         'autonomyMode': True,              # 启用自主导航模式
         'autonomySpeed': 0.5,              # 自主模式速度 (米/秒)
@@ -332,16 +333,16 @@ def generate_launch_description():
         'deadzone': 0.1,                              # 死区阈值
         'autorepeat_rate': 20.0,                      # 自动重复频率 (Hz)
     }
-    
+
     # ==================== 感知层：定位与建图 ====================
-    
+
     # FASTLIO2节点：实时激光SLAM
     # 功能：点云配准、里程计估计、实时地图构建
     # 输出：
     #   - /cloud_registered: 当前帧配准点云（body/sensor坐标系）
     #   - /cloud_map: 全局累积点云地图（map坐标系）⭐重要⭐
     #   - /Odometry: 位姿估计
-    # 
+    #
     # 说明：
     #   - /cloud_registered 是"当前scan"，表示当前时刻的激光扫描
     #   - /cloud_map 是"全局地图"，包含所有历史扫描的累积
@@ -360,7 +361,7 @@ def generate_launch_description():
             ("lio_path", "/lio_path"),            # 运动轨迹
         ]
     )
-    
+
     # Localizer节点：基于先验地图的定位
     # 功能：在已知地图中进行精确定位
     # 输入：
@@ -383,9 +384,9 @@ def generate_launch_description():
             {"initial_yaw": initial_yaw}
         ],
     )
-    
+
     # ==================== 激光雷达驱动 ====================
-    
+
     # Livox MID360激光雷达驱动
     # 功能：采集360度视场的3D点云数据
     # 输出：原始点云数据
@@ -400,7 +401,7 @@ def generate_launch_description():
     )
 
     # ==================== 全局规划层 ====================
-    
+
     # --- PCT全局规划器 ---
     # 功能：基于Tomogram 3D地图生成全局路径
     # 输入：
@@ -408,13 +409,13 @@ def generate_launch_description():
     #   - Tomogram地图（3D体素地图）
     # 输出：
     #   - /pct_global_path: 完整的3D全局路径
-    
+
     # 配置Python环境变量（包含PCT规划器的依赖路径）
     pct_share = get_package_share_directory('pct_planner')
     planner_dir = os.path.join(pct_share, 'planner')
     scripts_dir = os.path.join(planner_dir, 'scripts')
     lib_dir = os.path.join(planner_dir, 'lib')
-    
+
     # 构建PYTHONPATH：包含planner目录（配置/库）和scripts目录（工具）
     python_path = f"{planner_dir}:{scripts_dir}:{lib_dir}:{os.environ.get('PYTHONPATH', '')}"
 
@@ -426,7 +427,7 @@ def generate_launch_description():
         parameters=[pct_planner_params],
         env={'PYTHONPATH': python_path}
     )
-    
+
     # --- PCT路径适配器 ---
     # 功能：将全局路径切分为局部航点序列
     # 输入：
@@ -444,7 +445,7 @@ def generate_launch_description():
 
 
     # ==================== 地形分析层 ====================
-    
+
     # --- 基础地形分析 ---
     # 功能：分析地形的基本可通行性
     # 输入：
@@ -452,7 +453,7 @@ def generate_launch_description():
     # 输出：
     #   - /terrain_cloud: 地形点云
     #   - /terrain_local: 局部地形信息
-    # 
+    #
     # 说明：订阅/cloud_registered但通过remapping重定向到/cloud_map
     #       这样可以使用全局地图而非当前帧scan
     terrain_analysis_node = Node(
@@ -474,7 +475,7 @@ def generate_launch_description():
     # 输出：
     #   - /terrain_map: 增强的地形高度图（2.5D表示）
     #   - /terrain_map_ext: 扩展地形信息
-    # 
+    #
     # 工作流程：
     #   1. 接收全局点云地图 /cloud_map
     #   2. 构建体素化的地形表示
@@ -495,7 +496,7 @@ def generate_launch_description():
     )
 
     # ==================== 局部规划与控制层 ====================
-    
+
     # --- 局部规划器 ---
     # 功能：实时障碍物规避 + 局部轨迹规划（2.5D导航）
     # 输入：
@@ -506,7 +507,7 @@ def generate_launch_description():
     # 输出：
     #   - /path: 局部轨迹（nav_msgs/Path）
     #   - /slow_down: 减速指令
-    # 
+    #
     # 工作原理：
     #   1. 从预计算的路径库中选择候选路径
     #   2. 使用/cloud_map检测障碍物（全局地图信息）
@@ -534,7 +535,7 @@ def generate_launch_description():
     #   - /slow_down: 减速指令
     # 输出：
     #   - /cmd_vel: 速度指令（geometry_msgs/TwistStamped）
-    # 
+    #
     # 工作原理：
     #   1. 在路径上寻找前瞻点（lookahead point）
     #   2. 计算到达前瞻点的转向角速度
@@ -550,9 +551,9 @@ def generate_launch_description():
             # 发布 /cmd_vel（发送给机器人驱动）
         ]
     )
-    
+
     # ==================== 手动控制接口 ====================
-    
+
     # --- 手柄参数 ---
     joy_dev_arg = DeclareLaunchArgument(
         'joy_dev',
@@ -562,11 +563,11 @@ def generate_launch_description():
 
     # --- 手柄节点 ---
     # 功能：接收游戏手柄输入，用于手动控制
-    # 
+    #
     # 发布话题：
     #   - /joy (sensor_msgs/Joy): 手柄状态信息
     #       └─ 包含所有按键和摇杆的实时状态
-    # 
+    #
     # 订阅者（使用/joy话题的节点）：
     #   ├─ Local Planner (localPlanner)
     #   │  └─ 用途：手动/自主模式切换、障碍物检测开关、速度控制
@@ -582,7 +583,7 @@ def generate_launch_description():
     #          - axes[0]: 角速度控制（转向）
     #          - axes[2]: 自主模式开关
     #          - axes[5]: 手动模式开关
-    # 
+    #
     # 用途总结：
     #   - 手动控制机器人移动（摇杆）
     #   - 自主/手动模式切换（扳机键）
@@ -595,14 +596,14 @@ def generate_launch_description():
         output='screen',
         parameters=[joy_params]
     )
-    
+
     # ==================== 坐标变换 ====================
-    
+
     # 注意：在system_launch中，localizer_node会动态发布map->lidar变换
     # 不需要静态变换，否则会产生TF冲突（TF抖动）
-    
+
     # ==================== 可视化工具 ====================
-    
+
     # --- 可视化节点（可选）---
     # 功能：在RViz中可视化导航状态
     # 注意：当前已注释，根据需要启用
@@ -618,7 +619,7 @@ def generate_launch_description():
     # )
 
     # ==================== 启动描述组装 ====================
-    
+
     return LaunchDescription([
         # --- 启动参数 ---
         map_path_arg,                  # 地图路径参数
@@ -627,27 +628,27 @@ def generate_launch_description():
         tomogram_ground_h_arg,         # Tomogram地面高度参数
         x_arg, y_arg, z_arg, yaw_arg,  # 初始位姿参数
         joy_dev_arg,                   # 手柄设备参数
-        
+
         # --- 感知层 ---
         livox_launch,                  # Livox MID360激光雷达驱动
         lio_node,                      # FASTLIO2 实时SLAM
         localizer_node,                # 基于先验地图的定位
-        
+
         # --- 全局规划层 ---
         pct_planner,                   # PCT 3D全局路径规划器
         pct_adapter,                   # PCT路径适配器（全局→局部）
-        
+
         # --- 地形分析层 ---
         terrain_analysis_node,         # 基础地形分析
         terrain_analysis_ext_node,     # 扩展地形分析
-        
+
         # --- 局部规划与控制层 ---
         local_planner_node,            # 局部规划器（障碍物规避）
         path_follower_node,            # 路径跟踪器（Pure Pursuit）
-        
+
         # --- 硬件与手动控制 ---
         # robot_driver,                # 机器人底盘驱动（已注释）
         joy_node,                      # 游戏手柄接口
-        
+
         # --- 可视化 ---
     ])

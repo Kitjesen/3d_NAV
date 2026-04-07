@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from core.msgs.geometry import Quaternion, Vector3
 from core.msgs.sensor import (
     CameraIntrinsics,
     Image,
@@ -10,8 +11,6 @@ from core.msgs.sensor import (
     Imu,
     PointCloud2,
 )
-from core.msgs.geometry import Quaternion, Vector3
-
 
 # ---------------------------------------------------------------------------
 # Image

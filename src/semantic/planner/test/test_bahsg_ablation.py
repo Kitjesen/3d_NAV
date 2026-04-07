@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 test_bahsg_ablation.py — BA-HSG (Belief-Aware Hierarchical Scene Graph) 消融实验
 
@@ -28,7 +27,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-
 
 # ── 复用 instance_tracker 中的核心常量 ──
 BELIEF_NEG_EVIDENCE_WEIGHT = 0.5
@@ -141,7 +139,7 @@ def is_in_fov(
 #  场景生成
 # ============================================================
 
-def generate_objects(seed: int = 42) -> List[SimTrackedObject]:
+def generate_objects(seed: int = 42) -> list[SimTrackedObject]:
     """生成 100 个物体 (80 真实 + 20 误检)。"""
     rng = random.Random(seed)
     np_rng = np.random.RandomState(seed)
@@ -191,7 +189,7 @@ def generate_objects(seed: int = 42) -> List[SimTrackedObject]:
 
 def generate_camera_trajectory(
     num_steps: int, seed: int = 123,
-) -> List[Tuple[np.ndarray, np.ndarray]]:
+) -> list[tuple[np.ndarray, np.ndarray]]:
     """生成相机轨迹: (position, forward_direction) 序列。"""
     rng = np.random.RandomState(seed)
     trajectory = []
@@ -222,7 +220,7 @@ class AblationMode:
 def run_simulation(
     mode: str,
     seed: int = 42,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """运行一次消融模拟, 返回指标。"""
     objects = generate_objects(seed)
     trajectory = generate_camera_trajectory(NUM_STEPS, seed + 1)

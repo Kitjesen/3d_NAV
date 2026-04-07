@@ -31,8 +31,8 @@ def create_perception_pipeline(
     bpu_iou_threshold: float = 0.45,
     bpu_max_detections: int = 64,
     bpu_min_box_size_px: int = 12,
-    bpu_model_path: Optional[str] = None,
-    class_whitelist: Optional[List[str]] = None,
+    bpu_model_path: str | None = None,
+    class_whitelist: list[str] | None = None,
     frame_width: int = 640,
     frame_height: int = 480,
     reid_backbone: str = "osnet_x1_0",
@@ -77,10 +77,10 @@ def create_perception_pipeline(
 
     # qp_perception 跟踪器 + 选择器
     try:
-        from qp_perception.tracking.fusion import FusionMOT, FusionMOTConfig
+        from qp_perception.config import SelectorConfig
         from qp_perception.reid.extractor import ReIDConfig, ReIDExtractor
         from qp_perception.selection.weighted import WeightedTargetSelector
-        from qp_perception.config import SelectorConfig
+        from qp_perception.tracking.fusion import FusionMOT, FusionMOTConfig
 
         # Re-ID
         reid_cfg = ReIDConfig(backbone=reid_backbone, device="")
@@ -193,7 +193,7 @@ class BPUDetectorAdapter:
     def __init__(
         self,
         bpu_detector,
-        class_whitelist: Optional[List[str]] = None,
+        class_whitelist: list[str] | None = None,
         text_prompt: str = "",
     ):
         self._bpu = bpu_detector
@@ -246,7 +246,7 @@ class PerceptionPipeline:
         self._frame_count = 0
         self._total_ms = 0.0
 
-    def process(self, frame: np.ndarray, timestamp: Optional[float] = None):
+    def process(self, frame: np.ndarray, timestamp: float | None = None):
         """
         处理一帧，返回 (tracks, target)。
 

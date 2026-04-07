@@ -17,15 +17,18 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from memory.spatial.topology_graph import TopologySemGraph
 from semantic.perception.semantic_perception.geometry_extractor import GeometryExtractor
 from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner
-from semantic.perception.semantic_perception.leiden_segmentation import LeidenConfig, LeidenSegmenter
+from semantic.perception.semantic_perception.leiden_segmentation import (
+    LeidenConfig,
+    LeidenSegmenter,
+)
 from semantic.perception.semantic_perception.polyhedron_expansion import (
     PolyhedronExpander,
     PolyhedronExpansionConfig,
 )
 from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
-from memory.spatial.topology_graph import TopologySemGraph
 
 
 def create_mock_environment():

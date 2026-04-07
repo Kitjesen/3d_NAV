@@ -19,7 +19,7 @@ from typing import Any, Dict
 from core.config import RobotConfig
 
 
-def build_mid360_config_dict(cfg: RobotConfig) -> Dict[str, Any]:
+def build_mid360_config_dict(cfg: RobotConfig) -> dict[str, Any]:
     """Return a MID360_config.json-compatible dict for livox_ros_driver2."""
     lidar_ip = cfg.lidar.lidar_ip
     host_ip = cfg.lidar.host_ip
@@ -35,7 +35,7 @@ def build_mid360_config_dict(cfg: RobotConfig) -> Dict[str, Any]:
             v = default
         return v
 
-    cfg_dict: Dict[str, Any] = {
+    cfg_dict: dict[str, Any] = {
         "lidar_summary_info": {"lidar_type": 8},
         "MID360": {
             "lidar_net_info": {

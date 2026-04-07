@@ -6,10 +6,11 @@ Semantic Perception API - 检测器接口
 
 from abc import ABC, abstractmethod
 from typing import List, Optional
+
 import numpy as np
 
-from .types import Detection2D
 from .exceptions import DetectorError
+from .types import Detection2D
 
 
 class DetectorAPI(ABC):
@@ -27,7 +28,7 @@ class DetectorAPI(ABC):
     """
 
     @abstractmethod
-    def detect(self, image: np.ndarray) -> List[Detection2D]:
+    def detect(self, image: np.ndarray) -> list[Detection2D]:
         """
         检测图像中的物体
 
@@ -44,7 +45,7 @@ class DetectorAPI(ABC):
         pass
 
     @abstractmethod
-    def set_classes(self, classes: List[str]):
+    def set_classes(self, classes: list[str]):
         """
         设置检测类别（开放词汇检测）
 
@@ -57,7 +58,7 @@ class DetectorAPI(ABC):
         pass
 
     @abstractmethod
-    def get_classes(self) -> List[str]:
+    def get_classes(self) -> list[str]:
         """
         获取当前检测类别
 

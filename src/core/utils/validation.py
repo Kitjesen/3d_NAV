@@ -30,7 +30,7 @@ def validate_bgr(
     *,
     allow_bgra: bool = True,
     caller: str = "",
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """校验 BGR 图像，自动转换 BGRA→BGR。
 
     Returns:
@@ -66,7 +66,7 @@ def validate_depth(
     img: np.ndarray,
     *,
     caller: str = "",
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """校验深度图 (uint16 或 float32, 2D)。
 
     Returns:
@@ -99,7 +99,7 @@ def validate_depth_pair(
     *,
     resize_depth: bool = True,
     caller: str = "",
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """校验 BGR 和 depth 尺寸对齐，必要时 resize depth。
 
     Returns:
@@ -159,7 +159,7 @@ def validate_intrinsics(
     height: int,
     *,
     caller: str = "",
-) -> Optional[IntrinsicsResult]:
+) -> IntrinsicsResult | None:
     """校验相机内参矩阵 K (长度 ≥ 6)。
 
     Args:
@@ -212,7 +212,7 @@ def normalize_quaternion(
     w: float,
     *,
     epsilon: float = 1e-6,
-) -> Optional[Tuple[float, float, float, float]]:
+) -> tuple[float, float, float, float] | None:
     """归一化四元数，返回 (x, y, z, w) 或 None。"""
     norm = math.sqrt(x * x + y * y + z * z + w * w)
     if norm < epsilon:

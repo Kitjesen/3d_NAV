@@ -21,8 +21,8 @@ import pytest
 
 from semantic.perception.semantic_perception.instance_tracker import (
     InstanceTracker,
-    RoomNode,
     Region,
+    RoomNode,
     TrackedObject,
 )
 

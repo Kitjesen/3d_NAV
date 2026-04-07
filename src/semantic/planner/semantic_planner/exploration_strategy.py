@@ -5,7 +5,7 @@
 """
 
 import json
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -15,7 +15,7 @@ from .goal_resolver import GoalResult
 
 def extract_frontier_scene_data(
     scene_graph_json: str,
-) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+) -> tuple[list[dict], list[dict], list[dict]]:
     """从场景图中抽取 Frontier 评分需要的 objects/relations/rooms 子集。"""
     try:
         sg = json.loads(scene_graph_json)
@@ -32,7 +32,7 @@ def extract_frontier_scene_data(
     if not isinstance(raw_rooms, list):
         raw_rooms = []
 
-    objects: List[Dict] = []
+    objects: list[dict] = []
     for obj in raw_objects:
         if not isinstance(obj, dict):
             continue
@@ -75,11 +75,11 @@ def extract_frontier_scene_data(
 def generate_frontier_goal(
     frontier_scorer: FrontierScorer,
     instruction: str,
-    robot_position: Dict[str, float],
-    visited_positions: Optional[List[np.ndarray]],
+    robot_position: dict[str, float],
+    visited_positions: list[np.ndarray] | None,
     scene_graph_json: str,
     score_threshold: float = 0.2,
-) -> Optional[GoalResult]:
+) -> GoalResult | None:
     """基于 Frontier 评分器生成探索目标。"""
     try:
         rx = float(robot_position.get("x", 0.0))

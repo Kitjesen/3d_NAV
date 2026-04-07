@@ -11,7 +11,6 @@ from typing import List, Optional
 
 import numpy as np
 
-
 LABEL_BACKGROUND = "background"
 LABEL_RADIUS_FACTOR = 1.5   # extent * factor = 最大匹配半径
 
@@ -20,7 +19,7 @@ class SemanticLabeler:
     """解析场景图，按距离为点云分配语义标签。"""
 
     def __init__(self):
-        self._objects: List[dict] = []   # [{label, position, radius}, ...]
+        self._objects: list[dict] = []   # [{label, position, radius}, ...]
         self._lock = threading.Lock()
 
     def update_from_scene_graph(self, scene_graph_json: str) -> int:
@@ -51,7 +50,7 @@ class SemanticLabeler:
 
         return len(parsed)
 
-    def label_cloud(self, xyzrgb: np.ndarray) -> List[str]:
+    def label_cloud(self, xyzrgb: np.ndarray) -> list[str]:
         """
         为 (N, 6) 点云中每个点分配语义标签。
 

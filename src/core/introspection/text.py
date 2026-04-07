@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-_LAYER_LABELS: Dict[Optional[int], str] = {
+_LAYER_LABELS: dict[int | None, str] = {
     0: "L0·Safety",
     1: "L1·Driver",
     2: "L2·BaseAutonomy",
@@ -54,7 +54,7 @@ def render_text(handle: Any, *, color: bool = True) -> str:
 
     title_status = f"{G}RUNNING{X}" if started else f"{R}STOPPED{X}"
 
-    lines: List[str] = []
+    lines: list[str] = []
     W = 64
     lines.append(f"{B}{'═' * W}{X}")
     lines.append(
@@ -64,7 +64,7 @@ def render_text(handle: Any, *, color: bool = True) -> str:
     lines.append(f"{B}{'═' * W}{X}")
 
     # Group modules by layer
-    by_layer: Dict[Optional[int], List[str]] = defaultdict(list)
+    by_layer: dict[int | None, list[str]] = defaultdict(list)
     for name in modules:
         by_layer[getattr(modules[name], "layer", None)].append(name)
 

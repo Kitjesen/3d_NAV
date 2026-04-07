@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 _MAX_IMAGE_DIM = 512
 
 
-def _encode_image(image: np.ndarray) -> Optional[str]:
+def _encode_image(image: np.ndarray) -> str | None:
     """Resize image to max _MAX_IMAGE_DIM, encode as JPEG base64.
 
     Args:
@@ -74,7 +74,7 @@ def _encode_image(image: np.ndarray) -> Optional[str]:
         return None
 
 
-def _encode_image_pil(image: np.ndarray) -> Optional[str]:
+def _encode_image_pil(image: np.ndarray) -> str | None:
     """Fallback encoder using PIL when OpenCV is unavailable."""
     if image is None or image.size == 0:
         return None
@@ -95,7 +95,7 @@ def _encode_image_pil(image: np.ndarray) -> Optional[str]:
         return None
 
 
-def encode_image_b64(image: np.ndarray) -> Optional[str]:
+def encode_image_b64(image: np.ndarray) -> str | None:
     """Encode numpy image to base64 JPEG string. Tries OpenCV first, then PIL."""
     b64 = _encode_image(image)
     if b64 is None:
@@ -226,7 +226,7 @@ class VLMSceneAgent:
         self,
         image: np.ndarray,
         goal: str,
-        scene_graph: Optional[dict] = None,
+        scene_graph: dict | None = None,
     ) -> dict:
         """Ask the VLM whether the current view helps the robot reach its goal.
 
@@ -383,7 +383,7 @@ class VLMSceneAgent:
         self,
         prompt: str,
         image_b64: str,
-        extra_images: Optional[list] = None,
+        extra_images: list | None = None,
     ) -> str:
         """Generic OpenAI-compatible multimodal chat() call."""
         content = [

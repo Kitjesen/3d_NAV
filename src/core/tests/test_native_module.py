@@ -5,14 +5,13 @@ Uses mock subprocess to avoid needing real C++ binaries.
 
 import os
 import sys
-import time
 import threading
+import time
 import unittest
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
-from core.native_module import NativeModule, NativeModuleConfig
 from core.blueprint import Blueprint
-
+from core.native_module import NativeModule, NativeModuleConfig
 
 # ---------------------------------------------------------------------------
 # Helper: create a config pointing to a real executable (python itself)

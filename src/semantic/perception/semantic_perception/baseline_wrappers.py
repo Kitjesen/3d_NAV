@@ -72,7 +72,7 @@ class BasePlanner(ABC):
         pass
 
     @abstractmethod
-    def plan(self, start: np.ndarray, goal: np.ndarray) -> Optional[np.ndarray]:
+    def plan(self, start: np.ndarray, goal: np.ndarray) -> np.ndarray | None:
         """
         规划路径。
 
@@ -86,7 +86,7 @@ class BasePlanner(ABC):
         pass
 
     @abstractmethod
-    def get_statistics(self) -> Dict:
+    def get_statistics(self) -> dict:
         """
         获取统计信息。
 
@@ -128,7 +128,7 @@ class PCTAStarPlanner(BasePlanner):
     def initialize(
         self,
         resolution: float = 0.1,
-        size: Tuple[int, int, int] = (100, 100, 40),
+        size: tuple[int, int, int] = (100, 100, 40),
         origin: np.ndarray = None,
     ):
         """初始化 PCT A* 规划器。"""
@@ -153,7 +153,7 @@ class PCTAStarPlanner(BasePlanner):
 
         self.update_count += 1
 
-    def plan(self, start: np.ndarray, goal: np.ndarray) -> Optional[np.ndarray]:
+    def plan(self, start: np.ndarray, goal: np.ndarray) -> np.ndarray | None:
         """使用 A* 规划路径。"""
         if not self.initialized:
             raise RuntimeError("Planner not initialized")
@@ -190,7 +190,7 @@ class PCTAStarPlanner(BasePlanner):
         logger.info(f"PCT A* planned path: {len(path)} points, {planning_time*1000:.2f}ms")
         return path
 
-    def get_statistics(self) -> Dict:
+    def get_statistics(self) -> dict:
         """获取统计信息。"""
         return {
             "name": self.name,
@@ -210,7 +210,7 @@ class PCTAStarPlanner(BasePlanner):
             ),
         }
 
-    def _world_to_grid(self, world_pos: np.ndarray) -> Optional[Tuple[int, int, int]]:
+    def _world_to_grid(self, world_pos: np.ndarray) -> tuple[int, int, int] | None:
         """世界坐标 → 栅格坐标。"""
         grid_pos = ((world_pos - self.grid_origin) / self.resolution).astype(int)
 
@@ -219,16 +219,16 @@ class PCTAStarPlanner(BasePlanner):
 
         return tuple(grid_pos)
 
-    def _grid_to_world(self, grid_pos: Tuple[int, int, int]) -> np.ndarray:
+    def _grid_to_world(self, grid_pos: tuple[int, int, int]) -> np.ndarray:
         """栅格坐标 → 世界坐标。"""
         world_pos = (np.array(grid_pos) + 0.5) * self.resolution + self.grid_origin
         return world_pos
 
     def _astar_2d(
         self,
-        start: Tuple[int, int],
-        goal: Tuple[int, int],
-    ) -> Optional[List[Tuple[int, int]]]:
+        start: tuple[int, int],
+        goal: tuple[int, int],
+    ) -> list[tuple[int, int]] | None:
         """
         2D A* 搜索。
 
@@ -326,9 +326,11 @@ class USSNavPlanner(BasePlanner):
         """初始化 USS-Nav 规划器。"""
         # 导入 USS-Nav 组件
         try:
-            from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
-            from semantic.perception.semantic_perception.global_coverage_mask import GlobalCoverageMask
+            from semantic.perception.semantic_perception.global_coverage_mask import (
+                GlobalCoverageMask,
+            )
             from semantic.perception.semantic_perception.local_rolling_grid import LocalRollingGrid
+            from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
             from semantic.perception.semantic_perception.scg_path_planner import SCGPathPlanner
 
             # 创建组件
@@ -357,7 +359,7 @@ class USSNavPlanner(BasePlanner):
 
         self.update_count += 1
 
-    def plan(self, start: np.ndarray, goal: np.ndarray) -> Optional[np.ndarray]:
+    def plan(self, start: np.ndarray, goal: np.ndarray) -> np.ndarray | None:
         """使用 SCG 规划路径。"""
         if not self.initialized:
             raise RuntimeError("Planner not initialized")
@@ -387,7 +389,7 @@ class USSNavPlanner(BasePlanner):
 
         return path
 
-    def get_statistics(self) -> Dict:
+    def get_statistics(self) -> dict:
         """获取统计信息。"""
         return {
             "name": self.name,

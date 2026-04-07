@@ -7,8 +7,8 @@ import math
 import time
 import unittest
 
-from core import Module, In, Out, autoconnect
-from core.msgs.geometry import Twist, Vector3, Quaternion, Pose
+from core import In, Module, Out, autoconnect
+from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from drivers.thunder.han_dog_module import ThunderDriver
 

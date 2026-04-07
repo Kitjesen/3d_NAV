@@ -2,18 +2,17 @@
 TaggedLocationsModule -- frontier exploration and memory Module conversions.
 """
 
-import pytest
 import numpy as np
+import pytest
 
-from core import Module, In, Out, Blueprint, autoconnect
+from core import Blueprint, In, Module, Out, autoconnect
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.geometry import Pose, PoseStamped, Vector3, Quaternion
 from core.msgs.semantic import Detection3D, SceneGraph
-
-from semantic.planner.semantic_planner.frontier_module import FrontierModule
-from memory.modules.topological_module import TopologicalMemoryModule
 from memory.modules.episodic_module import EpisodicMemoryModule
 from memory.modules.tagged_locations_module import TaggedLocationsModule
+from memory.modules.topological_module import TopologicalMemoryModule
+from semantic.planner.semantic_planner.frontier_module import FrontierModule
 
 
 def _make_odom(x, y, z=0.0):

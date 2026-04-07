@@ -1,15 +1,18 @@
 from __future__ import annotations
-import ele_planner
+
 import typing
+
+import ele_planner
 import numpy
-_Shape = typing.Tuple[int, ...]
+
+_Shape = tuple[int, ...]
 
 __all__ = [
     "OfflineElePlanner"
 ]
 
 
-class OfflineElePlanner():
+class OfflineElePlanner:
     def __init__(self, max_heading_rate: float, use_quintic: bool = False) -> None: ...
     def debug(self) -> None: ...
     def get_debug_path(self) -> numpy.ndarray[numpy.float64, _Shape[m, n]]: ...

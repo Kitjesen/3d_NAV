@@ -11,14 +11,13 @@ import numpy as np
 import pytest
 
 from semantic.planner.semantic_planner.bbox_navigator import (
-    BBoxNavConfig,
-    BBoxNavigator,
     STATE_ARRIVED,
     STATE_IDLE,
     STATE_LOST,
     STATE_TRACKING,
+    BBoxNavConfig,
+    BBoxNavigator,
 )
-
 
 # ---------------------------------------------------------------------------
 # 测试辅助

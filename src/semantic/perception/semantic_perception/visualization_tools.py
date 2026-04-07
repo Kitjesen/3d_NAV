@@ -45,7 +45,7 @@ class PathVisualizer:
         visualizer.save("path_2d.png")
     """
 
-    def __init__(self, figsize: Tuple[int, int] = (12, 8)):
+    def __init__(self, figsize: tuple[int, int] = (12, 8)):
         """
         Args:
             figsize: 图像大小 (width, height)
@@ -57,9 +57,9 @@ class PathVisualizer:
     def plot_path_2d(
         self,
         path: np.ndarray,
-        occupancy_grid: Optional[np.ndarray] = None,
-        start: Optional[np.ndarray] = None,
-        goal: Optional[np.ndarray] = None,
+        occupancy_grid: np.ndarray | None = None,
+        start: np.ndarray | None = None,
+        goal: np.ndarray | None = None,
         title: str = "Path Visualization (2D)",
     ):
         """
@@ -111,9 +111,9 @@ class PathVisualizer:
     def plot_path_3d(
         self,
         path: np.ndarray,
-        point_cloud: Optional[np.ndarray] = None,
-        start: Optional[np.ndarray] = None,
-        goal: Optional[np.ndarray] = None,
+        point_cloud: np.ndarray | None = None,
+        start: np.ndarray | None = None,
+        goal: np.ndarray | None = None,
         title: str = "Path Visualization (3D)",
     ):
         """
@@ -207,7 +207,7 @@ class SCGVisualizer:
         visualizer.save("scg.png")
     """
 
-    def __init__(self, figsize: Tuple[int, int] = (14, 10)):
+    def __init__(self, figsize: tuple[int, int] = (14, 10)):
         """
         Args:
             figsize: 图像大小 (width, height)
@@ -389,7 +389,7 @@ class PerformanceVisualizer:
         visualizer.save("performance.png")
     """
 
-    def __init__(self, figsize: Tuple[int, int] = (14, 10)):
+    def __init__(self, figsize: tuple[int, int] = (14, 10)):
         """
         Args:
             figsize: 图像大小 (width, height)
@@ -398,8 +398,8 @@ class PerformanceVisualizer:
 
     def plot_comparison(
         self,
-        results: List,
-        metrics: List[str] = ['memory', 'update_time', 'planning_time'],
+        results: list,
+        metrics: list[str] = ['memory', 'update_time', 'planning_time'],
         title: str = "Performance Comparison",
     ):
         """
@@ -477,7 +477,7 @@ class PerformanceVisualizer:
 
     def plot_time_series(
         self,
-        data: Dict[str, List[float]],
+        data: dict[str, list[float]],
         title: str = "Performance Over Time",
         ylabel: str = "Value",
     ):
@@ -534,12 +534,12 @@ class ComprehensiveVisualizer:
 
     def visualize_all(
         self,
-        path: Optional[np.ndarray] = None,
+        path: np.ndarray | None = None,
         scg_builder = None,
-        results: Optional[List] = None,
+        results: list | None = None,
         output_dir: str = "visualizations",
-        point_cloud: Optional[np.ndarray] = None,
-        occupancy_grid: Optional[np.ndarray] = None,
+        point_cloud: np.ndarray | None = None,
+        occupancy_grid: np.ndarray | None = None,
     ):
         """
         生成所有可视化。

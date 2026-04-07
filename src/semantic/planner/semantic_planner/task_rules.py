@@ -10,7 +10,7 @@ task_rules.py — 规则分解数据与匹配逻辑
 """
 
 import re as _re
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 
 class TaskRulesMixin:
@@ -433,7 +433,7 @@ class TaskRulesMixin:
             pass
         return "未命名"
 
-    def _extract_speed_value(self, inst: str) -> Optional[float]:
+    def _extract_speed_value(self, inst: str) -> float | None:
         """Extract speed value from instruction like '速度调到0.5'."""
         import re
         m = re.search(r'(\d+\.?\d*)\s*(?:m/?s|米每秒)?', inst)
@@ -822,8 +822,8 @@ class TaskRulesMixin:
         step = 0
 
         # KG 知识增强: 查询目标的安全约束和典型位置
-        kg_approach_params: Dict = {"approach_distance": 0.5}
-        kg_find_params: Dict = {}
+        kg_approach_params: dict = {"approach_distance": 0.5}
+        kg_find_params: dict = {}
         if self._knowledge_graph is not None:
             # 安全距离约束 (SafeMind)
             constraint = self._knowledge_graph.check_safety(target, "approach")

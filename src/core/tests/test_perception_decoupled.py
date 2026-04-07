@@ -4,21 +4,24 @@ Verifies pluggable backends, Blueprint wiring, and swap-ability.
 No GPU required — uses mock backends.
 """
 
+import os
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
+
 import numpy as np
 
-import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from core import Module, In, Out, Blueprint, autoconnect
+from core import Blueprint, In, Module, Out, autoconnect
 from semantic.perception.semantic_perception.detector_module import (
-    DetectorModule, DetectionResult,
+    DetectionResult,
+    DetectorModule,
 )
 from semantic.perception.semantic_perception.encoder_module import (
-    EncoderModule, FeatureResult,
+    EncoderModule,
+    FeatureResult,
 )
-
 
 # ---------------------------------------------------------------------------
 # Mock backends (no GPU needed)

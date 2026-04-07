@@ -17,7 +17,6 @@ import numpy as np
 
 from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 
-
 # ---------------------------------------------------------------------------
 # Detection3D
 # ---------------------------------------------------------------------------
@@ -30,8 +29,8 @@ class Detection3D:
     label: str = ""
     confidence: float = 0.0
     position: Vector3 = field(default_factory=Vector3)
-    bbox_2d: List[float] = field(default_factory=list)  # [x1, y1, x2, y2]
-    clip_feature: Optional[np.ndarray] = None  # 512-dim
+    bbox_2d: list[float] = field(default_factory=list)  # [x1, y1, x2, y2]
+    clip_feature: np.ndarray | None = None  # 512-dim
     ts: float = 0.0
 
     def __post_init__(self) -> None:
@@ -169,8 +168,8 @@ class Region:
     """Scene region."""
 
     name: str = ""
-    object_ids: List[str] = field(default_factory=list)
-    center: Optional[Vector3] = None
+    object_ids: list[str] = field(default_factory=list)
+    center: Vector3 | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -201,9 +200,9 @@ class Region:
 class SceneGraph:
     """Scene graph — the primary perception output."""
 
-    objects: List[Detection3D] = field(default_factory=list)
-    relations: List[Relation] = field(default_factory=list)
-    regions: List[Region] = field(default_factory=list)
+    objects: list[Detection3D] = field(default_factory=list)
+    relations: list[Relation] = field(default_factory=list)
+    regions: list[Region] = field(default_factory=list)
     ts: float = 0.0
     frame_id: str = "map"
 
@@ -213,14 +212,14 @@ class SceneGraph:
 
     # -- query -----------------------------------------------------------------
 
-    def get_object_by_id(self, obj_id: str) -> Optional[Detection3D]:
+    def get_object_by_id(self, obj_id: str) -> Detection3D | None:
         """Get object by ID."""
         for obj in self.objects:
             if obj.id == obj_id:
                 return obj
         return None
 
-    def get_objects_by_label(self, label: str) -> List[Detection3D]:
+    def get_objects_by_label(self, label: str) -> list[Detection3D]:
         """Get objects by label (case-insensitive)."""
         return [o for o in self.objects if o.label.lower() == label.lower()]
 
@@ -362,8 +361,8 @@ class NavigationCommand:
     """Navigation command — convertible to Twist for cmd_vel."""
 
     command_type: str = "velocity"  # velocity | goto | label
-    target_position: Optional[Vector3] = None
-    target_label: Optional[str] = None
+    target_position: Vector3 | None = None
+    target_label: str | None = None
     linear_x: float = 0.0
     linear_y: float = 0.0
     angular_z: float = 0.0
@@ -421,7 +420,7 @@ class SafetyState:
     """Safety state for Gateway telemetry."""
 
     level: str = "safe"  # safe | warn | danger | estop
-    issues: List[str] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
     timestamp: float = 0.0
 
     def __post_init__(self) -> None:
@@ -456,7 +455,7 @@ class MissionStatus:
     """Mission status — corresponds to NavigationModule.mission_status Out port."""
 
     state: str = "idle"  # idle | planning | executing | success | failed
-    goal: Optional[str] = None
+    goal: str | None = None
     progress_pct: float = 0.0
     elapsed_sec: float = 0.0
 
@@ -554,16 +553,16 @@ class DialogueState:
     Aimed at end-user UI (Flutter App / Gateway / logs).
     """
 
-    understood: Optional[str] = None       # user intent
+    understood: str | None = None       # user intent
     doing: str = "idle"                    # current action description
     progress_pct: float = 0.0              # progress percentage
-    distance_m: Optional[float] = None     # distance to goal
-    issue: Optional[str] = None            # current issue
+    distance_m: float | None = None     # distance to goal
+    issue: str | None = None            # current issue
     safety: str = "OK"                     # safety level
     safety_text: str = "safe"               # safety description
-    eta_sec: Optional[float] = None        # estimated time of arrival
+    eta_sec: float | None = None        # estimated time of arrival
     mission_state: str = "IDLE"            # mission FSM state
-    response: Optional[str] = None         # voice response
+    response: str | None = None         # voice response
     position_x: float = 0.0
     position_y: float = 0.0
     ts: float = 0.0

@@ -8,16 +8,15 @@ from __future__ import annotations
 
 import os
 import pickle
+import sys
 import tempfile
 import unittest
 
 import numpy as np
 
-import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from nav.global_planner_service import GlobalPlannerService
-
 
 # ---------------------------------------------------------------------------
 # Helper: create a fake tomogram pickle for testing

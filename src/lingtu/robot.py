@@ -50,16 +50,16 @@ class Robot:
         self._detector = None
         self._started = False
 
-    def start(self) -> "Robot":
+    def start(self) -> Robot:
         """Start all subsystems."""
         if self._started:
             return self
 
-        from .lidar import LiDAR
         from .camera import Camera
-        from .slam import SLAM
-        from .navigator import Navigator
         from .detector import Detector
+        from .lidar import LiDAR
+        from .navigator import Navigator
+        from .slam import SLAM
 
         # Determine SLAM mode
         slam_mode = {

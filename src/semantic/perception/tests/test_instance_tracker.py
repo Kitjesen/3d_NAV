@@ -24,7 +24,6 @@ from semantic.perception.semantic_perception.instance_tracker import (
 )
 from semantic.perception.semantic_perception.projection import Detection3D
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  辅助工厂
 # ─────────────────────────────────────────────────────────────────────────────

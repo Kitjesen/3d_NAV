@@ -5,7 +5,6 @@ All Module In/Out ports use these types. No ROS2 dependency.
 
 from .geometry import Pose, PoseStamped, Quaternion, Transform, Twist, TwistStamped, Vector3
 from .nav import OccupancyGrid, Odometry, Path
-from .sensor import CameraIntrinsics, Image, ImageFormat, Imu, PointCloud2, PointField
 from .robot import BatteryState, FootForces, JointState, RobotState
 from .semantic import (
     Detection3D,
@@ -14,11 +13,12 @@ from .semantic import (
     GoalResult,
     MissionStatus,
     NavigationCommand,
-    Relation,
     Region,
+    Relation,
     SafetyState,
     SceneGraph,
 )
+from .sensor import CameraIntrinsics, Image, ImageFormat, Imu, PointCloud2, PointField
 
 __all__ = [
     # geometry

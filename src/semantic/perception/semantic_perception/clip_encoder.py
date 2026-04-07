@@ -25,6 +25,7 @@ CLIP 特征编码器 — 图像/文本跨模态匹配（论文级实现）
 import hashlib
 import logging
 from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 
 from core.utils.robustness import _try_empty_cuda_cache
@@ -82,8 +83,8 @@ class CLIPEncoder:
         self._feature_dim: int = 0
 
         # 特征缓存（LRU）
-        self._image_cache: Dict[str, np.ndarray] = {}
-        self._text_cache: Dict[str, np.ndarray] = {}
+        self._image_cache: dict[str, np.ndarray] = {}
+        self._text_cache: dict[str, np.ndarray] = {}
         self._cache_hits = 0
         self._cache_misses = 0
 
@@ -178,7 +179,7 @@ class CLIPEncoder:
         hash_input = f"{x1}_{y1}_{x2}_{y2}_{crop.tobytes()}"
         return hashlib.md5(hash_input.encode()).hexdigest()
 
-    def _manage_cache(self, cache: Dict[str, np.ndarray], key: str, value: np.ndarray):
+    def _manage_cache(self, cache: dict[str, np.ndarray], key: str, value: np.ndarray):
         """
         管理缓存（LRU策略）
 
@@ -196,9 +197,9 @@ class CLIPEncoder:
     def encode_image_crops(
         self,
         rgb: np.ndarray,
-        bboxes: List[np.ndarray],
+        bboxes: list[np.ndarray],
         use_cache: bool = True,
-    ) -> List[np.ndarray]:
+    ) -> list[np.ndarray]:
         """
         批量编码 bbox 裁剪区域的 CLIP 图像特征（优化版）
 
@@ -223,6 +224,7 @@ class CLIPEncoder:
             return [np.array([]) for _ in bboxes]
 
         import time
+
         import torch
         from PIL import Image
 
@@ -339,7 +341,7 @@ class CLIPEncoder:
 
     def encode_text(
         self,
-        texts: List[str],
+        texts: list[str],
         use_cache: bool = True,
     ) -> np.ndarray:
         """
@@ -409,8 +411,8 @@ class CLIPEncoder:
     def text_image_similarity(
         self,
         text_query: str,
-        image_features: List[np.ndarray],
-    ) -> List[float]:
+        image_features: list[np.ndarray],
+    ) -> list[float]:
         """
         计算文本查询与多个图像特征的相似度
 
@@ -445,8 +447,8 @@ class CLIPEncoder:
     def text_text_similarity(
         self,
         text_query: str,
-        text_list: List[str],
-    ) -> Optional[List[float]]:
+        text_list: list[str],
+    ) -> list[float] | None:
         """
         计算文本查询与多个文本的余弦相似度（D1 语义排序用）
 
@@ -476,8 +478,8 @@ class CLIPEncoder:
 
     def batch_text_image_similarity(
         self,
-        text_queries: List[str],
-        image_features: List[np.ndarray],
+        text_queries: list[str],
+        image_features: list[np.ndarray],
     ) -> np.ndarray:
         """
         批量计算文本查询与图像特征的相似度矩阵
@@ -534,7 +536,7 @@ class CLIPEncoder:
         self,
         rgb_frame: np.ndarray,
         bbox: np.ndarray,
-        mask: Optional[np.ndarray] = None,
+        mask: np.ndarray | None = None,
         w_g: float = 0.25,
         w_l: float = 0.50,
         w_m: float = 0.25,
@@ -586,7 +588,7 @@ class CLIPEncoder:
             return np.array([])
         return fused / norm
 
-    def get_statistics(self) -> Dict[str, float]:
+    def get_statistics(self) -> dict[str, float]:
         """
         获取性能统计信息
 

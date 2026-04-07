@@ -27,8 +27,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -189,8 +190,8 @@ _LEGACY_HANDLER_TOOLS = [
 AGENT_TOOLS = _BUILTIN_TOOLS + _LEGACY_HANDLER_TOOLS
 
 
-def _dedupe_tools(tools: List[dict]) -> List[dict]:
-    seen: Dict[str, dict] = {}
+def _dedupe_tools(tools: list[dict]) -> list[dict]:
+    seen: dict[str, dict] = {}
     for tool in tools:
         fn = tool.get("function", {})
         name = fn.get("name")
@@ -199,7 +200,7 @@ def _dedupe_tools(tools: List[dict]) -> List[dict]:
     return list(seen.values())
 
 
-def skills_to_openai_tools(tool_list: List[dict]) -> List[dict]:
+def skills_to_openai_tools(tool_list: list[dict]) -> list[dict]:
     """Convert MCP-style tool descriptors to OpenAI function-calling format.
 
     MCP format:  {"name": "...", "description": "...", "inputSchema": {...}}
@@ -245,7 +246,7 @@ class AgentState:
     instruction: str = ""
     step: int = 0
     max_steps: int = 10
-    messages: List[dict] = field(default_factory=list)
+    messages: list[dict] = field(default_factory=list)
     completed: bool = False
     summary: str = ""
     start_time: float = 0.0
@@ -261,13 +262,13 @@ class AgentLoop:
     def __init__(
         self,
         llm_client,
-        tool_registry: Dict[str, Callable],
-        tool_list: List[dict],
+        tool_registry: dict[str, Callable],
+        tool_list: list[dict],
         context_fn: Callable[[], dict],
         max_steps: int = 10,
         timeout: float = 120.0,
         *,
-        tool_handlers: Optional[Dict[str, Callable]] = None,
+        tool_handlers: dict[str, Callable] | None = None,
     ):
         """
         Args:
@@ -365,7 +366,7 @@ class AgentLoop:
                      instruction, state.step, state.summary)
         return state
 
-    async def _llm_call(self, messages: List[dict]) -> dict:
+    async def _llm_call(self, messages: list[dict]) -> dict:
         """Call LLM with tool definitions. Returns parsed response."""
         # Try tool-calling format (OpenAI-compatible)
         if hasattr(self._llm, "chat_with_tools"):

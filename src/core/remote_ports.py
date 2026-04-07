@@ -14,7 +14,8 @@ Usage:
     remote_in.bind_transport(dds_transport, topic="/nav/cmd_vel")
 """
 import logging
-from typing import Any, Callable, Optional, Type
+from collections.abc import Callable
+from typing import Any, Optional, Type
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +30,13 @@ class RemoteOut:
     def __init__(
         self,
         name: str,
-        msg_type: Optional[Type] = None,
+        msg_type: type | None = None,
         transport_topic: str = "",
     ) -> None:
         self.name = name
         self.msg_type = msg_type
         self.transport_topic = transport_topic or f"/{name}"
-        self._transport: Optional[Any] = None
+        self._transport: Any | None = None
 
     def bind_transport(self, transport: Any, topic: str = "") -> None:
         """Bind to a transport for cross-process delivery.
@@ -73,14 +74,14 @@ class RemoteIn:
     def __init__(
         self,
         name: str,
-        msg_type: Optional[Type] = None,
+        msg_type: type | None = None,
         transport_topic: str = "",
     ) -> None:
         self.name = name
         self.msg_type = msg_type
         self.transport_topic = transport_topic or f"/{name}"
-        self._transport: Optional[Any] = None
-        self._callback: Optional[Callable] = None
+        self._transport: Any | None = None
+        self._callback: Callable | None = None
 
     def bind_transport(self, transport: Any, topic: str = "") -> None:
         """Bind to a transport for cross-process delivery.

@@ -26,7 +26,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core import Module, In, Out, skill
+from core import In, Module, Out, skill
 from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
 
@@ -61,7 +61,7 @@ class MapManagerModule(Module, layer=6):
         self._poi_file = self._data_dir / "pois.yaml"
         self._active_map_file = self._data_dir / "active_map.yaml"
 
-        self._pois: Dict[str, Dict[str, float]] = load_yaml(
+        self._pois: dict[str, dict[str, float]] = load_yaml(
             self._poi_file, default={}
         )
         self._active_map: str = load_yaml(
@@ -81,7 +81,7 @@ class MapManagerModule(Module, layer=6):
             cmd = {}
 
         action = cmd.get("action", "")
-        resp: Dict[str, Any] = {"action": action, "success": False}
+        resp: dict[str, Any] = {"action": action, "success": False}
 
         try:
             if action == "list":
@@ -113,9 +113,9 @@ class MapManagerModule(Module, layer=6):
 
     # -- map operations ---------------------------------------------------------
 
-    def _map_list(self) -> Dict[str, Any]:
+    def _map_list(self) -> dict[str, Any]:
         """List map directories (exclude the 'active' symlink entry)."""
-        maps: List[Dict[str, Any]] = []
+        maps: list[dict[str, Any]] = []
         for entry in sorted(self._map_dir.iterdir()):
             if not entry.is_dir() or entry.name == "active":
                 continue
@@ -133,7 +133,7 @@ class MapManagerModule(Module, layer=6):
             "active": self._active_map,
         }
 
-    def _map_save(self, name: str) -> Dict[str, Any]:
+    def _map_save(self, name: str) -> dict[str, Any]:
         """Save SLAM map via ROS2 SaveMaps service, then build tomogram."""
         if not name:
             return {"action": "save", "success": False, "message": "missing map name"}
@@ -189,7 +189,7 @@ class MapManagerModule(Module, layer=6):
             "tomogram_ok": tomo_result.get("success", False),
         }
 
-    def _build_tomogram(self, name: str) -> Dict[str, Any]:
+    def _build_tomogram(self, name: str) -> dict[str, Any]:
         """Build tomogram.pickle from map.pcd using the PCT planner pipeline."""
         if not name:
             return {"action": "build_tomogram", "success": False, "message": "missing map name"}
@@ -223,7 +223,7 @@ class MapManagerModule(Module, layer=6):
                 "message": str(e),
             }
 
-    def _map_delete(self, name: str) -> Dict[str, Any]:
+    def _map_delete(self, name: str) -> dict[str, Any]:
         """Delete an entire map directory."""
         if not name:
             return {"action": "delete", "success": False, "message": "missing map name"}
@@ -249,7 +249,7 @@ class MapManagerModule(Module, layer=6):
         except OSError as exc:
             return {"action": "delete", "success": False, "message": str(exc)}
 
-    def _map_rename(self, name: str, new_name: str) -> Dict[str, Any]:
+    def _map_rename(self, name: str, new_name: str) -> dict[str, Any]:
         """Rename a map directory; update active symlink if needed."""
         if not name or not new_name:
             return {"action": "rename", "success": False, "message": "missing name(s)"}
@@ -288,7 +288,7 @@ class MapManagerModule(Module, layer=6):
         except OSError as exc:
             return {"action": "rename", "success": False, "message": str(exc)}
 
-    def _map_set_active(self, name: str) -> Dict[str, Any]:
+    def _map_set_active(self, name: str) -> dict[str, Any]:
         """Create/update the ``active`` symlink to point at the named map dir."""
         if not name:
             return {"action": "set_active", "success": False, "message": "missing map name"}
@@ -320,7 +320,7 @@ class MapManagerModule(Module, layer=6):
 
     # -- public helpers for other modules ---------------------------------------
 
-    def get_active_tomogram(self) -> Optional[str]:
+    def get_active_tomogram(self) -> str | None:
         """Return the tomogram.pickle path for the active map, or None.
 
         NavigationModule uses this to locate the PCT planner index at startup.
@@ -354,7 +354,7 @@ class MapManagerModule(Module, layer=6):
 
     # -- POI operations ---------------------------------------------------------
 
-    def _poi_set(self, cmd: Dict[str, Any]) -> Dict[str, Any]:
+    def _poi_set(self, cmd: dict[str, Any]) -> dict[str, Any]:
         name = cmd.get("name", "")
         if not name:
             return {"action": "poi_set", "success": False, "message": "missing POI name"}
@@ -366,7 +366,7 @@ class MapManagerModule(Module, layer=6):
         save_yaml(self._poi_file, self._pois)
         return {"action": "poi_set", "success": True, "message": f"POI set: {name}"}
 
-    def _poi_delete(self, name: str) -> Dict[str, Any]:
+    def _poi_delete(self, name: str) -> dict[str, Any]:
         if name not in self._pois:
             return {
                 "action": "poi_delete",
@@ -377,12 +377,12 @@ class MapManagerModule(Module, layer=6):
         save_yaml(self._poi_file, self._pois)
         return {"action": "poi_delete", "success": True, "message": f"POI deleted: {name}"}
 
-    def _poi_list(self) -> Dict[str, Any]:
+    def _poi_list(self) -> dict[str, Any]:
         return {"action": "poi_list", "success": True, "pois": dict(self._pois)}
 
     # -- health ----------------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         maps = [
             e.name for e in sorted(self._map_dir.iterdir())

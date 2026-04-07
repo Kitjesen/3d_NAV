@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core import Module, In, Out
+from core import In, Module, Out
 from core.msgs.nav import Odometry
 from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
@@ -43,8 +43,8 @@ class PatrolManagerModule(Module, layer=6):
         )
         self._routes_dir = Path(default_routes_dir)
         self._routes_dir.mkdir(parents=True, exist_ok=True)
-        self._active_route: Optional[str] = None
-        self._current_pose: Optional[Dict[str, float]] = None
+        self._active_route: str | None = None
+        self._current_pose: dict[str, float] | None = None
 
     def setup(self) -> None:
         self.patrol_command.subscribe(self._on_command)
@@ -63,7 +63,7 @@ class PatrolManagerModule(Module, layer=6):
             cmd = {}
 
         action = cmd.get("action", "")
-        resp: Dict[str, Any] = {"action": action, "success": False}
+        resp: dict[str, Any] = {"action": action, "success": False}
 
         try:
             if action == "save":
@@ -87,7 +87,7 @@ class PatrolManagerModule(Module, layer=6):
 
     # -- route CRUD -------------------------------------------------------------
 
-    def _save_route(self, cmd: Dict[str, Any]) -> Dict[str, Any]:
+    def _save_route(self, cmd: dict[str, Any]) -> dict[str, Any]:
         name = cmd.get("name", "")
         if not name:
             return {"action": "save", "success": False, "message": "missing route name"}
@@ -109,7 +109,7 @@ class PatrolManagerModule(Module, layer=6):
             "message": f"route saved: {name} ({len(waypoints)} waypoints)",
         }
 
-    def _load_route(self, name: str) -> Dict[str, Any]:
+    def _load_route(self, name: str) -> dict[str, Any]:
         if not name:
             return {"action": "load", "success": False, "message": "missing route name"}
         path = self._routes_dir / f"{name}.yaml"
@@ -118,8 +118,8 @@ class PatrolManagerModule(Module, layer=6):
         data = load_yaml(path)
         return {"action": "load", "success": True, "route": data}
 
-    def _list_routes(self) -> Dict[str, Any]:
-        routes: List[Dict[str, Any]] = []
+    def _list_routes(self) -> dict[str, Any]:
+        routes: list[dict[str, Any]] = []
         for f in sorted(self._routes_dir.glob("*.yaml")):
             data = load_yaml(f)
             if data:
@@ -131,7 +131,7 @@ class PatrolManagerModule(Module, layer=6):
                 })
         return {"action": "list", "success": True, "routes": routes}
 
-    def _delete_route(self, name: str) -> Dict[str, Any]:
+    def _delete_route(self, name: str) -> dict[str, Any]:
         if not name:
             return {"action": "delete", "success": False, "message": "missing route name"}
         path = self._routes_dir / f"{name}.yaml"
@@ -145,7 +145,7 @@ class PatrolManagerModule(Module, layer=6):
 
     # -- patrol control ---------------------------------------------------------
 
-    def _start_patrol(self, name: str) -> Dict[str, Any]:
+    def _start_patrol(self, name: str) -> dict[str, Any]:
         if not name:
             return {"action": "start", "success": False, "message": "missing route name"}
         path = self._routes_dir / f"{name}.yaml"
@@ -165,7 +165,7 @@ class PatrolManagerModule(Module, layer=6):
             "route_name": name,
         }
 
-    def _stop_patrol(self) -> Dict[str, Any]:
+    def _stop_patrol(self) -> dict[str, Any]:
         route_name = self._active_route or "(none)"
         self._active_route = None
         return {"action": "stop", "success": True, "message": f"patrol stopped: {route_name}"}

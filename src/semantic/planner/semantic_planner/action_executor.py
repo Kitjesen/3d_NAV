@@ -19,10 +19,10 @@
     BACKTRACK → 从拓扑记忆获取上一个位置, 导航回去
 """
 
-import math
-import time
 import logging
+import math
 import threading
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
@@ -112,8 +112,8 @@ class ActionExecutor:
 
     def generate_navigate_command(
         self,
-        target_position: Dict[str, float],
-        robot_position: Optional[Dict[str, float]] = None,
+        target_position: dict[str, float],
+        robot_position: dict[str, float] | None = None,
     ) -> ActionCommand:
         """
         NAVIGATE: 导航到目标位置。
@@ -145,8 +145,8 @@ class ActionExecutor:
 
     def generate_approach_command(
         self,
-        target_position: Dict[str, float],
-        robot_position: Dict[str, float],
+        target_position: dict[str, float],
+        robot_position: dict[str, float],
     ) -> ActionCommand:
         """
         APPROACH: 接近目标 (最后一段路, 减速)。
@@ -208,8 +208,8 @@ class ActionExecutor:
 
     def generate_verify_command(
         self,
-        target_position: Dict[str, float],
-        robot_position: Dict[str, float],
+        target_position: dict[str, float],
+        robot_position: dict[str, float],
     ) -> ActionCommand:
         """
         VERIFY: 面向目标, 准备视觉验证。
@@ -284,11 +284,11 @@ class ActionExecutor:
     def lera_recover(
         self,
         failed_action: str,
-        current_labels: List[str],
+        current_labels: list[str],
         original_goal: str,
         failure_count: int = 1,
-        llm_client: Optional[Any] = None,
-        event_loop: Optional[Any] = None,
+        llm_client: Any | None = None,
+        event_loop: Any | None = None,
     ) -> str:
         """
         LERa 三步失败恢复：Look → Explain → Replan。

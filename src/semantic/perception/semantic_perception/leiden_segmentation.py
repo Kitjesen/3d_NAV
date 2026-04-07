@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 class Region:
     """语义区域。"""
     region_id: int
-    node_ids: List[int]  # 包含的多面体节点 ID
+    node_ids: list[int]  # 包含的多面体节点 ID
     center: np.ndarray   # 区域中心
     volume: float        # 总体积
     region_type: str = "unknown"  # 区域类型 (corridor, room, ...)
@@ -77,8 +77,8 @@ class LeidenSegmenter:
             logger.info("Using igraph for Leiden clustering")
         except ImportError:
             try:
-                import networkx
                 import leidenalg
+                import networkx
                 self.use_igraph = False
                 logger.info("Using networkx + leidenalg for Leiden clustering")
             except ImportError:
@@ -88,7 +88,7 @@ class LeidenSegmenter:
                 )
                 self.use_igraph = None
 
-    def segment(self, scg_builder) -> List[Region]:
+    def segment(self, scg_builder) -> list[Region]:
         """
         对 SCG 进行 Leiden 社区检测。
 
@@ -127,7 +127,7 @@ class LeidenSegmenter:
         logger.info(f"Segmentation complete: {len(regions)} regions")
         return regions
 
-    def _segment_igraph(self, scg_builder) -> List[List[int]]:
+    def _segment_igraph(self, scg_builder) -> list[list[int]]:
         """使用 igraph 实现 Leiden 聚类。"""
         import igraph as ig
 
@@ -177,11 +177,11 @@ class LeidenSegmenter:
 
         return communities
 
-    def _segment_networkx(self, scg_builder) -> List[List[int]]:
+    def _segment_networkx(self, scg_builder) -> list[list[int]]:
         """使用 networkx + leidenalg 实现 Leiden 聚类。"""
-        import networkx as nx
-        import leidenalg
         import igraph as ig
+        import leidenalg
+        import networkx as nx
 
         # 构建 networkx 图
         G = nx.Graph()
@@ -222,7 +222,7 @@ class LeidenSegmenter:
 
         return communities
 
-    def _segment_fallback(self, scg_builder) -> List[List[int]]:
+    def _segment_fallback(self, scg_builder) -> list[list[int]]:
         """
         回退方案: 简单的连通分量检测。
 
@@ -258,7 +258,7 @@ class LeidenSegmenter:
     def _create_region(
         self,
         region_id: int,
-        node_ids: List[int],
+        node_ids: list[int],
         scg_builder,
     ) -> Region:
         """
@@ -297,7 +297,7 @@ class LeidenSegmenter:
 
     def _infer_region_type(
         self,
-        node_ids: List[int],
+        node_ids: list[int],
         scg_builder,
     ) -> str:
         """
@@ -339,8 +339,8 @@ class LeidenSegmenter:
 # ══════════════════════════════════════════════════════════════════
 
 def compare_segmentation(
-    leiden_regions: List[Region],
-    dbscan_clusters: List[List[int]],
+    leiden_regions: list[Region],
+    dbscan_clusters: list[list[int]],
 ) -> dict:
     """
     对比 Leiden 和 DBSCAN 的分割结果。

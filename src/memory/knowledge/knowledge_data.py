@@ -18,15 +18,14 @@ from .knowledge_graph import (
     SafetyLevel,
 )
 
-
 # ════════════════════════════════════════════════════════════════
 #  公共入口
 # ════════════════════════════════════════════════════════════════
 
 def build_all_knowledge(
-    concepts: Dict[str, ObjectConcept],
-    relations: List[KGRelation],
-    safety_constraints: List[SafetyConstraint],
+    concepts: dict[str, ObjectConcept],
+    relations: list[KGRelation],
+    safety_constraints: list[SafetyConstraint],
 ) -> None:
     """
     填充工业/室内/户外/医疗/居住全场景知识库。
@@ -54,7 +53,7 @@ def build_all_knowledge(
 #  安全设备
 # ════════════════════════════════════════════════════════════════
 
-def _build_safety_equipment(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_safety_equipment(concepts: dict[str, ObjectConcept]) -> None:
     concepts["fire_extinguisher"] = ObjectConcept(
         concept_id="fire_extinguisher",
         names_zh=["灭火器", "干粉灭火器", "消防灭火器", "灭火瓶", "CO2灭火器"],
@@ -184,7 +183,7 @@ def _build_safety_equipment(concepts: Dict[str, ObjectConcept]) -> None:
 #  家具
 # ════════════════════════════════════════════════════════════════
 
-def _build_furniture(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_furniture(concepts: dict[str, ObjectConcept]) -> None:
     concepts["chair"] = ObjectConcept(
         concept_id="chair",
         names_zh=["椅子", "办公椅", "座椅", "凳子", "转椅", "工位椅"],
@@ -308,7 +307,7 @@ def _build_furniture(concepts: Dict[str, ObjectConcept]) -> None:
 #  电子设备
 # ════════════════════════════════════════════════════════════════
 
-def _build_electronics(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_electronics(concepts: dict[str, ObjectConcept]) -> None:
     concepts["monitor"] = ObjectConcept(
         concept_id="monitor",
         names_zh=["显示器", "屏幕", "电脑屏幕", "监视器"],
@@ -459,7 +458,7 @@ def _build_electronics(concepts: Dict[str, ObjectConcept]) -> None:
 #  建筑结构
 # ════════════════════════════════════════════════════════════════
 
-def _build_structure(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_structure(concepts: dict[str, ObjectConcept]) -> None:
     concepts["door"] = ObjectConcept(
         concept_id="door",
         names_zh=["门", "房门", "大门", "玻璃门", "防火门", "推拉门", "卷帘门"],
@@ -668,7 +667,7 @@ def _build_structure(concepts: Dict[str, ObjectConcept]) -> None:
 #  日用品
 # ════════════════════════════════════════════════════════════════
 
-def _build_utility(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_utility(concepts: dict[str, ObjectConcept]) -> None:
     concepts["trash_bin"] = ObjectConcept(
         concept_id="trash_bin",
         names_zh=["垃圾桶", "垃圾箱", "废纸篓", "分类垃圾桶"],
@@ -967,7 +966,7 @@ def _build_utility(concepts: Dict[str, ObjectConcept]) -> None:
 #  工业特有
 # ════════════════════════════════════════════════════════════════
 
-def _build_industrial_specific(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_industrial_specific(concepts: dict[str, ObjectConcept]) -> None:
     concepts["forklift"] = ObjectConcept(
         concept_id="forklift",
         names_zh=["叉车", "铲车", "堆高车", "电动叉车"],
@@ -1131,7 +1130,7 @@ def _build_industrial_specific(concepts: Dict[str, ObjectConcept]) -> None:
 #  医疗设备
 # ════════════════════════════════════════════════════════════════
 
-def _build_medical(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_medical(concepts: dict[str, ObjectConcept]) -> None:
     concepts["wheelchair"] = ObjectConcept(
         concept_id="wheelchair",
         names_zh=["轮椅", "手动轮椅", "电动轮椅"],
@@ -1228,7 +1227,7 @@ def _build_medical(concepts: Dict[str, ObjectConcept]) -> None:
 #  户外 / 园区
 # ════════════════════════════════════════════════════════════════
 
-def _build_outdoor(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_outdoor(concepts: dict[str, ObjectConcept]) -> None:
     concepts["tree"] = ObjectConcept(
         concept_id="tree",
         names_zh=["树", "树木", "行道树", "绿化树"],
@@ -1379,7 +1378,7 @@ def _build_outdoor(concepts: Dict[str, ObjectConcept]) -> None:
 #  居住环境
 # ════════════════════════════════════════════════════════════════
 
-def _build_residential(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_residential(concepts: dict[str, ObjectConcept]) -> None:
     concepts["bed"] = ObjectConcept(
         concept_id="bed",
         names_zh=["床", "单人床", "双人床", "床铺", "上下铺"],
@@ -1406,7 +1405,7 @@ def _build_residential(concepts: Dict[str, ObjectConcept]) -> None:
 #  更多工业设备
 # ════════════════════════════════════════════════════════════════
 
-def _build_industrial_extended(concepts: Dict[str, ObjectConcept]) -> None:
+def _build_industrial_extended(concepts: dict[str, ObjectConcept]) -> None:
     concepts["valve"] = ObjectConcept(
         concept_id="valve",
         names_zh=["阀门", "截止阀", "球阀", "蝶阀", "手动阀", "安全阀"],
@@ -1640,7 +1639,7 @@ def _build_industrial_extended(concepts: Dict[str, ObjectConcept]) -> None:
 #  关系
 # ════════════════════════════════════════════════════════════════
 
-def _build_relations(relations: List[KGRelation]) -> None:
+def _build_relations(relations: list[KGRelation]) -> None:
     R = RelationType
     relations.extend([
         # IS_A — 分类层次
@@ -1766,7 +1765,7 @@ def _build_relations(relations: List[KGRelation]) -> None:
 #  安全约束
 # ════════════════════════════════════════════════════════════════
 
-def _build_safety_constraints(safety_constraints: List[SafetyConstraint]) -> None:
+def _build_safety_constraints(safety_constraints: list[SafetyConstraint]) -> None:
     safety_constraints.extend([
         # 配电箱 — 禁止所有操作
         SafetyConstraint(

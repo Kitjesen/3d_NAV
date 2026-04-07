@@ -10,13 +10,14 @@ Quick usage::
     render_png(system, "graph.png")      # PNG file (needs graphviz CLI)
 """
 
-from .dot import render as render_dot, render_svg, render_png
-from .text import render_text, render_connections
+from .dot import render as render_dot
+from .dot import render_png, render_svg
+from .text import render_connections, render_text
 
 __all__ = [
-    "render_dot",
-    "render_svg",
-    "render_png",
-    "render_text",
     "render_connections",
+    "render_dot",
+    "render_png",
+    "render_svg",
+    "render_text",
 ]

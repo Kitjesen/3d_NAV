@@ -19,8 +19,9 @@ Usage::
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,11 @@ logger = logging.getLogger(__name__)
 # typename must match ROS2 DDS type name exactly for subscription to work.
 
 try:
-    from cyclonedds.idl import IdlStruct, types
     from cyclonedds.domain import DomainParticipant
-    from cyclonedds.topic import Topic
+    from cyclonedds.idl import IdlStruct, types
+    from cyclonedds.qos import Policy, Qos
     from cyclonedds.sub import DataReader
-    from cyclonedds.qos import Qos, Policy
+    from cyclonedds.topic import Topic
     from cyclonedds.util import duration
 
     _HAS_CYCLONEDDS = True
@@ -211,7 +212,7 @@ class DDSReader:
         self._domain_id = domain_id
         self._subs: list[dict] = []
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._dp = None
 
     def subscribe(self, ros2_topic: str, dds_type, callback: Callable):

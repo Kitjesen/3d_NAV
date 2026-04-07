@@ -28,7 +28,7 @@ class TaggedLocationStore:
         self._path = json_path
         self._lock = threading.Lock()
         # 存储结构: {name: {"name": str, "position": [x, y, z], "yaw": float|None}}
-        self._store: Dict[str, dict] = {}
+        self._store: dict[str, dict] = {}
 
         if self._path:
             self.load()
@@ -41,7 +41,7 @@ class TaggedLocationStore:
         x: float,
         y: float,
         z: float = 0.0,
-        yaw: Optional[float] = None,
+        yaw: float | None = None,
     ) -> None:
         """存储一个标签地点（已存在则覆盖）。
 
@@ -66,7 +66,7 @@ class TaggedLocationStore:
 
     # ── 查询操作 ──────────────────────────────────────────────────────────
 
-    def query(self, name: str) -> Optional[dict]:
+    def query(self, name: str) -> dict | None:
         """精确匹配名称。
 
         Returns:
@@ -75,7 +75,7 @@ class TaggedLocationStore:
         with self._lock:
             return self._store.get(name)
 
-    def query_fuzzy(self, text: str) -> Optional[dict]:
+    def query_fuzzy(self, text: str) -> dict | None:
         """模糊匹配：text 包含标签名，或标签名包含 text（取最长匹配优先）。
 
         Args:
@@ -90,7 +90,7 @@ class TaggedLocationStore:
         if not entries:
             return None
 
-        best: Optional[dict] = None
+        best: dict | None = None
         best_len = 0
 
         for entry in entries:
@@ -103,7 +103,7 @@ class TaggedLocationStore:
 
         return best
 
-    def list_all(self) -> List[dict]:
+    def list_all(self) -> list[dict]:
         """列出所有标签地点。"""
         with self._lock:
             return list(self._store.values())
@@ -129,7 +129,7 @@ class TaggedLocationStore:
         if not self._path or not os.path.isfile(self._path):
             return
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
+            with open(self._path, encoding="utf-8") as f:
                 data = json.load(f)
             with self._lock:
                 self._store = {entry["name"]: entry for entry in data if "name" in entry}

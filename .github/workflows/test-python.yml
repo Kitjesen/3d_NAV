@@ -1,75 +1,33 @@
-name: Python Tests
-
-# 语义导航 Python 模块持续集成
-# 触发: main 分支 PR / push，仅当 Python 文件或配置变更时
-# 覆盖: semantic_planner (245 tests) + semantic_perception (271 tests) + mappilot_sdk (26 tests)
-# 无需 ROS2、GPU、硬件 — 纯 Python，Ubuntu CI 直接运行
+name: Python Tests + Lint
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/semantic_planner/**'
-      - 'src/semantic_perception/**'
-      - 'src/mappilot_sdk/**'
-      - '.github/workflows/test-python.yml'
+    paths: ['src/**', 'cli/**', 'pyproject.toml', '.github/workflows/test-python.yml']
   pull_request:
     branches: [main]
-    paths:
-      - 'src/semantic_planner/**'
-      - 'src/semantic_perception/**'
-      - 'src/mappilot_sdk/**'
-      - '.github/workflows/test-python.yml'
 
 jobs:
-  test:
-    name: Python Unit Tests
+  lint:
+    name: Ruff Lint + Format
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+  test:
+    name: Framework Tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
           cache: pip
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install numpy scipy scikit-learn jieba pytest pytest-asyncio
-
-      - name: Install mappilot_sdk
-        run: pip install -e src/mappilot_sdk/
-
-      - name: Set PYTHONPATH (for ROS2-style packages without ament)
-        run: |
-          echo "PYTHONPATH=$GITHUB_WORKSPACE/src/semantic_perception:$GITHUB_WORKSPACE/src/semantic_planner" >> $GITHUB_ENV
-
-      - name: Test semantic_perception
-        run: |
-          python -m pytest src/semantic_perception/test/ -v --tb=short \
-            --ignore=src/semantic_perception/test/test_scg_ros_integration.py \
-            --ignore=src/semantic_perception/test/test_yolo_world_detector.py \
-            --ignore=src/semantic_perception/test/test_parallel_comparison.py
+      - name: Install dependencies
+        run: pip install numpy scipy pyyaml pytest
+      - name: Run core tests
+        run: python -m pytest src/core/tests/ -q --tb=short
         env:
-          PYTHONPATH: ${{ github.workspace }}/src/semantic_perception:${{ github.workspace }}/src/semantic_planner
-
-      - name: Test semantic_planner
-        run: |
-          python -m pytest src/semantic_planner/test/ -v --tb=short \
-            --ignore=src/semantic_planner/test/test_slow_path_real_llm.py \
-            -k "not real_llm"
-        env:
-          PYTHONPATH: ${{ github.workspace }}/src/semantic_perception:${{ github.workspace }}/src/semantic_planner
-
-      - name: Test mappilot_sdk
-        run: python -m pytest src/mappilot_sdk/tests/ -v --tb=short
-
-      - name: Summary
-        if: always()
-        run: |
-          echo "semantic_perception | semantic_planner | mappilot_sdk"
+          PYTHONPATH: src

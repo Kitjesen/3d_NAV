@@ -7,22 +7,23 @@ test_goal_resolver.py — 目标解析器单元测试
 import asyncio
 import json
 import unittest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from semantic.planner.semantic_planner.llm_client import (
-    LLMConfig,
-    LLMClientBase,
-    LLMError,
-    create_llm_client,
-    OpenAIClient,
-    ClaudeClient,
-    QwenClient,
-)
 import pytest
+
 from semantic.planner.semantic_planner.goal_resolver import GoalResolver, GoalResult
+from semantic.planner.semantic_planner.llm_client import (
+    ClaudeClient,
+    LLMClientBase,
+    LLMConfig,
+    LLMError,
+    OpenAIClient,
+    QwenClient,
+    create_llm_client,
+)
 from semantic.planner.semantic_planner.prompt_templates import (
-    build_goal_resolution_prompt,
     build_exploration_prompt,
+    build_goal_resolution_prompt,
 )
 
 

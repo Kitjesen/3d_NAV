@@ -11,10 +11,11 @@ PersonTracker -- VLM 选人 + 实时视觉跟踪 (跟人走功能核心)
 
 import logging
 import math
-import time
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -24,14 +25,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrackedPerson:
     """被追踪的目标人物。"""
-    position: List[float]                          # [x, y, z] 世界坐标
-    velocity: List[float] = field(default_factory=lambda: [0.0, 0.0])  # [vx, vy] m/s
+    position: list[float]                          # [x, y, z] 世界坐标
+    velocity: list[float] = field(default_factory=lambda: [0.0, 0.0])  # [vx, vy] m/s
     last_seen: float = field(default_factory=time.time)
     confidence: float = 1.0
     # 外观特征 (用于遮挡后 Re-ID)
-    appearance: Optional[np.ndarray] = None        # CLIP 图像特征, shape (D,)
-    bbox: Optional[List[int]] = None               # 最近一帧的 [x1, y1, x2, y2]
-    obj_id: Optional[str] = None                   # 场景图 object ID (帧间匹配优先)
+    appearance: np.ndarray | None = None        # CLIP 图像特征, shape (D,)
+    bbox: list[int] | None = None               # 最近一帧的 [x1, y1, x2, y2]
+    obj_id: str | None = None                   # 场景图 object ID (帧间匹配优先)
 
 
 class PersonTracker:
@@ -54,7 +55,7 @@ class PersonTracker:
     def __init__(self, follow_distance: float = 1.5, lost_timeout: float = 5.0):
         self.follow_distance = follow_distance
         self.lost_timeout = lost_timeout
-        self._person: Optional[TrackedPerson] = None
+        self._person: TrackedPerson | None = None
         self._description: str = ""                # 用户描述 ("穿红衣服的人")
         self._target_selected: bool = False        # VLM 是否已选定目标
         self._vlm_selecting: bool = False          # VLM 选人中 (防重入)
@@ -63,7 +64,7 @@ class PersonTracker:
         # FusionMOT backend (optional, enabled via enable_fusion_tracking)
         self._fusion_tracker = None
         self._reid_extractor = None
-        self._target_track_id: Optional[int] = None
+        self._target_track_id: int | None = None
         self._following_selector = None  # PersonFollowingSelector (optional)
 
     def set_clip_encoder(self, clip_encoder) -> None:
@@ -81,8 +82,8 @@ class PersonTracker:
         Returns True if successfully initialized, False if qp_perception unavailable.
         """
         try:
-            from qp_perception.tracking.fusion import FusionMOT, FusionMOTConfig
             from qp_perception.reid.extractor import ReIDConfig, ReIDExtractor
+            from qp_perception.tracking.fusion import FusionMOT, FusionMOTConfig
 
             reid_cfg = ReIDConfig(backbone="osnet_x1_0", device="")
             self._reid_extractor = ReIDExtractor(reid_cfg)
@@ -96,7 +97,8 @@ class PersonTracker:
             # PersonFollowingSelector: state machine for target lock lifecycle
             try:
                 from qp_perception.selection.person_following import (
-                    FollowingConfig, PersonFollowingSelector,
+                    FollowingConfig,
+                    PersonFollowingSelector,
                 )
                 self._following_selector = PersonFollowingSelector(
                     FollowingConfig(
@@ -121,8 +123,8 @@ class PersonTracker:
     async def select_target_with_vlm(
         self,
         description: str,
-        person_crops: List[np.ndarray],
-        person_objects: List[Dict],
+        person_crops: list[np.ndarray],
+        person_objects: list[dict],
         llm_chat_fn: Callable,
     ) -> int:
         """
@@ -213,8 +215,8 @@ class PersonTracker:
     def select_by_clip(
         self,
         description: str,
-        person_crops: List[np.ndarray],
-        person_objects: List[Dict],
+        person_crops: list[np.ndarray],
+        person_objects: list[dict],
     ) -> int:
         """
         纯 CLIP 选人 (无 VLM 时的降级方案, 同步调用)。
@@ -257,7 +259,7 @@ class PersonTracker:
             logger.error("CLIP selection failed: %s", e)
         return -1
 
-    def _lock_target(self, obj: Dict, crop: Optional[np.ndarray] = None) -> None:
+    def _lock_target(self, obj: dict, crop: np.ndarray | None = None) -> None:
         """锁定目标，存储外观特征。"""
         pos = obj.get("position", [0, 0, 0])
         if isinstance(pos, dict):
@@ -286,8 +288,8 @@ class PersonTracker:
 
     def update(
         self,
-        scene_objects: List[Dict],
-        rgb_frame: Optional[np.ndarray] = None,
+        scene_objects: list[dict],
+        rgb_frame: np.ndarray | None = None,
     ) -> bool:
         """
         每帧更新跟踪状态。
@@ -343,7 +345,7 @@ class PersonTracker:
 
     # ── FusionMOT backend ─────────────────────────────────────────────────────
 
-    def _update_fusion(self, persons: List[Dict], rgb_frame: np.ndarray) -> bool:
+    def _update_fusion(self, persons: list[dict], rgb_frame: np.ndarray) -> bool:
         """Tracking via FusionMOT: Kalman smoothing + OSNet Re-ID.
 
         Uses Selective Re-ID (Fast-Deep-OC-SORT): only extracts appearance
@@ -475,10 +477,10 @@ class PersonTracker:
 
     @staticmethod
     def _map_tracks_to_persons(
-        tracks: list, persons: List[Dict],
-    ) -> Dict[int, Dict]:
+        tracks: list, persons: list[dict],
+    ) -> dict[int, dict]:
         """Map FusionMOT track_id to nearest input person by bbox center distance."""
-        result: Dict[int, Dict] = {}
+        result: dict[int, dict] = {}
         for track_id, bbox_arr, conf in tracks:
             tx, ty, tw, th = bbox_arr
             tcx, tcy = tx + tw / 2, ty + th / 2
@@ -500,8 +502,8 @@ class PersonTracker:
         return result
 
     def _match_person(
-        self, persons: List[Dict], rgb_frame: Optional[np.ndarray]
-    ) -> Optional[Dict]:
+        self, persons: list[dict], rgb_frame: np.ndarray | None
+    ) -> dict | None:
         """在候选 persons 中匹配已锁定的目标。"""
         if self._person is None:
             return None
@@ -554,7 +556,7 @@ class PersonTracker:
 
         return None
 
-    def _update_tracked(self, obj: Dict, rgb_frame: Optional[np.ndarray]) -> None:
+    def _update_tracked(self, obj: dict, rgb_frame: np.ndarray | None) -> None:
         """更新已匹配目标的位置和外观。"""
         new_pos = self._get_pos(obj)
         now = time.time()
@@ -599,7 +601,7 @@ class PersonTracker:
                 except Exception:
                     pass
 
-    def _init_person(self, obj: Dict) -> None:
+    def _init_person(self, obj: dict) -> None:
         """初始化目标 (未经 VLM 选定时的退化路径)。"""
         pos = self._get_pos(obj)
         self._person = TrackedPerson(
@@ -611,7 +613,7 @@ class PersonTracker:
         )
 
     @staticmethod
-    def _get_pos(obj: Dict) -> List[float]:
+    def _get_pos(obj: dict) -> list[float]:
         """统一提取 position，兼容 list 和 dict 格式。"""
         pos = obj.get("position", [0, 0, 0])
         if isinstance(pos, dict):
@@ -619,7 +621,7 @@ class PersonTracker:
         return list(pos[:3]) if len(pos) >= 3 else list(pos) + [0.0] * (3 - len(pos))
 
     @staticmethod
-    def _crop_person(rgb: np.ndarray, obj: Dict) -> Optional[np.ndarray]:
+    def _crop_person(rgb: np.ndarray, obj: dict) -> np.ndarray | None:
         """从 RGB 帧裁剪 person 区域。"""
         bbox = obj.get("bbox")
         if bbox is None:
@@ -642,8 +644,8 @@ class PersonTracker:
     # ── 导航接口 (保持与旧版兼容) ──
 
     def get_follow_waypoint(
-        self, robot_pos: List[float], predict_dt: float = 0.3,
-    ) -> Optional[Dict]:
+        self, robot_pos: list[float], predict_dt: float = 0.3,
+    ) -> dict | None:
         """返回跟随航点 (目标后方 follow_distance 处)。"""
         with self._lock:
             if self._person is None or self.is_lost():
@@ -677,7 +679,7 @@ class PersonTracker:
         elapsed = time.time() - self._person.last_seen
         return elapsed > self.REID_TIMEOUT
 
-    def get_person_position(self) -> Optional[List[float]]:
+    def get_person_position(self) -> list[float] | None:
         with self._lock:
             if self._person and not self.is_lost():
                 return list(self._person.position)

@@ -19,11 +19,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from semantic.perception.semantic_perception.dataset_loader import (
-    HM3DLoader,
-    GibsonLoader,
-    create_dataset_loader,
-    SceneMetadata,
     Frame,
+    GibsonLoader,
+    HM3DLoader,
+    SceneMetadata,
+    create_dataset_loader,
 )
 
 

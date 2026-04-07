@@ -31,6 +31,44 @@ py-modules = ["lingtu_cli"]
 where = ["."]
 include = ["src*", "cli*"]
 
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "cli"]
+exclude = [
+    "src/global_planning/PCT_planner/planner/lib/3rdparty",
+    "src/global_planning/PCT_planner/planner/scripts",
+    "src/global_planning/PCT_planner/tomography",
+    "**/legacy/*",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "UP",    # pyupgrade
+    "RUF",   # ruff-specific
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # function call in default arg (common in Module __init__)
+    "B905",  # zip strict (py310 compat)
+    "E402",  # module level import not at top (sys.path manipulation)
+    "F401",  # unused import (re-exports in __init__.py)
+    "F811",  # redefinition of unused name (test fixtures)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "nav", "semantic", "drivers", "gateway", "memory", "cli"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"src/core/tests/*" = ["F811", "E402"]
+"src/semantic/*/test*" = ["F811", "E402"]
+
 [tool.pytest.ini_options]
 testpaths = [
     "src/core/tests",

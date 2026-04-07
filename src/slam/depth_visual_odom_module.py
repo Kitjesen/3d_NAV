@@ -27,10 +27,10 @@ import cv2
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
+from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.sensor import Image, CameraIntrinsics
-from core.msgs.geometry import Pose, Vector3, Quaternion
+from core.msgs.sensor import CameraIntrinsics, Image
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -85,15 +85,15 @@ class DepthVisualOdomModule(Module, layer=1):
 
         # State
         self._active = False
-        self._intrinsics: Optional[CameraIntrinsics] = None
-        self._K: Optional[np.ndarray] = None  # 3x3 camera matrix
-        self._D: Optional[np.ndarray] = None  # distortion coeffs
-        self._undistort_maps: Optional[tuple] = None  # (map1, map2) for cv2.remap
+        self._intrinsics: CameraIntrinsics | None = None
+        self._K: np.ndarray | None = None  # 3x3 camera matrix
+        self._D: np.ndarray | None = None  # distortion coeffs
+        self._undistort_maps: tuple | None = None  # (map1, map2) for cv2.remap
 
         # Frame tracking
-        self._prev_gray: Optional[np.ndarray] = None
-        self._prev_depth: Optional[np.ndarray] = None
-        self._prev_kps: Optional[np.ndarray] = None  # (N, 2) tracked points
+        self._prev_gray: np.ndarray | None = None
+        self._prev_depth: np.ndarray | None = None
+        self._prev_kps: np.ndarray | None = None  # (N, 2) tracked points
         self._orb = None
 
         # Accumulated pose (world frame)
@@ -171,7 +171,7 @@ class DepthVisualOdomModule(Module, layer=1):
         self.active.publish(False)
         logger.info("DepthVisualOdom: deactivated (SLAM recovered)")
 
-    _latest_depth: Optional[np.ndarray] = None
+    _latest_depth: np.ndarray | None = None
 
     def _on_depth(self, img: Image) -> None:
         """Cache latest depth frame."""
@@ -262,7 +262,7 @@ class DepthVisualOdomModule(Module, layer=1):
         else:
             self._prev_kps = tracked_curr
 
-    def _detect_features(self, gray: np.ndarray) -> Optional[np.ndarray]:
+    def _detect_features(self, gray: np.ndarray) -> np.ndarray | None:
         """Detect ORB keypoints, return as (N, 2) float32 array."""
         if self._orb is None:
             return None
@@ -347,7 +347,7 @@ class DepthVisualOdomModule(Module, layer=1):
             np.array(pts_2d, dtype=np.float64),
         )
 
-    def _solve_pnp(self, pts_3d: np.ndarray, pts_2d: np.ndarray) -> Optional[np.ndarray]:
+    def _solve_pnp(self, pts_3d: np.ndarray, pts_2d: np.ndarray) -> np.ndarray | None:
         """Solve PnP with RANSAC, return 4x4 transform or None."""
         # distCoeffs=None because images are already undistorted in _process_frame
         success, rvec, tvec, inliers = cv2.solvePnPRansac(
@@ -424,7 +424,7 @@ class DepthVisualOdomModule(Module, layer=1):
             z = 0.25 * s
         return np.array([x, y, z, w])
 
-    def reset_pose(self, T: Optional[np.ndarray] = None) -> None:
+    def reset_pose(self, T: np.ndarray | None = None) -> None:
         """Reset accumulated pose (called when SLAM recovers and re-anchors)."""
         with self._lock:
             self._T_world_cam = T if T is not None else np.eye(4)
@@ -432,7 +432,7 @@ class DepthVisualOdomModule(Module, layer=1):
             self._prev_kps = None
             self._frame_count = 0
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["visual_odom"] = {
             "active": self._active,

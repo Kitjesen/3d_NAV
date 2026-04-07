@@ -24,7 +24,7 @@ class SpatialMemory(Protocol):
     def update_position(
         self,
         position: Any,
-        visible_labels: Optional[List[str]] = None,
+        visible_labels: list[str] | None = None,
     ) -> None:
         """Record the robot's current position and visible objects."""
         ...

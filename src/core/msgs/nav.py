@@ -8,13 +8,13 @@ from __future__ import annotations
 import math
 import struct
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Iterator, List, Optional, Union
+from typing import Any, List, Optional, Union
 
 import numpy as np
 
 from .geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
-
 
 # ---------------------------------------------------------------------------
 # Odometry
@@ -130,7 +130,7 @@ class Path:
     Maps to ROS2 nav_msgs/Path and /nav/global_path, /nav/local_path topics.
     """
 
-    poses: List[PoseStamped] = field(default_factory=list)
+    poses: list[PoseStamped] = field(default_factory=list)
     ts: float = 0.0
     frame_id: str = "map"
 
@@ -146,7 +146,7 @@ class Path:
     def __bool__(self) -> bool:
         return len(self.poses) > 0
 
-    def __getitem__(self, index: Union[int, slice]) -> Union[PoseStamped, List[PoseStamped]]:
+    def __getitem__(self, index: int | slice) -> PoseStamped | list[PoseStamped]:
         return self.poses[index]
 
     def __iter__(self) -> Iterator[PoseStamped]:
@@ -154,11 +154,11 @@ class Path:
 
     # -- queries -------------------------------------------------------------
 
-    def head(self) -> Optional[PoseStamped]:
+    def head(self) -> PoseStamped | None:
         """First waypoint, or None if path is empty."""
         return self.poses[0] if self.poses else None
 
-    def last(self) -> Optional[PoseStamped]:
+    def last(self) -> PoseStamped | None:
         """Last waypoint, or None if path is empty."""
         return self.poses[-1] if self.poses else None
 
@@ -210,7 +210,7 @@ class Path:
         off = 14
         frame_id = data[off: off + flen].decode("utf-8")
         off += flen
-        poses: List[PoseStamped] = []
+        poses: list[PoseStamped] = []
         for _ in range(n):
             ps = PoseStamped.decode(data[off:])
             poses.append(ps)

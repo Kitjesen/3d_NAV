@@ -56,7 +56,7 @@ class GlobalPlannerService:
         start: np.ndarray,
         goal: np.ndarray,
         safe_goal_tolerance: float = 4.0,
-    ) -> Tuple[List[np.ndarray], float]:
+    ) -> tuple[list[np.ndarray], float]:
         """Plan a path from start to goal.
 
         If the goal lands on an obstacle, BFS-searches the nearest free cell
@@ -98,7 +98,7 @@ class GlobalPlannerService:
         self,
         grid: np.ndarray,
         resolution: float = 0.2,
-        origin: Optional[np.ndarray] = None,
+        origin: np.ndarray | None = None,
     ) -> None:
         """Push live costmap to the backend (if supported)."""
         if self._backend is not None and hasattr(self._backend, "update_map"):
@@ -112,7 +112,7 @@ class GlobalPlannerService:
         self,
         goal: np.ndarray,
         tolerance: float = 4.0,
-    ) -> Optional[np.ndarray]:
+    ) -> np.ndarray | None:
         """BFS-search nearest free cell if goal is on an obstacle.
 
         Returns adjusted goal (np.ndarray) or None if no costmap available.
@@ -192,7 +192,7 @@ class GlobalPlannerService:
         name = self._planner_name.lower()
         # Trigger @register decorators for astar / pct backends
         try:
-            import global_planning.pct_adapters.src.global_planner_module  # noqa: F401
+            import global_planning.pct_adapters.src.global_planner_module
         except ImportError:
             pass
         try:
@@ -218,7 +218,7 @@ class GlobalPlannerService:
 
         return BackendCls(tomogram_path, self._obstacle_thr)
 
-    def _downsample(self, path: list, goal: np.ndarray) -> List[np.ndarray]:
+    def _downsample(self, path: list, goal: np.ndarray) -> list[np.ndarray]:
         if not path:
             return []
         result = [np.array(path[0][:3])]

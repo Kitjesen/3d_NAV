@@ -13,8 +13,8 @@ Usage::
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 from typing import Any
 
 _src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -45,8 +45,8 @@ def thunder_nav(dog_host: str = "127.0.0.1", dog_port: int = 13145, **kw) -> Blu
     try:
         from semantic.perception.semantic_perception.detector_module import DetectorModule
         from semantic.perception.semantic_perception.encoder_module import EncoderModule
-        from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
         from semantic.planner.semantic_planner.llm_module import LLMModule
+        from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
 
         bp.add(DetectorModule, detector=kw.get("detector", "yoloe"))
         bp.add(EncoderModule, encoder=kw.get("encoder", "mobileclip"))

@@ -20,17 +20,19 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from core import Module, In, Out
-from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
+from core import In, Module, Out
+from core.config import get_config
+from core.msgs.geometry import Vector3
+from core.msgs.nav import Odometry
 from core.msgs.semantic import (
     Detection3D as CoreDetection3D,
-    Relation,
+)
+from core.msgs.semantic import (
     Region,
+    Relation,
     SceneGraph,
 )
-from core.msgs.nav import Odometry
-from core.msgs.geometry import Vector3
-from core.config import get_config
+from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +114,10 @@ class PerceptionModule(Module, layer=3):
         self._clip_encoder = None
         self._sim_scene_observer = None
         self._frame_count: int = 0
-        self._latest_depth: Optional[np.ndarray] = None
-        self._latest_intrinsics: Optional[Any] = None
-        self._latest_odom_matrix: Optional[np.ndarray] = None
-        self._latest_core_detections: List[CoreDetection3D] = []
+        self._latest_depth: np.ndarray | None = None
+        self._latest_intrinsics: Any | None = None
+        self._latest_odom_matrix: np.ndarray | None = None
+        self._latest_core_detections: list[CoreDetection3D] = []
 
     # == Lifecycle =============================================================
 
@@ -387,7 +389,9 @@ class PerceptionModule(Module, layer=3):
                 logger.info("YOLOEDetector loaded")
                 return det
             elif self._detector_type == "yolo_world":
-                from semantic.perception.semantic_perception.yolo_world_detector import YOLOWorldDetector
+                from semantic.perception.semantic_perception.yolo_world_detector import (
+                    YOLOWorldDetector,
+                )
                 det = YOLOWorldDetector(
                     model_size=self._detector_model_size,
                     confidence=self._confidence_threshold,
@@ -410,7 +414,9 @@ class PerceptionModule(Module, layer=3):
                 logger.info("BPUDetector loaded")
                 return det
             elif self._detector_type == "sim_scene":
-                from semantic.perception.semantic_perception.sim_scene_observer import SimSceneObserver
+                from semantic.perception.semantic_perception.sim_scene_observer import (
+                    SimSceneObserver,
+                )
                 self._sim_scene_observer = SimSceneObserver(world=self._world)
                 logger.info("SimSceneObserver loaded (world=%s)", self._world or "")
                 return self._sim_scene_observer
@@ -429,7 +435,9 @@ class PerceptionModule(Module, layer=3):
                 return enc
             else:
                 # Default: MobileCLIP (USS-Nav style text-only, fast)
-                from semantic.perception.semantic_perception.mobileclip_encoder import MobileCLIPEncoder
+                from semantic.perception.semantic_perception.mobileclip_encoder import (
+                    MobileCLIPEncoder,
+                )
                 enc = MobileCLIPEncoder()
                 enc.load_model()
                 logger.info("MobileCLIPEncoder loaded")
@@ -457,6 +465,8 @@ class PerceptionModule(Module, layer=3):
         try:
             from semantic.perception.semantic_perception.projection import (
                 Detection3D as ProjDetection3D,
+            )
+            from semantic.perception.semantic_perception.projection import (
                 bbox_center_depth,
                 mask_to_pointcloud,
                 pointcloud_centroid,
@@ -551,7 +561,7 @@ class PerceptionModule(Module, layer=3):
 
     # == Format conversion =====================================================
 
-    def _convert_detections(self, detections_3d: list) -> List[CoreDetection3D]:
+    def _convert_detections(self, detections_3d: list) -> list[CoreDetection3D]:
         """projection.Detection3D -> core.msgs.Detection3D."""
         results = []
         for d in detections_3d:
@@ -631,8 +641,8 @@ class PerceptionModule(Module, layer=3):
 
     def _match_detection_metadata(
         self, label: str, px: float, py: float, pz: float,
-    ) -> Optional[CoreDetection3D]:
-        best_det: Optional[CoreDetection3D] = None
+    ) -> CoreDetection3D | None:
+        best_det: CoreDetection3D | None = None
         best_dist = 1.5
         label_lower = label.lower()
 
@@ -668,7 +678,7 @@ class PerceptionModule(Module, layer=3):
 
     # == Health ================================================================
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["frame_count"] = self._frame_count
         info["detector_type"] = self._detector_type

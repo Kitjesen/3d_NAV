@@ -20,7 +20,7 @@ VLM 开放词汇 bbox 检测 — "图里有X吗？在哪？"
 import json
 import logging
 import re
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ async def query_object_bbox(
     image_base64: str,
     target_description: str,
     language: str = "zh",
-) -> Optional[List[float]]:
+) -> list[float] | None:
     """
     用 VLM 在当前图像中定位目标物体的 bbox。
 
@@ -69,7 +69,7 @@ async def query_multiple_objects(
     image_base64: str,
     target_description: str,
     language: str = "zh",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     用 VLM 在当前图像中定位多个匹配目标。
 
@@ -128,7 +128,7 @@ def _resolve_vision_client(llm_client):
     return None
 
 
-def _build_bbox_prompt(target: str, language: str) -> Tuple[str, str]:
+def _build_bbox_prompt(target: str, language: str) -> tuple[str, str]:
     """构建单目标 VLM bbox 查询的 system + user prompt。"""
     if language == "zh":
         system = (
@@ -157,7 +157,7 @@ def _build_bbox_prompt(target: str, language: str) -> Tuple[str, str]:
     return system, user
 
 
-def _build_multi_bbox_prompt(target: str, language: str) -> Tuple[str, str]:
+def _build_multi_bbox_prompt(target: str, language: str) -> tuple[str, str]:
     """构建多目标 VLM bbox 查询的 system + user prompt。"""
     if language == "zh":
         system = (
@@ -186,7 +186,7 @@ def _build_multi_bbox_prompt(target: str, language: str) -> Tuple[str, str]:
     return system, user
 
 
-def _extract_bbox_from_response(response: str) -> Optional[List[float]]:
+def _extract_bbox_from_response(response: str) -> list[float] | None:
     """
     从 VLM 响应中提取单个 bbox，容错处理。
 
@@ -229,7 +229,7 @@ def _extract_bbox_from_response(response: str) -> Optional[List[float]]:
     return None
 
 
-def _extract_multi_bbox_from_response(response: str) -> List[Dict[str, Any]]:
+def _extract_multi_bbox_from_response(response: str) -> list[dict[str, Any]]:
     """
     从 VLM 响应中提取多目标 bbox 列表，容错处理。
 
@@ -260,7 +260,7 @@ def _extract_multi_bbox_from_response(response: str) -> List[Dict[str, Any]]:
     return []
 
 
-def _normalize_multi_results(raw_list: list) -> List[Dict[str, Any]]:
+def _normalize_multi_results(raw_list: list) -> list[dict[str, Any]]:
     """规范化多目标结果列表，过滤掉解析失败的条目。"""
     out = []
     for item in raw_list:
@@ -272,7 +272,7 @@ def _normalize_multi_results(raw_list: list) -> List[Dict[str, Any]]:
     return out
 
 
-def _normalize_single_result(item: dict) -> Optional[Dict[str, Any]]:
+def _normalize_single_result(item: dict) -> dict[str, Any] | None:
     """规范化单条结果，返回 {"name", "bbox", "confidence"} 或 None。"""
     bbox_raw = item.get("bbox")
     if bbox_raw is None:
@@ -327,7 +327,7 @@ def _parse_json_tolerant(text: str) -> Any:
     return None
 
 
-def _coerce_bbox(raw) -> Optional[List[float]]:
+def _coerce_bbox(raw) -> list[float] | None:
     """将各种形式的 bbox 输入规范化为 [x1,y1,x2,y2] 浮点列表。"""
     if raw is None:
         return None
@@ -357,7 +357,7 @@ def _coerce_bbox(raw) -> Optional[List[float]]:
     return None
 
 
-def _is_valid_bbox(coords: List[float]) -> bool:
+def _is_valid_bbox(coords: list[float]) -> bool:
     """检查 bbox 坐标是否合理（非负、x2>x1、y2>y1）。"""
     if len(coords) != 4:
         return False

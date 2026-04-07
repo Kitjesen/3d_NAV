@@ -19,18 +19,18 @@ re-exported here for backward compatibility.
 from __future__ import annotations
 
 import logging
-import time
 import threading
+import time
+from collections.abc import Callable
 from typing import (
     Any,
-    Callable,
     Generic,
     List,
     Optional,
     TypeVar,
 )
 
-from .transport.local import Transport, LocalTransport  # canonical location
+from .transport.local import LocalTransport, Transport  # canonical location
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +52,28 @@ class Out(Generic[T]):
     """
 
     __slots__ = (
-        "_name", "_msg_type", "owner", "_callbacks", "_transport",
-        "_transport_topic", "_msg_count", "_last_ts", "_lock",
-        "_rate_window_start", "_rate_window_count", "_rate_hz",
+        "_callbacks",
+        "_last_ts",
+        "_lock",
+        "_msg_count",
+        "_msg_type",
+        "_name",
         "_publish_errors",
+        "_rate_hz",
+        "_rate_window_count",
+        "_rate_window_start",
+        "_transport",
+        "_transport_topic",
+        "owner",
     )
 
     def __init__(self, msg_type: type, name: str, owner: Any = None) -> None:
         self._name = name
         self._msg_type = msg_type
         self.owner = owner
-        self._callbacks: List[Callable[[T], None]] = []
-        self._transport: Optional[Transport] = None
-        self._transport_topic: Optional[str] = None
+        self._callbacks: list[Callable[[T], None]] = []
+        self._transport: Transport | None = None
+        self._transport_topic: str | None = None
         self._msg_count: int = 0
         self._last_ts: float = 0.0
         self._lock = threading.Lock()
@@ -130,7 +139,7 @@ class Out(Generic[T]):
             if cb in self._callbacks:
                 self._callbacks.remove(cb)
 
-    def _bind_transport(self, transport: Transport, topic: Optional[str] = None) -> None:
+    def _bind_transport(self, transport: Transport, topic: str | None = None) -> None:
         """Bind an external transport layer. topic defaults to the port name."""
         self._transport = transport
         self._transport_topic = topic or self._name
@@ -211,24 +220,42 @@ class In(Generic[T]):
     _LATENCY_WINDOW = 256  # circular buffer size for percentile computation
 
     __slots__ = (
-        "_name", "_msg_type", "owner", "_callback", "_msg_count",
-        "_last_ts", "_latest", "_lock", "_policy", "_in_callback",
-        "_drop_count", "_throttle_interval", "_last_deliver_ts",
-        "_sample_n", "_sample_counter", "_buffer_size", "_buffer",
-        "_rate_window_start", "_rate_window_count", "_rate_hz",
-        "_deliver_count", "_callback_errors",
-        "_max_callback_ms", "_total_callback_ms",
-        "_latency_ring", "_latency_idx",
+        "_buffer",
+        "_buffer_size",
+        "_callback",
+        "_callback_errors",
+        "_deliver_count",
+        "_drop_count",
+        "_in_callback",
+        "_last_deliver_ts",
+        "_last_ts",
+        "_latency_idx",
+        "_latency_ring",
+        "_latest",
+        "_lock",
+        "_max_callback_ms",
+        "_msg_count",
+        "_msg_type",
+        "_name",
+        "_policy",
+        "_rate_hz",
+        "_rate_window_count",
+        "_rate_window_start",
+        "_sample_counter",
+        "_sample_n",
+        "_throttle_interval",
+        "_total_callback_ms",
+        "owner",
     )
 
     def __init__(self, msg_type: type, name: str, owner: Any = None) -> None:
         self._name = name
         self._msg_type = msg_type
         self.owner = owner
-        self._callback: Optional[Callable[[T], None]] = None
+        self._callback: Callable[[T], None] | None = None
         self._msg_count: int = 0
         self._last_ts: float = 0.0
-        self._latest: Optional[T] = None
+        self._latest: T | None = None
         self._lock = threading.Lock()
         self._policy: str = "all"
         self._in_callback: bool = False
@@ -241,7 +268,7 @@ class In(Generic[T]):
         self._sample_counter: int = 0
         # Buffer state
         self._buffer_size: int = 1
-        self._buffer: List = []
+        self._buffer: list = []
         # Rate + latency stats
         self._rate_window_start: float = 0.0
         self._rate_window_count: int = 0
@@ -251,7 +278,7 @@ class In(Generic[T]):
         self._max_callback_ms: float = 0.0
         self._total_callback_ms: float = 0.0
         # Circular buffer for recent callback latencies (percentile computation)
-        self._latency_ring: List[float] = []
+        self._latency_ring: list[float] = []
         self._latency_idx: int = 0
 
     # -- Core API ----------------------------------------------------------------
@@ -397,7 +424,7 @@ class In(Generic[T]):
         return self._last_ts
 
     @property
-    def latest(self) -> Optional[T]:
+    def latest(self) -> T | None:
         """Most recent message, or None if nothing received yet."""
         return self._latest
 

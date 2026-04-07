@@ -21,11 +21,11 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
 from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import OccupancyGrid, Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class OccupancyGridModule(Module, layer=2):
         self._interval = 1.0 / publish_hz
         self._robot_xy = np.zeros(2, dtype=np.float64)
         self._gs = int(2 * map_radius / resolution)  # grid side (cells)
-        self._kernel: Optional[np.ndarray] = None    # circular dilation kernel
+        self._kernel: np.ndarray | None = None    # circular dilation kernel
 
     def setup(self) -> None:
         self._kernel = self._make_circle_kernel(self._inf_radius, self._res)
@@ -165,7 +165,7 @@ class OccupancyGridModule(Module, layer=2):
         y, x = np.ogrid[-r: r + 1, -r: r + 1]
         return (x ** 2 + y ** 2) <= r ** 2
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["occupancy_grid"] = {
             "resolution":    self._res,

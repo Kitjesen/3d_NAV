@@ -16,8 +16,9 @@ Classes:
 import logging
 import pickle
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .abc import Publisher, Subscriber, TopicConfig, TransportABC
 
@@ -28,12 +29,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
+    from cyclonedds.core import Listener
     from cyclonedds.domain import DomainParticipant
-    from cyclonedds.topic import Topic
+    from cyclonedds.idl import IdlStruct
     from cyclonedds.pub import DataWriter
     from cyclonedds.sub import DataReader
-    from cyclonedds.core import Listener
-    from cyclonedds.idl import IdlStruct
+    from cyclonedds.topic import Topic
     _CYCLONE_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _CYCLONE_AVAILABLE = False

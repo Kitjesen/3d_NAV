@@ -33,13 +33,14 @@ import enum
 import logging
 import threading
 import time
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from ._dds import DDS_Imu, HAS_LIVOX_IDL, LivoxCustomMsg, dds_imu_to_imu, livox_msg_to_numpy
+from ._dds import HAS_LIVOX_IDL, DDS_Imu, LivoxCustomMsg, dds_imu_to_imu, livox_msg_to_numpy
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +70,11 @@ class LidarHealth:
     last_frame_time: float = 0.0
     last_frame_points: int = 0
     uptime_s: float = 0.0
-    driver_pid: Optional[int] = None
+    driver_pid: int | None = None
     driver_restarts: int = 0
     last_error: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "state": self.state.value,
             "ip": self.ip,
@@ -96,7 +97,7 @@ class _FPSCounter:
 
     def __init__(self, window: float = 1.0):
         self._window = window
-        self._timestamps: List[float] = []
+        self._timestamps: list[float] = []
 
     def tick(self) -> float:
         now = time.monotonic()
@@ -136,7 +137,7 @@ class Lidar:
 
     def __init__(
         self,
-        ip: Optional[str] = None,
+        ip: str | None = None,
         scan_topic: str = "/lidar/scan",
         imu_topic: str = "/imu/data",
     ):
@@ -156,13 +157,13 @@ class Lidar:
 
         # Data
         self._cloud_lock = threading.Lock()
-        self._latest_cloud: Optional[np.ndarray] = None
+        self._latest_cloud: np.ndarray | None = None
         self._latest_imu = None
         self._cloud_event = threading.Event()
 
         # Callbacks
-        self._cloud_callbacks: List[Callable[[np.ndarray], None]] = []
-        self._imu_callbacks: List[Callable] = []
+        self._cloud_callbacks: list[Callable[[np.ndarray], None]] = []
+        self._imu_callbacks: list[Callable] = []
 
         # Health
         self._fps_counter = _FPSCounter()
@@ -173,7 +174,7 @@ class Lidar:
     # Public API
     # ══════════════════════════════════════════════════════════════════════
 
-    def connect(self, ip: Optional[str] = None) -> "Lidar":
+    def connect(self, ip: str | None = None) -> Lidar:
         """Start the LiDAR driver and begin streaming.
 
         Args:
@@ -248,7 +249,7 @@ class Lidar:
 
     # ── Data access ──────────────────────────────────────────────────────
 
-    def on_cloud(self, callback: Callable[[np.ndarray], None]) -> "Lidar":
+    def on_cloud(self, callback: Callable[[np.ndarray], None]) -> Lidar:
         """Register a point cloud callback: ``fn(numpy_Nx4)``.
 
         Callbacks fire on the DDS reader thread. Keep them fast (<10ms)
@@ -260,7 +261,7 @@ class Lidar:
         self._cloud_callbacks.append(callback)
         return self
 
-    def on_imu(self, callback: Callable) -> "Lidar":
+    def on_imu(self, callback: Callable) -> Lidar:
         """Register an IMU callback: ``fn(core.msgs.sensor.Imu)``.
 
         Returns:
@@ -269,7 +270,7 @@ class Lidar:
         self._imu_callbacks.append(callback)
         return self
 
-    def get_cloud(self) -> Optional[np.ndarray]:
+    def get_cloud(self) -> np.ndarray | None:
         """Return the latest point cloud as numpy (N, 4): x, y, z, intensity.
 
         Non-blocking. Returns ``None`` if no data has arrived yet.
@@ -284,7 +285,7 @@ class Lidar:
         """
         return self._latest_imu
 
-    def wait_for_cloud(self, timeout: float = 5.0) -> Optional[np.ndarray]:
+    def wait_for_cloud(self, timeout: float = 5.0) -> np.ndarray | None:
         """Block until the first point cloud arrives.
 
         Args:
@@ -310,7 +311,7 @@ class Lidar:
         return self._state == LidarState.CONNECTED
 
     @property
-    def ip(self) -> Optional[str]:
+    def ip(self) -> str | None:
         return self._ip
 
     @property
@@ -335,7 +336,7 @@ class Lidar:
 
     # ── Context manager ──────────────────────────────────────────────────
 
-    def __enter__(self) -> "Lidar":
+    def __enter__(self) -> Lidar:
         if self._state != LidarState.CONNECTED:
             self.connect()
         return self

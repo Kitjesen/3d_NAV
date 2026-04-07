@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # TaskRulesMixin is imported lazily at class definition time (below) to avoid
 # circular imports — task_rules itself does a deferred import of the dataclasses
 # defined in this module.
-from .task_rules import TaskRulesMixin  # noqa: E402
+from .task_rules import TaskRulesMixin
 
 
 class SubGoalAction(Enum):
@@ -75,13 +75,13 @@ class SubGoal:
     step_id: int
     action: SubGoalAction
     target: str                     # 目标描述 ("kitchen", "red cup", etc.)
-    parameters: Dict = field(default_factory=dict)  # 附加参数
+    parameters: dict = field(default_factory=dict)  # 附加参数
     status: SubGoalStatus = SubGoalStatus.PENDING
-    result: Optional[Dict] = None   # 执行结果
+    result: dict | None = None   # 执行结果
     retry_count: int = 0
     max_retries: int = 2
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "step_id": self.step_id,
             "action": self.action.value,
@@ -95,7 +95,7 @@ class SubGoal:
 class TaskPlan:
     """完整的任务计划。"""
     instruction: str
-    subgoals: List[SubGoal] = field(default_factory=list)
+    subgoals: list[SubGoal] = field(default_factory=list)
     current_step: int = 0
 
     @property
@@ -113,7 +113,7 @@ class TaskPlan:
         )
 
     @property
-    def active_subgoal(self) -> Optional[SubGoal]:
+    def active_subgoal(self) -> SubGoal | None:
         for sg in self.subgoals:
             if sg.status in (SubGoalStatus.PENDING, SubGoalStatus.ACTIVE):
                 return sg
@@ -136,7 +136,7 @@ class TaskPlan:
             else:
                 active.status = SubGoalStatus.PENDING  # 允许重试
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "instruction": self.instruction,
             "total_steps": len(self.subgoals),
@@ -174,7 +174,7 @@ class TaskDecomposer(TaskRulesMixin):
         instruction: str,
         scene_summary: str = "",
         language: str = "zh",
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         """
         构建 LLM 分解 prompt (SayCan / Inner Monologue 风格)。
 

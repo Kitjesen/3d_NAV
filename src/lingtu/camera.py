@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, List, Optional
+from collections.abc import Callable
+from typing import List, Optional
 
 import numpy as np
 
@@ -30,12 +31,12 @@ class Camera:
         self._color_topic = color_topic
         self._depth_topic = depth_topic
         self._bridge = None
-        self._latest_color: Optional[np.ndarray] = None
-        self._latest_depth: Optional[np.ndarray] = None
+        self._latest_color: np.ndarray | None = None
+        self._latest_depth: np.ndarray | None = None
         self._intrinsics = None
         self._started = False
 
-    def start(self) -> "Camera":
+    def start(self) -> Camera:
         if self._started:
             return self
         try:
@@ -61,10 +62,10 @@ class Camera:
             self._bridge = None
         self._started = False
 
-    def get_color(self) -> Optional[np.ndarray]:
+    def get_color(self) -> np.ndarray | None:
         return self._latest_color
 
-    def get_depth(self) -> Optional[np.ndarray]:
+    def get_depth(self) -> np.ndarray | None:
         return self._latest_depth
 
     def get_intrinsics(self):

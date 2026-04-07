@@ -1,8 +1,11 @@
 from __future__ import annotations
-import traj_opt
+
 import typing
+
 import numpy
-_Shape = typing.Tuple[int, ...]
+import traj_opt
+
+_Shape = tuple[int, ...]
 
 __all__ = [
     "GPMPOptimizer",
@@ -10,7 +13,7 @@ __all__ = [
 ]
 
 
-class GPMPOptimizer():
+class GPMPOptimizer:
     def __init__(self) -> None: ...
     def get_ceilings(self) -> numpy.ndarray[numpy.float64, _Shape[m, 1]]: ...
     def get_heading_rate(self) -> numpy.ndarray[numpy.float64, _Shape[m, 1]]: ...
@@ -21,7 +24,7 @@ class GPMPOptimizer():
     def get_result_matrix(self) -> numpy.ndarray[numpy.float64, _Shape[m, n]]: ...
     def set_debug(self, arg0: bool) -> None: ...
     pass
-class GPMPOptimizerWnoa():
+class GPMPOptimizerWnoa:
     def __init__(self) -> None: ...
     def get_heights(self) -> numpy.ndarray[numpy.float64, _Shape[m, 1]]: ...
     def get_layers(self) -> numpy.ndarray[numpy.float64, _Shape[m, 1]]: ...

@@ -15,8 +15,8 @@ Usage:
 import logging
 from typing import Any, Dict, Optional, Set, Tuple, Type
 
-from core.rpc_client import RPCClient
 from core.module import Module
+from core.rpc_client import RPCClient
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,10 @@ class ModuleCoordinator:
         from core.worker_manager import WorkerManager  # type: ignore[import]
 
         self._mgr = WorkerManager(n_workers=n_workers)
-        self._proxies: Dict[str, RPCClient] = {}
-        self._assignments: Dict[str, int] = {}  # module_id → worker_id
+        self._proxies: dict[str, RPCClient] = {}
+        self._assignments: dict[str, int] = {}  # module_id → worker_id
         self._next_worker: int = 0
-        self._monitor: Optional[Any] = None
+        self._monitor: Any | None = None
 
     def start(self) -> None:
         """Start all worker processes."""
@@ -45,11 +45,11 @@ class ModuleCoordinator:
 
     def deploy(
         self,
-        module_cls: Type[Module],
+        module_cls: type[Module],
         module_id: str,
-        args: Tuple = (),
-        kwargs: Optional[Dict[str, Any]] = None,
-        worker_id: Optional[int] = None,
+        args: tuple = (),
+        kwargs: dict[str, Any] | None = None,
+        worker_id: int | None = None,
     ) -> RPCClient:
         """Deploy a Module to a Worker and return an RPC proxy.
 
@@ -70,7 +70,7 @@ class ModuleCoordinator:
         self._mgr.deploy(worker_id, module_cls, module_id, args, kwargs or {})
 
         # Discover @rpc methods from the class without instantiating it.
-        rpc_methods: Set[str] = set()
+        rpc_methods: set[str] = set()
         for name in dir(module_cls):
             if name.startswith("_"):
                 continue
@@ -111,7 +111,7 @@ class ModuleCoordinator:
         self._proxies.clear()
         self._assignments.clear()
 
-    def get_proxy(self, module_id: str) -> Optional[RPCClient]:
+    def get_proxy(self, module_id: str) -> RPCClient | None:
         """Return the RPCClient for a deployed module, or None."""
         return self._proxies.get(module_id)
 
@@ -147,12 +147,12 @@ class ModuleCoordinator:
         return monitor
 
     @property
-    def resource_monitor(self) -> Optional[Any]:
+    def resource_monitor(self) -> Any | None:
         """The active ResourceMonitor, or None if not started."""
         return self._monitor
 
     @property
-    def proxies(self) -> Dict[str, RPCClient]:
+    def proxies(self) -> dict[str, RPCClient]:
         """Shallow copy of the proxy registry."""
         return dict(self._proxies)
 

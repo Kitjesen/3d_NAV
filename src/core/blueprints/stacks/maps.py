@@ -19,10 +19,10 @@ def maps(**config) -> Blueprint:
     """
     bp = Blueprint()
     try:
-        from nav.occupancy_grid_module import OccupancyGridModule
-        from nav.esdf_module import ESDFModule
-        from nav.elevation_map_module import ElevationMapModule
         from core.config import get_config
+        from nav.elevation_map_module import ElevationMapModule
+        from nav.esdf_module import ESDFModule
+        from nav.occupancy_grid_module import OccupancyGridModule
         cfg = get_config()
         og = cfg.raw.get("occupancy_grid", {})
 

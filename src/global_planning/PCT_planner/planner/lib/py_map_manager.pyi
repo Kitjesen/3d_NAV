@@ -1,13 +1,15 @@
 from __future__ import annotations
-import py_map_manager
+
 import typing
+
+import py_map_manager
 
 __all__ = [
     "DenseElevationMap"
 ]
 
 
-class DenseElevationMap():
+class DenseElevationMap:
     def __init__(self) -> None: ...
     def set_debug(self, arg0: bool) -> None: ...
     def update_layer(self, arg0: int, arg1: float, arg2: float) -> int: ...

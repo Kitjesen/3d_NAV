@@ -45,7 +45,7 @@ class FastPathMixin:
     #  AdaNav: 得分熵计算
     # ================================================================
 
-    def _compute_score_entropy(self, scores: List[float]) -> float:
+    def _compute_score_entropy(self, scores: list[float]) -> float:
         """计算候选得分归一化后的香农熵（AdaNav 不确定度指标）。
 
         高熵表示候选得分均匀分布（歧义高），低熵表示某个候选明显胜出。
@@ -69,9 +69,9 @@ class FastPathMixin:
         self,
         instruction: str,
         scene_graph_json: str,
-        robot_position: Optional[Dict[str, float]] = None,
-        clip_encoder: Optional[Any] = None,
-    ) -> "Optional[GoalResult]":
+        robot_position: dict[str, float] | None = None,
+        clip_encoder: Any | None = None,
+    ) -> "GoalResult | None":
         """
         Fast Path: 场景图直接匹配, 无需 LLM。
 
@@ -97,6 +97,7 @@ class FastPathMixin:
             GoalResult or None (None = 需要 Slow Path)
         """
         from core.utils.sanitize import safe_json_loads
+
         from .goal_resolver import GoalResult
 
         sg = safe_json_loads(scene_graph_json, default=None)
@@ -133,7 +134,7 @@ class FastPathMixin:
         )
 
         # ── 对每个物体打分 (AdaNav 多源置信度) ──
-        scored: List[Tuple[dict, float, str]] = []
+        scored: list[tuple[dict, float, str]] = []
 
         for obj in objects:
             label = obj.get("label", "").lower()
@@ -528,7 +529,7 @@ class FastPathMixin:
         scene_graph: dict,
         clip_encoder,
         top_k: int = 2,
-    ) -> "Optional[set]":
+    ) -> "set | None":
         """
         GAP: Room CLIP 筛选 (FSR-VLN 路线 A + HOV-SG view embeddings)。
         优先用 rooms JSON 中的 clip_feature（HOV-SG view embeddings 均值）做
@@ -595,9 +596,9 @@ class FastPathMixin:
     @staticmethod
     def _clip_attribute_disambiguate(
         instruction: str,
-        candidates: "List[Tuple[dict, float, str]]",
+        candidates: "list[tuple[dict, float, str]]",
         clip_encoder,
-    ) -> "List[Tuple[dict, float, str]]":
+    ) -> "list[tuple[dict, float, str]]":
         """
         B7: 用 CLIP 对同类型多候选做属性消歧。
 
@@ -642,10 +643,10 @@ class FastPathMixin:
     def _try_room_fallback(
         self,
         instruction: str,
-        keywords: List[str],
+        keywords: list[str],
         scene_graph: dict,
-        clip_encoder: Optional[Any] = None,
-    ) -> "Optional[GoalResult]":
+        clip_encoder: Any | None = None,
+    ) -> "GoalResult | None":
         """Room 级 fallback: 当物体匹配失败时, 尝试匹配区域/房间。
 
         支持 "去厨房"、"到走廊"、"find the kitchen" 等区域级指令。
@@ -738,7 +739,7 @@ class FastPathMixin:
         )
 
     @staticmethod
-    def _extract_keywords(instruction: str) -> List[str]:
+    def _extract_keywords(instruction: str) -> list[str]:
         """
         从指令中提取关键词 (使用jieba精确分词)。
 
@@ -763,7 +764,7 @@ class FastPathMixin:
         english_parts = _re.findall(r'[a-zA-Z]+', instruction.lower())
         chinese_text = " ".join(chinese_parts)
 
-        all_keywords: List[str] = []
+        all_keywords: list[str] = []
 
         # 英文: 简单分词 (停用词过滤 + 长度过滤)
         for w in english_parts:
@@ -805,9 +806,9 @@ class FastPathMixin:
     def _parse_instruction_roles(
         self,
         inst_lower: str,
-        keywords: List[str],
-        scene_labels: List[str],
-    ) -> "Tuple[List[str], List[str]]":
+        keywords: list[str],
+        scene_labels: list[str],
+    ) -> "tuple[list[str], list[str]]":
         """
         从指令中解析主语 (导航目标) 和修饰语 (空间参考物)。
 
@@ -848,12 +849,12 @@ class FastPathMixin:
     @staticmethod
     def _parse_roles_regex(
         inst_lower: str,
-        keywords: List[str],
-        scene_labels: List[str],
-    ) -> "Tuple[List[str], List[str]]":
+        keywords: list[str],
+        scene_labels: list[str],
+    ) -> "tuple[list[str], list[str]]":
         """第 1 级: 正则匹配常见句式。"""
-        subjects: List[str] = []
-        modifiers: List[str] = []
+        subjects: list[str] = []
+        modifiers: list[str] = []
 
         en_patterns = [
             r'\b(?:find|go\s+to|navigate\s+to|locate|get)\s+([\w\s]+?)\s+(?:near|by|beside|next\s+to|behind|in\s+front\s+of|left\s+of|right\s+of|on|under|above|below)\s+(?:the\s+)?([\w\s]+)',
@@ -920,9 +921,9 @@ class FastPathMixin:
     @staticmethod
     def _parse_roles_scene_order(
         inst_lower: str,
-        keywords: List[str],
-        scene_labels: List[str],
-    ) -> "Tuple[List[str], List[str]]":
+        keywords: list[str],
+        scene_labels: list[str],
+    ) -> "tuple[list[str], list[str]]":
         """第 2 级: 按指令中出现顺序, 第一个匹配场景物体的词为主语。"""
         found_in_scene = []
         for kw in keywords:

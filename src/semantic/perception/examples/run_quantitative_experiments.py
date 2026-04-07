@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import matplotlib
+
 matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
@@ -35,8 +36,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from semantic.perception.semantic_perception.end_to_end_evaluation import EndToEndEvaluator
 from semantic.perception.semantic_perception.evaluation_framework import BenchmarkResult
 from semantic.perception.semantic_perception.visualization_tools import (
-    PerformanceVisualizer,
     ComprehensiveVisualizer,
+    PerformanceVisualizer,
 )
 
 logging.basicConfig(
@@ -55,10 +56,10 @@ class StatisticalAnalyzer:
 
     @staticmethod
     def compute_statistics(
-        method1_values: List[float],
-        method2_values: List[float],
+        method1_values: list[float],
+        method2_values: list[float],
         metric_name: str,
-    ) -> Dict:
+    ) -> dict:
         """
         计算两组数据的统计量。
 
@@ -100,7 +101,7 @@ class StatisticalAnalyzer:
         }
 
     @staticmethod
-    def generate_statistics_table(stats_list: List[Dict]) -> str:
+    def generate_statistics_table(stats_list: list[dict]) -> str:
         """生成统计表格（Markdown 格式）。"""
         lines = []
         lines.append("| 指标 | 方法 1 | 方法 2 | t 统计量 | p 值 | Cohen's d | 相对差异 | 显著性 |")
@@ -135,9 +136,9 @@ class ExperimentReportGenerator:
 
     def generate_report(
         self,
-        results: List[BenchmarkResult],
-        statistics: List[Dict],
-        config: Dict,
+        results: list[BenchmarkResult],
+        statistics: list[dict],
+        config: dict,
     ):
         """
         生成完整的实验报告。
@@ -249,7 +250,7 @@ class ExperimentReportGenerator:
 
         logger.info(f"实验报告已生成: {report_file}")
 
-    def _write_conclusions(self, f, statistics: List[Dict]):
+    def _write_conclusions(self, f, statistics: list[dict]):
         """写入结论部分。"""
         f.write("基于统计分析结果:\n\n")
 
@@ -280,7 +281,7 @@ def run_quantitative_experiments(
     num_scenes: int = 10,
     num_frames: int = 50,
     planning_queries: int = 10,
-    methods: List[str] = None,
+    methods: list[str] = None,
     output_dir: str = "experiment_results",
 ):
     """

@@ -4,13 +4,13 @@ These tests use a mock WorkerManager so they run without a real Worker process.
 ModuleCoordinator tests patch the import so coordinator.py is exercised
 end-to-end without requiring worker_manager.py to exist.
 """
-import pytest
 from unittest.mock import MagicMock, patch
 
-from core.rpc_client import RPCClient
-from core.remote_ports import RemoteOut, RemoteIn
-from core.module import Module, rpc
+import pytest
 
+from core.module import Module, rpc
+from core.remote_ports import RemoteIn, RemoteOut
+from core.rpc_client import RPCClient
 
 # ---------------------------------------------------------------------------
 # Shared fixtures

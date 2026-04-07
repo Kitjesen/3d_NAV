@@ -16,8 +16,9 @@ import math
 import re
 import threading
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -36,11 +37,11 @@ class SubgraphCandidate:
     center: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0]))
     room_id: int = -1
     group_id: int = -1
-    object_ids: List[int] = field(default_factory=list)
-    object_labels: List[str] = field(default_factory=list)
+    object_ids: list[int] = field(default_factory=list)
+    object_labels: list[str] = field(default_factory=list)
     relation_count: int = 0
 
-    def to_prompt_dict(self) -> Dict:
+    def to_prompt_dict(self) -> dict:
         return {
             "subgraph_id": self.subgraph_id,
             "level": self.level,
@@ -86,7 +87,7 @@ class FrontierSelection:
     frontier: Frontier
     score: float
     reasoning: str
-    subgraph_scores: List[SubgraphScore] = field(default_factory=list)
+    subgraph_scores: list[SubgraphScore] = field(default_factory=list)
 
 
 class SGNavReasoner:
@@ -126,13 +127,13 @@ class SGNavReasoner:
         self.reperception_n_max = max(1, reperception_n_max)
         self.reperception_s_thresh = min(max(reperception_s_thresh, 0.0), 1.0)
 
-        self._target_credibility: Dict[str, float] = {}
+        self._target_credibility: dict[str, float] = {}
         # 多视角观测历史: target_key -> list of ObservationRecord
-        self._observation_history: Dict[str, List[ObservationRecord]] = {}
+        self._observation_history: dict[str, list[ObservationRecord]] = {}
         self._cred_lock = threading.Lock()
 
     @property
-    def target_credibility(self) -> Dict[str, float]:
+    def target_credibility(self) -> dict[str, float]:
         with self._cred_lock:
             return dict(self._target_credibility)
 
@@ -146,13 +147,13 @@ class SGNavReasoner:
         self,
         instruction: str,
         scene_graph_json: str,
-        robot_position: Dict[str, float],
-        frontiers: List[Frontier],
+        robot_position: dict[str, float],
+        frontiers: list[Frontier],
         language: str = "zh",
-        llm_chat: Optional[Callable[[List[Dict[str, str]]], Awaitable[Optional[str]]]] = None,
-        frontier_descriptions: Optional[List[str]] = None,
-        explored_summaries: Optional[List[str]] = None,
-    ) -> Optional[FrontierSelection]:
+        llm_chat: Callable[[list[dict[str, str]]], Awaitable[str | None]] | None = None,
+        frontier_descriptions: list[str] | None = None,
+        explored_summaries: list[str] | None = None,
+    ) -> FrontierSelection | None:
         """执行 SG-Nav 风格 frontier 选择。"""
         if not frontiers:
             return None
@@ -167,7 +168,7 @@ class SGNavReasoner:
             explored_summaries=explored_summaries,
         )
 
-        best: Optional[Frontier] = None
+        best: Frontier | None = None
         best_score = -1.0
         best_details = ""
 
@@ -199,12 +200,12 @@ class SGNavReasoner:
         self,
         instruction: str,
         scene_graph_json: str,
-        robot_position: Dict[str, float],
+        robot_position: dict[str, float],
         language: str = "zh",
-        llm_chat: Optional[Callable[[List[Dict[str, str]]], Awaitable[Optional[str]]]] = None,
-        frontier_descriptions: Optional[List[str]] = None,
-        explored_summaries: Optional[List[str]] = None,
-    ) -> List[SubgraphScore]:
+        llm_chat: Callable[[list[dict[str, str]]], Awaitable[str | None]] | None = None,
+        frontier_descriptions: list[str] | None = None,
+        explored_summaries: list[str] | None = None,
+    ) -> list[SubgraphScore]:
         """对子图执行评分 (heuristic + optional LLM)。"""
         candidates = self._extract_subgraphs(scene_graph_json)
         if not candidates:
@@ -216,7 +217,7 @@ class SGNavReasoner:
             robot_position=robot_position,
         )
 
-        llm_scores: Dict[str, float] = {}
+        llm_scores: dict[str, float] = {}
         if self.use_llm_reasoning and llm_chat is not None:
             llm_scores = await self._score_subgraphs_llm(
                 instruction=instruction,
@@ -227,7 +228,7 @@ class SGNavReasoner:
                 explored_summaries=explored_summaries,
             )
 
-        outputs: List[SubgraphScore] = []
+        outputs: list[SubgraphScore] = []
         for c in candidates:
             h = heuristic_scores.get(c.subgraph_id, 0.0)
             l = llm_scores.get(c.subgraph_id)
@@ -258,9 +259,9 @@ class SGNavReasoner:
 
     def _apply_room_level_gating(
         self,
-        outputs: List[SubgraphScore],
-        candidates: List[SubgraphCandidate],
-    ) -> List[SubgraphScore]:
+        outputs: list[SubgraphScore],
+        candidates: list[SubgraphCandidate],
+    ) -> list[SubgraphScore]:
         """
         room->(group/view/object) 层次门控。
 
@@ -269,7 +270,7 @@ class SGNavReasoner:
         if not outputs or self.room_gate_weight <= 0.0:
             return outputs
 
-        room_score_by_room_id: Dict[int, float] = {}
+        room_score_by_room_id: dict[int, float] = {}
         candidate_map = {c.subgraph_id: c for c in candidates}
 
         for s in outputs:
@@ -285,7 +286,7 @@ class SGNavReasoner:
         if not room_score_by_room_id:
             return outputs
 
-        adjusted: List[SubgraphScore] = []
+        adjusted: list[SubgraphScore] = []
         for s in outputs:
             c = candidate_map.get(s.subgraph_id)
             if c is None or s.level == "room" or c.room_id < 0:
@@ -310,7 +311,7 @@ class SGNavReasoner:
         scene_graph_json: str,
         path_confidence: float,
         confirmed_visible: bool = False,
-    ) -> Tuple[bool, float, str]:
+    ) -> tuple[bool, float, str]:
         """SG-Nav 重感知: 多视角累积目标可信度评估 (§3.4)。
 
         检测到目标时不立刻接受, 而是累积多次观测 (最多 N_max 次)。
@@ -442,7 +443,7 @@ class SGNavReasoner:
         )
         return reject, cred, reason
 
-    def _extract_subgraphs(self, scene_graph_json: str) -> List[SubgraphCandidate]:
+    def _extract_subgraphs(self, scene_graph_json: str) -> list[SubgraphCandidate]:
         sg = self._parse_scene_graph(scene_graph_json)
 
         raw = sg.get("subgraphs", [])
@@ -464,7 +465,7 @@ class SGNavReasoner:
         if not isinstance(room_like, list) or not room_like:
             room_like = sg.get("regions", []) if isinstance(sg.get("regions", []), list) else []
 
-        candidates: List[SubgraphCandidate] = []
+        candidates: list[SubgraphCandidate] = []
 
         if isinstance(room_like, list) and room_like:
             for idx, r in enumerate(room_like):
@@ -532,8 +533,8 @@ class SGNavReasoner:
         candidates.sort(key=lambda c: (len(c.object_ids), c.relation_count), reverse=True)
         return candidates[: self.max_subgraphs]
 
-    def _parse_raw_subgraphs(self, raw_subgraphs: List[Dict]) -> List[SubgraphCandidate]:
-        parsed: List[SubgraphCandidate] = []
+    def _parse_raw_subgraphs(self, raw_subgraphs: list[dict]) -> list[SubgraphCandidate]:
+        parsed: list[SubgraphCandidate] = []
         for sg in raw_subgraphs:
             if not isinstance(sg, dict):
                 continue
@@ -565,9 +566,9 @@ class SGNavReasoner:
     def _score_subgraphs_heuristic(
         self,
         instruction: str,
-        candidates: List[SubgraphCandidate],
-        robot_position: Dict[str, float],
-    ) -> Tuple[Dict[str, float], Dict[str, str]]:
+        candidates: list[SubgraphCandidate],
+        robot_position: dict[str, float],
+    ) -> tuple[dict[str, float], dict[str, str]]:
         keywords = self._extract_keywords(instruction)
         relation_words = {
             "near", "left", "right", "front", "behind", "on", "above", "below",
@@ -582,8 +583,8 @@ class SGNavReasoner:
             dtype=np.float64,
         )
 
-        scores: Dict[str, float] = {}
-        reasons: Dict[str, str] = {}
+        scores: dict[str, float] = {}
+        reasons: dict[str, str] = {}
 
         for cand in candidates:
             label_text = " ".join(cand.object_labels).lower()
@@ -624,12 +625,12 @@ class SGNavReasoner:
     async def _score_subgraphs_llm(
         self,
         instruction: str,
-        candidates: List[SubgraphCandidate],
+        candidates: list[SubgraphCandidate],
         language: str,
-        llm_chat: Callable[[List[Dict[str, str]]], Awaitable[Optional[str]]],
-        frontier_descriptions: Optional[List[str]] = None,
-        explored_summaries: Optional[List[str]] = None,
-    ) -> Dict[str, float]:
+        llm_chat: Callable[[list[dict[str, str]]], Awaitable[str | None]],
+        frontier_descriptions: list[str] | None = None,
+        explored_summaries: list[str] | None = None,
+    ) -> dict[str, float]:
         messages = build_sgnav_subgraph_prompt(
             instruction=instruction,
             subgraphs=[c.to_prompt_dict() for c in candidates],
@@ -647,7 +648,7 @@ class SGNavReasoner:
             if not isinstance(raw_scores, list):
                 return {}
 
-            out: Dict[str, float] = {}
+            out: dict[str, float] = {}
             for item in raw_scores:
                 if not isinstance(item, dict):
                     continue
@@ -667,14 +668,14 @@ class SGNavReasoner:
     def _interpolate_to_frontier(
         self,
         frontier: Frontier,
-        subgraph_scores: List[SubgraphScore],
-    ) -> Tuple[float, str]:
+        subgraph_scores: list[SubgraphScore],
+    ) -> tuple[float, str]:
         if not subgraph_scores:
             return 0.0, "no subgraph score"
 
         weighted_sum = 0.0
         weight_sum = 0.0
-        nearest: Optional[Tuple[SubgraphScore, float]] = None
+        nearest: tuple[SubgraphScore, float] | None = None
 
         for sg in subgraph_scores:
             dist = float(np.linalg.norm(frontier.center_world - sg.center))
@@ -698,7 +699,7 @@ class SGNavReasoner:
         )
         return signal, detail
 
-    def _parse_scene_graph(self, scene_graph_json: str) -> Dict:
+    def _parse_scene_graph(self, scene_graph_json: str) -> dict:
         try:
             data = json.loads(scene_graph_json)
             if isinstance(data, dict):
@@ -708,7 +709,7 @@ class SGNavReasoner:
         return {}
 
     @staticmethod
-    def _compute_objects_center(objects: List[Dict]) -> np.ndarray:
+    def _compute_objects_center(objects: list[dict]) -> np.ndarray:
         points = []
         for obj in objects:
             if not isinstance(obj, dict):
@@ -751,7 +752,7 @@ class SGNavReasoner:
         return np.array([x, y], dtype=np.float64)
 
     @staticmethod
-    def _extract_keywords(text: str) -> List[str]:
+    def _extract_keywords(text: str) -> list[str]:
         if not text:
             return []
 
@@ -770,7 +771,7 @@ class SGNavReasoner:
         return dedup
 
     @staticmethod
-    def _extract_json(text) -> Dict:
+    def _extract_json(text) -> dict:
         # BUG FIX: LLM client (e.g. Claude) 可能已经返回 dict，不需要再 json.loads
         if isinstance(text, dict):
             return text

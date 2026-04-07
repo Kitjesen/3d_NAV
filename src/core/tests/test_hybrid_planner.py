@@ -11,19 +11,19 @@ Uses only numpy + inline mock objects.
 """
 
 import math
+
 import numpy as np
 import pytest
 
 from semantic.perception.semantic_perception.hybrid_planner import (
-    HybridPlanner,
     HybridPath,
+    HybridPlanner,
     _astar_on_grid,
-    _w2g,
-    _g2w,
-    _find_nearest_free,
     _downsample_cells,
+    _find_nearest_free,
+    _g2w,
+    _w2g,
 )
-
 
 # ── Mock topology graph ───────────────────────────────────────────────────────
 

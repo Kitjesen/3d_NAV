@@ -6,10 +6,11 @@ Semantic Perception API - 追踪器接口
 
 from abc import ABC, abstractmethod
 from typing import List, Optional
+
 import numpy as np
 
-from .types import Detection3D
 from .exceptions import TrackerError
+from .types import Detection3D
 
 
 class TrackerAPI(ABC):
@@ -34,9 +35,9 @@ class TrackerAPI(ABC):
     @abstractmethod
     def update(
         self,
-        detections: List[Detection3D],
-        timestamp: Optional[float] = None
-    ) -> List[Detection3D]:
+        detections: list[Detection3D],
+        timestamp: float | None = None
+    ) -> list[Detection3D]:
         """
         更新追踪器
 
@@ -53,7 +54,7 @@ class TrackerAPI(ABC):
         pass
 
     @abstractmethod
-    def get_all_tracks(self) -> List[Detection3D]:
+    def get_all_tracks(self) -> list[Detection3D]:
         """
         获取所有追踪的物体
 
@@ -63,7 +64,7 @@ class TrackerAPI(ABC):
         pass
 
     @abstractmethod
-    def get_track_by_id(self, track_id: str) -> Optional[Detection3D]:
+    def get_track_by_id(self, track_id: str) -> Detection3D | None:
         """
         根据ID获取追踪物体
 

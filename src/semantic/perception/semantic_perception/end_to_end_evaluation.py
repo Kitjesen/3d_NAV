@@ -32,11 +32,11 @@ from semantic.perception.semantic_perception.baseline_wrappers import create_pla
 from semantic.perception.semantic_perception.dataset_loader import create_dataset_loader
 from semantic.perception.semantic_perception.evaluation_framework import (
     BenchmarkFramework,
-    MemoryEvaluator,
-    UpdateEvaluator,
-    PathEvaluator,
-    ExplorationEvaluator,
     BenchmarkResult,
+    ExplorationEvaluator,
+    MemoryEvaluator,
+    PathEvaluator,
+    UpdateEvaluator,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,18 +63,18 @@ class EndToEndEvaluator:
     """
 
     def __init__(self):
-        self.results: List[BenchmarkResult] = []
+        self.results: list[BenchmarkResult] = []
         self.framework = BenchmarkFramework()
 
     def run_evaluation(
         self,
         dataset_type: str,
         dataset_root: Path,
-        scene_ids: List[str],
-        methods: List[str],
+        scene_ids: list[str],
+        methods: list[str],
         num_frames: int = 10,
         planning_queries: int = 5,
-    ) -> List[BenchmarkResult]:
+    ) -> list[BenchmarkResult]:
         """
         运行完整评估。
 
@@ -143,7 +143,7 @@ class EndToEndEvaluator:
         method: str,
         num_frames: int,
         planning_queries: int,
-    ) -> Optional[BenchmarkResult]:
+    ) -> BenchmarkResult | None:
         """
         评估单个场景和方法。
 

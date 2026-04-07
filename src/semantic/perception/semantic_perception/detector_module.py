@@ -27,8 +27,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class DetectionResult:
 
     Serializable, transport-friendly. Decoupled from detector internals.
     """
-    __slots__ = ("detections", "timestamp", "detector_name", "inference_ms")
+    __slots__ = ("detections", "detector_name", "inference_ms", "timestamp")
 
     def __init__(self, detections: list, timestamp: float = 0.0,
                  detector_name: str = "", inference_ms: float = 0.0):
@@ -188,7 +188,7 @@ class DetectorModule(Module, layer=3):
                 pass
         super().stop()
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         avg_ms = (self._total_inference_ms / self._frame_count
                   if self._frame_count > 0 else 0.0)

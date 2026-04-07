@@ -15,12 +15,12 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from core import Module, In, Out
+from core import In, Module, Out
 from core.msgs import Odometry, PoseStamped, SceneGraph
 from core.msgs.geometry import Pose, Quaternion, Vector3
 
-from .frontier_scorer import FrontierScorer
 from .exploration_strategy import extract_frontier_scene_data
+from .frontier_scorer import FrontierScorer
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +59,10 @@ class FrontierModule(Module, layer=4):
 
         super().__init__(**config)
         self._scorer = FrontierScorer(**scorer_kwargs)
-        self._last_odom: Optional[Odometry] = None
+        self._last_odom: Odometry | None = None
         self._last_instruction: str = ""
-        self._last_sg: Optional[SceneGraph] = None
-        self._visited: List[np.ndarray] = []
+        self._last_sg: SceneGraph | None = None
+        self._visited: list[np.ndarray] = []
 
     # -- 生命周期 --
 
@@ -148,7 +148,7 @@ class FrontierModule(Module, layer=4):
         }
         self.frontier_scores.publish(scores_dict)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["frontier_count"] = len(getattr(self._scorer, "_frontiers", []))
         info["exploration_active"] = self._last_instruction != ""

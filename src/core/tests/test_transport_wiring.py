@@ -7,7 +7,7 @@ a transport backend instead of direct callbacks.
 import time
 import unittest
 
-from core import Module, In, Out, Blueprint
+from core import Blueprint, In, Module, Out
 from core.transport.local import LocalTransport
 
 

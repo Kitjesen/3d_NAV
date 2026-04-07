@@ -4,11 +4,11 @@ Proves that when a module connected via transport crashes (raises exception),
 the publisher and other modules continue operating normally.
 """
 
-import time
 import threading
+import time
 import unittest
 
-from core import Module, In, Out, Blueprint
+from core import Blueprint, In, Module, Out
 from core.transport.local import LocalTransport
 
 

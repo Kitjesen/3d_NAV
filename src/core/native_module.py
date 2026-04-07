@@ -61,9 +61,9 @@ class NativeModuleConfig:
     """
     executable: str
     name: str = ""
-    parameters: Dict[str, Any] = field(default_factory=dict)
-    remappings: Dict[str, str] = field(default_factory=dict)
-    env: Dict[str, str] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
+    remappings: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
     shutdown_timeout: float = 5.0
     auto_restart: bool = False
     max_restarts: int = 3
@@ -74,7 +74,7 @@ class NativeModuleConfig:
         if not self.name:
             self.name = os.path.basename(self.executable)
 
-    def to_ros_args(self) -> List[str]:
+    def to_ros_args(self) -> list[str]:
         """Generate ``--ros-args -p key:=val -r /old:=/new`` CLI arguments."""
         if not self.parameters and not self.remappings:
             return []
@@ -90,7 +90,7 @@ class NativeModuleConfig:
             args.extend(["-r", f"{old}:={new}"])
         return args
 
-    def build_cmd(self) -> List[str]:
+    def build_cmd(self) -> list[str]:
         """Full command line: [executable] + ros_args."""
         return [self.executable] + self.to_ros_args()
 
@@ -114,9 +114,9 @@ class NativeModule(Module):
     def __init__(self, config: NativeModuleConfig, **kw):
         super().__init__(**kw)
         self._native_config = config
-        self._process: Optional[subprocess.Popen] = None
-        self._watchdog_thread: Optional[threading.Thread] = None
-        self._log_thread: Optional[threading.Thread] = None
+        self._process: subprocess.Popen | None = None
+        self._watchdog_thread: threading.Thread | None = None
+        self._log_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
         self._restart_count = 0
         self._start_time: float = 0.0
@@ -175,7 +175,7 @@ class NativeModule(Module):
         env = {**os.environ, **self._native_config.env}
 
         # Use process group on Unix for clean shutdown of child processes
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "env": env,
@@ -314,7 +314,7 @@ class NativeModule(Module):
 
     # -- Health report -------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         """Process health: running, pid, restart count, uptime."""
         info = super().port_summary()
         proc_running = self._process is not None and self._process.poll() is None

@@ -55,10 +55,10 @@ class SlowPathMixin:
         self,
         instruction: str,
         scene_graph_json: str,
-        robot_position: Optional[Dict[str, float]] = None,
+        robot_position: dict[str, float] | None = None,
         language: str = "zh",
         explore_if_unknown: bool = True,
-        clip_encoder: Optional[Any] = None,
+        clip_encoder: Any | None = None,
     ) -> "GoalResult":
         """
         完整解析 (AdaCoT 动态路由 + Fast/Slow 双进程)。
@@ -81,8 +81,9 @@ class SlowPathMixin:
             GoalResult
         """
         from core.utils.sanitize import safe_json_loads
-        from .goal_resolver import GoalResult
+
         from .adacot import AdaCoTDecision
+        from .goal_resolver import GoalResult
         from .prompt_templates import build_goal_resolution_prompt
 
         # ── 层 0: Tag 记忆 (精确匹配，最快，无需场景图) ──
@@ -185,7 +186,7 @@ class SlowPathMixin:
     async def generate_exploration_waypoint(
         self,
         instruction: str,
-        robot_position: Dict[str, float],
+        robot_position: dict[str, float],
         step_distance: float = 2.0,
         language: str = "zh",
         scene_graph_json: str = "",
@@ -204,6 +205,7 @@ class SlowPathMixin:
           - SG-Nav: 子图评分插值到 frontier
         """
         from core.utils.sanitize import safe_json_loads
+
         from .goal_resolver import GoalResult
         from .prompt_templates import build_exploration_prompt
 
@@ -330,10 +332,10 @@ class SlowPathMixin:
     def _try_tsg_exploration(
         self,
         instruction: str,
-        robot_position: Dict[str, float],
+        robot_position: dict[str, float],
         scene_graph_json: str,
         step_distance: float,
-    ) -> "Optional[GoalResult]":
+    ) -> "GoalResult | None":
         """
         尝试使用拓扑语义图 (TSG) 选择探索目标。
 
@@ -341,6 +343,7 @@ class SlowPathMixin:
         否则返回 None 让调用者 fallback 到 LLM。
         """
         from core.utils.sanitize import safe_json_loads
+
         from .goal_resolver import GoalResult
 
         if self._tsg is None or not scene_graph_json:
@@ -489,7 +492,7 @@ class SlowPathMixin:
         scene_graph_json: str,
         image_base64: str,
         language: str = "zh",
-    ) -> Dict:
+    ) -> dict:
         """
         视觉 grounding — 发送相机帧给 GPT-4o Vision。
 
@@ -549,7 +552,7 @@ class SlowPathMixin:
         scene_graph_json: str,
         max_objects: int = 15,
         max_relations: int = 20,
-        clip_encoder: Optional[Any] = None,
+        clip_encoder: Any | None = None,
     ) -> str:
         """
         选择性 Grounding: 只给 LLM 与指令相关的场景子图。
@@ -579,8 +582,9 @@ class SlowPathMixin:
         Returns:
             过滤后的场景图 JSON
         """
-        from core.utils.sanitize import safe_json_loads
         from typing import Dict as _Dict
+
+        from core.utils.sanitize import safe_json_loads
 
         sg = safe_json_loads(scene_graph_json, default=None)
         if sg is None:
@@ -597,7 +601,7 @@ class SlowPathMixin:
         inst_lower = instruction.lower()
 
         # ── D1: CLIP 语义排序 (替代纯关键词) ──
-        clip_relevance: _Dict[int, float] = {}
+        clip_relevance: dict[int, float] = {}
         if clip_encoder is not None:
             try:
                 labels = [obj.get("label", "") for obj in objects]
@@ -625,7 +629,7 @@ class SlowPathMixin:
 
         # ── 第 1 轮: CLIP + 关键词联合筛选 ──
         relevant_ids = set()
-        relevance_scores: _Dict[int, float] = {}
+        relevance_scores: dict[int, float] = {}
 
         for obj in objects:
             oid = obj.get("id")
@@ -742,7 +746,7 @@ class SlowPathMixin:
             except ImportError:
                 self._tsg = None
 
-    def set_room_object_kg(self, kg: Optional[Any]) -> None:
+    def set_room_object_kg(self, kg: Any | None) -> None:
         """注入房间-物体知识图谱 (P1: KG-backed room adjacency prediction)。"""
         self._room_object_kg = kg
 
@@ -752,14 +756,14 @@ class SlowPathMixin:
             self._visited_room_ids.add(room_id)
 
     @property
-    def topology_graph(self) -> Optional[Any]:
+    def topology_graph(self) -> Any | None:
         """获取拓扑语义图实例 (供外部模块访问)。"""
         return self._tsg
 
     @staticmethod
     def _get_current_room_id(
-        robot_position: Dict[str, float],
-        rooms: List[Dict],
+        robot_position: dict[str, float],
+        rooms: list[dict],
     ) -> int:
         """根据机器人位置找到当前所在的房间 ID。"""
         if not rooms:
@@ -785,8 +789,8 @@ class SlowPathMixin:
     # ================================================================
 
     async def _call_with_fallback(
-        self, messages: List[Dict[str, str]]
-    ) -> Optional[str]:
+        self, messages: list[dict[str, str]]
+    ) -> str | None:
         """调用主 LLM, 失败或空响应则尝试备用。"""
         from .llm_client import LLMError
 
@@ -813,9 +817,10 @@ class SlowPathMixin:
 
         return None
 
-    def _parse_llm_response(self, response_text, scene_graph: Optional[dict] = None) -> "GoalResult":
+    def _parse_llm_response(self, response_text, scene_graph: dict | None = None) -> "GoalResult":
         """解析 LLM JSON 响应。"""
         from core.utils.sanitize import sanitize_position
+
         from .goal_resolver import GoalResult
 
         try:
@@ -894,7 +899,7 @@ class SlowPathMixin:
         raise ValueError(f"No JSON found in response: {text[:200]}")
 
     @staticmethod
-    def _fix_truncated_json(text: str) -> Optional[str]:
+    def _fix_truncated_json(text: str) -> str | None:
         """尝试修复被截断的 JSON (常见于 max_tokens 限制)。"""
         import re
         required_keys = {"action", "target", "confidence"}

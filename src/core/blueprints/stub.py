@@ -19,12 +19,12 @@ import threading
 import time
 from typing import Any, Dict
 
-from core.stream import In, Out
+from core.blueprint import Blueprint
 from core.module import Module
 from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.registry import register
-from core.blueprint import Blueprint
+from core.stream import In, Out
 
 
 @register("driver", "stub", priority=0, description="Fake driver for CI/testing, no hardware")
@@ -136,7 +136,7 @@ class StubDogModule(Module, layer=1):
 
     # -- Health --------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         stats = super().port_summary()
         stats["stub"] = {"stopped": self._stopped}
         return stats

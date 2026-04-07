@@ -7,9 +7,9 @@
 """
 
 import json
-import time
-import sys
 import os
+import sys
+import time
 
 import numpy as np
 import pytest
@@ -22,7 +22,6 @@ if _SRC_DIR not in sys.path:
 
 from semantic.perception.semantic_perception.instance_tracker import InstanceTracker, TrackedObject
 from semantic.perception.semantic_perception.projection import Detection3D
-
 
 # ─────────────────────────────────────────────
 #  Helpers

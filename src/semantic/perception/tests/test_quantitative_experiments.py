@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use('Agg')
 
 import numpy as np
@@ -20,14 +21,15 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from examples.run_quantitative_experiments import (
-    StatisticalAnalyzer,
     ExperimentReportGenerator,
+    StatisticalAnalyzer,
 )
+
 from semantic.perception.semantic_perception.evaluation_framework import (
     BenchmarkResult,
     MemoryMetrics,
-    UpdateMetrics,
     PathMetrics,
+    UpdateMetrics,
 )
 
 

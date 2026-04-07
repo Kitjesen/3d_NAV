@@ -21,9 +21,9 @@ from typing import Optional
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class SimPointCloudProvider(Module, layer=1):
         z_max: float = 2.50,
         sample_spacing: float = 0.10,
         publish_hz: float = 2.0,
-        exclude_names: Optional[list[str]] = None,
+        exclude_names: list[str] | None = None,
         **kw,
     ):
         super().__init__(**kw)
@@ -51,7 +51,7 @@ class SimPointCloudProvider(Module, layer=1):
         self._spacing = sample_spacing
         self._interval = 1.0 / publish_hz
         self._exclude = set(exclude_names or ["floor", "robot"])
-        self._cloud: Optional[PointCloud2] = None
+        self._cloud: PointCloud2 | None = None
         self._last_pub = 0.0
 
     def setup(self) -> None:
@@ -153,7 +153,7 @@ class SimPointCloudProvider(Module, layer=1):
             geom_elem = parent
         return gpos
 
-    def _find_parent(self, child_elem, current_search) -> Optional[ET.Element]:
+    def _find_parent(self, child_elem, current_search) -> ET.Element | None:
         """Walk up from a geom's parent body. Simple: use parent map."""
         # ET doesn't have parent pointers, so we parse pos from geom directly.
         # For MuJoCo scenes, geoms in worldbody have no parent offset.

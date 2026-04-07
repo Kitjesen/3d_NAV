@@ -17,10 +17,11 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from core.module import Module
-from core.stream import In, Out
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.semantic import GoalResult as MsgGoalResult, SceneGraph
+from core.msgs.semantic import GoalResult as MsgGoalResult
+from core.msgs.semantic import SceneGraph
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,9 @@ class ActionExecutorModule(Module, layer=4):
         self._approach_distance: float = config.get("approach_distance", 0.5)
         self._nav_timeout: float = config.get("nav_timeout", 60.0)
         self._max_lera_retries: int = config.get("max_lera_retries", 3)
-        self._executor: Optional[Any] = None
-        self._latest_odom: Optional[Odometry] = None
-        self._latest_sg: Optional[SceneGraph] = None
+        self._executor: Any | None = None
+        self._latest_odom: Odometry | None = None
+        self._latest_sg: SceneGraph | None = None
         self._failure_count: int = 0
         self._lock = threading.Lock()
 
@@ -118,7 +119,7 @@ class ActionExecutorModule(Module, layer=4):
             "target_y": goal.target_y,
         }))
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["executing"] = self._executor is not None and getattr(self, "_current", None) is not None
         info["step_count"] = getattr(self, "_step_count", 0)

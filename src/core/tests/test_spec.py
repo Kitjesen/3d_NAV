@@ -12,17 +12,16 @@ import pytest
 from core.spec import (
     Detector,
     Encoder,
-    Tracker,
-    GoalResolver,
-    GlobalPlanner,
-    TaskDecomposer,
-    RobotDriver,
-    SpatialMemory,
     EpisodicMemoryLike,
-    SafetyChecker,
+    GlobalPlanner,
+    GoalResolver,
     LLMBackend,
+    RobotDriver,
+    SafetyChecker,
+    SpatialMemory,
+    TaskDecomposer,
+    Tracker,
 )
-
 
 # ── Conforming mock classes ────────────────────────────────────────
 

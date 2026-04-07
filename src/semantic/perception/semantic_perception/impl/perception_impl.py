@@ -7,24 +7,25 @@
 import logging
 import math
 import time
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
+
 import numpy as np
 
-from ..api.perception_api import PerceptionAPI
 from ..api.detector_api import DetectorAPI
 from ..api.encoder_api import EncoderAPI
+from ..api.exceptions import InvalidDepthError, InvalidImageError, PerceptionAPIError
+from ..api.perception_api import PerceptionAPI
 from ..api.tracker_api import TrackerAPI
 from ..api.types import (
-    Detection3D,
-    SceneGraph,
-    CameraInfo,
-    Position3D,
     BBox2D,
-    Relation,
-    Region,
+    CameraInfo,
+    Detection3D,
     PerceptionConfig,
+    Position3D,
+    Region,
+    Relation,
+    SceneGraph,
 )
-from ..api.exceptions import PerceptionAPIError, InvalidImageError, InvalidDepthError
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class PerceptionImpl(PerceptionAPI):
         detector: DetectorAPI,
         encoder: EncoderAPI,
         tracker: TrackerAPI,
-        config: Optional[PerceptionConfig] = None
+        config: PerceptionConfig | None = None
     ):
         """
         初始化感知系统
@@ -68,7 +69,7 @@ class PerceptionImpl(PerceptionAPI):
         self.config = config or PerceptionConfig()
 
         # 场景图状态
-        self._scene_graph: Optional[SceneGraph] = None
+        self._scene_graph: SceneGraph | None = None
         self._frame_count = 0
 
         # 性能统计
@@ -82,8 +83,8 @@ class PerceptionImpl(PerceptionAPI):
         rgb_image: np.ndarray,
         depth_image: np.ndarray,
         camera_info: CameraInfo,
-        transform: Optional[np.ndarray] = None
-    ) -> List[Detection3D]:
+        transform: np.ndarray | None = None
+    ) -> list[Detection3D]:
         """
         处理单帧图像
 
@@ -228,8 +229,8 @@ class PerceptionImpl(PerceptionAPI):
         bbox: BBox2D,
         depth_image: np.ndarray,
         camera_info: CameraInfo,
-        transform: Optional[np.ndarray] = None
-    ) -> Optional[Position3D]:
+        transform: np.ndarray | None = None
+    ) -> Position3D | None:
         """
         将2D边界框投影到3D
 
@@ -298,7 +299,7 @@ class PerceptionImpl(PerceptionAPI):
 
         return Position3D(x=float(x), y=float(y), z=float(z))
 
-    def _update_scene_graph(self, objects: List[Detection3D]):
+    def _update_scene_graph(self, objects: list[Detection3D]):
         """更新场景图"""
         if not objects:
             self._scene_graph = SceneGraph(
@@ -324,7 +325,7 @@ class PerceptionImpl(PerceptionAPI):
             frame_id="map"
         )
 
-    def _compute_relations(self, objects: List[Detection3D]) -> List[Relation]:
+    def _compute_relations(self, objects: list[Detection3D]) -> list[Relation]:
         """计算物体间的空间关系"""
         relations = []
         near_threshold = 1.5  # 米
@@ -350,7 +351,7 @@ class PerceptionImpl(PerceptionAPI):
 
         return relations
 
-    def _identify_regions(self, objects: List[Detection3D]) -> List[Region]:
+    def _identify_regions(self, objects: list[Detection3D]) -> list[Region]:
         """识别空间区域（简单聚类）"""
         if not objects:
             return []
@@ -414,10 +415,10 @@ class PerceptionImpl(PerceptionAPI):
 
     def query_objects(
         self,
-        label: Optional[str] = None,
+        label: str | None = None,
         min_confidence: float = 0.0,
-        region_name: Optional[str] = None
-    ) -> List[Detection3D]:
+        region_name: str | None = None
+    ) -> list[Detection3D]:
         """
         查询物体
 

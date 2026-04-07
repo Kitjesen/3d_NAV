@@ -88,22 +88,22 @@ def _build_skill_schema(method) -> dict:
         type(None): "null",
     }
 
-    properties: Dict[str, Any] = {}
-    required: List[str] = []
+    properties: dict[str, Any] = {}
+    required: list[str] = []
 
     for pname, param in sig.parameters.items():
         if pname == "self":
             continue
         ann = param.annotation
         json_type = _PY_TO_JSON.get(ann, "string")
-        prop: Dict[str, Any] = {"type": json_type}
+        prop: dict[str, Any] = {"type": json_type}
         if param.default is not _inspect.Parameter.empty:
             prop["default"] = param.default
         else:
             required.append(pname)
         properties[pname] = prop
 
-    schema: Dict[str, Any] = {
+    schema: dict[str, Any] = {
         "type": "object",
         "description": doc,
         "properties": properties,
@@ -128,7 +128,7 @@ class Module:
     """
 
     # class-level layer tag; subclasses may override
-    _layer: Optional[int] = None
+    _layer: int | None = None
 
     # Modules that host network servers (HTTP, WebSocket) set this True so
     # Blueprint._build_worker_mode() keeps them in the main process where they
@@ -137,7 +137,7 @@ class Module:
 
     # -- dimos-style __init_subclass__: set None placeholders at class definition ---
 
-    def __init_subclass__(cls, layer: Optional[int] = None, **kwargs: Any) -> None:
+    def __init_subclass__(cls, layer: int | None = None, **kwargs: Any) -> None:
         """Subclass hook — set class-level In/Out placeholder attributes.
 
         dimos needs this because Dask Actor proxies look up attributes on the class.
@@ -149,7 +149,7 @@ class Module:
             cls._layer = layer
 
         # merge namespaces from MRO modules so forward refs resolve
-        globalns: Dict[str, Any] = {}
+        globalns: dict[str, Any] = {}
         for c in reversed(cls.__mro__):
             mod = sys.modules.get(c.__module__)
             if mod:
@@ -170,14 +170,14 @@ class Module:
 
     def __init__(self, **config: Any) -> None:
         self._config = config
-        self._ports_in: Dict[str, In[Any]] = {}
-        self._ports_out: Dict[str, Out[Any]] = {}
+        self._ports_in: dict[str, In[Any]] = {}
+        self._ports_out: dict[str, Out[Any]] = {}
         self._running = False
         self._closed = False
         self._closed_lock = __import__("threading").Lock()
 
         # scan type hints and instantiate ports
-        globalns: Dict[str, Any] = {}
+        globalns: dict[str, Any] = {}
         for c in reversed(type(self).__mro__):
             mod = sys.modules.get(c.__module__)
             if mod:
@@ -203,7 +203,7 @@ class Module:
 
     # -- lifecycle -----------------------------------------------------------
 
-    def preflight(self) -> Optional[str]:
+    def preflight(self) -> str | None:
         """Pre-startup check — verify required resources are available.
 
         Called before setup(). Return ``None`` if all checks pass, or a string
@@ -253,32 +253,32 @@ class Module:
     # -- port access ---------------------------------------------------------
 
     @property
-    def ports_in(self) -> Dict[str, In[Any]]:
+    def ports_in(self) -> dict[str, In[Any]]:
         """Read-only copy of the input port dict."""
         return dict(self._ports_in)
 
     @property
-    def ports_out(self) -> Dict[str, Out[Any]]:
+    def ports_out(self) -> dict[str, Out[Any]]:
         """Read-only copy of the output port dict."""
         return dict(self._ports_out)
 
     @property
-    def all_ports(self) -> Dict[str, Any]:
+    def all_ports(self) -> dict[str, Any]:
         """All ports (In + Out)."""
         return {**self._ports_in, **self._ports_out}
 
     @property
-    def outputs(self) -> Dict[str, Out[Any]]:
+    def outputs(self) -> dict[str, Out[Any]]:
         """Alias for ports_out — dimos API compatibility."""
         return self._ports_out
 
     @property
-    def inputs(self) -> Dict[str, In[Any]]:
+    def inputs(self) -> dict[str, In[Any]]:
         """Alias for ports_in — dimos API compatibility."""
         return self._ports_in
 
     @property
-    def rpcs(self) -> Dict[str, Any]:
+    def rpcs(self) -> dict[str, Any]:
         """Discover all @rpc-decorated methods on this module.
 
         Scans the class MRO __dict__ (not dir(self)) to avoid triggering
@@ -295,7 +295,7 @@ class Module:
         return result
 
     @property
-    def skills(self) -> Dict[str, Any]:
+    def skills(self) -> dict[str, Any]:
         """Discover all @skill-decorated methods (AI-callable subset of @rpc).
 
         Scans the class MRO __dict__ to avoid infinite cross-recursion with rpcs.
@@ -309,7 +309,7 @@ class Module:
                     result[name] = getattr(self, name)
         return result
 
-    def get_skill_infos(self) -> "List[SkillInfo]":
+    def get_skill_infos(self) -> list[SkillInfo]:
         """Return SkillInfo list for all @skill methods on this module.
 
         Used by MCPServerModule.on_system_modules() for dynamic tool discovery.
@@ -338,12 +338,12 @@ class Module:
         return self._running
 
     @property
-    def layer(self) -> Optional[int]:
+    def layer(self) -> int | None:
         return self._layer
 
     # -- System-level hooks -----------------------------------------------
 
-    def on_system_modules(self, modules: "Dict[str, Module]") -> None:
+    def on_system_modules(self, modules: dict[str, Module]) -> None:
         """Called by Blueprint after all modules are built.
 
         Override to inspect other modules, discover @rpc methods,
@@ -390,14 +390,14 @@ class Module:
     # -- Blueprint factory ---------------------------------------------------
 
     @classmethod
-    def blueprint(cls, **kwargs: Any) -> "Blueprint":
+    def blueprint(cls, **kwargs: Any) -> Blueprint:
         """Create a Blueprint containing only this module."""
         from .blueprint import Blueprint
         return Blueprint().add(cls, **kwargs)
 
     # -- diagnostics ---------------------------------------------------------
 
-    def port_summary(self) -> Dict[str, Any]:
+    def port_summary(self) -> dict[str, Any]:
         """Port summary for debugging and health checks."""
         return {
             "module": type(self).__name__,

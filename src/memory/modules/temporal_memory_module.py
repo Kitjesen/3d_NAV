@@ -17,17 +17,16 @@ import re
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Deque, Dict, List, Optional
 
 import numpy as np
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.registry import register
-from core.msgs.semantic import SceneGraph
 from core.msgs.nav import Odometry
-
+from core.msgs.semantic import SceneGraph
+from core.registry import register
+from core.stream import In, Out
 from memory.modules._odom_mixin import OdomTrackingMixin
 
 logger = logging.getLogger(__name__)
@@ -43,10 +42,10 @@ class TemporalRecord:
 
     timestamp: float
     position: tuple  # (x, y, z)
-    objects: List[Dict[str, Any]]  # [{label, confidence, x, y, z}, ...]
+    objects: list[dict[str, Any]]  # [{label, confidence, x, y, z}, ...]
     room: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "timestamp": self.timestamp,
             "position": list(self.position),
@@ -55,7 +54,7 @@ class TemporalRecord:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> TemporalRecord:
+    def from_dict(cls, d: dict[str, Any]) -> TemporalRecord:
         pos = d.get("position", [0.0, 0.0, 0.0])
         return cls(
             timestamp=float(d.get("timestamp", 0.0)),
@@ -109,14 +108,14 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
         self._min_observation_interval = min_observation_interval
         self._save_dir = save_dir
 
-        self._buffer: Deque[TemporalRecord] = deque(maxlen=max_records)
+        self._buffer: deque[TemporalRecord] = deque(maxlen=max_records)
         self._lock = threading.Lock()
 
         self._last_record_ts: float = 0.0
         self._last_summary_ts: float = 0.0
 
         self._summary_cache: str = ""
-        self._summary_timer: Optional[threading.Timer] = None
+        self._summary_timer: threading.Timer | None = None
 
         self._jsonl_path: str = ""
 
@@ -205,7 +204,7 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
             self._summary_cache = summary_text
             self._last_summary_ts = now
 
-        object_counts: Dict[str, int] = {}
+        object_counts: dict[str, int] = {}
         with self._lock:
             records = list(self._buffer)
         for rec in records:
@@ -222,7 +221,7 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
         }
         self.temporal_summary.publish(summary_dict)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         with self._lock:
             info["buffer_size"] = len(self._buffer)
@@ -231,12 +230,12 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
 
     # -- Query methods ---------------------------------------------------------
 
-    def query_by_time(self, start_t: float, end_t: float) -> List[TemporalRecord]:
+    def query_by_time(self, start_t: float, end_t: float) -> list[TemporalRecord]:
         """Return all records whose timestamp falls within [start_t, end_t]."""
         with self._lock:
             return [r for r in self._buffer if start_t <= r.timestamp <= end_t]
 
-    def query_by_label(self, label: str) -> List[TemporalRecord]:
+    def query_by_label(self, label: str) -> list[TemporalRecord]:
         """Return all records that contain at least one object with the given label."""
         label_lower = label.lower()
         with self._lock:
@@ -245,7 +244,7 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
                 if any(o["label"].lower() == label_lower for o in r.objects)
             ]
 
-    def query_last_seen(self, label: str) -> Optional[TemporalRecord]:
+    def query_last_seen(self, label: str) -> TemporalRecord | None:
         """Return the most recent record containing an object with the given label."""
         label_lower = label.lower()
         with self._lock:
@@ -354,7 +353,7 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
             return
         loaded = 0
         try:
-            with open(self._jsonl_path, "r", encoding="utf-8") as f:
+            with open(self._jsonl_path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

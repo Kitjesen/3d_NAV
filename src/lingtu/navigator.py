@@ -30,7 +30,7 @@ class Navigator:
         self._planner_module = None
         self._started = False
 
-    def start(self) -> "Navigator":
+    def start(self) -> Navigator:
         if self._started:
             return self
         try:

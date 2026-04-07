@@ -25,6 +25,7 @@ Usage::
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import threading
 import time
@@ -32,14 +33,13 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-import json as _json
-
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.semantic import SceneGraph, GoalResult as MsgGoalResult
+from core.msgs.semantic import GoalResult as MsgGoalResult
+from core.msgs.semantic import SceneGraph
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +114,12 @@ class SemanticPlannerModule(Module, layer=4):
 
         # Scene graph — keep both JSON string (for GoalResolver) and
         # the original object (for LERa label extraction).
-        self._latest_sg: Optional[str] = None
-        self._current_scene_graph: Optional[SceneGraph] = None
+        self._latest_sg: str | None = None
+        self._current_scene_graph: SceneGraph | None = None
 
         # Active instruction + resolved goal
         self._current_instruction: str = ""
-        self._current_goal_pose: Optional[PoseStamped] = None
+        self._current_goal_pose: PoseStamped | None = None
 
         # LERa state — all guarded by _lera_lock
         self._lera_lock = threading.Lock()
@@ -132,11 +132,11 @@ class SemanticPlannerModule(Module, layer=4):
         # Sibling module references (set in on_system_modules)
         self._vector_memory = None
         self._tagged_locations = None
-        self._agent_tool_registry: Dict[str, Any] = {}
-        self._agent_tool_list: List[Dict[str, Any]] = []
+        self._agent_tool_registry: dict[str, Any] = {}
+        self._agent_tool_list: list[dict[str, Any]] = []
 
         # Latest camera frame for VLM tools in the agent loop
-        self._latest_rgb: Optional[np.ndarray] = None
+        self._latest_rgb: np.ndarray | None = None
 
         # Stats
         self._resolve_count: int = 0
@@ -148,10 +148,10 @@ class SemanticPlannerModule(Module, layer=4):
         self._tagged_locations = modules.get("TaggedLocationsModule")
         self._refresh_agent_tools(modules)
 
-    def _refresh_agent_tools(self, modules: Dict[str, Any]) -> None:
+    def _refresh_agent_tools(self, modules: dict[str, Any]) -> None:
         """Mirror MCP skill discovery for the internal agent loop."""
         self._agent_tool_registry = {}
-        tool_list: List[Dict[str, Any]] = []
+        tool_list: list[dict[str, Any]] = []
 
         for mod_name, mod in modules.items():
             if not hasattr(mod, "get_skill_infos"):
@@ -178,7 +178,7 @@ class SemanticPlannerModule(Module, layer=4):
                 })
 
         # Last discovered tool wins, matching MCPServerModule's behavior.
-        seen: Dict[str, Dict[str, Any]] = {}
+        seen: dict[str, dict[str, Any]] = {}
         for tool in tool_list:
             seen[tool["name"]] = tool
         self._agent_tool_list = list(seen.values())
@@ -308,7 +308,7 @@ class SemanticPlannerModule(Module, layer=4):
             self._lera_running = True
 
             # Snapshot mutable state for the background thread (avoids races).
-            labels: List[str] = (
+            labels: list[str] = (
                 [obj.label for obj in self._current_scene_graph.objects if obj.label]
                 if self._current_scene_graph else []
             )
@@ -335,9 +335,9 @@ class SemanticPlannerModule(Module, layer=4):
     def _run_lera(
         self,
         instruction: str,
-        labels: List[str],
+        labels: list[str],
         failure_count: int,
-        llm_client: Optional[Any],
+        llm_client: Any | None,
     ) -> None:
         """Background thread: Explain+Replan, then dispatch recovery action.
 
@@ -428,7 +428,7 @@ class SemanticPlannerModule(Module, layer=4):
 
     # ── Decomposition ─────────────────────────────────────────────────────────
 
-    def _decompose(self, instruction: str) -> Optional[dict]:
+    def _decompose(self, instruction: str) -> dict | None:
         if self._task_decomposer is None:
             return {"subtasks": [instruction]}
         try:
@@ -486,7 +486,7 @@ class SemanticPlannerModule(Module, layer=4):
     # ── Vector Memory Search ─────────────────────────────────────────────────
 
     @staticmethod
-    def _goal_result_position(result: Any) -> Optional[List[float]]:
+    def _goal_result_position(result: Any) -> list[float] | None:
         pos = getattr(result, "position", None)
         if isinstance(pos, dict):
             return [
@@ -763,7 +763,7 @@ class SemanticPlannerModule(Module, layer=4):
 
     # ── Health ────────────────────────────────────────────────────────────────
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["semantic_planner"] = {
             "decomposer": self._decomposer_strategy,

@@ -16,10 +16,9 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from core import Module, In, Out, skill
-from core.registry import register
+from core import In, Module, Out, skill
 from core.msgs import Odometry, SceneGraph
-
+from core.registry import register
 from memory.modules._odom_mixin import OdomTrackingMixin
 from memory.spatial.episodic import EpisodicMemory
 
@@ -86,7 +85,7 @@ class EpisodicMemoryModule(OdomTrackingMixin, Module, layer=3):
         """访问内部 EpisodicMemory (测试/查询用)。"""
         return self._memory
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         records = self._memory.records if hasattr(self._memory, "records") else getattr(self._memory, "_records", [])
         info["record_count"] = len(records)

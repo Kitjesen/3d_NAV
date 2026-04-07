@@ -1,16 +1,16 @@
 import importlib.util
 import sys
-
-import numpy as np
-import pytest
 import time
 import types
 from pathlib import Path
 
-from drivers.sim.mujoco_driver_module import MujocoDriverModule
+import numpy as np
+import pytest
+from sim.engine.core.robot import RobotConfig
+
 from core.blueprints.full_stack import full_stack_blueprint
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
-from sim.engine.core.robot import RobotConfig
+from drivers.sim.mujoco_driver_module import MujocoDriverModule
 
 
 def test_default_nova_dog_resolves_real_robot_model():
@@ -29,11 +29,10 @@ def test_semantic_namespace_wrappers_expose_runtime_import_paths():
     assert importlib.util.find_spec("semantic_planner.llm_client") is not None
 
     # Canonical imports from core.utils
+    from core.msgs import scene as scene_msgs
+    from core.utils.robustness import retry
     from core.utils.sanitize import sanitize_position
     from core.utils.validation import validate_bgr
-    from core.utils.robustness import retry
-
-    from core.msgs import scene as scene_msgs
     from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
     from semantic.perception.semantic_perception.tracked_objects import TrackedObject
 

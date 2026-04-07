@@ -6,12 +6,12 @@ Semantic Perception API - 工厂类
 
 from typing import Optional
 
-from .perception_api import PerceptionAPI
 from .detector_api import DetectorAPI
 from .encoder_api import EncoderAPI
+from .exceptions import ConfigurationError
+from .perception_api import PerceptionAPI
 from .tracker_api import TrackerAPI
 from .types import PerceptionConfig
-from .exceptions import ConfigurationError
 
 
 class PerceptionFactory:
@@ -26,7 +26,7 @@ class PerceptionFactory:
         detector_type: str = "yolo_world",
         encoder_type: str = "clip",
         tracker_type: str = "instance",
-        config: Optional[PerceptionConfig] = None
+        config: PerceptionConfig | None = None
     ) -> PerceptionAPI:
         """
         创建完整的感知系统
@@ -68,7 +68,7 @@ class PerceptionFactory:
     @staticmethod
     def create_detector(
         detector_type: str,
-        config: Optional[PerceptionConfig] = None
+        config: PerceptionConfig | None = None
     ) -> DetectorAPI:
         """
         创建检测器
@@ -107,7 +107,7 @@ class PerceptionFactory:
     @staticmethod
     def create_encoder(
         encoder_type: str,
-        config: Optional[PerceptionConfig] = None
+        config: PerceptionConfig | None = None
     ) -> EncoderAPI:
         """
         创建编码器
@@ -147,7 +147,7 @@ class PerceptionFactory:
     @staticmethod
     def create_tracker(
         tracker_type: str,
-        config: Optional[PerceptionConfig] = None
+        config: PerceptionConfig | None = None
     ) -> TrackerAPI:
         """
         创建追踪器

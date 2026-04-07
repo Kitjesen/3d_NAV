@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core import Module, In, Out
+from core import In, Module, Out
 from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
 
@@ -38,9 +38,9 @@ class TaskSchedulerModule(Module, layer=6):
         )
         self._schedule_file = Path(default_file)
         self._schedule_file.parent.mkdir(parents=True, exist_ok=True)
-        self._schedules: Dict[str, Dict[str, Any]] = self._load_schedules()
+        self._schedules: dict[str, dict[str, Any]] = self._load_schedules()
         # Tracks last-fired minute key per schedule to prevent double-firing
-        self._last_fired: Dict[str, str] = {}
+        self._last_fired: dict[str, str] = {}
 
     def setup(self) -> None:
         self.schedule_command.subscribe(self._on_command)
@@ -55,7 +55,7 @@ class TaskSchedulerModule(Module, layer=6):
             cmd = {}
 
         action = cmd.get("action", "")
-        resp: Dict[str, Any] = {"action": action, "success": False}
+        resp: dict[str, Any] = {"action": action, "success": False}
 
         try:
             if action == "add":
@@ -77,7 +77,7 @@ class TaskSchedulerModule(Module, layer=6):
 
     # -- schedule CRUD ----------------------------------------------------------
 
-    def _add_schedule(self, cmd: Dict[str, Any]) -> Dict[str, Any]:
+    def _add_schedule(self, cmd: dict[str, Any]) -> dict[str, Any]:
         name = cmd.get("name", "")
         if not name:
             return {"action": "add", "success": False, "message": "missing schedule name"}
@@ -95,7 +95,7 @@ class TaskSchedulerModule(Module, layer=6):
         self._save_schedules()
         return {"action": "add", "success": True, "message": f"schedule added: {name}"}
 
-    def _remove_schedule(self, name: str) -> Dict[str, Any]:
+    def _remove_schedule(self, name: str) -> dict[str, Any]:
         if not name:
             return {"action": "remove", "success": False, "message": "missing schedule name"}
         if name not in self._schedules:
@@ -105,7 +105,7 @@ class TaskSchedulerModule(Module, layer=6):
         self._save_schedules()
         return {"action": "remove", "success": True, "message": f"schedule removed: {name}"}
 
-    def _list_schedules(self) -> Dict[str, Any]:
+    def _list_schedules(self) -> dict[str, Any]:
         items = []
         for name, data in self._schedules.items():
             items.append({
@@ -119,7 +119,7 @@ class TaskSchedulerModule(Module, layer=6):
             })
         return {"action": "list", "success": True, "schedules": items}
 
-    def _set_enabled(self, name: str, enabled: bool) -> Dict[str, Any]:
+    def _set_enabled(self, name: str, enabled: bool) -> dict[str, Any]:
         action_name = "enable" if enabled else "disable"
         if not name:
             return {"action": action_name, "success": False, "message": "missing schedule name"}
@@ -132,7 +132,7 @@ class TaskSchedulerModule(Module, layer=6):
 
     # -- schedule evaluation (call periodically) --------------------------------
 
-    def check_schedules(self, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    def check_schedules(self, now: datetime | None = None) -> list[dict[str, Any]]:
         """Evaluate all schedules against current time and fire due tasks.
 
         Parameters
@@ -153,7 +153,7 @@ class TaskSchedulerModule(Module, layer=6):
         current_minute = now.minute
         minute_key = now.strftime("%Y-%m-%d %H:%M")
 
-        fired: List[Dict[str, Any]] = []
+        fired: list[dict[str, Any]] = []
 
         for name, data in self._schedules.items():
             if not data.get("enabled", True):
@@ -182,7 +182,7 @@ class TaskSchedulerModule(Module, layer=6):
 
     # -- persistence ------------------------------------------------------------
 
-    def _load_schedules(self) -> Dict[str, Dict[str, Any]]:
+    def _load_schedules(self) -> dict[str, dict[str, Any]]:
         data = load_yaml(self._schedule_file)
         return data if isinstance(data, dict) else {}
 

@@ -8,7 +8,8 @@ Strategy selection:
 """
 
 import logging
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 from .abc import (
     Publisher,
@@ -20,8 +21,8 @@ from .abc import (
 
 logger = logging.getLogger(__name__)
 
-_default_transport: Optional[TransportABC] = None
-_shm_transport: Optional[TransportABC] = None
+_default_transport: TransportABC | None = None
+_shm_transport: TransportABC | None = None
 
 
 def create_transport(
@@ -40,8 +41,8 @@ def create_transport(
 
     elif strategy == TransportStrategy.DUAL:
         from .dds import DDSTransport
-        from .shm import SHMTransport
         from .dual import DualTransport
+        from .shm import SHMTransport
         return DualTransport(SHMTransport(), DDSTransport())
 
     elif strategy == TransportStrategy.AUTO:

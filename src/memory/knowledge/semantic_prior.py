@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 #  房间类型→物体 语义先验知识库
 # ══════════════════════════════════════════════════════════════════
 
-ROOM_OBJECT_PRIORS: Dict[str, Dict[str, float]] = {
+ROOM_OBJECT_PRIORS: dict[str, dict[str, float]] = {
     "corridor": {
         "door": 0.95, "sign": 0.80, "fire extinguisher": 0.70,
         "elevator": 0.40, "stairs": 0.35, "trash can": 0.30,
@@ -135,7 +135,7 @@ class RoomPrior:
     room_name: str
     room_type: str
     prior_score: float
-    matched_objects: List[str] = field(default_factory=list)
+    matched_objects: list[str] = field(default_factory=list)
     is_visited: bool = False
     reasoning: str = ""
 
@@ -147,11 +147,11 @@ class TopologyEdge:
     to_room_id: int
     edge_type: str              # "door" | "traversal" | "proximity"
     mediator_label: str = ""    # 连通介质的标签 (如 "door")
-    mediator_position: Optional[Dict[str, float]] = None
+    mediator_position: dict[str, float] | None = None
     distance: float = 0.0
     traversal_count: int = 0    # 机器人实际穿越次数
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         d = {
             "from_room": self.from_room_id,
             "to_room": self.to_room_id,
@@ -180,8 +180,8 @@ class SemanticPriorEngine:
 
     def __init__(
         self,
-        room_priors: Optional[Dict[str, Dict[str, float]]] = None,
-        kg_path: Optional[str] = None,
+        room_priors: dict[str, dict[str, float]] | None = None,
+        kg_path: str | None = None,
     ):
         self._priors = room_priors or dict(ROOM_OBJECT_PRIORS)
 
@@ -193,8 +193,8 @@ class SemanticPriorEngine:
 
         # CLIP 编码器 (用于 predict_room_type_from_labels)
         self._clip_encoder = None
-        self._room_desc_keys: List[str] = []
-        self._room_desc_texts: List[str] = []
+        self._room_desc_keys: list[str] = []
+        self._room_desc_texts: list[str] = []
 
     def set_clip_encoder(self, clip_encoder) -> None:
         """注入 CLIP 编码器, 启用基于 CLIP text-text 相似度的房间类型预测。"""
@@ -204,8 +204,8 @@ class SemanticPriorEngine:
         logger.info("SemanticPriorEngine: CLIP encoder set, room type prediction enabled")
 
     def predict_room_type_from_labels(
-        self, visible_labels: List[str],
-    ) -> Dict[str, float]:
+        self, visible_labels: list[str],
+    ) -> dict[str, float]:
         """
         从当前可见物体标签预测房间类型 (纯 CLIP text-text, 不依赖 KG)。
 
@@ -250,10 +250,10 @@ class SemanticPriorEngine:
         return self._predict_room_type_keyword(visible_labels)
 
     def _predict_room_type_keyword(
-        self, visible_labels: List[str],
-    ) -> Dict[str, float]:
+        self, visible_labels: list[str],
+    ) -> dict[str, float]:
         """退化方案: 用先验表统计可见物体与各房间的匹配度。"""
-        scores: Dict[str, float] = {}
+        scores: dict[str, float] = {}
         labels_lower = [lbl.lower() for lbl in visible_labels]
 
         for room_type, objects in self._priors.items():
@@ -320,15 +320,15 @@ class SemanticPriorEngine:
             return False
 
     def reload_priors(
-        self, room_priors: Optional[Dict[str, Dict[str, float]]] = None,
+        self, room_priors: dict[str, dict[str, float]] | None = None,
     ) -> None:
         """热更新先验表 (运行时替换)。"""
         self._priors = room_priors or ROOM_OBJECT_PRIORS
         self._inverse_index = self._build_inverse_index()
 
-    def _build_inverse_index(self) -> Dict[str, List[Tuple[str, float]]]:
+    def _build_inverse_index(self) -> dict[str, list[tuple[str, float]]]:
         """物体→[(房间类型, 概率)] 反向索引。"""
-        idx: Dict[str, List[Tuple[str, float]]] = {}
+        idx: dict[str, list[tuple[str, float]]] = {}
         for room_type, objects in self._priors.items():
             for obj_label, prob in objects.items():
                 key = obj_label.lower()
@@ -342,7 +342,7 @@ class SemanticPriorEngine:
     def predict_target_rooms(
         self,
         target_instruction: str,
-    ) -> List[Tuple[str, float, str]]:
+    ) -> list[tuple[str, float, str]]:
         """
         预测目标最可能在哪种房间类型中。
 
@@ -353,8 +353,8 @@ class SemanticPriorEngine:
         if not keywords:
             return []
 
-        room_scores: Dict[str, float] = {}
-        room_reasons: Dict[str, List[str]] = {}
+        room_scores: dict[str, float] = {}
+        room_reasons: dict[str, list[str]] = {}
 
         for kw in keywords:
             candidates = self._inverse_index.get(kw, [])
@@ -375,9 +375,9 @@ class SemanticPriorEngine:
     def score_rooms_for_target(
         self,
         target_instruction: str,
-        rooms: List[Dict],
-        visited_room_ids: Optional[Set[int]] = None,
-    ) -> List[RoomPrior]:
+        rooms: list[dict],
+        visited_room_ids: set[int] | None = None,
+    ) -> list[RoomPrior]:
         """
         对具体房间列表评分: "这个目标最可能在哪个已知房间里?"
 
@@ -394,7 +394,7 @@ class SemanticPriorEngine:
         if not keywords:
             return []
 
-        results: List[RoomPrior] = []
+        results: list[RoomPrior] = []
         for room in rooms:
             room_id = room.get("room_id", -1)
             room_name = room.get("name", "unknown")
@@ -451,11 +451,11 @@ class SemanticPriorEngine:
     def get_unexplored_priors(
         self,
         target_instruction: str,
-        rooms: List[Dict],
-        topology_edges: List[Dict],
-        visited_room_ids: Set[int],
+        rooms: list[dict],
+        topology_edges: list[dict],
+        visited_room_ids: set[int],
         current_room_id: int = -1,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         结合拓扑图推荐未探索方向: 语义先验 + 可达性。
 
@@ -466,7 +466,7 @@ class SemanticPriorEngine:
             target_instruction, rooms, visited_room_ids,
         )
 
-        adjacency: Dict[int, List[int]] = {}
+        adjacency: dict[int, list[int]] = {}
         for edge in topology_edges:
             fr = edge.get("from_room", -1)
             to = edge.get("to_room", -1)
@@ -475,7 +475,7 @@ class SemanticPriorEngine:
                 adjacency.setdefault(to, []).append(fr)
 
         # BFS from current_room to compute hop distances
-        hop_dist: Dict[int, int] = {}
+        hop_dist: dict[int, int] = {}
         if current_room_id >= 0:
             bfs_queue: deque = deque([current_room_id])
             hop_dist[current_room_id] = 0
@@ -516,7 +516,7 @@ class SemanticPriorEngine:
         recommendations.sort(key=lambda r: r["combined_score"], reverse=True)
         return recommendations
 
-    def get_room_expected_objects(self, room_name: str) -> Dict[str, float]:
+    def get_room_expected_objects(self, room_name: str) -> dict[str, float]:
         """获取某房间类型的预期物体清单。"""
         room_type = self._normalize_room_type(room_name)
         return dict(self._priors.get(room_type, {}))
@@ -524,8 +524,8 @@ class SemanticPriorEngine:
     def get_exploration_summary(
         self,
         target_instruction: str,
-        rooms: List[Dict],
-        visited_room_ids: Set[int],
+        rooms: list[dict],
+        visited_room_ids: set[int],
     ) -> str:
         """生成拓扑探索摘要 (给 LLM 消费)。"""
         predictions = self.predict_target_rooms(target_instruction)
@@ -556,10 +556,10 @@ class SemanticPriorEngine:
 
     # ── 内部方法 ──
 
-    def _extract_target_keywords(self, instruction: str) -> List[str]:
+    def _extract_target_keywords(self, instruction: str) -> list[str]:
         """提取目标关键词 (支持中英文)。"""
         text = instruction.lower().strip()
-        keywords: List[str] = []
+        keywords: list[str] = []
 
         # 中文→英文映射
         for zh, en in ZH_OBJECT_MAP.items():

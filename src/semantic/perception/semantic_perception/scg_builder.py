@@ -51,7 +51,7 @@ class SCGEdge:
     confidence: float = 1.0  # 置信度
 
     @property
-    def pair(self) -> Tuple[int, int]:
+    def pair(self) -> tuple[int, int]:
         """返回节点对 (排序后)。"""
         return (min(self.from_id, self.to_id), max(self.from_id, self.to_id))
 
@@ -96,15 +96,15 @@ class SCGBuilder:
         self.config = config
 
         # 节点存储 (使用 polyhedron_expansion.Polyhedron)
-        self.nodes: Dict[int, any] = {}  # {poly_id: Polyhedron}
+        self.nodes: dict[int, any] = {}  # {poly_id: Polyhedron}
 
         # 边存储
-        self.edges: List[SCGEdge] = []
-        self.adjacency_map: Dict[int, List[SCGEdge]] = defaultdict(list)
+        self.edges: list[SCGEdge] = []
+        self.adjacency_map: dict[int, list[SCGEdge]] = defaultdict(list)
 
         # 空间索引 (用于快速查询)
-        self._kdtree: Optional[KDTree] = None
-        self._kdtree_ids: List[int] = []
+        self._kdtree: KDTree | None = None
+        self._kdtree_ids: list[int] = []
 
     # ── 节点管理 ──────────────────────────────────────────────
 
@@ -160,7 +160,7 @@ class SCGBuilder:
         """获取多面体节点。"""
         return self.nodes.get(poly_id)
 
-    def get_neighbors(self, poly_id: int) -> List[int]:
+    def get_neighbors(self, poly_id: int) -> list[int]:
         """获取邻居节点 ID 列表。"""
         return [
             e.to_id if e.from_id == poly_id else e.from_id
@@ -171,9 +171,9 @@ class SCGBuilder:
 
     def build_edges(
         self,
-        occupancy_grid: Optional[np.ndarray] = None,
-        grid_resolution: Optional[float] = None,
-        grid_origin: Optional[np.ndarray] = None,
+        occupancy_grid: np.ndarray | None = None,
+        grid_resolution: float | None = None,
+        grid_origin: np.ndarray | None = None,
     ) -> None:
         """
         构建所有拓扑边。
@@ -330,7 +330,7 @@ class SCGBuilder:
         self,
         from_id: int,
         to_id: int,
-    ) -> Tuple[float, List[int]]:
+    ) -> tuple[float, list[int]]:
         """
         Dijkstra 最短路径。
 
@@ -344,10 +344,10 @@ class SCGBuilder:
         if from_id not in self.nodes or to_id not in self.nodes:
             return float("inf"), []
 
-        dist_map: Dict[int, float] = {from_id: 0.0}
-        prev_map: Dict[int, int] = {}
+        dist_map: dict[int, float] = {from_id: 0.0}
+        prev_map: dict[int, int] = {}
         heap = [(0.0, from_id)]
-        visited_set: Set[int] = set()
+        visited_set: set[int] = set()
 
         while heap:
             cost, uid = heapq.heappop(heap)
@@ -381,7 +381,7 @@ class SCGBuilder:
 
         return float("inf"), []
 
-    def _bfs_reachable(self, from_id: int) -> Set[int]:
+    def _bfs_reachable(self, from_id: int) -> set[int]:
         """BFS 查找所有可达节点。"""
         reachable = set()
         queue = [from_id]
@@ -400,7 +400,7 @@ class SCGBuilder:
 
     # ── 回环检测 ──────────────────────────────────────────────
 
-    def _detect_loop_closure(self, polyhedron) -> Optional[int]:
+    def _detect_loop_closure(self, polyhedron) -> int | None:
         """
         检测回环 (是否与已有节点重复)。
 

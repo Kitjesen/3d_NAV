@@ -6,7 +6,7 @@ import logging
 
 from core.blueprint import Blueprint
 from core.config import get_config
-from core.registry import get, auto_select
+from core.registry import auto_select, get
 
 logger = logging.getLogger(__name__)
 

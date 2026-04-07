@@ -27,7 +27,7 @@ class TaskDecomposerModule(Module, layer=4):
 
     def __init__(self, **config: Any) -> None:
         super().__init__(**config)
-        self._decomposer: Optional[Any] = None
+        self._decomposer: Any | None = None
 
     def setup(self) -> None:
         self.instruction.subscribe(self._on_instruction)
@@ -43,7 +43,7 @@ class TaskDecomposerModule(Module, layer=4):
             logger.warning("TaskDecomposer init failed: %s", e)
             self._decomposer = None
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["last_decompose_time"] = getattr(self, "_last_decompose_time", None)
         info["subtask_count"] = getattr(self, "_subtask_count", 0)
@@ -56,7 +56,7 @@ class TaskDecomposerModule(Module, layer=4):
         if plan is not None:
             self.task_plan.publish(plan)
 
-    def _decompose(self, instruction: str) -> Optional[dict]:
+    def _decompose(self, instruction: str) -> dict | None:
         if self._decomposer is None:
             return self._offline_decompose(instruction)
         try:

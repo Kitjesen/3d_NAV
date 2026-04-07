@@ -19,8 +19,8 @@ Frontier 评分探索 — 统一目标 Grounding 与 Frontier 选择。
 数据类、常量、纯函数辅助见 frontier_types.py。
 """
 
-import math
 import logging
+import math
 import time as _time_mod
 from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -30,25 +30,25 @@ import numpy as np
 from core.utils.sanitize import safe_json_dumps
 
 from .frontier_types import (
+    # 辅助常量
+    _COOCCURRENCE,
+    _COOCCURRENCE_REVERSE,
     # 常量 (向后兼容重新导出)
     FREE_CELL,
     OCCUPIED_CELL,
     UNKNOWN_CELL,
     # 数据类 (向后兼容重新导出)
     Frontier,
-    # 辅助常量
-    _COOCCURRENCE,
-    _COOCCURRENCE_REVERSE,
+    angle_diff,
     # 纯函数
     angle_to_label,
-    angle_diff,
-    cooccurrence_score,
-    extract_bilingual_keywords,
-    tsp_sort_frontiers,
+    compute_kg_room_score,
     compute_semantic_prior_score,
     compute_uncertainty_score,
-    compute_kg_room_score,
+    cooccurrence_score,
+    extract_bilingual_keywords,
     generate_frontier_description,
+    tsp_sort_frontiers,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,39 +109,39 @@ class FrontierScorer:
         self.vision_weight = max(vision_weight, 0.0)
         self.semantic_prior_weight = max(semantic_prior_weight, 0.0)
         self.semantic_uncertainty_weight = max(semantic_uncertainty_weight, 0.0)
-        self._room_type_posteriors: Dict[int, Any] = {}
+        self._room_type_posteriors: dict[int, Any] = {}
 
         self.tsp_reorder = tsp_reorder
         self.tsp_frontier_limit = max(tsp_frontier_limit, 2)
         self.tsp_ig_radius_cells = max(tsp_ig_radius_cells, 1)
 
-        self._grid: Optional[np.ndarray] = None
+        self._grid: np.ndarray | None = None
         self._resolution: float = 0.05
         self._origin_x: float = 0.0
         self._origin_y: float = 0.0
-        self._frontiers: List[Frontier] = []
+        self._frontiers: list[Frontier] = []
 
         # P0: Frontier 失败记忆 (避免重复探索失败位置)
-        self._failed_positions: List[np.ndarray] = []
+        self._failed_positions: list[np.ndarray] = []
         self._failure_penalty_radius: float = 3.0
         self._failure_penalty_decay: float = 0.7
 
         # 创新3: 方向观测缓存
-        self._directional_features: Dict[int, np.ndarray] = {}
+        self._directional_features: dict[int, np.ndarray] = {}
         self._clip_encoder = None
 
         # 创新4: 语义先验引擎
         self._semantic_prior_engine = None
-        self._room_priors_cache: Dict[int, float] = {}
+        self._room_priors_cache: dict[int, float] = {}
 
         # P2: 房间-物体知识图谱
         self._room_object_kg = None
 
         # L3MVN: frontier 描述缓存
-        self._frontier_desc_cache: Dict[str, str] = {}
+        self._frontier_desc_cache: dict[str, str] = {}
 
         # 双语关键词缓存
-        self._bilingual_kw_cache: Dict[str, Set[str]] = {}
+        self._bilingual_kw_cache: dict[str, set[str]] = {}
 
     # ── Costmap ──────────────────────────────────────────────────
 
@@ -160,7 +160,7 @@ class FrontierScorer:
 
     # ── Frontier 提取 ────────────────────────────────────────────
 
-    def extract_frontiers(self, robot_position: np.ndarray) -> List[Frontier]:
+    def extract_frontiers(self, robot_position: np.ndarray) -> list[Frontier]:
         """
         从 costmap 提取 frontier cells 并聚类。
 
@@ -182,7 +182,7 @@ class FrontierScorer:
         frontier_mask[1:-1, 1:-1] = free_mask & has_unknown_neighbor
 
         visited = np.zeros_like(frontier_mask, dtype=bool)
-        clusters: List[List[Tuple[int, int]]] = []
+        clusters: list[list[tuple[int, int]]] = []
         _bfs_start = _time_mod.time()
         _bfs_timeout = False
 
@@ -193,7 +193,7 @@ class FrontierScorer:
                 if _bfs_timeout:
                     break
                 if frontier_mask[r, c] and not visited[r, c]:
-                    cluster: List[Tuple[int, int]] = []
+                    cluster: list[tuple[int, int]] = []
                     queue = deque([(r, c)])
                     visited[r, c] = True
 
@@ -266,11 +266,11 @@ class FrontierScorer:
             self.semantic_prior_weight = 0.2
             logger.info("Frontier semantic prior scoring enabled (weight=0.2)")
 
-    def set_room_type_posteriors(self, posteriors: Dict[int, Any]) -> None:
+    def set_room_type_posteriors(self, posteriors: dict[int, Any]) -> None:
         """注入房间类型后验分布 (不确定性驱动探索)。"""
         self._room_type_posteriors = dict(posteriors)
 
-    def set_room_type_posteriors_from_json(self, posteriors_json: Dict[str, Dict]) -> None:
+    def set_room_type_posteriors_from_json(self, posteriors_json: dict[str, dict]) -> None:
         """从场景图 JSON 中的 room_posteriors 注入后验。"""
         class _PosteriorProxy:
             __slots__ = ('entropy', 'hypotheses')
@@ -282,7 +282,7 @@ class FrontierScorer:
                         for k, v in item.items():
                             self.hypotheses[k] = v
 
-        parsed: Dict[int, Any] = {}
+        parsed: dict[int, Any] = {}
         for rid_str, data in posteriors_json.items():
             try:
                 rid = int(rid_str)
@@ -332,8 +332,8 @@ class FrontierScorer:
     def update_room_priors(
         self,
         instruction: str,
-        rooms: List[Dict],
-        visited_room_ids: Optional[set] = None,
+        rooms: list[dict],
+        visited_room_ids: set | None = None,
     ) -> None:
         """更新房间语义先验缓存 (每次场景图更新后调用)。"""
         if not self._semantic_prior_engine:
@@ -386,11 +386,11 @@ class FrontierScorer:
         self,
         instruction: str,
         robot_position: np.ndarray,
-        visited_positions: Optional[List[np.ndarray]] = None,
-        scene_objects: Optional[List[Dict]] = None,
-        scene_relations: Optional[List[Dict]] = None,
-        scene_rooms: Optional[List[Dict]] = None,
-    ) -> List[Frontier]:
+        visited_positions: list[np.ndarray] | None = None,
+        scene_objects: list[dict] | None = None,
+        scene_relations: list[dict] | None = None,
+        scene_rooms: list[dict] | None = None,
+    ) -> list[Frontier]:
         """
         对 frontier 评分 (MTU3D 统一 Grounding + VLFM 融合)。
 
@@ -420,8 +420,8 @@ class FrontierScorer:
 
         # 预计算物体矩阵 + 方向
         _obj_positions = None
-        _obj_labels_lower: List[str] = []
-        obj_directions: List[Tuple[float, str]] = []
+        _obj_labels_lower: list[str] = []
+        obj_directions: list[tuple[float, str]] = []
         if scene_objects:
             _obj_positions = np.array([
                 [obj["position"]["x"], obj["position"]["y"]] for obj in scene_objects
@@ -451,7 +451,7 @@ class FrontierScorer:
                 novelty_score = min(1.0, min_v / self.novelty_distance)
 
             language_score = 0.0
-            nearby_labels: List[str] = []
+            nearby_labels: list[str] = []
             if _obj_positions is not None:
                 dists_to_f = np.linalg.norm(
                     _obj_positions - frontier.center_world[:2], axis=1
@@ -555,7 +555,7 @@ class FrontierScorer:
         self,
         frontier: Frontier,
         robot_position: np.ndarray,
-        scene_rooms: List[Dict],
+        scene_rooms: list[dict],
     ) -> float:
         """计算 frontier 方向附近房间的语义不确定性评分 (测试入口)。"""
         return compute_uncertainty_score(
@@ -564,8 +564,8 @@ class FrontierScorer:
 
     def _compute_kg_room_score(
         self,
-        inst_keywords: Set[str],
-        nearby_labels: List[str],
+        inst_keywords: set[str],
+        nearby_labels: list[str],
     ) -> float:
         """P2: KG 目标-房间概率评分 (测试入口)。"""
         return compute_kg_room_score(inst_keywords, nearby_labels, self._room_object_kg)
@@ -574,7 +574,7 @@ class FrontierScorer:
         self,
         frontier: Frontier,
         robot_position: np.ndarray,
-        scene_rooms: List[Dict],
+        scene_rooms: list[dict],
     ) -> float:
         """计算 frontier 方向对应房间的语义先验评分 (测试入口)。"""
         return compute_semantic_prior_score(
@@ -584,7 +584,7 @@ class FrontierScorer:
 
     # ── 查询 ─────────────────────────────────────────────────────
 
-    def get_best_frontier(self) -> Optional[Frontier]:
+    def get_best_frontier(self) -> Frontier | None:
         """获取评分最高的 frontier (TSP 重排序后为访问序列第一个)。"""
         return self._frontiers[0] if self._frontiers else None
 

@@ -161,8 +161,8 @@ class UncertaintyModel:
         scg_builder,
         gcm,
         robot_pose: np.ndarray,
-        visited_polyhedra: Optional[Dict[int, int]] = None,
-    ) -> Optional[Tuple[int, float]]:
+        visited_polyhedra: dict[int, int] | None = None,
+    ) -> tuple[int, float] | None:
         """
         选择探索目标（最大信息增益）。
 
@@ -204,7 +204,7 @@ class UncertaintyModel:
         gcm,
         robot_pose: np.ndarray,
         max_distance: float = 10.0,
-    ) -> Optional[Tuple[Tuple[int, int], float]]:
+    ) -> tuple[tuple[int, int], float] | None:
         """
         选择前沿探索目标。
 
@@ -398,7 +398,7 @@ class ExplorationStrategy:
             uncertainty_model: UncertaintyModel 对象
         """
         self.uncertainty_model = uncertainty_model
-        self.visited_polyhedra: Dict[int, int] = {}  # {poly_id: visit_count}
+        self.visited_polyhedra: dict[int, int] = {}  # {poly_id: visit_count}
 
     def select_next_target(
         self,
@@ -406,7 +406,7 @@ class ExplorationStrategy:
         gcm,
         robot_pose: np.ndarray,
         prefer_frontier: bool = True,
-    ) -> Optional[np.ndarray]:
+    ) -> np.ndarray | None:
         """
         选择下一个探索目标。
 
@@ -455,7 +455,7 @@ class ExplorationStrategy:
         """重置访问记录。"""
         self.visited_polyhedra.clear()
 
-    def get_statistics(self) -> Dict:
+    def get_statistics(self) -> dict:
         """获取统计信息。"""
         return {
             'total_visited': len(self.visited_polyhedra),

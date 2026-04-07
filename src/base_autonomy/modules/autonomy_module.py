@@ -28,16 +28,16 @@ from typing import Any
 from core.blueprint import Blueprint
 from core.registry import register
 
-from .terrain_module import TerrainModule
 from .local_planner_module import LocalPlannerModule
 from .path_follower_module import PathFollowerModule
+from .terrain_module import TerrainModule
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "TerrainModule",
     "LocalPlannerModule",
     "PathFollowerModule",
+    "TerrainModule",
     "add_autonomy_stack",
 ]
 

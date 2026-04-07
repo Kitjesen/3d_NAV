@@ -47,7 +47,7 @@ class LingTuREPL(cmd.Cmd):
             print("  NavigationModule not available")
             return
 
-        from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
+        from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 
         goal = PoseStamped(
             pose=Pose(
@@ -228,6 +228,7 @@ class LingTuREPL(cmd.Cmd):
     def _map_fallback(self, cmd: dict) -> None:
         """Direct filesystem fallback when MapManagerModule is not running."""
         import shutil
+
         from cli.profiles_data import _default_map_dir
         action = cmd.get("action", "")
         map_dir = _default_map_dir()
@@ -286,7 +287,9 @@ class LingTuREPL(cmd.Cmd):
                 tds = str(tomo_dir)
                 if tds not in sys.path:
                     sys.path.insert(0, tds)
-                from global_planning.PCT_planner.tomography.scripts.build_tomogram import build_tomogram_from_pcd  # noqa: PLC0415
+                from global_planning.PCT_planner.tomography.scripts.build_tomogram import (
+                    build_tomogram_from_pcd,
+                )
                 build_tomogram_from_pcd(pcd_path, tomogram_path)
                 print(f"  Tomogram: {tomogram_path}")
             except Exception as e:
@@ -577,7 +580,7 @@ class LingTuREPL(cmd.Cmd):
         # Build tool handlers that publish to module ports
         def _navigate_to(x, y, **_):
             if nav and hasattr(nav, "goal_pose"):
-                from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
+                from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
                 goal = PoseStamped(pose=Pose(
                     position=Vector3(x=float(x), y=float(y), z=0.0),
                     orientation=Quaternion(x=0, y=0, z=0, w=1),
@@ -651,7 +654,7 @@ class LingTuREPL(cmd.Cmd):
 
         # Patch AgentLoop to print each step live
         try:
-            from semantic.planner.semantic_planner.agent_loop import AgentLoop, AGENT_TOOLS
+            from semantic.planner.semantic_planner.agent_loop import AGENT_TOOLS, AgentLoop
         except ImportError:
             print("  AgentLoop not available — check semantic stack is enabled")
             return
@@ -858,7 +861,9 @@ class LingTuREPL(cmd.Cmd):
             backend = getattr(llm_mod, "_backend", "?")
             print(f"  Testing {backend}...", end="", flush=True)
 
-            import asyncio, threading, time as _time
+            import asyncio
+            import threading
+            import time as _time
 
             result_holder = {}
             t0 = _time.time()

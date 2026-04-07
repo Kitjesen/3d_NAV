@@ -16,7 +16,6 @@ Fast Path (VLingNav/OmniNav 风格) 完全跳过 LLM, 不使用 prompt。
 import json
 from typing import Dict, List, Optional
 
-
 # ================================================================
 #  系统提示
 # ================================================================
@@ -133,9 +132,9 @@ If match found → navigate; if exploration needed → use topology to pick the 
 def build_goal_resolution_prompt(
     instruction: str,
     scene_graph_json: str,
-    robot_position: Optional[Dict[str, float]] = None,
+    robot_position: dict[str, float] | None = None,
     language: str = "zh",
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     构建目标解析的 LLM 消息列表 (创新2 补强: 层次 CoT)。
 
@@ -243,12 +242,12 @@ def build_goal_resolution_prompt(
 
 def build_exploration_prompt(
     instruction: str,
-    explored_directions: List[Dict[str, float]],
-    robot_position: Dict[str, float],
+    explored_directions: list[dict[str, float]],
+    robot_position: dict[str, float],
     language: str = "zh",
-    topology_context: Optional[str] = None,
-    semantic_priors: Optional[List[Dict]] = None,
-) -> List[Dict[str, str]]:
+    topology_context: str | None = None,
+    semantic_priors: list[dict] | None = None,
+) -> list[dict[str, str]]:
     """
     构建拓扑感知探索建议的 LLM 消息列表 (创新4 增强)。
 
@@ -419,9 +418,9 @@ Output format (strict JSON):
 
 
 def build_room_naming_prompt(
-    object_labels: List[str],
+    object_labels: list[str],
     language: str = "zh",
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     构建 Room LLM 命名 prompt (创新1 补强)。
 
@@ -462,11 +461,11 @@ def build_room_naming_prompt(
 
 def build_sgnav_subgraph_prompt(
     instruction: str,
-    subgraphs: List[Dict],
+    subgraphs: list[dict],
     language: str = "zh",
-    explored_summaries: Optional[List[str]] = None,
-    frontier_descriptions: Optional[List[str]] = None,
-) -> List[Dict[str, str]]:
+    explored_summaries: list[str] | None = None,
+    frontier_descriptions: list[str] | None = None,
+) -> list[dict[str, str]]:
     """
     SG-Nav 风格子图评分 prompt — H-CoT 4 步链式思考。
 

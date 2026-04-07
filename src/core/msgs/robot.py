@@ -20,7 +20,6 @@ from typing import Any, Dict, List
 from .geometry import Quaternion, Vector3
 from .sensor import Imu
 
-
 NUM_JOINTS = 16
 NUM_LEGS = 4
 
@@ -49,12 +48,12 @@ class JointState:
     All arrays are length 16, ordered per JOINT_NAMES.
     """
 
-    positions: List[float] = field(default_factory=lambda: [0.0] * NUM_JOINTS)
-    velocities: List[float] = field(default_factory=lambda: [0.0] * NUM_JOINTS)
-    efforts: List[float] = field(default_factory=lambda: [0.0] * NUM_JOINTS)
+    positions: list[float] = field(default_factory=lambda: [0.0] * NUM_JOINTS)
+    velocities: list[float] = field(default_factory=lambda: [0.0] * NUM_JOINTS)
+    efforts: list[float] = field(default_factory=lambda: [0.0] * NUM_JOINTS)
     ts: float = field(default_factory=time.time)
 
-    def leg(self, leg_idx: int) -> Dict[str, List[float]]:
+    def leg(self, leg_idx: int) -> dict[str, list[float]]:
         """Get joint values for one leg (0=FR, 1=FL, 2=RR, 3=RL).
 
         Returns dict with 3-element lists for hip, thigh, calf.
@@ -66,7 +65,7 @@ class JointState:
             "efforts": self.efforts[i:i+3],
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "positions": list(self.positions),
             "velocities": list(self.velocities),
@@ -75,7 +74,7 @@ class JointState:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> JointState:
+    def from_dict(cls, d: dict[str, Any]) -> JointState:
         return cls(
             positions=d.get("positions", [0.0] * NUM_JOINTS),
             velocities=d.get("velocities", [0.0] * NUM_JOINTS),
@@ -94,7 +93,7 @@ class BatteryState:
     percentage: int = 0
     voltage: float = 0.0
     current: float = 0.0
-    temperature: List[int] = field(default_factory=lambda: [0, 0])
+    temperature: list[int] = field(default_factory=lambda: [0, 0])
     status: int = 0
     cycle_count: int = 0
     ts: float = field(default_factory=time.time)
@@ -113,7 +112,7 @@ class BatteryState:
     def is_critical(self) -> bool:
         return self.status >= self.CRITICAL
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "percentage": self.percentage,
             "voltage": self.voltage,
@@ -125,7 +124,7 @@ class BatteryState:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> BatteryState:
+    def from_dict(cls, d: dict[str, Any]) -> BatteryState:
         return cls(
             percentage=d.get("percentage", 0),
             voltage=d.get("voltage", 0.0),
@@ -145,7 +144,7 @@ class BatteryState:
 class FootForces:
     """4-leg ground reaction forces (FR, FL, RR, RL)."""
 
-    forces: List[float] = field(default_factory=lambda: [0.0] * NUM_LEGS)
+    forces: list[float] = field(default_factory=lambda: [0.0] * NUM_LEGS)
     ts: float = field(default_factory=time.time)
 
     @property
@@ -162,15 +161,15 @@ class FootForces:
         return sum(self.forces)
 
     @property
-    def in_contact(self) -> List[bool]:
+    def in_contact(self) -> list[bool]:
         """Which feet are in ground contact (force > threshold)."""
         return [f > 5.0 for f in self.forces]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"forces": list(self.forces), "ts": self.ts}
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> FootForces:
+    def from_dict(cls, d: dict[str, Any]) -> FootForces:
         return cls(
             forces=d.get("forces", [0.0] * NUM_LEGS),
             ts=d.get("ts", 0.0),
@@ -194,7 +193,7 @@ class RobotState:
     imu: Imu = field(default_factory=Imu)
     ts: float = field(default_factory=time.time)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "joints": self.joints.to_dict(),
             "battery": self.battery.to_dict(),
@@ -208,7 +207,7 @@ class RobotState:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> RobotState:
+    def from_dict(cls, d: dict[str, Any]) -> RobotState:
         return cls(
             joints=JointState.from_dict(d.get("joints", {})),
             battery=BatteryState.from_dict(d.get("battery", {})),

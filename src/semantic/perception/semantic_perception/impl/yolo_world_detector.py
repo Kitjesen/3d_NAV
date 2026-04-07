@@ -7,16 +7,17 @@ YOLO-World检测器 - API适配实现
 import logging
 import time
 from typing import List, Optional
+
 import numpy as np
 
 from ..api.detector_api import DetectorAPI
-from ..api.types import Detection2D, BBox2D, PerceptionConfig
 from ..api.exceptions import (
     DetectorError,
-    DetectorInitError,
     DetectorInferenceError,
+    DetectorInitError,
     InvalidImageError,
 )
+from ..api.types import BBox2D, Detection2D, PerceptionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class YOLOWorldDetector(DetectorAPI):
     - 性能监控
     """
 
-    def __init__(self, config: Optional[PerceptionConfig] = None):
+    def __init__(self, config: PerceptionConfig | None = None):
         """
         初始化YOLO-World检测器
 
@@ -55,8 +56,8 @@ class YOLOWorldDetector(DetectorAPI):
         self.enable_cache = True
 
         self._model = None
-        self._current_classes: Optional[List[str]] = None
-        self._tensorrt_engine_path: Optional[str] = None
+        self._current_classes: list[str] | None = None
+        self._tensorrt_engine_path: str | None = None
 
         # 性能统计
         self._detect_count = 0
@@ -123,7 +124,7 @@ class YOLOWorldDetector(DetectorAPI):
             logger.warning(f"TensorRT export failed, using PyTorch: {e}")
             self.tensorrt = False
 
-    def detect(self, image: np.ndarray) -> List[Detection2D]:
+    def detect(self, image: np.ndarray) -> list[Detection2D]:
         """
         检测图像中的物体
 
@@ -218,7 +219,7 @@ class YOLOWorldDetector(DetectorAPI):
         except Exception as e:
             raise DetectorInferenceError(f"Detection failed: {e}")
 
-    def set_classes(self, classes: List[str]):
+    def set_classes(self, classes: list[str]):
         """
         设置检测类别
 
@@ -244,7 +245,7 @@ class YOLOWorldDetector(DetectorAPI):
         except Exception as e:
             raise DetectorError(f"Failed to set classes: {e}")
 
-    def get_classes(self) -> List[str]:
+    def get_classes(self) -> list[str]:
         """
         获取当前检测类别
 

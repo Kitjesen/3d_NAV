@@ -27,7 +27,7 @@ try:
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
-    from torch.utils.data import Dataset, DataLoader
+    from torch.utils.data import DataLoader, Dataset
 
     HAS_TORCH = True
 except ImportError:
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 #  Constants
 # ════════════════════════════════════════════════════════════
 
-ROOM_TYPES: List[str] = [
+ROOM_TYPES: list[str] = [
     "office", "kitchen", "corridor", "meeting_room", "bathroom",
     "stairwell", "lobby", "storage", "server_room", "warehouse",
     "lab", "parking", "outdoor", "elevator_hall", "factory",
@@ -58,7 +58,7 @@ SAFETY_LOSS_WEIGHT = {"safe": 1.0, "caution": 1.5, "dangerous": 3.0, "forbidden"
 #  Vocabulary & Feature Builders (KG → tensor)
 # ════════════════════════════════════════════════════════════
 
-def build_object_vocabulary(kg) -> Tuple[Dict[str, int], List[str]]:
+def build_object_vocabulary(kg) -> tuple[dict[str, int], list[str]]:
     """Build a label→index mapping from KG room-expected objects.
 
     Returns (label2idx dict, idx2label list). Sorted for determinism.
@@ -71,7 +71,7 @@ def build_object_vocabulary(kg) -> Tuple[Dict[str, int], List[str]]:
     return label2idx, idx2label
 
 
-def build_cooccurrence_matrix(kg, label2idx: Dict[str, int]) -> np.ndarray:
+def build_cooccurrence_matrix(kg, label2idx: dict[str, int]) -> np.ndarray:
     """Compute C x C co-occurrence matrix from KG room-type mappings.
 
     M[i][j] = number of room types where both object i and j are expected,
@@ -90,7 +90,7 @@ def build_cooccurrence_matrix(kg, label2idx: Dict[str, int]) -> np.ndarray:
     return M
 
 
-def build_safety_vector(kg, label2idx: Dict[str, int]) -> np.ndarray:
+def build_safety_vector(kg, label2idx: dict[str, int]) -> np.ndarray:
     """Build per-object safety encoding vector (R^C)."""
     C = len(label2idx)
     vec = np.zeros(C, dtype=np.float32)
@@ -101,7 +101,7 @@ def build_safety_vector(kg, label2idx: Dict[str, int]) -> np.ndarray:
     return vec
 
 
-def build_safety_loss_weights(kg, label2idx: Dict[str, int]) -> np.ndarray:
+def build_safety_loss_weights(kg, label2idx: dict[str, int]) -> np.ndarray:
     """Build per-object loss weight vector for safety-weighted BCE."""
     C = len(label2idx)
     weights = np.ones(C, dtype=np.float32)
@@ -112,7 +112,7 @@ def build_safety_loss_weights(kg, label2idx: Dict[str, int]) -> np.ndarray:
     return weights
 
 
-def build_affordance_vectors(kg, label2idx: Dict[str, int]) -> np.ndarray:
+def build_affordance_vectors(kg, label2idx: dict[str, int]) -> np.ndarray:
     """Build C x A affordance matrix (A = number of affordance types)."""
     affordance_types = [
         "graspable", "openable", "sittable", "inspectable", "pushable",
@@ -139,16 +139,16 @@ NUM_AFFORDANCE_TYPES = NUM_AFFORDANCES
 build_affordance_matrix = build_affordance_vectors
 
 
-def build_dangerous_mask(kg, label2idx: Dict[str, int]) -> np.ndarray:
+def build_dangerous_mask(kg, label2idx: dict[str, int]) -> np.ndarray:
     """Build boolean mask: True where object safety_level >= 'dangerous'."""
     safety_vec = build_safety_vector(kg, label2idx)
     return safety_vec >= SAFETY_ENCODING["dangerous"]
 
 
-def build_room_prior_vectors(kg, label2idx: Dict[str, int]) -> Dict[str, np.ndarray]:
+def build_room_prior_vectors(kg, label2idx: dict[str, int]) -> dict[str, np.ndarray]:
     """Build per-room-type prior vector (R^C) for each room type."""
     C = len(label2idx)
-    priors: Dict[str, np.ndarray] = {}
+    priors: dict[str, np.ndarray] = {}
     for rt in ROOM_TYPES:
         vec = np.zeros(C, dtype=np.float32)
         for lbl in kg.get_room_expected_objects(rt):
@@ -300,10 +300,10 @@ if HAS_TORCH:
         But uses our KG instead of HM3D dataset.
         """
 
-        def __init__(self, kg, label2idx: Dict[str, int],
+        def __init__(self, kg, label2idx: dict[str, int],
                      cooccurrence: np.ndarray, safety_vec: np.ndarray,
-                     affordance_mat: np.ndarray, room_priors: Dict[str, np.ndarray],
-                     num_scenes: int = 5000, removal_range: Tuple[float, float] = (0.3, 0.7),
+                     affordance_mat: np.ndarray, room_priors: dict[str, np.ndarray],
+                     num_scenes: int = 5000, removal_range: tuple[float, float] = (0.3, 0.7),
                      noise_rate: float = 0.10, seed: int = 42):
             super().__init__()
             self._kg = kg
@@ -322,7 +322,7 @@ if HAS_TORCH:
             self._scenes = self._generate_scenes(num_scenes, rng, np_rng)
 
         def _generate_scenes(self, num_scenes: int, rng: random.Random,
-                             np_rng: np.random.RandomState) -> List[Dict]:
+                             np_rng: np.random.RandomState) -> list[dict]:
             all_labels = list(self._label2idx.keys())
             scenes = []
             for _ in range(num_scenes):
@@ -381,7 +381,7 @@ if HAS_TORCH:
         def __len__(self) -> int:
             return len(self._scenes)
 
-        def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
             scene = self._scenes[idx]
             partial = scene["partial"]   # (N, C)
             N = partial.shape[0]
@@ -430,8 +430,8 @@ if HAS_TORCH:
                 model.parameters(), lr=lr, weight_decay=weight_decay)
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer, mode="min", patience=5, factor=0.5)
-            self.train_losses: List[float] = []
-            self.val_losses: List[float] = []
+            self.train_losses: list[float] = []
+            self.val_losses: list[float] = []
 
         def train_epoch(self, dataset: KGSceneGraphDataset) -> float:
             self.model.train()
@@ -477,7 +477,7 @@ if HAS_TORCH:
 
         def train(self, train_dataset: KGSceneGraphDataset,
                   val_dataset: KGSceneGraphDataset,
-                  epochs: int = 50, log_interval: int = 10) -> Dict:
+                  epochs: int = 50, log_interval: int = 10) -> dict:
             best_val = float("inf")
             best_state = None
             for epoch in range(epochs):
@@ -512,10 +512,10 @@ if HAS_TORCH:
             preds = predictor.predict(observed_labels, room_adj)
         """
 
-        def __init__(self, model: KGBeliefGCN, label2idx: Dict[str, int],
-                     idx2label: List[str], cooccurrence: np.ndarray,
+        def __init__(self, model: KGBeliefGCN, label2idx: dict[str, int],
+                     idx2label: list[str], cooccurrence: np.ndarray,
                      safety_vec: np.ndarray, affordance_mat: np.ndarray,
-                     room_priors: Dict[str, np.ndarray]):
+                     room_priors: dict[str, np.ndarray]):
             self.model = model
             self.label2idx = label2idx
             self.idx2label = idx2label
@@ -527,7 +527,7 @@ if HAS_TORCH:
             self._A = affordance_mat.shape[1]
 
         @classmethod
-        def from_kg(cls, kg, weights_path: Optional[str] = None) -> "BeliefPredictor":
+        def from_kg(cls, kg, weights_path: str | None = None) -> BeliefPredictor:
             label2idx, idx2label = build_object_vocabulary(kg)
             C = len(label2idx)
             cooc = build_cooccurrence_matrix(kg, label2idx)
@@ -553,9 +553,9 @@ if HAS_TORCH:
             torch.save(self.model.state_dict(), path)
 
         @torch.no_grad()
-        def predict(self, rooms_labels: List[List[str]],
-                    rooms_types: Optional[List[str]] = None,
-                    adj: Optional[np.ndarray] = None) -> np.ndarray:
+        def predict(self, rooms_labels: list[list[str]],
+                    rooms_types: list[str] | None = None,
+                    adj: np.ndarray | None = None) -> np.ndarray:
             """Predict complete object histograms for a set of rooms.
 
             Args:
@@ -614,14 +614,14 @@ if HAS_TORCH:
             pred = self.model(x_t, adj_t)
             return pred.numpy()
 
-        def predict_for_room(self, labels: List[str],
-                             room_type: Optional[str] = None) -> Dict[str, float]:
+        def predict_for_room(self, labels: list[str],
+                             room_type: str | None = None) -> dict[str, float]:
             """Predict object probabilities for a single room.
 
             Returns dict of {object_label: probability} for objects not yet observed.
             """
             preds = self.predict([labels], [room_type] if room_type else None)
-            result: Dict[str, float] = {}
+            result: dict[str, float] = {}
             observed = {lbl.lower() for lbl in labels}
             for idx, prob in enumerate(preds[0]):
                 lbl = self.idx2label[idx]

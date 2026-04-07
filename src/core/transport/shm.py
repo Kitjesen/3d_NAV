@@ -14,7 +14,8 @@ import multiprocessing.shared_memory as pyshm
 import struct
 import threading
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 import numpy as np
 
@@ -100,8 +101,8 @@ class SHMSubscriber(Subscriber):
         self._poll_interval = poll_interval
         self._last_seq = 0
         self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._shm: Optional[pyshm.SharedMemory] = None
+        self._thread: threading.Thread | None = None
+        self._shm: pyshm.SharedMemory | None = None
 
     def start(self) -> None:
         """Start polling thread. Always starts — retries SHM attach in poll loop."""

@@ -18,12 +18,11 @@ import unittest
 import numpy as np
 
 from memory.spatial.topology_graph import (
+    ExplorationTarget,
+    TopoEdge,
     TopologySemGraph,
     TopoNode,
-    TopoEdge,
-    ExplorationTarget,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Helper: 构造简单场景图字典

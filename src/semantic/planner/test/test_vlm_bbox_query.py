@@ -13,7 +13,6 @@ from semantic.planner.semantic_planner.vlm_bbox_query import (
     _parse_json_tolerant,
 )
 
-
 # ---------------------------------------------------------------------------
 # _extract_bbox_from_response 测试
 # ---------------------------------------------------------------------------

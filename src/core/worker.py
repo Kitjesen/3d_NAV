@@ -36,17 +36,17 @@ class Worker(multiprocessing.Process):
 
     def __init__(self, worker_id: str, cmd_queue: multiprocessing.Queue,
                  resp_queue: multiprocessing.Queue,
-                 extra_sys_path: "List[str] | None" = None):
+                 extra_sys_path: "list[str] | None" = None):
         super().__init__(daemon=True, name=f"worker-{worker_id}")
         self.worker_id = worker_id
         self._cmd_q = cmd_queue
         self._resp_q = resp_queue
-        self._modules: Dict[str, Any] = {}  # module_id → instance
+        self._modules: dict[str, Any] = {}  # module_id → instance
         # Capture parent sys.path so the subprocess can import the same modules.
         # On Windows (spawn start method) the child process does not inherit the
         # parent's sys.path, causing pickle failures for classes defined in
         # project source trees (e.g. test_core._WorkerTestModule).
-        self._extra_sys_path: List[str] = list(extra_sys_path or sys.path)
+        self._extra_sys_path: list[str] = list(extra_sys_path or sys.path)
 
     def run(self) -> None:
         """Worker event loop — process commands until SHUTDOWN."""
@@ -123,8 +123,8 @@ class Worker(multiprocessing.Process):
                 elif cmd == "BIND_PORT":
                     _, mod_id, port_name, direction, topic = msg
                     mod = self._modules[mod_id]
-                    from core.transport.shm import SHMTransport
                     from core.transport.adapter import TransportAdapter
+                    from core.transport.shm import SHMTransport
                     t = TransportAdapter(SHMTransport())
                     if direction == "out":
                         port = mod.ports_out.get(port_name)

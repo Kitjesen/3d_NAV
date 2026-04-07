@@ -23,7 +23,7 @@ class ServiceManager:
     """Manage systemd services — start on demand, stop on release."""
 
     def __init__(self):
-        self._started: List[str] = []  # services we started (we'll stop them)
+        self._started: list[str] = []  # services we started (we'll stop them)
 
     def is_running(self, service: str) -> bool:
         """Check if a systemd service is active."""
@@ -36,7 +36,7 @@ class ServiceManager:
         except Exception:
             return False
 
-    def start(self, *services: str) -> List[str]:
+    def start(self, *services: str) -> list[str]:
         """Start services. Returns list of actually started services."""
         started = []
         for svc in services:

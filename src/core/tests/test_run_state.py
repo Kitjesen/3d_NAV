@@ -33,7 +33,7 @@ def isolated_run_dir(tmp_path, monkeypatch):
 
 class TestSaveReadClear:
     def test_save_and_read(self, isolated_run_dir):
-        from cli.run_state import save_run_state, read_run_state
+        from cli.run_state import read_run_state, save_run_state
 
         cfg = {"robot": "stub", "llm": "mock", "_desc": "ignored"}
         save_run_state("stub", cfg, str(isolated_run_dir), argv=["stub"], daemon=False)
@@ -46,7 +46,7 @@ class TestSaveReadClear:
         assert state["config"]["robot"] == "stub"
 
     def test_save_populates_new_fields(self, isolated_run_dir):
-        from cli.run_state import save_run_state, read_run_state
+        from cli.run_state import read_run_state, save_run_state
 
         save_run_state(
             "stub", {"robot": "stub"}, str(isolated_run_dir),
@@ -61,7 +61,7 @@ class TestSaveReadClear:
         assert "version" in state
 
     def test_save_omits_none_counts(self, isolated_run_dir):
-        from cli.run_state import save_run_state, read_run_state
+        from cli.run_state import read_run_state, save_run_state
 
         save_run_state("stub", {}, str(isolated_run_dir))
         state = read_run_state()
@@ -74,7 +74,7 @@ class TestSaveReadClear:
         assert read_run_state() is None
 
     def test_clear_removes_files(self, isolated_run_dir):
-        from cli.run_state import save_run_state, read_run_state, clear_run_state
+        from cli.run_state import clear_run_state, read_run_state, save_run_state
 
         save_run_state("stub", {}, str(isolated_run_dir))
         assert read_run_state() is not None
@@ -84,7 +84,7 @@ class TestSaveReadClear:
 
 class TestUpdateRunState:
     def test_update_patches_fields(self, isolated_run_dir):
-        from cli.run_state import save_run_state, read_run_state, update_run_state
+        from cli.run_state import read_run_state, save_run_state, update_run_state
 
         save_run_state("stub", {}, str(isolated_run_dir), status="initializing")
         assert update_run_state(status="running", module_count=19) is True
@@ -100,7 +100,7 @@ class TestUpdateRunState:
         assert update_run_state(status="running") is False
 
     def test_update_preserves_other_fields(self, isolated_run_dir):
-        from cli.run_state import save_run_state, update_run_state, read_run_state
+        from cli.run_state import read_run_state, save_run_state, update_run_state
 
         save_run_state("nav", {"robot": "thunder"}, str(isolated_run_dir), argv=["nav"])
         update_run_state(status="running")

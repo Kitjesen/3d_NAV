@@ -60,8 +60,8 @@ class LLMClientBase(ABC):
     @abstractmethod
     async def chat(
         self,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
     ) -> str:
         """
         发送对话请求。
@@ -128,8 +128,8 @@ class OpenAIClient(LLMClientBase):
 
     async def chat(
         self,
-        messages: List[Dict],
-        temperature: Optional[float] = None,
+        messages: list[dict],
+        temperature: float | None = None,
     ) -> str:
         self._ensure_client()
         temp = temperature if temperature is not None else self.config.temperature
@@ -208,7 +208,7 @@ class OpenAIClient(LLMClientBase):
         text_prompt: str,
         image_base64: str,
         system_prompt: str = "",
-        temperature: Optional[float] = None,
+        temperature: float | None = None,
     ) -> str:
         """
         带图像的对话 (GPT-4o Vision)。
@@ -323,8 +323,8 @@ class ClaudeClient(LLMClientBase):
 
     async def chat(
         self,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
     ) -> str:
         self._ensure_client()
         temp = temperature if temperature is not None else self.config.temperature
@@ -418,8 +418,8 @@ class QwenClient(LLMClientBase):
 
     async def chat(
         self,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
     ) -> str:
         temp = temperature if temperature is not None else self.config.temperature
 
@@ -484,7 +484,7 @@ class QwenClient(LLMClientBase):
         # Should not reach here, but guard against falling through
         return ""
 
-    def _sync_call(self, messages: List[Dict[str, str]], temperature: float) -> str:
+    def _sync_call(self, messages: list[dict[str, str]], temperature: float) -> str:
         """同步调用 DashScope API。"""
         try:
             import dashscope
@@ -602,17 +602,18 @@ class MockLLMClient(LLMClientBase):
 
     async def chat(
         self,
-        messages: List[Dict[str, str]],
-        temperature: Optional[float] = None,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
     ) -> str:
         """返回与指令语义一致的 mock 导航 JSON。"""
-        import re, json as _json
+        import json as _json
+        import re
 
         # 拼接所有消息文本以提取关键信息
         full_text = " ".join(m.get("content", "") for m in messages).lower()
 
         # 1. 尝试从消息中解析场景图对象列表
-        objects: List[dict] = []
+        objects: list[dict] = []
         try:
             for m in messages:
                 content = m.get("content", "")
@@ -634,7 +635,7 @@ class MockLLMClient(LLMClientBase):
 
         # 按房间关键词匹配
         room_match = None
-        preferred_labels: List[str] = []
+        preferred_labels: list[str] = []
         for kw, (room, labels) in self._ROOM_HINTS.items():
             if kw in full_text:
                 room_match = room

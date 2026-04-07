@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 # 停用词表 — 工业级覆盖 (中英文 + 口语 + 方言 + 语气)
-STOP_WORDS: Set[str] = {
+STOP_WORDS: set[str] = {
     # ── 英文停用词 ──
     # 注意: 不删除意图动词 (go/find/get/show/take/bring/lead/see)
     #       这些词在 intent detection 阶段仍有语义价值
@@ -72,7 +72,7 @@ STOP_WORDS: Set[str] = {
 # 格式: concept_id → (names_zh, names_en)
 # 来源: IndustrialKnowledgeGraph 概念 (轻量子集, 避免跨包依赖)
 # 每个 concept 取主要别名, 不需要全部 (全量在 KG 中)
-_BILINGUAL_CONCEPTS: List[Tuple[List[str], List[str]]] = [
+_BILINGUAL_CONCEPTS: list[tuple[list[str], list[str]]] = [
     # ── 家具 ──
     (["椅子", "办公椅", "座椅", "凳子"], ["chair", "office chair", "seat", "stool"]),
     (["桌子", "办公桌", "书桌", "电脑桌"], ["desk", "table", "workstation"]),
@@ -170,8 +170,8 @@ _BILINGUAL_CONCEPTS: List[Tuple[List[str], List[str]]] = [
 ]
 
 # 预构建查找索引: word(lower) → set of cross-language equivalents
-_ZH_TO_EN: Dict[str, Set[str]] = {}
-_EN_TO_ZH: Dict[str, Set[str]] = {}
+_ZH_TO_EN: dict[str, set[str]] = {}
+_EN_TO_ZH: dict[str, set[str]] = {}
 
 for _zh_names, _en_names in _BILINGUAL_CONCEPTS:
     _en_set = {e.lower() for e in _en_names}
@@ -182,7 +182,7 @@ for _zh_names, _en_names in _BILINGUAL_CONCEPTS:
         _EN_TO_ZH.setdefault(en.lower(), set()).update(_zh_set)
 
 
-def expand_bilingual(keywords: List[str]) -> List[str]:
+def expand_bilingual(keywords: list[str]) -> list[str]:
     """
     将关键词列表扩展为中英双语。
 
@@ -191,7 +191,7 @@ def expand_bilingual(keywords: List[str]) -> List[str]:
 
     只扩展匹配到的词, 其余原样保留。返回去重后的列表。
     """
-    expanded: List[str] = list(keywords)
+    expanded: list[str] = list(keywords)
     for kw in keywords:
         kw_lower = kw.lower()
         # zh → en
@@ -202,7 +202,7 @@ def expand_bilingual(keywords: List[str]) -> List[str]:
             expanded.extend(_EN_TO_ZH[kw_lower])
     # 去重, 保序
     seen: set = set()
-    result: List[str] = []
+    result: list[str] = []
     for w in expanded:
         w_key = w.lower()
         if w_key not in seen:
@@ -211,7 +211,7 @@ def expand_bilingual(keywords: List[str]) -> List[str]:
     return result
 
 
-def translate_label(label: str) -> List[str]:
+def translate_label(label: str) -> list[str]:
     """
     将单个标签翻译为另一种语言的所有别名。
 
@@ -312,7 +312,7 @@ class ChineseTokenizer:
         for word, freq, tag in robot_words:
             self._jieba.add_word(word, freq, tag)
 
-    def tokenize(self, text: str, keep_pos: bool = False) -> List[str]:
+    def tokenize(self, text: str, keep_pos: bool = False) -> list[str]:
         """
         分词
 
@@ -338,7 +338,7 @@ class ChineseTokenizer:
             # 回退到简单分词
             return self._simple_tokenize(text)
 
-    def _simple_tokenize(self, text: str) -> List[str]:
+    def _simple_tokenize(self, text: str) -> list[str]:
         """简单分词（回退方案）"""
         import re
         # 混合分词: 英文按空格, 中文按字符组
@@ -352,7 +352,7 @@ class ChineseTokenizer:
         filter_stopwords: bool = True,
         keep_colors: bool = True,
         keep_spatial: bool = True
-    ) -> List[str]:
+    ) -> list[str]:
         """
         提取关键词
 
@@ -422,7 +422,7 @@ class ChineseTokenizer:
         }
         return word.lower() in spatial
 
-    def extract_noun_phrases(self, text: str) -> List[str]:
+    def extract_noun_phrases(self, text: str) -> list[str]:
         """
         提取名词短语（如"红色灭火器"、"会议室的门"）
 
@@ -460,7 +460,7 @@ class ChineseTokenizer:
 
 
 # 全局单例
-_global_tokenizer: Optional[ChineseTokenizer] = None
+_global_tokenizer: ChineseTokenizer | None = None
 
 
 def get_tokenizer(use_jieba: bool = True, custom_dict_path: str = None) -> ChineseTokenizer:
@@ -480,7 +480,7 @@ def get_tokenizer(use_jieba: bool = True, custom_dict_path: str = None) -> Chine
     return _global_tokenizer
 
 
-def extract_keywords(text: str, **kwargs) -> List[str]:
+def extract_keywords(text: str, **kwargs) -> list[str]:
     """
     便捷函数：提取关键词
 
@@ -496,7 +496,7 @@ def extract_keywords(text: str, **kwargs) -> List[str]:
 
 
 # 向后兼容：保留原有的简单分词函数
-def simple_extract_keywords(instruction: str) -> List[str]:
+def simple_extract_keywords(instruction: str) -> list[str]:
     """
     简单分词（向后兼容）
 

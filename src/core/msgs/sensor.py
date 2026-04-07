@@ -227,7 +227,7 @@ class Image:
 
     # -- introspection -------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Metadata dict (no pixel data)."""
         return {
             "format": self.format.value,
@@ -346,7 +346,7 @@ class CameraIntrinsics:
         )
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> CameraIntrinsics:
+    def from_dict(cls, d: dict[str, Any]) -> CameraIntrinsics:
         return cls(
             fx=d["fx"], fy=d["fy"], cx=d["cx"], cy=d["cy"],
             width=d["width"], height=d["height"],
@@ -358,7 +358,7 @@ class CameraIntrinsics:
             dist_k3=d.get("dist_k3", 0.0),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "fx": self.fx, "fy": self.fy,
             "cx": self.cx, "cy": self.cy,
@@ -629,7 +629,7 @@ class PointCloud2:
 
     # -- introspection -------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Metadata dict (no point data)."""
         xyz = self.points[:, :3]
         if self.is_empty:

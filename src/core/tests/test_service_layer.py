@@ -3,11 +3,13 @@
 Pure algorithm testing with mocks. No ROS2, no GPU, no API keys.
 """
 
+import os
+import sys
 import unittest
 from unittest.mock import MagicMock
+
 import numpy as np
 
-import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "semantic_perception"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "semantic_planner"))
@@ -129,8 +131,8 @@ class MockActionExecutor:
 class TestPerceptionService(unittest.TestCase):
 
     def _make_service(self, detector=True, encoder=True, tracker=True):
-        from semantic.perception.semantic_perception.service import PerceptionService
         from semantic.perception.semantic_perception.projection import CameraIntrinsics
+        from semantic.perception.semantic_perception.service import PerceptionService
         svc = PerceptionService(
             detector=MockDetector() if detector else None,
             encoder=MockEncoder() if encoder else None,

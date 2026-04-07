@@ -306,6 +306,7 @@ class TestTopologicalMemoryPersistence(unittest.TestCase):
 
     def test_save_and_load(self):
         import numpy as np
+
         from semantic.planner.semantic_planner.topological_memory import TopologicalMemory
 
         with tempfile.TemporaryDirectory() as tmpdir:

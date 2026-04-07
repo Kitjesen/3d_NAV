@@ -25,13 +25,13 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from base_autonomy.modules._nav_core_loader import nav_core_build_hint, try_import_nav_core
 from core.module import Module
-from core.stream import In, Out
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry, Path
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
 from core.msgs.sensor import PointCloud2
 from core.registry import register
-from base_autonomy.modules._nav_core_loader import try_import_nav_core, nav_core_build_hint
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ _DIR_THRE             = 90.0  # degrees — max allowed direction deviation
 _GOAL_CLEAR_RANGE     = 0.5   # m
 
 
-def _load_paths(paths_dir: str) -> Optional[Dict]:
+def _load_paths(paths_dir: str) -> dict | None:
     """Load pre-computed paths from PLY files.
 
     Returns dict with keys:
@@ -71,7 +71,7 @@ def _load_paths(paths_dir: str) -> Optional[Dict]:
         logger.error("LocalPlannerModule [cmu_py]: paths.ply not found at %s", paths_ply)
         return None
 
-    paths_data: List[List] = [[] for _ in range(_PATH_NUM)]
+    paths_data: list[list] = [[] for _ in range(_PATH_NUM)]
     with open(paths_ply, "rb") as f:
         raw = f.read()
     pos = raw.find(b"end_header\r\n")
@@ -117,7 +117,7 @@ def _load_paths(paths_dir: str) -> Optional[Dict]:
 
     # -- startPaths.ply: one group-start segment per group_id --
     start_ply = pd / "startPaths.ply"
-    start_paths_data: List[List] = [[] for _ in range(_GROUP_NUM)]
+    start_paths_data: list[list] = [[] for _ in range(_GROUP_NUM)]
     with open(start_ply, "rb") as f:
         raw3 = f.read()
     pos3 = raw3.find(b"end_header\r\n")
@@ -139,7 +139,7 @@ def _load_paths(paths_dir: str) -> Optional[Dict]:
 
     # -- correspondences.txt: voxel_id → list of blocked path_ids --
     corr_txt = pd / "correspondences.txt"
-    correspondences: Dict[int, List[int]] = {}
+    correspondences: dict[int, list[int]] = {}
     max_voxel_id = 0
     with open(corr_txt) as f:
         for line in f:
@@ -182,7 +182,7 @@ def _score_paths_numpy(
     rel_goal_y: float,
     rel_goal_dis: float,
     joy_dir_deg: float,                 # direction to goal in body frame (degrees)
-    correspondences: Dict[int, List[int]],
+    correspondences: dict[int, list[int]],
     group_of_path: np.ndarray,
     grid_voxel_num_x: int,
     grid_voxel_num_y: int,
@@ -336,14 +336,14 @@ class LocalPlannerModule(Module, layer=2):
         self._node = None
         self._robot_pos = np.zeros(3)
         self._robot_yaw = 0.0
-        self._latest_waypoint: Optional[PoseStamped] = None
-        self._terrain_points: Optional[np.ndarray] = None
-        self._boundary_points: Optional[np.ndarray] = None
-        self._added_obstacle_points: Optional[np.ndarray] = None
+        self._latest_waypoint: PoseStamped | None = None
+        self._terrain_points: np.ndarray | None = None
+        self._boundary_points: np.ndarray | None = None
+        self._added_obstacle_points: np.ndarray | None = None
         self._last_cmu_py_time: float = 0.0
 
         # cmu_py state
-        self._path_data: Optional[Dict] = None
+        self._path_data: dict | None = None
         self._nav_core = None
 
         # nanobind state
@@ -420,8 +420,8 @@ class LocalPlannerModule(Module, layer=2):
 
     def _setup_cmu(self):
         try:
-            from core.config import get_config
             from base_autonomy.native_factories import local_planner
+            from core.config import get_config
 
             cfg = get_config()
             self._node = local_planner(cfg)
@@ -782,7 +782,7 @@ class LocalPlannerModule(Module, layer=2):
         n = max(int(dist / step), 2)
         return [start + diff * (i / n) for i in range(1, n + 1)]
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["local_planner"] = {
             "backend":       self._backend,

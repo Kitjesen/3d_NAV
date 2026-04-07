@@ -24,7 +24,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from .detector_base import DetectorBase, Detection2D
+from .detector_base import Detection2D, DetectorBase
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +55,11 @@ class YOLOEDetector(DetectorBase):
         self.mask_downsample = mask_downsample
 
         self._model = None
-        self._current_classes: Optional[List[str]] = None
+        self._current_classes: list[str] | None = None
 
         self._detect_count = 0
         self._total_detect_time = 0.0
-        self._fps_history: List[float] = []
+        self._fps_history: list[float] = []
 
     @property
     def avg_fps(self) -> float:
@@ -118,7 +118,7 @@ class YOLOEDetector(DetectorBase):
             logger.warning("TensorRT export failed, using PyTorch: %s", e)
             self.tensorrt = False
 
-    def detect(self, rgb: np.ndarray, text_prompt: str) -> List[Detection2D]:
+    def detect(self, rgb: np.ndarray, text_prompt: str) -> list[Detection2D]:
         """
         YOLO-E 实例分割检测。
 
@@ -207,7 +207,7 @@ class YOLOEDetector(DetectorBase):
 
         return detections
 
-    def get_statistics(self) -> Dict[str, float]:
+    def get_statistics(self) -> dict[str, float]:
         avg_time = (self._total_detect_time / self._detect_count
                     if self._detect_count > 0 else 0.0)
         return {

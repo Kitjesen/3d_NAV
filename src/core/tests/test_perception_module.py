@@ -19,17 +19,16 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from core import Module, In, Out, Blueprint, autoconnect
-from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
-from core.msgs.semantic import Detection3D as CoreDetection3D, SceneGraph
-from core.msgs.nav import Odometry
+from core import Blueprint, In, Module, Out, autoconnect
 from core.msgs.geometry import Pose, Quaternion, Vector3
-
+from core.msgs.nav import Odometry
+from core.msgs.semantic import Detection3D as CoreDetection3D
+from core.msgs.semantic import SceneGraph
+from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
 from semantic.perception.semantic_perception.perception_module import (
     PerceptionModule,
     _quat_to_rotation,
 )
-
 
 # -- helpers -------------------------------------------------------------------
 

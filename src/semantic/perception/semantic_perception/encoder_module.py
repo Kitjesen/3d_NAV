@@ -18,15 +18,15 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
 
 class FeatureResult:
     """Encoder output: feature vector + metadata."""
-    __slots__ = ("feature", "timestamp", "encoder_name", "inference_ms")
+    __slots__ = ("encoder_name", "feature", "inference_ms", "timestamp")
 
     def __init__(self, feature: np.ndarray, timestamp: float = 0.0,
                  encoder_name: str = "", inference_ms: float = 0.0):
@@ -121,7 +121,7 @@ class EncoderModule(Module, layer=3):
         )
         self.feature.publish(result)
 
-    def encode_text(self, text: str) -> Optional[np.ndarray]:
+    def encode_text(self, text: str) -> np.ndarray | None:
         """Synchronous text encoding (for GoalResolver queries)."""
         if self._backend is None:
             return None
@@ -139,7 +139,7 @@ class EncoderModule(Module, layer=3):
                 pass
         super().stop()
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         avg_ms = (self._total_inference_ms / self._frame_count
                   if self._frame_count > 0 else 0.0)

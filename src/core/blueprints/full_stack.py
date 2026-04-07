@@ -29,11 +29,22 @@ from typing import Any
 from core.blueprint import Blueprint, autoconnect
 from core.utils.calibration_check import run_calibration_check
 
-from .stacks import driver, lidar, sim_lidar, slam, maps, perception, memory, navigation, safety, gateway
+from .stacks import (
+    driver,
+    gateway,
+    lidar,
+    maps,
+    memory,
+    navigation,
+    perception,
+    safety,
+    sim_lidar,
+    slam,
+)
 from .stacks import planner as planner_stack
 from .stacks.driver import driver_name
-from .stacks.slam import slam_module_name
 from .stacks.memory import DEFAULT_SEMANTIC_DIR
+from .stacks.slam import slam_module_name
 
 logger = logging.getLogger(__name__)
 

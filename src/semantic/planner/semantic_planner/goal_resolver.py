@@ -34,16 +34,16 @@ import numpy as np
 
 from core.utils.sanitize import safe_json_loads, sanitize_position
 
-from .adacot import AdaCoTRouter, AdaCoTConfig, AdaCoTDecision
+from .adacot import AdaCoTConfig, AdaCoTDecision, AdaCoTRouter
 from .fast_path import FastPathMixin
-from .llm_client import LLMClientBase, LLMError, LLMConfig, create_llm_client
-from .slow_path import SlowPathMixin
-from .tagged_locations import TaggedLocationStore
+from .llm_client import LLMClientBase, LLMConfig, LLMError, create_llm_client
 from .prompt_templates import (
-    build_goal_resolution_prompt,
     build_exploration_prompt,
+    build_goal_resolution_prompt,
     build_vision_grounding_prompt,
 )
+from .slow_path import SlowPathMixin
+from .tagged_locations import TaggedLocationStore
 
 try:
     from memory.spatial.topology_graph import TopologySemGraph
@@ -76,7 +76,7 @@ class GoalResult:
     candidate_id: int = -1         # BA-HSG: 候选物体 ID
     frame_id: str = "map"          # 坐标帧 (默认 map, 与 planner_node 一致)
     hint_room: str = ""                            # OmniNav: 目标所在推测房间名
-    hint_room_center: Optional[List[float]] = None # OmniNav: 房间中心坐标 [x,y,z]
+    hint_room_center: list[float] | None = None # OmniNav: 房间中心坐标 [x,y,z]
     score_entropy: float = 0.0                     # AdaNav: Fast Path 得分熵
 
 
@@ -85,7 +85,7 @@ class TargetHypothesis:
     """BA-HSG 多假设目标信念 (§3.4.3)。"""
     object_id: int
     label: str
-    position: List[float]          # [x, y, z]
+    position: list[float]          # [x, y, z]
     score: float                   # Fast Path fused score
     credibility: float             # BA-HSG composite credibility
     room_match: float              # room-instruction compatibility
@@ -102,7 +102,7 @@ class TargetBeliefManager:
     """
 
     def __init__(self, gamma1: float = 1.0, gamma2: float = 0.5, gamma3: float = 0.3) -> None:
-        self._hypotheses: List[TargetHypothesis] = []
+        self._hypotheses: list[TargetHypothesis] = []
         self._gamma1 = gamma1  # fused score weight
         self._gamma2 = gamma2  # credibility weight
         self._gamma3 = gamma3  # room match weight
@@ -110,7 +110,7 @@ class TargetBeliefManager:
 
     def init_from_candidates(
         self,
-        candidates: List[Dict],
+        candidates: list[dict],
         instruction: str = "",
     ) -> None:
         """从 Fast Path 候选列表初始化后验。"""
@@ -172,10 +172,10 @@ class TargetBeliefManager:
 
     def select_next_target(
         self,
-        robot_position: Optional[List[float]] = None,
+        robot_position: list[float] | None = None,
         beta: float = 0.5,
         rho: float = 0.2,
-    ) -> Optional[TargetHypothesis]:
+    ) -> TargetHypothesis | None:
         """期望代价选择: argmin(nav_cost - β·posterior + ρ·info_gain) (§3.4.3)。"""
         active = [h for h in self._hypotheses if not h.rejected and not h.verified]
         if not active:
@@ -205,7 +205,7 @@ class TargetBeliefManager:
         return best
 
     @property
-    def best_hypothesis(self) -> Optional[TargetHypothesis]:
+    def best_hypothesis(self) -> TargetHypothesis | None:
         """后验最高的未拒绝假设。"""
         active = [h for h in self._hypotheses if not h.rejected]
         return max(active, key=lambda h: h.posterior) if active else None
@@ -233,11 +233,11 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
     def __init__(
         self,
         primary_config: LLMConfig,
-        fallback_config: Optional[LLMConfig] = None,
+        fallback_config: LLMConfig | None = None,
         confidence_threshold: float = 0.6,
         fast_path_threshold: float = 0.75,   # Fast 路径最低置信度
         max_replan_attempts: int = 3,
-        tagged_location_store: Optional[TaggedLocationStore] = None,
+        tagged_location_store: TaggedLocationStore | None = None,
         save_dir: str = "",
     ) -> None:
         self._primary = create_llm_client(primary_config)
@@ -249,10 +249,10 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
         self._max_replan_attempts = max_replan_attempts
 
         # Tag 记忆层 (层 0: 用户手动标记的地点)
-        self._tag_store: Optional[TaggedLocationStore] = tagged_location_store
+        self._tag_store: TaggedLocationStore | None = tagged_location_store
 
         # 探索状态
-        self._explored_directions: List[Dict[str, float]] = []
+        self._explored_directions: list[dict[str, float]] = []
         self._explore_step_count = 0
         self._visited_room_ids: set = set()
 
@@ -262,6 +262,7 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
         # 创新4: 语义先验引擎 (拓扑感知探索)
         import os as _os
         import time as _time
+
         from .semantic_prior import SemanticPriorEngine
         _kg_path = _os.path.join(save_dir, "room_object_kg.json") if save_dir else None
         self._semantic_prior_engine = SemanticPriorEngine(kg_path=_kg_path)
@@ -273,7 +274,7 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
         self._room_object_kg = None
 
         # 创新5: 拓扑语义图 (Topology Semantic Graph)
-        self._tsg: Optional["TopologySemGraph"] = None
+        self._tsg: TopologySemGraph | None = None
         if TopologySemGraph is not None:
             self._tsg = TopologySemGraph()
 
@@ -286,7 +287,8 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
 
     def maybe_reload_kg(self) -> None:
         """Reload learned KG priors if the file has been updated recently."""
-        import time, os
+        import os
+        import time
         if not self._kg_path or not os.path.exists(self._kg_path):
             return
         now = time.time()
@@ -300,7 +302,7 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
     #  Tag 记忆层 (层 0: 精确/模糊匹配用户标记地点)
     # ================================================================
 
-    def _resolve_by_tag(self, instruction: str) -> Optional[GoalResult]:
+    def _resolve_by_tag(self, instruction: str) -> GoalResult | None:
         """Tag 记忆查询：精确匹配优先，然后模糊匹配。
 
         Args:
@@ -345,8 +347,8 @@ class GoalResolver(FastPathMixin, SlowPathMixin):
         object_id: int,
         detected: bool,
         clip_sim: float = 0.5,
-        robot_position: Optional[List[float]] = None,
-    ) -> Optional[GoalResult]:
+        robot_position: list[float] | None = None,
+    ) -> GoalResult | None:
         """到达候选目标后执行贝叶斯更新, 如需要则重选目标。
 
         Args:

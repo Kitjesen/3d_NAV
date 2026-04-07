@@ -110,7 +110,7 @@ class VoIScheduler:
     6. 选择效用最高的动作
     """
 
-    def __init__(self, config: Optional[VoIConfig] = None):
+    def __init__(self, config: VoIConfig | None = None):
         self._config = config or VoIConfig()
         self._decision_log: list = []
 
@@ -306,9 +306,9 @@ class VoIScheduler:
         logger.debug("VoI decision: %s", entry)
 
     @property
-    def decision_stats(self) -> Dict[str, int]:
+    def decision_stats(self) -> dict[str, int]:
         """统计各动作的决策次数。"""
-        stats: Dict[str, int] = {"continue": 0, "reperceive": 0, "slow_reason": 0}
+        stats: dict[str, int] = {"continue": 0, "reperceive": 0, "slow_reason": 0}
         for entry in self._decision_log:
             action = entry.get("action", "continue")
             stats[action] = stats.get(action, 0) + 1

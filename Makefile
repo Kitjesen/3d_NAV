@@ -78,6 +78,15 @@ lint:
 	@echo "Running clang-tidy..."
 	@bash -c "source /opt/ros/humble/setup.bash && colcon build --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 	@find src -name "*.cpp" | xargs clang-tidy -p build/
+
+py-lint:
+	ruff check src/ cli/
+
+py-format:
+	ruff format src/ cli/
+
+py-fix:
+	ruff check --fix src/ cli/
 	@echo "Done."
 
 mapping:

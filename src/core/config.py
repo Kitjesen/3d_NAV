@@ -7,10 +7,11 @@ Environment variable LINGTU_CONFIG_PATH overrides the default config path.
 """
 
 import os
-import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_CONFIG = _REPO_ROOT / "config" / "robot_config.yaml"
@@ -153,17 +154,17 @@ class RobotConfig:
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     lidar: LidarConfig = field(default_factory=LidarConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
-def _fill_dataclass(cls, data: Dict[str, Any]):
+def _fill_dataclass(cls, data: dict[str, Any]):
     """Instantiate a dataclass, ignoring keys not present in its fields."""
     field_names = {f.name for f in cls.__dataclass_fields__.values()}
     filtered = {k: v for k, v in data.items() if k in field_names}
     return cls(**filtered)
 
 
-def load_config(path: Optional[str] = None) -> RobotConfig:
+def load_config(path: str | None = None) -> RobotConfig:
     """Load robot config from YAML.
 
     Resolution order for the config file path:
@@ -176,7 +177,7 @@ def load_config(path: Optional[str] = None) -> RobotConfig:
     config_path = path or os.environ.get("LINGTU_CONFIG_PATH") or str(_DEFAULT_CONFIG)
 
     try:
-        with open(config_path, "r", encoding="utf-8") as fh:
+        with open(config_path, encoding="utf-8") as fh:
             raw = yaml.safe_load(fh) or {}
     except (FileNotFoundError, OSError):
         raw = {}
@@ -246,7 +247,7 @@ def validate_config(cfg: RobotConfig) -> list[str]:
 # Singleton accessor
 # ---------------------------------------------------------------------------
 
-_config: Optional[RobotConfig] = None
+_config: RobotConfig | None = None
 
 
 def get_config() -> RobotConfig:

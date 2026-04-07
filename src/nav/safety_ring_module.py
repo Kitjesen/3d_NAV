@@ -25,11 +25,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.nav import Odometry, Path
 from core.msgs.geometry import Twist, Vector3
-from core.msgs.semantic import SafetyState, ExecutionEval, MissionStatus
+from core.msgs.nav import Odometry, Path
+from core.msgs.semantic import ExecutionEval, MissionStatus, SafetyState
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +99,11 @@ class SafetyRingModule(Module, layer=0):
         # Ring 2 state
         self._robot_xy = np.zeros(2)
         self._robot_yaw = 0.0
-        self._path_points: Optional[np.ndarray] = None
-        self._goal_xy: Optional[np.ndarray] = None
+        self._path_points: np.ndarray | None = None
+        self._goal_xy: np.ndarray | None = None
         self._cmd_speed = 0.0
         self._actual_speed = 0.0
-        self._progress_history: List[Tuple[float, float]] = []
+        self._progress_history: list[tuple[float, float]] = []
         self._last_progress_time = time.monotonic()
         self._last_distance = float("inf")
         self._assessment = Assessment.IDLE
@@ -113,7 +113,7 @@ class SafetyRingModule(Module, layer=0):
         self._loc_confidence: float = 0.0
 
         # Ring 3 state
-        self._latest_mission: Optional[dict] = None
+        self._latest_mission: dict | None = None
         self._instruction = ""
 
     def setup(self):
@@ -299,7 +299,7 @@ class SafetyRingModule(Module, layer=0):
         self.safety_state.publish(SafetyState(level=SafetyLevel.STOP.value))
         return json.dumps({"status": "estop_triggered"})
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["safety_ring"] = {
             "level": self._safety_level.name,

@@ -151,7 +151,7 @@ class Vector3:
 
     # -- conversions ---------------------------------------------------------
 
-    def to_list(self) -> List[float]:
+    def to_list(self) -> list[float]:
         return [self.x, self.y, self.z]
 
     def to_tuple(self) -> tuple:
@@ -169,11 +169,11 @@ class Vector3:
             arr = padded
         return cls(float(arr[0]), float(arr[1]), float(arr[2]))
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> dict[str, float]:
         return {"x": self.x, "y": self.y, "z": self.z}
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> Vector3:
+    def from_dict(cls, d: dict[str, Any]) -> Vector3:
         return cls(d.get("x", 0.0), d.get("y", 0.0), d.get("z", 0.0))
 
     # -- binary --------------------------------------------------------------
@@ -209,7 +209,7 @@ class Quaternion:
         Quaternion(x=0, y=0, z=0, w=1)       # keywords
     """
 
-    __slots__ = ("x", "y", "z", "w")
+    __slots__ = ("w", "x", "y", "z")
     _FMT = struct.Struct("<4d")  # 32 bytes
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -347,7 +347,7 @@ class Quaternion:
 
     # -- conversions ---------------------------------------------------------
 
-    def to_list(self) -> List[float]:
+    def to_list(self) -> list[float]:
         return [self.x, self.y, self.z, self.w]
 
     def to_tuple(self) -> tuple:
@@ -367,11 +367,11 @@ class Quaternion:
     def identity(cls) -> Quaternion:
         return cls(0.0, 0.0, 0.0, 1.0)
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> dict[str, float]:
         return {"x": self.x, "y": self.y, "z": self.z, "w": self.w}
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> Quaternion:
+    def from_dict(cls, d: dict[str, Any]) -> Quaternion:
         return cls(d.get("x", 0.0), d.get("y", 0.0),
                    d.get("z", 0.0), d.get("w", 1.0))
 
@@ -404,7 +404,7 @@ class Pose:
         Pose(position=vec, orientation=quat)       # keywords
     """
 
-    __slots__ = ("position", "orientation")
+    __slots__ = ("orientation", "position")
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         if kwargs and not args:
@@ -506,14 +506,14 @@ class Pose:
 
     # -- serialisation -------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "position": self.position.to_dict(),
             "orientation": self.orientation.to_dict(),
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> Pose:
+    def from_dict(cls, d: dict[str, Any]) -> Pose:
         p = d.get("position", {})
         o = d.get("orientation", {})
         return cls(
@@ -545,7 +545,7 @@ class Pose:
 class PoseStamped:
     """Pose with timestamp and frame id (composition; includes .pose)."""
 
-    __slots__ = ("pose", "ts", "frame_id")
+    __slots__ = ("frame_id", "pose", "ts")
 
     def __init__(
         self,
@@ -608,11 +608,11 @@ class PoseStamped:
 
     # -- serialisation -------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {"pose": self.pose.to_dict(), "ts": self.ts, "frame_id": self.frame_id}
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> PoseStamped:
+    def from_dict(cls, d: dict[str, Any]) -> PoseStamped:
         return cls(
             pose=Pose.from_dict(d.get("pose", {})),
             ts=float(d.get("ts", 0)),
@@ -643,7 +643,7 @@ class PoseStamped:
 class Twist:
     """Linear + angular velocity."""
 
-    __slots__ = ("linear", "angular")
+    __slots__ = ("angular", "linear")
 
     def __init__(self, linear: Any = None, angular: Any = None) -> None:
         self.linear: Vector3 = (
@@ -687,14 +687,14 @@ class Twist:
 
     # -- serialisation -------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "linear": self.linear.to_dict(),
             "angular": self.angular.to_dict(),
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> Twist:
+    def from_dict(cls, d: dict[str, Any]) -> Twist:
         li = d.get("linear", {})
         an = d.get("angular", {})
         return cls(Vector3.from_dict(li), Vector3.from_dict(an))
@@ -721,7 +721,7 @@ class Twist:
 class TwistStamped(Twist):
     """Twist with timestamp and frame id."""
 
-    __slots__ = ("ts", "frame_id")
+    __slots__ = ("frame_id", "ts")
 
     def __init__(
         self,
@@ -752,14 +752,14 @@ class TwistStamped(Twist):
     def __str__(self) -> str:
         return self.__repr__()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         d = super().to_dict()
         d["ts"] = self.ts
         d["frame_id"] = self.frame_id
         return d
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> TwistStamped:
+    def from_dict(cls, d: dict[str, Any]) -> TwistStamped:
         return cls(
             Vector3.from_dict(d.get("linear", {})),
             Vector3.from_dict(d.get("angular", {})),
@@ -794,7 +794,7 @@ class TwistStamped(Twist):
 class Transform:
     """Rigid transform: translation (Vector3) + rotation (Quaternion) + frame metadata."""
 
-    __slots__ = ("translation", "rotation", "frame_id", "child_frame_id", "ts")
+    __slots__ = ("child_frame_id", "frame_id", "rotation", "translation", "ts")
 
     def __init__(
         self,
@@ -879,7 +879,7 @@ class Transform:
 
     # -- serialisation -------------------------------------------------------
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "translation": self.translation.to_dict(),
             "rotation": self.rotation.to_dict(),
@@ -889,7 +889,7 @@ class Transform:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> Transform:
+    def from_dict(cls, d: dict[str, Any]) -> Transform:
         return cls(
             translation=Vector3.from_dict(d.get("translation", {})),
             rotation=Quaternion.from_dict(d.get("rotation", {})),

@@ -24,13 +24,13 @@ systemd service:
   sudo systemctl enable --now ble_peripheral
 """
 
-import struct
-import time
-import subprocess
 import logging
-import signal
-import sys
 import os
+import signal
+import struct
+import subprocess
+import sys
+import time
 
 logging.basicConfig(
     level=logging.INFO,

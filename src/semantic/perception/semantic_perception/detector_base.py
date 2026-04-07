@@ -27,7 +27,7 @@ class Detection2D:
     label: str                # 检测类别文本
     class_id: int = -1        # 可选类别 ID
     features: np.ndarray = field(default_factory=lambda: np.array([]))  # 语义特征 (可选)
-    mask: Optional[np.ndarray] = None  # HxW bool 实例分割 mask (USS-Nav: mask→点云)
+    mask: np.ndarray | None = None  # HxW bool 实例分割 mask (USS-Nav: mask→点云)
 
 
 class DetectorBase(ABC):
@@ -39,7 +39,7 @@ class DetectorBase(ABC):
         ...
 
     @abstractmethod
-    def detect(self, rgb: np.ndarray, text_prompt: str) -> List[Detection2D]:
+    def detect(self, rgb: np.ndarray, text_prompt: str) -> list[Detection2D]:
         """
         对单张 RGB 图片进行开放词汇检测。
 

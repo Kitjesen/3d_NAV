@@ -95,7 +95,7 @@ class PerceptionService:
         depth: np.ndarray,
         tf_camera_to_world: np.ndarray,
         text_prompt: str = "",
-    ) -> Optional[FrameResult]:
+    ) -> FrameResult | None:
         """Run full perception pipeline on one frame.
 
         Args:
@@ -174,8 +174,11 @@ class PerceptionService:
             return []
         try:
             from .projection import (
-                project_to_3d, mask_to_pointcloud, pointcloud_centroid,
-                bbox_center_depth, transform_point,
+                bbox_center_depth,
+                mask_to_pointcloud,
+                pointcloud_centroid,
+                project_to_3d,
+                transform_point,
             )
         except ImportError:
             logger.warning("projection module not available")
@@ -256,7 +259,7 @@ class PerceptionService:
 
     # -- Health ---------------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         return {
             "detector": type(self.detector).__name__ if self.detector else None,
             "encoder": type(self.encoder).__name__ if self.encoder else None,

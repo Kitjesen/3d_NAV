@@ -8,15 +8,16 @@ import hashlib
 import logging
 import time
 from typing import Dict, List, Optional
+
 import numpy as np
 
 from ..api.encoder_api import EncoderAPI
-from ..api.types import PerceptionConfig
 from ..api.exceptions import (
     EncoderError,
-    EncoderInitError,
     EncoderInferenceError,
+    EncoderInitError,
 )
+from ..api.types import PerceptionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class CLIPEncoder(EncoderAPI):
     - 多尺度特征（可选）
     """
 
-    def __init__(self, config: Optional[PerceptionConfig] = None):
+    def __init__(self, config: PerceptionConfig | None = None):
         """
         初始化CLIP编码器
 
@@ -58,8 +59,8 @@ class CLIPEncoder(EncoderAPI):
         self._feature_dim: int = 0
 
         # 特征缓存（LRU）
-        self._image_cache: Dict[str, np.ndarray] = {}
-        self._text_cache: Dict[str, np.ndarray] = {}
+        self._image_cache: dict[str, np.ndarray] = {}
+        self._text_cache: dict[str, np.ndarray] = {}
         self._cache_hits = 0
         self._cache_misses = 0
 
@@ -224,7 +225,7 @@ class CLIPEncoder(EncoderAPI):
         except Exception as e:
             raise EncoderInferenceError(f"Text encoding failed: {e}")
 
-    def encode_images_batch(self, images: List[np.ndarray]) -> np.ndarray:
+    def encode_images_batch(self, images: list[np.ndarray]) -> np.ndarray:
         """
         批量编码图像
 
@@ -264,7 +265,7 @@ class CLIPEncoder(EncoderAPI):
         except Exception as e:
             raise EncoderInferenceError(f"Batch image encoding failed: {e}")
 
-    def encode_texts_batch(self, texts: List[str]) -> np.ndarray:
+    def encode_texts_batch(self, texts: list[str]) -> np.ndarray:
         """
         批量编码文本
 
@@ -320,8 +321,8 @@ class CLIPEncoder(EncoderAPI):
     def text_image_similarity(
         self,
         text: str,
-        image_features_list: List[np.ndarray]
-    ) -> List[float]:
+        image_features_list: list[np.ndarray]
+    ) -> list[float]:
         """
         计算文本与多个图像的相似度
 
@@ -394,7 +395,7 @@ class CLIPEncoder(EncoderAPI):
         """计算图像哈希（用于缓存键）"""
         return hashlib.md5(image.tobytes()).hexdigest()
 
-    def _update_cache(self, cache: Dict, key: str, value: np.ndarray):
+    def _update_cache(self, cache: dict, key: str, value: np.ndarray):
         """更新缓存（LRU策略）"""
         if len(cache) >= self.cache_size:
             # 删除最旧的条目

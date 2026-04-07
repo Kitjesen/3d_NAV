@@ -160,7 +160,7 @@ class ConvexHullComputer:
     """凸包计算器 — 使用 scipy.spatial.ConvexHull。"""
 
     @staticmethod
-    def compute(points: np.ndarray) -> Optional[dict]:
+    def compute(points: np.ndarray) -> dict | None:
         """
         计算点集的凸包。
 
@@ -299,8 +299,8 @@ class SeedSelector:
     @staticmethod
     def select_next_seed(
         candidates: np.ndarray,
-        existing_polyhedra: List[Polyhedron],
-    ) -> Optional[np.ndarray]:
+        existing_polyhedra: list[Polyhedron],
+    ) -> np.ndarray | None:
         """
         选择下一个种子点 (距离所有已有多面体最远)。
 
@@ -362,7 +362,7 @@ class PolyhedronExpander:
         occupancy_grid: np.ndarray,
         grid_resolution: float,
         grid_origin: np.ndarray,
-    ) -> List[Polyhedron]:
+    ) -> list[Polyhedron]:
         """
         多面体扩展主算法。
 

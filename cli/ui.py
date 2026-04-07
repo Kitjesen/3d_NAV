@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
 import sys
 import time
-import json
 from collections import deque
 from pathlib import Path
 

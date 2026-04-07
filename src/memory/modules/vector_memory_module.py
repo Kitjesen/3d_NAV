@@ -25,10 +25,10 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.semantic import SceneGraph
 from core.msgs.nav import Odometry
+from core.msgs.semantic import SceneGraph
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +68,14 @@ class VectorMemoryModule(Module, layer=3):
         self._use_chromadb = False
 
         # Fallback numpy store
-        self._np_embeddings: List[np.ndarray] = []
-        self._np_metadata: List[dict] = []
+        self._np_embeddings: list[np.ndarray] = []
+        self._np_metadata: list[dict] = []
 
         self._max_np_entries: int = kw.get("max_np_entries", 10000)
 
         self._robot_xy = (0.0, 0.0)
-        self._latest_labels: List[str] = []
-        self._latest_image: Optional[np.ndarray] = None
+        self._latest_labels: list[str] = []
+        self._latest_image: np.ndarray | None = None
         self._last_store_time = 0.0
         self._store_count = 0
 
@@ -136,7 +136,7 @@ class VectorMemoryModule(Module, layer=3):
 
     # ── Store ─────────────────────────────────────────────────────────────────
 
-    def _store_snapshot(self, labels: List[str]) -> None:
+    def _store_snapshot(self, labels: list[str]) -> None:
         text = ", ".join(sorted(set(labels)))
         embedding = self._encode_text(text)
         if embedding is None:
@@ -166,7 +166,7 @@ class VectorMemoryModule(Module, layer=3):
                 self._np_embeddings.pop(0)
                 self._np_metadata.pop(0)
 
-    def _encode_text(self, text: str) -> Optional[np.ndarray]:
+    def _encode_text(self, text: str) -> np.ndarray | None:
         if self._encoder is not None and hasattr(self._encoder, "encode_text"):
             try:
                 results = self._encoder.encode_text([text])
@@ -203,7 +203,7 @@ class VectorMemoryModule(Module, layer=3):
 
     # ── Query ─────────────────────────────────────────────────────────────────
 
-    def _query(self, text: str, n: int = 0) -> List[dict]:
+    def _query(self, text: str, n: int = 0) -> list[dict]:
         n = n or self._max_results
         embedding = self._encode_text(text)
         if embedding is None:
@@ -232,7 +232,7 @@ class VectorMemoryModule(Module, layer=3):
         else:
             return self._numpy_query(embedding, n)
 
-    def _numpy_query(self, query_vec: np.ndarray, n: int) -> List[dict]:
+    def _numpy_query(self, query_vec: np.ndarray, n: int) -> list[dict]:
         if not self._np_embeddings:
             return []
         mat = np.stack(self._np_embeddings)
@@ -262,7 +262,7 @@ class VectorMemoryModule(Module, layer=3):
             "results": results[:3],
         }
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         if self._use_chromadb and self._collection is not None:
             entry_count = self._collection.count()

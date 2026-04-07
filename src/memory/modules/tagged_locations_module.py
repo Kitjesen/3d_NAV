@@ -10,17 +10,16 @@
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from core import Module, In, Out, skill
-from core.registry import register
+from core import In, Module, Out, skill
 from core.msgs import Odometry, PoseStamped
 from core.msgs.geometry import Pose, Quaternion, Vector3
-
+from core.registry import register
 from memory.modules._odom_mixin import OdomTrackingMixin
 from memory.spatial.tagged_locations import TaggedLocationStore
 
@@ -123,7 +122,7 @@ class TaggedLocationsModule(OdomTrackingMixin, Module, layer=3):
         names = [e["name"] for e in entries]
         self.tag_status.publish(f"locations:{','.join(names)}" if names else "locations:")
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["location_count"] = len(self._store.list_all())
         info["last_save_time"] = getattr(self._store, "_last_save_time", None)
@@ -139,7 +138,7 @@ class TaggedLocationsModule(OdomTrackingMixin, Module, layer=3):
     @skill
     def list_tags(self) -> str:
         """List all saved location tags with positions."""
-        entries: List[dict] = self._store.list_all()
+        entries: list[dict] = self._store.list_all()
         return json.dumps({"tags": entries}, ensure_ascii=False)
 
     @skill

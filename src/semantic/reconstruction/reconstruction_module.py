@@ -19,16 +19,16 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from core import Module, In, Out
+from core import In, Module, Out
 from core.msgs.nav import Odometry
-from core.msgs.sensor import CameraIntrinsics, Image
 from core.msgs.semantic import SceneGraph
+from core.msgs.sensor import CameraIntrinsics, Image
 
 from .color_projector import ColorProjector
 from .semantic_labeler import SemanticLabeler
@@ -63,10 +63,10 @@ class ReconstructionModule(Module, layer=3):
         self._save_dir = config.get("save_dir", "maps/reconstruction")
 
         # Cached state
-        self._intrinsics: Optional[CameraIntrinsics] = None
-        self._latest_color: Optional[Image] = None
-        self._latest_depth: Optional[Image] = None
-        self._camera_to_world: Optional[np.ndarray] = None
+        self._intrinsics: CameraIntrinsics | None = None
+        self._latest_color: Image | None = None
+        self._latest_depth: Image | None = None
+        self._camera_to_world: np.ndarray | None = None
         self._lock = threading.Lock()
 
     def setup(self) -> None:
@@ -133,7 +133,7 @@ class ReconstructionModule(Module, layer=3):
             camera_to_world=camera_to_world,
         )
 
-    def publish_cloud(self) -> Optional[Dict[str, Any]]:
+    def publish_cloud(self) -> dict[str, Any] | None:
         """Build and publish the semantic cloud if enough points exist.
 
         Returns the stats dict, or None if below threshold.
@@ -145,14 +145,14 @@ class ReconstructionModule(Module, layer=3):
         labels = self._labeler.label_cloud(xyzrgb)
         n_labeled = sum(1 for lb in labels if lb != "background")
 
-        stats: Dict[str, Any] = {
+        stats: dict[str, Any] = {
             "total_points": len(xyzrgb),
             "labeled_points": n_labeled,
             "objects": self._labeler.object_count,
             "voxels": self._projector.voxel_count,
         }
 
-        cloud_payload: Dict[str, Any] = {
+        cloud_payload: dict[str, Any] = {
             "points_shape": list(xyzrgb.shape),
             "labels_count": len(labels),
             "stats": stats,
@@ -162,7 +162,7 @@ class ReconstructionModule(Module, layer=3):
         self.reconstruction_stats.publish(stats)
         return stats
 
-    def save_ply(self, filepath: Optional[str] = None) -> Dict[str, Any]:
+    def save_ply(self, filepath: str | None = None) -> dict[str, Any]:
         """Save current reconstruction to PLY file.
 
         Returns
@@ -186,7 +186,7 @@ class ReconstructionModule(Module, layer=3):
         except Exception as exc:
             return {"success": False, "message": f"save failed: {exc}"}
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["mesh_vertices"] = self._projector.voxel_count if self._projector else 0
         info["last_update_time"] = getattr(self, "_last_update_time", None)

@@ -26,10 +26,10 @@ class Detector:
         self._camera = camera
         self._backend = backend
         self._module = None
-        self._latest_detections: List[dict] = []
+        self._latest_detections: list[dict] = []
         self._started = False
 
-    def start(self) -> "Detector":
+    def start(self) -> Detector:
         if self._started:
             return self
         try:
@@ -49,7 +49,7 @@ class Detector:
             self._module = None
         self._started = False
 
-    def detect(self) -> List[dict]:
+    def detect(self) -> list[dict]:
         """Run detection on latest camera frame. Returns list of detections."""
         if self._camera and self._module:
             color = self._camera.get_color()
@@ -65,7 +65,7 @@ class Detector:
                     logger.debug("Detection failed: %s", e)
         return self._latest_detections
 
-    def find(self, label: str) -> Optional[dict]:
+    def find(self, label: str) -> dict | None:
         """Find the best match for a label in current detections."""
         detections = self.detect()
         target = label.lower()

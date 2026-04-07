@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Tests 31-36: Persistence, edge-case, and resilience tests for LingTu."""
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, 'src')
 for d in ['src/semantic/perception', 'src/semantic/planner']:
     if os.path.isdir(d): sys.path.insert(0, d)
@@ -9,10 +11,11 @@ for k in ['MOONSHOT_API_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY','DASHSCOPE_API
     os.environ.pop(k, None)
 import logging; logging.basicConfig(level=logging.WARNING)
 
-import time
 import shutil
 import tempfile
+import time
 import traceback
+
 import numpy as np
 
 results = []
@@ -39,9 +42,9 @@ def run_test(name, fn):
 # Test 31: SemanticMapper persistence
 # =========================================================================
 def test_31_semantic_mapper_persistence():
-    from memory.modules.semantic_mapper_module import SemanticMapperModule
-    from core.msgs.semantic import SceneGraph, Detection3D, Region
     from core.msgs.geometry import Vector3
+    from core.msgs.semantic import Detection3D, Region, SceneGraph
+    from memory.modules.semantic_mapper_module import SemanticMapperModule
 
     tmpdir = tempfile.mkdtemp(prefix="test_persist_smap_")
     try:
@@ -81,9 +84,9 @@ def test_31_semantic_mapper_persistence():
 # Test 32: VectorMemory numpy fallback (in-memory)
 # =========================================================================
 def test_32_vector_memory_numpy():
-    from memory.modules.vector_memory_module import VectorMemoryModule
+    from core.msgs.geometry import Pose, Vector3
     from core.msgs.nav import Odometry
-    from core.msgs.geometry import Vector3, Pose
+    from memory.modules.vector_memory_module import VectorMemoryModule
 
     mod = VectorMemoryModule(persist_dir="/tmp/test_vmem_np", store_interval=0.0)
     mod.setup()
@@ -186,8 +189,8 @@ def test_34_no_clip_startup():
 # Test 35: Empty SceneGraph — no crash, no goal_pose published
 # =========================================================================
 def test_35_empty_scene_graph():
-    from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
     from core.msgs.semantic import SceneGraph
+    from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
 
     mod = SemanticPlannerModule()
     mod.setup()
@@ -220,7 +223,7 @@ def test_35_empty_scene_graph():
 # Test 36: WaypointTracker stuck detection
 # =========================================================================
 def test_36_waypoint_tracker_stuck():
-    from nav.waypoint_tracker import WaypointTracker, EV_STUCK, EV_STUCK_WARN
+    from nav.waypoint_tracker import EV_STUCK, EV_STUCK_WARN, WaypointTracker
 
     tracker = WaypointTracker(
         threshold=1.5,

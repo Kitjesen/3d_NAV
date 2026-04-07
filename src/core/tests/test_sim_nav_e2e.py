@@ -7,9 +7,9 @@ sends a goal, and verifies the robot moves toward it.
 
 from __future__ import annotations
 
-import time
 import os
 import sys
+import time
 
 import numpy as np
 import pytest

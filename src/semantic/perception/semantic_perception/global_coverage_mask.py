@@ -76,7 +76,7 @@ class GlobalCoverageMask:
             resolution: 栅格分辨率 (米)
         """
         self.resolution = resolution
-        self.coverage_map: Dict[Tuple[int, int], CoverageCell] = {}
+        self.coverage_map: dict[tuple[int, int], CoverageCell] = {}
 
         # 统计信息
         self.total_cells = 0
@@ -164,7 +164,7 @@ class GlobalCoverageMask:
 
         return self.covered_cells / self.total_cells
 
-    def get_frontier_cells(self) -> List[Tuple[int, int]]:
+    def get_frontier_cells(self) -> list[tuple[int, int]]:
         """
         提取前沿单元（已知与未知的边界）。
 
@@ -179,7 +179,7 @@ class GlobalCoverageMask:
 
         return frontiers
 
-    def get_frontier_clusters(self, min_cluster_size: int = 3) -> List[List[Tuple[int, int]]]:
+    def get_frontier_clusters(self, min_cluster_size: int = 3) -> list[list[tuple[int, int]]]:
         """
         将前沿单元聚类为前沿区域。
 
@@ -256,7 +256,7 @@ class GlobalCoverageMask:
 
         logger.info(f"Loaded GCM from {filepath}")
 
-    def world_to_grid(self, world_pos: np.ndarray) -> Tuple[int, int]:
+    def world_to_grid(self, world_pos: np.ndarray) -> tuple[int, int]:
         """
         世界坐标 → 栅格坐标。
 
@@ -270,7 +270,7 @@ class GlobalCoverageMask:
         grid_y = int(np.floor(world_pos[1] / self.resolution))
         return (grid_x, grid_y)
 
-    def grid_to_world(self, grid_pos: Tuple[int, int]) -> np.ndarray:
+    def grid_to_world(self, grid_pos: tuple[int, int]) -> np.ndarray:
         """
         栅格坐标 → 世界坐标（栅格中心）。
 
@@ -321,7 +321,7 @@ class GlobalCoverageMask:
         return False
 
     @staticmethod
-    def _get_neighbors(x: int, y: int) -> List[Tuple[int, int]]:
+    def _get_neighbors(x: int, y: int) -> list[tuple[int, int]]:
         """获取 8-邻域。"""
         return [
             (x-1, y-1), (x, y-1), (x+1, y-1),
@@ -339,7 +339,7 @@ class GlobalCoverageMask:
         distance = np.linalg.norm(point - polyhedron.center)
         return distance <= polyhedron.radius
 
-    def get_statistics(self) -> Dict:
+    def get_statistics(self) -> dict:
         """获取统计信息。"""
         return {
             'resolution': self.resolution,

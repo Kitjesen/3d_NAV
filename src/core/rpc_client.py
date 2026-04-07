@@ -10,7 +10,8 @@ Usage:
     proxy.start()  # lifecycle command
 """
 import logging
-from typing import Any, Callable, List, Optional, Set
+from collections.abc import Callable
+from typing import Any, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +28,12 @@ class RPCClient:
         worker_manager: Any,
         worker_id: int,
         module_id: str,
-        rpc_methods: Optional[Set[str]] = None,
+        rpc_methods: set[str] | None = None,
     ) -> None:
         self._mgr = worker_manager
         self._worker_id = worker_id
         self._module_id = module_id
-        self._rpc_methods: Set[str] = rpc_methods or set()
+        self._rpc_methods: set[str] = rpc_methods or set()
         self._timeout = 30.0
 
     def __getattr__(self, name: str) -> Any:
@@ -79,7 +80,7 @@ class RPCClient:
         """Return health dict from the remote Worker."""
         return self._mgr.health(self._worker_id, self._module_id)
 
-    def get_skill_infos(self) -> "List[SkillInfo]":
+    def get_skill_infos(self) -> "list[SkillInfo]":
         """Fetch @skill metadata from the remote module via IPC GET_SKILLS.
 
         Returns a list of SkillInfo objects describing each @skill method.
@@ -100,7 +101,7 @@ class RPCClient:
         return self._module_id
 
     @property
-    def rpc_methods(self) -> Set[str]:
+    def rpc_methods(self) -> set[str]:
         return self._rpc_methods
 
     def __repr__(self) -> str:

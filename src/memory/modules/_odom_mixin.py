@@ -19,7 +19,7 @@ class OdomTrackingMixin:
     Usage: Call ``self.odometry.subscribe(self._on_odom)`` in setup().
     """
 
-    _last_odom: Optional[Odometry] = None
+    _last_odom: Odometry | None = None
 
     def _on_odom(self, odom: Odometry) -> None:
         if not (np.isfinite(odom.x) and np.isfinite(odom.y)):
@@ -27,7 +27,7 @@ class OdomTrackingMixin:
         self._last_odom = odom
 
     @property
-    def _robot_position(self) -> Optional[np.ndarray]:
+    def _robot_position(self) -> np.ndarray | None:
         if self._last_odom is None:
             return None
         o = self._last_odom

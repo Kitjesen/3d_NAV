@@ -12,8 +12,8 @@ import math
 import unittest
 
 import numpy as np
-
 import pytest
+
 from semantic.planner.semantic_planner.frontier_scorer import (
     FREE_CELL,
     OCCUPIED_CELL,
@@ -22,8 +22,8 @@ from semantic.planner.semantic_planner.frontier_scorer import (
     FrontierScorer,
 )
 from semantic.planner.semantic_planner.frontier_types import (
-    angle_to_label,
     angle_diff,
+    angle_to_label,
     cooccurrence_score,
 )
 

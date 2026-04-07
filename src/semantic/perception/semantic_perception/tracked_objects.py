@@ -15,47 +15,47 @@ import numpy as np
 
 # Re-export all shared data types and constants from core.msgs.scene
 from core.msgs.scene import (
-    # Constants
-    RELATION_NEAR_THRESHOLD,
-    RELATION_ON_THRESHOLD,
-    REGION_CLUSTER_RADIUS,
-    FLOOR_HEIGHT,
-    FLOOR_MERGE_TOLERANCE,
-    BELIEF_SIGMA_BASE,
-    BELIEF_SIGMA_DEPTH_COEFF,
-    BELIEF_NEG_EVIDENCE_WEIGHT,
     BELIEF_FRESHNESS_TAU,
+    BELIEF_LATERAL_SHARE,
+    BELIEF_NEG_EVIDENCE_WEIGHT,
     BELIEF_REPROJ_KAPPA,
     BELIEF_ROOM_BOOST,
-    BELIEF_LATERAL_SHARE,
-    BP_MAX_ITERATIONS,
+    BELIEF_SIGMA_BASE,
+    BELIEF_SIGMA_DEPTH_COEFF,
     BP_CONVERGENCE_EPS,
     BP_KG_PRIOR_BOOST,
     BP_KG_UNEXPECTED_PENALTY,
-    BP_ROOM_TO_OBJ_WEIGHT,
-    BP_OBJ_TO_ROOM_WEIGHT,
     BP_LATERAL_DECAY,
+    BP_MAX_ITERATIONS,
+    BP_OBJ_TO_ROOM_WEIGHT,
     BP_PHANTOM_BASE_ALPHA,
     BP_PHANTOM_MIN_ROOM_CONFIDENCE,
-    SAFETY_THRESHOLDS_NAVIGATION,
-    SAFETY_THRESHOLDS_INTERACTION,
-    SAFETY_PRIOR_ALPHA_SCALE,
-    ROOM_TYPE_RULES,
+    BP_ROOM_TO_OBJ_WEIGHT,
+    FLOOR_HEIGHT,
+    FLOOR_MERGE_TOLERANCE,
     GROUP_KEYWORDS,
+    REGION_CLUSTER_RADIUS,
+    # Constants
+    RELATION_NEAR_THRESHOLD,
+    RELATION_ON_THRESHOLD,
     ROOM_NAMING_STABILITY_COUNT,
     ROOM_NAMING_STABILITY_SEC,
-    # Functions
-    infer_room_type,
+    ROOM_TYPE_RULES,
+    SAFETY_PRIOR_ALPHA_SCALE,
+    SAFETY_THRESHOLDS_INTERACTION,
+    SAFETY_THRESHOLDS_NAVIGATION,
+    BeliefMessage,
+    FloorNode,
+    GroupNode,
+    PhantomNode,
+    Region,
+    RoomNode,
+    RoomTypePosterior,
     # Data classes
     SpatialRelation,
-    Region,
-    GroupNode,
-    RoomNode,
-    FloorNode,
-    PhantomNode,
-    RoomTypePosterior,
-    BeliefMessage,
     ViewNode,
+    # Functions
+    infer_room_type,
 )
 
 
@@ -83,8 +83,8 @@ class TrackedObject:
     # KG knowledge enhancement
     kg_concept_id: str = ""
     safety_level: str = "safe"
-    affordances: List[str] = field(default_factory=list)
-    functional_properties: Dict = field(default_factory=dict)
+    affordances: list[str] = field(default_factory=list)
+    functional_properties: dict = field(default_factory=dict)
     floor_level: int = 0
 
     # KG-Augmented Prior
@@ -137,7 +137,7 @@ class TrackedObject:
         else:
             self.points = np.vstack([self.points, new_points])
 
-        from .projection import _voxel_downsample, POINTCLOUD_VOXEL_SIZE
+        from .projection import POINTCLOUD_VOXEL_SIZE, _voxel_downsample
         self.points = _voxel_downsample(self.points, POINTCLOUD_VOXEL_SIZE, max_total)
 
     def _fuse_feature(self, new_feature: np.ndarray) -> np.ndarray:

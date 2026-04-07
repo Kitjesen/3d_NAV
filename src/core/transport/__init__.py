@@ -21,43 +21,43 @@ Factory:
 """
 
 # --- always-available core types ---
-from .local import Transport, LocalTransport
 from .abc import (
-    TransportABC,
     Publisher,
     Subscriber,
-    TransportStrategy,
     TopicConfig,
+    TransportABC,
+    TransportStrategy,
 )
-from .factory import create_publisher, create_subscriber, create_transport
 from .adapter import TransportAdapter
+from .factory import create_publisher, create_subscriber, create_transport
+from .local import LocalTransport, Transport
 
 # --- conditional backend imports ---
 try:
-    from .shm import SHMTransport, SHMPublisher, SHMSubscriber
+    from .shm import SHMPublisher, SHMSubscriber, SHMTransport
 except ImportError:
     pass
 
 try:
-    from .dds import DDSTransport, DDSPublisher, DDSSubscriber
+    from .dds import DDSPublisher, DDSSubscriber, DDSTransport
 except ImportError:
     pass
 
 try:
-    from .dual import DualTransport, DualPublisher, DualSubscriber
+    from .dual import DualPublisher, DualSubscriber, DualTransport
 except ImportError:
     pass
 
 __all__ = [
-    "Transport",
     "LocalTransport",
-    "TransportABC",
     "Publisher",
     "Subscriber",
-    "TransportStrategy",
     "TopicConfig",
-    "create_transport",
+    "Transport",
+    "TransportABC",
+    "TransportAdapter",
+    "TransportStrategy",
     "create_publisher",
     "create_subscriber",
-    "TransportAdapter",
+    "create_transport",
 ]

@@ -1,13 +1,12 @@
 """Sim-only semantic observer backed by MuJoCo scene XML metadata."""
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
-import xml.etree.ElementTree as ET
 
 import numpy as np
-
 
 _WORLD_FILES = {
     "building": "building_scene.xml",
@@ -53,7 +52,7 @@ class SimSceneObserver:
     def shutdown(self) -> None:
         return None
 
-    def observe(self, tf_camera_to_world: np.ndarray, intrinsics, text_prompt: str = "") -> List[SimDetection3D]:
+    def observe(self, tf_camera_to_world: np.ndarray, intrinsics, text_prompt: str = "") -> list[SimDetection3D]:
         if not self._objects:
             return []
 
@@ -63,7 +62,7 @@ class SimSceneObserver:
         # Different MuJoCo/runtime paths have exposed the forward axis as either
         # +X or -X in odometry. Try both conventions and keep the one that sees
         # the most objects so sim-only semantics stays stable across platforms.
-        forward_candidates: List[np.ndarray] = []
+        forward_candidates: list[np.ndarray] = []
         for raw_forward in (rot[:, 0].astype(np.float64), (-rot[:, 0]).astype(np.float64)):
             forward = self._normalize(raw_forward, np.array([1.0, 0.0, 0.0], dtype=np.float64))
             if not any(np.allclose(forward, prev) for prev in forward_candidates):
@@ -84,7 +83,7 @@ class SimSceneObserver:
         width = int(getattr(intrinsics, "width", 640) or 640)
         height = int(getattr(intrinsics, "height", 480) or 480)
 
-        best: List[SimDetection3D] = []
+        best: list[SimDetection3D] = []
         for forward in forward_candidates:
             detections = self._collect_detections(
                 pos=pos,
@@ -117,8 +116,8 @@ class SimSceneObserver:
         cy: float,
         width: int,
         height: int,
-    ) -> List[SimDetection3D]:
-        detections: List[SimDetection3D] = []
+    ) -> list[SimDetection3D]:
+        detections: list[SimDetection3D] = []
         for obj in self._objects:
             if allowed and obj.label.lower() not in allowed:
                 continue
@@ -158,7 +157,7 @@ class SimSceneObserver:
         return (vec / norm).astype(np.float64)
 
     @classmethod
-    def _load_objects(cls, world: str) -> List[_SceneObject]:
+    def _load_objects(cls, world: str) -> list[_SceneObject]:
         world_file = _WORLD_FILES.get(world, world)
         if not world_file:
             return []
@@ -171,7 +170,7 @@ class SimSceneObserver:
         if worldbody is None:
             return []
 
-        raw: List[_SceneObject] = []
+        raw: list[_SceneObject] = []
         for geom in worldbody.iter("geom"):
             label = cls._map_label(geom.attrib.get("name", ""))
             if not label:
@@ -182,7 +181,7 @@ class SimSceneObserver:
             extent = cls._extent_from_geom(geom)
             raw.append(_SceneObject(label=label, position=pos, extent=extent))
 
-        grouped: List[_SceneObject] = []
+        grouped: list[_SceneObject] = []
         for label in sorted({obj.label for obj in raw}):
             members = [obj for obj in raw if obj.label == label]
             if label in _AGGREGATE_LABELS:
@@ -199,7 +198,7 @@ class SimSceneObserver:
         return grouped
 
     @staticmethod
-    def _parse_vector(value: str) -> Optional[np.ndarray]:
+    def _parse_vector(value: str) -> np.ndarray | None:
         parts = [float(v) for v in value.split()] if value else []
         if len(parts) < 3:
             return None

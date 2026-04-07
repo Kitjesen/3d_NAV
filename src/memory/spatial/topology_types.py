@@ -41,21 +41,21 @@ class TopoNode:
     name: str
     center: np.ndarray                  # [x, y]
     room_type: str = "unknown"
-    semantic_labels: List[str] = field(default_factory=list)
+    semantic_labels: list[str] = field(default_factory=list)
 
     visited: bool = False
     visit_count: int = 0
     last_visited: float = 0.0
     objects_found: int = 0
 
-    frontier_direction: Optional[np.ndarray] = None
+    frontier_direction: np.ndarray | None = None
     frontier_size: float = 0.0
     predicted_room_type: str = ""
 
-    bounding_box: Optional[Dict[str, float]] = None
-    convex_hull: Optional[np.ndarray] = None
+    bounding_box: dict[str, float] | None = None
+    convex_hull: np.ndarray | None = None
     traversable_area: float = 0.0
-    height_range: Optional[Dict[str, float]] = None
+    height_range: dict[str, float] | None = None
     geometry_confidence: float = 0.0
     geometry_updated: float = 0.0
 
@@ -76,11 +76,11 @@ class TopoEdge:
     traversal_count: int = 0
     last_traversed: float = 0.0
     mediator_label: str = ""
-    mediator_pos: Optional[np.ndarray] = None
+    mediator_pos: np.ndarray | None = None
     confidence: float = 0.5
 
     @property
-    def pair(self) -> Tuple[int, int]:
+    def pair(self) -> tuple[int, int]:
         return (min(self.from_id, self.to_id), max(self.from_id, self.to_id))
 
 
@@ -97,7 +97,7 @@ class ExplorationTarget:
     reachability_score: float
     information_gain: float
     hops: int
-    path: List[int]
+    path: list[int]
     reasoning: str
 
 
@@ -173,9 +173,9 @@ def direction_name_en(dx: float, dy: float) -> str:
 def graph_shortest_path(
     from_id: int,
     to_id: int,
-    nodes: Dict[int, TopoNode],
-    adjacency: Dict[int, List[TopoEdge]],
-) -> Tuple[float, List[int]]:
+    nodes: dict[int, TopoNode],
+    adjacency: dict[int, list[TopoEdge]],
+) -> tuple[float, list[int]]:
     """
     Dijkstra 最短路径 (距离加权)。
 
@@ -185,10 +185,10 @@ def graph_shortest_path(
     if from_id not in nodes or to_id not in nodes:
         return float("inf"), []
 
-    dist_map: Dict[int, float] = {from_id: 0.0}
-    prev_map: Dict[int, int] = {}
+    dist_map: dict[int, float] = {from_id: 0.0}
+    prev_map: dict[int, int] = {}
     heap = [(0.0, from_id)]
-    visited_set: Set[int] = set()
+    visited_set: set[int] = set()
 
     while heap:
         cost, uid = heapq.heappop(heap)
@@ -221,13 +221,13 @@ def graph_shortest_path(
 
 def graph_hop_distances(
     from_id: int,
-    nodes: Dict[int, TopoNode],
-    adjacency: Dict[int, List[TopoEdge]],
-) -> Dict[int, int]:
+    nodes: dict[int, TopoNode],
+    adjacency: dict[int, list[TopoEdge]],
+) -> dict[int, int]:
     """BFS 计算从 from_id 到所有节点的跳数。"""
     if from_id not in nodes:
         return {}
-    hops: Dict[int, int] = {from_id: 0}
+    hops: dict[int, int] = {from_id: 0}
     queue = [from_id]
     while queue:
         uid = queue.pop(0)
@@ -284,15 +284,15 @@ def compute_node_information_gain(
 
 
 def tsg_to_dict(
-    nodes: Dict[int, TopoNode],
-    edges: List[TopoEdge],
+    nodes: dict[int, TopoNode],
+    edges: list[TopoEdge],
     current_room_id: int,
-    traversal_history: List[Dict],
-) -> Dict:
+    traversal_history: list[dict],
+) -> dict:
     """将拓扑图状态导出为可 JSON 序列化的字典。"""
     nodes_list = []
     for n in nodes.values():
-        d: Dict = {
+        d: dict = {
             "node_id": n.node_id,
             "node_type": n.node_type,
             "name": n.name,
@@ -340,12 +340,12 @@ def tsg_to_dict(
 
 
 def tsg_nodes_edges_from_dict(
-    data: Dict,
-) -> Tuple[Dict[int, TopoNode], List[TopoEdge], Dict[int, List[TopoEdge]], int]:
+    data: dict,
+) -> tuple[dict[int, TopoNode], list[TopoEdge], dict[int, list[TopoEdge]], int]:
     """从字典恢复节点、边、邻接表和 current_room_id。"""
-    nodes: Dict[int, TopoNode] = {}
-    edges: List[TopoEdge] = []
-    adjacency: Dict[int, List[TopoEdge]] = defaultdict(list)
+    nodes: dict[int, TopoNode] = {}
+    edges: list[TopoEdge] = []
+    adjacency: dict[int, list[TopoEdge]] = defaultdict(list)
 
     for nd in data.get("nodes", []):
         center = np.array([nd["center"]["x"], nd["center"]["y"]])
@@ -395,8 +395,8 @@ def tsg_nodes_edges_from_dict(
 
 
 def tsg_to_prompt_context(
-    nodes: Dict[int, TopoNode],
-    edges: List[TopoEdge],
+    nodes: dict[int, TopoNode],
+    edges: list[TopoEdge],
     language: str = "zh",
 ) -> str:
     """生成 LLM 可消费的拓扑摘要。"""

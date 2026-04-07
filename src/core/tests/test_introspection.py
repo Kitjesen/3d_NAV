@@ -2,12 +2,11 @@
 
 import pytest
 
-from core.module import Module
-from core.stream import In, Out
 from core.blueprint import Blueprint, autoconnect
+from core.module import Module
 from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.semantic import SceneGraph
-
+from core.stream import In, Out
 
 # ============================================================================
 # Test fixtures
@@ -286,8 +285,9 @@ class TestResourceMonitor:
         assert "no processes" in s
 
     def test_start_stop(self):
-        from core.resource_monitor import ResourceMonitor
         import os
+
+        from core.resource_monitor import ResourceMonitor
         m = ResourceMonitor(poll_interval=60.0)
         m.register("self", pid=os.getpid())
         m.start()
@@ -303,8 +303,9 @@ class TestResourceMonitor:
         assert "proc-a" not in m._pids
 
     def test_start_idempotent(self):
-        from core.resource_monitor import ResourceMonitor
         import os
+
+        from core.resource_monitor import ResourceMonitor
         m = ResourceMonitor(poll_interval=60.0)
         m.register("self", pid=os.getpid())
         m.start()

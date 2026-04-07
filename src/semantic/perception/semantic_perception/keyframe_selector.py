@@ -53,10 +53,10 @@ class KeyframeSelector:
 
     def __init__(self, config: KeyframeConfig = None):
         self._cfg = config or KeyframeConfig()
-        self._last_pos: Optional[np.ndarray] = None
+        self._last_pos: np.ndarray | None = None
         self._last_yaw: float = 0.0
         self._last_time: float = 0.0
-        self._last_gray: Optional[np.ndarray] = None
+        self._last_gray: np.ndarray | None = None
         self._keyframe_count: int = 0
         self._skip_count: int = 0
         self._total_count: int = 0
@@ -70,7 +70,7 @@ class KeyframeSelector:
         robot_x: float,
         robot_y: float,
         robot_yaw: float,
-        frame_gray: Optional[np.ndarray] = None,
+        frame_gray: np.ndarray | None = None,
         timestamp: float = None,
     ) -> bool:
         """

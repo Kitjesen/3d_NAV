@@ -5,7 +5,12 @@ Semantic Perception API - 使用示例
 """
 
 import numpy as np
-from semantic.perception.semantic_perception.api import PerceptionFactory, PerceptionConfig, CameraInfo
+
+from semantic.perception.semantic_perception.api import (
+    CameraInfo,
+    PerceptionConfig,
+    PerceptionFactory,
+)
 
 
 def example_1_basic_usage():
@@ -160,9 +165,9 @@ def example_6_error_handling():
     print("\n=== 示例6: 错误处理 ===")
 
     from semantic.perception.semantic_perception.api.exceptions import (
-        InvalidImageError,
         DetectorError,
-        PerceptionAPIError
+        InvalidImageError,
+        PerceptionAPIError,
     )
 
     perception = PerceptionFactory.create_perception()

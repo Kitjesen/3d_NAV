@@ -77,7 +77,7 @@ ROOM_NAMING_STABILITY_COUNT = 3
 ROOM_NAMING_STABILITY_SEC = 10.0
 
 
-def infer_room_type(labels: List[str]) -> str:
+def infer_room_type(labels: list[str]) -> str:
     """Infer room type from object labels (rule-based fallback for LLM naming)."""
     labels_lower = [l.lower() for l in labels]
     best_type = ""
@@ -114,7 +114,7 @@ class SpatialRelation:
 class Region:
     region_id: int
     center: np.ndarray
-    object_ids: List[int] = field(default_factory=list)
+    object_ids: list[int] = field(default_factory=list)
     name: str = ""
     llm_named: bool = False
 
@@ -125,8 +125,8 @@ class GroupNode:
     room_id: int
     name: str
     center: np.ndarray
-    object_ids: List[int] = field(default_factory=list)
-    semantic_labels: List[str] = field(default_factory=list)
+    object_ids: list[int] = field(default_factory=list)
+    semantic_labels: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -134,11 +134,11 @@ class RoomNode:
     room_id: int
     name: str
     center: np.ndarray
-    object_ids: List[int] = field(default_factory=list)
-    group_ids: List[int] = field(default_factory=list)
-    semantic_labels: List[str] = field(default_factory=list)
+    object_ids: list[int] = field(default_factory=list)
+    group_ids: list[int] = field(default_factory=list)
+    semantic_labels: list[str] = field(default_factory=list)
     llm_named: bool = False
-    clip_feature: Optional[np.ndarray] = None
+    clip_feature: np.ndarray | None = None
     feature_count: int = 0
 
 
@@ -146,9 +146,9 @@ class RoomNode:
 class FloorNode:
     floor_id: int
     floor_level: int
-    z_range: Tuple[float, float]
-    room_ids: List[int] = field(default_factory=list)
-    object_ids: List[int] = field(default_factory=list)
+    z_range: tuple[float, float]
+    room_ids: list[int] = field(default_factory=list)
+    object_ids: list[int] = field(default_factory=list)
     center_z: float = 0.0
 
 
@@ -173,8 +173,8 @@ class PhantomNode:
 @dataclass
 class RoomTypePosterior:
     room_id: int
-    hypotheses: Dict[str, float] = field(default_factory=dict)
-    _log_posteriors: Dict[str, float] = field(default_factory=dict)
+    hypotheses: dict[str, float] = field(default_factory=dict)
+    _log_posteriors: dict[str, float] = field(default_factory=dict)
 
     @property
     def best_type(self) -> str:
@@ -222,8 +222,8 @@ class ViewNode:
     position: np.ndarray
     timestamp: float
     room_id: int = -1
-    object_ids: List[int] = field(default_factory=list)
-    key_labels: List[str] = field(default_factory=list)
+    object_ids: list[int] = field(default_factory=list)
+    key_labels: list[str] = field(default_factory=list)
 
 
 def __getattr__(name: str):

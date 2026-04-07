@@ -28,13 +28,13 @@ import time
 from typing import Dict, Optional
 
 from core.module import Module
-from core.stream import In, Out
 from core.msgs.geometry import Twist
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
 # Source definitions: name → default priority
-_DEFAULT_PRIORITIES: Dict[str, int] = {
+_DEFAULT_PRIORITIES: dict[str, int] = {
     "teleop": 100,
     "visual_servo": 80,
     "recovery": 60,
@@ -68,7 +68,7 @@ class CmdVelMux(Module, layer=0):
         self._source_timeout = source_timeout
 
         # Per-source state: last twist + last publish time
-        self._sources: Dict[str, Dict] = {}
+        self._sources: dict[str, dict] = {}
         for name, priority in _DEFAULT_PRIORITIES.items():
             self._sources[name] = {
                 "priority": priority,

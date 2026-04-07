@@ -19,15 +19,15 @@ from typing import Any, Dict, Tuple
 import numpy as np
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.sensor import PointCloud2
 from core.msgs.nav import Odometry
+from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
 # Voxel key type: (ix, iy, iz) integer tuple
-_VoxelKey = Tuple[int, int, int]
+_VoxelKey = tuple[int, int, int]
 
 
 @register("map", "voxel", description="3D voxel grid from LiDAR point cloud")
@@ -68,7 +68,7 @@ class VoxelGridModule(Module, layer=2):
         self._interval = float(publish_interval)
 
         # voxel key → float count (float for smooth decay)
-        self._voxels: Dict[_VoxelKey, float] = {}
+        self._voxels: dict[_VoxelKey, float] = {}
         self._lock = threading.Lock()
 
         self._robot_xyz = np.zeros(3, dtype=np.float64)
@@ -160,7 +160,7 @@ class VoxelGridModule(Module, layer=2):
         centres = (keys_arr + 0.5) * self._res  # (N, 3) float32
 
         # Column carving: per (ix, iy) find min/max iz
-        col_map: Dict[tuple, list] = {}
+        col_map: dict[tuple, list] = {}
         for i, (ix, iy, iz) in enumerate(keys_arr.astype(np.int64).tolist()):
             col = (int(ix), int(iy))
             if col not in col_map:
@@ -174,7 +174,7 @@ class VoxelGridModule(Module, layer=2):
         total = len(self._voxels)
         mem_kb = (total * 64) / 1024  # rough: 3×int64 key + float value
 
-        stats: Dict[str, Any] = {
+        stats: dict[str, Any] = {
             "total_voxels": total,
             "occupied": total,
             "memory_kb": round(mem_kb, 1),
@@ -250,7 +250,7 @@ class VoxelGridModule(Module, layer=2):
     # Health
     # ------------------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         with self._lock:
             n = len(self._voxels)

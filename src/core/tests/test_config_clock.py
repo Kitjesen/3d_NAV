@@ -1,22 +1,21 @@
 """Tests for core.config and core.clock modules."""
 
 import os
-import time
 import tempfile
 import textwrap
+import time
 
 import pytest
 
 # ---------------------------------------------------------------------------
 # Config tests
 # ---------------------------------------------------------------------------
-
 from core.config import (
+    DriverConfig,
     GeometryConfig,
     RobotConfig,
     SafetyConfig,
     SpeedConfig,
-    DriverConfig,
     get_config,
     load_config,
     reset_config,

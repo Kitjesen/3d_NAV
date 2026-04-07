@@ -41,9 +41,9 @@ class ResourceMonitor:
 
     def __init__(self, poll_interval: float = 5.0) -> None:
         self._poll_interval = poll_interval
-        self._pids: Dict[str, int] = {}        # label → PID
-        self._stats: Dict[str, Any] = {}       # label → stat dict
-        self._thread: Optional[threading.Thread] = None
+        self._pids: dict[str, int] = {}        # label → PID
+        self._stats: dict[str, Any] = {}       # label → stat dict
+        self._thread: threading.Thread | None = None
         self._running = False
         self._lock = threading.Lock()
 
@@ -84,7 +84,7 @@ class ResourceMonitor:
 
     # -- Query ----------------------------------------------------------------
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Return a snapshot of current stats.
 
         Each entry is a dict with keys:
@@ -129,7 +129,7 @@ class ResourceMonitor:
             )
             return
 
-        procs: Dict[str, Any] = {}
+        procs: dict[str, Any] = {}
         self._sync_procs(psutil, procs)
 
         # Prime cpu_percent counters (first call always returns 0.0)
@@ -142,7 +142,7 @@ class ResourceMonitor:
         while self._running:
             time.sleep(self._poll_interval)
             self._sync_procs(psutil, procs)
-            new_stats: Dict[str, Any] = {}
+            new_stats: dict[str, Any] = {}
             for label, proc in list(procs.items()):
                 try:
                     mem = proc.memory_info()
@@ -159,7 +159,7 @@ class ResourceMonitor:
             with self._lock:
                 self._stats = new_stats
 
-    def _sync_procs(self, psutil_mod: Any, procs: Dict[str, Any]) -> None:
+    def _sync_procs(self, psutil_mod: Any, procs: dict[str, Any]) -> None:
         """Keep *procs* in sync with the current _pids registry."""
         with self._lock:
             current = dict(self._pids)

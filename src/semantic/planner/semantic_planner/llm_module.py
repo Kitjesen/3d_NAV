@@ -31,8 +31,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from core.module import Module
-from core.stream import In, Out
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +109,8 @@ class LLMModule(Module, layer=4):
         self._temperature = temperature
         self._base_url = base_url
         self._client = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._loop_thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
         self._call_count = 0
         self._total_latency_ms = 0.0
         self._error_count = 0
@@ -273,7 +273,7 @@ class LLMModule(Module, layer=4):
         self._loop_thread = None
         super().stop()
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         avg_ms = (self._total_latency_ms / self._call_count
                   if self._call_count > 0 else 0.0)

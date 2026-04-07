@@ -16,10 +16,9 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from core import Module, In, Out
-from core.registry import register
+from core import In, Module, Out
 from core.msgs import Odometry, SceneGraph
-
+from core.registry import register
 from memory.modules._odom_mixin import OdomTrackingMixin
 from memory.spatial.topological import TopologicalMemory
 
@@ -53,7 +52,7 @@ class TopologicalMemoryModule(OdomTrackingMixin, Module, layer=3):
 
         super().__init__(**config)
         self._memory = TopologicalMemory(**mem_kwargs)
-        self._last_sg: Optional[SceneGraph] = None
+        self._last_sg: SceneGraph | None = None
 
     # -- 生命周期 --
 
@@ -106,7 +105,7 @@ class TopologicalMemoryModule(OdomTrackingMixin, Module, layer=3):
             graph_dict = {}
         self.topo_graph.publish(graph_dict)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["node_count"] = getattr(self._memory, "node_count", len(getattr(self._memory, "_nodes", [])))
         info["edge_count"] = getattr(self._memory, "edge_count", len(getattr(self._memory, "_edges", [])))

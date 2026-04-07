@@ -8,6 +8,7 @@ from pathlib import Path
 
 # 设置非交互式后端
 import matplotlib
+
 matplotlib.use('Agg')
 
 import numpy as np
@@ -91,10 +92,10 @@ def test_visualization_import():
     print("测试 3: 可视化模块导入")
 
     from semantic.perception.semantic_perception.visualization_tools import (
-        PathVisualizer,
-        SCGVisualizer,
-        PerformanceVisualizer,
         ComprehensiveVisualizer,
+        PathVisualizer,
+        PerformanceVisualizer,
+        SCGVisualizer,
     )
 
     print(f"  ✓ PathVisualizer 导入成功")

@@ -4,14 +4,15 @@
 将现有的InstanceTracker适配到TrackerAPI接口
 """
 
-import time
 import logging
+import time
 from typing import Dict, List, Optional
+
 import numpy as np
 
-from ..api.tracker_api import TrackerAPI
-from ..api.types import Detection3D, Position3D, PerceptionConfig
 from ..api.exceptions import TrackerError
+from ..api.tracker_api import TrackerAPI
+from ..api.types import Detection3D, PerceptionConfig, Position3D
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class InstanceTracker(TrackerAPI):
     - 空间关系计算
     """
 
-    def __init__(self, config: Optional[PerceptionConfig] = None):
+    def __init__(self, config: PerceptionConfig | None = None):
         """
         初始化追踪器
 
@@ -44,7 +45,7 @@ class InstanceTracker(TrackerAPI):
         self.ema_alpha = 0.3  # EMA平滑系数
 
         # 追踪状态
-        self._tracks: Dict[str, Detection3D] = {}
+        self._tracks: dict[str, Detection3D] = {}
         self._next_id = 0
         self._frame_count = 0
 
@@ -56,9 +57,9 @@ class InstanceTracker(TrackerAPI):
 
     def update(
         self,
-        detections: List[Detection3D],
-        timestamp: Optional[float] = None
-    ) -> List[Detection3D]:
+        detections: list[Detection3D],
+        timestamp: float | None = None
+    ) -> list[Detection3D]:
         """
         更新追踪器
 
@@ -191,7 +192,7 @@ class InstanceTracker(TrackerAPI):
             del self._tracks[track_id]
             logger.debug(f"Removed old track: {track_id}")
 
-    def get_all_tracks(self) -> List[Detection3D]:
+    def get_all_tracks(self) -> list[Detection3D]:
         """
         获取所有追踪的物体
 
@@ -200,7 +201,7 @@ class InstanceTracker(TrackerAPI):
         """
         return list(self._tracks.values())
 
-    def get_track_by_id(self, track_id: str) -> Optional[Detection3D]:
+    def get_track_by_id(self, track_id: str) -> Detection3D | None:
         """
         根据ID获取追踪物体
 

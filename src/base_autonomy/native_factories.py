@@ -24,7 +24,7 @@ from core.native_install import DDS_ENV, exe, share
 from core.native_module import NativeModule, NativeModuleConfig
 
 
-def terrain_analysis(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def terrain_analysis(cfg: RobotConfig | None = None) -> NativeModule:
     """Ground estimation + obstacle detection (terrainAnalysis C++ node)."""
     cfg = cfg or get_config()
     ta = cfg.raw.get("terrain", {})
@@ -67,7 +67,7 @@ def terrain_analysis(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def terrain_analysis_ext(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def terrain_analysis_ext(cfg: RobotConfig | None = None) -> NativeModule:
     """Terrain connectivity + 2.5D height map (terrainAnalysisExt C++ node)."""
     cfg = cfg or get_config()
     ta = cfg.raw.get("terrain", {})
@@ -100,7 +100,7 @@ def terrain_analysis_ext(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def local_planner(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def local_planner(cfg: RobotConfig | None = None) -> NativeModule:
     """Obstacle avoidance + path scoring (localPlanner C++ node)."""
     cfg = cfg or get_config()
     lp  = cfg.raw.get("local_planner", {})
@@ -164,7 +164,7 @@ def local_planner(cfg: Optional[RobotConfig] = None) -> NativeModule:
     ))
 
 
-def path_follower(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def path_follower(cfg: RobotConfig | None = None) -> NativeModule:
     """Pure Pursuit waypoint tracking + cmd_vel output (pathFollower C++ node)."""
     cfg = cfg or get_config()
     pf  = cfg.raw.get("path_follower", {})

@@ -72,9 +72,9 @@ class RoomObjectKG:
 
     def __init__(self) -> None:
         # room_type → {total_visits, objects: {label → {count, conf_sum}}}
-        self._rooms: Dict[str, Dict] = {}
+        self._rooms: dict[str, dict] = {}
         # [(from_type, to_type, count, mediator)]
-        self._adjacency: Dict[Tuple[str, str], Dict] = {}
+        self._adjacency: dict[tuple[str, str], dict] = {}
         self._session_count: int = 0
         self._last_save_time: float = 0.0
 
@@ -83,8 +83,8 @@ class RoomObjectKG:
     def observe_room(
         self,
         room_type: str,
-        object_labels: List[str],
-        confidences: Optional[List[float]] = None,
+        object_labels: list[str],
+        confidences: list[float] | None = None,
     ) -> None:
         """
         记录一次房间观测: 在 room_type 中看到了 object_labels。
@@ -136,18 +136,18 @@ class RoomObjectKG:
     def to_room_object_priors(
         self,
         min_observations: int = 2,
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> dict[str, dict[str, float]]:
         """
         将累积统计转换为 ROOM_OBJECT_PRIORS 格式。
 
         概率 = (count + alpha) / (total_visits + beta)  (Laplace 平滑)
         """
-        priors: Dict[str, Dict[str, float]] = {}
+        priors: dict[str, dict[str, float]] = {}
         for rt, info in self._rooms.items():
             total = info["total_visits"]
             if total < 1:
                 continue
-            objects: Dict[str, float] = {}
+            objects: dict[str, float] = {}
             for lbl, stats in info["objects"].items():
                 if stats["count"] < min_observations:
                     continue
@@ -159,10 +159,10 @@ class RoomObjectKG:
                 priors[rt] = dict(sorted(objects.items(), key=lambda x: x[1], reverse=True))
         return priors
 
-    def get_object_rooms(self, label: str) -> List[Tuple[str, float]]:
+    def get_object_rooms(self, label: str) -> list[tuple[str, float]]:
         """反向查询: 物体最可能在哪种房间中? → [(room_type, probability)]"""
         lbl = label.lower().strip()
-        results: List[Tuple[str, float]] = []
+        results: list[tuple[str, float]] = []
         for rt, info in self._rooms.items():
             total = info["total_visits"]
             if total < 1:
@@ -174,7 +174,7 @@ class RoomObjectKG:
         results.sort(key=lambda x: x[1], reverse=True)
         return results
 
-    def get_adjacency_graph(self) -> List[Dict]:
+    def get_adjacency_graph(self) -> list[dict]:
         """获取房间邻接图。"""
         result = []
         for (ft, tt), info in self._adjacency.items():
@@ -188,7 +188,7 @@ class RoomObjectKG:
         result.sort(key=lambda x: x["count"], reverse=True)
         return result
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """获取统计摘要。"""
         total_objects = sum(
             len(info["objects"]) for info in self._rooms.values()
@@ -206,7 +206,7 @@ class RoomObjectKG:
         }
 
     @property
-    def room_types(self) -> List[str]:
+    def room_types(self) -> list[str]:
         return list(self._rooms.keys())
 
     @property
@@ -245,7 +245,7 @@ class RoomObjectKG:
 
             # Build inverse index for convenience
             priors = self.to_room_object_priors(min_observations=1)
-            object_room_index: Dict[str, List] = {}
+            object_room_index: dict[str, list] = {}
             for rt, objs in priors.items():
                 for lbl, prob in objs.items():
                     if lbl not in object_room_index:
@@ -276,7 +276,7 @@ class RoomObjectKG:
         支持多次调用 load() 合并多个 session 的数据。
         """
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.warning("Failed to load RoomObjectKG from %s: %s", path, e)
@@ -334,7 +334,7 @@ class RoomObjectKG:
 
 def extract_room_objects_from_scene_graph(
     scene_graph_json: str,
-) -> List[Tuple[str, List[str], List[float]]]:
+) -> list[tuple[str, list[str], list[float]]]:
     """
     从场景图 JSON 中提取 (room_type, [object_labels], [confidences])。
 
@@ -352,7 +352,7 @@ def extract_room_objects_from_scene_graph(
         return []
 
     # Build object lookup
-    obj_map: Dict = {}  # id → {label, confidence, region_id}
+    obj_map: dict = {}  # id → {label, confidence, region_id}
     for obj in objects:
         if not isinstance(obj, dict):
             continue
@@ -365,7 +365,7 @@ def extract_room_objects_from_scene_graph(
         obj_map[oid] = {"label": label, "confidence": conf, "region_id": region_id}
 
     regions = sg.get("regions", [])
-    results: List[Tuple[str, List[str], List[float]]] = []
+    results: list[tuple[str, list[str], list[float]]] = []
 
     if isinstance(regions, list) and regions:
         for region in regions:
@@ -388,7 +388,7 @@ def extract_room_objects_from_scene_graph(
     else:
         # Fallback: group by region_id
         from collections import defaultdict
-        region_objs: Dict[int, List[Tuple[str, float]]] = defaultdict(list)
+        region_objs: dict[int, list[tuple[str, float]]] = defaultdict(list)
         for oid, info in obj_map.items():
             rid = info["region_id"]
             if rid >= 0:
@@ -434,7 +434,7 @@ def _normalize_room_type_simple(name: str) -> str:
     return name
 
 
-def _infer_room_type_from_labels(labels: List[str]) -> str:
+def _infer_room_type_from_labels(labels: list[str]) -> str:
     """从物体标签推断房间类型 (与 instance_tracker.infer_room_type 类似)。"""
     try:
         from core.msgs.scene import infer_room_type

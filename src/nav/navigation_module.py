@@ -25,17 +25,17 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion, Twist
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.registry import register
+from core.stream import In, Out
 from nav.global_planner_service import GlobalPlannerService
 from nav.waypoint_tracker import (
-    WaypointTracker,
-    EV_WAYPOINT_REACHED,
     EV_PATH_COMPLETE,
-    EV_STUCK_WARN,
     EV_STUCK,
+    EV_STUCK_WARN,
+    EV_WAYPOINT_REACHED,
+    WaypointTracker,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ class NavigationModule(Module, layer=5):
         # Mission FSM state
         self._state = MissionState.IDLE
         self._robot_pos = np.zeros(3)
-        self._goal: Optional[np.ndarray] = None
+        self._goal: np.ndarray | None = None
         self._replan_count = 0
         self._max_replan = max_replan_count
         self._failure_reason = ""
@@ -128,20 +128,20 @@ class NavigationModule(Module, layer=5):
         self._loc_confidence: float = 0.0
         self._degen_level: str = "NONE"
         self._paused_for_localization: bool = False
-        self._pre_pause_state: Optional[str] = None
+        self._pre_pause_state: str | None = None
         self._planning_timeout = kw.get("planning_timeout", 30.0)
         self._speed_scale: float = 1.0  # degeneracy-based speed multiplier
 
         # Teleop pause/resume
         self._paused_for_teleop: bool = False
-        self._pre_teleop_goal: Optional[np.ndarray] = None
-        self._pre_teleop_state: Optional[str] = None
+        self._pre_teleop_goal: np.ndarray | None = None
+        self._pre_teleop_state: str | None = None
 
         # Cooldown for costmap-triggered replanning (3s minimum between replans)
         self._last_costmap_replan_time = 0.0
 
         # Patrol FSM state
-        self._patrol_goals: List[np.ndarray] = []
+        self._patrol_goals: list[np.ndarray] = []
         self._patrol_index = 0
         self._patrol_loop = False
 
@@ -167,6 +167,7 @@ class NavigationModule(Module, layer=5):
                 from geometry_msgs.msg import PointStamped
                 from rclpy.node import Node
                 from rclpy.qos import QoSProfile, ReliabilityPolicy
+
                 from core.ros2_context import ensure_rclpy, get_shared_executor
 
                 ensure_rclpy()
@@ -508,7 +509,7 @@ class NavigationModule(Module, layer=5):
             return False
         return not self._planner_svc.has_map
 
-    def _direct_goal_path(self, reason: str = "") -> List[np.ndarray]:
+    def _direct_goal_path(self, reason: str = "") -> list[np.ndarray]:
         logger.warning(
             "NavigationModule: using direct-goal fallback waypoint (reason=%s)",
             reason or "planner unavailable",
@@ -641,7 +642,7 @@ class NavigationModule(Module, layer=5):
             self._ros2_node.destroy_node()
             self._ros2_node = None
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["navigation"] = {
             "planner": self._planner_svc._planner_name,

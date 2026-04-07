@@ -14,7 +14,6 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-
 VOXEL_SIZE = 0.05          # 体素边长 (m)
 SUBSAMPLE_STEP = 4         # 像素降采样步长 (每 4 像素取一个，降低 CPU)
 MIN_DEPTH = 0.3            # 最小有效深度 (m)
@@ -92,7 +91,7 @@ class ColorProjector:
 
     def colorize_slam_cloud(
         self, points_world: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         用体素颜色表为 SLAM 点云上色。
 

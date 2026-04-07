@@ -26,6 +26,7 @@ YOLO-World 开放词汇检测器实现（论文级升级）
 import logging
 import time
 from typing import Dict, List, Optional
+
 import numpy as np
 
 try:
@@ -34,7 +35,8 @@ except ImportError:
     torch = None
 
 from core.utils.robustness import _try_empty_cuda_cache
-from .detector_base import DetectorBase, Detection2D
+
+from .detector_base import Detection2D, DetectorBase
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +74,8 @@ class YOLOWorldDetector(DetectorBase):
         self.enable_cache = enable_cache
 
         self._model = None
-        self._current_classes: Optional[List[str]] = None
-        self._tensorrt_engine_path: Optional[str] = None
+        self._current_classes: list[str] | None = None
+        self._tensorrt_engine_path: str | None = None
 
         # 性能统计
         self._detect_count = 0
@@ -153,7 +155,7 @@ class YOLOWorldDetector(DetectorBase):
             logger.warning("TensorRT export failed, using PyTorch: %s", e)
             self.tensorrt = False
 
-    def detect(self, rgb: np.ndarray, text_prompt: str) -> List[Detection2D]:
+    def detect(self, rgb: np.ndarray, text_prompt: str) -> list[Detection2D]:
         """
         使用 YOLO-World 进行开放词汇检测（优化版）
 
@@ -254,9 +256,9 @@ class YOLOWorldDetector(DetectorBase):
 
     def detect_batch(
         self,
-        rgb_batch: List[np.ndarray],
+        rgb_batch: list[np.ndarray],
         text_prompt: str
-    ) -> List[List[Detection2D]]:
+    ) -> list[list[Detection2D]]:
         """
         批处理检测（优化版）
 
@@ -329,7 +331,7 @@ class YOLOWorldDetector(DetectorBase):
 
         return all_detections
 
-    def get_statistics(self) -> Dict[str, float]:
+    def get_statistics(self) -> dict[str, float]:
         """
         获取性能统计信息
 

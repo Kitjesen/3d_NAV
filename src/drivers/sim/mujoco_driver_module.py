@@ -27,11 +27,11 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
-from core.msgs.geometry import Twist, Vector3, Pose, Quaternion, PoseStamped
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud2, Image, ImageFormat, CameraIntrinsics
+from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat, PointCloud2
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def _is_default_start_pos(start_pos: tuple) -> bool:
     return tuple(float(v) for v in start_pos[:3]) == _DEFAULT_START_POS
 
 
-def _scene_placeholder_start(scene_xml: Path) -> Optional[list[float]]:
+def _scene_placeholder_start(scene_xml: Path) -> list[float] | None:
     try:
         import xml.etree.ElementTree as ET
 
@@ -124,7 +124,7 @@ class MujocoDriverModule(Module, layer=1):
         self._obstacles = obstacles or []
 
         self._engine = None
-        self._sim_thread: Optional[threading.Thread] = None
+        self._sim_thread: threading.Thread | None = None
         self._running = False
         self._cmd_lock = threading.Lock()
         self._cmd_vx = 0.0
@@ -143,10 +143,10 @@ class MujocoDriverModule(Module, layer=1):
             if sim_root not in sys.path:
                 sys.path.insert(0, str(_SIM_ROOT.parent))
 
-            from sim.engine.mujoco.engine import MuJoCoEngine
             from sim.engine.core.robot import RobotConfig
+            from sim.engine.core.sensor import CameraConfig, LidarConfig
             from sim.engine.core.world import WorldConfig
-            from sim.engine.core.sensor import LidarConfig, CameraConfig
+            from sim.engine.mujoco.engine import MuJoCoEngine
 
             # Resolve world XML
             world_file = WORLDS.get(self._world_name, self._world_name)
@@ -357,7 +357,7 @@ class MujocoDriverModule(Module, layer=1):
 
         logger.info("MujocoDriverModule: sim loop ended after %d steps", step_count)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["mujoco"] = {
             "world": self._world_name,

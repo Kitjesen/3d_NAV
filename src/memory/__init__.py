@@ -12,14 +12,18 @@ Usage::
 """
 
 # Re-export core classes for convenience
-from .spatial.topological import TopologicalMemory
-from .spatial.episodic import EpisodicMemory
-from .spatial.tagged_locations import TaggedLocationStore
-from .modules.topological_module import TopologicalMemoryModule
 from .modules.episodic_module import EpisodicMemoryModule
 from .modules.tagged_locations_module import TaggedLocationsModule
+from .modules.topological_module import TopologicalMemoryModule
+from .spatial.episodic import EpisodicMemory
+from .spatial.tagged_locations import TaggedLocationStore
+from .spatial.topological import TopologicalMemory
 
 __all__ = [
-    "TopologicalMemory", "EpisodicMemory", "TaggedLocationStore",
-    "TopologicalMemoryModule", "EpisodicMemoryModule", "TaggedLocationsModule",
+    "EpisodicMemory",
+    "EpisodicMemoryModule",
+    "TaggedLocationStore",
+    "TaggedLocationsModule",
+    "TopologicalMemory",
+    "TopologicalMemoryModule",
 ]

@@ -4,13 +4,13 @@ GroundingDINO 开放词汇检测器实现。
 依赖: third_party/GroundingDINO (需要先 pip install -e)
 """
 
-import os
 import logging
+import os
 from typing import List, Optional
 
 import numpy as np
 
-from .detector_base import DetectorBase, Detection2D
+from .detector_base import Detection2D, DetectorBase
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,8 @@ class GroundingDINODetector(DetectorBase):
 
     def __init__(
         self,
-        config_path: Optional[str] = None,
-        weights_path: Optional[str] = None,
+        config_path: str | None = None,
+        weights_path: str | None = None,
         box_threshold: float = 0.35,
         text_threshold: float = 0.25,
         device: str = "cuda",
@@ -80,7 +80,7 @@ class GroundingDINODetector(DetectorBase):
             logger.error("Failed to load GroundingDINO: %s", e)
             raise
 
-    def detect(self, rgb: np.ndarray, text_prompt: str) -> List[Detection2D]:
+    def detect(self, rgb: np.ndarray, text_prompt: str) -> list[Detection2D]:
         """
         使用 GroundingDINO 进行检测。
 
@@ -94,9 +94,9 @@ class GroundingDINODetector(DetectorBase):
         if self._model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
+        import groundingdino.datasets.transforms as T
         import torch
         from PIL import Image
-        import groundingdino.datasets.transforms as T
 
         # BGR → RGB → PIL
         rgb_image = rgb[:, :, ::-1] if rgb.shape[2] == 3 else rgb
@@ -121,7 +121,7 @@ class GroundingDINODetector(DetectorBase):
         )
 
         h, w = rgb.shape[:2]
-        detections: List[Detection2D] = []
+        detections: list[Detection2D] = []
 
         for box, score, label in zip(boxes, logits, phrases):
             # box: center_x, center_y, w, h (normalized)

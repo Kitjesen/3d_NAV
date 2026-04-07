@@ -10,9 +10,10 @@ test_topological_memory.py — 拓扑记忆单元测试
 """
 
 import unittest
-import numpy as np
 
+import numpy as np
 import pytest
+
 from semantic.planner.semantic_planner.topological_memory import TopologicalMemory, TopoNode
 
 

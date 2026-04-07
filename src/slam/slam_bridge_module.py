@@ -18,15 +18,16 @@ import logging
 import math
 import threading
 import time as _time
-import numpy as np
 from typing import Any, Dict, Optional
 
+import numpy as np
+
 from core.module import Module
-from core.stream import In, Out
+from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
-from core.msgs.geometry import Pose, Vector3, Quaternion
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ class SlamBridgeModule(Module, layer=1):
         self._cloud_timeout: float = kw.get("cloud_timeout", 5.0)
         self._watchdog_hz: float = kw.get("watchdog_hz", 2.0)
         self._shutdown_event = threading.Event()
-        self._watchdog_thread: Optional[threading.Thread] = None
+        self._watchdog_thread: threading.Thread | None = None
 
         # Auto-recovery
         self._reconnect_timeout: float = kw.get("reconnect_timeout", 10.0)
@@ -100,8 +101,8 @@ class SlamBridgeModule(Module, layer=1):
         self._eigenvalue_ratio: float = 0.0  # min/max eigenvalue of Hessian
         self._condition_number: float = 0.0
         self._degenerate_dof_count: int = 0
-        self._eigenvalues: Optional[np.ndarray] = None  # 6-DOF eigenvalues
-        self._dof_mask: Optional[np.ndarray] = None  # 1.0=constrained, 0.0=degenerate
+        self._eigenvalues: np.ndarray | None = None  # 6-DOF eigenvalues
+        self._dof_mask: np.ndarray | None = None  # 1.0=constrained, 0.0=degenerate
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
         self._fitness_warn: float = kw.get("fitness_warn", 0.15)
@@ -114,9 +115,9 @@ class SlamBridgeModule(Module, layer=1):
         # Based on Selective KF (arXiv 2412.17235): only fuse degenerate DOFs
         self._visual_odom_fusion: bool = kw.get("visual_odom_fusion", True)
         self._visual_alpha: float = kw.get("visual_alpha", 0.6)  # visual blend weight during CRITICAL
-        self._last_slam_odom: Optional[Odometry] = None
-        self._last_visual_odom: Optional[Odometry] = None
-        self._visual_anchor_T: Optional[np.ndarray] = None  # SLAM pose when visual odom activated
+        self._last_slam_odom: Odometry | None = None
+        self._last_visual_odom: Odometry | None = None
+        self._visual_anchor_T: np.ndarray | None = None  # SLAM pose when visual odom activated
         self._visual_fused_count: int = 0
 
     def setup(self) -> None:
@@ -146,11 +147,12 @@ class SlamBridgeModule(Module, layer=1):
 
     def _try_rclpy(self) -> bool:
         try:
+            from nav_msgs.msg import Odometry as ROS2Odom
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from sensor_msgs.msg import PointCloud2
-            from nav_msgs.msg import Odometry as ROS2Odom
             from std_msgs.msg import Float32
+
             from core.ros2_context import ensure_rclpy, get_shared_executor
 
             ensure_rclpy()
@@ -631,7 +633,7 @@ class SlamBridgeModule(Module, layer=1):
             logger.warning("SlamBridge: reconnect failed")
             self.alive.publish(False)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         now = _time.time()
         info["localization"] = {

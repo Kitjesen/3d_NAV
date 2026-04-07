@@ -29,12 +29,13 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
 from .module import Module
 from .stream import In, Out
-from .transport.local import Transport, LocalTransport
+from .transport.local import LocalTransport, Transport
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,10 @@ logger = logging.getLogger(__name__)
 class _ModuleEntry:
     """One module slot in a Blueprint."""
 
-    module_cls: Type[Module]
-    config: Dict[str, Any]
-    alias: Optional[str] = None
-    instance: Optional[Module] = None  # pre-instantiated (e.g. NativeModule)
+    module_cls: type[Module]
+    config: dict[str, Any]
+    alias: str | None = None
+    instance: Module | None = None  # pre-instantiated (e.g. NativeModule)
 
     @property
     def name(self) -> str:
@@ -94,19 +95,19 @@ class Blueprint:
     """
 
     def __init__(self) -> None:
-        self._entries: List[_ModuleEntry] = []
-        self._wires: List[_WireSpec] = []
+        self._entries: list[_ModuleEntry] = []
+        self._wires: list[_WireSpec] = []
         self._auto_wired: bool = False
-        self._global_cfg: Dict[str, Any] = {}
+        self._global_cfg: dict[str, Any] = {}
 
     # -- registration -------------------------------------------------------
 
     def add(
         self,
         module_or_cls,
-        alias: Optional[str] = None,
+        alias: str | None = None,
         **config: Any,
-    ) -> "Blueprint":
+    ) -> Blueprint:
         """Register a Module class or a pre-instantiated Module.
 
         Args:
@@ -146,7 +147,7 @@ class Blueprint:
         in_module: str,
         in_port: str,
         transport: Any = None,
-    ) -> "Blueprint":
+    ) -> Blueprint:
         """Connect an Out port to an In port.
 
         Args:
@@ -162,7 +163,7 @@ class Blueprint:
         self._wires.append(_WireSpec(out_module, out_port, in_module, in_port, transport))
         return self
 
-    def global_config(self, n_workers: int = 0, **kwargs: Any) -> "Blueprint":
+    def global_config(self, n_workers: int = 0, **kwargs: Any) -> Blueprint:
         """Set system-level configuration.
 
         Supports the dimos-style chained build::
@@ -175,7 +176,7 @@ class Blueprint:
         self._global_cfg = {"n_workers": n_workers, **kwargs}
         return self
 
-    def auto_wire(self) -> "Blueprint":
+    def auto_wire(self) -> Blueprint:
         """Enable automatic port matching by (port_name, msg_type).
 
         Rules:
@@ -193,7 +194,7 @@ class Blueprint:
 
     # -- merge --------------------------------------------------------------
 
-    def merge(self, other: "Blueprint") -> "Blueprint":
+    def merge(self, other: Blueprint) -> Blueprint:
         """Merge all modules and wires from another Blueprint into this one."""
         existing = {e.name for e in self._entries}
         for entry in other._entries:
@@ -212,9 +213,9 @@ class Blueprint:
 
     def build(
         self,
-        transport: Optional[Transport] = None,
+        transport: Transport | None = None,
         n_workers: int = 0,
-    ) -> "SystemHandle":
+    ) -> SystemHandle:
         """Instantiate all modules, apply wiring, and return a runtime handle.
 
         Args:
@@ -236,18 +237,18 @@ class Blueprint:
             transport = LocalTransport()
 
         # 1. Instantiate modules
-        instances: Dict[str, Module] = {}
+        instances: dict[str, Module] = {}
         for entry in self._entries:
             inst = entry.instance if entry.instance is not None else entry.module_cls(**entry.config)
             instances[entry.name] = inst
 
         # 2. Collect ports
-        out_ports: Dict[str, Dict[str, Out]] = {n: m.ports_out for n, m in instances.items()}
-        in_ports:  Dict[str, Dict[str, In]]  = {n: m.ports_in  for n, m in instances.items()}
+        out_ports: dict[str, dict[str, Out]] = {n: m.ports_out for n, m in instances.items()}
+        in_ports:  dict[str, dict[str, In]]  = {n: m.ports_in  for n, m in instances.items()}
 
         # 3. Apply explicit wires
-        wired_in: Set[Tuple[str, str]] = set()
-        connections: List[Tuple[str, str, str, str]] = []
+        wired_in: set[tuple[str, str]] = set()
+        connections: list[tuple[str, str, str, str]] = []
         for spec in self._wires:
             _do_wire(spec, instances, out_ports, in_ports, wired_in, connections)
 
@@ -281,7 +282,7 @@ class Blueprint:
 
     # -- worker-mode build --------------------------------------------------
 
-    def _build_worker_mode(self, n_workers: int) -> "WorkerSystemHandle":
+    def _build_worker_mode(self, n_workers: int) -> WorkerSystemHandle:
         """Deploy modules to Worker subprocesses.
 
         Modules with _run_in_main=True stay in the main process and receive
@@ -291,27 +292,27 @@ class Blueprint:
         Cross-boundary wires use SHM for the data path.
         """
         from core.coordinator import ModuleCoordinator
-        from core.transport.shm import SHMTransport
         from core.transport.adapter import TransportAdapter
+        from core.transport.shm import SHMTransport
 
         worker_entries = [e for e in self._entries if not e.module_cls._run_in_main]
         local_entries  = [e for e in self._entries if     e.module_cls._run_in_main]
 
         coord = ModuleCoordinator(n_workers=n_workers)
         coord.start()
-        proxies: Dict[str, Any] = {}
+        proxies: dict[str, Any] = {}
         for entry in worker_entries:
             proxies[entry.name] = coord.deploy(entry.module_cls, entry.name, kwargs=entry.config)
 
-        local_instances: Dict[str, Any] = {}
+        local_instances: dict[str, Any] = {}
         for entry in local_entries:
             inst = entry.instance if entry.instance is not None else entry.module_cls(**entry.config)
             local_instances[entry.name] = inst
 
         local_out = {n: m.ports_out for n, m in local_instances.items()}
         local_in  = {n: m.ports_in  for n, m in local_instances.items()}
-        wired_in: Set[Tuple[str, str]] = set()
-        connections: List[Tuple[str, str, str, str]] = []
+        wired_in: set[tuple[str, str]] = set()
+        connections: list[tuple[str, str, str, str]] = []
 
         for spec in self._wires:
             out_mod, out_port = spec.out_module, spec.out_port
@@ -350,7 +351,7 @@ class Blueprint:
         for inst in local_instances.values():
             inst.start()
 
-        all_modules: Dict[str, Any] = {**proxies, **local_instances}
+        all_modules: dict[str, Any] = {**proxies, **local_instances}
         for inst in local_instances.values():
             inst.on_system_modules(all_modules)
 
@@ -365,18 +366,18 @@ class Blueprint:
 # Module-level helpers (extracted from Blueprint to remove @staticmethod noise)
 # ---------------------------------------------------------------------------
 
-def _resolve_transport(spec: Any) -> Optional[Transport]:
+def _resolve_transport(spec: Any) -> Transport | None:
     """Resolve a transport spec string or instance to a Transport."""
     if spec is None:
         return None
     if isinstance(spec, str):
         if spec == "dds":
-            from .transport.dds import DDSTransport
             from .transport.adapter import TransportAdapter
+            from .transport.dds import DDSTransport
             return TransportAdapter(DDSTransport())
         if spec == "shm":
-            from .transport.shm import SHMTransport
             from .transport.adapter import TransportAdapter
+            from .transport.shm import SHMTransport
             return TransportAdapter(SHMTransport())
         if spec == "local":
             return LocalTransport()
@@ -386,11 +387,11 @@ def _resolve_transport(spec: Any) -> Optional[Transport]:
 
 def _do_wire(
     spec: _WireSpec,
-    instances: Dict[str, Any],
-    out_ports: Dict[str, Dict[str, Out]],
-    in_ports:  Dict[str, Dict[str, In]],
-    wired_in:  Set[Tuple[str, str]],
-    connections: List[Tuple[str, str, str, str]],
+    instances: dict[str, Any],
+    out_ports: dict[str, dict[str, Out]],
+    in_ports:  dict[str, dict[str, In]],
+    wired_in:  set[tuple[str, str]],
+    connections: list[tuple[str, str, str, str]],
 ) -> None:
     """Apply one explicit wire specification."""
     if spec.out_module not in instances:
@@ -434,15 +435,15 @@ def _do_wire(
 
 
 def _do_auto_wire(
-    instances: Dict[str, Any],
-    out_ports: Dict[str, Dict[str, Out]],
-    in_ports:  Dict[str, Dict[str, In]],
-    wired_in:  Set[Tuple[str, str]],
-    connections: List[Tuple[str, str, str, str]],
+    instances: dict[str, Any],
+    out_ports: dict[str, dict[str, Out]],
+    in_ports:  dict[str, dict[str, In]],
+    wired_in:  set[tuple[str, str]],
+    connections: list[tuple[str, str, str, str]],
 ) -> None:
     """Auto-match Out→In by (port_name, msg_type)."""
     # Index: (port_name, msg_type) → [(module_name, Out)]
-    out_index: Dict[Tuple[str, type], List[Tuple[str, Out]]] = defaultdict(list)
+    out_index: dict[tuple[str, type], list[tuple[str, Out]]] = defaultdict(list)
     for mod_name, ports in out_ports.items():
         for port_name, port in ports.items():
             out_index[(port_name, port.msg_type)].append((mod_name, port))
@@ -477,22 +478,22 @@ def _do_auto_wire(
 
 
 def _topo_sort(
-    instances: Dict[str, Any],
-    connections: List[Tuple[str, str, str, str]],
-) -> List[str]:
+    instances: dict[str, Any],
+    connections: list[tuple[str, str, str, str]],
+) -> list[str]:
     """Kahn's topological sort; falls back to registration order on cycles.
 
     Upstream modules start first.  Within each topological level, lower-layer
     modules are sorted before higher-layer ones.
     """
-    in_degree: Dict[str, int] = {n: 0 for n in instances}
-    adj: Dict[str, List[str]] = defaultdict(list)
+    in_degree: dict[str, int] = {n: 0 for n in instances}
+    adj: dict[str, list[str]] = defaultdict(list)
     for out_mod, _, in_mod, _ in connections:
         if out_mod != in_mod:
             adj[out_mod].append(in_mod)
             in_degree[in_mod] = in_degree.get(in_mod, 0) + 1
 
-    result: List[str] = []
+    result: list[str] = []
     ready = sorted(
         (n for n, d in in_degree.items() if d == 0),
         key=lambda n: instances[n].layer or 0,
@@ -530,17 +531,17 @@ class SystemHandle:
 
     def __init__(
         self,
-        modules: Dict[str, Module],
+        modules: dict[str, Module],
         transport: Transport,
-        connections: List[Tuple[str, str, str, str]],
-        startup_order: List[str],
+        connections: list[tuple[str, str, str, str]],
+        startup_order: list[str],
     ) -> None:
         self._modules = modules
         self._transport = transport
         self._connections = connections
         self._startup_order = startup_order
         self._started = False
-        self._failed_modules: Dict[str, str] = {}
+        self._failed_modules: dict[str, str] = {}
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -604,8 +605,8 @@ class SystemHandle:
         if not self._started:
             return
         import threading as _th
-        hung_modules: List[str] = []
-        stop_errors: Dict[str, str] = {}
+        hung_modules: list[str] = []
+        stop_errors: dict[str, str] = {}
 
         def _safe_stop(mod_ref, mod_name):
             try:
@@ -647,11 +648,11 @@ class SystemHandle:
         return self._modules[name]
 
     @property
-    def modules(self) -> Dict[str, Module]:
+    def modules(self) -> dict[str, Module]:
         return dict(self._modules)
 
     @property
-    def connections(self) -> List[Tuple[str, str, str, str]]:
+    def connections(self) -> list[tuple[str, str, str, str]]:
         return list(self._connections)
 
     @property
@@ -660,7 +661,7 @@ class SystemHandle:
 
     # -- health -------------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         """Return a health summary dict."""
         total_in  = sum(p.msg_count for m in self._modules.values() for p in m.ports_in.values())
         total_out = sum(p.msg_count for m in self._modules.values() for p in m.ports_out.values())
@@ -676,7 +677,7 @@ class SystemHandle:
             "modules": {n: m.port_summary() for n, m in self._modules.items()},
         }
 
-    def comm_health(self) -> Dict[str, Any]:
+    def comm_health(self) -> dict[str, Any]:
         """Aggregate communication health across all modules.
 
         Returns per-connection stats: rate, drops, errors, latency.
@@ -755,9 +756,9 @@ class WorkerSystemHandle:
     def __init__(
         self,
         coord: Any,
-        proxies: Dict[str, Any],
-        local_instances: Dict[str, Any],
-        connections: List[Tuple[str, str, str, str]],
+        proxies: dict[str, Any],
+        local_instances: dict[str, Any],
+        connections: list[tuple[str, str, str, str]],
     ) -> None:
         self._coord = coord
         self._proxies = proxies
@@ -789,19 +790,19 @@ class WorkerSystemHandle:
         raise KeyError(f"Unknown module: '{name}'")
 
     @property
-    def modules(self) -> Dict[str, Any]:
+    def modules(self) -> dict[str, Any]:
         return {**self._proxies, **self._local}
 
     @property
-    def connections(self) -> List[Tuple[str, str, str, str]]:
+    def connections(self) -> list[tuple[str, str, str, str]]:
         return list(self._connections)
 
     @property
     def started(self) -> bool:
         return self._started
 
-    def health(self) -> Dict[str, Any]:
-        modules: Dict[str, Any] = {}
+    def health(self) -> dict[str, Any]:
+        modules: dict[str, Any] = {}
         for name, proxy in self._proxies.items():
             try:
                 modules[name] = proxy.health()

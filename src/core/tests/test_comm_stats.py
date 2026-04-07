@@ -6,14 +6,14 @@ Covers:
   - Blueprint.comm_health() aggregation
 """
 
-import sys
 import os
+import sys
 import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from core.stream import Out, In
+from core.stream import In, Out
 
 
 class TestOutStats(unittest.TestCase):
@@ -198,7 +198,7 @@ class TestPortSummaryStats(unittest.TestCase):
 
     def test_port_summary_has_comm_fields(self):
         from core.module import Module
-        from core.stream import Out, In
+        from core.stream import In, Out
 
         class DummyMod(Module):
             data_out: Out[int]

@@ -22,8 +22,8 @@
 import sys
 import time
 import traceback
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -121,10 +121,10 @@ class MockTopologySemGraph:
       - shortest_path(from_id, to_id)
     """
 
-    def __init__(self, room_centers: List[np.ndarray]):
-        self._nodes: Dict[int, MockTopoNode] = {}
-        self._edges: Dict  # from_id → {to_id: weight}
-        adjacency: Dict[int, Dict[int, float]] = {}
+    def __init__(self, room_centers: list[np.ndarray]):
+        self._nodes: dict[int, MockTopoNode] = {}
+        self._edges: dict  # from_id → {to_id: weight}
+        adjacency: dict[int, dict[int, float]] = {}
 
         for i, center in enumerate(room_centers):
             node = MockTopoNode(node_id=i, center=center)
@@ -144,15 +144,15 @@ class MockTopologySemGraph:
         self._adjacency = adjacency
 
     @property
-    def rooms(self) -> List[MockTopoNode]:
+    def rooms(self) -> list[MockTopoNode]:
         return list(self._nodes.values())
 
-    def get_node(self, node_id: int) -> Optional[MockTopoNode]:
+    def get_node(self, node_id: int) -> MockTopoNode | None:
         return self._nodes.get(node_id)
 
     def get_room_by_position(
         self, x: float, y: float, radius: float = 5.0
-    ) -> Optional[int]:
+    ) -> int | None:
         """返回最近的且在 radius 范围内的房间 ID。"""
         pos = np.array([x, y])
         best_id = None
@@ -174,7 +174,7 @@ class MockTopologySemGraph:
             return float("inf"), []
 
         dist_map = {from_id: 0.0}
-        prev_map: Dict[int, int] = {}
+        prev_map: dict[int, int] = {}
         heap = [(0.0, from_id)]
         visited = set()
 
@@ -234,8 +234,8 @@ def _build_mock_scg_for_scenario(scenario: dict):
 
     返回已调用过 build_edges 的 SCGBuilder。
     """
-    from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
     from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
+    from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
 
     start = scenario["start"]
     goal = scenario["goal"]
@@ -393,7 +393,9 @@ class HybridPlannerWrapper:
     def __init__(self):
         self._available = False
         try:
-            from semantic.perception.semantic_perception.hybrid_planner import HybridPlanner  # noqa: F401
+            from semantic.perception.semantic_perception.hybrid_planner import (
+                HybridPlanner,
+            )
             self._available = True
         except Exception as exc:
             self._error = str(exc)
@@ -469,8 +471,10 @@ class SCGPlannerWrapper:
     def __init__(self):
         self._available = False
         try:
-            from semantic.perception.semantic_perception.scg_path_planner import SCGPathPlanner  # noqa: F401
-            from semantic.perception.semantic_perception.scg_builder import SCGBuilder  # noqa: F401
+            from semantic.perception.semantic_perception.scg_builder import SCGBuilder
+            from semantic.perception.semantic_perception.scg_path_planner import (
+                SCGPathPlanner,
+            )
             self._available = True
         except Exception as exc:
             self._error = str(exc)
@@ -554,7 +558,7 @@ def _status_str(result: PlannerResult) -> str:
 
 def print_comparison_table(
     scenario: dict,
-    results: List[PlannerResult],
+    results: list[PlannerResult],
     file=None,
 ) -> None:
     """
@@ -606,7 +610,7 @@ def print_comparison_table(
         row = "│"
         vals = [r.planner_name, status, time_str, length_str, wp_str]
         for v, w in zip(vals, col_widths):
-            row += f" {str(v):<{w}} │"
+            row += f" {v!s:<{w}} │"
         buf.write(row + "\n")
 
         if not r.success and not r.skipped and r.error_msg:
@@ -622,7 +626,7 @@ def print_comparison_table(
 
 
 def print_summary_table(
-    all_results: List[PlannerResult],
+    all_results: list[PlannerResult],
     file=None,
 ) -> None:
     """打印跨场景汇总统计表。"""
@@ -679,7 +683,7 @@ def print_summary_table(
         row = "│"
         vals = [pname, success_str, time_str, length_str, wp_str]
         for v, w in zip(vals, col_widths):
-            row += f" {str(v):<{w}} │"
+            row += f" {v!s:<{w}} │"
         buf.write(row + "\n")
 
     buf.write(row_sep("└", "┴", "┘", "─") + "\n")
@@ -697,7 +701,7 @@ def print_summary_table(
 def run_parallel_comparison(
     scenarios=None,
     verbose: bool = True,
-) -> List[PlannerResult]:
+) -> list[PlannerResult]:
     """
     对所有场景运行三套规划器并收集结果。
 
@@ -717,7 +721,7 @@ def run_parallel_comparison(
         SCGPlannerWrapper(),
     ]
 
-    all_results: List[PlannerResult] = []
+    all_results: list[PlannerResult] = []
 
     for scenario in scenarios:
         scenario_results = []

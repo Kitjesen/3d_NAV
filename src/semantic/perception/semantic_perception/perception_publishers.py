@@ -8,8 +8,8 @@ perception_publishers.py — 发布 Mixin
 import json
 from typing import List
 
-from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import String
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class PerceptionPublishersMixin:
@@ -173,7 +173,7 @@ class PerceptionPublishersMixin:
     def _make_room_llm_namer(api_key: str, model: str, language: str):
         """创建异步 Room LLM 命名回调 (轻量直接 HTTP 调用, 不依赖 planner 包)。"""
 
-        async def _namer(labels: List[str]) -> str:
+        async def _namer(labels: list[str]) -> str:
             labels_str = ", ".join(labels[:12])
             if language == "zh":
                 system = (

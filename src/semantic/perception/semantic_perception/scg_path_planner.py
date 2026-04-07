@@ -45,8 +45,8 @@ class PathSegment:
 @dataclass
 class SCGPath:
     """SCG 路径。"""
-    polyhedron_sequence: List[int]  # 多面体 ID 序列
-    segments: List[PathSegment]  # 路径段
+    polyhedron_sequence: list[int]  # 多面体 ID 序列
+    segments: list[PathSegment]  # 路径段
     total_distance: float
     planning_time: float
     success: bool
@@ -275,7 +275,7 @@ class SCGPathPlanner:
             success=True,
         )
 
-    def _locate_polyhedron(self, point: np.ndarray) -> Optional[int]:
+    def _locate_polyhedron(self, point: np.ndarray) -> int | None:
         """
         定位点所在的多面体。
 
@@ -313,7 +313,7 @@ class SCGPathPlanner:
         self,
         start_id: int,
         goal_id: int,
-    ) -> Optional[List[int]]:
+    ) -> list[int] | None:
         """
         A* 搜索多面体序列。
 
@@ -359,7 +359,7 @@ class SCGPathPlanner:
 
         return None
 
-    def _get_neighbors(self, poly_id: int) -> List[Tuple[int, float]]:
+    def _get_neighbors(self, poly_id: int) -> list[tuple[int, float]]:
         """
         获取多面体的邻居。
 
@@ -396,10 +396,10 @@ class SCGPathPlanner:
 
     def _generate_path_segments(
         self,
-        poly_sequence: List[int],
+        poly_sequence: list[int],
         start: np.ndarray,
         goal: np.ndarray,
-    ) -> List[PathSegment]:
+    ) -> list[PathSegment]:
         """
         生成穿过多面体序列的路径段。
 
@@ -473,7 +473,7 @@ class SCGPathPlanner:
             # 否则，返回两个中心的中点
             return 0.5 * (poly1.center + poly2.center)
 
-    def _find_edge(self, poly1_id: int, poly2_id: int) -> Optional[any]:
+    def _find_edge(self, poly1_id: int, poly2_id: int) -> any | None:
         """查找两个多面体之间的边。"""
         for edge in self.scg.edges:
             if (edge.from_id == poly1_id and edge.to_id == poly2_id) or \
@@ -486,7 +486,7 @@ class SCGPathPlanner:
         edge = self._find_edge(poly1_id, poly2_id)
         return edge.edge_type.value if edge else 'unknown'
 
-    def _merge_segments(self, segments: List[PathSegment]) -> np.ndarray:
+    def _merge_segments(self, segments: list[PathSegment]) -> np.ndarray:
         """
         合并路径段为完整路径。
 
@@ -509,8 +509,8 @@ class SCGPathPlanner:
     def _split_path_into_segments(
         self,
         path: np.ndarray,
-        poly_sequence: List[int],
-    ) -> List[PathSegment]:
+        poly_sequence: list[int],
+    ) -> list[PathSegment]:
         """
         将路径分割为路径段。
 

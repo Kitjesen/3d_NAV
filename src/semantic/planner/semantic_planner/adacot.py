@@ -74,15 +74,15 @@ class AdaCoTRouter:
     设计目标: 计算量 < 1ms, 不调用任何模型。
     """
 
-    def __init__(self, config: Optional[AdaCoTConfig] = None):
+    def __init__(self, config: AdaCoTConfig | None = None):
         self._config = config or AdaCoTConfig()
         self._stats = {"fast": 0, "slow": 0, "auto": 0}
 
     def decide(
         self,
         instruction: str,
-        scene_graph: Optional[Dict] = None,
-        keywords: Optional[List[str]] = None,
+        scene_graph: dict | None = None,
+        keywords: list[str] | None = None,
         score_entropy: float = 0.0,
     ) -> AdaCoTDecision:
         """根据指令和场景图状态决定路径。
@@ -138,7 +138,7 @@ class AdaCoTRouter:
             n_relations = len(scene_graph.get("relations", []))
 
             # 同标签物体计数
-            label_counts: Dict[str, int] = {}
+            label_counts: dict[str, int] = {}
             for obj in objects:
                 lbl = str(obj.get("label", "")).lower()
                 if lbl:
@@ -203,6 +203,6 @@ class AdaCoTRouter:
         return decision
 
     @property
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         """路由统计。"""
         return dict(self._stats)

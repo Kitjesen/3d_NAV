@@ -29,11 +29,11 @@ Usage::
     robot.save_map("building_a")
 """
 
-from .lidar import LiDAR
-from .slam import SLAM
 from .camera import Camera
 from .detector import Detector
+from .lidar import LiDAR
 from .navigator import Navigator
 from .robot import Robot
+from .slam import SLAM
 
-__all__ = ["LiDAR", "SLAM", "Camera", "Detector", "Navigator", "Robot"]
+__all__ = ["SLAM", "Camera", "Detector", "LiDAR", "Navigator", "Robot"]

@@ -6,17 +6,16 @@ Tests cover:
   - NavigationModule: pause/resume on localization loss
 """
 
-import sys
 import os
+import sys
 import time
 import unittest
 
 # Ensure src/ is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.geometry import Pose, Vector3, Quaternion
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SlamBridgeModule watchdog tests
@@ -213,7 +212,7 @@ class TestSafetyRingLocalization(unittest.TestCase):
 class TestNavigationPauseResume(unittest.TestCase):
 
     def _make(self):
-        from nav.navigation_module import NavigationModule, MissionState
+        from nav.navigation_module import MissionState, NavigationModule
         m = NavigationModule(planner="astar")
         m.setup()
         return m, MissionState
@@ -302,6 +301,7 @@ class TestWaypointTrackerPause(unittest.TestCase):
 
     def test_pause_resets_stuck_timer(self):
         import numpy as np
+
         from nav.waypoint_tracker import WaypointTracker
         t = WaypointTracker(threshold=1.0, stuck_timeout=5.0)
         t.reset([np.array([10, 0, 0])], np.array([0, 0, 0]))
@@ -318,6 +318,7 @@ class TestWaypointTrackerPause(unittest.TestCase):
 
     def test_pause_preserves_path(self):
         import numpy as np
+
         from nav.waypoint_tracker import WaypointTracker
         t = WaypointTracker(threshold=1.0)
         path = [np.array([5, 0, 0]), np.array([10, 0, 0])]
@@ -368,7 +369,7 @@ class TestSlamDegeneracyDetection(unittest.TestCase):
         self.assertEqual(m._degen_level, DEGEN_CRITICAL)
 
     def test_good_metrics_clears_degeneracy(self):
-        from slam.slam_bridge_module import DEGEN_NONE, DEGEN_CRITICAL
+        from slam.slam_bridge_module import DEGEN_CRITICAL, DEGEN_NONE
         m = self._make()
         m._icp_fitness = 0.5
         m._update_degeneracy_level()
@@ -424,7 +425,7 @@ class TestSlamDegeneracyDetection(unittest.TestCase):
 class TestNavigationDegeneracyResponse(unittest.TestCase):
 
     def _make(self):
-        from nav.navigation_module import NavigationModule, MissionState
+        from nav.navigation_module import MissionState, NavigationModule
         m = NavigationModule(planner="astar")
         m.setup()
         return m, MissionState

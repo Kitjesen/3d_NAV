@@ -12,9 +12,10 @@ test_fast_resolve.py — 目标解析器 Fast Path + 选择性 Grounding 测试
 import json
 import unittest
 
-from semantic.planner.semantic_planner.llm_client import LLMConfig
 import pytest
+
 from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+from semantic.planner.semantic_planner.llm_client import LLMConfig
 
 
 def _make_scene_graph(objects, relations=None, regions=None):

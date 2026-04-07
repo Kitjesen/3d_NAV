@@ -22,12 +22,12 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+from base_autonomy.modules._nav_core_loader import nav_core_build_hint, try_import_nav_core
 from core.module import Module
-from core.stream import In, Out
-from core.msgs.nav import Odometry, Path
 from core.msgs.geometry import Twist, Vector3
+from core.msgs.nav import Odometry, Path
 from core.registry import register
-from base_autonomy.modules._nav_core_loader import try_import_nav_core, nav_core_build_hint
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -142,8 +142,8 @@ class PathFollowerModule(Module, layer=2):
 
     def _setup_native(self):
         try:
-            from core.config import get_config
             from base_autonomy.native_factories import path_follower
+            from core.config import get_config
 
             cfg = get_config()
             self._node = path_follower(cfg)
@@ -334,7 +334,7 @@ class PathFollowerModule(Module, layer=2):
 
     # ── Health ─────────────────────────────────────────────────────────────
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         h = {
             "backend": self._backend,

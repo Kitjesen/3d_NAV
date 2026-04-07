@@ -1,5 +1,4 @@
-﻿# -*- coding: utf-8 -*-
-"""
+﻿"""
 test_fast_slow_benchmark.py \u2014 Fast-Slow \u53cc\u8fdb\u7a0b\u8bda\u5b9e\u6027\u80fd\u57fa\u51c6\u6d4b\u8bd5
 
 \u6838\u5fc3\u539f\u5219:
@@ -22,11 +21,10 @@ import unittest
 from typing import Dict, List, Tuple
 
 import numpy as np
-
-from semantic.planner.semantic_planner.llm_client import LLMConfig
 import pytest
-from semantic.planner.semantic_planner.goal_resolver import GoalResolver
 
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+from semantic.planner.semantic_planner.llm_client import LLMConfig
 
 # ============================================================
 #  \u573a\u666f\u6784\u5efa\u5de5\u5177
@@ -42,11 +40,11 @@ COMMON_OBJECTS = [
 
 def make_scene(
     target_label: str,
-    target_pos: Dict[str, float],
+    target_pos: dict[str, float],
     target_score: float = 0.85,
     target_det_count: int = 4,
     num_distractors: int = 8,
-    relations: List[Dict] = None,
+    relations: list[dict] = None,
     seed: int = 42,
 ) -> str:
     """
@@ -117,7 +115,7 @@ class TestFastPathHitRate(unittest.TestCase):
 
         \u671f\u671b: \u5927\u591a\u6570\u80fd\u547d\u4e2d (>= 70%)
         """
-        cases: List[Tuple[str, str, Dict, float, int]] = [
+        cases: list[tuple[str, str, dict, float, int]] = [
             # (instruction, target_label, target_pos, target_score, det_count)
             ("go to the chair", "chair", {"x": 3, "y": 2, "z": 0}, 0.9, 5),
             ("find the door", "door", {"x": 5, "y": 5, "z": 0}, 0.85, 4),

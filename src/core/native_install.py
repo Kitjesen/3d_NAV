@@ -29,11 +29,11 @@ DDS_ENV: dict[str, str] = {
 }
 
 
-def _install_prefix(cfg: "RobotConfig") -> str:
+def _install_prefix(cfg: RobotConfig) -> str:
     return cfg.raw.get("nav_install", _DEFAULT_PREFIX)
 
 
-def exe(cfg: "RobotConfig", package: str, binary: str) -> str:
+def exe(cfg: RobotConfig, package: str, binary: str) -> str:
     """Return the absolute path to a compiled binary.
 
     Tries colcon full layout first (prefix/package/lib/package/binary),
@@ -46,7 +46,7 @@ def exe(cfg: "RobotConfig", package: str, binary: str) -> str:
     return os.path.join(prefix, "lib", package, binary)
 
 
-def share(cfg: "RobotConfig", package: str, *sub: str) -> str:
+def share(cfg: RobotConfig, package: str, *sub: str) -> str:
     """Return the absolute path to a share file.
 
     Tries colcon full layout first (prefix/package/share/package/...),

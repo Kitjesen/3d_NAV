@@ -79,12 +79,12 @@ class BBoxNavigator:
       (lx, az) = nav.compute_cmd_vel(3d, robot_pose)
     """
 
-    def __init__(self, config: Optional[BBoxNavConfig] = None) -> None:
+    def __init__(self, config: BBoxNavConfig | None = None) -> None:
         self._cfg = config if config is not None else BBoxNavConfig()
         self._state: str = STATE_IDLE
         self._last_bbox_time: float = 0.0
-        self._target_bbox: Optional[list] = None
-        self._target_3d: Optional[np.ndarray] = None   # [x, y, z] 世界坐标
+        self._target_bbox: list | None = None
+        self._target_3d: np.ndarray | None = None   # [x, y, z] 世界坐标
         self._lock = threading.Lock()
         # Camera→body rotation from factory calibration
         cam_cfg = get_config().camera
@@ -93,7 +93,7 @@ class BBoxNavigator:
     # ── 公开接口 ─────────────────────────────────────────────────────────────
 
     def set_target_bbox(
-        self, bbox: list, frame_timestamp: Optional[float] = None
+        self, bbox: list, frame_timestamp: float | None = None
     ) -> None:
         """
         设置/更新目标 bbox [x1, y1, x2, y2]。
@@ -116,8 +116,8 @@ class BBoxNavigator:
         fy: float,
         cx: float,
         cy: float,
-        robot_pose: Optional[tuple] = None,  # (x, y, yaw) 世界坐标系
-    ) -> Optional[np.ndarray]:
+        robot_pose: tuple | None = None,  # (x, y, yaw) 世界坐标系
+    ) -> np.ndarray | None:
         """
         bbox 中心 + 深度图 → 3D 坐标。
 
@@ -378,7 +378,7 @@ class BBoxNavigator:
             return self._state
 
     @property
-    def target_3d(self) -> Optional[np.ndarray]:
+    def target_3d(self) -> np.ndarray | None:
         """最近一帧计算的目标 3D 坐标（世界坐标系），无则 None。"""
         with self._lock:
             return self._target_3d.copy() if self._target_3d is not None else None

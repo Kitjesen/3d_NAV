@@ -25,10 +25,10 @@ import time
 from typing import Any, Dict, List, Optional
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.semantic import SceneGraph
 from core.msgs.nav import Odometry
+from core.msgs.semantic import SceneGraph
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class SemanticMapperModule(Module, layer=3):
         self._robot_xy = (0.0, 0.0)
 
         # name → stable int ID for TSG room nodes
-        self._room_name_to_id: Dict[str, int] = {}
+        self._room_name_to_id: dict[str, int] = {}
         self._next_room_id: int = 0
 
         self._last_save_time: float = 0.0
@@ -179,10 +179,10 @@ class SemanticMapperModule(Module, layer=3):
     def _extract_objects(
         self,
         sg: SceneGraph,
-        object_ids: List[str],
+        object_ids: list[str],
     ):
-        labels: List[str] = []
-        confs: List[float] = []
+        labels: list[str] = []
+        confs: list[float] = []
         for oid in object_ids:
             obj = sg.get_object_by_id(oid)
             if obj and obj.label:
@@ -308,7 +308,7 @@ class SemanticMapperModule(Module, layer=3):
 
     # ── Health ────────────────────────────────────────────────────────────────
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["semantic_mapper"] = {
             "save_dir":    self._save_dir,

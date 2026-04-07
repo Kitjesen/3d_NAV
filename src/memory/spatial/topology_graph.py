@@ -27,23 +27,23 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from memory.spatial.topology_types import (
-    # 数据类 (向后兼容重新导出)
-    TopoNode,
-    TopoEdge,
-    ExplorationTarget,
-    # 常量
-    _REACHABILITY_LAMBDA,
     _FRONTIER_BASE_PRIOR,
     _MIN_FRONTIER_DISTANCE,
+    # 常量
+    _REACHABILITY_LAMBDA,
     _SEMANTIC_BOOST_FACTOR,
     _VISITED_PENALTY,
+    ExplorationTarget,
+    TopoEdge,
+    # 数据类 (向后兼容重新导出)
+    TopoNode,
+    compute_node_information_gain,
+    graph_hop_distances,
+    graph_shortest_path,
     # 纯函数
     infer_room_type,
-    graph_shortest_path,
-    graph_hop_distances,
-    compute_node_information_gain,
-    tsg_to_dict,
     tsg_nodes_edges_from_dict,
+    tsg_to_dict,
     tsg_to_prompt_context,
 )
 
@@ -69,17 +69,17 @@ class TopologySemGraph:
     """
 
     def __init__(self):
-        self._nodes: Dict[int, TopoNode] = {}
-        self._edges: List[TopoEdge] = []
-        self._adjacency: Dict[int, List[TopoEdge]] = defaultdict(list)
+        self._nodes: dict[int, TopoNode] = {}
+        self._edges: list[TopoEdge] = []
+        self._adjacency: dict[int, list[TopoEdge]] = defaultdict(list)
         self._next_frontier_id = 10000
 
-        self._traversal_history: List[Dict] = []
+        self._traversal_history: list[dict] = []
         self._current_room_id: int = -1
-        self._robot_position: Optional[np.ndarray] = None
-        self._robot_trajectory: List[np.ndarray] = []
+        self._robot_position: np.ndarray | None = None
+        self._robot_trajectory: list[np.ndarray] = []
 
-        self._room_object_expectations: Dict[str, Dict[str, float]] = {}
+        self._room_object_expectations: dict[str, dict[str, float]] = {}
         self._geometry_extractor = None
 
     # ── 图构建 ──────────────────────────────────────────────────
@@ -89,7 +89,7 @@ class TopologySemGraph:
         self._geometry_extractor = geometry_extractor
         logger.info("Geometry extractor connected to topology graph")
 
-    def update_from_scene_graph(self, sg: Dict) -> None:
+    def update_from_scene_graph(self, sg: dict) -> None:
         """从场景图字典同步拓扑图，保留穿越记忆和访问状态。"""
         rooms = sg.get("rooms", [])
         topology_edges = sg.get("topology_edges", [])
@@ -100,7 +100,7 @@ class TopologySemGraph:
             if n.node_type == "room"
         }
 
-        new_room_ids: Set[int] = set()
+        new_room_ids: set[int] = set()
         for room in rooms:
             rid = room.get("room_id", -1)
             if rid < 0:
@@ -190,9 +190,9 @@ class TopologySemGraph:
 
     def update_frontiers_from_costmap(
         self,
-        frontier_points: List[np.ndarray],
-        frontier_sizes: Optional[List[float]] = None,
-    ) -> List[int]:
+        frontier_points: list[np.ndarray],
+        frontier_sizes: list[float] | None = None,
+    ) -> list[int]:
         """从 costmap 前沿点清除旧前沿并添加新前沿。"""
         for fid in [nid for nid, n in self._nodes.items() if n.node_type == "frontier"]:
             self._remove_node(fid)
@@ -217,7 +217,7 @@ class TopologySemGraph:
 
     # ── 穿越记忆 ──────────────────────────────────────────────
 
-    def record_robot_position(self, x: float, y: float) -> Optional[int]:
+    def record_robot_position(self, x: float, y: float) -> int | None:
         """记录机器人当前位置, 自动检测房间切换。"""
         pos = np.array([x, y], dtype=np.float64)
         self._robot_position = pos
@@ -290,18 +290,18 @@ class TopologySemGraph:
 
     def compute_all_information_gains(
         self, target_instruction: str, semantic_engine=None,
-    ) -> Dict[int, float]:
+    ) -> dict[int, float]:
         """计算所有节点的信息增益。"""
         return {
             nid: compute_node_information_gain(n, target_instruction, semantic_engine)
             for nid, n in self._nodes.items()
         }
 
-    def shortest_path(self, from_id: int, to_id: int) -> Tuple[float, List[int]]:
+    def shortest_path(self, from_id: int, to_id: int) -> tuple[float, list[int]]:
         """Dijkstra 最短路径 (距离加权)。"""
         return graph_shortest_path(from_id, to_id, self._nodes, self._adjacency)
 
-    def hop_distances(self, from_id: int) -> Dict[int, int]:
+    def hop_distances(self, from_id: int) -> dict[int, int]:
         """BFS 计算从 from_id 到所有节点的跳数。"""
         return graph_hop_distances(from_id, self._nodes, self._adjacency)
 
@@ -312,7 +312,7 @@ class TopologySemGraph:
         target_instruction: str,
         semantic_engine=None,
         top_k: int = 3,
-    ) -> List[ExplorationTarget]:
+    ) -> list[ExplorationTarget]:
         """
         选择最优探索目标 — 融合语义先验 + 拓扑可达 + 信息增益。
 
@@ -335,7 +335,7 @@ class TopologySemGraph:
 
         all_ig = self.compute_all_information_gains(target_instruction, semantic_engine)
         hop_map = self.hop_distances(source)
-        candidates: List[ExplorationTarget] = []
+        candidates: list[ExplorationTarget] = []
 
         for nid, node in self._nodes.items():
             if nid == source:
@@ -387,12 +387,12 @@ class TopologySemGraph:
         """生成 LLM 可消费的拓扑摘要。"""
         return tsg_to_prompt_context(self._nodes, self._edges, language)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """导出为可 JSON 序列化的字典。"""
         return tsg_to_dict(self._nodes, self._edges, self._current_room_id, self._traversal_history)
 
     @classmethod
-    def from_dict(cls, data: Dict) -> "TopologySemGraph":
+    def from_dict(cls, data: dict) -> "TopologySemGraph":
         """从字典恢复拓扑图。"""
         tsg = cls()
         tsg._nodes, tsg._edges, tsg._adjacency, tsg._current_room_id = (
@@ -416,11 +416,11 @@ class TopologySemGraph:
             return False
 
     @classmethod
-    def load_from_file(cls, path: str) -> "Optional[TopologySemGraph]":
+    def load_from_file(cls, path: str) -> "TopologySemGraph | None":
         """从 JSON 文件恢复拓扑图。"""
         import json as _json
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = _json.load(f)
             tsg = cls.from_dict(data)
             logger.info("TopologySemGraph loaded from %s (%d nodes, %d edges)",
@@ -433,11 +433,11 @@ class TopologySemGraph:
     # ── 查询 ──────────────────────────────────────────────────
 
     @property
-    def rooms(self) -> List[TopoNode]:
+    def rooms(self) -> list[TopoNode]:
         return [n for n in self._nodes.values() if n.node_type == "room"]
 
     @property
-    def frontiers(self) -> List[TopoNode]:
+    def frontiers(self) -> list[TopoNode]:
         return [n for n in self._nodes.values() if n.node_type == "frontier"]
 
     @property
@@ -445,25 +445,25 @@ class TopologySemGraph:
         return self._current_room_id
 
     @property
-    def visited_room_ids(self) -> Set[int]:
+    def visited_room_ids(self) -> set[int]:
         return {n.node_id for n in self._nodes.values() if n.node_type == "room" and n.visited}
 
     @property
-    def unvisited_room_ids(self) -> Set[int]:
+    def unvisited_room_ids(self) -> set[int]:
         return {n.node_id for n in self._nodes.values()
                 if n.node_type == "room" and not n.visited}
 
-    def get_node(self, node_id: int) -> Optional[TopoNode]:
+    def get_node(self, node_id: int) -> TopoNode | None:
         return self._nodes.get(node_id)
 
-    def get_neighbors(self, node_id: int) -> List[int]:
+    def get_neighbors(self, node_id: int) -> list[int]:
         """获取邻居节点ID。"""
         return [
             e.to_id if e.from_id == node_id else e.from_id
             for e in self._adjacency.get(node_id, [])
         ]
 
-    def get_room_by_position(self, x: float, y: float, radius: float = 4.0) -> Optional[int]:
+    def get_room_by_position(self, x: float, y: float, radius: float = 4.0) -> int | None:
         """根据位置查找最近的房间节点。"""
         pos = np.array([x, y])
         rooms = self.rooms
@@ -485,9 +485,9 @@ class TopologySemGraph:
                 if e.from_id != node_id and e.to_id != node_id
             ]
 
-    def _rebuild_edges(self, topology_edges: List[Dict]) -> None:
+    def _rebuild_edges(self, topology_edges: list[dict]) -> None:
         """从 scene graph 的 topology_edges 重建边 (保留穿越记忆)。"""
-        old_traversals: Dict[Tuple[int, int], Tuple[int, float, float]] = {}
+        old_traversals: dict[tuple[int, int], tuple[int, float, float]] = {}
         for e in self._edges:
             if e.traversal_count > 0:
                 old_traversals[e.pair] = (e.traversal_count, e.last_traversed, e.confidence)

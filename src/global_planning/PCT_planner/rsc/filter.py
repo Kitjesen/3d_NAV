@@ -1,8 +1,8 @@
 import open3d as o3d
- 
+
 # 加载点云数据
 pcd = o3d.io.read_point_cloud("pcd/scans.pcd")
- 
+
 # 计算法线（区域生长需要法线或颜色）
 pcd.estimate_normals()
 

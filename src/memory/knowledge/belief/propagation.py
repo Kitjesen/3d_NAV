@@ -15,12 +15,12 @@ belief_propagation.py — KG-Augmented Loopy Belief Propagation Mixin
 import logging
 import math
 import time
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import numpy as np
 
 from core.msgs.scene import (
-    BeliefMessage,
+    BELIEF_LATERAL_SHARE,
     BP_CONVERGENCE_EPS,
     BP_KG_PRIOR_BOOST,
     BP_KG_UNEXPECTED_PENALTY,
@@ -30,11 +30,11 @@ from core.msgs.scene import (
     BP_PHANTOM_BASE_ALPHA,
     BP_PHANTOM_MIN_ROOM_CONFIDENCE,
     BP_ROOM_TO_OBJ_WEIGHT,
-    BELIEF_LATERAL_SHARE,
-    PhantomNode,
     RELATION_NEAR_THRESHOLD,
-    RoomTypePosterior,
     SAFETY_PRIOR_ALPHA_SCALE,
+    BeliefMessage,
+    PhantomNode,
+    RoomTypePosterior,
     TrackedObject,
 )
 
@@ -84,7 +84,7 @@ class BeliefPropagationMixin:
         self._phantom_nodes.clear()
 
         # 记录迭代前的 P_exist 快照 (收敛判据)
-        prev_beliefs: Dict[int, float] = {
+        prev_beliefs: dict[int, float] = {
             oid: obj.existence_prob for oid, obj in self._objects.items()
         }
         self._bp_messages_log.clear()
@@ -126,7 +126,7 @@ class BeliefPropagationMixin:
     #  Phase 1: 上行传播 — Object → Room Type Posterior
     # ──────────────────────────────────────────────────────────
 
-    def _bp_phase_upward(self, regions: List['Region']) -> None:
+    def _bp_phase_upward(self, regions: list['Region']) -> None:
         """Phase 1: 用观测到的物体标签更新房间类型贝叶斯后验。
 
         数学公式 (对数域):
@@ -162,7 +162,7 @@ class BeliefPropagationMixin:
             if not labels_in_room:
                 continue
 
-            log_posteriors: Dict[str, float] = {}
+            log_posteriors: dict[str, float] = {}
             log_prior = -math.log(max(len(room_types), 1))
 
             for rtype in room_types:
@@ -196,7 +196,7 @@ class BeliefPropagationMixin:
     #  Phase 2: 下行传播 — Room Type Posterior → Object Prior
     # ──────────────────────────────────────────────────────────
 
-    def _bp_phase_downward(self, regions: List['Region']) -> None:
+    def _bp_phase_downward(self, regions: list['Region']) -> None:
         """Phase 2: 下行传播 — 房间后验 → 物体先验注入。
 
         两种模式 (自动切换):
@@ -222,7 +222,7 @@ class BeliefPropagationMixin:
         # ── 模式 B: KG 查表 fallback ──
         self._bp_phase_downward_kg_lookup(regions)
 
-    def _bp_phase_downward_gcn(self, regions: List['Region']) -> None:
+    def _bp_phase_downward_gcn(self, regions: list['Region']) -> None:
         """Phase 2A: 用 KG-BELIEF GCN 推理完整直方图。
 
         GCN 输出: per-room predicted probability for each object class
@@ -230,9 +230,9 @@ class BeliefPropagationMixin:
           - predicted_prob > 0.5 → 该物体是 "期望的" → alpha 提升
           - predicted_prob < 0.2 且 detection_count <= 2 → beta 惩罚
         """
-        room_labels: List[List[str]] = []
-        room_types: List[str] = []
-        region_list: List = []
+        room_labels: list[list[str]] = []
+        room_types: list[str] = []
+        region_list: list = []
 
         for region in regions:
             labels = [
@@ -296,7 +296,7 @@ class BeliefPropagationMixin:
                         delta_beta=delta_b, weight=1.0 - gcn_prob,
                     ))
 
-    def _bp_phase_downward_kg_lookup(self, regions: List['Region']) -> None:
+    def _bp_phase_downward_kg_lookup(self, regions: list['Region']) -> None:
         """Phase 2B: KG 查表 fallback (无训练模型时使用)。
 
         用 KG.get_room_expected_objects + 房间后验 → 启发式 alpha/beta.
@@ -406,7 +406,7 @@ class BeliefPropagationMixin:
     #  Phase 4: Phantom Node Generation (Blind Nodes)
     # ──────────────────────────────────────────────────────────
 
-    def _bp_phase_phantom_generation(self, regions: List['Region']) -> None:
+    def _bp_phase_phantom_generation(self, regions: list['Region']) -> None:
         """Phase 4: 基于房间后验 + KG 生成 phantom (blind) 节点。
 
         与 BSG (ICRA 2024) blind nodes 的本质区别:
@@ -439,8 +439,8 @@ class BeliefPropagationMixin:
             }
 
             # 对每个高概率房间假设, 收集期望但未见的物体
-            phantom_candidates: Dict[str, float] = {}  # label → aggregated P
-            phantom_safety: Dict[str, str] = {}
+            phantom_candidates: dict[str, float] = {}  # label → aggregated P
+            phantom_safety: dict[str, str] = {}
 
             for rtype, rprob in posterior.hypotheses.items():
                 if rprob < 0.1:
@@ -486,7 +486,7 @@ class BeliefPropagationMixin:
     #  Phantom Node API
     # ──────────────────────────────────────────────────────────
 
-    def get_phantom_nodes(self) -> List[PhantomNode]:
+    def get_phantom_nodes(self) -> list[PhantomNode]:
         """获取当前所有 phantom (blind) 节点, 按存在概率降序排列。"""
         return sorted(
             self._phantom_nodes.values(),
@@ -494,7 +494,7 @@ class BeliefPropagationMixin:
             reverse=True,
         )
 
-    def promote_phantom(self, phantom_id: int, detection) -> Optional[TrackedObject]:
+    def promote_phantom(self, phantom_id: int, detection) -> TrackedObject | None:
         """将 phantom 节点实体化: 当检测到与 phantom 匹配的物体时调用。
 
         phantom 的先验 α 被继承到新 TrackedObject 中 — 信息不丢失。
@@ -523,11 +523,11 @@ class BeliefPropagationMixin:
         self._next_id += 1
         return obj
 
-    def get_room_type_posteriors(self) -> Dict[int, RoomTypePosterior]:
+    def get_room_type_posteriors(self) -> dict[int, RoomTypePosterior]:
         """获取所有房间的类型后验分布 (供 LLM 和规划器使用)。"""
         return dict(self._room_type_posteriors)
 
-    def get_exploration_targets(self) -> List[Dict]:
+    def get_exploration_targets(self) -> list[dict]:
         """基于信念状态推荐探索目标 (结合 phantom 和房间不确定性)。
 
         策略:
@@ -572,7 +572,7 @@ class BeliefPropagationMixin:
         targets.sort(key=lambda t: -t["priority"])
         return targets
 
-    def get_bp_diagnostics(self) -> Dict:
+    def get_bp_diagnostics(self) -> dict:
         """获取信念传播诊断信息 (调试和论文实验用)。"""
         return {
             "total_iterations": self._bp_iteration_count,

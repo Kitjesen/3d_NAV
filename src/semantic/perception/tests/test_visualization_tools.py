@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use('Agg')  # 使用非交互式后端
 
 import numpy as np
@@ -21,10 +22,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from semantic.perception.semantic_perception.visualization_tools import (
-    PathVisualizer,
-    SCGVisualizer,
-    PerformanceVisualizer,
     ComprehensiveVisualizer,
+    PathVisualizer,
+    PerformanceVisualizer,
+    SCGVisualizer,
 )
 
 
@@ -52,9 +53,10 @@ def create_test_occupancy_grid():
 
 def create_test_scg():
     """创建测试 SCG。"""
-    from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
-    from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
     from scipy.spatial import ConvexHull
+
+    from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
+    from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
 
     config = SCGConfig()
     scg_builder = SCGBuilder(config)
@@ -97,8 +99,8 @@ def create_test_results():
     from semantic.perception.semantic_perception.evaluation_framework import (
         BenchmarkResult,
         MemoryMetrics,
-        UpdateMetrics,
         PathMetrics,
+        UpdateMetrics,
     )
 
     results = []

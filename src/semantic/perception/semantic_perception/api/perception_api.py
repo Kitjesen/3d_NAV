@@ -6,10 +6,11 @@ Semantic Perception API - 感知系统接口
 
 from abc import ABC, abstractmethod
 from typing import List, Optional
+
 import numpy as np
 
-from .types import Detection3D, SceneGraph, CameraInfo, PerceptionConfig
 from .exceptions import PerceptionAPIError
+from .types import CameraInfo, Detection3D, PerceptionConfig, SceneGraph
 
 
 class PerceptionAPI(ABC):
@@ -42,8 +43,8 @@ class PerceptionAPI(ABC):
         rgb_image: np.ndarray,
         depth_image: np.ndarray,
         camera_info: CameraInfo,
-        transform: Optional[np.ndarray] = None
-    ) -> List[Detection3D]:
+        transform: np.ndarray | None = None
+    ) -> list[Detection3D]:
         """
         处理单帧RGB-D图像
 
@@ -78,7 +79,7 @@ class PerceptionAPI(ABC):
         pass
 
     @abstractmethod
-    def get_detections(self) -> List[Detection3D]:
+    def get_detections(self) -> list[Detection3D]:
         """
         获取当前所有检测结果
 
@@ -90,10 +91,10 @@ class PerceptionAPI(ABC):
     @abstractmethod
     def query_objects(
         self,
-        label: Optional[str] = None,
+        label: str | None = None,
         min_confidence: float = 0.0,
-        position_filter: Optional[dict] = None
-    ) -> List[Detection3D]:
+        position_filter: dict | None = None
+    ) -> list[Detection3D]:
         """
         查询物体
 
@@ -155,7 +156,7 @@ class PerceptionAPI(ABC):
         pass
 
     @abstractmethod
-    def set_detection_classes(self, classes: List[str]):
+    def set_detection_classes(self, classes: list[str]):
         """
         设置检测类别
 
@@ -165,7 +166,7 @@ class PerceptionAPI(ABC):
         pass
 
     @abstractmethod
-    def get_detection_classes(self) -> List[str]:
+    def get_detection_classes(self) -> list[str]:
         """
         获取当前检测类别
 
@@ -183,7 +184,7 @@ class PerceptionAPI(ABC):
         """
         pass
 
-    def get_visualization(self) -> Optional[np.ndarray]:
+    def get_visualization(self) -> np.ndarray | None:
         """
         获取可视化图像（可选实现）
 

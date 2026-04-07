@@ -30,14 +30,14 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.geometry import PoseStamped, Pose, Twist, Vector3, Quaternion
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.sensor import Image, CameraIntrinsics
 from core.msgs.semantic import SceneGraph
+from core.msgs.sensor import CameraIntrinsics, Image
 from core.registry import register
+from core.stream import In, Out
 
-from .bbox_navigator import BBoxNavigator, BBoxNavConfig, STATE_TRACKING, STATE_ARRIVED, STATE_LOST
+from .bbox_navigator import STATE_ARRIVED, STATE_LOST, STATE_TRACKING, BBoxNavConfig, BBoxNavigator
 from .person_tracker import PersonTracker
 
 logger = logging.getLogger(__name__)
@@ -95,11 +95,11 @@ class VisualServoModule(Module, layer=4):
         self._target_label: str = ""
 
         # Cached sensor data
-        self._latest_depth: Optional[np.ndarray] = None
-        self._latest_rgb: Optional[np.ndarray] = None
-        self._intrinsics: Optional[tuple] = None  # (fx, fy, cx, cy)
+        self._latest_depth: np.ndarray | None = None
+        self._latest_rgb: np.ndarray | None = None
+        self._intrinsics: tuple | None = None  # (fx, fy, cx, cy)
         self._robot_pose: tuple = (0.0, 0.0, 0.0)  # (x, y, yaw)
-        self._latest_sg: Optional[SceneGraph] = None
+        self._latest_sg: SceneGraph | None = None
 
         self._servo_active = False  # True when publishing cmd_vel (close range)
         self._last_status_time = 0.0
@@ -233,7 +233,7 @@ class VisualServoModule(Module, layer=4):
 
         self._publish_status()
 
-    def _find_target_bbox(self) -> Optional[list]:
+    def _find_target_bbox(self) -> list | None:
         """Find target label in latest scene_graph detections → return bbox."""
         sg = self._latest_sg
         if sg is None or not sg.objects:
@@ -368,7 +368,7 @@ class VisualServoModule(Module, layer=4):
 
         self.servo_status.publish(status)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["tracking_active"] = self._mode != MODE_IDLE
         if self._mode == MODE_IDLE:

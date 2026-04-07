@@ -99,7 +99,7 @@ except ImportError:
 # ── Conversion helpers ──────────────────────────────────────────────────
 
 
-def livox_msg_to_numpy(msg) -> Optional[np.ndarray]:
+def livox_msg_to_numpy(msg) -> np.ndarray | None:
     """Convert a LivoxCustomMsg to numpy (N, 4): x, y, z, intensity.
 
     Uses list-comprehension + single np.array() call — measured ~1.5ms

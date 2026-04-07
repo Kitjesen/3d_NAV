@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core import In, Module, Out, skill
-from core.registry import register
 from core.msgs import Odometry
+from core.registry import register
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class MissionLoggerModule(Module, layer=3):
         self._log_dir = Path(log_dir)
         self._log_dir.mkdir(parents=True, exist_ok=True)
 
-        self._current: Optional[Dict[str, Any]] = None
+        self._current: dict[str, Any] | None = None
         self._last_odom_time: float = 0.0
         self._last_x: float = 0.0
         self._last_y: float = 0.0
@@ -144,7 +144,7 @@ class MissionLoggerModule(Module, layer=3):
 
     # -- persistence --
 
-    def _save_mission(self, mission: Dict[str, Any]) -> None:
+    def _save_mission(self, mission: dict[str, Any]) -> None:
         safe_id = mission["id"].replace(":", "-")
         path = self._log_dir / f"{safe_id}.json"
         try:
@@ -163,7 +163,7 @@ class MissionLoggerModule(Module, layer=3):
                 except OSError:
                     pass
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["logged_entries"] = len(list(self._log_dir.glob("*.json")))
         info["buffer_size"] = 1 if self._current is not None else 0
@@ -179,10 +179,10 @@ class MissionLoggerModule(Module, layer=3):
 
     # -- REPL helpers (native types) --
 
-    def _list_missions_raw(self, count: int = 10) -> List[Dict[str, Any]]:
+    def _list_missions_raw(self, count: int = 10) -> list[dict[str, Any]]:
         """Return summary dicts of the most recent *count* missions."""
         files = sorted(self._log_dir.glob("*.json"), reverse=True)
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for f in files[:count]:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
@@ -202,7 +202,7 @@ class MissionLoggerModule(Module, layer=3):
                 logger.warning("Failed to read mission record %s: %s", f.name, exc)
         return results
 
-    def _stats_raw(self) -> Dict[str, Any]:
+    def _stats_raw(self) -> dict[str, Any]:
         """Return aggregate statistics dict."""
         files = list(self._log_dir.glob("*.json"))
         total = len(files)
@@ -249,13 +249,13 @@ class MissionLoggerModule(Module, layer=3):
 
     # -- Backward-compat shims for tests / REPL that expect native dicts --
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Return aggregate statistics dict (REPL / direct call compat)."""
         return self._stats_raw()
 
     # -- Full detail (REPL only, not exposed as @skill — trajectory is large) --
 
-    def get_mission(self, mission_id: str) -> Optional[Dict[str, Any]]:
+    def get_mission(self, mission_id: str) -> dict[str, Any] | None:
         """Return full detail (including trajectory) for a mission by ID."""
         if not mission_id:
             return None

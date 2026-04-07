@@ -32,10 +32,10 @@ import time
 from typing import Any, Dict, Optional
 
 from core.module import Module, skill
-from core.stream import In, Out
 from core.msgs.geometry import Twist, Vector3
 from core.msgs.sensor import Image
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +84,10 @@ class TeleopModule(Module, layer=6):
         self._gateway = None
 
         # Camera encoding
-        self._encode_thread: Optional[threading.Thread] = None
-        self._idle_thread: Optional[threading.Thread] = None
+        self._encode_thread: threading.Thread | None = None
+        self._idle_thread: threading.Thread | None = None
         self._running = False
-        self._latest_raw: Optional[Any] = None
+        self._latest_raw: Any | None = None
         self._raw_lock = threading.Lock()
         self._new_frame = threading.Event()
 
@@ -123,7 +123,7 @@ class TeleopModule(Module, layer=6):
         self._gateway = None
         super().stop()
 
-    def on_system_modules(self, modules: Dict[str, Any]) -> None:
+    def on_system_modules(self, modules: dict[str, Any]) -> None:
         """Inject GatewayModule reference for camera push + config sharing."""
         gw = modules.get("GatewayModule")
         if gw is not None:
@@ -237,7 +237,7 @@ class TeleopModule(Module, layer=6):
                 except Exception:
                     pass
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["active"] = self._active
         info["clients"] = self._clients

@@ -46,7 +46,7 @@ class GoalResolutionService:
         self._resolver = resolver
 
     def resolve_fast(self, instruction: str, scene_graph_json: str,
-                     robot_pos: Optional[Dict] = None) -> Any:
+                     robot_pos: dict | None = None) -> Any:
         """Fast Path — rule-based scene graph matching (~0.2ms).
 
         Returns GoalResult or None if confidence too low.
@@ -58,7 +58,7 @@ class GoalResolutionService:
             return None
 
     async def resolve_slow(self, instruction: str, scene_graph_json: str,
-                           robot_pos: Optional[Dict] = None) -> Any:
+                           robot_pos: dict | None = None) -> Any:
         """Slow Path — LLM reasoning (~2s).
 
         Returns GoalResult. Requires LLM client configured in resolver.
@@ -70,7 +70,7 @@ class GoalResolutionService:
             return None
 
     def resolve(self, instruction: str, scene_graph_json: str,
-                robot_pos: Optional[Dict] = None) -> Any:
+                robot_pos: dict | None = None) -> Any:
         """Auto — try Fast, return if confident, else None (caller decides on Slow)."""
         result = self.resolve_fast(instruction, scene_graph_json, robot_pos)
         if result is not None and hasattr(result, 'confidence'):
@@ -115,8 +115,8 @@ class FrontierExplorationService:
         origin_y: float,
         robot_pos: np.ndarray,
         instruction: str = "",
-        scene_graph: Optional[Dict] = None,
-    ) -> Optional[Any]:
+        scene_graph: dict | None = None,
+    ) -> Any | None:
         """Extract frontiers, score them, return the best one.
 
         Returns best Frontier or None if no valid frontiers.
@@ -174,7 +174,7 @@ class ActionExecutionService:
         """Generate look-around (360 scan) command."""
         return self._executor.generate_look_around_command(robot_pos)
 
-    async def recover(self, failed_action: str, scene_state: Dict,
+    async def recover(self, failed_action: str, scene_state: dict,
                       event_loop: Any = None) -> str:
         """LERa 3-step failure recovery using LLM.
 

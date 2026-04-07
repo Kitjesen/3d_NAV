@@ -11,11 +11,10 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from core import Module, In, Out
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion, Twist
+from core import In, Module, Out
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry, Path
 from core.msgs.semantic import SafetyState, SceneGraph
-
 
 # ============================================================================
 # NavigationModule
@@ -347,6 +346,7 @@ class TestMCPServerModule(unittest.TestCase):
     def test_tools_discovered_via_skill(self):
         """@skill methods on MCPServerModule itself appear in _tool_registry after on_system_modules."""
         import json
+
         from core.module import Module, skill
 
         class FakeNav(Module, layer=5):
@@ -389,6 +389,7 @@ class TestMCPServerModule(unittest.TestCase):
 
     def test_tag_location_via_skill(self):
         import json
+
         from memory.modules.tagged_locations_module import TaggedLocationsModule
         m = self._make()
         m._odom = {"x": 5.0, "y": 3.0, "z": 0.0}
@@ -400,6 +401,7 @@ class TestMCPServerModule(unittest.TestCase):
 
     def test_navigate_to_resolves_to_navigation_named_module(self):
         import json
+
         from core.module import Module, skill
 
         class FakeNav(Module, layer=5):
@@ -503,8 +505,8 @@ class TestSLAMModule(unittest.TestCase):
         self.assertEqual(m.layer, 1)
 
     def test_backends_registered(self):
-        from slam.slam_module import SLAMModule  # trigger @register
         from core.registry import list_plugins
+        from slam.slam_module import SLAMModule  # trigger @register
         backends = list_plugins("slam")
         self.assertIn("fastlio2", backends)
         self.assertIn("pointlio", backends)
@@ -524,7 +526,8 @@ class TestSLAMModule(unittest.TestCase):
 class TestSemanticPlannerModule(unittest.TestCase):
 
     def _make(self):
-        import sys, os
+        import os
+        import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "semantic", "planner"))
         from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
         return SemanticPlannerModule()
@@ -669,8 +672,8 @@ class TestSemanticPlannerModule(unittest.TestCase):
 
     def test_scene_graph_stored_as_object(self):
         """_on_scene_graph must persist the SceneGraph object, not just JSON."""
-        from core.msgs.semantic import SceneGraph, Detection3D
         from core.msgs.geometry import Vector3
+        from core.msgs.semantic import Detection3D, SceneGraph
         m = self._make()
         sg = SceneGraph(objects=[Detection3D(label="chair", confidence=0.9)])
         m._on_scene_graph(sg)
@@ -686,6 +689,7 @@ class TestMissionLoggerModule(unittest.TestCase):
 
     def _make(self, tmp_path=None):
         import tempfile
+
         from memory.modules.mission_logger_module import MissionLoggerModule
         log_dir = tmp_path or tempfile.mkdtemp(prefix="lingtu_test_missions_")
         return MissionLoggerModule(log_dir=log_dir)
@@ -720,7 +724,8 @@ class TestMissionLoggerModule(unittest.TestCase):
         self.assertEqual(s["total"], 0)
 
     def test_mission_lifecycle_saved(self):
-        import tempfile, os
+        import os
+        import tempfile
         tmp = tempfile.mkdtemp(prefix="lingtu_test_missions_")
         m = self._make(tmp_path=tmp)
 
@@ -728,7 +733,7 @@ class TestMissionLoggerModule(unittest.TestCase):
         self.assertIsNotNone(m._current)
         self.assertEqual(m._current["goal"], "kitchen")
 
-        from core.msgs.geometry import Pose, Vector3, Quaternion
+        from core.msgs.geometry import Pose, Quaternion, Vector3
         def _odom(x, y):
             return Odometry(pose=Pose(position=Vector3(x=x, y=y, z=0.0)))
         m._on_odom(_odom(1.0, 2.0))

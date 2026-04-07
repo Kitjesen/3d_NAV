@@ -50,7 +50,7 @@ class SceneMetadata:
     bounds: np.ndarray  # (2, 3) [min, max]
     floor_height: float
     ceiling_height: float
-    metadata: Dict
+    metadata: dict
 
 
 @dataclass
@@ -63,16 +63,16 @@ class Frame:
     camera_pose: np.ndarray  # (4, 4) 变换矩阵
 
     # 传感器数据
-    rgb: Optional[np.ndarray] = None  # (H, W, 3)
-    depth: Optional[np.ndarray] = None  # (H, W)
-    semantic: Optional[np.ndarray] = None  # (H, W)
+    rgb: np.ndarray | None = None  # (H, W, 3)
+    depth: np.ndarray | None = None  # (H, W)
+    semantic: np.ndarray | None = None  # (H, W)
 
     # 点云 (世界坐标系)
-    point_cloud: Optional[np.ndarray] = None  # (N, 3)
-    point_colors: Optional[np.ndarray] = None  # (N, 3)
+    point_cloud: np.ndarray | None = None  # (N, 3)
+    point_colors: np.ndarray | None = None  # (N, 3)
 
     # 相机内参
-    intrinsics: Optional[np.ndarray] = None  # (3, 3)
+    intrinsics: np.ndarray | None = None  # (3, 3)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -95,7 +95,7 @@ class BaseDatasetLoader(ABC):
             dataset_root: 数据集根目录
         """
         self.dataset_root = Path(dataset_root)
-        self._scene_cache: Dict[str, SceneMetadata] = {}
+        self._scene_cache: dict[str, SceneMetadata] = {}
 
     @abstractmethod
     def load_scene_metadata(self, scene_id: str) -> SceneMetadata:
@@ -137,7 +137,7 @@ class BaseDatasetLoader(ABC):
         pass
 
     @abstractmethod
-    def list_scenes(self) -> List[str]:
+    def list_scenes(self) -> list[str]:
         """
         列出所有场景。
 
@@ -149,9 +149,9 @@ class BaseDatasetLoader(ABC):
     def load_trajectory(
         self,
         scene_id: str,
-        frame_ids: Optional[List[int]] = None,
+        frame_ids: list[int] | None = None,
         **kwargs,
-    ) -> List[Frame]:
+    ) -> list[Frame]:
         """
         加载轨迹（多帧）。
 
@@ -307,7 +307,7 @@ class HM3DLoader(BaseDatasetLoader):
 
         return frame
 
-    def list_scenes(self) -> List[str]:
+    def list_scenes(self) -> list[str]:
         """列出 HM3D 所有场景。"""
         scenes = []
         for scene_dir in self.split_dir.iterdir():
@@ -319,7 +319,7 @@ class HM3DLoader(BaseDatasetLoader):
     def _depth_to_point_cloud(
         depth: np.ndarray,
         camera_pose: np.ndarray,
-        intrinsics: Optional[np.ndarray] = None,
+        intrinsics: np.ndarray | None = None,
     ) -> np.ndarray:
         """
         从深度图生成点云。
@@ -442,7 +442,7 @@ class GibsonLoader(BaseDatasetLoader):
 
         return frame
 
-    def list_scenes(self) -> List[str]:
+    def list_scenes(self) -> list[str]:
         """列出 Gibson 所有场景。"""
         scenes = []
         for scene_dir in self.dataset_root.iterdir():

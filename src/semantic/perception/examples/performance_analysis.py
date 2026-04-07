@@ -15,26 +15,25 @@
     python performance_analysis.py
 """
 
+import cProfile
+import pstats
 import sys
 import time
+from io import StringIO
 from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
-import cProfile
-import pstats
-from io import StringIO
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from semantic.perception.semantic_perception.local_rolling_grid import LocalRollingGrid
 from semantic.perception.semantic_perception.polyhedron_expansion import (
     PolyhedronExpander,
     PolyhedronExpansionConfig,
 )
 from semantic.perception.semantic_perception.scg_builder import SCGBuilder, SCGConfig
 from semantic.perception.semantic_perception.uncertainty_model import UncertaintyModel
-from semantic.perception.semantic_perception.local_rolling_grid import LocalRollingGrid
-
 
 # ══════════════════════════════════════════════════════════════════
 #  性能分析器
@@ -117,8 +116,9 @@ class PerformanceAnalyzer:
         print("=" * 60)
 
         # 创建测试多面体
-        from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
         from scipy.spatial import ConvexHull
+
+        from semantic.perception.semantic_perception.polyhedron_expansion import Polyhedron
 
         config = SCGConfig()
         scg_builder = SCGBuilder(config)

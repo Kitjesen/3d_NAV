@@ -19,7 +19,6 @@ import numpy as np
 
 from .detector_base import Detection2D, DetectorBase
 
-
 # COCO 80 缁鎮?(娑?ultralytics/YOLO 娑撯偓閼?
 COCO_NAMES = [
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
@@ -107,7 +106,7 @@ class BPUDetector(DetectorBase):
         self,
         confidence: float = 0.25,
         iou_threshold: float = 0.45,
-        model_path: Optional[str] = None,
+        model_path: str | None = None,
         max_detections: int = 64,
         min_box_size_px: int = 12,
     ):
@@ -131,6 +130,7 @@ class BPUDetector(DetectorBase):
     def load_model(self) -> None:
         """Load the BPU .hbm model."""
         import glob as _glob
+
         from hbm_runtime import HB_HBMRuntime
 
         path = self._model_path
@@ -160,7 +160,7 @@ class BPUDetector(DetectorBase):
         if vocab_matches:
             import json
             try:
-                with open(vocab_matches[0], "r", encoding="utf-8") as f:
+                with open(vocab_matches[0], encoding="utf-8") as f:
                     vdata = json.load(f)
                 names = vdata.get("names", {})
                 self._custom_vocab = {int(k): v for k, v in names.items()}
@@ -268,7 +268,7 @@ class BPUDetector(DetectorBase):
             f"[BPU] {self._model_name_short} loaded (seg={self.has_seg}{seg_info})"
         )
 
-    def detect(self, rgb: np.ndarray, text_prompt: str) -> List[Detection2D]:
+    def detect(self, rgb: np.ndarray, text_prompt: str) -> list[Detection2D]:
         """
         BPU 閹恒劎鎮?+ COCO 閺嶅洨鏉╁洦鎶ら妴?
 
@@ -309,7 +309,7 @@ class BPUDetector(DetectorBase):
         masks_list = self._generate_masks(raw, kept_mc, outputs, scale, pad_x, pad_y)
 
         # 鏉炲床娑?Detection2D, 閹?text_prompt 鏉╁洦鎶?
-        results: List[Detection2D] = []
+        results: list[Detection2D] = []
         frame_area = h0 * w0
         for i, (box, score, cid) in enumerate(raw):
             cid = int(cid)
@@ -364,7 +364,7 @@ class BPUDetector(DetectorBase):
         """Keep smaller far-field targets instead of hard-coding a 20px cutoff."""
         return width >= self._min_box_size_px and height >= self._min_box_size_px
 
-    def _limit_detection_results(self, results: List[Detection2D]) -> List[Detection2D]:
+    def _limit_detection_results(self, results: list[Detection2D]) -> list[Detection2D]:
         """Sort globally by confidence before truncation to avoid class-order bias."""
         if not results:
             return []
@@ -395,7 +395,7 @@ class BPUDetector(DetectorBase):
         """Decode YOLOE end-to-end output [1, 300, 38] into detections."""
         det_out = outputs[self._yoloe_det_name][0]  # (300, 38)
         # 38 = 4(bbox xyxy) + 1(score) + 1(class_id) + 32(mask_coeffs)
-        results: List[Detection2D] = []
+        results: list[Detection2D] = []
 
         for i in range(det_out.shape[0]):
             row = det_out[i]

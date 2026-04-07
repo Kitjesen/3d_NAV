@@ -17,7 +17,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semantic.perception.semantic_perception.local_rolling_grid import LocalRollingGrid, create_mock_point_cloud
+from semantic.perception.semantic_perception.local_rolling_grid import (
+    LocalRollingGrid,
+    create_mock_point_cloud,
+)
 
 
 def test_basic_functionality():

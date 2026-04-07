@@ -24,9 +24,9 @@ from typing import Any, Dict
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
 from core.msgs.nav import OccupancyGrid
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +108,7 @@ class ESDFModule(Module, layer=2):
             "frame_id":       og.frame_id,
         }
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["esdf"] = {"obstacle_threshold": self._obs_thr}
         return info

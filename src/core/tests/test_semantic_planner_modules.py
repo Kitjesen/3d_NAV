@@ -13,15 +13,14 @@ import math
 
 import pytest
 
-from core import In, Module, Out, autoconnect, Blueprint
+from core import Blueprint, In, Module, Out, autoconnect
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.semantic import GoalResult as MsgGoalResult, SceneGraph, Detection3D
-
+from core.msgs.semantic import Detection3D, SceneGraph
+from core.msgs.semantic import GoalResult as MsgGoalResult
+from semantic.planner.semantic_planner.action_executor_module import ActionExecutorModule
 from semantic.planner.semantic_planner.goal_resolver_module import GoalResolverModule
 from semantic.planner.semantic_planner.task_decomposer_module import TaskDecomposerModule
-from semantic.planner.semantic_planner.action_executor_module import ActionExecutorModule
-
 
 # ============================================================================
 # Helpers

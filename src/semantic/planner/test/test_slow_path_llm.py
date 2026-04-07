@@ -16,9 +16,10 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
-from semantic.planner.semantic_planner.llm_client import LLMConfig
 import pytest
+
 from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+from semantic.planner.semantic_planner.llm_client import LLMConfig
 
 
 def make_scene_graph(objects, relations=None):

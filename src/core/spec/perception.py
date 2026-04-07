@@ -19,7 +19,7 @@ class Detector(Protocol):
     expose at least these three methods.
     """
 
-    def detect(self, image: Any, classes: Optional[List[str]] = None) -> list:
+    def detect(self, image: Any, classes: list[str] | None = None) -> list:
         """Run detection on an image, optionally restricting to *classes*."""
         ...
 

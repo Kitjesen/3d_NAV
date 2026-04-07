@@ -24,7 +24,8 @@ import functools
 import logging
 import random
 import time
-from typing import Any, Callable, Optional, Sequence, Type, TypeVar
+from collections.abc import Callable, Sequence
+from typing import Any, Optional, Type, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,7 @@ def _try_empty_cuda_cache():
 def retry(
     max_attempts: int = 2,
     backoff: float = 1.0,
-    on: Sequence[Type[Exception]] = (Exception,),
+    on: Sequence[type[Exception]] = (Exception,),
     *,
     jitter: bool = True,
     log_level: int = logging.WARNING,
@@ -191,7 +192,7 @@ def retry(
 def retry_async(
     max_attempts: int = 2,
     backoff: float = 1.0,
-    on: Sequence[Type[Exception]] = (Exception,),
+    on: Sequence[type[Exception]] = (Exception,),
     *,
     jitter: bool = True,
     log_level: int = logging.WARNING,

@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from core.module import Module
 from core.stream import In, Out
 
-
 # ── RedactSecretsFilter ──────────────────────────────────────────────────────
 
 class TestRedactSecretsFilter(unittest.TestCase):

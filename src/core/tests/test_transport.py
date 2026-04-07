@@ -1,11 +1,12 @@
 """Tests for transport backends — LocalTransport, SHM, and Dual."""
 
-import time
 import threading
+import time
 
 import pytest
-from core.transport.local import LocalTransport, Transport
+
 from core.transport.abc import TopicConfig, TransportStrategy
+from core.transport.local import LocalTransport, Transport
 
 
 class TestLocalTransport:
@@ -247,9 +248,9 @@ class TestTransportAdapter:
 
     def test_adapter_with_out_in_ports(self):
         """Adapter works as transport for Out[T] → In[T] data flow."""
+        from core.stream import In, Out
         from core.transport.adapter import TransportAdapter
         from core.transport.shm import SHMTransport
-        from core.stream import Out, In
 
         adapter = TransportAdapter(SHMTransport())
 
@@ -281,8 +282,8 @@ class TestDDSTransport:
         t.close()
 
     def test_pub_sub_roundtrip(self):
-        from core.transport.dds import DDSTransport
         from core.transport.abc import TopicConfig
+        from core.transport.dds import DDSTransport
 
         transport = DDSTransport(domain_id=0)
         topic = TopicConfig(name="lingtu_test_roundtrip")
@@ -306,8 +307,8 @@ class TestDDSTransport:
         assert received[0] == {"hello": "dds", "value": 42}
 
     def test_close_cleanup(self):
-        from core.transport.dds import DDSTransport
         from core.transport.abc import TopicConfig
+        from core.transport.dds import DDSTransport
 
         transport = DDSTransport(domain_id=0)
         topic = TopicConfig(name="lingtu_test_cleanup")
@@ -350,16 +351,16 @@ class TestTransportFactory:
 
     def test_create_dds(self):
         pytest.importorskip("cyclonedds", reason="cyclonedds not installed")
-        from core.transport.factory import create_transport
         from core.transport.dds import DDSTransport
+        from core.transport.factory import create_transport
         t = create_transport(TransportStrategy.DDS)
         assert isinstance(t, DDSTransport)
         t.close()
 
     def test_create_dual(self):
         pytest.importorskip("cyclonedds", reason="cyclonedds not installed")
-        from core.transport.factory import create_transport
         from core.transport.dual import DualTransport
+        from core.transport.factory import create_transport
         t = create_transport(TransportStrategy.DUAL)
         assert isinstance(t, DualTransport)
         t.close()

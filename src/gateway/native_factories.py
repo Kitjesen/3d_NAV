@@ -18,7 +18,7 @@ from core.native_install import DDS_ENV, exe
 from core.native_module import NativeModule, NativeModuleConfig
 
 
-def grpc_gateway(cfg: Optional[RobotConfig] = None) -> NativeModule:
+def grpc_gateway(cfg: RobotConfig | None = None) -> NativeModule:
     """gRPC gateway — remote control + telemetry (C++)."""
     cfg = cfg or get_config()
     return NativeModule(NativeModuleConfig(

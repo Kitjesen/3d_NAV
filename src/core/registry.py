@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Set, Type
 logger = logging.getLogger(__name__)
 
 # Global: category -> {name -> (cls, metadata)}
-_registry: Dict[str, Dict[str, tuple]] = {}
+_registry: dict[str, dict[str, tuple]] = {}
 
 
 def register(
@@ -40,7 +40,7 @@ def register(
     name: str,
     *,
     priority: int = 0,
-    platforms: Optional[Set[str]] = None,
+    platforms: set[str] | None = None,
     description: str = "",
 ):
     """Decorator: register a class under category/name.
@@ -52,7 +52,7 @@ def register(
         platforms: {"x86_64", "aarch64"} or empty = all
         description: human-readable label
     """
-    def decorator(cls: Type) -> Type:
+    def decorator(cls: type) -> type:
         _registry.setdefault(category, {})[name] = (cls, {
             "priority": priority,
             "platforms": platforms or set(),
@@ -62,7 +62,7 @@ def register(
     return decorator
 
 
-def get(category: str, name: str) -> Type:
+def get(category: str, name: str) -> type:
     """Get registered class by category/name. Raises KeyError if missing."""
     if category not in _registry:
         raise KeyError(f"Unknown category '{category}'. Available: {list(_registry)}")
@@ -74,17 +74,17 @@ def get(category: str, name: str) -> Type:
     return _registry[category][name][0]
 
 
-def list_plugins(category: str) -> List[str]:
+def list_plugins(category: str) -> list[str]:
     """List all registered names in a category."""
     return sorted(_registry.get(category, {}).keys())
 
 
-def list_categories() -> List[str]:
+def list_categories() -> list[str]:
     """List all categories."""
     return sorted(_registry.keys())
 
 
-def auto_select(category: str, platform: str = "") -> Optional[str]:
+def auto_select(category: str, platform: str = "") -> str | None:
     """Pick highest-priority plugin, optionally filtered by platform."""
     if category not in _registry:
         return None
@@ -99,7 +99,7 @@ def auto_select(category: str, platform: str = "") -> Optional[str]:
     return candidates[0][1]
 
 
-def get_metadata(category: str, name: str) -> Dict[str, Any]:
+def get_metadata(category: str, name: str) -> dict[str, Any]:
     """Get plugin metadata."""
     if category in _registry and name in _registry[category]:
         return _registry[category][name][1]
@@ -111,12 +111,12 @@ def clear():
     _registry.clear()
 
 
-def snapshot() -> Dict[str, Dict[str, tuple]]:
+def snapshot() -> dict[str, dict[str, tuple]]:
     """Return a deep copy of the current registry (for test save/restore)."""
     return {cat: dict(plugins) for cat, plugins in _registry.items()}
 
 
-def restore(state: Dict[str, Dict[str, tuple]]) -> None:
+def restore(state: dict[str, dict[str, tuple]]) -> None:
     """Restore registry to a previously snapshotted state (for testing only)."""
     _registry.clear()
     for cat, plugins in state.items():

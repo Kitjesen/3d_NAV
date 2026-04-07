@@ -3,7 +3,7 @@
 import threading
 import unittest
 
-from core import Module, In, Out, Blueprint, autoconnect
+from core import Blueprint, In, Module, Out, autoconnect
 from core.msgs.geometry import Twist, Vector3
 from core.msgs.nav import Odometry
 

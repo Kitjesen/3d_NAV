@@ -21,12 +21,12 @@ from typing import Any, Dict
 
 import numpy as np
 
+from base_autonomy.modules._nav_core_loader import nav_core_build_hint, try_import_nav_core
 from core.module import Module
-from core.stream import In, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
-from base_autonomy.modules._nav_core_loader import try_import_nav_core, nav_core_build_hint
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class TerrainModule(Module, layer=2):
         super().__init__(**kw)
         self._backend = backend
         self._core = None       # nanobind: TerrainAnalysisCore
-        self._nodes: Dict[str, Any] = {}  # native: NativeModule dict
+        self._nodes: dict[str, Any] = {}  # native: NativeModule dict
         self._odom_x = 0.0
         self._odom_y = 0.0
         self._odom_z = 0.0
@@ -109,8 +109,8 @@ class TerrainModule(Module, layer=2):
     def _setup_native(self):
         """Setup C++ NativeModule backends (legacy)."""
         try:
-            from core.config import get_config
             from base_autonomy.native_factories import terrain_analysis, terrain_analysis_ext
+            from core.config import get_config
             cfg = get_config()
             self._nodes = {
                 "terrain": terrain_analysis(cfg),
@@ -216,7 +216,7 @@ class TerrainModule(Module, layer=2):
                 result.map_width, result.map_width)
             self.elevation_map.publish(elev)
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         node_health = {}
         for name, node in self._nodes.items():

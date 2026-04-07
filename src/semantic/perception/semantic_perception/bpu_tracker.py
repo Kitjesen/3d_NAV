@@ -33,7 +33,7 @@ class TrackedDetection:
     score: float              # 检测置信度 0-1
     label: str                # 检测类别文本
     class_id: int             # COCO class_id
-    mask: Optional[np.ndarray] = None  # HxW bool 实例分割 mask (可选)
+    mask: np.ndarray | None = None  # HxW bool 实例分割 mask (可选)
     det_idx: int = -1         # 对应原始 Detection2D 的索引 (用于回溯 mask)
 
 
@@ -49,13 +49,13 @@ class _DetectionResults:
       - len(results)    → int
     """
 
-    def __init__(self, dets: List[Detection2D]):
+    def __init__(self, dets: list[Detection2D]):
         n = len(dets)
         if n == 0:
             self.conf = np.empty((0,), dtype=np.float32)
             self.cls = np.empty((0,), dtype=np.float32)
             self._xyxy = np.empty((0, 4), dtype=np.float32)
-            self._orig_indices: List[int] = []
+            self._orig_indices: list[int] = []
         else:
             self.conf = np.array([d.score for d in dets], dtype=np.float32)
             self.cls = np.array([d.class_id for d in dets], dtype=np.float32)
@@ -81,7 +81,7 @@ class _DetectionResults:
     def __len__(self) -> int:
         return len(self.conf)
 
-    def __getitem__(self, mask) -> "_DetectionResults":
+    def __getitem__(self, mask) -> _DetectionResults:
         """支持布尔或整数索引，返回子集。"""
         obj = _DetectionResults.__new__(_DetectionResults)
         obj.conf = self.conf[mask]
@@ -189,13 +189,13 @@ class BPUTracker:
             raise ValueError(f"tracker_type must be 'botsort' or 'bytetrack', got '{tracker_type}'")
 
         # 保存最新一帧的原始检测，用于 track_id → mask 的回溯
-        self._last_dets: List[Detection2D] = []
+        self._last_dets: list[Detection2D] = []
 
         # 性能统计
         self.last_detect_ms: float = 0.0
         self.last_track_ms: float = 0.0
 
-    def track(self, bgr_frame: np.ndarray, text_prompt: str) -> List[TrackedDetection]:
+    def track(self, bgr_frame: np.ndarray, text_prompt: str) -> list[TrackedDetection]:
         """对单帧执行 BPU 检测 + BoT-SORT 跟踪。
 
         Args:
@@ -208,7 +208,7 @@ class BPUTracker:
         """
         # 1. BPU 检测
         t0 = time.perf_counter()
-        dets: List[Detection2D] = self._detector.detect(bgr_frame, text_prompt)
+        dets: list[Detection2D] = self._detector.detect(bgr_frame, text_prompt)
         self.last_detect_ms = (time.perf_counter() - t0) * 1000.0
         self._last_dets = dets
 
@@ -227,7 +227,7 @@ class BPUTracker:
 
         # 4. 转换为 TrackedDetection
         # raw_tracks 列: [x1, y1, x2, y2, track_id, score, cls, det_idx]
-        tracked: List[TrackedDetection] = []
+        tracked: list[TrackedDetection] = []
         for row in raw_tracks:
             x1, y1, x2, y2 = row[0], row[1], row[2], row[3]
             track_id = int(row[4])
@@ -262,7 +262,7 @@ class BPUTracker:
         self._last_dets = []
 
     @property
-    def active_track_ids(self) -> List[int]:
+    def active_track_ids(self) -> list[int]:
         """当前活跃 track ID 列表。"""
         return [t.track_id for t in self._tracker.tracked_stracks if t.is_activated]
 

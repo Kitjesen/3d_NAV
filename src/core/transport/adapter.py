@@ -22,9 +22,10 @@ Usage::
 
 import logging
 import pickle
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any, Dict, List, Optional
 
-from .abc import TopicConfig, TransportABC, Publisher, Subscriber
+from .abc import Publisher, Subscriber, TopicConfig, TransportABC
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +42,16 @@ class TransportAdapter:
         backend: TransportABC,
         default_qos_depth: int = 10,
         default_reliable: bool = False,
-        serializer: Optional[Callable[[Any], bytes]] = None,
-        deserializer: Optional[Callable[[bytes], Any]] = None,
+        serializer: Callable[[Any], bytes] | None = None,
+        deserializer: Callable[[bytes], Any] | None = None,
     ) -> None:
         self._backend = backend
         self._default_qos_depth = default_qos_depth
         self._default_reliable = default_reliable
         self._serializer = serializer or pickle.dumps
         self._deserializer = deserializer or pickle.loads
-        self._publishers: Dict[str, Publisher] = {}
-        self._subscribers: Dict[str, List[Subscriber]] = {}
+        self._publishers: dict[str, Publisher] = {}
+        self._subscribers: dict[str, list[Subscriber]] = {}
 
     def publish(self, topic: str, msg: Any) -> None:
         """Publish a message to a topic.

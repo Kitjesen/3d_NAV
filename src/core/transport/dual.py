@@ -5,7 +5,8 @@ Use when real-time performance and ROS2 tool access are both required.
 """
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .abc import Publisher, Subscriber, TopicConfig, TransportABC
 

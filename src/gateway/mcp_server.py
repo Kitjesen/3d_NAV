@@ -25,11 +25,11 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion, Twist
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.semantic import SceneGraph, SafetyState
+from core.msgs.semantic import SafetyState, SceneGraph
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -84,20 +84,20 @@ class MCPServerModule(Module, layer=6):
         super().__init__(**kw)
         self._port = port
         self._host = host
-        self._server_thread: Optional[threading.Thread] = None
+        self._server_thread: threading.Thread | None = None
 
         # Cached telemetry (written by subscriptions)
-        self._odom:    Optional[Dict] = None
+        self._odom:    dict | None = None
         self._sg_json: str = "{}"
-        self._safety:  Optional[Dict] = None
-        self._mission: Optional[Dict] = None
+        self._safety:  dict | None = None
+        self._mission: dict | None = None
 
         # Injected after system.start() by cli/main.py
         self._system_handle = None
 
         # Populated by on_system_modules() — all @skill across all modules
-        self._tool_registry: Dict[str, Any] = {}   # func_name → bound method
-        self._tool_list:     List[Dict] = []        # MCP tool descriptors
+        self._tool_registry: dict[str, Any] = {}   # func_name → bound method
+        self._tool_list:     list[dict] = []        # MCP tool descriptors
 
         # Memory / perception module references (for built-in query tools)
         self._tagged_locations_mod = None
@@ -110,7 +110,7 @@ class MCPServerModule(Module, layer=6):
         """Inject SystemHandle so get_health / list_modules work."""
         self._system_handle = handle
 
-    def on_system_modules(self, modules: Dict[str, Any]) -> None:
+    def on_system_modules(self, modules: dict[str, Any]) -> None:
         """Auto-discover every @skill method from every running module.
 
         Called by Blueprint.build() after all modules are instantiated.
@@ -362,10 +362,10 @@ class MCPServerModule(Module, layer=6):
 
     def _run_server(self) -> None:
         try:
+            import uvicorn
             from fastapi import FastAPI
             from fastapi.middleware.cors import CORSMiddleware
             from fastapi.responses import JSONResponse
-            import uvicorn
         except ImportError:
             logger.error("FastAPI not installed — run: pip install fastapi uvicorn")
             return
@@ -425,7 +425,7 @@ class MCPServerModule(Module, layer=6):
 
     # -- Module health summary ---------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["mcp"] = {
             "port":       self._port,

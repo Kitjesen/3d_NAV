@@ -20,21 +20,22 @@ import asyncio
 import logging
 import math
 import time
-from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from core.msgs.scene import (
     FLOOR_HEIGHT,
     FLOOR_MERGE_TOLERANCE,
-    FloorNode,
     GROUP_KEYWORDS,
-    GroupNode,
     REGION_CLUSTER_RADIUS,
     RELATION_NEAR_THRESHOLD,
     RELATION_ON_THRESHOLD,
     ROOM_NAMING_STABILITY_COUNT,
     ROOM_NAMING_STABILITY_SEC,
+    FloorNode,
+    GroupNode,
     Region,
     RoomNode,
     SpatialRelation,
@@ -57,7 +58,7 @@ class RoomManagerMixin:
     self._cached_regions, self._cached_floors。
     """
 
-    def compute_spatial_relations(self) -> List[SpatialRelation]:
+    def compute_spatial_relations(self) -> list[SpatialRelation]:
         """
         计算所有物体对之间的空间关系 (ConceptGraphs + SG-Nav)。
 
@@ -76,7 +77,7 @@ class RoomManagerMixin:
         Returns:
             SpatialRelation 列表
         """
-        relations: List[SpatialRelation] = []
+        relations: list[SpatialRelation] = []
         objs = list(self._objects.values())
         n = len(objs)
 
@@ -199,7 +200,7 @@ class RoomManagerMixin:
 
         return relations
 
-    def compute_regions(self) -> List[Region]:
+    def compute_regions(self) -> list[Region]:
         """
         将物体按空间位置聚类为区域 (SG-Nav 的"房间级"层次)。
 
@@ -246,7 +247,7 @@ class RoomManagerMixin:
                 cluster_labels = np.arange(len(objs))
 
         # 按簇ID分组
-        cluster_to_objs: Dict[int, List[int]] = {}
+        cluster_to_objs: dict[int, list[int]] = {}
         for idx, cl in enumerate(cluster_labels):
             cl_int = int(cl)
             if cl_int == -1:
@@ -256,7 +257,7 @@ class RoomManagerMixin:
             else:
                 cluster_to_objs.setdefault(cl_int, []).append(idx)
 
-        regions: List[Region] = []
+        regions: list[Region] = []
         for region_id, obj_indices in enumerate(cluster_to_objs.values()):
             obj_ids = [objs[i].object_id for i in obj_indices]
             center = positions_2d[obj_indices].mean(axis=0)
@@ -292,15 +293,15 @@ class RoomManagerMixin:
 
         return regions
 
-    def compute_groups(self, regions: List[Region]) -> List[GroupNode]:
+    def compute_groups(self, regions: list[Region]) -> list[GroupNode]:
         """
         根据 room/region 内物体语义构建 group 层。
 
         SG-Nav 的 group 层用于把同一区域中的同类物体聚为中间节点，
         降低 LLM 直接处理 object 级图的复杂度。
         """
-        groups: List[GroupNode] = []
-        group_index: Dict[Tuple[int, str], int] = {}
+        groups: list[GroupNode] = []
+        group_index: dict[tuple[int, str], int] = {}
 
         for room in regions:
             for oid in room.object_ids:
@@ -335,7 +336,7 @@ class RoomManagerMixin:
 
         return groups
 
-    def compute_rooms(self, regions: List[Region], groups: List[GroupNode]) -> List[RoomNode]:
+    def compute_rooms(self, regions: list[Region], groups: list[GroupNode]) -> list[RoomNode]:
         """将 region 标准化为 room 节点。
 
         创新1 补强: 当 Region 满足稳定条件时 (物体数 >= ROOM_NAMING_STABILITY_COUNT
@@ -343,12 +344,12 @@ class RoomManagerMixin:
         可读的语义名称 (e.g. '走廊', 'office'), 替换掉 'area_with_door_chair' 式的
         拼接命名。LLM 命名结果缓存在 _room_name_cache 中, 避免重复调用。
         """
-        room_to_groups: Dict[int, List[int]] = {}
+        room_to_groups: dict[int, list[int]] = {}
         for g in groups:
             room_to_groups.setdefault(g.room_id, []).append(g.group_id)
 
         now = time.time()
-        rooms: List[RoomNode] = []
+        rooms: list[RoomNode] = []
         for r in regions:
             labels = [
                 self._objects[oid].label
@@ -421,7 +422,7 @@ class RoomManagerMixin:
 
     def query_rooms_by_embedding(
         self, embedding: np.ndarray, top_k: int = 3
-    ) -> List[Tuple[RoomNode, float]]:
+    ) -> list[tuple[RoomNode, float]]:
         """OneMap: 用 CLIP embedding 查询最相似的 room。
 
         Args:
@@ -442,7 +443,7 @@ class RoomManagerMixin:
             return []
         q = q / q_norm
 
-        scored: List[Tuple[RoomNode, float]] = []
+        scored: list[tuple[RoomNode, float]] = []
         for room in rooms:
             if room.clip_feature is None:
                 continue
@@ -455,7 +456,7 @@ class RoomManagerMixin:
     _LLM_NAMING_MAX_CONCURRENT = 3
     _LLM_NAMING_TIMEOUT_S = 15.0
 
-    def _trigger_room_llm_naming(self, region_id: int, labels: List[str]) -> None:
+    def _trigger_room_llm_naming(self, region_id: int, labels: list[str]) -> None:
         """异步调用 LLM 为 Room 命名 (限并发 + 超时 + task 追踪)。"""
         if region_id in self._room_name_cache:
             return
@@ -510,8 +511,8 @@ class RoomManagerMixin:
 
     def compute_topology_edges(
         self,
-        rooms: List[RoomNode],
-    ) -> List[Dict]:
+        rooms: list[RoomNode],
+    ) -> list[dict]:
         """
         计算房间间拓扑连通边 (Hydra + Concept-Guided Exploration 融合)。
 
@@ -523,7 +524,7 @@ class RoomManagerMixin:
         if len(rooms) < 2:
             return []
 
-        edges: List[Dict] = []
+        edges: list[dict] = []
         seen_pairs: set = set()
 
         room_by_id = {r.room_id: r for r in rooms}
@@ -617,7 +618,7 @@ class RoomManagerMixin:
 
         return edges
 
-    def _estimate_frontier_directions(self, rooms: List[RoomNode]) -> List[Dict]:
+    def _estimate_frontier_directions(self, rooms: list[RoomNode]) -> list[dict]:
         """
         估算前沿方向 (创新5: 拓扑语义图前沿节点)。
 
@@ -631,7 +632,7 @@ class RoomManagerMixin:
         if not rooms or not self._objects:
             return []
 
-        frontiers: List[Dict] = []
+        frontiers: list[dict] = []
         all_positions = np.array([obj.position[:2] for obj in self._objects.values()])
         scene_center = all_positions.mean(axis=0)
 
@@ -732,9 +733,9 @@ class RoomManagerMixin:
         return frontiers[:10]
 
     @staticmethod
-    def _build_hierarchy_edges(rooms: List[RoomNode], groups: List[GroupNode]) -> List[Dict]:
+    def _build_hierarchy_edges(rooms: list[RoomNode], groups: list[GroupNode]) -> list[dict]:
         """构建 room→group→object 的层次边。"""
-        edges: List[Dict] = []
+        edges: list[dict] = []
 
         for room in rooms:
             for gid in room.group_ids:
@@ -759,9 +760,9 @@ class RoomManagerMixin:
         return edges
 
     @staticmethod
-    def _build_view_edges(views: List[ViewNode]) -> List[Dict]:
+    def _build_view_edges(views: list[ViewNode]) -> list[dict]:
         """构建 room→view→object 边。"""
-        edges: List[Dict] = []
+        edges: list[dict] = []
         for v in views:
             if v.room_id >= 0:
                 edges.append({
@@ -782,7 +783,7 @@ class RoomManagerMixin:
         return edges
 
     @staticmethod
-    def _assign_view_rooms(views: List[ViewNode], rooms: List[RoomNode]) -> List[ViewNode]:
+    def _assign_view_rooms(views: list[ViewNode], rooms: list[RoomNode]) -> list[ViewNode]:
         """为 view 节点分配 room_id（按最近 room center）。"""
         if not views:
             return []
@@ -802,14 +803,14 @@ class RoomManagerMixin:
 
     @staticmethod
     def _build_subgraphs(
-        rooms: List[RoomNode],
-        groups: List[GroupNode],
-        views: List[ViewNode],
-        objects_by_id: Dict[int, TrackedObject],
-        relations_list: List[Dict],
-    ) -> List[Dict]:
+        rooms: list[RoomNode],
+        groups: list[GroupNode],
+        views: list[ViewNode],
+        objects_by_id: dict[int, TrackedObject],
+        relations_list: list[dict],
+    ) -> list[dict]:
         """构建 SG-Nav 风格子图摘要，供 planner 侧按子图推理。"""
-        subgraphs: List[Dict] = []
+        subgraphs: list[dict] = []
 
         # room 级子图
         for room in rooms:
@@ -878,7 +879,7 @@ class RoomManagerMixin:
 
         return subgraphs
 
-    def compute_floors(self) -> List[FloorNode]:
+    def compute_floors(self) -> list[FloorNode]:
         """
         通过物体 z 坐标聚类推断楼层 (HOV-SG 层次场景图的 Floor 层)。
 
@@ -896,8 +897,8 @@ class RoomManagerMixin:
         z_sorted_indices = np.argsort(z_values)
         sorted_list = z_sorted_indices.tolist()
 
-        floors: List[FloorNode] = []
-        current_floor_objs: List[int] = []
+        floors: list[FloorNode] = []
+        current_floor_objs: list[int] = []
         current_z_min = z_values[sorted_list[0]]
         current_z_sum = 0.0
 
@@ -939,7 +940,7 @@ class RoomManagerMixin:
         return floors
 
     def assign_rooms_to_floors(
-        self, floors: List[FloorNode], rooms: List[RoomNode]
+        self, floors: list[FloorNode], rooms: list[RoomNode]
     ) -> None:
         """将 rooms 分配到 floors (通过其物体的 floor_level 投票)。"""
         for floor in floors:

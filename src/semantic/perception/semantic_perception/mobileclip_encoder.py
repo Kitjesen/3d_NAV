@@ -55,7 +55,7 @@ class MobileCLIPEncoder:
         self._tokenizer = None
         self._feature_dim: int = 0
 
-        self._text_cache: Dict[str, np.ndarray] = {}
+        self._text_cache: dict[str, np.ndarray] = {}
         self._cache_hits = 0
         self._cache_misses = 0
 
@@ -128,7 +128,8 @@ class MobileCLIPEncoder:
 
         # Try local cache first (avoids HuggingFace Hub network calls)
         pretrained = self._pretrained
-        import os, glob
+        import glob
+        import os
         for pattern in [
             "~/.cache/huggingface/hub/models--timm--vit_base_patch32_clip_224.openai/snapshots/*/open_clip_model.safetensors",
             "~/.cache/huggingface/hub/models--timm--vit_base_patch32_clip_224.openai/snapshots/*/open_clip_pytorch_model.bin",
@@ -157,7 +158,7 @@ class MobileCLIPEncoder:
             clip_model_name, self._feature_dim, self._device,
         )
 
-    def precompute_labels(self, labels: List[str]) -> None:
+    def precompute_labels(self, labels: list[str]) -> None:
         """
         预编码标签集合并缓存 (USS-Nav: 初始化时一次性完成)。
 
@@ -188,7 +189,7 @@ class MobileCLIPEncoder:
 
     def encode_text(
         self,
-        texts: List[str],
+        texts: list[str],
         use_cache: bool = True,
     ) -> np.ndarray:
         """
@@ -222,7 +223,7 @@ class MobileCLIPEncoder:
 
         return np.array(results)
 
-    def _batch_encode(self, texts: List[str]) -> List[np.ndarray]:
+    def _batch_encode(self, texts: list[str]) -> list[np.ndarray]:
         """批量文本编码 (GPU)。"""
         import torch
 
@@ -235,8 +236,8 @@ class MobileCLIPEncoder:
     def text_text_similarity(
         self,
         text_query: str,
-        text_list: List[str],
-    ) -> Optional[List[float]]:
+        text_list: list[str],
+    ) -> list[float] | None:
         """文本-文本余弦相似度 (兼容原 CLIPEncoder 接口)。"""
         if self._model is None or not text_list:
             return None
@@ -255,8 +256,8 @@ class MobileCLIPEncoder:
     def text_image_similarity(
         self,
         text_query: str,
-        image_features: List[np.ndarray],
-    ) -> List[float]:
+        image_features: list[np.ndarray],
+    ) -> list[float]:
         """
         文本与语义特征的相似度 (兼容原接口)。
 
@@ -271,7 +272,7 @@ class MobileCLIPEncoder:
             for f in image_features
         ]
 
-    def get_statistics(self) -> Dict[str, float]:
+    def get_statistics(self) -> dict[str, float]:
         return {
             "cache_hit_rate": self.cache_hit_rate,
             "cache_hits": self._cache_hits,

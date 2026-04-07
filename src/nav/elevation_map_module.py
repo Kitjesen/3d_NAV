@@ -22,10 +22,10 @@ from typing import Any, Dict
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ class ElevationMapModule(Module, layer=2):
             "frame_id":   "map",
         })
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["elevation_map"] = {
             "resolution": self._res,

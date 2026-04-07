@@ -17,8 +17,8 @@ import numpy as np
 # 添加模块路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from memory.spatial.topology_graph import TopologySemGraph, TopoNode
 from semantic.perception.semantic_perception.geometry_extractor import GeometryExtractor
-from memory.spatial.topology_graph import TopoNode, TopologySemGraph
 
 
 def test_toponode_serialization():

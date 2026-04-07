@@ -15,10 +15,10 @@ Coverage:
   - health() structure
 """
 
-import sys
-import os
-import time
 import asyncio
+import os
+import sys
+import time
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _repo = os.path.abspath(os.path.join(_here, "..", "..", "..", ".."))
@@ -31,14 +31,14 @@ for _p in [_repo, _src,
         sys.path.insert(0, _p)
 
 import pytest
+
 from core.module import Module, skill
-from core.stream import In, Out
 from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.semantic import SceneGraph, Detection3D, Region
+from core.msgs.semantic import Detection3D, Region, SceneGraph
+from core.stream import In, Out
 from semantic.planner.semantic_planner.agent_loop import AgentLoop
 from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
-
 
 # ---------------------------------------------------------------------------
 # Helpers

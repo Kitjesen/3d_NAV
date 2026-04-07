@@ -14,7 +14,8 @@ Canonical location: core.utils.sanitize
 import json
 import logging
 import math
-from typing import Any, Dict, List, Optional, Sequence, Union
+from collections.abc import Sequence
+from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,9 @@ def sanitize_float(v: float, default: float = 0.0) -> float:
 
 
 def sanitize_position(
-    pos: Optional[Sequence[float]],
+    pos: Sequence[float] | None,
     default: tuple = (0.0, 0.0, 0.0),
-) -> List[float]:
+) -> list[float]:
     """校验 3D 位置，NaN/Inf 分量替换为 default 对应分量。
 
     Returns:

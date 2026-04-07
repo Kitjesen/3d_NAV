@@ -24,11 +24,11 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from core.module import Module
-from core.stream import In, Out
-from core.msgs.geometry import Twist, Vector3, Pose, Quaternion, PoseStamped
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud2, Image, ImageFormat, CameraIntrinsics
+from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat, PointCloud2
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ class ROS2SimDriverModule(Module, layer=1):
 
         self._node = None
         self._pub_cmd_vel = None
-        self._spin_thread: Optional[threading.Thread] = None
+        self._spin_thread: threading.Thread | None = None
         self._running = False
         self._stopped = False
 
@@ -106,11 +106,12 @@ class ROS2SimDriverModule(Module, layer=1):
 
         try:
             import rclpy
+            from geometry_msgs.msg import TwistStamped
+            from nav_msgs.msg import Odometry as ROS2Odom
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
-            from nav_msgs.msg import Odometry as ROS2Odom
-            from sensor_msgs.msg import PointCloud2, Image as ROS2Image, CameraInfo
-            from geometry_msgs.msg import TwistStamped
+            from sensor_msgs.msg import CameraInfo, PointCloud2
+            from sensor_msgs.msg import Image as ROS2Image
 
             if not rclpy.ok():
                 rclpy.init()
@@ -371,8 +372,8 @@ class ROS2SimDriverModule(Module, layer=1):
         if self._pub_cmd_vel is None or self._node is None:
             return
         try:
-            from geometry_msgs.msg import TwistStamped
             from builtin_interfaces.msg import Time as ROS2Time
+            from geometry_msgs.msg import TwistStamped
 
             msg = TwistStamped()
             now = time.time()
@@ -416,7 +417,7 @@ class ROS2SimDriverModule(Module, layer=1):
 
     # -- Health --------------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["ros2"] = {
             "node": self._node_name,
@@ -434,12 +435,12 @@ class ROS2SimDriverModule(Module, layer=1):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _parse_xyz_offsets(fields) -> Optional[tuple]:
+def _parse_xyz_offsets(fields) -> tuple | None:
     """Extract byte offsets for x, y, z fields from a PointCloud2 field list.
 
     Returns (offset_x, offset_y, offset_z) or None if any field is missing.
     """
-    offsets: Dict[str, int] = {}
+    offsets: dict[str, int] = {}
     for field in fields:
         name = field.name.lower()
         if name in ("x", "y", "z"):

@@ -6,12 +6,16 @@ import json
 import unittest
 
 import numpy as np
-
 import pytest
-from semantic.planner.semantic_planner.frontier_scorer import FrontierScorer, FREE_CELL, UNKNOWN_CELL
+
 from semantic.planner.semantic_planner.exploration_strategy import (
     extract_frontier_scene_data,
     generate_frontier_goal,
+)
+from semantic.planner.semantic_planner.frontier_scorer import (
+    FREE_CELL,
+    UNKNOWN_CELL,
+    FrontierScorer,
 )
 
 

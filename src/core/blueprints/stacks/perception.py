@@ -34,8 +34,8 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
         pass
 
     try:
-        from semantic.perception.semantic_perception.perception_module import PerceptionModule
         from semantic.perception.semantic_perception.encoder_module import EncoderModule
+        from semantic.perception.semantic_perception.perception_module import PerceptionModule
 
         bp.add(
             PerceptionModule,

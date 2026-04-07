@@ -43,7 +43,7 @@ class GeometryExtractor:
         search_radius: float = 5.0,
         cost_threshold: float = 0.5,
         min_cells: int = 10,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         提取房间的几何信息。
 
@@ -121,7 +121,7 @@ class GeometryExtractor:
             logger.error(f"Failed to extract geometry for room at {room_center}: {e}")
             return self._empty_geometry()
 
-    def world_to_grid(self, world_pos: np.ndarray) -> Optional[Tuple[int, int]]:
+    def world_to_grid(self, world_pos: np.ndarray) -> tuple[int, int] | None:
         """
         世界坐标 → 栅格坐标。
 
@@ -162,10 +162,10 @@ class GeometryExtractor:
 
     def extract_traversable_cells(
         self,
-        center_grid: Tuple[int, int],
+        center_grid: tuple[int, int],
         radius_cells: int,
         cost_threshold: float,
-    ) -> List[Tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """
         提取可通行栅格单元。
 
@@ -204,8 +204,8 @@ class GeometryExtractor:
 
     def compute_bounding_box(
         self,
-        cells: List[Tuple[int, int]],
-    ) -> Dict[str, float]:
+        cells: list[tuple[int, int]],
+    ) -> dict[str, float]:
         """
         计算边界框 (AABB)。
 
@@ -234,7 +234,7 @@ class GeometryExtractor:
 
     def compute_convex_hull(
         self,
-        cells: List[Tuple[int, int]],
+        cells: list[tuple[int, int]],
     ) -> np.ndarray:
         """
         计算凸包 (使用 scipy.spatial.ConvexHull)。
@@ -273,7 +273,7 @@ class GeometryExtractor:
 
     def compute_traversable_area(
         self,
-        cells: List[Tuple[int, int]],
+        cells: list[tuple[int, int]],
     ) -> float:
         """
         计算可通行面积 (平方米)。
@@ -289,9 +289,9 @@ class GeometryExtractor:
 
     def extract_height_range(
         self,
-        center_grid: Tuple[int, int],
+        center_grid: tuple[int, int],
         radius_cells: int,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         提取高度范围 (从 layers_g 和 layers_c)。
 
@@ -330,7 +330,7 @@ class GeometryExtractor:
         self,
         num_cells: int,
         convex_hull: np.ndarray,
-        bounding_box: Dict[str, float],
+        bounding_box: dict[str, float],
     ) -> float:
         """
         计算几何信息的置信度。
@@ -389,7 +389,7 @@ class GeometryExtractor:
         return float(area)
 
     @staticmethod
-    def _empty_geometry() -> Dict[str, Any]:
+    def _empty_geometry() -> dict[str, Any]:
         """返回空几何信息 (用于错误情况)。"""
         return {
             "bounding_box": {"x_min": 0.0, "x_max": 0.0, "y_min": 0.0, "y_max": 0.0},

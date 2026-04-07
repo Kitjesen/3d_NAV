@@ -23,11 +23,11 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from core.stream import In, Out
 from core.module import Module
-from core.msgs.geometry import Twist, Quaternion, Vector3
+from core.msgs.geometry import Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class ThunderDriver(Module, layer=1):
         # 位置积分
         self._pos_x = 0.0
         self._pos_y = 0.0
-        self._last_odom_time: Optional[float] = None
+        self._last_odom_time: float | None = None
         self._last_slam_reset = time.time()
 
         # IMU 缓存
@@ -102,8 +102,8 @@ class ThunderDriver(Module, layer=1):
         self._latest_gyro = (0.0, 0.0, 0.0)
 
         # asyncio
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._grpc_thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._grpc_thread: threading.Thread | None = None
 
     # ── Brainstem auto-start ──
 
@@ -409,7 +409,7 @@ class ThunderDriver(Module, layer=1):
 
     # ── 健康报告 ──
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         stats = super().port_summary()
         stats["grpc"] = {
             "connected": self._connected,

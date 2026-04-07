@@ -31,18 +31,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
+import sys
 import threading
 import time
 from typing import Any, Dict, Optional
 
-import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-from core.stream import In, Out
 from core.module import Module
-from core.msgs.geometry import Twist, Quaternion, Vector3
+from core.msgs.geometry import Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class NovaDogConnection(Module, layer=1):
         # Dead-reckoning position
         self._pos_x = 0.0
         self._pos_y = 0.0
-        self._last_odom_time: Optional[float] = None
+        self._last_odom_time: float | None = None
         self._last_slam_reset = time.time()
 
         # IMU cache
@@ -115,8 +116,8 @@ class NovaDogConnection(Module, layer=1):
         self._latest_gyro = (0.0, 0.0, 0.0)
 
         # asyncio
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._grpc_thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._grpc_thread: threading.Thread | None = None
 
     # -- Lifecycle --
 
@@ -399,7 +400,7 @@ class NovaDogConnection(Module, layer=1):
 
     # -- Health --
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         stats = super().port_summary()
         stats["grpc"] = {
             "connected": self._connected,

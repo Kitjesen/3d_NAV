@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _executor = None
-_spin_thread: Optional[threading.Thread] = None
+_spin_thread: threading.Thread | None = None
 _running = False
 
 

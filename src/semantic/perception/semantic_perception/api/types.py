@@ -5,7 +5,8 @@ Semantic Perception API - 公共类型定义
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 
 
@@ -17,7 +18,7 @@ class BBox2D:
     x2: float
     y2: float
 
-    def to_list(self) -> List[float]:
+    def to_list(self) -> list[float]:
         """转换为列表格式"""
         return [self.x1, self.y1, self.x2, self.y2]
 
@@ -37,11 +38,11 @@ class Position3D:
     y: float
     z: float
 
-    def to_list(self) -> List[float]:
+    def to_list(self) -> list[float]:
         """转换为列表格式"""
         return [self.x, self.y, self.z]
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> dict[str, float]:
         """转换为字典格式"""
         return {"x": self.x, "y": self.y, "z": self.z}
 
@@ -52,10 +53,10 @@ class Detection2D:
     label: str
     confidence: float
     bbox: BBox2D
-    class_id: Optional[int] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    class_id: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "label": self.label,
@@ -74,12 +75,12 @@ class Detection3D:
     confidence: float
     bbox_2d: BBox2D
     position_3d: Position3D
-    clip_feature: Optional[np.ndarray] = None
+    clip_feature: np.ndarray | None = None
     detection_count: int = 1
     last_seen: float = 0.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式（不包含numpy数组）"""
         return {
             "id": self.id,
@@ -101,9 +102,9 @@ class Relation:
     predicate: str  # near, on, left_of, right_of, etc.
     object_id: str
     confidence: float = 1.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "subject_id": self.subject_id,
@@ -118,11 +119,11 @@ class Relation:
 class Region:
     """场景区域"""
     name: str
-    object_ids: List[str]
-    center: Optional[Position3D] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    object_ids: list[str]
+    center: Position3D | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "name": self.name,
@@ -135,14 +136,14 @@ class Region:
 @dataclass
 class SceneGraph:
     """场景图"""
-    objects: List[Detection3D]
-    relations: List[Relation]
-    regions: List[Region] = field(default_factory=list)
+    objects: list[Detection3D]
+    relations: list[Relation]
+    regions: list[Region] = field(default_factory=list)
     timestamp: float = 0.0
     frame_id: str = "map"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "objects": [obj.to_dict() for obj in self.objects],
@@ -153,14 +154,14 @@ class SceneGraph:
             "metadata": self.metadata
         }
 
-    def get_object_by_id(self, obj_id: str) -> Optional[Detection3D]:
+    def get_object_by_id(self, obj_id: str) -> Detection3D | None:
         """根据ID获取物体"""
         for obj in self.objects:
             if obj.id == obj_id:
                 return obj
         return None
 
-    def get_objects_by_label(self, label: str) -> List[Detection3D]:
+    def get_objects_by_label(self, label: str) -> list[Detection3D]:
         """根据标签获取物体列表"""
         return [obj for obj in self.objects if obj.label.lower() == label.lower()]
 
@@ -176,7 +177,7 @@ class CameraInfo:
     height: int
     depth_scale: float = 0.001  # 深度缩放因子
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "fx": self.fx,
@@ -201,9 +202,9 @@ class PerceptionConfig:
     merge_distance: float = 0.5
     max_depth: float = 6.0
     min_depth: float = 0.3
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "detector_type": self.detector_type,

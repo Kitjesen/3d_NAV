@@ -1,5 +1,4 @@
-﻿# -*- coding: utf-8 -*-
-"""
+﻿"""
 test_fast_slow_efficiency.py — Fast-Slow 双进程推理效率量化
 
 量化指标 (论文 Table 用):
@@ -25,11 +24,10 @@ import unittest
 from typing import Dict, List, Tuple
 
 import numpy as np
-
-from semantic.planner.semantic_planner.llm_client import LLMConfig
 import pytest
-from semantic.planner.semantic_planner.goal_resolver import GoalResolver
 
+from semantic.planner.semantic_planner.goal_resolver import GoalResolver
+from semantic.planner.semantic_planner.llm_client import LLMConfig
 
 # ============================================================
 #  场景生成工具
@@ -46,11 +44,11 @@ COMMON_OBJECTS = [
 
 def make_scene_scaled(
     target_label: str,
-    target_pos: Dict[str, float],
+    target_pos: dict[str, float],
     target_score: float = 0.85,
     target_det_count: int = 4,
     num_distractors: int = 8,
-    relations: List[Dict] = None,
+    relations: list[dict] = None,
     seed: int = 42,
     include_regions: bool = False,
 ) -> str:
@@ -162,8 +160,8 @@ class TestFastPathHitRateByComplexity(unittest.TestCase):
         self.resolver = GoalResolver(self.config, fast_path_threshold=0.75)
 
     def _run_hit_rate(
-        self, cases: List[Tuple], category: str,
-    ) -> Tuple[float, List[str]]:
+        self, cases: list[tuple], category: str,
+    ) -> tuple[float, list[str]]:
         """运行命中率测试, 返回 (rate, details)。"""
         hits = 0
         total = 0
@@ -485,7 +483,7 @@ class TestAdaNavEntropyTrigger(unittest.TestCase):
         self.config = LLMConfig(backend="openai", model="test")
         self.resolver = GoalResolver(self.config, fast_path_threshold=0.75)
 
-    def _compute_entropy(self, scores: List[float]) -> float:
+    def _compute_entropy(self, scores: list[float]) -> float:
         """Shannon entropy over normalized scores."""
         if not scores:
             return 0.0

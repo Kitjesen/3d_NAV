@@ -4,17 +4,17 @@ Verifies pluggable LLM backends, async request/response, Blueprint wiring.
 No API keys needed — uses mock backend.
 """
 
+import os
+import sys
 import time
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "semantic", "planner"))
 
-from core import Module, In, Out, Blueprint
+from core import Blueprint, In, Module, Out
 from semantic.planner.semantic_planner.llm_module import LLMModule, LLMRequest, LLMResponse
-
 
 # ---------------------------------------------------------------------------
 # LLMRequest / LLMResponse
@@ -171,7 +171,11 @@ class TestFullDecoupledPipeline(unittest.TestCase):
     def test_image_to_goal_pipeline(self):
         """Image → Detector → GoalResolver → LLM → Goal, all via Blueprint."""
         import numpy as np
-        from semantic.perception.semantic_perception.detector_module import DetectorModule, DetectionResult
+
+        from semantic.perception.semantic_perception.detector_module import (
+            DetectionResult,
+            DetectorModule,
+        )
 
         class FakePlanner(Module, layer=4):
             detections: In[DetectionResult]
@@ -186,6 +190,7 @@ class TestFullDecoupledPipeline(unittest.TestCase):
 
         # Mock detector backend
         from unittest.mock import patch
+
         from core.tests.test_perception_decoupled import _MockDetectorBackend
 
         with patch.object(DetectorModule, '_create_backend',

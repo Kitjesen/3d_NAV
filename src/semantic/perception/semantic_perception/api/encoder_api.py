@@ -6,6 +6,7 @@ Semantic Perception API - 编码器接口
 
 from abc import ABC, abstractmethod
 from typing import List, Union
+
 import numpy as np
 
 from .exceptions import EncoderError
@@ -61,7 +62,7 @@ class EncoderAPI(ABC):
         pass
 
     @abstractmethod
-    def encode_images_batch(self, images: List[np.ndarray]) -> np.ndarray:
+    def encode_images_batch(self, images: list[np.ndarray]) -> np.ndarray:
         """
         批量编码图像
 
@@ -77,7 +78,7 @@ class EncoderAPI(ABC):
         pass
 
     @abstractmethod
-    def encode_texts_batch(self, texts: List[str]) -> np.ndarray:
+    def encode_texts_batch(self, texts: list[str]) -> np.ndarray:
         """
         批量编码文本
 

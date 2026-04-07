@@ -1,8 +1,9 @@
 """Tests for core.utils.calibration_check — startup calibration validation."""
 
 import unittest
-from unittest.mock import MagicMock, patch
 from dataclasses import dataclass
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 
 

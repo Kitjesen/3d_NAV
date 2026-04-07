@@ -6,8 +6,8 @@ Covers:
   - Integration: visual odom → SlamBridge → fused odometry
 """
 
-import sys
 import os
+import sys
 import time
 import unittest
 
@@ -16,10 +16,9 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.sensor import Image, CameraIntrinsics
-from core.msgs.geometry import Pose, Vector3, Quaternion
-
+from core.msgs.sensor import CameraIntrinsics, Image
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DepthVisualOdomModule tests

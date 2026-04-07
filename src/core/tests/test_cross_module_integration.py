@@ -1,6 +1,8 @@
 """Cross-module integration tests for LingTu navigation system (tests 21-30)."""
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, "src")
 for d in ["src/semantic/perception", "src/semantic/planner"]:
     if os.path.isdir(d): sys.path.insert(0, d)
@@ -8,8 +10,9 @@ for k in ["MOONSHOT_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DASHSCOPE_
     os.environ.pop(k, None)
 import logging; logging.basicConfig(level=logging.ERROR)
 
-import time
 import threading
+import time
+
 import numpy as np
 
 # Capture warnings during build for test 30
@@ -25,14 +28,16 @@ def _capture_warn(self, msg, *args, **kwargs):
 logging.Logger.warning = _capture_warn
 
 # Patch server start methods to avoid port binding / blocking in CI
-import gateway.gateway_module as _gw_mod
 import drivers.teleop_module as _tp_mod
+import gateway.gateway_module as _gw_mod
 import gateway.mcp_server as _mcp_mod
+
 _gw_mod.GatewayModule.start = lambda self: None
 _tp_mod.TeleopModule.start = lambda self: None
 _mcp_mod.MCPServerModule.start = lambda self: None
 
 from core.blueprints.full_stack import full_stack_blueprint
+
 bp = full_stack_blueprint(
     robot="stub", slam_profile="none",
     enable_native=False, enable_semantic=True, enable_gateway=True,
@@ -121,8 +126,8 @@ except Exception as e:
 
 # ==== Test 22: Odometry fan-out ====
 try:
+    from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
     from core.msgs.nav import Odometry
-    from core.msgs.geometry import Pose, Twist, Vector3, Quaternion
     odom = Odometry(
         pose=Pose(position=Vector3(1.0, 2.0, 0.0), orientation=Quaternion(0, 0, 0, 1)),
         twist=Twist(linear=Vector3(0.1, 0, 0), angular=Vector3(0, 0, 0)),
@@ -166,8 +171,8 @@ except Exception as e:
 
 # ==== Test 24: Costmap chain ====
 try:
-    from nav.occupancy_grid_module import OccupancyGridModule
     from core.msgs.sensor import PointCloud2
+    from nav.occupancy_grid_module import OccupancyGridModule
     ogm = OccupancyGridModule(resolution=0.5, map_radius=5.0, z_min=0.1, z_max=2.0)
     ogm.setup()
     pts = np.array([[1.0, 1.0, 0.5], [1.5, 1.5, 0.8], [2.0, 2.0, 1.0], [-1.0, -1.0, 0.3]], dtype=np.float32)

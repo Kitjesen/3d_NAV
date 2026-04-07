@@ -32,9 +32,9 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 
 from core.module import Module
-from core.stream import Out
-from core.msgs.sensor import Image, ImageFormat, CameraIntrinsics
+from core.msgs.sensor import CameraIntrinsics, Image, ImageFormat
 from core.registry import register
+from core.stream import Out
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +75,9 @@ class CameraBridgeModule(Module, layer=1):
         self._rclpy_available = False
 
         # Undistortion maps — computed once on first camera_info with nonzero distortion
-        self._undistort_maps: Optional[Tuple[np.ndarray, np.ndarray]] = None
-        self._undistorted_intrinsics: Optional[CameraIntrinsics] = None
-        self._K: Optional[np.ndarray] = None  # 3x3 camera matrix (undistorted)
+        self._undistort_maps: tuple[np.ndarray, np.ndarray] | None = None
+        self._undistorted_intrinsics: CameraIntrinsics | None = None
+        self._K: np.ndarray | None = None  # 3x3 camera matrix (undistorted)
 
         # Auto-recovery: monitor data freshness, reconnect if stale
         self._last_color_ts: float = 0.0
@@ -85,7 +85,7 @@ class CameraBridgeModule(Module, layer=1):
         self._stale_timeout: float = kw.get("stale_timeout", 5.0)
         self._max_reconnects: int = kw.get("max_reconnects", 10)
         self._reconnect_count: int = 0
-        self._watchdog_thread: Optional[threading.Thread] = None
+        self._watchdog_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
 
     def setup(self) -> None:
@@ -96,7 +96,9 @@ class CameraBridgeModule(Module, layer=1):
         try:
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
-            from sensor_msgs.msg import Image as ROS2Image, CameraInfo
+            from sensor_msgs.msg import CameraInfo
+            from sensor_msgs.msg import Image as ROS2Image
+
             from core.ros2_context import ensure_rclpy, get_shared_executor
 
             ensure_rclpy()
@@ -163,7 +165,7 @@ class CameraBridgeModule(Module, layer=1):
             self._node = None
         super().stop()
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["frame_count"] = getattr(self, "_frame_count", 0)
         now = time.time()

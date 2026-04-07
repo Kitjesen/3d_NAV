@@ -25,8 +25,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from core.registry import get, snapshot, restore
-
+from core.registry import get, restore, snapshot
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -37,7 +36,7 @@ def registry_isolation():
     """Save registry state before each test, restore after to prevent pollution."""
     saved = snapshot()
     # Trigger @register decorators (executed at import time)
-    import global_planning.pct_adapters.src.global_planner_module  # noqa: F401
+    import global_planning.pct_adapters.src.global_planner_module
     yield
     restore(saved)
     # Re-register after restore clears the registry

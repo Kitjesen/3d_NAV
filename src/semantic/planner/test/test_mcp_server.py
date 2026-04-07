@@ -39,12 +39,11 @@ for _p in [_repo, _src]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from core.stream import In, Out
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion, Twist
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.semantic import SceneGraph, SafetyState
+from core.msgs.semantic import SafetyState, SceneGraph
+from core.stream import In, Out
 from gateway.mcp_server import MCPServerModule
-
 
 # ---------------------------------------------------------------------------
 # Helpers

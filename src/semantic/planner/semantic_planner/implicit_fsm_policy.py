@@ -187,7 +187,7 @@ class ImplicitFSMPolicy:
     def is_ready(self) -> bool:
         return self._ready
 
-    def predict(self, obs: ImplicitFSMObservation) -> Optional[ImplicitFSMPrediction]:
+    def predict(self, obs: ImplicitFSMObservation) -> ImplicitFSMPrediction | None:
         if not self._ready or self._model is None:
             return None
 

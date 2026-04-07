@@ -82,13 +82,13 @@ class BenchmarkResult:
     timestamp: float
 
     # 各项指标
-    memory: Optional[MemoryMetrics] = None
-    update: Optional[UpdateMetrics] = None
-    path: Optional[PathMetrics] = None
-    exploration: Optional[ExplorationMetrics] = None
+    memory: MemoryMetrics | None = None
+    update: UpdateMetrics | None = None
+    path: PathMetrics | None = None
+    exploration: ExplorationMetrics | None = None
 
     # 额外信息
-    metadata: Dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=dict)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -153,7 +153,7 @@ class UpdateEvaluator:
     """
 
     def __init__(self):
-        self.update_times: List[float] = []
+        self.update_times: list[float] = []
         self.current_start = 0.0
 
     def start_update(self):
@@ -198,7 +198,7 @@ class PathEvaluator:
     @staticmethod
     def evaluate_path(
         path: np.ndarray,
-        occupancy_grid: Optional[np.ndarray] = None,
+        occupancy_grid: np.ndarray | None = None,
         planning_time: float = 0.0,
     ) -> PathMetrics:
         """
@@ -360,7 +360,7 @@ class BenchmarkFramework:
     """
 
     def __init__(self):
-        self.results: List[BenchmarkResult] = []
+        self.results: list[BenchmarkResult] = []
 
     def run_benchmark(
         self,

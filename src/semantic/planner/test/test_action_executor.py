@@ -12,8 +12,8 @@ import time
 import unittest
 
 import numpy as np
-
 import pytest
+
 from semantic.planner.semantic_planner.action_executor import (
     ActionCommand,
     ActionExecutor,

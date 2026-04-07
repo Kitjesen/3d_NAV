@@ -32,7 +32,6 @@ from core.msgs.geometry import Pose, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import Image, ImageFormat
 
-
 # ---------------------------------------------------------------------------
 # 1. MapManagerModule
 # ---------------------------------------------------------------------------
@@ -50,7 +49,7 @@ class TestMapManagerModule(unittest.TestCase):
             data_dir=self._data_dir,
         )
         self.mod.setup()
-        self._responses: List[dict] = []
+        self._responses: list[dict] = []
         self.mod.map_response.subscribe(lambda r: self._responses.append(r))
 
     def tearDown(self):
@@ -264,7 +263,7 @@ class TestWavefrontFrontierExplorer(unittest.TestCase):
         # _make_pose_stamped sets pose position via PoseStamped constructor
         # PoseStamped.x is a read-only property delegating to pose.x
         # The method may use direct pose attribute access; verify frame_id
-        from core.msgs.geometry import PoseStamped, Pose
+        from core.msgs.geometry import Pose, PoseStamped
         ps = PoseStamped(pose=Pose(3.0, 4.0, 0.0), frame_id="map")
         self.assertAlmostEqual(ps.x, 3.0)
         self.assertAlmostEqual(ps.y, 4.0)
@@ -283,8 +282,8 @@ class TestPatrolManagerModule(unittest.TestCase):
         from nav.services.nav_services.patrol_manager_module import PatrolManagerModule
         self.mod = PatrolManagerModule(routes_dir=os.path.join(self._tmpdir, "routes"))
         self.mod.setup()
-        self._statuses: List[str] = []
-        self._goals: List[list] = []
+        self._statuses: list[str] = []
+        self._goals: list[list] = []
         self.mod.patrol_status.subscribe(lambda s: self._statuses.append(s))
         self.mod.patrol_goals.subscribe(lambda g: self._goals.append(g))
 
@@ -382,7 +381,7 @@ class TestTaskSchedulerModule(unittest.TestCase):
             schedule_file=os.path.join(self._tmpdir, "sched.yaml")
         )
         self.mod.setup()
-        self._tasks: List[dict] = []
+        self._tasks: list[dict] = []
         self.mod.scheduled_task.subscribe(lambda t: self._tasks.append(t))
 
     def tearDown(self):
@@ -509,7 +508,7 @@ class TestGeofenceManagerModule(unittest.TestCase):
             geofence_file=os.path.join(self._tmpdir, "fences.yaml")
         )
         self.mod.setup()
-        self._alerts: List[dict] = []
+        self._alerts: list[dict] = []
         self.mod.geofence_alert.subscribe(lambda a: self._alerts.append(a))
 
     def tearDown(self):

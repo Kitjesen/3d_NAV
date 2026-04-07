@@ -18,12 +18,11 @@ import time
 
 import pytest
 
-from core.stream import In, LocalTransport, Out
-from core.module import Module, rpc, skill
 from core.blueprint import Blueprint, SystemHandle, autoconnect
+from core.module import Module, rpc, skill
 from core.msgs.geometry import PoseStamped, Vector3
-from core.msgs.semantic import SceneGraph, Detection3D, GoalResult
-
+from core.msgs.semantic import Detection3D, GoalResult, SceneGraph
+from core.stream import In, LocalTransport, Out
 
 # ============================================================================
 # Test Fixtures — 测试用模块定义
@@ -1457,6 +1456,7 @@ class TestWorker:
     def test_worker_list_empty(self):
         """Fresh worker returns empty module list."""
         import multiprocessing
+
         from core.worker import Worker
 
         cmd_q: multiprocessing.Queue = multiprocessing.Queue()
@@ -1476,6 +1476,7 @@ class TestWorker:
     def test_worker_deploy_module(self):
         """DEPLOY instantiates a module inside the worker."""
         import multiprocessing
+
         from core.worker import Worker
 
         cmd_q: multiprocessing.Queue = multiprocessing.Queue()
@@ -1500,6 +1501,7 @@ class TestWorker:
     def test_worker_rpc_call_across_process(self):
         """RPC call crosses the process boundary and returns the correct value."""
         import multiprocessing
+
         from core.worker import Worker
 
         cmd_q: multiprocessing.Queue = multiprocessing.Queue()
@@ -1532,6 +1534,7 @@ class TestWorker:
     def test_worker_shutdown_graceful(self):
         """SHUTDOWN stops all modules and the worker process exits cleanly."""
         import multiprocessing
+
         from core.worker import Worker
 
         cmd_q: multiprocessing.Queue = multiprocessing.Queue()
@@ -1591,6 +1594,7 @@ class TestWorker:
     def test_worker_get_skills_command(self):
         """GET_SKILLS returns serialized SkillInfo list for a deployed module."""
         import multiprocessing
+
         from core.worker import Worker
 
         cmd_q: multiprocessing.Queue = multiprocessing.Queue()

@@ -47,7 +47,7 @@ class LocalRollingGrid:
 
     def __init__(
         self,
-        size: Tuple[float, float, float] = (8.0, 8.0, 4.0),
+        size: tuple[float, float, float] = (8.0, 8.0, 4.0),
         resolution: float = 0.1,
         roll_threshold: float = 2.0,
     ):
@@ -81,7 +81,7 @@ class LocalRollingGrid:
     def update(
         self,
         robot_pose: np.ndarray,
-        point_cloud: Optional[np.ndarray] = None,
+        point_cloud: np.ndarray | None = None,
     ) -> None:
         """
         更新局部栅格。
@@ -184,7 +184,7 @@ class LocalRollingGrid:
                 # 贝叶斯更新（hit）
                 self._bayesian_update(grid_pos, hit=True)
 
-    def _bayesian_update(self, grid_pos: Tuple[int, int, int], hit: bool) -> None:
+    def _bayesian_update(self, grid_pos: tuple[int, int, int], hit: bool) -> None:
         """
         贝叶斯占据更新。
 
@@ -239,7 +239,7 @@ class LocalRollingGrid:
         """
         return (self.occupancy > threshold).astype(np.float32)
 
-    def world_to_grid(self, world_pos: np.ndarray) -> Optional[Tuple[int, int, int]]:
+    def world_to_grid(self, world_pos: np.ndarray) -> tuple[int, int, int] | None:
         """
         世界坐标 → 栅格坐标。
 
@@ -261,7 +261,7 @@ class LocalRollingGrid:
 
         return tuple(grid_pos)
 
-    def grid_to_world(self, grid_pos: Tuple[int, int, int]) -> np.ndarray:
+    def grid_to_world(self, grid_pos: tuple[int, int, int]) -> np.ndarray:
         """
         栅格坐标 → 世界坐标（栅格中心）。
 

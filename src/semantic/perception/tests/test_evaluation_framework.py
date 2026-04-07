@@ -19,15 +19,15 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from semantic.perception.semantic_perception.evaluation_framework import (
-    MemoryEvaluator,
-    UpdateEvaluator,
-    PathEvaluator,
-    ExplorationEvaluator,
     BenchmarkFramework,
-    MemoryMetrics,
-    UpdateMetrics,
-    PathMetrics,
+    ExplorationEvaluator,
     ExplorationMetrics,
+    MemoryEvaluator,
+    MemoryMetrics,
+    PathEvaluator,
+    PathMetrics,
+    UpdateEvaluator,
+    UpdateMetrics,
 )
 
 

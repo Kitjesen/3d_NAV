@@ -23,7 +23,7 @@ class TrackerStatus:
     """Snapshot of tracker state for one odometry tick."""
     wp_index: int
     wp_total: int
-    event: Optional[str] = field(default=None)
+    event: str | None = field(default=None)
 
 
 class WaypointTracker:
@@ -63,7 +63,7 @@ class WaypointTracker:
         self._stuck_timeout = stuck_timeout
         self._stuck_dist = stuck_dist
 
-        self._path: List[np.ndarray] = []
+        self._path: list[np.ndarray] = []
         self._wp_index: int = 0
         self._last_progress_time: float = 0.0
         self._last_progress_pos: np.ndarray = np.zeros(3)
@@ -74,7 +74,7 @@ class WaypointTracker:
     # Public API                                                           #
     # ------------------------------------------------------------------ #
 
-    def reset(self, path: List[np.ndarray], robot_pos: np.ndarray) -> None:
+    def reset(self, path: list[np.ndarray], robot_pos: np.ndarray) -> None:
         """Start tracking a new path. Clears all stuck state."""
         self._path = path
         self._wp_index = 0
@@ -153,7 +153,7 @@ class WaypointTracker:
     # ------------------------------------------------------------------ #
 
     @property
-    def current_waypoint(self) -> Optional[np.ndarray]:
+    def current_waypoint(self) -> np.ndarray | None:
         """Current waypoint to pursue, or None if path complete/empty."""
         if self._wp_index < len(self._path):
             return self._path[self._wp_index]

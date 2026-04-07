@@ -12,12 +12,19 @@ Legacy:
 """
 
 from .full_stack import full_stack_blueprint
+from .stacks import driver, gateway, maps, memory, navigation, perception, planner, safety, slam
 from .stub import stub_blueprint
-from .stacks import driver, slam, maps, perception, memory, planner, navigation, safety, gateway
 
 __all__ = [
+    "driver",
     "full_stack_blueprint",
+    "gateway",
+    "maps",
+    "memory",
+    "navigation",
+    "perception",
+    "planner",
+    "safety",
+    "slam",
     "stub_blueprint",
-    "driver", "slam", "maps", "perception", "memory",
-    "planner", "navigation", "safety", "gateway",
 ]

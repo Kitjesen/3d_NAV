@@ -33,10 +33,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from core.module import Module, skill
-from core.stream import In, Out
-from core.msgs.nav import Odometry
 from core.msgs.geometry import Pose, PoseStamped
+from core.msgs.nav import Odometry
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
         self._costmap_max_age: float = kw.get("costmap_max_age", 30.0)
 
         # Sensor state (updated by subscribers, read by exploration thread)
-        self._costmap_data: Optional[dict] = None
+        self._costmap_data: dict | None = None
         self._robot_x: float = 0.0
         self._robot_y: float = 0.0
         self._robot_yaw: float = 0.0
@@ -132,11 +132,11 @@ class WavefrontFrontierExplorer(Module, layer=2):
         self._goal_reached_event = threading.Event()
 
         # Exploration thread
-        self._explore_thread: Optional[threading.Thread] = None
+        self._explore_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         # Visited goals: list of (x, y) to avoid revisiting
-        self._visited_goals: List[Tuple[float, float]] = []
+        self._visited_goals: list[tuple[float, float]] = []
         self._consecutive_low_gain: int = 0
         self._max_low_gain: int = 3  # stop after N consecutive low-gain attempts
 
@@ -328,7 +328,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
         self.exploring.publish(False)
         logger.info("WavefrontFrontierExplorer: exploration loop exited")
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         exploring = self._explore_thread is not None and self._explore_thread.is_alive()
         info["exploration_state"] = "exploring" if exploring else "idle"
@@ -341,7 +341,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
 
     def _parse_costmap(
         self, data: dict
-    ) -> Tuple[Optional[np.ndarray], Optional[dict]]:
+    ) -> tuple[np.ndarray | None, dict | None]:
         """Extract grid array and geometry metadata from costmap dict.
 
         Returns (grid_2d, meta) where meta has resolution/origin_x/origin_y,
@@ -383,7 +383,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
         meta: dict,
         robot_x: float,
         robot_y: float,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """BFS from robot position to find frontier cells, then cluster them.
 
         A frontier cell is a FREE cell that has at least one UNKNOWN neighbour.
@@ -449,7 +449,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
                         queue.append((nr, nc, depth + 1))
 
         # Connected-component labelling on frontier_mask
-        clusters: List[dict] = []
+        clusters: list[dict] = []
         cluster_visited = np.zeros((h, w), dtype=bool)
 
         frontier_rows, frontier_cols = np.where(frontier_mask)
@@ -459,7 +459,7 @@ class WavefrontFrontierExplorer(Module, layer=2):
                 continue
 
             # Flood-fill this cluster with 8-connectivity
-            cells: List[Tuple[int, int]] = []
+            cells: list[tuple[int, int]] = []
             cq = deque()
             cq.append((r0, c0))
             cluster_visited[r0, c0] = True
@@ -499,12 +499,12 @@ class WavefrontFrontierExplorer(Module, layer=2):
 
     def _score_clusters(
         self,
-        clusters: List[dict],
+        clusters: list[dict],
         robot_x: float,
         robot_y: float,
         robot_yaw: float,
         meta: dict,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """Score and sort clusters (highest first).
 
         Weights:

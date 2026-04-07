@@ -3,6 +3,7 @@ test_laplacian_filter.py — Laplacian 模糊检测单元测试
 """
 
 import unittest
+
 import numpy as np
 import pytest
 
@@ -168,6 +169,7 @@ class TestInstanceTracker(unittest.TestCase):
     def test_scene_graph_json(self):
         """场景图 JSON 应可正常解析。"""
         import json
+
         from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
         from semantic.perception.semantic_perception.projection import Detection3D
         tracker = InstanceTracker()
@@ -194,6 +196,7 @@ class TestInstanceTracker(unittest.TestCase):
     def test_view_nodes_recorded(self):
         """记录视角后 scene_graph 应包含 view 节点。"""
         import json
+
         from semantic.perception.semantic_perception.instance_tracker import InstanceTracker
         from semantic.perception.semantic_perception.projection import Detection3D
 

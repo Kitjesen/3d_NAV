@@ -27,14 +27,16 @@ import logging
 import math
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from core.utils.sanitize import sanitize_position, safe_json_dumps
-from core.utils.sanitize import safe_json_dump
+from core.utils.sanitize import safe_json_dump, safe_json_dumps, sanitize_position
+from memory.knowledge.belief.propagation import BeliefPropagationMixin
 
 from .projection import Detection3D
+from .room_manager import RoomManagerMixin
 
 # ── 从子模块导入所有公开符号 (向后兼容: 外部 from .instance_tracker import X 继续有效) ──
 from .tracked_objects import (
@@ -54,32 +56,30 @@ from .tracked_objects import (
     BP_PHANTOM_BASE_ALPHA,
     BP_PHANTOM_MIN_ROOM_CONFIDENCE,
     BP_ROOM_TO_OBJ_WEIGHT,
-    BeliefMessage,
-    FloorNode,
     FLOOR_HEIGHT,
     FLOOR_MERGE_TOLERANCE,
     GROUP_KEYWORDS,
-    GroupNode,
-    PhantomNode,
     REGION_CLUSTER_RADIUS,
     RELATION_NEAR_THRESHOLD,
     RELATION_ON_THRESHOLD,
     ROOM_NAMING_STABILITY_COUNT,
     ROOM_NAMING_STABILITY_SEC,
     ROOM_TYPE_RULES,
-    Region,
-    RoomNode,
-    RoomTypePosterior,
     SAFETY_PRIOR_ALPHA_SCALE,
     SAFETY_THRESHOLDS_INTERACTION,
     SAFETY_THRESHOLDS_NAVIGATION,
+    BeliefMessage,
+    FloorNode,
+    GroupNode,
+    PhantomNode,
+    Region,
+    RoomNode,
+    RoomTypePosterior,
     SpatialRelation,
     TrackedObject,
     ViewNode,
     infer_room_type,
 )
-from memory.knowledge.belief.propagation import BeliefPropagationMixin
-from .room_manager import RoomManagerMixin
 
 logger = logging.getLogger(__name__)
 
@@ -125,47 +125,47 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         self.max_views = max_views
 
         self._lock = threading.Lock()  # 线程安全: 保护 _objects 并发访问
-        self._objects: Dict[int, TrackedObject] = {}
+        self._objects: dict[int, TrackedObject] = {}
         self._next_id = 0
 
         # 关键视角层 (view nodes)
-        self._views: Dict[int, ViewNode] = {}
+        self._views: dict[int, ViewNode] = {}
         self._next_view_id = 0
         self._last_view_id = -1
 
         # Room LLM 命名状态 (创新1: 在线增量场景图补强)
-        self._room_llm_namer: Optional[Callable] = None  # async (labels) -> str
-        self._room_name_cache: Dict[int, str] = {}       # region_id -> LLM name
-        self._last_rooms: List[RoomNode] = []              # OneMap: 最近一次 compute_rooms 缓存
-        self._llm_pending_tasks: Dict[int, asyncio.Task] = {}  # region_id -> pending LLM task
-        self._region_stability: Dict[int, Tuple[frozenset, float]] = {}  # region_id -> (obj_id_set, stable_since)
+        self._room_llm_namer: Callable | None = None  # async (labels) -> str
+        self._room_name_cache: dict[int, str] = {}       # region_id -> LLM name
+        self._last_rooms: list[RoomNode] = []              # OneMap: 最近一次 compute_rooms 缓存
+        self._llm_pending_tasks: dict[int, asyncio.Task] = {}  # region_id -> pending LLM task
+        self._region_stability: dict[int, tuple[frozenset, float]] = {}  # region_id -> (obj_id_set, stable_since)
 
         # 知识图谱 (ConceptBot / OpenFunGraph 增强)
         self._knowledge_graph = knowledge_graph
 
         # 楼层层 (SPADE / HOV-SG)
-        self._cached_floors: List[FloorNode] = []
+        self._cached_floors: list[FloorNode] = []
         self._cached_regions: list = []
 
         # ── Loopy Belief Propagation 状态 ──
-        self._room_type_posteriors: Dict[int, RoomTypePosterior] = {}
-        self._phantom_nodes: Dict[int, PhantomNode] = {}
+        self._room_type_posteriors: dict[int, RoomTypePosterior] = {}
+        self._phantom_nodes: dict[int, PhantomNode] = {}
         self._next_phantom_id = 0
-        self._bp_messages_log: List[BeliefMessage] = []  # 调试用: 最近一轮的消息
+        self._bp_messages_log: list[BeliefMessage] = []  # 调试用: 最近一轮的消息
         self._bp_iteration_count = 0                      # 统计: 总 BP 迭代次数
-        self._bp_convergence_history: List[float] = []    # 统计: 每轮最大 Δ
+        self._bp_convergence_history: list[float] = []    # 统计: 每轮最大 Δ
         self._last_bp_time: float = 0.0                   # BP 节流: 最多 1Hz
 
         # ── Neuro-Symbolic Belief GCN (KG-BELIEF) ──
         self._belief_model = None  # Optional[BeliefPredictor]
 
     @property
-    def objects(self) -> Dict[int, TrackedObject]:
+    def objects(self) -> dict[int, TrackedObject]:
         with self._lock:
             return dict(self._objects)  # 返回快照，防止外部迭代时并发修改
 
     @property
-    def views(self) -> Dict[int, ViewNode]:
+    def views(self) -> dict[int, ViewNode]:
         return self._views
 
     def set_room_namer(self, namer: Callable) -> None:
@@ -193,11 +193,11 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
 
     def update(
         self,
-        detections: List[Detection3D],
-        camera_pos: Optional[np.ndarray] = None,
-        camera_forward: Optional[np.ndarray] = None,
+        detections: list[Detection3D],
+        camera_pos: np.ndarray | None = None,
+        camera_forward: np.ndarray | None = None,
         intrinsics_fx: float = 0.0,
-    ) -> List[TrackedObject]:
+    ) -> list[TrackedObject]:
         """
         用本帧检测结果更新全局物体表。
 
@@ -211,7 +211,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
             本帧匹配/新建的 TrackedObject 列表
         """
         with self._lock:
-            matched: List[TrackedObject] = []
+            matched: list[TrackedObject] = []
 
             for det in detections:
                 # 传递真实 fx 给 _update_extent
@@ -278,10 +278,10 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
     def record_view(
         self,
         camera_position: np.ndarray,
-        object_ids: List[int],
+        object_ids: list[int],
         min_distance: float = 1.0,
         min_interval: float = 1.0,
-    ) -> Optional[ViewNode]:
+    ) -> ViewNode | None:
         """
         记录关键视角 (view 节点)。
 
@@ -333,8 +333,8 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         for v in oldest:
             self._views.pop(v.view_id, None)
 
-    def _collect_labels(self, object_ids: List[int], limit: int = 8) -> List[str]:
-        labels: List[str] = []
+    def _collect_labels(self, object_ids: list[int], limit: int = 8) -> list[str]:
+        labels: list[str] = []
         seen = set()
         for oid in object_ids:
             obj = self._objects.get(oid)
@@ -348,7 +348,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
                 break
         return labels
 
-    def _find_match(self, det: Detection3D) -> Optional[TrackedObject]:
+    def _find_match(self, det: Detection3D) -> TrackedObject | None:
         """
         USS-Nav §IV-C: 双指标优先级融合匹配。
 
@@ -374,7 +374,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
             return None
 
         # ── 优先级 1: Semantic Match (语义强 + 几何弱) ──
-        best_sem_match: Optional[TrackedObject] = None
+        best_sem_match: TrackedObject | None = None
         best_sem_score = -1.0
 
         for obj, dist in candidates:
@@ -402,7 +402,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
 
         # ── 优先级 2: Geometric Match (双向几何强) ──
         if det_has_points:
-            best_geo_match: Optional[TrackedObject] = None
+            best_geo_match: TrackedObject | None = None
             best_geo_score = -1.0
 
             for obj, dist in candidates:
@@ -423,7 +423,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
                 return best_geo_match
 
         # ── Fallback: 同类别 + 空间距离 (无点云时的降级路径) ──
-        best_fallback: Optional[TrackedObject] = None
+        best_fallback: TrackedObject | None = None
         best_dist = self.merge_distance
 
         for obj, dist in candidates:
@@ -806,21 +806,30 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         self,
         num_scenes: int = 5000,
         epochs: int = 50,
-        save_path: Optional[str] = None,
+        save_path: str | None = None,
     ) -> bool:
         """训练 KG-BELIEF GCN 模型 (从 KG 合成数据)。"""
         if self._knowledge_graph is None:
             logger.warning("Cannot train belief model without KG")
             return False
         try:
-            from memory.knowledge.belief.network import (
-                BeliefPredictor, BeliefTrainer as BTrainer,
-                KGBeliefGCN, KGSceneGraphDataset, SafetyWeightedBCELoss,
-                build_object_vocabulary, build_cooccurrence_matrix,
-                build_safety_vector, build_affordance_vectors,
-                build_room_prior_vectors, build_safety_loss_weights,
-            )
             import torch
+
+            from memory.knowledge.belief.network import (
+                BeliefPredictor,
+                KGBeliefGCN,
+                KGSceneGraphDataset,
+                SafetyWeightedBCELoss,
+                build_affordance_vectors,
+                build_cooccurrence_matrix,
+                build_object_vocabulary,
+                build_room_prior_vectors,
+                build_safety_loss_weights,
+                build_safety_vector,
+            )
+            from memory.knowledge.belief.network import (
+                BeliefTrainer as BTrainer,
+            )
 
             kg = self._knowledge_graph
             label2idx, idx2label = build_object_vocabulary(kg)
@@ -890,7 +899,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         query: str,
         top_k: int = 5,
         clip_encoder=None,
-    ) -> List[TrackedObject]:
+    ) -> list[TrackedObject]:
         """
         按文本查询匹配物体。
 
@@ -954,7 +963,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         anchor: str = "",
         top_k: int = 5,
         clip_encoder=None,
-    ) -> List[TrackedObject]:
+    ) -> list[TrackedObject]:
         """
         空间感知查询 (EmbodiedRAG + SG-Nav 空间推理)。
 
@@ -1011,7 +1020,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         self,
         affordance: str,
         top_k: int = 10,
-    ) -> List[TrackedObject]:
+    ) -> list[TrackedObject]:
         """
         按可供性查询 (OpenFunGraph 功能查询)。
 
@@ -1028,7 +1037,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
     def query_by_safety(
         self,
         safety_level: str = "dangerous",
-    ) -> List[TrackedObject]:
+    ) -> list[TrackedObject]:
         """查询特定安全等级的物体。"""
         return [
             obj for obj in self._objects.values()
@@ -1038,9 +1047,9 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
     def query_by_floor(
         self,
         floor_level: int,
-        label: Optional[str] = None,
+        label: str | None = None,
         top_k: int = 20,
-    ) -> List[TrackedObject]:
+    ) -> list[TrackedObject]:
         """按楼层查询物体 (SPADE 层次规划)。"""
         matches = [
             obj for obj in self._objects.values()
@@ -1060,7 +1069,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         target: str,
         max_nodes: int = 30,
         clip_encoder=None,
-    ) -> Dict:
+    ) -> dict:
         """
         EmbodiedRAG 风格的任务相关子图提取。
 
@@ -1154,7 +1163,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
     #  DovSG 动态场景图更新 (IEEE RA-L 2025)
     # ════════════════════════════════════════════════════════════
 
-    def compute_scene_diff(self, prev_snapshot: Dict) -> Dict:
+    def compute_scene_diff(self, prev_snapshot: dict) -> dict:
         """
         计算场景图差异 (DovSG 局部更新核心)。
 
@@ -1236,7 +1245,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         }
 
     @staticmethod
-    def _summarize_diff(events: List[Dict]) -> str:
+    def _summarize_diff(events: list[dict]) -> str:
         """生成场景变化的自然语言摘要。"""
         if not events:
             return "No changes detected."
@@ -1258,8 +1267,8 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
     def apply_local_update(
         self,
         region_id: int,
-        new_detections: List[Detection3D],
-    ) -> Dict:
+        new_detections: list[Detection3D],
+    ) -> dict:
         """
         DovSG 局部更新: 只更新指定区域的物体, 其余保持不变。
 
@@ -1350,7 +1359,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         query_embedding: np.ndarray,
         top_k: int = 5,
         min_similarity: float = 0.2,
-    ) -> List[Tuple[TrackedObject, float]]:
+    ) -> list[tuple[TrackedObject, float]]:
         """
         用 CLIP 嵌入向量查询最相似物体 (批量余弦相似度)。
 
@@ -1386,7 +1395,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         query: str,
         clip_encoder=None,
         top_k: int = 5,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         开放词汇查询: 文本 → CLIP → 场景图物体 (完整流程)。
 
@@ -1513,7 +1522,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         """从文件恢复场景图 (长期记忆加载)。"""
         import json
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.warning("Failed to load scene graph from %s: %s", path, e)
@@ -1576,10 +1585,10 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
 
     def update_local(
         self,
-        new_detections: List["Detection3D"],
+        new_detections: list["Detection3D"],
         robot_pos: "np.ndarray",
         update_radius: float = 5.0,
-    ) -> Dict:
+    ) -> dict:
         """Process only objects within *update_radius* metres of *robot_pos*.
 
         Objects outside the radius are left untouched but listed under
@@ -1622,7 +1631,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         max_age: float = None,
         stale_timeout_sec: float = None,
         min_confidence: float = 0.0,
-    ) -> List[str]:
+    ) -> list[str]:
         """Remove objects that have not been seen recently.
 
         Parameters
@@ -1646,7 +1655,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
             self._objects.pop(obj.object_id, None)
         return [str(obj.object_id) for obj in stale]
 
-    def get_scene_graph_diff_json(self, prev_snapshot: Dict) -> str:
+    def get_scene_graph_diff_json(self, prev_snapshot: dict) -> str:
         """Return a JSON string describing changes since *prev_snapshot*.
 
         The output has keys: ``added``, ``updated``, ``removed``, ``summary``, ``timestamp``.

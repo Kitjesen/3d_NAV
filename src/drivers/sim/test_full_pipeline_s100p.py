@@ -5,7 +5,12 @@ Run on S100P:
     cd ~/data/SLAM/navigation/src
     PYTHONPATH=. python3 drivers/sim/test_full_pipeline_s100p.py
 """
-import sys, os, time, math, pickle
+import math
+import os
+import pickle
+import sys
+import time
+
 import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -54,17 +59,19 @@ print("=" * 60)
 
 print("  nanobind...", end=" ")
 import _nav_core
+
 print("OK (%d functions)" % len([x for x in dir(_nav_core) if not x.startswith("_")]))
 
 print("  MuJoCo...", end=" ")
 print("OK (v%s)" % _mujoco_version(mujoco))
 
 print("  sim engine...", end=" ")
-from sim.engine.mujoco.engine import MuJoCoEngine
-from sim.engine.core.robot import RobotConfig
-from sim.engine.core.world import WorldConfig, ObstacleConfig
-from sim.engine.core.sensor import LidarConfig
 from sim.engine.core.engine import VelocityCommand
+from sim.engine.core.robot import RobotConfig
+from sim.engine.core.sensor import LidarConfig
+from sim.engine.core.world import ObstacleConfig, WorldConfig
+from sim.engine.mujoco.engine import MuJoCoEngine
+
 print("OK")
 
 print("  terrain_core...", end=" ")
@@ -92,6 +99,7 @@ except AttributeError:
 
 print("  planner backends...", end=" ")
 from global_planning.pct_adapters.src.global_planner_module import _AStarBackend
+
 try:
     from global_planning.pct_adapters.src.global_planner_module import _PCTBackend
     print("A* + PCT")
@@ -146,7 +154,7 @@ for step in range(100):
 pos = e.get_robot_state().position
 print("  Robot pos: (%.2f, %.2f)" % (pos[0], pos[1]))
 print("  Terrain scans: %d, obstacle points: %s" % (len(scan_results), scan_results))
-print("  Elevation map: %dx%d" % (scan_results and (51, 51) or (0, 0)))
+print("  Elevation map: %dx%d" % ((scan_results and (51, 51)) or (0, 0)))
 e.close()
 print("  PASSED")
 
@@ -156,15 +164,15 @@ print("=" * 60)
 print("Step 3: Full MuJoCo navigation (cmu_py + nav_core + A*)")
 print("=" * 60)
 
-from drivers.sim.mujoco_driver_module import MujocoDriverModule
-from nav.navigation_module import NavigationModule
 from base_autonomy.modules import LocalPlannerModule, PathFollowerModule
-from core.module import Module
 from core.blueprint import Blueprint
-from core.stream import Out, In
-from core.msgs.geometry import PoseStamped, Pose, Vector3, Quaternion
+from core.module import Module
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
+from core.stream import In, Out
+from drivers.sim.mujoco_driver_module import MujocoDriverModule
+from nav.navigation_module import NavigationModule
 
 
 class LiveMapper(Module, layer=3):

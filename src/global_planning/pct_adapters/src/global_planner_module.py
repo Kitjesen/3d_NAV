@@ -95,12 +95,12 @@ class _PCTBackend:
         self._load_error: str = ""
 
         # 2D ground-floor grid for _find_safe_goal BFS (extracted from tomogram)
-        self._grid: Optional[np.ndarray] = None
+        self._grid: np.ndarray | None = None
         self._resolution: float = 0.2
         self._origin: np.ndarray = np.zeros(2)
 
         # Live costmap overlay for dynamic obstacle avoidance
-        self._costmap: Optional[np.ndarray] = None
+        self._costmap: np.ndarray | None = None
         self._costmap_resolution: float = 0.2
         self._costmap_origin: np.ndarray = np.zeros(2)
 
@@ -212,7 +212,7 @@ class _PCTBackend:
             self._origin = np.array(raw.get("origin", [0, 0])[:2], dtype=np.float64)
 
         self._resolution = res
-        self._static_grid: Optional[np.ndarray] = None
+        self._static_grid: np.ndarray | None = None
         if self._grid is not None:
             self._static_grid = self._grid.copy()
             logger.info(
@@ -221,7 +221,7 @@ class _PCTBackend:
             )
 
     def update_map(self, grid: np.ndarray, resolution: float = 0.2,
-                   origin: Optional[np.ndarray] = None) -> None:
+                   origin: np.ndarray | None = None) -> None:
         """Accept live costmap for dynamic obstacle checking in _find_safe_goal.
 
         The costmap is stored separately and merged with the static tomogram
@@ -348,7 +348,7 @@ class _AStarBackend:
     """
 
     def __init__(self, tomogram_path: str = "", obstacle_thr: float = 49.9):
-        self._grid: Optional[np.ndarray] = None
+        self._grid: np.ndarray | None = None
         self._resolution = 0.2
         self._origin = np.zeros(2)
         self._obstacle_thr = obstacle_thr
@@ -384,7 +384,7 @@ class _AStarBackend:
         )
 
     def update_map(self, grid: np.ndarray, resolution: float = 0.2,
-                   origin: Optional[np.ndarray] = None) -> None:
+                   origin: np.ndarray | None = None) -> None:
         """Live costmap update — replaces the static pickle-loaded grid."""
         self._grid = np.asarray(grid, dtype=np.float32)
         self._resolution = resolution
@@ -405,12 +405,12 @@ class _AStarBackend:
         nrows, ncols = self._grid.shape  # grid[row=y, col=x]
         gz = float(goal[2]) if len(goal) > 2 else 0.0
 
-        def world2grid(wx: float, wy: float) -> Tuple[int, int]:
+        def world2grid(wx: float, wy: float) -> tuple[int, int]:
             col = int(round((wx - self._origin[0]) / res))
             row = int(round((wy - self._origin[1]) / res))
             return (max(0, min(col, ncols - 1)), max(0, min(row, nrows - 1)))
 
-        def grid2world(col: int, row: int) -> Tuple[float, float]:
+        def grid2world(col: int, row: int) -> tuple[float, float]:
             return (col * res + self._origin[0], row * res + self._origin[1])
 
         sc, sr = world2grid(float(start[0]), float(start[1]))
@@ -455,7 +455,7 @@ class _AStarBackend:
             return []
 
         # Reconstruct — walk came_from back to start, include start point
-        path_cells: List[Tuple[int, int]] = []
+        path_cells: list[tuple[int, int]] = []
         cur = (gc, gr)
         while cur in came_from:
             path_cells.append(cur)

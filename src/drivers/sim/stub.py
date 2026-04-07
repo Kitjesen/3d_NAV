@@ -17,10 +17,10 @@ import math
 import time
 from typing import Any, Dict
 
-from core.stream import In, Out
 from core.module import Module
 from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
+from core.stream import In, Out
 
 
 class StubConnection(Module, layer=1):
@@ -81,7 +81,7 @@ class StubConnection(Module, layer=1):
         ))
 
 
-def stub_blueprint(**config) -> "Blueprint":
+def stub_blueprint(**config) -> Blueprint:
     """Test blueprint -- StubConnection + new module architecture.
 
     NOTE: Blueprint factory — cross-layer imports are intentional here (see CLAUDE.md).

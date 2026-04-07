@@ -20,7 +20,7 @@ def load_yaml(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             if yaml is not None:
                 data = yaml.safe_load(f)
             else:

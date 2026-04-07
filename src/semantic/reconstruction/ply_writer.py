@@ -13,8 +13,8 @@ import numpy as np
 
 def save_ply(
     points_xyz: np.ndarray,          # (N, 3) float32
-    colors_rgb: Optional[np.ndarray] = None,  # (N, 3) uint8，可选
-    labels: Optional[List[str]] = None,        # (N,) str，可选，写入 comment
+    colors_rgb: np.ndarray | None = None,  # (N, 3) uint8，可选
+    labels: list[str] | None = None,        # (N,) str，可选，写入 comment
     filepath: str = "output.ply",
 ) -> int:
     """
@@ -83,7 +83,7 @@ def save_ply(
 
 def save_ply_with_labels(
     xyzrgb: np.ndarray,        # (N, 6) float32: xyz + rgb
-    labels: List[str],
+    labels: list[str],
     filepath: str,
 ) -> int:
     """保存带颜色的点云，同时在同目录输出 labels.txt。"""

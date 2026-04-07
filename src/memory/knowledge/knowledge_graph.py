@@ -75,17 +75,17 @@ class RelationType(Enum):
 class ObjectConcept:
     """物体概念节点 (KG 中的核心实体)。"""
     concept_id: str                  # 唯一标识, e.g. "fire_extinguisher"
-    names_zh: List[str]              # 中文名称列表 (含别名)
-    names_en: List[str]              # 英文名称列表 (含别名)
+    names_zh: list[str]              # 中文名称列表 (含别名)
+    names_en: list[str]              # 英文名称列表 (含别名)
     category: str                    # 上位类别: furniture, safety, electronics, etc.
     safety_level: SafetyLevel = SafetyLevel.SAFE
-    affordances: Set[AffordanceType] = field(default_factory=set)
-    typical_locations: List[str] = field(default_factory=list)
-    weight_kg: Tuple[float, float] = (0.0, 0.0)  # (min, max) 估算
+    affordances: set[AffordanceType] = field(default_factory=set)
+    typical_locations: list[str] = field(default_factory=list)
+    weight_kg: tuple[float, float] = (0.0, 0.0)  # (min, max) 估算
     size_class: str = "medium"       # small / medium / large / fixed
-    properties: Dict[str, str] = field(default_factory=dict)
-    safety_notes: List[str] = field(default_factory=list)
-    clip_aliases: List[str] = field(default_factory=list)  # CLIP 匹配用的额外描述
+    properties: dict[str, str] = field(default_factory=dict)
+    safety_notes: list[str] = field(default_factory=list)
+    clip_aliases: list[str] = field(default_factory=list)  # CLIP 匹配用的额外描述
 
 
 @dataclass
@@ -126,18 +126,18 @@ class IndustrialKnowledgeGraph:
     """
 
     def __init__(self):
-        self._concepts: Dict[str, ObjectConcept] = {}
-        self._relations: List[KGRelation] = []
-        self._safety_constraints: List[SafetyConstraint] = []
-        self._name_index_zh: Dict[str, str] = {}   # 中文名 → concept_id
-        self._name_index_en: Dict[str, str] = {}   # 英文名 → concept_id
-        self._category_index: Dict[str, List[str]] = {}  # category → [concept_id]
+        self._concepts: dict[str, ObjectConcept] = {}
+        self._relations: list[KGRelation] = []
+        self._safety_constraints: list[SafetyConstraint] = []
+        self._name_index_zh: dict[str, str] = {}   # 中文名 → concept_id
+        self._name_index_en: dict[str, str] = {}   # 英文名 → concept_id
+        self._category_index: dict[str, list[str]] = {}  # category → [concept_id]
 
         self._build_industrial_knowledge()
 
     # ── 查询接口 ──
 
-    def lookup(self, name: str) -> Optional[ObjectConcept]:
+    def lookup(self, name: str) -> ObjectConcept | None:
         """按名称查找物体概念 (中英文、别名、模糊匹配)。"""
         name_lower = name.lower().strip()
         if not name_lower:
@@ -167,12 +167,12 @@ class IndustrialKnowledgeGraph:
         concept = self.lookup(name)
         return concept.safety_level if concept else SafetyLevel.SAFE
 
-    def get_affordances(self, name: str) -> Set[AffordanceType]:
+    def get_affordances(self, name: str) -> set[AffordanceType]:
         """查询物体可供性。"""
         concept = self.lookup(name)
         return concept.affordances if concept else set()
 
-    def check_safety(self, target: str, action: str) -> Optional[SafetyConstraint]:
+    def check_safety(self, target: str, action: str) -> SafetyConstraint | None:
         """
         检查操作安全性 (SafeMind 约束检查)。
 
@@ -195,16 +195,16 @@ class IndustrialKnowledgeGraph:
 
         return None
 
-    def get_relations(self, concept_id: str) -> List[KGRelation]:
+    def get_relations(self, concept_id: str) -> list[KGRelation]:
         """获取概念的所有关系。"""
         return [r for r in self._relations if r.source == concept_id]
 
-    def get_typical_locations(self, name: str) -> List[str]:
+    def get_typical_locations(self, name: str) -> list[str]:
         """查询物体典型位置 (辅助 FIND 指令定向搜索)。"""
         concept = self.lookup(name)
         return concept.typical_locations if concept else []
 
-    def get_category_members(self, category: str) -> List[ObjectConcept]:
+    def get_category_members(self, category: str) -> list[ObjectConcept]:
         """按类别查询所有物体。"""
         cids = self._category_index.get(category, [])
         return [self._concepts[cid] for cid in cids if cid in self._concepts]
@@ -219,7 +219,7 @@ class IndustrialKnowledgeGraph:
         level = self.get_safety_level(name)
         return level in (SafetyLevel.DANGEROUS, SafetyLevel.FORBIDDEN)
 
-    def enrich_object_properties(self, label: str) -> Dict[str, any]:
+    def enrich_object_properties(self, label: str) -> dict[str, any]:
         """
         为检测到的物体补充 KG 知识 (ConceptBot OPE 模块)。
 
@@ -248,18 +248,18 @@ class IndustrialKnowledgeGraph:
             "properties": concept.properties,
         }
 
-    def query_by_affordance(self, affordance: AffordanceType) -> List[ObjectConcept]:
+    def query_by_affordance(self, affordance: AffordanceType) -> list[ObjectConcept]:
         """按可供性查询 (OpenFunGraph 功能查询)。"""
         return [
             c for c in self._concepts.values()
             if affordance in c.affordances
         ]
 
-    def get_all_concepts(self) -> List[ObjectConcept]:
+    def get_all_concepts(self) -> list[ObjectConcept]:
         """返回所有概念列表。"""
         return list(self._concepts.values())
 
-    def get_clip_vocabulary(self) -> List[str]:
+    def get_clip_vocabulary(self) -> list[str]:
         """导出 CLIP 匹配词汇表 (供 YOLO-World 动态类名)。"""
         vocab = []
         for concept in self._concepts.values():
@@ -349,10 +349,10 @@ class IndustrialKnowledgeGraph:
     def map_unknown_to_concept(
         self,
         label: str,
-        clip_embedding: Optional[np.ndarray] = None,
+        clip_embedding: np.ndarray | None = None,
         clip_encoder=None,
         similarity_threshold: float = 0.25,
-    ) -> Optional[ObjectConcept]:
+    ) -> ObjectConcept | None:
         """
         将未知物体映射到最近的已知概念 (DovSG 开放词汇)。
 
@@ -368,8 +368,8 @@ class IndustrialKnowledgeGraph:
 
         # Level 2: CLIP 语义相似度 (批量编码, 避免逐别名调用)
         if clip_embedding is not None and clip_encoder is not None:
-            all_aliases: List[str] = []
-            alias_to_concept: List[ObjectConcept] = []
+            all_aliases: list[str] = []
+            alias_to_concept: list[ObjectConcept] = []
             for concept in self._concepts.values():
                 for alias in concept.names_en + concept.clip_aliases:
                     all_aliases.append(alias)
@@ -422,7 +422,7 @@ class IndustrialKnowledgeGraph:
 
         return None
 
-    def get_room_expected_objects(self, room_type: str) -> List[str]:
+    def get_room_expected_objects(self, room_type: str) -> list[str]:
         """
         查询房间类型的预期物体 (引导探索, Concept-Guided Exploration 风格)。
 
@@ -478,7 +478,7 @@ class IndustrialKnowledgeGraph:
         room_lower = room_type.lower().replace(" ", "_")
         return room_objects.get(room_lower, [])
 
-    def get_manipulation_info(self, target: str, action: str) -> Dict:
+    def get_manipulation_info(self, target: str, action: str) -> dict:
         """
         获取操作信息 (PICK/PLACE 前的可行性判断)。
 
@@ -554,7 +554,7 @@ class IndustrialKnowledgeGraph:
 
         return result
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """返回 KG 统计信息。"""
         return {
             "total_concepts": len(self._concepts),

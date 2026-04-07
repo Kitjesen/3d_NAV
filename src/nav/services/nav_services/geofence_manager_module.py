@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core import Module, In, Out
+from core import In, Module, Out
 from core.msgs.nav import Odometry
 from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
@@ -40,7 +40,7 @@ class GeofenceManagerModule(Module, layer=6):
         )
         self._geofence_file = Path(default_file)
         self._geofence_file.parent.mkdir(parents=True, exist_ok=True)
-        self._fences: Dict[str, Dict[str, Any]] = self._load_fences()
+        self._fences: dict[str, dict[str, Any]] = self._load_fences()
         self._robot_x: float = 0.0
         self._robot_y: float = 0.0
 
@@ -62,7 +62,7 @@ class GeofenceManagerModule(Module, layer=6):
             cmd = {}
 
         action = cmd.get("action", "")
-        resp: Dict[str, Any] = {"action": action, "success": False}
+        resp: dict[str, Any] = {"action": action, "success": False}
 
         try:
             if action == "add":
@@ -86,7 +86,7 @@ class GeofenceManagerModule(Module, layer=6):
 
     # -- fence CRUD -------------------------------------------------------------
 
-    def _add_fence(self, cmd: Dict[str, Any]) -> Dict[str, Any]:
+    def _add_fence(self, cmd: dict[str, Any]) -> dict[str, Any]:
         name = cmd.get("name", "")
         polygon = cmd.get("polygon", [])
         if not name:
@@ -97,7 +97,7 @@ class GeofenceManagerModule(Module, layer=6):
         self._save_fences()
         return {"action": "add", "success": True, "message": f"fence added: {name}"}
 
-    def _remove_fence(self, name: str) -> Dict[str, Any]:
+    def _remove_fence(self, name: str) -> dict[str, Any]:
         if not name:
             return {"action": "remove", "success": False, "message": "missing fence name"}
         if name not in self._fences:
@@ -106,7 +106,7 @@ class GeofenceManagerModule(Module, layer=6):
         self._save_fences()
         return {"action": "remove", "success": True, "message": f"fence removed: {name}"}
 
-    def _list_fences(self) -> Dict[str, Any]:
+    def _list_fences(self) -> dict[str, Any]:
         fences = [
             {
                 "name": name,
@@ -117,13 +117,13 @@ class GeofenceManagerModule(Module, layer=6):
         ]
         return {"action": "list", "success": True, "fences": fences}
 
-    def _clear_fences(self) -> Dict[str, Any]:
+    def _clear_fences(self) -> dict[str, Any]:
         count = len(self._fences)
         self._fences.clear()
         self._save_fences()
         return {"action": "clear", "success": True, "message": f"cleared {count} fences"}
 
-    def _set_enabled(self, name: str, enabled: bool) -> Dict[str, Any]:
+    def _set_enabled(self, name: str, enabled: bool) -> dict[str, Any]:
         action_name = "enable" if enabled else "disable"
         if not name:
             return {"action": action_name, "success": False, "message": "missing fence name"}
@@ -136,13 +136,13 @@ class GeofenceManagerModule(Module, layer=6):
 
     # -- intrusion detection (call periodically) --------------------------------
 
-    def check_intrusion(self) -> List[Dict[str, Any]]:
+    def check_intrusion(self) -> list[dict[str, Any]]:
         """Check if robot is inside any enabled geofence.
 
         Returns list of intrusion alerts (empty if safe).
         Each alert is also published to geofence_alert.
         """
-        alerts: List[Dict[str, Any]] = []
+        alerts: list[dict[str, Any]] = []
         for name, data in self._fences.items():
             if not data.get("enabled", True):
                 continue
@@ -160,7 +160,7 @@ class GeofenceManagerModule(Module, layer=6):
         return alerts
 
     @staticmethod
-    def _point_in_polygon(px: float, py: float, polygon: List) -> bool:
+    def _point_in_polygon(px: float, py: float, polygon: list) -> bool:
         """Ray-casting point-in-polygon test."""
         n = len(polygon)
         if n < 3:
@@ -179,7 +179,7 @@ class GeofenceManagerModule(Module, layer=6):
 
     # -- health ----------------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["zone_count"] = len(self._fences)
         enabled = sum(1 for f in self._fences.values() if f.get("enabled", True))
@@ -190,7 +190,7 @@ class GeofenceManagerModule(Module, layer=6):
 
     # -- persistence ------------------------------------------------------------
 
-    def _load_fences(self) -> Dict[str, Dict[str, Any]]:
+    def _load_fences(self) -> dict[str, dict[str, Any]]:
         data = load_yaml(self._geofence_file)
         return data if isinstance(data, dict) else {}
 

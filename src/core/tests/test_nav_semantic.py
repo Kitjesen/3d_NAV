@@ -15,12 +15,11 @@ from core.msgs.semantic import (
     GoalResult,
     MissionStatus,
     NavigationCommand,
-    Relation,
     Region,
+    Relation,
     SafetyState,
     SceneGraph,
 )
-
 
 # ===== Odometry =====
 

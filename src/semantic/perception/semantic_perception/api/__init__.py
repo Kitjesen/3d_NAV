@@ -4,39 +4,37 @@ Semantic Perception API
 统一的语义感知接口层
 """
 
-from .types import (
-    BBox2D,
-    Position3D,
-    Detection2D,
-    Detection3D,
-    Relation,
-    Region,
-    SceneGraph,
-    CameraInfo,
-    PerceptionConfig,
-)
-
-from .exceptions import (
-    PerceptionAPIError,
-    DetectorError,
-    DetectorInitError,
-    DetectorInferenceError,
-    EncoderError,
-    EncoderInitError,
-    EncoderInferenceError,
-    TrackerError,
-    SceneGraphError,
-    InvalidImageError,
-    InvalidDepthError,
-    InvalidCameraInfoError,
-    ConfigurationError,
-)
-
-from .perception_api import PerceptionAPI
 from .detector_api import DetectorAPI
 from .encoder_api import EncoderAPI
-from .tracker_api import TrackerAPI
+from .exceptions import (
+    ConfigurationError,
+    DetectorError,
+    DetectorInferenceError,
+    DetectorInitError,
+    EncoderError,
+    EncoderInferenceError,
+    EncoderInitError,
+    InvalidCameraInfoError,
+    InvalidDepthError,
+    InvalidImageError,
+    PerceptionAPIError,
+    SceneGraphError,
+    TrackerError,
+)
 from .factory import PerceptionFactory
+from .perception_api import PerceptionAPI
+from .tracker_api import TrackerAPI
+from .types import (
+    BBox2D,
+    CameraInfo,
+    Detection2D,
+    Detection3D,
+    PerceptionConfig,
+    Position3D,
+    Region,
+    Relation,
+    SceneGraph,
+)
 
 __all__ = [
     # Types
