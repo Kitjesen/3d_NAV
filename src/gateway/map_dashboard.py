@@ -147,7 +147,10 @@ body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI',
     </div>
 
     <div style="margin-top:24px">
-      <h2 style="margin-bottom:10px">3D 预览</h2>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2>3D 预览 <span id="vMode" style="font-size:13px;color:var(--text2);font-weight:normal;margin-left:8px">实时建图</span></h2>
+        <button class="btn btn-sm btn-g" onclick="showLive()">查看实时建图</button>
+      </div>
       <iframe src="/map/viewer" class="viewer-frame" id="vFrame"></iframe>
     </div>
   </div>
@@ -243,7 +246,7 @@ async function loadMaps(){
       '<div class="mt">'+(size?'<span>'+size+'</span>':'')+(kf?'<span>'+kf+' 关键帧</span>':'')+'</div>' +
       '<div class="acts">' +
         (!isAct?'<button class="btn btn-g btn-sm" onclick="setAct(&quot;'+name+'&quot;)">设为当前</button>':'')+
-        '<button class="btn btn-b btn-sm" onclick="document.getElementById(&quot;vFrame&quot;).src=&quot;/map/viewer?map='+encodeURIComponent(name)+'&quot;">3D 查看</button>'+
+        '<button class="btn btn-b btn-sm" onclick="viewSaved(&quot;'+name+'&quot;)">3D 查看</button>'+
         '<button class="btn btn-sm" style="background:rgba(188,140,255,0.15);color:var(--purple);border:1px solid rgba(188,140,255,0.25)" onclick="renameMap(&quot;'+name+'&quot;)">重命名</button>'+
         '<button class="btn btn-r btn-sm" onclick="delMap(&quot;'+name+'&quot;)">删除</button>'+
       '</div></div>';
@@ -255,6 +258,15 @@ async function setAct(n){
   const r=await F('/api/v1/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_active',name:n})});
   if(r&&r.success!==false){T(n+' 已设为当前地图','ok');loadMaps();}
   else T('失败: '+(r?.error||'未知'),'err');
+}
+
+function showLive(){
+  document.getElementById('vFrame').src='/map/viewer?t='+Date.now();
+  document.getElementById('vMode').textContent='实时建图';
+}
+function viewSaved(name){
+  document.getElementById('vFrame').src='/map/viewer?map='+encodeURIComponent(name);
+  document.getElementById('vMode').textContent='已保存: '+name;
 }
 
 async function renameMap(n){

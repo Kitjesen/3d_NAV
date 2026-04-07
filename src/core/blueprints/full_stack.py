@@ -209,9 +209,12 @@ def full_stack_blueprint(
         "VectorMemoryModule", "TemporalMemoryModule", "MissionLoggerModule",
         "SemanticPlannerModule", "VisualServoModule",
         "ReconstructionModule", "SafetyRingModule", "GeofenceManagerModule",
-        "GatewayModule", "MCPServerModule",
+        "MCPServerModule",
     ]:
         _w(_drv, "odometry", consumer, "odometry")
+
+    # Gateway uses SLAM odometry (when available) for accurate position display
+    _w(_nav_odom_src, "odometry", "GatewayModule", "odometry")
 
     # Costmap → NavigationModule (live obstacle data for _find_safe_goal BFS)
     _w("OccupancyGridModule", "costmap", "NavigationModule", "costmap")
