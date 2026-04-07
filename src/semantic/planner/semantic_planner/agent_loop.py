@@ -3,28 +3,27 @@
 Upgrades SemanticPlannerModule from single-shot resolve to iterative agent:
   1. Observe: gather scene_graph + odometry + memory context + camera image
   2. Think:   LLM decides next action via tool calling
-  3. Act:     execute tool (navigate_to, detect_object, query_memory, tag_location,
-              describe_scene, assess_situation)
+  3. Act:     execute tool → any @skill method from any Module
   4. Repeat:  until task complete, max_steps reached, or abort
 
-Tools exposed to LLM:
-  navigate_to(x, y)             — publish goal_pose
-  navigate_to_object(label)     — Fast Path resolve
-  detect_object(label)          — check scene_graph for object
-  query_memory(text)            — vector search past locations
-  tag_location(name)            — save current position
-  say(text)                     — speak to user
-  done(summary)                 — mark task complete
-  describe_scene()              — VLM: describe current camera view
-  assess_situation(goal)        — VLM: does current view help reach goal?
+Tool discovery:
+  Tools are auto-discovered from all Modules with @skill-decorated methods.
+  SemanticPlannerModule collects them via on_system_modules() (same mechanism
+  as MCPServerModule) and passes them to AgentLoop at construction time.
+
+  Built-in tools (always available, not from @skill):
+    done(summary)                 — mark task complete
+    describe_scene(context)       — VLM: describe current camera view
+    assess_situation(goal)        — VLM: does current view help reach goal?
 
 Usage (called by SemanticPlannerModule._on_instruction):
-  loop = AgentLoop(llm_client, tools, publish_fns)
+  loop = AgentLoop(llm_client, tool_registry, tool_list, context_fn)
   await loop.run("找到红色椅子然后标记位置")
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -33,93 +32,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Tool definitions for LLM (OpenAI function-calling format)
-AGENT_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "navigate_to",
-            "description": "Navigate to a specific coordinate (x, y in meters).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "x": {"type": "number", "description": "X coordinate in meters"},
-                    "y": {"type": "number", "description": "Y coordinate in meters"},
-                },
-                "required": ["x", "y"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "navigate_to_object",
-            "description": "Navigate to a visible object by its label (e.g. 'red chair', 'door').",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "label": {"type": "string", "description": "Object label to find and navigate to"},
-                },
-                "required": ["label"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "detect_object",
-            "description": "Check if an object is currently visible in the scene.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "label": {"type": "string", "description": "Object label to look for"},
-                },
-                "required": ["label"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_memory",
-            "description": "Search past experience for a location matching a description.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "Natural language location description"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "tag_location",
-            "description": "Save the current robot position with a name for later navigation.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Name for this location"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "say",
-            "description": "Speak a message to the user.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "Message to say"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
+# Built-in tools (always available, not from @skill discovery)
+_BUILTIN_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -178,6 +92,131 @@ AGENT_TOOLS = [
     },
 ]
 
+_LEGACY_HANDLER_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "navigate_to",
+            "description": "Navigate to map coordinates in the global frame.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "number", "description": "Target x position in meters"},
+                    "y": {"type": "number", "description": "Target y position in meters"},
+                    "yaw": {
+                        "type": "number",
+                        "description": "Optional heading in radians",
+                        "default": 0.0,
+                    },
+                },
+                "required": ["x", "y"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "navigate_to_object",
+            "description": "Resolve and navigate toward an object label from the current scene graph.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string", "description": "Object label to navigate toward"},
+                },
+                "required": ["label"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "detect_object",
+            "description": "Check whether an object label is visible in the current scene graph.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string", "description": "Object label to search for"},
+                },
+                "required": ["label"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_memory",
+            "description": "Query spatial memory for a previously seen location.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Natural-language memory query"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tag_location",
+            "description": "Tag the robot's current location with a name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Tag name to assign"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "say",
+            "description": "Emit a short spoken or logged message for the operator.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Message to say"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+]
+
+# Backward-compatible public constant used by legacy tests.
+AGENT_TOOLS = _BUILTIN_TOOLS + _LEGACY_HANDLER_TOOLS
+
+
+def _dedupe_tools(tools: List[dict]) -> List[dict]:
+    seen: Dict[str, dict] = {}
+    for tool in tools:
+        fn = tool.get("function", {})
+        name = fn.get("name")
+        if name:
+            seen[name] = tool
+    return list(seen.values())
+
+
+def skills_to_openai_tools(tool_list: List[dict]) -> List[dict]:
+    """Convert MCP-style tool descriptors to OpenAI function-calling format.
+
+    MCP format:  {"name": "...", "description": "...", "inputSchema": {...}}
+    OpenAI format: {"type": "function", "function": {"name", "description", "parameters"}}
+    """
+    result = []
+    for t in tool_list:
+        result.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("inputSchema", {"type": "object", "properties": {}}),
+            },
+        })
+    return result
+
 AGENT_SYSTEM_PROMPT = """You are a navigation robot assistant. You execute tasks by calling tools in sequence.
 
 Available information:
@@ -222,27 +261,47 @@ class AgentLoop:
     def __init__(
         self,
         llm_client,
-        tool_handlers: Dict[str, Callable],
+        tool_registry: Dict[str, Callable],
+        tool_list: List[dict],
         context_fn: Callable[[], dict],
         max_steps: int = 10,
         timeout: float = 120.0,
+        *,
+        tool_handlers: Optional[Dict[str, Callable]] = None,
     ):
         """
         Args:
             llm_client: LLM client with chat() method (supports tool calling)
-            tool_handlers: {tool_name: handler_fn} — each returns a result string
+            tool_registry: {tool_name: bound_method} — auto-discovered @skill methods
+            tool_list: MCP-style tool descriptors from @skill auto-discovery
             context_fn: returns {robot_x, robot_y, visible_objects, nav_status,
                         memory_context, camera_image (np.ndarray or None),
                         scene_graph (dict or None), camera_available (bool)}
             max_steps: max iterations before forced stop
             timeout: max wall-clock seconds
+            tool_handlers: (deprecated) legacy {name: fn} dict, merged into registry
         """
         self._llm = llm_client
-        self._handlers = tool_handlers
+        discovered_tools = skills_to_openai_tools(tool_list)
+        legacy_tools = [
+            tool for tool in _LEGACY_HANDLER_TOOLS
+            if tool["function"]["name"] in (tool_handlers or {})
+        ]
+
+        # Merge legacy handlers + auto-discovered handlers; discovered handlers win.
+        self._handlers = dict(tool_handlers or {})
+        self._handlers.update(tool_registry)
+
+        # Build OpenAI-format tools: builtins + discovered + legacy compatibility tools.
+        self._tools = _dedupe_tools(_BUILTIN_TOOLS + discovered_tools + legacy_tools)
         self._context_fn = context_fn
         self._max_steps = max_steps
         self._timeout = timeout
         self._vlm_agent = None  # lazy-initialized on first VLM tool call
+        logger.info(
+            "AgentLoop: %d tools (%d discovered + %d legacy + %d builtin)",
+            len(self._tools), len(tool_list), len(legacy_tools), len(_BUILTIN_TOOLS),
+        )
 
     async def run(self, instruction: str) -> AgentState:
         """Execute the agent loop for a given instruction."""
@@ -310,25 +369,25 @@ class AgentLoop:
         """Call LLM with tool definitions. Returns parsed response."""
         # Try tool-calling format (OpenAI-compatible)
         if hasattr(self._llm, "chat_with_tools"):
-            return await self._llm.chat_with_tools(messages, tools=AGENT_TOOLS)
+            return await self._llm.chat_with_tools(messages, tools=self._tools)
 
         # Fallback: regular chat with tool descriptions in prompt
         tools_desc = "\n".join(
-            f"- {t['function']['name']}: {t['function']['description']}"
-            for t in AGENT_TOOLS
+            (
+                f"- {t['function']['name']}: {t['function'].get('description', '')} "
+                f"args={json.dumps(t['function'].get('parameters', {}), ensure_ascii=False)}"
+            )
+            for t in self._tools
         )
         augmented = messages.copy()
         augmented[0] = {
             "role": "system",
             "content": messages[0]["content"] + f"\n\nAvailable tools:\n{tools_desc}\n\n"
-                       "Respond with JSON: {\"tool\": \"name\", \"args\": {...}} or "
-                       "{\"tool\": \"done\", \"args\": {\"summary\": \"...\"}}"
+                       "You must either choose exactly one tool call in JSON or call done.\n"
+                       "Respond with JSON only: {\"tool\": \"name\", \"args\": {...}}"
         }
 
-        text = await self._llm.chat(
-            [m["content"] for m in augmented if m["role"] != "system"][-1],
-            system_prompt=augmented[0]["content"],
-        )
+        text = await self._llm.chat(augmented)
 
         # Parse JSON tool call from text
         return self._parse_text_tool_call(text)
@@ -476,6 +535,3 @@ class AgentLoop:
 
         return f"Unknown VLM tool: {name}"
 
-
-# Need asyncio import at module level for iscoroutinefunction check
-import asyncio

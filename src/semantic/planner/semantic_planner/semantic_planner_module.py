@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 # Minimum seconds between consecutive LERa triggers (prevents storm on repeated STUCK).
 _LERA_COOLDOWN = 15.0
+_AGENT_SKILL_BLOCKLIST = {
+    "send_instruction",  # avoid recursive self-triggering from inside the agent loop
+    "emergency_stop",    # keep safety-state transitions outside the LLM control path
+}
 
 
 @register("semantic_planner", "default", description="Unified semantic planner module")
@@ -128,6 +132,8 @@ class SemanticPlannerModule(Module, layer=4):
         # Sibling module references (set in on_system_modules)
         self._vector_memory = None
         self._tagged_locations = None
+        self._agent_tool_registry: Dict[str, Any] = {}
+        self._agent_tool_list: List[Dict[str, Any]] = []
 
         # Latest camera frame for VLM tools in the agent loop
         self._latest_rgb: Optional[np.ndarray] = None
@@ -140,6 +146,46 @@ class SemanticPlannerModule(Module, layer=4):
     def on_system_modules(self, modules: dict) -> None:
         self._vector_memory = modules.get("VectorMemoryModule")
         self._tagged_locations = modules.get("TaggedLocationsModule")
+        self._refresh_agent_tools(modules)
+
+    def _refresh_agent_tools(self, modules: Dict[str, Any]) -> None:
+        """Mirror MCP skill discovery for the internal agent loop."""
+        self._agent_tool_registry = {}
+        tool_list: List[Dict[str, Any]] = []
+
+        for mod_name, mod in modules.items():
+            if not hasattr(mod, "get_skill_infos"):
+                continue
+            try:
+                infos = mod.get_skill_infos()
+            except Exception as exc:
+                logger.debug("semantic planner: skill discovery failed for %s: %s", mod_name, exc)
+                continue
+
+            for info in infos:
+                if info.func_name in _AGENT_SKILL_BLOCKLIST:
+                    continue
+                method = getattr(mod, info.func_name, None)
+                if method is None:
+                    continue
+                self._agent_tool_registry[info.func_name] = method
+                schema = _json.loads(info.args_schema)
+                desc = schema.pop("description", "")
+                tool_list.append({
+                    "name": info.func_name,
+                    "description": f"[{info.class_name}] {desc}".strip(),
+                    "inputSchema": schema,
+                })
+
+        # Last discovered tool wins, matching MCPServerModule's behavior.
+        seen: Dict[str, Dict[str, Any]] = {}
+        for tool in tool_list:
+            seen[tool["name"]] = tool
+        self._agent_tool_list = list(seen.values())
+        logger.info(
+            "Semantic planner agent tools: %d discovered (%d blocked)",
+            len(self._agent_tool_list), len(_AGENT_SKILL_BLOCKLIST),
+        )
 
     def setup(self) -> None:
         self._init_backends()
@@ -572,6 +618,8 @@ class SemanticPlannerModule(Module, layer=4):
 
         agent = AgentLoop(
             llm_client=llm,
+            tool_registry=self._agent_tool_registry,
+            tool_list=self._agent_tool_list,
             tool_handlers=handlers,
             context_fn=self._agent_context,
             max_steps=10,
@@ -585,21 +633,42 @@ class SemanticPlannerModule(Module, layer=4):
         if self._current_scene_graph:
             labels = [o.label for o in self._current_scene_graph.objects if o.label]
             visible = ", ".join(labels[:20])
+        memory_context = "none"
+        if self._vector_memory is not None:
+            try:
+                stats = self._vector_memory.get_memory_stats()
+                memory_context = f"vector_memory_entries={stats.get('entries', 0)}"
+            except Exception:
+                memory_context = "vector_memory_available"
+        scene_graph = None
+        if self._latest_sg:
+            try:
+                scene_graph = _json.loads(self._latest_sg)
+            except Exception:
+                scene_graph = {"raw": self._latest_sg}
         return {
             "robot_x": float(self._robot_pos[0]),
             "robot_y": float(self._robot_pos[1]),
             "visible_objects": visible or "none",
             "nav_status": self._last_nav_state or "IDLE",
-            "memory_context": "",
+            "memory_context": memory_context,
+            "camera_image": self._latest_rgb,
+            "camera_available": self._latest_rgb is not None,
+            "scene_graph": scene_graph,
         }
 
-    def _tool_navigate_to(self, x: float, y: float) -> str:
+    def _tool_navigate_to(self, x: float, y: float, yaw: float = 0.0) -> str:
+        q_w = np.cos(yaw / 2.0)
+        q_z = np.sin(yaw / 2.0)
         pose = PoseStamped(
-            pose=Pose(position=Vector3(x=x, y=y, z=0.0), orientation=Quaternion(0, 0, 0, 1)),
+            pose=Pose(
+                position=Vector3(x=x, y=y, z=0.0),
+                orientation=Quaternion(0.0, 0.0, float(q_z), float(q_w)),
+            ),
             frame_id="map",
         )
         self.goal_pose.publish(pose)
-        return f"Navigating to ({x:.1f}, {y:.1f})"
+        return f"Navigating to ({x:.1f}, {y:.1f}, yaw={yaw:.2f})"
 
     def _tool_navigate_to_object(self, label: str) -> str:
         if self._latest_sg:

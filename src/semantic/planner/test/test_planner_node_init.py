@@ -18,6 +18,7 @@ Coverage:
 import sys
 import os
 import time
+import asyncio
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _repo = os.path.abspath(os.path.join(_here, "..", "..", "..", ".."))
@@ -30,10 +31,12 @@ for _p in [_repo, _src,
         sys.path.insert(0, _p)
 
 import pytest
+from core.module import Module, skill
 from core.stream import In, Out
 from core.msgs.geometry import PoseStamped, Vector3
 from core.msgs.nav import Odometry
 from core.msgs.semantic import SceneGraph, Detection3D, Region
+from semantic.planner.semantic_planner.agent_loop import AgentLoop
 from semantic.planner.semantic_planner.semantic_planner_module import SemanticPlannerModule
 
 
@@ -226,3 +229,106 @@ class TestSemanticPlannerHealth:
         assert isinstance(h, dict)
         assert "planner" in h or "goal_resolver" in h or "instruction" in str(h)
         mod.stop()
+
+
+# ---------------------------------------------------------------------------
+# 6. agent loop wiring
+# ---------------------------------------------------------------------------
+
+class _FakeSkillModule(Module):
+    @skill
+    def hello(self, name: str = "robot") -> str:
+        """Return a greeting string."""
+        return f"hello {name}"
+
+
+class _UnsafeSkillModule(Module):
+    @skill
+    def emergency_stop(self) -> str:
+        """Trigger an emergency stop."""
+        return "stopped"
+
+
+class _RecordingLLM:
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.messages = None
+
+    async def chat(self, messages, temperature=None):
+        self.messages = messages
+        if self._replies:
+            return self._replies.pop(0)
+        return '{"tool":"done","args":{"summary":"finished"}}'
+
+
+class TestAgentLoopTools:
+    def test_llm_fallback_receives_runtime_tool_list(self):
+        llm = _RecordingLLM(['{"tool":"hello","args":{"name":"codex"}}'])
+        tool_list = [{
+            "name": "hello",
+            "description": "[FakeSkill] Return a greeting",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+            },
+        }]
+        agent = AgentLoop(
+            llm_client=llm,
+            tool_registry={"hello": lambda name="robot": f"hello {name}"},
+            tool_list=tool_list,
+            context_fn=lambda: {
+                "robot_x": 0.0,
+                "robot_y": 0.0,
+                "visible_objects": "none",
+                "nav_status": "IDLE",
+                "memory_context": "none",
+                "camera_available": False,
+            },
+        )
+        response = asyncio.run(agent._llm_call([
+            {"role": "system", "content": "test"},
+            {"role": "user", "content": "say hello"},
+        ]))
+        assert response["tool_calls"][0]["function"]["name"] == "hello"
+        assert llm.messages is not None
+        assert "hello" in llm.messages[0]["content"]
+
+
+class TestSemanticPlannerAgentLoop:
+    def test_on_system_modules_discovers_agent_skills(self):
+        mod = SemanticPlannerModule()
+        tool_mod = _FakeSkillModule()
+        unsafe_mod = _UnsafeSkillModule()
+        mod.on_system_modules({
+            "SemanticPlannerModule": mod,
+            "FakeSkillModule": tool_mod,
+            "UnsafeSkillModule": unsafe_mod,
+        })
+
+        assert "hello" in mod._agent_tool_registry
+        assert any(t["name"] == "hello" for t in mod._agent_tool_list)
+        assert "emergency_stop" not in mod._agent_tool_registry
+
+    def test_run_agent_loop_uses_discovered_skills(self):
+        mod = SemanticPlannerModule()
+        mod.on_system_modules({
+            "SemanticPlannerModule": mod,
+            "FakeSkillModule": _FakeSkillModule(),
+        })
+        mod._goal_resolver = type(
+            "_Resolver",
+            (),
+            {
+                "_primary": _RecordingLLM([
+                    '{"tool":"hello","args":{"name":"lingtu"}}',
+                    '{"tool":"done","args":{"summary":"ok"}}',
+                ]),
+            },
+        )()
+
+        state = asyncio.run(mod._run_agent_loop("greet the operator"))
+
+        assert state.completed
+        assert state.summary == "ok"
+        assert any(m.get("role") == "tool" and "hello lingtu" in m.get("content", "")
+                   for m in state.messages)

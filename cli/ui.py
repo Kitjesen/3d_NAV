@@ -1,4 +1,4 @@
-"""Banner, profile listing, stop/status helpers."""
+"""Banner, profile listing, stop/status/log/show-config helpers."""
 
 from __future__ import annotations
 
@@ -7,10 +7,13 @@ import re
 import signal
 import sys
 import time
+import json
+from collections import deque
+from pathlib import Path
 
 from . import term as T
 from .profiles_data import PROFILES
-from .run_state import clear_run_state, is_pid_alive, read_run_state
+from .run_state import clear_run_state, is_pid_alive, read_run_state, resolve_log_file
 
 
 def _vlen(s: str) -> int:
@@ -303,7 +306,7 @@ def list_profiles():
     print("\n  Override any flag: lingtu nav --llm mock\n")
 
 
-def cmd_stop() -> None:
+def cmd_stop(force: bool = False) -> None:
     state = read_run_state()
     if state is None:
         print("  No running instance found (.lingtu/run.json missing)")
@@ -317,10 +320,15 @@ def cmd_stop() -> None:
 
     print(f"  Stopping PID {pid} (profile: {state.get('profile', '?')})...")
     try:
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
     except OSError as e:
         print(f"  Failed to stop: {e}")
         sys.exit(1)
+
+    if force:
+        clear_run_state()
+        print(f"  {T.green('Force killed.')}")
+        return
 
     for _ in range(30):
         if not is_pid_alive(pid):
@@ -338,25 +346,156 @@ def cmd_stop() -> None:
         print(f"  Could not kill PID {pid}. Manual cleanup needed.")
 
 
-def cmd_status_external() -> None:
+def cmd_status_external(as_json: bool = False) -> None:
     state = read_run_state()
     if state is None:
-        print("  No running instance")
+        if as_json:
+            print(json.dumps({"status": "not_running"}))
+        else:
+            print("  No running instance")
         return
+
+    from .run_state import compute_uptime, format_uptime
 
     pid = state.get("pid")
     alive = is_pid_alive(pid) if pid else False
+    uptime = compute_uptime(state) if alive else None
+
+    if as_json:
+        report = dict(state)
+        report["alive"] = alive
+        report["uptime_seconds"] = uptime
+        report["runtime_status"] = (
+            state.get("status", "running") if alive else "dead"
+        )
+        print(json.dumps(report, indent=2, default=str))
+        return
+
     profile = state.get("profile", "?")
     started = state.get("started_at", "?")
+    cwd = state.get("cwd", "?")
     log_dir = state.get("log_dir", "?")
+    log_file = state.get("log_file", "?")
+    daemon = state.get("daemon", False)
+    argv = state.get("argv", [])
+    host = state.get("host", "?")
+    version = state.get("version", "?")
+    modules = state.get("module_count")
+    wires = state.get("wire_count")
+    runtime_status = state.get("status", "running")
 
-    status = T.green("running") if alive else T.red("dead (stale PID)")
-    print(f"\n  Status:    {status}")
+    status_label = T.green(runtime_status) if alive else T.red("dead (stale PID)")
+    print(f"\n  Status:    {status_label}")
     print(f"  PID:       {pid}")
+    print(f"  Host:      {host}")
+    print(f"  Version:   {version}")
     print(f"  Profile:   {profile}")
     print(f"  Started:   {started}")
+    if uptime is not None:
+        print(f"  Uptime:    {format_uptime(uptime)}")
+    print(f"  Mode:      {'daemon' if daemon else 'foreground'}")
+    if modules is not None or wires is not None:
+        mod_str = str(modules) if modules is not None else "?"
+        wire_str = str(wires) if wires is not None else "?"
+        print(f"  Blueprint: {mod_str} modules, {wire_str} wires")
+    print(f"  CWD:       {cwd}")
     print(f"  Logs:      {log_dir}")
+    print(f"  Log file:  {log_file}")
+    if argv:
+        print(f"  Args:      {' '.join(str(a) for a in argv)}")
 
     if not alive:
         print(f"\n  {T.yellow('Stale run state. Run `lingtu stop` to clean up.')}")
     print()
+
+
+def cmd_show_config_external(profile_name: str, cfg: dict, as_json: bool = False) -> None:
+    resolved = {k: v for k, v in cfg.items() if not k.startswith("_")}
+    if as_json:
+        print(json.dumps(resolved, indent=2, ensure_ascii=False, sort_keys=True, default=str))
+        return
+    print(f"\n  {T.bold('Resolved config')}  [{T.green(profile_name)}]\n")
+    print(json.dumps(resolved, indent=2, ensure_ascii=False, sort_keys=True, default=str))
+    print()
+
+
+def cmd_restart() -> None:
+    """Stop current instance, then restart it with the same argv + cwd."""
+    state = read_run_state()
+    if state is None:
+        print("  No running instance to restart (.lingtu/run.json missing)")
+        sys.exit(1)
+
+    argv = list(state.get("argv") or [])
+    cwd = state.get("cwd") or os.getcwd()
+
+    cmd_stop(force=False)
+    # read_run_state is cleared by cmd_stop on success; wait briefly for cleanup.
+    time.sleep(0.5)
+
+    python_exe = sys.executable or "python3"
+    repo_root = Path(__file__).resolve().parent.parent
+    entry = repo_root / "lingtu.py"
+    new_cmd = [python_exe, str(entry)] + argv
+
+    print(f"  Restarting: {' '.join(new_cmd)}")
+    import subprocess as _sp
+
+    try:
+        _sp.Popen(new_cmd, cwd=cwd)
+        print(f"  {T.green('Restart launched.')} Use `lingtu status` to verify.")
+    except OSError as e:
+        print(f"  {T.red('Restart failed')}: {e}")
+        sys.exit(1)
+
+
+def cmd_log_external(follow: bool = False, lines: int = 80) -> None:
+    state = read_run_state()
+    if state is None:
+        print("  No running instance found (.lingtu/run.json missing)")
+        sys.exit(1)
+
+    log_file = resolve_log_file(state)
+    if log_file is None:
+        print("  No log file found for current run state")
+        sys.exit(1)
+
+    pid = state.get("pid")
+    alive = is_pid_alive(pid) if pid else False
+    print(f"  Reading: {log_file}")
+    if follow:
+        status = "running" if alive else "stale"
+        print(f"  Follow:  on ({status})\n")
+    else:
+        print()
+
+    try:
+        with log_file.open("r", encoding="utf-8", errors="replace") as fh:
+            if lines > 0:
+                for line in deque(fh, maxlen=lines):
+                    sys.stdout.write(line)
+            else:
+                sys.stdout.write(fh.read())
+    except OSError as e:
+        print(f"  Failed to read log file: {e}")
+        sys.exit(1)
+
+    if not follow:
+        print()
+        return
+
+    try:
+        with log_file.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(0, os.SEEK_END)
+            while True:
+                line = fh.readline()
+                if line:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                    continue
+                if pid and not is_pid_alive(pid):
+                    print(f"\n  {T.yellow('Process exited; follow stopped.')}")
+                    return
+                time.sleep(0.5)
+    except KeyboardInterrupt:
+        print(f"\n  {T.dim('Log follow stopped')}")

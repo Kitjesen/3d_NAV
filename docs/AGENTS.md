@@ -500,10 +500,16 @@ lingtu [profile] [options]
 | ----------------- | ---------- | -------------------------------------------------------------------------- |
 | `profile`         | positional | Profile name (`stub`, `dev`, `sim`, `map`, `nav`, `explore`)               |
 | `stop`            | positional | Stop running daemon (SIGTERM to PID from `.lingtu/run.json`)               |
+| `status`          | positional | Show current external run status from `.lingtu/run.json`                   |
+| `show-config`     | positional | Print the resolved config for a profile without starting the system         |
+| `log`             | positional | Print the current run log; use `-f` to follow                              |
 | `doctor`          | positional | Run `scripts/doctor.py` diagnostics                                        |
 | `rerun`           | positional | Run `scripts/rerun_live.py` visualization                                  |
 | `--list`          | flag       | List all profiles and exit                                                 |
 | `--daemon` / `-d` | flag       | Fork as Unix daemon (implies no REPL)                                      |
+| `--follow` / `-f` | flag       | Follow output for `lingtu log`                                             |
+| `--lines`         | int        | Number of lines to show for `lingtu log` (default 80)                      |
+| `--force`         | flag       | Force action for commands such as `lingtu stop`                            |
 | `--robot`         | str        | Override robot preset (`stub`, `sim`, `ros2`, `s100p`, `thunder`)          |
 | `--dog-host`      | str        | Override Thunder robot host IP                                             |
 | `--dog-port`      | int        | Override Thunder robot gRPC port                                           |
@@ -588,6 +594,9 @@ lingtu [profile] [options]
 
 ```bash
 python lingtu.py s100p --daemon    # fork to background, log to logs/
+python lingtu.py status            # inspect current run
+python lingtu.py log -f            # follow the current run log
+python lingtu.py show-config nav   # print resolved nav config
 python lingtu.py stop              # SIGTERM to running daemon
 ```
 

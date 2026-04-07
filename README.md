@@ -33,25 +33,66 @@ Full build including OTA daemon and PCT planner C++ core:
 ./build_all.sh
 ```
 
+## CLI — `python lingtu.py`
+
+Single entry point for launching profiles and inspecting running instances.
+
+```bash
+python lingtu.py                     # interactive profile picker
+python lingtu.py --list              # list available profiles
+python lingtu.py --version           # print version and exit
+python lingtu.py stub                # no hardware, framework testing
+python lingtu.py dev                 # semantic pipeline, no C++ nodes
+python lingtu.py sim                 # MuJoCo simulation
+python lingtu.py map                 # SLAM mapping mode
+python lingtu.py nav                 # navigate using a saved map
+python lingtu.py explore             # exploration, no pre-built map
+python lingtu.py nav --llm mock      # override any profile flag
+python lingtu.py nav --daemon        # background daemon (Unix)
+```
+
+### Lifecycle commands
+
+```bash
+python lingtu.py status              # running instance status
+python lingtu.py status --json       # machine-readable (pipe into jq)
+python lingtu.py log                 # print the current run log
+python lingtu.py log -f              # follow (tail -f)
+python lingtu.py log --lines 200     # last 200 lines
+python lingtu.py show-config nav     # print resolved config
+python lingtu.py show-config nav --json
+python lingtu.py stop                # graceful stop (SIGTERM)
+python lingtu.py stop --force        # SIGKILL
+python lingtu.py restart             # stop + relaunch with the same argv
+python lingtu.py doctor              # diagnostics
+python lingtu.py rerun               # launch Rerun 3D viewer
+```
+
+`lingtu status` shows PID, host, profile, uptime, module/wire count, log
+location, and live status (`running` / `stopping` / stale). `--json` emits the
+full state dict for scripting.
+
 ## Operation Modes
 
 **Mapping** — Drive the robot manually while SLAM builds a map.
 
 ```bash
-./mapping.sh
-./save_map.sh   # Save map when done
+python lingtu.py map        # recommended
+./mapping.sh                # legacy shell launcher
+./save_map.sh               # save map when done
 ```
 
 **Navigation** — Load an existing map and navigate autonomously to a goal.
 
 ```bash
-./planning.sh
+python lingtu.py nav        # recommended
+./planning.sh               # legacy shell launcher
 ```
 
 **Exploration** — Navigate in an unknown environment without a pre-built map. Supports natural language goal specification.
 
 ```bash
-ros2 launch launch/navigation_explore.launch.py
+python lingtu.py explore
 ros2 launch launch/navigation_explore.launch.py target:="找到餐桌"
 ```
 

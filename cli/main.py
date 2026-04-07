@@ -14,78 +14,34 @@ from . import term as T
 from .logging_util import setup_logging
 from .profiles_data import PROFILES, ROBOT_PRESETS
 from .repl import LingTuREPL
-from .run_state import clear_run_state, save_run_state
+from .run_state import (
+    _lingtu_version,
+    clear_run_state,
+    save_run_state,
+    update_run_state,
+)
 from .runtime_extra import daemonize, health_check, kill_residual_ports, preflight
 from .term import IS_TTY
-from .ui import cmd_stop, list_profiles, print_banner, select_interactive, wizard_interactive
+from .ui import (
+    cmd_log_external,
+    cmd_restart,
+    cmd_show_config_external,
+    cmd_status_external,
+    cmd_stop,
+    list_profiles,
+    print_banner,
+    select_interactive,
+    wizard_interactive,
+)
 
 logger = logging.getLogger("lingtu")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="LingTu Navigation System",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=textwrap.dedent(
-            """\
-            profiles:
-              stub      No hardware, framework testing
-              sim       MuJoCo kinematic simulation
-              dev       Semantic pipeline, no C++ nodes
-              nav     Navigation with pre-built map
-              explore   Exploration, no pre-built map
+_SPECIAL_COMMANDS = {"stop", "restart", "status", "show-config", "log", "doctor", "rerun"}
 
-            special commands:
-              stop      Stop running daemon
-        """
-        ),
-    )
-    parser.add_argument("profile", nargs="?", default=None, help="Profile name or 'stop'")
-    parser.add_argument("--list", action="store_true", help="List profiles and exit")
-    parser.add_argument("--daemon", "-d", action="store_true", help="Run as background daemon (Unix)")
-    parser.add_argument("--robot", default=None)
-    parser.add_argument("--dog-host", default=None, dest="dog_host")
-    parser.add_argument("--dog-port", type=int, default=None, dest="dog_port")
-    parser.add_argument("--detector", default=None)
-    parser.add_argument("--encoder", default=None)
-    parser.add_argument("--llm", default=None)
-    parser.add_argument("--planner", default=None)
-    parser.add_argument("--tomogram", default=None)
-    parser.add_argument("--gateway-port", type=int, default=None, dest="gateway_port")
-    parser.add_argument("--no-semantic", action="store_true")
-    parser.add_argument("--no-gateway", action="store_true")
-    parser.add_argument("--native", action="store_true", help="Force C++ autonomy stack (terrain+local_planner+pathFollower)")
-    parser.add_argument("--no-native", action="store_true")
-    parser.add_argument("--rerun", action="store_true", help="Enable Rerun 3D visualization on startup")
-    parser.add_argument("--no-repl", action="store_true", help="Foreground daemon (no interactive REPL)")
-    parser.add_argument("--log-level", default="INFO", dest="log_level")
-    parser.add_argument("--log-format", default="text", choices=["text", "json"],
-                        dest="log_format", help="Log file format: text (default) or json")
-    args = parser.parse_args()
 
-    if args.list:
-        list_profiles()
-        return
-
-    if args.profile == "stop":
-        cmd_stop()
-        return
-
-    _repo = Path(__file__).resolve().parent.parent
-
-    if args.profile == "doctor":
-        import subprocess as _sp
-
-        _sp.run([sys.executable, str(_repo / "scripts" / "doctor.py")])
-        return
-
-    if args.profile == "rerun":
-        import subprocess as _sp
-
-        _sp.run([sys.executable, str(_repo / "scripts" / "rerun_live.py")])
-        return
-
-    profile_name = args.profile
+def _resolve_profile_name(explicit_profile: str | None, args: argparse.Namespace) -> str:
+    profile_name = explicit_profile
     if profile_name is None:
         has_custom = any(
             [
@@ -102,7 +58,15 @@ def main() -> None:
             profile_name = "stub"
         else:
             profile_name = select_interactive()
+    return profile_name
 
+
+def _resolve_config(
+    profile_name: str,
+    args: argparse.Namespace,
+    *,
+    allow_wizard: bool = True,
+) -> dict:
     if profile_name not in PROFILES:
         print(f"  {T.red('Error')}: Unknown profile '{profile_name}'")
         print(f"  Available: {', '.join(PROFILES.keys())}")
@@ -145,11 +109,120 @@ def main() -> None:
     if args.rerun:
         cfg["enable_rerun"] = True
 
-    # Optional interactive wizard: only when user didn't pin a profile via argv
-    # and the session is TTY. The wizard lets users toggle high-level features
-    # without remembering flags.
-    if args.profile is None and IS_TTY:
+    if allow_wizard and args.target is None and IS_TTY:
         wizard_interactive(profile_name, cfg)
+
+    return cfg
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="LingTu Navigation System",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=textwrap.dedent(
+            """\
+            profiles:
+              stub      No hardware, framework testing
+              sim       MuJoCo kinematic simulation
+              dev       Semantic pipeline, no C++ nodes
+              nav       Navigation with pre-built map
+              explore   Exploration, no pre-built map
+
+            lifecycle commands:
+              stop         Stop running daemon
+              restart      Stop and relaunch with the same argv
+              status       Show external run status (add --json for jq)
+              show-config  Print resolved config (add --json for jq)
+              log          Print the current run log (add -f to follow)
+              doctor       Run diagnostics
+              rerun        Launch Rerun 3D viewer
+        """
+        ),
+    )
+    parser.add_argument("target", nargs="?", default=None, help="Profile name or command")
+    parser.add_argument("extra", nargs="*", help=argparse.SUPPRESS)
+    parser.add_argument("--list", action="store_true", help="List profiles and exit")
+    parser.add_argument("--version", action="store_true", help="Print LingTu version and exit")
+    parser.add_argument("--json", action="store_true",
+                        help="Machine-readable JSON output (status / show-config)")
+    parser.add_argument("--daemon", "-d", action="store_true", help="Run as background daemon (Unix)")
+    parser.add_argument("--follow", "-f", action="store_true", help="Follow output for `lingtu log`")
+    parser.add_argument("--lines", type=int, default=80, help="Number of lines for `lingtu log` (default: 80)")
+    parser.add_argument("--force", action="store_true", help="Force action for commands like `lingtu stop`")
+    parser.add_argument("--robot", default=None)
+    parser.add_argument("--dog-host", default=None, dest="dog_host")
+    parser.add_argument("--dog-port", type=int, default=None, dest="dog_port")
+    parser.add_argument("--detector", default=None)
+    parser.add_argument("--encoder", default=None)
+    parser.add_argument("--llm", default=None)
+    parser.add_argument("--planner", default=None)
+    parser.add_argument("--tomogram", default=None)
+    parser.add_argument("--gateway-port", type=int, default=None, dest="gateway_port")
+    parser.add_argument("--no-semantic", action="store_true")
+    parser.add_argument("--no-gateway", action="store_true")
+    parser.add_argument("--native", action="store_true", help="Force C++ autonomy stack (terrain+local_planner+pathFollower)")
+    parser.add_argument("--no-native", action="store_true")
+    parser.add_argument("--rerun", action="store_true", help="Enable Rerun 3D visualization on startup")
+    parser.add_argument("--no-repl", action="store_true", help="Foreground daemon (no interactive REPL)")
+    parser.add_argument("--log-level", default="INFO", dest="log_level")
+    parser.add_argument("--log-format", default="text", choices=["text", "json"],
+                        dest="log_format", help="Log file format: text (default) or json")
+    args = parser.parse_args()
+
+    if args.version:
+        print(f"lingtu {_lingtu_version()}")
+        return
+
+    if args.list:
+        list_profiles()
+        return
+
+    if args.target == "stop":
+        cmd_stop(force=args.force)
+        return
+
+    if args.target == "restart":
+        cmd_restart()
+        return
+
+    if args.target == "status":
+        cmd_status_external(as_json=args.json)
+        return
+
+    _repo = Path(__file__).resolve().parent.parent
+
+    if args.target == "doctor":
+        import subprocess as _sp
+
+        _sp.run([sys.executable, str(_repo / "scripts" / "doctor.py")])
+        return
+
+    if args.target == "rerun":
+        import subprocess as _sp
+
+        _sp.run([sys.executable, str(_repo / "scripts" / "rerun_live.py")])
+        return
+
+    if args.target == "log":
+        cmd_log_external(follow=args.follow, lines=args.lines)
+        return
+
+    if args.target == "show-config":
+        profile_name = args.extra[0] if args.extra else None
+        if len(args.extra) > 1:
+            print("  Usage: lingtu show-config [profile] [overrides]")
+            sys.exit(1)
+        profile_name = _resolve_profile_name(profile_name, args)
+        cfg = _resolve_config(profile_name, args, allow_wizard=False)
+        cmd_show_config_external(profile_name, cfg, as_json=args.json)
+        return
+
+    if args.target not in _SPECIAL_COMMANDS and args.extra:
+        print(f"  {T.red('Error')}: Unexpected extra positional arguments: {' '.join(args.extra)}")
+        sys.exit(1)
+
+    profile_name = _resolve_profile_name(args.target, args)
+    cfg = _resolve_config(profile_name, args, allow_wizard=True)
 
     if args.daemon:
         args.no_repl = True
@@ -210,7 +283,27 @@ def main() -> None:
             url = rerun_mod.start_rerun()
             logger.info("Rerun auto-started: %s", url)
 
-    save_run_state(profile_name, cfg, log_dir)
+    try:
+        _mod_count = len(system.modules)
+    except Exception:
+        _mod_count = None
+    try:
+        _wire_count = len(getattr(system, "_connections", []) or [])
+    except Exception:
+        _wire_count = None
+
+    save_run_state(
+        profile_name,
+        cfg,
+        log_dir,
+        log_format=args.log_format,
+        argv=sys.argv[1:],
+        cwd=str(Path.cwd()),
+        daemon=args.daemon,
+        status="running",
+        module_count=_mod_count,
+        wire_count=_wire_count,
+    )
 
     print_banner(profile_name, cfg, system, log_dir)
 
@@ -234,6 +327,10 @@ def main() -> None:
             print()
 
     print("  Stopping modules...")
+    try:
+        update_run_state(status="stopping")
+    except Exception:
+        pass
     system.stop()
     try:
         from core.ros2_context import shutdown_shared_executor
