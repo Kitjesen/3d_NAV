@@ -332,18 +332,19 @@ class GatewayModule(Module, layer=6):
         self.push_event({"type": "odometry", "data": d})
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
-        """Accumulate map point cloud for /map/viewer."""
+        """Accumulate map point cloud for /map/viewer with voxel dedup."""
         pts = cloud.points if hasattr(cloud, "points") else None
         if pts is None or len(pts) == 0:
             return
+        new_pts = np.array(pts, dtype=np.float32)
         with self._map_cloud_lock:
             if self._map_points is None:
-                self._map_points = np.array(pts, dtype=np.float32)
+                self._map_points = new_pts
             else:
-                self._map_points = np.vstack([self._map_points, np.array(pts, dtype=np.float32)])
+                self._map_points = np.vstack([self._map_points, new_pts])
             self._map_cloud_count += 1
-            # Downsample every 20 frames to prevent unbounded growth
-            if self._map_cloud_count % 20 == 0 and len(self._map_points) > 50000:
+            # Voxel dedup every 5 frames — removes duplicate points from stationary robot
+            if self._map_cloud_count % 5 == 0:
                 self._map_points = self._voxel_downsample(self._map_points, self._map_voxel_size)
 
     @staticmethod
