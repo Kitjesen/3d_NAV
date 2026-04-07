@@ -253,6 +253,9 @@ class GatewayModule(Module, layer=6):
         self._map_cloud_count: int = 0
         self._map_voxel_size: float = 0.15
 
+        # Odometry rate tracking (sliding window for SLAM Hz display)
+        self._odom_timestamps: list = []  # last 20 timestamps
+
         self._app   = None
         self._server_thread: Optional[threading.Thread] = None
 
@@ -322,6 +325,10 @@ class GatewayModule(Module, layer=6):
         }
         with self._state_lock:
             self._odom = d
+            # Track for Hz calculation (sliding window of 20)
+            self._odom_timestamps.append(time.time())
+            if len(self._odom_timestamps) > 20:
+                self._odom_timestamps.pop(0)
         self.push_event({"type": "odometry", "data": d})
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
@@ -637,6 +644,15 @@ class GatewayModule(Module, layer=6):
         async def get_health():
             with gw._sse_lock:
                 n_sse = len(gw._sse_queues)
+            with gw._map_cloud_lock:
+                map_pts = len(gw._map_points) if gw._map_points is not None else 0
+            # Calculate SLAM Hz from odometry timestamps
+            slam_hz = 0.0
+            with gw._state_lock:
+                ts = gw._odom_timestamps
+                if len(ts) >= 2:
+                    span = ts[-1] - ts[0]
+                    slam_hz = (len(ts) - 1) / span if span > 0 else 0
             return {
                 "gateway":     "running",
                 "port":        gw._port,
@@ -648,6 +664,8 @@ class GatewayModule(Module, layer=6):
                 },
                 "has_odom": gw._odom is not None,
                 "has_map_mgr": gw._map_mgr is not None,
+                "slam_hz":  round(slam_hz, 1),
+                "map_points": map_pts,
             }
 
         # ── Liveness / Readiness probes ────────────────────────────────────

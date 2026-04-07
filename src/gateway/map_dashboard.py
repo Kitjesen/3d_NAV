@@ -177,9 +177,9 @@ async function pollSlam(){
   if(!h){document.getElementById('hDot').className='dot off';document.getElementById('hSt').textContent='离线';return;}
   document.getElementById('hDot').className='dot on';
   document.getElementById('hSt').textContent='在线';
-  const gw=h.gateway||{};
-  const p=gw.map_points||0;
+  const p=h.map_points||0;
   document.getElementById('pts').textContent=p>1000?(p/1000|0)+'K':p;
+  document.getElementById('hz').textContent=(h.slam_hz||0).toFixed(1);
 
   const st=await F('/api/v1/state');
   if(st&&st.odometry){
@@ -299,6 +299,13 @@ async function saveMap(){
 // Init + polling (independent, non-blocking)
 try{pollSlam();}catch(e){console.error('pollSlam init:',e);}
 try{loadMaps();}catch(e){console.error('loadMaps init:',e);}
-setInterval(()=>{try{pollSlam();}catch(e){}},4000);
+setInterval(()=>{try{pollSlam();}catch(e){}},2000);
+
+// Auto-refresh iframe in live mode (every 8s)
+setInterval(()=>{
+  if(document.getElementById('vMode').textContent==='实时建图'){
+    document.getElementById('vFrame').src='/map/viewer?t='+Date.now();
+  }
+},8000);
 </script>
 </body></html>'''
