@@ -849,19 +849,25 @@ class GatewayModule(Module, layer=6):
             pcd_path = os.path.join(save_dir, "map.pcd")
             errors = []
 
+            # Common ROS2 env setup for subprocess calls
+            _ros_env = (
+                "source /opt/ros/humble/setup.bash && "
+                "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+                "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+            )
+
             # Save via Fast-LIO2
             try:
                 r = subprocess.run(
                     ["bash", "-c",
-                     f"source /opt/ros/humble/setup.bash && "
-                     f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                     _ros_env +
                      f"ros2 service call /nav/save_map interface/srv/SaveMaps "
                      f"\"{{file_path: '{pcd_path}'}}\""],
                     capture_output=True, text=True, timeout=30)
                 if "success=True" in r.stdout:
                     pass
                 else:
-                    errors.append(f"Fast-LIO2: {r.stdout[-100:]}")
+                    errors.append(f"Fast-LIO2: {r.stderr[-200:] if r.stderr else r.stdout[-200:]}")
             except Exception as e:
                 errors.append(f"Fast-LIO2: {e}")
 
@@ -869,8 +875,7 @@ class GatewayModule(Module, layer=6):
             try:
                 r = subprocess.run(
                     ["bash", "-c",
-                     f"source /opt/ros/humble/setup.bash && "
-                     f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                     _ros_env +
                      f"ros2 service call /pgo/save_maps interface/srv/SaveMaps "
                      f"\"{{file_path: '{save_dir}', save_patches: true}}\""],
                     capture_output=True, text=True, timeout=30)
