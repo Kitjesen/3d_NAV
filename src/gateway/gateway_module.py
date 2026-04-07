@@ -50,17 +50,16 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 from pydantic import BaseModel, Field, field_validator
 
 from core.module import Module
-from core.stream import In, Out
-import numpy as np
-
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.sensor import PointCloud2
 from core.msgs.semantic import ExecutionEval, SafetyState, SceneGraph
+from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.stream import In, Out
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +72,7 @@ class GoalRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
-    instruction: Optional[str] = None
+    instruction: str | None = None
 
 
 class CmdVelRequest(BaseModel):
@@ -120,8 +119,8 @@ class LeaseRequest(BaseModel):
 
 class MapRequest(BaseModel):
     action: str
-    name:     Optional[str] = None
-    new_name: Optional[str] = None
+    name:     str | None = None
+    new_name: str | None = None
 
     @field_validator("action")
     @classmethod
@@ -141,7 +140,7 @@ class _Lease:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._holder: Optional[str] = None
+        self._holder: str | None = None
         self._expiry: float = 0.0
 
     def acquire(self, client_id: str, ttl: float) -> bool:
@@ -172,7 +171,7 @@ class _Lease:
                 return True
             return self._holder == client_id and time.monotonic() < self._expiry
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         with self._lock:
             now = time.monotonic()
             return {
@@ -221,12 +220,12 @@ class GatewayModule(Module, layer=6):
         # Cached state — written by Module callbacks, read by HTTP handlers.
         # Protected by RLock so callbacks and HTTP handler threads don't race.
         self._state_lock = threading.RLock()
-        self._odom:     Optional[Dict] = None
+        self._odom:     dict | None = None
         self._sg_json:  str = "{}"
-        self._safety:   Optional[Dict] = None
-        self._mission:  Optional[Dict] = None
-        self._eval:     Optional[Dict] = None
-        self._dialogue: Optional[Dict] = None
+        self._safety:   dict | None = None
+        self._mission:  dict | None = None
+        self._eval:     dict | None = None
+        self._dialogue: dict | None = None
         self._mode: str = "manual"
 
         self._lease = _Lease()
@@ -234,21 +233,21 @@ class GatewayModule(Module, layer=6):
         # SSE fan-out — one asyncio.Queue per connected client.
         # Written from Module threads via push_event() (thread-safe).
         self._sse_lock:   threading.Lock = threading.Lock()
-        self._sse_queues: List[asyncio.Queue] = []
+        self._sse_queues: list[asyncio.Queue] = []
 
         # Teleop: delegate to TeleopModule (set by on_system_modules)
         self._teleop_module = None
         self._teleop_clients:   int  = 0
-        self._latest_jpeg:  Optional[bytes] = None
+        self._latest_jpeg:  bytes | None = None
         self._jpeg_lock: threading.Lock = threading.Lock()
 
         # Reference to MapManagerModule (set by on_system_modules)
         self._map_mgr = None
         # All modules dict (set by on_system_modules)
-        self._all_modules: Dict[str, Any] = {}
+        self._all_modules: dict[str, Any] = {}
 
         # Map cloud accumulator for /map/viewer
-        self._map_points: Optional[np.ndarray] = None
+        self._map_points: np.ndarray | None = None
         self._map_cloud_lock = threading.Lock()
         self._map_cloud_count: int = 0
         self._map_voxel_size: float = 0.15
@@ -257,7 +256,7 @@ class GatewayModule(Module, layer=6):
         self._odom_timestamps: list = []  # last 20 timestamps
 
         self._app   = None
-        self._server_thread: Optional[threading.Thread] = None
+        self._server_thread: threading.Thread | None = None
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -283,7 +282,7 @@ class GatewayModule(Module, layer=6):
         self._server_thread = None
         super().stop()
 
-    def on_system_modules(self, modules: Dict[str, Any]) -> None:
+    def on_system_modules(self, modules: dict[str, Any]) -> None:
         self._map_mgr = modules.get("MapManagerModule")
         self._all_modules = modules
 
@@ -372,7 +371,7 @@ class GatewayModule(Module, layer=6):
 
     # -- SSE fan-out --------------------------------------------------------
 
-    def push_event(self, event: Dict) -> None:
+    def push_event(self, event: dict) -> None:
         """Thread-safe: push an event to all connected SSE clients."""
         with self._sse_lock:
             queues = list(self._sse_queues)
@@ -539,7 +538,7 @@ class GatewayModule(Module, layer=6):
                     content={"error": "MapManagerModule not running"},
                 )
             # Deliver command via Module port (synchronous one-shot)
-            result: List[Dict] = []
+            result: list[dict] = []
 
             def _capture(resp: dict) -> None:
                 result.append(resp)
@@ -665,7 +664,7 @@ class GatewayModule(Module, layer=6):
                     status_code=503,
                 )
 
-            module_health: Dict[str, Any] = {}
+            module_health: dict[str, Any] = {}
             all_ok = True
             for name, mod in gw._all_modules.items():
                 try:
@@ -690,6 +689,7 @@ class GatewayModule(Module, layer=6):
         @app.get("/dashboard", summary="Map management dashboard")
         async def dashboard():
             from starlette.responses import HTMLResponse
+
             from gateway.map_dashboard import generate_dashboard_html
             return HTMLResponse(generate_dashboard_html())
 
@@ -715,7 +715,8 @@ class GatewayModule(Module, layer=6):
         @app.get("/api/v1/slam/maps", summary="List maps from filesystem")
         async def slam_maps():
             """Filesystem scan fallback — works even without MapManagerModule."""
-            import os, pathlib
+            import os
+            import pathlib
             map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
             maps = []
             active_target = ""
@@ -802,7 +803,8 @@ class GatewayModule(Module, layer=6):
 
         @app.post("/api/v1/map/activate", summary="Set active map (symlink)")
         async def activate_map(body: dict):
-            import os, pathlib
+            import os
+            import pathlib
             name = body.get("name", "")
             if not name:
                 return JSONResponse({"success": False, "message": "需要 name"}, status_code=400)
@@ -821,7 +823,8 @@ class GatewayModule(Module, layer=6):
 
         @app.post("/api/v1/map/rename", summary="Rename a saved map")
         async def rename_map(body: dict):
-            import os, pathlib
+            import os
+            import pathlib
             old = body.get("old_name", "")
             new = body.get("new_name", "")
             if not old or not new:
@@ -847,7 +850,8 @@ class GatewayModule(Module, layer=6):
         @app.post("/api/v1/map/save", summary="Save current SLAM map")
         async def save_map_now(body: dict = {}):
             """One-click map save — calls ROS2 save_map service via subprocess."""
-            import subprocess, os
+            import os
+            import subprocess
             name = body.get("name", "")
             if not name:
                 from datetime import datetime
@@ -986,7 +990,7 @@ class GatewayModule(Module, layer=6):
 
     # -- health -------------------------------------------------------------
 
-    def health(self) -> Dict[str, Any]:
+    def health(self) -> dict[str, Any]:
         info = super().port_summary()
         with self._sse_lock:
             n_sse = len(self._sse_queues)
@@ -1022,7 +1026,8 @@ class GatewayModule(Module, layer=6):
 
     def _measure_slam_hz(self) -> None:
         """Spawn ros2 topic hz, parse rate, update cache. Runs in background thread."""
-        import subprocess, re
+        import re
+        import subprocess
         try:
             r = subprocess.run(
                 ["bash", "-c",
@@ -1040,7 +1045,9 @@ class GatewayModule(Module, layer=6):
 
     def _generate_viewer_live(self) -> str:
         """Snapshot ikd-tree to temp PCD, then render. Shows exactly what save_map would produce."""
-        import subprocess, tempfile, os
+        import os
+        import subprocess
+        import tempfile
         tmp = os.path.join(tempfile.gettempdir(), "lingtu_live_snapshot.pcd")
         try:
             r = subprocess.run(
@@ -1140,15 +1147,7 @@ class GatewayModule(Module, layer=6):
 <title>LingTu Map Viewer</title>
 <style>
 body {{ margin:0; background:#0a0a0f; overflow:hidden; }}
-#info {{ position:absolute; top:10px; left:10px; color:#00ff88; font-family:monospace;
-         font-size:13px; z-index:10; background:rgba(0,0,0,0.6); padding:10px; border-radius:6px; }}
-#info a {{ color:#4af; }}
 </style></head><body>
-<div id="info">
-LingTu SLAM — {n:,} points<br>
-<span style="color:#888">Drag=rotate | Scroll=zoom | RightDrag=pan</span><br>
-<a href="/api/v1/map/points">Raw JSON</a>
-</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>

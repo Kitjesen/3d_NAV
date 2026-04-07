@@ -54,7 +54,11 @@ body { font-family:'Inter','PingFang SC','Microsoft YaHei',sans-serif; backgroun
 .mode-tabs button:hover:not(.active) { background:var(--bg4); }
 
 /* Map List */
-.map-list { flex:1; overflow-y:auto; padding:0; }
+.map-list { flex:1; overflow-y:auto; padding:0; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+.map-list::-webkit-scrollbar { width:4px; }
+.map-list::-webkit-scrollbar-track { background:transparent; }
+.map-list::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+.map-list::-webkit-scrollbar-thumb:hover { background:var(--text3); }
 .map-item { padding:8px 12px; border-bottom:1px solid var(--border); cursor:pointer; transition:background 0.15s; }
 .map-item:hover { background:var(--bg3); }
 .map-item.active { border-left:3px solid var(--accent); background:var(--bg3); }
