@@ -73,6 +73,7 @@ class SlamBridgeModule(Module, layer=1):
         self._quality_topic = quality_topic
         self._reader = None
         self._rclpy_node = None  # fallback
+        self._odom_recv_ts: list = []  # raw receive timestamps for true Hz
 
         # Localization health watchdog
         self._last_odom_time: float = 0.0
@@ -256,7 +257,12 @@ class SlamBridgeModule(Module, layer=1):
             )
             fused = self._fuse_odometry(slam_odom)
             self.odometry.publish(fused)
-            self._last_odom_time = _time.time()
+            now = _time.time()
+            self._last_odom_time = now
+            # Track raw receive rate (independent of downstream callback chain)
+            self._odom_recv_ts.append(now)
+            if len(self._odom_recv_ts) > 30:
+                self._odom_recv_ts.pop(0)
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
 

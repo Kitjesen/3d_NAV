@@ -646,13 +646,21 @@ class GatewayModule(Module, layer=6):
                 n_sse = len(gw._sse_queues)
             with gw._map_cloud_lock:
                 map_pts = len(gw._map_points) if gw._map_points is not None else 0
-            # Calculate SLAM Hz from odometry timestamps
+            # SLAM Hz: prefer SlamBridge raw receive rate (more accurate than Gateway port rate)
             slam_hz = 0.0
-            with gw._state_lock:
-                ts = gw._odom_timestamps
+            bridge = gw._all_modules.get("SlamBridgeModule")
+            if bridge and hasattr(bridge, "_odom_recv_ts"):
+                ts = bridge._odom_recv_ts
                 if len(ts) >= 2:
                     span = ts[-1] - ts[0]
                     slam_hz = (len(ts) - 1) / span if span > 0 else 0
+            if slam_hz == 0.0:
+                # Fallback: own port timestamps
+                with gw._state_lock:
+                    ts = gw._odom_timestamps
+                    if len(ts) >= 2:
+                        span = ts[-1] - ts[0]
+                        slam_hz = (len(ts) - 1) / span if span > 0 else 0
             return {
                 "gateway":     "running",
                 "port":        gw._port,
