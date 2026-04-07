@@ -646,21 +646,8 @@ class GatewayModule(Module, layer=6):
                 n_sse = len(gw._sse_queues)
             with gw._map_cloud_lock:
                 map_pts = len(gw._map_points) if gw._map_points is not None else 0
-            # SLAM Hz: prefer SlamBridge raw receive rate (more accurate than Gateway port rate)
-            slam_hz = 0.0
-            bridge = gw._all_modules.get("SlamBridgeModule")
-            if bridge and hasattr(bridge, "_odom_recv_ts"):
-                ts = bridge._odom_recv_ts
-                if len(ts) >= 2:
-                    span = ts[-1] - ts[0]
-                    slam_hz = (len(ts) - 1) / span if span > 0 else 0
-            if slam_hz == 0.0:
-                # Fallback: own port timestamps
-                with gw._state_lock:
-                    ts = gw._odom_timestamps
-                    if len(ts) >= 2:
-                        span = ts[-1] - ts[0]
-                        slam_hz = (len(ts) - 1) / span if span > 0 else 0
+            # SLAM Hz: cached subprocess call to `ros2 topic hz` (most accurate, avoids Python GIL artifacts)
+            slam_hz = gw._get_slam_hz_cached()
             return {
                 "gateway":     "running",
                 "port":        gw._port,
@@ -1001,6 +988,39 @@ class GatewayModule(Module, layer=6):
             "map_points":  map_pts,
         }
         return info
+
+    # -- SLAM Hz measurement (subprocess-based, cached) -----------------------
+
+    def _get_slam_hz_cached(self) -> float:
+        """Measure SLAM topic Hz via background thread, cached for 4s."""
+        now = time.time()
+        if not hasattr(self, "_slam_hz_value"):
+            self._slam_hz_value = 0.0
+            self._slam_hz_last_update = 0.0
+            self._slam_hz_lock = threading.Lock()
+
+        if now - self._slam_hz_last_update > 4.0:
+            with self._slam_hz_lock:
+                if now - self._slam_hz_last_update > 4.0:
+                    self._slam_hz_last_update = now
+                    threading.Thread(target=self._measure_slam_hz, daemon=True).start()
+        return round(self._slam_hz_value, 1)
+
+    def _measure_slam_hz(self) -> None:
+        """Spawn ros2 topic hz, parse rate, update cache. Runs in background thread."""
+        import subprocess, re
+        try:
+            r = subprocess.run(
+                ["bash", "-c",
+                 "source /opt/ros/humble/setup.bash && "
+                 "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                 "timeout 3 ros2 topic hz /nav/odometry 2>&1 | tail -5"],
+                capture_output=True, text=True, timeout=5)
+            m = re.search(r"average rate: ([\d.]+)", r.stdout)
+            if m:
+                self._slam_hz_value = float(m.group(1))
+        except Exception:
+            pass
 
     # -- Map 3D viewer HTML generation ----------------------------------------
 
