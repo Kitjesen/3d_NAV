@@ -18,13 +18,9 @@ if(NOT MSVC)
   endif()
 endif()
 
-# ── Acceleration libraries (used by both ROS2 and standalone) ──
+# xsimd removed: profile on S100P showed SIMD had no benefit on ARM Cortex-A55
+# for our workload sizes. Compiler auto-vectorization handles the hot paths.
 include(FetchContent)
-
-FetchContent_Declare(xsimd
-  GIT_REPOSITORY https://github.com/xtensor-stack/xsimd.git
-  GIT_TAG        13.0.0)
-FetchContent_MakeAvailable(xsimd)
 
 # OpenMP (optional, for terrain/scoring parallelization)
 find_package(OpenMP QUIET)
@@ -39,7 +35,6 @@ if(DEFINED ENV{AMENT_PREFIX_PATH})
   target_include_directories(${PROJECT_NAME} INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
-  target_link_libraries(${PROJECT_NAME} INTERFACE xsimd)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(${PROJECT_NAME} INTERFACE OpenMP::OpenMP_CXX)
   endif()
@@ -57,11 +52,10 @@ if(DEFINED ENV{AMENT_PREFIX_PATH})
   if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
 
-    # Helper: add test with xsimd + OpenMP
+    # Helper: add test with OpenMP
     macro(nav_core_add_test target src)
       ament_add_gtest(${target} ${src})
       target_include_directories(${target} PRIVATE include)
-      target_link_libraries(${target} xsimd)
       if(OpenMP_CXX_FOUND)
         target_link_libraries(${target} OpenMP::OpenMP_CXX)
       endif()
@@ -110,7 +104,7 @@ else()
 
   add_executable(test_local_planner_core test/test_local_planner_core.cpp)
   target_include_directories(test_local_planner_core PRIVATE include)
-  target_link_libraries(test_local_planner_core GTest::gtest_main xsimd)
+  target_link_libraries(test_local_planner_core GTest::gtest_main)
   gtest_discover_tests(test_local_planner_core)
 
   add_executable(test_param_sensitivity test/test_param_sensitivity.cpp)
@@ -125,7 +119,7 @@ else()
 
   add_executable(test_benchmark test/test_benchmark.cpp)
   target_include_directories(test_benchmark PRIVATE include)
-  target_link_libraries(test_benchmark GTest::gtest_main xsimd Taskflow)
+  target_link_libraries(test_benchmark GTest::gtest_main Taskflow)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(test_benchmark OpenMP::OpenMP_CXX)
   endif()

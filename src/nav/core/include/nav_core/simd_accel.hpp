@@ -15,12 +15,9 @@
 #include <cstddef>
 #include <vector>
 
-#if __has_include(<xsimd/xsimd.hpp>)
-#define NAV_CORE_HAS_XSIMD 1
-#include <xsimd/xsimd.hpp>
-#else
+// xsimd disabled: profile showed SIMD had no benefit on ARM Cortex-A55 (S100P)
+// for our workload sizes. Compiler auto-vectorization of scalar path is sufficient.
 #define NAV_CORE_HAS_XSIMD 0
-#endif
 
 namespace nav_core {
 namespace simd {

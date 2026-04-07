@@ -23,12 +23,6 @@ find_package(OpenMP QUIET)
 if(NOT OpenMP_FOUND)
   add_library(OpenMP::OpenMP_CXX INTERFACE IMPORTED)
 endif()
-# Stub xsimd target before nav_core import (nav_core's exported targets reference it)
-if(NOT TARGET xsimd)
-  add_library(xsimd INTERFACE IMPORTED)
-  set_target_properties(xsimd PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/xsimd/include")
-endif()
 find_package(nav_core REQUIRED)
 
 # Include directories
