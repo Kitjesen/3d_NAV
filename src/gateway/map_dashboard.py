@@ -182,9 +182,9 @@ body { font-family:'Inter','PingFang SC','Microsoft YaHei',sans-serif; backgroun
     </div>
 
     <div class="sidebar-actions">
-      <button class="action-btn save" onclick="saveMap()" id="btnSave">&#128190; 保存地图</button>
-      <button class="action-btn viewer" onclick="showLive()">&#127758; 刷新 3D 预览</button>
-      <button class="action-btn estop" onclick="doSwitch('stop')">&#9888; EMERGENCY STOP</button>
+      <button class="action-btn save" onclick="saveMap()" id="btnSave"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg> 保存地图</button>
+      <button class="action-btn viewer" onclick="showLive()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 12l-2.44-2.78.34-3.68-3.61-.82-1.89-3.18L12 3 8.6 1.54 6.71 4.72l-3.61.81.34 3.68L1 12l2.44 2.78-.34 3.69 3.61.82 1.89 3.18L12 21l3.4 1.46 1.89-3.18 3.61-.82-.34-3.68L23 12z"/></svg> 刷新 3D 预览</button>
+      <button class="action-btn estop" onclick="doSwitch('stop')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> EMERGENCY STOP</button>
     </div>
   </div>
 
@@ -281,8 +281,8 @@ async function loadMaps(){
       '<div class="map-item-meta">'+(m.size||'')+' '+(m.patches?m.patches+' 关键帧':'')+'</div>' +
       '<div class="map-item-actions">' +
         (isAct?'<button class="map-btn primary" onclick="viewSaved(&quot;'+m.name+'&quot;)">3D 预览</button>':'<button class="map-btn ghost" onclick="setAct(&quot;'+m.name+'&quot;)">激活地图</button>') +
-        '<button class="map-btn icon" onclick="renameMap(&quot;'+m.name+'&quot;)" title="重命名">&#9998;</button>' +
-        '<button class="map-btn icon" onclick="delMap(&quot;'+m.name+'&quot;)" title="删除" style="color:var(--red)">&#128465;</button>' +
+        '<button class="map-btn icon" onclick="renameMap(&quot;'+m.name+'&quot;)" title="重命名"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+        '<button class="map-btn icon" onclick="delMap(&quot;'+m.name+'&quot;)" title="删除" style="color:var(--red)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>' +
       '</div></div>';
   }).join('');
 }
@@ -297,10 +297,10 @@ function viewSaved(name){
 }
 
 async function setAct(n){
-  T('设置当前地图: '+n,'info');
-  const r=await F('/api/v1/maps',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_active',name:n})});
-  if(r&&r.success!==false){T(n+' 已激活','ok');loadMaps();}
-  else T('失败','err');
+  T('激活地图: '+n,'info');
+  const r=await F('/api/v1/map/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
+  if(r&&r.success){T(n+' 已激活','ok');loadMaps();}
+  else T('激活失败: '+(r?.message||'未知'),'err');
 }
 async function renameMap(n){
   const nn=prompt('新名称:',n);

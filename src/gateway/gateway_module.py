@@ -800,6 +800,25 @@ class GatewayModule(Module, layer=6):
                 html = gw._generate_viewer_live()
             return HTMLResponse(html)
 
+        @app.post("/api/v1/map/activate", summary="Set active map (symlink)")
+        async def activate_map(body: dict):
+            import os, pathlib
+            name = body.get("name", "")
+            if not name:
+                return JSONResponse({"success": False, "message": "需要 name"}, status_code=400)
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+            target = os.path.join(map_dir, name)
+            if not os.path.isdir(target):
+                return JSONResponse({"success": False, "message": f"地图不存在: {name}"}, status_code=404)
+            active_link = pathlib.Path(map_dir) / "active"
+            try:
+                if active_link.is_symlink() or active_link.exists():
+                    active_link.unlink()
+                active_link.symlink_to(name)
+                return {"success": True, "active": name}
+            except Exception as e:
+                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
         @app.post("/api/v1/map/rename", summary="Rename a saved map")
         async def rename_map(body: dict):
             import os, pathlib
