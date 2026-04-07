@@ -717,7 +717,7 @@ class TaskRulesMixin:
                 if target.startswith(p):
                     target = target[len(p):].strip()
                     break
-            for p in list(self.SIMPLE_INSPECT_PATTERNS_EN) + ["check "]:
+            for p in [*list(self.SIMPLE_INSPECT_PATTERNS_EN), "check "]:
                 if inst_lower.startswith(p):
                     target = inst[len(p):].strip()
                     break
@@ -809,7 +809,7 @@ class TaskRulesMixin:
                 if target.startswith(p):
                     target = target[len(p):].strip()
                     break
-            for p in self.SIMPLE_NAV_PATTERNS_EN + [
+            for p in [*self.SIMPLE_NAV_PATTERNS_EN,
                 "find ", "search for ", "locate ", "look for ",
                 "where is ", "where are ", "show me ",
                 "seek ", "spot ", "identify ",

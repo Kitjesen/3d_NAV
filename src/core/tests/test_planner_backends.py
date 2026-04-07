@@ -66,7 +66,7 @@ def _make_tomogram_pickle(trav: np.ndarray, resolution: float = 0.2,
     payload = {
         "data": data,
         "resolution": resolution,
-        "center": list(center) + [0.0],
+        "center": [*list(center), 0.0],
         "slice_h0": 0.5,
         "slice_dh": 0.5,
     }

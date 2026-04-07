@@ -63,8 +63,12 @@ ignore = [
     "RUF002",  # ambiguous unicode in docstring (Chinese chars, legacy code)
     "RUF003",  # ambiguous unicode in comment (Chinese chars, legacy code)
     "UP035",   # deprecated typing imports (Dict→dict etc, too many to fix at once)
+    "UP031",   # printf-string-formatting (legacy %s style, migrate gradually)
     "E741",    # ambiguous variable name (l, I, O — common in math code)
     "RUF012",  # mutable class default (Module ports use this pattern intentionally)
+    "F403",    # undefined-local-with-import-star (legacy ROS2-style wildcard imports)
+    "B027",    # empty-method-without-abstract-decorator (Module lifecycle stubs)
+    "RUF046",  # unnecessary-cast-to-int (explicit int() for clarity in grid math)
 ]
 
 [tool.ruff.lint.isort]

@@ -75,7 +75,7 @@ class LingTuREPL(cmd.Cmd):
     def do_stop(self, arg):
         """Emergency stop — halt all motion immediately."""
         count = 0
-        for name, mod in self._system.modules.items():
+        for _name, mod in self._system.modules.items():
             if hasattr(mod, "stop_signal") and hasattr(mod.stop_signal, "_deliver"):
                 mod.stop_signal._deliver(2)
                 count += 1
@@ -131,7 +131,6 @@ class LingTuREPL(cmd.Cmd):
         if mod is not None:
             # Collect response via a one-shot callback
             result_holder: list = []
-            orig_cb = None
             # Temporarily subscribe a capture callback
             mod.map_response._add_callback(result_holder.append)
             try:
@@ -546,7 +545,7 @@ class LingTuREPL(cmd.Cmd):
 
         # Build context function from live modules
         nav = self._get_module("NavigationModule")
-        smap = self._get_module("SemanticMapperModule")
+        self._get_module("SemanticMapperModule")
         vmem = self._get_module("VectorMemoryModule")
         sem = self._get_module("SemanticPlannerModule")
 

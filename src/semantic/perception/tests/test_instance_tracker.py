@@ -194,11 +194,16 @@ class TestInstanceTrackerUpdate(unittest.TestCase):
 
     def test_far_positions_kept_separate(self):
         """距离很远的同类对象不应合并。"""
-        feat1 = np.random.rand(512).astype(np.float32); feat1 /= np.linalg.norm(feat1)
-        feat2 = np.random.rand(512).astype(np.float32); feat2 /= np.linalg.norm(feat2)
+        feat1 = np.random.rand(512).astype(np.float32)
+        feat1 /= np.linalg.norm(feat1)
+        feat2 = np.random.rand(512).astype(np.float32)
+        feat2 /= np.linalg.norm(feat2)
         # 强制不同特征使语义匹配失败
-        feat1[0] = 1.0; feat1[1:] = 0
-        feat2[1] = 1.0; feat2[0] = 0; feat2[2:] = 0
+        feat1[0] = 1.0
+        feat1[1:] = 0
+        feat2[1] = 1.0
+        feat2[0] = 0
+        feat2[2:] = 0
 
         det1 = _make_det(label="chair", pos=(0.0, 0.0, 0.0), features=feat1)
         det2 = _make_det(label="chair", pos=(20.0, 0.0, 0.0), features=feat2)

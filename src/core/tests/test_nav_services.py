@@ -211,7 +211,7 @@ class TestWavefrontFrontierExplorer(unittest.TestCase):
         flat = np.zeros(100, dtype=np.int16)
         data = {"grid": flat, "resolution": 0.1, "origin_x": 0.0, "origin_y": 0.0,
                 "width": 10, "height": 10}
-        grid, meta = mod._parse_costmap(data)
+        grid, _meta = mod._parse_costmap(data)
         self.assertEqual(grid.shape, (10, 10))
 
     def test_find_frontiers_all_free_no_unknown(self):
@@ -259,7 +259,7 @@ class TestWavefrontFrontierExplorer(unittest.TestCase):
         self.assertTrue(mod._goal_reached_event.is_set())
 
     def test_make_pose_stamped(self):
-        mod = self._make_explorer()
+        self._make_explorer()
         # _make_pose_stamped sets pose position via PoseStamped constructor
         # PoseStamped.x is a read-only property delegating to pose.x
         # The method may use direct pose attribute access; verify frame_id

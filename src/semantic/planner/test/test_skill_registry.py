@@ -197,7 +197,6 @@ class TestCallSkillWithCallback:
         nav = LingTuNavigationSkills()
         registry.register_instance(nav)
 
-        calls = []
         nav.set_callbacks(navigate=lambda target: f"navigating to {target}")
 
         result = registry.call_skill("navigate_to", target="体育馆")

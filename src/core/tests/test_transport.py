@@ -115,7 +115,7 @@ class TestSHMTransport:
 
         pub = transport.create_publisher(topic)
         sub_topic = TopicConfig(name="/test/shm_bytes", strategy=TransportStrategy.SHM)
-        sub = transport.create_subscriber(sub_topic, lambda data, ts: received.append(data))
+        transport.create_subscriber(sub_topic, lambda data, ts: received.append(data))
 
         # Give subscriber time to start polling
         time.sleep(0.05)
@@ -136,7 +136,7 @@ class TestSHMTransport:
 
         pub = transport.create_publisher(topic)
         sub_topic = TopicConfig(name="/test/shm_pickle", strategy=TransportStrategy.SHM)
-        sub = transport.create_subscriber(sub_topic, lambda data, ts: received.append(data))
+        transport.create_subscriber(sub_topic, lambda data, ts: received.append(data))
 
         time.sleep(0.05)
         pub.publish({"key": "value", "n": 42})
@@ -255,7 +255,7 @@ class TestTransportAdapter:
         adapter = TransportAdapter(SHMTransport())
 
         out = Out(int, "test_val")
-        inp = In(int, "test_val")
+        In(int, "test_val")
 
         # Bind transport to out port
         out._bind_transport(adapter, "/test/port_flow")
@@ -289,7 +289,7 @@ class TestDDSTransport:
         topic = TopicConfig(name="lingtu_test_roundtrip")
 
         received = []
-        sub = transport.create_subscriber(topic, received.append)
+        transport.create_subscriber(topic, received.append)
         pub = transport.create_publisher(topic)
 
         # Allow DDS discovery to complete before publishing

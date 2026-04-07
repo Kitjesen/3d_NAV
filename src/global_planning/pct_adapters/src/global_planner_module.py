@@ -255,7 +255,7 @@ class _PCTBackend:
         g_res = self._resolution
         g_ox, g_oy = self._origin[0], self._origin[1]
         gh, gw = self._grid.shape
-        ch, cw = cm.shape
+        _ch, _cw = cm.shape
 
         # Find costmap cells that are obstacles
         obs_rows, obs_cols = np.where(cm >= self._obstacle_thr)

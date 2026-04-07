@@ -39,35 +39,35 @@ from .types import (
 __all__ = [
     # Types
     "BBox2D",
-    "Position3D",
+    "CameraInfo",
+    "ConfigurationError",
     "Detection2D",
     "Detection3D",
-    "Relation",
-    "Region",
-    "SceneGraph",
-    "CameraInfo",
-    "PerceptionConfig",
-    # Exceptions
-    "PerceptionAPIError",
+    "DetectorAPI",
     "DetectorError",
-    "DetectorInitError",
     "DetectorInferenceError",
+    "DetectorInitError",
+    "EncoderAPI",
     "EncoderError",
-    "EncoderInitError",
     "EncoderInferenceError",
-    "TrackerError",
-    "SceneGraphError",
-    "InvalidImageError",
-    "InvalidDepthError",
+    "EncoderInitError",
     "InvalidCameraInfoError",
-    "ConfigurationError",
+    "InvalidDepthError",
+    "InvalidImageError",
     # APIs
     "PerceptionAPI",
-    "DetectorAPI",
-    "EncoderAPI",
-    "TrackerAPI",
+    # Exceptions
+    "PerceptionAPIError",
+    "PerceptionConfig",
     # Factory
     "PerceptionFactory",
+    "Position3D",
+    "Region",
+    "Relation",
+    "SceneGraph",
+    "SceneGraphError",
+    "TrackerAPI",
+    "TrackerError",
 ]
 
 __version__ = "1.0.0"

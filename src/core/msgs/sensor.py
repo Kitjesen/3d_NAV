@@ -214,14 +214,18 @@ class Image:
             return val
 
         fmt_len = _read_u32()
-        fmt_str = raw[off: off + fmt_len].decode(); off += fmt_len
+        fmt_str = raw[off: off + fmt_len].decode()
+        off += fmt_len
         ndim = _read_u32()
         shape = tuple(_read_u32() for _ in range(ndim))
         dtype_len = _read_u32()
-        dtype_str = raw[off: off + dtype_len].decode(); off += dtype_len
-        ts = struct.unpack_from("<d", raw, off)[0]; off += 8
+        dtype_str = raw[off: off + dtype_len].decode()
+        off += dtype_len
+        ts = struct.unpack_from("<d", raw, off)[0]
+        off += 8
         frame_len = _read_u32()
-        frame_id = raw[off: off + frame_len].decode(); off += frame_len
+        frame_id = raw[off: off + frame_len].decode()
+        off += frame_len
         data = np.frombuffer(raw, dtype=np.dtype(dtype_str), offset=off).reshape(shape)
         return cls(data=data.copy(), format=ImageFormat(fmt_str), ts=ts, frame_id=frame_id)
 
@@ -621,9 +625,12 @@ class PointCloud2:
     @classmethod
     def decode(cls, raw: bytes) -> PointCloud2:
         off = 0
-        n, cols, ts = _PC_HDR.unpack_from(raw, off); off += _PC_HDR.size
-        frame_len = struct.unpack_from("<I", raw, off)[0]; off += 4
-        frame_id = raw[off: off + frame_len].decode(); off += frame_len
+        n, cols, ts = _PC_HDR.unpack_from(raw, off)
+        off += _PC_HDR.size
+        frame_len = struct.unpack_from("<I", raw, off)[0]
+        off += 4
+        frame_id = raw[off: off + frame_len].decode()
+        off += frame_len
         pts = np.frombuffer(raw, dtype=np.float32, offset=off, count=n * cols).reshape(n, cols)
         return cls(points=pts.copy(), ts=ts, frame_id=frame_id)
 
@@ -710,8 +717,10 @@ class Imu:
     def decode(cls, raw: bytes) -> Imu:
         vals = _IMU_FMT.unpack_from(raw, 0)
         off = _IMU_FMT.size
-        ts = struct.unpack_from("<d", raw, off)[0]; off += 8
-        frame_len = struct.unpack_from("<I", raw, off)[0]; off += 4
+        ts = struct.unpack_from("<d", raw, off)[0]
+        off += 8
+        frame_len = struct.unpack_from("<I", raw, off)[0]
+        off += 4
         frame_id = raw[off: off + frame_len].decode()
         return cls(
             orientation=Quaternion(vals[0], vals[1], vals[2], vals[3]),

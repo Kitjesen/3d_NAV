@@ -32,6 +32,11 @@ import subprocess
 import sys
 import time
 
+try:
+    from bluezero import peripheral as ble_peripheral
+except ImportError:
+    ble_peripheral = None  # type: ignore[assignment]
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",

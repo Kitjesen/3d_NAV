@@ -114,7 +114,7 @@ def run_new_voi(trajectory):
     scheduler = VoIScheduler(config=cfg)
     actions = []
 
-    base_time = time.time()
+    time.time()
     last_rep_time = 0.0
     last_slow_time = 0.0
     rep_count = 0

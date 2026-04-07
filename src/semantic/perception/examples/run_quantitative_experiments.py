@@ -281,7 +281,7 @@ def run_quantitative_experiments(
     num_scenes: int = 10,
     num_frames: int = 50,
     planning_queries: int = 10,
-    methods: list[str] = None,
+    methods: list[str] | None = None,
     output_dir: str = "experiment_results",
 ):
     """

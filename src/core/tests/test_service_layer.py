@@ -184,7 +184,7 @@ class TestPerceptionService(unittest.TestCase):
         svc = self._make_service(encoder=False)
         bgr = np.zeros((480, 640, 3), dtype=np.uint8)
         depth = np.ones((480, 640), dtype=np.uint16) * 2000
-        result = svc.process_frame(bgr, depth, np.eye(4), "chair")
+        svc.process_frame(bgr, depth, np.eye(4), "chair")
         # Should still detect + project + track, just no CLIP features
         # (may be None if projection fails with all-same depth, that's ok)
 

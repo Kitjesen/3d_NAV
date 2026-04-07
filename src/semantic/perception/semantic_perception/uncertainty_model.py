@@ -430,7 +430,7 @@ class ExplorationStrategy:
             )
 
             if frontier_result is not None:
-                grid_pos, gain = frontier_result
+                grid_pos, _gain = frontier_result
                 # 转换为世界坐标
                 world_pos = gcm.grid_to_world(grid_pos)
                 return np.array([world_pos[0], world_pos[1], robot_pose[2]])
@@ -441,7 +441,7 @@ class ExplorationStrategy:
         )
 
         if poly_result is not None:
-            poly_id, gain = poly_result
+            poly_id, _gain = poly_result
             poly = scg_builder.nodes[poly_id]
             return poly.center
 

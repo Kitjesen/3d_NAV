@@ -180,7 +180,7 @@ class PathFollowerModule(Module, layer=2):
     # ── Callbacks ─────────────────────────────────────────────────────────
 
     def _on_odom(self, odom: Odometry):
-        prev_x, prev_y = self._robot_x, self._robot_y
+        _prev_x, _prev_y = self._robot_x, self._robot_y
         self._robot_x = odom.pose.position.x
         self._robot_y = odom.pose.position.y
 

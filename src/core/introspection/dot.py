@@ -98,7 +98,7 @@ def render(
     # Collect producers / consumers keyed by (port_name, type_name)
     producers: dict[tuple[str, str], list[str]] = defaultdict(list)
     consumers: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for out_mod, out_port, in_mod, in_port in connections:
+    for out_mod, out_port, in_mod, _in_port in connections:
         if out_mod in ignored_modules or in_mod in ignored_modules:
             continue
         type_name = port_type.get((out_mod, out_port), "Any")

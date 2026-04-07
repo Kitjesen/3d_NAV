@@ -380,7 +380,7 @@ class TestTargetBeliefManager(unittest.TestCase):
     def test_bayesian_update_confirmed(self):
         bm = self._make()
         bm.init_from_candidates(self._candidates())
-        initial_p1 = bm._hypotheses[0].posterior
+        _ = bm._hypotheses[0].posterior
         # Confirm object 1 with high CLIP similarity
         bm.bayesian_update(1, detected=True, clip_sim=0.9)
         # Object 1 posterior should increase relative to others

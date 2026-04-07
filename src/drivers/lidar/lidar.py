@@ -427,7 +427,7 @@ class Lidar:
         self._cloud_event.set()
 
         # Health
-        fps = self._fps_counter.tick()
+        self._fps_counter.tick()
         self._health.total_frames += 1
         self._health.total_points += len(arr)
         self._health.last_frame_points = len(arr)

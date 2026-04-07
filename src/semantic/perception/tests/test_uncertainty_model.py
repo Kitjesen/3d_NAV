@@ -78,7 +78,7 @@ def test_polyhedron_uncertainty():
     print("测试 1: 多面体不确定性计算")
     print("=" * 60)
 
-    scg_builder, gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
+    _scg_builder, _gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
 
     model = UncertaintyModel()
 
@@ -109,7 +109,7 @@ def test_gcm_uncertainty():
     print("测试 2: GCM 不确定性计算")
     print("=" * 60)
 
-    scg_builder, gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
+    _scg_builder, gcm, _polyhedra, _occupancy_grid, _grid_resolution, _grid_origin = create_test_environment()
 
     model = UncertaintyModel()
 
@@ -133,7 +133,7 @@ def test_information_gain():
     print("测试 3: 信息增益计算")
     print("=" * 60)
 
-    scg_builder, gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
+    _scg_builder, _gcm, polyhedra, _occupancy_grid, _grid_resolution, _grid_origin = create_test_environment()
 
     model = UncertaintyModel()
 
@@ -166,7 +166,7 @@ def test_exploration_target_selection():
     print("测试 4: 探索目标选择")
     print("=" * 60)
 
-    scg_builder, gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
+    scg_builder, gcm, polyhedra, _occupancy_grid, _grid_resolution, _grid_origin = create_test_environment()
 
     model = UncertaintyModel()
 
@@ -203,7 +203,7 @@ def test_frontier_target_selection():
     print("测试 5: 前沿目标选择")
     print("=" * 60)
 
-    scg_builder, gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
+    _scg_builder, gcm, _polyhedra, _occupancy_grid, _grid_resolution, _grid_origin = create_test_environment()
 
     model = UncertaintyModel()
 
@@ -234,7 +234,7 @@ def test_exploration_strategy():
     print("测试 6: 探索策略")
     print("=" * 60)
 
-    scg_builder, gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
+    scg_builder, gcm, polyhedra, _occupancy_grid, _grid_resolution, _grid_origin = create_test_environment()
 
     model = UncertaintyModel()
     strategy = ExplorationStrategy(model)
@@ -283,7 +283,7 @@ def test_uncertainty_update():
     print("测试 7: 不确定性更新")
     print("=" * 60)
 
-    scg_builder, gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
+    _scg_builder, _gcm, polyhedra, occupancy_grid, grid_resolution, grid_origin = create_test_environment()
 
     model = UncertaintyModel()
 

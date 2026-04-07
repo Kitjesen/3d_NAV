@@ -26,7 +26,7 @@ def _make_tomogram_pickle(
     shape: tuple = (100, 100),
     resolution: float = 0.2,
     center: tuple = (0.0, 0.0),
-    obstacle_cells: list = None,
+    obstacle_cells: list | None = None,
 ) -> str:
     """Create a temporary tomogram pickle and return its path.
 

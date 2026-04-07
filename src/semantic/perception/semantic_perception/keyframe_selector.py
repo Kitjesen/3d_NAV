@@ -71,7 +71,7 @@ class KeyframeSelector:
         robot_y: float,
         robot_yaw: float,
         frame_gray: np.ndarray | None = None,
-        timestamp: float = None,
+        timestamp: float | None = None,
     ) -> bool:
         """
         判断当前帧是否为关键帧。

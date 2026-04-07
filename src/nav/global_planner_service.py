@@ -197,12 +197,12 @@ class GlobalPlannerService:
             pass
         try:
             BackendCls = get("planner_backend", name)
-        except KeyError:
+        except KeyError as err:
             from core.registry import list_plugins
             available = list_plugins("planner_backend")
             raise ValueError(
                 f"Unknown planner: '{name}'. Available: {available}"
-            )
+            ) from err
 
         tomogram_path = self._tomogram
         if not tomogram_path or not os.path.exists(tomogram_path):

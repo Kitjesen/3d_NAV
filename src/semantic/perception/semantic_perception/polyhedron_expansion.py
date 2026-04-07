@@ -396,7 +396,7 @@ class PolyhedronExpander:
         polyhedra = []
         covered_points = set()
 
-        for i in range(self.config.max_polyhedra):
+        for _i in range(self.config.max_polyhedra):
             # 选择种子点
             remaining_candidates = np.array([
                 c for j, c in enumerate(candidates)

@@ -44,7 +44,7 @@ def make_scene(
     target_score: float = 0.85,
     target_det_count: int = 4,
     num_distractors: int = 8,
-    relations: list[dict] = None,
+    relations: list[dict] | None = None,
     seed: int = 42,
 ) -> str:
     """

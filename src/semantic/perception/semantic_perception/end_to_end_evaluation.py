@@ -208,7 +208,7 @@ class EndToEndEvaluator:
         logger.info(f"  Planning {planning_queries} paths...")
         path_metrics_list = []
 
-        for i in range(planning_queries):
+        for _i in range(planning_queries):
             # 随机生成起点和终点
             bounds = metadata.bounds
             start = np.random.uniform(bounds[0], bounds[1])

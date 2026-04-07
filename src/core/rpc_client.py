@@ -9,9 +9,14 @@ Usage:
     result = proxy.navigate(x=5.0, y=3.0)  # RPC call
     proxy.start()  # lifecycle command
 """
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
-from typing import Any, List, Optional, Set
+from typing import TYPE_CHECKING, Any, List, Optional, Set
+
+if TYPE_CHECKING:
+    from core.module import SkillInfo
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +85,7 @@ class RPCClient:
         """Return health dict from the remote Worker."""
         return self._mgr.health(self._worker_id, self._module_id)
 
-    def get_skill_infos(self) -> "list[SkillInfo]":
+    def get_skill_infos(self) -> list[SkillInfo]:
         """Fetch @skill metadata from the remote module via IPC GET_SKILLS.
 
         Returns a list of SkillInfo objects describing each @skill method.

@@ -92,7 +92,7 @@ class NativeModuleConfig:
 
     def build_cmd(self) -> list[str]:
         """Full command line: [executable] + ros_args."""
-        return [self.executable] + self.to_ros_args()
+        return [self.executable, *self.to_ros_args()]
 
 
 # ---------------------------------------------------------------------------

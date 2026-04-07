@@ -5,12 +5,27 @@ import typing
 import ele_planner
 import numpy
 
+from . import a_star as _a_star_mod
+from . import traj_opt as _traj_opt_mod
+
 _Shape = tuple[int, ...]
+
+m = typing.TypeVar("m")
+n = typing.TypeVar("n")
+
+# Re-export referenced types for type annotations
+Astar = _a_star_mod.Astar
+GPMPOptimizer = _traj_opt_mod.GPMPOptimizer
+GPMPOptimizerWnoa = _traj_opt_mod.GPMPOptimizerWnoa
 
 __all__ = [
     "OfflineElePlanner"
 ]
 
+
+class DenseElevationMap:
+    """Opaque C++ type returned by OfflineElePlanner.get_map()."""
+    ...
 
 class OfflineElePlanner:
     def __init__(self, max_heading_rate: float, use_quintic: bool = False) -> None: ...

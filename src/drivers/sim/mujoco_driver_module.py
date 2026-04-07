@@ -109,7 +109,7 @@ class MujocoDriverModule(Module, layer=1):
         policy_path: str = "",
         robot_xml: str = "",
         start_pos: tuple = (0.0, 0.0, 0.35),
-        obstacles: list = None,
+        obstacles: list | None = None,
         **kw,
     ):
         super().__init__(**kw)

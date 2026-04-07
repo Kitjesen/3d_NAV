@@ -193,7 +193,7 @@ class PerceptionImpl(PerceptionAPI):
         except (InvalidImageError, InvalidDepthError):
             raise
         except Exception as e:
-            raise PerceptionAPIError(f"Frame processing failed: {e}")
+            raise PerceptionAPIError(f"Frame processing failed: {e}") from e
 
     def _validate_inputs(
         self,
@@ -361,7 +361,7 @@ class PerceptionImpl(PerceptionAPI):
         cluster_radius = 3.0  # 米
         assigned = set()
 
-        for i, obj in enumerate(objects):
+        for _i, obj in enumerate(objects):
             if obj.id in assigned:
                 continue
 
@@ -371,7 +371,7 @@ class PerceptionImpl(PerceptionAPI):
 
             # 查找附近的物体
             pos1 = np.array([obj.position_3d.x, obj.position_3d.y])
-            for j, other in enumerate(objects):
+            for _j, other in enumerate(objects):
                 if other.id in assigned:
                     continue
 

@@ -481,7 +481,7 @@ class PersonTracker:
     ) -> dict[int, dict]:
         """Map FusionMOT track_id to nearest input person by bbox center distance."""
         result: dict[int, dict] = {}
-        for track_id, bbox_arr, conf in tracks:
+        for track_id, bbox_arr, _conf in tracks:
             tx, ty, tw, th = bbox_arr
             tcx, tcy = tx + tw / 2, ty + th / 2
             best_p, best_d = None, float("inf")

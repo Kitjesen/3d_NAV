@@ -92,7 +92,7 @@ def example_3_query_objects():
     camera_info = CameraInfo(fx=525.0, fy=525.0, cx=319.5, cy=239.5, width=640, height=480)
 
     perception.detector.set_classes(["chair", "table"])
-    detections = perception.process_frame(rgb, depth, camera_info)
+    perception.process_frame(rgb, depth, camera_info)
 
     # 查询特定标签的物体
     chairs = perception.query_objects(label="chair")
@@ -201,7 +201,7 @@ def example_7_factory_methods():
         detector_type="yolo_world",
         encoder_type="clip"
     )
-    perception = PerceptionFactory.create_from_config(config)
+    PerceptionFactory.create_from_config(config)
     print("从配置创建感知系统成功")
 
 

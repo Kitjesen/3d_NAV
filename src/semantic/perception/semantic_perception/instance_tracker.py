@@ -405,7 +405,7 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
             best_geo_match: TrackedObject | None = None
             best_geo_score = -1.0
 
-            for obj, dist in candidates:
+            for obj, _dist in candidates:
                 if len(obj.points) == 0:
                     continue
 
@@ -1628,8 +1628,8 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
 
     def remove_stale_objects(
         self,
-        max_age: float = None,
-        stale_timeout_sec: float = None,
+        max_age: float | None = None,
+        stale_timeout_sec: float | None = None,
         min_confidence: float = 0.0,
     ) -> list[str]:
         """Remove objects that have not been seen recently.

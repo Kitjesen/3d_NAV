@@ -48,7 +48,7 @@ def make_scene_scaled(
     target_score: float = 0.85,
     target_det_count: int = 4,
     num_distractors: int = 8,
-    relations: list[dict] = None,
+    relations: list[dict] | None = None,
     seed: int = 42,
     include_regions: bool = False,
 ) -> str:
@@ -197,7 +197,7 @@ class TestFastPathHitRateByComplexity(unittest.TestCase):
                     "position": target_pos,
                     "score": score,
                     "detection_count": det_count,
-                }] + scene_objects_extra,
+                }, *scene_objects_extra],
                 "relations": relations or [],
                 "regions": [],
                 "summary": "test",

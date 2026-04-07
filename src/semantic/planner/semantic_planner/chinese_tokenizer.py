@@ -246,7 +246,7 @@ class ChineseTokenizer:
     - 关键词提取
     """
 
-    def __init__(self, use_jieba: bool = True, custom_dict_path: str = None):
+    def __init__(self, use_jieba: bool = True, custom_dict_path: str | None = None):
         """
         初始化分词器
 
@@ -439,7 +439,6 @@ class ChineseTokenizer:
 
         words_with_pos = list(self._pseg.cut(text))
         noun_phrases = []
-        current_phrase = []
 
         for i, (word, pos) in enumerate(words_with_pos):
             # 形容词 + 名词 → 名词短语
@@ -451,7 +450,7 @@ class ChineseTokenizer:
             # 名词 + 的 + 名词 → 名词短语
             if pos in ['n', 'ns', 'nr', 'nz']:
                 if i + 2 < len(words_with_pos):
-                    mid_word, mid_pos = words_with_pos[i + 1]
+                    mid_word, _mid_pos = words_with_pos[i + 1]
                     next_word, next_pos = words_with_pos[i + 2]
                     if mid_word == "的" and next_pos in ['n', 'ns', 'nr', 'nz']:
                         noun_phrases.append(word + "的" + next_word)
@@ -463,7 +462,7 @@ class ChineseTokenizer:
 _global_tokenizer: ChineseTokenizer | None = None
 
 
-def get_tokenizer(use_jieba: bool = True, custom_dict_path: str = None) -> ChineseTokenizer:
+def get_tokenizer(use_jieba: bool = True, custom_dict_path: str | None = None) -> ChineseTokenizer:
     """
     获取全局分词器单例
 

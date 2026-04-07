@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 
 from core.module import Module
+
+if TYPE_CHECKING:
+    from core.blueprint import Blueprint
 from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from core.stream import In, Out

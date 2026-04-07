@@ -124,7 +124,7 @@ class OpenAIClient(LLMClientBase):
             except ImportError:
                 raise LLMError(
                     "openai package not installed. Run: pip install openai"
-                )
+                ) from None
 
     async def chat(
         self,
@@ -319,7 +319,7 @@ class ClaudeClient(LLMClientBase):
             except ImportError:
                 raise LLMError(
                     "anthropic package not installed. Run: pip install anthropic"
-                )
+                ) from None
 
     async def chat(
         self,
@@ -442,7 +442,7 @@ class QwenClient(LLMClientBase):
                     )
                     await asyncio.sleep(1)
                     continue
-                raise LLMError(f"Qwen API call timed out after {self.config.timeout_sec}s")
+                raise LLMError(f"Qwen API call timed out after {self.config.timeout_sec}s") from None
             except (KeyboardInterrupt, SystemExit):
                 raise
             except LLMError:
@@ -492,7 +492,7 @@ class QwenClient(LLMClientBase):
         except ImportError:
             raise LLMError(
                 "dashscope package not installed. Run: pip install dashscope"
-            )
+            ) from None
 
         response = Generation.call(
             model=self.config.model,
@@ -553,7 +553,7 @@ class MoonshotClient(OpenAIClient):
             except ImportError:
                 raise LLMError(
                     "openai package not installed. Run: pip install openai"
-                )
+                ) from None
 
     async def chat_with_image(self, *args, **kwargs) -> str:
         raise LLMError("Moonshot Kimi does not support vision input yet")
@@ -634,11 +634,9 @@ class MockLLMClient(LLMClientBase):
         reasoning = "Mock LLM: 根据语义推断导航目标"
 
         # 按房间关键词匹配
-        room_match = None
         preferred_labels: list[str] = []
         for kw, (room, labels) in self._ROOM_HINTS.items():
             if kw in full_text:
-                room_match = room
                 preferred_labels = labels
                 reasoning = (
                     f"Mock LLM: 指令含'{kw}'关键词 → 推断目标区域为{room}，"

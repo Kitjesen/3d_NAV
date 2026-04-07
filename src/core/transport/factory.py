@@ -53,7 +53,7 @@ def create_transport(
         except Exception:
             from .dds import DDSTransport
             if ros_node is None:
-                raise ValueError("AUTO fallback to DDS requires ros_node")
+                raise ValueError("AUTO fallback to DDS requires ros_node") from None
             return DDSTransport(ros_node)
 
     raise ValueError(f"Unknown strategy: {strategy}")
@@ -80,7 +80,7 @@ def create_publisher(
 def create_subscriber(
     topic_name: str,
     msg_type: Any = None,
-    callback: Callable = None,
+    callback: Callable | None = None,
     strategy: TransportStrategy = TransportStrategy.DDS,
     ros_node=None,
     **kwargs,

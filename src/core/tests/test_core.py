@@ -337,8 +337,8 @@ class TestLocalTransport:
         t = LocalTransport()
         assert t.subscriber_count("t") == 0
 
-        cb1 = lambda m: None
-        cb2 = lambda m: None
+        def cb1(m): return None
+        def cb2(m): return None
         t.subscribe("t", cb1)
         t.subscribe("t", cb2)
         assert t.subscriber_count("t") == 2
@@ -588,7 +588,6 @@ class TestBlueprint:
 
     def test_auto_wire_skips_explicit(self):
         """auto_wire 跳过已有显式连接的 In。"""
-        received = []
 
         system = (
             Blueprint()
@@ -602,7 +601,7 @@ class TestBlueprint:
 
         sink = system.get_module("SinkModule")
         src1 = system.get_module("src1")
-        src2 = system.get_module("src2")
+        system.get_module("src2")
 
         # scene_graph 已显式连到 src1
         sg1 = SceneGraph(objects=[Detection3D(label="from_src1")])
@@ -679,7 +678,7 @@ class TestAutoconnect:
         system = bp.build()
 
         src = system.get_module("SourceModule")
-        planner = system.get_module("PlannerModule")
+        system.get_module("PlannerModule")
         detector = system.get_module("DetectorModule")
 
         # SourceModule.pose → DetectorModule.pose (同名同类型)
@@ -908,7 +907,7 @@ class TestEndToEnd:
         src = system.get_module("SourceModule")
         sink = system.get_module("SinkModule")
 
-        for i in range(10):
+        for _i in range(10):
             src.scene_graph.publish(SceneGraph())
 
         assert src.scene_graph.msg_count == 10
@@ -1251,7 +1250,8 @@ class TestBackpressure:
         # Deliver from a background thread so it blocks
         t = threading.Thread(target=inp._deliver, args=(1,))
         t.start()
-        import time; time.sleep(0.02)  # let it enter callback
+        import time
+        time.sleep(0.02)  # let it enter callback
 
         # These should be dropped (callback busy)
         inp._deliver(2)

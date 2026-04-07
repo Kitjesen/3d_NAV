@@ -92,7 +92,7 @@ class MobileCLIPEncoder:
             import torch
 
             logger.info("Loading MobileCLIP text encoder...")
-            model, _, preprocess = mobileclip.create_model_and_transforms(
+            model, _, _preprocess = mobileclip.create_model_and_transforms(
                 "mobileclip_s2", pretrained="/mobileclip_s2.pt"
             )
             self._tokenizer = mobileclip.get_tokenizer("mobileclip_s2")

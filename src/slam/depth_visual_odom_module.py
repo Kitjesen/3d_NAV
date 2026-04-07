@@ -283,7 +283,7 @@ class DepthVisualOdomModule(Module, layer=1):
             return None, None
 
         pts = prev_pts.reshape(-1, 1, 2)
-        curr_pts, status, err = cv2.calcOpticalFlowPyrLK(
+        curr_pts, status, _err = cv2.calcOpticalFlowPyrLK(
             prev_gray, curr_gray, pts, None, **LK_PARAMS
         )
         if curr_pts is None or status is None:

@@ -5,10 +5,13 @@ import sys
 
 sys.path.insert(0, "src")
 for d in ["src/semantic/perception", "src/semantic/planner"]:
-    if os.path.isdir(d): sys.path.insert(0, d)
+    if os.path.isdir(d):
+        sys.path.insert(0, d)
 for k in ["MOONSHOT_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY"]:
     os.environ.pop(k, None)
-import logging; logging.basicConfig(level=logging.ERROR)
+import logging
+
+logging.basicConfig(level=logging.ERROR)
 
 import threading
 import time
@@ -105,7 +108,7 @@ try:
 
     # Create a temporary Out and wire to all targets (simulating fan-out)
     fake_out = OutPort(SceneGraph, "scene_graph_test_source")
-    for tname, in_port in target_ports.items():
+    for _tname, in_port in target_ports.items():
         fake_out._add_callback(in_port._deliver)
 
     before = {tn: tp.msg_count for tn, tp in target_ports.items()}
@@ -139,7 +142,7 @@ try:
 
     odom_sources = set(c[0] for c in odom_conns)
     if odom_sources:
-        src_name = list(odom_sources)[0]
+        src_name = next(iter(odom_sources))
         src_port = system.modules[src_name].ports_out["odometry"]
         before = {}
         for tname in found_odom:

@@ -120,7 +120,7 @@ class TestBeliefResolution(unittest.TestCase):
     def test_credibility_zero_clamps(self):
         """credibility=0 被 clamp 到 0.01, 不会导致 alpha=0。"""
         state = SchedulerState(target_credibility=0.0)
-        alpha, beta, p = self.scheduler._resolve_belief(state)
+        alpha, beta, _p = self.scheduler._resolve_belief(state)
         self.assertGreater(alpha, 0.0)
         self.assertGreater(beta, 0.0)
 

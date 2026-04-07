@@ -90,7 +90,7 @@ class Worker(multiprocessing.Process):
                     self._resp_q.put(("OK", mod_id))
 
                 elif cmd == "RPC_CALL":
-                    _, mod_id, method, rpc_args, rpc_kwargs = msg
+                    _, mod_id, method, _rpc_args, rpc_kwargs = msg
                     mod = self._modules[mod_id]
                     result = mod.call_rpc(method, **rpc_kwargs)
                     self._resp_q.put(("RESULT", result))
@@ -137,7 +137,7 @@ class Worker(multiprocessing.Process):
                     self._resp_q.put(("OK", port_name))
 
                 elif cmd == "SHUTDOWN":
-                    for mod_id, mod in list(self._modules.items()):
+                    for _mod_id, mod in list(self._modules.items()):
                         try:
                             mod.stop()
                         except Exception:

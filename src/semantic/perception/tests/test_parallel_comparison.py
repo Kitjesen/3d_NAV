@@ -939,7 +939,7 @@ class TestParallelComparison:
         hybrid_result = self.hybrid_wrapper.plan(scenario)
         scg_result = self.scg_wrapper.plan(scenario)
 
-        output = print_comparison_table(
+        print_comparison_table(
             scenario,
             [pct_result, hybrid_result, scg_result],
             file=buf,

@@ -310,12 +310,12 @@ class TestShortestPath(unittest.TestCase):
 
     def test_same_node(self):
         tsg = self._setup_line()
-        cost, path = tsg.shortest_path(1, 1)
+        cost, _path = tsg.shortest_path(1, 1)
         self.assertEqual(cost, 0.0)
 
     def test_nonexistent_source(self):
         tsg = self._setup_line()
-        cost, path = tsg.shortest_path(99, 0)
+        cost, _path = tsg.shortest_path(99, 0)
         self.assertEqual(cost, float("inf"))
 
 

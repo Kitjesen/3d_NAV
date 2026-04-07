@@ -347,7 +347,7 @@ class AgentLoop:
             # Parse response
             if response.get("tool_calls"):
                 for tc in response["tool_calls"]:
-                    result = await self._execute_tool(tc, state)
+                    await self._execute_tool(tc, state)
                     if state.completed:
                         break
             elif response.get("content"):

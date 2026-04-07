@@ -49,18 +49,18 @@ class TestTwistToWalk(unittest.TestCase):
 
     def test_max_speed(self):
         mod = ThunderDriver(max_linear_speed=1.0, max_angular_speed=1.0)
-        nx, ny, nz = mod._twist_to_walk(1.0, 0.0, 1.0)
+        nx, _ny, nz = mod._twist_to_walk(1.0, 0.0, 1.0)
         self.assertAlmostEqual(nx, 1.0)
         self.assertAlmostEqual(nz, 1.0)
 
     def test_clamp(self):
         mod = ThunderDriver(max_linear_speed=0.5)
-        nx, ny, nz = mod._twist_to_walk(999.0, 0.0, 0.0)
+        nx, _ny, _nz = mod._twist_to_walk(999.0, 0.0, 0.0)
         self.assertAlmostEqual(nx, 1.0)  # clamped
 
     def test_negative(self):
         mod = ThunderDriver(max_linear_speed=1.0)
-        nx, ny, nz = mod._twist_to_walk(-0.5, 0.0, 0.0)
+        nx, _ny, _nz = mod._twist_to_walk(-0.5, 0.0, 0.0)
         self.assertAlmostEqual(nx, -0.5)
 
 

@@ -5,11 +5,15 @@ Modules access config via: cfg = load_config(); cfg.speed.max_speed
 
 Environment variable LINGTU_CONFIG_PATH overrides the default config path.
 """
+from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    import numpy as np
 
 import yaml
 
@@ -92,7 +96,7 @@ class CameraConfig:
     dist_k3: float = 0.0
 
     @property
-    def T_body_camera(self) -> 'np.ndarray':
+    def T_body_camera(self) -> np.ndarray:
         """4x4 body→camera static transform from factory calibration.
 
         Uses cv2.Rodrigues for rotation (falls back to numpy if cv2 unavailable).

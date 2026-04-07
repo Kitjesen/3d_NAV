@@ -290,7 +290,7 @@ class VoIScheduler:
     def _log_decision(
         self, state: SchedulerState, action: SchedulerAction, reason: str
     ) -> None:
-        alpha, beta, p = self._resolve_belief(state)
+        _alpha, _beta, p = self._resolve_belief(state)
         entry = {
             "time": time.time(),
             "action": action.value,

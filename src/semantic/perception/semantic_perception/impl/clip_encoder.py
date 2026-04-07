@@ -72,7 +72,7 @@ class CLIPEncoder(EncoderAPI):
         try:
             self._load_model()
         except Exception as e:
-            raise EncoderInitError(f"Failed to initialize CLIP: {e}")
+            raise EncoderInitError(f"Failed to initialize CLIP: {e}") from e
 
     def _load_model(self):
         """加载CLIP模型"""
@@ -109,9 +109,9 @@ class CLIPEncoder(EncoderAPI):
         except ImportError:
             raise EncoderInitError(
                 "open_clip not installed. Run: pip install open-clip-torch"
-            )
+            ) from None
         except Exception as e:
-            raise EncoderInitError(f"Failed to load CLIP model: {e}")
+            raise EncoderInitError(f"Failed to load CLIP model: {e}") from e
 
     def encode_image(self, image: np.ndarray) -> np.ndarray:
         """
@@ -169,7 +169,7 @@ class CLIPEncoder(EncoderAPI):
             return features
 
         except Exception as e:
-            raise EncoderInferenceError(f"Image encoding failed: {e}")
+            raise EncoderInferenceError(f"Image encoding failed: {e}") from e
 
     def encode_text(self, text: str) -> np.ndarray:
         """
@@ -223,7 +223,7 @@ class CLIPEncoder(EncoderAPI):
             return features
 
         except Exception as e:
-            raise EncoderInferenceError(f"Text encoding failed: {e}")
+            raise EncoderInferenceError(f"Text encoding failed: {e}") from e
 
     def encode_images_batch(self, images: list[np.ndarray]) -> np.ndarray:
         """
@@ -263,7 +263,7 @@ class CLIPEncoder(EncoderAPI):
             return features.cpu().numpy()
 
         except Exception as e:
-            raise EncoderInferenceError(f"Batch image encoding failed: {e}")
+            raise EncoderInferenceError(f"Batch image encoding failed: {e}") from e
 
     def encode_texts_batch(self, texts: list[str]) -> np.ndarray:
         """
@@ -295,7 +295,7 @@ class CLIPEncoder(EncoderAPI):
             return features.cpu().numpy()
 
         except Exception as e:
-            raise EncoderInferenceError(f"Batch text encoding failed: {e}")
+            raise EncoderInferenceError(f"Batch text encoding failed: {e}") from e
 
     def compute_similarity(
         self,

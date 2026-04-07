@@ -64,7 +64,7 @@ class WorkerManager:
         except Exception:
             raise TimeoutError(
                 f"Worker {worker_id} timed out after {timeout}s on command {msg[0]}"
-            )
+            ) from None
         if resp[0] == "ERROR":
             raise RuntimeError(f"Worker {worker_id}: {resp[1]}")
         return resp

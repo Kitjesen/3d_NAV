@@ -404,7 +404,7 @@ class TestAutoconnect:
         # Find modules by type from the name->module dict
         perception = None
         planner = None
-        for name, mod in system.modules.items():
+        for _name, mod in system.modules.items():
             if isinstance(mod, PerceptionModule):
                 perception = mod
             elif isinstance(mod, _DownstreamPlanner):

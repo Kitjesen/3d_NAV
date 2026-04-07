@@ -24,9 +24,12 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any, Dict, List, Optional, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_args, get_origin, get_type_hints
 
 from .stream import In, Out
+
+if TYPE_CHECKING:
+    from .blueprint import Blueprint
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +359,7 @@ class Module:
 
     # -- Dynamic port creation --------------------------------------------
 
-    def io(self, name: str, direction: type, msg_type: type = None) -> Any:
+    def io(self, name: str, direction: type, msg_type: type | None = None) -> Any:
         """Dynamically create a port at runtime.
 
         Args:

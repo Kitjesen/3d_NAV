@@ -63,7 +63,7 @@ class PerceptionFactory:
             return PerceptionImpl(detector, encoder, tracker, config)
 
         except Exception as e:
-            raise ConfigurationError(f"Failed to create perception system: {e}")
+            raise ConfigurationError(f"Failed to create perception system: {e}") from e
 
     @staticmethod
     def create_detector(

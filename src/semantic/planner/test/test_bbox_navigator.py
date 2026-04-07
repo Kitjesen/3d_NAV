@@ -110,7 +110,7 @@ class TestPDController:
         robot_pose = (0.0, 0.0, 0.0)
         # 距离 0.3 m < min_distance=0.8
         target_3d = np.array([0.3, 0.0, 0.0])
-        lx, az = self.nav.compute_cmd_vel(target_3d, robot_pose)
+        lx, _az = self.nav.compute_cmd_vel(target_3d, robot_pose)
         assert lx < 0.0
 
     def test_pd_turn_left(self):

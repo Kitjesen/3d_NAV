@@ -135,7 +135,7 @@ class TestParseJsonTolerant:
 class TestBuildBboxPrompt:
     def test_build_prompt_zh_contains_target(self):
         """中文 prompt 应包含目标描述。"""
-        system, user = _build_bbox_prompt("红色椅子", "zh")
+        _system, user = _build_bbox_prompt("红色椅子", "zh")
         assert "红色椅子" in user
 
     def test_build_prompt_zh_system_has_format(self):
@@ -146,7 +146,7 @@ class TestBuildBboxPrompt:
 
     def test_build_prompt_en_contains_target(self):
         """英文 prompt 应包含目标描述。"""
-        system, user = _build_bbox_prompt("red chair", "en")
+        _system, user = _build_bbox_prompt("red chair", "en")
         assert "red chair" in user
 
     def test_build_prompt_en_system_has_format(self):

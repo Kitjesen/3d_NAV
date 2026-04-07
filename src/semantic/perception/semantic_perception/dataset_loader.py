@@ -428,7 +428,7 @@ class GibsonLoader(BaseDatasetLoader):
         load_point_cloud: bool = True,
     ) -> Frame:
         """加载 Gibson 单帧数据。"""
-        scene_path = self.dataset_root / scene_id
+        self.dataset_root / scene_id
 
         # Gibson 使用全景图，这里简化处理
         frame = Frame(

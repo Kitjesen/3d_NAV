@@ -389,13 +389,13 @@ def extract_room_objects_from_scene_graph(
         # Fallback: group by region_id
         from collections import defaultdict
         region_objs: dict[int, list[tuple[str, float]]] = defaultdict(list)
-        for oid, info in obj_map.items():
+        for _oid, info in obj_map.items():
             rid = info["region_id"]
             if rid >= 0:
                 region_objs[rid].append((info["label"], info["confidence"]))
 
         if region_objs:
-            for rid, objs in region_objs.items():
+            for _rid, objs in region_objs.items():
                 labels = [o[0] for o in objs]
                 confs = [o[1] for o in objs]
                 room_type = _infer_room_type_from_labels(labels)

@@ -103,7 +103,7 @@ class RoomManagerMixin:
             dx = float(a.position[0] - b.position[0])
             dy = float(a.position[1] - b.position[1])
             dz = float(a.position[2] - b.position[2])
-            dist_2d = math.sqrt(dx * dx + dy * dy)
+            math.sqrt(dx * dx + dy * dy)
             dist_3d = math.sqrt(dx * dx + dy * dy + dz * dz)
 
             # 包围盒感知的间隙距离 (扣除两物体各自半径)
@@ -527,7 +527,7 @@ class RoomManagerMixin:
         edges: list[dict] = []
         seen_pairs: set = set()
 
-        room_by_id = {r.room_id: r for r in rooms}
+        {r.room_id: r for r in rooms}
 
         # Strategy 1: Door-mediated connectivity
         door_objects = [
@@ -634,7 +634,7 @@ class RoomManagerMixin:
 
         frontiers: list[dict] = []
         all_positions = np.array([obj.position[:2] for obj in self._objects.values()])
-        scene_center = all_positions.mean(axis=0)
+        all_positions.mean(axis=0)
 
         door_kw = {"door", "gate", "entrance", "exit", "门", "出口", "入口"}
         door_objects = [
@@ -643,7 +643,7 @@ class RoomManagerMixin:
         ]
 
         room_centers = {r.room_id: r.center for r in rooms}
-        room_obj_ids = {r.room_id: set(r.object_ids) for r in rooms}
+        {r.room_id: set(r.object_ids) for r in rooms}
 
         for door in door_objects:
             door_pos = door.position[:2]

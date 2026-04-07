@@ -129,7 +129,7 @@ class FusionMOTWrapper:
         # 转为 numpy: bboxes (N,4) xywh, confidences (N,)
         bboxes = np.array([[d.bbox.x, d.bbox.y, d.bbox.w, d.bbox.h] for d in detections], dtype=np.float32)
         confs = np.array([d.confidence for d in detections], dtype=np.float32)
-        class_ids = [d.class_id for d in detections]
+        [d.class_id for d in detections]
 
         # Re-ID 特征提取 (需要 frame，但 Detector 协议不传 frame)
         # 这里 features=None，FusionMOT 会退化到 IoU+motion 匹配

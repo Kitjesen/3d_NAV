@@ -160,7 +160,7 @@ def test_memory_usage():
     # 模拟多次更新（内存不应增长）
     robot_pos = np.array([0.0, 0.0, 0.0])
 
-    for i in range(10):
+    for _i in range(10):
         robot_pos += np.array([0.5, 0.0, 0.0])
         point_cloud = create_mock_point_cloud(robot_pos, num_points=100)
         grid.update(robot_pos, point_cloud)

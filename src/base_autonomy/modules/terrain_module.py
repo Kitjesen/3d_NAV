@@ -140,7 +140,7 @@ class TerrainModule(Module, layer=2):
         logger.info("TerrainModule [%s]: started", self._backend)
 
     def stop(self):
-        for name, node in reversed(list(self._nodes.items())):
+        for _name, node in reversed(list(self._nodes.items())):
             try:
                 node.stop()
             except Exception:

@@ -87,7 +87,7 @@ class InstanceTracker(TrackerAPI):
                 matched = False
 
                 # 尝试匹配现有追踪
-                for track_id, track in self._tracks.items():
+                for _track_id, track in self._tracks.items():
                     if self._should_merge(det, track):
                         # 更新追踪
                         self._update_track(track, det, timestamp)
@@ -109,7 +109,7 @@ class InstanceTracker(TrackerAPI):
             return matched_tracks
 
         except Exception as e:
-            raise TrackerError(f"Tracking update failed: {e}")
+            raise TrackerError(f"Tracking update failed: {e}") from e
 
     def _should_merge(self, det: Detection3D, track: Detection3D) -> bool:
         """判断是否应该合并检测和追踪"""

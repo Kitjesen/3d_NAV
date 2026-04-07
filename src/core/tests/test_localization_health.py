@@ -263,7 +263,6 @@ class TestNavigationPauseResume(unittest.TestCase):
         m._on_localization_status({"state": "LOST", "confidence": 0.0})
 
         # Send odom — should be skipped (position updates but tracker not called)
-        initial_status_count = m.mission_status.msg_count
         odom = Odometry(pose=Pose(position=Vector3(5, 5, 0)), ts=time.time())
         m._on_odom(odom)
         # mission_status should not change (no tracker event)
@@ -431,7 +430,7 @@ class TestNavigationDegeneracyResponse(unittest.TestCase):
         return m, MissionState
 
     def test_severe_degeneracy_limits_speed(self):
-        m, MS = self._make()
+        m, _MS = self._make()
         m._on_localization_status({
             "state": "TRACKING", "confidence": 0.4,
             "degeneracy": "SEVERE",
@@ -439,7 +438,7 @@ class TestNavigationDegeneracyResponse(unittest.TestCase):
         self.assertAlmostEqual(m._speed_scale, 0.4)
 
     def test_mild_degeneracy_limits_speed(self):
-        m, MS = self._make()
+        m, _MS = self._make()
         m._on_localization_status({
             "state": "TRACKING", "confidence": 0.7,
             "degeneracy": "MILD",
@@ -447,7 +446,7 @@ class TestNavigationDegeneracyResponse(unittest.TestCase):
         self.assertAlmostEqual(m._speed_scale, 0.7)
 
     def test_no_degeneracy_full_speed(self):
-        m, MS = self._make()
+        m, _MS = self._make()
         m._on_localization_status({
             "state": "TRACKING", "confidence": 1.0,
             "degeneracy": "NONE",

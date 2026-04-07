@@ -61,7 +61,7 @@ class TestExtractFrontierSceneData(unittest.TestCase):
             ],
         })
 
-        objects, relations, rooms = extract_frontier_scene_data(sg)
+        objects, _relations, rooms = extract_frontier_scene_data(sg)
         self.assertEqual(len(objects), 1)
         self.assertEqual(len(rooms), 1)
         self.assertEqual(rooms[0]["name"], "office")

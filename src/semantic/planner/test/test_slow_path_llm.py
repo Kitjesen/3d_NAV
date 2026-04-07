@@ -130,7 +130,7 @@ class TestSlowPathLLM(unittest.TestCase):
 
         # 获取发送给LLM的消息
         call_args = self.resolver._primary.chat.call_args
-        messages = call_args[0][0]
+        call_args[0][0]
 
         print("\n=== Slow Path LLM Test ===")
         print(f"Instruction: {instruction}")

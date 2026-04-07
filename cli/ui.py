@@ -436,7 +436,7 @@ def cmd_restart() -> None:
     python_exe = sys.executable or "python3"
     repo_root = Path(__file__).resolve().parent.parent
     entry = repo_root / "lingtu.py"
-    new_cmd = [python_exe, str(entry)] + argv
+    new_cmd = [python_exe, str(entry), *argv]
 
     print(f"  Restarting: {' '.join(new_cmd)}")
     import subprocess as _sp

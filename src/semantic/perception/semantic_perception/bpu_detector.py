@@ -189,7 +189,7 @@ class BPUDetector(DetectorBase):
         # 缁鍩嗛弫? 娴犲孩膩閸ㄥ鐤勯梽鍛扮翻閸戠儤甯归弬绱欐稉宥勭贩鐠?vocab 閺傚洣娆㈤敍宀勪缉閸?vocab/model 娑撳秴灏柊宥忕礆
         # 閸忓牊澹傞幓蹇氱翻閸戠儤澹橀張鈧崣鍏橀惃?cls 闁岸浜鹃弫?
         _candidate_cls_ch = set()
-        for name, arr in dummy_out.items():
+        for _name, arr in dummy_out.items():
             ch = arr.shape[-1]
             if ch not in (64, 32, 1) and ch != self.INPUT_SIZE // 4:
                 _candidate_cls_ch.add(ch)
@@ -310,7 +310,7 @@ class BPUDetector(DetectorBase):
 
         # 鏉炲床娑?Detection2D, 閹?text_prompt 鏉╁洦鎶?
         results: list[Detection2D] = []
-        frame_area = h0 * w0
+        h0 * w0
         for i, (box, score, cid) in enumerate(raw):
             cid = int(cid)
             # 鏉╁洦鎶? 娴犲懍绻氶悾?text_prompt 娑撳厴閸栧綊鍘ら惃?COCO 缁?
@@ -565,7 +565,7 @@ class BPUDetector(DetectorBase):
             cls_name, bbox_name, mask_name = self._output_map[i]
             cls_logits = outputs[cls_name][0]
             bbox_raw = outputs[bbox_name][0]
-            H, W = cls_logits.shape[:2]
+            _H, _W = cls_logits.shape[:2]
 
             cls_scores = 1.0 / (1.0 + np.exp(-cls_logits.astype(np.float32)))
             max_scores = cls_scores.max(axis=-1)

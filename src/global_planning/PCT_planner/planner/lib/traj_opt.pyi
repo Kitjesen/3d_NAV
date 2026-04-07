@@ -7,6 +7,9 @@ import traj_opt
 
 _Shape = tuple[int, ...]
 
+m = typing.TypeVar("m")
+n = typing.TypeVar("n")
+
 __all__ = [
     "GPMPOptimizer",
     "GPMPOptimizerWnoa"

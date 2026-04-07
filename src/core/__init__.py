@@ -21,28 +21,46 @@ from .stream import In, Out
 from .transport import LocalTransport, Transport
 
 __all__ = [
-    # transport
-    "Transport", "LocalTransport",
-    # stream
-    "Out", "In",
-    # module
-    "Module", "rpc", "skill", "SkillInfo",
     # blueprint
-    "Blueprint", "SystemHandle", "WorkerSystemHandle", "autoconnect",
-    # config
-    "RobotConfig", "load_config", "get_config", "reset_config",
+    "Blueprint",
     # clock
-    "Clock", "clock",
-    # native
-    "NativeModule", "NativeModuleConfig",
-    # rpc / remote
-    "RPCClient", "RemoteOut", "RemoteIn",
+    "Clock",
+    "In",
+    "LocalTransport",
+    # module
+    "Module",
     # coordinator (imported lazily — requires WorkerManager)
     "ModuleCoordinator",
-    # introspection (imported lazily)
-    "render_text", "render_dot", "render_svg", "render_png",
+    # native
+    "NativeModule",
+    "NativeModuleConfig",
+    # stream
+    "Out",
+    # rpc / remote
+    "RPCClient",
+    "RemoteIn",
+    "RemoteOut",
     # resource monitor (imported lazily)
     "ResourceMonitor",
+    # config
+    "RobotConfig",
+    "SkillInfo",
+    "SystemHandle",
+    # transport
+    "Transport",
+    "WorkerSystemHandle",
+    "autoconnect",
+    "clock",
+    "get_config",
+    "load_config",
+    "render_dot",
+    "render_png",
+    "render_svg",
+    # introspection (imported lazily)
+    "render_text",
+    "reset_config",
+    "rpc",
+    "skill",
 ]
 
 

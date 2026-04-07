@@ -190,7 +190,6 @@ class RerunModule(Module, layer=6):
 
     def _on_safety(self, state: SafetyState):
         level = state.level if hasattr(state, 'level') else 0
-        color = [[0, 255, 0]] if level == 0 else [[255, 255, 0]] if level == 1 else [[255, 0, 0]]
         label = ["SAFE", "WARN", "STOP"][min(level, 2)]
         rr.log("world/safety",
                rr.TextLog(f"Safety: {label}", level=rr.TextLogLevel.WARN if level > 0 else rr.TextLogLevel.INFO))

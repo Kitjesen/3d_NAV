@@ -66,7 +66,6 @@ class TestRetry(unittest.TestCase):
     def test_jitter_varies_wait_time(self):
         """With jitter=True, backoff intervals vary."""
         waits = []
-        original_sleep = time.sleep
 
         def mock_sleep(t):
             waits.append(t)

@@ -161,7 +161,7 @@ class VoxelGridModule(Module, layer=2):
 
         # Column carving: per (ix, iy) find min/max iz
         col_map: dict[tuple, list] = {}
-        for i, (ix, iy, iz) in enumerate(keys_arr.astype(np.int64).tolist()):
+        for _i, (ix, iy, iz) in enumerate(keys_arr.astype(np.int64).tolist()):
             col = (int(ix), int(iy))
             if col not in col_map:
                 col_map[col] = [iz, iz]

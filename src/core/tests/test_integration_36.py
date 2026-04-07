@@ -32,7 +32,8 @@ print("=== 1-12: Individual Modules ===")
 # 1
 from memory.modules.semantic_mapper_module import SemanticMapperModule
 
-m = SemanticMapperModule(save_dir="/tmp/v_test1"); m.setup()
+m = SemanticMapperModule(save_dir="/tmp/v_test1")
+m.setup()
 m._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0))))
 sg = SceneGraph(objects=[Detection3D(id="1", label="desk")],
                 regions=[Region(name="office", object_ids=["1"], center=Vector3(1, 0, 0))])
@@ -44,28 +45,40 @@ T("1.SemanticMapper count", m._sg_count > 0)
 # 2
 from memory.modules.vector_memory_module import VectorMemoryModule
 
-v = VectorMemoryModule(); v.setup()
-v._robot_xy = (15, 5); v._store_snapshot(["backpack", "bench"])
+v = VectorMemoryModule()
+v.setup()
+v._robot_xy = (15, 5)
+v._store_snapshot(["backpack", "bench"])
 T("2.VectorMemory query", v.query_location("find backpack")["found"])
 T("2.VectorMemory stats", v.get_memory_stats()["entries"] == 1)
 
 # 3
 from semantic.planner.semantic_planner.visual_servo_module import VisualServoModule
 
-vs = VisualServoModule(); vs.setup()
-vs._on_servo_target("find:chair"); T("3.VisualServo find", vs._mode == "find")
-vs._on_servo_target("follow:person"); T("3.VisualServo follow", vs._mode == "follow")
-vs._on_servo_target("stop"); T("3.VisualServo stop", vs._mode == "idle")
-vs._engage_servo(); T("3.VisualServo engage", vs._servo_active)
-vs._release_servo(); T("3.VisualServo release", not vs._servo_active)
+vs = VisualServoModule()
+vs.setup()
+vs._on_servo_target("find:chair")
+T("3.VisualServo find", vs._mode == "find")
+vs._on_servo_target("follow:person")
+T("3.VisualServo follow", vs._mode == "follow")
+vs._on_servo_target("stop")
+T("3.VisualServo stop", vs._mode == "idle")
+vs._engage_servo()
+T("3.VisualServo engage", vs._servo_active)
+vs._release_servo()
+T("3.VisualServo release", not vs._servo_active)
 
 # 4
 from drivers.teleop_module import TeleopModule
 
-tp = TeleopModule(release_timeout=0.01); tp.setup()
+tp = TeleopModule(release_timeout=0.01)
+tp.setup()
 T("4.Teleop ports", "cmd_vel" in tp.ports_out)
-tp._on_joy({"lx": 0.5}); T("4.Teleop active", tp._active)
-time.sleep(0.02); tp._check_idle(); T("4.Teleop idle", not tp._active)
+tp._on_joy({"lx": 0.5})
+T("4.Teleop active", tp._active)
+time.sleep(0.02)
+tp._check_idle()
+T("4.Teleop idle", not tp._active)
 
 # 5
 import json
@@ -82,7 +95,7 @@ T("5.AgentLoop tool registry", len(AGENT_TOOLS) >= 7)
 from nav.navigation_module import NavigationModule
 
 nm = NavigationModule(enable_ros2_bridge=False)
-T("6.Nav ros2_bridge", nm._enable_ros2_bridge == False)
+T("6.Nav ros2_bridge", not nm._enable_ros2_bridge)
 
 # 7
 from nav.global_planner_service import GlobalPlannerService
@@ -90,7 +103,8 @@ from nav.global_planner_service import GlobalPlannerService
 gps = GlobalPlannerService()
 class MockB:
     _grid = np.zeros((100, 100), dtype=np.float32)
-    _resolution = 0.2; _origin = np.array([0.0, 0.0])
+    _resolution = 0.2
+    _origin = np.array([0.0, 0.0])
     def plan(self, s, g): return [s, g]
 gps._backend = MockB()
 g = np.array([5.0, 5.0, 0.0])
@@ -102,7 +116,8 @@ T("7.GPS safe obstacle", r is not None and not np.array_equal(r[:2], g[:2]))
 # 8
 from nav.occupancy_grid_module import OccupancyGridModule
 
-og = OccupancyGridModule(); og.setup()
+og = OccupancyGridModule()
+og.setup()
 og._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0))))
 og._on_cloud(PointCloud2(points=np.random.randn(100, 3).astype(np.float32) * 5))
 T("8.OccupancyGrid", og.occupancy_grid.msg_count > 0)
@@ -110,15 +125,18 @@ T("8.OccupancyGrid", og.occupancy_grid.msg_count > 0)
 # 9
 from nav.esdf_module import ESDFModule
 
-es = ESDFModule(); es.setup()
-grid = np.zeros((50, 50), dtype=np.int8); grid[20:30, 20:30] = 100
+es = ESDFModule()
+es.setup()
+grid = np.zeros((50, 50), dtype=np.int8)
+grid[20:30, 20:30] = 100
 es._on_grid(OccupancyGrid(grid=grid, resolution=0.2))
 T("9.ESDF", es.esdf.msg_count > 0)
 
 # 10
 from nav.elevation_map_module import ElevationMapModule
 
-em = ElevationMapModule(); em.setup()
+em = ElevationMapModule()
+em.setup()
 em._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0))))
 em._on_cloud(PointCloud2(points=np.random.randn(100, 3).astype(np.float32) * 5))
 T("10.ElevationMap", em.elevation_map.msg_count > 0)
@@ -126,14 +144,16 @@ T("10.ElevationMap", em.elevation_map.msg_count > 0)
 # 11
 from slam.slam_bridge_module import SlamBridgeModule
 
-sb = SlamBridgeModule(); sb.setup()
+sb = SlamBridgeModule()
+sb.setup()
 T("11.SlamBridge state attrs", hasattr(sb, "_reader") and hasattr(sb, "_rclpy_node"))
 T("11.SlamBridge ports", "map_cloud" in sb.ports_out and "odometry" in sb.ports_out)
 
 # 12
 from drivers.thunder.camera_bridge_module import CameraBridgeModule
 
-cb = CameraBridgeModule(); cb.setup()
+cb = CameraBridgeModule()
+cb.setup()
 T("12.CameraBridge stub", cb._node is None)
 T("12.CameraBridge ports", all(p in cb.ports_out for p in ["color_image", "depth_image", "camera_info"]))
 
@@ -144,7 +164,8 @@ print("\n=== 21-30: Cross-Module (dev profile) ===")
 from core.blueprints.full_stack import full_stack_blueprint
 
 buf = io.StringIO()
-h = logging.StreamHandler(buf); h.setLevel(logging.WARNING)
+h = logging.StreamHandler(buf)
+h.setLevel(logging.WARNING)
 logging.getLogger("core.blueprint").addHandler(h)
 
 bp = full_stack_blueprint(robot="stub", slam_profile="none",
@@ -183,7 +204,8 @@ T("25.goal Planner->Nav", any("SemanticPlanner" in c[0] and "Navigation" in c[2]
 for mod in system.modules.values():
     if hasattr(mod, "odometry") and hasattr(mod.odometry, "_deliver"):
         mod.odometry._deliver(Odometry(pose=Pose(position=Vector3(0, 0, 0))))
-chair = Detection3D(id="c", label="chair", confidence=0.9); chair.position = Vector3(8, 2, 0)
+chair = Detection3D(id="c", label="chair", confidence=0.9)
+chair.position = Vector3(8, 2, 0)
 planner.scene_graph._deliver(SceneGraph(objects=[chair]))
 time.sleep(0.3)
 prev = nav.goal_pose.msg_count
@@ -192,7 +214,8 @@ time.sleep(0.5)
 T("26.FastPath->Nav", nav.goal_pose.msg_count - prev > 0)
 
 # 27 Vector Memory
-vmem2._robot_xy = (20, 10); vmem2._store_snapshot(["fire extinguisher", "hose"])
+vmem2._robot_xy = (20, 10)
+vmem2._store_snapshot(["fire extinguisher", "hose"])
 prev = nav.goal_pose.msg_count
 planner.instruction._deliver("find fire extinguisher")
 time.sleep(0.5)
@@ -223,7 +246,8 @@ print("\n=== 31-36: Persistence + Edge Cases ===")
 # ============================================================
 
 # 31
-m2 = SemanticMapperModule(save_dir="/tmp/v_test1"); m2.setup()
+m2 = SemanticMapperModule(save_dir="/tmp/v_test1")
+m2.setup()
 T("31.Persist KG", len(m2._kg.room_types) > 0 if m2._kg else False)
 
 # 33

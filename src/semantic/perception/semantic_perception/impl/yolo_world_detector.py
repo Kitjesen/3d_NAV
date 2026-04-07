@@ -69,7 +69,7 @@ class YOLOWorldDetector(DetectorAPI):
         try:
             self._load_model()
         except Exception as e:
-            raise DetectorInitError(f"Failed to initialize YOLO-World: {e}")
+            raise DetectorInitError(f"Failed to initialize YOLO-World: {e}") from e
 
     def _load_model(self):
         """加载YOLO-World模型"""
@@ -92,13 +92,15 @@ class YOLOWorldDetector(DetectorAPI):
         except ImportError:
             raise DetectorInitError(
                 "ultralytics not installed. Run: pip install ultralytics"
-            )
+            ) from None
         except Exception as e:
-            raise DetectorInitError(f"Failed to load YOLO-World model: {e}")
+            raise DetectorInitError(f"Failed to load YOLO-World model: {e}") from e
 
     def _export_tensorrt(self, model_name: str):
         """导出TensorRT引擎"""
         try:
+            from ultralytics import YOLO
+
             logger.info("Exporting to TensorRT...")
 
             export_kwargs = {
@@ -217,7 +219,7 @@ class YOLOWorldDetector(DetectorAPI):
             return detections
 
         except Exception as e:
-            raise DetectorInferenceError(f"Detection failed: {e}")
+            raise DetectorInferenceError(f"Detection failed: {e}") from e
 
     def set_classes(self, classes: list[str]):
         """
@@ -243,7 +245,7 @@ class YOLOWorldDetector(DetectorAPI):
                 self._current_classes = classes
 
         except Exception as e:
-            raise DetectorError(f"Failed to set classes: {e}")
+            raise DetectorError(f"Failed to set classes: {e}") from e
 
     def get_classes(self) -> list[str]:
         """

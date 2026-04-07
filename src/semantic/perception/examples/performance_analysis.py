@@ -146,7 +146,7 @@ class PerformanceAnalyzer:
         occupancy_grid = np.random.rand(100, 100, 40) < 0.3
 
         # 性能分析
-        result, elapsed_time, profile_stats = self.profile_function(
+        _result, elapsed_time, profile_stats = self.profile_function(
             scg_builder.build_edges,
             occupancy_grid,
             resolution=0.1,

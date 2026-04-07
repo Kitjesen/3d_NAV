@@ -399,7 +399,7 @@ class PerformanceVisualizer:
     def plot_comparison(
         self,
         results: list,
-        metrics: list[str] = ['memory', 'update_time', 'planning_time'],
+        metrics: list[str] | None = None,
         title: str = "Performance Comparison",
     ):
         """
@@ -411,6 +411,8 @@ class PerformanceVisualizer:
             title: 图表标题
         """
         # 按方法分组
+        if metrics is None:
+            metrics = ['memory', 'update_time', 'planning_time']
         methods = {}
         for result in results:
             if result.method_name not in methods:

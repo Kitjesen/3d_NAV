@@ -160,7 +160,6 @@ class TestAstarOnGrid:
         trav = _make_walled_trav(30, 30)
         path = _astar_on_grid(trav, (5, 5), (20, 5), obs_thr=49.9)
         assert path is not None
-        mid = 30 // 2
         # No cell in the path should be in the wall row
         for ci, cj in path:
             assert trav[ci, cj] < 49.9, "path goes through obstacle"

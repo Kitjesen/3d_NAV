@@ -89,7 +89,7 @@ def auto_select(category: str, platform: str = "") -> str | None:
     if category not in _registry:
         return None
     candidates = []
-    for name, (cls, meta) in _registry[category].items():
+    for name, (_cls, meta) in _registry[category].items():
         if platform and meta["platforms"] and platform not in meta["platforms"]:
             continue
         candidates.append((meta["priority"], name))

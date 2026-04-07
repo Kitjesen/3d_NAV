@@ -106,7 +106,7 @@ class TestUpdateLocal:
         # 添加一个近处物体
         near_det = _make_det("door", 1.0, 0.5)
         tracker.update([near_det])
-        obj_id = list(tracker.objects.keys())[0]
+        obj_id = next(iter(tracker.objects.keys()))
         initial_count = tracker.objects[obj_id].detection_count
 
         # 再次在附近检测到
@@ -199,7 +199,7 @@ class TestRemoveStaleObjects:
         """过期 + 低置信度的物体应被移除。"""
         tracker = _make_tracker()
         tracker.update([_make_det("ghost_object", 1.0, 0.0)])
-        obj_id = list(tracker.objects.keys())[0]
+        obj_id = next(iter(tracker.objects.keys()))
         obj = tracker.objects[obj_id]
 
         # 手动设置成"很久以前见过"且"低置信度"
@@ -214,7 +214,7 @@ class TestRemoveStaleObjects:
         """过期但置信度高的物体不被移除 (双条件: 超时 AND 低置信度)。"""
         tracker = _make_tracker()
         tracker.update([_make_det("important_sign", 1.0, 0.0)])
-        obj_id = list(tracker.objects.keys())[0]
+        obj_id = next(iter(tracker.objects.keys()))
         obj = tracker.objects[obj_id]
 
         obj.last_seen = time.time() - 100.0  # 过期
@@ -228,7 +228,7 @@ class TestRemoveStaleObjects:
         """新鲜但置信度低的物体不被移除 (需同时满足两个条件)。"""
         tracker = _make_tracker()
         tracker.update([_make_det("uncertain_obj", 1.0, 0.0)])
-        obj_id = list(tracker.objects.keys())[0]
+        obj_id = next(iter(tracker.objects.keys()))
         obj = tracker.objects[obj_id]
 
         # 时间戳是当前 → 刚见过, 未超时
@@ -349,7 +349,7 @@ class TestGetSceneGraphDiffJson:
         """物体位置显著移动时, 应出现在 updated 列表。"""
         tracker = _make_tracker()
         tracker.update([_make_det("chair", 1.0, 0.0)])
-        obj_id = list(tracker.objects.keys())[0]
+        obj_id = next(iter(tracker.objects.keys()))
 
         # 构造快照: 物体在旧位置
         prev_snapshot = {
@@ -454,7 +454,7 @@ class TestIncrementalUpdateIntegration:
         far_feat = far_feat / np.linalg.norm(far_feat)
         far_det = _make_det("chair", 50.0, 0.0, features=far_feat)
         tracker.update([far_det])
-        remote_obj = list(tracker.objects.values())[0]
+        remote_obj = next(iter(tracker.objects.values()))
         initial_count = remote_obj.detection_count
 
         # 在原点附近发一个相同 label 的检测 (理论上可以匹配), 但用局部更新

@@ -41,7 +41,7 @@ def test_memory_evaluator():
     evaluator.start()
 
     # 分配一些内存
-    data = [np.random.rand(1000, 1000) for _ in range(10)]
+    [np.random.rand(1000, 1000) for _ in range(10)]
 
     metrics = evaluator.stop()
 
@@ -63,7 +63,7 @@ def test_update_evaluator():
     evaluator = UpdateEvaluator()
 
     # 模拟 10 次更新
-    for i in range(10):
+    for _i in range(10):
         evaluator.start_update()
         time.sleep(0.01)  # 模拟更新耗时
         evaluator.end_update()
@@ -221,7 +221,7 @@ def test_benchmark_framework():
         }
 
     # 运行基准测试
-    result_a = framework.run_benchmark(
+    framework.run_benchmark(
         method_name="Method A",
         scene_id="test_scene",
         run_fn=run_method_a,
@@ -229,7 +229,7 @@ def test_benchmark_framework():
         evaluate_update=True,
     )
 
-    result_b = framework.run_benchmark(
+    framework.run_benchmark(
         method_name="Method B",
         scene_id="test_scene",
         run_fn=run_method_b,

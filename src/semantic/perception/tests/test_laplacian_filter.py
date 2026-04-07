@@ -138,7 +138,7 @@ class TestInstanceTracker(unittest.TestCase):
         tracker.update([det1])
         tracker.update([det2])
         self.assertEqual(len(tracker.objects), 1)
-        obj = list(tracker.objects.values())[0]
+        obj = next(iter(tracker.objects.values()))
         self.assertEqual(obj.detection_count, 2)
 
     def test_different_labels_separate(self):
@@ -246,7 +246,7 @@ class TestInstanceTracker(unittest.TestCase):
 
         tracker.update([det1])
         tracker.update([det2])
-        obj = list(tracker.objects.values())[0]
+        obj = next(iter(tracker.objects.values()))
         self.assertEqual(obj.features.shape[0], 3)
         self.assertGreater(np.linalg.norm(obj.features), 0.9)
 

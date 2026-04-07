@@ -85,7 +85,7 @@ def _astar_on_grid(trav: np.ndarray, start: tuple[int, int], goal: tuple[int, in
         List[(ix, iy)] path, or None if unreachable or timed out
     """
     deadline = time.monotonic() + timeout_sec
-    h = lambda a, b: abs(a[0] - b[0]) + abs(a[1] - b[1])  # Manhattan heuristic
+    def h(a, b): return abs(a[0] - b[0]) + abs(a[1] - b[1])  # Manhattan heuristic
     open_q = [(h(start, goal), 0.0, start, [])]
     visited: dict = {}
 
@@ -93,11 +93,11 @@ def _astar_on_grid(trav: np.ndarray, start: tuple[int, int], goal: tuple[int, in
         if time.monotonic() > deadline:
             logger.warning("A* timeout after %.1fs (visited %d nodes)", timeout_sec, len(visited))
             return None
-        f, g, cur, path = heapq.heappop(open_q)
+        _f, g, cur, path = heapq.heappop(open_q)
         if cur in visited:
             continue
         visited[cur] = True
-        path = path + [cur]
+        path = [*path, cur]
         if cur == goal:
             return path
         for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),

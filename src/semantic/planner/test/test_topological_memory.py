@@ -34,7 +34,7 @@ class TestNodeCreation(unittest.TestCase):
         self.assertIsNone(result)  # 太近, 不创建新节点
         self.assertEqual(len(mem.nodes), 1)
         # 但 visit_count 应增加
-        self.assertEqual(list(mem.nodes.values())[0].visit_count, 2)
+        self.assertEqual(next(iter(mem.nodes.values())).visit_count, 2)
 
     def test_far_position_creates_new_node(self):
         mem = TopologicalMemory(new_node_distance=2.0)
@@ -59,7 +59,7 @@ class TestNodeCreation(unittest.TestCase):
             np.array([0.0, 0.0, 0.0]),
             visible_labels=["chair", "desk"],
         )
-        node = list(mem.nodes.values())[0]
+        node = next(iter(mem.nodes.values()))
         self.assertIn("chair", node.visible_labels)
         self.assertIn("desk", node.visible_labels)
 
@@ -67,7 +67,7 @@ class TestNodeCreation(unittest.TestCase):
         mem = TopologicalMemory(new_node_distance=2.0)
         mem.update_position(np.array([0.0, 0.0, 0.0]), visible_labels=["chair"])
         mem.update_position(np.array([0.5, 0.0, 0.0]), visible_labels=["desk"])
-        node = list(mem.nodes.values())[0]
+        node = next(iter(mem.nodes.values()))
         self.assertIn("chair", node.visible_labels)
         self.assertIn("desk", node.visible_labels)
         # 不应重复

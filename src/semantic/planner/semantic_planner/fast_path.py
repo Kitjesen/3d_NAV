@@ -14,11 +14,15 @@ fast_path.py — Fast Path (System 1) 目标解析 Mixin。
   - _clip_attribute_disambiguate(): B7 CLIP 属性消歧
   - _extract_core_noun(): 核心名词提取
 """
+from __future__ import annotations
 
 import logging
 import math
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    from .goal_resolver import GoalResult
 
 import numpy as np
 
@@ -71,7 +75,7 @@ class FastPathMixin:
         scene_graph_json: str,
         robot_position: dict[str, float] | None = None,
         clip_encoder: Any | None = None,
-    ) -> "GoalResult | None":
+    ) -> GoalResult | None:
         """
         Fast Path: 场景图直接匹配, 无需 LLM。
 
@@ -529,7 +533,7 @@ class FastPathMixin:
         scene_graph: dict,
         clip_encoder,
         top_k: int = 2,
-    ) -> "set | None":
+    ) -> set | None:
         """
         GAP: Room CLIP 筛选 (FSR-VLN 路线 A + HOV-SG view embeddings)。
         优先用 rooms JSON 中的 clip_feature（HOV-SG view embeddings 均值）做
@@ -596,9 +600,9 @@ class FastPathMixin:
     @staticmethod
     def _clip_attribute_disambiguate(
         instruction: str,
-        candidates: "list[tuple[dict, float, str]]",
+        candidates: list[tuple[dict, float, str]],
         clip_encoder,
-    ) -> "list[tuple[dict, float, str]]":
+    ) -> list[tuple[dict, float, str]]:
         """
         B7: 用 CLIP 对同类型多候选做属性消歧。
 
@@ -646,7 +650,7 @@ class FastPathMixin:
         keywords: list[str],
         scene_graph: dict,
         clip_encoder: Any | None = None,
-    ) -> "GoalResult | None":
+    ) -> GoalResult | None:
         """Room 级 fallback: 当物体匹配失败时, 尝试匹配区域/房间。
 
         支持 "去厨房"、"到走廊"、"find the kitchen" 等区域级指令。
@@ -808,7 +812,7 @@ class FastPathMixin:
         inst_lower: str,
         keywords: list[str],
         scene_labels: list[str],
-    ) -> "tuple[list[str], list[str]]":
+    ) -> tuple[list[str], list[str]]:
         """
         从指令中解析主语 (导航目标) 和修饰语 (空间参考物)。
 
@@ -851,7 +855,7 @@ class FastPathMixin:
         inst_lower: str,
         keywords: list[str],
         scene_labels: list[str],
-    ) -> "tuple[list[str], list[str]]":
+    ) -> tuple[list[str], list[str]]:
         """第 1 级: 正则匹配常见句式。"""
         subjects: list[str] = []
         modifiers: list[str] = []
@@ -923,7 +927,7 @@ class FastPathMixin:
         inst_lower: str,
         keywords: list[str],
         scene_labels: list[str],
-    ) -> "tuple[list[str], list[str]]":
+    ) -> tuple[list[str], list[str]]:
         """第 2 级: 按指令中出现顺序, 第一个匹配场景物体的词为主语。"""
         found_in_scene = []
         for kw in keywords:

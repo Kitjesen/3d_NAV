@@ -6,16 +6,16 @@
             - Livox MID360 激光雷达
             - FASTLIO2 (定位 + 建图)
             - Localizer (基于先验地图的定位)
-        
+
         全局规划层：
             - PCT Global Planner (基于Tomogram的3D全局路径规划)
             - PCT Adapter (全局路径分段为局部航点)
-        
+
         局部规划层：
             - Terrain Analysis (地形可通行性分析)
             - Local Planner (障碍物规避 + 轨迹规划)
             - Path Follower (路径跟踪 -> 速度指令)
-        
+
         执行层：
             - Robot Driver (电机控制)
             - Joystick (手动控制接口)
@@ -28,23 +28,23 @@
     来源: Livox MID360 雷达
     话题: /livox/lidar (原始点云)
     说明: 当前帧的原始激光扫描数据（sensor坐标系）
-    
+
     2. 【当前帧配准点云】/cloud_registered
     来源: FASTLIO2 -> body_cloud
     坐标系: sensor/body 坐标系
     说明: 当前帧激光扫描，已经过IMU去畸变和点云配准
             这是"当前scan"，用于实时障碍物检测
-    
+
     3. 【全局地图点云】/cloud_map  ⭐关键话题⭐
-    来源: FASTLIO2 -> world_cloud  
+    来源: FASTLIO2 -> world_cloud
     坐标系: map/world 全局坐标系
     说明: 累积的全局点云地图（所有历史扫描的集合）
             包含整个环境的3D结构信息
-    
+
     使用者：
     ├─ Terrain Analysis       (订阅: /cloud_map)
     │  └─ 分析全局地形可通行性
-    ├─ Terrain Analysis Ext   (订阅: /cloud_map)  
+    ├─ Terrain Analysis Ext   (订阅: /cloud_map)
     │  └─ 生成增强地形高度图 -> /terrain_map
     └─ Local Planner          (订阅: /cloud_map)
         └─ 使用全局地图进行障碍物规避
@@ -54,7 +54,7 @@
     坐标系: map 全局坐标系
     说明: 从/cloud_map提取的2.5D地形表示
             每个网格存储高度和可通行性信息
-    
+
     使用者：
     └─ Local Planner          (订阅: /terrain_map)
         └─ 结合地形信息选择可通行路径
@@ -87,7 +87,7 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     """
         生成完整的3D导航系统启动描述
-        
+
         包含模块：
         - FASTLIO2 (实时定位与建图)
         - PCT Global Planner (全局路径规划)

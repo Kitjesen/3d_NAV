@@ -18,10 +18,14 @@ slow_path.py — Slow Path (System 2) LLM 推理 Mixin。
   - _parse_llm_response(): LLM JSON 响应解析
   - _extract_json() / _fix_truncated_json(): JSON 提取工具
 """
+from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from .goal_resolver import GoalResult
 
 import numpy as np
 
@@ -59,7 +63,7 @@ class SlowPathMixin:
         language: str = "zh",
         explore_if_unknown: bool = True,
         clip_encoder: Any | None = None,
-    ) -> "GoalResult":
+    ) -> GoalResult:
         """
         完整解析 (AdaCoT 动态路由 + Fast/Slow 双进程)。
 
@@ -190,7 +194,7 @@ class SlowPathMixin:
         step_distance: float = 2.0,
         language: str = "zh",
         scene_graph_json: str = "",
-    ) -> "GoalResult":
+    ) -> GoalResult:
         """
         生成拓扑感知探索航点 (创新5 升级: TSG 信息增益探索)。
 
@@ -335,7 +339,7 @@ class SlowPathMixin:
         robot_position: dict[str, float],
         scene_graph_json: str,
         step_distance: float,
-    ) -> "GoalResult | None":
+    ) -> GoalResult | None:
         """
         尝试使用拓扑语义图 (TSG) 选择探索目标。
 
@@ -817,7 +821,7 @@ class SlowPathMixin:
 
         return None
 
-    def _parse_llm_response(self, response_text, scene_graph: dict | None = None) -> "GoalResult":
+    def _parse_llm_response(self, response_text, scene_graph: dict | None = None) -> GoalResult:
         """解析 LLM JSON 响应。"""
         from core.utils.sanitize import sanitize_position
 

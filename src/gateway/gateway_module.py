@@ -804,7 +804,10 @@ class GatewayModule(Module, layer=6):
         @app.get("/api/v1/camera/snapshot", summary="Camera JPEG snapshot")
         async def camera_snapshot():
             """Grab one JPEG frame via rclpy (fastrtps, matching camera driver)."""
-            import subprocess, tempfile, os
+            import os
+            import subprocess
+            import tempfile
+
             from starlette.responses import Response
             out = os.path.join(tempfile.gettempdir(), "lingtu_cam_snap.jpg")
             script = os.path.join(tempfile.gettempdir(), "lingtu_cam_snap.py")
@@ -885,10 +888,12 @@ class GatewayModule(Module, layer=6):
                 return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 
         @app.post("/api/v1/map/save", summary="Save current SLAM map")
-        async def save_map_now(body: dict = {}):
+        async def save_map_now(body: dict | None = None):
             """One-click map save — calls ROS2 save_map service via subprocess."""
             import os
             import subprocess
+            if body is None:
+                body = {}
             name = body.get("name", "")
             if not name:
                 from datetime import datetime
@@ -1087,7 +1092,7 @@ class GatewayModule(Module, layer=6):
         import tempfile
         tmp = os.path.join(tempfile.gettempdir(), "lingtu_live_snapshot.pcd")
         try:
-            r = subprocess.run(
+            subprocess.run(
                 ["bash", "-c",
                  "source /opt/ros/humble/setup.bash && "
                  "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "

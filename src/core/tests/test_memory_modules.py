@@ -833,7 +833,7 @@ class TestTopologicalOperations(unittest.TestCase):
         m._on_scene_graph(_scene_graph(["monitor", "keyboard"]))
         nodes = m._memory.nodes
         self.assertGreater(len(nodes), 0)
-        first_node = list(nodes.values())[0]
+        first_node = next(iter(nodes.values()))
         self.assertIn("monitor", first_node.visible_labels)
 
     def test_topo_summary_published(self):

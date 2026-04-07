@@ -85,14 +85,14 @@ print("OK" if has_pct else "NOT FOUND (will use A*)")
 
 print("  nav_core.score_path...", end=" ")
 try:
-    _nav_core.score_path
+    _ = _nav_core.score_path
     print("OK")
 except AttributeError:
     print("MISSING")
 
 print("  nav_core.compute_control...", end=" ")
 try:
-    _nav_core.compute_control
+    _ = _nav_core.compute_control
     print("OK")
 except AttributeError:
     print("MISSING")
