@@ -245,7 +245,7 @@ def test_integration_with_polyhedron_expansion():
 
     # 统计信息
     stats = gcm.get_statistics()
-    print(f"\nGCM 统计信息:")
+    print("\nGCM 统计信息:")
     print(f"  分辨率: {stats['resolution']}m")
     print(f"  总单元格数: {stats['total_cells']}")
     print(f"  已覆盖单元格数: {stats['covered_cells']}")

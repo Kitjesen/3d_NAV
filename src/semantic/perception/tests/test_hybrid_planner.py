@@ -99,7 +99,7 @@ def test_basic_planning():
 
     result = planner.plan_path(start, goal)
 
-    print(f"\n结果:")
+    print("\n结果:")
     print(f"  成功: {result.success}")
     print(f"  房间序列: {result.room_sequence}")
     print(f"  路径段数: {len(result.segments)}")
@@ -113,7 +113,7 @@ def test_basic_planning():
     assert len(result.room_sequence) >= 2, "房间序列至少包含起点和终点"
     assert result.num_waypoints >= 2, "路径至少包含起点和终点"
 
-    print(f"\n路径段详情:")
+    print("\n路径段详情:")
     for i, seg in enumerate(result.segments):
         print(
             f"  段 {i+1}: 房间 {seg.from_room_id} → {seg.to_room_id}, "
@@ -121,7 +121,7 @@ def test_basic_planning():
             f"时间={seg.planning_time*1000:.2f}ms"
         )
 
-    print(f"\n✓ 基本功能测试通过")
+    print("\n✓ 基本功能测试通过")
     print()
 
 
@@ -142,7 +142,7 @@ def test_topology_layer():
     assert path == [1, 2, 3, 4], "拓扑路径应该是 [1, 2, 3, 4]"
     assert cost == 30.0, "拓扑代价应该是 30.0"
 
-    print(f"✓ 拓扑层规划正确")
+    print("✓ 拓扑层规划正确")
     print()
 
 
@@ -171,7 +171,7 @@ def test_room_location():
         assert room_id == expected_id, f"应该定位到房间 {expected_id}"
         assert room.name == expected_name, f"房间名应该是 {expected_name}"
 
-    print(f"\n✓ 房间定位正确")
+    print("\n✓ 房间定位正确")
     print()
 
 
@@ -206,7 +206,7 @@ def test_performance_comparison():
 
     results = compare_planners(hybrid_planner, baseline_planner, test_cases)
 
-    print(f"\n性能对比结果:")
+    print("\n性能对比结果:")
     print(f"{'测试用例':<15} {'混合时间':<12} {'基线时间':<12} {'加速比':<10}")
     print("-" * 60)
 
@@ -221,7 +221,7 @@ def test_performance_comparison():
     avg_speedup = sum(r.speedup for r in results) / len(results)
     print(f"\n平均加速比: {avg_speedup:.2f}×")
 
-    print(f"\n✓ 性能对比完成")
+    print("\n✓ 性能对比完成")
     print()
 
 

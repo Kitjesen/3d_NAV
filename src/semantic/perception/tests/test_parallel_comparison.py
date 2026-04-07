@@ -989,7 +989,7 @@ if __name__ == "__main__":
     print("并行规划器对比测试框架")
     print("=" * 72)
     print(f"场景数量: {len(SCENARIOS)}")
-    print(f"规划器数量: 3 (PCT A* / HybridPlanner / SCGPathPlanner)")
+    print("规划器数量: 3 (PCT A* / HybridPlanner / SCGPathPlanner)")
     print("=" * 72)
 
     try:

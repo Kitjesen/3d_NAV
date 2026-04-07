@@ -235,7 +235,7 @@ def setup_advertising():
         "power on",
         "discoverable on",
         "discoverable-timeout 0",
-        f"advertise.name \"DaSuanRobot\"",
+        "advertise.name \"DaSuanRobot\"",
         f"advertise.uuids {SERVICE_UUID}",
         "advertise on",
     ]

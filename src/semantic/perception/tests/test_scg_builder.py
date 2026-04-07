@@ -104,7 +104,7 @@ def test_node_management():
     print(f"移除节点 3 后: {len(builder.nodes)} 个节点")
     assert len(builder.nodes) == 3, "应该剩余 3 个节点"
 
-    print(f"✓ 节点管理正确")
+    print("✓ 节点管理正确")
     print()
 
 
@@ -134,7 +134,7 @@ def test_adjacency_detection():
 
     assert len(adjacency_edges) > 0, "应该检测到邻接边"
 
-    print(f"✓ 邻接边检测正确")
+    print("✓ 邻接边检测正确")
     print()
 
 
@@ -172,7 +172,7 @@ def test_connectivity_detection():
 
     assert len(connectivity_edges) > 0, "应该检测到连通边"
 
-    print(f"✓ 连通边检测正确")
+    print("✓ 连通边检测正确")
     print()
 
 
@@ -203,7 +203,7 @@ def test_path_search():
     assert len(path) >= 2, "路径至少包含起点和终点"
     assert path[0] == 0 and path[-1] == 2, "路径应该从 0 到 2"
 
-    print(f"✓ 路径搜索正确")
+    print("✓ 路径搜索正确")
     print()
 
 
@@ -244,7 +244,7 @@ def test_loop_closure():
     # 应该检测到回环，不添加重复节点
     assert len(builder.nodes) == 1, "应该检测到回环，不添加重复节点"
 
-    print(f"✓ 回环检测正确")
+    print("✓ 回环检测正确")
     print()
 
 
@@ -267,7 +267,7 @@ def test_statistics():
 
     stats = builder.get_statistics()
 
-    print(f"统计信息:")
+    print("统计信息:")
     print(f"  节点数: {stats['num_nodes']}")
     print(f"  边数: {stats['num_edges']}")
     print(f"  边类型: {stats['edge_types']}")
@@ -276,7 +276,7 @@ def test_statistics():
     assert stats['num_nodes'] == 3, "节点数应该是 3"
     assert stats['num_edges'] > 0, "边数应该大于 0"
 
-    print(f"✓ 统计信息正确")
+    print("✓ 统计信息正确")
     print()
 
 

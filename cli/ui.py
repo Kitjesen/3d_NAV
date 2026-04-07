@@ -160,7 +160,7 @@ def select_interactive() -> str:
     W = 54  # card inner width
 
     print(T.navy(f"  ┌{'─' * W}┐"))
-    print(T.navy(f"  │") + T.bold(f"{'  Select a profile to launch':^{W}}") + T.navy("│"))
+    print(T.navy("  │") + T.bold(f"{'  Select a profile to launch':^{W}}") + T.navy("│"))
     print(T.navy(f"  ├{'─' * W}┤"))
 
     for i, name in enumerate(names, 1):

@@ -89,7 +89,7 @@ class EndToEndEvaluator:
         Returns:
             评估结果列表
         """
-        logger.info(f"Starting end-to-end evaluation")
+        logger.info("Starting end-to-end evaluation")
         logger.info(f"  Dataset: {dataset_type}")
         logger.info(f"  Scenes: {len(scene_ids)}")
         logger.info(f"  Methods: {methods}")
@@ -257,7 +257,7 @@ class EndToEndEvaluator:
             },
         )
 
-        logger.info(f"  ✓ Evaluation completed")
+        logger.info("  ✓ Evaluation completed")
         logger.info(f"    Memory: {memory_metrics.total_memory_mb:.2f} MB")
         logger.info(f"    Update time: {update_metrics.avg_update_time_ms:.2f} ms")
         if avg_path_metrics:
@@ -306,7 +306,7 @@ class EndToEndEvaluator:
                 # 内存统计
                 memory_values = [r.memory.total_memory_mb for r in results if r.memory]
                 if memory_values:
-                    f.write(f"**内存占用**:\n")
+                    f.write("**内存占用**:\n")
                     f.write(f"- 平均: {np.mean(memory_values):.2f} MB\n")
                     f.write(f"- 最大: {np.max(memory_values):.2f} MB\n")
                     f.write(f"- 最小: {np.min(memory_values):.2f} MB\n\n")
@@ -314,7 +314,7 @@ class EndToEndEvaluator:
                 # 更新速率统计
                 update_values = [r.update.avg_update_time_ms for r in results if r.update]
                 if update_values:
-                    f.write(f"**更新速率**:\n")
+                    f.write("**更新速率**:\n")
                     f.write(f"- 平均更新时间: {np.mean(update_values):.2f} ms\n")
                     f.write(f"- 更新频率: {1000.0 / np.mean(update_values):.2f} Hz\n\n")
 
@@ -324,7 +324,7 @@ class EndToEndEvaluator:
                 planning_times = [r.path.planning_time_ms for r in results if r.path]
 
                 if path_lengths:
-                    f.write(f"**路径质量**:\n")
+                    f.write("**路径质量**:\n")
                     f.write(f"- 平均路径长度: {np.mean(path_lengths):.2f} m\n")
                     f.write(f"- 平均平滑度: {np.mean(path_smoothness):.2f}\n")
                     f.write(f"- 平均规划时间: {np.mean(planning_times):.2f} ms\n\n")

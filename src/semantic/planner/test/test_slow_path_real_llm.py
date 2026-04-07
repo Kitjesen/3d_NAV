@@ -96,7 +96,7 @@ class TestSlowPathRealLLM(unittest.TestCase):
         instruction = "go to the red chair"
 
         print(f"\n{'='*60}")
-        print(f"Test: Simple Navigation")
+        print("Test: Simple Navigation")
         print(f"{'='*60}")
         print(f"Instruction: {instruction}")
         print(f"Objects: {len(objects)}")
@@ -111,7 +111,7 @@ class TestSlowPathRealLLM(unittest.TestCase):
             )
         )
 
-        print(f"\nResult:")
+        print("\nResult:")
         print(f"  Path: {result.path}")
         print(f"  Action: {result.action}")
         print(f"  Target: {result.target_label}")
@@ -163,7 +163,7 @@ class TestSlowPathRealLLM(unittest.TestCase):
         instruction = "find the chair near the door"
 
         print(f"\n{'='*60}")
-        print(f"Test: Spatial Reasoning")
+        print("Test: Spatial Reasoning")
         print(f"{'='*60}")
         print(f"Instruction: {instruction}")
         print(f"Objects: {len(objects)}")
@@ -178,7 +178,7 @@ class TestSlowPathRealLLM(unittest.TestCase):
             )
         )
 
-        print(f"\nResult:")
+        print("\nResult:")
         print(f"  Path: {result.path}")
         print(f"  Target: {result.target_label}")
         print(f"  Position: ({result.target_x:.1f}, {result.target_y:.1f})")
@@ -220,7 +220,7 @@ class TestSlowPathRealLLM(unittest.TestCase):
         instruction = "find the fire extinguisher"
 
         print(f"\n{'='*60}")
-        print(f"Test: ESCA Filtering + LLM")
+        print("Test: ESCA Filtering + LLM")
         print(f"{'='*60}")
         print(f"Instruction: {instruction}")
         print(f"Original objects: {len(objects)}")
@@ -241,7 +241,7 @@ class TestSlowPathRealLLM(unittest.TestCase):
             )
         )
 
-        print(f"\nResult:")
+        print("\nResult:")
         print(f"  Path: {result.path}")
         print(f"  Target: {result.target_label}")
         print(f"  Position: ({result.target_x:.1f}, {result.target_y:.1f})")
@@ -279,7 +279,7 @@ class TestSlowPathRealLLM(unittest.TestCase):
         instruction = "去红色灭火器"
 
         print(f"\n{'='*60}")
-        print(f"Test: Chinese Instruction")
+        print("Test: Chinese Instruction")
         print(f"{'='*60}")
         print(f"Instruction: {instruction}")
         print(f"Objects: {len(objects)}")
@@ -293,7 +293,7 @@ class TestSlowPathRealLLM(unittest.TestCase):
             )
         )
 
-        print(f"\nResult:")
+        print("\nResult:")
         print(f"  Path: {result.path}")
         print(f"  Target: {result.target_label}")
         print(f"  Position: ({result.target_x:.1f}, {result.target_y:.1f})")

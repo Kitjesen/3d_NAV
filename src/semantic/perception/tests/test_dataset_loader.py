@@ -104,7 +104,7 @@ def test_hm3d_loader():
         scene_id = scenes[0]
         metadata = loader.load_scene_metadata(scene_id)
 
-        print(f"\n场景元数据:")
+        print("\n场景元数据:")
         print(f"  场景 ID: {metadata.scene_id}")
         print(f"  数据集: {metadata.dataset}")
         print(f"  帧数: {metadata.num_frames}")
@@ -123,7 +123,7 @@ def test_hm3d_loader():
             load_point_cloud=True,
         )
 
-        print(f"\n帧数据:")
+        print("\n帧数据:")
         print(f"  帧 ID: {frame.frame_id}")
         print(f"  时间戳: {frame.timestamp}")
         print(f"  相机位姿:\n{frame.camera_pose}")
@@ -205,7 +205,7 @@ def test_point_cloud_generation():
 
     print(f"深度图形状: {depth.shape}")
     print(f"点云数量: {len(point_cloud)}")
-    print(f"点云范围:")
+    print("点云范围:")
     print(f"  X: [{point_cloud[:, 0].min():.2f}, {point_cloud[:, 0].max():.2f}]")
     print(f"  Y: [{point_cloud[:, 1].min():.2f}, {point_cloud[:, 1].max():.2f}]")
     print(f"  Z: [{point_cloud[:, 2].min():.2f}, {point_cloud[:, 2].max():.2f}]")
@@ -275,7 +275,7 @@ def test_gibson_loader():
         scene_id = scenes[0]
         metadata = loader.load_scene_metadata(scene_id)
 
-        print(f"\n场景元数据:")
+        print("\n场景元数据:")
         print(f"  场景 ID: {metadata.scene_id}")
         print(f"  数据集: {metadata.dataset}")
 

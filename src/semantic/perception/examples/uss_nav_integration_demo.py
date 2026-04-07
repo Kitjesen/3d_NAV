@@ -69,7 +69,7 @@ def create_mock_environment():
     occupancy_grid = tomogram.inflated_cost[..., 0].T  # (100, 100)
     occupancy_grid = np.expand_dims(occupancy_grid, axis=2)  # (100, 100, 1)
 
-    print(f"✓ 环境创建完成")
+    print("✓ 环境创建完成")
     print(f"  Tomogram: {tomogram.map_dim_x}×{tomogram.map_dim_y}")
     print(f"  占据栅格: {occupancy_grid.shape}")
     print()
@@ -112,7 +112,7 @@ def demo_geometry_enhanced_topology(tomogram):
         if room.traversable_area > 0:
             print(f"    可通行面积: {room.traversable_area:.2f} m²")
 
-    print(f"✓ 几何增强拓扑图构建完成")
+    print("✓ 几何增强拓扑图构建完成")
     print()
 
     return tsg
@@ -135,7 +135,7 @@ def demo_hybrid_planner(tsg, tomogram):
     result = planner.plan_path(start, goal)
 
     if result.success:
-        print(f"✓ 路径规划成功")
+        print("✓ 路径规划成功")
         print(f"  房间序列: {result.room_sequence}")
         print(f"  路径点数: {result.num_waypoints}")
         print(f"  总代价: {result.total_cost:.2f}")
@@ -143,7 +143,7 @@ def demo_hybrid_planner(tsg, tomogram):
         print(f"    - 拓扑层: {result.topology_planning_time*1000:.2f}ms")
         print(f"    - 几何层: {result.geometry_planning_time*1000:.2f}ms")
     else:
-        print(f"✗ 路径规划失败")
+        print("✗ 路径规划失败")
 
     print()
 
@@ -171,7 +171,7 @@ def demo_polyhedron_expansion(occupancy_grid):
 
     polyhedra = expander.expand(occupancy_grid, grid_resolution, grid_origin)
 
-    print(f"✓ 多面体扩展完成")
+    print("✓ 多面体扩展完成")
     print(f"  生成多面体数: {len(polyhedra)}")
     print(f"  总体积: {sum(p.volume for p in polyhedra):.2f} m³")
     print()
@@ -204,7 +204,7 @@ def demo_scg_builder(polyhedra, occupancy_grid):
 
     stats = builder.get_statistics()
 
-    print(f"✓ SCG 构建完成")
+    print("✓ SCG 构建完成")
     print(f"  节点数: {stats['num_nodes']}")
     print(f"  边数: {stats['num_edges']}")
     print(f"  边类型: {stats['edge_types']}")
@@ -229,7 +229,7 @@ def demo_leiden_segmentation(scg_builder):
 
     regions = segmenter.segment(scg_builder)
 
-    print(f"✓ Leiden 分割完成")
+    print("✓ Leiden 分割完成")
     print(f"  区域数: {len(regions)}")
 
     for region in regions:

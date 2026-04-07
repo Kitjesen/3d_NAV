@@ -275,8 +275,8 @@ class TestSlowPathLLM(unittest.TestCase):
 
         print("\n=== Fast-to-Slow Fallback Test ===")
         print(f"Instruction: {instruction}")
-        print(f"Fast Path: Failed (confidence < 0.75)")
-        print(f"Slow Path: Success")
+        print("Fast Path: Failed (confidence < 0.75)")
+        print("Slow Path: Success")
         print(f"Result: {result.target_label}")
         print(f"Confidence: {result.confidence}")
 

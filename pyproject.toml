@@ -59,6 +59,12 @@ ignore = [
     "E402",  # module level import not at top (sys.path manipulation)
     "F401",  # unused import (re-exports in __init__.py)
     "F811",  # redefinition of unused name (test fixtures)
+    "RUF001",  # ambiguous unicode in string (Chinese chars, legacy code)
+    "RUF002",  # ambiguous unicode in docstring (Chinese chars, legacy code)
+    "RUF003",  # ambiguous unicode in comment (Chinese chars, legacy code)
+    "UP035",   # deprecated typing imports (Dict→dict etc, too many to fix at once)
+    "E741",    # ambiguous variable name (l, I, O — common in math code)
+    "RUF012",  # mutable class default (Module ports use this pattern intentionally)
 ]
 
 [tool.ruff.lint.isort]

@@ -119,14 +119,14 @@ def example_4_statistics():
 
     # 获取检测器信息
     detector_info = perception.detector.get_model_info()
-    print(f"\n检测器信息:")
+    print("\n检测器信息:")
     print(f"  名称: {detector_info['name']}")
     print(f"  版本: {detector_info['version']}")
     print(f"  设备: {detector_info['device']}")
 
     # 获取编码器信息
     encoder_info = perception.encoder.get_model_info()
-    print(f"\n编码器信息:")
+    print("\n编码器信息:")
     print(f"  名称: {encoder_info['name']}")
     print(f"  特征维度: {encoder_info['feature_dim']}")
     print(f"  缓存命中率: {encoder_info['cache_hit_rate']:.2%}")

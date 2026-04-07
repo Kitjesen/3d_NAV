@@ -92,7 +92,7 @@ def test_polyhedron_uncertainty():
         poly, occupancy_grid, grid_resolution, grid_origin
     )
 
-    print(f"多面体 0:")
+    print("多面体 0:")
     print(f"  中心: {poly.center}")
     print(f"  体积: {poly.volume:.2f}m³")
     print(f"  不确定性: {uncertainty:.4f}")
@@ -116,7 +116,7 @@ def test_gcm_uncertainty():
     # 计算 GCM 的整体不确定性
     uncertainty = model.compute_gcm_uncertainty(gcm)
 
-    print(f"GCM 统计:")
+    print("GCM 统计:")
     print(f"  总单元格数: {gcm.total_cells}")
     print(f"  已覆盖单元格数: {gcm.covered_cells}")
     print(f"  整体不确定性: {uncertainty:.4f}")
@@ -146,7 +146,7 @@ def test_information_gain():
 
     # 计算每个多面体的信息增益
     print(f"机器人位置: {robot_pose}")
-    print(f"\n多面体信息增益:")
+    print("\n多面体信息增益:")
 
     for i, poly in enumerate(polyhedra[:5]):  # 只显示前 5 个
         gain = model.compute_information_gain(poly, robot_pose, visit_count=0)
@@ -184,7 +184,7 @@ def test_exploration_target_selection():
         poly_id, gain = result
         poly = scg_builder.nodes[poly_id]
 
-        print(f"选择的探索目标:")
+        print("选择的探索目标:")
         print(f"  多面体 ID: {poly_id}")
         print(f"  位置: {poly.center}")
         print(f"  信息增益: {gain:.4f}")
@@ -217,7 +217,7 @@ def test_frontier_target_selection():
         grid_pos, gain = result
         world_pos = gcm.grid_to_world(grid_pos)
 
-        print(f"选择的前沿目标:")
+        print("选择的前沿目标:")
         print(f"  栅格位置: {grid_pos}")
         print(f"  世界位置: {world_pos}")
         print(f"  信息增益: {gain:.4f}")
@@ -246,7 +246,7 @@ def test_exploration_strategy():
     target = strategy.select_next_target(scg_builder, gcm, robot_pose, prefer_frontier=True)
 
     if target is not None:
-        print(f"选择的探索目标（优先前沿）:")
+        print("选择的探索目标（优先前沿）:")
         print(f"  位置: {target}")
     else:
         print("⚠️ 没有找到探索目标")
@@ -255,7 +255,7 @@ def test_exploration_strategy():
     target = strategy.select_next_target(scg_builder, gcm, robot_pose, prefer_frontier=False)
 
     if target is not None:
-        print(f"\n选择的探索目标（优先多面体）:")
+        print("\n选择的探索目标（优先多面体）:")
         print(f"  位置: {target}")
     else:
         print("⚠️ 没有找到探索目标")
@@ -268,7 +268,7 @@ def test_exploration_strategy():
 
     # 获取统计信息
     stats = strategy.get_statistics()
-    print(f"\n探索统计:")
+    print("\n探索统计:")
     print(f"  访问的多面体数: {stats['total_visited']}")
     print(f"  总访问次数: {stats['total_visits']}")
     print(f"  最多访问次数: {stats['most_visited']}")
@@ -294,14 +294,14 @@ def test_uncertainty_update():
     # 更新多面体的不确定性
     poly = polyhedra[0]
 
-    print(f"更新前:")
+    print("更新前:")
     print(f"  不确定性: {getattr(poly, 'uncertainty', 'N/A')}")
 
     model.update_polyhedron_uncertainty(
         poly, occupancy_grid, grid_resolution, grid_origin
     )
 
-    print(f"\n更新后:")
+    print("\n更新后:")
     print(f"  不确定性: {poly.uncertainty:.4f}")
 
     assert hasattr(poly, 'uncertainty'), "多面体应该有 uncertainty 属性"

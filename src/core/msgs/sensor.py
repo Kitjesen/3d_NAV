@@ -482,9 +482,9 @@ class PointCloud2:
                 else:
                     norm_fields.append(
                         PointField(
-                            name=str(getattr(spec, "name")),
-                            offset=int(getattr(spec, "offset")),
-                            datatype=int(getattr(spec, "datatype")),
+                            name=str(spec.name),
+                            offset=int(spec.offset),
+                            datatype=int(spec.datatype),
                             count=int(getattr(spec, "count", 1)),
                         )
                     )

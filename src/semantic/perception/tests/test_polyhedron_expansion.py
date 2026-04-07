@@ -45,7 +45,7 @@ def test_sphere_sampling():
 
     assert np.allclose(norms, 1.0, atol=1e-6), "应该是单位向量"
 
-    print(f"✓ 球面采样正确")
+    print("✓ 球面采样正确")
     print()
 
 
@@ -76,7 +76,7 @@ def test_convex_hull():
     # 立方体体积应该是 1
     assert np.isclose(result['volume'], 1.0, atol=0.1), "立方体体积应该接近 1"
 
-    print(f"✓ 凸包计算正确")
+    print("✓ 凸包计算正确")
     print()
 
 
@@ -121,7 +121,7 @@ def test_collision_detection():
     print(f"碰撞多面体: collision={collision_detected}")
     assert collision_detected, "应该检测到碰撞"
 
-    print(f"✓ 碰撞检测正确")
+    print("✓ 碰撞检测正确")
     print()
 
 
@@ -171,7 +171,7 @@ def test_polyhedron_expansion():
 
     assert len(polyhedra) > 0, "应该生成至少一个多面体"
 
-    print(f"\n✓ 多面体扩展成功")
+    print("\n✓ 多面体扩展成功")
     print()
 
 

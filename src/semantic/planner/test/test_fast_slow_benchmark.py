@@ -177,7 +177,7 @@ class TestFastPathHitRate(unittest.TestCase):
             print(f"  KNOWN LIMITATION: 'find red chair' matched '{result.target_label}' "
                   f"(attribute mismatch, needs CLIP)")
         else:
-            print(f"  OK: correctly deferred to Slow Path")
+            print("  OK: correctly deferred to Slow Path")
 
 
 class TestSpatialReasoning(unittest.TestCase):
@@ -310,11 +310,11 @@ class TestResponseTime(unittest.TestCase):
         p50 = np.percentile(times, 50)
         p99 = np.percentile(times, 99)
 
-        print(f"\n=== Fast Path Latency (no CLIP, string-match only) ===")
+        print("\n=== Fast Path Latency (no CLIP, string-match only) ===")
         print(f"  Avg:  {avg:.3f} ms")
         print(f"  P50:  {p50:.3f} ms")
         print(f"  P99:  {p99:.3f} ms")
-        print(f"  NOTE: Real deployment with CLIP inference will add ~20-50ms on Jetson")
+        print("  NOTE: Real deployment with CLIP inference will add ~20-50ms on Jetson")
 
         # \u5b57\u7b26\u4e32\u5339\u914d\u5e94\u5728 <10ms
         self.assertLess(avg, 10.0,
@@ -333,7 +333,7 @@ class TestResponseTime(unittest.TestCase):
             times.append(elapsed_ms)
 
         avg = np.mean(times)
-        print(f"\n=== Large Scene (200 objects) Latency ===")
+        print("\n=== Large Scene (200 objects) Latency ===")
         print(f"  Avg: {avg:.3f} ms")
 
         self.assertLess(avg, 50.0,
@@ -484,11 +484,11 @@ class TestESCATokenReduction(unittest.TestCase):
         kept = filtered["object_count"]
         reduction = 1 - (kept / original)
 
-        print(f"\n=== ESCA Token Reduction ===")
+        print("\n=== ESCA Token Reduction ===")
         print(f"  Original: {original} objects")
         print(f"  Filtered: {kept} objects")
         print(f"  Reduction: {reduction*100:.1f}%")
-        print(f"  NOTE: Our ESCA is keyword-based, not CLIP-feature-based like the paper")
+        print("  NOTE: Our ESCA is keyword-based, not CLIP-feature-based like the paper")
 
         # \u76ee\u6807\u4fdd\u7559
         labels = [o["label"] for o in filtered["objects"]]

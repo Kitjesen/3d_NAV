@@ -35,7 +35,7 @@ def debug_polyhedron_expansion():
     grid_resolution = 0.5
     grid_origin = np.array([0.0, 0.0, 0.0])
 
-    print(f"\n栅格信息:")
+    print("\n栅格信息:")
     print(f"  形状: {occupancy_grid.shape}")
     print(f"  分辨率: {grid_resolution}m")
     print(f"  原点: {grid_origin}")
@@ -54,7 +54,7 @@ def debug_polyhedron_expansion():
         collision_threshold=0.5,
     )
 
-    print(f"\n配置参数:")
+    print("\n配置参数:")
     print(f"  球面采样数: {config.num_sphere_samples}")
     print(f"  半径范围: {config.r_min}m - {config.r_max}m (步长 {config.r_step}m)")
     print(f"  最小体积: {config.min_polyhedron_volume}m³")
@@ -67,7 +67,7 @@ def debug_polyhedron_expansion():
     candidates = expander._extract_free_space_candidates(
         occupancy_grid, grid_resolution, grid_origin
     )
-    print(f"\n候选点:")
+    print("\n候选点:")
     print(f"  数量: {len(candidates)}")
     if len(candidates) > 0:
         print(f"  范围: x=[{candidates[:, 0].min():.2f}, {candidates[:, 0].max():.2f}]")
@@ -86,7 +86,7 @@ def debug_polyhedron_expansion():
     directions = sampler.fibonacci_sphere(config.num_sphere_samples)
     radii = np.arange(config.r_min, config.r_max + config.r_step, config.r_step)
 
-    print(f"\n球面采样:")
+    print("\n球面采样:")
     print(f"  方向数: {len(directions)}")
     print(f"  半径数: {len(radii)} {radii}")
 
@@ -102,7 +102,7 @@ def debug_polyhedron_expansion():
     print(f"  采样点数: {len(sample_points)}")
 
     if len(sample_points) < 4:
-        print(f"\n⚠️ 采样点不足 4 个，无法构成凸包")
+        print("\n⚠️ 采样点不足 4 个，无法构成凸包")
 
         # 调试: 检查几个方向的采样
         print(f"\n调试采样 (前 5 个方向, 第一个半径 r={radii[0]}):")
@@ -124,10 +124,10 @@ def debug_polyhedron_expansion():
     hull_result = hull_computer.compute(sample_points)
 
     if hull_result is None:
-        print(f"\n⚠️ 凸包计算失败")
+        print("\n⚠️ 凸包计算失败")
         return
 
-    print(f"\n凸包:")
+    print("\n凸包:")
     print(f"  顶点数: {len(hull_result['vertices'])}")
     print(f"  面片数: {len(hull_result['faces'])}")
     print(f"  体积: {hull_result['volume']:.4f}m³")
@@ -160,12 +160,12 @@ def debug_polyhedron_expansion():
 
     collision_ratio = collision_count / inside_count if inside_count > 0 else 0
 
-    print(f"\n碰撞检测详情:")
+    print("\n碰撞检测详情:")
     print(f"  采样点数: {config.collision_check_samples}")
     print(f"  内部点数: {inside_count}")
     print(f"  碰撞点数: {collision_count}")
     print(f"  碰撞比例: {collision_ratio:.2%}")
-    print(f"  阈值: 30%")
+    print("  阈值: 30%")
 
     has_collision = collision_checker.check_collision(
         polyhedron_vertices=hull_result["vertices"],
@@ -179,10 +179,10 @@ def debug_polyhedron_expansion():
     print(f"  碰撞: {has_collision}")
 
     if has_collision:
-        print(f"\n⚠️ 检测到碰撞")
+        print("\n⚠️ 检测到碰撞")
         return
 
-    print(f"\n✓ 成功生成一个多面体!")
+    print("\n✓ 成功生成一个多面体!")
 
 
 if __name__ == "__main__":

@@ -196,7 +196,7 @@ def preflight(profile_name: str, cfg: dict) -> None:
                     if not port_open:
                         print(f"  {T.yellow('!')} Firewall may block port {gw_port} from LAN")
                         print(f"    Fix: {T.bold(f'sudo iptables -I INPUT -p tcp --dport {gw_port} -j ACCEPT')}")
-                        print(f"    Also: {T.bold(f'sudo iptables -I INPUT -p tcp --dport 8090 -j ACCEPT')}")
+                        print(f"    Also: {T.bold('sudo iptables -I INPUT -p tcp --dport 8090 -j ACCEPT')}")
             except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
                 pass
 

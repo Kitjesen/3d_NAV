@@ -45,7 +45,7 @@ def test_polyhedron_creation():
         sample_points=vertices.copy(),
     )
 
-    print(f"  ✓ Polyhedron 创建成功")
+    print("  ✓ Polyhedron 创建成功")
     print(f"    - poly_id: {poly.poly_id}")
     print(f"    - 顶点数: {len(poly.vertices)}")
     print(f"    - 面片数: {len(poly.faces)}")
@@ -82,7 +82,7 @@ def test_scg_with_polyhedra():
         )
         scg_builder.add_polyhedron(poly)
 
-    print(f"  ✓ SCG 构建成功")
+    print("  ✓ SCG 构建成功")
     print(f"    - 节点数: {len(scg_builder.nodes)}")
     print()
 
@@ -98,10 +98,10 @@ def test_visualization_import():
         SCGVisualizer,
     )
 
-    print(f"  ✓ PathVisualizer 导入成功")
-    print(f"  ✓ SCGVisualizer 导入成功")
-    print(f"  ✓ PerformanceVisualizer 导入成功")
-    print(f"  ✓ ComprehensiveVisualizer 导入成功")
+    print("  ✓ PathVisualizer 导入成功")
+    print("  ✓ SCGVisualizer 导入成功")
+    print("  ✓ PerformanceVisualizer 导入成功")
+    print("  ✓ ComprehensiveVisualizer 导入成功")
     print()
 
 

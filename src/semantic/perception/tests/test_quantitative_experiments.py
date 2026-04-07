@@ -50,7 +50,7 @@ def test_statistical_analyzer():
         "内存占用 (MB)",
     )
 
-    print(f"\n统计结果:")
+    print("\n统计结果:")
     print(f"  方法 1 均值: {stat['method1_mean']:.2f}")
     print(f"  方法 2 均值: {stat['method2_mean']:.2f}")
     print(f"  t 统计量: {stat['t_statistic']:.2f}")
@@ -224,7 +224,7 @@ def test_report_generator():
         with open(report_file, encoding='utf-8') as f:
             content = f.read()
 
-        print(f"\n报告预览（前 500 字符）:")
+        print("\n报告预览（前 500 字符）:")
         print(content[:500])
 
         assert "USS-Nav 定量实验报告" in content, "报告应包含标题"

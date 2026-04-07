@@ -119,7 +119,7 @@ def test_path_planning():
     # 规划路径
     result = planner.plan(start, goal, smooth=True, simplify=True)
 
-    print(f"\n规划结果:")
+    print("\n规划结果:")
     print(f"  成功: {result.success}")
     print(f"  多面体序列: {result.polyhedron_sequence}")
     print(f"  路径段数: {len(result.segments)}")
@@ -127,7 +127,7 @@ def test_path_planning():
     print(f"  规划时间: {result.planning_time*1000:.2f}ms")
 
     if result.success:
-        print(f"\n路径段详情:")
+        print("\n路径段详情:")
         for i, segment in enumerate(result.segments):
             print(f"  段 {i}: 多面体 {segment.from_poly_id} -> {segment.to_poly_id}")
             print(f"    路径点数: {len(segment.waypoints)}")
@@ -163,7 +163,7 @@ def test_path_smoothing():
     smoothed = smoother.smooth(path)
 
     print(f"平滑后路径点数: {len(smoothed)}")
-    print(f"平滑前后对比:")
+    print("平滑前后对比:")
     for i in range(len(path)):
         print(f"  点 {i}: {path[i]} -> {smoothed[i]}")
 
@@ -200,7 +200,7 @@ def test_path_simplification():
     simplified = smoother.simplify(path, tolerance=0.1)
 
     print(f"简化后路径点数: {len(simplified)}")
-    print(f"简化后路径:")
+    print("简化后路径:")
     for i, point in enumerate(simplified):
         print(f"  点 {i}: {point}")
 
@@ -232,7 +232,7 @@ def test_comparison_with_hybrid_planner():
     # SCG 规划
     scg_result = scg_planner.plan(start, goal)
 
-    print(f"SCG 规划器:")
+    print("SCG 规划器:")
     print(f"  成功: {scg_result.success}")
     print(f"  多面体序列长度: {len(scg_result.polyhedron_sequence)}")
     print(f"  总距离: {scg_result.total_distance:.2f}m")

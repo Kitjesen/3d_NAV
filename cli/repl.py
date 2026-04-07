@@ -399,7 +399,7 @@ class LingTuREPL(cmd.Cmd):
         if svc.wait_ready("slam", target, timeout=10.0):
             print(f"  Switched to {profile} — bridge reconnects in ~3s")
         else:
-            print(f"  Warning: services not ready after 10s, check: journalctl -u slam -f")
+            print("  Warning: services not ready after 10s, check: journalctl -u slam -f")
 
         # Update config
         if hasattr(self, '_cfg') and self._cfg:
@@ -541,7 +541,7 @@ class LingTuREPL(cmd.Cmd):
         backend = getattr(llm_mod, "_backend", "?")
         if backend == "mock":
             print(f"  {T.yellow('!')} LLM backend is 'mock' — responses will be simulated")
-            print(f"    Set a real API key and restart with --llm kimi/qwen/openai")
+            print("    Set a real API key and restart with --llm kimi/qwen/openai")
             print()
 
         # Build context function from live modules
@@ -846,9 +846,9 @@ class LingTuREPL(cmd.Cmd):
             print(f"  Requests:     {req_cnt} sent, {resp_cnt} responses")
 
             if not key_set and backend != "mock":
-                print(f"\n  To set the key:")
+                print("\n  To set the key:")
                 print(f"    export {key_env}=your_key_here")
-                print(f"    then restart lingtu")
+                print("    then restart lingtu")
 
             print()
 
@@ -896,7 +896,7 @@ class LingTuREPL(cmd.Cmd):
             print()
 
         elif subcmd == "backends":
-            print(f"\n  Available LLM backends:\n")
+            print("\n  Available LLM backends:\n")
             backends = [
                 ("kimi",   "MOONSHOT_API_KEY",  "Kimi K2 (Moonshot AI, China-direct, recommended)"),
                 ("qwen",   "DASHSCOPE_API_KEY", "Qwen (Alibaba, China-direct fallback)"),
@@ -1025,7 +1025,7 @@ class LingTuREPL(cmd.Cmd):
             cloud_n = slam.map_cloud.msg_count if hasattr(slam, "map_cloud") else 0
             odom_ok  = T.green("flowing") if odom_n  > 0 else T.yellow("no data yet")
             cloud_ok = T.green("flowing") if cloud_n > 0 else T.yellow("no data yet")
-            print(f"\n  SLAM")
+            print("\n  SLAM")
             print(f"    odometry   {odom_ok}  ({odom_n} msgs)")
             print(f"    point cloud {cloud_ok}  ({cloud_n} msgs)")
         else:
@@ -1037,7 +1037,7 @@ class LingTuREPL(cmd.Cmd):
             x, y, z = nav._robot_pos
             state = getattr(nav, "_state", "?")
             state_color = T.green if state in ("IDLE", "SUCCESS") else T.yellow if state == "EXECUTING" else T.red
-            print(f"\n  Navigation")
+            print("\n  Navigation")
             print(f"    position   x={x:.2f}  y={y:.2f}  z={z:.2f}")
             print(f"    state      {state_color(state)}")
 
@@ -1046,7 +1046,7 @@ class LingTuREPL(cmd.Cmd):
         if occ:
             n = sum(p.msg_count for p in occ.ports_in.values())
             ok = T.green("building") if n > 0 else T.yellow("waiting for point cloud")
-            print(f"\n  Map building")
+            print("\n  Map building")
             print(f"    occupancy grid  {ok}  ({n} cloud updates)")
 
         elev = self._get_module("ElevationMapModule")
@@ -1060,7 +1060,7 @@ class LingTuREPL(cmd.Cmd):
         lp      = self._get_module("LocalPlannerModule")
         pf      = self._get_module("PathFollowerModule")
         if terrain or lp or pf:
-            print(f"\n  C++ backends")
+            print("\n  C++ backends")
             if terrain:
                 be = getattr(terrain, "_backend", "?")
                 ok = T.green("nanobind") if be == "nanobind" else T.yellow(be)

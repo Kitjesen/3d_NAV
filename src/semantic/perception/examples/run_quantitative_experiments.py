@@ -205,7 +205,7 @@ class ExperimentReportGenerator:
                 # 内存统计
                 memory_vals = [r.memory.total_memory_mb for r in method_results if r.memory]
                 if memory_vals:
-                    f.write(f"**内存占用**:\n")
+                    f.write("**内存占用**:\n")
                     f.write(f"- 平均: {np.mean(memory_vals):.2f} MB\n")
                     f.write(f"- 标准差: {np.std(memory_vals):.2f} MB\n")
                     f.write(f"- 最小: {np.min(memory_vals):.2f} MB\n")
@@ -214,7 +214,7 @@ class ExperimentReportGenerator:
                 # 更新时间统计
                 update_vals = [r.update.avg_update_time_ms for r in method_results if r.update]
                 if update_vals:
-                    f.write(f"**更新时间**:\n")
+                    f.write("**更新时间**:\n")
                     f.write(f"- 平均: {np.mean(update_vals):.2f} ms\n")
                     f.write(f"- 标准差: {np.std(update_vals):.2f} ms\n")
                     f.write(f"- 最小: {np.min(update_vals):.2f} ms\n")
@@ -223,7 +223,7 @@ class ExperimentReportGenerator:
                 # 路径质量统计
                 path_vals = [r.path.planning_time_ms for r in method_results if r.path]
                 if path_vals:
-                    f.write(f"**规划时间**:\n")
+                    f.write("**规划时间**:\n")
                     f.write(f"- 平均: {np.mean(path_vals):.2f} ms\n")
                     f.write(f"- 标准差: {np.std(path_vals):.2f} ms\n")
                     f.write(f"- 最小: {np.min(path_vals):.2f} ms\n")

@@ -231,7 +231,7 @@ class SemanticPlannerModule(Module, layer=4):
                 approach_distance=self._approach_dist,
             )
             logger.info("ActionExecutor (LERa) initialized")
-        except Exception as e:
+        except Exception:
             logger.warning("ActionExecutor not available")
 
     # ── Input handlers ────────────────────────────────────────────────────────

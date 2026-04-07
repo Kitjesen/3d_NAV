@@ -73,7 +73,7 @@ def test_pct_astar_planner():
     path = planner.plan(start, goal)
 
     if path is not None:
-        print(f"\n路径规划成功:")
+        print("\n路径规划成功:")
         print(f"  路径点数: {len(path)}")
         print(f"  起点: {path[0]}")
         print(f"  终点: {path[-1]}")
@@ -82,7 +82,7 @@ def test_pct_astar_planner():
 
     # 获取统计信息
     stats = planner.get_statistics()
-    print(f"\n统计信息:")
+    print("\n统计信息:")
     print(f"  更新次数: {stats['update_count']}")
     print(f"  规划次数: {stats['planning_count']}")
     print(f"  平均规划时间: {stats['avg_planning_time_ms']:.2f} ms")
@@ -117,7 +117,7 @@ def test_uss_nav_planner():
 
         # 获取统计信息
         stats = planner.get_statistics()
-        print(f"\n统计信息:")
+        print("\n统计信息:")
         print(f"  更新次数: {stats['update_count']}")
         print(f"  多面体数: {stats['num_polyhedra']}")
         print(f"  边数: {stats['num_edges']}")
@@ -184,7 +184,7 @@ def test_performance_comparison():
 
     stats1 = planner1.get_statistics()
 
-    print(f"PCT A*:")
+    print("PCT A*:")
     print(f"  更新时间: {update_time1:.2f} ms")
     print(f"  规划时间: {planning_time1:.2f} ms")
     print(f"  内存占用: {stats1['memory_mb']:.2f} MB")
@@ -202,13 +202,13 @@ def test_performance_comparison():
 
         stats2 = planner2.get_statistics()
 
-        print(f"\nUSS-Nav:")
+        print("\nUSS-Nav:")
         print(f"  更新时间: {update_time2:.2f} ms")
         print(f"  多面体数: {stats2['num_polyhedra']}")
         print(f"  边数: {stats2['num_edges']}")
 
     except ImportError:
-        print(f"\n⚠️ USS-Nav 组件未安装，跳过对比")
+        print("\n⚠️ USS-Nav 组件未安装，跳过对比")
 
     print("\n✓ 性能对比测试通过")
     print()

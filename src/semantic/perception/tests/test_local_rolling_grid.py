@@ -96,7 +96,7 @@ def test_occupancy_update():
 
     # 获取统计信息
     stats = grid.get_statistics()
-    print(f"\n统计信息:")
+    print("\n统计信息:")
     print(f"  更新次数: {stats['update_count']}")
     print(f"  占据单元格数: {stats['occupied_cells']}")
     print(f"  自由单元格数: {stats['free_cells']}")
@@ -168,7 +168,7 @@ def test_memory_usage():
     # 检查内存是否增长
     occupancy_size_after = grid.occupancy.nbytes
 
-    print(f"\n10 次更新后:")
+    print("\n10 次更新后:")
     print(f"  占据栅格内存: {occupancy_size_after / 1024:.2f} KB")
     print(f"  内存增长: {(occupancy_size_after - occupancy_size) / 1024:.2f} KB")
 
@@ -218,7 +218,7 @@ def test_reset():
     point_cloud = create_mock_point_cloud(robot_pos, num_points=100)
     grid.update(robot_pos, point_cloud)
 
-    print(f"更新前:")
+    print("更新前:")
     print(f"  中心: {grid.center}")
     print(f"  更新次数: {grid.update_count}")
     print(f"  滚动次数: {grid.roll_count}")
@@ -226,7 +226,7 @@ def test_reset():
     # 重置
     grid.reset()
 
-    print(f"\n重置后:")
+    print("\n重置后:")
     print(f"  中心: {grid.center}")
     print(f"  更新次数: {grid.update_count}")
     print(f"  滚动次数: {grid.roll_count}")

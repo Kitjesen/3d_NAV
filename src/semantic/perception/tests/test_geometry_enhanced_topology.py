@@ -46,7 +46,7 @@ def test_toponode_serialization():
     tsg._nodes[1] = node
     data = tsg.to_dict()
 
-    print(f"✓ 序列化成功")
+    print("✓ 序列化成功")
     print(f"  节点数据: {json.dumps(data['nodes'][0], indent=2)}")
 
     # 反序列化
@@ -60,7 +60,7 @@ def test_toponode_serialization():
     assert node2.height_range == node.height_range, "高度范围不匹配"
     assert node2.geometry_confidence == node.geometry_confidence, "置信度不匹配"
 
-    print(f"✓ 反序列化成功，所有字段匹配")
+    print("✓ 反序列化成功，所有字段匹配")
     print()
 
 
@@ -97,7 +97,7 @@ def test_geometry_extractor_mock():
     world_pos2 = extractor.grid_to_world(*grid_pos)
     print(f"  世界坐标: {world_pos} → 栅格坐标: {grid_pos} → 世界坐标: {world_pos2}")
     assert np.allclose(world_pos, world_pos2, atol=0.1), "坐标转换不一致"
-    print(f"✓ 坐标转换正确")
+    print("✓ 坐标转换正确")
 
     # 测试几何提取
     print("\n测试几何提取:")
@@ -118,7 +118,7 @@ def test_geometry_extractor_mock():
     assert len(geometry["convex_hull"]) >= 3, "凸包至少需要 3 个顶点"
     assert 0 <= geometry["confidence"] <= 1, "置信度应在 [0, 1] 范围内"
 
-    print(f"✓ 几何提取成功")
+    print("✓ 几何提取成功")
     print()
 
 
@@ -196,7 +196,7 @@ def test_topology_integration():
     assert room1.traversable_area > 0, "房间 1 应有可通行面积"
     assert room1.geometry_confidence > 0, "房间 1 应有几何置信度"
 
-    print(f"\n✓ 拓扑图集成成功")
+    print("\n✓ 拓扑图集成成功")
     print()
 
 

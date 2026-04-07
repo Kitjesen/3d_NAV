@@ -98,7 +98,7 @@ def test_end_to_end_evaluator():
 
         if results:
             result = results[0]
-            print(f"\n结果详情:")
+            print("\n结果详情:")
             print(f"  方法: {result.method_name}")
             print(f"  场景: {result.scene_id}")
             if result.memory:
@@ -126,7 +126,7 @@ def test_end_to_end_evaluator():
         # 读取报告内容
         with open(report_file) as f:
             report_content = f.read()
-            print(f"\n报告预览（前 500 字符）:")
+            print("\n报告预览（前 500 字符）:")
             print(report_content[:500])
 
         print("\n✓ 端到端评估器测试通过")
