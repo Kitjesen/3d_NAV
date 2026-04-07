@@ -149,11 +149,11 @@ class TestSemanticMapperSetup(unittest.TestCase):
 
     def test_kg_path(self):
         m = self._make(save_dir="/tmp/test_dir")
-        self.assertEqual(m._kg_path(), "/tmp/test_dir/room_object_kg.json")
+        self.assertEqual(m._kg_path(), os.path.join("/tmp/test_dir", "room_object_kg.json"))
 
     def test_tsg_path(self):
         m = self._make(save_dir="/tmp/test_dir")
-        self.assertEqual(m._tsg_path(), "/tmp/test_dir/topology_graph.json")
+        self.assertEqual(m._tsg_path(), os.path.join("/tmp/test_dir", "topology_graph.json"))
 
 
 # ===========================================================================
