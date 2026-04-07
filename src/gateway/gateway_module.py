@@ -332,20 +332,8 @@ class GatewayModule(Module, layer=6):
         self.push_event({"type": "odometry", "data": d})
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
-        """Accumulate map point cloud for /map/viewer with voxel dedup."""
-        pts = cloud.points if hasattr(cloud, "points") else None
-        if pts is None or len(pts) == 0:
-            return
-        new_pts = np.array(pts, dtype=np.float32)
-        with self._map_cloud_lock:
-            if self._map_points is None:
-                self._map_points = new_pts
-            else:
-                self._map_points = np.vstack([self._map_points, new_pts])
-            self._map_cloud_count += 1
-            # Voxel dedup every 5 frames — removes duplicate points from stationary robot
-            if self._map_cloud_count % 5 == 0:
-                self._map_points = self._voxel_downsample(self._map_points, self._map_voxel_size)
+        """Track that map_cloud is flowing (for health). Actual viewer data comes from PCD snapshot."""
+        self._map_cloud_count += 1
 
     @staticmethod
     def _voxel_downsample(pts: np.ndarray, voxel: float) -> np.ndarray:
@@ -645,8 +633,7 @@ class GatewayModule(Module, layer=6):
         async def get_health():
             with gw._sse_lock:
                 n_sse = len(gw._sse_queues)
-            with gw._map_cloud_lock:
-                map_pts = len(gw._map_points) if gw._map_points is not None else 0
+            map_pts = gw._map_cloud_count  # frames received (not point count)
             # SLAM Hz: cached subprocess call to `ros2 topic hz` (most accurate, avoids Python GIL artifacts)
             slam_hz = gw._get_slam_hz_cached()
             return {
@@ -808,7 +795,8 @@ class GatewayModule(Module, layer=6):
             if map:
                 html = gw._generate_viewer_from_pcd(map)
             else:
-                html = gw._generate_viewer_html()
+                # Live: snapshot from ikd-tree via save_map to temp file
+                html = gw._generate_viewer_live()
             return HTMLResponse(html)
 
         @app.post("/api/v1/map/rename", summary="Rename a saved map")
@@ -1029,6 +1017,45 @@ class GatewayModule(Module, layer=6):
             pass
 
     # -- Map 3D viewer HTML generation ----------------------------------------
+
+    def _generate_viewer_live(self) -> str:
+        """Snapshot ikd-tree to temp PCD, then render. Shows exactly what save_map would produce."""
+        import subprocess, tempfile, os
+        tmp = os.path.join(tempfile.gettempdir(), "lingtu_live_snapshot.pcd")
+        try:
+            r = subprocess.run(
+                ["bash", "-c",
+                 "source /opt/ros/humble/setup.bash && "
+                 "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+                 "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                 f"ros2 service call /nav/save_map interface/srv/SaveMaps "
+                 f"\"{{file_path: '{tmp}'}}\""],
+                capture_output=True, text=True, timeout=15)
+        except Exception:
+            pass
+
+        if os.path.isfile(tmp) and os.path.getsize(tmp) > 200:
+            # Parse temp PCD
+            with open(tmp, "rb") as f:
+                n_points = 0
+                point_step = 16
+                while True:
+                    line = f.readline().decode("ascii", errors="ignore").strip()
+                    if "POINTS" in line:
+                        n_points = int(line.split()[-1])
+                    if "SIZE" in line:
+                        point_step = sum(int(s) for s in line.split()[1:])
+                    if line.startswith("DATA"):
+                        break
+                data = f.read(n_points * point_step)
+            pts = np.frombuffer(data[:n_points * point_step], dtype=np.float32).reshape(n_points, point_step // 4)[:, :3]
+            valid = np.isfinite(pts).all(axis=1)
+            pts = pts[valid]
+            with self._map_cloud_lock:
+                self._map_points = pts
+            return self._generate_viewer_html()
+        else:
+            return "<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>暂无地图数据</h2><p>开始建图并移动机器人后刷新。</p></body></html>"
 
     def _generate_viewer_from_pcd(self, map_name: str) -> str:
         """Load a saved PCD file and generate viewer HTML (does NOT touch live data)."""

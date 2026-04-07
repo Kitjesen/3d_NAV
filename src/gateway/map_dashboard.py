@@ -178,7 +178,7 @@ async function pollSlam(){
   document.getElementById('hDot').className='dot on';
   document.getElementById('hSt').textContent='在线';
   const p=h.map_points||0;
-  document.getElementById('pts').textContent=p>1000?(p/1000|0)+'K':p;
+  document.getElementById('pts').textContent=p>1000?(p/1000|0)+'K帧':p+'帧';
   document.getElementById('hz').textContent=(h.slam_hz||0).toFixed(1);
 
   const st=await F('/api/v1/state');
