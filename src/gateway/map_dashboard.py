@@ -301,11 +301,6 @@ try{pollSlam();}catch(e){console.error('pollSlam init:',e);}
 try{loadMaps();}catch(e){console.error('loadMaps init:',e);}
 setInterval(()=>{try{pollSlam();}catch(e){}},2000);
 
-// Auto-refresh iframe in live mode (every 8s)
-setInterval(()=>{
-  if(document.getElementById('vMode').textContent==='实时建图'){
-    document.getElementById('vFrame').src='/map/viewer?t='+Date.now();
-  }
-},8000);
+// No auto-refresh — iframe viewer has its own internal update loop
 </script>
 </body></html>'''
