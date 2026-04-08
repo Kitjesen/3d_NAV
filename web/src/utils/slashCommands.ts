@@ -42,7 +42,10 @@ export async function executeSlashCommand(raw: string, sseState: SSEState): Prom
     const odom = sseState.odometry
     const safety = sseState.safetyState
     const stateZh = ms ? (NAV_STATE_ZH[ms.state] ?? ms.state) : '未知'
-    const pos = odom ? `(${odom.x.toFixed(2)}, ${odom.y.toFixed(2)})` : '--'
+    const pos =
+      typeof odom?.x === 'number' && typeof odom?.y === 'number'
+        ? `(${odom.x.toFixed(2)}, ${odom.y.toFixed(2)})`
+        : '--'
     const estop = safety?.estop ? '急停激活' : '正常'
     return `状态：${stateZh}\n位置：${pos}\n安全：${estop}`
   }

@@ -16,8 +16,13 @@ function formatUptime(s: number) {
   return `${sec}s`
 }
 
-function rad2deg(r: number) {
+function rad2deg(r: number | undefined) {
+  if (typeof r !== 'number') return '--'
   return ((r * 180) / Math.PI).toFixed(1)
+}
+
+function num(v: unknown, digits = 2): string {
+  return typeof v === 'number' && isFinite(v) ? v.toFixed(digits) : '--'
 }
 
 const NAV_STATE_ZH: Record<string, string> = {
@@ -34,10 +39,10 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
   const mission = sseState.missionStatus
   const safety = sseState.safetyState
 
-  const x = odom ? odom.x.toFixed(2) : '--'
-  const y = odom ? odom.y.toFixed(2) : '--'
+  const x = num(odom?.x)
+  const y = num(odom?.y)
   const yaw = odom ? rad2deg(odom.yaw) + '°' : '--'
-  const vx = odom ? odom.vx.toFixed(2) + ' m/s' : '--'
+  const vx = num(odom?.vx) + (typeof odom?.vx === 'number' ? ' m/s' : '')
   const navState = mission?.state ?? 'IDLE'
   const estopActive = safety?.estop ?? false
   const navStateZh = NAV_STATE_ZH[navState] ?? navState

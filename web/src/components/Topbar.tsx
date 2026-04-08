@@ -36,7 +36,10 @@ interface TopbarProps {
 export function Topbar({ sseState }: TopbarProps) {
   const estop = sseState.safetyState?.estop ?? false
   const odom = sseState.odometry
-  const posLabel = odom ? `(${odom.x.toFixed(1)}, ${odom.y.toFixed(1)})` : '--'
+  const posLabel =
+    typeof odom?.x === 'number' && typeof odom?.y === 'number'
+      ? `(${odom.x.toFixed(1)}, ${odom.y.toFixed(1)})`
+      : '--'
   const navState = sseState.missionStatus?.state ?? 'IDLE'
   const navStateZh = NAV_STATE_ZH[navState] ?? navState
   const slamMode = sseState.slamStatus?.mode ?? null
