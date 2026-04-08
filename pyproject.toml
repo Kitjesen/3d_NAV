@@ -79,6 +79,7 @@ known-first-party = ["core", "nav", "semantic", "drivers", "gateway", "memory", 
 "src/core/tests/*" = ["F811", "E402"]
 "src/semantic/*/test*" = ["F811", "E402"]
 "calibration/**" = ["W191", "E731", "F821"]
+"docs/**" = ["E702", "E701"]
 
 [tool.pytest.ini_options]
 testpaths = [

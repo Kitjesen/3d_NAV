@@ -1,8 +1,9 @@
 """Generate analysis figures for outdoor terrain SLAM tests."""
 import matplotlib
+
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.collections import LineCollection
 
@@ -125,7 +126,7 @@ ax.scatter(gx[-1], gy[-1], c='#FF4444', s=250, marker='X', zorder=10, label='End
 
 ax.annotate('START\n(27.1, 3.8)', (gx[0], gy[0]), fontsize=11, fontweight='bold',
             color='#00FF88', xytext=(15, 10), textcoords='offset points')
-ax.annotate(f'END\n(26.7, -31.2)', (gx[-1], gy[-1]), fontsize=11, fontweight='bold',
+ax.annotate('END\n(26.7, -31.2)', (gx[-1], gy[-1]), fontsize=11, fontweight='bold',
             color='#FF4444', xytext=(15, 10), textcoords='offset points')
 
 # Direction arrows

@@ -8,11 +8,13 @@ Key improvements over v1:
 - Dual-algorithm comparison (Point-LIO vs Fast-LIO2) on same plot
 """
 import matplotlib
+
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import numpy as np
 import json
 import os
+
+import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.patches import FancyArrowPatch
 
 plt.rcParams.update({
@@ -176,7 +178,7 @@ ax.plot(cx[0], cy[0], 'o', color='#2E7D32', ms=16, zorder=10,
 ax.plot(cx[-1], cy[-1], 's', color='#C62828', ms=13, zorder=10,
         markeredgecolor='black', markeredgewidth=1.5, label='End')
 # Loop error annotation
-ax.annotate(f'Loop closure error ≈ 7.1 m',
+ax.annotate('Loop closure error ≈ 7.1 m',
             xy=(cx[-1], cy[-1]), xytext=(30, 25), textcoords='offset points',
             fontsize=11, fontweight='bold', color='#C62828',
             arrowprops=dict(arrowstyle='->', lw=1.5, color='#C62828'),
@@ -260,9 +262,9 @@ gx0, gy0 = gx - gx[0], gy - gy[0]
 sx0, sy0 = sx - sx[0], sy - sy[0]
 
 for xd, yd, c, name, mk in [
-    (cx0, cy0, COLORS['corridor'], f'Corridor (indoor, 295 s, ~268 m)', '-'),
-    (gx0, gy0, COLORS['grass'],    f'Grass (outdoor, 27 s, ~47 m)', '-'),
-    (sx0, sy0, COLORS['slope'],    f'Slope (outdoor, 162 s, ~346 m)', '-'),
+    (cx0, cy0, COLORS['corridor'], 'Corridor (indoor, 295 s, ~268 m)', '-'),
+    (gx0, gy0, COLORS['grass'],    'Grass (outdoor, 27 s, ~47 m)', '-'),
+    (sx0, sy0, COLORS['slope'],    'Slope (outdoor, 162 s, ~346 m)', '-'),
 ]:
     ax.plot(xd, yd, mk, color=c, lw=2.5, alpha=0.9, label=name, zorder=3)
     ax.plot(xd, yd, 'o', color=c, ms=3, alpha=0.4, zorder=4)
@@ -611,7 +613,7 @@ if os.path.exists(dual_json):
             label=f'Fast-LIO2 (max = {f_disp.max():.0f} m)')
     if f_good < len(ft):
         ax.axvline(ft_g[-1], color='#C62828', lw=1.5, ls='--', alpha=0.7,
-                   label=f'Fast-LIO2 diverges')
+                   label='Fast-LIO2 diverges')
     ax.fill_between(pt, p_disp, alpha=0.06, color=ALGO_COLORS['pointlio'])
     ax.fill_between(ft_g, f_disp, alpha=0.06, color=ALGO_COLORS['fastlio2'])
     ax.set_xlabel('Time (s)')
@@ -625,7 +627,7 @@ if os.path.exists(dual_json):
 
     print('\n4 dual-algorithm comparison figures generated.')
 else:
-    print(f'\nNo dual_slam_corridor.json found, skipping dual comparison figures.')
+    print('\nNo dual_slam_corridor.json found, skipping dual comparison figures.')
 
 
 print('\nAll figures generated successfully.')

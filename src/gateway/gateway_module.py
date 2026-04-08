@@ -459,7 +459,8 @@ class GatewayModule(Module, layer=6):
             configured = _get_configured_key()
             if not configured:
                 return JSONResponse({"ok": True, "message": "认证未启用"})
-            import hashlib, hmac as _hmac
+            import hashlib
+            import hmac as _hmac
             if _hmac.compare_digest(
                 hashlib.sha256(key.encode()).hexdigest(),
                 hashlib.sha256(configured.encode()).hexdigest(),

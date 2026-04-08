@@ -3,9 +3,12 @@ name: Python Tests + Lint
 on:
   push:
     branches: [main]
-    paths: ['src/**', 'cli/**', 'pyproject.toml', '.github/workflows/test-python.yml']
+    paths: ['src/**', 'cli/**', 'docs/**', 'calibration/**', 'pyproject.toml', '.github/workflows/test-python.yml']
   pull_request:
     branches: [main]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   lint:
@@ -13,7 +16,16 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            src
+            cli
+            docs
+            calibration
+            pyproject.toml
       - uses: astral-sh/ruff-action@v3
+        with:
+          args: check src/ cli/ docs/ calibration/
 
   test:
     name: Framework Tests
@@ -21,6 +33,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            src
+            cli
+            config
+            sim
+            pyproject.toml
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'

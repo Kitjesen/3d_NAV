@@ -3,12 +3,13 @@
 生成 MuJoCo 仿真测试科研 PPT
 LingTu 多层工厂导航 — 四足机器人自主导航系统
 """
-from pptx import Presentation
-from pptx.util import Inches, Pt, Emu
-from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
-from pptx.enum.shapes import MSO_SHAPE
 import os
+
+from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.util import Emu, Inches, Pt
 
 # ── 配色方案 (学术风格: 深蓝+灰白) ────────────────────
 C_TITLE_BG = RGBColor(0x1B, 0x2A, 0x4A)     # 深海蓝

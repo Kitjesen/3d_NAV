@@ -462,8 +462,8 @@ def cmd_health_external(as_json: bool = False) -> None:
         return
 
     port = state.get("config", {}).get("gateway_port", 5050)
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     url = f"http://localhost:{port}/api/v1/health"
     try:

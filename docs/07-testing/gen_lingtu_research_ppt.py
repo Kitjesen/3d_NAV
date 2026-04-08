@@ -1,4 +1,4 @@
-"""
+r"""
 Comprehensive Research PPT — LingTu Autonomous Navigation System
 =================================================================
 Covers: system architecture, MuJoCo factory simulation, ONNX policy,

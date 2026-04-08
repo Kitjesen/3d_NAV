@@ -8,7 +8,9 @@ Usage:
 """
 import os
 import sys
+
 import numpy as np
+
 
 def load_pcd(path):
     """Load PCD file (ASCII or binary), return (N,3) xyz array and optional intensity."""
@@ -166,7 +168,6 @@ def render_comparison(paths, titles):
     from plotly.subplots import make_subplots
 
     fig = go.Figure()
-    colors = ['#1565C0', '#E65100']
 
     for i, (path, title) in enumerate(zip(paths, titles)):
         xyz, _ = load_pcd(path)
