@@ -172,6 +172,18 @@ class FastPathMixin:
                     if kw in label or label in kw:
                         label_score = max(label_score, 0.5)
 
+            # KG co-occurrence: object shares room with instruction target
+            # (ASCENT-style learned co-occurrence via P(obj|room))
+            if label_score == 0.0 and getattr(self, '_room_object_kg', None):
+                for kw in keywords:
+                    co_objects = self._room_object_kg.get_cooccurring_objects(kw)
+                    for co_label, co_weight in co_objects:
+                        if co_label in label or label in co_label:
+                            label_score = max(label_score, 0.35 * min(co_weight / 0.5, 1.0))
+                            break
+                    if label_score > 0:
+                        break
+
             if label_score == 0.0:
                 continue  # 完全不相关, 跳过
 

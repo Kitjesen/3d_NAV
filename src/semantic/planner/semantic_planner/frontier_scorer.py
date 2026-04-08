@@ -126,6 +126,12 @@ class FrontierScorer:
         self._failure_penalty_radius: float = 3.0
         self._failure_penalty_decay: float = 0.7
 
+        # Sticky frontier: anti-oscillation (ASCENT-inspired)
+        self._selected_history: list[tuple[np.ndarray, float]] = []
+        self._sticky_distance: float = 1.5       # meters
+        self._sticky_cooldown: float = 60.0       # seconds
+        self._sticky_max_penalty: float = 0.5     # max score multiplier reduction
+
         # 创新3: 方向观测缓存
         self._directional_features: dict[int, np.ndarray] = {}
         self._clip_encoder = None
@@ -310,8 +316,48 @@ class FrontierScorer:
         )
 
     def clear_failure_memory(self) -> None:
-        """清空失败记忆 (新任务时调用)。"""
+        """清空失败记忆 + sticky 历史 (新任务时调用)。"""
         self._failed_positions.clear()
+        self._selected_history.clear()
+
+    # ── Sticky frontier (ASCENT-inspired anti-oscillation) ────────
+
+    def record_frontier_selection(self, position: np.ndarray) -> None:
+        """Record a selected frontier position to prevent re-selection oscillation."""
+        pos = np.asarray(position[:2], dtype=np.float64)
+        now = _time_mod.time()
+        self._selected_history.append((pos, now))
+        # Prune expired entries
+        cutoff = now - self._sticky_cooldown
+        self._selected_history = [
+            (p, t) for p, t in self._selected_history if t > cutoff
+        ]
+
+    def clear_sticky_history(self) -> None:
+        """Clear sticky frontier history (on new task / goal change)."""
+        self._selected_history.clear()
+
+    def _compute_sticky_penalty(self, frontier_center: np.ndarray) -> float:
+        """Penalize frontiers too close to recently selected ones.
+
+        Prevents oscillation between adjacent frontiers. Penalty decays
+        with both time elapsed and spatial distance.
+        """
+        if not self._selected_history:
+            return 0.0
+        now = _time_mod.time()
+        max_penalty = 0.0
+        for pos, ts in self._selected_history:
+            age = now - ts
+            if age > self._sticky_cooldown:
+                continue
+            dist = float(np.linalg.norm(frontier_center - pos))
+            if dist < self._sticky_distance:
+                time_factor = 1.0 - (age / self._sticky_cooldown)
+                dist_factor = 1.0 - (dist / self._sticky_distance)
+                penalty = self._sticky_max_penalty * time_factor * dist_factor
+                max_penalty = max(max_penalty, penalty)
+        return min(1.0, max_penalty)
 
     def _compute_failure_penalty(self, frontier_center: np.ndarray) -> float:
         """计算 frontier 与已失败位置的惩罚分 (P0)。"""
@@ -533,6 +579,11 @@ class FrontierScorer:
             failure_penalty = self._compute_failure_penalty(frontier.center_world)
             if failure_penalty > 0:
                 frontier.score *= (1.0 - failure_penalty)
+
+            # Sticky frontier: penalize re-selection of recently visited areas
+            sticky_penalty = self._compute_sticky_penalty(frontier.center_world)
+            if sticky_penalty > 0:
+                frontier.score *= (1.0 - sticky_penalty)
 
         self._frontiers.sort(key=lambda f: f.score, reverse=True)
 

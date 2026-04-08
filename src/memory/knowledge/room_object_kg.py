@@ -174,6 +174,54 @@ class RoomObjectKG:
         results.sort(key=lambda x: x[1], reverse=True)
         return results
 
+    def get_cooccurring_objects(
+        self,
+        label: str,
+        min_prob: float = 0.3,
+        top_k: int = 10,
+    ) -> list[tuple[str, float]]:
+        """
+        Find objects that co-occur with `label` in the same room types.
+
+        Uses learned P(object|room) to compute implicit co-occurrence:
+        for each room where `label` appears, collect other objects with
+        high probability. Returns weighted list sorted by co-occurrence
+        strength.
+
+        Inspired by ASCENT (Gong et al. 2025) knowledge graph co-occurrence.
+
+        Args:
+            label: Object label to find co-occurring objects for.
+            min_prob: Minimum P(object|room) to consider (default 0.3).
+            top_k: Maximum number of co-occurring objects to return.
+
+        Returns:
+            List of (co_label, weight) sorted descending by weight.
+            Weight = max over rooms of P(label|room) * P(co_label|room).
+        """
+        lbl = label.lower().strip()
+        # Find rooms where this label appears
+        label_rooms = self.get_object_rooms(lbl)
+        if not label_rooms:
+            return []
+
+        priors = self.to_room_object_priors(min_observations=1)
+        co_scores: dict[str, float] = {}
+
+        for room_type, label_prob in label_rooms:
+            room_objects = priors.get(room_type, {})
+            for obj_label, obj_prob in room_objects.items():
+                if obj_label == lbl or obj_prob < min_prob:
+                    continue
+                # Co-occurrence strength = P(label|room) * P(co_object|room)
+                strength = label_prob * obj_prob
+                co_scores[obj_label] = max(
+                    co_scores.get(obj_label, 0.0), strength,
+                )
+
+        results = sorted(co_scores.items(), key=lambda x: x[1], reverse=True)
+        return results[:top_k]
+
     def get_adjacency_graph(self) -> list[dict]:
         """获取房间邻接图。"""
         result = []
