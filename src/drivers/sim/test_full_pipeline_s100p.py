@@ -164,7 +164,7 @@ print("=" * 60)
 print("Step 3: Full MuJoCo navigation (cmu_py + nav_core + A*)")
 print("=" * 60)
 
-from base_autonomy.modules import LocalPlannerModule, PathFollowerModule
+from base_autonomy.modules import LocalPlannerModule, PathFollowerModule, TerrainModule
 from core.blueprint import Blueprint
 from core.module import Module
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
@@ -218,18 +218,26 @@ class LiveMapper(Module, layer=3):
 bp = Blueprint()
 bp.add(MujocoDriverModule, world="open_field", sim_rate=50.0, render=False, obstacles=obstacles)
 bp.add(LiveMapper)
+bp.add(TerrainModule, backend="nanobind")
 bp.add(LocalPlannerModule, backend="cmu_py")
 bp.add(PathFollowerModule, backend="nav_core")
 bp.add(NavigationModule, planner="astar", waypoint_threshold=2.0, downsample_dist=1.0)
 
+# Odometry → all consumers
 bp.wire("MujocoDriverModule", "odometry", "LiveMapper", "odom_in")
 bp.wire("MujocoDriverModule", "odometry", "NavigationModule", "odometry")
+bp.wire("MujocoDriverModule", "odometry", "TerrainModule", "odometry")
 bp.wire("MujocoDriverModule", "odometry", "LocalPlannerModule", "odometry")
 bp.wire("MujocoDriverModule", "odometry", "PathFollowerModule", "odometry")
+# LiDAR → TerrainModule (raw cloud) + LiveMapper (costmap)
+bp.wire("MujocoDriverModule", "lidar_cloud", "TerrainModule", "map_cloud")
 bp.wire("MujocoDriverModule", "lidar_cloud", "LiveMapper", "lidar_in")
-bp.wire("MujocoDriverModule", "lidar_cloud", "LocalPlannerModule", "terrain_map")
+# TerrainModule → LocalPlannerModule (processed terrain, not raw cloud)
+bp.wire("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
+# Costmap + goal
 bp.wire("LiveMapper", "costmap_out", "NavigationModule", "costmap")
 bp.wire("LiveMapper", "goal_cmd", "NavigationModule", "goal_pose")
+# Navigation → local planning → path following → driver
 bp.wire("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
 bp.wire("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
 bp.wire("PathFollowerModule", "cmd_vel", "MujocoDriverModule", "cmd_vel")

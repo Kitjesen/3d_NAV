@@ -5,7 +5,7 @@
   </option>
   <worldbody>
     <light directional="true" diffuse="0.8 0.8 0.8" specular="0.3 0.3 0.3" pos="0 0 5" dir="0 0 -1" />
-    <geom name="ground" type="plane" size="0 0 1" material="grid" condim="4" conaffinity="15" friction="1.0 0.5 0.5"/>
+    <geom name="robot_ground" type="plane" size="0 0 1" condim="4" conaffinity="15" contype="0" rgba="0.8 0.8 0.8 0" friction="1.0 0.5 0.5"/>
     <body name="trunk" pos="0 0 0.45">
       <joint name="root" type="free" />
       <inertial pos="-0.00111 0.00718 0.07632" mass="18.69147" fullinertia="0.24077 0.63159 0.58481 -0.00158 0.00277 -0.00895" />
@@ -130,8 +130,8 @@
   </default>
   <asset>
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0.0 0.0 0.0" width="512" height="512" />
-    <texture name="grid" type="2d" builtin="checker" rgb1="0.8 0.8 0.8" rgb2="0.6 0.6 0.6" width="256" height="256" />
-    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.1" />
+    <texture name="robot_grid" type="2d" builtin="checker" rgb1="0.8 0.8 0.8" rgb2="0.6 0.6 0.6" width="256" height="256" />
+    <material name="robot_grid" texture="robot_grid" texrepeat="8 8" reflectance="0.1" />
   </asset>
   <!-- IMU 传感器 -->
   <sensor>
@@ -139,24 +139,24 @@
     <gyro name="angular-velocity" site="imu"/>
   </sensor>
 
-  <!-- Torque actuators: PD 在 Python 侧计算，和 Isaac Lab 训练一致 -->
-  <!-- Dart 布局: [FR(h,t,c), FL(h,t,c), RR(h,t,c), RL(h,t,c), feet(4)] = 12+4 -->
+  <!-- Position actuators: MuJoCo PD, ctrl=目标角度, kp/kv 与 brainstem inferKp 一致 -->
+  <!-- Policy clamp_action() 已限制范围, ctrlrange 放宽不截断 policy 输出 -->
   <actuator>
-    <motor joint="fr_hip_joint"   name="fr_hip"   gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="fr_thigh_joint" name="fr_thigh" gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="fr_calf_joint"  name="fr_calf"  gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="fl_hip_joint"   name="fl_hip"   gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="fl_thigh_joint" name="fl_thigh" gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="fl_calf_joint"  name="fl_calf"  gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="rr_hip_joint"   name="rr_hip"   gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="rr_thigh_joint" name="rr_thigh" gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="rr_calf_joint"  name="rr_calf"  gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="rl_hip_joint"   name="rl_hip"   gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="rl_thigh_joint" name="rl_thigh" gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="rl_calf_joint"  name="rl_calf"  gear="1" ctrllimited="true" ctrlrange="-120 120"/>
-    <motor joint="fr_foot_joint"  name="fr_foot"  gear="1" ctrllimited="true" ctrlrange="-60 60"/>
-    <motor joint="fl_foot_joint"  name="fl_foot"  gear="1" ctrllimited="true" ctrlrange="-60 60"/>
-    <motor joint="rr_foot_joint"  name="rr_foot"  gear="1" ctrllimited="true" ctrlrange="-60 60"/>
-    <motor joint="rl_foot_joint"  name="rl_foot"  gear="1" ctrllimited="true" ctrlrange="-60 60"/>
+    <position joint="fr_hip_joint"   name="fr_hip"   kp="65"  kv="5"  ctrlrange="-1.0 1.0"   forcerange="-120 120"/>
+    <position joint="fr_thigh_joint" name="fr_thigh" kp="95"  kv="5"  ctrlrange="-3.5 3.5"   forcerange="-120 120"/>
+    <position joint="fr_calf_joint"  name="fr_calf"  kp="120" kv="5"  ctrlrange="-3.5 3.5"   forcerange="-120 120"/>
+    <position joint="fl_hip_joint"   name="fl_hip"   kp="65"  kv="5"  ctrlrange="-1.0 1.0"   forcerange="-120 120"/>
+    <position joint="fl_thigh_joint" name="fl_thigh" kp="95"  kv="5"  ctrlrange="-3.5 3.5"   forcerange="-120 120"/>
+    <position joint="fl_calf_joint"  name="fl_calf"  kp="120" kv="5"  ctrlrange="-3.5 3.5"   forcerange="-120 120"/>
+    <position joint="rr_hip_joint"   name="rr_hip"   kp="65"  kv="5"  ctrlrange="-1.0 1.0"   forcerange="-120 120"/>
+    <position joint="rr_thigh_joint" name="rr_thigh" kp="95"  kv="5"  ctrlrange="-3.5 3.5"   forcerange="-120 120"/>
+    <position joint="rr_calf_joint"  name="rr_calf"  kp="120" kv="5"  ctrlrange="-7.0 7.0"   forcerange="-120 120"/>
+    <position joint="rl_hip_joint"   name="rl_hip"   kp="65"  kv="5"  ctrlrange="-1.0 1.0"   forcerange="-120 120"/>
+    <position joint="rl_thigh_joint" name="rl_thigh" kp="95"  kv="5"  ctrlrange="-3.5 3.5"   forcerange="-120 120"/>
+    <position joint="rl_calf_joint"  name="rl_calf"  kp="120" kv="5"  ctrlrange="-7.0 7.0"   forcerange="-120 120"/>
+    <position joint="fr_foot_joint"  name="fr_foot"  kp="30"  kv="2"  ctrlrange="-1.0 1.0"   forcerange="-60 60"/>
+    <position joint="fl_foot_joint"  name="fl_foot"  kp="30"  kv="2"  ctrlrange="-1.0 1.0"   forcerange="-60 60"/>
+    <position joint="rr_foot_joint"  name="rr_foot"  kp="30"  kv="2"  ctrlrange="-1.0 1.0"   forcerange="-60 60"/>
+    <position joint="rl_foot_joint"  name="rl_foot"  kp="30"  kv="2"  ctrlrange="-1.0 1.0"   forcerange="-60 60"/>
   </actuator>
 </mujoco>
