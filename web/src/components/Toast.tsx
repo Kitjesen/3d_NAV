@@ -1,5 +1,6 @@
 import { X } from 'lucide-react'
-import type { Toast, ToastKind } from '../hooks/useToast'
+import type { Toast, ToastKind } from '../types'
+import styles from './Toast.module.css'
 
 interface ToastContainerProps {
   toasts: Toast[]
@@ -7,20 +8,20 @@ interface ToastContainerProps {
 }
 
 function kindClass(kind: ToastKind) {
-  if (kind === 'success') return 'toast--success'
-  if (kind === 'error')   return 'toast--error'
-  return 'toast--info'
+  if (kind === 'success') return styles.toastSuccess
+  if (kind === 'error')   return styles.toastError
+  return styles.toastInfo
 }
 
 export function ToastContainer({ toasts, dismiss }: ToastContainerProps) {
   if (toasts.length === 0) return null
   return (
-    <div className="toast-container" aria-live="polite" aria-atomic="false">
+    <div className={styles.container} aria-live="polite" aria-atomic="false">
       {toasts.map(t => (
-        <div key={t.id} className={`toast ${kindClass(t.kind)}`} role="status">
-          <span className="toast-msg">{t.message}</span>
+        <div key={t.id} className={kindClass(t.kind)} role="status">
+          <span className={styles.msg}>{t.message}</span>
           <button
-            className="toast-close"
+            className={styles.close}
             onClick={() => dismiss(t.id)}
             aria-label="关闭通知"
           >

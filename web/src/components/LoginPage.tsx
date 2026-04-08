@@ -1,5 +1,7 @@
 import { useState, useCallback } from 'react'
 import { Navigation, Key, AlertCircle } from 'lucide-react'
+import * as api from '../services/api'
+import styles from './LoginPage.module.css'
 
 interface LoginPageProps {
   onLogin: () => void
@@ -18,12 +20,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     setError('')
 
     try {
-      const res = await fetch('/api/v1/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: key.trim() }),
-      })
-      const data = await res.json()
+      const data = await api.login(key.trim())
       if (data.ok) {
         onLogin()
       } else {
@@ -37,20 +34,20 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   }, [key, onLogin])
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="login-logo">
+    <div className={styles.loginPage}>
+      <div className={styles.card}>
+        <div className={styles.logo}>
           <Navigation size={32} />
           <h1>LingTu</h1>
           <p>机器人控制台</p>
         </div>
 
-        <form className="login-form" onSubmit={handleSubmit}>
-          <div className="login-input-wrap">
-            <Key size={16} className="login-input-icon" />
+        <form className={styles.form} onSubmit={handleSubmit}>
+          <div className={styles.inputWrap}>
+            <Key size={16} className={styles.inputIcon} />
             <input
               type="password"
-              className="login-input"
+              className={styles.input}
               placeholder="输入 API Key..."
               value={key}
               onChange={(e) => setKey(e.target.value)}
@@ -60,21 +57,21 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           </div>
 
           {error && (
-            <div className="login-error">
+            <div className={styles.error}>
               <AlertCircle size={14} /> {error}
             </div>
           )}
 
           <button
             type="submit"
-            className="login-btn"
+            className={styles.btn}
             disabled={loading || !key.trim()}
           >
             {loading ? '验证中...' : '登录'}
           </button>
         </form>
 
-        <p className="login-hint">
+        <p className={styles.hint}>
           API Key 通过环境变量 LINGTU_API_KEY 配置
         </p>
       </div>

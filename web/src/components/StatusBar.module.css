@@ -1,0 +1,82 @@
+/* StatusBar component styles */
+
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--statusbar-h);
+  padding: 0 14px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.icon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.item {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.sep {
+  color: var(--border-hi);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.navActive { color: var(--accent); }
+.navFail   { color: var(--red); }
+
+.estop {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: var(--red);
+  animation: blink-red 0.6s step-end infinite;
+}
+
+@keyframes blink-red {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+.right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.hbDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: background 0.3s;
+}
+
+.hbDotAlive {
+  composes: hbDot;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+}

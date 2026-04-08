@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { Send } from 'lucide-react'
-import type { SSEState } from '../hooks/useSSE'
+import type { SSEState } from '../types'
+import * as api from '../services/api'
+import { isSlashCommand, executeSlashCommand } from '../utils/slashCommands'
+import styles from './ChatPanel.module.css'
 
 interface Message {
   id: number
@@ -24,13 +27,6 @@ const NAV_STATE_ZH: Record<string, string> = {
   FAILED:    '导航失败。',
   CANCELLED: '导航已取消。',
 }
-
-const HELP_TEXT = `可用指令：
-/go <x> <y>   — 导航到坐标
-/stop         — 紧急停止
-/status       — 显示当前状态
-/map list     — 地图管理
-/help         — 显示帮助`
 
 interface ChatPanelProps {
   sseState: SSEState
@@ -77,91 +73,23 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     setMessages(prev => [...prev, { id: nextId(), role: 'system', text, ts: Date.now() }])
   }
 
-  // --- Slash command handler ---
-  async function handleSlashCommand(raw: string) {
-    const parts = raw.trim().split(/\s+/)
-    const cmd = parts[0].toLowerCase()
-
-    if (cmd === '/help') {
-      addSystem(HELP_TEXT)
-      return
-    }
-
-    if (cmd === '/status') {
-      const ms = sseState.missionStatus
-      const odom = sseState.odometry
-      const safety = sseState.safetyState
-      const stateZh = ms ? (NAV_STATE_ZH[ms.state] ?? ms.state) : '未知'
-      const pos = odom ? `(${odom.x.toFixed(2)}, ${odom.y.toFixed(2)})` : '--'
-      const estop = safety?.estop ? '急停激活' : '正常'
-      addSystem(`状态：${stateZh}\n位置：${pos}\n安全：${estop}`)
-      return
-    }
-
-    if (cmd === '/map') {
-      addSystem('地图管理请切换到地图标签。')
-      return
-    }
-
-    if (cmd === '/stop') {
-      addSystem('正在发送急停指令…')
-      try {
-        const res = await fetch('/api/v1/stop', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: '{}',
-        })
-        addSystem(res.ok ? '急停指令已发送。' : `急停失败：HTTP ${res.status}`)
-      } catch (e) {
-        addSystem(`急停网络错误：${String(e)}`)
-      }
-      return
-    }
-
-    if (cmd === '/go') {
-      const x = parseFloat(parts[1])
-      const y = parseFloat(parts[2])
-      if (isNaN(x) || isNaN(y)) {
-        addSystem('用法：/go <x> <y>  （示例：/go 3.5 -1.2）')
-        return
-      }
-      addSystem(`正在导航到坐标 (${x}, ${y})…`)
-      try {
-        const res = await fetch('/api/v1/goal', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ x, y }),
-        })
-        addSystem(res.ok ? `目标已提交：(${x}, ${y})` : `导航失败：HTTP ${res.status}`)
-      } catch (e) {
-        addSystem(`导航网络错误：${String(e)}`)
-      }
-      return
-    }
-
-    addSystem(`未知指令：${cmd}。输入 /help 查看可用指令。`)
-  }
-
   async function sendInstruction() {
     const text = input.trim()
     if (!text || sending) return
     setInput('')
     setMessages(prev => [...prev, { id: nextId(), role: 'user', text, ts: Date.now() }])
 
-    // Slash command path — no setSending needed (fast local dispatch)
-    if (text.startsWith('/')) {
-      await handleSlashCommand(text)
+    // Slash command path — delegated to utils/slashCommands
+    if (isSlashCommand(text)) {
+      const response = await executeSlashCommand(text, sseState)
+      addSystem(response)
       return
     }
 
     // Natural language instruction path
     setSending(true)
     try {
-      const res = await fetch('/api/v1/instruction', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      })
+      const res = await api.sendInstruction(text)
       if (!res.ok) {
         const err = await res.text()
         addSystem(`错误：${res.status} ${err}`)
@@ -182,27 +110,27 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
   }
 
   return (
-    <div className="chat-panel">
-      <div className="chat-header">
-        <span className="chat-title">智能体</span>
+    <div className={styles.chatPanel}>
+      <div className={styles.header}>
+        <span className={styles.title}>智能体</span>
         <span
-          className={`sse-dot ${sseState.connected ? 'sse-dot--on' : 'sse-dot--off'}`}
+          className={sseState.connected ? styles.sseDotOn : styles.sseDotOff}
           title={sseState.connected ? 'SSE 已连接' : 'SSE 已断开'}
         />
       </div>
 
-      <div className="chat-messages" ref={listRef}>
+      <div className={styles.messages} ref={listRef}>
         {messages.map(msg => (
-          <div key={msg.id} className={`chat-bubble chat-bubble--${msg.role}`}>
-            <div className="bubble-text">{msg.text}</div>
-            <div className="bubble-time">{formatTime(msg.ts)}</div>
+          <div key={msg.id} className={msg.role === 'user' ? styles.bubbleUser : styles.bubbleSystem}>
+            <div className={styles.bubbleText}>{msg.text}</div>
+            <div className={styles.bubbleTime}>{formatTime(msg.ts)}</div>
           </div>
         ))}
       </div>
 
-      <div className="chat-input-row">
+      <div className={styles.inputRow}>
         <input
-          className="chat-input"
+          className={styles.input}
           type="text"
           placeholder="输入指令…"
           value={input}
@@ -212,7 +140,7 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
           aria-label="导航指令"
         />
         <button
-          className="btn-send"
+          className={styles.btnSend}
           onClick={sendInstruction}
           disabled={sending || !input.trim()}
           aria-label="发送"

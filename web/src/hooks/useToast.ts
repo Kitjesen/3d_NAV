@@ -1,12 +1,8 @@
 import { useState, useCallback, useRef } from 'react'
+import type { Toast, ToastKind } from '../types'
 
-export type ToastKind = 'success' | 'error' | 'info'
-
-export interface Toast {
-  id: number
-  message: string
-  kind: ToastKind
-}
+// Re-export types for backward compatibility
+export type { ToastKind, Toast } from '../types'
 
 let _id = 0
 

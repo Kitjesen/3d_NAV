@@ -1,0 +1,190 @@
+/* CameraFeed component styles */
+
+.cameraFeed {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.viewport {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #060a10;
+}
+
+.img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  cursor: pointer;
+}
+
+.imgContain {
+  composes: img;
+  object-fit: contain;
+}
+
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-faint);
+}
+
+.placeholderIcon {
+  color: var(--text-faint);
+  opacity: 0.4;
+}
+
+.placeholderLabel {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.camBadge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  backdrop-filter: blur(6px);
+}
+
+.camBadgeLive {
+  composes: camBadge;
+  background: rgba(0, 255, 136, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(0, 255, 136, 0.3);
+}
+
+.camBadgeOff {
+  composes: camBadge;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.camBadgeDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.camBadgeLive .camBadgeDot {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: pulse-green 1.5s ease-in-out infinite;
+}
+
+.camBadgeOff .camBadgeDot {
+  background: var(--red);
+}
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.75); }
+}
+
+.estopOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(239, 68, 68, 0.18);
+  border: 2px solid var(--red);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 4px;
+  color: var(--red);
+  text-shadow: 0 0 20px var(--red);
+  animation: blink-red 0.6s step-end infinite;
+  pointer-events: none;
+}
+
+@keyframes blink-red {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.btnStop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--red-dim);
+  color: #fff;
+  border: 1px solid var(--red);
+  border-radius: var(--radius);
+  cursor: pointer;
+  padding: 5px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.btnStop:hover {
+  background: var(--red);
+  box-shadow: 0 0 12px var(--red-glow);
+}
+
+.btnStop:active {
+  transform: scale(0.97);
+}
+
+.hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-left: auto;
+}
+
+.btnGhost {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius);
+  cursor: pointer;
+  padding: 4px 10px;
+  font-size: 11px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.btnGhost:hover {
+  color: var(--text);
+  border-color: var(--accent-dim);
+}
+
+.reconnectBtn {
+  composes: btnGhost;
+  margin-top: 4px;
+}

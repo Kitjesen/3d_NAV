@@ -1,15 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Map, FolderOpen, Trash2, Star, RefreshCw, Save, Pencil, Box } from 'lucide-react'
-import type { ToastKind } from '../hooks/useToast'
-
-interface MapInfo {
-  name: string
-  has_pcd: boolean
-  has_tomogram: boolean
-  is_active: boolean
-  size_mb?: number
-  patch_count?: number
-}
+import type { MapInfo, ToastKind } from '../types'
+import * as api from '../services/api'
+import styles from './MapView.module.css'
 
 interface MapViewProps {
   showToast: (msg: string, kind?: ToastKind) => void
@@ -20,14 +13,12 @@ export function MapView({ showToast }: MapViewProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const fetchMaps = useCallback(async () => {
+  const loadMaps = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch('/api/v1/slam/maps')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
-      setMaps(data.maps || [])
+      const result = await api.fetchMaps()
+      setMaps(result)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(`无法获取地图列表: ${msg}`)
@@ -37,51 +28,36 @@ export function MapView({ showToast }: MapViewProps) {
     }
   }, [])
 
-  useEffect(() => { fetchMaps() }, [fetchMaps])
+  useEffect(() => { loadMaps() }, [loadMaps])
 
-  const activateMap = async (name: string) => {
+  const handleActivate = async (name: string) => {
     try {
-      const res = await fetch('/api/v1/map/activate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await api.activateMap(name)
       showToast(`已激活: ${name}`, 'success')
-      fetchMaps()
+      loadMaps()
     } catch {
       showToast(`激活失败: ${name}`, 'error')
     }
   }
 
-  const deleteMap = async (name: string) => {
+  const handleDelete = async (name: string) => {
     if (!confirm(`确定删除地图 "${name}"？此操作不可恢复。`)) return
     try {
-      const res = await fetch('/api/v1/maps', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'delete', name }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await api.deleteMap(name)
       showToast(`已删除: ${name}`, 'success')
-      fetchMaps()
+      loadMaps()
     } catch {
       showToast(`删除失败: ${name}`, 'error')
     }
   }
 
-  const renameMap = async (oldName: string) => {
+  const handleRename = async (oldName: string) => {
     const newName = prompt(`重命名地图 "${oldName}":`, oldName)
     if (!newName || newName === oldName) return
     try {
-      const res = await fetch('/api/v1/map/rename', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ old_name: oldName, new_name: newName }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await api.renameMap(oldName, newName)
       showToast(`已重命名: ${newName}`, 'success')
-      fetchMaps()
+      loadMaps()
     } catch {
       showToast(`重命名失败`, 'error')
     }
@@ -91,91 +67,86 @@ export function MapView({ showToast }: MapViewProps) {
     window.open(`/map/viewer?map=${encodeURIComponent(name)}`, '_blank', 'noopener,noreferrer')
   }
 
-  const saveMap = async () => {
+  const handleSave = async () => {
     const name = prompt('输入地图名称:')
     if (!name) return
     try {
-      const res = await fetch('/api/v1/map/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await api.saveMap(name)
       showToast(`保存成功: ${name}`, 'success')
-      fetchMaps()
+      loadMaps()
     } catch {
       showToast('保存失败', 'error')
     }
   }
 
   return (
-    <div className="map-manager">
-      <div className="map-header">
+    <div className={styles.mapManager}>
+      <div className={styles.header}>
         <h2><Map size={18} /> 地图管理</h2>
-        <div className="map-actions">
-          <button className="btn-small btn-accent" onClick={saveMap}>
+        <div className={styles.actions}>
+          <button className={styles.btnSmallAccent} onClick={handleSave}>
             <Save size={14} /> 保存当前地图
           </button>
-          <button className="btn-small" onClick={fetchMaps}>
+          <button className={styles.btnSmall} onClick={loadMaps}>
             <RefreshCw size={14} /> 刷新
           </button>
         </div>
       </div>
 
-      {loading && <div className="map-loading">加载中...</div>}
+      {loading && <div className={styles.loading}>加载中...</div>}
 
       {error && (
-        <div className="map-error">
+        <div className={styles.error}>
           <p>{error}</p>
-          <p className="map-hint">请确保后端 GatewayModule 已启动</p>
-          <button className="btn-small" onClick={fetchMaps}>
+          <p className={styles.mapHint}>请确保后端 GatewayModule 已启动</p>
+          <button className={styles.btnSmall} onClick={loadMaps}>
             <RefreshCw size={14} /> 重试
           </button>
         </div>
       )}
 
       {!loading && !error && maps.length === 0 && (
-        <div className="map-empty">
+        <div className={styles.empty}>
           <FolderOpen size={48} strokeWidth={1} />
           <p>暂无保存的地图</p>
-          <p className="map-hint">使用建图模式 (python lingtu.py map) 创建地图</p>
+          <p className={styles.mapHint}>使用建图模式 (python lingtu.py map) 创建地图</p>
         </div>
       )}
 
       {!loading && maps.length > 0 && (
-        <div className="map-list">
+        <div className={styles.list}>
           {maps.map((m) => (
-            <div key={m.name} className={`map-card ${m.is_active ? 'map-card--active' : ''}`}>
-              <div className="map-card-info">
-                <span className="map-name">
-                  {m.is_active && <Star size={14} className="star-icon" />}
+            <div key={m.name} className={m.is_active ? styles.cardActive : styles.card}>
+              <div className={styles.cardInfo}>
+                <span className={styles.mapName}>
+                  {m.is_active && <Star size={14} className={styles.starIcon} />}
                   {m.name}
                 </span>
-                <span className="map-meta">
-                  {m.has_pcd && <span className="tag tag-pcd">PCD</span>}
-                  {m.has_tomogram && <span className="tag tag-tomo">Tomogram</span>}
-                  {!m.has_pcd && !m.has_tomogram && <span className="tag tag-empty">空</span>}
+                <span className={styles.meta}>
+                  {m.has_pcd && <span className={styles.tagPcd}>PCD</span>}
+                  {m.has_tomogram && <span className={styles.tagTomo}>Tomogram</span>}
+                  {!m.has_pcd && !m.has_tomogram && <span className={styles.tagEmpty}>空</span>}
                   {m.patch_count != null && (
-                    <span className="tag tag-empty">{m.patch_count} patches</span>
+                    <span className={styles.tagEmpty}>{m.patch_count} patches</span>
                   )}
                   {m.size_mb != null && (
-                    <span className="tag tag-empty">{m.size_mb.toFixed(1)} MB</span>
+                    <span className={styles.tagEmpty}>{m.size_mb.toFixed(1)} MB</span>
                   )}
                 </span>
               </div>
-              <div className="map-card-actions">
-                <button className="btn-tiny" onClick={() => previewMap3D(m.name)} title="3D 预览">
+              <div className={styles.cardActions}>
+                <button className={styles.btnTiny} onClick={() => previewMap3D(m.name)} title="3D 预览">
                   <Box size={12} /> 3D 预览
                 </button>
-                <button className="btn-tiny" onClick={() => renameMap(m.name)} title="重命名">
+                <button className={styles.btnTiny} onClick={() => handleRename(m.name)} title="重命名">
                   <Pencil size={12} /> 重命名
                 </button>
                 {!m.is_active && (
-                  <button className="btn-tiny btn-accent" onClick={() => activateMap(m.name)} title="设为当前地图">
+                  <button className={styles.btnTinyAccent} onClick={() => handleActivate(m.name)} title="设为当前地图">
                     <Star size={12} /> 激活
                   </button>
                 )}
-                <button className="btn-tiny btn-danger" onClick={() => deleteMap(m.name)} title="删除地图">
+                <button className={styles.btnTinyDanger} onClick={() => handleDelete(m.name)} title="删除地图">
                   <Trash2 size={12} />
                 </button>
               </div>

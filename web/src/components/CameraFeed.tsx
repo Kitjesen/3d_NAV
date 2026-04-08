@@ -1,6 +1,7 @@
 import { useRef, useEffect } from 'react'
 import { Camera, StopCircle, RefreshCw } from 'lucide-react'
 import { useCamera } from '../hooks/useCamera'
+import styles from './CameraFeed.module.css'
 
 interface CameraFeedProps {
   onStop: () => void
@@ -20,24 +21,24 @@ export function CameraFeed({ onStop, estop }: CameraFeedProps) {
   }, [imgSrc])
 
   return (
-    <div className="camera-feed">
+    <div className={styles.cameraFeed}>
       {/* Video area */}
-      <div className="camera-viewport">
+      <div className={styles.viewport}>
         {imgSrc ? (
           <img
             ref={imgRef}
-            className="camera-img"
+            className={styles.img}
             alt="机器人相机画面"
             src={imgSrc}
           />
         ) : (
-          <div className="camera-placeholder">
-            <Camera size={48} strokeWidth={1} className="placeholder-icon" />
-            <span className="placeholder-label">
+          <div className={styles.placeholder}>
+            <Camera size={48} strokeWidth={1} className={styles.placeholderIcon} />
+            <span className={styles.placeholderLabel}>
               {connected ? '等待画面帧…' : '无相机画面'}
             </span>
             {!connected && (
-              <button className="btn-ghost reconnect-btn" onClick={reconnect}>
+              <button className={styles.reconnectBtn} onClick={reconnect}>
                 <RefreshCw size={14} />
                 重新连接
               </button>
@@ -46,26 +47,26 @@ export function CameraFeed({ onStop, estop }: CameraFeedProps) {
         )}
 
         {/* Connection badge */}
-        <div className={`cam-badge ${connected ? 'cam-badge--live' : 'cam-badge--off'}`}>
-          <span className="cam-badge-dot" />
+        <div className={connected ? styles.camBadgeLive : styles.camBadgeOff}>
+          <span className={styles.camBadgeDot} />
           {connected ? '直播' : '离线'}
         </div>
 
         {/* ESTOP overlay — full-screen flash when active */}
-        {estop && <div className="estop-overlay">急停激活</div>}
+        {estop && <div className={styles.estopOverlay}>急停激活</div>}
       </div>
 
       {/* Controls strip */}
-      <div className="camera-controls">
+      <div className={styles.controls}>
         <button
-          className="btn-stop"
+          className={styles.btnStop}
           onClick={onStop}
           aria-label="紧急停止"
         >
           <StopCircle size={18} />
           紧急停止
         </button>
-        <span className="camera-hint">640 × 480 · MJPEG</span>
+        <span className={styles.hint}>640 × 480 · MJPEG</span>
       </div>
     </div>
   )

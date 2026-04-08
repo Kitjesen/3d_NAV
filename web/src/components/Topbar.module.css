@@ -1,0 +1,142 @@
+/* Topbar component styles */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--topbar-h);
+  padding: 0 14px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 12px;
+  z-index: 10;
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 140px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+
+.logoIcon {
+  color: var(--accent);
+}
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 99px;
+}
+
+.badgeOnline {
+  composes: badge;
+  background: var(--accent-glow);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+}
+
+.badgeOffline {
+  composes: badge;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--red);
+  border: 1px solid var(--red-dim);
+}
+
+.center {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  justify-content: center;
+}
+
+.stat {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.statLabel {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.statValue {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.navExecuting { color: var(--accent); }
+.navFailed    { color: var(--red); }
+.navPlanning  { color: #f59e0b; }
+
+.divider {
+  width: 1px;
+  height: 14px;
+  background: var(--border-hi);
+}
+
+.estop {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--red);
+  animation: blink-red 0.6s step-end infinite;
+}
+
+@keyframes blink-red {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  min-width: 140px;
+  justify-content: flex-end;
+}
+
+.btnIcon {
+  background: transparent;
+  border: 1px solid var(--border-hi);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  cursor: pointer;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.btnIcon:hover {
+  color: var(--text);
+  border-color: var(--border-hi);
+}
+
+/* SLAM mode colors in topbar */
+.slamFastlio2  { color: #f59e0b; }
+.slamLocalizer { color: var(--accent); }
+.slamStop      { color: var(--text-faint); }

@@ -1,0 +1,38 @@
+/* TabBar component styles */
+
+.tabBar {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  height: 32px;
+  padding: 0 14px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tabBtn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  padding: 0 14px 6px;
+  height: 100%;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.tabBtn:hover {
+  color: var(--text-dim);
+}
+
+.tabBtnActive {
+  composes: tabBtn;
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
