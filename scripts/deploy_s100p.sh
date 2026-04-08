@@ -58,6 +58,8 @@ if [ -f "$REPO/install/setup.bash" ]; then
 fi
 set -u
 cd "$REPO"
+# Export API keys from .bashrc for daemon (nohup doesn't inherit login shell)
+eval "$(grep '^export.*API_KEY' ~/.bashrc 2>/dev/null)" || true
 nohup python3 lingtu.py nav --daemon > "$LOG" 2>&1 &
 echo "  等待系统初始化..."
 for i in $(seq 1 30); do
