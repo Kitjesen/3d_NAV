@@ -5,6 +5,7 @@ import { CameraFeed } from './components/CameraFeed'
 import { ChatPanel } from './components/ChatPanel'
 import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
+import { LoginPage } from './components/LoginPage'
 import './App.css'
 
 type Tab = 'console' | 'map'
@@ -18,12 +19,11 @@ const NAV_STATE_ZH: Record<string, string> = {
   CANCELLED: '已取消',
 }
 
-function App() {
+function Dashboard() {
   const sseState = useSSE('/api/v1/events')
   const [uptimeSeconds, setUptimeSeconds] = useState(0)
   const [activeTab, setActiveTab] = useState<Tab>('console')
 
-  // Uptime counter — increments every second from page load
   useEffect(() => {
     const t = setInterval(() => setUptimeSeconds(s => s + 1), 1000)
     return () => clearInterval(t)
@@ -32,9 +32,7 @@ function App() {
   const handleStop = useCallback(async () => {
     try {
       await fetch('/api/v1/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-    } catch {
-      // best-effort — if the robot is unreachable, stop is already moot
-    }
+    } catch { /* best-effort */ }
   }, [])
 
   const estop = sseState.safetyState?.estop ?? false
@@ -45,7 +43,6 @@ function App() {
 
   return (
     <div className="app">
-      {/* Top bar */}
       <header className="topbar">
         <div className="topbar-left">
           <span className="topbar-logo">
@@ -56,7 +53,6 @@ function App() {
             {sseState.connected ? '在线' : '离线'}
           </span>
         </div>
-
         <div className="topbar-center">
           <span className="topbar-stat">
             <span className="stat-label">位置</span>
@@ -74,7 +70,6 @@ function App() {
             </>
           )}
         </div>
-
         <div className="topbar-right">
           <button className="btn-icon" aria-label="设置">
             <Settings size={16} />
@@ -82,27 +77,19 @@ function App() {
         </div>
       </header>
 
-      {/* Tab bar */}
       <nav className="tab-bar" role="tablist">
         <button
-          role="tab"
-          aria-selected={activeTab === 'console'}
+          role="tab" aria-selected={activeTab === 'console'}
           className={`tab-btn ${activeTab === 'console' ? 'tab-btn--active' : ''}`}
           onClick={() => setActiveTab('console')}
-        >
-          控制台
-        </button>
+        >控制台</button>
         <button
-          role="tab"
-          aria-selected={activeTab === 'map'}
+          role="tab" aria-selected={activeTab === 'map'}
           className={`tab-btn ${activeTab === 'map' ? 'tab-btn--active' : ''}`}
           onClick={() => setActiveTab('map')}
-        >
-          地图管理
-        </button>
+        >地图管理</button>
       </nav>
 
-      {/* Main content */}
       <main className="main-content">
         {activeTab === 'console' && (
           <div className="main-grid">
@@ -117,10 +104,32 @@ function App() {
         {activeTab === 'map' && <MapView />}
       </main>
 
-      {/* Status bar */}
       <StatusBar sseState={sseState} uptimeSeconds={uptimeSeconds} />
     </div>
   )
+}
+
+function App() {
+  const [authChecked, setAuthChecked] = useState(false)
+  const [loggedIn, setLoggedIn] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/v1/auth/check')
+      .then(r => r.json())
+      .then(data => {
+        setLoggedIn(!data.auth_required)
+        setAuthChecked(true)
+      })
+      .catch(() => {
+        // Backend offline — skip auth
+        setLoggedIn(true)
+        setAuthChecked(true)
+      })
+  }, [])
+
+  if (!authChecked) return null
+  if (!loggedIn) return <LoginPage onLogin={() => setLoggedIn(true)} />
+  return <Dashboard />
 }
 
 export default App

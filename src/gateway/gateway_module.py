@@ -442,7 +442,38 @@ class GatewayModule(Module, layer=6):
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+        # -- API Key auth (disabled if LINGTU_API_KEY not set) -------------
+        from gateway.auth import APIKeyMiddleware
+        app.add_middleware(APIKeyMiddleware)
+
         gw = self
+
+        # -- Auth endpoints (always public) --------------------------------
+
+        @app.post("/api/v1/auth/login", summary="Login with API key")
+        async def auth_login(request: Request):
+            body = await request.json()
+            key = body.get("key", "")
+            from gateway.auth import _get_configured_key
+            configured = _get_configured_key()
+            if not configured:
+                return JSONResponse({"ok": True, "message": "认证未启用"})
+            import hashlib, hmac as _hmac
+            if _hmac.compare_digest(
+                hashlib.sha256(key.encode()).hexdigest(),
+                hashlib.sha256(configured.encode()).hexdigest(),
+            ):
+                resp = JSONResponse({"ok": True, "message": "登录成功"})
+                resp.set_cookie("lingtu_api_key", key, httponly=True, max_age=86400 * 30)
+                return resp
+            return JSONResponse({"ok": False, "message": "Key 无效"}, status_code=403)
+
+        @app.get("/api/v1/auth/check", summary="Check if auth is required")
+        async def auth_check():
+            from gateway.auth import _get_configured_key
+            configured = _get_configured_key()
+            return {"auth_required": configured is not None}
 
         # -- 422 Validation errors → clean JSON ----------------------------
 
