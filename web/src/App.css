@@ -236,60 +236,144 @@ body {
 }
 
 /* ===== Map view ===== */
-.map-view {
+/* ===== Map Manager ===== */
+.map-manager {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--bg);
-}
-
-.map-iframe {
-  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  max-width: 900px;
+  margin: 0 auto;
   width: 100%;
-  height: 100%;
-  border: none;
-  display: block;
 }
 
-.map-placeholder {
-  flex: 1;
+.map-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.map-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.map-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-small {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.btn-small:hover { border-color: var(--text-dim); color: var(--text); }
+.btn-small.btn-accent { border-color: var(--accent); color: var(--accent); }
+.btn-small.btn-accent:hover { background: rgba(0,255,136,0.08); }
+
+.map-message {
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  background: rgba(0,255,136,0.08);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.map-loading, .map-error, .map-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 12px;
+  padding: 60px 20px;
   color: var(--text-dim);
+  text-align: center;
 }
 
-.map-placeholder p {
-  margin: 0;
-  font-size: 14px;
+.map-error p, .map-empty p { margin: 0; font-size: 14px; }
+.map-hint { font-size: 11px; color: var(--text-dim); opacity: 0.6; }
+
+.map-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.map-hint {
-  font-size: 11px !important;
-  color: var(--text-dim);
-  opacity: 0.6;
-}
-
-.btn-reconnect {
+.map-card {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 16px;
+  justify-content: space-between;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 12px;
+  transition: border-color 0.15s;
 }
 
-.btn-reconnect:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+.map-card:hover { border-color: var(--text-dim); }
+.map-card--active { border-color: var(--accent); background: rgba(0,255,136,0.04); }
+
+.map-card-info { display: flex; flex-direction: column; gap: 4px; }
+
+.map-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-mono);
 }
+
+.star-icon { color: var(--accent); }
+
+.map-meta { display: flex; gap: 6px; }
+
+.tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.tag-pcd { background: rgba(59,130,246,0.15); color: #60a5fa; }
+.tag-tomo { background: rgba(0,255,136,0.1); color: var(--accent); }
+.tag-empty { background: rgba(255,255,255,0.05); color: var(--text-dim); }
+
+.map-card-actions { display: flex; gap: 6px; }
+
+.btn-tiny {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.btn-tiny:hover { border-color: var(--text-dim); color: var(--text); }
+.btn-tiny.btn-accent { border-color: var(--accent); color: var(--accent); }
+.btn-tiny.btn-accent:hover { background: rgba(0,255,136,0.08); }
+.btn-tiny.btn-danger:hover { border-color: var(--red); color: var(--red); }
 
 /* ===== Main grid ===== */
 .main-grid {
