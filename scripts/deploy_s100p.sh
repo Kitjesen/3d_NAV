@@ -50,10 +50,12 @@ fi
 
 # 4. 启动新进程
 echo "[4/5] 启动 lingtu nav..."
+set +u  # ROS2 setup.bash has unbound variables
 source /opt/ros/humble/setup.bash
 if [ -f "$REPO/install/setup.bash" ]; then
     source "$REPO/install/setup.bash"
 fi
+set -u
 cd "$REPO"
 nohup python3 lingtu.py nav --daemon > "$LOG" 2>&1 &
 sleep 5
