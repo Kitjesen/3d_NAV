@@ -2,17 +2,19 @@
 # WARNING: SuperGlue is allowed to be used for non-commercial research purposes!!
 #        : You must carefully check and follow its licensing condition!!
 #        : https://github.com/magicleap/SuperGluePretrainedNetwork/blob/master/LICENSE
-from email.mime import image
-import sys
-import cv2
-import math
-import json
-import torch
-import numpy
 import argparse
+import json
+import math
+import sys
+from email.mime import image
+
+import cv2
 import matplotlib
+import numpy
+import torch
 from models.matching import Matching
-from models.utils import (make_matching_plot_fast, frame2tensor)
+from models.utils import frame2tensor, make_matching_plot_fast
+
 
 def main():
   print('\033[93m' + '****************************************************************************************************' + '\033[0m')
@@ -38,7 +40,7 @@ def main():
   torch.set_grad_enabled(False)
   device = 'cuda' if torch.cuda.is_available() and not opt.force_cpu else 'cpu'
 
-  print('Running inference on device \"{}\"'.format(device))
+  print(f'Running inference on device \"{device}\"')
   config = {
     'superpoint': {
       'nms_radius': opt.nms_radius,
@@ -57,13 +59,16 @@ def main():
 
     if angle == 90:
       code = cv2.ROTATE_90_CLOCKWISE
-      func = lambda x: numpy.stack([x[:, 1], width - x[:, 0]], axis=1)
+      def func(x):
+        return numpy.stack([x[:, 1], width - x[:, 0]], axis=1)
     elif angle == 180:
       code = cv2.ROTATE_180
-      func = lambda x: numpy.stack([height - x[:, 0], width - x[:, 1]], axis=1)
+      def func(x):
+        return numpy.stack([height - x[:, 0], width - x[:, 1]], axis=1)
     elif angle == 270:
       code = cv2.ROTATE_90_COUNTERCLOCKWISE
-      func = lambda x: numpy.stack([height - x[:, 1], x[:, 0]], axis=1)
+      def func(x):
+        return numpy.stack([height - x[:, 1], x[:, 0]], axis=1)
     else:
       print('error: unsupported rotation angle %d' % angle)
       exit(1)
@@ -72,7 +77,7 @@ def main():
 
 
   data_path = opt.data_path
-  with open(data_path + '/calib.json', 'r') as f:
+  with open(data_path + '/calib.json') as f:
     calib_config = json.load(f)
 
   for bag_name in calib_config['meta']['bag_names']:

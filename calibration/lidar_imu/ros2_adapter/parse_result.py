@@ -44,7 +44,7 @@ def parse_initialization_result(filepath: str) -> dict:
         Gyroscope bias =    0.001  -0.002  0.003
         Gravity =    0.00  0.00  -9.81
     """
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         content = f.read()
 
     result = {}

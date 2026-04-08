@@ -306,7 +306,7 @@ def cmd_verify(args):
             undistorted = undistorted[y:y+rh, x:x+rw]
 
         # Side by side
-        h1, w1 = frame.shape[:2]
+        h1, _w1 = frame.shape[:2]
         h2, w2 = undistorted.shape[:2]
         scale = h1 / h2 if h2 > 0 else 1.0
         undist_resized = cv2.resize(undistorted, (int(w2 * scale), h1))
@@ -324,8 +324,8 @@ def cmd_verify(args):
 def cmd_from_bag(args):
     """Extract checkerboard images from a ROS2 bag and calibrate (headless)."""
     try:
-        from rosbag2_py import SequentialReader, StorageOptions, ConverterOptions
         from rclpy.serialization import deserialize_message
+        from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
         from sensor_msgs.msg import Image as RosImage
     except ImportError:
         logger.error(
@@ -359,7 +359,7 @@ def cmd_from_bag(args):
     logger.info("Extracting frames from %s topic=%s ...", args.bag, args.topic)
 
     while reader.has_next():
-        topic, data, ts = reader.read_next()
+        _topic, data, _ts = reader.read_next()
         count += 1
         if count % sample_interval != 0:
             continue
@@ -380,7 +380,7 @@ def cmd_from_bag(args):
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
         # Check for checkerboard
-        found, corners = find_checkerboard(img, board_size)
+        found, _corners = find_checkerboard(img, board_size)
         if found:
             path = os.path.join(img_dir, f"bag_{saved:03d}.png")
             cv2.imwrite(path, img)

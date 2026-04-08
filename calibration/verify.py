@@ -37,7 +37,7 @@ BOLD = "\033[1m"
 def load_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
@@ -279,7 +279,7 @@ def check_lidar_camera_projection(cfg: dict, result: CheckResult, verbose: bool)
         result.warn("Cannot check projection — invalid intrinsics")
         return
 
-    K = np.array([[fx, 0, cx],
+    np.array([[fx, 0, cx],
                   [0, fy, cy],
                   [0,  0,  1]], dtype=np.float64)
 
@@ -364,8 +364,8 @@ def check_lidar_camera_projection(cfg: dict, result: CheckResult, verbose: bool)
         )
     else:
         result.fail(
-            f"LiDAR→camera projection: 0/5 forward points in image — "
-            f"extrinsic chain is likely wrong"
+            "LiDAR→camera projection: 0/5 forward points in image — "
+            "extrinsic chain is likely wrong"
         )
 
     # The point behind the robot should not project to positive Z

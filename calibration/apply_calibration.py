@@ -52,7 +52,7 @@ def backup_file(path: Path) -> None:
 
 
 def load_yaml(path: Path) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
@@ -240,7 +240,7 @@ def apply_camera_lidar(calib_path: str, dry_run: bool = False) -> None:
     """Apply camera-LiDAR extrinsics to robot_config.yaml."""
     logger.info("\n== Camera-LiDAR Extrinsics ==")
 
-    with open(calib_path, "r") as f:
+    with open(calib_path) as f:
         calib = json.load(f)
 
     # direct_visual_lidar_calibration outputs T_lidar_camera as [x, y, z, qx, qy, qz, qw]
@@ -254,6 +254,7 @@ def apply_camera_lidar(calib_path: str, dry_run: bool = False) -> None:
         x, y, z, qx, qy, qz, qw = T_data
         try:
             import cv2
+
             # Quaternion to rotation matrix
             from scipy.spatial.transform import Rotation
             R_lc = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()

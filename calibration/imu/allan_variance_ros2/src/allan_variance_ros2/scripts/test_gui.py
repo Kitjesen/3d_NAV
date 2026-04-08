@@ -2,8 +2,6 @@
 import numpy as np
 import pandas as pd
 
-
-
 # create holoviews graph
 hv_plot = hv.Points(df)
 

@@ -1,5 +1,6 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+
 # Load data
 imu_orig = np.loadtxt('../Log/IMU_before_filter.txt')
 lidar_orig = np.loadtxt('../Log/Lidar_before_filter.txt')

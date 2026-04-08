@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-# 
+#
 # @file   analysis.py
 # @brief  Plotting and analysis tool to determine IMU parameters.
 # @author Russell Buchanan
-# 
+#
 
 import argparse
 import csv
@@ -23,7 +23,8 @@ def get_intercept(x, y, m, b):
 	logy = np.log(y)
 	coeffs, _ = curve_fit(line_func, logx, logy, bounds=([m, -np.inf], [m + 0.001, np.inf]))
 	poly = np.poly1d(coeffs)
-	yfit = lambda x: np.exp(poly(np.log(x)))
+	def yfit(x):
+		return np.exp(poly(np.log(x)))
 
 	return yfit(b), yfit
 
@@ -60,8 +61,8 @@ line_count = 0
 rostopic = "/sensors/imu"
 update_rate = 400.0
 if args.config:
-	import yaml #pip install pyyaml
-	with open(args.config, "r") as stream:
+	import yaml  #pip install pyyaml
+	with open(args.config) as stream:
 		config = yaml.safe_load(stream)
 	rostopic = config["imu_topic"]
 	update_rate = config["imu_rate"]

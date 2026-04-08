@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 # Taken from http://wiki.ros.org/rosbag/Cookbook
 
-import rosbag2_py
 import argparse
-from rosidl_runtime_py.utilities import get_message
-from rclpy.serialization import deserialize_message
-from std_msgs.msg import String
-from allan_variance_msgs.msg import Imu9DoF
-from sensor_msgs.msg import Imu
-import numpy as np
-from rosbag2_py._info import Info
-import pandas as pd
+
 import holoviews as hv
+import numpy as np
+import pandas as pd
+import rosbag2_py
+from allan_variance_msgs.msg import Imu9DoF
+from rclpy.serialization import deserialize_message
+from rosbag2_py._info import Info
+from rosidl_runtime_py.utilities import get_message
+from sensor_msgs.msg import Imu
+from std_msgs.msg import String
+
 hv.extension('bokeh', logo=False)
 import panel as pn
-
 import rerun as rr
 
 parser = argparse.ArgumentParser()
@@ -34,7 +35,7 @@ def get_rosbag_options(path, storage_id, serialization_format='cdr'):
         output_serialization_format=serialization_format)
 
     return storage_options, converter_options
-  
+
 storage_options, converter_options = get_rosbag_options(args.input, args.storage_id)
 
 reader = rosbag2_py.SequentialReader()
@@ -87,8 +88,8 @@ while reader.has_next():
     # msg = deserialize_message(data, msg_type)
 
     msg_counter += 1
- 
-print(f"{number_of_messages} IMU messages buffered!") 
+
+print(f"{number_of_messages} IMU messages buffered!")
 rr.connect()
 # c = {}
 # c["linear_acceleration_x"] = imu_data[0, :]
@@ -111,4 +112,4 @@ rr.connect()
 # bokeh_server.stop()
 
 
-    
+
