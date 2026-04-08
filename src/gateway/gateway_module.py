@@ -1008,6 +1008,16 @@ class GatewayModule(Module, layer=6):
                     gw._teleop_release()
                 logger.info("Teleop WS disconnected (%d clients)", gw._teleop_clients)
 
+        # Serve React dashboard (web/dist/) at root — must be last mount
+        import os as _os
+        _web_dist = _os.path.normpath(
+            _os.path.join(_os.path.dirname(__file__), "..", "..", "web", "dist")
+        )
+        if _os.path.isdir(_web_dist):
+            from starlette.staticfiles import StaticFiles
+            app.mount("/", StaticFiles(directory=_web_dist, html=True), name="dashboard")
+            logger.info("Dashboard served from %s", _web_dist)
+
         return app
 
     def _run_server(self) -> None:
