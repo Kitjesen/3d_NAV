@@ -231,11 +231,15 @@ export function PathView({ sseState, showToast }: PathViewProps) {
   const [hoverCoords, setHoverCoords] = useState<[number, number] | null>(null)
   const [pathLength, setPathLength] = useState(0)
 
-  const path   = sseState.globalPath?.points ?? []
+  const rawPath = sseState.globalPath?.points ?? []
+  const path = rawPath.filter(
+    (p): p is PathPoint =>
+      p != null && typeof p.x === 'number' && typeof p.y === 'number'
+  )
   const odom   = sseState.odometry
-  const robotX = odom?.x ?? 0
-  const robotY = odom?.y ?? 0
-  const yaw    = odom?.yaw ?? 0
+  const robotX = typeof odom?.x === 'number' ? odom.x : 0
+  const robotY = typeof odom?.y === 'number' ? odom.y : 0
+  const yaw    = typeof odom?.yaw === 'number' ? odom.yaw : 0
 
   // Accumulate position trail
   useEffect(() => {

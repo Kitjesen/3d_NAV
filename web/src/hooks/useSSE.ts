@@ -59,29 +59,41 @@ export function useSSE(url: string = '/api/v1/events') {
           const event = JSON.parse(line) as SSEEvent
           setState(prev => {
             const next = { ...prev, events: [...prev.events.slice(-99), event] }
-            switch (event.type) {
+            const evt = event as { type: string; data?: Record<string, unknown>; [k: string]: unknown }
+            switch (evt.type) {
+              case 'snapshot': {
+                // Backend sends nested {type: snapshot, data: {odometry, safety, mission, ...}}
+                const d = evt.data || {}
+                if (d.odometry) next.odometry = { type: 'odometry', ...d.odometry as object } as never
+                if (d.mission)  next.missionStatus = { type: 'mission_status', ...d.mission as object } as never
+                if (d.safety)   next.safetyState = { type: 'safety_state', ...d.safety as object } as never
+                break
+              }
               case 'odometry':
-                next.odometry = event
+                next.odometry = event as never
                 break
+              case 'mission':
               case 'mission_status':
-                next.missionStatus = event
+                next.missionStatus = { type: 'mission_status', ...(evt.data as object || evt) } as never
                 break
+              case 'safety':
               case 'safety_state':
-                next.safetyState = event
+                next.safetyState = { type: 'safety_state', ...(evt.data as object || evt) } as never
                 break
               case 'scene_graph':
-                next.sceneGraph = event
+                next.sceneGraph = event as never
                 break
               case 'slam_status':
-                next.slamStatus = event
+                next.slamStatus = event as never
                 break
               case 'robot_status':
-                next.robotStatus = event
+                next.robotStatus = event as never
                 break
               case 'global_path':
-                next.globalPath = event
+                next.globalPath = event as never
                 break
               case 'heartbeat':
+              case 'ping':
                 next.lastHeartbeat = Date.now()
                 break
             }
