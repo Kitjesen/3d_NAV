@@ -23,7 +23,7 @@
 
   --radius:      6px;
   --font-mono:   'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
-  --font-ui:     'Inter', 'Geist', system-ui, -apple-system, sans-serif;
+  --font-ui:     'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
 
   /* Topbar + statusbar heights */
   --topbar-h:    44px;
