@@ -120,6 +120,24 @@ class _PCTBackend:
             if p not in sys.path:
                 sys.path.insert(0, p)
 
+        # Pre-load internal shared libraries so the pybind11 modules can find
+        # them. Setting LD_LIBRARY_PATH after process start is too late for
+        # dlopen, so we use ctypes.CDLL with RTLD_GLOBAL instead.
+        import ctypes
+        for lib_name in [
+            "libcommon_smoothing.so",
+            "liba_star_search.so",
+            "libmap_manager.so",
+            "libgpmp_optimizer.so",
+            "libele_planner_lib.so",
+        ]:
+            lib_path = os.path.join(_PCT_LIB, lib_name)
+            if os.path.isfile(lib_path):
+                try:
+                    ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
+                except OSError as e:
+                    logger.debug("PCT: preload %s failed: %s", lib_name, e)
+
         try:
             from planner_wrapper import TomogramPlanner  # type: ignore
         except ImportError as e:
