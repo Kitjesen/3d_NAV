@@ -7,7 +7,7 @@ import logging
 from core.blueprint import Blueprint
 
 logger = logging.getLogger(__name__)
-_NATIVE_CAMERA_DRIVERS = {"MujocoDriverModule", "ROS2SimDriverModule"}
+_NATIVE_CAMERA_DRIVERS = {"MujocoDriverModule"}  # Only MuJoCo has built-in camera
 
 
 def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -> Blueprint:
