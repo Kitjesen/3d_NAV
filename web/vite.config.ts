@@ -9,6 +9,7 @@ export default defineConfig({
       '/api': 'http://localhost:5050',
       '/ws': { target: 'ws://localhost:5050', ws: true },
       '/mcp': 'http://localhost:5050',
+      '/map': 'http://localhost:5050',
     },
   },
   build: {

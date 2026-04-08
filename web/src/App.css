@@ -252,6 +252,45 @@ body {
   display: block;
 }
 
+.map-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-dim);
+}
+
+.map-placeholder p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.map-hint {
+  font-size: 11px !important;
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+.btn-reconnect {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.btn-reconnect:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ===== Main grid ===== */
 .main-grid {
   display: grid;
