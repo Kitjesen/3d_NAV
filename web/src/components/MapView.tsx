@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Map, FolderOpen, Trash2, Star, RefreshCw, Save } from 'lucide-react'
+import { Map, FolderOpen, Trash2, Star, RefreshCw, Save, Pencil, Box } from 'lucide-react'
+import type { ToastKind } from '../hooks/useToast'
 
 interface MapInfo {
   name: string
@@ -7,13 +8,17 @@ interface MapInfo {
   has_tomogram: boolean
   is_active: boolean
   size_mb?: number
+  patch_count?: number
 }
 
-export function MapView() {
+interface MapViewProps {
+  showToast: (msg: string, kind?: ToastKind) => void
+}
+
+export function MapView({ showToast }: MapViewProps) {
   const [maps, setMaps] = useState<MapInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [message, setMessage] = useState('')
 
   const fetchMaps = useCallback(async () => {
     setLoading(true)
@@ -34,11 +39,6 @@ export function MapView() {
 
   useEffect(() => { fetchMaps() }, [fetchMaps])
 
-  const showMsg = (text: string) => {
-    setMessage(text)
-    setTimeout(() => setMessage(''), 3000)
-  }
-
   const activateMap = async (name: string) => {
     try {
       const res = await fetch('/api/v1/map/activate', {
@@ -47,10 +47,10 @@ export function MapView() {
         body: JSON.stringify({ name }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      showMsg(`已激活: ${name}`)
+      showToast(`已激活: ${name}`, 'success')
       fetchMaps()
     } catch {
-      showMsg(`激活失败: ${name}`)
+      showToast(`激活失败: ${name}`, 'error')
     }
   }
 
@@ -63,11 +63,32 @@ export function MapView() {
         body: JSON.stringify({ action: 'delete', name }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      showMsg(`已删除: ${name}`)
+      showToast(`已删除: ${name}`, 'success')
       fetchMaps()
     } catch {
-      showMsg(`删除失败: ${name}`)
+      showToast(`删除失败: ${name}`, 'error')
     }
+  }
+
+  const renameMap = async (oldName: string) => {
+    const newName = prompt(`重命名地图 "${oldName}":`, oldName)
+    if (!newName || newName === oldName) return
+    try {
+      const res = await fetch('/api/v1/map/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_name: oldName, new_name: newName }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      showToast(`已重命名: ${newName}`, 'success')
+      fetchMaps()
+    } catch {
+      showToast(`重命名失败`, 'error')
+    }
+  }
+
+  const previewMap3D = (name: string) => {
+    window.open(`/map/viewer?map=${encodeURIComponent(name)}`, '_blank', 'noopener,noreferrer')
   }
 
   const saveMap = async () => {
@@ -80,10 +101,10 @@ export function MapView() {
         body: JSON.stringify({ name }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      showMsg(`保存成功: ${name}`)
+      showToast(`保存成功: ${name}`, 'success')
       fetchMaps()
     } catch {
-      showMsg('保存失败')
+      showToast('保存失败', 'error')
     }
   }
 
@@ -100,8 +121,6 @@ export function MapView() {
           </button>
         </div>
       </div>
-
-      {message && <div className="map-message">{message}</div>}
 
       {loading && <div className="map-loading">加载中...</div>}
 
@@ -136,9 +155,21 @@ export function MapView() {
                   {m.has_pcd && <span className="tag tag-pcd">PCD</span>}
                   {m.has_tomogram && <span className="tag tag-tomo">Tomogram</span>}
                   {!m.has_pcd && !m.has_tomogram && <span className="tag tag-empty">空</span>}
+                  {m.patch_count != null && (
+                    <span className="tag tag-empty">{m.patch_count} patches</span>
+                  )}
+                  {m.size_mb != null && (
+                    <span className="tag tag-empty">{m.size_mb.toFixed(1)} MB</span>
+                  )}
                 </span>
               </div>
               <div className="map-card-actions">
+                <button className="btn-tiny" onClick={() => previewMap3D(m.name)} title="3D 预览">
+                  <Box size={12} /> 3D 预览
+                </button>
+                <button className="btn-tiny" onClick={() => renameMap(m.name)} title="重命名">
+                  <Pencil size={12} /> 重命名
+                </button>
                 {!m.is_active && (
                   <button className="btn-tiny btn-accent" onClick={() => activateMap(m.name)} title="设为当前地图">
                     <Star size={12} /> 激活

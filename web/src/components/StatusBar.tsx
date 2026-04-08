@@ -94,6 +94,38 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
         <span className="status-value">1.8</span>
       </span>
 
+      {sseState.slamStatus && (
+        <>
+          <span className="status-sep">·</span>
+          <span className="status-item">
+            <span className="status-label">SLAM</span>
+            <span className="status-value">{sseState.slamStatus.slam_hz.toFixed(1)} Hz</span>
+          </span>
+          <span className="status-sep">·</span>
+          <span className="status-item">
+            <span className="status-label">退化</span>
+            <span className={`status-value ${sseState.slamStatus.degeneracy_count > 0 ? 'status-nav--fail' : ''}`}>
+              {sseState.slamStatus.degeneracy_count}
+            </span>
+          </span>
+        </>
+      )}
+
+      {sseState.robotStatus && (
+        <>
+          <span className="status-sep">·</span>
+          <span className="status-item">
+            <span className="status-label">电量</span>
+            <span className="status-value">{sseState.robotStatus.battery.toFixed(0)}%</span>
+          </span>
+          <span className="status-sep">·</span>
+          <span className="status-item">
+            <span className="status-label">温度</span>
+            <span className="status-value">{sseState.robotStatus.temperature.toFixed(1)}°C</span>
+          </span>
+        </>
+      )}
+
       <span className="statusbar-right">
         <span className={`hb-dot ${sseState.lastHeartbeat && Date.now() - sseState.lastHeartbeat < 5000 ? 'hb-dot--alive' : ''}`} title="Heartbeat" />
       </span>

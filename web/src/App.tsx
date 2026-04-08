@@ -1,14 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Navigation, Settings } from 'lucide-react'
+import { Navigation, Settings, Radio } from 'lucide-react'
 import { useSSE } from './hooks/useSSE'
+import { useToast } from './hooks/useToast'
 import { CameraFeed } from './components/CameraFeed'
 import { ChatPanel } from './components/ChatPanel'
 import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
+import { SlamPanel } from './components/SlamPanel'
+import { ToastContainer } from './components/Toast'
 import { LoginPage } from './components/LoginPage'
 import './App.css'
 
-type Tab = 'console' | 'map'
+type Tab = 'console' | 'map' | 'slam'
+
+const SLAM_MODE_ZH: Record<string, string> = {
+  fastlio2:  '建图',
+  localizer: '导航',
+  stop:      '停止',
+}
 
 const NAV_STATE_ZH: Record<string, string> = {
   IDLE: '空闲',
@@ -21,6 +30,7 @@ const NAV_STATE_ZH: Record<string, string> = {
 
 function Dashboard() {
   const sseState = useSSE('/api/v1/events')
+  const { toasts, show: showToast, dismiss } = useToast()
   const [uptimeSeconds, setUptimeSeconds] = useState(0)
   const [activeTab, setActiveTab] = useState<Tab>('console')
 
@@ -40,6 +50,8 @@ function Dashboard() {
   const posLabel = odom ? `(${odom.x.toFixed(1)}, ${odom.y.toFixed(1)})` : '--'
   const navState = sseState.missionStatus?.state ?? 'IDLE'
   const navStateZh = NAV_STATE_ZH[navState] ?? navState
+  const slamMode = sseState.slamStatus?.mode ?? null
+  const slamModeZh = slamMode ? (SLAM_MODE_ZH[slamMode] ?? slamMode) : null
 
   return (
     <div className="app">
@@ -63,6 +75,15 @@ function Dashboard() {
             <span className="stat-label">导航</span>
             <span className={`stat-value nav-state--${navState.toLowerCase()}`}>{navStateZh}</span>
           </span>
+          {slamModeZh && (
+            <>
+              <span className="topbar-divider" />
+              <span className="topbar-stat">
+                <span className="stat-label"><Radio size={10} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 2 }} />SLAM</span>
+                <span className={`stat-value slam-mode--${slamMode}`}>{slamModeZh}</span>
+              </span>
+            </>
+          )}
           {estop && (
             <>
               <span className="topbar-divider" />
@@ -88,6 +109,11 @@ function Dashboard() {
           className={`tab-btn ${activeTab === 'map' ? 'tab-btn--active' : ''}`}
           onClick={() => setActiveTab('map')}
         >地图管理</button>
+        <button
+          role="tab" aria-selected={activeTab === 'slam'}
+          className={`tab-btn ${activeTab === 'slam' ? 'tab-btn--active' : ''}`}
+          onClick={() => setActiveTab('slam')}
+        >SLAM 模式</button>
       </nav>
 
       <main className="main-content">
@@ -101,10 +127,12 @@ function Dashboard() {
             </aside>
           </div>
         )}
-        {activeTab === 'map' && <MapView />}
+        {activeTab === 'map' && <MapView showToast={showToast} />}
+        {activeTab === 'slam' && <SlamPanel sseState={sseState} showToast={showToast} />}
       </main>
 
       <StatusBar sseState={sseState} uptimeSeconds={uptimeSeconds} />
+      <ToastContainer toasts={toasts} dismiss={dismiss} />
     </div>
   )
 }

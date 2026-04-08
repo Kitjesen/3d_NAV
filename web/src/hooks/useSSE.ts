@@ -30,18 +30,36 @@ export interface HeartbeatEvent {
   type: 'heartbeat'
 }
 
+export interface SlamStatusEvent {
+  type: 'slam_status'
+  slam_hz: number
+  mode: string
+  map_points: number
+  degeneracy_count: number
+}
+
+export interface RobotStatusEvent {
+  type: 'robot_status'
+  battery: number
+  temperature: number
+}
+
 export type SSEEvent =
   | OdometryEvent
   | MissionStatusEvent
   | SafetyStateEvent
   | SceneGraphEvent
   | HeartbeatEvent
+  | SlamStatusEvent
+  | RobotStatusEvent
 
 export interface SSEState {
   odometry: OdometryEvent | null
   missionStatus: MissionStatusEvent | null
   safetyState: SafetyStateEvent | null
   sceneGraph: SceneGraphEvent | null
+  slamStatus: SlamStatusEvent | null
+  robotStatus: RobotStatusEvent | null
   lastHeartbeat: number | null
   connected: boolean
   events: SSEEvent[]
@@ -52,6 +70,8 @@ const INITIAL_STATE: SSEState = {
   missionStatus: null,
   safetyState: null,
   sceneGraph: null,
+  slamStatus: null,
+  robotStatus: null,
   lastHeartbeat: null,
   connected: false,
   events: [],
@@ -99,6 +119,12 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               case 'scene_graph':
                 next.sceneGraph = event
+                break
+              case 'slam_status':
+                next.slamStatus = event
+                break
+              case 'robot_status':
+                next.robotStatus = event
                 break
               case 'heartbeat':
                 next.lastHeartbeat = Date.now()
