@@ -50,7 +50,8 @@ fi
 
 # 4. 启动新进程
 echo "[4/5] 启动 lingtu nav..."
-set +u  # ROS2 setup.bash has unbound variables
+set +u  # ROS2 setup.bash and .bashrc may have unbound variables
+source ~/.bashrc 2>/dev/null || true
 source /opt/ros/humble/setup.bash
 if [ -f "$REPO/install/setup.bash" ]; then
     source "$REPO/install/setup.bash"
