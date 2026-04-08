@@ -449,6 +449,67 @@ def cmd_restart() -> None:
         sys.exit(1)
 
 
+def cmd_health_external(as_json: bool = False) -> None:
+    """Query running instance's /api/v1/health endpoint and display sensor/module status."""
+    state = read_run_state()
+    if state is None:
+        print("  无运行实例")
+        return
+
+    pid = state.get("pid")
+    if not is_pid_alive(pid):
+        print(f"  实例已停止 (PID {pid})")
+        return
+
+    port = state.get("config", {}).get("gateway_port", 5050)
+    import urllib.request
+    import urllib.error
+
+    url = f"http://localhost:{port}/api/v1/health"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, OSError) as e:
+        print(f"  {T.red('无法连接 Gateway')}: {e}")
+        return
+
+    if as_json:
+        print(json.dumps(data, indent=2, default=str))
+        return
+
+    status = data.get("status", "?")
+    status_color = T.green(status) if status == "ok" else T.red(status)
+    print(f"\n  系统状态:  {status_color}")
+    print(f"  模块:      {T.green(str(data.get('modules_ok', '?')))} 正常"
+          f"  {T.red(str(data.get('modules_fail', 0))) if data.get('modules_fail') else '0'} 异常")
+
+    sensors = data.get("sensors", {})
+    if sensors:
+        print(f"\n  {'传感器':<12} {'状态':<12} {'详情'}")
+        print(f"  {'─'*12} {'─'*12} {'─'*24}")
+        for name, info in sensors.items():
+            s = info.get("status", "?")
+            s_colored = T.green(s) if s in ("streaming", "active", "connected") else T.yellow(s)
+            details = []
+            for k, v in info.items():
+                if k != "status":
+                    details.append(f"{k}={v}")
+            print(f"  {name:<12} {s_colored:<20} {', '.join(details)}")
+
+    teleop = data.get("teleop", {})
+    gw = data.get("gateway", {})
+    print(f"\n  Gateway:   端口 {gw.get('port', '?')}  SSE客户端 {gw.get('sse_clients', 0)}")
+    print(f"  遥控:      {'活跃' if teleop.get('active') else '空闲'}  客户端 {teleop.get('clients', 0)}")
+    print(f"  SLAM:      {data.get('slam_hz', 0)} Hz  点云帧 {data.get('map_points', 0)}")
+    print(f"  里程计:    {'✓' if data.get('has_odom') else '✗'}")
+
+    fails = [n for n, s in data.get("modules", {}).items() if s != "ok"]
+    if fails:
+        print(f"\n  {T.red('异常模块')}: {', '.join(fails)}")
+    print()
+
+
 def cmd_log_external(follow: bool = False, lines: int = 80) -> None:
     state = read_run_state()
     if state is None:

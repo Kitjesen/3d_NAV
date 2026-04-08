@@ -23,6 +23,7 @@ from .run_state import (
 from .runtime_extra import daemonize, health_check, kill_residual_ports, preflight
 from .term import IS_TTY
 from .ui import (
+    cmd_health_external,
     cmd_log_external,
     cmd_restart,
     cmd_show_config_external,
@@ -37,7 +38,7 @@ from .ui import (
 logger = logging.getLogger("lingtu")
 
 
-_SPECIAL_COMMANDS = {"stop", "restart", "status", "show-config", "log", "doctor", "rerun"}
+_SPECIAL_COMMANDS = {"stop", "restart", "status", "show-config", "log", "health", "doctor", "rerun"}
 
 
 def _resolve_profile_name(explicit_profile: str | None, args: argparse.Namespace) -> str:
@@ -134,6 +135,7 @@ def main() -> None:
               status       Show external run status (add --json for jq)
               show-config  Print resolved config (add --json for jq)
               log          Print the current run log (add -f to follow)
+              health       Sensor and module health (add --json for jq)
               doctor       Run diagnostics
               rerun        Launch Rerun 3D viewer
         """
@@ -187,6 +189,10 @@ def main() -> None:
 
     if args.target == "status":
         cmd_status_external(as_json=args.json)
+        return
+
+    if args.target == "health":
+        cmd_health_external(as_json=args.json)
         return
 
     _repo = Path(__file__).resolve().parent.parent

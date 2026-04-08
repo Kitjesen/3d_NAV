@@ -659,26 +659,74 @@ class GatewayModule(Module, layer=6):
                 sg = gw._sg_json
             return JSONResponse({"scene_graph": sg})
 
-        @app.get("/api/v1/health", summary="Gateway health")
+        @app.get("/api/v1/health", summary="System health overview")
         async def get_health():
             with gw._sse_lock:
                 n_sse = len(gw._sse_queues)
-            map_pts = gw._map_cloud_count  # frames received (not point count)
-            # SLAM Hz: cached subprocess call to `ros2 topic hz` (most accurate, avoids Python GIL artifacts)
+            map_pts = gw._map_cloud_count
             slam_hz = gw._get_slam_hz_cached()
+
+            # Sensor & module status summary
+            sensors: dict[str, Any] = {}
+            modules_ok = 0
+            modules_fail = 0
+            module_summary: dict[str, str] = {}
+
+            if gw._all_modules:
+                for name, mod in gw._all_modules.items():
+                    try:
+                        h = mod.health() if hasattr(mod, "health") else {}
+                        module_summary[name] = "ok"
+                        modules_ok += 1
+
+                        # Extract sensor-level info from key modules
+                        if "LidarModule" in name:
+                            lidar_h = h.get("lidar", {})
+                            sensors["lidar"] = {
+                                "status": lidar_h.get("state", "unknown"),
+                                "ip": lidar_h.get("ip", "?"),
+                                "cloud_hz": round(h.get("ports_out", {}).get("scan", {}).get("rate_hz", 0), 1),
+                            }
+                        elif "CameraBridge" in name:
+                            color_out = h.get("ports_out", {}).get("color_image", {})
+                            sensors["camera"] = {
+                                "status": "streaming" if color_out.get("msg_count", 0) > 0 else "idle",
+                                "fps": round(color_out.get("rate_hz", 0), 1),
+                                "frames": color_out.get("msg_count", 0),
+                            }
+                        elif "SlamBridge" in name or "SLAMModule" in name:
+                            odom_out = h.get("ports_out", {}).get("odometry", {})
+                            sensors["slam"] = {
+                                "status": "active" if odom_out.get("msg_count", 0) > 0 else "inactive",
+                                "hz": round(odom_out.get("rate_hz", 0), 1),
+                            }
+                        elif "Navigation" in name:
+                            sensors["navigation"] = {
+                                "state": h.get("mission_state", "idle"),
+                                "replan_count": h.get("replan_count", 0),
+                            }
+                    except Exception:
+                        module_summary[name] = "error"
+                        modules_fail += 1
+
             return {
-                "gateway":     "running",
-                "port":        gw._port,
-                "mode":        gw._mode,
-                "sse_clients": n_sse,
+                "status": "ok" if modules_fail == 0 else "degraded",
+                "modules_ok": modules_ok,
+                "modules_fail": modules_fail,
+                "gateway": {
+                    "port": gw._port,
+                    "mode": gw._mode,
+                    "sse_clients": n_sse,
+                },
                 "teleop": {
-                    "active":  gw._teleop_active,
+                    "active": gw._teleop_active,
                     "clients": gw._teleop_clients,
                 },
-                "has_odom": gw._odom is not None,
-                "has_map_mgr": gw._map_mgr is not None,
-                "slam_hz":  round(slam_hz, 1),
+                "sensors": sensors,
+                "slam_hz": round(slam_hz, 1),
                 "map_points": map_pts,
+                "has_odom": gw._odom is not None,
+                "modules": module_summary,
             }
 
         # ── Liveness / Readiness probes ────────────────────────────────────
