@@ -27,19 +27,19 @@ export function CameraFeed({ onStop, estop }: CameraFeedProps) {
           <img
             ref={imgRef}
             className="camera-img"
-            alt="Robot camera feed"
+            alt="机器人相机画面"
             src={imgSrc}
           />
         ) : (
           <div className="camera-placeholder">
             <Camera size={48} strokeWidth={1} className="placeholder-icon" />
             <span className="placeholder-label">
-              {connected ? 'Waiting for frames…' : 'No camera signal'}
+              {connected ? '等待画面帧…' : '无相机画面'}
             </span>
             {!connected && (
               <button className="btn-ghost reconnect-btn" onClick={reconnect}>
                 <RefreshCw size={14} />
-                Reconnect
+                重新连接
               </button>
             )}
           </div>
@@ -48,11 +48,11 @@ export function CameraFeed({ onStop, estop }: CameraFeedProps) {
         {/* Connection badge */}
         <div className={`cam-badge ${connected ? 'cam-badge--live' : 'cam-badge--off'}`}>
           <span className="cam-badge-dot" />
-          {connected ? 'LIVE' : 'OFFLINE'}
+          {connected ? '直播' : '离线'}
         </div>
 
         {/* ESTOP overlay — full-screen flash when active */}
-        {estop && <div className="estop-overlay">E-STOP ACTIVE</div>}
+        {estop && <div className="estop-overlay">急停激活</div>}
       </div>
 
       {/* Controls strip */}
@@ -60,10 +60,10 @@ export function CameraFeed({ onStop, estop }: CameraFeedProps) {
         <button
           className="btn-stop"
           onClick={onStop}
-          aria-label="Emergency stop"
+          aria-label="紧急停止"
         >
           <StopCircle size={18} />
-          STOP
+          紧急停止
         </button>
         <span className="camera-hint">640 × 480 · MJPEG</span>
       </div>

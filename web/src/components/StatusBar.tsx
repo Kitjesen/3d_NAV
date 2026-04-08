@@ -31,35 +31,45 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
   const navState = mission?.state ?? 'IDLE'
   const estopActive = safety?.estop ?? false
 
+  const NAV_STATE_ZH: Record<string, string> = {
+    IDLE: '空闲',
+    EXECUTING: '执行中',
+    PLANNING: '规划中',
+    ARRIVED: '已到达',
+    FAILED: '失败',
+    CANCELLED: '已取消',
+  }
+  const navStateZh = NAV_STATE_ZH[navState] ?? navState
+
   return (
     <div className="status-bar">
       <Activity size={13} className="statusbar-icon" />
 
       <span className="status-item">
-        <span className="status-label">pos</span>
+        <span className="status-label">位置</span>
         <span className="status-value">({x}, {y})</span>
       </span>
 
       <span className="status-sep">·</span>
 
       <span className="status-item">
-        <span className="status-label">hdg</span>
+        <span className="status-label">航向</span>
         <span className="status-value">{yaw}</span>
       </span>
 
       <span className="status-sep">·</span>
 
       <span className="status-item">
-        <span className="status-label">vel</span>
+        <span className="status-label">速度</span>
         <span className="status-value">{vx}</span>
       </span>
 
       <span className="status-sep">·</span>
 
       <span className="status-item">
-        <span className="status-label">nav</span>
+        <span className="status-label">导航</span>
         <span className={`status-value status-nav ${navState === 'EXECUTING' ? 'status-nav--active' : navState === 'FAILED' ? 'status-nav--fail' : ''}`}>
-          {navState}
+          {navStateZh}
         </span>
       </span>
 
@@ -67,20 +77,20 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
 
       {estopActive && (
         <>
-          <span className="status-item status-estop">E-STOP</span>
+          <span className="status-item status-estop">急停</span>
           <span className="status-sep">·</span>
         </>
       )}
 
       <span className="status-item">
-        <span className="status-label">uptime</span>
+        <span className="status-label">运行时长</span>
         <span className="status-value">{formatUptime(uptimeSeconds)}</span>
       </span>
 
       <span className="status-sep">·</span>
 
       <span className="status-item">
-        <span className="status-label">v</span>
+        <span className="status-label">版本</span>
         <span className="status-value">1.8</span>
       </span>
 

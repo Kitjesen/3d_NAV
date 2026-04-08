@@ -13,8 +13,24 @@ let _id = 0
 function nextId() { return ++_id }
 
 function formatTime(ts: number) {
-  return new Date(ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
+
+const NAV_STATE_ZH: Record<string, string> = {
+  PLANNING:  '规划路线中',
+  EXECUTING: '导航中',
+  ARRIVED:   '已到达目的地。',
+  IDLE:      '导航空闲。',
+  FAILED:    '导航失败。',
+  CANCELLED: '导航已取消。',
+}
+
+const HELP_TEXT = `可用指令：
+/go <x> <y>   — 导航到坐标
+/stop         — 紧急停止
+/status       — 显示当前状态
+/map list     — 地图管理
+/help         — 显示帮助`
 
 interface ChatPanelProps {
   sseState: SSEState
@@ -25,7 +41,7 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     {
       id: nextId(),
       role: 'system',
-      text: 'LingTu navigation system online. Send a natural language instruction to begin.',
+      text: '灵途导航系统已上线。发送自然语言指令以开始导航，或使用 /help 查看指令列表。',
       ts: Date.now(),
     },
   ])
@@ -49,26 +65,96 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     if (key === prevMissionRef.current) return
     prevMissionRef.current = key
 
-    const stateLabel: Record<string, string> = {
-      PLANNING: 'Planning route…',
-      EXECUTING: 'Navigating…',
-      ARRIVED: 'Arrived at destination.',
-      IDLE: 'Navigation idle.',
-      FAILED: 'Navigation failed.',
-      CANCELLED: 'Navigation cancelled.',
-    }
+    const label = NAV_STATE_ZH[ms.state] ?? ms.state
     const text = ms.goal
-      ? `[${ms.state}] ${stateLabel[ms.state] ?? ms.state} Goal: ${ms.goal} (${Math.round(ms.progress * 100)}%)`
-      : `[${ms.state}] ${stateLabel[ms.state] ?? ms.state}`
+      ? `[${ms.state}] ${label} 目标：${ms.goal} (${Math.round(ms.progress * 100)}%)`
+      : `[${ms.state}] ${label}`
 
     setMessages(prev => [...prev, { id: nextId(), role: 'system', text, ts: Date.now() }])
   }, [sseState.missionStatus])
+
+  function addSystem(text: string) {
+    setMessages(prev => [...prev, { id: nextId(), role: 'system', text, ts: Date.now() }])
+  }
+
+  // --- Slash command handler ---
+  async function handleSlashCommand(raw: string) {
+    const parts = raw.trim().split(/\s+/)
+    const cmd = parts[0].toLowerCase()
+
+    if (cmd === '/help') {
+      addSystem(HELP_TEXT)
+      return
+    }
+
+    if (cmd === '/status') {
+      const ms = sseState.missionStatus
+      const odom = sseState.odometry
+      const safety = sseState.safetyState
+      const stateZh = ms ? (NAV_STATE_ZH[ms.state] ?? ms.state) : '未知'
+      const pos = odom ? `(${odom.x.toFixed(2)}, ${odom.y.toFixed(2)})` : '--'
+      const estop = safety?.estop ? '急停激活' : '正常'
+      addSystem(`状态：${stateZh}\n位置：${pos}\n安全：${estop}`)
+      return
+    }
+
+    if (cmd === '/map') {
+      addSystem('地图管理请切换到地图标签。')
+      return
+    }
+
+    if (cmd === '/stop') {
+      addSystem('正在发送急停指令…')
+      try {
+        const res = await fetch('/api/v1/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        })
+        addSystem(res.ok ? '急停指令已发送。' : `急停失败：HTTP ${res.status}`)
+      } catch (e) {
+        addSystem(`急停网络错误：${String(e)}`)
+      }
+      return
+    }
+
+    if (cmd === '/go') {
+      const x = parseFloat(parts[1])
+      const y = parseFloat(parts[2])
+      if (isNaN(x) || isNaN(y)) {
+        addSystem('用法：/go <x> <y>  （示例：/go 3.5 -1.2）')
+        return
+      }
+      addSystem(`正在导航到坐标 (${x}, ${y})…`)
+      try {
+        const res = await fetch('/api/v1/goal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ x, y }),
+        })
+        addSystem(res.ok ? `目标已提交：(${x}, ${y})` : `导航失败：HTTP ${res.status}`)
+      } catch (e) {
+        addSystem(`导航网络错误：${String(e)}`)
+      }
+      return
+    }
+
+    addSystem(`未知指令：${cmd}。输入 /help 查看可用指令。`)
+  }
 
   async function sendInstruction() {
     const text = input.trim()
     if (!text || sending) return
     setInput('')
     setMessages(prev => [...prev, { id: nextId(), role: 'user', text, ts: Date.now() }])
+
+    // Slash command path — no setSending needed (fast local dispatch)
+    if (text.startsWith('/')) {
+      await handleSlashCommand(text)
+      return
+    }
+
+    // Natural language instruction path
     setSending(true)
     try {
       const res = await fetch('/api/v1/instruction', {
@@ -78,17 +164,11 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
       })
       if (!res.ok) {
         const err = await res.text()
-        setMessages(prev => [
-          ...prev,
-          { id: nextId(), role: 'system', text: `Error: ${res.status} ${err}`, ts: Date.now() },
-        ])
+        addSystem(`错误：${res.status} ${err}`)
       }
       // Successful acknowledgment — mission_status SSE events will follow
     } catch (e) {
-      setMessages(prev => [
-        ...prev,
-        { id: nextId(), role: 'system', text: `Network error: ${String(e)}`, ts: Date.now() },
-      ])
+      addSystem(`网络错误：${String(e)}`)
     } finally {
       setSending(false)
     }
@@ -104,8 +184,11 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
   return (
     <div className="chat-panel">
       <div className="chat-header">
-        <span className="chat-title">Agent</span>
-        <span className={`sse-dot ${sseState.connected ? 'sse-dot--on' : 'sse-dot--off'}`} title={sseState.connected ? 'SSE connected' : 'SSE disconnected'} />
+        <span className="chat-title">智能体</span>
+        <span
+          className={`sse-dot ${sseState.connected ? 'sse-dot--on' : 'sse-dot--off'}`}
+          title={sseState.connected ? 'SSE 已连接' : 'SSE 已断开'}
+        />
       </div>
 
       <div className="chat-messages" ref={listRef}>
@@ -121,18 +204,18 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
         <input
           className="chat-input"
           type="text"
-          placeholder="Send instruction…"
+          placeholder="输入指令…"
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={sending}
-          aria-label="Navigation instruction"
+          aria-label="导航指令"
         />
         <button
           className="btn-send"
           onClick={sendInstruction}
           disabled={sending || !input.trim()}
-          aria-label="Send"
+          aria-label="发送"
         >
           <Send size={16} />
         </button>
