@@ -8,6 +8,7 @@ import { ChatPanel } from './components/ChatPanel'
 import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
+import { PathView } from './components/PathView'
 import { ToastContainer } from './components/Toast'
 import { LoginPage } from './components/LoginPage'
 import * as api from './services/api'
@@ -51,6 +52,7 @@ function Dashboard() {
         )}
         {activeTab === 'map' && <MapView showToast={showToast} />}
         {activeTab === 'slam' && <SlamPanel sseState={sseState} showToast={showToast} />}
+        {activeTab === 'path' && <PathView sseState={sseState} showToast={showToast} />}
       </main>
 
       <StatusBar sseState={sseState} uptimeSeconds={uptimeSeconds} />

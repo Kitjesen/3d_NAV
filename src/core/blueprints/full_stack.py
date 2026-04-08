@@ -242,6 +242,7 @@ def full_stack_blueprint(
     _w("NavigationModule", "mission_status", "MCPServerModule", "mission_status")
     _w("SafetyRingModule", "execution_eval", "GatewayModule", "execution_eval")
     _w("SafetyRingModule", "dialogue_state", "GatewayModule", "dialogue_state")
+    _w("NavigationModule", "global_path", "GatewayModule", "global_path")
 
     # Goal routing from sim driver
     try:

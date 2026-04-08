@@ -278,11 +278,12 @@ class TestGatewayModule(unittest.TestCase):
 
     def test_ports_in(self):
         m = self._make()
-        self.assertEqual(len(m.ports_in), 7)
+        self.assertEqual(len(m.ports_in), 8)
         self.assertIn("odometry", m.ports_in)
         self.assertIn("map_cloud", m.ports_in)
         self.assertIn("scene_graph", m.ports_in)
         self.assertIn("safety_state", m.ports_in)
+        self.assertIn("global_path", m.ports_in)
 
     def test_ports_out(self):
         m = self._make()

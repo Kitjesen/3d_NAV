@@ -53,6 +53,17 @@ export interface RobotStatusEvent {
   temperature: number
 }
 
+export interface PathPoint {
+  x: number
+  y: number
+  z: number
+}
+
+export interface GlobalPathEvent {
+  type: 'global_path'
+  points: PathPoint[]
+}
+
 export type SSEEvent =
   | OdometryEvent
   | MissionStatusEvent
@@ -61,6 +72,7 @@ export type SSEEvent =
   | HeartbeatEvent
   | SlamStatusEvent
   | RobotStatusEvent
+  | GlobalPathEvent
 
 export interface SSEState {
   odometry: OdometryEvent | null
@@ -69,6 +81,7 @@ export interface SSEState {
   sceneGraph: SceneGraphEvent | null
   slamStatus: SlamStatusEvent | null
   robotStatus: RobotStatusEvent | null
+  globalPath: GlobalPathEvent | null
   lastHeartbeat: number | null
   connected: boolean
   events: SSEEvent[]
@@ -82,6 +95,6 @@ export interface Toast {
   kind: ToastKind
 }
 
-export type Tab = 'console' | 'map' | 'slam'
+export type Tab = 'console' | 'map' | 'slam' | 'path'
 
 export type SlamProfile = 'fastlio2' | 'localizer' | 'stop'

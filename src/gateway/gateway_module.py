@@ -204,6 +204,7 @@ class GatewayModule(Module, layer=6):
     mission_status: In[dict]
     execution_eval: In[ExecutionEval]
     dialogue_state: In[dict]
+    global_path:    In[list]  # from NavigationModule — list of np.ndarray [x,y,z]
 
     # -- Outputs (client commands → modules) --------------------------------
     goal_pose:   Out[PoseStamped]
@@ -227,6 +228,7 @@ class GatewayModule(Module, layer=6):
         self._eval:     dict | None = None
         self._dialogue: dict | None = None
         self._mode: str = "manual"
+        self._last_path: list[dict] = []
 
         self._lease = _Lease()
 
@@ -268,6 +270,7 @@ class GatewayModule(Module, layer=6):
         self.mission_status.subscribe(self._on_mission)
         self.execution_eval.subscribe(self._on_eval)
         self.dialogue_state.subscribe(self._on_dialogue)
+        self.global_path.subscribe(self._on_global_path)
         self._app = self._build_app()
 
     def start(self) -> None:
@@ -368,6 +371,16 @@ class GatewayModule(Module, layer=6):
         with self._state_lock:
             self._dialogue = d
         self.push_event({"type": "dialogue", "data": d})
+
+    def _on_global_path(self, path: list) -> None:
+        # path is list of np.ndarray [x, y, z] from NavigationModule
+        points = [
+            {"x": float(p[0]), "y": float(p[1]), "z": float(p[2]) if len(p) > 2 else 0.0}
+            for p in path
+        ]
+        with self._state_lock:
+            self._last_path = points
+        self.push_event({"type": "global_path", "points": points})
 
     # -- SSE fan-out --------------------------------------------------------
 
@@ -659,6 +672,11 @@ class GatewayModule(Module, layer=6):
             with gw._state_lock:
                 sg = gw._sg_json
             return JSONResponse({"scene_graph": sg})
+
+        @app.get("/api/v1/path", summary="Latest planned path")
+        async def get_path():
+            with gw._state_lock:
+                return {"path": gw._last_path, "robot": gw._odom}
 
         @app.get("/api/v1/health", summary="System health overview")
         async def get_health():

@@ -10,6 +10,8 @@ export type {
   HeartbeatEvent,
   SlamStatusEvent,
   RobotStatusEvent,
+  GlobalPathEvent,
+  PathPoint,
   SSEEvent,
   SSEState,
 } from '../types'
@@ -21,6 +23,7 @@ const INITIAL_STATE: SSEState = {
   sceneGraph: null,
   slamStatus: null,
   robotStatus: null,
+  globalPath: null,
   lastHeartbeat: null,
   connected: false,
   events: [],
@@ -74,6 +77,9 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               case 'robot_status':
                 next.robotStatus = event
+                break
+              case 'global_path':
+                next.globalPath = event
                 break
               case 'heartbeat':
                 next.lastHeartbeat = Date.now()

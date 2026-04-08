@@ -1,15 +1,18 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Change ROBOT_HOST to your robot's IP for local development
+const ROBOT_HOST = process.env.ROBOT_HOST || '192.168.66.190:5050'
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
     proxy: {
-      '/api': 'http://localhost:5050',
-      '/ws': { target: 'ws://localhost:5050', ws: true },
-      '/mcp': 'http://localhost:5050',
-      '/map': 'http://localhost:5050',
+      '/api': `http://${ROBOT_HOST}`,
+      '/ws': { target: `ws://${ROBOT_HOST}`, ws: true },
+      '/mcp': `http://${ROBOT_HOST}`,
+      '/map': `http://${ROBOT_HOST}`,
     },
   },
   build: {
