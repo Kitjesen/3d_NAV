@@ -58,7 +58,13 @@ fi
 set -u
 cd "$REPO"
 nohup python3 lingtu.py nav --daemon > "$LOG" 2>&1 &
-sleep 5
+echo "  等待系统初始化..."
+for i in $(seq 1 30); do
+    if [ -f .lingtu/run.json ]; then
+        break
+    fi
+    sleep 1
+done
 
 # 5. 验证
 echo "[5/5] 验证..."
