@@ -33,6 +33,7 @@ from typing import Any, Dict, Optional
 
 from core.module import Module, skill
 from core.msgs.geometry import Twist, Vector3
+from core.msgs.semantic import SceneGraph
 from core.msgs.sensor import Image
 from core.registry import register
 from core.stream import In, Out
@@ -52,7 +53,7 @@ class TeleopModule(Module, layer=6):
     # -- Inputs --
     color_image: In[Image]
     joy_input:   In[dict]      # {"lx": float, "ly": float, "az": float}
-    scene_graph: In[dict]      # detection overlay (optional, from PerceptionModule)
+    scene_graph: In[SceneGraph] # detection overlay (optional, from PerceptionModule)
 
     # -- Outputs --
     cmd_vel:        Out[Twist]
@@ -201,12 +202,11 @@ class TeleopModule(Module, layer=6):
 
     # -- detection overlay ----------------------------------------------------
 
-    def _on_scene_graph(self, sg: dict) -> None:
+    def _on_scene_graph(self, sg: SceneGraph) -> None:
         """Cache latest detections for overlay drawing."""
         try:
-            objects = sg.get("objects", []) if isinstance(sg, dict) else []
             with self._det_lock:
-                self._latest_detections = objects
+                self._latest_detections = list(sg.objects) if sg.objects else []
         except Exception:
             pass
 
@@ -217,19 +217,19 @@ class TeleopModule(Module, layer=6):
         if not dets:
             return frame
         h, w = frame.shape[:2]
-        for obj in dets:
-            bbox = obj.get("bbox")
-            label = obj.get("label", "")
-            conf = obj.get("confidence", 0.0)
-            if not bbox or len(bbox) < 4:
+        for det in dets:
+            bbox = getattr(det, "bbox_2d", None) or getattr(det, "bbox", None)
+            label = getattr(det, "label", "")
+            conf = getattr(det, "confidence", 0.0)
+            if bbox is None:
                 continue
-            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-            # Clamp to frame bounds
+            if hasattr(bbox, "__len__") and len(bbox) >= 4:
+                x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            else:
+                continue
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
-            # Green box
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 136), 2)
-            # Label background + text
             text = f"{label} {conf:.0%}" if conf > 0 else label
             if text:
                 (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
