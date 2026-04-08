@@ -52,6 +52,7 @@ class TeleopModule(Module, layer=6):
     # -- Inputs --
     color_image: In[Image]
     joy_input:   In[dict]      # {"lx": float, "ly": float, "az": float}
+    scene_graph: In[dict]      # detection overlay (optional, from PerceptionModule)
 
     # -- Outputs --
     cmd_vel:        Out[Twist]
@@ -86,6 +87,10 @@ class TeleopModule(Module, layer=6):
         # Camera encoding
         self._encode_thread: threading.Thread | None = None
         self._idle_thread: threading.Thread | None = None
+
+        # Detection overlay
+        self._latest_detections: list = []
+        self._det_lock = threading.Lock()
         self._running = False
         self._latest_raw: Any | None = None
         self._raw_lock = threading.Lock()
@@ -97,6 +102,8 @@ class TeleopModule(Module, layer=6):
         self.color_image.subscribe(self._on_image)
         self.color_image.set_policy("latest")
         self.joy_input.subscribe(self._on_joy)
+        self.scene_graph.subscribe(self._on_scene_graph)
+        self.scene_graph.set_policy("latest")
 
     def start(self) -> None:
         super().start()
@@ -192,6 +199,44 @@ class TeleopModule(Module, layer=6):
                     and time.monotonic() - self._last_joy_time > self._release_timeout):
                 self._release()
 
+    # -- detection overlay ----------------------------------------------------
+
+    def _on_scene_graph(self, sg: dict) -> None:
+        """Cache latest detections for overlay drawing."""
+        try:
+            objects = sg.get("objects", []) if isinstance(sg, dict) else []
+            with self._det_lock:
+                self._latest_detections = objects
+        except Exception:
+            pass
+
+    def _draw_detections(self, frame, cv2):
+        """Draw bounding boxes + labels on the frame (in-place)."""
+        with self._det_lock:
+            dets = list(self._latest_detections)
+        if not dets:
+            return frame
+        h, w = frame.shape[:2]
+        for obj in dets:
+            bbox = obj.get("bbox")
+            label = obj.get("label", "")
+            conf = obj.get("confidence", 0.0)
+            if not bbox or len(bbox) < 4:
+                continue
+            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            # Clamp to frame bounds
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w, x2), min(h, y2)
+            # Green box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 136), 2)
+            # Label background + text
+            text = f"{label} {conf:.0%}" if conf > 0 else label
+            if text:
+                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 4, y1), (0, 255, 136), -1)
+                cv2.putText(frame, text, (x1 + 2, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        return frame
+
     # -- camera frame handling ----------------------------------------------
 
     def _on_image(self, img: Image) -> None:
@@ -228,8 +273,9 @@ class TeleopModule(Module, layer=6):
 
             if have_cv2:
                 try:
+                    frame = self._draw_detections(raw.copy(), cv2)
                     ok, buf = cv2.imencode(
-                        ".jpg", raw,
+                        ".jpg", frame,
                         [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality],
                     )
                     if ok:

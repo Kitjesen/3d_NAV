@@ -263,6 +263,7 @@ def full_stack_blueprint(
     _w("VisualServoModule", "nav_stop", "NavigationModule", "stop_signal")
 
     # Teleop — joystick → TeleopModule → CmdVelMux, active signal → Nav
+    _w("PerceptionModule", "scene_graph", "TeleopModule", "scene_graph")
     _w("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
 
     # ── CmdVelMux: priority-based velocity arbitration ──
