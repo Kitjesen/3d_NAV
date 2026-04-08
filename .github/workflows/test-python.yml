@@ -17,12 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 1
           sparse-checkout: |
             src
             cli
             docs
             calibration
             pyproject.toml
+          sparse-checkout-cone-mode: false
       - uses: astral-sh/ruff-action@v3
         with:
           args: check src/ cli/ docs/ calibration/
@@ -34,12 +36,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 1
           sparse-checkout: |
             src
             cli
             config
             sim
             pyproject.toml
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
