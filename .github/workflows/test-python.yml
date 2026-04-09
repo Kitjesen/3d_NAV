@@ -49,7 +49,9 @@ jobs:
           python-version: '3.10'
           cache: pip
       - name: Install dependencies
-        run: pip install numpy scipy pyyaml pytest
+        # opencv-python-headless needed by bpu_detector.py (module-level import)
+        # which is reachable via mock.patch in test_perception_*.py.
+        run: pip install numpy scipy pyyaml pytest opencv-python-headless
       - name: Run core tests
         run: python -m pytest src/core/tests/ -q --tb=short
         env:
