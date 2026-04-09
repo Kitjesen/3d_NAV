@@ -236,6 +236,8 @@ def full_stack_blueprint(
     # Gateway + MCP state feeds — explicit wires to avoid auto-wire ambiguity
     _w("PerceptionModule", "scene_graph", "GatewayModule", "scene_graph")
     _w("PerceptionModule", "scene_graph", "MCPServerModule", "scene_graph")
+    # Reconstruction receives scene_graph for semantic labelling + dynamic masking
+    _w("PerceptionModule", "scene_graph", "ReconstructionModule", "scene_graph")
     _w("SafetyRingModule", "safety_state", "GatewayModule", "safety_state")
     _w("SafetyRingModule", "safety_state", "MCPServerModule", "safety_state")
     _w("NavigationModule", "mission_status", "GatewayModule", "mission_status")
