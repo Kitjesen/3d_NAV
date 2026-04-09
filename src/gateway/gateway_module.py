@@ -846,6 +846,22 @@ class GatewayModule(Module, layer=6):
                     })
             return {"maps": maps, "active": active_target, "map_dir": map_dir}
 
+        @app.get("/api/v1/maps/{name}/pcd", summary="Serve raw PCD file for inline preview")
+        async def get_map_pcd(name: str):
+            import os as _os
+            import pathlib
+            from fastapi.responses import FileResponse
+            from fastapi import HTTPException
+            map_dir = _os.environ.get("NAV_MAP_DIR", _os.path.expanduser("~/data/nova/maps"))
+            base = pathlib.Path(map_dir).resolve()
+            pcd_path = (base / name / "map.pcd").resolve()
+            if not str(pcd_path).startswith(str(base)):
+                raise HTTPException(status_code=403)
+            if not pcd_path.is_file():
+                raise HTTPException(status_code=404, detail=f"No PCD for map: {name}")
+            return FileResponse(str(pcd_path), media_type="application/octet-stream",
+                                filename="map.pcd")
+
         @app.post("/api/v1/slam/switch", summary="Hot-switch SLAM profile")
         async def slam_switch(body: dict):
             profile = body.get("profile", "")

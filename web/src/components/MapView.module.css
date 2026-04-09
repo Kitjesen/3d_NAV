@@ -1,40 +1,162 @@
-/* MapView component styles */
+/* MapView — split layout: left viewer + right list */
 
-.mapManager {
-  flex: 1;
-  padding: 20px;
-  overflow-y: auto;
-  max-width: 900px;
-  margin: 0 auto;
-  width: 100%;
+.mapTab {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
 }
 
-.header {
+.viewerPanel {
+  width: 42%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Right panel ── */
+
+.listPanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.listHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0;
+  min-height: 38px;
 }
 
-.header h2 {
+.listTitle {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 16px;
+  gap: 6px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
+  margin: 0;
 }
 
-.actions {
+.listActions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
+
+.listScroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* ── State messages ── */
+
+.stateMsg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 20px;
+  color: var(--text-dim);
+  text-align: center;
+  font-size: 13px;
+}
+
+.stateMsg p { margin: 0; }
+
+/* ── Map list ── */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: border-color 0.12s;
+}
+
+.card:hover { border-color: var(--border-hi); }
+
+.cardActive {
+  composes: card;
+  border-color: var(--accent);
+  background: rgba(0,255,136,0.04);
+}
+
+.cardSelected {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.cardInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mapName {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.starIcon { color: var(--accent); flex-shrink: 0; }
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tagPcd   { composes: tag; background: rgba(59,130,246,0.15); color: #60a5fa; }
+.tagTomo  { composes: tag; background: rgba(0,255,136,0.10); color: var(--accent); }
+.tagEmpty { composes: tag; background: rgba(255,255,255,0.05); color: var(--text-dim); }
+
+.cardActions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+/* ── Buttons ── */
 
 .btnSmall {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 12px;
+  gap: 4px;
+  padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -54,79 +176,11 @@
 
 .btnSmallAccent:hover { background: rgba(0,255,136,0.08); }
 
-.loading, .error, .empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 60px 20px;
-  color: var(--text-dim);
-  text-align: center;
-}
-
-.error p, .empty p { margin: 0; font-size: 14px; }
-
-.mapHint { font-size: 11px; color: var(--text-dim); opacity: 0.6; }
-
-.list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  transition: border-color 0.15s;
-}
-
-.card:hover { border-color: var(--text-dim); }
-
-.cardActive {
-  composes: card;
-  border-color: var(--accent);
-  background: rgba(0,255,136,0.04);
-}
-
-.cardInfo { display: flex; flex-direction: column; gap: 4px; }
-
-.mapName {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-}
-
-.starIcon { color: var(--accent); }
-
-.meta { display: flex; gap: 6px; }
-
-.tag {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-weight: 500;
-}
-
-.tagPcd { composes: tag; background: rgba(59,130,246,0.15); color: #60a5fa; }
-.tagTomo { composes: tag; background: rgba(0,255,136,0.1); color: var(--accent); }
-.tagEmpty { composes: tag; background: rgba(255,255,255,0.05); color: var(--text-dim); }
-
-.cardActions { display: flex; gap: 6px; }
-
 .btnTiny {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
+  gap: 3px;
+  padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: transparent;
@@ -134,9 +188,17 @@
   cursor: pointer;
   font-size: 10px;
   font-family: inherit;
+  white-space: nowrap;
 }
 
 .btnTiny:hover { border-color: var(--text-dim); color: var(--text); }
+
+.btnTinyActive {
+  composes: btnTiny;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(0,255,136,0.08);
+}
 
 .btnTinyAccent {
   composes: btnTiny;
