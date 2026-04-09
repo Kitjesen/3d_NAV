@@ -7,11 +7,26 @@
 }
 
 .viewerPanel {
-  width: 42%;
+  /* width set via inline style for resizable split */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 200px;
+}
+
+.divider {
+  width: 4px;
+  flex-shrink: 0;
+  background: var(--border);
+  cursor: col-resize;
+  transition: background 0.15s;
+  position: relative;
+}
+
+.divider:hover,
+.divider:active {
+  background: var(--accent);
 }
 
 /* ── Right panel ── */
@@ -104,6 +119,15 @@
   border-radius: 8px;
   padding: 0 5px;
   line-height: 16px;
+}
+
+.groupHint {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .list {

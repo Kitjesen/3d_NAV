@@ -43,6 +43,32 @@
   white-space: nowrap;
 }
 
+.schemeGroup {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.schemeBtn {
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.schemeBtn:hover { border-color: var(--text-dim); color: var(--text); }
+
+.schemeBtnActive {
+  composes: schemeBtn;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(0,255,136,0.08);
+}
+
 .resetBtn {
   display: flex;
   align-items: center;
@@ -52,6 +78,7 @@
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .resetBtn:hover { border-color: var(--text-dim); color: var(--text); }
