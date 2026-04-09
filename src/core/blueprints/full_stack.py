@@ -238,6 +238,13 @@ def full_stack_blueprint(
     _w("PerceptionModule", "scene_graph", "MCPServerModule", "scene_graph")
     # Reconstruction receives scene_graph for semantic labelling + dynamic masking
     _w("PerceptionModule", "scene_graph", "ReconstructionModule", "scene_graph")
+
+    # Keyframe exporter: same camera + odometry feeds as ReconstructionModule
+    if "ReconKeyframeExporterModule" in _bp_names and _camera_src in _bp_names:
+        bp.wire(_camera_src, _color_out, "ReconKeyframeExporterModule", "color_image")
+        bp.wire(_camera_src, "depth_image", "ReconKeyframeExporterModule", "depth_image")
+        bp.wire(_camera_src, "camera_info", "ReconKeyframeExporterModule", "camera_info")
+    _w(_drv, "odometry", "ReconKeyframeExporterModule", "odometry")
     _w("SafetyRingModule", "safety_state", "GatewayModule", "safety_state")
     _w("SafetyRingModule", "safety_state", "MCPServerModule", "safety_state")
     _w("NavigationModule", "mission_status", "GatewayModule", "mission_status")

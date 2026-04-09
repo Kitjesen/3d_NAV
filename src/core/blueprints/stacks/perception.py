@@ -76,4 +76,23 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     except ImportError:
         pass
 
+    # Optional: stream keyframes to a remote reconstruction server
+    # Enabled when recon_server_url is provided in config
+    recon_server_url = config.get("recon_server_url", "")
+    if recon_server_url:
+        try:
+            from semantic.reconstruction.keyframe_exporter_module import (
+                ReconKeyframeExporterModule,
+            )
+            bp.add(
+                ReconKeyframeExporterModule,
+                server_url=recon_server_url,
+                keyframe_dist_m=float(config.get("recon_kf_dist_m", 0.3)),
+                keyframe_rot_rad=float(config.get("recon_kf_rot_rad", 0.26)),
+                keyframe_time_s=float(config.get("recon_kf_time_s", 2.0)),
+                jpeg_quality=int(config.get("recon_jpeg_quality", 85)),
+            )
+        except ImportError:
+            pass
+
     return bp
