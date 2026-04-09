@@ -239,6 +239,13 @@ def full_stack_blueprint(
     # Reconstruction receives scene_graph for semantic labelling + dynamic masking
     _w("PerceptionModule", "scene_graph", "ReconstructionModule", "scene_graph")
 
+    # Dataset recorder: same camera + odometry feeds as ReconstructionModule
+    if "DatasetRecorderModule" in _bp_names and _camera_src in _bp_names:
+        bp.wire(_camera_src, _color_out, "DatasetRecorderModule", "color_image")
+        bp.wire(_camera_src, "depth_image", "DatasetRecorderModule", "depth_image")
+        bp.wire(_camera_src, "camera_info", "DatasetRecorderModule", "camera_info")
+    _w(_drv, "odometry", "DatasetRecorderModule", "odometry")
+
     # Keyframe exporter: same camera + odometry feeds as ReconstructionModule
     if "ReconKeyframeExporterModule" in _bp_names and _camera_src in _bp_names:
         bp.wire(_camera_src, _color_out, "ReconKeyframeExporterModule", "color_image")
