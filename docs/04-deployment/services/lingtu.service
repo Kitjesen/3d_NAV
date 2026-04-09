@@ -1,0 +1,26 @@
+[Unit]
+Description=LingTu Navigation Stack (algorithm layer)
+Documentation=https://github.com/Kitjesen/lingtu
+After=robot-fastlio2.service robot-localizer.service robot-camera.service robot-brainstem.service
+Wants=robot-fastlio2.service robot-localizer.service robot-camera.service robot-brainstem.service
+
+[Service]
+Type=simple
+User=sunrise
+WorkingDirectory=/opt/lingtu/current
+Environment="PYTHONPATH=/opt/lingtu/current/src"
+ExecStartPre=/bin/bash -c '\
+  source /opt/ros/humble/setup.bash && \
+  source /opt/lingtu/current/install/setup.bash && \
+  python3 /opt/lingtu/current/lingtu.py --version'
+ExecStart=/bin/bash -c '\
+  source /opt/ros/humble/setup.bash && \
+  source /opt/lingtu/current/install/setup.bash && \
+  exec python3 /opt/lingtu/current/lingtu.py nav'
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=60s
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=multi-user.target

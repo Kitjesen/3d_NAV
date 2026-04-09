@@ -1,0 +1,29 @@
+[Unit]
+Description=Robot SLAM - Fast-LIO2 (odometry + mapping)
+Documentation=https://github.com/Kitjesen/lingtu
+After=robot-lidar.service
+Requires=robot-lidar.service
+
+[Service]
+Type=simple
+User=sunrise
+WorkingDirectory=/opt/lingtu/current
+ExecStart=/bin/bash -c '\
+  source /opt/ros/humble/setup.bash && \
+  source /opt/lingtu/current/install/setup.bash && \
+  exec /opt/lingtu/current/install/fastlio2/lib/fastlio2/lio_node \
+    --ros-args \
+    -p config_path:=/opt/lingtu/current/install/fastlio2/share/fastlio2/config/lio_s100p.yaml \
+    -r /cloud_registered:=/nav/registered_cloud \
+    -r /cloud_map:=/nav/map_cloud \
+    -r /Odometry:=/nav/odometry \
+    -r /path:=/lio_path \
+    -r /imu/data:=/nav/imu \
+    -r /lidar/scan:=/nav/lidar_scan \
+    -r save_map:=/nav/save_map'
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Robot Brainstem (Dart CMS gRPC:13145)
+Documentation=https://github.com/Kitjesen/lingtu
+After=network.target
+
+[Service]
+Type=simple
+User=sunrise
+WorkingDirectory=/home/sunrise/data/brainstem
+Environment="PATH=/home/sunrise/data/dart-sdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/sunrise/data/dart-sdk/bin/dart han_dog/bin/server.dart
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+
+[Install]
+WantedBy=multi-user.target

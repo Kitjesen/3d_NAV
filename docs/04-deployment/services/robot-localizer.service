@@ -1,0 +1,32 @@
+[Unit]
+Description=Robot Localizer - ICP map-based localization
+Documentation=https://github.com/Kitjesen/lingtu
+After=robot-fastlio2.service
+Requires=robot-fastlio2.service
+
+[Service]
+Type=simple
+User=sunrise
+WorkingDirectory=/opt/lingtu/current
+ExecStart=/bin/bash -c '\
+  source /opt/ros/humble/setup.bash && \
+  source /opt/lingtu/current/install/setup.bash && \
+  exec /opt/lingtu/current/install/localizer/lib/localizer/localizer_node \
+    --ros-args \
+    -p config_path:=/opt/lingtu/current/install/localizer/share/localizer/config/localizer.yaml \
+    -p static_map_path:=/home/sunrise/data/nova/maps/active/map.pcd \
+    -p initial_x:=0.0 \
+    -p initial_y:=0.0 \
+    -p initial_z:=0.0 \
+    -p initial_yaw:=0.0 \
+    -r /cloud_registered:=/nav/registered_cloud \
+    -r /Odometry:=/nav/odometry \
+    -r map_cloud:=/nav/map_cloud \
+    -r relocalize:=/nav/relocalize \
+    -r relocalize_check:=/nav/relocalize_check'
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+
+[Install]
+WantedBy=multi-user.target
