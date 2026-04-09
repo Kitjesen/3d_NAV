@@ -20,6 +20,10 @@ perception = ["torch", "ultralytics", "open-clip-torch"]
 llm = ["openai", "anthropic"]
 vector = ["chromadb"]
 dev = ["pytest"]
+# ThunderDriver 依赖 brainstem 的 gRPC 契约包 brainstem_api (v2.0.0)。
+# 真机 / sunrise 部署时安装: pip install -e '.[thunder]'
+# stub / sim 模式不需要装。
+thunder = ["brainstem-api @ git+https://github.com/Kitjesen/brainstem_api.git@v2.0.0#subdirectory=python"]
 
 [project.scripts]
 lingtu = "lingtu_cli:main"
