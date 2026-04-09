@@ -70,7 +70,7 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               }
               case 'odometry':
-                next.odometry = event as never
+                next.odometry = { type: 'odometry', ...(evt.data as object || evt) } as never
                 break
               case 'mission':
               case 'mission_status':
