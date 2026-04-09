@@ -728,6 +728,41 @@ class GatewayModule(Module, layer=6):
                         module_summary[name] = "error"
                         modules_fail += 1
 
+            # ── Brainstem gRPC probe (RobotControl :13145) ──
+            def _brainstem_probe():
+                import grpc
+                import brainstem_api as bapi
+                ch = grpc.insecure_channel("127.0.0.1:13145")
+                stub = bapi.RobotControlStub(ch)
+                state = stub.GetCmsState(bapi.Empty(), timeout=1.0)
+                fsm_map = {0: "ZERO", 1: "GROUNDED", 2: "STANDING",
+                           3: "WALKING", 4: "TRANSITIONING"}
+                info: dict[str, Any] = {
+                    "status": "connected",
+                    "host": "127.0.0.1:13145",
+                    "fsm": fsm_map.get(state.kind, str(state.kind)),
+                }
+                try:
+                    v = stub.GetVoltage(bapi.Empty(), timeout=1.0)
+                    if v.values:
+                        info["voltage_avg"] = round(sum(v.values) / len(v.values), 1)
+                except Exception:
+                    pass
+                ch.close()
+                return info
+
+            brainstem_info: dict[str, Any] = {"status": "not_probed"}
+            try:
+                loop = asyncio.get_event_loop()
+                brainstem_info = await loop.run_in_executor(None, _brainstem_probe)
+            except ImportError:
+                brainstem_info = {"status": "unavailable",
+                                 "reason": "brainstem_api not installed"}
+            except Exception as e:
+                brainstem_info = {"status": "unreachable",
+                                 "host": "127.0.0.1:13145",
+                                 "error": str(e)[:120]}
+
             return {
                 "status": "ok" if modules_fail == 0 else "degraded",
                 "modules_ok": modules_ok,
@@ -746,6 +781,7 @@ class GatewayModule(Module, layer=6):
                 "map_points": map_pts,
                 "has_odom": gw._odom is not None,
                 "modules": module_summary,
+                "brainstem": brainstem_info,
             }
 
         # ── Liveness / Readiness probes ────────────────────────────────────
@@ -1147,6 +1183,8 @@ class GatewayModule(Module, layer=6):
                 port=self._port,
                 log_level="warning",
                 loop="asyncio",
+                # websockets 14+ dropped legacy API; sansio backend is compatible
+                ws="websockets-sansio",
                 # Production: keep-alive and timeout tuning
                 timeout_keep_alive=30,
                 ws_max_size=2 * 1024 * 1024,  # 2 MB — enough for 1080p JPEG
