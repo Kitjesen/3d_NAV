@@ -11,8 +11,13 @@ import sys
 import time
 import unittest
 
-import cv2
 import numpy as np
+import pytest
+
+# cv2 is only required when the visual-SLAM fusion pipeline is active.
+# On CI / minimal environments without opencv-python-headless installed,
+# skip the whole module instead of failing at collection time.
+cv2 = pytest.importorskip("cv2")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
