@@ -730,8 +730,8 @@ class GatewayModule(Module, layer=6):
 
             # ── Brainstem gRPC probe (RobotControl :13145) ──
             def _brainstem_probe():
-                import grpc
                 import brainstem_api as bapi
+                import grpc
                 ch = grpc.insecure_channel("127.0.0.1:13145")
                 stub = bapi.RobotControlStub(ch)
                 state = stub.GetCmsState(bapi.Empty(), timeout=1.0)
@@ -851,7 +851,7 @@ class GatewayModule(Module, layer=6):
             """Filesystem scan fallback — works even without MapManagerModule."""
             import os
             import pathlib
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
             maps = []
             active_target = ""
             active_link = pathlib.Path(map_dir) / "active"
@@ -886,9 +886,10 @@ class GatewayModule(Module, layer=6):
         async def get_map_pcd(name: str):
             import os as _os
             import pathlib
-            from fastapi.responses import FileResponse
+
             from fastapi import HTTPException
-            map_dir = _os.environ.get("NAV_MAP_DIR", _os.path.expanduser("~/data/nova/maps"))
+            from fastapi.responses import FileResponse
+            map_dir = _os.environ.get("NAV_MAP_DIR", _os.path.expanduser("~/data/inovxio/data/maps"))
             base = pathlib.Path(map_dir).resolve()
             pcd_path = (base / name / "map.pcd").resolve()
             if not str(pcd_path).startswith(str(base)):
@@ -1000,7 +1001,7 @@ class GatewayModule(Module, layer=6):
             name = body.get("name", "")
             if not name:
                 return JSONResponse({"success": False, "message": "需要 name"}, status_code=400)
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
             target = os.path.join(map_dir, name)
             if not os.path.isdir(target):
                 return JSONResponse({"success": False, "message": f"地图不存在: {name}"}, status_code=404)
@@ -1021,7 +1022,7 @@ class GatewayModule(Module, layer=6):
             new = body.get("new_name", "")
             if not old or not new:
                 return JSONResponse({"success": False, "message": "需要 old_name 和 new_name"}, status_code=400)
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
             old_path = os.path.join(map_dir, old)
             new_path = os.path.join(map_dir, new)
             if not os.path.isdir(old_path):
@@ -1050,7 +1051,7 @@ class GatewayModule(Module, layer=6):
             if not name:
                 from datetime import datetime
                 name = "map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
             save_dir = os.path.join(map_dir, name)
             os.makedirs(save_dir, exist_ok=True)
             pcd_path = os.path.join(save_dir, "map.pcd")
@@ -1293,7 +1294,7 @@ class GatewayModule(Module, layer=6):
     def _generate_viewer_from_pcd(self, map_name: str) -> str:
         """Load a saved PCD file and generate viewer HTML (does NOT touch live data)."""
         import os
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
         pcd_path = os.path.join(map_dir, map_name, "map.pcd")
         if not os.path.isfile(pcd_path):
             return f"<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>地图不存在: {map_name}</h2><p>找不到 {pcd_path}</p></body></html>"

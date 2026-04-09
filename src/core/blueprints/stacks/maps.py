@@ -58,7 +58,10 @@ def maps(**config) -> Blueprint:
         from nav.services.nav_services.map_manager_module import MapManagerModule
         map_dir = config.get(
             "map_dir",
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/lingtu/maps")),
+            os.environ.get(
+                "NAV_MAP_DIR",
+                os.path.expanduser("~/data/inovxio/data/maps"),
+            ),
         )
         bp.add(MapManagerModule, map_dir=map_dir)
     except ImportError as e:

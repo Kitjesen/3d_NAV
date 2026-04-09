@@ -51,7 +51,10 @@ class MapManagerModule(Module, layer=6):
         )
         default_map_dir = config.get(
             "map_dir",
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+            os.environ.get(
+                "NAV_MAP_DIR",
+                os.path.expanduser("~/data/inovxio/data/maps"),
+            ),
         )
         self._data_dir = Path(default_data_dir)
         self._map_dir = Path(default_map_dir)
