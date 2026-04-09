@@ -183,6 +183,11 @@ class TeleopModule(Module, layer=6):
     def on_client_connect(self) -> None:
         """Called by GatewayModule when a teleop WS client connects."""
         self._clients += 1
+        # Kick the encoder immediately so the new client gets the most recent
+        # cached raw frame encoded + pushed on the first send-loop iteration,
+        # instead of waiting up to ~33ms for the next camera tick.
+        if self._latest_raw is not None:
+            self._new_frame.set()
 
     def on_client_disconnect(self) -> None:
         """Called by GatewayModule when a teleop WS client disconnects."""
@@ -240,11 +245,18 @@ class TeleopModule(Module, layer=6):
     # -- camera frame handling ----------------------------------------------
 
     def _on_image(self, img: Image) -> None:
-        if self._gateway is None or self._clients == 0:
+        if self._gateway is None:
             return
+        # Always cache the latest raw frame, even when no clients are connected,
+        # so that a freshly-connecting client can immediately get an encoded
+        # frame (instead of waiting ~33ms for the next camera tick and seeing
+        # the Dashboard flash "offline / reconnect" initially).
         with self._raw_lock:
             self._latest_raw = img.data
-        self._new_frame.set()
+        # Only wake the encoder thread when a client is connected — skipping
+        # the JPEG encode step keeps CPU usage low in idle state.
+        if self._clients > 0:
+            self._new_frame.set()
 
     def _encode_loop(self) -> None:
         """Dedicated thread: encode raw frames to JPEG at stream_fps."""
