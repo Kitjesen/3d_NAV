@@ -5,10 +5,10 @@ After=network.target
 [Service]
 Type=simple
 User=sunrise
-WorkingDirectory=/home/sunrise/data/SLAM/navigation
+WorkingDirectory=/home/sunrise/data/inovxio/lingtu
 ExecStart=/bin/bash -c '\
   source /opt/ros/humble/setup.bash && \
-  source ~/data/SLAM/navigation/install/setup.bash && \
+  source ~/data/inovxio/lingtu/install/setup.bash && \
   exec ros2 run livox_ros_driver2 livox_ros_driver2_node \
     --ros-args \
     -p xfer_format:=1 \
@@ -16,7 +16,7 @@ ExecStart=/bin/bash -c '\
     -p data_src:=0 \
     -p publish_freq:=10.0 \
     -p output_data_type:=0 \
-    -p user_config_path:=/home/sunrise/data/SLAM/navigation/install/livox_ros_driver2/share/livox_ros_driver2/config/MID360_config.json \
+    -p user_config_path:=/home/sunrise/data/inovxio/lingtu/install/livox_ros_driver2/share/livox_ros_driver2/config/MID360_config.json \
     -r livox/lidar:=/nav/lidar_scan \
     -r livox/imu:=/nav/imu'
 Restart=on-failure

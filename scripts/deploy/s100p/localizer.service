@@ -6,14 +6,14 @@ Wants=slam.service
 [Service]
 Type=simple
 User=sunrise
-WorkingDirectory=/home/sunrise/data/SLAM/navigation
+WorkingDirectory=/home/sunrise/data/inovxio/lingtu
 ExecStart=/bin/bash -c '\
   source /opt/ros/humble/setup.bash && \
-  source ~/data/SLAM/navigation/install/setup.bash && \
-  MAP_PATH=$${NAV_MAP_PATH:-/home/sunrise/data/nova/maps/active/map}; \
+  source ~/data/inovxio/lingtu/install/setup.bash && \
+  MAP_PATH=$${NAV_MAP_PATH:-/home/sunrise/data/inovxio/data/maps/active/map}; \
   exec ros2 run localizer localizer_node \
     --ros-args \
-    -p config_path:=/home/sunrise/data/SLAM/navigation/install/localizer/share/localizer/config/localizer.yaml \
+    -p config_path:=/home/sunrise/data/inovxio/lingtu/install/localizer/share/localizer/config/localizer.yaml \
     -p static_map_path:=$${MAP_PATH}.pcd \
     -p initial_x:=0.0 \
     -p initial_y:=0.0 \

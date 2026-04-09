@@ -26,7 +26,7 @@ import numpy as np
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
-sys.path.insert(0, "/home/sunrise/data/SLAM/navigation/src/semantic/perception")
+sys.path.insert(0, "/home/sunrise/data/inovxio/lingtu/src/semantic/perception")
 
 latest_jpg = None
 lock = threading.Lock()

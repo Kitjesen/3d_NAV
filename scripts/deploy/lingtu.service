@@ -6,15 +6,15 @@ Wants=lidar.service camera.service
 [Service]
 Type=simple
 User=sunrise
-WorkingDirectory=/home/sunrise/data/SLAM/navigation
+WorkingDirectory=/home/sunrise/data/inovxio/lingtu
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 lingtu.py nav --no-repl --daemon
 Restart=on-failure
 RestartSec=5
 
 # Logging
-StandardOutput=append:/home/sunrise/data/nova/logs/lingtu/lingtu.log
-StandardError=append:/home/sunrise/data/nova/logs/lingtu/lingtu.log
+StandardOutput=append:/home/sunrise/data/inovxio/data/logs/lingtu/lingtu.log
+StandardError=append:/home/sunrise/data/inovxio/data/logs/lingtu/lingtu.log
 
 [Install]
 WantedBy=multi-user.target

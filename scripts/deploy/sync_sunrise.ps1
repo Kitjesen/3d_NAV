@@ -6,7 +6,7 @@
 
 param(
     [string]$SunriseHost = "sunrise@192.168.66.190",
-    [string]$RemotePath = "/home/sunrise/data/SLAM/navigation",
+    [string]$RemotePath = "/home/sunrise/data/inovxio/lingtu",
     [string]$ProxyPort = "7890"
 )
 

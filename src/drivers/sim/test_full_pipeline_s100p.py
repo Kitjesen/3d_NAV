@@ -2,7 +2,7 @@
 """S100P full pipeline test: MuJoCo + terrain_core + PCT/A* + navigation.
 
 Run on S100P:
-    cd ~/data/SLAM/navigation/src
+    cd ~/data/inovxio/lingtu/src
     PYTHONPATH=. python3 drivers/sim/test_full_pipeline_s100p.py
 """
 import math

@@ -6,9 +6,9 @@ Wants=lidar.service camera.service
 [Service]
 Type=simple
 User=sunrise
-WorkingDirectory=/home/sunrise/data/SLAM/navigation
+WorkingDirectory=/home/sunrise/data/inovxio/lingtu
 Environment=PYTHONUNBUFFERED=1
-Environment=NAV_MAP_DIR=/home/sunrise/data/nova/maps
+Environment=NAV_MAP_DIR=/home/sunrise/data/inovxio/data/maps
 ExecStart=/usr/bin/python3 scripts/manager/manager.py
 Restart=on-failure
 RestartSec=3

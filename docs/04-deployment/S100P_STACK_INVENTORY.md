@@ -32,9 +32,9 @@ S100P 上**不是之前以为的 3 套栈，而是 5 代累积的 40+ systemd se
 | `brainstem.service` | ✅ | ✅ | `~/data/brainstem/` | Dart CMS gRPC :13145, 机器人腿部控制 |
 | `camera.service` | ✅ | ✅ | orbbec_camera launch | 相机 ROS2 节点 |
 | `can-setup.service` | ✅ | ✅ | shell oneshot | CAN 总线初始化 (can0-can3) |
-| `lidar.service` | ✅ | ✅ | `~/data/SLAM/navigation/install/` | Livox MID-360 驱动 (**冲突源 1**) |
-| `slam.service` | ✅ | ✅ | `~/data/SLAM/navigation/install/` | Fast-LIO2 SLAM |
-| `localizer.service` | ✅ | ✅ | `~/data/SLAM/navigation/install/` | ICP 定位 |
+| `lidar.service` | ✅ | ✅ | `~/data/inovxio/lingtu/install/` | Livox MID-360 驱动 (**冲突源 1**) |
+| `slam.service` | ✅ | ✅ | `~/data/inovxio/lingtu/install/` | Fast-LIO2 SLAM |
+| `localizer.service` | ✅ | ✅ | `~/data/inovxio/lingtu/install/` | ICP 定位 |
 | `nav-lidar-network.service` | ✅ | exited | network script | LiDAR 网络初始化 (oneshot) |
 | `ota-agent.service` | ✅ | ✅ | `/opt/nova/ota/` | OTA 拉取 agent |
 | `cortex-telemetry.service` | ❌ | ✅ | `/opt/nova/cortex/v0.2.8/` | 遥测服务（**僵尸**）|
@@ -77,13 +77,13 @@ systemd.slice
 ├── lidar.service
 │   ├── pid 1730  ros2 run livox_ros_driver2
 │   └── pid 2886  livox_ros_driver2_node
-│                 config: ~/data/SLAM/navigation/install/livox_ros_driver2/...
+│                 config: ~/data/inovxio/lingtu/install/livox_ros_driver2/...
 │                 remap: livox/lidar → /nav/lidar_scan  ← 冲突源 1
 │
 ├── slam.service
 │   ├── pid 1731  ros2 run fastlio2 lio_node
 │   └── pid 2876  fastlio2 lio_node (3.1GB RAM, 23% CPU)
-│                 config: ~/data/SLAM/navigation/install/fastlio2/.../lio_s100p.yaml
+│                 config: ~/data/inovxio/lingtu/install/fastlio2/.../lio_s100p.yaml
 │
 ├── localizer.service
 │   ├── pid 1733  ros2 run localizer localizer_node
@@ -115,7 +115,7 @@ systemd.slice
 /user.slice/user-1000.slice/session-8.scope  (SSH session 8, 已断开)
 │
 └── pid 9765  python3 lingtu.py nav --daemon    (14:31:01 启动)
-    │         cwd: ~/data/SLAM/navigation
+    │         cwd: ~/data/inovxio/lingtu
     │         PPid: 1  (systemd, 因为 --daemon 后 fork detach)
     │         监听: 5050 (Gateway), 8090 (MCP)
     │
@@ -131,7 +131,7 @@ systemd.slice
 
 | 路径 | 版本 | 大小 | 状态 |
 |---|---|---|---|
-| `~/data/SLAM/navigation/` | `VERSION=2.0.0` (git main `31bd815b`) | 2.5 GB | 活跃开发分支，本次 session 已 push 到此分支 |
+| `~/data/inovxio/lingtu/` | `VERSION=2.0.0` (git main `31bd815b`) | 2.5 GB | 活跃开发分支，本次 session 已 push 到此分支 |
 | `~/data/brainstem/` | 未查 | 未查 | brainstem 独立项目 |
 | `/opt/nova/cortex/current/` → `v0.2.8` | v0.2.8 | 152 MB | nova-dog runtime 旧项目 |
 | `/opt/nova/lingtu/v1.8.0/` | `VERSION=1.7.5` | 272 MB | OTA 部署，但 VERSION 文件没更新（bug）|
@@ -156,7 +156,7 @@ deploy.base_dir: "/opt/nova/ota"
 
 | 实例 | PID | 启动源 | 二进制路径 | 配置路径 |
 |---|---|---|---|---|
-| 1 | 2886 | `lidar.service` | `~/data/SLAM/navigation/install/livox_ros_driver2/` | `~/data/SLAM/navigation/install/.../MID360_config.json` |
+| 1 | 2886 | `lidar.service` | `~/data/inovxio/lingtu/install/livox_ros_driver2/` | `~/data/inovxio/lingtu/install/.../MID360_config.json` |
 | 2 | 9887 | `lingtu.py nav --daemon` (手工) | `/opt/nova/lingtu/v1.8.0/install/livox_ros_driver2/` | `~/.lingtu/generated/livox/MID360_config.json` |
 
 **影响**：
@@ -191,7 +191,7 @@ ExecStart=/bin/bash /opt/nav/scripts/services/nav-slam.sh   ← 不存在
 
 ### 4.5 OTA 部署没启动
 
-OTA Agent 把 LingTu 拉到了 `/opt/nova/lingtu/v1.8.0/`，但**没有任何 service 启动这个目录**。它是"已下载未部署"的状态。真正在跑的是 `~/data/SLAM/navigation/install/` 的开发版。
+OTA Agent 把 LingTu 拉到了 `/opt/nova/lingtu/v1.8.0/`，但**没有任何 service 启动这个目录**。它是"已下载未部署"的状态。真正在跑的是 `~/data/inovxio/lingtu/install/` 的开发版。
 
 ---
 
@@ -217,7 +217,7 @@ OTA Agent 把 LingTu 拉到了 `/opt/nova/lingtu/v1.8.0/`，但**没有任何 se
 
 代次 4: 现役 SLAM 栈
   → slam/lidar/localizer.service (3 个无前缀)
-  → 依赖 ~/data/SLAM/navigation/install/
+  → 依赖 ~/data/inovxio/lingtu/install/
   → 现状: 在跑
 
 代次 5: OTA 部署的 LingTu 1.8.0
@@ -248,7 +248,7 @@ OTA Agent 把 LingTu 拉到了 `/opt/nova/lingtu/v1.8.0/`，但**没有任何 se
 
 | Service | 迁移目标 |
 |---|---|
-| `slam.service` / `lidar.service` / `localizer.service` | 代码从 `~/data/SLAM/navigation/install/` 迁到 `/opt/lingtu/releases/<version>/`，然后重写 ExecStart 指向新路径 |
+| `slam.service` / `lidar.service` / `localizer.service` | 代码从 `~/data/inovxio/lingtu/install/` 迁到 `/opt/lingtu/releases/<version>/`，然后重写 ExecStart 指向新路径 |
 
 ### 6.3 立即处理（冲突源）
 
@@ -276,7 +276,7 @@ OTA Agent 把 LingTu 拉到了 `/opt/nova/lingtu/v1.8.0/`，但**没有任何 se
 - [ ] LingTu 导航栈是否依赖 cortex 的 `dog-safety` / `dog-control`？
 - [ ] `/home/sunrise/data/brainstem/` 的代码是哪个 git commit？对应哪个 brainstem 版本？
 - [ ] `/opt/nova/lingtu/v1.8.0/` 为什么 VERSION 文件说 1.7.5？（打包 bug 修复）
-- [ ] `~/data/SLAM/navigation/` 和 `/opt/nova/lingtu/v1.8.0/` 代码差异多大？
+- [ ] `~/data/inovxio/lingtu/` 和 `/opt/nova/lingtu/v1.8.0/` 代码差异多大？
 
 ---
 
@@ -308,17 +308,17 @@ uptime
 sudo mkdir -p /opt/lingtu/releases/v2.0.0-dev
 sudo chown -R sunrise:sunrise /opt/lingtu
 
-# 2. 把 ~/data/SLAM/navigation/install/ 复制到 /opt/lingtu/releases/v2.0.0-dev/
+# 2. 把 ~/data/inovxio/lingtu/install/ 复制到 /opt/lingtu/releases/v2.0.0-dev/
 #    (先 rsync, 避免 git 目录)
 rsync -av --exclude='.git' --exclude='build' \
-    ~/data/SLAM/navigation/ /opt/lingtu/releases/v2.0.0-dev/
+    ~/data/inovxio/lingtu/ /opt/lingtu/releases/v2.0.0-dev/
 
 # 3. 建 current symlink
 ln -s /opt/lingtu/releases/v2.0.0-dev /opt/lingtu/current
 
 # 4. 配置目录独立
 mkdir -p /opt/lingtu/config
-cp ~/data/SLAM/navigation/config/robot_config.yaml /opt/lingtu/config/robot.yaml
+cp ~/data/inovxio/lingtu/config/robot_config.yaml /opt/lingtu/config/robot.yaml
 ```
 
 ### Step 3: 重写 systemd services（Day 2）

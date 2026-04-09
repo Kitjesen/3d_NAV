@@ -5,7 +5,7 @@
 ## 0. 为什么要写这份文档
 
 2026-04-09，在 S100P 上发现**三套导航栈同时在跑**：
-- `~/data/SLAM/navigation/` — 开发版本（手工启动，开机自起）
+- `~/data/inovxio/lingtu/` — 开发版本（手工启动，开机自起）
 - `/opt/nova/cortex/` — NOVA Cortex 老部署（开机自起）
 - `/opt/nova/lingtu/v1.8.0/` — OTA Agent 最新部署
 
@@ -215,7 +215,7 @@ lingtu snapshot create pre-cleanup
 systemctl stop ota-agent
 pkill -STOP -f "lingtu.py nav"
 pkill -STOP -f "/opt/nova/cortex"
-pkill -STOP -f "data/SLAM/navigation"
+pkill -STOP -f "data/inovxio/lingtu"
 
 # 3. 只保留基础（brainstem + 安全层），其他全停
 ```
@@ -229,7 +229,7 @@ pkill -STOP -f "data/SLAM/navigation"
 调查清单：
 - [ ] `/opt/nova/cortex/` — 这是 nova-dog 项目的，LingTu 用得上吗？
 - [ ] `/opt/nova/lingtu/v1.8.0/` — OTA 部署的版本，对应哪个 git tag？
-- [ ] `~/data/SLAM/navigation/` — 开发版本，和 OTA 版本差异多大？
+- [ ] `~/data/inovxio/lingtu/` — 开发版本，和 OTA 版本差异多大？
 - [ ] brainstem (pid 1729) — 哪个目录启动的？用的哪版 profile？
 - [ ] 开机自启机制 — 是 rc.local / init / systemd generator / bashrc？
 
@@ -313,7 +313,7 @@ ssh sunrise@<robot> lingtu doctor
 
 ### 并行运行的三套栈
 
-**栈 1：`~/data/SLAM/navigation/`**（开发版，13:54 开机自起）
+**栈 1：`~/data/inovxio/lingtu/`**（开发版，13:54 开机自起）
 - pid 1729 `dart:server.dart` — brainstem，监听 13145
 - pid 1730 `livox_ros_driver2` — LiDAR 驱动（第一份）
 - pid 1731 `fastlio2 lio_node` — Fast-LIO2 SLAM

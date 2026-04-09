@@ -39,7 +39,7 @@ cd navigation
 git submodule update --init --recursive
 ```
 
-> 工作区路径: `/home/sunrise/data/SLAM/navigation`
+> 工作区路径: `/home/sunrise/data/inovxio/lingtu`
 > 后面统一叫 `$NAV_DIR`
 
 ---
@@ -60,7 +60,7 @@ make -j$(nproc) && sudo make install
 ### 3.2 GTSAM 4.1.1
 
 ```bash
-cd /home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1
+cd /home/sunrise/data/inovxio/lingtu/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1
 mkdir -p build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=../install \
     -DGTSAM_BUILD_TESTS=OFF -DGTSAM_WITH_TBB=OFF -DGTSAM_USE_SYSTEM_EIGEN=ON
@@ -69,7 +69,7 @@ make -j$(nproc) && make install
 
 ```bash
 # 加入环境变量（永久生效）
-echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/sunrise/data/SLAM/navigation/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/sunrise/data/inovxio/lingtu/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib' >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -99,7 +99,7 @@ sudo cmake --install build
 ## 4. 编译工作区
 
 ```bash
-cd /home/sunrise/data/SLAM/navigation
+cd /home/sunrise/data/inovxio/lingtu
 ./build_all.sh
 source install/setup.bash
 ```
@@ -116,7 +116,7 @@ ros2 pkg list | grep -E "fastlio2|local_planner|pct_planner|remote_monitoring"
 ## 5. 安装系统服务（一条命令）
 
 ```bash
-cd /home/sunrise/data/SLAM/navigation
+cd /home/sunrise/data/inovxio/lingtu
 sudo bash scripts/install_services.sh
 ```
 
@@ -124,7 +124,7 @@ sudo bash scripts/install_services.sh
 
 | 步骤 | 动作 | 结果 |
 |------|------|------|
-| 1 | `ln -sfn /home/sunrise/data/SLAM/navigation /opt/nav` | 创建符号链接 |
+| 1 | `ln -sfn /home/sunrise/data/inovxio/lingtu /opt/nav` | 创建符号链接 |
 | 2 | 复制 `systemd/*.service` 到 `/etc/systemd/system/` | 注册服务 |
 | 3 | 配置 sudoers | sunrise 用户可以无密码管理服务 |
 
@@ -132,7 +132,7 @@ sudo bash scripts/install_services.sh
 
 ```bash
 ls -la /opt/nav
-# 应显示: /opt/nav -> /home/sunrise/data/SLAM/navigation
+# 应显示: /opt/nav -> /home/sunrise/data/inovxio/lingtu
 
 systemctl list-unit-files | grep nav
 # 应显示 6 个服务
@@ -230,7 +230,7 @@ sudo systemctl restart nav-slam
 不走 systemd，直接在终端运行：
 
 ```bash
-cd /home/sunrise/data/SLAM/navigation
+cd /home/sunrise/data/inovxio/lingtu
 source install/setup.bash
 
 # 建图 (全部节点一次启动)
@@ -304,7 +304,7 @@ sudo systemctl restart nav-lidar nav-slam nav-autonomy nav-grpc
 # 一键部署 — 在新机器上执行
 set -e
 
-NAV_DIR="/home/sunrise/data/SLAM/navigation"
+NAV_DIR="/home/sunrise/data/inovxio/lingtu"
 
 echo "=== [1/5] 系统依赖 ==="
 sudo apt update && sudo apt install -y \

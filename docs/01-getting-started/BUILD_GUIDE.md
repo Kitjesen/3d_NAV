@@ -12,7 +12,7 @@
 
 本文档中 `$NAV_DIR` 代表工作区根目录 (即 `3d_NAV` 所在路径)。
 
-部署到机器人时，该目录通常为 `/home/sunrise/data/SLAM/navigation`，
+部署到机器人时，该目录通常为 `/home/sunrise/data/inovxio/lingtu`，
 本地开发时是你 clone 仓库后的实际路径。
 
 ---

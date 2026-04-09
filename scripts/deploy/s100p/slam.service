@@ -6,13 +6,13 @@ Wants=lidar.service
 [Service]
 Type=simple
 User=sunrise
-WorkingDirectory=/home/sunrise/data/SLAM/navigation
+WorkingDirectory=/home/sunrise/data/inovxio/lingtu
 ExecStart=/bin/bash -c '\
   source /opt/ros/humble/setup.bash && \
-  source ~/data/SLAM/navigation/install/setup.bash && \
+  source ~/data/inovxio/lingtu/install/setup.bash && \
   exec ros2 run fastlio2 lio_node \
     --ros-args \
-    -p config_path:=/home/sunrise/data/SLAM/navigation/install/fastlio2/share/fastlio2/config/lio_s100p.yaml \
+    -p config_path:=/home/sunrise/data/inovxio/lingtu/install/fastlio2/share/fastlio2/config/lio_s100p.yaml \
     -r /cloud_registered:=/nav/registered_cloud \
     -r /cloud_map:=/nav/map_cloud \
     -r /Odometry:=/nav/odometry \

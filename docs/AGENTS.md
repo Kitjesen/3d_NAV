@@ -623,7 +623,7 @@ Daemon uses Unix double-fork (`setsid`), writes PID to `.lingtu/run.pid`, state 
 ## 22. S100P Deployment
 
 - **SSH**: `ssh sunrise@192.168.66.190`
-- **Nav code**: `~/data/SLAM/navigation/`
+- **Nav code**: `~/data/inovxio/lingtu/`
 - **Nav deploy**: `/opt/lingtu/nav/`
 - **CycloneDDS**: Built from source at `~/cyclonedds/install/`
 - **Python**: 3.10.12, cyclonedds==0.10.5

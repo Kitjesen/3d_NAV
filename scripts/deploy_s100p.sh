@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # S100P 一键部署脚本
-# 用法: ssh sunrise 'bash ~/data/SLAM/navigation/scripts/deploy_s100p.sh'
+# 用法: ssh sunrise 'bash ~/data/inovxio/lingtu/scripts/deploy_s100p.sh'
 # 或本地: ssh sunrise@192.168.66.190 'bash -s' < scripts/deploy_s100p.sh
 
 set -euo pipefail
 
-REPO=~/data/SLAM/navigation
+REPO=~/data/inovxio/lingtu
 LOG=/tmp/deploy_s100p.log
 
 echo "═══════════════════════════════════════════"

@@ -46,8 +46,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-NAV_DIR = os.environ.get("NAV_DIR", "/home/sunrise/data/SLAM/navigation")
-MAP_DIR = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+NAV_DIR = os.environ.get("NAV_DIR", "/home/sunrise/data/inovxio/lingtu")
+MAP_DIR = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
 MANAGER_PORT = int(os.environ.get("LINGTU_PORT", "5050"))
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -327,7 +327,6 @@ async def api_stop():
     # Send stop to brainstem
     try:
         import grpc
-        sys.path.insert(0, "/opt/nova/brainstem/v2.0.0/brainstem_api/python")
         from brainstem_api import cms_pb2_grpc
         from google.protobuf.empty_pb2 import Empty
         channel = grpc.insecure_channel("127.0.0.1:13145")

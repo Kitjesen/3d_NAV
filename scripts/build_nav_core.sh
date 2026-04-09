@@ -16,7 +16,7 @@
 #   - nanobind: pip install nanobind
 #
 # After building, add to ~/.bashrc (or lingtu does it automatically):
-#   export PYTHONPATH=~/data/SLAM/navigation/src/nav/core/build_nb:$PYTHONPATH
+#   export PYTHONPATH=~/data/inovxio/lingtu/src/nav/core/build_nb:$PYTHONPATH
 
 set -euo pipefail
 

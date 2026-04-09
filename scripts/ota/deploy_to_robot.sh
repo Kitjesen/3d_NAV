@@ -26,7 +26,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-REMOTE_NAV_DIR="/home/sunrise/data/SLAM/navigation"
+REMOTE_NAV_DIR="/home/sunrise/data/inovxio/lingtu"
 SERVICES="nav-slam nav-autonomy nav-planning nav-grpc ota-daemon"
 
 # ---- 参数检查 ----

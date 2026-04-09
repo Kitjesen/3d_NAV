@@ -3,7 +3,7 @@
 ## 安装
 
 ```bash
-cd ~/data/SLAM/navigation
+cd ~/data/inovxio/lingtu
 pip install -e .
 ```
 

@@ -14,7 +14,7 @@ ExecStart=/bin/bash -c '\
   exec /opt/lingtu/current/install/localizer/lib/localizer/localizer_node \
     --ros-args \
     -p config_path:=/opt/lingtu/current/install/localizer/share/localizer/config/localizer.yaml \
-    -p static_map_path:=/home/sunrise/data/nova/maps/active/map.pcd \
+    -p static_map_path:=/home/sunrise/data/inovxio/data/maps/active/map.pcd \
     -p initial_x:=0.0 \
     -p initial_y:=0.0 \
     -p initial_z:=0.0 \

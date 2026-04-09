@@ -703,7 +703,7 @@ sudo apt install libx264-dev
 ### 7.2 编译
 
 ```bash
-cd /home/sunrise/data/SLAM/navigation
+cd /home/sunrise/data/inovxio/lingtu
 
 colcon build --packages-select remote_monitoring \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
