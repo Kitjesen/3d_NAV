@@ -829,10 +829,6 @@ class GatewayModule(Module, layer=6):
                         continue
                     pcd = os.path.join(full, "map.pcd")
                     has_pcd = os.path.isfile(pcd)
-                    size = ""
-                    if has_pcd:
-                        sz = os.path.getsize(pcd)
-                        size = f"{sz/1024/1024:.1f}MB" if sz > 1024*1024 else f"{sz/1024:.0f}KB"
                     patches_dir = os.path.join(full, "patches")
                     patch_count = len(os.listdir(patches_dir)) if os.path.isdir(patches_dir) else 0
                     has_tomogram = os.path.isfile(os.path.join(full, "tomogram.pickle"))
