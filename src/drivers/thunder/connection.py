@@ -308,8 +308,8 @@ class NovaDogConnection(Module, layer=1):
 
     async def _connect_and_run(self):
         try:
-            import grpc.aio as grpc_aio
             import brainstem_api as dog_msg
+            import grpc.aio as grpc_aio
         except ImportError:
             logger.error("grpc/brainstem_api not available — running in stub mode")
             self._connected = False
