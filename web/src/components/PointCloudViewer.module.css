@@ -43,6 +43,29 @@
   white-space: nowrap;
 }
 
+.resetBtn {
+  display: flex;
+  align-items: center;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.resetBtn:hover { border-color: var(--text-dim); color: var(--text); }
+
+.hint {
+  flex-shrink: 0;
+  padding: 5px 14px;
+  font-size: 10px;
+  color: var(--text-faint);
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+  text-align: center;
+}
+
 .body {
   flex: 1;
   position: relative;

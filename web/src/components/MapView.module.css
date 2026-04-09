@@ -74,6 +74,38 @@
 
 /* ── Map list ── */
 
+/* ── Groups ── */
+
+.group {
+  margin-bottom: 14px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.groupLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+
+.groupCount {
+  font-size: 10px;
+  color: var(--text-faint);
+  background: var(--bg3);
+  border-radius: 8px;
+  padding: 0 5px;
+  line-height: 16px;
+}
+
 .list {
   display: flex;
   flex-direction: column;
