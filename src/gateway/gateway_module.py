@@ -834,13 +834,19 @@ class GatewayModule(Module, layer=6):
                         sz = os.path.getsize(pcd)
                         size = f"{sz/1024/1024:.1f}MB" if sz > 1024*1024 else f"{sz/1024:.0f}KB"
                     patches_dir = os.path.join(full, "patches")
-                    kf = len(os.listdir(patches_dir)) if os.path.isdir(patches_dir) else 0
+                    patch_count = len(os.listdir(patches_dir)) if os.path.isdir(patches_dir) else 0
+                    has_tomogram = os.path.isfile(os.path.join(full, "tomogram.pickle"))
+                    size_mb: float | None = None
+                    if has_pcd:
+                        sz = os.path.getsize(pcd)
+                        size_mb = round(sz / 1024 / 1024, 1)
                     maps.append({
                         "name": d,
                         "has_pcd": has_pcd,
-                        "size": size,
-                        "patches": kf,
-                        "active": d == active_target,
+                        "has_tomogram": has_tomogram,
+                        "is_active": d == active_target,
+                        "size_mb": size_mb,
+                        "patch_count": patch_count,
                     })
             return {"maps": maps, "active": active_target, "map_dir": map_dir}
 
