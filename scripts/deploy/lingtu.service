@@ -1,6 +1,6 @@
 [Unit]
 Description=LingTu Navigation System
-After=network.target lidar.service camera.service brainstem.service
+After=network.target lidar.service camera.service brainstem.service robot-brainstem.service
 Wants=lidar.service camera.service
 
 [Service]
@@ -8,13 +8,24 @@ Type=simple
 User=sunrise
 WorkingDirectory=/home/sunrise/data/inovxio/lingtu
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 lingtu.py nav --no-repl --daemon
+
+# ExecStart uses a bash wrapper so we can:
+#   1. source /opt/ros/humble/setup.bash  (ROS2 core env: AMENT_PREFIX_PATH, LD_LIBRARY_PATH)
+#   2. source lingtu's colcon install/setup.bash  (livox_ros_driver2 + nav_core + ...)
+#   3. eval user-level API keys from ~/.bashrc  (DASHSCOPE_API_KEY, OPENAI_API_KEY, MOONSHOT_API_KEY)
+#   4. exec python3 (replaces the bash process — systemd tracks python PID directly)
+#
+# Without step 1+2, livox_ros_driver2_node fails to find its shared libs (exit 127).
+# Without step 3, LLMModule preflight fails with "API key not set".
+ExecStart=/bin/bash -c '\
+  set -e; \
+  source /opt/ros/humble/setup.bash; \
+  source /home/sunrise/data/inovxio/lingtu/install/setup.bash; \
+  eval "$(grep -E "^export (DASHSCOPE_API_KEY|OPENAI_API_KEY|MOONSHOT_API_KEY|ANTHROPIC_API_KEY|LINGTU_API_KEY)=" /home/sunrise/.bashrc || true)"; \
+  exec /usr/bin/python3 lingtu.py nav --no-repl'
+
 Restart=on-failure
 RestartSec=5
-
-# Logging
-StandardOutput=append:/home/sunrise/data/inovxio/data/logs/lingtu/lingtu.log
-StandardError=append:/home/sunrise/data/inovxio/data/logs/lingtu/lingtu.log
 
 [Install]
 WantedBy=multi-user.target
