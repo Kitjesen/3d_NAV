@@ -124,7 +124,7 @@ def full_stack_blueprint(
             enable_teleop=enable_teleop,
             enable_rerun=enable_rerun,
         )
-                               if enable_gateway else Blueprint(),
+            if enable_gateway else Blueprint(),
     )
 
     # ── Cross-stack critical wires ──────────────────────────────────────
@@ -263,7 +263,10 @@ def full_stack_blueprint(
     _w("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
     _w("VisualServoModule", "nav_stop", "NavigationModule", "stop_signal")
 
-    # Teleop — joystick → TeleopModule → CmdVelMux, active signal → Nav
+    # Teleop — camera feed + joystick → TeleopModule → CmdVelMux, active signal → Nav
+    _camera_src_t = "CameraBridgeModule" if "CameraBridgeModule" in _bp_names else _drv
+    _color_port_t  = "color_image" if _camera_src_t == "CameraBridgeModule" else "camera_image"
+    _w(_camera_src_t, _color_port_t, "TeleopModule", "color_image")
     _w("PerceptionModule", "scene_graph", "TeleopModule", "scene_graph")
     _w("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
 

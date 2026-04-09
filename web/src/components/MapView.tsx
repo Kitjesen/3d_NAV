@@ -94,11 +94,12 @@ export function MapView({ showToast }: MapViewProps) {
   const [loading,     setLoading    ] = useState(true)
   const [error,       setError      ] = useState('')
   const [selectedMap, setSelectedMap] = useState<string | null>(null)
-  const [splitPct,    setSplitPct   ] = useState(42)
+  const [splitPct,    setSplitPct   ] = useState(30)
 
   // Resizable divider
-  const containerRef = useRef<HTMLDivElement>(null)
-  const divDragRef   = useRef<{ startX: number; startPct: number } | null>(null)
+  const containerRef    = useRef<HTMLDivElement>(null)
+  const divDragRef      = useRef<{ startX: number; startPct: number } | null>(null)
+  const hasAutoSelected = useRef(false)
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -124,7 +125,14 @@ export function MapView({ showToast }: MapViewProps) {
   // Data
   const loadMaps = useCallback(async () => {
     setLoading(true); setError('')
-    try { setMaps(await api.fetchMaps()) }
+    try {
+      const data = await api.fetchMaps()
+      setMaps(data)
+      if (!hasAutoSelected.current) {
+        const active = data.find(m => m.is_active)
+        if (active) { setSelectedMap(active.name); hasAutoSelected.current = true }
+      }
+    }
     catch (e: unknown) {
       setError(`无法获取地图列表: ${e instanceof Error ? e.message : String(e)}`)
       setMaps([])
