@@ -17,12 +17,20 @@ Usage::
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .config import RobotConfig
 
-_DEFAULT_PREFIX = "/opt/nova/lingtu/v1.8.0/install"
+# Default install prefix: <lingtu_repo>/install
+# (the colcon build output lives next to src/ inside the repo root)
+# Overridable via cfg.raw["nav_install"] or env var LINGTU_NAV_INSTALL.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_PREFIX = os.environ.get(
+    "LINGTU_NAV_INSTALL",
+    str(_REPO_ROOT / "install"),
+)
 
 DDS_ENV: dict[str, str] = {
     "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
