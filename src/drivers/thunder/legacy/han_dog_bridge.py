@@ -47,7 +47,7 @@ from interface.msg import RobotState, BatteryState
 
 # han_dog gRPC 客户端
 from grpc import aio as grpc_aio
-import han_dog_message as dog_msg
+import brainstem_api as dog_msg
 
 from core.utils.sanitize import sanitize_float
 from core.utils.validation import normalize_quaternion
@@ -119,7 +119,7 @@ class HanDogBridge(Node):
 
         # gRPC 相关 (在 asyncio 线程中初始化)
         self._channel: Optional[grpc_aio.Channel] = None
-        self._stub: Optional[dog_msg.CmsStub] = None
+        self._stub: Optional[dog_msg.RobotControlStub] = None
 
         # 位置积分 (cmd_vel + IMU yaw → 世界坐标)
         self._pos_x = 0.0
@@ -397,7 +397,7 @@ class HanDogBridge(Node):
 
         async with grpc_aio.insecure_channel(addr) as channel:
             self._channel = channel
-            self._stub = dog_msg.CmsStub(channel)
+            self._stub = dog_msg.RobotControlStub(channel)
             self._connected = True
             self.get_logger().info(f'Connected to Han Dog CMS at {addr}')
 

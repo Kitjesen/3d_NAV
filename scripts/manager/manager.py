@@ -327,11 +327,11 @@ async def api_stop():
     # Send stop to brainstem
     try:
         import grpc
-        sys.path.insert(0, "/opt/nova/brainstem/v2.0.0/han_dog_message/python")
-        from han_dog_message import cms_pb2_grpc
+        sys.path.insert(0, "/opt/nova/brainstem/v2.0.0/brainstem_api/python")
+        from brainstem_api import cms_pb2_grpc
         from google.protobuf.empty_pb2 import Empty
         channel = grpc.insecure_channel("127.0.0.1:13145")
-        stub = cms_pb2_grpc.CmsStub(channel)
+        stub = cms_pb2_grpc.RobotControlStub(channel)
         stub.SitDown(Empty(), timeout=3)
         channel.close()
     except Exception as e:

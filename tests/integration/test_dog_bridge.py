@@ -33,12 +33,12 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped
 from std_msgs.msg import Bool, Int8
 
-import han_dog_message as dog_msg
+import brainstem_api as dog_msg
 
 
 # ─── Mock CMS Server ───────────────────────────────────────
 
-class MockCmsServicer(dog_msg.CmsServicer):
+class MockCmsServicer(dog_msg.RobotControlServicer):
     """Mock brainstem CMS that records all gRPC calls."""
 
     def __init__(self):
@@ -131,7 +131,7 @@ def start_mock_server(servicer, port=13199):
 
     async def serve():
         server = grpc_aio.server()
-        dog_msg.add_CmsServicer_to_server(servicer, server)
+        dog_msg.add_RobotControlServicer_to_server(servicer, server)
         server.add_insecure_port(f'0.0.0.0:{port}')
         await server.start()
         await server.wait_for_termination()

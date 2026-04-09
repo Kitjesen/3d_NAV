@@ -309,9 +309,9 @@ class NovaDogConnection(Module, layer=1):
     async def _connect_and_run(self):
         try:
             import grpc.aio as grpc_aio
-            import han_dog_message as dog_msg
+            import brainstem_api as dog_msg
         except ImportError:
-            logger.error("grpc/han_dog_message not available — running in stub mode")
+            logger.error("grpc/brainstem_api not available — running in stub mode")
             self._connected = False
             self.alive.publish(False)
             await asyncio.sleep(999999)
@@ -321,7 +321,7 @@ class NovaDogConnection(Module, layer=1):
         logger.info("Connecting to brainstem CMS at %s...", addr)
 
         async with grpc_aio.insecure_channel(addr) as channel:
-            self._stub = dog_msg.CmsStub(channel)
+            self._stub = dog_msg.RobotControlStub(channel)
             self._connected = True
             self.alive.publish(True)
             logger.info("Connected to brainstem CMS at %s", addr)
@@ -370,7 +370,7 @@ class NovaDogConnection(Module, layer=1):
 
     async def _send_walk(self, vec: tuple):
         try:
-            import han_dog_message as dog_msg
+            import brainstem_api as dog_msg
             await self._stub.Walk(dog_msg.Vector3(x=vec[0], y=vec[1], z=vec[2]))
         except Exception as e:
             logger.warning("Walk failed: %s", e)
@@ -380,7 +380,7 @@ class NovaDogConnection(Module, layer=1):
 
     async def _sit_down(self):
         try:
-            import han_dog_message as dog_msg
+            import brainstem_api as dog_msg
             await self._send_walk_zero()
             await self._stub.SitDown(dog_msg.Empty())
             self._standing = False
@@ -390,7 +390,7 @@ class NovaDogConnection(Module, layer=1):
 
     async def _safe_shutdown(self):
         try:
-            import han_dog_message as dog_msg
+            import brainstem_api as dog_msg
             await self._send_walk_zero()
             await self._stub.SitDown(dog_msg.Empty())
             await self._stub.Disable(dog_msg.Empty())
