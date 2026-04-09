@@ -1,0 +1,8 @@
+[Unit]
+Description=LingTu Navigation System
+Documentation=https://github.com/Kitjesen/MapPilot
+Wants=robot-brainstem.service robot-camera.service lingtu.service
+After=robot-brainstem.service robot-camera.service lingtu.service
+
+[Install]
+WantedBy=multi-user.target
