@@ -105,7 +105,7 @@ class CameraBridgeModule(Module, layer=1):
             self._rclpy_available = True
 
             qos = QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
+                reliability=ReliabilityPolicy.BEST_EFFORT,
                 depth=self._qos_depth,
             )
 
