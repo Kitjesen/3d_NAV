@@ -152,6 +152,117 @@ class TestMapManagerModule(unittest.TestCase):
         resp = self.mod._map_save("")
         self.assertFalse(resp["success"])
 
+    # -- occupancy snapshot tests --
+
+    def test_build_occupancy_snapshot_missing_name(self):
+        resp = self.mod._build_occupancy_snapshot("")
+        self.assertFalse(resp["success"])
+
+    def test_build_occupancy_snapshot_no_pcd(self):
+        resp = self.mod._build_occupancy_snapshot("nonexistent_map")
+        self.assertFalse(resp["success"])
+        self.assertIn("no PCD file", resp["message"])
+
+    def test_build_occupancy_snapshot_ascii_pcd(self):
+        """Write a minimal ASCII PCD file and verify occupancy.npz is produced."""
+        map_dir = Path(self._map_dir) / "test_occ"
+        map_dir.mkdir()
+        pcd_path = map_dir / "map.pcd"
+        # Minimal valid ASCII PCD with 4 obstacle-height points forming a 2x2 square
+        # Ground points at z=0.0 (many, so percentile-5 ≈ 0.0),
+        # obstacle points at z=0.5 (within 0.10–2.00 above ground).
+        pcd_content = (
+            "VERSION 0.7\n"
+            "FIELDS x y z\n"
+            "SIZE 4 4 4\n"
+            "TYPE F F F\n"
+            "COUNT 1 1 1\n"
+            "WIDTH 8\n"
+            "HEIGHT 1\n"
+            "VIEWPOINT 0 0 0 1 0 0 0\n"
+            "POINTS 8\n"
+            "DATA ascii\n"
+            "0.0 0.0 0.0\n"
+            "1.0 0.0 0.0\n"
+            "0.0 1.0 0.0\n"
+            "1.0 1.0 0.0\n"
+            "0.0 0.0 0.5\n"
+            "1.0 0.0 0.5\n"
+            "0.0 1.0 0.5\n"
+            "1.0 1.0 0.5\n"
+        )
+        pcd_path.write_text(pcd_content)
+
+        resp = self.mod._build_occupancy_snapshot("test_occ")
+        self.assertTrue(resp["success"], f"Expected success, got: {resp}")
+        occ_path = map_dir / "occupancy.npz"
+        self.assertTrue(occ_path.exists())
+
+        data = np.load(str(occ_path))
+        self.assertIn("grid", data)
+        self.assertIn("resolution", data)
+        self.assertIn("origin", data)
+        grid = data["grid"]
+        self.assertEqual(grid.dtype, np.int8)
+        self.assertEqual(grid.ndim, 2)
+        # At least one occupied cell
+        self.assertTrue(np.any(grid == 100))
+
+    def test_load_pcd_points_ascii(self):
+        """_load_pcd_points parses a simple ASCII PCD correctly."""
+        import tempfile
+        pcd_content = (
+            "VERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\n"
+            "WIDTH 3\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS 3\nDATA ascii\n"
+            "1.0 2.0 0.5\n3.0 4.0 1.0\n5.0 6.0 1.5\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".pcd", delete=False) as f:
+            f.write(pcd_content)
+            fname = f.name
+        try:
+            from nav.services.nav_services.map_manager_module import MapManagerModule
+            pts = MapManagerModule._load_pcd_points(fname)
+            self.assertIsNotNone(pts)
+            self.assertEqual(pts.shape, (3, 3))
+            np.testing.assert_allclose(pts[0], [1.0, 2.0, 0.5], atol=1e-5)
+        finally:
+            os.unlink(fname)
+
+    def test_map_list_has_occupancy_field(self):
+        """_map_list reports has_occupancy=True when occupancy.npz exists."""
+        d = Path(self._map_dir) / "mapwithall"
+        d.mkdir()
+        (d / "map.pcd").touch()
+        (d / "tomogram.pickle").touch()
+        (d / "occupancy.npz").touch()
+
+        resp = self._cmd({"action": "list"})
+        self.assertTrue(resp["success"])
+        entry = next(m for m in resp["maps"] if m["name"] == "mapwithall")
+        self.assertTrue(entry["has_occupancy"])
+
+    def test_map_list_has_occupancy_false_when_absent(self):
+        d = Path(self._map_dir) / "mapnocc"
+        d.mkdir()
+        (d / "map.pcd").touch()
+
+        resp = self._cmd({"action": "list"})
+        entry = next(m for m in resp["maps"] if m["name"] == "mapnocc")
+        self.assertFalse(entry["has_occupancy"])
+
+    def test_get_active_occupancy_none(self):
+        result = self.mod.get_active_occupancy()
+        self.assertIsNone(result)
+
+    def test_get_active_occupancy_returns_path(self):
+        d = Path(self._map_dir) / "fullmap"
+        d.mkdir()
+        (d / "occupancy.npz").touch()
+        self._cmd({"action": "set_active", "name": "fullmap"})
+        result = self.mod.get_active_occupancy()
+        self.assertIsNotNone(result)
+        self.assertTrue(result.endswith("occupancy.npz"))
+
 
 # ---------------------------------------------------------------------------
 # 2. WavefrontFrontierExplorer
