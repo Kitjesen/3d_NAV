@@ -259,6 +259,7 @@ class GatewayModule(Module, layer=6):
 
         self._app   = None
         self._server_thread: threading.Thread | None = None
+        self._defer_server: bool = False  # True → main thread runs uvicorn
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -276,10 +277,11 @@ class GatewayModule(Module, layer=6):
 
     def start(self) -> None:
         super().start()
-        self._server_thread = threading.Thread(
-            target=self._run_server, daemon=True, name="gateway"
-        )
-        self._server_thread.start()
+        if not self._defer_server:
+            self._server_thread = threading.Thread(
+                target=self._run_server, daemon=True, name="gateway"
+            )
+            self._server_thread.start()
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
 
     def stop(self) -> None:

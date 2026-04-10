@@ -265,6 +265,15 @@ def main() -> None:
 
     kill_residual_ports(blueprint_cfg)
 
+    # In --no-repl mode, defer uvicorn startup so main thread can run it
+    # (avoids GIL starvation from DDS callbacks in daemon threads).
+    if args.no_repl:
+        try:
+            gw = system.get_module("GatewayModule")
+            gw._defer_server = True
+        except (KeyError, AttributeError):
+            pass
+
     try:
         system.start()
     except Exception as e:
@@ -323,7 +332,18 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _on_signal)
 
     if args.no_repl:
-        shutdown.wait()
+        # Run uvicorn in the main thread so it gets reliable event-loop
+        # scheduling.  Daemon threads (DDS/LiDAR callbacks) can starve a
+        # threaded uvicorn of GIL time, making all HTTP endpoints hang.
+        gw = None
+        try:
+            gw = system.get_module("GatewayModule")
+        except (KeyError, AttributeError):
+            pass
+        if gw is not None and hasattr(gw, "_run_server"):
+            gw._run_server()          # blocks until SIGTERM
+        else:
+            shutdown.wait()
     else:
         signal.signal(signal.SIGINT, signal.default_int_handler)
         repl = LingTuREPL(system, cfg)
