@@ -1,63 +1,140 @@
-/* ===== Design Tokens ===== */
+/* ===================================================================
+   LingTu Dashboard — Arc / Raycast inspired design system
+   =================================================================== */
+
 :root {
-  /* Base surfaces — slightly warmer than pure blue-black */
-  --bg:          #0b0e14;
-  --bg2:         #12161f;
-  --bg3:         #1a1f2b;
-  --surface:     #12161f;
-  --border:      #212733;
-  --border-hi:   #2e3544;
+  /* ── Surfaces ── */
+  /* Base canvas — deep navy with subtle warmth */
+  --bg:          #0A0B14;
+  --bg-layer-1:  #0F1019;
+  --bg-layer-2:  #151623;
+  --bg-layer-3:  #1C1E2E;
 
-  /* Text — warmer whites */
-  --text:        #e8e4dc;
-  --text-dim:    #8a8577;
-  --text-faint:  #4d4a42;
+  /* Glass panel surfaces (used with backdrop-filter blur) */
+  --glass:       rgba(22, 24, 38, 0.6);
+  --glass-hi:    rgba(30, 32, 48, 0.7);
+  --glass-lo:    rgba(18, 20, 32, 0.5);
 
-  /* Accent — warmer teal-mint (less radioactive than #00ff88) */
-  --accent:      #5EEAD4;
-  --accent-dim:  #3BCFBA;
-  --accent-glow: rgba(94, 234, 212, 0.18);
+  /* Borders — extremely subtle hairlines */
+  --border:      rgba(255, 255, 255, 0.06);
+  --border-hi:   rgba(255, 255, 255, 0.12);
+  --border-focus: rgba(255, 255, 255, 0.2);
 
-  /* Warm secondary — Claude orange for highlights / focus rings */
-  --warm:        #EA7846;
-  --warm-dim:    #D65A2B;
-  --warm-glow:   rgba(234, 120, 70, 0.18);
+  /* Inner highlight (top edge of glass) */
+  --inner-hi:    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 
-  --red:         #ef4444;
-  --red-dim:     #b91c1c;
-  --red-glow:    rgba(239, 68, 68, 0.2);
+  /* ── Text ── */
+  --text:        #E8E9F0;
+  --text-dim:    #9599A8;
+  --text-faint:  #5A5E70;
+  --text-mute:   #3D4050;
 
-  --blue:        #60A5FA;
-  --blue-dim:    #3B82F6;
+  /* ── Accents — signature rainbow gradient like Arc ── */
+  --brand-1:     #6366F1;  /* indigo */
+  --brand-2:     #A855F7;  /* purple */
+  --brand-3:     #EC4899;  /* pink */
+  --brand-4:     #F59E0B;  /* amber */
 
-  --radius:      8px;
-  --radius-lg:   12px;
-  --font-mono:   'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
-  --font-ui:     'Inter', 'Noto Sans SC', 'PingFang SC', system-ui, -apple-system, sans-serif;
-  --font-serif:  'Tiempos Text', 'Noto Serif SC', Georgia, serif;
+  --gradient-brand: linear-gradient(135deg,
+    #6366F1 0%,
+    #A855F7 35%,
+    #EC4899 70%,
+    #F59E0B 100%);
 
-  /* Topbar + statusbar heights */
-  --topbar-h:    44px;
-  --statusbar-h: 28px;
+  --gradient-brand-soft: linear-gradient(135deg,
+    rgba(99, 102, 241, 0.15) 0%,
+    rgba(168, 85, 247, 0.12) 35%,
+    rgba(236, 72, 153, 0.10) 70%,
+    rgba(245, 158, 11, 0.08) 100%);
 
-  /* Motion */
+  /* Status colors — muted, modern */
+  --accent:       #5EEAD4;  /* live/streaming — teal mint */
+  --accent-dim:   #2DD4BF;
+  --accent-glow:  rgba(94, 234, 212, 0.2);
+
+  --warn:         #FBBF24;
+  --warn-glow:    rgba(251, 191, 36, 0.2);
+
+  --red:          #F87171;
+  --red-dim:      #DC2626;
+  --red-glow:     rgba(248, 113, 113, 0.25);
+
+  --blue:         #60A5FA;
+  --blue-glow:    rgba(96, 165, 250, 0.2);
+
+  /* ── Shadows — layered, realistic depth ── */
+  --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md:
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 4px 12px rgba(0, 0, 0, 0.35),
+    var(--inner-hi);
+  --shadow-lg:
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    0 12px 40px rgba(0, 0, 0, 0.45),
+    var(--inner-hi);
+  --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.15);
+
+  /* ── Radii ── */
+  --r-sm:         6px;
+  --r-md:         10px;
+  --r-lg:         14px;
+  --r-xl:         20px;
+  --r-full:       9999px;
+  --radius:       10px;   /* legacy alias */
+
+  /* ── Typography ── */
+  --font-ui:      'Geist', 'Inter', 'Noto Sans SC', 'PingFang SC', system-ui, -apple-system, sans-serif;
+  --font-mono:    'Geist Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  --font-serif:   'Tiempos Text', 'Source Serif 4', 'Noto Serif SC', Georgia, serif;
+
+  /* Type scale */
+  --fs-xs:   11px;   /* micro labels, badges */
+  --fs-sm:   12px;   /* secondary text, hints */
+  --fs-base: 14px;   /* body default */
+  --fs-md:   15px;   /* emphasized body */
+  --fs-lg:   17px;   /* section titles */
+  --fs-xl:   20px;   /* page headings */
+  --fs-2xl:  28px;   /* hero */
+
+  /* ── Motion ── */
   --ease-out:    cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── Layout ── */
+  --topbar-h:    48px;
+  --statusbar-h: 28px;
 }
 
-/* ===== Global breathing pulse for live indicators ===== */
+/* ── Global animations ── */
+
 @keyframes pulse-soft {
   0%, 100% { opacity: 1;   transform: scale(1); }
-  50%      { opacity: 0.6; transform: scale(0.92); }
+  50%      { opacity: 0.55; transform: scale(0.9); }
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(3%, -2%) scale(1.05); }
+  66%      { transform: translate(-2%, 3%) scale(0.98); }
+}
+
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+
 /* ===== Reset ===== */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 html, body, #root {
   height: 100%;
@@ -68,17 +145,56 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--fs-base);
+  line-height: 1.55;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
 }
 
 /* ===== App shell ===== */
 .app {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
   background: var(--bg);
+  overflow: hidden;
+}
+
+/* Ambient background — drifting colored blurs like Arc */
+.app::before,
+.app::after {
+  content: '';
+  position: fixed;
+  width: 60vw;
+  height: 60vw;
+  border-radius: 50%;
+  filter: blur(120px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.4;
+}
+
+.app::before {
+  top: -20%;
+  left: -10%;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.25), transparent 60%);
+  animation: drift 20s var(--ease-in-out) infinite;
+}
+
+.app::after {
+  bottom: -20%;
+  right: -10%;
+  background: radial-gradient(circle, rgba(236, 72, 153, 0.18), transparent 60%);
+  animation: drift 25s var(--ease-in-out) infinite reverse;
+}
+
+/* All content above the ambient background */
+.app > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* ===== Main content wrapper ===== */
@@ -87,44 +203,60 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  padding: 12px;
+  gap: 12px;
 }
 
 /* ===== Main grid (console tab) ===== */
 .main-grid {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: 1fr 340px;
+  gap: 12px;
   flex: 1;
   min-height: 0;
-  border-bottom: 1px solid var(--border);
   height: 100%;
 }
 
 .camera-section {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border);
   min-height: 0;
-  background: radial-gradient(ellipse at top, #0a0e16 0%, #060a10 100%);
-  animation: fade-in 0.5s var(--ease-out);
+  background: var(--glass);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: fade-in 0.6s var(--ease-spring);
+}
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  animation: fade-in 0.6s var(--ease-spring) 0.08s both;
 }
 
 .chat-section {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
-  background: var(--bg2);
-  animation: fade-in 0.5s var(--ease-out) 0.08s both;
+  background: var(--glass);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
 }
 
-/* ===== Responsive: collapse chat below camera on small screens ===== */
+/* ===== Responsive ===== */
 @media (max-width: 900px) {
   .main-grid {
     grid-template-columns: 1fr;
     grid-template-rows: 1fr 240px;
-  }
-
-  .camera-section {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
   }
 }

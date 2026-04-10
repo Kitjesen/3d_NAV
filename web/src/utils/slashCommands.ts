@@ -1,5 +1,6 @@
-// Slash command parser and executor for ChatPanel
-// Extracts command handling logic from ChatPanel.tsx
+// Slash command parser, executor, and autocomplete registry.
+// Extracts command handling logic from ChatPanel.tsx and adds a
+// metadata table that powers the /-command dropdown (Claude-Code style).
 
 import type { SSEState } from '../types'
 import * as api from '../services/api'
@@ -13,12 +14,73 @@ const NAV_STATE_ZH: Record<string, string> = {
   CANCELLED: '导航已取消。',
 }
 
-const HELP_TEXT = `可用指令：
-/go <x> <y>   — 导航到坐标
-/stop         — 紧急停止
-/status       — 显示当前状态
-/map list     — 地图管理
-/help         — 显示帮助`
+// ── Command registry — single source of truth for dropdown + help ──
+
+export interface SlashCommandSpec {
+  /** Command trigger including the leading slash, e.g. '/go' */
+  name: string
+  /** Full argument template shown in the dropdown, e.g. '/go <x> <y>' */
+  usage: string
+  /** One-line description in Chinese */
+  description: string
+  /** Optional concrete example */
+  example?: string
+  /** Optional emoji-free single-letter category tag */
+  group?: '导航' | '系统' | '地图'
+}
+
+export const SLASH_COMMANDS: SlashCommandSpec[] = [
+  {
+    name: '/go',
+    usage: '/go <x> <y>',
+    description: '发送导航目标到指定世界坐标',
+    example: '/go 3.5 -1.2',
+    group: '导航',
+  },
+  {
+    name: '/stop',
+    usage: '/stop',
+    description: '立即停止机器人并取消当前导航',
+    group: '导航',
+  },
+  {
+    name: '/status',
+    usage: '/status',
+    description: '查看当前位置、导航状态、安全状态',
+    group: '系统',
+  },
+  {
+    name: '/map',
+    usage: '/map',
+    description: '跳转到地图管理（也可直接点击 "地图" 标签）',
+    group: '地图',
+  },
+  {
+    name: '/help',
+    usage: '/help',
+    description: '显示全部可用指令',
+    group: '系统',
+  },
+]
+
+const HELP_TEXT =
+  '可用指令：\n' +
+  SLASH_COMMANDS.map(c => `${c.usage.padEnd(16)} — ${c.description}`).join('\n')
+
+/**
+ * Return commands whose name matches the user's current partial input.
+ * "fuzzy" means: substring match on the command name, case-insensitive.
+ * Typing nothing ('/') returns all commands.
+ */
+export function matchSlashCommands(partial: string): SlashCommandSpec[] {
+  const q = partial.trim().toLowerCase()
+  if (!q.startsWith('/')) return []
+  const needle = q.slice(1)
+  if (needle.length === 0) return SLASH_COMMANDS
+  return SLASH_COMMANDS.filter(c =>
+    c.name.slice(1).toLowerCase().includes(needle)
+  )
+}
 
 export interface SlashCommandResult {
   command: string

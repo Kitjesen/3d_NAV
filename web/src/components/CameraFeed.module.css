@@ -13,7 +13,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: #060a10;
+  background: radial-gradient(ellipse at center, #0A0B14 0%, #050610 100%);
 }
 
 .img {
@@ -123,8 +123,10 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
-  background: var(--bg2);
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }

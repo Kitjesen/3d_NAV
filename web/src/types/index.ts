@@ -95,6 +95,6 @@ export interface Toast {
   kind: ToastKind
 }
 
-export type Tab = 'console' | 'map' | 'slam' | 'path'
+export type Tab = 'console' | 'scene' | 'map' | 'slam'
 
 export type SlamProfile = 'fastlio2' | 'localizer' | 'stop'

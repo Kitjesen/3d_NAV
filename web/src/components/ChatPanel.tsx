@@ -1,8 +1,13 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { Send } from 'lucide-react'
 import type { SSEState } from '../types'
 import * as api from '../services/api'
-import { isSlashCommand, executeSlashCommand } from '../utils/slashCommands'
+import {
+  isSlashCommand,
+  executeSlashCommand,
+  matchSlashCommands,
+  type SlashCommandSpec,
+} from '../utils/slashCommands'
 import styles from './ChatPanel.module.css'
 
 interface Message {
@@ -16,7 +21,9 @@ let _id = 0
 function nextId() { return ++_id }
 
 function formatTime(ts: number) {
-  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return new Date(ts).toLocaleTimeString('zh-CN', {
+    hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
 }
 
 const NAV_STATE_ZH: Record<string, string> = {
@@ -37,14 +44,32 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     {
       id: nextId(),
       role: 'system',
-      text: '灵途导航系统已上线。发送自然语言指令以开始导航，或使用 /help 查看指令列表。',
+      text: '灵途导航系统已上线。发送自然语言指令，或输入 / 查看命令。',
       ts: Date.now(),
     },
   ])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [suggestionIdx, setSuggestionIdx] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const prevMissionRef = useRef<string | null>(null)
+
+  // ── Autocomplete candidates ──
+  const suggestions: SlashCommandSpec[] = useMemo(() => {
+    if (!isSlashCommand(input)) return []
+    // Only show suggestions while user is still typing the command name
+    // (i.e. no space typed yet). Once space is typed the user is entering args.
+    if (input.includes(' ')) return []
+    return matchSlashCommands(input)
+  }, [input])
+
+  const showDropdown = suggestions.length > 0
+
+  // Reset selected index when suggestions change
+  useEffect(() => {
+    setSuggestionIdx(0)
+  }, [suggestions.length])
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -69,24 +94,22 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     setMessages(prev => [...prev, { id: nextId(), role: 'system', text, ts: Date.now() }])
   }, [sseState.missionStatus])
 
-  function addSystem(text: string) {
+  const addSystem = useCallback((text: string) => {
     setMessages(prev => [...prev, { id: nextId(), role: 'system', text, ts: Date.now() }])
-  }
+  }, [])
 
-  async function sendInstruction() {
+  const sendInstruction = useCallback(async () => {
     const text = input.trim()
     if (!text || sending) return
     setInput('')
     setMessages(prev => [...prev, { id: nextId(), role: 'user', text, ts: Date.now() }])
 
-    // Slash command path — delegated to utils/slashCommands
     if (isSlashCommand(text)) {
       const response = await executeSlashCommand(text, sseState)
       addSystem(response)
       return
     }
 
-    // Natural language instruction path
     setSending(true)
     try {
       const res = await api.sendInstruction(text)
@@ -94,15 +117,49 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
         const err = await res.text()
         addSystem(`错误：${res.status} ${err}`)
       }
-      // Successful acknowledgment — mission_status SSE events will follow
     } catch (e) {
       addSystem(`网络错误：${String(e)}`)
     } finally {
       setSending(false)
     }
-  }
+  }, [input, sending, sseState, addSystem])
+
+  // Accept the currently highlighted suggestion — inserts command
+  // name + trailing space, so the user can immediately type args.
+  const acceptSuggestion = useCallback((spec: SlashCommandSpec) => {
+    // If the command has an argument template, add a space so typing
+    // arguments feels natural. Commands with no args close the dropdown.
+    const hasArgs = spec.usage.includes('<')
+    setInput(spec.name + (hasArgs ? ' ' : ''))
+    setSuggestionIdx(0)
+    // Refocus for keyboard flow
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (showDropdown) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSuggestionIdx(i => (i + 1) % suggestions.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSuggestionIdx(i => (i - 1 + suggestions.length) % suggestions.length)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        acceptSuggestion(suggestions[suggestionIdx])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setInput('')
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       sendInstruction()
@@ -129,15 +186,43 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
       </div>
 
       <div className={styles.inputRow}>
+        {showDropdown && (
+          <div className={styles.suggestBox} role="listbox">
+            <div className={styles.suggestHeader}>
+              <span>命令</span>
+              <span className={styles.suggestHint}>↑↓ 选择 · Tab 补全 · Esc 关闭</span>
+            </div>
+            <div className={styles.suggestList}>
+              {suggestions.map((c, i) => (
+                <button
+                  key={c.name}
+                  type="button"
+                  role="option"
+                  aria-selected={i === suggestionIdx}
+                  className={i === suggestionIdx ? styles.suggestItemActive : styles.suggestItem}
+                  onMouseEnter={() => setSuggestionIdx(i)}
+                  onClick={() => acceptSuggestion(c)}
+                >
+                  <span className={styles.suggestName}>{c.usage}</span>
+                  <span className={styles.suggestDesc}>{c.description}</span>
+                  {c.group && <span className={styles.suggestGroup}>{c.group}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <input
+          ref={inputRef}
           className={styles.input}
           type="text"
-          placeholder="输入指令…"
+          placeholder="输入指令或 / 查看命令…"
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={sending}
           aria-label="导航指令"
+          autoComplete="off"
+          spellCheck={false}
         />
         <button
           className={styles.btnSend}

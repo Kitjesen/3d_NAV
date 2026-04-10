@@ -1,0 +1,249 @@
+/* GpsCard — rotating globe with robot position pulse */
+
+.card {
+  padding: 16px 18px 18px;
+  background: var(--glass-hi);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  animation: fade-in 0.6s var(--ease-spring) 0.1s both;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.labelDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  animation: pulse-soft 2.4s var(--ease-in-out) infinite;
+}
+
+.status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: rgba(94, 234, 212, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(94, 234, 212, 0.2);
+  letter-spacing: 0.05em;
+}
+
+.statusOffline {
+  composes: status;
+  background: rgba(248, 113, 113, 0.08);
+  color: var(--red);
+  border-color: rgba(248, 113, 113, 0.2);
+}
+
+/* ── Globe ── */
+
+.globeWrap {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  margin: 16px auto 20px;
+}
+
+/* Outer dashed orbit ring */
+.orbit {
+  position: absolute;
+  inset: -14px;
+  border: 1px dashed rgba(94, 234, 212, 0.2);
+  border-radius: 50%;
+  animation: rotate-orbit 18s linear infinite;
+}
+
+.orbit::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+  transform: translateX(-50%);
+}
+
+@keyframes rotate-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* The globe itself */
+.globe {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 30%,
+      rgba(139, 92, 246, 0.9) 0%,
+      rgba(99, 102, 241, 0.8) 25%,
+      rgba(30, 27, 75, 0.95) 70%,
+      rgba(10, 11, 20, 1) 100%);
+  box-shadow:
+    inset -18px -18px 36px rgba(0, 0, 0, 0.6),
+    inset 4px 4px 18px rgba(139, 92, 246, 0.4),
+    0 0 60px rgba(99, 102, 241, 0.35),
+    0 8px 24px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+/* Longitude/latitude grid — animated to simulate rotation */
+.globe::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      transparent 0,
+      transparent calc(10% - 1px),
+      rgba(94, 234, 212, 0.22) calc(10% - 1px),
+      rgba(94, 234, 212, 0.22) 10%
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent calc(12.5% - 1px),
+      rgba(94, 234, 212, 0.14) calc(12.5% - 1px),
+      rgba(94, 234, 212, 0.14) 12.5%
+    );
+  mask-image: radial-gradient(circle, #000 45%, transparent 70%);
+  -webkit-mask-image: radial-gradient(circle, #000 45%, transparent 70%);
+  animation: rotate-longitude 24s linear infinite;
+}
+
+/* Glossy highlight on top-left */
+.globe::after {
+  content: '';
+  position: absolute;
+  top: 8%;
+  left: 12%;
+  width: 40%;
+  height: 40%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.25), transparent 60%);
+  filter: blur(8px);
+  pointer-events: none;
+}
+
+@keyframes rotate-longitude {
+  from { background-position: 0 0, 0 0; }
+  to   { background-position: 200% 0, 0 0; }
+}
+
+/* Robot position marker — center of globe */
+.marker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.markerDot {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #FBBF24;
+  box-shadow:
+    0 0 14px #FBBF24,
+    0 0 4px #FFFFFF,
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  z-index: 3;
+}
+
+.markerPulse {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #FBBF24;
+  transform: translate(-50%, -50%);
+  animation: pulse-ring 2.2s var(--ease-out) infinite;
+}
+
+.markerPulse2 {
+  composes: markerPulse;
+  animation-delay: 1.1s;
+}
+
+@keyframes pulse-ring {
+  0% {
+    width: 10px;
+    height: 10px;
+    opacity: 1;
+    border-width: 2px;
+  }
+  100% {
+    width: 64px;
+    height: 64px;
+    opacity: 0;
+    border-width: 1px;
+  }
+}
+
+/* ── Stats row ── */
+
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.statLabel {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.statValue {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.statValueDim {
+  composes: statValue;
+  color: var(--text-dim);
+}

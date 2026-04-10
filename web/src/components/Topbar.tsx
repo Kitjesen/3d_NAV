@@ -49,7 +49,9 @@ export function Topbar({ sseState }: TopbarProps) {
     <header className={styles.topbar}>
       <div className={styles.left}>
         <span className={styles.logo}>
-          <Navigation size={18} className={styles.logoIcon} />
+          <span className={styles.logoIcon}>
+            <Navigation size={16} strokeWidth={2.25} />
+          </span>
           LingTu
         </span>
         <span className={sseState.connected ? styles.badgeOnline : styles.badgeOffline}>

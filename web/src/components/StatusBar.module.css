@@ -3,10 +3,12 @@
 .statusBar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   height: var(--statusbar-h);
-  padding: 0 14px;
-  background: var(--bg2);
+  padding: 0 18px;
+  background: var(--glass-lo);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   overflow: hidden;

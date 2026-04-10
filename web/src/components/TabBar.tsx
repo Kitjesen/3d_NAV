@@ -8,9 +8,9 @@ interface TabBarProps {
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'console', label: '控制台' },
-  { key: 'path',    label: '轨迹' },
-  { key: 'map',     label: '地图管理' },
-  { key: 'slam',    label: 'SLAM 模式' },
+  { key: 'scene',   label: '场景' },
+  { key: 'map',     label: '地图' },
+  { key: 'slam',    label: 'SLAM' },
 ]
 
 export function TabBar({ activeTab, onTabChange }: TabBarProps) {

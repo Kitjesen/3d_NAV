@@ -5,10 +5,11 @@ import { Topbar } from './components/Topbar'
 import { TabBar } from './components/TabBar'
 import { CameraFeed } from './components/CameraFeed'
 import { ChatPanel } from './components/ChatPanel'
+import { GpsCard } from './components/GpsCard'
 import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
-import { PathView } from './components/PathView'
+import { SceneView } from './components/SceneView'
 import { ToastContainer } from './components/Toast'
 import { LoginPage } from './components/LoginPage'
 import * as api from './services/api'
@@ -45,14 +46,17 @@ function Dashboard() {
             <section className="camera-section">
               <CameraFeed onStop={handleStop} estop={estop} />
             </section>
-            <aside className="chat-section">
-              <ChatPanel sseState={sseState} />
+            <aside className="sidebar-section">
+              <GpsCard sseState={sseState} />
+              <div className="chat-section">
+                <ChatPanel sseState={sseState} />
+              </div>
             </aside>
           </div>
         )}
+        {activeTab === 'scene' && <SceneView sseState={sseState} showToast={showToast} />}
         {activeTab === 'map' && <MapView showToast={showToast} />}
         {activeTab === 'slam' && <SlamPanel sseState={sseState} showToast={showToast} />}
-        {activeTab === 'path' && <PathView sseState={sseState} showToast={showToast} />}
       </main>
 
       <StatusBar sseState={sseState} uptimeSeconds={uptimeSeconds} />
@@ -65,7 +69,16 @@ function App() {
   const [authChecked, setAuthChecked] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
 
+  // Dev preview: ?login forces the login page to render
+  const forceLogin = typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).has('login')
+
   useEffect(() => {
+    if (forceLogin) {
+      setLoggedIn(false)
+      setAuthChecked(true)
+      return
+    }
     api.checkAuth()
       .then(data => {
         setLoggedIn(!data.auth_required)
@@ -76,7 +89,7 @@ function App() {
         setLoggedIn(true)
         setAuthChecked(true)
       })
-  }, [])
+  }, [forceLogin])
 
   if (!authChecked) return null
   if (!loggedIn) return <LoginPage onLogin={() => setLoggedIn(true)} />
