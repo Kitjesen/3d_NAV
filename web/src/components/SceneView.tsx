@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import {
   Compass, Grid3x3, Navigation, Route, Target, Bot,
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle,
+  MapPinned,
 } from 'lucide-react'
 import type { SSEState, MapInfo, PathPoint, ToastKind } from '../types'
 import * as api from '../services/api'
@@ -539,8 +540,16 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
           <div className={styles.drawerBody}>
             {maps.length === 0 && (
               <div className={styles.emptyState}>
-                暂无地图<br/>
-                <small>点击“保存地图”创建</small>
+                <MapPinned size={32} className={styles.emptyIcon} strokeWidth={1.4} />
+                <div className={styles.emptyTitle}>暂无地图</div>
+                <div className={styles.emptyHint}>保存当前场景来创建第一张地图</div>
+                <button
+                  type="button"
+                  className={styles.emptyCta}
+                  onClick={handleSaveMap}
+                >
+                  <Save size={11} /> 保存地图
+                </button>
               </div>
             )}
             {MAP_GROUPS.map(g => {

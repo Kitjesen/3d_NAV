@@ -10,6 +10,7 @@ import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
 import { SceneView } from './components/SceneView'
+import { MiniMap } from './components/MiniMap'
 import { ToastContainer } from './components/Toast'
 import { LoginPage } from './components/LoginPage'
 import * as api from './services/api'
@@ -40,14 +41,15 @@ function Dashboard() {
       <Topbar sseState={sseState} />
       <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
-      <main className="main-content">
+      <main className="main-content" key={activeTab}>
         {activeTab === 'console' && (
-          <div className="main-grid">
+          <div className="main-grid tab-panel" role="tabpanel" id="panel-console">
             <section className="camera-section">
-              <CameraFeed onStop={handleStop} estop={estop} />
+              <CameraFeed onStop={handleStop} estop={estop} sseState={sseState} />
             </section>
             <aside className="sidebar-section">
               <GpsCard sseState={sseState} />
+              <MiniMap sseState={sseState} />
               <div className="chat-section">
                 <ChatPanel sseState={sseState} />
               </div>

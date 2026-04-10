@@ -33,36 +33,45 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   color: var(--text-faint);
+  animation: fade-in 0.5s var(--ease-spring);
 }
 
 .placeholderIcon {
-  color: var(--text-faint);
-  opacity: 0.4;
+  color: var(--text-dim);
+  opacity: 0.5;
+  animation: placeholder-pulse 2.8s var(--ease-in-out) infinite;
+}
+
+@keyframes placeholder-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50%      { opacity: 0.6;  transform: scale(1.04); }
 }
 
 .placeholderLabel {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-dim);
+  letter-spacing: 0.02em;
 }
 
 .camBadge {
   position: absolute;
-  top: 14px;
-  left: 14px;
+  top: var(--s-3);
+  left: var(--s-3);
   display: flex;
   align-items: center;
   gap: 6px;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.08em;
   padding: 5px 10px;
-  border-radius: 8px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  border-radius: var(--r-md);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  box-shadow: var(--shadow-sm), var(--inner-hi);
   animation: fade-in 0.5s var(--ease-out) 0.2s both;
 }
 
@@ -122,11 +131,11 @@
 .controls {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: rgba(0, 0, 0, 0.25);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -138,23 +147,29 @@
   background: var(--red-dim);
   color: #fff;
   border: 1px solid var(--red);
-  border-radius: var(--radius);
+  border-radius: var(--r-md);
   cursor: pointer;
   padding: 5px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.5px;
-  transition: background 0.15s, box-shadow 0.15s;
+  letter-spacing: 0.06em;
+  transition: background 0.15s, box-shadow 0.15s, transform 0.08s;
 }
 
 .btnStop:hover {
   background: var(--red);
-  box-shadow: 0 0 12px var(--red-glow);
+  box-shadow: 0 0 12px var(--red-glow), 0 0 0 3px rgba(248, 113, 113, 0.15);
 }
 
 .btnStop:active {
-  transform: scale(0.97);
+  transform: scale(0.94);
+  transition-duration: 0.08s;
+}
+
+.btnStop:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.5);
 }
 
 .hint {
@@ -168,14 +183,15 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.03);
   color: var(--text-dim);
-  border: 1px solid var(--border-hi);
-  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   cursor: pointer;
-  padding: 4px 10px;
+  padding: 5px 11px;
   font-size: 11px;
-  transition: color 0.15s, border-color 0.15s;
+  font-weight: 500;
+  transition: all 0.15s var(--ease-out);
 }
 
 .btnGhost:hover {

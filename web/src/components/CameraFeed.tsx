@@ -1,14 +1,17 @@
 import { useRef, useEffect } from 'react'
 import { Camera, StopCircle, RefreshCw } from 'lucide-react'
 import { useCamera } from '../hooks/useCamera'
+import { CameraHud } from './CameraHud'
+import type { SSEState } from '../types'
 import styles from './CameraFeed.module.css'
 
 interface CameraFeedProps {
   onStop: () => void
   estop: boolean
+  sseState: SSEState
 }
 
-export function CameraFeed({ onStop, estop }: CameraFeedProps) {
+export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
   const { imgSrc, connected, reconnect } = useCamera('/ws/teleop')
   const imgRef = useRef<HTMLImageElement>(null)
 
@@ -51,6 +54,9 @@ export function CameraFeed({ onStop, estop }: CameraFeedProps) {
           <span className={styles.camBadgeDot} />
           {connected ? '直播' : '离线'}
         </div>
+
+        {/* Telemetry HUD overlay */}
+        <CameraHud sseState={sseState} />
 
         {/* ESTOP overlay — full-screen flash when active */}
         {estop && <div className={styles.estopOverlay}>急停激活</div>}

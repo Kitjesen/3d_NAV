@@ -176,6 +176,22 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
         />
       </div>
 
+      {/* Quick-command chips — Raycast suggestion style */}
+      <div className={styles.quickBar}>
+        {(['停止', '状态', '去充电站', '回原点', '报告位置'] as const).map(cmd => (
+          <button
+            key={cmd}
+            className={styles.quickChip}
+            onClick={() => {
+              setInput(cmd)
+              requestAnimationFrame(() => inputRef.current?.focus())
+            }}
+          >
+            {cmd}
+          </button>
+        ))}
+      </div>
+
       <div className={styles.messages} ref={listRef}>
         {messages.map(msg => (
           <div key={msg.id} className={msg.role === 'user' ? styles.bubbleUser : styles.bubbleSystem}>

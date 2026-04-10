@@ -3,12 +3,12 @@
 .statusBar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s-2);
   height: var(--statusbar-h);
-  padding: 0 18px;
+  padding: 0 var(--s-4);
   background: var(--glass-lo);
-  backdrop-filter: blur(12px) saturate(140%);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   overflow: hidden;
@@ -17,33 +17,38 @@
 .icon {
   color: var(--text-faint);
   flex-shrink: 0;
+  opacity: 0.7;
 }
 
 .item {
   display: flex;
   align-items: baseline;
-  gap: 4px;
+  gap: 5px;
   white-space: nowrap;
 }
 
 .label {
-  font-family: var(--font-mono);
   font-size: 10px;
+  font-weight: 600;
   color: var(--text-faint);
   text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.08em;
 }
 
 .value {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-dim);
+  font-weight: 500;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .sep {
-  color: var(--border-hi);
+  color: var(--text-mute);
   font-size: 11px;
   flex-shrink: 0;
+  user-select: none;
 }
 
 .navActive { color: var(--accent); }
@@ -74,7 +79,7 @@
   height: 6px;
   border-radius: 50%;
   background: var(--text-faint);
-  transition: background 0.3s;
+  transition: background 0.4s var(--ease-out), box-shadow 0.4s var(--ease-out);
 }
 
 .hbDotAlive {

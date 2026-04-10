@@ -75,12 +75,22 @@
   --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.15);
 
   /* ── Radii ── */
+  --r-xs:         4px;
   --r-sm:         6px;
-  --r-md:         10px;
-  --r-lg:         14px;
-  --r-xl:         20px;
+  --r-md:         8px;
+  --r-lg:         12px;
+  --r-xl:         16px;
+  --r-2xl:        20px;
   --r-full:       9999px;
-  --radius:       10px;   /* legacy alias */
+  --radius:       8px;    /* legacy alias */
+
+  /* ── Space scale (4px rhythm) ── */
+  --s-1:  4px;
+  --s-2:  8px;
+  --s-3:  12px;
+  --s-4:  16px;
+  --s-5:  20px;
+  --s-6:  24px;
 
   /* ── Typography ── */
   --font-ui:      'Geist', 'Inter', 'Noto Sans SC', 'PingFang SC', system-ui, -apple-system, sans-serif;
@@ -136,6 +146,23 @@
   padding: 0;
 }
 
+/* Accessible focus baseline — hide for mouse, show for keyboard */
+:focus:not(:focus-visible) { outline: none; }
+:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.55);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Honor user motion preferences globally */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 html, body, #root {
   height: 100%;
   overflow: hidden;
@@ -180,15 +207,17 @@ body {
 .app::before {
   top: -20%;
   left: -10%;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.25), transparent 60%);
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.18), transparent 60%);
   animation: drift 20s var(--ease-in-out) infinite;
+  opacity: 0.75;
 }
 
 .app::after {
   bottom: -20%;
   right: -10%;
-  background: radial-gradient(circle, rgba(236, 72, 153, 0.18), transparent 60%);
+  background: radial-gradient(circle, rgba(236, 72, 153, 0.12), transparent 60%);
   animation: drift 25s var(--ease-in-out) infinite reverse;
+  opacity: 0.65;
 }
 
 /* All content above the ambient background */
@@ -205,6 +234,11 @@ body {
   flex-direction: column;
   padding: 12px;
   gap: 12px;
+  animation: fade-in 0.32s var(--ease-spring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-content { animation: none; }
 }
 
 /* ===== Main grid (console tab) ===== */
@@ -257,6 +291,13 @@ body {
 @media (max-width: 900px) {
   .main-grid {
     grid-template-columns: 1fr;
-    grid-template-rows: 1fr 240px;
+    grid-template-rows: minmax(220px, 1fr) minmax(240px, auto);
+  }
+  .main-content {
+    padding: 8px;
+    gap: 8px;
+  }
+  .sidebar-section {
+    gap: 8px;
   }
 }

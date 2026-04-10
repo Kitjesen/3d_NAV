@@ -1,0 +1,53 @@
+/* CameraHud — telemetry overlay on top-right of camera viewport */
+
+.hud {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(10, 11, 20, 0.55);
+  backdrop-filter: blur(12px) saturate(130%);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--r-md);
+  padding: 8px 10px;
+  min-width: 106px;
+  pointer-events: none;
+  animation: fade-in 0.4s var(--ease-out) 0.3s both;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.key {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.3px;
+}
+
+.valWarn {
+  composes: val;
+  color: var(--warn);
+  text-shadow: 0 0 8px var(--warn-glow);
+}
