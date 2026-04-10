@@ -93,7 +93,7 @@ class Navigator:
     def use_map(self, name: str) -> None:
         """Switch to a named map."""
         import os
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
         tomogram = os.path.join(map_dir, name, "tomogram.pickle")
         if os.path.exists(tomogram) and self._nav_module:
             self._nav_module._planner_svc._backend._load_tomogram(tomogram)

@@ -84,10 +84,10 @@ class SLAM:
         return self._latest_cloud
 
     def save_map(self, name: str) -> bool:
-        """Save current SLAM map to ~/data/nova/maps/<name>/."""
+        """Save current SLAM map to ~/data/inovxio/data/maps/<name>/."""
         import subprocess
         map_dir = os.path.join(
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps")),
             name,
         )
         os.makedirs(map_dir, exist_ok=True)
@@ -117,7 +117,7 @@ class SLAM:
                 "PCT_planner", "tomography", "scripts"))
             from build_tomogram import build_tomogram_from_pcd
             map_dir = os.path.join(
-                os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+                os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps")),
                 name,
             )
             build_tomogram_from_pcd(

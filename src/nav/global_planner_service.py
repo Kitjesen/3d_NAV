@@ -207,7 +207,7 @@ class GlobalPlannerService:
         tomogram_path = self._tomogram
         if not tomogram_path or not os.path.exists(tomogram_path):
             active_tomo = os.path.join(
-                os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+                os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps")),
                 "active", "tomogram.pickle",
             )
             if os.path.exists(active_tomo):

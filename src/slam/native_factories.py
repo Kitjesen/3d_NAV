@@ -124,7 +124,7 @@ def slam_localizer(cfg: RobotConfig | None = None) -> NativeModule:
     map_path = slam_cfg.get(
         "static_map_path",
         os.path.join(
-            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps")),
+            os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps")),
             "active", "map.pcd",
         ),
     )

@@ -159,7 +159,7 @@ class _PCTBackend:
             self._load_error = (
                 f"Tomogram file not found: '{tomogram_path}'. "
                 f"Set tomogram= in your profile or copy the map to "
-                f"~/data/nova/maps/active/tomogram.pickle"
+                f"~/data/inovxio/data/maps/active/tomogram.pickle"
             )
             logger.error("PCT backend: %s", self._load_error)
             return
