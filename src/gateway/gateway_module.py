@@ -1202,6 +1202,7 @@ class GatewayModule(Module, layer=6):
                 log_level="warning",
                 loop="uvloop",
                 ws="auto",
+                lifespan="off",
                 timeout_keep_alive=30,
                 ws_max_size=2 * 1024 * 1024,  # 2 MB — enough for 1080p JPEG
             )
