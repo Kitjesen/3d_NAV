@@ -1192,16 +1192,18 @@ class GatewayModule(Module, layer=6):
                 port=self._port,
                 log_level="warning",
                 loop="asyncio",
-                # websockets 14+ dropped legacy API; sansio backend is compatible
-                ws="websockets-sansio",
-                # Production: keep-alive and timeout tuning
+                ws="auto",
                 timeout_keep_alive=30,
                 ws_max_size=2 * 1024 * 1024,  # 2 MB — enough for 1080p JPEG
             )
             server = uvicorn.Server(config)
+            logger.info("uvicorn server.run() starting on %s:%d", self._host, self._port)
             server.run()
+            logger.error("uvicorn server.run() returned unexpectedly")
         except ImportError:
             logger.error("uvicorn not installed — run: pip install 'uvicorn[standard]'")
+        except Exception:
+            logger.exception("uvicorn crashed")
 
     # -- health -------------------------------------------------------------
 
