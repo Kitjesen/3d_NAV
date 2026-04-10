@@ -177,50 +177,131 @@ class CameraBridgeModule(Module, layer=1):
         return info
 
     # ── Auto-recovery watchdog ────────────────────────────────────────────────
+    #
+    # Three escalation levels:
+    #   L1  Reconnect rclpy subscription  (QoS / topic mismatch)
+    #   L2  systemctl restart camera      (camera node crash)
+    #   L3  USB reset + restart camera    (hardware disconnect)
 
     def _watchdog_loop(self) -> None:
-        """Monitor data freshness. Reconnect ROS2 node if camera goes stale."""
+        """Monitor data freshness. Escalate recovery on repeated failures."""
+        startup_grace = 30.0  # seconds after start before checking "never received"
+        start_time = time.time()
+
         while not self._shutdown_event.is_set():
-            self._shutdown_event.wait(timeout=2.0)
+            self._shutdown_event.wait(timeout=3.0)
             if not self._running or not self._rclpy_available:
                 continue
 
             now = time.time()
-            # Only check staleness after we've received at least one frame
-            if self._last_color_ts == 0.0:
+
+            # Determine if camera is stale
+            if self._last_color_ts > 0:
+                color_age = now - self._last_color_ts
+                is_stale = color_age > self._stale_timeout
+            else:
+                # Never received a frame — wait for startup grace period
+                is_stale = (now - start_time) > startup_grace
+
+            if not is_stale:
+                if self._reconnect_count > 0:
+                    logger.info("CameraBridge: data resumed after %d recovery attempt(s)",
+                                self._reconnect_count)
+                    self._reconnect_count = 0
                 continue
 
-            color_age = now - self._last_color_ts
-            if color_age > self._stale_timeout:
-                if self._reconnect_count >= self._max_reconnects:
-                    if self._reconnect_count == self._max_reconnects:
-                        logger.error(
-                            "CameraBridge: max reconnects (%d) reached, giving up",
-                            self._max_reconnects)
-                        self.alive.publish(False)
-                        self._reconnect_count += 1  # prevent repeated logs
-                    continue
+            if self._reconnect_count >= self._max_reconnects:
+                if self._reconnect_count == self._max_reconnects:
+                    logger.error(
+                        "CameraBridge: max recoveries (%d) reached, giving up",
+                        self._max_reconnects)
+                    self.alive.publish(False)
+                    self._reconnect_count += 1
+                continue
 
-                self._reconnect_count += 1
-                backoff = min(2.0 ** self._reconnect_count, 30.0)
+            self._reconnect_count += 1
+            level = self._recovery_level(self._reconnect_count)
+            backoff = min(5.0 * self._reconnect_count, 30.0)
+
+            if level == 1:
                 logger.warning(
-                    "CameraBridge: camera stale %.1fs, reconnecting (%d/%d, backoff %.0fs)",
-                    color_age, self._reconnect_count, self._max_reconnects, backoff)
-                self._shutdown_event.wait(timeout=backoff)
-                if self._shutdown_event.is_set():
-                    break
-
+                    "CameraBridge: L1 recovery — reconnect rclpy (%d/%d)",
+                    self._reconnect_count, self._max_reconnects)
                 if self._create_ros2_node():
-                    logger.info("CameraBridge: reconnected successfully")
                     self.alive.publish(True)
                 else:
                     self.alive.publish(False)
+            elif level == 2:
+                logger.warning(
+                    "CameraBridge: L2 recovery — restart camera.service (%d/%d)",
+                    self._reconnect_count, self._max_reconnects)
+                self._restart_camera_service()
+                self._shutdown_event.wait(timeout=8.0)
+                if self._shutdown_event.is_set():
+                    break
+                self._create_ros2_node()
             else:
-                # Healthy — reset reconnect counter
-                if self._reconnect_count > 0:
-                    logger.info("CameraBridge: data resumed after %d reconnect(s)",
-                                self._reconnect_count)
-                    self._reconnect_count = 0
+                logger.warning(
+                    "CameraBridge: L3 recovery — USB reset + restart (%d/%d)",
+                    self._reconnect_count, self._max_reconnects)
+                self._usb_reset_camera()
+                self._shutdown_event.wait(timeout=5.0)
+                self._restart_camera_service()
+                self._shutdown_event.wait(timeout=8.0)
+                if self._shutdown_event.is_set():
+                    break
+                self._create_ros2_node()
+
+            self._shutdown_event.wait(timeout=backoff)
+
+    @staticmethod
+    def _recovery_level(attempt: int) -> int:
+        """L1 for first 2 attempts, L2 for next 3, L3 after that."""
+        if attempt <= 2:
+            return 1
+        if attempt <= 5:
+            return 2
+        return 3
+
+    @staticmethod
+    def _restart_camera_service() -> None:
+        """Restart the camera systemd service."""
+        import subprocess
+        try:
+            subprocess.run(
+                ["sudo", "systemctl", "restart", "camera"],
+                capture_output=True, timeout=10,
+            )
+            logger.info("CameraBridge: camera.service restarted")
+        except Exception as e:
+            logger.warning("CameraBridge: failed to restart camera.service: %s", e)
+
+    @staticmethod
+    def _usb_reset_camera() -> None:
+        """Reset Orbbec USB device without physical unplug."""
+        import subprocess
+        try:
+            # Find Orbbec device in sysfs (vendor 2bc5)
+            result = subprocess.run(
+                ["bash", "-c",
+                 "grep -rl '2bc5' /sys/bus/usb/devices/*/idVendor 2>/dev/null "
+                 "| head -1 | xargs dirname"],
+                capture_output=True, text=True, timeout=5,
+            )
+            dev_path = result.stdout.strip()
+            if dev_path:
+                auth_path = f"{dev_path}/authorized"
+                # Power cycle: deauthorize → wait → reauthorize
+                subprocess.run(
+                    ["bash", "-c", f"echo 0 | sudo tee {auth_path} && "
+                     f"sleep 2 && echo 1 | sudo tee {auth_path}"],
+                    capture_output=True, timeout=10,
+                )
+                logger.info("CameraBridge: USB reset via %s", auth_path)
+            else:
+                logger.warning("CameraBridge: Orbbec USB device not found in sysfs")
+        except Exception as e:
+            logger.warning("CameraBridge: USB reset failed: %s", e)
 
     # ── ROS2 callbacks ────────────────────────────────────────────────────────
 
