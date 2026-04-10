@@ -66,6 +66,7 @@ class TerrainModule(Module, layer=2):
     def setup(self):
         self.odometry.subscribe(self._on_odom)
         self.map_cloud.subscribe(self._on_cloud)
+        self.map_cloud.set_policy("latest")
 
         if self._backend == "nanobind":
             self._setup_nanobind()

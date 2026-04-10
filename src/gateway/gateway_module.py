@@ -265,6 +265,7 @@ class GatewayModule(Module, layer=6):
     def setup(self) -> None:
         self.odometry.subscribe(self._on_odometry)
         self.map_cloud.subscribe(self._on_map_cloud)
+        self.map_cloud.set_policy("latest")
         self.scene_graph.subscribe(self._on_scene_graph)
         self.safety_state.subscribe(self._on_safety)
         self.mission_status.subscribe(self._on_mission)
@@ -1184,6 +1185,12 @@ class GatewayModule(Module, layer=6):
     def _run_server(self) -> None:
         if self._app is None:
             return
+        # Reduce GIL switch interval so uvicorn's event loop gets CPU time
+        # even when LiDAR/DDS callbacks are active in other threads.
+        # Default is 5ms; 1ms gives the event loop ~10x more scheduling chances.
+        import sys
+        old_interval = sys.getswitchinterval()
+        sys.setswitchinterval(0.001)
         try:
             import uvicorn
             config = uvicorn.Config(
@@ -1204,6 +1211,8 @@ class GatewayModule(Module, layer=6):
             logger.error("uvicorn not installed — run: pip install 'uvicorn[standard]'")
         except Exception:
             logger.exception("uvicorn crashed")
+        finally:
+            sys.setswitchinterval(old_interval)
 
     # -- health -------------------------------------------------------------
 
