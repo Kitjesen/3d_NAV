@@ -259,7 +259,7 @@ class DDSReader:
             self._thread = None
 
     def _spin_loop(self) -> None:
-        """Poll readers and dispatch callbacks. 1ms sleep for low latency."""
+        """Poll readers and dispatch callbacks."""
         while self._running:
             got_any = False
             for sub in self._subs:
@@ -274,8 +274,11 @@ class DDSReader:
                             sub["callback"](sample)
                 except Exception as e:
                     logger.debug("DDSReader poll %s: %s", sub["ros2_topic"], e)
-            # Adaptive sleep: 1ms when active, 5ms when idle
-            time.sleep(0.001 if got_any else 0.005)
+                # Yield GIL between readers so uvicorn can process HTTP
+                time.sleep(0)
+            # 10ms active / 20ms idle — still <100ms latency, but frees
+            # GIL for uvicorn event loop (~50 polls/s is plenty for nav)
+            time.sleep(0.010 if got_any else 0.020)
 
 
 # ── DDSWriter — publish to ROS2 topics ───────────────────────────────────────
