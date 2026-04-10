@@ -23,16 +23,17 @@
 .logo {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-family: var(--font-ui);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.3px;
+  gap: 8px;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
   color: var(--text);
 }
 
 .logoIcon {
   color: var(--accent);
+  filter: drop-shadow(0 0 4px var(--accent-glow));
 }
 
 .badge {

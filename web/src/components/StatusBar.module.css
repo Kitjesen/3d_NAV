@@ -78,5 +78,6 @@
 .hbDotAlive {
   composes: hbDot;
   background: var(--accent);
-  box-shadow: 0 0 5px var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow), 0 0 0 2px rgba(94, 234, 212, 0.12);
+  animation: pulse-soft 2.4s var(--ease-in-out) infinite;
 }

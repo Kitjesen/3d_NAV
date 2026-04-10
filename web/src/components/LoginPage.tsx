@@ -37,9 +37,11 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     <div className={styles.loginPage}>
       <div className={styles.card}>
         <div className={styles.logo}>
-          <Navigation size={32} />
+          <div className={styles.logoIcon}>
+            <Navigation size={28} strokeWidth={2} />
+          </div>
           <h1>LingTu</h1>
-          <p>机器人控制台</p>
+          <p>自主导航控制台</p>
         </div>
 
         <form className={styles.form} onSubmit={handleSubmit}>
@@ -72,7 +74,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         </form>
 
         <p className={styles.hint}>
-          API Key 通过环境变量 LINGTU_API_KEY 配置
+          API Key 通过环境变量 <code>LINGTU_API_KEY</code> 配置
         </p>
       </div>
     </div>

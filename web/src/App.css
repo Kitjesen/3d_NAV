@@ -1,34 +1,59 @@
 /* ===== Design Tokens ===== */
 :root {
-  --bg:          #0a0e17;
-  --bg2:         #0f1520;
-  --bg3:         #141c2b;
-  --surface:     #0f1520;
-  --border:      #1e2a3a;
-  --border-hi:   #2a3d55;
+  /* Base surfaces — slightly warmer than pure blue-black */
+  --bg:          #0b0e14;
+  --bg2:         #12161f;
+  --bg3:         #1a1f2b;
+  --surface:     #12161f;
+  --border:      #212733;
+  --border-hi:   #2e3544;
 
-  --text:        #e2e8f0;
-  --text-dim:    #8892a4;
-  --text-faint:  #4a5568;
+  /* Text — warmer whites */
+  --text:        #e8e4dc;
+  --text-dim:    #8a8577;
+  --text-faint:  #4d4a42;
 
-  --accent:      #00ff88;
-  --accent-dim:  #00cc6a;
-  --accent-glow: rgba(0, 255, 136, 0.15);
+  /* Accent — warmer teal-mint (less radioactive than #00ff88) */
+  --accent:      #5EEAD4;
+  --accent-dim:  #3BCFBA;
+  --accent-glow: rgba(94, 234, 212, 0.18);
+
+  /* Warm secondary — Claude orange for highlights / focus rings */
+  --warm:        #EA7846;
+  --warm-dim:    #D65A2B;
+  --warm-glow:   rgba(234, 120, 70, 0.18);
 
   --red:         #ef4444;
   --red-dim:     #b91c1c;
   --red-glow:    rgba(239, 68, 68, 0.2);
 
-  --blue:        #3b82f6;
-  --blue-dim:    #1d4ed8;
+  --blue:        #60A5FA;
+  --blue-dim:    #3B82F6;
 
-  --radius:      6px;
+  --radius:      8px;
+  --radius-lg:   12px;
   --font-mono:   'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
-  --font-ui:     'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --font-ui:     'Inter', 'Noto Sans SC', 'PingFang SC', system-ui, -apple-system, sans-serif;
+  --font-serif:  'Tiempos Text', 'Noto Serif SC', Georgia, serif;
 
   /* Topbar + statusbar heights */
   --topbar-h:    44px;
   --statusbar-h: 28px;
+
+  /* Motion */
+  --ease-out:    cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ===== Global breathing pulse for live indicators ===== */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.6; transform: scale(0.92); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ===== Reset ===== */
@@ -79,7 +104,8 @@ body {
   flex-direction: column;
   border-right: 1px solid var(--border);
   min-height: 0;
-  background: #060a10;
+  background: radial-gradient(ellipse at top, #0a0e16 0%, #060a10 100%);
+  animation: fade-in 0.5s var(--ease-out);
 }
 
 .chat-section {
@@ -87,6 +113,7 @@ body {
   flex-direction: column;
   min-height: 0;
   background: var(--bg2);
+  animation: fade-in 0.5s var(--ease-out) 0.08s both;
 }
 
 /* ===== Responsive: collapse chat below camera on small screens ===== */

@@ -50,32 +50,34 @@
 
 .camBadge {
   position: absolute;
-  top: 10px;
-  left: 10px;
+  top: 14px;
+  left: 14px;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.5px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  backdrop-filter: blur(6px);
+  letter-spacing: 0.6px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: fade-in 0.5s var(--ease-out) 0.2s both;
 }
 
 .camBadgeLive {
   composes: camBadge;
-  background: rgba(0, 255, 136, 0.12);
+  background: rgba(94, 234, 212, 0.1);
   color: var(--accent);
-  border: 1px solid rgba(0, 255, 136, 0.3);
+  border: 1px solid rgba(94, 234, 212, 0.25);
 }
 
 .camBadgeOff {
   composes: camBadge;
-  background: rgba(239, 68, 68, 0.1);
+  background: rgba(239, 68, 68, 0.08);
   color: var(--red);
-  border: 1px solid rgba(239, 68, 68, 0.25);
+  border: 1px solid rgba(239, 68, 68, 0.22);
 }
 
 .camBadgeDot {
@@ -86,17 +88,12 @@
 
 .camBadgeLive .camBadgeDot {
   background: var(--accent);
-  box-shadow: 0 0 6px var(--accent);
-  animation: pulse-green 1.5s ease-in-out infinite;
+  box-shadow: 0 0 8px var(--accent-glow), 0 0 0 3px rgba(94, 234, 212, 0.1);
+  animation: pulse-soft 2s var(--ease-in-out) infinite;
 }
 
 .camBadgeOff .camBadgeDot {
   background: var(--red);
-}
-
-@keyframes pulse-green {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.5; transform: scale(0.75); }
 }
 
 .estopOverlay {

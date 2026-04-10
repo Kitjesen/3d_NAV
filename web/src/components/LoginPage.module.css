@@ -1,44 +1,108 @@
-/* LoginPage component styles */
+/* LoginPage — Claude-inspired warm, elegant, editorial feel */
 
 .loginPage {
+  position: fixed;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 100vh;
-  background: var(--bg);
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 30%, rgba(234, 120, 70, 0.08), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 50% 90%, rgba(234, 120, 70, 0.04), transparent 70%),
+    #F5F1EB;
+  overflow: hidden;
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #2A2622;
+  animation: fadeIn 0.8s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Ambient breathing glow behind the card */
+.loginPage::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 600px;
+  height: 600px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(234, 120, 70, 0.06), transparent 60%);
+  animation: breathe 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1); }
+  50%      { opacity: 1;   transform: translate(-50%, -50%) scale(1.08); }
 }
 
 .card {
-  width: 360px;
-  padding: 40px 32px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  text-align: center;
+  position: relative;
+  width: 440px;
+  padding: 56px 48px 48px;
+  background: rgba(255, 253, 250, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(42, 38, 34, 0.08);
+  border-radius: 20px;
+  box-shadow:
+    0 1px 2px rgba(42, 38, 34, 0.04),
+    0 8px 24px rgba(42, 38, 34, 0.06),
+    0 24px 64px rgba(42, 38, 34, 0.08);
+  animation: slideUp 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .logo {
-  margin-bottom: 32px;
-  color: var(--accent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 40px;
+}
+
+.logoIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 20px;
+  background: linear-gradient(135deg, #EA7846, #D65A2B);
+  border-radius: 16px;
+  color: #FFFDF8;
+  box-shadow:
+    0 4px 12px rgba(234, 120, 70, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
 .logo h1 {
-  font-size: 24px;
-  font-weight: 600;
-  margin: 12px 0 4px;
-  color: var(--text);
+  font-family: 'Tiempos Text', 'Noto Serif SC', Georgia, serif;
+  font-size: 32px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: #2A2622;
+  margin: 0 0 6px;
 }
 
 .logo p {
-  font-size: 13px;
-  color: var(--text-dim);
+  font-size: 14px;
+  color: #8B8177;
   margin: 0;
+  letter-spacing: 0.01em;
 }
 
 .form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .inputWrap {
@@ -49,55 +113,115 @@
 
 .inputIcon {
   position: absolute;
-  left: 12px;
-  color: var(--text-dim);
+  left: 16px;
+  color: #B5A999;
+  transition: color 0.2s ease;
 }
 
 .input {
   width: 100%;
-  padding: 10px 12px 10px 36px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
+  padding: 14px 16px 14px 44px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(42, 38, 34, 0.1);
+  border-radius: 12px;
+  color: #2A2622;
   font-size: 14px;
-  font-family: var(--font-mono);
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
   outline: none;
+  transition: all 0.2s ease;
+}
+
+.input::placeholder {
+  color: #B5A999;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.input:hover {
+  border-color: rgba(42, 38, 34, 0.18);
+  background: rgba(255, 255, 255, 0.8);
 }
 
 .input:focus {
-  border-color: var(--accent);
+  border-color: #EA7846;
+  background: #FFFDF8;
+  box-shadow: 0 0 0 4px rgba(234, 120, 70, 0.1);
+}
+
+.input:focus + .inputIcon,
+.inputWrap:focus-within .inputIcon {
+  color: #EA7846;
 }
 
 .error {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  background: rgba(239, 68, 68, 0.1);
-  border-radius: var(--radius);
-  color: var(--red);
-  font-size: 12px;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(220, 38, 38, 0.06);
+  border: 1px solid rgba(220, 38, 38, 0.15);
+  border-radius: 10px;
+  color: #B91C1C;
+  font-size: 13px;
+  animation: shake 0.4s ease;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-4px); }
+  75%      { transform: translateX(4px); }
 }
 
 .btn {
-  padding: 10px;
-  background: var(--accent);
+  padding: 14px;
+  background: linear-gradient(135deg, #EA7846, #D65A2B);
   border: none;
-  border-radius: var(--radius);
-  color: var(--bg);
-  font-size: 14px;
-  font-weight: 600;
+  border-radius: 12px;
+  color: #FFFDF8;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   cursor: pointer;
-  font-family: var(--font-ui);
+  font-family: 'Inter', system-ui, sans-serif;
+  transition: all 0.2s ease;
+  box-shadow:
+    0 1px 2px rgba(214, 90, 43, 0.2),
+    0 4px 12px rgba(214, 90, 43, 0.15);
+  margin-top: 8px;
 }
 
-.btn:hover { opacity: 0.9; }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    0 2px 4px rgba(214, 90, 43, 0.25),
+    0 8px 20px rgba(214, 90, 43, 0.2);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
 
 .hint {
-  margin-top: 20px;
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(42, 38, 34, 0.06);
+  font-size: 12px;
+  color: #A8998A;
+  text-align: center;
+  letter-spacing: 0.01em;
+  line-height: 1.6;
+}
+
+.hint code {
+  padding: 2px 6px;
+  background: rgba(42, 38, 34, 0.05);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 11px;
-  color: var(--text-dim);
-  opacity: 0.5;
+  color: #6B5E52;
 }
