@@ -1101,9 +1101,15 @@ class GatewayModule(Module, layer=6):
                     status_code=500)
 
         # ── WebSocket teleop ───────────────────────────────────────────────
+        # Use Starlette's WebSocketRoute directly (app.add_websocket_route)
+        # instead of @app.websocket to bypass FastAPI's APIWebSocketRoute
+        # dependency-injection stack, which has a bug in 0.135.x that causes
+        # the handshake to be silently closed before the handler body runs.
 
-        @app.websocket("/ws/teleop")
-        async def ws_teleop(ws: WebSocket):
+        from starlette.websockets import WebSocket as StarletteWebSocket
+        from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
+
+        async def ws_teleop_endpoint(ws: StarletteWebSocket):
             await ws.accept()
             gw._teleop_clients += 1
             tm = gw._teleop_module
@@ -1150,7 +1156,7 @@ class GatewayModule(Module, layer=6):
                             tm.force_release()
                         else:
                             gw.cmd_vel.publish(Twist())
-            except WebSocketDisconnect:
+            except StarletteWebSocketDisconnect:
                 pass
             finally:
                 frame_task.cancel()
@@ -1160,6 +1166,8 @@ class GatewayModule(Module, layer=6):
                 elif gw._teleop_clients == 0:
                     gw._teleop_release()
                 logger.info("Teleop WS disconnected (%d clients)", gw._teleop_clients)
+
+        app.add_websocket_route("/ws/teleop", ws_teleop_endpoint)
 
         # Serve React dashboard (web/dist/) at root — must be last mount
         import os as _os
