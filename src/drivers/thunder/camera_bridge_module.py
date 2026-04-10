@@ -265,14 +265,24 @@ class CameraBridgeModule(Module, layer=1):
 
     @staticmethod
     def _restart_camera_service() -> None:
-        """Restart the camera systemd service."""
+        """Restart the camera systemd service (kill stale children first)."""
         import subprocess
         try:
+            # Stop + kill stale component_container to prevent device lock fights
             subprocess.run(
-                ["sudo", "systemctl", "restart", "camera"],
+                ["sudo", "systemctl", "stop", "camera"],
                 capture_output=True, timeout=10,
             )
-            logger.info("CameraBridge: camera.service restarted")
+            subprocess.run(
+                ["sudo", "killall", "-9", "component_container"],
+                capture_output=True, timeout=5,
+            )
+            time.sleep(1)
+            subprocess.run(
+                ["sudo", "systemctl", "start", "camera"],
+                capture_output=True, timeout=10,
+            )
+            logger.info("CameraBridge: camera.service restarted (clean)")
         except Exception as e:
             logger.warning("CameraBridge: failed to restart camera.service: %s", e)
 
