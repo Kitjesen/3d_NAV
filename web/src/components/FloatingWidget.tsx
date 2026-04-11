@@ -13,7 +13,13 @@ interface Layout {
   z: number
 }
 
-const LS_KEY = 'lingtu-widget-layouts-v2'
+const LS_KEY = 'lingtu-widget-layouts-v3'
+const LS_OLD_KEYS = ['lingtu-widget-layouts-v1', 'lingtu-widget-layouts-v2']
+
+// Clean up any stale keys from previous layout generations
+try {
+  for (const k of LS_OLD_KEYS) localStorage.removeItem(k)
+} catch { /* noop */ }
 
 function loadLayouts(): Record<string, Layout> {
   try {
@@ -31,7 +37,10 @@ function saveLayouts(layouts: Record<string, Layout>) {
 }
 
 export function resetAllLayouts() {
-  try { localStorage.removeItem(LS_KEY) } catch { /* noop */ }
+  try {
+    localStorage.removeItem(LS_KEY)
+    for (const k of LS_OLD_KEYS) localStorage.removeItem(k)
+  } catch { /* noop */ }
   window.location.reload()
 }
 
