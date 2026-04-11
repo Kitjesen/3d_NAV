@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Camera, Globe2, Map as MapIcon, MessageSquare, RotateCcw } from 'lucide-react'
 import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
 import { Topbar } from './components/Topbar'
@@ -11,6 +12,7 @@ import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
 import { SceneView } from './components/SceneView'
 import { MiniMap } from './components/MiniMap'
+import { FloatingWidget, resetAllLayouts } from './components/FloatingWidget'
 import { ToastContainer } from './components/Toast'
 import { LoginPage } from './components/LoginPage'
 import * as api from './services/api'
@@ -43,17 +45,59 @@ function Dashboard() {
 
       <main className="main-content" key={activeTab}>
         {activeTab === 'console' && (
-          <div className="main-grid tab-panel" role="tabpanel" id="panel-console">
-            <section className="camera-section">
+          <div className="console-canvas" role="tabpanel" id="panel-console">
+            <FloatingWidget
+              id="camera"
+              title="相机"
+              titleIcon={<Camera size={13} />}
+              defaultPos={{ x: 16, y: 16 }}
+              defaultSize={{ w: 780, h: 560 }}
+              minSize={{ w: 400, h: 300 }}
+            >
               <CameraFeed onStop={handleStop} estop={estop} sseState={sseState} />
-            </section>
-            <aside className="sidebar-section">
+            </FloatingWidget>
+
+            <FloatingWidget
+              id="chat"
+              title="智能体"
+              titleIcon={<MessageSquare size={13} />}
+              defaultPos={{ x: 812, y: 420 }}
+              defaultSize={{ w: 520, h: 440 }}
+              minSize={{ w: 340, h: 280 }}
+            >
+              <ChatPanel sseState={sseState} />
+            </FloatingWidget>
+
+            <FloatingWidget
+              id="gps"
+              title="定位"
+              titleIcon={<Globe2 size={13} />}
+              defaultPos={{ x: 812, y: 16 }}
+              defaultSize={{ w: 340, h: 390 }}
+              minSize={{ w: 280, h: 340 }}
+            >
               <GpsCard sseState={sseState} />
+            </FloatingWidget>
+
+            <FloatingWidget
+              id="minimap"
+              title="Mini Map"
+              titleIcon={<MapIcon size={13} />}
+              defaultPos={{ x: 1168, y: 16 }}
+              defaultSize={{ w: 300, h: 390 }}
+              minSize={{ w: 240, h: 260 }}
+            >
               <MiniMap sseState={sseState} />
-              <div className="chat-section">
-                <ChatPanel sseState={sseState} />
-              </div>
-            </aside>
+            </FloatingWidget>
+
+            <button
+              className="reset-layout-btn"
+              onClick={resetAllLayouts}
+              title="恢复默认布局"
+            >
+              <RotateCcw size={13} />
+              重置布局
+            </button>
           </div>
         )}
         {activeTab === 'scene' && <SceneView sseState={sseState} showToast={showToast} />}

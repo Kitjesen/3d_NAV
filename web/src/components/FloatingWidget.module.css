@@ -1,0 +1,238 @@
+/* FloatingWidget — draggable, resizable widget (iOS/RViz style) */
+
+.widget {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--glass);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    0 12px 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  animation: widgetIn 0.4s var(--ease-spring);
+  transition: box-shadow 0.2s var(--ease-out);
+}
+
+@keyframes widgetIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.widget:hover,
+.widgetFocused {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 2px 4px rgba(0, 0, 0, 0.4),
+    0 16px 48px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(99, 102, 241, 0.15);
+}
+
+.widgetDragging {
+  transition: none;
+  user-select: none;
+  cursor: grabbing;
+  opacity: 0.96;
+}
+
+.widgetResizing {
+  transition: none;
+  user-select: none;
+}
+
+/* ── Header (drag handle) ─────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: linear-gradient(180deg,
+    rgba(255, 255, 255, 0.035) 0%,
+    rgba(255, 255, 255, 0) 100%);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+  min-height: 38px;
+}
+
+.header:active { cursor: grabbing; }
+
+.title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.titleIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-faint);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: all 0.15s var(--ease-out);
+}
+
+.actionBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+/* Traffic-light style dots (optional decorative) */
+.dots {
+  display: flex;
+  gap: 5px;
+  margin-right: 4px;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  transition: background 0.15s;
+}
+
+.dotRed    { background: #FF5F57; }
+.dotYellow { background: #FEBC2E; }
+.dotGreen  { background: #28C840; }
+
+/* ── Body ────────────────────────────────────────────────── */
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── Resize handles ──────────────────────────────────────── */
+
+.resizeHandle {
+  position: absolute;
+  z-index: 10;
+}
+
+.resizeE {
+  composes: resizeHandle;
+  top: 10px;
+  bottom: 10px;
+  right: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.resizeS {
+  composes: resizeHandle;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.resizeSE {
+  composes: resizeHandle;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+}
+
+.resizeSE::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(255, 255, 255, 0.18);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.18);
+  border-bottom-right-radius: 3px;
+  pointer-events: none;
+  transition: border-color 0.15s;
+}
+
+.resizeSE:hover::after {
+  border-right-color: rgba(99, 102, 241, 0.6);
+  border-bottom-color: rgba(99, 102, 241, 0.6);
+}
+
+.resizeW {
+  composes: resizeHandle;
+  top: 10px;
+  bottom: 10px;
+  left: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.resizeN {
+  composes: resizeHandle;
+  left: 10px;
+  right: 10px;
+  top: 0;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.resizeSW {
+  composes: resizeHandle;
+  left: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nesw-resize;
+}
+
+.resizeNE {
+  composes: resizeHandle;
+  right: 0;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nesw-resize;
+}
+
+.resizeNW {
+  composes: resizeHandle;
+  left: 0;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+}
