@@ -39,26 +39,20 @@ export function resetAllLayouts() {
 
 export interface FloatingWidgetProps {
   id: string
-  title: React.ReactNode
-  titleIcon?: React.ReactNode
   defaultPos: { x: number; y: number }
   defaultSize: { w: number; h: number }
   minSize?: { w: number; h: number }
   children: React.ReactNode
-  headerActions?: React.ReactNode
 }
 
 type DragMode = null | 'move' | 'e' | 's' | 'n' | 'w' | 'se' | 'sw' | 'ne' | 'nw'
 
 export function FloatingWidget({
   id,
-  title,
-  titleIcon,
   defaultPos,
   defaultSize,
   minSize = { w: 260, h: 180 },
   children,
-  headerActions,
 }: FloatingWidgetProps) {
   // Load persisted layout or use defaults
   const [layout, setLayout] = useState<Layout>(() => {
@@ -74,7 +68,6 @@ export function FloatingWidget({
   })
 
   const [dragMode, setDragMode] = useState<DragMode>(null)
-  const [focused, setFocused] = useState(false)
   const dragStartRef = useRef<{
     mouseX: number
     mouseY: number
@@ -94,7 +87,6 @@ export function FloatingWidget({
   // Bring widget to front when clicked
   const bringToFront = useCallback(() => {
     setLayout(prev => ({ ...prev, z: ++globalZ }))
-    setFocused(true)
   }, [])
 
   // Start a drag or resize operation
@@ -172,21 +164,8 @@ export function FloatingWidget({
     }
   }, [dragMode, minSize.w, minSize.h])
 
-  // Lose focus when clicking outside (any other widget/anywhere)
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      const widgetEl = document.getElementById(`widget-${id}`)
-      if (widgetEl && !widgetEl.contains(e.target as Node)) {
-        setFocused(false)
-      }
-    }
-    window.addEventListener('mousedown', onClick)
-    return () => window.removeEventListener('mousedown', onClick)
-  }, [id])
-
   const wrapperClass = [
     styles.widget,
-    focused ? styles.widgetFocused : '',
     dragMode === 'move' ? styles.widgetDragging : '',
     dragMode && dragMode !== 'move' ? styles.widgetResizing : '',
   ].filter(Boolean).join(' ')
@@ -204,29 +183,18 @@ export function FloatingWidget({
       }}
       onMouseDown={bringToFront}
     >
+      {/* Invisible drag strip at the top — only visible on hover */}
       <div
-        className={styles.header}
-        onMouseDown={(e) => {
-          // Only start drag if mousedown was directly on header, not on action buttons
-          if ((e.target as HTMLElement).closest('button')) return
-          startAction('move', e)
-        }}
+        className={styles.dragStrip}
+        onMouseDown={(e) => startAction('move', e)}
+        title="拖动移动"
       >
-        <span className={styles.dots}>
-          <span className={`${styles.dot} ${styles.dotRed}`} />
-          <span className={`${styles.dot} ${styles.dotYellow}`} />
-          <span className={`${styles.dot} ${styles.dotGreen}`} />
-        </span>
-        <span className={styles.title}>
-          {titleIcon && <span className={styles.titleIcon}>{titleIcon}</span>}
-          {title}
-        </span>
-        {headerActions && <span className={styles.actions}>{headerActions}</span>}
+        <span className={styles.dragGrabber} />
       </div>
 
       <div className={styles.body}>{children}</div>
 
-      {/* Resize handles */}
+      {/* Resize handles (invisible, hover cursors) */}
       <div className={styles.resizeN}  onMouseDown={(e) => startAction('n',  e)} />
       <div className={styles.resizeS}  onMouseDown={(e) => startAction('s',  e)} />
       <div className={styles.resizeE}  onMouseDown={(e) => startAction('e',  e)} />

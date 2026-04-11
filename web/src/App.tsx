@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Camera, Globe2, Map as MapIcon, MessageSquare, RotateCcw } from 'lucide-react'
+import { RotateCcw } from 'lucide-react'
 import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
 import { Topbar } from './components/Topbar'
@@ -48,8 +48,6 @@ function Dashboard() {
           <div className="console-canvas" role="tabpanel" id="panel-console">
             <FloatingWidget
               id="camera"
-              title="相机"
-              titleIcon={<Camera size={13} />}
               defaultPos={{ x: 16, y: 16 }}
               defaultSize={{ w: 780, h: 560 }}
               minSize={{ w: 400, h: 300 }}
@@ -59,8 +57,6 @@ function Dashboard() {
 
             <FloatingWidget
               id="chat"
-              title="智能体"
-              titleIcon={<MessageSquare size={13} />}
               defaultPos={{ x: 812, y: 420 }}
               defaultSize={{ w: 520, h: 440 }}
               minSize={{ w: 340, h: 280 }}
@@ -70,8 +66,6 @@ function Dashboard() {
 
             <FloatingWidget
               id="gps"
-              title="定位"
-              titleIcon={<Globe2 size={13} />}
               defaultPos={{ x: 812, y: 16 }}
               defaultSize={{ w: 340, h: 390 }}
               minSize={{ w: 280, h: 340 }}
@@ -81,8 +75,6 @@ function Dashboard() {
 
             <FloatingWidget
               id="minimap"
-              title="Mini Map"
-              titleIcon={<MapIcon size={13} />}
               defaultPos={{ x: 1168, y: 16 }}
               defaultSize={{ w: 300, h: 390 }}
               minSize={{ w: 240, h: 260 }}

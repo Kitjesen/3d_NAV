@@ -1,134 +1,79 @@
-/* FloatingWidget — draggable, resizable widget (iOS/RViz style) */
+/* FloatingWidget — invisible draggable/resizable wrapper.
+   Child component provides ALL the visuals. Widget only manages
+   position, size, z-index, and interactions. */
 
 .widget {
   position: absolute;
   display: flex;
   flex-direction: column;
-  background: var(--glass);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
-  border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 2px 4px rgba(0, 0, 0, 0.3),
-    0 12px 32px rgba(0, 0, 0, 0.35);
-  overflow: hidden;
+  overflow: visible;
   animation: widgetIn 0.4s var(--ease-spring);
-  transition: box-shadow 0.2s var(--ease-out);
 }
 
 @keyframes widgetIn {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.widget:hover,
-.widgetFocused {
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    0 2px 4px rgba(0, 0, 0, 0.4),
-    0 16px 48px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(99, 102, 241, 0.15);
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .widgetDragging {
-  transition: none;
   user-select: none;
   cursor: grabbing;
-  opacity: 0.96;
+  opacity: 0.98;
+}
+
+.widgetDragging *,
+.widgetResizing * {
+  pointer-events: none;
 }
 
 .widgetResizing {
-  transition: none;
   user-select: none;
 }
 
-/* ── Header (drag handle) ─────────────────────────────────── */
+/* ── Invisible drag handle (top strip of widget) ─────────────
+   Covers the top 36px and provides a subtle hover affordance. */
 
-.header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: linear-gradient(180deg,
-    rgba(255, 255, 255, 0.035) 0%,
-    rgba(255, 255, 255, 0) 100%);
-  border-bottom: 1px solid var(--border);
+.dragStrip {
+  position: absolute;
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 36px;
   cursor: grab;
-  user-select: none;
-  flex-shrink: 0;
-  min-height: 38px;
-}
-
-.header:active { cursor: grabbing; }
-
-.title {
-  flex: 1;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.titleIcon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  color: var(--text-faint);
-}
-
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.actionBtn {
+  z-index: 5;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--text-faint);
-  cursor: pointer;
-  transition: all 0.15s var(--ease-out);
+  pointer-events: auto;
+  opacity: 0;
+  transition: opacity 0.2s var(--ease-out);
 }
 
-.actionBtn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
+.widget:hover .dragStrip {
+  opacity: 1;
 }
 
-/* Traffic-light style dots (optional decorative) */
-.dots {
-  display: flex;
-  gap: 5px;
-  margin-right: 4px;
+.dragStrip:active { cursor: grabbing; }
+
+/* A subtle "grabber" pill that appears on hover */
+.dragGrabber {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: background 0.15s var(--ease-out), transform 0.15s var(--ease-out);
 }
 
-.dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.15);
-  transition: background 0.15s;
+.dragStrip:hover .dragGrabber {
+  background: rgba(255, 255, 255, 0.35);
+  transform: scaleX(1.1);
 }
 
-.dotRed    { background: #FF5F57; }
-.dotYellow { background: #FEBC2E; }
-.dotGreen  { background: #28C840; }
-
-/* ── Body ────────────────────────────────────────────────── */
+/* ── Child container — fills widget, no box of its own ─────── */
 
 .body {
   flex: 1;
@@ -136,10 +81,15 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  position: relative;
+  border-radius: inherit;
 }
 
-/* ── Resize handles ──────────────────────────────────────── */
+.body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Resize handles — invisible until hover ──────────────── */
 
 .resizeHandle {
   position: absolute;
@@ -148,91 +98,96 @@
 
 .resizeE {
   composes: resizeHandle;
-  top: 10px;
-  bottom: 10px;
-  right: 0;
-  width: 6px;
+  top: 16px;
+  bottom: 16px;
+  right: -4px;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.resizeW {
+  composes: resizeHandle;
+  top: 16px;
+  bottom: 16px;
+  left: -4px;
+  width: 10px;
   cursor: ew-resize;
 }
 
 .resizeS {
   composes: resizeHandle;
-  left: 10px;
-  right: 10px;
-  bottom: 0;
-  height: 6px;
+  left: 16px;
+  right: 16px;
+  bottom: -4px;
+  height: 10px;
+  cursor: ns-resize;
+}
+
+.resizeN {
+  composes: resizeHandle;
+  left: 16px;
+  right: 16px;
+  top: -4px;
+  height: 10px;
   cursor: ns-resize;
 }
 
 .resizeSE {
   composes: resizeHandle;
-  right: 0;
-  bottom: 0;
-  width: 16px;
-  height: 16px;
+  right: -4px;
+  bottom: -4px;
+  width: 18px;
+  height: 18px;
   cursor: nwse-resize;
-}
-
-.resizeSE::after {
-  content: '';
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid rgba(255, 255, 255, 0.18);
-  border-bottom: 2px solid rgba(255, 255, 255, 0.18);
-  border-bottom-right-radius: 3px;
-  pointer-events: none;
-  transition: border-color 0.15s;
-}
-
-.resizeSE:hover::after {
-  border-right-color: rgba(99, 102, 241, 0.6);
-  border-bottom-color: rgba(99, 102, 241, 0.6);
-}
-
-.resizeW {
-  composes: resizeHandle;
-  top: 10px;
-  bottom: 10px;
-  left: 0;
-  width: 6px;
-  cursor: ew-resize;
-}
-
-.resizeN {
-  composes: resizeHandle;
-  left: 10px;
-  right: 10px;
-  top: 0;
-  height: 6px;
-  cursor: ns-resize;
 }
 
 .resizeSW {
   composes: resizeHandle;
-  left: 0;
-  bottom: 0;
-  width: 16px;
-  height: 16px;
+  left: -4px;
+  bottom: -4px;
+  width: 18px;
+  height: 18px;
   cursor: nesw-resize;
 }
 
 .resizeNE {
   composes: resizeHandle;
-  right: 0;
-  top: 0;
-  width: 16px;
-  height: 16px;
+  right: -4px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
   cursor: nesw-resize;
 }
 
 .resizeNW {
   composes: resizeHandle;
-  left: 0;
-  top: 0;
-  width: 16px;
-  height: 16px;
+  left: -4px;
+  top: -4px;
+  width: 18px;
+  height: 18px;
   cursor: nwse-resize;
+}
+
+/* SE corner gets a subtle visual indicator on hover */
+.resizeSE::after {
+  content: '';
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-bottom-right-radius: 3px;
+  transition: border-color 0.15s var(--ease-out);
+}
+
+.widget:hover .resizeSE::after {
+  border-right-color: rgba(255, 255, 255, 0.2);
+  border-bottom-color: rgba(255, 255, 255, 0.2);
+}
+
+.resizeSE:hover::after {
+  border-right-color: rgba(99, 102, 241, 0.7);
+  border-bottom-color: rgba(99, 102, 241, 0.7);
 }
