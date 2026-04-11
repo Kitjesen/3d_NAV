@@ -3,6 +3,7 @@ import { Map, FolderOpen, Trash2, Star, RefreshCw, Save, Pencil } from 'lucide-r
 import type { MapInfo, ToastKind } from '../types'
 import * as api from '../services/api'
 import { PointCloudViewer } from './PointCloudViewer'
+import { PromptModal, ConfirmModal } from './Modal'
 import styles from './MapView.module.css'
 
 interface MapViewProps {
@@ -96,6 +97,11 @@ export function MapView({ showToast }: MapViewProps) {
   const [selectedMap, setSelectedMap] = useState<string | null>(null)
   const [splitPct,    setSplitPct   ] = useState(30)
 
+  // Modal state
+  const [saveOpen,   setSaveOpen  ] = useState(false)
+  const [renameFrom, setRenameFrom] = useState<string | null>(null)
+  const [deleteFrom, setDeleteFrom] = useState<string | null>(null)
+
   // Resizable divider
   const containerRef    = useRef<HTMLDivElement>(null)
   const divDragRef      = useRef<{ startX: number; startPct: number } | null>(null)
@@ -145,25 +151,38 @@ export function MapView({ showToast }: MapViewProps) {
     try { await api.activateMap(name); showToast(`已激活: ${name}`, 'success'); loadMaps() }
     catch { showToast(`激活失败: ${name}`, 'error') }
   }
-  const handleDelete = async (name: string) => {
-    if (!confirm(`确定删除地图 "${name}"？`)) return
+  const handleDelete = (name: string) => setDeleteFrom(name)
+  const handleRename = (name: string) => setRenameFrom(name)
+  const handleSave = () => setSaveOpen(true)
+
+  const confirmDelete = async () => {
+    const name = deleteFrom
+    setDeleteFrom(null)
+    if (!name) return
     try {
       await api.deleteMap(name); showToast(`已删除: ${name}`, 'success')
       if (selectedMap === name) setSelectedMap(null); loadMaps()
     } catch { showToast(`删除失败: ${name}`, 'error') }
   }
-  const handleRename = async (oldName: string) => {
-    const n = prompt(`重命名地图 "${oldName}":`, oldName)
-    if (!n || n === oldName) return
+  const confirmRename = async (newName: string) => {
+    const oldName = renameFrom
+    setRenameFrom(null)
+    if (!oldName || newName === oldName) return
     try {
-      await api.renameMap(oldName, n); showToast(`已重命名: ${n}`, 'success')
-      if (selectedMap === oldName) setSelectedMap(n); loadMaps()
+      await api.renameMap(oldName, newName); showToast(`已重命名: ${newName}`, 'success')
+      if (selectedMap === oldName) setSelectedMap(newName); loadMaps()
     } catch { showToast('重命名失败', 'error') }
   }
-  const handleSave = async () => {
-    const n = prompt('输入地图名称:'); if (!n) return
-    try { await api.saveMap(n); showToast(`保存成功: ${n}`, 'success'); loadMaps() }
+  const confirmSave = async (name: string) => {
+    setSaveOpen(false)
+    try { await api.saveMap(name); showToast(`保存成功: ${name}`, 'success'); loadMaps() }
     catch { showToast('保存失败', 'error') }
+  }
+
+  const nameValidator = (v: string) => {
+    if (!/^[a-zA-Z0-9_-]+$/.test(v)) return '仅支持字母、数字、下划线和横线'
+    if (v.length > 32) return '名称过长 (最多 32 字符)'
+    return null
   }
 
   const togglePreview = (name: string) =>
@@ -236,6 +255,41 @@ export function MapView({ showToast }: MapViewProps) {
           ))}
         </div>
       </div>
+
+      <PromptModal
+        open={saveOpen}
+        title="保存当前地图"
+        message="保存当前 SLAM 建图结果。系统会自动生成导航所需的 tomogram 和 occupancy 数据。"
+        placeholder="例如 building_2f"
+        confirmLabel="保存"
+        icon={<Save size={18} />}
+        validate={nameValidator}
+        onConfirm={confirmSave}
+        onCancel={() => setSaveOpen(false)}
+      />
+
+      <PromptModal
+        open={renameFrom != null}
+        title="重命名地图"
+        message={renameFrom ? `将 "${renameFrom}" 重命名为：` : ''}
+        placeholder="新地图名称"
+        initialValue={renameFrom ?? ''}
+        confirmLabel="重命名"
+        icon={<Pencil size={18} />}
+        validate={nameValidator}
+        onConfirm={confirmRename}
+        onCancel={() => setRenameFrom(null)}
+      />
+
+      <ConfirmModal
+        open={deleteFrom != null}
+        title="删除地图"
+        message={`确定要删除地图 "${deleteFrom}" 吗？此操作无法撤销。`}
+        confirmLabel="删除"
+        danger
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteFrom(null)}
+      />
     </div>
   )
 }

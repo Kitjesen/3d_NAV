@@ -190,18 +190,21 @@ body {
   overflow: hidden;
 }
 
-/* Ambient background — drifting colored blurs like Arc */
+/* Ambient background — drifting colored blurs like Arc.
+   GPU-friendly: smaller sizes + lower blur + will-change transform. */
 .app::before,
 .app::after {
   content: '';
   position: fixed;
-  width: 60vw;
-  height: 60vw;
+  width: 40vw;
+  height: 40vw;
   border-radius: 50%;
-  filter: blur(120px);
+  filter: blur(80px);
   pointer-events: none;
   z-index: 0;
   opacity: 0.4;
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 .app::before {

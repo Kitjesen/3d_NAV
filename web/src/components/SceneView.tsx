@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import type { SSEState, MapInfo, PathPoint, ToastKind } from '../types'
 import * as api from '../services/api'
+import { PromptModal } from './Modal'
 import styles from './SceneView.module.css'
 
 interface SceneViewProps {
@@ -324,6 +325,7 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
 
   const [hoverCoords, setHoverCoords] = useState<[number, number] | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(true)
+  const [saveModalOpen, setSaveModalOpen] = useState(false)
   const [layers, setLayers] = useState<Layers>({
     grid: true, trail: true, path: true, goal: true, robot: true,
   })
@@ -451,9 +453,10 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
     render()
   }, [render])
 
-  const handleSaveMap = async () => {
-    const name = prompt('地图名称:')
-    if (!name) return
+  const handleSaveMap = () => setSaveModalOpen(true)
+
+  const confirmSaveMap = async (name: string) => {
+    setSaveModalOpen(false)
     try {
       await api.saveMap(name)
       showToast(`已保存: ${name}`, 'success')
@@ -668,6 +671,22 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
           </button>
         </div>
       </div>
+
+      <PromptModal
+        open={saveModalOpen}
+        title="保存当前地图"
+        message="保存当前 SLAM 建图结果。系统会自动生成导航所需的 tomogram 和 occupancy 数据。"
+        placeholder="例如 building_2f"
+        confirmLabel="保存"
+        icon={<Save size={18} />}
+        validate={(v) => {
+          if (!/^[a-zA-Z0-9_-]+$/.test(v)) return '仅支持字母、数字、下划线和横线'
+          if (v.length > 32) return '名称过长 (最多 32 字符)'
+          return null
+        }}
+        onConfirm={confirmSaveMap}
+        onCancel={() => setSaveModalOpen(false)}
+      />
     </div>
   )
 }

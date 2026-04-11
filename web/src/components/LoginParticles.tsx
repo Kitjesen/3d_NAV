@@ -26,9 +26,9 @@ export function LoginParticles() {
       hue: number
     }
 
-    // Device-pixel-ratio aware sizing
+    // Device-pixel-ratio aware sizing — cap DPR at 1.5 for perf
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5)
       const { innerWidth: w, innerHeight: h } = window
       canvas.width = w * dpr
       canvas.height = h * dpr
@@ -36,14 +36,14 @@ export function LoginParticles() {
       canvas.style.height = `${h}px`
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-      // Repopulate particles on resize — density ~1 per 9000px²
-      const target = Math.min(80, Math.floor((w * h) / 9000))
+      // Much lower density — 40 particles max is plenty visually
+      const target = Math.min(40, Math.floor((w * h) / 24000))
       if (particles.length !== target) {
         particles = Array.from({ length: target }, () => ({
           x: Math.random() * w,
           y: Math.random() * h,
-          vx: (Math.random() - 0.5) * 0.25,
-          vy: (Math.random() - 0.5) * 0.25,
+          vx: (Math.random() - 0.5) * 0.2,
+          vy: (Math.random() - 0.5) * 0.2,
           r: 0.8 + Math.random() * 1.4,
           hue: Math.random() < 0.5 ? 250 : 320, // indigo or pink
         }))
@@ -53,7 +53,17 @@ export function LoginParticles() {
     resize()
     window.addEventListener('resize', resize)
 
-    const render = () => {
+    // Throttle to ~30fps — enough for background ambience, half the work
+    let lastFrame = 0
+    const frameInterval = 1000 / 30
+
+    const render = (now: number) => {
+      if (now - lastFrame < frameInterval) {
+        rafId = requestAnimationFrame(render)
+        return
+      }
+      lastFrame = now
+
       const w = canvas.clientWidth
       const h = canvas.clientHeight
       ctx.clearRect(0, 0, w, h)
@@ -68,10 +78,12 @@ export function LoginParticles() {
         if (p.y > h) p.y = 0
       }
 
-      // Draw connections (only nearby pairs)
-      const maxDist = 140
+      // Draw connections (batched into one path, single stroke call)
+      const maxDist = 120
       const maxDistSq = maxDist * maxDist
+      ctx.strokeStyle = 'rgba(140, 150, 220, 0.08)'
       ctx.lineWidth = 0.5
+      ctx.beginPath()
       for (let i = 0; i < particles.length; i++) {
         const a = particles[i]
         for (let j = i + 1; j < particles.length; j++) {
@@ -80,26 +92,20 @@ export function LoginParticles() {
           const dy = a.y - b.y
           const distSq = dx * dx + dy * dy
           if (distSq < maxDistSq) {
-            const alpha = (1 - distSq / maxDistSq) * 0.15
-            ctx.strokeStyle = `rgba(140, 150, 220, ${alpha})`
-            ctx.beginPath()
             ctx.moveTo(a.x, a.y)
             ctx.lineTo(b.x, b.y)
-            ctx.stroke()
           }
         }
       }
+      ctx.stroke()
 
-      // Draw particles
+      // Draw particles (no per-particle shadowBlur — too expensive)
       for (const p of particles) {
         ctx.beginPath()
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
-        ctx.fillStyle = `hsla(${p.hue}, 85%, 72%, 0.55)`
-        ctx.shadowColor = `hsla(${p.hue}, 85%, 65%, 0.6)`
-        ctx.shadowBlur = 6
+        ctx.fillStyle = `hsla(${p.hue}, 85%, 72%, 0.6)`
         ctx.fill()
       }
-      ctx.shadowBlur = 0
 
       rafId = requestAnimationFrame(render)
     }
