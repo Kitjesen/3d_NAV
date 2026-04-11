@@ -4,8 +4,6 @@
 
 .widget {
   position: absolute;
-  display: flex;
-  flex-direction: column;
   border-radius: var(--r-lg);
   overflow: visible;
   animation: widgetIn 0.4s var(--ease-spring);
@@ -73,20 +71,22 @@
   transform: scaleX(1.1);
 }
 
-/* ── Child container — fills widget, no box of its own ─────── */
+/* ── Child container — absolute-fills the widget ─────────── */
 
 .body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   border-radius: inherit;
 }
 
 .body > * {
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Resize handles — invisible until hover ──────────────── */

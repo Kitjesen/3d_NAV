@@ -13,7 +13,7 @@ interface Layout {
   z: number
 }
 
-const LS_KEY = 'lingtu-widget-layouts-v1'
+const LS_KEY = 'lingtu-widget-layouts-v2'
 
 function loadLayouts(): Record<string, Layout> {
   try {

@@ -48,26 +48,17 @@ function Dashboard() {
           <div className="console-canvas" role="tabpanel" id="panel-console">
             <FloatingWidget
               id="camera"
-              defaultPos={{ x: 16, y: 16 }}
-              defaultSize={{ w: 780, h: 560 }}
+              defaultPos={{ x: 0, y: 0 }}
+              defaultSize={{ w: 1000, h: 930 }}
               minSize={{ w: 400, h: 300 }}
             >
               <CameraFeed onStop={handleStop} estop={estop} sseState={sseState} />
             </FloatingWidget>
 
             <FloatingWidget
-              id="chat"
-              defaultPos={{ x: 812, y: 420 }}
-              defaultSize={{ w: 520, h: 440 }}
-              minSize={{ w: 340, h: 280 }}
-            >
-              <ChatPanel sseState={sseState} />
-            </FloatingWidget>
-
-            <FloatingWidget
               id="gps"
-              defaultPos={{ x: 812, y: 16 }}
-              defaultSize={{ w: 340, h: 390 }}
+              defaultPos={{ x: 1016, y: 0 }}
+              defaultSize={{ w: 440, h: 510 }}
               minSize={{ w: 280, h: 340 }}
             >
               <GpsCard sseState={sseState} />
@@ -75,11 +66,20 @@ function Dashboard() {
 
             <FloatingWidget
               id="minimap"
-              defaultPos={{ x: 1168, y: 16 }}
-              defaultSize={{ w: 300, h: 390 }}
+              defaultPos={{ x: 1472, y: 0 }}
+              defaultSize={{ w: 420, h: 510 }}
               minSize={{ w: 240, h: 260 }}
             >
               <MiniMap sseState={sseState} />
+            </FloatingWidget>
+
+            <FloatingWidget
+              id="chat"
+              defaultPos={{ x: 1016, y: 526 }}
+              defaultSize={{ w: 876, h: 404 }}
+              minSize={{ w: 340, h: 280 }}
+            >
+              <ChatPanel sseState={sseState} />
             </FloatingWidget>
 
             <button
