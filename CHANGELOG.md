@@ -6,6 +6,57 @@ Format: [Semantic Versioning](https://semver.org/) — `MAJOR.MINOR.PATCH`
 
 ---
 
+## [2.2.0] — 2026-04-13 (Dashboard 全面重做 + DDS/Gateway 可靠性)
+
+### Dashboard — Arc/Raycast 风格重做 (18 组件)
+
+- **设计系统重构** — 深蓝紫背景 + 漂移彩色 blur orb + 玻璃拟态面板 + indigo→purple→pink→amber 品牌渐变
+- **字体升级** — Geist + Geist Mono + Inter，14px base，4px 节奏间距 (--s-1…--s-6)，6 级圆角 (r-xs…r-2xl)
+- **FloatingWidget 系统** — 控制台 4 个 widget 可自由拖拽/resize，布局 localStorage 持久化，右下角"重置布局"按钮
+- **SceneView** (新) — RViz 级场景视图：5 图层开关 (网格/轨迹/路径/目标/本机)，点击发送导航目标，四足机器狗渲染 (渐变躯干+4脚+箭头)，indigo→pink 渐变路径，琥珀十字准星目标，左侧地图抽屉 + 右侧状态栏
+- **GpsCard** (新) — 旋转地球卡：经纬网格动画 + 外轨道卫星 + 琥珀脉冲定位标记 + X/Y/航向/速度/SLAM
+- **MiniMap** (新) — 2D 俯视 Canvas 卡：机器人箭头 + 轨迹 + 路径渐变 + 目标点
+- **CameraHud** (新) — 相机右上角遥测浮层：SLAM Hz / 速度 / 电量 / 温度 / 延迟，低电/高温警告
+- **LoginPage** (重构) — Canvas 粒子背景 + 三层 drifting orbs + 网格 mesh + 机器狗 SVG hero + 系统状态徽章 + 三态按钮 (Idle/Loading/Success)
+- **ChatPanel** (增强) — /命令自动补全下拉 (↑↓/Tab/Enter/Esc)，5 个快捷指令 chip，消息 bubbleIn 动画
+- **Modal** (新) — PromptModal + ConfirmModal 替代原生 prompt/confirm，玻璃卡 + 品牌渐变 + spring 入场 + 输入验证
+- **TabBar** — Pill 分段控件 (Raycast 风)，无下划线，键盘 ←→ 导航
+- **Topbar** — 品牌渐变 logo chip，transparent 背景
+- **Toast** (重做) — Spring slide-in + 玻璃 shadow + 按变体发光
+- **可访问性** — 全局 :focus-visible baseline，prefers-reduced-motion 尊重，roving-tabindex，aria-controls/aria-label
+- **响应式** — 三级: 1280/1100/900px
+
+### Gateway 可靠性
+
+- **DDS GIL 饥饿修复** — DDSReader._spin_loop 轮询间隔 1ms→10ms + reader 间 time.sleep(0) 释放 GIL，解决 uvicorn 所有 HTTP endpoint 超时
+- **uvicorn 主线程运行** — --no-repl 模式下 GatewayModule._defer_server=True，主线程调 _run_server()
+- **uvloop 事件循环** — asyncio → uvloop (C 实现)，DDS 线程不再阻塞 I/O polling
+- **WebSocket 403 修复** — Starlette 原生 WebSocketRoute 绕开 FastAPI 0.135 APIWebSocketRoute bug
+- **map_cloud 背压** — TerrainModule + GatewayModule 添加 set_policy("latest") 防回调堆积
+- **uvicorn crash logging** — _run_server catch-all 异常日志 + ws="auto" 兼容 websockets 15.x
+
+### 相机自动恢复
+
+- **三级 watchdog** — L1 rclpy 重连 (1-2次) → L2 systemctl restart camera (3-5次) → L3 USB sysfs reset + restart (6+次)
+- **QoS 修复** — CameraBridgeModule RELIABLE→BEST_EFFORT 匹配 Orbbec Gemini 335
+- **防重复进程** — camera.service 添加 ExecStartPre killall + KillMode=control-group，watchdog stop→kill→start 三步清洁重启
+- **帧缓存优化** — TeleopModule 无论有无 WS 客户端都缓存最新帧，连接时立即推送
+
+### 地图管理
+
+- **occupancy.npz 自动生成** — map save 自动从 map.pcd 生成 2D 占据栅格 (0.2m 分辨率)，_map_list 新增 has_occupancy 字段，get_active_occupancy() API
+- **路径统一** — 6 处 ~/data/nova/maps 硬编码清零，统一到 ~/data/inovxio/data/maps
+
+### 文档
+
+- **web/README.md** — 18 组件架构图 + 设计规范 + API 端点表 + 部署流程
+
+### 统计
+
+- **19 commits**, 30+ files changed, ~4000 lines added
+- **Dashboard**: 18 组件, 1760 modules, 63KB CSS (gzip 12KB), 276KB JS (gzip 86KB)
+- **Tests**: 1263 passed, 7 skipped
+
 ## [2.1.0] — 2026-04-06 (Enterprise 加固 + C++ 性能优化 + 标定文档)
 
 ### Enterprise Hardening
