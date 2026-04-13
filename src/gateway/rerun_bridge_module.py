@@ -22,7 +22,7 @@ from typing import Any, Optional
 import numpy as np
 
 from core.module import Module, skill
-from core.msgs.nav import Odometry
+from core.msgs.nav import Odometry, PoseStamped
 from core.msgs.sensor import PointCloud2
 from core.registry import register
 from core.stream import In, Out
@@ -45,8 +45,9 @@ class RerunBridgeModule(Module, layer=6):
     """
 
     # Module ports (auto-wired from SLAM / Driver)
-    odometry: In[Odometry]
+    odometry:  In[Odometry]
     map_cloud: In[PointCloud2]
+    goal_pose: In[PoseStamped]   # navigation goal (from GatewayModule click)
 
     # Output: whether rerun is active (for UI/status)
     rerun_active: Out[bool]
@@ -82,6 +83,7 @@ class RerunBridgeModule(Module, layer=6):
     def setup(self) -> None:
         self.odometry.subscribe(self._on_odom)
         self.map_cloud.subscribe(self._on_cloud)
+        self.goal_pose.subscribe(self._on_goal_pose)
 
     def start(self) -> None:
         super().start()
@@ -235,6 +237,27 @@ class RerunBridgeModule(Module, layer=6):
             ))
         except Exception as e:
             logger.debug("rerun point cloud log failed: %s", e)
+
+    def _on_goal_pose(self, goal: PoseStamped) -> None:
+        """Log navigation goal marker in Rerun when a click-to-navigate is sent."""
+        if not self._active or self._rr is None:
+            return
+        rr = self._rr
+        x, y, z = goal.pose.position.x, goal.pose.position.y, goal.pose.position.z
+        try:
+            rr.log("world/nav_goal", rr.Points3D(
+                [[x, y, z + 0.1]],
+                radii=[0.25],
+                colors=[[0, 255, 170]],
+                labels=["goal"],
+            ))
+            rr.log("world/nav_goal_ring", rr.Boxes3D(
+                centers=[[x, y, 0.02]],
+                half_sizes=[[0.3, 0.3, 0.01]],
+                colors=[[0, 255, 170, 80]],
+            ))
+        except Exception as e:
+            logger.debug("rerun goal marker log failed: %s", e)
 
     # ── ROS2 subscriptions (camera, TF, costmap, detections, path) ───────
 

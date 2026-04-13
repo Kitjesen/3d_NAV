@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import re
 import threading
 import time
@@ -28,6 +29,7 @@ from core.msgs.semantic import SceneGraph
 from core.registry import register
 from core.stream import In, Out
 from memory.modules._odom_mixin import OdomTrackingMixin
+from memory.storage.temporal_store import TemporalStore
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,12 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
         self._summary_timer: threading.Timer | None = None
 
         self._jsonl_path: str = ""
+        self._store: TemporalStore | None = None
+
+        # Async SQLite write queue — prevents high-freq perception callbacks
+        # from blocking on disk I/O.  Background thread drains the queue.
+        self._write_queue: queue.Queue = queue.Queue(maxsize=2000)
+        self._write_thread: threading.Thread | None = None
 
     # -- Lifecycle -------------------------------------------------------------
 
@@ -129,14 +137,42 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
             os.makedirs(self._save_dir, exist_ok=True)
             self._jsonl_path = os.path.join(self._save_dir, "temporal_memory.jsonl")
             self._load_from_disk()
+            db_path = os.path.join(self._save_dir, "temporal_memory.db")
+            try:
+                self._store = TemporalStore(db_path)
+            except Exception as exc:
+                logger.warning("TemporalMemory: could not open SQLite store: %s", exc)
 
     def start(self) -> None:
         self._schedule_summary()
+        if self._store is not None:
+            self._write_thread = threading.Thread(
+                target=self._write_worker, daemon=True, name="TemporalStore-writer"
+            )
+            self._write_thread.start()
 
     def stop(self) -> None:
         if self._summary_timer is not None:
             self._summary_timer.cancel()
             self._summary_timer = None
+        # Signal writer thread to drain and exit
+        self._write_queue.put(None)
+        if self._write_thread is not None:
+            self._write_thread.join(timeout=3.0)
+            self._write_thread = None
+
+    def _write_worker(self) -> None:
+        """Background thread: drain the write queue into SQLite."""
+        while True:
+            item = self._write_queue.get()
+            if item is None:  # sentinel → exit
+                break
+            if self._store is None:
+                continue
+            try:
+                self._store.insert(**item)
+            except Exception as exc:
+                logger.debug("TemporalStore async write failed: %s", exc)
 
     # -- Port callbacks --------------------------------------------------------
 
@@ -177,6 +213,27 @@ class TemporalMemoryModule(OdomTrackingMixin, Module, layer=3):
 
         if self._jsonl_path:
             self._append_to_disk(record)
+
+        # Enqueue per-entity SQLite writes (non-blocking; background thread drains)
+        if self._store is not None:
+            robot_x, robot_y = float(pos[0]), float(pos[1])
+            for sg_obj in sg.objects:
+                if not sg_obj.label:
+                    continue
+                item: dict[str, Any] = dict(
+                    label=sg_obj.label,
+                    confidence=round(float(sg_obj.confidence), 3),
+                    pos_x=round(float(sg_obj.position.x), 3),
+                    pos_y=round(float(sg_obj.position.y), 3),
+                    robot_x=robot_x,
+                    robot_y=robot_y,
+                    ts=now,
+                    embedding=getattr(sg_obj, "clip_feature", None),
+                )
+                try:
+                    self._write_queue.put_nowait(item)
+                except queue.Full:
+                    logger.debug("TemporalStore write queue full, dropping observation")
 
         # Publish incremental context
         context = self._format_record(record)

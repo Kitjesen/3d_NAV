@@ -75,6 +75,12 @@ class GoalRequest(BaseModel):
     instruction: str | None = None
 
 
+class ClickNavRequest(BaseModel):
+    x: float
+    y: float
+    z: float = 0.0
+
+
 class CmdVelRequest(BaseModel):
     vx: float
     vy: float = 0.0
@@ -129,6 +135,35 @@ class MapRequest(BaseModel):
         if v not in allowed:
             raise ValueError(f"action must be one of {allowed}")
         return v
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_since(since: str) -> float:
+    """Parse a human-readable 'since' string to a Unix timestamp.
+
+    Accepted formats: "1h", "30m", "30min", "5s", "2d", or a bare number
+    (treated as seconds-ago).  Returns ``time.time() - delta``.
+    """
+    import re as _re
+    now = time.time()
+    m = _re.match(r"^(\d+(?:\.\d+)?)\s*(s|sec|m|min|h|hour|d|day)?", since.strip().lower())
+    if m:
+        value = float(m.group(1))
+        unit = m.group(2) or "s"
+        if unit in ("h", "hour"):
+            return now - value * 3600
+        if unit in ("m", "min"):
+            return now - value * 60
+        if unit in ("d", "day"):
+            return now - value * 86400
+        return now - value
+    try:
+        return now - float(since)
+    except ValueError:
+        return now - 3600  # fallback: 1 hour
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +291,9 @@ class GatewayModule(Module, layer=6):
 
         # Odometry rate tracking (sliding window for SLAM Hz display)
         self._odom_timestamps: list = []  # last 20 timestamps
+
+        # Lazy TemporalStore handle — shared file with TemporalMemoryModule
+        self._temporal_store: Any = None
 
         self._app   = None
         self._server_thread: threading.Thread | None = None
@@ -517,6 +555,18 @@ class GatewayModule(Module, layer=6):
                 gw.instruction.publish(body.instruction)
             return {"status": "ok", "goal": [body.x, body.y, body.z]}
 
+        @app.post("/api/v1/navigate/click", summary="Navigate to map-viewer click point")
+        async def post_navigate_click(body: ClickNavRequest):
+            gw.goal_pose.publish(PoseStamped(
+                pose=Pose(
+                    position=Vector3(body.x, body.y, body.z),
+                    orientation=Quaternion(0, 0, 0, 1),
+                ),
+                frame_id="map",
+                ts=time.time(),
+            ))
+            return {"status": "ok", "goal": [body.x, body.y, body.z]}
+
         @app.post("/api/v1/cmd_vel", summary="Direct velocity command")
         async def post_cmd_vel(body: CmdVelRequest):
             gw.cmd_vel.publish(Twist(
@@ -547,6 +597,91 @@ class GatewayModule(Module, layer=6):
                 gw.stop_cmd.publish(2)
                 gw.cmd_vel.publish(Twist())
             return {"status": "ok", "mode": body.mode}
+
+        # ── Memory ─────────────────────────────────────────────────────────
+
+        def _temporal_store():
+            """Lazy-open TemporalStore at the same path TemporalMemoryModule uses."""
+            if gw._temporal_store is None:
+                try:
+                    import os as _os
+                    from memory.storage.temporal_store import TemporalStore as _TS
+                    mem_dir = _os.environ.get(
+                        "LINGTU_MEMORY_DIR",
+                        _os.path.join(_os.path.expanduser("~"), ".nova", "semantic"),
+                    )
+                    gw._temporal_store = _TS(_os.path.join(mem_dir, "temporal_memory.db"))
+                except Exception as exc:
+                    logger.warning("GatewayModule: TemporalStore unavailable: %s", exc)
+            return gw._temporal_store
+
+        @app.get("/api/v1/memory/temporal", summary="Query temporal entity observations")
+        async def get_temporal_memory(
+            label: str | None = None,
+            since: str | None = None,
+            near_x: float | None = None,
+            near_y: float | None = None,
+            radius: float | None = None,
+            limit: int = 100,
+        ):
+            since_ts = _parse_since(since) if since else None
+            store = _temporal_store()
+            if store is None:
+                return JSONResponse(
+                    status_code=503,
+                    content={"error": "temporal_store_unavailable",
+                             "detail": "TemporalMemoryModule not running or save_dir not set"},
+                )
+            loop = asyncio.get_event_loop()
+            rows = await loop.run_in_executor(
+                None,
+                lambda: store.query(
+                    label=label,
+                    since_ts=since_ts,
+                    near_x=near_x,
+                    near_y=near_y,
+                    radius=radius,
+                    limit=max(1, min(limit, 1000)),
+                ),
+            )
+            return {"observations": rows, "count": len(rows)}
+
+        @app.post("/api/v1/memory/temporal/semantic",
+                  summary="Semantic similarity search over temporal observations")
+        async def post_temporal_semantic(body: dict):
+            """Accept {embedding: [float,...], top_k: int, since: str, label: str}.
+
+            Returns observations ordered by CLIP cosine similarity to the
+            provided embedding vector.  Used by downstream agents / askme tool.
+            """
+            import numpy as _np
+            raw_emb = body.get("embedding")
+            if not raw_emb:
+                return JSONResponse(status_code=422,
+                                    content={"error": "embedding required"})
+            try:
+                query_vec = _np.asarray(raw_emb, dtype=_np.float32)
+            except Exception as exc:
+                return JSONResponse(status_code=422,
+                                    content={"error": f"invalid embedding: {exc}"})
+
+            since_ts = _parse_since(body["since"]) if body.get("since") else None
+            store = _temporal_store()
+            if store is None:
+                return JSONResponse(status_code=503,
+                                    content={"error": "temporal_store_unavailable"})
+
+            loop = asyncio.get_event_loop()
+            rows = await loop.run_in_executor(
+                None,
+                lambda: store.query_semantic(
+                    query_vec,
+                    top_k=int(body.get("top_k", 10)),
+                    since_ts=since_ts,
+                    label=body.get("label") or None,
+                ),
+            )
+            return {"observations": rows, "count": len(rows)}
 
         # ── Lease ──────────────────────────────────────────────────────────
 
@@ -1309,7 +1444,7 @@ class GatewayModule(Module, layer=6):
             pts = pts[valid]
             with self._map_cloud_lock:
                 self._map_points = pts
-            return self._generate_viewer_html()
+            return self._generate_viewer_html(robot_pos=self._odom)
         else:
             return "<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>暂无地图数据</h2><p>开始建图并移动机器人后刷新。</p></body></html>"
 
@@ -1346,7 +1481,7 @@ class GatewayModule(Module, layer=6):
         # Generate viewer with loaded data directly (no shared state modification)
         return self._generate_viewer_html(override_pts=pts)
 
-    def _generate_viewer_html(self, override_pts=None) -> str:
+    def _generate_viewer_html(self, override_pts=None, robot_pos=None) -> str:
         if override_pts is not None:
             pts = override_pts
         else:
@@ -1370,6 +1505,15 @@ class GatewayModule(Module, layer=6):
 
         cx = float(pts[:, 0].mean())
         cy = float(pts[:, 1].mean())
+
+        if robot_pos is not None:
+            rx = float(robot_pos.get("x", cx))
+            ry = float(robot_pos.get("y", cy))
+            ryaw = float(robot_pos.get("yaw", 0.0))
+            robot_visible = "true"
+        else:
+            rx, ry, ryaw = cx, cy, 0.0
+            robot_visible = "false"
 
         return f'''<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -1418,6 +1562,77 @@ grid.rotation.x = Math.PI/2;
 grid.position.set({cx:.1f}, {cy:.1f}, {zmin:.1f});
 scene.add(grid);
 scene.add(new THREE.AxesHelper(2));
+
+// ── Robot position marker ──────────────────────────────────────────
+const robotMesh = (function(){{
+  const g = new THREE.ConeGeometry(0.15,0.5,8);
+  const m = new THREE.MeshBasicMaterial({{color:0x4488ff}});
+  const mesh = new THREE.Mesh(g,m);
+  mesh.rotation.x = Math.PI/2;
+  mesh.rotation.z = {ryaw:.4f};
+  mesh.position.set({rx:.3f},{ry:.3f},0.25);
+  mesh.visible = {robot_visible};
+  return mesh;
+}})();
+scene.add(robotMesh);
+
+// ── Goal marker (hidden until first click) ─────────────────────────
+const goalSphere = new THREE.Mesh(
+  new THREE.SphereGeometry(0.18,16,16),
+  new THREE.MeshBasicMaterial({{color:0x00ffaa,transparent:true,opacity:0.85}})
+);
+goalSphere.visible = false;
+const goalRing = new THREE.Mesh(
+  new THREE.RingGeometry(0.22,0.38,32),
+  new THREE.MeshBasicMaterial({{color:0x00ffaa,transparent:true,opacity:0.5,side:THREE.DoubleSide}})
+);
+goalRing.rotation.x = Math.PI/2;
+goalRing.visible = false;
+scene.add(goalSphere);
+scene.add(goalRing);
+
+// ── Toast + hint UI ────────────────────────────────────────────────
+const toast = document.createElement('div');
+toast.style.cssText = 'position:fixed;bottom:32px;left:50%;transform:translateX(-50%);background:rgba(0,255,170,0.12);border:1px solid rgba(0,255,170,0.6);color:#00ffaa;padding:10px 24px;border-radius:8px;font-family:monospace;font-size:13px;display:none;pointer-events:none;z-index:100;backdrop-filter:blur(8px)';
+document.body.appendChild(toast);
+function showToast(msg,ms){{toast.textContent=msg;toast.style.display='block';clearTimeout(toast._t);toast._t=setTimeout(()=>{{toast.style.display='none';}},ms||3000);}}
+const hint = document.createElement('div');
+hint.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);color:rgba(0,255,170,0.45);font-family:monospace;font-size:11px;pointer-events:none;letter-spacing:.5px';
+hint.textContent = '单击地图 → 发送导航目标  |  拖拽旋转视角';
+document.body.appendChild(hint);
+
+// ── Click-to-Navigate (raycast to z=0 ground plane) ────────────────
+const raycaster = new THREE.Raycaster();
+const _m = new THREE.Vector2();
+const gPlane = new THREE.Plane(new THREE.Vector3(0,0,1),0);
+let _md = null;
+renderer.domElement.addEventListener('mousedown',e=>{{_md={{x:e.clientX,y:e.clientY}};}});
+renderer.domElement.addEventListener('mouseup',e=>{{
+  if(!_md)return;
+  const dx=e.clientX-_md.x, dy=e.clientY-_md.y;
+  _md=null;
+  if(dx*dx+dy*dy>25)return;
+  _m.x=(e.clientX/innerWidth)*2-1;
+  _m.y=-(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(_m,camera);
+  const tgt=new THREE.Vector3();
+  if(!raycaster.ray.intersectPlane(gPlane,tgt))return;
+  goalSphere.position.set(tgt.x,tgt.y,0.18);
+  goalSphere.visible=true;
+  goalRing.position.set(tgt.x,tgt.y,0.02);
+  goalRing.visible=true;
+  fetch('/api/v1/navigate/click',{{
+    method:'POST',headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{x:tgt.x,y:tgt.y,z:0.0}})
+  }}).then(r=>r.json()).then(()=>{{
+    showToast('正在导航到 ('+tgt.x.toFixed(2)+', '+tgt.y.toFixed(2)+')');
+  }}).catch(err=>{{
+    showToast('发送失败: '+err,4000);
+    goalSphere.visible=false;
+    goalRing.visible=false;
+  }});
+}});
+
 addEventListener('resize', ()=>{{
   camera.aspect=innerWidth/innerHeight;
   camera.updateProjectionMatrix();
