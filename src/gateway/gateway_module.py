@@ -299,9 +299,15 @@ class GatewayModule(Module, layer=6):
         # Costmap SSE throttle (publish at ~2Hz regardless of OccupancyGridModule rate)
         self._costmap_throttle: int = 0
 
+        # SceneGraph SSE throttle (~2Hz)
+        self._sg_throttle: int = 0
+
         # Autonomous exploration state + frontier explorer module ref
         self._exploring: bool = False
         self._frontier_explorer: Any = None
+
+        # TaggedLocationsModule ref (set by on_system_modules)
+        self._tagged_loc_module: Any = None
 
         self._app   = None
         self._server_thread: threading.Thread | None = None
@@ -341,6 +347,11 @@ class GatewayModule(Module, layer=6):
         self._frontier_explorer = next(
             (m for m in modules.values()
              if m.__class__.__name__ == "WavefrontFrontierExplorer"),
+            None,
+        )
+        self._tagged_loc_module = next(
+            (m for m in modules.values()
+             if m.__class__.__name__ == "TaggedLocationsModule"),
             None,
         )
 
@@ -402,6 +413,24 @@ class GatewayModule(Module, layer=6):
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         with self._state_lock:
             self._sg_json = sg.to_json() if hasattr(sg, "to_json") else str(sg)
+        # Push detected objects to SSE viewer at ~2Hz
+        self._sg_throttle += 1
+        if self._sg_throttle % 5 == 0:
+            try:
+                objects = [
+                    {
+                        "label": obj.label,
+                        "x": round(float(obj.position.x), 2),
+                        "y": round(float(obj.position.y), 2),
+                        "conf": round(float(obj.confidence), 2),
+                    }
+                    for obj in sg.objects
+                    if obj.label and float(obj.confidence) > 0.25
+                ]
+                if objects:
+                    self.push_event({"type": "scene_graph", "objects": objects})
+            except Exception:
+                pass
 
     def _on_safety(self, state: SafetyState) -> None:
         d = {"level": getattr(state, "level", 0), "ts": time.time()}
@@ -885,6 +914,27 @@ class GatewayModule(Module, layer=6):
             with gw._state_lock:
                 sg = gw._sg_json
             return JSONResponse({"scene_graph": sg})
+
+        @app.get("/api/v1/locations", summary="List tagged navigation locations")
+        async def get_locations():
+            tlm = gw._tagged_loc_module
+            if tlm is None:
+                return JSONResponse({"locations": []})
+            try:
+                entries = list(tlm.store._store.values())
+                locations = [
+                    {
+                        "name": e.get("name", ""),
+                        "x": round(float(e.get("x", 0.0)), 3),
+                        "y": round(float(e.get("y", 0.0)), 3),
+                        "z": round(float(e.get("z", 0.0)), 3),
+                    }
+                    for e in entries
+                    if e.get("name")
+                ]
+            except Exception:
+                locations = []
+            return JSONResponse({"locations": locations})
 
         @app.get("/api/v1/path", summary="Latest planned path")
         async def get_path():
@@ -1633,6 +1683,14 @@ body{{background:#05060d;overflow:hidden;font-family:-apple-system,BlinkMacSyste
 #toast{{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);padding:9px 22px;font-size:11.5px;letter-spacing:.5px;display:none;pointer-events:none;z-index:200;color:#7ab8ff;}}
 .dot{{width:6px;height:6px;border-radius:50%;background:#ff4444;display:inline-block;margin-right:8px;flex-shrink:0;transition:background .4s,box-shadow .4s;}}
 .dot.live{{background:#44cc88;box-shadow:0 0 7px #44cc8899;}}
+#camPanel{{position:fixed;bottom:22px;right:16px;padding:12px 14px;z-index:50;}}
+#camPanel img{{width:216px;height:122px;object-fit:cover;border-radius:8px;background:#060c20;display:block;}}
+#camStatus{{font-size:9px;color:rgba(80,140,255,0.50);margin-top:5px;letter-spacing:1px;text-align:center;}}
+#locPanel{{position:fixed;top:16px;right:16px;padding:12px 14px;z-index:50;min-width:138px;display:none;}}
+#locBtns{{display:flex;flex-direction:column;gap:5px;margin-top:2px;}}
+#kbHud{{position:fixed;bottom:80px;right:16px;display:grid;grid-template-columns:repeat(3,22px);grid-template-rows:repeat(2,22px);gap:3px;opacity:0;transition:opacity .3s;z-index:60;}}
+.kk{{width:22px;height:22px;border-radius:4px;background:rgba(15,40,110,0.45);border:1px solid rgba(50,100,220,0.28);font-size:9px;color:rgba(80,140,220,0.55);display:flex;align-items:center;justify-content:center;}}
+.kk.on{{background:rgba(40,90,200,0.75);border-color:rgba(100,160,255,0.75);color:#c8dcff;box-shadow:0 0 6px rgba(80,140,255,0.4);}}
 </style>
 </head>
 <body>
@@ -1655,8 +1713,27 @@ body{{background:#05060d;overflow:hidden;font-family:-apple-system,BlinkMacSyste
   <button class="btn" id="expBtn" onclick="toggleExplore()">▶&nbsp;探索</button>
 </div>
 
-<div id="hint">单击地图发送导航目标 · 拖拽旋转 · 滚轮缩放</div>
+<div id="hint">单击地图发送导航目标 · 拖拽旋转 · 滚轮缩放 · WASD手动驾驶</div>
 <div id="toast" class="glass"></div>
+
+<!-- Camera live feed panel -->
+<div id="camPanel" class="glass">
+  <div class="lbl">摄像头</div>
+  <img id="camImg" alt="">
+  <div id="camStatus">连接中...</div>
+</div>
+
+<!-- Tagged location shortcuts -->
+<div id="locPanel" class="glass">
+  <div class="lbl">快速导航</div>
+  <div id="locBtns"></div>
+</div>
+
+<!-- WASD keyboard indicator -->
+<div id="kbHud">
+  <div></div><div class="kk" id="kW">W</div><div></div>
+  <div class="kk" id="kA">A</div><div class="kk" id="kS">S</div><div class="kk" id="kD">D</div>
+</div>
 
 <script>
 // ── Scene setup ────────────────────────────────────────────────────────────
@@ -1843,6 +1920,13 @@ let _cmMesh = new THREE.Mesh(
 _cmMesh.visible = false;
 scene.add(_cmMesh);
 
+// ── Scene-graph object markers ─────────────────────────────────────────────
+let _sgMarkers = [];
+const _sgColors = {{
+  person:0xff4455, chair:0x44aaff, door:0xffcc00, table:0x88ddff,
+  charging_station:0x00ff88, dog:0xff8844, cat:0xffaa44, box:0xaaaaff
+}};
+
 // ── UI refs & helpers ──────────────────────────────────────────────────────
 const $dot = document.getElementById('dot');
 const $mission = document.getElementById('missionTxt');
@@ -1993,11 +2077,110 @@ renderer.domElement.addEventListener('mouseup',   e=>{{
         else if(ev.type==='mode')        _mode(ev.data);
         else if(ev.type==='costmap')     _costmap(ev);
         else if(ev.type==='exploring')   _setExploring(ev.active);
+        else if(ev.type==='scene_graph') _sgUpdate(ev.objects||[]);
       }}catch(_){{}}
     }};
     es.onerror=function(){{$dot.classList.remove('live');es.close();setTimeout(_connect,3000);}};
   }}
+  function _sgUpdate(objects){{
+    _sgMarkers.forEach(m=>scene.remove(m)); _sgMarkers=[];
+    objects.forEach(function(obj){{
+      const color=_sgColors[obj.label]||0xaaaaff;
+      const mat=new THREE.MeshBasicMaterial({{color,transparent:true,opacity:0.45+0.45*obj.conf}});
+      const sphere=new THREE.Mesh(new THREE.SphereGeometry(0.10,10,10),mat);
+      sphere.position.set(obj.x,obj.y,0.55); scene.add(sphere); _sgMarkers.push(sphere);
+      const lg=new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(obj.x,obj.y,0.05),new THREE.Vector3(obj.x,obj.y,0.45)]);
+      const line=new THREE.Line(lg,new THREE.LineBasicMaterial({{color,transparent:true,opacity:0.35}}));
+      scene.add(line); _sgMarkers.push(line);
+    }});
+  }}
   _connect();
+}})();
+
+// ── Camera snapshot panel ──────────────────────────────────────────────────
+(function(){{
+  const img=document.getElementById('camImg');
+  const status=document.getElementById('camStatus');
+  let _ok=false;
+  function refresh(){{
+    fetch('/api/v1/camera/snapshot?t='+Date.now())
+      .then(r=>{{if(!r.ok)throw new Error(r.status);return r.blob();}})
+      .then(blob=>{{
+        const prev=img.src; img.src=URL.createObjectURL(blob);
+        if(prev&&prev.startsWith('blob:'))URL.revokeObjectURL(prev);
+        status.textContent=new Date().toLocaleTimeString('zh-CN',{{hour12:false}});
+        _ok=true;
+      }})
+      .catch(()=>{{status.textContent='摄像头离线';_ok=false;}})
+      .finally(()=>setTimeout(refresh,_ok?900:4000));
+  }}
+  refresh();
+}})();
+
+// ── Tagged location shortcuts ──────────────────────────────────────────────
+(function(){{
+  fetch('/api/v1/locations').then(r=>r.json()).then(function(data){{
+    const locs=data.locations||[];
+    if(!locs.length)return;
+    const panel=document.getElementById('locPanel');
+    const btns=document.getElementById('locBtns');
+    panel.style.display='block';
+    locs.forEach(function(loc){{
+      const b=document.createElement('button');
+      b.className='btn';
+      b.style.cssText='text-align:left;width:100%;font-size:10px;padding:5px 10px;';
+      b.textContent='→ '+loc.name;
+      b.onclick=function(){{
+        fetch('/api/v1/instruction',{{method:'POST',
+          headers:{{'Content-Type':'application/json'}},
+          body:JSON.stringify({{text:'去'+loc.name}})}})
+        .then(r=>r.json())
+        .then(()=>{{showToast('导航 → '+loc.name);$mission.textContent='导航中 → '+loc.name;}})
+        .catch(e=>showToast('导航失败: '+e,4000));
+      }};
+      btns.appendChild(b);
+      // Pin on 3D map
+      const pin=new THREE.Mesh(new THREE.ConeGeometry(0.12,0.35,6),
+        new THREE.MeshBasicMaterial({{color:0x00ffaa,transparent:true,opacity:0.78}}));
+      pin.rotation.x=Math.PI; pin.position.set(loc.x,loc.y,0.35); scene.add(pin);
+      const pRing=new THREE.Mesh(new THREE.RingGeometry(0.14,0.22,32),
+        new THREE.MeshBasicMaterial({{color:0x00ffaa,transparent:true,opacity:0.32,side:THREE.DoubleSide}}));
+      pRing.rotation.x=Math.PI/2; pRing.position.set(loc.x,loc.y,0.015); scene.add(pRing);
+    }});
+  }}).catch(function(){{}});
+}})();
+
+// ── WASD keyboard control ──────────────────────────────────────────────────
+(function(){{
+  const kbHud=document.getElementById('kbHud');
+  const kW=document.getElementById('kW'),kA=document.getElementById('kA');
+  const kS=document.getElementById('kS'),kD=document.getElementById('kD');
+  const _k={{}};
+  let _wasMoving=false;
+  document.addEventListener('keydown',function(e){{
+    const k=e.key.toLowerCase();
+    if(['w','a','s','d'].includes(k)){{ e.preventDefault(); _k[k]=true; kbHud.style.opacity='1'; }}
+  }});
+  document.addEventListener('keyup',function(e){{
+    _k[e.key.toLowerCase()]=false;
+  }});
+  setInterval(function(){{
+    kW.classList.toggle('on',!!_k['w']); kA.classList.toggle('on',!!_k['a']);
+    kS.classList.toggle('on',!!_k['s']); kD.classList.toggle('on',!!_k['d']);
+    const vx=(_k['w']?0.40:0)+(_k['s']?-0.40:0);
+    const wz=(_k['a']?0.70:0)+(_k['d']?-0.70:0);
+    if(vx!==0||wz!==0){{
+      fetch('/api/v1/cmd_vel',{{method:'POST',
+        headers:{{'Content-Type':'application/json'}},
+        body:JSON.stringify({{vx:vx,vy:0,wz:wz}})}});
+      _wasMoving=true;
+    }} else if(_wasMoving){{
+      fetch('/api/v1/stop',{{method:'POST'}});
+      _wasMoving=false;
+      setTimeout(function(){{kbHud.style.opacity='0';}},1800);
+    }}
+  }},100);
 }})();
 
 // ── Animation loop ─────────────────────────────────────────────────────────
