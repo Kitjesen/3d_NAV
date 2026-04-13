@@ -1167,6 +1167,24 @@ class GatewayModule(Module, layer=6):
                 html = gw._generate_viewer_live()
             return HTMLResponse(html)
 
+        @app.get("/robot/meshes/{filename}", summary="Serve robot STL mesh files")
+        async def serve_robot_mesh(filename: str):
+            import os
+            from starlette.responses import FileResponse
+            from fastapi.responses import JSONResponse
+            mesh_dir = os.environ.get(
+                "DOG_MESH_DIR",
+                os.path.join(os.path.dirname(__file__),
+                             "../../../../products/quadruped_ws/dog_arm/meshes"),
+            )
+            safe_name = os.path.basename(filename)  # prevent path traversal
+            path = os.path.join(mesh_dir, safe_name)
+            if not os.path.isfile(path):
+                return JSONResponse(status_code=404, content={"error": "mesh not found", "name": safe_name})
+            return FileResponse(path, media_type="application/octet-stream",
+                                headers={"Access-Control-Allow-Origin": "*",
+                                         "Cache-Control": "public, max-age=3600"})
+
         @app.get("/api/v1/camera/snapshot", summary="Camera JPEG snapshot")
         async def camera_snapshot():
             """Grab one JPEG frame via rclpy (fastrtps, matching camera driver)."""
@@ -1563,7 +1581,9 @@ class GatewayModule(Module, layer=6):
             with self._map_cloud_lock:
                 pts = self._map_points
         if pts is None or len(pts) == 0:
-            return "<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>No map data yet</h2><p>Start mapping first, then refresh.</p></body></html>"
+            return ("<html><body style='background:#05060d;color:#4488ff;"
+                    "font-family:monospace;padding:40px'>"
+                    "<h2>暂无地图数据</h2><p>开始建图并移动机器人后刷新。</p></body></html>")
 
         # Subsample for browser performance
         max_pts = 80000
@@ -1574,10 +1594,7 @@ class GatewayModule(Module, layer=6):
         z = pts[:, 2]
         zmin, zmax = float(z.min()), float(z.max())
         n = len(pts)
-
-        # Inline point data as compact JS array
         coords = ",".join(f"{pts[i,0]:.3f},{pts[i,1]:.3f},{pts[i,2]:.3f}" for i in range(n))
-
         cx = float(pts[:, 0].mean())
         cy = float(pts[:, 1].mean())
 
@@ -1591,254 +1608,423 @@ class GatewayModule(Module, layer=6):
             robot_visible = "false"
 
         return f'''<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<title>LingTu Map Viewer</title>
+<html>
+<head>
+<meta charset="utf-8">
+<title>灵途 · LingTu</title>
 <style>
-body {{ margin:0; background:#0a0a0f; overflow:hidden; }}
-</style></head><body>
+*{{box-sizing:border-box;margin:0;padding:0;}}
+body{{background:#05060d;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",sans-serif;}}
+.glass{{background:rgba(4,12,35,0.78);border:1px solid rgba(40,90,200,0.30);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);border-radius:14px;}}
+#hud{{position:fixed;top:16px;left:16px;padding:14px 18px;min-width:210px;z-index:50;}}
+.lbl{{font-size:9px;letter-spacing:2.5px;color:rgba(80,140,255,0.55);text-transform:uppercase;margin-bottom:8px;}}
+.row{{font-size:12.5px;color:#8ab4ff;letter-spacing:.4px;line-height:2.0;font-variant-numeric:tabular-nums;}}
+.row b{{color:#5599ff;font-weight:600;}}
+#ctrlBar{{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:9px 16px;z-index:50;white-space:nowrap;}}
+#missionTxt{{font-size:11.5px;color:rgba(100,155,255,0.8);letter-spacing:.5px;min-width:160px;}}
+.sep{{width:1px;height:22px;background:rgba(50,100,200,0.22);}}
+.btn{{background:rgba(20,50,130,0.55);border:1px solid rgba(55,110,240,0.45);color:#7aacff;font-size:10.5px;letter-spacing:.8px;padding:6px 15px;border-radius:8px;cursor:pointer;font-family:inherit;transition:all .16s;outline:none;}}
+.btn:hover{{background:rgba(40,85,190,0.70);color:#c0d4ff;border-color:rgba(90,150,255,0.65);}}
+.btn.stop{{background:rgba(110,20,20,0.55);border-color:rgba(220,50,50,0.45);color:#ff9999;}}
+.btn.stop:hover{{background:rgba(160,30,30,0.70);color:#ffcccc;}}
+.btn.active{{background:rgba(120,20,20,0.55);border-color:rgba(220,60,60,0.50);color:#ffaaaa;}}
+.btn.active:hover{{background:rgba(170,30,30,0.70);color:#ffdddd;}}
+#hint{{position:fixed;top:16px;left:50%;transform:translateX(-50%);font-size:10px;color:rgba(50,100,200,0.42);letter-spacing:1.8px;pointer-events:none;z-index:40;}}
+#toast{{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);padding:9px 22px;font-size:11.5px;letter-spacing:.5px;display:none;pointer-events:none;z-index:200;color:#7ab8ff;}}
+.dot{{width:6px;height:6px;border-radius:50%;background:#ff4444;display:inline-block;margin-right:8px;flex-shrink:0;transition:background .4s,box-shadow .4s;}}
+.dot.live{{background:#44cc88;box-shadow:0 0 7px #44cc8899;}}
+</style>
+</head>
+<body>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+
+<div id="hud" class="glass">
+  <div class="lbl">灵途 · 导航状态</div>
+  <div class="row">X&nbsp;<b id="hx">—</b>&nbsp;&nbsp;Y&nbsp;<b id="hy">—</b></div>
+  <div class="row">模式&nbsp;<b id="hmode">—</b></div>
+  <div class="row" id="hmission" style="font-size:11px;color:rgba(80,130,220,0.60);">—</div>
+</div>
+
+<div id="ctrlBar" class="glass">
+  <span class="dot" id="dot"></span>
+  <span id="missionTxt">待机</span>
+  <div class="sep"></div>
+  <button class="btn stop" onclick="doStop()">■&nbsp;停止</button>
+  <button class="btn" id="expBtn" onclick="toggleExplore()">▶&nbsp;探索</button>
+</div>
+
+<div id="hint">单击地图发送导航目标 · 拖拽旋转 · 滚轮缩放</div>
+<div id="toast" class="glass"></div>
+
 <script>
+// ── Scene setup ────────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a0a0f);
-scene.fog = new THREE.FogExp2(0x0a0a0f, 0.008);
-const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 500);
-camera.position.set({cx+5:.1f}, {cy-25:.1f}, 25);
+scene.background = new THREE.Color(0x05060d);
+scene.fog = new THREE.FogExp2(0x05060d, 0.0055);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 600);
+camera.position.set({cx+5:.1f}, {cy-28:.1f}, 28);
 camera.up.set(0, 0, 1);
+
 const renderer = new THREE.WebGLRenderer({{antialias:true}});
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(devicePixelRatio);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
 document.body.appendChild(renderer.domElement);
+
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
 controls.target.set({cx:.1f}, {cy:.1f}, 1.5);
 controls.enableDamping = true;
-controls.dampingFactor = 0.05;
+controls.dampingFactor = 0.06;
+controls.minDistance = 2;
+controls.maxDistance = 250;
 controls.update();
 
-const geo = new THREE.BufferGeometry();
-const pos = new Float32Array({n*3});
-const col = new Float32Array({n*3});
-const pts = [{coords}];
-const zmin={zmin:.2f}, zmax={zmax:.2f}, zr=zmax-zmin||1;
-for(let i=0;i<{n};i++){{
-  pos[i*3]=pts[i*3]; pos[i*3+1]=pts[i*3+1]; pos[i*3+2]=pts[i*3+2];
-  let t=(pts[i*3+2]-zmin)/zr;
-  col[i*3]   = t<0.5 ? t*2 : 1;
-  col[i*3+1] = 1-Math.abs(t-0.5)*2;
-  col[i*3+2] = t>0.5 ? (1-t)*2 : 1;
-}}
-geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-scene.add(new THREE.Points(geo, new THREE.PointsMaterial({{
-  size:0.04, vertexColors:true, sizeAttenuation:true, transparent:true, opacity:0.85
-}})));
-const grid = new THREE.GridHelper(40, 40, 0x1a1a2e, 0x111122);
-grid.rotation.x = Math.PI/2;
-grid.position.set({cx:.1f}, {cy:.1f}, {zmin:.1f});
-scene.add(grid);
-scene.add(new THREE.AxesHelper(2));
+// ── Lighting (for STL meshes) ──────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x1a2a60, 2.5));
+const dLight = new THREE.DirectionalLight(0x5588ff, 2.0);
+dLight.position.set(4, -6, 10);
+scene.add(dLight);
+const dLight2 = new THREE.DirectionalLight(0x2244aa, 0.8);
+dLight2.position.set(-4, 4, 3);
+scene.add(dLight2);
 
-// ── Robot position marker ──────────────────────────────────────────
-const robotMesh = (function(){{
-  const g = new THREE.ConeGeometry(0.15,0.5,8);
-  const m = new THREE.MeshBasicMaterial({{color:0x4488ff}});
-  const mesh = new THREE.Mesh(g,m);
-  mesh.rotation.x = Math.PI/2;
-  mesh.rotation.z = {ryaw:.4f};
-  mesh.position.set({rx:.3f},{ry:.3f},0.25);
-  mesh.visible = {robot_visible};
-  return mesh;
+// ── Point cloud — cold blue height gradient ────────────────────────────────
+(function(){{
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array({n*3});
+  const col = new Float32Array({n*3});
+  const pts = [{coords}];
+  const zmin={zmin:.3f}, zmax={zmax:.3f}, zr = zmax-zmin || 1;
+  for(let i=0; i<{n}; i++){{
+    pos[i*3]   = pts[i*3];
+    pos[i*3+1] = pts[i*3+1];
+    pos[i*3+2] = pts[i*3+2];
+    const t = (pts[i*3+2] - zmin) / zr;
+    // dark navy → ocean blue → bright cyan
+    if(t < 0.5){{
+      const s = t * 2;
+      col[i*3]   = 0.04*(1-s);
+      col[i*3+1] = 0.10*(1-s) + 0.33*s;
+      col[i*3+2] = 0.24*(1-s) + 0.78*s;
+    }} else {{
+      const s = (t-0.5)*2;
+      col[i*3]   = 0;
+      col[i*3+1] = 0.33*(1-s) + 0.90*s;
+      col[i*3+2] = 0.78*(1-s) + 1.0*s;
+    }}
+  }}
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(col, 3));
+  scene.add(new THREE.Points(geo, new THREE.PointsMaterial({{
+    size:0.035, vertexColors:true, sizeAttenuation:true, transparent:true, opacity:0.88
+  }})));
 }})();
-scene.add(robotMesh);
 
-// ── Goal marker (hidden until first click) ─────────────────────────
-const goalSphere = new THREE.Mesh(
-  new THREE.SphereGeometry(0.18,16,16),
-  new THREE.MeshBasicMaterial({{color:0x00ffaa,transparent:true,opacity:0.85}})
-);
-goalSphere.visible = false;
-const goalRing = new THREE.Mesh(
-  new THREE.RingGeometry(0.22,0.38,32),
-  new THREE.MeshBasicMaterial({{color:0x00ffaa,transparent:true,opacity:0.5,side:THREE.DoubleSide}})
-);
-goalRing.rotation.x = Math.PI/2;
-goalRing.visible = false;
-scene.add(goalSphere);
-scene.add(goalRing);
+// ── Ground grid ────────────────────────────────────────────────────────────
+const grid = new THREE.GridHelper(100, 100, 0x0c1830, 0x070e1d);
+grid.rotation.x = Math.PI/2;
+grid.position.set({cx:.1f}, {cy:.1f}, {zmin:.2f}-0.01);
+scene.add(grid);
 
-// ── Costmap overlay (2D occupancy grid projected onto ground plane) ─
+// ── Robot group ────────────────────────────────────────────────────────────
+const robotGroup = new THREE.Group();
+robotGroup.position.set({rx:.3f}, {ry:.3f}, 0.0);
+robotGroup.rotation.z = {ryaw:.4f};
+robotGroup.visible = {robot_visible};
+scene.add(robotGroup);
+
+// Wireframe fallback shown while STLs load
+const _fbMesh = new THREE.Mesh(
+  new THREE.BoxGeometry(0.62, 0.36, 0.18),
+  new THREE.MeshBasicMaterial({{color:0x2255cc, transparent:true, opacity:0.55, wireframe:true}})
+);
+_fbMesh.position.set(0, 0, 0.40);
+robotGroup.add(_fbMesh);
+
+// STL mesh material
+const _matBody = new THREE.MeshPhongMaterial({{
+  color:0xb8cdff, specular:0x4466bb, shininess:55, transparent:true, opacity:0.92
+}});
+const _matLeg = new THREE.MeshPhongMaterial({{
+  color:0x8aaae8, specular:0x223388, shininess:38, transparent:true, opacity:0.88
+}});
+
+(function(){{
+  if(typeof THREE.STLLoader === 'undefined') return;
+  const loader = new THREE.STLLoader();
+  let loaded = 0;
+  function load(url, mat, px, py, pz){{
+    loader.load(url, function(geo){{
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, mat.clone());
+      m.position.set(px, py, pz);
+      robotGroup.add(m);
+      loaded++;
+      if(loaded === 1) _fbMesh.visible = false;
+    }}, undefined, function(){{/* 404 — skip */}});
+  }}
+  // base_link sits ~0.40m above ground; URDF hip offsets add to that
+  const bz = 0.40;
+  load('/robot/meshes/base_link.STL',    _matBody,  0,       0,        bz);
+  load('/robot/meshes/fr_hip_Link.STL',  _matLeg,   0.2395, -0.0646,  bz+0.0807);
+  load('/robot/meshes/fl_hip_Link.STL',  _matLeg,   0.2395,  0.0654,  bz+0.0807);
+  load('/robot/meshes/rr_hip_Link.STL',  _matLeg,  -0.2395, -0.0662,  bz+0.0807);
+  load('/robot/meshes/rl_hip_Link.STL',  _matLeg,  -0.2395,  0.0638,  bz+0.0807);
+  // Thigh links: hip_pos + thigh_joint_offset (all joints at 0)
+  load('/robot/meshes/fr_thigh_Link.STL',_matLeg,   0.3175, -0.1441,  bz+0.0807);
+  load('/robot/meshes/fl_thigh_Link.STL',_matLeg,   0.3175,  0.1449,  bz+0.0807);
+  load('/robot/meshes/rr_thigh_Link.STL',_matLeg,  -0.1615, -0.1457,  bz+0.0807);
+  load('/robot/meshes/rl_thigh_Link.STL',_matLeg,  -0.1615,  0.1433,  bz+0.0807);
+}})();
+
+// ── Pulsing position ring (stays at ground level, outside robot group) ─────
+const _ringMat = new THREE.MeshBasicMaterial({{
+  color:0x3377ff, transparent:true, opacity:0.55, side:THREE.DoubleSide
+}});
+const _ringMesh = new THREE.Mesh(new THREE.RingGeometry(0.38, 0.52, 56), _ringMat);
+_ringMesh.rotation.x = Math.PI/2;
+_ringMesh.position.set({rx:.3f}, {ry:.3f}, 0.015);
+_ringMesh.visible = {robot_visible};
+scene.add(_ringMesh);
+
+// ── Goal marker ────────────────────────────────────────────────────────────
+const goalGroup = new THREE.Group();
+goalGroup.visible = false;
+goalGroup.add(Object.assign(
+  new THREE.Mesh(new THREE.SphereGeometry(0.13,20,20),
+    new THREE.MeshBasicMaterial({{color:0x00e5ff,transparent:true,opacity:0.88}})),
+  {{position: new THREE.Vector3(0,0,0.13)}}
+));
+const _gRing1 = new THREE.Mesh(
+  new THREE.RingGeometry(0.18,0.30,48),
+  new THREE.MeshBasicMaterial({{color:0x00e5ff,transparent:true,opacity:0.55,side:THREE.DoubleSide}})
+);
+_gRing1.rotation.x = Math.PI/2;
+goalGroup.add(_gRing1);
+const _gRing2 = new THREE.Mesh(
+  new THREE.RingGeometry(0.34,0.46,48),
+  new THREE.MeshBasicMaterial({{color:0x00e5ff,transparent:true,opacity:0.22,side:THREE.DoubleSide}})
+);
+_gRing2.rotation.x = Math.PI/2;
+goalGroup.add(_gRing2);
+scene.add(goalGroup);
+
+// ── Trajectory — rolling ring-buffer with fade gradient ────────────────────
+const _trajMax = 2000;
+const _trajPos = new Float32Array(_trajMax*3);
+const _trajCol = new Float32Array(_trajMax*3);
+const _trajGeo = new THREE.BufferGeometry();
+_trajGeo.setAttribute('position', new THREE.BufferAttribute(_trajPos, 3));
+_trajGeo.setAttribute('color',    new THREE.BufferAttribute(_trajCol, 3));
+_trajGeo.setDrawRange(0, 0);
+scene.add(new THREE.Line(_trajGeo, new THREE.LineBasicMaterial({{
+  vertexColors:true, transparent:true, opacity:0.9
+}})));
+let _trajN = 0;
+
+// ── Planned path ───────────────────────────────────────────────────────────
+const _pathGeo = new THREE.BufferGeometry();
+scene.add(new THREE.Line(_pathGeo, new THREE.LineBasicMaterial({{
+  color:0x00ffaa, transparent:true, opacity:0.72
+}})));
+
+// ── Costmap overlay ─────────────────────────────────────────────────────────
 const _cmCanvas = document.createElement('canvas');
 const _cmCtx = _cmCanvas.getContext('2d');
 const _cmTex = new THREE.CanvasTexture(_cmCanvas);
-const _cmMat = new THREE.MeshBasicMaterial({{map:_cmTex,transparent:true,opacity:0.55,side:THREE.DoubleSide,depthWrite:false}});
-let _cmMesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), _cmMat);
+let _cmMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(1,1),
+  new THREE.MeshBasicMaterial({{map:_cmTex,transparent:true,opacity:0.50,side:THREE.DoubleSide,depthWrite:false}})
+);
 _cmMesh.visible = false;
 scene.add(_cmMesh);
 
-// ── Trajectory line (live robot path, blue) ────────────────────────
-const _trajMax = 2000;
-const _trajBuf = new Float32Array(_trajMax * 3);
-const _trajGeo = new THREE.BufferGeometry();
-_trajGeo.setAttribute('position', new THREE.BufferAttribute(_trajBuf, 3));
-_trajGeo.setDrawRange(0, 0);
-scene.add(new THREE.Line(_trajGeo, new THREE.LineBasicMaterial({{color:0x4488ff,transparent:true,opacity:0.7}})));
-let _trajN = 0;
-
-// ── Planned path line (green) ──────────────────────────────────────
-const _pathGeo = new THREE.BufferGeometry();
-scene.add(new THREE.Line(_pathGeo, new THREE.LineBasicMaterial({{color:0x00ff88}})));
-
-// ── Toast + hint UI ────────────────────────────────────────────────
-const toast = document.createElement('div');
-toast.style.cssText = 'position:fixed;bottom:32px;left:50%;transform:translateX(-50%);background:rgba(0,255,170,0.12);border:1px solid rgba(0,255,170,0.6);color:#00ffaa;padding:10px 24px;border-radius:8px;font-family:monospace;font-size:13px;display:none;pointer-events:none;z-index:100;backdrop-filter:blur(8px)';
-document.body.appendChild(toast);
-function showToast(msg,ms){{toast.textContent=msg;toast.style.display='block';clearTimeout(toast._t);toast._t=setTimeout(()=>{{toast.style.display='none';}},ms||3000);}}
-const hint = document.createElement('div');
-hint.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);color:rgba(0,255,170,0.45);font-family:monospace;font-size:11px;pointer-events:none;letter-spacing:.5px';
-hint.textContent = '单击地图 → 发送导航目标  |  拖拽旋转视角';
-document.body.appendChild(hint);
-const statusBar = document.createElement('div');
-statusBar.style.cssText = 'position:fixed;top:12px;right:16px;color:rgba(0,255,170,0.6);font-family:monospace;font-size:11px;pointer-events:none;letter-spacing:.5px';
-statusBar.textContent = '待机';
-document.body.appendChild(statusBar);
-
-// ── Explore button ─────────────────────────────────────────────────
+// ── UI refs & helpers ──────────────────────────────────────────────────────
+const $dot = document.getElementById('dot');
+const $mission = document.getElementById('missionTxt');
+const $hx = document.getElementById('hx');
+const $hy = document.getElementById('hy');
+const $hmode = document.getElementById('hmode');
+const $hmission = document.getElementById('hmission');
+const $toast = document.getElementById('toast');
+const $expBtn = document.getElementById('expBtn');
 let _exploring = false;
-const exploreBtn = document.createElement('button');
-exploreBtn.textContent = '▶ 开始探索';
-exploreBtn.style.cssText = 'position:fixed;bottom:32px;right:16px;background:rgba(0,255,170,0.10);border:1px solid rgba(0,255,170,0.5);color:#00ffaa;padding:8px 18px;border-radius:6px;font-family:monospace;font-size:12px;cursor:pointer;letter-spacing:.5px;backdrop-filter:blur(8px)';
-exploreBtn.onmouseover = function(){{this.style.background='rgba(0,255,170,0.22)';}};
-exploreBtn.onmouseout  = function(){{this.style.background=_exploring?'rgba(255,80,80,0.18)':'rgba(0,255,170,0.10)';}};
-exploreBtn.onclick = function(){{
+
+function showToast(msg, ms){{
+  $toast.textContent=msg; $toast.style.display='block';
+  clearTimeout($toast._t);
+  $toast._t=setTimeout(()=>{{$toast.style.display='none';}}, ms||3000);
+}}
+function doStop(){{
+  fetch('/api/v1/stop',{{method:'POST'}})
+    .then(()=>showToast('■ 紧急停止'))
+    .catch(e=>showToast('停止失败: '+e,4000));
+}}
+function toggleExplore(){{
   const url = _exploring ? '/api/v1/explore/stop' : '/api/v1/explore/start';
-  fetch(url,{{method:'POST'}}).then(r=>r.json()).then(d=>{{
+  fetch(url,{{method:'POST'}}).then(r=>r.json()).then(()=>{{
     showToast(_exploring ? '探索已停止' : '自主探索启动');
-  }}).catch(err=>showToast('探索指令失败: '+err,4000));
-}};
-document.body.appendChild(exploreBtn);
+  }}).catch(e=>showToast('探索失败: '+e,4000));
+}}
 function _setExploring(v){{
-  _exploring = v;
-  exploreBtn.textContent = v ? '■ 停止探索' : '▶ 开始探索';
-  exploreBtn.style.background = v ? 'rgba(255,80,80,0.18)' : 'rgba(0,255,170,0.10)';
-  exploreBtn.style.borderColor = v ? 'rgba(255,80,80,0.6)' : 'rgba(0,255,170,0.5)';
-  exploreBtn.style.color = v ? '#ff5050' : '#00ffaa';
-  statusBar.textContent = v ? '自主探索中...' : '待机';
+  _exploring=v;
+  $expBtn.textContent = v ? '■ 停止探索' : '▶ 探索';
+  $expBtn.className = v ? 'btn active' : 'btn';
+  $mission.textContent = v ? '自主探索中...' : '待机';
 }}
 
-// ── Click-to-Navigate (raycast to z=0 ground plane) ────────────────
-const raycaster = new THREE.Raycaster();
-const _m = new THREE.Vector2();
-const gPlane = new THREE.Plane(new THREE.Vector3(0,0,1),0);
-let _md = null;
-renderer.domElement.addEventListener('mousedown',e=>{{_md={{x:e.clientX,y:e.clientY}};}});
-renderer.domElement.addEventListener('mouseup',e=>{{
-  if(!_md)return;
-  const dx=e.clientX-_md.x, dy=e.clientY-_md.y;
-  _md=null;
-  if(dx*dx+dy*dy>25)return;
-  _m.x=(e.clientX/innerWidth)*2-1;
-  _m.y=-(e.clientY/innerHeight)*2+1;
-  raycaster.setFromCamera(_m,camera);
+// ── Click-to-navigate ──────────────────────────────────────────────────────
+const _ray = new THREE.Raycaster();
+const _mv  = new THREE.Vector2();
+const _gp  = new THREE.Plane(new THREE.Vector3(0,0,1), 0);
+let _md    = null;
+renderer.domElement.addEventListener('mousedown', e=>{{_md={{x:e.clientX,y:e.clientY}};}});
+renderer.domElement.addEventListener('mouseup',   e=>{{
+  if(!_md) return;
+  const dx=e.clientX-_md.x, dy=e.clientY-_md.y; _md=null;
+  if(dx*dx+dy*dy>25) return;
+  _mv.x=(e.clientX/innerWidth)*2-1;
+  _mv.y=-(e.clientY/innerHeight)*2+1;
+  _ray.setFromCamera(_mv, camera);
   const tgt=new THREE.Vector3();
-  if(!raycaster.ray.intersectPlane(gPlane,tgt))return;
-  goalSphere.position.set(tgt.x,tgt.y,0.18);
-  goalSphere.visible=true;
-  goalRing.position.set(tgt.x,tgt.y,0.02);
-  goalRing.visible=true;
+  if(!_ray.ray.intersectPlane(_gp, tgt)) return;
+  goalGroup.position.set(tgt.x, tgt.y, 0);
+  goalGroup.visible=true;
   fetch('/api/v1/navigate/click',{{
-    method:'POST',headers:{{'Content-Type':'application/json'}},
+    method:'POST', headers:{{'Content-Type':'application/json'}},
     body:JSON.stringify({{x:tgt.x,y:tgt.y,z:0.0}})
   }}).then(r=>r.json()).then(()=>{{
-    showToast('正在导航到 ('+tgt.x.toFixed(2)+', '+tgt.y.toFixed(2)+')');
-    statusBar.textContent='导航中 → ('+tgt.x.toFixed(1)+', '+tgt.y.toFixed(1)+')';
-  }}).catch(err=>{{
-    showToast('发送失败: '+err,4000);
-    goalSphere.visible=false;
-    goalRing.visible=false;
+    showToast('导航目标 → ('+tgt.x.toFixed(2)+', '+tgt.y.toFixed(2)+')');
+    $mission.textContent='导航中 → ('+tgt.x.toFixed(1)+', '+tgt.y.toFixed(1)+')';
+  }}).catch(e=>{{
+    showToast('发送失败: '+e, 4000);
+    goalGroup.visible=false;
   }});
 }});
 
-// ── SSE live updates — robot pose / trajectory / path / mission ────
+// ── SSE live updates ───────────────────────────────────────────────────────
 (function(){{
   function _odom(o){{
-    if(!o)return;
-    robotMesh.position.set(o.x,o.y,0.25);
-    robotMesh.rotation.z=o.yaw||0;
-    robotMesh.visible=true;
-    if(_trajN<_trajMax){{
-      _trajBuf[_trajN*3]=o.x;_trajBuf[_trajN*3+1]=o.y;_trajBuf[_trajN*3+2]=0.08;
+    if(!o) return;
+    const ox=o.x||0, oy=o.y||0;
+    robotGroup.position.set(ox, oy, 0);
+    robotGroup.rotation.z = o.yaw||0;
+    robotGroup.visible = true;
+    _ringMesh.position.set(ox, oy, 0.015);
+    _ringMesh.visible = true;
+    $hx.textContent = ox.toFixed(2);
+    $hy.textContent = oy.toFixed(2);
+    // Append to trajectory ring-buffer
+    if(_trajN < _trajMax){{
+      _trajPos[_trajN*3]=ox; _trajPos[_trajN*3+1]=oy; _trajPos[_trajN*3+2]=0.08;
       _trajN++;
-    }}else{{
-      _trajBuf.copyWithin(0,3);
-      _trajBuf[(_trajMax-1)*3]=o.x;_trajBuf[(_trajMax-1)*3+1]=o.y;_trajBuf[(_trajMax-1)*3+2]=0.08;
+    }} else {{
+      _trajPos.copyWithin(0,3);
+      _trajPos[(_trajMax-1)*3]=ox; _trajPos[(_trajMax-1)*3+1]=oy; _trajPos[(_trajMax-1)*3+2]=0.08;
+    }}
+    // Rebuild vertex color fade (old=dim, new=bright blue)
+    const n=Math.min(_trajN,_trajMax);
+    for(let i=0;i<n;i++){{
+      const f=i/n;
+      _trajCol[i*3]  =0.04+0.22*f;
+      _trajCol[i*3+1]=0.20+0.47*f;
+      _trajCol[i*3+2]=0.80+0.20*f;
     }}
     _trajGeo.attributes.position.needsUpdate=true;
+    _trajGeo.attributes.color.needsUpdate=true;
     _trajGeo.setDrawRange(0,_trajN);
   }}
   function _path(pts){{
-    if(!pts||!pts.length)return;
+    if(!pts||!pts.length) return;
     const a=new Float32Array(pts.length*3);
     for(let i=0;i<pts.length;i++){{a[i*3]=pts[i].x;a[i*3+1]=pts[i].y;a[i*3+2]=0.05;}}
     _pathGeo.setAttribute('position',new THREE.BufferAttribute(a,3));
     _pathGeo.attributes.position.needsUpdate=true;
   }}
   function _mission(m){{
-    if(!m)return;
+    if(!m) return;
     const s=m.state||m.status||'';
     if(s){{
-      statusBar.textContent='导航: '+s;
-      if(s==='idle'||s==='arrived'||s==='success'){{goalSphere.visible=false;goalRing.visible=false;}}
+      $mission.textContent=s; $hmission.textContent=s;
+      if(s==='idle'||s==='arrived'||s==='success') goalGroup.visible=false;
     }}
   }}
+  function _mode(md){{
+    if(md) $hmode.textContent=typeof md==='string'?md:(md.mode||md);
+  }}
   function _costmap(ev){{
-    const cols=ev.cols, res=ev.resolution, ox=ev.origin[0], oy=ev.origin[1];
-    const size=cols*res;
-    // decode base64 → Uint8Array
+    const cols=ev.cols, res=ev.resolution, ox=ev.origin[0], oy=ev.origin[1], sz=cols*res;
     const bin=atob(ev.grid_b64);
     const arr=new Uint8Array(bin.length);
-    for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
-    // resize canvas if needed
+    for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
     if(_cmCanvas.width!==cols){{_cmCanvas.width=cols;_cmCanvas.height=cols;}}
     const img=_cmCtx.createImageData(cols,cols);
     for(let i=0;i<cols*cols;i++){{
       const v=arr[i];
       if(v<=0){{img.data[i*4+3]=0;continue;}}
-      img.data[i*4]  =v>50?220:160;   // R — obstacle=bright, inflated=dim
-      img.data[i*4+1]=v>50? 60:120;   // G
-      img.data[i*4+2]=v>50? 40: 40;   // B
-      img.data[i*4+3]=Math.min(200,v*2+60);  // A
+      img.data[i*4]  =v>50?215:175;
+      img.data[i*4+1]=v>50? 42: 85;
+      img.data[i*4+2]=v>50? 28: 28;
+      img.data[i*4+3]=Math.min(205,v*2+55);
     }}
     _cmCtx.putImageData(img,0,0);
     _cmTex.needsUpdate=true;
-    // reposition and resize the plane mesh
     _cmMesh.geometry.dispose();
-    _cmMesh.geometry=new THREE.PlaneGeometry(size,size);
-    _cmMesh.position.set(ox+size/2,oy+size/2,0.012);
+    _cmMesh.geometry=new THREE.PlaneGeometry(sz,sz);
+    _cmMesh.position.set(ox+sz/2, oy+sz/2, 0.01);
     _cmMesh.visible=true;
   }}
   function _connect(){{
     const es=new EventSource('/api/v1/events');
+    es.onopen=()=>$dot.classList.add('live');
     es.onmessage=function(e){{
       try{{
         const ev=JSON.parse(e.data);
-        if(ev.type==='snapshot'){{_odom(ev.data&&ev.data.odometry);_mission(ev.data&&ev.data.mission);}}
-        else if(ev.type==='odometry')_odom(ev.data);
-        else if(ev.type==='global_path')_path(ev.points);
-        else if(ev.type==='mission')_mission(ev.data);
-        else if(ev.type==='costmap')_costmap(ev);
-        else if(ev.type==='exploring')_setExploring(ev.active);
+        if(ev.type==='snapshot'){{
+          if(ev.data){{ _odom(ev.data.odometry); _mission(ev.data.mission); _mode(ev.data.mode); }}
+        }}
+        else if(ev.type==='odometry')    _odom(ev.data);
+        else if(ev.type==='global_path') _path(ev.points);
+        else if(ev.type==='mission')     _mission(ev.data);
+        else if(ev.type==='mode')        _mode(ev.data);
+        else if(ev.type==='costmap')     _costmap(ev);
+        else if(ev.type==='exploring')   _setExploring(ev.active);
       }}catch(_){{}}
     }};
-    es.onerror=function(){{es.close();setTimeout(_connect,3000);}};
+    es.onerror=function(){{$dot.classList.remove('live');es.close();setTimeout(_connect,3000);}};
   }}
   _connect();
+}})();
+
+// ── Animation loop ─────────────────────────────────────────────────────────
+let _t = 0;
+(function _loop(){{
+  requestAnimationFrame(_loop);
+  _t += 0.016;
+  // Pulse robot ring
+  const rp = 0.5 + 0.5*Math.sin(_t*2.8);
+  _ringMesh.material.opacity = 0.35 + 0.25*rp;
+  _ringMesh.scale.setScalar(1.0 + 0.07*Math.sin(_t*2.8));
+  // Pulse goal rings
+  if(goalGroup.visible){{
+    const gp = 0.5 + 0.5*Math.sin(_t*4.5);
+    _gRing1.material.opacity = 0.28 + 0.27*gp;
+    _gRing2.scale.setScalar(1.0 + 0.18*gp);
+    _gRing2.material.opacity = 0.18*(1-gp);
+  }}
+  controls.update();
+  renderer.render(scene, camera);
 }})();
 
 addEventListener('resize', ()=>{{
   camera.aspect=innerWidth/innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth,innerHeight);
 }});
-
-(function a(){{requestAnimationFrame(a); controls.update(); renderer.render(scene,camera);}})();
-</script></body></html>'''
+</script>
+</body>
+</html>'''
