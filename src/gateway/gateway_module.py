@@ -240,6 +240,7 @@ class GatewayModule(Module, layer=6):
     execution_eval: In[ExecutionEval]
     dialogue_state: In[dict]
     global_path:    In[list]  # from NavigationModule — list of np.ndarray [x,y,z]
+    costmap:        In[dict]  # from OccupancyGridModule — {grid, resolution, origin, ts}
 
     # -- Outputs (client commands → modules) --------------------------------
     goal_pose:   Out[PoseStamped]
@@ -295,6 +296,13 @@ class GatewayModule(Module, layer=6):
         # Lazy TemporalStore handle — shared file with TemporalMemoryModule
         self._temporal_store: Any = None
 
+        # Costmap SSE throttle (publish at ~2Hz regardless of OccupancyGridModule rate)
+        self._costmap_throttle: int = 0
+
+        # Autonomous exploration state + frontier explorer module ref
+        self._exploring: bool = False
+        self._frontier_explorer: Any = None
+
         self._app   = None
         self._server_thread: threading.Thread | None = None
         self._defer_server: bool = False  # True → main thread runs uvicorn
@@ -311,6 +319,7 @@ class GatewayModule(Module, layer=6):
         self.execution_eval.subscribe(self._on_eval)
         self.dialogue_state.subscribe(self._on_dialogue)
         self.global_path.subscribe(self._on_global_path)
+        self.costmap.subscribe(self._on_costmap)
         self._app = self._build_app()
 
     def start(self) -> None:
@@ -329,6 +338,11 @@ class GatewayModule(Module, layer=6):
     def on_system_modules(self, modules: dict[str, Any]) -> None:
         self._map_mgr = modules.get("MapManagerModule")
         self._all_modules = modules
+        self._frontier_explorer = next(
+            (m for m in modules.values()
+             if m.__class__.__name__ == "WavefrontFrontierExplorer"),
+            None,
+        )
 
     # -- teleop helpers (delegate to TeleopModule) ---------------------------
 
@@ -422,6 +436,29 @@ class GatewayModule(Module, layer=6):
         with self._state_lock:
             self._last_path = points
         self.push_event({"type": "global_path", "points": points})
+
+    def _on_costmap(self, cm: dict) -> None:
+        """Throttle OccupancyGridModule costmap to ~2 Hz and push as SSE."""
+        self._costmap_throttle += 1
+        if self._costmap_throttle % 5 != 0:
+            return
+        grid = cm.get("grid")
+        if grid is None:
+            return
+        try:
+            import base64 as _b64
+            import numpy as _np
+            g = _np.clip(grid, 0, 100).astype(_np.uint8)
+            cols = int(g.shape[0])
+            self.push_event({
+                "type":       "costmap",
+                "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
+                "cols":       cols,
+                "resolution": float(cm.get("resolution", 0.1)),
+                "origin":     [float(v) for v in cm.get("origin", [0.0, 0.0])],
+            })
+        except Exception as exc:
+            logger.debug("_on_costmap serialize failed: %s", exc)
 
     # -- SSE fan-out --------------------------------------------------------
 
@@ -747,6 +784,44 @@ class GatewayModule(Module, layer=6):
                     content={"error": resp.get("message", "failed"), "detail": resp},
                 )
             return resp
+
+        # ── Explore ────────────────────────────────────────────────────────
+
+        @app.post("/api/v1/explore/start", summary="Start autonomous frontier exploration")
+        async def explore_start():
+            fe = gw._frontier_explorer
+            if fe is None:
+                return JSONResponse(status_code=503,
+                                    content={"error": "WavefrontFrontierExplorer not running"})
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, fe.begin_exploration)
+            gw._exploring = True
+            gw.push_event({"type": "exploring", "active": True})
+            return {"status": result}
+
+        @app.post("/api/v1/explore/stop", summary="Stop autonomous frontier exploration")
+        async def explore_stop():
+            fe = gw._frontier_explorer
+            if fe is None:
+                return JSONResponse(status_code=503,
+                                    content={"error": "WavefrontFrontierExplorer not running"})
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, fe.end_exploration)
+            gw._exploring = False
+            gw.push_event({"type": "exploring", "active": False})
+            return {"status": result}
+
+        @app.get("/api/v1/explore/status", summary="Exploration status")
+        async def explore_status():
+            fe = gw._frontier_explorer
+            if fe is None:
+                return {"available": False, "exploring": False}
+            h = fe.health() if hasattr(fe, "health") else {}
+            return {
+                "available":      True,
+                "exploring":      gw._exploring,
+                "frontier_count": h.get("frontier_count", 0),
+            }
 
         # ── Telemetry ──────────────────────────────────────────────────────
 
@@ -1591,6 +1666,15 @@ goalRing.visible = false;
 scene.add(goalSphere);
 scene.add(goalRing);
 
+// ── Costmap overlay (2D occupancy grid projected onto ground plane) ─
+const _cmCanvas = document.createElement('canvas');
+const _cmCtx = _cmCanvas.getContext('2d');
+const _cmTex = new THREE.CanvasTexture(_cmCanvas);
+const _cmMat = new THREE.MeshBasicMaterial({{map:_cmTex,transparent:true,opacity:0.55,side:THREE.DoubleSide,depthWrite:false}});
+let _cmMesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), _cmMat);
+_cmMesh.visible = false;
+scene.add(_cmMesh);
+
 // ── Trajectory line (live robot path, blue) ────────────────────────
 const _trajMax = 2000;
 const _trajBuf = new Float32Array(_trajMax * 3);
@@ -1617,6 +1701,29 @@ const statusBar = document.createElement('div');
 statusBar.style.cssText = 'position:fixed;top:12px;right:16px;color:rgba(0,255,170,0.6);font-family:monospace;font-size:11px;pointer-events:none;letter-spacing:.5px';
 statusBar.textContent = '待机';
 document.body.appendChild(statusBar);
+
+// ── Explore button ─────────────────────────────────────────────────
+let _exploring = false;
+const exploreBtn = document.createElement('button');
+exploreBtn.textContent = '▶ 开始探索';
+exploreBtn.style.cssText = 'position:fixed;bottom:32px;right:16px;background:rgba(0,255,170,0.10);border:1px solid rgba(0,255,170,0.5);color:#00ffaa;padding:8px 18px;border-radius:6px;font-family:monospace;font-size:12px;cursor:pointer;letter-spacing:.5px;backdrop-filter:blur(8px)';
+exploreBtn.onmouseover = function(){{this.style.background='rgba(0,255,170,0.22)';}};
+exploreBtn.onmouseout  = function(){{this.style.background=_exploring?'rgba(255,80,80,0.18)':'rgba(0,255,170,0.10)';}};
+exploreBtn.onclick = function(){{
+  const url = _exploring ? '/api/v1/explore/stop' : '/api/v1/explore/start';
+  fetch(url,{{method:'POST'}}).then(r=>r.json()).then(d=>{{
+    showToast(_exploring ? '探索已停止' : '自主探索启动');
+  }}).catch(err=>showToast('探索指令失败: '+err,4000));
+}};
+document.body.appendChild(exploreBtn);
+function _setExploring(v){{
+  _exploring = v;
+  exploreBtn.textContent = v ? '■ 停止探索' : '▶ 开始探索';
+  exploreBtn.style.background = v ? 'rgba(255,80,80,0.18)' : 'rgba(0,255,170,0.10)';
+  exploreBtn.style.borderColor = v ? 'rgba(255,80,80,0.6)' : 'rgba(0,255,170,0.5)';
+  exploreBtn.style.color = v ? '#ff5050' : '#00ffaa';
+  statusBar.textContent = v ? '自主探索中...' : '待机';
+}}
 
 // ── Click-to-Navigate (raycast to z=0 ground plane) ────────────────
 const raycaster = new THREE.Raycaster();
@@ -1683,6 +1790,32 @@ renderer.domElement.addEventListener('mouseup',e=>{{
       if(s==='idle'||s==='arrived'||s==='success'){{goalSphere.visible=false;goalRing.visible=false;}}
     }}
   }}
+  function _costmap(ev){{
+    const cols=ev.cols, res=ev.resolution, ox=ev.origin[0], oy=ev.origin[1];
+    const size=cols*res;
+    // decode base64 → Uint8Array
+    const bin=atob(ev.grid_b64);
+    const arr=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+    // resize canvas if needed
+    if(_cmCanvas.width!==cols){{_cmCanvas.width=cols;_cmCanvas.height=cols;}}
+    const img=_cmCtx.createImageData(cols,cols);
+    for(let i=0;i<cols*cols;i++){{
+      const v=arr[i];
+      if(v<=0){{img.data[i*4+3]=0;continue;}}
+      img.data[i*4]  =v>50?220:160;   // R — obstacle=bright, inflated=dim
+      img.data[i*4+1]=v>50? 60:120;   // G
+      img.data[i*4+2]=v>50? 40: 40;   // B
+      img.data[i*4+3]=Math.min(200,v*2+60);  // A
+    }}
+    _cmCtx.putImageData(img,0,0);
+    _cmTex.needsUpdate=true;
+    // reposition and resize the plane mesh
+    _cmMesh.geometry.dispose();
+    _cmMesh.geometry=new THREE.PlaneGeometry(size,size);
+    _cmMesh.position.set(ox+size/2,oy+size/2,0.012);
+    _cmMesh.visible=true;
+  }}
   function _connect(){{
     const es=new EventSource('/api/v1/events');
     es.onmessage=function(e){{
@@ -1692,6 +1825,8 @@ renderer.domElement.addEventListener('mouseup',e=>{{
         else if(ev.type==='odometry')_odom(ev.data);
         else if(ev.type==='global_path')_path(ev.points);
         else if(ev.type==='mission')_mission(ev.data);
+        else if(ev.type==='costmap')_costmap(ev);
+        else if(ev.type==='exploring')_setExploring(ev.active);
       }}catch(_){{}}
     }};
     es.onerror=function(){{es.close();setTimeout(_connect,3000);}};
