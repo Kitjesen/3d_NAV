@@ -1591,6 +1591,19 @@ goalRing.visible = false;
 scene.add(goalSphere);
 scene.add(goalRing);
 
+// ── Trajectory line (live robot path, blue) ────────────────────────
+const _trajMax = 2000;
+const _trajBuf = new Float32Array(_trajMax * 3);
+const _trajGeo = new THREE.BufferGeometry();
+_trajGeo.setAttribute('position', new THREE.BufferAttribute(_trajBuf, 3));
+_trajGeo.setDrawRange(0, 0);
+scene.add(new THREE.Line(_trajGeo, new THREE.LineBasicMaterial({{color:0x4488ff,transparent:true,opacity:0.7}})));
+let _trajN = 0;
+
+// ── Planned path line (green) ──────────────────────────────────────
+const _pathGeo = new THREE.BufferGeometry();
+scene.add(new THREE.Line(_pathGeo, new THREE.LineBasicMaterial({{color:0x00ff88}})));
+
 // ── Toast + hint UI ────────────────────────────────────────────────
 const toast = document.createElement('div');
 toast.style.cssText = 'position:fixed;bottom:32px;left:50%;transform:translateX(-50%);background:rgba(0,255,170,0.12);border:1px solid rgba(0,255,170,0.6);color:#00ffaa;padding:10px 24px;border-radius:8px;font-family:monospace;font-size:13px;display:none;pointer-events:none;z-index:100;backdrop-filter:blur(8px)';
@@ -1600,6 +1613,10 @@ const hint = document.createElement('div');
 hint.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);color:rgba(0,255,170,0.45);font-family:monospace;font-size:11px;pointer-events:none;letter-spacing:.5px';
 hint.textContent = '单击地图 → 发送导航目标  |  拖拽旋转视角';
 document.body.appendChild(hint);
+const statusBar = document.createElement('div');
+statusBar.style.cssText = 'position:fixed;top:12px;right:16px;color:rgba(0,255,170,0.6);font-family:monospace;font-size:11px;pointer-events:none;letter-spacing:.5px';
+statusBar.textContent = '待机';
+document.body.appendChild(statusBar);
 
 // ── Click-to-Navigate (raycast to z=0 ground plane) ────────────────
 const raycaster = new THREE.Raycaster();
@@ -1626,6 +1643,7 @@ renderer.domElement.addEventListener('mouseup',e=>{{
     body:JSON.stringify({{x:tgt.x,y:tgt.y,z:0.0}})
   }}).then(r=>r.json()).then(()=>{{
     showToast('正在导航到 ('+tgt.x.toFixed(2)+', '+tgt.y.toFixed(2)+')');
+    statusBar.textContent='导航中 → ('+tgt.x.toFixed(1)+', '+tgt.y.toFixed(1)+')';
   }}).catch(err=>{{
     showToast('发送失败: '+err,4000);
     goalSphere.visible=false;
@@ -1633,14 +1651,59 @@ renderer.domElement.addEventListener('mouseup',e=>{{
   }});
 }});
 
+// ── SSE live updates — robot pose / trajectory / path / mission ────
+(function(){{
+  function _odom(o){{
+    if(!o)return;
+    robotMesh.position.set(o.x,o.y,0.25);
+    robotMesh.rotation.z=o.yaw||0;
+    robotMesh.visible=true;
+    if(_trajN<_trajMax){{
+      _trajBuf[_trajN*3]=o.x;_trajBuf[_trajN*3+1]=o.y;_trajBuf[_trajN*3+2]=0.08;
+      _trajN++;
+    }}else{{
+      _trajBuf.copyWithin(0,3);
+      _trajBuf[(_trajMax-1)*3]=o.x;_trajBuf[(_trajMax-1)*3+1]=o.y;_trajBuf[(_trajMax-1)*3+2]=0.08;
+    }}
+    _trajGeo.attributes.position.needsUpdate=true;
+    _trajGeo.setDrawRange(0,_trajN);
+  }}
+  function _path(pts){{
+    if(!pts||!pts.length)return;
+    const a=new Float32Array(pts.length*3);
+    for(let i=0;i<pts.length;i++){{a[i*3]=pts[i].x;a[i*3+1]=pts[i].y;a[i*3+2]=0.05;}}
+    _pathGeo.setAttribute('position',new THREE.BufferAttribute(a,3));
+    _pathGeo.attributes.position.needsUpdate=true;
+  }}
+  function _mission(m){{
+    if(!m)return;
+    const s=m.state||m.status||'';
+    if(s){{
+      statusBar.textContent='导航: '+s;
+      if(s==='idle'||s==='arrived'||s==='success'){{goalSphere.visible=false;goalRing.visible=false;}}
+    }}
+  }}
+  function _connect(){{
+    const es=new EventSource('/api/v1/events');
+    es.onmessage=function(e){{
+      try{{
+        const ev=JSON.parse(e.data);
+        if(ev.type==='snapshot'){{_odom(ev.data&&ev.data.odometry);_mission(ev.data&&ev.data.mission);}}
+        else if(ev.type==='odometry')_odom(ev.data);
+        else if(ev.type==='global_path')_path(ev.points);
+        else if(ev.type==='mission')_mission(ev.data);
+      }}catch(_){{}}
+    }};
+    es.onerror=function(){{es.close();setTimeout(_connect,3000);}};
+  }}
+  _connect();
+}})();
+
 addEventListener('resize', ()=>{{
   camera.aspect=innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 }});
-
-// No auto-update — viewer shows ikd-tree snapshot at load time.
-// User clicks "查看实时建图" in Dashboard to get a fresh snapshot.
 
 (function a(){{requestAnimationFrame(a); controls.update(); renderer.render(scene,camera);}})();
 </script></body></html>'''
