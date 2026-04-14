@@ -32,8 +32,31 @@ _DEFAULT_PREFIX = os.environ.get(
     str(_REPO_ROOT / "install"),
 )
 
+def _build_ld_library_path(prefix: str) -> str:
+    """Collect all install/*/lib dirs + CycloneDDS, append to current LD_LIBRARY_PATH."""
+    lib_dirs: list[str] = []
+
+    # Scan every package under the colcon install prefix
+    prefix_path = Path(prefix)
+    if prefix_path.exists():
+        for pkg in prefix_path.iterdir():
+            lib = pkg / "lib"
+            if lib.is_dir():
+                lib_dirs.append(str(lib))
+
+    # CycloneDDS built from source (Unitree / S100P convention)
+    cyclone_lib = Path.home() / "cyclonedds" / "install" / "lib"
+    if cyclone_lib.exists():
+        lib_dirs.append(str(cyclone_lib))
+
+    existing = os.environ.get("LD_LIBRARY_PATH", "")
+    all_dirs = lib_dirs + ([existing] if existing else [])
+    return ":".join(all_dirs)
+
+
 DDS_ENV: dict[str, str] = {
     "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
+    "LD_LIBRARY_PATH": _build_ld_library_path(_DEFAULT_PREFIX),
 }
 
 
