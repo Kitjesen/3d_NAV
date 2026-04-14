@@ -87,6 +87,13 @@ class TeleopModule(Module, layer=6):
 
         # Camera encoding
         self._encode_thread: threading.Thread | None = None
+
+        # Camera rotation from config (degrees: 0/90/180/270)
+        try:
+            from core.config import get_config
+            self._cam_rotate = int(get_config().raw.get("camera", {}).get("rotate", 0))
+        except Exception:
+            self._cam_rotate = 0
         self._idle_thread: threading.Thread | None = None
 
         # Detection overlay
@@ -286,6 +293,9 @@ class TeleopModule(Module, layer=6):
             if have_cv2:
                 try:
                     frame = self._draw_detections(raw.copy(), cv2)
+                    _rot_map = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+                    if self._cam_rotate in _rot_map:
+                        frame = cv2.rotate(frame, _rot_map[self._cam_rotate])
                     ok, buf = cv2.imencode(
                         ".jpg", frame,
                         [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality],
