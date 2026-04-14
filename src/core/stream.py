@@ -225,7 +225,9 @@ class In(Generic[T]):
         "_callback",
         "_callback_errors",
         "_deliver_count",
+        "_deliver_lock",
         "_drop_count",
+        "_executor",
         "_in_callback",
         "_last_deliver_ts",
         "_last_ts",
@@ -258,7 +260,9 @@ class In(Generic[T]):
         self._latest: T | None = None
         self._lock = threading.Lock()
         self._policy: str = "all"
-        self._in_callback: bool = False
+        self._in_callback: bool = False  # kept for "all" policy reentrancy guard
+        self._deliver_lock = threading.Lock()  # atomic guard for "latest" policy
+        self._executor: Any = None  # ThreadPoolExecutor for "async" policy
         self._drop_count: int = 0
         # Throttle state
         self._throttle_interval: float = 0.0
@@ -313,10 +317,16 @@ class In(Generic[T]):
             self.lidar.set_policy("sample", n=5)          # every 5th scan
             self.detections.set_policy("buffer", size=10)  # batch of 10
         """
-        valid = ("all", "latest", "throttle", "sample", "buffer")
+        valid = ("all", "latest", "throttle", "sample", "buffer", "async")
         if policy not in valid:
             raise ValueError(f"Unknown policy '{policy}', expected one of {valid}")
         self._policy = policy
+        if policy == "async":
+            import concurrent.futures
+            if self._executor is None:
+                self._executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix=f"in-{self._name}"
+                )
         if policy == "throttle":
             self._throttle_interval = kwargs.get("interval", 0.1)
         elif policy == "sample":
@@ -344,9 +354,31 @@ class In(Generic[T]):
         if not self._callback:
             return
 
-        # -- Policy: latest (drop if busy) --
-        if self._policy == "latest" and self._in_callback:
-            self._drop_count += 1
+        # -- Policy: async (fire-and-forget on thread pool) --
+        if self._policy == "async":
+            self._deliver_count += 1
+            self._executor.submit(self._callback, msg)
+            return
+
+        # -- Policy: latest (atomic lock — thread-safe drop if busy) --
+        if self._policy == "latest":
+            if not self._deliver_lock.acquire(blocking=False):
+                self._drop_count += 1
+                return
+            self._deliver_count += 1
+            t0 = time.time()
+            try:
+                self._callback(msg)
+            except Exception:
+                self._callback_errors += 1
+                logger.exception("In[%s] callback error", self._name)
+            finally:
+                dt_ms = (time.time() - t0) * 1000.0
+                self._total_callback_ms += dt_ms
+                if dt_ms > self._max_callback_ms:
+                    self._max_callback_ms = dt_ms
+                self._record_latency(dt_ms)
+                self._deliver_lock.release()
             return
 
         # -- Policy: throttle (rate limit) --

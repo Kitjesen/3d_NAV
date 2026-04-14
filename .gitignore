@@ -2,6 +2,9 @@
 # LingTu .gitignore — 2026-03-24 cleaned
 # ============================================================
 
+# ── Third-party reference code (local only, not tracked) ──
+third_party/
+
 # ── ROS 2 build artifacts ──
 build/
 install/

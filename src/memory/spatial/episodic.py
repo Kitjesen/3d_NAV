@@ -2,6 +2,9 @@
 时空情节记忆（Spatiotemporal Episodic Memory）
 参考：ReMEmbR (arXiv:2409.13682) + VLingNav VLingMem
 轻量实现：numpy 向量相似度，无外部依赖
+
+持久化：pass persist_path= to EpisodicMemory() to enable SQLite backend.
+Records survive process restarts and are hydrated on startup.
 """
 from __future__ import annotations
 
@@ -9,6 +12,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
@@ -38,10 +42,27 @@ class EpisodicMemory:
     MAX_RECORDS = 500
     MIN_DISTANCE_M = 1.0   # 同一位置 1m 内不重复记录
 
-    def __init__(self, clip_encoder: object | None = None) -> None:
+    def __init__(
+        self,
+        clip_encoder: object | None = None,
+        persist_path: str | Path | None = None,
+    ) -> None:
         self._records: list[MemoryRecord] = []
         self._clip = clip_encoder
         self._lock = threading.Lock()
+        self._store: "SqliteEpisodicStore | None" = None
+
+        if persist_path is not None:
+            from memory.spatial.episodic_store import SqliteEpisodicStore
+            self._store = SqliteEpisodicStore(persist_path)
+            self._store.open()
+            # Hydrate in-memory cache from persisted DB (up to MAX_RECORDS)
+            with self._lock:
+                self._records = self._store.load_recent(self.MAX_RECORDS)
+            logger.info(
+                "EpisodicMemory: loaded %d records from %s",
+                len(self._records), persist_path,
+            )
 
     # ---------- 写入 ----------
 
@@ -98,6 +119,14 @@ class EpisodicMemory:
             if len(self._records) > self.MAX_RECORDS:
                 self._records = self._records[-self.MAX_RECORDS:]
 
+        # Persist outside the lock — SQLite write is independently thread-safe
+        if self._store is not None:
+            self._store.save(record)
+            if len(self._records) >= self.MAX_RECORDS:
+                # Flush buffer before pruning so prune has actual rows to delete
+                self._store.flush()
+                self._store.prune_oldest(self.MAX_RECORDS)
+
     # ---------- 检索 ----------
 
     def query_by_text(
@@ -112,18 +141,32 @@ class EpisodicMemory:
         if not candidates:
             return []
 
-        # CLIP 嵌入检索
+        # CLIP 嵌入检索 — vectorized: pre-normalize q_emb, batch matmul for all embeddings
         if self._clip is not None:
             try:
                 q_emb = self._clip.encode_text(query)
-                scores = []
-                for r in candidates:
-                    if r.embedding is not None:
-                        sim = float(np.dot(q_emb, r.embedding) /
-                                    (np.linalg.norm(q_emb) * np.linalg.norm(r.embedding) + 1e-9))
-                    else:
-                        sim = self._keyword_score(query, r)
-                    scores.append(sim)
+                q_norm = float(np.linalg.norm(q_emb))
+                if q_norm < 1e-9:
+                    raise ValueError("zero query embedding")
+                q_unit = q_emb / q_norm
+
+                # Split candidates into those with/without embeddings
+                with_emb = [(i, r) for i, r in enumerate(candidates) if r.embedding is not None]
+                scores = [0.0] * len(candidates)
+
+                if with_emb:
+                    idx, recs = zip(*with_emb)
+                    mat = np.stack([r.embedding for r in recs])          # (K, D)
+                    norms = np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9
+                    sims = (mat / norms) @ q_unit                        # (K,) — one matmul
+                    for j, i in enumerate(idx):
+                        scores[i] = float(sims[j])
+
+                # Keyword fallback for records without embeddings
+                for i, r in enumerate(candidates):
+                    if r.embedding is None:
+                        scores[i] = self._keyword_score(query, r)
+
                 ranked = sorted(zip(scores, candidates), key=lambda x: -x[0])
                 return [r for _, r in ranked[:top_k]]
             except (ValueError, TypeError, AttributeError) as e:
@@ -140,19 +183,22 @@ class EpisodicMemory:
         radius: float = 3.0,
         top_k: int = 5,
     ) -> list[MemoryRecord]:
-        """空间范围检索"""
+        """空间范围检索 — vectorized: single np.linalg.norm call over (N,2) matrix."""
         pos = np.array(position, dtype=float)
         if not np.isfinite(pos[:2]).all():
             return []
         with self._lock:
+            if not self._records:
+                return []
             records_snap = list(self._records)
-        results = []
-        for r in records_snap:
-            dist = float(np.linalg.norm(pos[:2] - r.position[:2]))
-            if dist <= radius:
-                results.append((dist, r))
-        results.sort(key=lambda x: x[0])
-        return [r for _, r in results[:top_k]]
+            positions = np.array([r.position[:2] for r in records_snap])  # (N, 2)
+
+        dists = np.linalg.norm(positions - pos[:2], axis=1)  # one vectorized call
+        in_radius = np.where(dists <= radius)[0]
+        if len(in_radius) == 0:
+            return []
+        top_idx = in_radius[np.argsort(dists[in_radius])][:top_k]
+        return [records_snap[i] for i in top_idx]
 
     # ---------- 格式化 ----------
 
@@ -188,6 +234,12 @@ class EpisodicMemory:
             return []
         with self._lock:
             return list(self._records[-n:])
+
+    def close(self) -> None:
+        """Flush and close the SQLite store (no-op if no persist_path)."""
+        if self._store is not None:
+            self._store.close()
+            self._store = None
 
     def __len__(self) -> int:
         with self._lock:

@@ -67,11 +67,12 @@ class VectorMemoryModule(Module, layer=3):
         self._encoder = None     # CLIP text/image encoder
         self._use_chromadb = False
 
-        # Fallback numpy store
-        self._np_embeddings: list[np.ndarray] = []
-        self._np_metadata: list[dict] = []
-
         self._max_np_entries: int = kw.get("max_np_entries", 10000)
+
+        # Fallback numpy store — deque(maxlen) gives O(1) FIFO eviction vs O(n) list.pop(0)
+        from collections import deque
+        self._np_embeddings: deque = deque(maxlen=self._max_np_entries)
+        self._np_metadata: deque = deque(maxlen=self._max_np_entries)
 
         self._robot_xy = (0.0, 0.0)
         self._latest_labels: list[str] = []
@@ -161,10 +162,7 @@ class VectorMemoryModule(Module, layer=3):
         else:
             self._np_embeddings.append(embedding)
             self._np_metadata.append(meta)
-            # LRU eviction: drop oldest entries when over limit
-            while len(self._np_embeddings) > self._max_np_entries:
-                self._np_embeddings.pop(0)
-                self._np_metadata.pop(0)
+            # deque(maxlen) auto-evicts oldest entry — no manual pop needed
 
     def _encode_text(self, text: str) -> np.ndarray | None:
         if self._encoder is not None and hasattr(self._encoder, "encode_text"):

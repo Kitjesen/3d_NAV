@@ -140,6 +140,25 @@ class FastPathMixin:
         # ── 对每个物体打分 (AdaNav 多源置信度) ──
         scored: list[tuple[dict, float, str]] = []
 
+        # Pre-compute CLIP similarities in one batched call instead of N individual calls.
+        # batch_text_image_similarity(texts, features) → (1, K) matrix.
+        _clip_sims: dict = {}  # obj_id → float similarity
+        if clip_encoder is not None and hasattr(clip_encoder, "batch_text_image_similarity"):
+            _clip_objs = [
+                (obj.get("id"), np.array(obj["clip_feature"]))
+                for obj in objects
+                if obj.get("clip_feature") is not None
+            ]
+            if _clip_objs:
+                try:
+                    _ids, _feats = zip(*_clip_objs)
+                    _sims = clip_encoder.batch_text_image_similarity([instruction], list(_feats))
+                    if _sims is not None and len(_sims) > 0:
+                        for _j, _oid in enumerate(_ids):
+                            _clip_sims[_oid] = float(_sims[0][_j])
+                except Exception as _e:
+                    logger.debug("Batch CLIP similarity failed, falling back per-object: %s", _e)
+
         for obj in objects:
             label = obj.get("label", "").lower()
             score = obj.get("score", 0.5)
@@ -190,10 +209,15 @@ class FastPathMixin:
             # 源 2: 检测器置信度 (多次观测 → 更可靠)
             detector_score = min(score, 1.0) * min(det_count / 3, 1.0)
 
-            # 源 3: CLIP 视觉-语言相似度
+            # 源 3: CLIP 视觉-语言相似度 — use pre-computed batch result when available
             clip_score = 0.0
             has_real_clip = False
-            if clip_encoder is not None and obj.get("clip_feature") is not None:
+            obj_id = obj.get("id")
+            if obj_id in _clip_sims:
+                clip_score = _clip_sims[obj_id]
+                has_real_clip = True
+            elif clip_encoder is not None and obj.get("clip_feature") is not None:
+                # Fallback: per-object call (batch_text_image_similarity unavailable)
                 try:
                     clip_feature = np.array(obj.get("clip_feature"))
                     if clip_feature.size > 0:
