@@ -60,6 +60,7 @@ class CameraBridgeModule(Module, layer=1):
         info_topic: str = "/camera/camera_info",
         spin_rate: float = 30.0,
         qos_depth: int = 5,
+        rotate: int = 0,
         **kw,
     ):
         super().__init__(**kw)
@@ -69,6 +70,8 @@ class CameraBridgeModule(Module, layer=1):
         self._info_topic = info_topic
         self._spin_rate = spin_rate
         self._qos_depth = qos_depth
+        # Rotation: 0=none, 90=CW, 180=flip, 270=CCW
+        self._rotate = rotate
 
         self._node = None
         self._running = False
@@ -335,6 +338,16 @@ class CameraBridgeModule(Module, layer=1):
             if self._undistort_maps is not None:
                 import cv2
                 arr = cv2.remap(arr, *self._undistort_maps, cv2.INTER_LINEAR)
+
+            # Rotate if camera is mounted sideways
+            if self._rotate != 0:
+                import cv2
+                _rot_map = {90: cv2.ROTATE_90_CLOCKWISE,
+                            180: cv2.ROTATE_180,
+                            270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+                rot_code = _rot_map.get(self._rotate)
+                if rot_code is not None:
+                    arr = cv2.rotate(arr, rot_code)
 
             now = time.time()
             self._last_color_ts = now

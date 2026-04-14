@@ -91,6 +91,8 @@ camera:
   width: 640
   height: 480
   depth_scale: 0.001         # 原始深度值 → 米 (1mm 单位)
+  # 相机安装旋转补偿 (度): 0=正装, 90=顺时针90°侧装, 180=倒装, 270=逆时针90°
+  rotate: 90
   # 畸变系数 (Brown-Conrady / plumb_bob 模型)
   dist_k1: 0.0
   dist_k2: 0.0
