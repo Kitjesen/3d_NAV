@@ -15,6 +15,7 @@ import { MiniMap } from './components/MiniMap'
 import { FloatingWidget, resetAllLayouts } from './components/FloatingWidget'
 import { ToastContainer } from './components/Toast'
 import { LoginPage } from './components/LoginPage'
+import { Landing } from './components/Landing'
 import * as api from './services/api'
 import type { Tab } from './types'
 import './App.css'
@@ -107,12 +108,38 @@ function App() {
   const [authChecked, setAuthChecked] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
 
+  // Landing page: ?landing bypasses auth and shows the marketing page
+  const isLanding = typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).has('landing')
+
   // Dev preview: ?login forces the login page to render
   const forceLogin = typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).has('login')
 
   useEffect(() => {
-    if (forceLogin) {
+    // Landing page needs scroll — remove dashboard overflow:hidden from html/body
+    if (isLanding) {
+      document.documentElement.style.overflow = 'auto'
+      document.documentElement.style.height = 'auto'
+      document.body.style.overflow = 'auto'
+      document.body.style.height = 'auto'
+      const root = document.getElementById('root')
+      if (root) { root.style.overflow = 'auto'; root.style.height = 'auto' }
+    }
+    return () => {
+      if (isLanding) {
+        document.documentElement.style.overflow = ''
+        document.documentElement.style.height = ''
+        document.body.style.overflow = ''
+        document.body.style.height = ''
+        const root = document.getElementById('root')
+        if (root) { root.style.overflow = ''; root.style.height = '' }
+      }
+    }
+  }, [isLanding])
+
+  useEffect(() => {
+    if (isLanding || forceLogin) {
       setLoggedIn(false)
       setAuthChecked(true)
       return
@@ -127,8 +154,9 @@ function App() {
         setLoggedIn(true)
         setAuthChecked(true)
       })
-  }, [forceLogin])
+  }, [isLanding, forceLogin])
 
+  if (isLanding) return <Landing />
   if (!authChecked) return null
   if (!loggedIn) return <LoginPage onLogin={() => setLoggedIn(true)} />
   return <Dashboard />
