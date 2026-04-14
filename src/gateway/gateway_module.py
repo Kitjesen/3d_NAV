@@ -302,6 +302,9 @@ class GatewayModule(Module, layer=6):
         # SceneGraph SSE throttle (~2Hz)
         self._sg_throttle: int = 0
 
+        # SLAM status SSE throttle (~1Hz at 10Hz odom)
+        self._slam_status_throttle: int = 0
+
         # Autonomous exploration state + frontier explorer module ref
         self._exploring: bool = False
         self._frontier_explorer: Any = None
@@ -398,6 +401,19 @@ class GatewayModule(Module, layer=6):
             if len(self._odom_timestamps) > 20:
                 self._odom_timestamps.pop(0)
         self.push_event({"type": "odometry", "data": d})
+
+        # Push slam_status at ~1Hz (every 10 odometry frames)
+        self._slam_status_throttle += 1
+        if self._slam_status_throttle % 10 == 0:
+            with self._map_cloud_lock:
+                map_pts = len(self._map_points) if self._map_points is not None else 0
+            self.push_event({
+                "type": "slam_status",
+                "mode": self._mode,
+                "slam_hz": self._get_slam_hz_cached(),
+                "map_points": map_pts,
+                "degeneracy_count": getattr(self, "_degeneracy_count", 0),
+            })
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
         """Track that map_cloud is flowing (for health). Actual viewer data comes from PCD snapshot."""
