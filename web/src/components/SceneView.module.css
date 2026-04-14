@@ -101,6 +101,7 @@
 }
 
 .layerBtnActive.layerGrid   { color: #8B9BC4; }
+.layerBtnActive.layerCloud  { color: #38BDF8; }
 .layerBtnActive.layerTrail  { color: #5EEAD4; }
 .layerBtnActive.layerPath   { color: #A78BFA; }
 .layerBtnActive.layerGoal   { color: #FBBF24; }

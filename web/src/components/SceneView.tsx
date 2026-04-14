@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import {
   Compass, Grid3x3, Navigation, Route, Target, Bot,
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle,
-  MapPinned,
+  MapPinned, Cloud,
 } from 'lucide-react'
 import type { SSEState, MapInfo, PathPoint, ToastKind } from '../types'
 import * as api from '../services/api'
@@ -22,11 +22,12 @@ interface ViewTransform {
 
 // ── Layer flags ────────────────────────────────────────────────
 interface Layers {
-  grid:  boolean
-  trail: boolean
-  path:  boolean
-  goal:  boolean
-  robot: boolean
+  grid:       boolean
+  cloud:      boolean
+  trail:      boolean
+  path:       boolean
+  goal:       boolean
+  robot:      boolean
 }
 
 // ── World ↔ canvas helpers ─────────────────────────────────────
@@ -75,6 +76,19 @@ function computeTransform(
 }
 
 // ── Drawing ────────────────────────────────────────────────────
+
+function drawCloud(
+  ctx: CanvasRenderingContext2D,
+  flat: number[],
+  t: ViewTransform,
+) {
+  if (flat.length < 3) return
+  ctx.fillStyle = 'rgba(56, 189, 248, 0.55)'  // sky-blue tint
+  for (let i = 0; i + 2 < flat.length; i += 3) {
+    const [cx, cy] = worldToCanvas(flat[i], flat[i + 1], t)
+    ctx.fillRect(cx - 0.5, cy - 0.5, 1, 1)
+  }
+}
 
 function drawGrid(ctx: CanvasRenderingContext2D, t: ViewTransform, w: number, h: number) {
   // Major grid every 5m, minor every 1m
@@ -327,7 +341,7 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [saveModalOpen, setSaveModalOpen] = useState(false)
   const [layers, setLayers] = useState<Layers>({
-    grid: true, trail: true, path: true, goal: true, robot: true,
+    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true,
   })
   const [maps, setMaps] = useState<MapInfo[]>([])
 
@@ -347,6 +361,7 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
   const hasGoal      = missionState === 'EXECUTING' || missionState === 'PLANNING'
   const slamMode     = sseState.slamStatus?.mode ?? '—'
   const slamHz       = sseState.slamStatus?.slam_hz ?? 0
+  const cloudFlat    = sseState.mapCloud?.points ?? []
 
   // ── Load map list ─────────────────────────────────────────────
   const loadMaps = useCallback(async () => {
@@ -387,11 +402,12 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
     ctx.clearRect(0, 0, w, h)
 
     if (layers.grid)  drawGrid(ctx, t, w, h)
+    if (layers.cloud) drawCloud(ctx, cloudFlat, t)
     if (layers.trail) drawTrail(ctx, trailRef.current, t)
     if (layers.path)  drawPath(ctx, path, t)
     if (layers.goal)  drawGoal(ctx, path, t)
     if (layers.robot) drawRobot(ctx, robotX, robotY, yaw, t)
-  }, [path, robotX, robotY, yaw, layers])
+  }, [path, robotX, robotY, yaw, layers, cloudFlat])
 
   // Resize & re-render on state change
   useEffect(() => {
@@ -509,8 +525,9 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
         <span className={styles.divider} />
 
         <div className={styles.layerGroup}>
-          <LayerBtn k="grid"  icon={<Grid3x3 size={11} />}   label="网格" colorClass="layerGrid" />
-          <LayerBtn k="trail" icon={<Route size={11} />}      label="轨迹" colorClass="layerTrail" />
+          <LayerBtn k="grid"  icon={<Grid3x3 size={11} />}   label="网格"  colorClass="layerGrid" />
+          <LayerBtn k="cloud" icon={<Cloud size={11} />}      label="点云"  colorClass="layerCloud" />
+          <LayerBtn k="trail" icon={<Route size={11} />}      label="轨迹"  colorClass="layerTrail" />
           <LayerBtn k="path"  icon={<Navigation size={11} />} label="路径" colorClass="layerPath" />
           <LayerBtn k="goal"  icon={<Target size={11} />}     label="目标" colorClass="layerGoal" />
           <LayerBtn k="robot" icon={<Bot size={11} />}        label="本机" colorClass="layerRobot" />

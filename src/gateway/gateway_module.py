@@ -305,6 +305,10 @@ class GatewayModule(Module, layer=6):
         # SLAM status SSE throttle (~1Hz at 10Hz odom)
         self._slam_status_throttle: int = 0
 
+        # Cached SLAM profile (fastlio2 / localizer / stopped) — refreshed every 5s
+        self._cached_slam_profile: str = "—"
+        self._slam_profile_ts: float = 0.0
+
         # Autonomous exploration state + frontier explorer module ref
         self._exploring: bool = False
         self._frontier_explorer: Any = None
@@ -409,15 +413,51 @@ class GatewayModule(Module, layer=6):
                 map_pts = len(self._map_points) if self._map_points is not None else 0
             self.push_event({
                 "type": "slam_status",
-                "mode": self._mode,
+                "mode": self._get_slam_profile(),
                 "slam_hz": self._get_slam_hz_cached(),
                 "map_points": map_pts,
                 "degeneracy_count": getattr(self, "_degeneracy_count", 0),
             })
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
-        """Track that map_cloud is flowing (for health). Actual viewer data comes from PCD snapshot."""
+        """Store downsampled map cloud and push to SSE clients every 5s."""
         self._map_cloud_count += 1
+        pts = cloud.points  # (N, 3) float32
+        if pts is None or len(pts) == 0:
+            return
+        # Downsample to ≤8000 points for SSE bandwidth
+        if len(pts) > 8000:
+            idx = np.random.choice(len(pts), 8000, replace=False)
+            pts = pts[idx]
+        with self._map_cloud_lock:
+            self._map_points = pts
+        # Push to SSE at ~0.2Hz (every 5 map_cloud frames)
+        if self._map_cloud_count % 5 == 0:
+            flat = pts[:, :3].astype(np.float32).flatten().tolist()
+            self.push_event({"type": "map_cloud", "points": flat, "count": len(pts)})
+
+    def _get_slam_profile(self) -> str:
+        """Return current SLAM profile (cached 5s): fastlio2 / localizer / stopped."""
+        now = time.time()
+        if now - self._slam_profile_ts < 5.0:
+            return self._cached_slam_profile
+        self._slam_profile_ts = now
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
+            services = svc.status("slam_pgo", "localizer", "slam")
+            if services.get("slam_pgo") in ("running", "active"):
+                profile = "fastlio2"
+            elif services.get("localizer") in ("running", "active"):
+                profile = "localizer"
+            elif services.get("slam") in ("running", "active"):
+                profile = "slam"
+            else:
+                profile = "stopped"
+            self._cached_slam_profile = profile
+        except Exception:
+            pass
+        return self._cached_slam_profile
 
     @staticmethod
     def _voxel_downsample(pts: np.ndarray, voxel: float) -> np.ndarray:

@@ -64,6 +64,12 @@ export interface GlobalPathEvent {
   points: PathPoint[]
 }
 
+export interface MapCloudEvent {
+  type: 'map_cloud'
+  points: number[]   // flat [x,y,z, x,y,z, …]
+  count: number
+}
+
 export type SSEEvent =
   | OdometryEvent
   | MissionStatusEvent
@@ -73,6 +79,7 @@ export type SSEEvent =
   | SlamStatusEvent
   | RobotStatusEvent
   | GlobalPathEvent
+  | MapCloudEvent
 
 export interface SSEState {
   odometry: OdometryEvent | null
@@ -82,6 +89,7 @@ export interface SSEState {
   slamStatus: SlamStatusEvent | null
   robotStatus: RobotStatusEvent | null
   globalPath: GlobalPathEvent | null
+  mapCloud: MapCloudEvent | null
   lastHeartbeat: number | null
   connected: boolean
   events: SSEEvent[]
