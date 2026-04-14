@@ -326,7 +326,13 @@ class CameraBridgeModule(Module, layer=1):
 
             if encoding in ("bgr8", "rgb8"):
                 arr = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 3)
-                fmt = ImageFormat.BGR if encoding == "bgr8" else ImageFormat.RGB
+                # Normalize to BGR — OpenCV's native format.
+                # TeleopModule (cv2.imencode) and detection overlay
+                # (cv2.rectangle/putText) all assume BGR input.
+                if encoding == "rgb8":
+                    import cv2
+                    arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                fmt = ImageFormat.BGR
             elif encoding in ("mono8", "8uc1"):
                 arr = np.frombuffer(raw, dtype=np.uint8).reshape(h, w)
                 fmt = ImageFormat.GRAY
