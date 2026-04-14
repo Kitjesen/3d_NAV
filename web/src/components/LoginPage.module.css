@@ -61,7 +61,7 @@
   height: 520px;
   top: -120px;
   left: -80px;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.35), transparent 60%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.35), transparent 60%);
   animation: orbDrift1 22s var(--ease-in-out) infinite;
 }
 
@@ -70,7 +70,7 @@
   height: 460px;
   bottom: -100px;
   right: -60px;
-  background: radial-gradient(circle, rgba(236, 72, 153, 0.28), transparent 60%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.28), transparent 60%);
   animation: orbDrift2 28s var(--ease-in-out) infinite reverse;
 }
 
@@ -79,7 +79,7 @@
   height: 300px;
   top: 40%;
   right: 22%;
-  background: radial-gradient(circle, rgba(168, 85, 247, 0.18), transparent 60%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.18), transparent 60%);
   animation: orbDrift3 24s var(--ease-in-out) infinite;
 }
 
@@ -207,9 +207,9 @@
   inset: -1px;
   border-radius: 22px;
   background: linear-gradient(135deg,
-    rgba(99, 102, 241, 0.4),
-    rgba(168, 85, 247, 0.3),
-    rgba(236, 72, 153, 0.4));
+    rgba(255, 255, 255, 0.4),
+    rgba(255, 255, 255, 0.3),
+    rgba(255, 255, 255, 0.4));
   z-index: -1;
   filter: blur(18px);
   opacity: 0.35;
@@ -236,7 +236,7 @@
   border-radius: 14px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.25),
-    0 4px 16px rgba(99, 102, 241, 0.35);
+    0 4px 16px rgba(255, 255, 255, 0.35);
   flex-shrink: 0;
   animation: iconIn 0.9s var(--ease-spring) 0.15s both;
 }
@@ -343,8 +343,8 @@
 
 .input:focus:not(:disabled) {
   background: rgba(0, 0, 0, 0.5);
-  border-color: rgba(99, 102, 241, 0.5);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.15);
 }
 
 .input:disabled {
@@ -412,7 +412,7 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 1px 2px rgba(0, 0, 0, 0.3),
-    0 4px 16px rgba(99, 102, 241, 0.3);
+    0 4px 16px rgba(255, 255, 255, 0.3);
   margin-top: 6px;
   overflow: hidden;
   min-height: 48px;
@@ -441,7 +441,7 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.28),
     0 2px 4px rgba(0, 0, 0, 0.35),
-    0 10px 30px rgba(99, 102, 241, 0.45);
+    0 10px 30px rgba(255, 255, 255, 0.45);
 }
 
 .btn:hover:not(:disabled)::before {
@@ -462,8 +462,8 @@
   outline: none;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.25),
-    0 0 0 3px rgba(99, 102, 241, 0.4),
-    0 4px 16px rgba(99, 102, 241, 0.3);
+    0 0 0 3px rgba(255, 255, 255, 0.4),
+    0 4px 16px rgba(255, 255, 255, 0.3);
 }
 
 .btnIdle {

@@ -1,78 +1,74 @@
 /* ===================================================================
-   LingTu Dashboard — Arc / Raycast inspired design system
+   LingTu Dashboard — Frosted Glass (毛玻璃) design system
    =================================================================== */
 
 :root {
-  /* ── Surfaces ── */
-  /* Base canvas — deep navy with subtle warmth */
-  --bg:          #0A0B14;
-  --bg-layer-1:  #0F1019;
-  --bg-layer-2:  #151623;
-  --bg-layer-3:  #1C1E2E;
+  /* ── Surfaces — pure dark, no color tint ── */
+  --bg:          #090A0F;
+  --bg-layer-1:  #0E0F15;
+  --bg-layer-2:  #13141C;
+  --bg-layer-3:  #1A1B24;
 
-  /* Glass panel surfaces (used with backdrop-filter blur) */
-  --glass:       rgba(22, 24, 38, 0.6);
-  --glass-hi:    rgba(30, 32, 48, 0.7);
-  --glass-lo:    rgba(18, 20, 32, 0.5);
+  /* Glass — higher transparency + stronger blur = real frosted glass */
+  --glass:       rgba(255, 255, 255, 0.04);
+  --glass-hi:    rgba(255, 255, 255, 0.06);
+  --glass-lo:    rgba(255, 255, 255, 0.03);
 
-  /* Borders — extremely subtle hairlines */
-  --border:      rgba(255, 255, 255, 0.06);
-  --border-hi:   rgba(255, 255, 255, 0.12);
-  --border-focus: rgba(255, 255, 255, 0.2);
+  /* Borders — white hairlines */
+  --border:      rgba(255, 255, 255, 0.08);
+  --border-hi:   rgba(255, 255, 255, 0.14);
+  --border-focus: rgba(255, 255, 255, 0.25);
 
-  /* Inner highlight (top edge of glass) */
-  --inner-hi:    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  /* Inner highlight (top edge of glass — frosted sheen) */
+  --inner-hi:    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
-  /* ── Text ── */
-  --text:        #E8E9F0;
-  --text-dim:    #9599A8;
-  --text-faint:  #5A5E70;
-  --text-mute:   #3D4050;
+  /* ── Text — neutral whites ── */
+  --text:        #E4E4E8;
+  --text-dim:    #8C8C96;
+  --text-faint:  #55555F;
+  --text-mute:   #3A3A42;
 
-  /* ── Accents — signature rainbow gradient like Arc ── */
-  --brand-1:     #6366F1;  /* indigo */
-  --brand-2:     #A855F7;  /* purple */
-  --brand-3:     #EC4899;  /* pink */
-  --brand-4:     #F59E0B;  /* amber */
+  /* ── Brand — single accent, no rainbow gradient ── */
+  --brand-1:     #FFFFFF;
+  --brand-2:     #FFFFFF;
+  --brand-3:     #FFFFFF;
+  --brand-4:     #FFFFFF;
 
+  /* Replaced: gradient-brand → frosted white button */
   --gradient-brand: linear-gradient(135deg,
-    #6366F1 0%,
-    #A855F7 35%,
-    #EC4899 70%,
-    #F59E0B 100%);
+    rgba(255, 255, 255, 0.15) 0%,
+    rgba(255, 255, 255, 0.08) 100%);
 
   --gradient-brand-soft: linear-gradient(135deg,
-    rgba(99, 102, 241, 0.15) 0%,
-    rgba(168, 85, 247, 0.12) 35%,
-    rgba(236, 72, 153, 0.10) 70%,
-    rgba(245, 158, 11, 0.08) 100%);
+    rgba(255, 255, 255, 0.06) 0%,
+    rgba(255, 255, 255, 0.03) 100%);
 
-  /* Status colors — muted, modern */
-  --accent:       #5EEAD4;  /* live/streaming — teal mint */
+  /* Status colors — kept but muted */
+  --accent:       #5EEAD4;
   --accent-dim:   #2DD4BF;
-  --accent-glow:  rgba(94, 234, 212, 0.2);
+  --accent-glow:  rgba(94, 234, 212, 0.15);
 
   --warn:         #FBBF24;
-  --warn-glow:    rgba(251, 191, 36, 0.2);
+  --warn-glow:    rgba(251, 191, 36, 0.15);
 
   --red:          #F87171;
   --red-dim:      #DC2626;
-  --red-glow:     rgba(248, 113, 113, 0.25);
+  --red-glow:     rgba(248, 113, 113, 0.2);
 
   --blue:         #60A5FA;
-  --blue-glow:    rgba(96, 165, 250, 0.2);
+  --blue-glow:    rgba(96, 165, 250, 0.15);
 
-  /* ── Shadows — layered, realistic depth ── */
-  --shadow-sm:    0 1px 2px rgba(0, 0, 0, 0.3);
+  /* ── Shadows — softer, less aggressive ── */
+  --shadow-sm:    0 1px 3px rgba(0, 0, 0, 0.4);
   --shadow-md:
-    0 1px 2px rgba(0, 0, 0, 0.3),
-    0 4px 12px rgba(0, 0, 0, 0.35),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 4px 16px rgba(0, 0, 0, 0.3),
     var(--inner-hi);
   --shadow-lg:
-    0 2px 4px rgba(0, 0, 0, 0.4),
-    0 12px 40px rgba(0, 0, 0, 0.45),
+    0 2px 4px rgba(0, 0, 0, 0.5),
+    0 12px 40px rgba(0, 0, 0, 0.4),
     var(--inner-hi);
-  --shadow-glow: 0 0 40px rgba(99, 102, 241, 0.15);
+  --shadow-glow: 0 0 40px rgba(255, 255, 255, 0.04);
 
   /* ── Radii ── */
   --r-xs:         4px;
@@ -190,37 +186,21 @@ body {
   overflow: hidden;
 }
 
-/* Ambient background — drifting colored blurs like Arc.
-   GPU-friendly: smaller sizes + lower blur + will-change transform. */
-.app::before,
-.app::after {
+/* Ambient background — no colored orbs, just a very subtle
+   radial vignette so edges are slightly darker than center. */
+.app::before {
   content: '';
   position: fixed;
-  width: 40vw;
-  height: 40vw;
-  border-radius: 50%;
-  filter: blur(80px);
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 40%,
+    transparent 30%,
+    rgba(0, 0, 0, 0.3) 100%);
   pointer-events: none;
   z-index: 0;
-  opacity: 0.4;
-  will-change: transform;
-  transform: translateZ(0);
-}
-
-.app::before {
-  top: -20%;
-  left: -10%;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.18), transparent 60%);
-  animation: drift 20s var(--ease-in-out) infinite;
-  opacity: 0.75;
 }
 
 .app::after {
-  bottom: -20%;
-  right: -10%;
-  background: radial-gradient(circle, rgba(236, 72, 153, 0.12), transparent 60%);
-  animation: drift 25s var(--ease-in-out) infinite reverse;
-  opacity: 0.65;
+  content: none;
 }
 
 /* All content above the ambient background */
@@ -298,8 +278,8 @@ body {
   flex-direction: column;
   min-height: 0;
   background: var(--glass);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(40px) saturate(120%);
+  -webkit-backdrop-filter: blur(40px) saturate(120%);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-md);
@@ -321,8 +301,8 @@ body {
   flex: 1;
   min-height: 0;
   background: var(--glass);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(40px) saturate(120%);
+  -webkit-backdrop-filter: blur(40px) saturate(120%);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-md);

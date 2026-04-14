@@ -40,7 +40,7 @@
 
 .tabBtn:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.55);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.55);
 }
 
 .tabBtn:active {

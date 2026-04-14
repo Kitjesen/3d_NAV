@@ -18,8 +18,8 @@
   gap: var(--s-3);
   padding: var(--s-2) var(--s-3);
   background: var(--glass);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(40px) saturate(120%);
+  -webkit-backdrop-filter: blur(40px) saturate(120%);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-sm), var(--inner-hi);
@@ -50,7 +50,7 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 1px 2px rgba(0, 0, 0, 0.3),
-    0 2px 8px rgba(99, 102, 241, 0.25);
+    0 2px 8px rgba(255, 255, 255, 0.25);
 }
 
 .divider {
@@ -141,7 +141,7 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 1px 2px rgba(0, 0, 0, 0.3),
-    0 2px 10px rgba(99, 102, 241, 0.28);
+    0 2px 10px rgba(255, 255, 255, 0.28);
 }
 
 .toolbarBtnPrimary:hover {
@@ -149,7 +149,7 @@
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.25),
     0 2px 4px rgba(0, 0, 0, 0.3),
-    0 6px 16px rgba(99, 102, 241, 0.38);
+    0 6px 16px rgba(255, 255, 255, 0.38);
 }
 
 /* ── Main workspace ────────────────────────────────────────────── */
@@ -172,8 +172,8 @@
   display: flex;
   flex-direction: column;
   background: var(--glass);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(40px) saturate(120%);
+  -webkit-backdrop-filter: blur(40px) saturate(120%);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-md);
@@ -277,8 +277,8 @@
 
 .mapItemActive {
   composes: mapItem;
-  background: rgba(99, 102, 241, 0.1);
-  border-color: rgba(99, 102, 241, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.24);
   color: var(--text);
 }
 
@@ -288,7 +288,7 @@
   height: 6px;
   border-radius: 50%;
   background: var(--brand-1);
-  box-shadow: 0 0 8px rgba(99, 102, 241, 0.55);
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.55);
   flex-shrink: 0;
 }
 
@@ -348,8 +348,8 @@
   align-items: center;
   gap: 5px;
   padding: 6px 12px;
-  background: rgba(99, 102, 241, 0.14);
-  border: 1px solid rgba(99, 102, 241, 0.32);
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.32);
   border-radius: 999px;
   color: #C7D2FE;
   font-size: 10.5px;
@@ -360,15 +360,15 @@
 }
 
 .emptyCta:hover {
-  background: rgba(99, 102, 241, 0.22);
-  border-color: rgba(99, 102, 241, 0.5);
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.5);
   color: #FFFFFF;
   transform: translateY(-1px);
 }
 
 .emptyCta:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.4);
 }
 
 /* ── Center canvas area ────────────────────────────────────────── */
@@ -378,8 +378,8 @@
   display: flex;
   flex-direction: column;
   background: var(--glass);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(40px) saturate(120%);
+  -webkit-backdrop-filter: blur(40px) saturate(120%);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-md);
@@ -481,8 +481,8 @@
 .statCard {
   padding: var(--s-4);
   background: var(--glass);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(40px) saturate(120%);
+  -webkit-backdrop-filter: blur(40px) saturate(120%);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-sm), var(--inner-hi);
