@@ -227,9 +227,10 @@ pct_planner:
 # ── TraversabilityCost 分层代价融合 ──
 # 合并规则: max() 优先级 — LETHAL(100) > INSCRIBED(99) > slope(1-98) > proximity(0-50)
 # 硬约束 (obstacle/steep slope) 不可被软层覆盖
+# max_slope_deg: 默认从 terrain_analysis.slope_max (tan 值) 自动转换，四足 ~40°
 traversability_cost:
   safe_distance: 1.5           # ESDF 接近性衰减距离 (m), 此范围内 soft cost 递增
-  max_slope_deg: 30.0          # ≥ 此坡度 → LETHAL (不可通行)
+  # max_slope_deg:             # 不设 → 从 terrain_analysis.slope_max 读取 (单一来源)
   proximity_cap: 50.0          # ESDF 软代价上限 (不会推升到 INSCRIBED=99)
   publish_hz: 2.0              # 融合发布频率 (Hz)
 

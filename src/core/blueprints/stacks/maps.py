@@ -51,11 +51,15 @@ def maps(**config) -> Blueprint:
 
         from nav.traversability_cost_module import TraversabilityCostModule
         tc = cfg.raw.get("traversability_cost", {})
-        bp.add(TraversabilityCostModule,
-               safe_distance=tc.get("safe_distance", 1.5),
-               max_slope_deg=tc.get("max_slope_deg", 30.0),
-               proximity_cap=tc.get("proximity_cap", 50.0),
-               publish_hz=tc.get("publish_hz", 2.0))
+        tc_kw: dict = dict(
+            safe_distance=tc.get("safe_distance", 1.5),
+            proximity_cap=tc.get("proximity_cap", 50.0),
+            publish_hz=tc.get("publish_hz", 2.0),
+        )
+        if "max_slope_deg" in tc:
+            tc_kw["max_slope_deg"] = tc["max_slope_deg"]
+        # else: auto-read from terrain_analysis.slope_max (single source of truth)
+        bp.add(TraversabilityCostModule, **tc_kw)
     except ImportError as e:
         logger.warning("Map modules not available: %s", e)
 

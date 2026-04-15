@@ -1,15 +1,25 @@
-"""TraversabilityCostModule — fuse obstacle + slope + ESDF into unified cost.
+"""TraversabilityCostModule — map layer hub: ESDF relay + slope visualization.
 
-Subscribes to four map modules, produces a single fused traversability grid
-that both GlobalPlannerService (via NavigationModule) and LocalPlannerModule
-consume.
+Two core functions:
+  1. ESDF → LocalPlanner  — relay ESDF distance field + gradients for smooth
+     obstacle avoidance scoring in the CMU local planner. This is the primary
+     value on S100P: the local planner gets distance-to-obstacle info it never
+     had before, enabling path-score bias toward corridor centers.
+  2. Slope → Web          — compute slope grid from ElevationMap and push via
+     Gateway SSE for operator situational awareness (green/yellow/red overlay).
 
-Fusion formula per cell:
-  fused = clamp(
-      w_obs   * obstacle_cost
-    + w_slope * slope_cost(elevation)
-    + w_prox  * proximity_cost(esdf)
-  , 0, 100)
+Secondary function (dev/sim only):
+  3. fused_cost → NavigationModule → A* backend — on dev machines where
+     ele_planner.so (PCT) is unavailable, the fused grid gives the Python A*
+     terrain awareness (slope hard-block + proximity preference). On S100P
+     with PCT active, this fused grid only feeds _find_safe_goal BFS — PCT
+     plans on its own pre-built 3D tomogram, not on this grid.
+
+Merge rule: layered max() with hard constraint protection.
+  L0  LETHAL(100) / INSCRIBED(99) from OccupancyGrid — never overridden
+  L1  slope ≥ max_slope → LETHAL
+  L2  slope soft cost 1..97 — only on free cells
+  L3  ESDF proximity 0..proximity_cap — only on free cells
 
 Ports:
   In:  costmap (dict), elevation_map (dict), esdf (dict), traversability (dict)
@@ -66,11 +76,19 @@ def _resample_to_grid(
 @register("map", "traversability_cost",
           description="Fuse obstacle + slope + ESDF into unified traversability cost")
 class TraversabilityCostModule(Module, layer=2):
-    """Unified traversability cost provider.
+    """Map layer hub: ESDF relay + slope visualization + A* fallback fusion.
 
-    Fuses four map layers into a single cost grid consumed by both
-    global planner (via NavigationModule) and local planner (via ESDF field).
-    Gracefully degrades: if any input is missing, that layer contributes zero cost.
+    Primary (S100P production):
+      - Relays ESDF field to LocalPlannerModule for smooth obstacle avoidance
+      - Publishes slope grid for Web operator situational awareness
+      - fused_cost feeds NavigationModule but PCT ignores it for path planning
+
+    Secondary (dev/sim):
+      - fused_cost is the sole cost source for the Python A* planner
+      - Gives A* terrain awareness that raw OccupancyGrid alone doesn't have
+
+    Gracefully degrades: if any input is missing, that layer contributes zero.
+    max_slope_deg defaults from robot_config.yaml terrain_analysis.slope_max.
     """
 
     # Inputs — from four map sources
@@ -87,16 +105,29 @@ class TraversabilityCostModule(Module, layer=2):
     def __init__(
         self,
         safe_distance: float = 1.5,
-        max_slope_deg: float = 30.0,
+        max_slope_deg: float | None = None,
         proximity_cap: float = 50.0,
         publish_hz: float = 2.0,
         **kw,
     ):
         super().__init__(**kw)
         self._safe_dist = safe_distance
-        self._max_slope = max_slope_deg
-        self._prox_cap = proximity_cap    # max soft cost from ESDF (never promotes to INSCRIBED)
+        self._prox_cap = proximity_cap
         self._interval = 1.0 / publish_hz
+
+        # Read max_slope from robot_config (single source of truth)
+        if max_slope_deg is not None:
+            self._max_slope = max_slope_deg
+        else:
+            try:
+                from core.config import get_config
+                cfg = get_config()
+                # terrain_analysis.slope_max is tan(angle); convert to degrees
+                import math
+                slope_tan = cfg.raw.get("terrain_analysis", {}).get("slope_max", 0.84)
+                self._max_slope = math.degrees(math.atan(slope_tan))
+            except (ImportError, AttributeError):
+                self._max_slope = 40.0  # ~tan(0.84) ≈ 40°, reasonable for quadruped
 
         # Latest data from each source
         self._costmap_data: dict | None = None
