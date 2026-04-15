@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, memo } from 'react'
 import {
   Compass, Grid3x3, Navigation, Route, Target, Bot, Layers as LayersIcon, Mountain,
-  PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle, Pencil,
+  PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle, Pencil, X,
   MapPinned, Cloud, Maximize2, Radio, Activity, LocateFixed, VideoOff,
 } from 'lucide-react'
 import type { SSEState, MapInfo, PathPoint, ToastKind, SlamProfile } from '../types'
@@ -158,19 +158,24 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     } catch { showToast('保存失败', 'error') }
   }
 
-  const handleActivate = (name: string) => {
-    // Click map → show confirm modal to load (relocalize) this map
-    setLoadTarget(name)
+  const handleActivate = async (name: string) => {
+    // Left click = select/activate only (highlight in list), no relocalization, no toast
+    try {
+      await api.activateMap(name)
+      loadMaps()
+    } catch { /* silent */ }
   }
 
   const confirmLoadMap = async () => {
     if (!loadTarget) return
     const name = loadTarget
     setLoadTarget(null)
+    // Clear old saved map first — don't show stale data
+    setSavedMapFlat(undefined)
     try {
       await api.activateMap(name)
       await api.relocalize(name, 0, 0, 0)
-      showToast(`已加载并重定位: ${name}`, 'success')
+      showToast(`已加载: ${name}，重定位到原点`, 'success')
       loadMaps()
       try {
         const pts = await api.fetchSavedMapPoints(name)
@@ -322,13 +327,24 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         <div className={styles.drawer}>
           <div className={styles.drawerHeader}>
             <span className={styles.drawerTitle}>地图</span>
-            <button
-              className={styles.drawerToggle}
-              onClick={() => setDrawerOpen(!drawerOpen)}
-              title={drawerOpen ? '收起' : '展开'}
-            >
-              {drawerOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-            </button>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {savedMapFlat !== undefined && (
+                <button
+                  className={styles.drawerToggle}
+                  onClick={() => setSavedMapFlat(undefined)}
+                  title="清除已加载地图"
+                >
+                  <X size={14} />
+                </button>
+              )}
+              <button
+                className={styles.drawerToggle}
+                onClick={() => setDrawerOpen(!drawerOpen)}
+                title={drawerOpen ? '收起' : '展开'}
+              >
+                {drawerOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+              </button>
+            </div>
           </div>
           <div className={styles.drawerBody}>
             {maps.length === 0 && (
@@ -358,9 +374,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                       onClick={() => handleActivate(m.name)}
                       onContextMenu={(e) => {
                         e.preventDefault()
-                        setMapContextMenu({ name: m.name, x: e.clientX, y: e.clientY })
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                        setMapContextMenu({ name: m.name, x: rect.right + 4, y: rect.top })
                       }}
-                      title="左键加载 · 右键管理"
+                      title="左键选中 · 右键管理"
                     >
                       <span>{m.name}</span>
                       {m.has_tomogram && <span className={styles.mapBadge}>T</span>}
