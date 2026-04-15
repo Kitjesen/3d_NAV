@@ -147,14 +147,20 @@ class TomogramPlanner(object):
         self.planner = ele_planner.OfflineElePlanner(
             max_heading_rate=self.max_heading_rate, use_quintic=self.use_quintic
         )
+        # ele_planner.so was compiled against numpy 1.x C API.
+        # numpy 2.x changed array struct layout (ABI break), so we must
+        # force C-contiguous + correct dtype BEFORE passing to C++.
+        def _compat(arr, dtype=np.double):
+            return np.ascontiguousarray(arr.reshape(-1, arr.shape[-1]), dtype=dtype)
+
         self.planner.init_map(
             self.obstacle_thr, 30, self.resolution, self.n_slice, 0.5,
-            trav.reshape(-1, trav.shape[-1]).astype(np.double),
-            elev_g.reshape(-1, elev_g.shape[-1]).astype(np.double),
-            elev_c.reshape(-1, elev_c.shape[-1]).astype(np.double),
-            gateway.reshape(-1, gateway.shape[-1]),
-            trav_gy.reshape(-1, trav_gy.shape[-1]).astype(np.double),
-            -trav_gx.reshape(-1, trav_gx.shape[-1]).astype(np.double)
+            _compat(trav),
+            _compat(elev_g),
+            _compat(elev_c),
+            _compat(gateway, dtype=np.int32),
+            _compat(trav_gy),
+            _compat(-trav_gx),
         )
 
     def plan(self, start_pos, end_pos, start_height=0, end_height=0):
