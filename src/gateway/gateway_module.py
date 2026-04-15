@@ -419,22 +419,46 @@ class GatewayModule(Module, layer=6):
                 "degeneracy_count": getattr(self, "_degeneracy_count", 0),
             })
 
+    @staticmethod
+    def _voxel_downsample(pts: np.ndarray, voxel_size: float) -> np.ndarray:
+        """Voxel grid downsample: keep one point per cell (by first occurrence)."""
+        if len(pts) == 0:
+            return pts
+        voxels = np.floor(pts[:, :3] / voxel_size).astype(np.int32)
+        _, unique_idx = np.unique(voxels, axis=0, return_index=True)
+        return pts[np.sort(unique_idx)]
+
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
-        """Store downsampled map cloud and push to SSE clients every 5s."""
+        """Accumulate map cloud with voxel downsampling; push 30k pts to SSE every 5 frames."""
         self._map_cloud_count += 1
         pts = cloud.points  # (N, 3) float32
         if pts is None or len(pts) == 0:
             return
-        # Downsample to ≤8000 points for SSE bandwidth
-        if len(pts) > 8000:
-            idx = np.random.choice(len(pts), 8000, replace=False)
-            pts = pts[idx]
+        pts = pts[:, :3].astype(np.float32)
         with self._map_cloud_lock:
-            self._map_points = pts
-        # Push to SSE at ~0.2Hz (every 5 map_cloud frames)
+            if self._map_points is None:
+                self._map_points = pts
+            else:
+                combined = np.concatenate([self._map_points, pts], axis=0)
+                # Voxel-downsample when accumulated cloud grows large
+                if len(combined) > 300_000:
+                    combined = self._voxel_downsample(combined, self._map_voxel_size)
+                self._map_points = combined
+
+        # Push to SSE at ~0.2Hz (every 5 frames)
         if self._map_cloud_count % 5 == 0:
-            flat = pts[:, :3].astype(np.float32).flatten().tolist()
-            self.push_event({"type": "map_cloud", "points": flat, "count": len(pts)})
+            with self._map_cloud_lock:
+                pts_all = self._map_points
+            if pts_all is None:
+                return
+            # Sample ≤30k points for SSE bandwidth
+            if len(pts_all) > 30_000:
+                idx = np.random.choice(len(pts_all), 30_000, replace=False)
+                pts_send = pts_all[idx]
+            else:
+                pts_send = pts_all
+            flat = pts_send[:, :3].astype(np.float32).flatten().tolist()
+            self.push_event({"type": "map_cloud", "points": flat, "count": len(pts_send)})
 
     def _get_slam_profile(self) -> str:
         """Return current SLAM profile (cached 5s): fastlio2 / localizer / stopped."""
@@ -1218,6 +1242,41 @@ class GatewayModule(Module, layer=6):
             return FileResponse(str(pcd_path), media_type="application/octet-stream",
                                 filename="map.pcd")
 
+        @app.get("/api/v1/maps/{name}/points", summary="Saved map point cloud as JSON")
+        async def get_saved_map_points(name: str, max_points: int = 30000):
+            import pathlib
+            from fastapi import HTTPException
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
+            base = pathlib.Path(map_dir).resolve()
+            pcd_path = (base / name / "map.pcd").resolve()
+            if not str(pcd_path).startswith(str(base)):
+                raise HTTPException(status_code=403)
+            if not pcd_path.is_file():
+                raise HTTPException(status_code=404, detail=f"Map not found: {name}")
+            # Parse PCD binary (same logic as _load_map_for_viewer)
+            with open(pcd_path, "rb") as f:
+                n_points, point_step = 0, 16
+                while True:
+                    line = f.readline().decode("ascii", errors="ignore").strip()
+                    if "POINTS" in line:
+                        n_points = int(line.split()[-1])
+                    if "SIZE" in line:
+                        point_step = sum(int(s) for s in line.split()[1:])
+                    if line.startswith("DATA"):
+                        break
+                data = f.read(n_points * point_step)
+            pts = np.frombuffer(data[:n_points * point_step], dtype=np.float32).reshape(n_points, point_step // 4)[:, :3]
+            valid = np.isfinite(pts).all(axis=1)
+            pts = pts[valid]
+            if len(pts) > 0:
+                med = np.median(pts, axis=0)
+                pts = pts[np.abs(pts - med).max(axis=1) < 100]
+            if len(pts) > max_points:
+                idx = np.random.choice(len(pts), max_points, replace=False)
+                pts = pts[idx]
+            flat = pts[:, :3].astype(np.float32).flatten().tolist()
+            return {"count": len(pts), "points": flat}
+
         @app.post("/api/v1/slam/switch", summary="Hot-switch SLAM profile")
         async def slam_switch(body: dict):
             profile = body.get("profile", "")
@@ -1238,6 +1297,39 @@ class GatewayModule(Module, layer=6):
                     svc.stop("slam_pgo", "localizer", "slam")
                     ok = True
                 return {"success": ok, "profile": profile, "message": f"Switched to {profile}" if ok else "Services not ready after 10s"}
+            except Exception as e:
+                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+        @app.post("/api/v1/slam/relocalize", summary="Relocalize against a saved map")
+        async def slam_relocalize(body: dict):
+            """Call /relocalize ROS2 service to localize robot in a saved map."""
+            import os, subprocess
+            map_name = body.get("map_name", "")
+            x    = float(body.get("x",   0.0))
+            y    = float(body.get("y",   0.0))
+            yaw  = float(body.get("yaw", 0.0))
+            if not map_name:
+                return JSONResponse({"success": False, "message": "map_name required"}, status_code=400)
+            map_dir  = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
+            pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+            if not os.path.isfile(pcd_path):
+                return JSONResponse({"success": False, "message": f"Map not found: {pcd_path}"}, status_code=404)
+            _ros_env = (
+                "source /opt/ros/humble/setup.bash && "
+                "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+                "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+            )
+            try:
+                r = subprocess.run(
+                    ["bash", "-c",
+                     _ros_env +
+                     f"ros2 service call /relocalize interface/srv/Relocalize "
+                     f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
+                     f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""],
+                    capture_output=True, text=True, timeout=30)
+                ok = "success=True" in r.stdout
+                msg = r.stdout[-300:] if not ok else f"Relocalized to {map_name}"
+                return {"success": ok, "message": msg}
             except Exception as e:
                 return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 

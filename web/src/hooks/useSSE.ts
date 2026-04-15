@@ -12,6 +12,7 @@ export type {
   RobotStatusEvent,
   GlobalPathEvent,
   MapCloudEvent,
+  CostmapEvent,
   PathPoint,
   SSEEvent,
   SSEState,
@@ -26,6 +27,7 @@ const INITIAL_STATE: SSEState = {
   robotStatus: null,
   globalPath: null,
   mapCloud: null,
+  costmap: null,
   lastHeartbeat: null,
   connected: false,
   events: [],
@@ -96,6 +98,9 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               case 'map_cloud':
                 next.mapCloud = event as never
+                break
+              case 'costmap':
+                next.costmap = event as never
                 break
               case 'heartbeat':
               case 'ping':

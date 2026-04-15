@@ -66,12 +66,14 @@ class SlamBridgeModule(Module, layer=1):
         cloud_topic: str = "/nav/map_cloud",
         odom_topic: str = "/nav/odometry",
         quality_topic: str = "/localization_quality",
+        registered_cloud_topic: str = "/nav/registered_cloud",
         **kw,
     ):
         super().__init__(**kw)
         self._cloud_topic = cloud_topic
         self._odom_topic = odom_topic
         self._quality_topic = quality_topic
+        self._registered_cloud_topic = registered_cloud_topic
         self._reader = None
         self._rclpy_node = None  # fallback
         self._odom_recv_ts: list = []  # raw receive timestamps for true Hz
@@ -140,6 +142,8 @@ class SlamBridgeModule(Module, layer=1):
             self._reader.on_odometry(self._odom_topic, self._on_dds_odom)
             self._reader.on_pointcloud2(self._cloud_topic, self._on_dds_cloud)
             self._reader.on_float32(self._quality_topic, self._on_dds_quality)
+            # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
+            # for localizer mode (avoids duplicate accumulation when both topics fire)
             logger.info("SlamBridgeModule: using cyclonedds (lightweight)")
             return True
         except ImportError:
@@ -160,6 +164,8 @@ class SlamBridgeModule(Module, layer=1):
             self._rclpy_node = Node("slam_bridge")
             get_shared_executor().add_node(self._rclpy_node)
             self._rclpy_node.create_subscription(PointCloud2, self._cloud_topic, self._on_rclpy_cloud, qos)
+            # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
+            # for localizer mode (avoids duplicate accumulation when both topics fire)
             self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
             # Subscribe to degeneracy metrics if available
             self._subscribe_degeneracy_rclpy(self._rclpy_node, qos)

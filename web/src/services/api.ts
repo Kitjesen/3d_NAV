@@ -85,6 +85,22 @@ export async function saveMap(name: string): Promise<void> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
+export async function fetchSavedMapPoints(name: string): Promise<number[]> {
+  const res = await fetch(`/api/v1/maps/${encodeURIComponent(name)}/points?max_points=30000`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  return data.points as number[]
+}
+
+export async function relocalize(mapName: string, x: number, y: number, yaw: number): Promise<void> {
+  const res = await fetch('/api/v1/slam/relocalize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ map_name: mapName, x, y, yaw }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
 // --- Auth ---
 
 export async function login(key: string): Promise<{ ok: boolean; message?: string }> {

@@ -70,6 +70,14 @@ export interface MapCloudEvent {
   count: number
 }
 
+export interface CostmapEvent {
+  type: 'costmap'
+  grid_b64: string   // base64-encoded uint8 flat array (0=free, 100=occupied)
+  cols: number       // grid is cols×cols cells
+  resolution: number // meters per cell
+  origin: [number, number]  // world [x, y] of bottom-left corner
+}
+
 export type SSEEvent =
   | OdometryEvent
   | MissionStatusEvent
@@ -80,6 +88,7 @@ export type SSEEvent =
   | RobotStatusEvent
   | GlobalPathEvent
   | MapCloudEvent
+  | CostmapEvent
 
 export interface SSEState {
   odometry: OdometryEvent | null
@@ -90,6 +99,7 @@ export interface SSEState {
   robotStatus: RobotStatusEvent | null
   globalPath: GlobalPathEvent | null
   mapCloud: MapCloudEvent | null
+  costmap: CostmapEvent | null
   lastHeartbeat: number | null
   connected: boolean
   events: SSEEvent[]
