@@ -22,7 +22,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text);
 }
@@ -35,7 +35,7 @@
 
 .sectionLabel {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.6px;
   color: var(--text-faint);
@@ -59,7 +59,7 @@
   color: var(--text-dim);
   cursor: pointer;
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   transition: border-color 0.15s, background 0.15s, color 0.15s;
   flex: 1;
@@ -135,7 +135,7 @@
 
 .statLabel {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--text-faint);
@@ -152,7 +152,7 @@
 .statWarn { color: #f59e0b; }
 
 .statMode {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--accent);
 }
 
@@ -175,7 +175,7 @@
   border-radius: var(--radius);
   color: #fff;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.5px;
   cursor: pointer;
@@ -195,6 +195,6 @@
 
 .estopHint {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-faint);
 }

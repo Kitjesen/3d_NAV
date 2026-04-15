@@ -39,7 +39,7 @@
 }
 
 .status {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   padding: 2px 9px;
   border-radius: var(--r-full);
@@ -228,7 +228,7 @@
 }
 
 .statLabel {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -237,7 +237,7 @@
 
 .statValue {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--text);
   letter-spacing: -0.01em;

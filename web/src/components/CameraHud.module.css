@@ -30,7 +30,7 @@
 
 .key {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.8px;
   color: var(--text-faint);
@@ -40,7 +40,7 @@
 
 .val {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text);
   letter-spacing: 0.3px;

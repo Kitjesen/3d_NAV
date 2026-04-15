@@ -17,7 +17,7 @@
 
 .toolbarTitle {
   font-family: 'Noto Sans SC', system-ui, sans-serif;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-dim, #8892a4);
   margin-right: auto;
@@ -25,7 +25,7 @@
 
 .badge {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   padding: 2px 8px;
   border-radius: 10px;
@@ -40,7 +40,7 @@
 
 .btnGhost {
   font-family: 'Noto Sans SC', system-ui, sans-serif;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   color: var(--text-dim, #8892a4);
   background: transparent;
@@ -78,7 +78,7 @@
   bottom: 8px;
   right: 8px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 400;
   color: var(--text-faint, #5a6478);
   pointer-events: none;
@@ -93,7 +93,7 @@
   left: 50%;
   transform: translateX(-50%);
   font-family: 'Noto Sans SC', system-ui, sans-serif;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-faint, #5a6478);
   pointer-events: none;
   white-space: nowrap;
@@ -113,7 +113,7 @@
 
 .statLabel {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 400;
   color: var(--text-faint, #5a6478);
   text-transform: uppercase;
@@ -122,7 +122,7 @@
 
 .statValue {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: #00ff88;
 }

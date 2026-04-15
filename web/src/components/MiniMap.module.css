@@ -21,7 +21,7 @@
 }
 
 .label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.8px;
   text-transform: uppercase;
@@ -30,7 +30,7 @@
 
 .sub {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-faint);
 }
 
@@ -53,7 +53,7 @@
   align-items: center;
   justify-content: center;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-faint);
   pointer-events: none;
 }

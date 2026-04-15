@@ -88,7 +88,7 @@
 }
 
 .title {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.015em;
   color: var(--text);
@@ -124,7 +124,7 @@
 .body {
   margin-top: 16px;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.55;
   letter-spacing: -0.005em;
 }
@@ -142,7 +142,7 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   color: var(--text);
-  font-size: 14px;
+  font-size: 15px;
   font-family: var(--font-mono);
   letter-spacing: -0.005em;
   outline: none;
@@ -162,7 +162,7 @@
 
 .error {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: #FCA5A5;
   letter-spacing: -0.005em;
 }
@@ -178,7 +178,7 @@
   padding: 10px 18px;
   border-radius: 10px;
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.005em;
   cursor: pointer;

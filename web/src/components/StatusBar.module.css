@@ -28,7 +28,7 @@
 }
 
 .label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-faint);
   text-transform: uppercase;
@@ -37,7 +37,7 @@
 
 .value {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text);
   font-variant-numeric: tabular-nums;
@@ -46,7 +46,7 @@
 
 .sep {
   color: var(--text-mute);
-  font-size: 11px;
+  font-size: 12px;
   flex-shrink: 0;
   user-select: none;
 }
@@ -56,7 +56,7 @@
 
 .estop {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.8px;
   color: var(--red);

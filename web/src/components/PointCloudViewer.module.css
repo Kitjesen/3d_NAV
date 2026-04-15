@@ -21,7 +21,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -29,7 +29,7 @@
 
 .mapLabel {
   flex: 1;
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--font-mono);
   color: var(--accent);
   overflow: hidden;
@@ -38,7 +38,7 @@
 }
 
 .info {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
   white-space: nowrap;
 }
@@ -56,7 +56,7 @@
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 11px;
   font-family: inherit;
 }
 
@@ -86,7 +86,7 @@
 .hint {
   flex-shrink: 0;
   padding: 5px 14px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-faint);
   border-top: 1px solid var(--border);
   background: var(--bg2);
@@ -107,14 +107,14 @@
   align-items: center;
   justify-content: center;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 13px;
   text-align: center;
   padding: 24px;
   line-height: 1.6;
 }
 
 .placeholder small {
-  font-size: 10px;
+  font-size: 11px;
   opacity: 0.6;
 }
 
