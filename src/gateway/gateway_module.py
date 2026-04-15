@@ -1635,7 +1635,26 @@ class GatewayModule(Module, layer=6):
         )
         if _os.path.isdir(_web_dist):
             from starlette.staticfiles import StaticFiles
-            app.mount("/", StaticFiles(directory=_web_dist, html=True), name="dashboard")
+            from starlette.middleware import Middleware
+            from starlette.types import ASGIApp, Receive, Scope, Send
+
+            # Prevent browser from caching index.html (hashed assets are fine)
+            _inner_app = StaticFiles(directory=_web_dist, html=True)
+
+            async def _no_cache_html(scope: Scope, receive: Receive, send: Send) -> None:
+                async def _send_with_headers(message: dict) -> None:
+                    if message.get("type") == "http.response.start":
+                        headers = dict(message.get("headers", []))
+                        # Only add no-cache for HTML (index.html), not hashed assets
+                        path = scope.get("path", "")
+                        if not path.startswith("/assets/"):
+                            raw = list(message.get("headers", []))
+                            raw.append((b"cache-control", b"no-cache, no-store, must-revalidate"))
+                            message = {**message, "headers": raw}
+                    await send(message)
+                await _inner_app(scope, receive, _send_with_headers)
+
+            app.mount("/", _no_cache_html, name="dashboard")
             logger.info("Dashboard served from %s", _web_dist)
 
         return app
