@@ -109,7 +109,7 @@
   --t-overline-size:    11px;
   --t-overline-weight:  700;
   --t-overline-color:   var(--text-faint);
-  --t-overline-track:   0.08em;
+  --t-overline-track:   0.09em;
 
   /* caption: hints, timestamps, footnotes — smallest, dimmest */
   --t-caption-size:     11px;
@@ -118,7 +118,7 @@
   --t-caption-track:    0;
 
   /* label: secondary interactive labels (tabs, chips) */
-  --t-label-size:       12.5px;
+  --t-label-size:       13px;
   --t-label-weight:     500;
   --t-label-color:      var(--text-dim);
   --t-label-track:      0.01em;
@@ -130,28 +130,28 @@
   --t-body-track:       -0.006em;
 
   /* body-em: emphasized body / active states */
-  --t-body-em-size:     14px;
+  --t-body-em-size:     15px;
   --t-body-em-weight:   600;
   --t-body-em-color:    var(--text);
-  --t-body-em-track:    -0.008em;
+  --t-body-em-track:    -0.01em;
 
-  /* value: monospace numeric/data — data is always brightest */
-  --t-value-size:       14px;
-  --t-value-weight:     500;
+  /* value: monospace numeric/data — bigger than body, always brightest */
+  --t-value-size:       16px;
+  --t-value-weight:     600;
   --t-value-color:      var(--text);
-  --t-value-track:      -0.01em;
+  --t-value-track:      -0.015em;
 
-  /* value-lg: large stat display numbers (SLAM panel) */
-  --t-value-lg-size:    20px;
-  --t-value-lg-weight:  600;
+  /* value-lg: large stat display numbers (SLAM panel / GPS card) */
+  --t-value-lg-size:    26px;
+  --t-value-lg-weight:  700;
   --t-value-lg-color:   var(--text);
-  --t-value-lg-track:   -0.02em;
+  --t-value-lg-track:   -0.025em;
 
   /* title: panel/section headers */
-  --t-title-size:       15px;
-  --t-title-weight:     600;
+  --t-title-size:       17px;
+  --t-title-weight:     700;
   --t-title-color:      var(--text);
-  --t-title-track:      -0.015em;
+  --t-title-track:      -0.02em;
 
   /* ── Motion ── */
   --ease-out:    cubic-bezier(0.2, 0.8, 0.2, 1);
