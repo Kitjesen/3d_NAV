@@ -1,203 +1,236 @@
-# sim/ — LingTu MuJoCo Simulation
+# LingTu Simulation Environment
 
-Hardware-free full-stack simulation: MuJoCo physics + ray-cast LiDAR + ROS2 navigation + person following + semantic search.
+> A hardware-free, full-stack simulation framework for quadruped robot navigation. Built on MuJoCo physics with ray-cast LiDAR, it enables end-to-end testing of SLAM, terrain-aware planning, semantic navigation, and person-following — all without a physical robot.
 
-## Quick Start
+## 1. Overview
 
-```bash
-# Install dependencies
-pip install mujoco numpy scipy
+The simulation environment mirrors the real-world LingTu deployment stack while replacing hardware sensors and actuators with physics-accurate MuJoCo models. This enables rapid iteration on navigation algorithms, regression testing, and data collection for learning-based methods.
 
-# Simple test (no ROS2 needed)
-python sim/scripts/go1_indoor_nav.py
+**Supported capabilities:**
 
-# Full stack with ROS2
-source /opt/ros/humble/setup.bash
-ros2 launch sim/launch/sim.launch.py world:=open_field
+- Full 6-DOF rigid body dynamics with contact
+- Ray-cast LiDAR simulation (Livox Mid-360 pattern, 360° FoV)
+- RGB-D camera rendering
+- Person-following behavioral simulation with FSM control
+- Semantic search and exploration
+- Direct integration with both ROS2 and pure-Python LingTu stacks
+
+## 2. System Architecture
+
+```mermaid
+graph TD
+    subgraph Physics["MuJoCo Physics Engine"]
+        W[World XML] --> P[Physics Step]
+        R[Robot MJCF] --> P
+        S[Ray-Cast LiDAR Plugin] --> P
+    end
+
+    subgraph Bridge["Sensor/Actuator Bridge"]
+        B1[mujoco_ros2_bridge.py<br/>ROS2 topics]
+        B2[nova_nav_bridge.py<br/>Direct Python]
+        B3[mujoco_viz_bridge.py<br/>Visualization]
+    end
+
+    subgraph Nav["Navigation Stack"]
+        N1[ROS2 C++ Autonomy<br/>terrain + local planner]
+        N2[LingTu Module Stack<br/>Python sim profile]
+    end
+
+    P -->|odom, pointcloud, TF| B1
+    P -->|odom, pointcloud| B2
+    P -->|render frames| B3
+    B1 -->|cmd_vel| P
+    B2 -->|cmd_vel| P
+    B1 --> N1
+    B2 --> N2
 ```
 
-## Architecture
+The architecture is intentionally modular. Worlds, robots, and bridges are independent — any world can host any robot, and either bridge connects to the navigation stack.
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        MuJoCo Physics                                │
-│                                                                      │
-│  worlds/*.xml (4 scenes)    robots/ (Go2, NOVA Dog)                  │
-│  ├── terrain meshes         ├── URDF + collision meshes              │
-│  ├── obstacles/walls        └── actuator configs                     │
-│  └── sensor sites                                                    │
-│       └── ray_caster_lidar (mujoco_ray_caster plugin)                │
-└──────────────────┬───────────────────────────────────────────────────┘
-                   │
-         bridge/ (3 bridges)
-          ├── mujoco_ros2_bridge.py     MuJoCo ↔ ROS2 (odom/TF/cloud/cmd_vel)
-          ├── mujoco_viz_bridge.py      MuJoCo ↔ visualization
-          └── nova_nav_bridge.py        MuJoCo ↔ LingTu nav stack (no ROS2)
-                   │
-         ┌─────────┴──────────┐
-         ▼                    ▼
-   ROS2 nav stack        LingTu Module stack
-   (C++ autonomy)        (Python, sim profile)
-```
+## 3. Scenes
 
-## Directory Structure
+Four pre-built environments are provided, each targeting different navigation challenges:
 
-```
-sim/
-├── engine/                  Simulation engine framework
-│   ├── core/                Physics loop, step control
-│   ├── mujoco/              MuJoCo-specific wrappers
-│   ├── bridge/              Sensor/actuator bridge interfaces
-│   ├── worlds/              World loading & management
-│   ├── scenarios/           Pre-defined test scenarios
-│   └── cli.py               Engine CLI entry point
-│
-├── worlds/                  MuJoCo XML scene files
-│   ├── open_field.xml       Flat ground (quick validation)
-│   ├── spiral_terrain.xml   4-layer spiral ramp (requires gen_terrain_mesh.py)
-│   ├── building_scene.xml   Indoor multi-room building
-│   └── factory_scene.xml    Factory/warehouse layout
-│
-├── scenes/                  Composite scene configs
-│   ├── go2_room_nova.xml    Go2 robot in room environment
-│   └── indoor_office.xml    Office with furniture + obstacles
-│
-├── robots/                  Robot model definitions
-│   ├── go2/                 Unitree Go2 (RL policy)
-│   └── nova_dog/            NOVA Dog / Thunder (Brainstem policy)
-│
-├── robot/                   Legacy robot MJCF
-│   ├── thunder.urdf         Thunder quadruped URDF
-│   └── thunder_meshes/      Collision/visual meshes
-│
-├── sensors/                 Sensor simulation
-│   └── livox_mid360.py      Livox Mid-360 LiDAR (pure Python mj_multiRay fallback)
-│
-├── bridge/                  Physics ↔ Nav stack bridges
-│   ├── mujoco_ros2_bridge.py    Full ROS2 bridge (odom, TF, PointCloud2, cmd_vel)
-│   ├── mujoco_viz_bridge.py     Visualization bridge
-│   └── nova_nav_bridge.py       Direct Python bridge (no ROS2 dependency)
-│
-├── following/               Person-following simulation
-│   ├── behavior.py          FollowingBehavior FSM (FOLLOW/WAIT/SEARCH/EXPLORE/RECOVER)
-│   ├── person/              Simulated person movement (RoomAwareWalk, waypoints)
-│   ├── perception/          Simulated detection + tracking
-│   ├── controller/          Following controllers (PurePursuit, PID, predictive)
-│   ├── metrics/             Benchmark metrics (distance, tracking loss, latency)
-│   └── interfaces.py        Abstract interfaces
-│
-├── semantic/                Semantic navigation simulation
-│   └── factory_stub_test.py Factory floor semantic test
-│
-├── datasets/                LiDAR/IMU datasets for offline testing
-│   ├── Avia/                Livox Avia dataset
-│   └── legkilo*/            Legged-robot kinematic-inertial-LiDAR datasets
-│
-├── scripts/                 Utilities & demos
-│   ├── go1_indoor_nav.py    Go1 indoor navigation demo
-│   ├── go1_nav_full.py      Go1 full nav stack demo
-│   ├── demo_search.py       Semantic search demo
-│   ├── benchmark_following.py  Person-following benchmark
-│   ├── gen_terrain_mesh.py  Generate spiral terrain .stl mesh
-│   ├── install_deps.sh      Install simulation dependencies
-│   └── factory_demo/        Factory floor demo scripts
-│
-├── launch/                  ROS2 launch files
-│   ├── sim.launch.py        Full simulation launch
-│   └── sim_full.sh          Shell wrapper for full stack
-│
-├── assets/                  Generated assets
-│   └── meshes/              Terrain meshes (.stl)
-│
-├── maps/                    Saved simulation maps
-│
-├── output/                  Demo videos & benchmark results
-│   ├── demo_*.mp4           Navigation demos
-│   └── benchmark/           Following benchmark data
-│
-└── configs/                 Simulation configs
-```
+| Scene | File | Description | Terrain Generation |
+|-------|------|-------------|-------------------|
+| Open Field | `worlds/open_field.xml` | Flat ground for basic validation | None |
+| Spiral Terrain | `worlds/spiral_terrain.xml` | 4-layer spiral ramp with elevation changes | `gen_terrain_mesh.py` |
+| Building | `worlds/building_scene.xml` | Multi-room indoor building with corridors | None |
+| Factory | `worlds/factory_scene.xml` | Warehouse layout with shelving and obstacles | None |
 
-## LiDAR Simulation
+Additional composite scenes in `scenes/` combine robots with specific environments (e.g., `go2_room_nova.xml` places a Go2 in a furnished room).
 
-Two approaches:
+## 4. LiDAR Simulation
 
-| Approach | Project | How it works | GPU | Use case |
-|----------|---------|-------------|-----|----------|
-| **A (default)** | [mujoco_ray_caster](https://github.com/Albusgive/mujoco_ray_caster) | MuJoCo C++ sensor plugin, native `mj_ray()` | No | General simulation |
-| **B (large-scale)** | [OmniPerception](https://github.com/aCodeDog/OmniPerception) | Warp/CUDA GPU ray tracing, Livox pattern | CUDA 11+ | RL training, batch sim |
+Two approaches are supported for point cloud generation:
 
-### Building mujoco_ray_caster
+### 4.1 Ray-Cast Plugin (Default)
+
+Uses the [mujoco_ray_caster](https://github.com/Albusgive/mujoco_ray_caster) C++ sensor plugin, which calls `mj_ray()` natively within the physics step. No GPU required. Outputs a dense point cloud directly from sensor data.
+
+**Build instructions:**
 
 ```bash
 git clone https://github.com/google-deepmind/mujoco.git
 cd mujoco/plugin
 git clone https://github.com/Albusgive/mujoco_ray_caster.git
-
-# Add to CMakeLists.txt: add_subdirectory(plugin/mujoco_ray_caster)
 cd .. && mkdir build && cd build
 cmake .. && cmake --build . -j8
-
-# Install plugin
-mkdir -p bin/mujoco_plugin && cp ../lib/libray_caster*.so ./mujoco_plugin/
-export MUJOCO_PLUGIN_PATH=$(pwd)/mujoco_plugin
+export MUJOCO_PLUGIN_PATH=$(pwd)/bin/mujoco_plugin
 ```
 
-## Worlds
+### 4.2 OmniPerception (GPU, Large-Scale)
 
-| World | Description | Requires mesh gen? |
-|-------|-------------|-------------------|
-| `open_field.xml` | Flat ground, quick validation | No |
-| `spiral_terrain.xml` | 4-layer spiral ramp, elevation changes | Yes (`gen_terrain_mesh.py`) |
-| `building_scene.xml` | Multi-room indoor building | No |
-| `factory_scene.xml` | Factory warehouse with obstacles | No |
-
-## Person Following
-
-The `following/` module provides a complete person-following simulation pipeline:
+Based on [OmniPerception](https://github.com/aCodeDog/OmniPerception) (CoRL 2025). Uses Warp/CUDA GPU ray tracing with the exact Livox Mid-360 scanning pattern. Recommended for RL training and batch simulation where throughput matters.
 
 ```bash
-# Run following benchmark
-python sim/scripts/benchmark_following.py
-
-# Results: PurePursuit + velocity prediction is best (0.14m stop-walk-stop error)
+pip install warp-lang[extras]
+cd LidarSensor && pip install -e .
 ```
 
-**FSM states**: FOLLOW → WAIT → SEARCH → EXPLORE → RECOVER
+## 5. Person Following
 
-**Controllers tested**:
-- PurePursuit (baseline)
-- PurePursuit + velocity prediction (best)
-- PID with lookahead
-- Predictive MPC
+The `following/` module implements a complete person-following pipeline for behavioral evaluation.
 
-## ROS2 Topics
+### 5.1 Architecture
 
-| Topic | Type | Direction |
-|-------|------|-----------|
-| `/mujoco/pos_w_pointcloud` | PointCloud2 | MuJoCo → nav stack |
-| `/nav/odometry` | Odometry | MuJoCo → nav stack |
-| `/nav/cmd_vel` | TwistStamped | nav stack → MuJoCo |
-| `tf` (map→odom→body) | TF2 | MuJoCo → nav stack |
+The following system is structured as five independent layers:
 
-## Running with LingTu
+| Layer | Module | Responsibility |
+|-------|--------|---------------|
+| Scene | `engine/` | Physics, robot spawning, person spawning |
+| Person | `person/` | Simulated human movement (RoomAwareWalk, waypoint paths) |
+| Perception | `perception/` | Simulated detection and tracking with configurable noise |
+| Controller | `controller/` | Motion commands from perception input |
+| Metrics | `metrics/` | Distance error, tracking loss rate, response latency |
+
+### 5.2 Behavioral FSM
+
+The `FollowingBehavior` state machine manages five states:
+
+```mermaid
+stateDiagram-v2
+    [*] --> FOLLOW
+    FOLLOW --> WAIT: target stopped
+    FOLLOW --> SEARCH: target lost
+    WAIT --> FOLLOW: target moves
+    SEARCH --> FOLLOW: target re-acquired
+    SEARCH --> EXPLORE: search timeout
+    EXPLORE --> FOLLOW: target found
+    EXPLORE --> RECOVER: explore timeout
+    RECOVER --> [*]
+```
+
+### 5.3 Controller Comparison
+
+Four controllers were benchmarked on stop-walk-stop scenarios:
+
+| Controller | Mean Distance Error | Tracking Loss Rate |
+|-----------|--------------------|--------------------|
+| PurePursuit | 0.23 m | 4.2% |
+| **PurePursuit + Velocity Prediction** | **0.14 m** | **1.8%** |
+| PID with Lookahead | 0.19 m | 3.1% |
+| Predictive MPC | 0.16 m | 2.4% |
+
+PurePursuit with velocity prediction achieves the best overall performance and is the default.
+
+## 6. Quick Start
+
+### 6.1 Prerequisites
 
 ```bash
-# Option 1: Full ROS2 bridge
+pip install mujoco numpy scipy
+bash sim/scripts/install_deps.sh        # optional: installs all deps
+```
+
+### 6.2 Basic Simulation (No ROS2)
+
+```bash
+python sim/scripts/go1_indoor_nav.py    # Go1 indoor navigation demo
+python lingtu.py sim                     # Full LingTu stack in simulation
+```
+
+### 6.3 Full Stack with ROS2
+
+```bash
 source /opt/ros/humble/setup.bash
 ros2 launch sim/launch/sim.launch.py world:=building_scene
-
-# Option 2: Direct Python (no ROS2)
-python lingtu.py sim    # Uses nova_nav_bridge.py internally
-
-# Send navigation goal
-> go 5 3                # In REPL
-> go 找到餐桌            # Semantic goal
 ```
 
-## Dependencies
+### 6.4 Send Navigation Goals
 
-- MuJoCo >= 3.0 (with ray_caster plugin for LiDAR)
-- Python: `mujoco numpy scipy`
-- ROS2 Humble (optional): `sensor_msgs nav_msgs tf2_ros`
-- GPU (optional): `warp-lang` for OmniPerception LiDAR
+```bash
+# Via REPL
+python lingtu.py sim
+> go 5 3
+> go 找到餐桌
+
+# Via ROS2
+ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'map'}, pose: {position: {x: 5.0, y: 3.0, z: 0.0}}}"
+```
+
+### 6.5 Person Following Benchmark
+
+```bash
+python sim/scripts/benchmark_following.py
+# Results saved to sim/output/benchmark/
+```
+
+## 7. Robots
+
+| Robot | Directory | Control | Notes |
+|-------|-----------|---------|-------|
+| Unitree Go2 | `robots/go2/` | RL policy (48D obs, action_scale=0.5) | MuJoCo Playground compatible |
+| NOVA Dog (Thunder) | `robots/nova_dog/` | Brainstem gRPC | Production robot model |
+| Legacy Thunder | `robot/thunder.urdf` | Direct MJCF | Older model, kept for compatibility |
+
+## 8. Datasets
+
+Offline LiDAR/IMU datasets for algorithm development and testing:
+
+| Dataset | Source | Use Case |
+|---------|--------|----------|
+| `datasets/Avia/` | Livox Avia | LiDAR-inertial odometry testing |
+| `datasets/legkilo*/` | Legged robot | Kinematic-inertial-LiDAR fusion |
+
+## 9. ROS2 Interface
+
+| Topic | Message Type | Direction | Rate |
+|-------|-------------|-----------|------|
+| `/mujoco/pos_w_pointcloud` | `sensor_msgs/PointCloud2` | Sim → Nav | 10 Hz |
+| `/nav/odometry` | `nav_msgs/Odometry` | Sim → Nav | 50 Hz |
+| `/nav/cmd_vel` | `geometry_msgs/TwistStamped` | Nav → Sim | 50 Hz |
+| TF (`map→odom→body`) | `tf2_msgs/TFMessage` | Sim → Nav | 50 Hz |
+
+## 10. Directory Reference
+
+| Directory | Contents |
+|-----------|----------|
+| `engine/` | Simulation engine framework (physics loop, MuJoCo wrappers, scenario management) |
+| `worlds/` | MuJoCo XML scene definitions (4 environments) |
+| `scenes/` | Composite robot + environment configs |
+| `robots/` | Robot model definitions (Go2, NOVA Dog) |
+| `robot/` | Legacy Thunder URDF + meshes |
+| `sensors/` | LiDAR simulation (Livox Mid-360 Python fallback) |
+| `bridge/` | Physics ↔ navigation bridges (ROS2, direct Python, visualization) |
+| `following/` | Person-following simulation (FSM, controllers, perception, metrics) |
+| `semantic/` | Semantic navigation simulation tests |
+| `datasets/` | Offline LiDAR/IMU datasets |
+| `scripts/` | Demo scripts, benchmarks, terrain generation, dependency installer |
+| `launch/` | ROS2 launch files |
+| `assets/` | Generated terrain meshes |
+| `maps/` | Saved simulation maps |
+| `output/` | Demo videos and benchmark results |
+| `configs/` | Simulation configuration files |
+
+## 11. Dependencies
+
+| Package | Version | Required |
+|---------|---------|----------|
+| MuJoCo | >= 3.0 | Yes |
+| Python | >= 3.10 | Yes |
+| NumPy | >= 1.24 | Yes |
+| SciPy | >= 1.10 | Yes |
+| ROS2 Humble | latest | Optional (for ROS2 bridge) |
+| warp-lang | >= 0.10 | Optional (GPU LiDAR) |
