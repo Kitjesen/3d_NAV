@@ -391,7 +391,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
       costmapMeshRef.current = null
     }
 
-    if (!costmap) return
+    if (!costmap || !layers.costmap) return
 
     const { grid_b64, cols, resolution, origin } = costmap
     const bytes = Uint8Array.from(atob(grid_b64), c => c.charCodeAt(0))
@@ -407,7 +407,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const val  = bytes[(rows - 1 - r) * cols + c]  // flip Y to match Three.js UV
+        const val  = bytes[r * cols + c]  // no manual flip — CanvasTexture.flipY handles it
         const o    = (r * cols + c) * 4
         if (val === 0) {
           // free space → fully transparent
@@ -449,7 +449,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     )
     scene.add(mesh)
     costmapMeshRef.current = mesh
-  }, [costmap])
+  }, [costmap, layers.costmap])
 
   // ── Costmap visibility toggle ──────────────────────────────────
   useEffect(() => {
@@ -484,7 +484,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const raw = bytes[(rows - 1 - r) * cols + c]
+        const raw = bytes[r * cols + c]  // no manual flip — CanvasTexture.flipY handles it
         const deg = raw * (90.0 / 255.0)
         const o = (r * cols + c) * 4
         if (deg < 3) {
