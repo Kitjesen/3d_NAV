@@ -149,25 +149,12 @@ export function Landing() {
             </a>
           </div>
 
-          {/* Decorative quadruped silhouette via SVG */}
-          <svg
+          <img
+            src="/s100p.png"
             className={styles.heroVisual}
-            viewBox="0 0 320 220"
-            fill="currentColor"
-            aria-hidden="true"
-            focusable="false"
-          >
-            {/* Simplified quadruped silhouette */}
-            <rect x="80" y="70" width="160" height="60" rx="20" />
-            <rect x="60" y="55" width="50" height="35" rx="10" />
-            {/* Legs */}
-            <rect x="88" y="126" width="20" height="60" rx="8" />
-            <rect x="118" y="126" width="20" height="60" rx="8" />
-            <rect x="178" y="126" width="20" height="60" rx="8" />
-            <rect x="208" y="126" width="20" height="60" rx="8" />
-            {/* Tail stub */}
-            <rect x="232" y="78" width="40" height="14" rx="7" />
-          </svg>
+            alt="地瓜机器人 RDK S100P — 128 TOPS Nash BPU"
+            draggable="false"
+          />
 
           <div className={styles.heroSweep} aria-hidden="true" />
         </section>

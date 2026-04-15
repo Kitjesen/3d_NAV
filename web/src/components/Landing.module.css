@@ -378,18 +378,21 @@
 /* Robot silhouette decorative element */
 .heroVisual {
   position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 320px;
-  height: 220px;
+  bottom: -20px;
+  right: max(4vw, 40px);
+  width: 420px;
+  height: auto;
   pointer-events: none;
-  opacity: 0.06;
+  opacity: 0.55;
+  mix-blend-mode: lighten;
+  filter: drop-shadow(0 0 40px rgba(99, 102, 241, 0.3));
   animation: fadeUp 1.2s var(--lt-ease-spring) 0.6s both;
 }
 
 :global(html[data-theme="light"]) .heroVisual {
-  opacity: 0.04;
+  mix-blend-mode: multiply;
+  opacity: 0.7;
+  filter: none;
 }
 
 /* ── Section base ── */
