@@ -1,246 +1,374 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="MapPilot Logo" width="480" />
+  <img src="docs/assets/logo.png" alt="LingTu" width="480" />
 </p>
 
-# MapPilot (灵途)
+<h1 align="center">LingTu (灵途)</h1>
 
-[![ROS2](https://img.shields.io/badge/ROS2-Humble-blue)](https://docs.ros.org/en/humble/)
-[![Platform](https://img.shields.io/badge/Platform-Jetson_Orin_NX_16GB-green)](https://developer.nvidia.com/embedded/jetson-orin)
-[![License](https://img.shields.io/badge/License-MIT-lightgrey)](LICENSE)
+<p align="center">
+  <strong>Autonomous navigation for quadruped robots in real-world environments</strong>
+</p>
 
-Autonomous navigation system for quadruped robots in outdoor and off-road environments. Runs on ROS 2 Humble. Supports SLAM-based mapping, terrain-aware path planning, and semantic navigation via natural language instructions.
+<p align="center">
+  <a href="https://docs.ros.org/en/humble/"><img src="https://img.shields.io/badge/ROS2-Humble-blue" alt="ROS2" /></a>
+  <a href="#platform"><img src="https://img.shields.io/badge/Platform-S100P_(RDK_X5)-green" alt="Platform" /></a>
+  <img src="https://img.shields.io/badge/Tests-1263_passed-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Version-2.2.0-orange" alt="Version" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-lightgrey" alt="License" /></a>
+</p>
 
 ---
 
-## Hardware
+## What is LingTu?
 
-| Component | Specification | Required |
-|-----------|--------------|----------|
-| LiDAR | Livox MID-360 | Yes |
-| RGB-D Camera | Orbbec Gemini 330 | No |
-| Compute | Jetson Orin NX 16GB | Recommended |
-| OS | Ubuntu 22.04 | Yes |
+LingTu is a full-stack autonomous navigation system that runs on quadruped robots. It handles everything from LiDAR SLAM and terrain analysis to semantic navigation ("go to the kitchen") and remote control via a web dashboard.
 
-Dual-board architecture: Nav Board runs navigation software (SLAM, planning, perception, gRPC); Dog Board runs the motion control RL policy and motor drivers. They communicate over Ethernet — Nav Board sends velocity commands, Dog Board executes them.
+**Key capabilities:**
+- **SLAM** — Fast-LIO2 mapping + ICP localization against pre-built maps
+- **Terrain-aware planning** — PCT planner + A* with traversability scoring
+- **Semantic navigation** — Natural language goals via LLM (Kimi/Qwen/OpenAI/Claude)
+- **Web Dashboard** — Real-time camera, telemetry, map management, joystick teleop
+- **MCP Server** — AI agent control interface (16 tools for LLM-based task execution)
+- **Camera auto-recovery** — 3-level watchdog (rclpy → systemd → USB reset)
 
-## Build
+## Platform
+
+| Component | Specification |
+|-----------|--------------|
+| Compute | S100P (RDK X5, Nash BPU 128 TOPS, aarch64) |
+| LiDAR | Livox MID-360 |
+| RGB-D Camera | Orbbec Gemini 335 |
+| OS | Ubuntu 22.04 + ROS2 Humble |
+| Motion Control | Brainstem (gRPC :13145) |
+
+Dual-board architecture: **Nav Board** (S100P) runs LingTu; **Dog Board** runs Brainstem motor control. Connected via Ethernet.
+
+## Quick Start
+
+### Framework tests (no hardware needed)
 
 ```bash
-source /opt/ros/humble/setup.bash
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
-source install/setup.bash
+python -m pytest src/core/tests/ -q    # 1263 tests, ~5s
 ```
 
-Full build including OTA daemon and PCT planner C++ core:
+### Run on robot
 
 ```bash
-./build_all.sh
-```
+# Interactive profile picker
+python lingtu.py
 
-## CLI — `python lingtu.py`
+# Common profiles
+python lingtu.py stub                   # no hardware, framework testing
+python lingtu.py dev                    # semantic pipeline, no C++ nodes
+python lingtu.py sim                    # MuJoCo simulation (full stack)
+python lingtu.py map                    # SLAM mapping mode
+python lingtu.py nav                    # navigate using a saved map
+python lingtu.py explore                # exploration, no pre-built map
 
-Single entry point for launching profiles and inspecting running instances.
-
-```bash
-python lingtu.py                     # interactive profile picker
-python lingtu.py --list              # list available profiles
-python lingtu.py --version           # print version and exit
-python lingtu.py stub                # no hardware, framework testing
-python lingtu.py dev                 # semantic pipeline, no C++ nodes
-python lingtu.py sim                 # MuJoCo simulation
-python lingtu.py map                 # SLAM mapping mode
-python lingtu.py nav                 # navigate using a saved map
-python lingtu.py explore             # exploration, no pre-built map
-python lingtu.py nav --llm mock      # override any profile flag
-python lingtu.py nav --daemon        # background daemon (Unix)
+# Override flags
+python lingtu.py nav --llm mock         # real robot but mock LLM
+python lingtu.py nav --daemon           # background daemon (systemd)
 ```
 
 ### Lifecycle commands
 
 ```bash
-python lingtu.py status              # running instance status
-python lingtu.py status --json       # machine-readable (pipe into jq)
-python lingtu.py log                 # print the current run log
-python lingtu.py log -f              # follow (tail -f)
-python lingtu.py log --lines 200     # last 200 lines
-python lingtu.py show-config nav     # print resolved config
-python lingtu.py show-config nav --json
-python lingtu.py stop                # graceful stop (SIGTERM)
-python lingtu.py stop --force        # SIGKILL
-python lingtu.py restart             # stop + relaunch with the same argv
-python lingtu.py doctor              # diagnostics
-python lingtu.py rerun               # launch Rerun 3D viewer
-```
-
-`lingtu status` shows PID, host, profile, uptime, module/wire count, log
-location, and live status (`running` / `stopping` / stale). `--json` emits the
-full state dict for scripting.
-
-## Operation Modes
-
-**Mapping** — Drive the robot manually while SLAM builds a map.
-
-```bash
-python lingtu.py map        # recommended
-./mapping.sh                # legacy shell launcher
-./save_map.sh               # save map when done
-```
-
-**Navigation** — Load an existing map and navigate autonomously to a goal.
-
-```bash
-python lingtu.py nav        # recommended
-./planning.sh               # legacy shell launcher
-```
-
-**Exploration** — Navigate in an unknown environment without a pre-built map. Supports natural language goal specification.
-
-```bash
-python lingtu.py explore
-ros2 launch launch/navigation_explore.launch.py target:="找到餐桌"
+python lingtu.py status                 # PID, profile, uptime, module count
+python lingtu.py status --json          # machine-readable
+python lingtu.py log -f                 # follow logs
+python lingtu.py stop                   # graceful stop
+python lingtu.py restart                # stop + relaunch
+python lingtu.py doctor                 # diagnostics
 ```
 
 ## Architecture
 
 ```
-Livox LiDAR --> Fast-LIO2 (SLAM) --> Terrain Analysis --> PCT Planner --> Dog Board
-                      |                                         |
-                 ICP Localizer                          Local Planner
-                      |
-            Orbbec RGB-D Camera
-                      |
-              YOLO-World + CLIP
-                      |
-           ConceptGraphs Scene Graph
-                      |
-         Semantic Planner (Fast-Slow)  <-- Natural language instruction
-                      |
-               gRPC Gateway (50051) --> Flutter Client
+L0  Safety       SafetyRingModule + GeofenceManager + CmdVelMux
+L1  Hardware     Driver + CameraBridge + LiDAR + SLAM
+L2  Maps         OccupancyGrid + ESDF + ElevationMap + Terrain + PathFollower
+L3  Perception   Detector (BPU/YOLOE) + CLIP Encoder + SemanticMapper + Memory
+L4  Decision     SemanticPlanner + LLM + VisualServo + AgentLoop
+L5  Planning     NavigationModule (A*/PCT + WaypointTracker + mission FSM)
+L6  Interface    GatewayModule (HTTP/WS/SSE) + MCPServer + TeleopModule
 ```
 
-**SLAM**: Fast-LIO2 frontend with pose graph optimization (PGO) loop closure. ICP-based relocalization against a saved map.
+High layers → low layers only. All modules use the `core.Module` base class with `In[T]`/`Out[T]` typed ports. Modules are composed via `Blueprint` and factory functions.
 
-**Terrain Analysis**: Point cloud ground estimation, traversability scoring, slope-weighted cost generation.
+### Composable Stack API
 
-**Global Planning**: PCT planner (tomography-based) with A\* search. Catmull-Rom path smoothing. Waypoint tracking with stuck detection and progressive recovery.
+```python
+from core.blueprint import autoconnect
+from core.blueprints.stacks import *
 
-**Semantic Navigation**: Fast path (~0.17 ms) uses keyword and spatial matching against the scene graph. Slow path (~2 s) uses LLM reasoning with ESCA selective grounding. AdaNav entropy trigger escalates from fast to slow when confidence is low. LERa failure recovery handles repeated subgoal failures.
+system = autoconnect(
+    driver("thunder", host="192.168.66.190"),
+    slam("localizer"),
+    maps(),
+    perception("bpu"),
+    memory(),
+    planner("kimi"),
+    navigation("astar"),
+    safety(),
+    gateway(5050),
+).build()
+system.start()
+```
 
-**Remote Monitoring**: gRPC server on port 50051. Flutter client (Android, Windows, iOS) for telemetry, manual control, and OTA updates.
+### Pluggable Backends
 
-## Platform Boundary
+| Module | Backends |
+|--------|----------|
+| Driver | `thunder` (gRPC→Brainstem), `stub`, `sim_mujoco`, `sim_ros2` |
+| SLAM | `fastlio2`, `pointlio`, `localizer` (ICP), `bridge` (external ROS2) |
+| Detector | `yoloe`, `yolo_world`, `bpu` (Nash 128 TOPS), `grounding_dino` |
+| LLM | `kimi`, `openai`, `claude`, `qwen`, `mock` |
+| Planner | `astar` (Python), `pct` (C++ ele_planner.so) |
 
-`lingtu` is the robot autonomy provider for the NOVA Dog platform. It owns:
+All backends registered via `@register("category", "name")`. Zero if/else.
 
-- ROS2 navigation and localization
-- semantic perception and scene graph construction
-- provider-side task execution
-- provider-side gRPC telemetry and data streams
+## Web Dashboard
 
-`lingtu` is not the operator-facing runtime and should not be treated as the
-top-level product control plane.
+Frosted-glass UI served at `http://<robot>:5050`. Access via SSH tunnel:
 
-For the product boundary:
+```bash
+ssh -L 5050:localhost:5050 sunrise@192.168.66.190
+# Then open http://localhost:5050
+```
 
-- `nav` wraps `lingtu` navigation as a product service
-- `sense` wraps `lingtu` perception outputs as product-readable scene truth
-- `voice` and `askme` stay on the operator interaction side
-- `arbiter`, `safety`, and `control` own mission, safety, and actuation policy
+### Tabs
 
-See
-[`products/nova-dog/runtime/docs/ASKME_LINGTU_DECOUPLING.md`](/D:/inovxio/products/nova-dog/runtime/docs/ASKME_LINGTU_DECOUPLING.md)
-for the cross-project decoupling design.
+| Tab | Description |
+|-----|-------------|
+| **Console** | Camera live feed + GPS globe + MiniMap + AI chat — all draggable/resizable widgets |
+| **Scene** | RViz-style 2D/3D view — click to send nav goals, layer toggles, map management |
+| **Map** | 3D point cloud viewer + map CRUD (save/activate/rename/delete) |
+| **SLAM** | Switch between mapping (fastlio2) and localization (localizer) modes |
+
+### Features
+
+- **Floating Widgets** — Drag, resize, z-order. Layout persisted to localStorage
+- **Camera HUD** — SLAM Hz, speed, battery, temperature, latency overlay
+- **`/` Command autocomplete** — Type `/` for Claude-Code-style command dropdown
+- **Quick commands** — One-click chips: 停止, 状态, 去充电站, 回原点
+- **Brand Modals** — Glassmorphism dialogs replace native prompt/confirm
+- **Camera auto-rotate** — Backend `cv2.rotate()` compensates for sideways mounting
+
+### Tech
+
+React 19 + TypeScript + Vite 8 + CSS Modules. WebGL point cloud rendering. Canvas 2D maps. Zero runtime CSS libraries. 18 components, ~80KB CSS, ~290KB JS (gzipped ~90KB).
+
+## REPL Commands
+
+```
+go/navigate <target>     Navigate to coordinate or semantic target
+stop / cancel            Emergency stop / cancel navigation
+status                   System status
+map list|save|use|delete Map management
+smap status|rooms|query  Semantic map
+agent <instruction>      Multi-step LLM agent
+teleop status|release    Remote control
+health                   Module health
+watch <port>             Live port monitor
+```
+
+## MCP Server (AI Agent Control)
+
+16 tools exposed via JSON-RPC at `http://<robot>:8090/mcp`:
+
+| Category | Tools |
+|----------|-------|
+| Navigation | `navigate_to`, `navigate_to_object`, `stop`, `get_navigation_status` |
+| Perception | `get_scene_graph`, `detect_objects`, `get_robot_position` |
+| Memory | `query_memory`, `query_location`, `list_tagged_locations`, `tag_location` |
+| Planning | `send_instruction`, `decompose_task` |
+| System | `get_health`, `list_modules`, `get_config` |
+
+```bash
+# Connect Claude Code to the robot
+claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
+```
+
+## Semantic Navigation
+
+### 5-Level Goal Resolution
+
+```
+Instruction: "去上次放背包的地方"
+  ↓
+1. Tag Lookup     — exact/fuzzy match in TaggedLocationStore     → goal_pose
+2. Fast Path      — scene graph keyword + CLIP matching (<200ms) → goal_pose
+3. Vector Memory  — CLIP embedding search in ChromaDB            → goal_pose
+4. Frontier       — topology graph exploration                   → goal_pose
+5. Visual Servo   — VLM bbox detection + PD tracking             → cmd_vel
+```
+
+### Fast-Slow Dual Process
+
+- **Fast Path** (System 1, ~0.17ms): Direct scene graph matching
+- **Slow Path** (System 2, ~2s): LLM reasoning with ESCA selective grounding
+
+### Multi-Turn Agent Loop
+
+`agent <instruction>` triggers observe→think→act with 7 LLM tools. Max 10 steps / 120s timeout.
+
+## Mapping & Navigation Workflow
+
+### 1. Build a map
+
+```bash
+python lingtu.py map                    # Start SLAM mapping
+# Drive the robot around, then in REPL:
+> map save office_2f                    # Saves map.pcd + tomogram.pickle + occupancy.npz
+> map list                              # Verify
+```
+
+### 2. Navigate
+
+```bash
+python lingtu.py nav                    # Start with localization
+# In REPL:
+> map use office_2f                     # Activate map
+> go 5 3                                # Navigate to (5, 3)
+> go 找到餐桌                            # Semantic navigation
+```
+
+### 3. Dashboard
+
+```bash
+# SSH tunnel
+ssh -L 5050:localhost:5050 sunrise@192.168.66.190
+# Browser: http://localhost:5050
+# Scene tab → click on map to send goals
+```
+
+## cmd_vel Priority Arbitration
+
+All velocity sources go through CmdVelMux (L0):
+
+| Source | Priority | Timeout |
+|--------|----------|---------|
+| Teleop (joystick) | 100 | 0.5s |
+| VisualServo (tracking) | 80 | 0.5s |
+| Recovery (stuck backup) | 60 | 0.5s |
+| PathFollower (autonomy) | 40 | 0.5s |
+
+Highest-priority active source wins. Sources timeout after 0.5s of silence.
 
 ## Source Layout
 
 ```
 src/
-  slam/                    Fast-LIO2, PGO, ICP localizer
-  base_autonomy/           Terrain analysis, local planner
-  global_planning/         PCT planner, path adapter
-  semantic_perception/     YOLO-World, CLIP, ConceptGraphs scene graph
-  semantic_planner/        Fast-Slow planner, frontier exploration, LLM client
-  remote_monitoring/       gRPC gateway, OTA service, WebRTC bridge
-  nav_core/                Header-only C++ core (platform-independent)
-  ota_daemon/              OTA update daemon (independent CMake build)
-  drivers/                 Livox LiDAR driver, quadruped serial interface
+├── core/              Framework: Module, Blueprint, Transport, Registry, tests (1263)
+├── nav/               NavigationModule, SafetyRing, CmdVelMux, WaypointTracker
+├── semantic/          Perception (Detector+Encoder), Planner (LLM+VisualServo+AgentLoop)
+├── memory/            SemanticMapper, EpisodicMemory, VectorMemory, RoomObjectKG
+├── drivers/           Thunder driver, CameraBridge, TeleopModule, LiDAR
+├── gateway/           GatewayModule (FastAPI), MCPServer, auth middleware
+├── base_autonomy/     TerrainModule, LocalPlanner, PathFollower (C++ nanobind)
+├── slam/              SLAMModule (Fast-LIO2/Point-LIO), SlamBridge, C++ nodes
+└── global_planning/   PCT planner (C++ ele_planner.so), A* backend
 
-client/
-  flutter_monitor/         Flutter cross-platform client application
-
-config/                    YAML configuration files
-launch/                    ROS 2 launch files (mapping, navigation, exploration)
-systemd/                   Systemd service units for bare-metal deployment
-scripts/                   Build, deploy, health check, OTA utilities
+web/                   React Dashboard (18 components, Vite 8)
+config/                robot_config.yaml (single source of truth)
+calibration/           Camera/LiDAR/IMU calibration toolbox
+scripts/               Deploy, verify, benchmark utilities
 ```
 
 ## Configuration
 
-Key configuration files:
+```yaml
+# config/robot_config.yaml (key sections)
+camera:
+  rotate: 270           # Compensate sideways mounting (0/90/180/270)
+  fx: 615.0             # Intrinsics (overridden by ROS2 CameraInfo)
 
-| File | Purpose |
-|------|---------|
-| `config/robot_config.yaml` | Robot geometry, speed limits, safety parameters |
-| `config/semantic_planner.yaml` | LLM backend, goal resolution, frontier scoring weights |
-| `config/topic_contract.yaml` | ROS 2 topic name definitions |
-| `config/semantic_exploration.yaml` | Exploration mode overrides |
+lidar:
+  offset_x: 0.0         # LiDAR-IMU extrinsics
+  
+occupancy_grid:
+  resolution: 0.2       # Grid cell size (meters)
+  
+gateway:
+  api_key: ""           # Set LINGTU_API_KEY env var to enable auth
+```
 
-LLM backends (set via environment variable):
+### LLM backends
 
 ```bash
-export MOONSHOT_API_KEY="..."       # Kimi — default, China-accessible
-export DASHSCOPE_API_KEY="..."      # Qwen — fallback
-export OPENAI_API_KEY="sk-..."      # OpenAI
-export ANTHROPIC_API_KEY="sk-ant-..." # Claude
+export MOONSHOT_API_KEY="..."           # Kimi (default, China-accessible)
+export DASHSCOPE_API_KEY="..."          # Qwen (fallback)
+export OPENAI_API_KEY="sk-..."          # OpenAI
+export ANTHROPIC_API_KEY="sk-ant-..."   # Claude
+```
+
+## Deployment
+
+### systemd (production)
+
+```bash
+# On S100P robot
+sudo systemctl enable lingtu camera
+sudo systemctl start lingtu
+```
+
+Services: `lingtu.service` (navigation), `camera.service` (Orbbec), `slam.service` (Fast-LIO2), `localizer.service` (ICP).
+
+### Update
+
+```bash
+ssh sunrise@192.168.66.190
+cd ~/data/inovxio/lingtu
+git pull origin main
+cd web && npm run build
+sudo systemctl restart lingtu
 ```
 
 ## Testing
 
 ```bash
-make test                          # All colcon unit tests
-make test-integration              # Integration tests (requires ROS 2 build)
+# Python framework tests (no ROS2 needed)
+python -m pytest src/core/tests/ -q              # 1263 tests
 
-# Planning unit tests — no ROS 2 required
-python tests/planning/test_pct_adapter_logic.py
+# C++ nav_core tests
+cd src/nav/core && mkdir -p build && cd build
+cmake .. && make -j$(nproc)
+./test_benchmark                                  # 12 benchmarks
+./test_local_planner_core                         # 30 tests
 
-# Single test file
-cd src/semantic_planner && python -m pytest test/test_goal_resolver.py -v
+# Full ROS2 build
+source /opt/ros/humble/setup.bash
+make build
 ```
 
-## Deployment
+## Sensor Calibration
 
-**Docker**
+Factory calibration toolbox in `calibration/`:
 
-```bash
-make docker-build
-make docker-run     # docker-compose up -d
-```
+| Step | Tool | Time |
+|------|------|------|
+| Camera intrinsics | `calibration/camera/calibrate_intrinsic.py` | ~5 min |
+| IMU noise | `calibration/imu/allan_variance_ros2/` | ~2 hr |
+| LiDAR-IMU extrinsics | `calibration/lidar_imu/LiDAR_IMU_Init/` | ~2 min |
+| Camera-LiDAR extrinsics | `calibration/camera_lidar/direct_visual_lidar_calibration/` | ~10 min |
+| Apply all | `calibration/apply_calibration.py` → robot_config.yaml | instant |
+| Verify | `calibration/verify.py` | instant |
 
-**Bare-metal (systemd)**
+## Version History
 
-```bash
-make install        # Install systemd service units
-```
+| Version | Date | Highlights |
+|---------|------|------------|
+| v2.2.0 | 2026-04-13 | Dashboard Arc/Raycast → Frosted Glass redesign, DDS GIL fix, camera 3-level auto-recovery, FloatingWidget system |
+| v2.1.0 | 2026-04-06 | Enterprise hardening, C++ nav_core SIMD optimization, 1226 tests |
+| v1.0.0 | 2026-03 | Initial release |
 
-Seven service units: `nav-lidar`, `nav-slam`, `nav-autonomy`, `nav-planning`, `nav-grpc`, `nav-semantic`, `ota-daemon`.
-
-**OTA**
-
-```bash
-scripts/ota/build_nav_package.sh   # Build update package
-scripts/ota/deploy_to_robot.sh     # One-click deploy to robot
-```
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| `docs/AGENTS.md` | ROS 2 topic and node map, startup sequence |
-| `docs/02-architecture/` | System architecture, topic contract |
-| `docs/03-development/` | API reference, parameter tuning, troubleshooting |
-| `docs/04-deployment/` | Docker and OTA deployment guides |
-| `docs/06-semantic-nav/` | Semantic navigation design and implementation |
+See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+---
+
+<p align="center">
+  <strong>穹沛科技 (Inovxio)</strong> — 让机器人走进真实世界
+</p>
