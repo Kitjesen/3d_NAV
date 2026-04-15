@@ -100,9 +100,13 @@ camera:
   dist_p2: 0.0
   dist_k3: 0.0
 
-# ── gRPC 服务 ──
-grpc:
-  port: 50051
+# ── 服务端口 ──
+gateway:
+  port: 5050               # Dashboard HTTP/WS/SSE (GatewayModule)
+  mcp_port: 8090           # MCP JSON-RPC (MCPServerModule)
+brainstem:
+  host: "127.0.0.1"
+  port: 13145              # Brainstem gRPC (运动控制)
 
 # ── 路径跟踪控制增益 ──
 control:
