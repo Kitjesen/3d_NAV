@@ -1,140 +1,203 @@
-# sim/ — MapPilot MuJoCo Simulation
+# sim/ — LingTu MuJoCo Simulation
 
-硬件无关的全栈仿真：MuJoCo 物理 + 真实 LiDAR 射线追踪 + ROS2 nav 栈。
+Hardware-free full-stack simulation: MuJoCo physics + ray-cast LiDAR + ROS2 navigation + person following + semantic search.
 
-## LiDAR 实现：两个方案
-
-| 方案 | 项目 | 原理 | GPU 要求 | 适用场景 |
-|---|---|---|---|---|
-| **A（推荐）** | [mujoco_ray_caster](https://github.com/Albusgive/mujoco_ray_caster) | MuJoCo C++ sensor plugin，`mj_ray()` 原生 | ❌ 不需要 | 主仿真，全平台 |
-| **B（大规模）** | [OmniPerception](https://github.com/aCodeDog/OmniPerception) | Warp/CUDA GPU ray tracing，Livox Mid-360 原生 | ✅ CUDA 11+ | RL 训练，批量仿真 |
-
-方案 A 默认使用：C++ plugin 编译后，在 XML 里一行配置 LiDAR，直接出 PointCloud2。
-方案 B 备用：CoRL 2025 论文，Livox 扫描模式 100% 真实，但需要 GPU。
-
-## 架构
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       MuJoCo Physics                                │
-│                                                                     │
-│  worlds/spiral_terrain.xml                                          │
-│  ├── terrain mesh (螺旋4层, gen_terrain_mesh.py 生成)               │
-│  └── robot body                                                     │
-│       └── lidar_link                                                │
-│            └── <sensor type="ray_caster_lidar"> ← mujoco_ray_caster│
-│                 fov_h=360, fov_v=59, size="400 16"                  │
-└──────────────────┬──────────────────────────────────────────────────┘
-                   │  d->sensordata (直接内存)
-                   ▼
-     bridge/mujoco_ros2_bridge.py
-       │
-       ├── /mujoco/pos_w_pointcloud (PointCloud2) → terrain_analysis
-       ├── /nav/odometry (Odometry, 50Hz)
-       └── TF: map → odom → body
-                   ▲
-       /nav/cmd_vel (TwistStamped) → 自研底层运动控制器
-```
-
-## 快速开始
-
-### Step 1 — 编译 mujoco_ray_caster
+## Quick Start
 
 ```bash
-# 克隆 MuJoCo 源码 + plugin
+# Install dependencies
+pip install mujoco numpy scipy
+
+# Simple test (no ROS2 needed)
+python sim/scripts/go1_indoor_nav.py
+
+# Full stack with ROS2
+source /opt/ros/humble/setup.bash
+ros2 launch sim/launch/sim.launch.py world:=open_field
+```
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                        MuJoCo Physics                                │
+│                                                                      │
+│  worlds/*.xml (4 scenes)    robots/ (Go2, NOVA Dog)                  │
+│  ├── terrain meshes         ├── URDF + collision meshes              │
+│  ├── obstacles/walls        └── actuator configs                     │
+│  └── sensor sites                                                    │
+│       └── ray_caster_lidar (mujoco_ray_caster plugin)                │
+└──────────────────┬───────────────────────────────────────────────────┘
+                   │
+         bridge/ (3 bridges)
+          ├── mujoco_ros2_bridge.py     MuJoCo ↔ ROS2 (odom/TF/cloud/cmd_vel)
+          ├── mujoco_viz_bridge.py      MuJoCo ↔ visualization
+          └── nova_nav_bridge.py        MuJoCo ↔ LingTu nav stack (no ROS2)
+                   │
+         ┌─────────┴──────────┐
+         ▼                    ▼
+   ROS2 nav stack        LingTu Module stack
+   (C++ autonomy)        (Python, sim profile)
+```
+
+## Directory Structure
+
+```
+sim/
+├── engine/                  Simulation engine framework
+│   ├── core/                Physics loop, step control
+│   ├── mujoco/              MuJoCo-specific wrappers
+│   ├── bridge/              Sensor/actuator bridge interfaces
+│   ├── worlds/              World loading & management
+│   ├── scenarios/           Pre-defined test scenarios
+│   └── cli.py               Engine CLI entry point
+│
+├── worlds/                  MuJoCo XML scene files
+│   ├── open_field.xml       Flat ground (quick validation)
+│   ├── spiral_terrain.xml   4-layer spiral ramp (requires gen_terrain_mesh.py)
+│   ├── building_scene.xml   Indoor multi-room building
+│   └── factory_scene.xml    Factory/warehouse layout
+│
+├── scenes/                  Composite scene configs
+│   ├── go2_room_nova.xml    Go2 robot in room environment
+│   └── indoor_office.xml    Office with furniture + obstacles
+│
+├── robots/                  Robot model definitions
+│   ├── go2/                 Unitree Go2 (RL policy)
+│   └── nova_dog/            NOVA Dog / Thunder (Brainstem policy)
+│
+├── robot/                   Legacy robot MJCF
+│   ├── thunder.urdf         Thunder quadruped URDF
+│   └── thunder_meshes/      Collision/visual meshes
+│
+├── sensors/                 Sensor simulation
+│   └── livox_mid360.py      Livox Mid-360 LiDAR (pure Python mj_multiRay fallback)
+│
+├── bridge/                  Physics ↔ Nav stack bridges
+│   ├── mujoco_ros2_bridge.py    Full ROS2 bridge (odom, TF, PointCloud2, cmd_vel)
+│   ├── mujoco_viz_bridge.py     Visualization bridge
+│   └── nova_nav_bridge.py       Direct Python bridge (no ROS2 dependency)
+│
+├── following/               Person-following simulation
+│   ├── behavior.py          FollowingBehavior FSM (FOLLOW/WAIT/SEARCH/EXPLORE/RECOVER)
+│   ├── person/              Simulated person movement (RoomAwareWalk, waypoints)
+│   ├── perception/          Simulated detection + tracking
+│   ├── controller/          Following controllers (PurePursuit, PID, predictive)
+│   ├── metrics/             Benchmark metrics (distance, tracking loss, latency)
+│   └── interfaces.py        Abstract interfaces
+│
+├── semantic/                Semantic navigation simulation
+│   └── factory_stub_test.py Factory floor semantic test
+│
+├── datasets/                LiDAR/IMU datasets for offline testing
+│   ├── Avia/                Livox Avia dataset
+│   └── legkilo*/            Legged-robot kinematic-inertial-LiDAR datasets
+│
+├── scripts/                 Utilities & demos
+│   ├── go1_indoor_nav.py    Go1 indoor navigation demo
+│   ├── go1_nav_full.py      Go1 full nav stack demo
+│   ├── demo_search.py       Semantic search demo
+│   ├── benchmark_following.py  Person-following benchmark
+│   ├── gen_terrain_mesh.py  Generate spiral terrain .stl mesh
+│   ├── install_deps.sh      Install simulation dependencies
+│   └── factory_demo/        Factory floor demo scripts
+│
+├── launch/                  ROS2 launch files
+│   ├── sim.launch.py        Full simulation launch
+│   └── sim_full.sh          Shell wrapper for full stack
+│
+├── assets/                  Generated assets
+│   └── meshes/              Terrain meshes (.stl)
+│
+├── maps/                    Saved simulation maps
+│
+├── output/                  Demo videos & benchmark results
+│   ├── demo_*.mp4           Navigation demos
+│   └── benchmark/           Following benchmark data
+│
+└── configs/                 Simulation configs
+```
+
+## LiDAR Simulation
+
+Two approaches:
+
+| Approach | Project | How it works | GPU | Use case |
+|----------|---------|-------------|-----|----------|
+| **A (default)** | [mujoco_ray_caster](https://github.com/Albusgive/mujoco_ray_caster) | MuJoCo C++ sensor plugin, native `mj_ray()` | No | General simulation |
+| **B (large-scale)** | [OmniPerception](https://github.com/aCodeDog/OmniPerception) | Warp/CUDA GPU ray tracing, Livox pattern | CUDA 11+ | RL training, batch sim |
+
+### Building mujoco_ray_caster
+
+```bash
 git clone https://github.com/google-deepmind/mujoco.git
 cd mujoco/plugin
 git clone https://github.com/Albusgive/mujoco_ray_caster.git
 
-# 修改 CMakeLists.txt，在 plugin 列表末尾加：
-# add_subdirectory(plugin/mujoco_ray_caster)
-
+# Add to CMakeLists.txt: add_subdirectory(plugin/mujoco_ray_caster)
 cd .. && mkdir build && cd build
 cmake .. && cmake --build . -j8
 
-# 把 .so 放到 mujoco_plugin 目录
-cd bin && mkdir -p mujoco_plugin && cp ../lib/libray_caster*.so ./mujoco_plugin/
+# Install plugin
+mkdir -p bin/mujoco_plugin && cp ../lib/libray_caster*.so ./mujoco_plugin/
 export MUJOCO_PLUGIN_PATH=$(pwd)/mujoco_plugin
 ```
 
-### Step 2 — 安装 Python 依赖
+## Worlds
+
+| World | Description | Requires mesh gen? |
+|-------|-------------|-------------------|
+| `open_field.xml` | Flat ground, quick validation | No |
+| `spiral_terrain.xml` | 4-layer spiral ramp, elevation changes | Yes (`gen_terrain_mesh.py`) |
+| `building_scene.xml` | Multi-room indoor building | No |
+| `factory_scene.xml` | Factory warehouse with obstacles | No |
+
+## Person Following
+
+The `following/` module provides a complete person-following simulation pipeline:
 
 ```bash
-pip install mujoco numpy scipy
-# ROS2 Humble（nav 栈用）
-source /opt/ros/humble/setup.bash
-source install/setup.bash
+# Run following benchmark
+python sim/scripts/benchmark_following.py
+
+# Results: PurePursuit + velocity prediction is best (0.14m stop-walk-stop error)
 ```
 
-### Step 3 — 生成螺旋地形 mesh
+**FSM states**: FOLLOW → WAIT → SEARCH → EXPLORE → RECOVER
 
-```bash
-python sim/scripts/gen_terrain_mesh.py
-```
-
-### Step 4 — 启动仿真
-
-```bash
-# 平地测试（快速验证，不需要 mesh）
-python sim/scripts/run_sim.py --world open_field
-
-# 螺旋全场景
-ros2 launch sim/launch/sim.launch.py world:=spiral_terrain
-```
-
-### Step 5 — 发送导航目标
-
-```bash
-ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
-  "{header: {frame_id: 'map'}, pose: {position: {x: -47.8, y: -28.6, z: 20.2}}}"
-```
-
-## 方案 B：OmniPerception（GPU，Livox 精确模式）
-
-```bash
-pip install warp-lang[extras] taichi
-cd LidarSensor && pip install -e .
-
-# MuJoCo 可视化（需要 ROS2）
-source /opt/ros/humble/setup.bash
-python3 LidarSensor/sensor_pattern/sensor_lidar/lidar_vis_ros2.py
-```
-
-## 文件结构
-
-```
-sim/
-├── README.md
-├── worlds/
-│   ├── open_field.xml          # 平地场景（含 ray_caster_lidar XML 配置）
-│   └── spiral_terrain.xml      # 螺旋场景（需先 gen_terrain_mesh.py）
-├── robot/
-│   └── robot.xml               # 机器人 MJCF（填入自研 URDF）
-├── sensors/
-│   └── livox_mid360.py         # 方案 B fallback：纯 Python mj_multiRay
-├── bridge/
-│   └── mujoco_ros2_bridge.py   # MuJoCo ↔ ROS2（odom, TF, 点云, cmd_vel）
-├── launch/
-│   └── sim.launch.py           # 全栈 ROS2 launch
-├── scripts/
-│   ├── gen_terrain_mesh.py     # spiral pickle → .stl mesh
-│   └── run_sim.py              # 主入口
-└── assets/
-    └── meshes/                 # 生成的地形 mesh
-```
+**Controllers tested**:
+- PurePursuit (baseline)
+- PurePursuit + velocity prediction (best)
+- PID with lookahead
+- Predictive MPC
 
 ## ROS2 Topics
 
-| Topic | Type | 方向 |
-|---|---|---|
-| `/mujoco/pos_w_pointcloud` | PointCloud2 | MuJoCo → terrain_analysis |
-| `/nav/odometry` | Odometry | MuJoCo → nav_stack |
-| `/nav/cmd_vel` | TwistStamped | nav_stack → MuJoCo |
-| `tf` (map→odom→body) | TF2 | MuJoCo → nav_stack |
+| Topic | Type | Direction |
+|-------|------|-----------|
+| `/mujoco/pos_w_pointcloud` | PointCloud2 | MuJoCo → nav stack |
+| `/nav/odometry` | Odometry | MuJoCo → nav stack |
+| `/nav/cmd_vel` | TwistStamped | nav stack → MuJoCo |
+| `tf` (map→odom→body) | TF2 | MuJoCo → nav stack |
 
-## 依赖
+## Running with LingTu
 
-- MuJoCo ≥ 3.0（含 ray_caster plugin 编译）
+```bash
+# Option 1: Full ROS2 bridge
+source /opt/ros/humble/setup.bash
+ros2 launch sim/launch/sim.launch.py world:=building_scene
+
+# Option 2: Direct Python (no ROS2)
+python lingtu.py sim    # Uses nova_nav_bridge.py internally
+
+# Send navigation goal
+> go 5 3                # In REPL
+> go 找到餐桌            # Semantic goal
+```
+
+## Dependencies
+
+- MuJoCo >= 3.0 (with ray_caster plugin for LiDAR)
 - Python: `mujoco numpy scipy`
-- ROS2 Humble: `sensor_msgs nav_msgs tf2_ros`
-- cyclonedds-cpp（ROS2 bridge 用，fastdds 可能有问题）
+- ROS2 Humble (optional): `sensor_msgs nav_msgs tf2_ros`
+- GPU (optional): `warp-lang` for OmniPerception LiDAR
