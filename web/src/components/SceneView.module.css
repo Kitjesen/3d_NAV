@@ -997,6 +997,89 @@
   cursor: not-allowed;
 }
 
+/* ── Goal confirm panel ────────────────────────────────────────── */
+
+.goalConfirmPanel {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(14, 16, 32, 0.92);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--border-hi);
+  border-left: 3px solid rgba(6, 182, 212, 0.7);
+  border-radius: var(--r-md);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  animation: goal-panel-in 0.2s var(--ease-out);
+  pointer-events: all;
+  z-index: 10;
+  white-space: nowrap;
+}
+
+@keyframes goal-panel-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.goalConfirmLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(6, 182, 212, 0.9);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.goalConfirmCoords {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  margin-right: 4px;
+}
+
+.goalConfirmBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  background: rgba(6, 182, 212, 0.15);
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  border-radius: var(--r-sm);
+  color: rgba(6, 182, 212, 0.95);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s var(--ease-out);
+}
+
+.goalConfirmBtn:hover {
+  background: rgba(6, 182, 212, 0.28);
+  border-color: rgba(6, 182, 212, 0.7);
+}
+
+.goalCancelBtn {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s var(--ease-out);
+}
+
+.goalCancelBtn:hover {
+  border-color: var(--border-hi);
+  color: var(--text);
+}
+
 /* ── Responsive ────────────────────────────────────────────────── */
 
 @media (max-width: 1280px) {

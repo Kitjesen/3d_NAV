@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from 'react'
+import { useRef, useEffect, useCallback, useState, memo } from 'react'
 import {
   Compass, Grid3x3, Navigation, Route, Target, Bot,
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle,
@@ -34,7 +34,7 @@ const MAP_GROUPS: Array<{ label: string; filter: (m: MapInfo) => boolean }> = [
   { label: '空地图',   filter: m => !m.has_pcd },
 ]
 
-export function SceneView({ sseState, showToast }: SceneViewProps) {
+function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const scene3DRef = useRef<Scene3DHandle>(null)
 
   // Trail: state so Scene3D re-renders on movement
@@ -58,6 +58,7 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
   const [relocY, setRelocY] = useState('0')
   const [relocYaw, setRelocYaw] = useState('0')
   const [relocPending, setRelocPending] = useState(false)
+  const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
 
   const { imgSrc: cameraImgSrc, connected: cameraConnected } = useCamera()
 
@@ -115,14 +116,21 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
   }, [odom])
 
   // ── Handlers ──────────────────────────────────────────────────
-  const handleGoal = useCallback(async (x: number, y: number) => {
+  const handlePendingGoal = useCallback((x: number, y: number) => {
+    setPendingGoal({ x, y })
+  }, [])
+
+  const handleConfirmGoal = useCallback(async () => {
+    if (!pendingGoal) return
+    const { x, y } = pendingGoal
+    setPendingGoal(null)
     try {
       await api.sendGoal(x, y)
       showToast(`目标已发送: (${x.toFixed(2)}, ${y.toFixed(2)})`, 'success')
     } catch {
       showToast('发送目标失败', 'error')
     }
-  }, [showToast])
+  }, [pendingGoal, showToast])
 
   const handleClearTrail = useCallback(() => {
     setTrail([])
@@ -315,11 +323,26 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
               path={path}
               layers={layers}
               pointSize={pointSize}
-              onGoal={handleGoal}
+              onPendingGoal={handlePendingGoal}
+              pendingGoal={pendingGoal}
             />
             <div className={styles.canvasOverlayTop}>
-              <span className={styles.scaleLabel}>3D 场景视图  ·  拖拽旋转  ·  滚轮缩放  ·  点击发送目标</span>
+              <span className={styles.scaleLabel}>3D 场景视图  ·  拖拽旋转  ·  滚轮缩放  ·  点击放置目标</span>
             </div>
+            {pendingGoal && (
+              <div className={styles.goalConfirmPanel}>
+                <span className={styles.goalConfirmLabel}>导航目标</span>
+                <span className={styles.goalConfirmCoords}>
+                  ({pendingGoal.x.toFixed(2)}, {pendingGoal.y.toFixed(2)})
+                </span>
+                <button className={styles.goalConfirmBtn} onClick={handleConfirmGoal}>
+                  <Navigation size={12} /> 发送
+                </button>
+                <button className={styles.goalCancelBtn} onClick={() => setPendingGoal(null)}>
+                  取消
+                </button>
+              </div>
+            )}
             {/* Camera PiP */}
             <div className={styles.cameraPip}>
               <div className={styles.cameraPipHeader}>
@@ -505,3 +528,5 @@ export function SceneView({ sseState, showToast }: SceneViewProps) {
     </div>
   )
 }
+
+export const SceneView = memo(SceneViewComponent)

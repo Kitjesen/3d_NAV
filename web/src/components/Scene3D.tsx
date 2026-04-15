@@ -36,7 +36,8 @@ interface Scene3DProps {
   path:         PathPoint[]
   layers:       Layers
   pointSize:    number
-  onGoal:       (x: number, y: number) => void
+  onPendingGoal: (x: number, y: number) => void
+  pendingGoal?:  { x: number; y: number } | null
 }
 
 const Z_FLOOR   = -0.2  // include floor-level scan points
@@ -64,7 +65,7 @@ function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) 
 }
 
 export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
-  { cloudFlat, savedMapFlat, costmap, sceneGraph, robotX, robotY, yaw, trail, path, layers, pointSize, onGoal },
+  { cloudFlat, savedMapFlat, costmap, sceneGraph, robotX, robotY, yaw, trail, path, layers, pointSize, onPendingGoal, pendingGoal },
   ref,
 ) {
   const mountRef   = useRef<HTMLDivElement>(null)
@@ -80,6 +81,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
   const pathLineRef  = useRef<THREE.Line | null>(null)
   const robotRef   = useRef<THREE.Group | null>(null)
   const goalRef        = useRef<THREE.Mesh | null>(null)
+  const pendingGoalRef = useRef<THREE.Mesh | null>(null)
   const costmapMeshRef = useRef<THREE.Mesh | null>(null)
   const gridRef        = useRef<THREE.GridHelper | null>(null)
   const floorRef   = useRef<THREE.Mesh | null>(null)
@@ -355,6 +357,23 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     goalRef.current = mesh
   }, [path, layers.goal])
 
+  // ── Pending goal marker ────────────────────────────────────────
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+    if (pendingGoalRef.current) { removeFrom(scene, pendingGoalRef.current); pendingGoalRef.current = null }
+    if (!pendingGoal) return
+
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.4, 0.06, 8, 32),
+      new THREE.MeshBasicMaterial({ color: 0x06b6d4 }),
+    )
+    ring.rotation.x = Math.PI / 2
+    ring.position.set(pendingGoal.x, 0.05, -pendingGoal.y)
+    scene.add(ring)
+    pendingGoalRef.current = ring
+  }, [pendingGoal])
+
   // ── Costmap overlay ────────────────────────────────────────────
   useEffect(() => {
     const scene = sceneRef.current
@@ -534,7 +553,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     const hits = raycaster.current.intersectObject(floor)
     if (hits.length > 0) {
       const p = hits[0].point
-      onGoal(p.x, -p.z)  // convert Three.js back to world coords
+      onPendingGoal(p.x, -p.z)  // convert Three.js back to world coords
     }
   }
 
