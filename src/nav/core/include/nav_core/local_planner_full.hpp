@@ -108,12 +108,14 @@ public:
   /// Load pre-computed path library from directory containing PLY files.
   /// Returns true on success.
   bool loadPaths(const std::string& pathsDir) {
-    bool ok = true;
-    ok = ok && loadStartPaths(pathsDir + "/startPaths.ply");
-    ok = ok && loadPathList(pathsDir + "/pathList.ply");
-    ok = ok && loadCorrespondences(pathsDir + "/correspondences.txt");
-    pathsLoaded_ = ok;
-    return ok;
+    bool ok1 = loadStartPaths(pathsDir + "/startPaths.ply");
+    fprintf(stderr, "[nav_core] loadStartPaths: %s\n", ok1 ? "OK" : "FAIL");
+    bool ok2 = loadPathList(pathsDir + "/pathList.ply");
+    fprintf(stderr, "[nav_core] loadPathList: %s\n", ok2 ? "OK" : "FAIL");
+    bool ok3 = loadCorrespondences(pathsDir + "/correspondences.txt");
+    fprintf(stderr, "[nav_core] loadCorrespondences: %s\n", ok3 ? "OK" : "FAIL");
+    pathsLoaded_ = ok1 && ok2 && ok3;
+    return pathsLoaded_;
   }
 
   bool pathsLoaded() const { return pathsLoaded_; }
