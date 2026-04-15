@@ -322,8 +322,9 @@ private:
 
   bool loadPathList(const std::string& filename) {
     std::ifstream f(filename);
-    if (!f.is_open()) return false;
+    if (!f.is_open()) { fprintf(stderr, "[nav_core] pathList: cannot open %s\n", filename.c_str()); return false; }
     int n = readPlyHeader(f);
+    fprintf(stderr, "[nav_core] pathList: header pointNum=%d, kPathNum=%d\n", n, kPathNum);
     if (n != kPathNum) return false;
     for (int i = 0; i < kPathNum; i++) {
       float ex, ey, ez; int pathID, groupID;
