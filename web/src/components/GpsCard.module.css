@@ -22,11 +22,11 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.09em;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  letter-spacing: var(--t-overline-track);
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--t-overline-color);
 }
 
 .labelDot {
@@ -228,19 +228,19 @@
 }
 
 .statLabel {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  letter-spacing: var(--t-overline-track);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--t-overline-color);
 }
 
 .statValue {
   font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text);
-  letter-spacing: -0.01em;
+  font-size: var(--t-value-size);
+  font-weight: var(--t-value-weight);
+  color: var(--t-value-color);
+  letter-spacing: var(--t-value-track);
   font-variant-numeric: tabular-nums;
 }
 

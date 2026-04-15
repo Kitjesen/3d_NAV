@@ -31,10 +31,10 @@
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text);
+  font-size: var(--t-title-size);
+  font-weight: var(--t-title-weight);
+  letter-spacing: var(--t-title-track);
+  color: var(--t-title-color);
   margin-right: var(--s-1);
 }
 
@@ -79,10 +79,10 @@
   background: transparent;
   border: none;
   border-radius: var(--r-sm);
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  letter-spacing: -0.005em;
+  color: var(--t-caption-color);
+  font-size: var(--t-label-size);
+  font-weight: var(--t-label-weight);
+  letter-spacing: var(--t-label-track);
   cursor: pointer;
   transition: all 0.15s var(--ease-out);
   white-space: nowrap;
@@ -120,10 +120,10 @@
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  letter-spacing: -0.005em;
+  color: var(--t-label-color);
+  font-size: var(--t-label-size);
+  font-weight: var(--t-label-weight);
+  letter-spacing: var(--t-label-track);
   cursor: pointer;
   transition: all 0.15s var(--ease-out);
 }
@@ -193,11 +193,11 @@
 }
 
 .drawerTitle {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  letter-spacing: var(--t-overline-track);
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--t-overline-color);
 }
 
 .drawerToggle {
@@ -246,11 +246,11 @@
 }
 
 .mapGroupTitle {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  letter-spacing: var(--t-overline-track);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--t-overline-color);
   padding: 6px 8px 4px;
 }
 
@@ -263,9 +263,9 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--r-md);
-  color: var(--text-dim);
-  font-size: 13px;
-  font-weight: 500;
+  color: var(--t-label-color);
+  font-size: var(--t-label-size);
+  font-weight: var(--t-label-weight);
   cursor: pointer;
   transition: all 0.15s var(--ease-out);
   text-align: left;
@@ -296,12 +296,12 @@
 
 .mapBadge {
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
+  font-size: var(--t-caption-size);
+  font-weight: var(--t-caption-weight);
   padding: 1px 6px;
   border-radius: var(--r-xs);
   background: rgba(255, 255, 255, 0.05);
-  color: var(--text-faint);
+  color: var(--t-caption-color);
   letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
 }
@@ -432,32 +432,32 @@
   -webkit-backdrop-filter: blur(12px) saturate(140%);
   border: 1px solid var(--border);
   border-radius: var(--r-full);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-dim);
-  letter-spacing: -0.005em;
+  font-size: var(--t-label-size);
+  font-weight: var(--t-label-weight);
+  color: var(--t-label-color);
+  letter-spacing: var(--t-label-track);
   box-shadow: var(--shadow-sm), var(--inner-hi);
 }
 
 .coords {
   font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text);
+  font-size: var(--t-value-size);
+  color: var(--t-value-color);
   padding: 5px 10px;
   background: rgba(10, 11, 20, 0.72);
   backdrop-filter: blur(12px) saturate(140%);
   -webkit-backdrop-filter: blur(12px) saturate(140%);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  letter-spacing: -0.01em;
+  letter-spacing: var(--t-value-track);
   font-variant-numeric: tabular-nums;
   box-shadow: var(--shadow-sm), var(--inner-hi);
 }
 
 .scaleLabel {
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-faint);
+  font-size: var(--t-caption-size);
+  color: var(--t-caption-color);
   padding: 4px 9px;
   background: rgba(10, 11, 20, 0.72);
   backdrop-filter: blur(12px) saturate(140%);
@@ -492,11 +492,11 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  letter-spacing: var(--t-overline-track);
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--t-overline-color);
   margin-bottom: var(--s-3);
 }
 
@@ -526,19 +526,19 @@
 }
 
 .statLabel {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  letter-spacing: var(--t-overline-track);
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--t-overline-color);
 }
 
 .statValue {
   font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text);
-  letter-spacing: -0.01em;
+  font-size: var(--t-value-size);
+  font-weight: var(--t-value-weight);
+  color: var(--t-value-color);
+  letter-spacing: var(--t-value-track);
   font-variant-numeric: tabular-nums;
 }
 

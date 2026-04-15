@@ -16,11 +16,11 @@
 }
 
 .title {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  letter-spacing: var(--t-overline-track);
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--t-overline-color);
 }
 
 .sseDot {
@@ -54,7 +54,7 @@
 
 .quickChip {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-caption-size);
   font-weight: 600;
   letter-spacing: 0.3px;
   color: var(--text-dim);
@@ -125,7 +125,7 @@
 .bubbleText {
   padding: 8px 12px;
   border-radius: var(--r-lg);
-  font-size: 13.5px;
+  font-size: var(--t-body-size);
   line-height: 1.5;
   word-break: break-word;
 }
@@ -148,13 +148,13 @@
   border: 1px solid rgba(255, 255, 255, 0.055);
   border-bottom-left-radius: var(--r-xs);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--t-label-size);
 }
 
 .bubbleTime {
   font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-faint);
+  font-size: var(--t-caption-size);
+  color: var(--t-caption-color);
   padding: 0 3px;
 }
 
@@ -203,22 +203,22 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  letter-spacing: var(--t-overline-track);
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--t-overline-color);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .suggestHint {
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 400;
-  letter-spacing: 0.02em;
+  font-size: var(--t-caption-size);
+  font-weight: var(--t-caption-weight);
+  letter-spacing: var(--t-caption-track);
   text-transform: none;
-  color: var(--text-faint);
+  color: var(--t-caption-color);
 }
 
 .suggestList {
@@ -241,9 +241,9 @@
   background: transparent;
   border: none;
   border-radius: 8px;
-  color: var(--text-dim);
+  color: var(--t-body-color);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--t-body-size);
   text-align: left;
   cursor: pointer;
   transition: background 0.12s var(--ease-out);
@@ -262,10 +262,10 @@
 
 .suggestName {
   font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  letter-spacing: -0.01em;
+  font-size: var(--t-body-em-size);
+  font-weight: var(--t-body-em-weight);
+  color: var(--t-body-em-color);
+  letter-spacing: var(--t-value-track);
   white-space: nowrap;
 }
 
@@ -277,9 +277,9 @@
 }
 
 .suggestDesc {
-  font-size: 12px;
-  color: var(--text-faint);
-  letter-spacing: -0.005em;
+  font-size: var(--t-label-size);
+  color: var(--t-label-color);
+  letter-spacing: var(--t-label-track);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -292,12 +292,12 @@
 
 .suggestGroup {
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
+  font-size: var(--t-caption-size);
+  font-weight: var(--t-caption-weight);
   padding: 2px 6px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.05);
-  color: var(--text-faint);
+  color: var(--t-caption-color);
   border: 1px solid var(--border);
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -316,7 +316,7 @@
   border-radius: var(--r-md);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13.5px;
+  font-size: var(--t-body-size);
   padding: 9px 12px;
   outline: none;
   transition: all 0.2s var(--ease-out);

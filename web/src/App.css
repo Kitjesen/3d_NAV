@@ -102,6 +102,57 @@
   --fs-xl:   22px;   /* page-level headings */
   --fs-2xl:  30px;   /* hero / large display */
 
+  /* ── Semantic type roles — size + weight + color + tracking ── */
+  /* Each role is a complete bundle; use all four props together.  */
+
+  /* overline: tiny uppercase section/stat labels */
+  --t-overline-size:    11px;
+  --t-overline-weight:  700;
+  --t-overline-color:   var(--text-faint);
+  --t-overline-track:   0.08em;
+
+  /* caption: hints, timestamps, footnotes — smallest, dimmest */
+  --t-caption-size:     11px;
+  --t-caption-weight:   400;
+  --t-caption-color:    var(--text-faint);
+  --t-caption-track:    0;
+
+  /* label: secondary interactive labels (tabs, chips) */
+  --t-label-size:       12.5px;
+  --t-label-weight:     500;
+  --t-label-color:      var(--text-dim);
+  --t-label-track:      0.01em;
+
+  /* body: standard readable text */
+  --t-body-size:        14px;
+  --t-body-weight:      400;
+  --t-body-color:       var(--text-dim);
+  --t-body-track:       -0.006em;
+
+  /* body-em: emphasized body / active states */
+  --t-body-em-size:     14px;
+  --t-body-em-weight:   600;
+  --t-body-em-color:    var(--text);
+  --t-body-em-track:    -0.008em;
+
+  /* value: monospace numeric/data — data is always brightest */
+  --t-value-size:       14px;
+  --t-value-weight:     500;
+  --t-value-color:      var(--text);
+  --t-value-track:      -0.01em;
+
+  /* value-lg: large stat display numbers (SLAM panel) */
+  --t-value-lg-size:    20px;
+  --t-value-lg-weight:  600;
+  --t-value-lg-color:   var(--text);
+  --t-value-lg-track:   -0.02em;
+
+  /* title: panel/section headers */
+  --t-title-size:       15px;
+  --t-title-weight:     600;
+  --t-title-color:      var(--text);
+  --t-title-track:      -0.015em;
+
   /* ── Motion ── */
   --ease-out:    cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);

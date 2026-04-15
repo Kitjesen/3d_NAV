@@ -28,20 +28,20 @@
 }
 
 .label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-faint);
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
+  color: var(--t-overline-color);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--t-overline-track);
 }
 
 .value {
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text);
+  font-size: var(--t-value-size);
+  font-weight: var(--t-value-weight);
+  color: var(--t-value-color);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--t-value-track);
 }
 
 .sep {

@@ -22,9 +22,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--text);
+  font-size: var(--t-title-size);
+  font-weight: var(--t-title-weight);
+  color: var(--t-title-color);
+  letter-spacing: var(--t-title-track);
 }
 
 .section {
@@ -34,11 +35,11 @@
 }
 
 .sectionLabel {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
   text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--text-faint);
+  letter-spacing: var(--t-overline-track);
+  color: var(--t-overline-color);
 }
 
 /* Mode selector buttons */
@@ -56,11 +57,11 @@
   border: 1px solid var(--border-hi);
   border-radius: var(--radius);
   background: var(--bg3);
-  color: var(--text-dim);
+  color: var(--t-label-color);
   cursor: pointer;
   font-family: var(--font-ui);
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--t-label-size);
+  font-weight: var(--t-label-weight);
   transition: border-color 0.15s, background 0.15s, color 0.15s;
   flex: 1;
   min-width: 0;
@@ -134,22 +135,23 @@
 }
 
 .statLabel {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--t-overline-size);
+  font-weight: var(--t-overline-weight);
   text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--text-faint);
+  letter-spacing: var(--t-overline-track);
+  color: var(--t-overline-color);
 }
 
 .statValue {
   font-family: var(--font-mono);
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text);
+  font-size: var(--t-value-lg-size);
+  font-weight: var(--t-value-lg-weight);
+  color: var(--t-value-lg-color);
+  letter-spacing: var(--t-value-lg-track);
   line-height: 1.2;
 }
 
-.statWarn { color: #f59e0b; }
+.statWarn { color: var(--warn); }
 
 .statMode {
   font-size: 14px;
