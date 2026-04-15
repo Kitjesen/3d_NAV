@@ -34,10 +34,10 @@
 
 .tab,
 .tabActive {
-  padding: 4px 10px;
+  padding: 4px 11px;
   border-radius: var(--r-sm);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 500;
   border: none;
   cursor: pointer;
@@ -91,9 +91,9 @@
 
 .badge {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   padding: 2px 8px;
   border-radius: var(--r-full);
   font-variant-numeric: tabular-nums;
@@ -130,16 +130,16 @@
 }
 
 .statLabel {
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
   color: var(--text-faint);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
 }
 
 .statValue {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text);
   font-variant-numeric: tabular-nums;

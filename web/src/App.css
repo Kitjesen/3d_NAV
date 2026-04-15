@@ -89,18 +89,18 @@
   --s-6:  24px;
 
   /* ── Typography ── */
-  --font-ui:      'Geist', 'Inter', 'Noto Sans SC', 'PingFang SC', system-ui, -apple-system, sans-serif;
-  --font-mono:    'Geist Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
-  --font-serif:   'Tiempos Text', 'Source Serif 4', 'Noto Serif SC', Georgia, serif;
+  --font-ui:      'Inter', 'Noto Sans SC', 'PingFang SC', system-ui, -apple-system, sans-serif;
+  --font-mono:    'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  --font-serif:   'Source Serif 4', 'Noto Serif SC', Georgia, serif;
 
-  /* Type scale */
-  --fs-xs:   11px;   /* micro labels, badges */
-  --fs-sm:   12px;   /* secondary text, hints */
-  --fs-base: 14px;   /* body default */
-  --fs-md:   15px;   /* emphasized body */
-  --fs-lg:   17px;   /* section titles */
-  --fs-xl:   20px;   /* page headings */
-  --fs-2xl:  28px;   /* hero */
+  /* Type scale — follows 1.25 modular ratio (Minor Third) */
+  --fs-xs:   11px;   /* micro labels, badges, status dots */
+  --fs-sm:   12.5px; /* captions, secondary meta */
+  --fs-base: 14px;   /* body default, form controls */
+  --fs-md:   15.5px; /* emphasized body, primary labels */
+  --fs-lg:   19px;   /* section headings */
+  --fs-xl:   22px;   /* page-level headings */
+  --fs-2xl:  30px;   /* hero / large display */
 
   /* ── Motion ── */
   --ease-out:    cubic-bezier(0.2, 0.8, 0.2, 1);
