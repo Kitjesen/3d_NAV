@@ -281,28 +281,17 @@ private:
   int readPlyHeader(std::ifstream& f) {
     std::string line;
     int pointNum = 0;
-    std::string prev;
     while (std::getline(f, line)) {
-      std::istringstream iss(line);
-      std::string token;
-      iss >> token;
-      if (token == "end_header") break;
-      if (token == "vertex" || (prev == "element" && token != "element")) {
-        if (prev == "element") {
-          std::istringstream iss2(line);
-          std::string t1; int n;
-          iss2 >> t1 >> n;
-          pointNum = n;
-        }
-      }
-      // Better parsing: look for "element vertex N"
+      // Strip trailing \r (Windows CRLF safety)
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (line == "end_header") break;
+      // Parse "element vertex N"
       if (line.find("element vertex") != std::string::npos) {
-        std::istringstream iss3(line);
-        std::string a, b; int n;
-        iss3 >> a >> b >> n;
+        std::istringstream iss(line);
+        std::string a, b; int n = 0;
+        iss >> a >> b >> n;
         pointNum = n;
       }
-      prev = token;
     }
     return pointNum;
   }
