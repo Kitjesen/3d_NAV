@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // Change ROBOT_HOST to your robot's IP for local development
-const ROBOT_HOST = process.env.ROBOT_HOST || '192.168.66.190:5050'
+const ROBOT_HOST = process.env.ROBOT_HOST || 'localhost:5050'
 
 export default defineConfig({
   plugins: [react()],
