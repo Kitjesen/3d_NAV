@@ -708,6 +708,7 @@
   bottom: 14px;
   right: 14px;
   width: 220px;
+  cursor: grab;
   background: rgba(6, 7, 14, 0.88);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -757,8 +758,9 @@
 .cameraPipImg {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 3 / 4;
   object-fit: cover;
+  transform: rotate(90deg) scale(1.33);
 }
 
 .cameraPipEmpty {

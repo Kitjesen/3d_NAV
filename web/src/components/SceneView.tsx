@@ -444,14 +444,37 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 </button>
               </div>
             )}
-            {/* Camera PiP */}
-            <div className={styles.cameraPip}>
+            {/* Camera PiP — draggable */}
+            <div
+              className={styles.cameraPip}
+              onMouseDown={(e) => {
+                const pip = e.currentTarget
+                const rect = pip.getBoundingClientRect()
+                const ox = e.clientX - rect.left
+                const oy = e.clientY - rect.top
+                const onMove = (ev: MouseEvent) => {
+                  const parent = pip.parentElement!.getBoundingClientRect()
+                  pip.style.left = `${ev.clientX - parent.left - ox}px`
+                  pip.style.top = `${ev.clientY - parent.top - oy}px`
+                  pip.style.right = 'auto'
+                  pip.style.bottom = 'auto'
+                }
+                const onUp = () => {
+                  document.removeEventListener('mousemove', onMove)
+                  document.removeEventListener('mouseup', onUp)
+                  pip.style.cursor = 'grab'
+                }
+                pip.style.cursor = 'grabbing'
+                document.addEventListener('mousemove', onMove)
+                document.addEventListener('mouseup', onUp)
+              }}
+            >
               <div className={styles.cameraPipHeader}>
                 <span className={cameraConnected ? styles.camDotLive : styles.camDotOff} />
                 {cameraConnected ? '摄像头' : '无信号'}
               </div>
               {cameraImgSrc
-                ? <img src={cameraImgSrc} className={styles.cameraPipImg} alt="camera" />
+                ? <img src={cameraImgSrc} className={styles.cameraPipImg} alt="camera" draggable={false} />
                 : <div className={styles.cameraPipEmpty}><VideoOff size={18} opacity={0.35} /></div>
               }
             </div>
