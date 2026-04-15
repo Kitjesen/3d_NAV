@@ -108,14 +108,12 @@ public:
   /// Load pre-computed path library from directory containing PLY files.
   /// Returns true on success.
   bool loadPaths(const std::string& pathsDir) {
-    bool ok1 = loadStartPaths(pathsDir + "/startPaths.ply");
-    fprintf(stderr, "[nav_core] loadStartPaths: %s\n", ok1 ? "OK" : "FAIL");
-    bool ok2 = loadPathList(pathsDir + "/pathList.ply");
-    fprintf(stderr, "[nav_core] loadPathList: %s\n", ok2 ? "OK" : "FAIL");
-    bool ok3 = loadCorrespondences(pathsDir + "/correspondences.txt");
-    fprintf(stderr, "[nav_core] loadCorrespondences: %s\n", ok3 ? "OK" : "FAIL");
-    pathsLoaded_ = ok1 && ok2 && ok3;
-    return pathsLoaded_;
+    bool ok = true;
+    ok = ok && loadStartPaths(pathsDir + "/startPaths.ply");
+    ok = ok && loadPathList(pathsDir + "/pathList.ply");
+    ok = ok && loadCorrespondences(pathsDir + "/correspondences.txt");
+    pathsLoaded_ = ok;
+    return ok;
   }
 
   bool pathsLoaded() const { return pathsLoaded_; }
@@ -311,9 +309,8 @@ private:
 
   bool loadPathList(const std::string& filename) {
     std::ifstream f(filename);
-    if (!f.is_open()) { fprintf(stderr, "[nav_core] pathList: cannot open %s\n", filename.c_str()); return false; }
+    if (!f.is_open()) return false;
     int n = readPlyHeader(f);
-    fprintf(stderr, "[nav_core] pathList: header pointNum=%d, kPathNum=%d\n", n, kPathNum);
     if (n != kPathNum) return false;
     for (int i = 0; i < kPathNum; i++) {
       float ex, ey, ez; int pathID, groupID;
