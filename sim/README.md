@@ -17,35 +17,21 @@ The simulation environment mirrors the real-world LingTu deployment stack while 
 
 ## 2. System Architecture
 
-```mermaid
-graph TD
-    subgraph Physics["MuJoCo Physics Engine"]
-        W[World XML] --> P[Physics Step]
-        R[Robot MJCF] --> P
-        S[Ray-Cast LiDAR Plugin] --> P
-    end
+The system has three layers:
 
-    subgraph Bridge["Sensor/Actuator Bridge"]
-        B1[mujoco_ros2_bridge.py<br/>ROS2 topics]
-        B2[nova_nav_bridge.py<br/>Direct Python]
-        B3[mujoco_viz_bridge.py<br/>Visualization]
-    end
+**Physics** — MuJoCo loads a world XML + robot MJCF, runs the physics step each tick, and reads ray-cast LiDAR data from the sensor plugin.
 
-    subgraph Nav["Navigation Stack"]
-        N1[ROS2 C++ Autonomy<br/>terrain + local planner]
-        N2[LingTu Module Stack<br/>Python sim profile]
-    end
+**Bridge** — Three bridge options connect physics to navigation:
 
-    P -->|odom, pointcloud, TF| B1
-    P -->|odom, pointcloud| B2
-    P -->|render frames| B3
-    B1 -->|cmd_vel| P
-    B2 -->|cmd_vel| P
-    B1 --> N1
-    B2 --> N2
-```
+| Bridge | Path | Notes |
+|--------|------|-------|
+| `mujoco_ros2_bridge.py` | MuJoCo → ROS2 topics → C++ autonomy stack | Full ROS2, same as real robot |
+| `nova_nav_bridge.py` | MuJoCo → Python LingTu modules directly | No ROS2 dependency, fastest iteration |
+| `mujoco_viz_bridge.py` | MuJoCo → visualization only | Rendering, no navigation |
 
-The architecture is intentionally modular. Worlds, robots, and bridges are independent — any world can host any robot, and either bridge connects to the navigation stack.
+**Navigation** — Either the ROS2 C++ autonomy stack (terrain + local planner + path follower) or the pure-Python LingTu module stack (`python lingtu.py sim`).
+
+Worlds, robots, and bridges are independent — any world can host any robot, and either bridge connects to navigation.
 
 ## 3. Scenes
 
@@ -108,18 +94,13 @@ The following system is structured as five independent layers:
 
 The `FollowingBehavior` state machine manages five states:
 
-```mermaid
-stateDiagram-v2
-    [*] --> FOLLOW
-    FOLLOW --> WAIT: target stopped
-    FOLLOW --> SEARCH: target lost
-    WAIT --> FOLLOW: target moves
-    SEARCH --> FOLLOW: target re-acquired
-    SEARCH --> EXPLORE: search timeout
-    EXPLORE --> FOLLOW: target found
-    EXPLORE --> RECOVER: explore timeout
-    RECOVER --> [*]
-```
+| State | Trigger In | Trigger Out |
+|-------|-----------|-------------|
+| **FOLLOW** | target re-acquired / target moves | target stopped → WAIT, target lost → SEARCH |
+| **WAIT** | target stopped | target moves → FOLLOW |
+| **SEARCH** | target lost | target found → FOLLOW, timeout → EXPLORE |
+| **EXPLORE** | search timeout | target found → FOLLOW, timeout → RECOVER |
+| **RECOVER** | explore timeout | (terminal) |
 
 ### 5.3 Controller Comparison
 
