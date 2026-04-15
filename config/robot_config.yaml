@@ -224,13 +224,13 @@ pct_planner:
   smooth_method: catmull_rom   # 路径平滑方式: catmull_rom / downsample
   smooth_interp: 3             # Catmull-Rom 每段插值点数
 
-# ── TraversabilityCost 融合代价 ──
+# ── TraversabilityCost 分层代价融合 ──
+# 合并规则: max() 优先级 — LETHAL(100) > INSCRIBED(99) > slope(1-98) > proximity(0-50)
+# 硬约束 (obstacle/steep slope) 不可被软层覆盖
 traversability_cost:
-  obstacle_weight: 1.0         # 障碍物代价权重 (主导)
-  slope_weight: 0.3            # 坡度代价权重 (>15° 开始惩罚)
-  proximity_weight: 0.2        # ESDF 接近性权重 (远离障碍物偏好)
-  safe_distance: 1.5           # ESDF 安全距离 (m)
-  max_slope_deg: 30.0          # 超过此坡度 = 不可通行
+  safe_distance: 1.5           # ESDF 接近性衰减距离 (m), 此范围内 soft cost 递增
+  max_slope_deg: 30.0          # ≥ 此坡度 → LETHAL (不可通行)
+  proximity_cap: 50.0          # ESDF 软代价上限 (不会推升到 INSCRIBED=99)
   publish_hz: 2.0              # 融合发布频率 (Hz)
 
 # ── OccupancyGrid 实时栅格 ──

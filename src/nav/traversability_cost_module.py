@@ -86,20 +86,16 @@ class TraversabilityCostModule(Module, layer=2):
 
     def __init__(
         self,
-        obstacle_weight: float = 1.0,
-        slope_weight: float = 0.3,
-        proximity_weight: float = 0.2,
         safe_distance: float = 1.5,
         max_slope_deg: float = 30.0,
+        proximity_cap: float = 50.0,
         publish_hz: float = 2.0,
         **kw,
     ):
         super().__init__(**kw)
-        self._w_obs = obstacle_weight
-        self._w_slope = slope_weight
-        self._w_prox = proximity_weight
         self._safe_dist = safe_distance
         self._max_slope = max_slope_deg
+        self._prox_cap = proximity_cap    # max soft cost from ESDF (never promotes to INSCRIBED)
         self._interval = 1.0 / publish_hz
 
         # Latest data from each source
@@ -130,8 +126,26 @@ class TraversabilityCostModule(Module, layer=2):
     def _on_traversability(self, data: dict) -> None:
         self._trav_data = data
 
+    # Cost semantics (match ROS2 nav2 costmap_2d convention):
+    #   LETHAL     = 100  — occupied wall, hard constraint, cannot be overridden
+    #   INSCRIBED  = 99   — inside inflation radius, treat as impassable
+    #   SLOPE_HARD = 98   — slope ≥ max_slope_deg, impassable terrain
+    #   1..97             — soft cost (slope preference + ESDF proximity preference)
+    #   0                 — free space
+    LETHAL    = 100
+    INSCRIBED = 99
+
     def _try_fuse(self) -> None:
-        """Fuse available layers and publish. Triggered by costmap (primary clock)."""
+        """Layered priority merge. Triggered by costmap (primary clock).
+
+        Layer precedence (high → low):
+          L0  Lethal/Inscribed — from OccupancyGrid (obstacle + inflation)
+          L1  Slope hard-block — slope ≥ max_slope_deg → LETHAL
+          L2  Slope soft cost  — slope mapped to 1..97 (only on free cells)
+          L3  Proximity prefer — ESDF distance preference (only on free cells)
+
+        Merge rule: max() per cell with hard constraint protection.
+        """
         now = time.time()
         if now - self._last_publish < self._interval:
             return
@@ -139,23 +153,28 @@ class TraversabilityCostModule(Module, layer=2):
 
         cm = self._costmap_data
         if cm is None:
-            return  # costmap is required as the base grid
+            return
 
-        grid = np.asarray(cm["grid"], dtype=np.float32)
+        obs_grid = np.asarray(cm["grid"], dtype=np.float32)
         res = cm["resolution"]
         origin = np.array(cm["origin"][:2], dtype=np.float64)
-        shape = grid.shape
+        shape = obs_grid.shape
 
-        # Start with obstacle cost (always available)
-        fused = self._w_obs * grid
+        # L0: Obstacle layer is the base — lethal and inscribed cells are protected
+        fused = obs_grid.copy()
+        is_hard = obs_grid >= self.INSCRIBED  # lethal + inscribed cells
 
-        # Slope cost from elevation map
+        # L1+L2: Slope layer
         slope_deg = self._compute_slope(shape, origin, res)
         if slope_deg is not None:
-            slope_cost = np.clip(slope_deg / self._max_slope, 0, 1) * 100.0
-            # Cells above max_slope get hard-blocked
-            slope_cost[slope_deg >= self._max_slope] = 100.0
-            fused += self._w_slope * slope_cost
+            # Hard-block: slope ≥ max → LETHAL (even if OccupancyGrid says free)
+            slope_lethal = slope_deg >= self._max_slope
+            fused[slope_lethal & ~is_hard] = self.LETHAL
+
+            # Soft cost: slope < max → map to 1..97, only on non-hard cells
+            soft_mask = ~is_hard & ~slope_lethal & (slope_deg > 3.0)
+            slope_cost = np.clip(slope_deg / self._max_slope, 0, 0.97) * 100.0
+            fused[soft_mask] = np.maximum(fused[soft_mask], slope_cost[soft_mask])
 
             self.slope_grid.publish({
                 "grid": slope_deg,
@@ -164,10 +183,15 @@ class TraversabilityCostModule(Module, layer=2):
                 "ts": now,
             })
 
-        # Proximity cost from ESDF
+        # L3: Proximity preference — only on free-ish cells (cost < INSCRIBED)
+        #     This does NOT duplicate inflation (inflation is binary dilation at 0.5m,
+        #     proximity is a smooth gradient out to safe_distance=1.5m).
         prox_cost = self._compute_proximity(shape, origin, res)
         if prox_cost is not None:
-            fused += self._w_prox * prox_cost
+            free_mask = fused < self.INSCRIBED
+            # Cap proximity contribution so it never promotes free→inscribed
+            soft_prox = np.clip(prox_cost * (self._prox_cap / 100.0), 0, self._prox_cap)
+            fused[free_mask] = np.maximum(fused[free_mask], soft_prox[free_mask])
 
         fused = np.clip(fused, 0, 100).astype(np.float32)
 
@@ -250,16 +274,15 @@ class TraversabilityCostModule(Module, layer=2):
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["traversability_cost"] = {
-            "weights": {
-                "obstacle": self._w_obs,
-                "slope": self._w_slope,
-                "proximity": self._w_prox,
-            },
+            "merge": "layered_max (LETHAL > INSCRIBED > slope > proximity)",
             "safe_distance": self._safe_dist,
             "max_slope_deg": self._max_slope,
-            "has_costmap": self._costmap_data is not None,
-            "has_elevation": self._elev_data is not None,
-            "has_esdf": self._esdf_data is not None,
-            "has_traversability": self._trav_data is not None,
+            "proximity_cap": self._prox_cap,
+            "layers": {
+                "costmap":        self._costmap_data is not None,
+                "elevation":      self._elev_data is not None,
+                "esdf":           self._esdf_data is not None,
+                "traversability": self._trav_data is not None,
+            },
         }
         return info
