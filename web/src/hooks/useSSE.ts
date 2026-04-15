@@ -13,6 +13,7 @@ export type {
   GlobalPathEvent,
   MapCloudEvent,
   CostmapEvent,
+  SlopeGridEvent,
   PathPoint,
   SSEEvent,
   SSEState,
@@ -28,6 +29,7 @@ const INITIAL_STATE: SSEState = {
   globalPath: null,
   mapCloud: null,
   costmap: null,
+  slopeGrid: null,
   lastHeartbeat: null,
   connected: false,
   events: [],
@@ -101,6 +103,9 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               case 'costmap':
                 next.costmap = event as never
+                break
+              case 'slope_grid':
+                next.slopeGrid = event as never
                 break
               case 'heartbeat':
               case 'ping':

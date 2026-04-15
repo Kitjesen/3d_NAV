@@ -9,25 +9,28 @@
 import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import type { PathPoint, CostmapEvent, SceneGraphEvent } from '../types'
+import type { PathPoint, CostmapEvent, SlopeGridEvent, SceneGraphEvent } from '../types'
 
 export interface Scene3DHandle {
   resetCamera(): void
 }
 
 interface Layers {
-  grid:  boolean
-  cloud: boolean
-  trail: boolean
-  path:  boolean
-  goal:  boolean
-  robot: boolean
+  grid:    boolean
+  cloud:   boolean
+  trail:   boolean
+  path:    boolean
+  goal:    boolean
+  robot:   boolean
+  costmap: boolean
+  slope:   boolean
 }
 
 interface Scene3DProps {
   cloudFlat:    number[]
   savedMapFlat?: number[]
   costmap:      CostmapEvent | null
+  slopeGrid:    SlopeGridEvent | null
   sceneGraph:   SceneGraphEvent | null
   robotX:       number
   robotY:       number
@@ -65,7 +68,7 @@ function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) 
 }
 
 export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
-  { cloudFlat, savedMapFlat, costmap, sceneGraph, robotX, robotY, yaw, trail, path, layers, pointSize, onPendingGoal, pendingGoal },
+  { cloudFlat, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, layers, pointSize, onPendingGoal, pendingGoal },
   ref,
 ) {
   const mountRef   = useRef<HTMLDivElement>(null)
@@ -83,6 +86,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
   const goalRef        = useRef<THREE.Mesh | null>(null)
   const pendingGoalRef = useRef<THREE.Mesh | null>(null)
   const costmapMeshRef = useRef<THREE.Mesh | null>(null)
+  const slopeMeshRef   = useRef<THREE.Mesh | null>(null)
   const gridRef        = useRef<THREE.GridHelper | null>(null)
   const floorRef   = useRef<THREE.Mesh | null>(null)
   const savedMapRef    = useRef<THREE.Points | null>(null)
@@ -446,6 +450,91 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     scene.add(mesh)
     costmapMeshRef.current = mesh
   }, [costmap])
+
+  // ── Costmap visibility toggle ──────────────────────────────────
+  useEffect(() => {
+    if (costmapMeshRef.current) costmapMeshRef.current.visible = layers.costmap
+  }, [layers.costmap])
+
+  // ── Slope grid overlay (green→yellow→red) ──────────────────────
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+
+    if (slopeMeshRef.current) {
+      scene.remove(slopeMeshRef.current)
+      slopeMeshRef.current.geometry.dispose()
+      ;(slopeMeshRef.current.material as THREE.MeshBasicMaterial).map?.dispose()
+      ;(slopeMeshRef.current.material as THREE.Material).dispose()
+      slopeMeshRef.current = null
+    }
+
+    if (!slopeGrid || !layers.slope) return
+
+    const { grid_b64, cols, resolution, origin } = slopeGrid
+    const bytes = Uint8Array.from(atob(grid_b64), c => c.charCodeAt(0))
+    const rows = Math.round(bytes.length / cols)
+    if (rows <= 0 || cols <= 0) return
+
+    const canvas = document.createElement('canvas')
+    canvas.width = cols
+    canvas.height = rows
+    const ctx = canvas.getContext('2d')!
+    const img = ctx.createImageData(cols, rows)
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const raw = bytes[(rows - 1 - r) * cols + c]
+        const deg = raw * (90.0 / 255.0)
+        const o = (r * cols + c) * 4
+        if (deg < 3) {
+          // flat — fully transparent
+          img.data[o] = img.data[o+1] = img.data[o+2] = img.data[o+3] = 0
+        } else if (deg < 15) {
+          // mild slope — green
+          const t = (deg - 3) / 12
+          img.data[o]     = Math.round(40 * t)
+          img.data[o + 1] = Math.round(180 + 40 * t)
+          img.data[o + 2] = Math.round(60 * t)
+          img.data[o + 3] = Math.round(30 + 50 * t)
+        } else if (deg < 25) {
+          // moderate slope — yellow
+          const t = (deg - 15) / 10
+          img.data[o]     = Math.round(200 + 55 * t)
+          img.data[o + 1] = Math.round(200 - 60 * t)
+          img.data[o + 2] = 30
+          img.data[o + 3] = Math.round(80 + 40 * t)
+        } else {
+          // steep slope — red
+          img.data[o]     = 240
+          img.data[o + 1] = 50
+          img.data[o + 2] = 50
+          img.data[o + 3] = 140
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.minFilter = THREE.LinearFilter
+    tex.magFilter = THREE.NearestFilter
+
+    const sizeX = cols * resolution
+    const sizeY = rows * resolution
+    const geo = new THREE.PlaneGeometry(sizeX, sizeY)
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthWrite: false,
+    })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.rotation.x = -Math.PI / 2
+    mesh.position.set(
+      origin[0] + sizeX / 2,
+      0.02,
+      -(origin[1] + sizeY / 2),
+    )
+    scene.add(mesh)
+    slopeMeshRef.current = mesh
+  }, [slopeGrid, layers.slope])
 
   // ── Saved map cloud (gray, background layer) ───────────────────
   useEffect(() => {

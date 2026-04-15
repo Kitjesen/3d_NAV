@@ -78,6 +78,14 @@ export interface CostmapEvent {
   origin: [number, number]  // world [x, y] of bottom-left corner
 }
 
+export interface SlopeGridEvent {
+  type: 'slope_grid'
+  grid_b64: string   // base64-encoded uint8 (0-90° mapped to 0-255)
+  cols: number
+  resolution: number
+  origin: [number, number]
+}
+
 export type SSEEvent =
   | OdometryEvent
   | MissionStatusEvent
@@ -89,6 +97,7 @@ export type SSEEvent =
   | GlobalPathEvent
   | MapCloudEvent
   | CostmapEvent
+  | SlopeGridEvent
 
 export interface SSEState {
   odometry: OdometryEvent | null
@@ -100,6 +109,7 @@ export interface SSEState {
   globalPath: GlobalPathEvent | null
   mapCloud: MapCloudEvent | null
   costmap: CostmapEvent | null
+  slopeGrid: SlopeGridEvent | null
   lastHeartbeat: number | null
   connected: boolean
   events: SSEEvent[]

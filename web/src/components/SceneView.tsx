@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, memo } from 'react'
 import {
-  Compass, Grid3x3, Navigation, Route, Target, Bot,
+  Compass, Grid3x3, Navigation, Route, Target, Bot, Layers as LayersIcon, Mountain,
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle,
   MapPinned, Cloud, Maximize2, Radio, Activity, LocateFixed, VideoOff,
 } from 'lucide-react'
@@ -18,12 +18,14 @@ interface SceneViewProps {
 
 // ── Layer flags ────────────────────────────────────────────────
 interface Layers {
-  grid:  boolean
-  cloud: boolean
-  trail: boolean
-  path:  boolean
-  goal:  boolean
-  robot: boolean
+  grid:    boolean
+  cloud:   boolean
+  trail:   boolean
+  path:    boolean
+  goal:    boolean
+  robot:   boolean
+  costmap: boolean
+  slope:   boolean
 }
 
 const TRAIL_MAX = 300
@@ -45,7 +47,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [saveModalOpen, setSaveModalOpen] = useState(false)
   const [layers, setLayers] = useState<Layers>({
-    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true,
+    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true, costmap: true, slope: false,
   })
   const [maps, setMaps] = useState<MapInfo[]>([])
   const [pointSize, setPointSize] = useState(0.05)
@@ -226,7 +228,9 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
           <LayerBtn k="trail" icon={<Route size={11} />}      label="轨迹"  />
           <LayerBtn k="path"  icon={<Navigation size={11} />} label="路径"  />
           <LayerBtn k="goal"  icon={<Target size={11} />}     label="目标"  />
-          <LayerBtn k="robot" icon={<Bot size={11} />}        label="本机"  />
+          <LayerBtn k="robot"   icon={<Bot size={11} />}        label="本机"  />
+          <LayerBtn k="costmap" icon={<LayersIcon size={11} />} label="代价"  />
+          <LayerBtn k="slope"   icon={<Mountain size={11} />}   label="坡度"  />
         </div>
 
         <span className={styles.divider} />
@@ -315,6 +319,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
               cloudFlat={cloudFlat}
               savedMapFlat={savedMapFlat}
               costmap={sseState.costmap ?? null}
+              slopeGrid={sseState.slopeGrid ?? null}
               sceneGraph={sseState.sceneGraph ?? null}
               robotX={robotX}
               robotY={robotY}
