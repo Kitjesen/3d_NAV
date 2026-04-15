@@ -306,6 +306,47 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Context menu (right-click on map item) ─────────────────── */
+
+.contextMenu {
+  background: rgba(14, 15, 21, 0.95);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  min-width: 160px;
+  animation: fade-in 0.12s var(--ease-out);
+}
+
+.contextMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--t-label-color);
+  font-size: var(--t-label-size);
+  font-weight: var(--t-label-weight);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  text-align: left;
+}
+
+.contextMenuItem:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.contextMenuDanger:hover {
+  background: rgba(248, 113, 113, 0.12);
+  color: var(--red);
+}
+
 .emptyState {
   display: flex;
   flex-direction: column;

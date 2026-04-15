@@ -1,13 +1,13 @@
 import { useRef, useEffect, useCallback, useState, memo } from 'react'
 import {
   Compass, Grid3x3, Navigation, Route, Target, Bot, Layers as LayersIcon, Mountain,
-  PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle,
+  PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle, Pencil,
   MapPinned, Cloud, Maximize2, Radio, Activity, LocateFixed, VideoOff,
 } from 'lucide-react'
 import type { SSEState, MapInfo, PathPoint, ToastKind, SlamProfile } from '../types'
 import * as api from '../services/api'
 import { useCamera } from '../hooks/useCamera'
-import { PromptModal } from './Modal'
+import { PromptModal, ConfirmModal } from './Modal'
 import { Scene3D, type Scene3DHandle } from './Scene3D'
 import styles from './SceneView.module.css'
 
@@ -61,6 +61,14 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const [relocYaw, setRelocYaw] = useState('0')
   const [relocPending, setRelocPending] = useState(false)
   const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
+
+  // Map management modals
+  const [mapContextMenu, setMapContextMenu] = useState<{ name: string; x: number; y: number } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [renameTarget, setRenameTarget] = useState<string | null>(null)
+  const [loadTarget, setLoadTarget] = useState<string | null>(null)
+  // SLAM switch confirmation
+  const [slamSwitchTarget, setSlamSwitchTarget] = useState<SlamProfile | null>(null)
 
   const { imgSrc: cameraImgSrc, connected: cameraConnected } = useCamera()
 
@@ -150,16 +158,65 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     } catch { showToast('保存失败', 'error') }
   }
 
-  const handleActivate = async (name: string) => {
-    try {
-      await api.activateMap(name)
-      showToast(`已激活: ${name}`, 'success')
-      loadMaps()
-    } catch { showToast('激活失败', 'error') }
+  const handleActivate = (name: string) => {
+    // Click map → show confirm modal to load (relocalize) this map
+    setLoadTarget(name)
   }
 
-  const handleSwitchSlam = async (profile: SlamProfile) => {
+  const confirmLoadMap = async () => {
+    if (!loadTarget) return
+    const name = loadTarget
+    setLoadTarget(null)
+    try {
+      await api.activateMap(name)
+      await api.relocalize(name, 0, 0, 0)
+      showToast(`已加载并重定位: ${name}`, 'success')
+      loadMaps()
+      try {
+        const pts = await api.fetchSavedMapPoints(name)
+        setSavedMapFlat(pts)
+      } catch { /* PCD not available */ }
+    } catch (e: unknown) {
+      showToast(`加载失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }
+
+  const handleDeleteMap = async () => {
+    if (!deleteTarget) return
+    const name = deleteTarget
+    setDeleteTarget(null)
+    try {
+      await api.deleteMap(name)
+      showToast(`已删除: ${name}`, 'success')
+      loadMaps()
+      if (savedMapFlat !== undefined) setSavedMapFlat(undefined)
+    } catch (e: unknown) {
+      showToast(`删除失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }
+
+  const confirmRenameMap = async (newName: string) => {
+    if (!renameTarget) return
+    const oldName = renameTarget
+    setRenameTarget(null)
+    try {
+      await api.renameMap(oldName, newName)
+      showToast(`已重命名: ${oldName} → ${newName}`, 'success')
+      loadMaps()
+    } catch (e: unknown) {
+      showToast(`重命名失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }
+
+  const handleSwitchSlam = (profile: SlamProfile) => {
     if (slamPending) return
+    setSlamSwitchTarget(profile)
+  }
+
+  const confirmSwitchSlam = async () => {
+    if (!slamSwitchTarget) return
+    const profile = slamSwitchTarget
+    setSlamSwitchTarget(null)
     setSlamPending(profile)
     try {
       await api.switchSlamMode(profile)
@@ -299,7 +356,11 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                       key={m.name}
                       className={m.is_active ? styles.mapItemActive : styles.mapItem}
                       onClick={() => handleActivate(m.name)}
-                      title={m.is_active ? '已激活' : '点击激活'}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setMapContextMenu({ name: m.name, x: e.clientX, y: e.clientY })
+                      }}
+                      title="左键加载 · 右键管理"
                     >
                       <span>{m.name}</span>
                       {m.has_tomogram && <span className={styles.mapBadge}>T</span>}
@@ -308,6 +369,24 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 </div>
               )
             })}
+            {/* Context menu */}
+            {mapContextMenu && (
+              <div
+                className={styles.contextMenu}
+                style={{ position: 'fixed', left: mapContextMenu.x, top: mapContextMenu.y, zIndex: 100 }}
+                onClick={() => setMapContextMenu(null)}
+              >
+                <button className={styles.contextMenuItem} onClick={() => { setLoadTarget(mapContextMenu.name); setMapContextMenu(null) }}>
+                  <LocateFixed size={12} /> 加载并重定位
+                </button>
+                <button className={styles.contextMenuItem} onClick={() => { setRenameTarget(mapContextMenu.name); setMapContextMenu(null) }}>
+                  <Pencil size={12} /> 重命名
+                </button>
+                <button className={[styles.contextMenuItem, styles.contextMenuDanger].join(' ')} onClick={() => { setDeleteTarget(mapContextMenu.name); setMapContextMenu(null) }}>
+                  <Trash2 size={12} /> 删除
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -514,6 +593,62 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
           </button>
         </div>
       </div>
+
+      {/* Click-away to close context menu */}
+      {mapContextMenu && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setMapContextMenu(null)} />
+      )}
+
+      {/* Load map confirm */}
+      <ConfirmModal
+        open={loadTarget !== null}
+        title="加载地图"
+        message={`加载「${loadTarget ?? ''}」并重定位到此地图？\n当前实时点云将对齐到此地图的坐标系。`}
+        confirmLabel="加载并重定位"
+        onConfirm={confirmLoadMap}
+        onCancel={() => setLoadTarget(null)}
+      />
+
+      {/* Delete map confirm */}
+      <ConfirmModal
+        open={deleteTarget !== null}
+        title="删除地图"
+        message={`确认删除「${deleteTarget ?? ''}」？此操作不可恢复。`}
+        confirmLabel="删除"
+        danger
+        onConfirm={handleDeleteMap}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* Rename map */}
+      <PromptModal
+        open={renameTarget !== null}
+        title="重命名地图"
+        message={`当前名称: ${renameTarget ?? ''}`}
+        placeholder="新名称"
+        initialValue={renameTarget ?? ''}
+        confirmLabel="重命名"
+        icon={<Pencil size={18} />}
+        validate={(v) => {
+          if (!/^[a-zA-Z0-9_-]+$/.test(v)) return '仅支持字母、数字、下划线和横线'
+          if (v === renameTarget) return '名称未变'
+          return null
+        }}
+        onConfirm={confirmRenameMap}
+        onCancel={() => setRenameTarget(null)}
+      />
+
+      {/* SLAM switch confirm */}
+      <ConfirmModal
+        open={slamSwitchTarget !== null}
+        title="切换 SLAM 模式"
+        message={slamSwitchTarget === 'fastlio2'
+          ? '切换到建图模式？当前导航巡航将停止，开始实时建图。'
+          : '切换到巡航模式？需要先加载一张已有地图用于定位。'}
+        confirmLabel={slamSwitchTarget === 'fastlio2' ? '开始建图' : '切换巡航'}
+        onConfirm={confirmSwitchSlam}
+        onCancel={() => setSlamSwitchTarget(null)}
+      />
 
       <PromptModal
         open={saveModalOpen}
