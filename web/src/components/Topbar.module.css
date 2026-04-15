@@ -16,7 +16,49 @@
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  min-width: 140px;
+}
+
+.sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 var(--s-1);
+  flex-shrink: 0;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tab,
+.tabActive {
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-out), color 0.15s var(--ease-out);
+  white-space: nowrap;
+}
+
+.tab {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.tab:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.tabActive {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .logo {

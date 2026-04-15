@@ -3,7 +3,6 @@ import { RotateCcw } from 'lucide-react'
 import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
 import { Topbar } from './components/Topbar'
-import { TabBar } from './components/TabBar'
 import { CameraFeed } from './components/CameraFeed'
 import { ChatPanel } from './components/ChatPanel'
 import { GpsCard } from './components/GpsCard'
@@ -41,8 +40,7 @@ function Dashboard() {
 
   return (
     <div className="app">
-      <Topbar sseState={sseState} />
-      <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      <Topbar sseState={sseState} activeTab={activeTab} onTabChange={setActiveTab} />
 
       <main className="main-content" key={activeTab}>
         {activeTab === 'console' && (
