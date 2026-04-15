@@ -47,7 +47,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [saveModalOpen, setSaveModalOpen] = useState(false)
   const [layers, setLayers] = useState<Layers>({
-    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true, costmap: true, slope: false,
+    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true, costmap: false, slope: false,
   })
   const [maps, setMaps] = useState<MapInfo[]>([])
   const [pointSize, setPointSize] = useState(0.05)
@@ -429,6 +429,12 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
             />
             <div className={styles.canvasOverlayTop}>
               <span className={styles.scaleLabel}>3D 场景视图  ·  拖拽旋转  ·  滚轮缩放  ·  点击放置目标</span>
+            </div>
+            <div className={styles.robotOverlay}>
+              <span>位置 ({robotX.toFixed(2)}, {robotY.toFixed(2)})</span>
+              <span>航向 {((yaw * 180) / Math.PI).toFixed(1)}°</span>
+              <span>速度 {vx.toFixed(2)} m/s</span>
+              <span>{missionState}</span>
             </div>
             {pendingGoal && (
               <div className={styles.goalConfirmPanel}>
