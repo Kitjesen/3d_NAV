@@ -407,24 +407,38 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const val  = bytes[r * cols + c]  // no manual flip — CanvasTexture.flipY handles it
+        const val  = bytes[r * cols + c]
         const o    = (r * cols + c) * 4
         if (val === 0) {
           // free space → fully transparent
           img.data[o] = img.data[o+1] = img.data[o+2] = img.data[o+3] = 0
-        } else if (val >= 100) {
-          // occupied wall → muted dark red, semi-transparent so point cloud shows through
+        } else if (val >= 99) {
+          // LETHAL / INSCRIBED → dark red
           img.data[o]     = 200
           img.data[o + 1] = 40
           img.data[o + 2] = 40
           img.data[o + 3] = 120
+        } else if (val >= 50) {
+          // high cost (slope hard or proximity) → orange-red
+          const t = (val - 50) / 49
+          img.data[o]     = Math.round(200 + 40 * t)
+          img.data[o + 1] = Math.round(120 - 80 * t)
+          img.data[o + 2] = 30
+          img.data[o + 3] = Math.round(60 + 50 * t)
+        } else if (val >= 10) {
+          // moderate cost (slope soft) → green to yellow
+          const t = (val - 10) / 40
+          img.data[o]     = Math.round(40 + 160 * t)   // green → yellow
+          img.data[o + 1] = Math.round(180 - 40 * t)
+          img.data[o + 2] = 30
+          img.data[o + 3] = Math.round(30 + 40 * t)
         } else {
-          // inflation zone: very subtle blue tint, barely visible
-          const t = val / 99
-          img.data[o]     = Math.round(30  + t * 20)   // R: 30–50
-          img.data[o + 1] = Math.round(60  + t * 20)   // G: 60–80
-          img.data[o + 2] = Math.round(120 + t * 40)   // B: 120–160 (blue)
-          img.data[o + 3] = Math.round(15  + t * 45)   // alpha: 15–60 (very subtle)
+          // low cost (inflation fringe) → subtle blue
+          const t = val / 10
+          img.data[o]     = Math.round(30 + t * 10)
+          img.data[o + 1] = Math.round(60 + t * 20)
+          img.data[o + 2] = Math.round(120 + t * 30)
+          img.data[o + 3] = Math.round(10 + t * 20)
         }
       }
     }
