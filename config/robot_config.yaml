@@ -207,7 +207,7 @@ tomogram:
   kernel_size: 7               # 地形分析卷积核大小
   interval_min: 0.50           # 最小可通行间隔 — 地面到障碍物 (m)
   interval_free: 0.65          # 自由通行间隔 — 机器人高度 (m)
-  slope_max: 0.40              # 最大坡度 (tan值, ~22°)
+  slope_max: 1.00              # 最大坡度 (tan值, 45°) — 四足极限
   step_max: 0.17               # 最大台阶高度 (m)
   standable_ratio: 0.20        # 可站立面积比例
   cost_barrier: 50.0           # 障碍物代价阈值 (≥此值不可通行)
@@ -227,7 +227,7 @@ pct_planner:
 # ── TraversabilityCost 分层代价融合 ──
 # 合并规则: max() 优先级 — LETHAL(100) > INSCRIBED(99) > slope(1-98) > proximity(0-50)
 # 硬约束 (obstacle/steep slope) 不可被软层覆盖
-# max_slope_deg: 默认从 terrain_analysis.slope_max (tan 值) 自动转换，四足 ~40°
+# max_slope_deg: 默认从 terrain_analysis.slope_max (tan 值) 自动转换，四足 45°
 traversability_cost:
   safe_distance: 1.5           # ESDF 接近性衰减距离 (m), 此范围内 soft cost 递增
   # max_slope_deg:             # 不设 → 从 terrain_analysis.slope_max 读取 (单一来源)

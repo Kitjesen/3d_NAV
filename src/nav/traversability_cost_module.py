@@ -124,10 +124,10 @@ class TraversabilityCostModule(Module, layer=2):
                 cfg = get_config()
                 # terrain_analysis.slope_max is tan(angle); convert to degrees
                 import math
-                slope_tan = cfg.raw.get("terrain_analysis", {}).get("slope_max", 0.84)
+                slope_tan = cfg.raw.get("terrain_analysis", {}).get("slope_max", 1.0)
                 self._max_slope = math.degrees(math.atan(slope_tan))
             except (ImportError, AttributeError):
-                self._max_slope = 40.0  # ~tan(0.84) ≈ 40°, reasonable for quadruped
+                self._max_slope = 45.0  # tan(1.0) = 45°, quadruped limit
 
         # Latest data from each source
         self._costmap_data: dict | None = None
