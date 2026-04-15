@@ -445,6 +445,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     ctx.putImageData(img, 0, 0)
 
     const tex = new THREE.CanvasTexture(canvas)
+    tex.flipY = false  // grid[iy,ix] row0=Y_min — no flip needed
     tex.minFilter = THREE.LinearFilter
     tex.magFilter = THREE.NearestFilter
 
@@ -458,7 +459,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     mesh.rotation.x = -Math.PI / 2
     mesh.position.set(
       origin[0] + sizeX / 2,
-      0.01,                          // just above floor grid
+      0.01,
       -(origin[1] + sizeY / 2),
     )
     scene.add(mesh)
@@ -530,6 +531,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     ctx.putImageData(img, 0, 0)
 
     const tex = new THREE.CanvasTexture(canvas)
+    tex.flipY = false  // grid[iy,ix] row0=Y_min — no flip needed
     tex.minFilter = THREE.LinearFilter
     tex.magFilter = THREE.NearestFilter
 

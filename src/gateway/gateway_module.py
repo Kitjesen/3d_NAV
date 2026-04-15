@@ -561,10 +561,13 @@ class GatewayModule(Module, layer=6):
 
             import numpy as _np
             g = _np.clip(grid, 0, 100).astype(_np.uint8)
-            cols = int(g.shape[0])
+            # grid[iy, ix]: shape[0]=rows(Y), shape[1]=cols(X)
+            rows = int(g.shape[0])
+            cols = int(g.shape[1]) if g.ndim >= 2 else rows
             self.push_event({
                 "type":       "costmap",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
+                "rows":       rows,
                 "cols":       cols,
                 "resolution": float(cm.get("resolution", 0.1)),
                 "origin":     [float(v) for v in cm.get("origin", [0.0, 0.0])],
@@ -583,10 +586,12 @@ class GatewayModule(Module, layer=6):
             import numpy as _np
             # Encode slope degrees as uint8 (0-90° → 0-255)
             g = _np.clip(grid * (255.0 / 90.0), 0, 255).astype(_np.uint8)
-            cols = int(g.shape[0])
+            rows = int(g.shape[0])
+            cols = int(g.shape[1]) if g.ndim >= 2 else rows
             self.push_event({
                 "type":       "slope_grid",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
+                "rows":       rows,
                 "cols":       cols,
                 "resolution": float(data.get("resolution", 0.2)),
                 "origin":     [float(v) for v in data.get("origin", [0.0, 0.0])],
