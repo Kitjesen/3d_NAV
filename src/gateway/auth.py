@@ -136,7 +136,7 @@ class APIKeyMiddleware:
         query = scope.get("query_string", b"").decode("latin-1")
         if query:
             parsed = parse_qs(query)
-            if "api_key" in parsed and parsed["api_key"]:
+            if parsed.get("api_key"):
                 return parsed["api_key"][0]
 
         # 3. Cookie lingtu_api_key=

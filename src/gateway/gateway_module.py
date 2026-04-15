@@ -556,6 +556,7 @@ class GatewayModule(Module, layer=6):
             return
         try:
             import base64 as _b64
+
             import numpy as _np
             g = _np.clip(grid, 0, 100).astype(_np.uint8)
             cols = int(g.shape[0])
@@ -751,6 +752,7 @@ class GatewayModule(Module, layer=6):
             if gw._temporal_store is None:
                 try:
                     import os as _os
+
                     from memory.storage.temporal_store import TemporalStore as _TS
                     mem_dir = _os.environ.get(
                         "LINGTU_MEMORY_DIR",
@@ -1244,7 +1246,9 @@ class GatewayModule(Module, layer=6):
 
         @app.get("/api/v1/maps/{name}/points", summary="Saved map point cloud as JSON")
         async def get_saved_map_points(name: str, max_points: int = 30000):
+            import os
             import pathlib
+
             from fastapi import HTTPException
             map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
             base = pathlib.Path(map_dir).resolve()
@@ -1303,7 +1307,8 @@ class GatewayModule(Module, layer=6):
         @app.post("/api/v1/slam/relocalize", summary="Relocalize against a saved map")
         async def slam_relocalize(body: dict):
             """Call /relocalize ROS2 service to localize robot in a saved map."""
-            import os, subprocess
+            import os
+            import subprocess
             map_name = body.get("map_name", "")
             x    = float(body.get("x",   0.0))
             y    = float(body.get("y",   0.0))
@@ -1368,8 +1373,9 @@ class GatewayModule(Module, layer=6):
         @app.get("/robot/meshes/{filename}", summary="Serve robot STL mesh files")
         async def serve_robot_mesh(filename: str):
             import os
-            from starlette.responses import FileResponse
+
             from fastapi.responses import JSONResponse
+            from starlette.responses import FileResponse
             mesh_dir = os.environ.get(
                 "DOG_MESH_DIR",
                 os.path.join(os.path.dirname(__file__),

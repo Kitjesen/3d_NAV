@@ -119,7 +119,7 @@ class SqliteEpisodicStore:
     # Write
     # ------------------------------------------------------------------
 
-    def save(self, record: "MemoryRecord") -> None:
+    def save(self, record: MemoryRecord) -> None:
         """Buffer a single MemoryRecord; flushes automatically when the
         buffer fills or the flush interval elapses."""
         import time as _time
@@ -130,7 +130,7 @@ class SqliteEpisodicStore:
                     or (now - self._last_flush) >= self._FLUSH_INTERVAL):
                 self._flush_locked()
 
-    def save_batch(self, records: "list[MemoryRecord]") -> None:
+    def save_batch(self, records: list[MemoryRecord]) -> None:
         """Persist multiple records in one transaction."""
         rows = [
             (
@@ -167,10 +167,11 @@ class SqliteEpisodicStore:
     # Read
     # ------------------------------------------------------------------
 
-    def load_recent(self, n: int) -> "list[MemoryRecord]":
+    def load_recent(self, n: int) -> list[MemoryRecord]:
         """Return the *n* most recent records, oldest-first."""
-        from memory.spatial.episodic import MemoryRecord
         import numpy as np
+
+        from memory.spatial.episodic import MemoryRecord
         with self._lock:
             cur = self._conn.execute(
                 "SELECT ts, position, labels, room, desc, emb"
@@ -182,7 +183,7 @@ class SqliteEpisodicStore:
         records.reverse()  # oldest first, matching in-memory order
         return records
 
-    def load_all(self) -> "list[MemoryRecord]":
+    def load_all(self) -> list[MemoryRecord]:
         """Return all records, oldest-first."""
         with self._lock:
             cur = self._conn.execute(
@@ -192,7 +193,7 @@ class SqliteEpisodicStore:
             rows = cur.fetchall()
         return [_row_to_record(r) for r in rows]
 
-    def load_range(self, start_ts: float, end_ts: float) -> "list[MemoryRecord]":
+    def load_range(self, start_ts: float, end_ts: float) -> list[MemoryRecord]:
         """Return records in the [start_ts, end_ts] range, oldest-first."""
         with self._lock:
             cur = self._conn.execute(
@@ -213,7 +214,7 @@ class SqliteEpisodicStore:
 # Internal helper
 # ------------------------------------------------------------------
 
-def _row_to_record(row: tuple) -> "MemoryRecord":
+def _row_to_record(row: tuple) -> MemoryRecord:
     from memory.spatial.episodic import MemoryRecord
     ts, pos_b, labels_j, room, desc, emb_b = row
     return MemoryRecord(

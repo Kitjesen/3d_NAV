@@ -111,7 +111,7 @@ class TemporalStore:
         robot_y: float = 0.0,
         ts: float | None = None,
         session_id: str = "",
-        embedding: "np.ndarray | None" = None,
+        embedding: np.ndarray | None = None,
     ) -> None:
         """Insert one entity observation.
 
@@ -202,7 +202,7 @@ class TemporalStore:
 
     def query_semantic(
         self,
-        query_embedding: "np.ndarray",
+        query_embedding: np.ndarray,
         top_k: int = 10,
         since_ts: float | None = None,
         label: str | None = None,

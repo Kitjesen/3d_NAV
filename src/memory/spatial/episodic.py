@@ -50,7 +50,7 @@ class EpisodicMemory:
         self._records: list[MemoryRecord] = []
         self._clip = clip_encoder
         self._lock = threading.Lock()
-        self._store: "SqliteEpisodicStore | None" = None
+        self._store: SqliteEpisodicStore | None = None
 
         if persist_path is not None:
             from memory.spatial.episodic_store import SqliteEpisodicStore

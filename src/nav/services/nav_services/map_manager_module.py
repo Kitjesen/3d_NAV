@@ -410,7 +410,7 @@ class MapManagerModule(Module, layer=6):
         try:
             pts_list: list[list[float]] = []
             in_data = False
-            with open(pcd_path, "r", errors="replace") as f:
+            with open(pcd_path, errors="replace") as f:
                 for line in f:
                     line = line.strip()
                     if not in_data:
