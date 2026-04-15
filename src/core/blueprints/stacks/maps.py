@@ -48,6 +48,16 @@ def maps(**config) -> Blueprint:
         bp.add(ElevationMapModule,
                resolution=config.get("elev_resolution", og.get("resolution", 0.2)),
                map_radius=config.get("elev_radius", 15.0))
+
+        from nav.traversability_cost_module import TraversabilityCostModule
+        tc = cfg.raw.get("traversability_cost", {})
+        bp.add(TraversabilityCostModule,
+               obstacle_weight=tc.get("obstacle_weight", 1.0),
+               slope_weight=tc.get("slope_weight", 0.3),
+               proximity_weight=tc.get("proximity_weight", 0.2),
+               safe_distance=tc.get("safe_distance", 1.5),
+               max_slope_deg=tc.get("max_slope_deg", 30.0),
+               publish_hz=tc.get("publish_hz", 2.0))
     except ImportError as e:
         logger.warning("Map modules not available: %s", e)
 

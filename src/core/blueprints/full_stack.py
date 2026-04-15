@@ -227,8 +227,17 @@ def full_stack_blueprint(
     # Gateway uses SLAM odometry (when available) for accurate position display
     _w(_nav_odom_src, "odometry", "GatewayModule", "odometry")
 
-    # Costmap → NavigationModule (live obstacle data for _find_safe_goal BFS)
-    _w("OccupancyGridModule", "costmap", "NavigationModule", "costmap")
+    # TraversabilityCostModule inputs — fuse four map layers
+    _w("OccupancyGridModule", "costmap",        "TraversabilityCostModule", "costmap")
+    _w("ElevationMapModule",  "elevation_map",   "TraversabilityCostModule", "elevation_map")
+    _w("ESDFModule",          "esdf",            "TraversabilityCostModule", "esdf")
+    _w("TerrainModule",       "traversability",  "TraversabilityCostModule", "traversability")
+
+    # TraversabilityCostModule outputs → consumers
+    _w("TraversabilityCostModule", "fused_cost",  "NavigationModule",    "costmap")
+    _w("TraversabilityCostModule", "esdf_field",  "LocalPlannerModule",  "esdf")
+    _w("TraversabilityCostModule", "fused_cost",  "GatewayModule",       "costmap")
+    _w("TraversabilityCostModule", "slope_grid",  "GatewayModule",       "slope_grid")
 
     # Mission history — NavigationModule state changes go to MissionLoggerModule
     _w("NavigationModule", "mission_status", "MissionLoggerModule", "mission_status")

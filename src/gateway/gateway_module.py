@@ -240,7 +240,8 @@ class GatewayModule(Module, layer=6):
     execution_eval: In[ExecutionEval]
     dialogue_state: In[dict]
     global_path:    In[list]  # from NavigationModule — list of np.ndarray [x,y,z]
-    costmap:        In[dict]  # from OccupancyGridModule — {grid, resolution, origin, ts}
+    costmap:        In[dict]  # from TraversabilityCostModule — fused cost grid
+    slope_grid:     In[dict]  # from TraversabilityCostModule — slope in degrees
 
     # -- Outputs (client commands → modules) --------------------------------
     goal_pose:   Out[PoseStamped]
@@ -333,6 +334,7 @@ class GatewayModule(Module, layer=6):
         self.dialogue_state.subscribe(self._on_dialogue)
         self.global_path.subscribe(self._on_global_path)
         self.costmap.subscribe(self._on_costmap)
+        self.slope_grid.subscribe(self._on_slope_grid)
         self._app = self._build_app()
 
     def start(self) -> None:
@@ -569,6 +571,28 @@ class GatewayModule(Module, layer=6):
             })
         except Exception as exc:
             logger.debug("_on_costmap serialize failed: %s", exc)
+
+    def _on_slope_grid(self, data: dict) -> None:
+        """Push slope grid as SSE event for web visualization."""
+        grid = data.get("grid")
+        if grid is None:
+            return
+        try:
+            import base64 as _b64
+
+            import numpy as _np
+            # Encode slope degrees as uint8 (0-90° → 0-255)
+            g = _np.clip(grid * (255.0 / 90.0), 0, 255).astype(_np.uint8)
+            cols = int(g.shape[0])
+            self.push_event({
+                "type":       "slope_grid",
+                "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
+                "cols":       cols,
+                "resolution": float(data.get("resolution", 0.2)),
+                "origin":     [float(v) for v in data.get("origin", [0.0, 0.0])],
+            })
+        except Exception as exc:
+            logger.debug("_on_slope_grid serialize failed: %s", exc)
 
     # -- SSE fan-out --------------------------------------------------------
 

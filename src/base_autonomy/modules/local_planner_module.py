@@ -325,6 +325,7 @@ class LocalPlannerModule(Module, layer=2):
     waypoint:    In[PoseStamped]
     boundary:    In[PointCloud2]
     added_obstacles: In[PointCloud2]
+    esdf:        In[dict]       # ESDF distance field + gradients for smoother scoring
 
     # -- Outputs --
     local_path: Out[Path]
@@ -340,6 +341,9 @@ class LocalPlannerModule(Module, layer=2):
         self._terrain_points: np.ndarray | None = None
         self._boundary_points: np.ndarray | None = None
         self._added_obstacle_points: np.ndarray | None = None
+        self._esdf_field: np.ndarray | None = None
+        self._esdf_resolution: float = 0.2
+        self._esdf_origin: np.ndarray | None = None
         self._last_cmu_py_time: float = 0.0
 
         # cmu_py state
@@ -359,6 +363,7 @@ class LocalPlannerModule(Module, layer=2):
         self.waypoint.subscribe(self._on_waypoint)
         self.boundary.subscribe(self._on_boundary)
         self.added_obstacles.subscribe(self._on_added_obstacles)
+        self.esdf.subscribe(self._on_esdf)
 
         if self._backend == "nanobind":
             self._setup_nanobind()
@@ -504,6 +509,14 @@ class LocalPlannerModule(Module, layer=2):
             if now - self._last_cmu_py_time >= 1.0:
                 self._last_cmu_py_time = now
                 self._run_cmu_py()
+
+    def _on_esdf(self, data: dict) -> None:
+        """Store ESDF distance field for proximity-aware scoring."""
+        self._esdf_field = data.get("distance_field")
+        self._esdf_resolution = data.get("resolution", 0.2)
+        origin = data.get("origin")
+        if origin is not None:
+            self._esdf_origin = np.array(origin[:2], dtype=np.float64)
 
     def _on_terrain(self, cloud: PointCloud2):
         """Store terrain obstacle points for local planning."""
