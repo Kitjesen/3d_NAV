@@ -199,6 +199,13 @@ class TerrainModule(Module, layer=2):
         else:
             return
 
+        # GIL hot-path: cap at 30K points to keep tolist() < 100ms.
+        # LiDAR @10Hz delivers ~100K points; downsample to keep uvicorn alive.
+        MAX_POINTS = 30_000
+        if len(pts4) > MAX_POINTS:
+            stride = len(pts4) // MAX_POINTS
+            pts4 = pts4[::stride][:MAX_POINTS]
+
         # Flatten to 1D for C++ (Nx4 → 4N flat)
         flat = pts4.ravel().tolist()  # TODO: zero-copy via nb::ndarray when available
         ts = getattr(cloud, 'ts', time.time())
