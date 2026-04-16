@@ -1,0 +1,57 @@
+/* ThinkingBubble — Claude Code style spinner + rotating verb.
+   Palette-compliant: amber/warn tone only (no new colors).
+*/
+
+.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(245, 158, 11, 0.06);    /* very subtle amber wash */
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: var(--r-full);
+  font-family: var(--font-ui);
+  font-size: var(--t-caption-size);
+  color: var(--warn, #f59e0b);
+  line-height: 1.2;
+  user-select: none;
+  animation: thinkingIn 0.24s var(--ease-out);
+}
+
+@keyframes thinkingIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.spinner {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--warn, #f59e0b);
+  text-shadow: 0 0 6px rgba(245, 158, 11, 0.45);
+  line-height: 1;
+  /* tiny breathing effect — independent of the frame cycle */
+  animation: thinkingPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes thinkingPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.72; }
+}
+
+.label {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+
+.elapsed {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption-size);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  padding-left: 4px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  margin-left: 2px;
+}

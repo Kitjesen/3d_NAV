@@ -8,13 +8,15 @@ import {
   matchSlashCommands,
   type SlashCommandSpec,
 } from '../utils/slashCommands'
+import { ThinkingBubble } from './ThinkingBubble'
 import styles from './ChatPanel.module.css'
 
 interface Message {
   id: number
-  role: 'user' | 'system'
+  role: 'user' | 'system' | 'assistant'
   text: string
   ts: number
+  phase?: string
 }
 
 let _id = 0
@@ -51,9 +53,11 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [suggestionIdx, setSuggestionIdx] = useState(0)
+  const [thinking, setThinking] = useState<{ hint: string; startedAt: number } | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const prevMissionRef = useRef<string | null>(null)
+  const lastAgentTsRef = useRef<number>(0)
 
   // ── Autocomplete candidates ──
   const suggestions: SlashCommandSpec[] = useMemo(() => {
@@ -71,12 +75,25 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     setSuggestionIdx(0)
   }, [suggestions.length])
 
-  // Scroll to bottom on new messages
+  // Scroll to bottom on new messages or thinking state change
   useEffect(() => {
     if (listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight
     }
-  }, [messages])
+  }, [messages, thinking])
+
+  // Safety: clear orphaned thinking after 60s (agent hung or crashed).
+  // Inline setMessages to avoid forward-reference to addSystem.
+  useEffect(() => {
+    if (!thinking) return
+    const t = setTimeout(() => {
+      setThinking(null)
+      setMessages(prev => [...prev, {
+        id: nextId(), role: 'system', text: '⚠ 智能体超时未响应', ts: Date.now(),
+      }])
+    }, 60_000)
+    return () => clearTimeout(t)
+  }, [thinking])
 
   // React to mission_status changes from SSE
   useEffect(() => {
@@ -98,6 +115,33 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     setMessages(prev => [...prev, { id: nextId(), role: 'system', text, ts: Date.now() }])
   }, [])
 
+  // ── Agent chat stream ──
+  // SemanticPlanner publishes messages with role='thinking' (progress hint)
+  // or 'assistant' (concrete result). Thinking updates the bubble's hint;
+  // assistant appends to the message list and dismisses the bubble.
+  useEffect(() => {
+    const m = sseState.agentMessage
+    if (!m) return
+    if (m.ts <= lastAgentTsRef.current) return  // dedup
+    lastAgentTsRef.current = m.ts
+
+    if (m.role === 'thinking') {
+      setThinking(prev => ({
+        hint: m.text,
+        startedAt: prev?.startedAt ?? Date.now(),
+      }))
+    } else if (m.role === 'assistant') {
+      setMessages(prev => [...prev, {
+        id: nextId(),
+        role: 'assistant',
+        text: m.text,
+        ts: Math.floor(m.ts * 1000),
+        phase: m.phase,
+      }])
+      setThinking(null)   // agent produced a reply — stop thinking
+    }
+  }, [sseState.agentMessage])
+
   const sendInstruction = useCallback(async () => {
     const text = input.trim()
     if (!text || sending) return
@@ -111,14 +155,18 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     }
 
     setSending(true)
+    setThinking({ hint: '发送指令…', startedAt: Date.now() })
     try {
       const res = await api.sendInstruction(text)
       if (!res.ok) {
         const err = await res.text()
         addSystem(`错误：${res.status} ${err}`)
+        setThinking(null)
       }
+      // else: thinking bubble stays visible until agent_message arrives
     } catch (e) {
       addSystem(`网络错误：${String(e)}`)
+      setThinking(null)
     } finally {
       setSending(false)
     }
@@ -193,12 +241,23 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
       </div>
 
       <div className={styles.messages} ref={listRef}>
-        {messages.map(msg => (
-          <div key={msg.id} className={msg.role === 'user' ? styles.bubbleUser : styles.bubbleSystem}>
-            <div className={styles.bubbleText}>{msg.text}</div>
-            <div className={styles.bubbleTime}>{formatTime(msg.ts)}</div>
+        {messages.map(msg => {
+          const cls =
+            msg.role === 'user'      ? styles.bubbleUser      :
+            msg.role === 'assistant' ? styles.bubbleAssistant :
+                                        styles.bubbleSystem
+          return (
+            <div key={msg.id} className={cls}>
+              <div className={styles.bubbleText}>{msg.text}</div>
+              <div className={styles.bubbleTime}>{formatTime(msg.ts)}</div>
+            </div>
+          )
+        })}
+        {thinking && (
+          <div className={styles.bubbleThinking}>
+            <ThinkingBubble hint={thinking.hint} startedAt={thinking.startedAt} />
           </div>
-        ))}
+        )}
       </div>
 
       <div className={styles.inputRow}>

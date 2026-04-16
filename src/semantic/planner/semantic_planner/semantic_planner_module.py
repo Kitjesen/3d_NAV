@@ -82,6 +82,7 @@ class SemanticPlannerModule(Module, layer=4):
     planner_status:  Out[str]
     cancel:          Out[str]  # "lera_abort" → NavigationModule.cancel
     servo_target:    Out[str]  # "find:<label>" → VisualServoModule
+    agent_message:   Out[dict]  # chat-facing messages: {role, text, ts, phase?}
 
     def __init__(
         self,
@@ -236,6 +237,23 @@ class SemanticPlannerModule(Module, layer=4):
 
     # ── Input handlers ────────────────────────────────────────────────────────
 
+    # ── Chat-facing message helpers ──
+    def _chat(self, role: str, text: str, phase: str | None = None) -> None:
+        """Publish a chat message for the Web ChatPanel.
+
+        role: 'thinking' | 'assistant' | 'tool'
+        phase: optional sub-state hint (e.g. 'decompose', 'fast_path', 'vector')
+        """
+        try:
+            self.agent_message.publish({
+                "role": role,
+                "text": text,
+                "ts": time.time(),
+                "phase": phase or "",
+            })
+        except Exception:
+            pass  # never let chat failures affect planning
+
     def _on_instruction(self, text: str) -> None:
         """New instruction → decompose → resolve."""
         self._current_instruction = text
@@ -244,13 +262,22 @@ class SemanticPlannerModule(Module, layer=4):
             self._requery_count = 0
             self._last_nav_state = ""
         self.planner_status.publish("PROCESSING")
+        self._chat("thinking", "正在理解指令…", phase="parse")
 
         plan = self._decompose(text)
         if plan:
             self.task_plan.publish(plan)
+            subtasks = plan.get("subtasks") or []
+            if len(subtasks) > 1:
+                self._chat("assistant",
+                           f"拆解为 {len(subtasks)} 步：" + " → ".join(subtasks[:4]),
+                           phase="decompose")
 
         if self._latest_sg:
+            self._chat("thinking", "在场景中搜索目标…", phase="resolve")
             self._try_resolve(text, self._latest_sg)
+        else:
+            self._chat("assistant", "⚠ 还没有场景图，无法定位目标", phase="no_sg")
 
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         """Scene graph update → cache + re-resolve if active instruction."""
@@ -472,15 +499,20 @@ class SemanticPlannerModule(Module, layer=4):
                     self._current_goal_pose = pose
                     self.goal_pose.publish(pose)
                     self.planner_status.publish("RESOLVED")
+                    self._chat("assistant",
+                               f"找到目标：({pos[0]:.2f}, {pos[1]:.2f})，开始导航",
+                               phase="fast_path")
                     return
         except Exception:
             logger.exception("Fast path resolution failed")
 
         # Level 3: Vector Memory (CLIP embedding search)
+        self._chat("thinking", "Fast Path 未命中，查询向量记忆…", phase="vector")
         if self._try_vector_memory(instruction):
             return
 
         # Level 4: Frontier exploration → Level 5: Visual servo
+        self._chat("thinking", "无已知目标，转向前沿探索…", phase="frontier")
         self._explore_frontier(instruction)
 
     # ── Vector Memory Search ─────────────────────────────────────────────────
@@ -530,6 +562,9 @@ class SemanticPlannerModule(Module, layer=4):
             self._current_goal_pose = pose
             self.goal_pose.publish(pose)
             self.planner_status.publish("VECTOR_MEMORY")
+            self._chat("assistant",
+                       f"向量记忆命中：({best['x']:.2f}, {best['y']:.2f}) 置信度 {best.get('score', 0):.2f}",
+                       phase="vector")
             logger.info("Vector memory hit: '%s' → (%.1f, %.1f) score=%.2f",
                         instruction, best["x"], best["y"], best["score"])
             return True
@@ -559,7 +594,11 @@ class SemanticPlannerModule(Module, layer=4):
                 self.goal_pose.publish(pose)
                 self._frontier_count += 1
                 self.planner_status.publish("EXPLORING")
+                self._chat("assistant",
+                           f"前沿点：({pos[0]:.2f}, {pos[1]:.2f})，边探索边搜索",
+                           phase="frontier")
             else:
+                self._chat("assistant", "⚠ 无可达前沿点，尝试视觉伺服", phase="visual_servo")
                 self._fallback_visual_servo(instruction)
         except Exception:
             logger.exception("Frontier exploration failed")

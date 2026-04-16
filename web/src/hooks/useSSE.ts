@@ -14,6 +14,7 @@ export type {
   MapCloudEvent,
   CostmapEvent,
   SlopeGridEvent,
+  AgentMessageEvent,
   PathPoint,
   SSEEvent,
   SSEState,
@@ -30,6 +31,7 @@ const INITIAL_STATE: SSEState = {
   mapCloud: null,
   costmap: null,
   slopeGrid: null,
+  agentMessage: null,
   lastHeartbeat: null,
   connected: false,
   events: [],
@@ -106,6 +108,9 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               case 'slope_grid':
                 next.slopeGrid = event as never
+                break
+              case 'agent_message':
+                next.agentMessage = event as never
                 break
               case 'heartbeat':
               case 'ping':

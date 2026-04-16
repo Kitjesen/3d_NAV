@@ -242,6 +242,7 @@ class GatewayModule(Module, layer=6):
     global_path:    In[list]  # from NavigationModule — list of np.ndarray [x,y,z]
     costmap:        In[dict]  # from TraversabilityCostModule — fused cost grid
     slope_grid:     In[dict]  # from TraversabilityCostModule — slope in degrees
+    agent_message:  In[dict]  # from SemanticPlanner — chat-facing messages
 
     # -- Outputs (client commands → modules) --------------------------------
     goal_pose:   Out[PoseStamped]
@@ -335,6 +336,7 @@ class GatewayModule(Module, layer=6):
         self.global_path.subscribe(self._on_global_path)
         self.costmap.subscribe(self._on_costmap)
         self.slope_grid.subscribe(self._on_slope_grid)
+        self.agent_message.subscribe(self._on_agent_message)
         self._app = self._build_app()
 
     def start(self) -> None:
@@ -598,6 +600,19 @@ class GatewayModule(Module, layer=6):
             })
         except Exception as exc:
             logger.debug("_on_slope_grid serialize failed: %s", exc)
+
+    def _on_agent_message(self, msg: dict) -> None:
+        """Forward semantic planner chat messages as SSE for the Web ChatPanel."""
+        try:
+            self.push_event({
+                "type":  "agent_message",
+                "role":  str(msg.get("role", "assistant")),
+                "text":  str(msg.get("text", "")),
+                "phase": str(msg.get("phase", "")),
+                "ts":    float(msg.get("ts", time.time())),
+            })
+        except Exception as exc:
+            logger.debug("_on_agent_message serialize failed: %s", exc)
 
     # -- SSE fan-out --------------------------------------------------------
 

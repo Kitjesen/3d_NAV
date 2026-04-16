@@ -86,6 +86,14 @@ export interface SlopeGridEvent {
   origin: [number, number]
 }
 
+export interface AgentMessageEvent {
+  type: 'agent_message'
+  role: 'thinking' | 'assistant' | 'tool'
+  text: string
+  phase?: string
+  ts: number
+}
+
 export type SSEEvent =
   | OdometryEvent
   | MissionStatusEvent
@@ -98,6 +106,7 @@ export type SSEEvent =
   | MapCloudEvent
   | CostmapEvent
   | SlopeGridEvent
+  | AgentMessageEvent
 
 export interface SSEState {
   odometry: OdometryEvent | null
@@ -110,6 +119,7 @@ export interface SSEState {
   mapCloud: MapCloudEvent | null
   costmap: CostmapEvent | null
   slopeGrid: SlopeGridEvent | null
+  agentMessage: AgentMessageEvent | null  // latest agent chat message (ts dedups)
   lastHeartbeat: number | null
   connected: boolean
   events: SSEEvent[]

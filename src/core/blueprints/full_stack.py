@@ -253,6 +253,9 @@ def full_stack_blueprint(
     _w("SafetyRingModule", "dialogue_state", "GatewayModule", "dialogue_state")
     _w("NavigationModule", "global_path", "GatewayModule", "global_path")
 
+    # Semantic planner → chat (SSE agent_message)
+    _w("SemanticPlannerModule", "agent_message", "GatewayModule", "agent_message")
+
     # Goal routing from sim driver
     try:
         from core.registry import get as _get_plugin

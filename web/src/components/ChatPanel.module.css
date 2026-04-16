@@ -122,6 +122,31 @@
   align-items: flex-start;
 }
 
+/* Assistant message: accent-tinted, distinguishes from neutral system bubble.
+   Uses --accent (teal) subtly — part of the unified palette. */
+.bubbleAssistant {
+  composes: bubble;
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.bubbleAssistant .bubbleText {
+  background: rgba(94, 234, 212, 0.07);
+  border: 1px solid rgba(94, 234, 212, 0.18);
+  border-bottom-left-radius: var(--r-xs);
+  color: var(--text);
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+
+/* Container for ThinkingBubble — aligned like a system/assistant reply */
+.bubbleThinking {
+  align-self: flex-start;
+  display: flex;
+  padding: 2px 0;
+  animation: bubbleIn 0.28s var(--ease-spring);
+}
+
 .bubbleText {
   padding: 8px 12px;
   border-radius: var(--r-lg);
