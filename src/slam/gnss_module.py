@@ -260,6 +260,8 @@ class GnssModule(Module, layer=1):
         require_fix_type: int = 1,
         allow_float: bool = True,
         status_rate_hz: float = 2.0,
+        serial_port: Optional[str] = None,
+        serial_baud: int = 115200,
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
@@ -267,6 +269,8 @@ class GnssModule(Module, layer=1):
         self._fix_topic = fix_topic
         self._antenna_frame = antenna_frame
         self._map_frame = map_frame
+        self._serial_port = serial_port
+        self._serial_baud = serial_baud
 
         self._origin = MapOrigin(
             lat=origin_lat, lon=origin_lon, alt=origin_alt,
@@ -286,6 +290,7 @@ class GnssModule(Module, layer=1):
         self._link_ok = False
         self._running = False
         self._dds_reader = None
+        self._serial_driver = None
         self._status_thread: Optional[threading.Thread] = None
         self._status_rate_hz = status_rate_hz
         self._shutdown_event = threading.Event()
@@ -296,8 +301,34 @@ class GnssModule(Module, layer=1):
     # -- lifecycle ----------------------------------------------------------
 
     def setup(self) -> None:
-        """Attempt DDS subscription. Fall back to stub silently."""
-        self._try_start_dds()
+        """Try DDS subscription first, then serial driver, then stub."""
+        if self._try_start_dds():
+            return
+        if self._serial_port:
+            self._try_start_serial()
+        else:
+            logger.info("GnssModule: no DDS and no serial_port — stub mode")
+
+    def _try_start_serial(self) -> bool:
+        """Start direct serial NMEA reader as DDS fallback."""
+        try:
+            from slam.gnss_serial_driver import GnssSerialDriver
+            driver = GnssSerialDriver(
+                port=self._serial_port,
+                baud=self._serial_baud,
+                callback=self.inject_fix,
+            )
+            if driver.start():
+                self._serial_driver = driver
+                logger.info(
+                    "GnssModule: serial driver started on %s @ %d baud",
+                    self._serial_port, self._serial_baud,
+                )
+                return True
+            return False
+        except Exception as e:
+            logger.warning("GnssModule: serial driver failed: %s", e)
+            return False
 
     def _try_start_dds(self) -> bool:
         """Start DDS subscription if cyclonedds available."""
@@ -350,6 +381,12 @@ class GnssModule(Module, layer=1):
             except Exception:
                 pass
             self._dds_reader = None
+        if self._serial_driver is not None:
+            try:
+                self._serial_driver.stop()
+            except Exception:
+                pass
+            self._serial_driver = None
         super().stop()
 
     # -- DDS callback -------------------------------------------------------

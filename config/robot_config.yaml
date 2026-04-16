@@ -115,8 +115,8 @@ brainstem:
 gnss:
   enabled: false                   # 全局开关，未接入前保持 false
   model: "WTRTK-980"
-  device: "/dev/ttyUSB0"           # UART 设备 (或 TYPE-C 对应的 /dev/ttyACM0)
-  baud: 460800
+  device: "/dev/ttyUSB0"           # UART 设备 (CH340 USB-UART)
+  baud: 115200                     # UM980 默认 115200 (可通过 CONFIG COM1 460800 提速)
 
   # 天线相对 body 原点的安装偏移 (m, body frame)
   antenna_offset:
