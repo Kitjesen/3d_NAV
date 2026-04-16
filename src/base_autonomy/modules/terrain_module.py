@@ -169,6 +169,13 @@ class TerrainModule(Module, layer=2):
             self.traversability.publish({"status": "passthrough"})
 
     def _on_cloud(self, cloud: PointCloud2):
+        # Throttle: tolist() + nanobind process holds GIL hundreds of ms,
+        # starves uvicorn. 2 Hz is plenty for terrain (planner runs at 1 Hz).
+        now = time.time()
+        if now - getattr(self, "_last_process_ts", 0.0) < 0.5:
+            return
+        self._last_process_ts = now
+
         if self._backend == "simple":
             self.terrain_map.publish(cloud)
             return
