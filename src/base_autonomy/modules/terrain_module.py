@@ -169,9 +169,13 @@ class TerrainModule(Module, layer=2):
             self.traversability.publish({"status": "passthrough"})
 
     def _on_cloud(self, cloud: PointCloud2):
-        # Throttle: tolist() + nanobind process holds GIL ~500ms per call.
-        # 0.5Hz (2s interval) keeps GIL contention manageable for uvicorn.
-        # Planner runs at 1Hz; terrain refresh every 2s is acceptable.
+        # GIL hot-path. Three layers of protection:
+        # 1. Bypass entirely if env LINGTU_DISABLE_TERRAIN=1
+        # 2. Throttle to 0.5 Hz (2 s interval)
+        # 3. Cap point count in _process_nanobind below
+        import os
+        if os.environ.get("LINGTU_DISABLE_TERRAIN", "0") == "1":
+            return
         now = time.time()
         if now - getattr(self, "_last_process_ts", 0.0) < 2.0:
             return
