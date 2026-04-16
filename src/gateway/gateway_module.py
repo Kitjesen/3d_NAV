@@ -1655,8 +1655,7 @@ class GatewayModule(Module, layer=6):
         )
         if _os.path.isdir(_web_dist):
             from starlette.staticfiles import StaticFiles
-            from starlette.middleware import Middleware
-            from starlette.types import ASGIApp, Receive, Scope, Send
+            from starlette.types import Receive, Scope, Send
 
             # Prevent browser from caching index.html (hashed assets are fine)
             _inner_app = StaticFiles(directory=_web_dist, html=True)
@@ -1664,7 +1663,6 @@ class GatewayModule(Module, layer=6):
             async def _no_cache_html(scope: Scope, receive: Receive, send: Send) -> None:
                 async def _send_with_headers(message: dict) -> None:
                     if message.get("type") == "http.response.start":
-                        headers = dict(message.get("headers", []))
                         # Only add no-cache for HTML (index.html), not hashed assets
                         path = scope.get("path", "")
                         if not path.startswith("/assets/"):

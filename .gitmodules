@@ -1,3 +1,0 @@
-[submodule "src/robot_proto"]
-	path = src/robot_proto
-	url = https://github.com/Kitjesen/Robot_Proto.git
