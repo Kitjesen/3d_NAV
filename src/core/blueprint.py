@@ -230,18 +230,12 @@ class Blueprint:
             TypeError:  Type mismatch in an explicit wire().
         """
         n_workers = self._global_cfg.get("n_workers", n_workers)
-        # Auto-detect: if any module declares _run_in_worker, enable worker mode
+        # Worker mode: only activate when explicitly requested via n_workers > 0
+        # or LINGTU_WORKERS env var. Auto-detect is disabled until BPU/CLIP
+        # compatibility with multiprocessing fork is verified on S100P aarch64.
         if n_workers == 0:
-            has_worker_modules = any(
-                getattr(e.module_cls, '_run_in_worker', False) for e in self._entries
-            )
-            if has_worker_modules:
-                groups = {getattr(e.module_cls, '_worker_group', '') or 'default'
-                          for e in self._entries
-                          if getattr(e.module_cls, '_run_in_worker', False)}
-                n_workers = len(groups)
-                logger.info("Auto-enabling worker mode: %d groups detected (%s)",
-                            n_workers, ', '.join(sorted(groups)))
+            import os as _os
+            n_workers = int(_os.environ.get("LINGTU_WORKERS", "0"))
         if n_workers > 0:
             return self._build_worker_mode(n_workers)
 
