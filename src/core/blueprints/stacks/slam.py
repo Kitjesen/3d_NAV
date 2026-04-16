@@ -110,44 +110,29 @@ def slam_module_name(profile: str) -> str:
 
 
 def _read_gnss_fusion_kwargs() -> dict:
-    """Load SlamBridgeModule GNSS fusion kwargs from robot_config.yaml.
+    """Load SlamBridgeModule GNSS fusion kwargs from the typed GnssConfig.
 
     Returns an empty dict on any failure so SlamBridgeModule falls back to its
     own hardcoded defaults — never blocks SLAM startup because of config quirks.
     """
     try:
         from core.config import get_config
-        raw = get_config().raw.get("gnss") or {}
+        gnss = get_config().gnss
     except Exception as e:
         logger.debug("GNSS fusion config unavailable: %s", e)
         return {}
 
-    kwargs: dict = {}
-
-    ant = raw.get("antenna_offset") or {}
-    if ant:
-        kwargs["gnss_antenna_offset"] = (
-            float(ant.get("x", 0.0)),
-            float(ant.get("y", 0.0)),
-            float(ant.get("z", 0.0)),
-        )
-
-    fusion = raw.get("fusion") or {}
-    # Map robot_config keys → SlamBridgeModule kwargs. Only set keys that are
-    # explicitly present to let the Module's own defaults stand otherwise.
-    _key_map = {
-        "enabled":               "gnss_fusion",
-        "alpha_healthy":         "gnss_alpha_healthy",
-        "alpha_degraded":        "gnss_alpha_degraded",
-        "rtk_float_scale":       "gnss_rtk_float_scale",
-        "max_age_s":             "gnss_max_age_s",
-        "max_std_m":             "gnss_max_std_m",
-        "residual_warn_m":       "gnss_residual_warn_m",
-        "residual_warn_duration_s": "gnss_residual_warn_duration_s",
-        "residual_warn_ratio":   "gnss_residual_warn_ratio",
+    ant = gnss.antenna_offset
+    fusion = gnss.fusion
+    return {
+        "gnss_antenna_offset": (float(ant.x), float(ant.y), float(ant.z)),
+        "gnss_fusion":                   bool(fusion.enabled),
+        "gnss_alpha_healthy":            float(fusion.alpha_healthy),
+        "gnss_alpha_degraded":           float(fusion.alpha_degraded),
+        "gnss_rtk_float_scale":          float(fusion.rtk_float_scale),
+        "gnss_max_age_s":                float(fusion.max_age_s),
+        "gnss_max_std_m":                float(fusion.max_std_m),
+        "gnss_residual_warn_m":          float(fusion.residual_warn_m),
+        "gnss_residual_warn_duration_s": float(fusion.residual_warn_duration_s),
+        "gnss_residual_warn_ratio":      float(fusion.residual_warn_ratio),
     }
-    for src, dst in _key_map.items():
-        if src in fusion:
-            kwargs[dst] = fusion[src]
-
-    return kwargs

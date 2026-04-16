@@ -183,6 +183,23 @@ class GnssSerialDriver:
         self._running = False
         if self._thread:
             self._thread.join(timeout=3.0)
+
+    def write_rtcm(self, data: bytes) -> bool:
+        """Forward RTCM differential corrections to the receiver UART.
+
+        Called by NtripClientModule callbacks — receivers that accept RTCM
+        on the same serial line (UM980 / UBX) consume them and upgrade the
+        fix type to RTK_FIXED / RTK_FLOAT. Safe to call concurrently with
+        the read loop; pyserial's Serial.write is thread-safe on POSIX.
+        """
+        if self._serial is None or not self._running:
+            return False
+        try:
+            self._serial.write(data)
+            return True
+        except Exception as e:
+            logger.debug("GnssSerialDriver: RTCM write failed: %s", e)
+            return False
             self._thread = None
         if self._serial:
             try:

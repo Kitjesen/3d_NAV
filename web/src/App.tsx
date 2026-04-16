@@ -7,6 +7,7 @@ import { CameraFeed } from './components/CameraFeed'
 import { ChatPanel } from './components/ChatPanel'
 import { GpsCard } from './components/GpsCard'
 import { GnssCard } from './components/GnssCard'
+import { GnssFusionCard } from './components/GnssFusionCard'
 import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
@@ -89,6 +90,15 @@ function Dashboard() {
               minSize={{ w: 280, h: 340 }}
             >
               <GnssCard sseState={sseState} />
+            </FloatingWidget>
+
+            <FloatingWidget
+              id="gnss-fusion"
+              defaultPos={{ x: 1488, y: 940 }}
+              defaultSize={{ w: 420, h: 340 }}
+              minSize={{ w: 280, h: 260 }}
+            >
+              <GnssFusionCard sseState={sseState} />
             </FloatingWidget>
 
             <button

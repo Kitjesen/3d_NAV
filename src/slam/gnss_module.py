@@ -245,6 +245,11 @@ class GnssModule(Module, layer=1):
     gnss_odom:   Out[GnssOdom]
     alive:       Out[bool]
 
+    # ── inputs ──────────────────────────────────────────────────────────
+    # RTCM corrections from NtripClientModule — auto-wired, forwarded to
+    # the serial driver so the receiver can reach RTK_FIXED.
+    rtcm_bytes:  In[bytes]
+
     def __init__(
         self,
         device_model: str = "WTRTK-980",
@@ -307,12 +312,30 @@ class GnssModule(Module, layer=1):
         Serial is preferred because it doesn't need a separate ROS2
         GNSS driver service — just pyserial reading the UART directly.
         """
+        # RTCM forwarding: subscribe regardless of transport — when NTRIP
+        # module publishes, we forward bytes to the serial driver.
+        self.rtcm_bytes.subscribe(self._on_rtcm_bytes)
+
         if self._serial_port:
             if self._try_start_serial():
                 return
         if self._try_start_dds():
             return
         logger.info("GnssModule: no serial and no DDS — stub mode")
+
+    def _on_rtcm_bytes(self, data: bytes) -> None:
+        """Forward RTCM corrections to the receiver via serial.
+
+        If there is no serial driver (DDS mode), the ironoa driver is
+        expected to handle RTCM injection via its own NTRIP client; we
+        silently no-op here.
+        """
+        if not data or self._serial_driver is None:
+            return
+        try:
+            self._serial_driver.write_rtcm(data)
+        except Exception as e:
+            logger.debug("GnssModule: RTCM forward failed: %s", e)
 
     def _try_start_serial(self) -> bool:
         """Start direct serial NMEA reader as DDS fallback."""
