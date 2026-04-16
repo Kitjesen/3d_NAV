@@ -6,6 +6,7 @@ import { Topbar } from './components/Topbar'
 import { CameraFeed } from './components/CameraFeed'
 import { ChatPanel } from './components/ChatPanel'
 import { GpsCard } from './components/GpsCard'
+import { GnssCard } from './components/GnssCard'
 import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
@@ -75,10 +76,19 @@ function Dashboard() {
             <FloatingWidget
               id="chat"
               defaultPos={{ x: 1016, y: 526 }}
-              defaultSize={{ w: 876, h: 404 }}
+              defaultSize={{ w: 456, h: 404 }}
               minSize={{ w: 340, h: 280 }}
             >
               <ChatPanel sseState={sseState} />
+            </FloatingWidget>
+
+            <FloatingWidget
+              id="gnss"
+              defaultPos={{ x: 1488, y: 526 }}
+              defaultSize={{ w: 420, h: 404 }}
+              minSize={{ w: 280, h: 340 }}
+            >
+              <GnssCard sseState={sseState} />
             </FloatingWidget>
 
             <button

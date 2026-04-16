@@ -108,6 +108,59 @@ brainstem:
   host: "127.0.0.1"
   port: 13145              # Brainstem gRPC (运动控制)
 
+# ── GNSS (WTRTK-980) ──
+# 硬件: WitMotion WTRTK-980 (UM980 芯片, 单天线 RTK, 50Hz)
+# 驱动: ironoa/um982_ros2_driver (systemd: gnss.service)
+# 融合: fastlio2_gnss backend (GTSAM PGO 全局约束)
+gnss:
+  enabled: false                   # 全局开关，未接入前保持 false
+  model: "WTRTK-980"
+  device: "/dev/ttyUSB0"           # UART 设备 (或 TYPE-C 对应的 /dev/ttyACM0)
+  baud: 460800
+
+  # 天线相对 body 原点的安装偏移 (m, body frame)
+  antenna_offset:
+    x: 0.00                        # 前后
+    y: 0.00                        # 左右
+    z: 0.45                        # 离地高度
+
+  # ROS2 topic (ironoa 驱动发布，LingTu 通过 DDS 订阅)
+  topic_fix: "/gps/fix"             # sensor_msgs/NavSatFix (50Hz)
+  topic_odom: "/gps/odom"           # nav_msgs/Odometry (UTM, 50Hz)
+  topic_vel: "/gps/vel"             # geometry_msgs/TwistStamped
+
+  # 地图原点 (WGS84 → ENU 参考点)
+  # null = 首次运行自动锁定当前 GNSS 位置为原点并写回文件
+  origin:
+    lat: null
+    lon: null
+    alt: null
+    auto_init: true                # 自动初始化
+
+  # 质量控制 (坏质量的 fix 会被加大协方差或丢弃)
+  quality:
+    min_sat_used: 8                # 最少使用卫星数
+    max_hdop: 2.5                  # HDOP 上限
+    max_age_s: 2.0                 # 数据最大老化时间
+    require_fix_type: 1            # 1=Single, 4=RTK_FIXED (最低接受等级)
+    allow_float: true              # 允许 RTK Float (权重降到 0.3)
+
+  # RTCM 差分 (千寻/移动 CORS NTRIP, 可选)
+  rtcm:
+    enabled: false
+    ntrip_host: "rtk.ntrip.qxwz.com"
+    ntrip_port: 8001
+    ntrip_mount: "RTCM32_GGB"
+    ntrip_user: ""
+    ntrip_pass: ""
+
+  # 融合后端
+  fusion:
+    backend: "fastlio2_gnss"       # fastlio2_gnss | glio
+    factor_weight_fix: 1.0         # RTK Fix 权重 (GTSAM factor)
+    factor_weight_float: 0.3       # RTK Float 权重
+    factor_weight_single: 0.05     # Single 权重
+
 # ── 路径跟踪控制增益 ──
 control:
   yaw_rate_gain: 7.5

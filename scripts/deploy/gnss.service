@@ -1,0 +1,45 @@
+[Unit]
+Description=LingTu GNSS Driver (WTRTK-980 / UM980)
+Documentation=https://github.com/ironoa/um982_ros2_driver
+After=network.target
+Wants=network.target
+
+# Camera 和 livox-driver 不依赖 GNSS，但我们希望 GNSS 先启动好
+# 让 lingtu.service 启动时能立即订阅 /gps/fix
+Before=lingtu.service
+
+[Service]
+Type=simple
+User=sunrise
+Group=dialout
+
+# Device permissions: sunrise 必须在 dialout 组才能读 /dev/ttyUSB*
+Environment=ROS_DOMAIN_ID=0
+Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+# 指向 ironoa/um982_ros2_driver 编译产物
+# 安装位置: /opt/lingtu/gnss/install/
+ExecStartPre=/bin/bash -c 'test -e /dev/ttyUSB0 || test -e /dev/ttyACM0'
+ExecStart=/bin/bash -c " \
+    source /opt/ros/humble/setup.bash && \
+    source /opt/lingtu/gnss/install/setup.bash && \
+    ros2 run um982_driver um982_driver_node \
+      --ros-args \
+      -p port:=/dev/ttyUSB0 \
+      -p baud:=460800 \
+      -p frame_id:=gnss_antenna \
+      -p publish_rate:=50"
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+KillMode=control-group
+KillSignal=SIGTERM
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gnss
+
+[Install]
+WantedBy=multi-user.target
