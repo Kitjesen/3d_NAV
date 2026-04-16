@@ -107,8 +107,12 @@ class VisualServoModule(Module, layer=4):
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def setup(self) -> None:
+        # VLM / re-ID work is heavy — drop stale frames so we don't block
+        # the camera publisher (and, transitively, uvicorn).
         self.color_image.subscribe(self._on_color)
+        self.color_image.set_policy("latest")
         self.depth_image.subscribe(self._on_depth)
+        self.depth_image.set_policy("latest")
         self.camera_info.subscribe(self._on_camera_info)
         self.odometry.subscribe(self._on_odom)
         self.servo_target.subscribe(self._on_servo_target)

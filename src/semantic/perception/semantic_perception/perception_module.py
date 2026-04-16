@@ -137,9 +137,13 @@ class PerceptionModule(Module, layer=3):
         else:
             self._setup_direct()
 
-        # Wire port callbacks
+        # Wire port callbacks. Use "latest" on high-rate camera ports so slow
+        # detector/CLIP inference can't block the camera publisher (and in turn
+        # starve uvicorn of the GIL, which hangs the Gateway).
         self.color_image.subscribe(self._on_color_frame)
+        self.color_image.set_policy("latest")
         self.depth_image.subscribe(self._on_depth)
+        self.depth_image.set_policy("latest")
         self.camera_info.subscribe(self._on_camera_info)
         self.odometry.subscribe(self._on_odometry)
 

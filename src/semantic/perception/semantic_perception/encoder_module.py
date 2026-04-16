@@ -82,6 +82,9 @@ class EncoderModule(Module, layer=3):
             logger.exception("EncoderModule: failed to load '%s'", self._encoder_name)
             self._backend = None
         self.image.subscribe(self._on_image)
+        # CLIP encode is ~200-500ms on S100P CPU; drop stale frames rather than
+        # block the camera publisher (which would starve uvicorn of the GIL).
+        self.image.set_policy("latest")
 
     def _create_backend(self):
         name = self._encoder_name.lower()

@@ -70,8 +70,13 @@ class ReconstructionModule(Module, layer=3):
         self._lock = threading.Lock()
 
     def setup(self) -> None:
+        # Reconstruction is heavy (CLIP + 3D TSDF). Drop stale frames so the
+        # camera publisher never blocks waiting for us — that would starve
+        # the uvicorn event loop of the GIL.
         self.color_image.subscribe(self._on_color)
+        self.color_image.set_policy("latest")
         self.depth_image.subscribe(self._on_depth)
+        self.depth_image.set_policy("latest")
         self.camera_info.subscribe(self._on_camera_info)
         self.scene_graph.subscribe(self._on_scene_graph)
         self.odometry.subscribe(self._on_odom)
