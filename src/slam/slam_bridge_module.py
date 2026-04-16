@@ -36,6 +36,7 @@ LOC_UNINIT = "UNINIT"        # No data received yet
 LOC_TRACKING = "TRACKING"    # Receiving data, quality OK
 LOC_DEGRADED = "DEGRADED"    # Receiving data, quality poor (cloud timeout or degeneracy)
 LOC_LOST = "LOST"            # No odometry for > timeout
+LOC_DIVERGED = "DIVERGED"    # Odometry values physically impossible → auto-relocalize
 
 # Degeneracy severity levels (from SLAM quality metrics)
 DEGEN_NONE = "NONE"              # Normal operation
@@ -92,6 +93,18 @@ class SlamBridgeModule(Module, layer=1):
         self._reconnect_timeout: float = kw.get("reconnect_timeout", 10.0)
         self._max_reconnects: int = kw.get("max_reconnects", 10)
         self._reconnect_count: int = 0
+
+        # Drift guard — detect odometry divergence and auto-relocalize
+        self._drift_max_speed: float = kw.get("drift_max_speed", 5.0)       # m/s, quad max ~3
+        self._drift_max_jump: float = kw.get("drift_max_jump", 2.0)         # m between frames
+        self._drift_max_pos: float = kw.get("drift_max_pos", 500.0)         # m from origin
+        self._drift_confirm_frames: int = kw.get("drift_confirm_frames", 5) # consecutive bad
+        self._drift_bad_count: int = 0
+        self._drift_last_good_pos: np.ndarray | None = None                 # for relocalize
+        self._drift_last_good_yaw: float = 0.0
+        self._drift_relocalize_cooldown: float = kw.get("drift_relocalize_cooldown", 30.0)
+        self._drift_last_relocalize: float = 0.0
+        self._prev_odom_pos: np.ndarray | None = None
 
         # SLAM degeneracy detection
         self._degeneracy_topic: str = kw.get("degeneracy_topic", "/slam/degeneracy")
@@ -244,8 +257,106 @@ class SlamBridgeModule(Module, layer=1):
         except Exception as e:
             logger.debug("SlamBridge dds quality error: %s", e)
 
+    def _check_drift(self, odom: Odometry) -> bool:
+        """Return True if odometry looks diverged (should NOT be published).
+
+        Checks:
+          1. |velocity| > max_speed (quad can't exceed ~3 m/s)
+          2. |position jump| > max_jump between consecutive frames
+          3. |position| > max_pos from origin (indoor environment bound)
+
+        After drift_confirm_frames consecutive bad readings, triggers
+        auto-relocalize to last known good position.
+        """
+        pos = np.array([odom.x, odom.y, odom.z])
+        speed = abs(getattr(odom, 'vx', 0.0))
+        bad = False
+
+        # Check 1: speed
+        if speed > self._drift_max_speed:
+            bad = True
+
+        # Check 2: position jump
+        if self._prev_odom_pos is not None:
+            jump = float(np.linalg.norm(pos[:2] - self._prev_odom_pos[:2]))
+            if jump > self._drift_max_jump:
+                bad = True
+
+        # Check 3: absolute position
+        if np.linalg.norm(pos[:2]) > self._drift_max_pos:
+            bad = True
+
+        if bad:
+            self._drift_bad_count += 1
+        else:
+            # Good frame — save as fallback position for relocalize
+            self._drift_bad_count = 0
+            self._drift_last_good_pos = pos.copy()
+            self._drift_last_good_yaw = getattr(odom, 'yaw', 0.0)
+            self._prev_odom_pos = pos.copy()
+            return False
+
+        self._prev_odom_pos = pos.copy()
+
+        if self._drift_bad_count >= self._drift_confirm_frames:
+            now = _time.time()
+            if self._loc_state != LOC_DIVERGED:
+                logger.error(
+                    "Localization DIVERGED: pos=(%.1f,%.1f,%.1f) speed=%.1f "
+                    "bad_frames=%d — suppressing odometry",
+                    pos[0], pos[1], pos[2], speed, self._drift_bad_count)
+                self._loc_state = LOC_DIVERGED
+
+            # Auto-relocalize (with cooldown)
+            if (now - self._drift_last_relocalize > self._drift_relocalize_cooldown
+                    and self._drift_last_good_pos is not None):
+                self._drift_last_relocalize = now
+                threading.Thread(
+                    target=self._auto_relocalize,
+                    daemon=True, name="drift-relocalize",
+                ).start()
+            return True  # suppress this frame
+
+        return False
+
+    def _auto_relocalize(self) -> None:
+        """Trigger relocalize via ROS2 service using last known good position."""
+        import os, subprocess
+        pos = self._drift_last_good_pos
+        yaw = self._drift_last_good_yaw
+        if pos is None:
+            pos = np.zeros(3)
+            yaw = 0.0
+
+        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
+        pcd_path = os.path.join(map_dir, "active", "map.pcd")
+        if not os.path.isfile(pcd_path):
+            logger.warning("Drift guard: no active map PCD for relocalize: %s", pcd_path)
+            return
+
+        logger.warning(
+            "Drift guard: auto-relocalize to (%.2f, %.2f, yaw=%.2f) using %s",
+            pos[0], pos[1], yaw, pcd_path)
+        try:
+            ros_env = (
+                "source /opt/ros/humble/setup.bash && "
+                "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+                "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+            )
+            subprocess.run(
+                ["bash", "-c",
+                 ros_env +
+                 f"ros2 service call /nav/relocalize interface/srv/Relocalize "
+                 f"\"{{pcd_path: '{pcd_path}', x: {pos[0]}, y: {pos[1]}, z: 0.0, "
+                 f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""],
+                capture_output=True, text=True, timeout=30)
+            logger.info("Drift guard: relocalize call completed")
+            self._drift_bad_count = 0
+        except Exception as e:
+            logger.warning("Drift guard: relocalize failed: %s", e)
+
     def _on_dds_odom(self, msg) -> None:
-        """DDS_Odometry → Module Odometry (with selective visual fusion)."""
+        """DDS_Odometry → Module Odometry (with selective visual fusion + drift guard)."""
         try:
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
@@ -264,6 +375,11 @@ class SlamBridgeModule(Module, layer=1):
                 ts=stamp,
             )
             fused = self._fuse_odometry(slam_odom)
+
+            # Drift guard: suppress diverged odometry, trigger auto-relocalize
+            if self._check_drift(fused):
+                return  # don't publish garbage to downstream modules
+
             self.odometry.publish(fused)
             now = _time.time()
             self._last_odom_time = now
@@ -541,7 +657,11 @@ class SlamBridgeModule(Module, layer=1):
             odom_age = (now - self._last_odom_time) if self._last_odom_time > 0 else float("inf")
             cloud_age = (now - self._last_cloud_time) if self._last_cloud_time > 0 else float("inf")
 
-            if self._last_odom_time == 0.0:
+            if self._loc_state == LOC_DIVERGED:
+                # Drift guard set this — keep it until drift clears
+                new_state = LOC_DIVERGED
+                confidence = 0.0
+            elif self._last_odom_time == 0.0:
                 new_state = LOC_UNINIT
                 confidence = 0.0
             elif odom_age > self._odom_timeout:
@@ -576,9 +696,11 @@ class SlamBridgeModule(Module, layer=1):
                 elif new_state == LOC_DEGRADED and self._degen_level != DEGEN_NONE:
                     logger.warning("Localization DEGRADED: SLAM degeneracy %s",
                                    self._degen_level)
-                elif new_state == LOC_TRACKING and self._loc_state in (LOC_LOST, LOC_DEGRADED):
+                elif new_state == LOC_TRACKING and self._loc_state in (
+                        LOC_LOST, LOC_DEGRADED, LOC_DIVERGED):
                     logger.info("Localization recovered -> TRACKING")
-                    self._reconnect_count = 0  # reset on recovery
+                    self._reconnect_count = 0
+                    self._drift_bad_count = 0
                 self._loc_state = new_state
 
             # Auto-recovery: reconnect DDS/rclpy if LOST for too long
