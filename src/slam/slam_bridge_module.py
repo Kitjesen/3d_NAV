@@ -58,6 +58,7 @@ class SlamBridgeModule(Module, layer=1):
     localization_quality:  Out[float]
     alive:                 Out[bool]
     localization_status:   Out[dict]
+    gnss_fusion_health:    Out[dict]
 
     # Visual odometry input for selective DOF fusion during degeneracy
     visual_odom: In[Odometry]
@@ -140,6 +141,21 @@ class SlamBridgeModule(Module, layer=1):
         self._last_gnss_rx_ts: float = 0.0
         self._gnss_map_offset: np.ndarray | None = None  # shape (2,) XY, map = enu + offset
         self._gnss_fused_count: int = 0
+
+        # Residual guard — protects against locking on a bad first sample
+        # (RTK multipath, init glitch). If aligned residual stays above the
+        # warn threshold for too long, clear the offset to force re-lock on
+        # the next healthy GNSS + SLAM sample.
+        self._gnss_residual_warn_m: float = kw.get("gnss_residual_warn_m", 5.0)
+        self._gnss_residual_warn_duration_s: float = kw.get(
+            "gnss_residual_warn_duration_s", 10.0)
+        self._gnss_residual_warn_ratio: float = kw.get(
+            "gnss_residual_warn_ratio", 0.7)
+        # Ring buffer of (ts, residual_m) for sliding-window ratio check
+        self._gnss_residual_history: list[tuple[float, float]] = []
+        self._gnss_last_residual_m: float = 0.0
+        self._gnss_relock_count: int = 0
+        self._gnss_last_relock_ts: float = 0.0
 
     def setup(self) -> None:
         # Visual odometry input for selective fusion
@@ -621,6 +637,15 @@ class SlamBridgeModule(Module, layer=1):
         # GNSS in SLAM map frame
         gnss_in_map = gnss_xy + self._gnss_map_offset
 
+        # Residual guard: track misalignment, force re-lock on sustained drift
+        residual = float(np.linalg.norm(slam_xy - gnss_in_map))
+        self._gnss_last_residual_m = residual
+        if self._check_residual_and_maybe_relock(residual):
+            # Just cleared the offset — skip blending this frame, next valid
+            # GNSS sample will re-lock on a fresh pair.
+            self._publish_gnss_health()
+            return odom
+
         # Weight: degraded SLAM → trust GNSS more
         if self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL):
             alpha = self._gnss_alpha_degraded
@@ -635,12 +660,14 @@ class SlamBridgeModule(Module, layer=1):
         if self._gnss_fused_count % 50 == 1:
             logger.info(
                 "GNSS-SLAM fusion active: alpha=%.2f, fix=%s, std=%.2fm, "
-                "slam=(%.2f,%.2f) gnss=(%.2f,%.2f) fused=(%.2f,%.2f)",
-                alpha, g.fix_type.name, h_std,
+                "residual=%.2fm, slam=(%.2f,%.2f) gnss=(%.2f,%.2f) "
+                "fused=(%.2f,%.2f)",
+                alpha, g.fix_type.name, h_std, residual,
                 slam_xy[0], slam_xy[1],
                 gnss_in_map[0], gnss_in_map[1],
                 fused_xy[0], fused_xy[1],
             )
+        self._publish_gnss_health()
 
         return Odometry(
             pose=Pose(
@@ -654,6 +681,75 @@ class SlamBridgeModule(Module, layer=1):
             twist=odom.twist,
             ts=odom.ts,
         )
+
+    def _check_residual_and_maybe_relock(self, residual: float) -> bool:
+        """Sliding-window check: if too many recent samples exceed threshold,
+        clear the alignment offset so the next good sample re-locks it.
+
+        Returns True iff the offset was just cleared.
+        """
+        now = _time.time()
+        window = self._gnss_residual_warn_duration_s
+        self._gnss_residual_history.append((now, residual))
+        cutoff = now - window
+        # Drop entries older than the window
+        while self._gnss_residual_history and self._gnss_residual_history[0][0] < cutoff:
+            self._gnss_residual_history.pop(0)
+
+        # Need a filled window + enough samples (≥ 5) before firing
+        if not self._gnss_residual_history:
+            return False
+        if self._gnss_residual_history[0][0] > now - window * 0.5:
+            return False
+        if len(self._gnss_residual_history) < 5:
+            return False
+
+        warn_count = sum(
+            1 for _ts, r in self._gnss_residual_history
+            if r > self._gnss_residual_warn_m
+        )
+        ratio = warn_count / len(self._gnss_residual_history)
+        if ratio < self._gnss_residual_warn_ratio:
+            return False
+
+        # Fire: clear offset, bump counter, drop history
+        logger.warning(
+            "GNSS-SLAM residual sustained > %.1fm (%.0f%% of last %.1fs, "
+            "n=%d); relocking alignment. Previous offset=%s",
+            self._gnss_residual_warn_m, ratio * 100.0, window,
+            len(self._gnss_residual_history),
+            None if self._gnss_map_offset is None
+            else f"({self._gnss_map_offset[0]:.2f}, {self._gnss_map_offset[1]:.2f})",
+        )
+        self._gnss_map_offset = None
+        self._gnss_residual_history.clear()
+        self._gnss_relock_count += 1
+        self._gnss_last_relock_ts = now
+        return True
+
+    def _publish_gnss_health(self) -> None:
+        """Publish a compact diagnostic snapshot for Dashboard / watchdog."""
+        self.gnss_fusion_health.publish({
+            "enabled": self._gnss_fusion,
+            "alignment_locked": self._gnss_map_offset is not None,
+            "map_offset": (
+                None if self._gnss_map_offset is None
+                else [float(self._gnss_map_offset[0]),
+                      float(self._gnss_map_offset[1])]
+            ),
+            "last_residual_m": float(self._gnss_last_residual_m),
+            "fused_count": int(self._gnss_fused_count),
+            "relock_count": int(self._gnss_relock_count),
+            "last_relock_ts": float(self._gnss_last_relock_ts),
+            "last_fix_type": (
+                self._last_gnss_odom.fix_type.name
+                if self._last_gnss_odom is not None else "NONE"
+            ),
+            "last_gnss_age_s": (
+                float(_time.time() - self._last_gnss_rx_ts)
+                if self._last_gnss_rx_ts > 0 else float("inf")
+            ),
+        })
 
     # ── Localization health watchdog ──────────────────────────────��──────
 

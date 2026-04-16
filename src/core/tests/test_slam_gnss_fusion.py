@@ -320,5 +320,126 @@ class TestGnssDisabled(unittest.TestCase):
         self.assertAlmostEqual(fused.pose.position.y, 20.0)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Residual guard / re-alignment
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestResidualGuard(unittest.TestCase):
+    """Sustained large residual should trigger re-locking of the offset.
+
+    We shortcut time by mutating the ring-buffer entries — this makes tests
+    deterministic instead of depending on wall-clock.
+    """
+
+    def _make_locked(self, **kw):
+        m = _make_bridge(**kw)
+        m.setup()
+        _prime_healthy(m)
+        # Lock at slam=(0,0), gnss=(0,0) → offset = (0, 0)
+        m._on_gnss_odom(_make_gnss_odom(e=0.0, n=0.0))
+        m._fuse_odometry(_make_slam_odom(x=0.0, y=0.0))
+        assert m._gnss_map_offset is not None
+        return m
+
+    def test_residual_tracked_on_each_frame(self):
+        m = self._make_locked()
+        # SLAM drifts 2m from GNSS-aligned position
+        m._on_gnss_odom(_make_gnss_odom(e=0.0, n=0.0))
+        m._fuse_odometry(_make_slam_odom(x=2.0, y=0.0))
+        self.assertAlmostEqual(m._gnss_last_residual_m, 2.0, places=3)
+
+    def test_short_window_does_not_relock(self):
+        m = self._make_locked(gnss_residual_warn_m=1.0,
+                               gnss_residual_warn_duration_s=10.0)
+        # Only a few frames with large residual → not enough window time
+        for _ in range(3):
+            m._on_gnss_odom(_make_gnss_odom(e=0.0, n=0.0))
+            m._fuse_odometry(_make_slam_odom(x=10.0, y=0.0))
+        self.assertIsNotNone(m._gnss_map_offset)
+        self.assertEqual(m._gnss_relock_count, 0)
+
+    def test_sustained_residual_triggers_relock(self):
+        m = self._make_locked(
+            gnss_residual_warn_m=1.0,
+            gnss_residual_warn_duration_s=10.0,
+            gnss_residual_warn_ratio=0.7,
+        )
+        # Drive residual=10m across 10 frames; then backdate history so the
+        # window is "old enough" to fire (older than 5s = half window).
+        for _ in range(10):
+            m._on_gnss_odom(_make_gnss_odom(e=0.0, n=0.0))
+            m._fuse_odometry(_make_slam_odom(x=10.0, y=0.0))
+
+        now = time.time()
+        m._gnss_residual_history = [
+            (now - 7.0 + i * 0.5, 10.0) for i in range(10)
+        ]
+
+        # Next frame: guard checks and should fire
+        m._on_gnss_odom(_make_gnss_odom(e=0.0, n=0.0))
+        m._fuse_odometry(_make_slam_odom(x=10.0, y=0.0))
+
+        self.assertIsNone(m._gnss_map_offset)
+        self.assertEqual(m._gnss_relock_count, 1)
+
+    def test_relock_allows_fresh_lock(self):
+        m = self._make_locked(
+            gnss_residual_warn_m=1.0,
+            gnss_residual_warn_duration_s=10.0,
+        )
+        # Force relock
+        now = time.time()
+        m._gnss_residual_history = [
+            (now - 7.0 + i * 0.5, 10.0) for i in range(10)
+        ]
+        m._on_gnss_odom(_make_gnss_odom(e=0.0, n=0.0))
+        m._fuse_odometry(_make_slam_odom(x=10.0, y=0.0))
+        self.assertIsNone(m._gnss_map_offset)
+
+        # Next healthy GNSS should re-lock with new offset
+        m._on_gnss_odom(_make_gnss_odom(e=3.0, n=4.0))
+        m._fuse_odometry(_make_slam_odom(x=13.0, y=14.0))
+        self.assertIsNotNone(m._gnss_map_offset)
+        self.assertAlmostEqual(m._gnss_map_offset[0], 10.0)
+        self.assertAlmostEqual(m._gnss_map_offset[1], 10.0)
+
+
+class TestGnssFusionHealthPort(unittest.TestCase):
+
+    def test_health_port_exists(self):
+        m = _make_bridge()
+        self.assertIn("gnss_fusion_health", m.ports_out)
+
+    def test_health_snapshot_schema(self):
+        m = _make_bridge()
+        m.setup()
+        _prime_healthy(m)
+
+        received: list[dict] = []
+        m.gnss_fusion_health._add_callback(received.append)
+
+        # First call: lock offset, no snapshot yet because we return before publish
+        m._on_gnss_odom(_make_gnss_odom(e=0.0, n=0.0))
+        m._fuse_odometry(_make_slam_odom(x=0.0, y=0.0))
+
+        # Second call: publish path exercised
+        m._on_gnss_odom(_make_gnss_odom(e=0.0, n=0.0))
+        m._fuse_odometry(_make_slam_odom(x=1.0, y=0.0))
+
+        self.assertGreater(len(received), 0)
+        snap = received[-1]
+        for key in (
+            "enabled", "alignment_locked", "map_offset",
+            "last_residual_m", "fused_count", "relock_count",
+            "last_relock_ts", "last_fix_type", "last_gnss_age_s",
+        ):
+            self.assertIn(key, snap, f"missing key: {key}")
+        self.assertTrue(snap["enabled"])
+        self.assertTrue(snap["alignment_locked"])
+        self.assertEqual(snap["last_fix_type"], "RTK_FIXED")
+        self.assertGreaterEqual(snap["fused_count"], 1)
+        self.assertEqual(snap["relock_count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
