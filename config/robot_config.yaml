@@ -157,9 +157,33 @@ gnss:
   # 融合后端
   fusion:
     backend: "fastlio2_gnss"       # fastlio2_gnss | glio
-    factor_weight_fix: 1.0         # RTK Fix 权重 (GTSAM factor)
+    factor_weight_fix: 1.0         # RTK Fix 权重 (GTSAM factor, 保留给未来因子图后端)
     factor_weight_float: 0.3       # RTK Float 权重
     factor_weight_single: 0.05     # Single 权重
+
+    # SlamBridgeModule 松耦合融合参数 (stacks/slam.py 读取)
+    enabled: true                  # 融合总开关 (false 回到纯 LiDAR SLAM)
+    alpha_healthy: 0.05            # SLAM 健康时 GNSS 每帧拉回权重
+    alpha_degraded: 0.5            # SLAM 退化时 GNSS 每帧拉回权重
+    rtk_float_scale: 0.3           # RTK_FLOAT 的权重额外折扣系数
+    max_age_s: 2.0                 # GNSS 样本最大老化时间 (秒)
+    max_std_m: 1.0                 # 水平 1σ 阈值 (超过丢弃)
+    residual_warn_m: 5.0           # 对齐后残差阈值 (m)
+    residual_warn_duration_s: 10.0 # 残差观察窗口 (秒)
+    residual_warn_ratio: 0.7       # 窗口内超阈值比例 → 触发重锁
+
+# ── 自主探索 ──
+# 两个后端 binary-compatible 输出 exploration_goal: Out[PoseStamped]:
+#   wavefront  — 纯 Python BFS frontier (src/nav/frontier_explorer_module.py)
+#   tare       — CMU TARE 分层规划 (third_party/tare_planner 子模块)
+#   none       — 关掉探索
+exploration:
+  backend: "none"                  # none | wavefront | tare
+  # TARE 预调好的场景: campus | forest | garage | indoor | matterport | tunnel
+  tare_scenario: "forest"
+  tare_auto_start: true            # 启动时立即发 start 信号给 TARE
+  # 可选：覆盖 TARE 的 yaml 配置绝对路径 (不填则用 install/share 默认)
+  tare_config: ""
 
 # ── 路径跟踪控制增益 ──
 control:

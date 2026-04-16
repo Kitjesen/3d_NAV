@@ -102,7 +102,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "explore": dict(
-        _desc="Explore unknown area (no map needed)",
+        _desc="Explore unknown area (wavefront frontier)",
         _default_robot="s100p",
         slam_profile="fastlio2",
         llm="qwen",
@@ -111,6 +111,22 @@ PROFILES = {
         enable_semantic=True,
         enable_gateway=True,
         enable_frontier=True,
+        exploration_backend="wavefront",
+        gateway_port=5050,
+    ),
+    "tare_explore": dict(
+        _desc="Explore via CMU TARE hierarchical planner (needs tare_planner submodule built)",
+        _default_robot="s100p",
+        slam_profile="fastlio2",
+        llm="qwen",
+        planner="pct",
+        enable_native=False,
+        enable_semantic=True,
+        enable_gateway=True,
+        # Don't add wavefront explorer — TARE stack handles goal generation.
+        enable_frontier=False,
+        exploration_backend="tare",
+        tare_scenario="forest",
         gateway_port=5050,
     ),
     "sim": dict(

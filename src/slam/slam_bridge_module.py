@@ -22,8 +22,9 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from core.module import Module
+from core.module import Module, skill
 from core.msgs.geometry import Pose, Quaternion, Vector3
+from core.msgs.gnss import GnssFixType, GnssOdom
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
@@ -58,9 +59,13 @@ class SlamBridgeModule(Module, layer=1):
     localization_quality:  Out[float]
     alive:                 Out[bool]
     localization_status:   Out[dict]
+    gnss_fusion_health:    Out[dict]
 
     # Visual odometry input for selective DOF fusion during degeneracy
     visual_odom: In[Odometry]
+
+    # GNSS ENU odometry for global drift anchoring (auto-wired from GnssModule)
+    gnss_odom: In[GnssOdom]
 
     def __init__(
         self,
@@ -135,10 +140,54 @@ class SlamBridgeModule(Module, layer=1):
         self._visual_anchor_T: np.ndarray | None = None  # SLAM pose when visual odom activated
         self._visual_fused_count: int = 0
 
+        # GNSS fusion — gently anchor long-term SLAM drift with RTK position.
+        # Only XY is fused (Z / orientation stay with SLAM since GNSS altitude is
+        # noisy and position alone gives no heading). Alignment is locked once,
+        # then GNSS pulls SLAM toward global truth with weight alpha per frame.
+        self._gnss_fusion: bool = kw.get("gnss_fusion", True)
+        self._gnss_max_age_s: float = kw.get("gnss_max_age_s", 2.0)
+        self._gnss_max_std_m: float = kw.get("gnss_max_std_m", 1.0)
+        self._gnss_alpha_healthy: float = kw.get("gnss_alpha_healthy", 0.05)
+        self._gnss_alpha_degraded: float = kw.get("gnss_alpha_degraded", 0.5)
+        self._gnss_rtk_float_scale: float = kw.get("gnss_rtk_float_scale", 0.3)
+        # Antenna position in body frame (metres). GNSS reports the antenna's
+        # ENU position, so we compensate by rotating this offset into the map
+        # frame (via SLAM orientation) and subtracting — giving the body
+        # origin position that can be fused with SLAM odometry.
+        _ant = kw.get("gnss_antenna_offset", (0.0, 0.0, 0.0))
+        self._gnss_antenna_offset: np.ndarray = np.asarray(_ant, dtype=float)
+        if self._gnss_antenna_offset.shape != (3,):
+            raise ValueError(
+                f"gnss_antenna_offset must be length-3, got {self._gnss_antenna_offset.shape}"
+            )
+        self._last_gnss_odom: GnssOdom | None = None
+        self._last_gnss_rx_ts: float = 0.0
+        self._gnss_map_offset: np.ndarray | None = None  # shape (2,) XY, map = enu + offset
+        self._gnss_fused_count: int = 0
+
+        # Residual guard — protects against locking on a bad first sample
+        # (RTK multipath, init glitch). If aligned residual stays above the
+        # warn threshold for too long, clear the offset to force re-lock on
+        # the next healthy GNSS + SLAM sample.
+        self._gnss_residual_warn_m: float = kw.get("gnss_residual_warn_m", 5.0)
+        self._gnss_residual_warn_duration_s: float = kw.get(
+            "gnss_residual_warn_duration_s", 10.0)
+        self._gnss_residual_warn_ratio: float = kw.get(
+            "gnss_residual_warn_ratio", 0.7)
+        # Ring buffer of (ts, residual_m) for sliding-window ratio check
+        self._gnss_residual_history: list[tuple[float, float]] = []
+        self._gnss_last_residual_m: float = 0.0
+        self._gnss_relock_count: int = 0
+        self._gnss_last_relock_ts: float = 0.0
+
     def setup(self) -> None:
         # Visual odometry input for selective fusion
         if self._visual_odom_fusion:
             self.visual_odom.subscribe(self._on_visual_odom)
+
+        # GNSS input for global position anchoring
+        if self._gnss_fusion:
+            self.gnss_odom.subscribe(self._on_gnss_odom)
 
         # Try cyclonedds first (lightweight, no ROS2 env needed)
         if self._try_cyclonedds():
@@ -561,6 +610,11 @@ class SlamBridgeModule(Module, layer=1):
         self._last_visual_odom = odom
 
     def _fuse_odometry(self, slam_odom: Odometry) -> Odometry:
+        """Two-stage fusion: visual (DOF-selective) then GNSS (global anchor)."""
+        after_visual = self._fuse_visual(slam_odom)
+        return self._fuse_gnss_position(after_visual)
+
+    def _fuse_visual(self, slam_odom: Odometry) -> Odometry:
         """Selectively blend visual odometry into degenerate DOF directions.
 
         When degeneracy is NONE/MILD: pass SLAM odom unchanged.
@@ -664,6 +718,192 @@ class SlamBridgeModule(Module, layer=1):
         )
         self._last_slam_odom = fused_odom
         return fused_odom
+
+    # ── GNSS global position anchoring ──────────────────────────────────
+
+    def _on_gnss_odom(self, odom: GnssOdom) -> None:
+        """Store latest GNSS ENU odometry; used by _fuse_gnss_position."""
+        self._last_gnss_odom = odom
+        self._last_gnss_rx_ts = _time.time()
+
+    def _fuse_gnss_position(self, odom: Odometry) -> Odometry:
+        """Blend RTK GNSS ENU position into SLAM XY to anchor long-term drift.
+
+        Strategy
+        --------
+        1. Gate on fix quality (RTK only), freshness, horizontal std.
+        2. First qualifying sample while SLAM is healthy locks the
+           ``map ↔ enu`` translation offset (one-shot alignment).
+        3. Subsequent samples: weighted blend of SLAM XY with aligned GNSS XY.
+           Weight rises when SLAM is degraded so GNSS carries more load.
+        4. Z and orientation untouched — GNSS altitude is too noisy and a
+           single position doesn't define heading.
+        """
+        if not self._gnss_fusion or self._last_gnss_odom is None:
+            return odom
+
+        g = self._last_gnss_odom
+
+        # Freshness: drop if the last received sample is stale
+        age = _time.time() - self._last_gnss_rx_ts
+        if age > self._gnss_max_age_s:
+            return odom
+
+        # Quality: only RTK (fixed or float) carries position-level authority.
+        # SINGLE/DGPS are too coarse (> 1 m) to help a LiDAR SLAM anchor.
+        if g.fix_type not in (GnssFixType.RTK_FIXED, GnssFixType.RTK_FLOAT):
+            return odom
+
+        # Noise gate
+        h_var = max(g.cov_e, 0.0) + max(g.cov_n, 0.0)
+        h_std = (h_var * 0.5) ** 0.5
+        if h_std > self._gnss_max_std_m:
+            return odom
+
+        slam_xy = np.array([odom.pose.position.x, odom.pose.position.y])
+
+        # Lever-arm compensation: GNSS reports the antenna, SLAM reports the
+        # body. Rotate the antenna offset from body to map frame using current
+        # SLAM orientation, then subtract its XY from the GNSS ENU position
+        # so both operands refer to the body origin.
+        if self._gnss_antenna_offset.any():
+            R_body2map = odom.pose.orientation.to_rotation_matrix()
+            a_map = R_body2map @ self._gnss_antenna_offset
+            gnss_xy = np.array([g.east - a_map[0], g.north - a_map[1]])
+        else:
+            gnss_xy = np.array([g.east, g.north])
+
+        # One-shot alignment: lock the map↔ENU translation while SLAM healthy
+        if self._gnss_map_offset is None:
+            if self._loc_state != LOC_TRACKING:
+                return odom
+            if self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL):
+                return odom
+            self._gnss_map_offset = slam_xy - gnss_xy
+            logger.info(
+                "GNSS-SLAM alignment locked: map_offset=(%.3f, %.3f) m "
+                "(fix=%s, std=%.2fm)",
+                self._gnss_map_offset[0], self._gnss_map_offset[1],
+                g.fix_type.name, h_std,
+            )
+            return odom
+
+        # GNSS in SLAM map frame
+        gnss_in_map = gnss_xy + self._gnss_map_offset
+
+        # Residual guard: track misalignment, force re-lock on sustained drift
+        residual = float(np.linalg.norm(slam_xy - gnss_in_map))
+        self._gnss_last_residual_m = residual
+        if self._check_residual_and_maybe_relock(residual):
+            # Just cleared the offset — skip blending this frame, next valid
+            # GNSS sample will re-lock on a fresh pair.
+            self._publish_gnss_health()
+            return odom
+
+        # Weight: degraded SLAM → trust GNSS more
+        if self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL):
+            alpha = self._gnss_alpha_degraded
+        else:
+            alpha = self._gnss_alpha_healthy
+        if g.fix_type == GnssFixType.RTK_FLOAT:
+            alpha *= self._gnss_rtk_float_scale
+
+        fused_xy = slam_xy * (1.0 - alpha) + gnss_in_map * alpha
+
+        self._gnss_fused_count += 1
+        if self._gnss_fused_count % 50 == 1:
+            logger.info(
+                "GNSS-SLAM fusion active: alpha=%.2f, fix=%s, std=%.2fm, "
+                "residual=%.2fm, slam=(%.2f,%.2f) gnss=(%.2f,%.2f) "
+                "fused=(%.2f,%.2f)",
+                alpha, g.fix_type.name, h_std, residual,
+                slam_xy[0], slam_xy[1],
+                gnss_in_map[0], gnss_in_map[1],
+                fused_xy[0], fused_xy[1],
+            )
+        self._publish_gnss_health()
+
+        return Odometry(
+            pose=Pose(
+                position=Vector3(
+                    x=float(fused_xy[0]),
+                    y=float(fused_xy[1]),
+                    z=odom.pose.position.z,
+                ),
+                orientation=odom.pose.orientation,
+            ),
+            twist=odom.twist,
+            ts=odom.ts,
+        )
+
+    def _check_residual_and_maybe_relock(self, residual: float) -> bool:
+        """Sliding-window check: if too many recent samples exceed threshold,
+        clear the alignment offset so the next good sample re-locks it.
+
+        Returns True iff the offset was just cleared.
+        """
+        now = _time.time()
+        window = self._gnss_residual_warn_duration_s
+        self._gnss_residual_history.append((now, residual))
+        cutoff = now - window
+        # Drop entries older than the window
+        while self._gnss_residual_history and self._gnss_residual_history[0][0] < cutoff:
+            self._gnss_residual_history.pop(0)
+
+        # Need a filled window + enough samples (≥ 5) before firing
+        if not self._gnss_residual_history:
+            return False
+        if self._gnss_residual_history[0][0] > now - window * 0.5:
+            return False
+        if len(self._gnss_residual_history) < 5:
+            return False
+
+        warn_count = sum(
+            1 for _ts, r in self._gnss_residual_history
+            if r > self._gnss_residual_warn_m
+        )
+        ratio = warn_count / len(self._gnss_residual_history)
+        if ratio < self._gnss_residual_warn_ratio:
+            return False
+
+        # Fire: clear offset, bump counter, drop history
+        logger.warning(
+            "GNSS-SLAM residual sustained > %.1fm (%.0f%% of last %.1fs, "
+            "n=%d); relocking alignment. Previous offset=%s",
+            self._gnss_residual_warn_m, ratio * 100.0, window,
+            len(self._gnss_residual_history),
+            None if self._gnss_map_offset is None
+            else f"({self._gnss_map_offset[0]:.2f}, {self._gnss_map_offset[1]:.2f})",
+        )
+        self._gnss_map_offset = None
+        self._gnss_residual_history.clear()
+        self._gnss_relock_count += 1
+        self._gnss_last_relock_ts = now
+        return True
+
+    def _publish_gnss_health(self) -> None:
+        """Publish a compact diagnostic snapshot for Dashboard / watchdog."""
+        self.gnss_fusion_health.publish({
+            "enabled": self._gnss_fusion,
+            "alignment_locked": self._gnss_map_offset is not None,
+            "map_offset": (
+                None if self._gnss_map_offset is None
+                else [float(self._gnss_map_offset[0]),
+                      float(self._gnss_map_offset[1])]
+            ),
+            "last_residual_m": float(self._gnss_last_residual_m),
+            "fused_count": int(self._gnss_fused_count),
+            "relock_count": int(self._gnss_relock_count),
+            "last_relock_ts": float(self._gnss_last_relock_ts),
+            "last_fix_type": (
+                self._last_gnss_odom.fix_type.name
+                if self._last_gnss_odom is not None else "NONE"
+            ),
+            "last_gnss_age_s": (
+                float(_time.time() - self._last_gnss_rx_ts)
+                if self._last_gnss_rx_ts > 0 else float("inf")
+            ),
+        })
 
     # ── Localization health watchdog ──────────────────────────────��──────
 
@@ -795,4 +1035,83 @@ class SlamBridgeModule(Module, layer=1):
             "visual_fusion_active": self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL) and self._last_visual_odom is not None,
             "visual_fused_count": self._visual_fused_count,
         }
+        info["gnss_fusion"] = self._gnss_health_snapshot()
         return info
+
+    # -- AI-callable skills ------------------------------------------------
+
+    def _gnss_health_snapshot(self) -> dict[str, Any]:
+        """Shared payload for @skill and health() — matches Out port schema."""
+        return {
+            "enabled": self._gnss_fusion,
+            "alignment_locked": self._gnss_map_offset is not None,
+            "map_offset": (
+                None if self._gnss_map_offset is None
+                else [float(self._gnss_map_offset[0]),
+                      float(self._gnss_map_offset[1])]
+            ),
+            "antenna_offset_body": self._gnss_antenna_offset.tolist(),
+            "last_residual_m": float(self._gnss_last_residual_m),
+            "fused_count": int(self._gnss_fused_count),
+            "relock_count": int(self._gnss_relock_count),
+            "last_relock_ts": float(self._gnss_last_relock_ts),
+            "last_fix_type": (
+                self._last_gnss_odom.fix_type.name
+                if self._last_gnss_odom is not None else "NONE"
+            ),
+            "last_gnss_age_s": (
+                float(_time.time() - self._last_gnss_rx_ts)
+                if self._last_gnss_rx_ts > 0 else float("inf")
+            ),
+        }
+
+    @skill
+    def get_gnss_fusion_status(self) -> str:
+        """Return GNSS-SLAM fusion health: alignment, residual, fix quality,
+        relock count, and last GNSS sample age. Use this to diagnose outdoor
+        drift or suspected GNSS signal loss."""
+        import json
+        return json.dumps(self._gnss_health_snapshot(), default=str)
+
+    @skill
+    def relock_gnss_alignment(self) -> str:
+        """Force re-locking of the GNSS↔SLAM alignment offset. The next
+        valid RTK fix received while SLAM is healthy will establish a new
+        offset. Use this after a known map switch or after diagnosing that
+        the current alignment drifted."""
+        import json
+        prev = (
+            None if self._gnss_map_offset is None
+            else [float(self._gnss_map_offset[0]),
+                  float(self._gnss_map_offset[1])]
+        )
+        self._gnss_map_offset = None
+        self._gnss_residual_history.clear()
+        self._gnss_relock_count += 1
+        self._gnss_last_relock_ts = _time.time()
+        logger.warning(
+            "GNSS-SLAM alignment manually relocked (prev=%s)", prev)
+        return json.dumps({
+            "status": "relocked",
+            "previous_offset": prev,
+            "relock_count": self._gnss_relock_count,
+        })
+
+    @skill
+    def set_gnss_fusion(self, enabled: bool) -> str:
+        """Enable or disable the GNSS-SLAM fusion runtime switch. When
+        disabled, SLAM odometry is published without any GNSS correction
+        (equivalent to pure LiDAR-inertial SLAM). Persisted only in this
+        process — does not write robot_config.yaml."""
+        import json
+        self._gnss_fusion = bool(enabled)
+        if not self._gnss_fusion:
+            # Dropping the alignment is kinder than leaving a stale offset
+            self._gnss_map_offset = None
+            self._gnss_residual_history.clear()
+        logger.warning("GNSS fusion runtime switch: %s",
+                        "ON" if self._gnss_fusion else "OFF")
+        return json.dumps({
+            "status": "ok",
+            "enabled": self._gnss_fusion,
+        })

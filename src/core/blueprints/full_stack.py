@@ -31,6 +31,7 @@ from core.utils.calibration_check import run_calibration_check
 
 from .stacks import (
     driver,
+    exploration,
     gateway,
     lidar,
     maps,
@@ -144,6 +145,18 @@ def full_stack_blueprint(
             # Bridge: forwards GnssFix from DeviceManager → GnssModule
             _gnss_bp.add(GnssBridgeModule,
                          device_id=_gnss_cfg.get("device_id", "wtrtk980_main"))
+            # Optional NTRIP RTCM injection — activates RTK_FIXED when
+            # a CORS service is configured (gnss.rtcm.enabled=true).
+            _rtcm_cfg = _gnss_cfg.get("rtcm") or {}
+            if _rtcm_cfg.get("enabled", False):
+                from slam.ntrip_client_module import NtripClientModule
+                _gnss_bp.add(NtripClientModule,
+                             enabled=True,
+                             host=_rtcm_cfg.get("ntrip_host", ""),
+                             port=int(_rtcm_cfg.get("ntrip_port", 2101)),
+                             mount=_rtcm_cfg.get("ntrip_mount", ""),
+                             user=_rtcm_cfg.get("ntrip_user", ""),
+                             password=_rtcm_cfg.get("ntrip_pass", ""))
     except Exception as _e:
         import logging as _log
         _log.getLogger(__name__).debug("GNSS not loaded: %s", _e)
@@ -163,6 +176,11 @@ def full_stack_blueprint(
         planner_stack(llm, semantic_save_dir)
                                if enable_semantic else Blueprint(),
         navigation(planner_backend, tomogram, enable_native, **config),
+        exploration(
+            backend=config.get("exploration_backend", "none"),
+            tare_scenario=config.get("tare_scenario", "forest"),
+            auto_start=config.get("exploration_auto_start", True),
+        ),
         safety(),
         gateway(
             gateway_port,

@@ -40,7 +40,20 @@ build_ros() {
     echo ">>> [ROS] Done. Run: source install/setup.bash"
 }
 
-# ── 3. OTA Daemon (独立 CMake, 不在 colcon 管理内) ──
+# ── 3. TARE Planner (vendored in-tree, linked via fetched OR-Tools) ──
+build_tare() {
+    echo ">>> [TARE] Building TARE Planner..."
+    if [ -f "$_SCRIPT_DIR/build_tare.sh" ]; then
+        bash "$_SCRIPT_DIR/build_tare.sh" || {
+            echo ">>> [TARE] Build failed — exploration backend will fall back to wavefront"
+            return 0
+        }
+    else
+        echo ">>> [TARE] build_tare.sh not found, skipping"
+    fi
+}
+
+# ── 4. OTA Daemon (独立 CMake, 不在 colcon 管理内) ──
 build_ota() {
     echo ">>> [OTA] Building OTA Daemon..."
     local OTA_DIR="$WORKSPACE_DIR/src/ota_daemon"
@@ -67,10 +80,15 @@ case "$MODE" in
     --ota-only)
         build_ota
         ;;
+    --tare-only)
+        build_tare
+        ;;
     all|*)
         build_pct_core
         echo ""
         build_ros
+        echo ""
+        build_tare
         echo ""
         build_ota
         ;;

@@ -104,6 +104,12 @@ client/flutter_monitor/web/.dart_tool/
 third_party/
 !third_party/.gitkeep
 
+# OR-Tools binaries fetched by scripts/build/fetch_ortools.sh — ~130 MB
+# per arch, not committed. The or-tools/ directory below ships the
+# .gitkeep placeholder only.
+src/exploration/tare_planner/or-tools/*
+!src/exploration/tare_planner/or-tools/.gitkeep
+
 # ── Generated test/paper output ──
 paper_figures/
 pipeline_videos/

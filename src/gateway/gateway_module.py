@@ -244,6 +244,7 @@ class GatewayModule(Module, layer=6):
     costmap:        In[dict]  # from TraversabilityCostModule — fused cost grid
     slope_grid:     In[dict]  # from TraversabilityCostModule — slope in degrees
     agent_message:  In[dict]  # from SemanticPlanner — chat-facing messages
+    gnss_fusion_health: In[dict]  # from SlamBridgeModule — GNSS/SLAM alignment diag
 
     # -- Outputs (client commands → modules) --------------------------------
     goal_pose:   Out[PoseStamped]
@@ -339,6 +340,7 @@ class GatewayModule(Module, layer=6):
         self.costmap.subscribe(self._on_costmap)
         self.slope_grid.subscribe(self._on_slope_grid)
         self.agent_message.subscribe(self._on_agent_message)
+        self.gnss_fusion_health.subscribe(self._on_gnss_fusion_health)
         self._app = self._build_app()
 
     def start(self) -> None:
@@ -541,6 +543,11 @@ class GatewayModule(Module, layer=6):
         with self._state_lock:
             self._dialogue = d
         self.push_event({"type": "dialogue", "data": d})
+
+    def _on_gnss_fusion_health(self, state: dict) -> None:
+        """Forward SlamBridge gnss_fusion_health to SSE (type=gnss_fusion)."""
+        d = state if isinstance(state, dict) else {"raw": str(state)}
+        self.push_event({"type": "gnss_fusion", "data": d})
 
     def _on_global_path(self, path: list) -> None:
         # path is list of np.ndarray [x, y, z] from NavigationModule

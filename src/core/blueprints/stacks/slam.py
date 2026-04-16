@@ -3,6 +3,11 @@
 Optionally includes DepthVisualOdomModule for degeneracy-resilient fusion.
 When SLAM detects corridor/open-field degeneracy (SEVERE/CRITICAL),
 visual odometry from the depth camera selectively fuses into degenerate DOFs.
+
+GNSS fusion: when GnssModule is present in the system (from full_stack.py's
+_gnss_bp), its ``gnss_odom`` port auto-wires into SlamBridgeModule.gnss_odom
+via Blueprint._do_auto_wire (matches by port_name + msg_type). No explicit
+wire() call needed — do not add one here unless the port names diverge.
 """
 
 from __future__ import annotations
@@ -29,6 +34,16 @@ def slam(profile: str = "fastlio2", enable_visual_backup: bool = True) -> Bluepr
       "localizer" → start slam + localizer services (navigation mode)
       "bridge"    → subscribe only, assume SLAM already running
       "none"/""   → empty (stub/dev mode)
+
+    GNSS fusion config is read from robot_config.yaml gnss.* section and
+    passed to SlamBridgeModule as kwargs:
+      gnss.antenna_offset.{x,y,z}  → gnss_antenna_offset (lever-arm)
+      gnss.fusion.enabled          → gnss_fusion
+      gnss.fusion.alpha_{healthy,degraded}  → gnss_alpha_{healthy,degraded}
+      gnss.fusion.rtk_float_scale  → gnss_rtk_float_scale
+      gnss.fusion.max_{age_s,std_m} → gnss_max_{age_s,std_m}
+      gnss.fusion.residual_{warn_m,warn_duration_s,warn_ratio}
+                                    → gnss_residual_*
     """
     bp = Blueprint()
 
@@ -68,7 +83,7 @@ def slam(profile: str = "fastlio2", enable_visual_backup: bool = True) -> Bluepr
     # Bridge ROS2 topics into Python Module ports
     try:
         from slam.slam_bridge_module import SlamBridgeModule
-        bp.add(SlamBridgeModule)
+        bp.add(SlamBridgeModule, **_read_gnss_fusion_kwargs())
     except ImportError as e:
         logger.warning("SlamBridgeModule not available: %s", e)
 
@@ -92,3 +107,32 @@ def slam_module_name(profile: str) -> str:
     if not profile or profile == "none":
         return ""
     return "SlamBridgeModule"
+
+
+def _read_gnss_fusion_kwargs() -> dict:
+    """Load SlamBridgeModule GNSS fusion kwargs from the typed GnssConfig.
+
+    Returns an empty dict on any failure so SlamBridgeModule falls back to its
+    own hardcoded defaults — never blocks SLAM startup because of config quirks.
+    """
+    try:
+        from core.config import get_config
+        gnss = get_config().gnss
+    except Exception as e:
+        logger.debug("GNSS fusion config unavailable: %s", e)
+        return {}
+
+    ant = gnss.antenna_offset
+    fusion = gnss.fusion
+    return {
+        "gnss_antenna_offset": (float(ant.x), float(ant.y), float(ant.z)),
+        "gnss_fusion":                   bool(fusion.enabled),
+        "gnss_alpha_healthy":            float(fusion.alpha_healthy),
+        "gnss_alpha_degraded":           float(fusion.alpha_degraded),
+        "gnss_rtk_float_scale":          float(fusion.rtk_float_scale),
+        "gnss_max_age_s":                float(fusion.max_age_s),
+        "gnss_max_std_m":                float(fusion.max_std_m),
+        "gnss_residual_warn_m":          float(fusion.residual_warn_m),
+        "gnss_residual_warn_duration_s": float(fusion.residual_warn_duration_s),
+        "gnss_residual_warn_ratio":      float(fusion.residual_warn_ratio),
+    }

@@ -145,6 +145,61 @@ class LidarConfig:
 
 
 @dataclass
+class GnssAntennaOffset:
+    """Antenna mounting offset in body frame (metres)."""
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+
+@dataclass
+class GnssQualityConfig:
+    """Quality gate applied by GnssModule before forwarding fixes downstream."""
+    min_sat_used: int = 8
+    max_hdop: float = 2.5
+    max_age_s: float = 2.0
+    require_fix_type: int = 1
+    allow_float: bool = True
+
+
+@dataclass
+class GnssFusionRuntime:
+    """Runtime fusion parameters consumed by SlamBridgeModule. Keys mirror
+    SlamBridgeModule kwargs 1:1 (minus the ``gnss_`` prefix). Values left
+    at their defaults here hand off to the Module's own hard-coded defaults."""
+    backend: str = "fastlio2_gnss"       # reserved for future factor-graph backends
+    factor_weight_fix: float = 1.0
+    factor_weight_float: float = 0.3
+    factor_weight_single: float = 0.05
+    enabled: bool = True
+    alpha_healthy: float = 0.05
+    alpha_degraded: float = 0.5
+    rtk_float_scale: float = 0.3
+    max_age_s: float = 2.0
+    max_std_m: float = 1.0
+    residual_warn_m: float = 5.0
+    residual_warn_duration_s: float = 10.0
+    residual_warn_ratio: float = 0.7
+
+
+@dataclass
+class GnssConfig:
+    """Typed view of the ``gnss:`` section of robot_config.yaml.
+
+    Non-typed sub-sections (origin, rtcm, topic_fix, etc.) stay in
+    ``RobotConfig.raw['gnss']`` for loose access. This config owns the
+    safety-critical bits (antenna offset, quality gate, fusion weights).
+    """
+    enabled: bool = False
+    model: str = "WTRTK-980"
+    device: str = "/dev/wtrtk980"
+    baud: int = 115200
+    antenna_offset: GnssAntennaOffset = field(default_factory=GnssAntennaOffset)
+    quality: GnssQualityConfig = field(default_factory=GnssQualityConfig)
+    fusion: GnssFusionRuntime = field(default_factory=GnssFusionRuntime)
+
+
+@dataclass
 class RobotConfig:
     """Top-level robot configuration, mirroring config/robot_config.yaml.
 
@@ -158,6 +213,7 @@ class RobotConfig:
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     lidar: LidarConfig = field(default_factory=LidarConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
+    gnss: GnssConfig = field(default_factory=GnssConfig)
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -166,6 +222,26 @@ def _fill_dataclass(cls, data: dict[str, Any]):
     field_names = {f.name for f in cls.__dataclass_fields__.values()}
     filtered = {k: v for k, v in data.items() if k in field_names}
     return cls(**filtered)
+
+
+def _fill_gnss_config(data: dict[str, Any]) -> GnssConfig:
+    """Build GnssConfig from the nested gnss section of robot_config.yaml.
+    Nested antenna_offset / quality / fusion subsections are filled
+    recursively; unknown keys are tolerated (forward-compat)."""
+    if not isinstance(data, dict):
+        return GnssConfig()
+    antenna = _fill_dataclass(GnssAntennaOffset, data.get("antenna_offset") or {})
+    quality = _fill_dataclass(GnssQualityConfig, data.get("quality") or {})
+    fusion = _fill_dataclass(GnssFusionRuntime, data.get("fusion") or {})
+    return GnssConfig(
+        enabled=bool(data.get("enabled", False)),
+        model=str(data.get("model", "WTRTK-980")),
+        device=str(data.get("device", "/dev/wtrtk980")),
+        baud=int(data.get("baud", 115200)),
+        antenna_offset=antenna,
+        quality=quality,
+        fusion=fusion,
+    )
 
 
 def load_config(path: str | None = None) -> RobotConfig:
@@ -193,6 +269,7 @@ def load_config(path: str | None = None) -> RobotConfig:
         safety=_fill_dataclass(SafetyConfig, raw.get("safety", {})),
         lidar=_fill_dataclass(LidarConfig, raw.get("lidar", {})),
         camera=_fill_dataclass(CameraConfig, raw.get("camera", {})),
+        gnss=_fill_gnss_config(raw.get("gnss", {})),
         raw=raw,
     )
 
@@ -237,6 +314,41 @@ def validate_config(cfg: RobotConfig) -> list[str]:
     # Driver control rate must be positive
     if cfg.driver.control_rate <= 0:
         errors.append(f"driver.control_rate must be > 0, got {cfg.driver.control_rate}")
+
+    # GNSS — only check when enabled; unset robots skip these
+    if cfg.gnss.enabled:
+        if cfg.gnss.quality.min_sat_used < 0:
+            errors.append(
+                f"gnss.quality.min_sat_used must be ≥ 0, got {cfg.gnss.quality.min_sat_used}"
+            )
+        if cfg.gnss.quality.max_hdop <= 0:
+            errors.append(
+                f"gnss.quality.max_hdop must be > 0, got {cfg.gnss.quality.max_hdop}"
+            )
+        if cfg.gnss.quality.max_age_s <= 0:
+            errors.append(
+                f"gnss.quality.max_age_s must be > 0, got {cfg.gnss.quality.max_age_s}"
+            )
+        if not 0.0 <= cfg.gnss.fusion.alpha_healthy <= 1.0:
+            errors.append(
+                f"gnss.fusion.alpha_healthy must be in [0, 1], "
+                f"got {cfg.gnss.fusion.alpha_healthy}"
+            )
+        if not 0.0 <= cfg.gnss.fusion.alpha_degraded <= 1.0:
+            errors.append(
+                f"gnss.fusion.alpha_degraded must be in [0, 1], "
+                f"got {cfg.gnss.fusion.alpha_degraded}"
+            )
+        if cfg.gnss.fusion.residual_warn_m <= 0:
+            errors.append(
+                f"gnss.fusion.residual_warn_m must be > 0, "
+                f"got {cfg.gnss.fusion.residual_warn_m}"
+            )
+        if not 0.0 < cfg.gnss.fusion.residual_warn_ratio <= 1.0:
+            errors.append(
+                f"gnss.fusion.residual_warn_ratio must be in (0, 1], "
+                f"got {cfg.gnss.fusion.residual_warn_ratio}"
+            )
 
     # Camera intrinsics must be positive
     if cfg.camera.fx <= 0 or cfg.camera.fy <= 0:

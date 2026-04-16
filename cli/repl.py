@@ -413,6 +413,85 @@ class LingTuREPL(cmd.Cmd):
         except Exception as e:
             print(f"  Failed: {e}")
 
+    def do_gnss(self, arg):
+        """GNSS-SLAM fusion: gnss status | relock | enable | disable"""
+        parts = arg.split()
+        subcmd = parts[0] if parts else "status"
+
+        if subcmd == "status":
+            self._gnss_status()
+        elif subcmd == "relock":
+            self._gnss_relock()
+        elif subcmd in ("enable", "on"):
+            self._gnss_set_fusion(True)
+        elif subcmd in ("disable", "off"):
+            self._gnss_set_fusion(False)
+        else:
+            print("  Usage: gnss status | relock | enable | disable")
+
+    def complete_gnss(self, text, line, begidx, endidx):
+        options = ["status", "relock", "enable", "disable", "on", "off"]
+        return [o for o in options if o.startswith(text)]
+
+    def _gnss_status(self):
+        bridge = self._get_module("SlamBridgeModule")
+        if bridge is None:
+            print("  SlamBridgeModule not available")
+            return
+        try:
+            snap = bridge._gnss_health_snapshot()
+        except Exception as e:
+            print(f"  Failed to read GNSS fusion status: {e}")
+            return
+        enabled = snap.get("enabled")
+        locked = snap.get("alignment_locked")
+        print(f"  Fusion enabled: {'●' if enabled else '○'}")
+        print(f"  Alignment locked: {'●' if locked else '○'}")
+        if snap.get("map_offset"):
+            mx, my = snap["map_offset"]
+            print(f"  Map↔ENU offset: ({mx:+.3f}, {my:+.3f}) m")
+        ant = snap.get("antenna_offset_body") or [0.0, 0.0, 0.0]
+        print(f"  Antenna body offset: ({ant[0]:+.3f}, {ant[1]:+.3f}, {ant[2]:+.3f}) m")
+        fix = snap.get("last_fix_type", "NONE")
+        age = snap.get("last_gnss_age_s", float("inf"))
+        age_str = f"{age:.1f}s" if age != float("inf") else "∞"
+        print(f"  Last fix: {fix}  age: {age_str}")
+        print(f"  Residual: {snap.get('last_residual_m', 0.0):.2f} m")
+        print(f"  Fused frames: {snap.get('fused_count', 0)}")
+        print(f"  Relock count: {snap.get('relock_count', 0)}")
+
+        gnss = self._get_module("GnssModule")
+        if gnss is not None:
+            try:
+                h = gnss.health()
+                origin = h.get("origin")
+                if origin:
+                    print(f"  Origin: ({origin['lat']:.7f}, {origin['lon']:.7f}, {origin['alt']:.2f})")
+            except Exception:
+                pass
+
+    def _gnss_relock(self):
+        bridge = self._get_module("SlamBridgeModule")
+        if bridge is None:
+            print("  SlamBridgeModule not available")
+            return
+        try:
+            result = bridge.relock_gnss_alignment()
+            print(f"  {result}")
+        except Exception as e:
+            print(f"  Relock failed: {e}")
+
+    def _gnss_set_fusion(self, enabled: bool):
+        bridge = self._get_module("SlamBridgeModule")
+        if bridge is None:
+            print("  SlamBridgeModule not available")
+            return
+        try:
+            result = bridge.set_gnss_fusion(enabled)
+            print(f"  {result}")
+        except Exception as e:
+            print(f"  Failed: {e}")
+
     def do_smap(self, arg):
         """Semantic map: smap status | rooms | save | load <dir> | query <text>"""
         parts = arg.split(None, 1)
