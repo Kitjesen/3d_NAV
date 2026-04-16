@@ -81,7 +81,9 @@ class TestNavigationModule(unittest.TestCase):
         self.assertEqual(h["navigation"]["planner"], "astar")
 
     def test_no_map_uses_direct_goal_fallback(self):
-        m = self._make(enable_ros2_bridge=False)
+        # Direct-goal fallback is off by default since Wave 1 — explicitly opt
+        # in for this legacy-behaviour test.
+        m = self._make(enable_ros2_bridge=False, allow_direct_goal_fallback=True)
 
         class _NoMapBackend:
             _grid = None
@@ -128,7 +130,8 @@ class TestNavigationModule(unittest.TestCase):
         self.assertIn("empty path", m._failure_reason)
 
     def test_duplicate_goal_update_is_ignored_while_executing(self):
-        m = self._make(enable_ros2_bridge=False)
+        # Requires direct-goal fallback to reach EXECUTING without a real map.
+        m = self._make(enable_ros2_bridge=False, allow_direct_goal_fallback=True)
 
         class _NoMapBackend:
             _grid = None

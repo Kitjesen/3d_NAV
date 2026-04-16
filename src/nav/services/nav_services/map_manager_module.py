@@ -280,86 +280,48 @@ class MapManagerModule(Module, layer=6):
             }
 
     def _build_occupancy_snapshot(self, name: str) -> dict[str, Any]:
-        """Build a static 2D occupancy grid from map.pcd and save as occupancy.npz.
+        """Build ROS2-compatible 2D occupancy grid from SLAM output.
 
-        Algorithm
-        ---------
-        1. Load the PCD file (open3d if available, ASCII fallback otherwise).
-        2. Filter points to obstacle-height range (0.10 m – 2.00 m above median
-           ground, matching OccupancyGridModule defaults).
-        3. Project XY into a fixed-resolution grid (0.20 m/cell).
-        4. Mark occupied cells = 100, free = 0.
-        5. Save as npz: grid (int8 H×W), resolution (float), origin (float[2]).
+        Outputs in <map_dir>/<name>/:
+            occupancy.npz  — numpy (grid int8: -1/0/100, resolution, origin)
+            map.pgm        — ROS2 map_server PGM (254=free, 0=occ, 205=unknown)
+            map.yaml       — ROS2 map_server metadata
 
-        This step is wrapped in try/except; any failure returns success=False and
-        the caller (_map_save) continues without blocking the overall save.
+        Prefers log-odds Bayesian raycasting when PGO wrote poses.txt + patches/;
+        falls back to height-filtered XY projection (binary, no unknown) if PGO
+        didn't save patches — matches legacy behaviour so Fast-LIO2-only setups
+        still produce a usable grid.
         """
         if not name:
-            return {"action": "build_occupancy_snapshot", "success": False, "message": "missing map name"}
+            return {"action": "build_occupancy_snapshot", "success": False,
+                    "message": "missing map name"}
 
         map_dir = self._map_dir / name
         pcd_path = map_dir / "map.pcd"
         occ_path = map_dir / "occupancy.npz"
+        pgm_path = map_dir / "map.pgm"
+        yaml_path = map_dir / "map.yaml"
+        poses_path = map_dir / "poses.txt"
+        patches_dir = map_dir / "patches"
 
         if not pcd_path.exists():
-            return {
-                "action": "build_occupancy_snapshot",
-                "success": False,
-                "message": f"no PCD file at {pcd_path}",
-            }
+            return {"action": "build_occupancy_snapshot", "success": False,
+                    "message": f"no PCD file at {pcd_path}"}
 
         try:
-            pts = self._load_pcd_points(str(pcd_path))
-            if pts is None or pts.shape[0] == 0:
-                return {
-                    "action": "build_occupancy_snapshot",
-                    "success": False,
-                    "message": "PCD file is empty or could not be parsed",
-                }
-
-            resolution: float = 0.20  # metres per cell — matches OccupancyGridModule default
-            z_min_rel: float = 0.10   # obstacle bottom threshold above ground
-            z_max_rel: float = 2.00   # obstacle top threshold above ground
-
-            # Estimate ground level from median of lowest percentile
-            ground_z = float(np.percentile(pts[:, 2], 5))
-            z_lo = ground_z + z_min_rel
-            z_hi = ground_z + z_max_rel
-
-            # Height filter — keep only obstacle-height band
-            mask = (pts[:, 2] >= z_lo) & (pts[:, 2] <= z_hi)
-            obs_pts = pts[mask, :2]
-
-            if obs_pts.shape[0] == 0:
-                # No obstacle-height points — save an empty 1×1 grid so the file exists
-                grid = np.zeros((1, 1), dtype=np.int8)
-                origin = np.array([0.0, 0.0], dtype=np.float64)
-                np.savez_compressed(str(occ_path), grid=grid, resolution=resolution, origin=origin)
-                return {
-                    "action": "build_occupancy_snapshot",
-                    "success": True,
-                    "occupancy": str(occ_path),
-                    "message": "no obstacle-height points; saved empty grid",
-                }
-
-            # Compute grid bounds from all XY points (use full cloud for extent)
-            xy_all = pts[:, :2]
-            xy_min = xy_all.min(axis=0)
-            xy_max = xy_all.max(axis=0)
-
-            # Add a small border (1 cell) so boundary obstacles are visible
-            border = resolution
-            origin = xy_min - border
-            grid_w = int(np.ceil((xy_max[0] + border - origin[0]) / resolution)) + 1
-            grid_h = int(np.ceil((xy_max[1] + border - origin[1]) / resolution)) + 1
-
-            grid = np.zeros((grid_h, grid_w), dtype=np.int8)
-
-            # Rasterise obstacle points
-            col_idx = np.floor((obs_pts[:, 0] - origin[0]) / resolution).astype(np.int32)
-            row_idx = np.floor((obs_pts[:, 1] - origin[1]) / resolution).astype(np.int32)
-            valid = (col_idx >= 0) & (col_idx < grid_w) & (row_idx >= 0) & (row_idx < grid_h)
-            grid[row_idx[valid], col_idx[valid]] = 100
+            has_pgo = (
+                poses_path.exists()
+                and patches_dir.is_dir()
+                and any(patches_dir.iterdir())
+            )
+            if has_pgo:
+                grid, resolution, origin = self._build_occupancy_raycasting(
+                    poses_path, patches_dir,
+                )
+                mode = "raycasting"
+            else:
+                grid, resolution, origin = self._build_occupancy_projection(pcd_path)
+                mode = "projection"
 
             np.savez_compressed(
                 str(occ_path),
@@ -367,26 +329,272 @@ class MapManagerModule(Module, layer=6):
                 resolution=np.float64(resolution),
                 origin=origin.astype(np.float64),
             )
+            self._save_occupancy_pgm_yaml(grid, resolution, origin, pgm_path, yaml_path)
+
+            n_unk = int((grid == -1).sum())
+            n_fre = int((grid ==  0).sum())
+            n_occ = int((grid == 100).sum())
             logger.info(
-                "Occupancy snapshot saved: %s  shape=%s  res=%.2f  origin=(%.1f,%.1f)",
-                occ_path, grid.shape, resolution, origin[0], origin[1],
+                "Occupancy '%s' (%s) shape=%s res=%.3f  unknown=%d free=%d occupied=%d",
+                name, mode, grid.shape, resolution, n_unk, n_fre, n_occ,
             )
             return {
-                "action": "build_occupancy_snapshot",
-                "success": True,
-                "occupancy": str(occ_path),
+                "action":     "build_occupancy_snapshot",
+                "success":    True,
+                "occupancy":  str(occ_path),
+                "pgm":        str(pgm_path),
+                "yaml":       str(yaml_path),
+                "mode":       mode,
                 "grid_shape": list(grid.shape),
-                "resolution": resolution,
-                "origin": origin.tolist(),
+                "resolution": float(resolution),
+                "origin":     origin.tolist(),
+                "counts":     {"unknown": n_unk, "free": n_fre, "occupied": n_occ},
             }
 
         except Exception as exc:
             logger.warning("build_occupancy_snapshot failed for '%s': %s", name, exc)
-            return {
-                "action": "build_occupancy_snapshot",
-                "success": False,
-                "message": str(exc),
-            }
+            return {"action": "build_occupancy_snapshot", "success": False,
+                    "message": str(exc)}
+
+    # ── Occupancy algorithms ───────────────────────────────────────────────
+
+    def _build_occupancy_raycasting(
+        self, poses_path: Path, patches_dir: Path,
+    ) -> tuple[np.ndarray, float, np.ndarray]:
+        """Log-odds Bayesian occupancy via raycasting from keyframe poses."""
+        resolution:  float = 0.10
+        z_min_rel:   float = 0.10
+        z_max_rel:   float = 2.00
+        max_range:   float = 30.0
+        log_occ:     float = 0.85
+        log_free:    float = -0.40
+        log_min:     float = -2.0
+        log_max:     float = 3.5
+        thresh_occ:  float = 0.65
+        thresh_free: float = 0.196
+
+        poses = self._parse_poses_txt(poses_path)
+        if not poses:
+            raise RuntimeError(f"no valid poses in {poses_path}")
+
+        frame_data: list[tuple[np.ndarray, np.ndarray]] = []
+        ground_z_list: list[float] = []
+        xy_min = np.array([+np.inf, +np.inf], dtype=np.float32)
+        xy_max = np.array([-np.inf, -np.inf], dtype=np.float32)
+
+        for p in poses:
+            patch_path = patches_dir / p["patch"]
+            if not patch_path.is_file():
+                continue
+            body_pts = self._load_pcd_points(str(patch_path))
+            if body_pts is None or body_pts.shape[0] == 0:
+                continue
+            R = self._quat_to_rot(p["q"])
+            t = p["t"]
+            world_pts = body_pts @ R.T + t
+            dx = world_pts[:, 0] - t[0]
+            dy = world_pts[:, 1] - t[1]
+            dist = np.sqrt(dx * dx + dy * dy)
+            world_pts = world_pts[dist < max_range]
+            if world_pts.shape[0] == 0:
+                continue
+            frame_data.append((t[:2].copy(), world_pts))
+            xy_min = np.minimum(xy_min, world_pts[:, :2].min(axis=0))
+            xy_max = np.maximum(xy_max, world_pts[:, :2].max(axis=0))
+            ground_z_list.append(float(np.percentile(world_pts[:, 2], 5)))
+
+        if not frame_data:
+            raise RuntimeError("no usable patches loaded")
+
+        ground_z = float(np.median(ground_z_list))
+        z_lo, z_hi = ground_z + z_min_rel, ground_z + z_max_rel
+
+        border = 1.0
+        origin = (xy_min - border).astype(np.float64)
+        grid_w = int(np.ceil((xy_max[0] + border - origin[0]) / resolution)) + 1
+        grid_h = int(np.ceil((xy_max[1] + border - origin[1]) / resolution)) + 1
+        if grid_w <= 0 or grid_h <= 0 or grid_w * grid_h > 25_000_000:
+            raise RuntimeError(f"grid size out of range: {grid_w}×{grid_h}")
+
+        log_odds = np.zeros((grid_h, grid_w), dtype=np.float32)
+
+        for origin_xy, world_pts in frame_data:
+            ox = int(np.floor((origin_xy[0] - origin[0]) / resolution))
+            oy = int(np.floor((origin_xy[1] - origin[1]) / resolution))
+
+            end_col = np.floor((world_pts[:, 0] - origin[0]) / resolution).astype(np.int32)
+            end_row = np.floor((world_pts[:, 1] - origin[1]) / resolution).astype(np.int32)
+
+            self._raycast_free(log_odds, ox, oy, end_col, end_row,
+                               grid_w, grid_h, log_free)
+
+            obs_mask = (world_pts[:, 2] >= z_lo) & (world_pts[:, 2] <= z_hi)
+            hc = end_col[obs_mask]
+            hr = end_row[obs_mask]
+            valid = (hc >= 0) & (hc < grid_w) & (hr >= 0) & (hr < grid_h)
+            if valid.any():
+                np.add.at(log_odds, (hr[valid], hc[valid]), log_occ)
+
+            np.clip(log_odds, log_min, log_max, out=log_odds)
+
+        grid = np.full((grid_h, grid_w), -1, dtype=np.int8)
+        prob = 1.0 / (1.0 + np.exp(-log_odds))
+        grid[prob > thresh_occ] = 100
+        grid[(prob < thresh_free) & (log_odds < -0.01)] = 0
+
+        return grid, resolution, origin
+
+    def _build_occupancy_projection(
+        self, pcd_path: Path,
+    ) -> tuple[np.ndarray, float, np.ndarray]:
+        """Fallback: height-filter + XY projection (binary, no unknown state)."""
+        pts = self._load_pcd_points(str(pcd_path))
+        if pts is None or pts.shape[0] == 0:
+            raise RuntimeError("PCD file empty or unparseable")
+
+        resolution: float = 0.20
+        z_min_rel:  float = 0.10
+        z_max_rel:  float = 2.00
+
+        ground_z = float(np.percentile(pts[:, 2], 5))
+        z_lo, z_hi = ground_z + z_min_rel, ground_z + z_max_rel
+        mask = (pts[:, 2] >= z_lo) & (pts[:, 2] <= z_hi)
+        obs_pts = pts[mask, :2]
+
+        xy_min = pts[:, :2].min(axis=0)
+        xy_max = pts[:, :2].max(axis=0)
+        border = resolution
+        origin = (xy_min - border).astype(np.float64)
+        grid_w = int(np.ceil((xy_max[0] + border - origin[0]) / resolution)) + 1
+        grid_h = int(np.ceil((xy_max[1] + border - origin[1]) / resolution)) + 1
+        grid = np.zeros((grid_h, grid_w), dtype=np.int8)
+
+        if obs_pts.shape[0] > 0:
+            col = np.floor((obs_pts[:, 0] - origin[0]) / resolution).astype(np.int32)
+            row = np.floor((obs_pts[:, 1] - origin[1]) / resolution).astype(np.int32)
+            v = (col >= 0) & (col < grid_w) & (row >= 0) & (row < grid_h)
+            grid[row[v], col[v]] = 100
+
+        return grid, resolution, origin
+
+    # ── Output helpers ─────────────────────────────────────────────────────
+
+    def _save_occupancy_pgm_yaml(
+        self, grid: np.ndarray, resolution: float, origin: np.ndarray,
+        pgm_path: Path, yaml_path: Path,
+    ) -> None:
+        """ROS2 map_server compatible PGM + YAML."""
+        pgm = np.full_like(grid, 205, dtype=np.uint8)
+        pgm[grid == 0] = 254
+        pgm[grid == 100] = 0
+        pgm = np.flipud(pgm)
+
+        h, w = pgm.shape
+        with open(pgm_path, "wb") as f:
+            f.write(f"P5\n{w} {h}\n255\n".encode())
+            f.write(pgm.tobytes())
+
+        yaml_body = {
+            "image":           pgm_path.name,
+            "resolution":      float(resolution),
+            "origin":          [float(origin[0]), float(origin[1]), 0.0],
+            "negate":          0,
+            "occupied_thresh": 0.65,
+            "free_thresh":     0.196,
+            "mode":            "trinary",
+        }
+        try:
+            import yaml as _yaml
+            with open(yaml_path, "w") as f:
+                _yaml.safe_dump(yaml_body, f, default_flow_style=False, sort_keys=False)
+        except ImportError:
+            yaml_path.write_text(
+                f"image: {yaml_body['image']}\n"
+                f"resolution: {yaml_body['resolution']}\n"
+                f"origin: [{yaml_body['origin'][0]}, {yaml_body['origin'][1]}, 0.0]\n"
+                f"negate: 0\n"
+                f"occupied_thresh: 0.65\n"
+                f"free_thresh: 0.196\n"
+                f"mode: trinary\n"
+            )
+
+    @staticmethod
+    def _raycast_free(
+        log_odds: np.ndarray, ox: int, oy: int,
+        end_col: np.ndarray, end_row: np.ndarray,
+        grid_w: int, grid_h: int, log_free: float,
+    ) -> None:
+        """Vectorised free-space update along rays via DDA rasterisation."""
+        if end_col.size == 0:
+            return
+        dx = end_col - ox
+        dy = end_row - oy
+        steps = np.maximum(np.abs(dx), np.abs(dy))
+        steps = np.minimum(steps, 500).astype(np.int32)
+        max_s = int(steps.max()) if steps.size else 0
+        if max_s < 1:
+            return
+
+        chunk = max(1, 200_000 // max_s)
+        n = end_col.size
+        ks = np.arange(max_s, dtype=np.float32)
+
+        for s in range(0, n, chunk):
+            e = min(n, s + chunk)
+            dx_b = dx[s:e].astype(np.float32)
+            dy_b = dy[s:e].astype(np.float32)
+            steps_b = steps[s:e].astype(np.float32)
+            frac = ks[None, :] / np.maximum(steps_b[:, None], 1.0)
+            cols = ox + frac * dx_b[:, None]
+            rows = oy + frac * dy_b[:, None]
+            valid_len = ks[None, :] < steps_b[:, None]
+            cols = np.floor(cols).astype(np.int32)
+            rows = np.floor(rows).astype(np.int32)
+            in_bounds = (cols >= 0) & (cols < grid_w) & (rows >= 0) & (rows < grid_h)
+            mask = in_bounds & valid_len
+            if not mask.any():
+                continue
+            cols = cols[mask]
+            rows = rows[mask]
+            np.add.at(log_odds, (rows, cols), log_free)
+
+    @staticmethod
+    def _parse_poses_txt(path: Path) -> list[dict]:
+        """Parse PGO poses.txt: each line 'patch.pcd tx ty tz qw qx qy qz'."""
+        poses: list[dict] = []
+        with open(path) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) != 8:
+                    continue
+                try:
+                    poses.append({
+                        "patch": parts[0],
+                        "t": np.array(
+                            [float(parts[1]), float(parts[2]), float(parts[3])],
+                            dtype=np.float32),
+                        "q": np.array(
+                            [float(parts[4]), float(parts[5]),
+                             float(parts[6]), float(parts[7])],
+                            dtype=np.float32),
+                    })
+                except ValueError:
+                    continue
+        return poses
+
+    @staticmethod
+    def _quat_to_rot(q: np.ndarray) -> np.ndarray:
+        """Quaternion (w, x, y, z) → 3×3 rotation matrix."""
+        w, x, y, z = float(q[0]), float(q[1]), float(q[2]), float(q[3])
+        n = np.sqrt(w * w + x * x + y * y + z * z)
+        if n < 1e-9:
+            return np.eye(3, dtype=np.float32)
+        w, x, y, z = w / n, x / n, y / n, z / n
+        return np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w)],
+            [2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y)],
+        ], dtype=np.float32)
 
     @staticmethod
     def _load_pcd_points(pcd_path: str) -> np.ndarray | None:

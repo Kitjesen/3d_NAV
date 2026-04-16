@@ -215,6 +215,10 @@ class TestSlamBridgeDofMaskPreference(unittest.TestCase):
         obj._visual_fused_count = 0
         obj._last_slam_odom = None
         obj._dof_mask = None
+        # GNSS fusion was introduced in a later merge; disable it here so the
+        # test only exercises the visual-odometry / DOF-mask path.
+        obj._gnss_fusion = False
+        obj._last_gnss_odom = None
         return obj
 
     def _make_odom(self, x=0.0, y=0.0, z=0.0):
