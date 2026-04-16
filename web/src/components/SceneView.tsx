@@ -78,10 +78,20 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
       p != null && typeof p.x === 'number' && typeof p.y === 'number'
   )
   const odom   = sseState.odometry
-  const robotX = typeof odom?.x   === 'number' ? odom.x   : 0
-  const robotY = typeof odom?.y   === 'number' ? odom.y   : 0
-  const yaw    = typeof odom?.yaw === 'number' ? odom.yaw : 0
-  const vx     = typeof odom?.vx  === 'number' ? odom.vx  : 0
+  // Sanity filter: reject absurd values (SLAM may emit garbage when lost).
+  // Reasonable bounds: |pos| < 10km, |vel| < 10 m/s (quadruped max ~3 m/s).
+  const sanePos = (v: unknown): number =>
+    typeof v === 'number' && Number.isFinite(v) && Math.abs(v) < 10000 ? v : 0
+  const saneVel = (v: unknown): number =>
+    typeof v === 'number' && Number.isFinite(v) && Math.abs(v) < 10 ? v : 0
+  const saneYaw = (v: unknown): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : 0
+
+  const robotX = sanePos(odom?.x)
+  const robotY = sanePos(odom?.y)
+  const yaw    = saneYaw(odom?.yaw)
+  const vx     = saneVel(odom?.vx)
+  const odomValid = odom != null && sanePos(odom.x) === odom.x && sanePos(odom.y) === odom.y
 
   const missionState = sseState.missionStatus?.state ?? 'IDLE'
   const missionGoal  = sseState.missionStatus?.goal
@@ -431,10 +441,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
               <span className={styles.scaleLabel}>3D 场景视图  ·  拖拽旋转  ·  滚轮缩放  ·  点击放置目标</span>
             </div>
             <div className={styles.robotOverlay}>
-              <span>位置 ({robotX.toFixed(2)}, {robotY.toFixed(2)})</span>
-              <span>航向 {((yaw * 180) / Math.PI).toFixed(1)}°</span>
-              <span>速度 {vx.toFixed(2)} m/s</span>
-              <span>{missionState}</span>
+              <span>位置 {odomValid ? `(${robotX.toFixed(2)}, ${robotY.toFixed(2)})` : '(--, --)'}</span>
+              <span>航向 {odomValid ? `${((yaw * 180) / Math.PI).toFixed(1)}°` : '--°'}</span>
+              <span>速度 {odomValid ? `${vx.toFixed(2)} m/s` : '-- m/s'}</span>
+              <span>{slamMode === '—' || slamMode === 'stop' ? '⚠ SLAM 离线' : missionState}</span>
             </div>
             {pendingGoal && (
               <div className={styles.goalConfirmPanel}>
