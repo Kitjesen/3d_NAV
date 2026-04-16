@@ -104,17 +104,33 @@ def full_stack_blueprint(
     _needs_lidar = slam_profile not in ("", "none", "bridge")
     _lidar_ip = config.get("lidar_ip")
 
-    # GNSS module (optional — reads gnss.enabled from robot_config.yaml)
+    # ── Device Registry + GNSS ────────────────────────────────────
+    # DeviceManager loads config/devices.yaml and orchestrates all hardware.
+    # GnssModule receives fixes via GnssBridge from DeviceManager (no
+    # direct serial access — clean separation of hardware and fusion logic).
+    _device_bp = Blueprint()
+    try:
+        import os
+        from pathlib import Path
+        _devices_yaml = Path(__file__).resolve().parents[3] / "config" / "devices.yaml"
+        if _devices_yaml.exists():
+            from core.devices import DeviceManager
+            _device_bp.add(DeviceManager,
+                           config_path=str(_devices_yaml),
+                           enable_hotplug=os.environ.get("LINGTU_HOTPLUG", "1") == "1")
+    except Exception as _e:
+        import logging as _log
+        _log.getLogger(__name__).debug("DeviceManager not loaded: %s", _e)
+
     _gnss_bp = Blueprint()
     try:
         from core.config import get_config
         _gnss_cfg = get_config().raw.get("gnss", {})
         if _gnss_cfg.get("enabled", False):
             from slam.gnss_module import GnssModule
-            _gnss_bp = Blueprint()
+            from slam.gnss_bridge import GnssBridgeModule
+            # GnssModule: fusion-side (LLA→ENU, quality, status) — no serial
             _gnss_bp.add(GnssModule,
-                         serial_port=_gnss_cfg.get("device", "/dev/wtrtk980"),
-                         serial_baud=_gnss_cfg.get("baud", 115200),
                          device_model=_gnss_cfg.get("model", "WTRTK-980"),
                          origin_lat=(_gnss_cfg.get("origin") or {}).get("lat"),
                          origin_lon=(_gnss_cfg.get("origin") or {}).get("lon"),
@@ -123,11 +139,15 @@ def full_stack_blueprint(
                          min_sat_used=(_gnss_cfg.get("quality") or {}).get("min_sat_used", 8),
                          max_hdop=(_gnss_cfg.get("quality") or {}).get("max_hdop", 2.5),
                          )
+            # Bridge: forwards GnssFix from DeviceManager → GnssModule
+            _gnss_bp.add(GnssBridgeModule,
+                         device_id=_gnss_cfg.get("device_id", "wtrtk980_main"))
     except Exception as _e:
         import logging as _log
         _log.getLogger(__name__).debug("GNSS not loaded: %s", _e)
 
     bp = autoconnect(
+        _device_bp,
         driver(robot, **driver_config),
         lidar(ip=_lidar_ip, enabled=_needs_lidar),
         sim_lidar(scene_xml=scene_xml),

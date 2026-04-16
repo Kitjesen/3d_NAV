@@ -1083,6 +1083,23 @@ class GatewayModule(Module, layer=6):
             with gw._state_lock:
                 return {"path": gw._last_path, "robot": gw._odom}
 
+        @app.get("/api/v1/devices", summary="Hardware device registry status")
+        async def get_devices():
+            """Returns DeviceManager snapshot — all hardware devices + status."""
+            mgr = gw._all_modules.get("DeviceManager") if gw._all_modules else None
+            if mgr is None:
+                return {"devices": [], "manager": "not_loaded"}
+            try:
+                health = mgr.health()
+                return {
+                    "manager": "ok",
+                    "spec_count": health.get("spec_count", 0),
+                    "opened_count": health.get("opened_count", 0),
+                    "devices": health.get("devices", []),
+                }
+            except Exception as e:
+                return {"devices": [], "manager": "error", "error": str(e)}
+
         @app.get("/api/v1/health", summary="System health overview")
         async def get_health():
             with gw._sse_lock:

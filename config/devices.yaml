@@ -1,0 +1,86 @@
+# LingTu Device Registry — 单一硬件设备清单
+#
+# 所有硬件设备登记在此。DeviceManager 在启动时:
+#   1. 加载本文件
+#   2. 自动检测 (udev / lsusb / ping)
+#   3. 用对应 driver 打开
+#   4. 用对应 decoder 解码协议
+#   5. 状态发布到 Dashboard /api/v1/devices
+#
+# 替换硬件: 改这里一行, 不需要改代码
+
+version: 1
+
+devices:
+  # ── GNSS ────────────────────────────────────────
+  - id: wtrtk980_main
+    type: gnss
+    enabled: true
+    driver: serial_nmea0183       # NmeaSerialDriver
+    description: "WitMotion WTRTK-980 RTK GNSS"
+    udev_match:
+      vendor_id: "1a86"            # CH340
+      product_id: "7523"
+      port_path: "3-1"             # USB physical port (区分多个 CH340)
+    serial:
+      device: /dev/wtrtk980        # udev symlink (auto-created)
+      baud: 115200
+    capabilities: [position, velocity]
+    publish_topics:
+      - {name: gnss_fix,    type: GnssFix,    rate_hz: 1.0}
+      - {name: gnss_status, type: GnssStatus, rate_hz: 0.5}
+
+  # ── LiDAR ───────────────────────────────────────
+  - id: livox_mid360_main
+    type: lidar
+    enabled: true
+    driver: livox_sdk2
+    description: "Livox MID-360 360° 3D LiDAR"
+    network:
+      ip: "192.168.1.115"
+      port: 56100
+    capabilities: [pointcloud, imu]
+    publish_topics:
+      - {name: scan, type: PointCloud2, rate_hz: 10}
+      - {name: imu,  type: Imu,         rate_hz: 200}
+
+  # ── Camera ──────────────────────────────────────
+  - id: orbbec_gemini335_main
+    type: camera
+    enabled: true
+    driver: orbbec_sdk
+    description: "Orbbec Gemini 335 RGB-D Camera"
+    udev_match:
+      vendor_id: "2bc5"
+      product_id: "0800"
+    config:
+      color_resolution: "640x480"
+      depth_resolution: "640x480"
+      fps: 30
+      rotate: 270                  # 安装方向旋转 (0/90/180/270)
+    capabilities: [color, depth]
+    publish_topics:
+      - {name: color_image, type: Image, rate_hz: 30}
+      - {name: depth_image, type: Image, rate_hz: 30}
+
+  # ── Motor Controller ────────────────────────────
+  - id: brainstem_main
+    type: motor_controller
+    enabled: true
+    driver: brainstem_grpc
+    description: "Brainstem 四足运动控制 (han_dog.dart)"
+    network:
+      host: "127.0.0.1"
+      port: 13145
+    capabilities: [walk, stand, sit, listen_imu, listen_joint]
+
+  # ── PCAN-USB (CAN bus) ──────────────────────────
+  - id: pcan_main
+    type: can_bus
+    enabled: false                # 由 Brainstem 内部使用
+    driver: pcan_native
+    description: "PEAK PCAN-USB → 电机 CAN 总线"
+    udev_match:
+      vendor_id: "0c72"
+      product_id: "000c"
+    note: "Brainstem 内部独占, 不走 LingTu Module 系统"
