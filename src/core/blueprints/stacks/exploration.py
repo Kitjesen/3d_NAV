@@ -85,6 +85,9 @@ def _add_tare(bp: Blueprint, **kw) -> bool:
         return False
 
     try:
+        from exploration.exploration_supervisor_module import (
+            ExplorationSupervisorModule,
+        )
         from exploration.native_factories import tare_explorer
         from exploration.tare_explorer_module import TAREExplorerModule
         scenario = kw.pop("tare_scenario", None)
@@ -93,7 +96,16 @@ def _add_tare(bp: Blueprint, **kw) -> bool:
                 "tare_scenario", "forest")
         bp.add(tare_explorer(cfg, scenario=scenario))
         bp.add(TAREExplorerModule, **_tare_kwargs(kw))
-        logger.info("TARE exploration stack enabled (scenario=%s)", scenario)
+        # Supervisor consolidates tare_stats into supervisor_state +
+        # fires exploration_ready once TARE is healthy. Autoconnect wires
+        # its ``tare_stats: In[dict]`` to TAREExplorerModule's Out, and
+        # its ``supervisor_state: Out[dict]`` plus ``tare_stats`` into
+        # Gateway for SSE.
+        bp.add(ExplorationSupervisorModule, **_supervisor_kwargs(kw))
+        logger.info(
+            "TARE exploration stack enabled (scenario=%s, supervisor=on)",
+            scenario,
+        )
         return True
     except Exception as e:
         logger.warning("TARE module load failed: %s", e)
@@ -115,3 +127,13 @@ def _tare_kwargs(kw: dict) -> dict:
         "way_point_timeout_s", "auto_start",
     }
     return {k: v for k, v in kw.items() if k in allowed}
+
+
+def _supervisor_kwargs(kw: dict) -> dict:
+    """Keep only ExplorationSupervisorModule-relevant kwargs."""
+    mapping = {
+        "tare_warn_timeout_s":     "warn_timeout_s",
+        "tare_fallback_timeout_s": "fallback_timeout_s",
+        "tare_supervisor_hz":      "poll_hz",
+    }
+    return {dst: kw[src] for src, dst in mapping.items() if src in kw}

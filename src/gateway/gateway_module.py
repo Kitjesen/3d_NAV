@@ -245,6 +245,8 @@ class GatewayModule(Module, layer=6):
     slope_grid:     In[dict]  # from TraversabilityCostModule — slope in degrees
     agent_message:  In[dict]  # from SemanticPlanner — chat-facing messages
     gnss_fusion_health: In[dict]  # from SlamBridgeModule — GNSS/SLAM alignment diag
+    tare_stats:         In[dict]  # from TAREExplorerModule — exploration diag
+    supervisor_state:   In[dict]  # from ExplorationSupervisorModule — watchdog
 
     # -- Outputs (client commands → modules) --------------------------------
     goal_pose:   Out[PoseStamped]
@@ -341,6 +343,8 @@ class GatewayModule(Module, layer=6):
         self.slope_grid.subscribe(self._on_slope_grid)
         self.agent_message.subscribe(self._on_agent_message)
         self.gnss_fusion_health.subscribe(self._on_gnss_fusion_health)
+        self.tare_stats.subscribe(self._on_tare_stats)
+        self.supervisor_state.subscribe(self._on_exploration_supervisor)
         self._app = self._build_app()
 
     def start(self) -> None:
@@ -548,6 +552,17 @@ class GatewayModule(Module, layer=6):
         """Forward SlamBridge gnss_fusion_health to SSE (type=gnss_fusion)."""
         d = state if isinstance(state, dict) else {"raw": str(state)}
         self.push_event({"type": "gnss_fusion", "data": d})
+
+    def _on_tare_stats(self, stats: dict) -> None:
+        """Forward TAREExplorerModule tare_stats to SSE (type=tare_stats)."""
+        d = stats if isinstance(stats, dict) else {"raw": str(stats)}
+        self.push_event({"type": "tare_stats", "data": d})
+
+    def _on_exploration_supervisor(self, state: dict) -> None:
+        """Forward ExplorationSupervisorModule supervisor_state to SSE
+        (type=exploration_supervisor). Dashboards show mode + reason."""
+        d = state if isinstance(state, dict) else {"raw": str(state)}
+        self.push_event({"type": "exploration_supervisor", "data": d})
 
     def _on_global_path(self, path: list) -> None:
         # path is list of np.ndarray [x, y, z] from NavigationModule
