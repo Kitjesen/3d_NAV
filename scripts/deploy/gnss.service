@@ -17,18 +17,20 @@ Group=dialout
 Environment=ROS_DOMAIN_ID=0
 Environment=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
-# 指向 ironoa/um982_ros2_driver 编译产物
-# 安装位置: /opt/lingtu/gnss/install/
-ExecStartPre=/bin/bash -c 'test -e /dev/ttyUSB0 || test -e /dev/ttyACM0'
+# wtrtk980_ros2_reader — C++ ROS2 node for WTRTK-980
+# Source: src/drivers/gnss/wtrtk980_ros2_reader/
+# Build:  ~/data/inovxio/lingtu/install/ (colcon)
+ExecStartPre=/bin/bash -c 'test -e /dev/wtrtk980'
 ExecStart=/bin/bash -c " \
     source /opt/ros/humble/setup.bash && \
-    source /opt/lingtu/gnss/install/setup.bash && \
-    ros2 run um982_driver um982_driver_node \
+    source /home/sunrise/data/inovxio/lingtu/install/setup.bash && \
+    ros2 run wtrtk980_ros2_reader wtrtk980_ros2_node \
       --ros-args \
-      -p port:=/dev/ttyUSB0 \
-      -p baud:=460800 \
-      -p frame_id:=gnss_antenna \
-      -p publish_rate:=50"
+      -p device:=auto \
+      -p fix_topic:=/gps/fix \
+      -p raw_topic:=/gps/nmea \
+      -p frame_id:=wtrtk980 \
+      -p publish_raw:=true"
 
 Restart=on-failure
 RestartSec=5
