@@ -230,6 +230,18 @@ class Blueprint:
             TypeError:  Type mismatch in an explicit wire().
         """
         n_workers = self._global_cfg.get("n_workers", n_workers)
+        # Auto-detect: if any module declares _run_in_worker, enable worker mode
+        if n_workers == 0:
+            has_worker_modules = any(
+                getattr(e.module_cls, '_run_in_worker', False) for e in self._entries
+            )
+            if has_worker_modules:
+                groups = {getattr(e.module_cls, '_worker_group', '') or 'default'
+                          for e in self._entries
+                          if getattr(e.module_cls, '_run_in_worker', False)}
+                n_workers = len(groups)
+                logger.info("Auto-enabling worker mode: %d groups detected (%s)",
+                            n_workers, ', '.join(sorted(groups)))
         if n_workers > 0:
             return self._build_worker_mode(n_workers)
 
@@ -295,14 +307,36 @@ class Blueprint:
         from core.transport.adapter import TransportAdapter
         from core.transport.shm import SHMTransport
 
-        worker_entries = [e for e in self._entries if not e.module_cls._run_in_main]
-        local_entries  = [e for e in self._entries if     e.module_cls._run_in_main]
+        # Partition modules into: main-process locals vs worker subprocesses.
+        # _run_in_worker modules are grouped by _worker_group so related heavy
+        # modules share a single subprocess (and its GIL), but isolate from
+        # the main process Gateway/Navigation.
+        worker_entries = [e for e in self._entries
+                          if getattr(e.module_cls, '_run_in_worker', False)]
+        local_entries  = [e for e in self._entries
+                          if not getattr(e.module_cls, '_run_in_worker', False)]
 
-        coord = ModuleCoordinator(n_workers=n_workers)
+        # Count distinct worker groups to decide n_workers
+        groups: dict[str, list] = {}
+        for e in worker_entries:
+            grp = getattr(e.module_cls, '_worker_group', '') or 'default'
+            groups.setdefault(grp, []).append(e)
+        actual_workers = max(n_workers, len(groups)) if groups else 0
+
+        coord = ModuleCoordinator(n_workers=actual_workers)
         coord.start()
+
+        # Assign each group to a dedicated worker index
+        group_worker_id: dict[str, int] = {}
+        for idx, grp_name in enumerate(sorted(groups.keys())):
+            group_worker_id[grp_name] = idx
+
         proxies: dict[str, Any] = {}
         for entry in worker_entries:
-            proxies[entry.name] = coord.deploy(entry.module_cls, entry.name, kwargs=entry.config)
+            grp = getattr(entry.module_cls, '_worker_group', '') or 'default'
+            wid = group_worker_id[grp]
+            proxies[entry.name] = coord.deploy(
+                entry.module_cls, entry.name, kwargs=entry.config, worker_id=wid)
 
         local_instances: dict[str, Any] = {}
         for entry in local_entries:

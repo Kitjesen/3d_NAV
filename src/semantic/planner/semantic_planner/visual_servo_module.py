@@ -49,6 +49,8 @@ MODE_FOLLOW = "follow"   # person following
 
 @register("visual_servo", "default", description="Visual servoing: bbox tracking + person following")
 class VisualServoModule(Module, layer=4):
+    _run_in_worker = True
+    _worker_group = "semantic"
     """Visual servo navigation with distance-based mode switching.
 
     Far range:  BBoxNavigator.compute_3d_from_bbox() → PoseStamped → NavigationModule

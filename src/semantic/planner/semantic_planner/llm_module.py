@@ -79,6 +79,8 @@ class LLMResponse:
 
 @register("llm", "pluggable", description="Pluggable LLM backend module")
 class LLMModule(Module, layer=4):
+    _run_in_worker = True
+    _worker_group = "semantic"
     """Pluggable LLM Module — async chat via In/Out ports.
 
     In:  request  (LLMRequest)   — prompt from any module

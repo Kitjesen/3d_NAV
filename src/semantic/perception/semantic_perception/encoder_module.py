@@ -46,6 +46,8 @@ class FeatureResult:
 
 @register("encoder", "pluggable", description="Pluggable feature encoder module")
 class EncoderModule(Module, layer=3):
+    _run_in_worker = True
+    _worker_group = "perception"
     """Pluggable feature encoder Module.
 
     In:  image (np.ndarray)       — BGR uint8 HxWx3

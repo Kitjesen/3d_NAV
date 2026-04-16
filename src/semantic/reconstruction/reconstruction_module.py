@@ -35,6 +35,8 @@ from .semantic_labeler import SemanticLabeler
 
 
 class ReconstructionModule(Module, layer=3):
+    _run_in_worker = True
+    _worker_group = "perception"
     """3-D semantic reconstruction module (hive Module).
 
     Combines RGB-D projection into a voxel colour table with

@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 
 class PerceptionModule(Module, layer=3):
+    _run_in_worker = True
+    _worker_group = "perception"
     """Semantic perception: YOLO detection + CLIP encoding + scene graph tracking.
 
     Thin Module shell around existing algorithms in semantic_perception.

@@ -138,6 +138,13 @@ class Module:
     # can receive RPCClient proxies via on_system_modules() directly.
     _run_in_main: bool = False
 
+    # Heavy ML modules set this True to be deployed into a Worker subprocess
+    # with its own GIL, preventing slow inference from blocking the Gateway.
+    # _worker_group groups related modules into the same subprocess (e.g.
+    # "perception" → PerceptionModule + EncoderModule share one worker).
+    _run_in_worker: bool = False
+    _worker_group: str = ""
+
     # -- dimos-style __init_subclass__: set None placeholders at class definition ---
 
     def __init_subclass__(cls, layer: int | None = None, **kwargs: Any) -> None:

@@ -53,6 +53,8 @@ _AGENT_SKILL_BLOCKLIST = {
 
 @register("semantic_planner", "default", description="Unified semantic planner module")
 class SemanticPlannerModule(Module, layer=4):
+    _run_in_worker = True
+    _worker_group = "semantic"
     """Unified semantic planner: decompose → resolve → explore → execute.
 
     Internally composes GoalResolver, FrontierScorer, TaskDecomposer,
