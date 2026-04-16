@@ -25,7 +25,6 @@ from core.devices.drivers.serial_nmea0183 import (
 from core.devices.spec import DeviceSpec, TopicSpec, UdevMatch
 from core.msgs.gnss import GnssFixType
 
-
 # ═══════════════════════════════════════════════════════════════════
 # Spec loading
 # ═══════════════════════════════════════════════════════════════════

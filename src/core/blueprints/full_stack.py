@@ -129,8 +129,8 @@ def full_stack_blueprint(
         from core.config import get_config
         _gnss_cfg = get_config().raw.get("gnss", {})
         if _gnss_cfg.get("enabled", False):
-            from slam.gnss_module import GnssModule
             from slam.gnss_bridge import GnssBridgeModule
+            from slam.gnss_module import GnssModule
             # GnssModule: fusion-side (LLA→ENU, quality, status) — no serial
             _gnss_bp.add(GnssModule,
                          device_model=_gnss_cfg.get("model", "WTRTK-980"),

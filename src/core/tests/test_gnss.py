@@ -32,7 +32,6 @@ from slam.gnss_module import (
     lla_to_enu,
 )
 
-
 # ═══════════════════════════════════════════════════════════════════
 # GnssFixType enum
 # ═══════════════════════════════════════════════════════════════════
@@ -95,7 +94,7 @@ class TestGnssFix:
         assert fix.vertical_std_m == pytest.approx(0.2, rel=0.01)
 
     def test_int_to_enum_coercion(self):
-        fix = GnssFix(fix_type=4)  # noqa — int passed instead of enum
+        fix = GnssFix(fix_type=4)
         assert fix.fix_type == GnssFixType.RTK_FIXED
 
     def test_invalid_covariance_length(self):

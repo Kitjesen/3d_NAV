@@ -157,9 +157,9 @@ class MapOrigin:
     ``config/robot_config.yaml`` for map consistency.
     """
 
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-    alt: Optional[float] = None
+    lat: float | None = None
+    lon: float | None = None
+    alt: float | None = None
     auto_init: bool = True
 
     @property
@@ -189,8 +189,9 @@ class MapOrigin:
 def _try_load_dds_types():
     """Return (NavSatFix, Odometry) DDS IDL structs if available, else (None, None)."""
     try:
-        from cyclonedds.idl import IdlStruct, types
         from dataclasses import dataclass as dds_dataclass
+
+        from cyclonedds.idl import IdlStruct, types
 
         @dds_dataclass
         class DDS_Time(IdlStruct):
@@ -250,9 +251,9 @@ class GnssModule(Module, layer=1):
         fix_topic: str = "/gps/fix",
         antenna_frame: str = "gnss_antenna",
         map_frame: str = "map",
-        origin_lat: Optional[float] = None,
-        origin_lon: Optional[float] = None,
-        origin_alt: Optional[float] = None,
+        origin_lat: float | None = None,
+        origin_lon: float | None = None,
+        origin_alt: float | None = None,
         auto_init_origin: bool = True,
         min_sat_used: int = 8,
         max_hdop: float = 2.5,
@@ -260,7 +261,7 @@ class GnssModule(Module, layer=1):
         require_fix_type: int = 1,
         allow_float: bool = True,
         status_rate_hz: float = 2.0,
-        serial_port: Optional[str] = None,
+        serial_port: str | None = None,
         serial_baud: int = 115200,
         **kw: Any,
     ) -> None:
@@ -291,12 +292,12 @@ class GnssModule(Module, layer=1):
         self._running = False
         self._dds_reader = None
         self._serial_driver = None
-        self._status_thread: Optional[threading.Thread] = None
+        self._status_thread: threading.Thread | None = None
         self._status_rate_hz = status_rate_hz
         self._shutdown_event = threading.Event()
 
         # most recent fix (for status publishing)
-        self._last_fix: Optional[GnssFix] = None
+        self._last_fix: GnssFix | None = None
 
     # -- lifecycle ----------------------------------------------------------
 

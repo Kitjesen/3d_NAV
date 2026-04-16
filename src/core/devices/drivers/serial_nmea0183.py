@@ -31,7 +31,7 @@ def register_driver(name: str):
     return wrap
 
 
-def get_driver(name: str) -> Optional[type[Device]]:
+def get_driver(name: str) -> type[Device] | None:
     return _driver_registry.get(name)
 
 
@@ -56,10 +56,10 @@ class SerialNmea0183Device(Device):
         self._port = spec.serial.get("device", "/dev/ttyUSB0")
         self._baud = spec.serial.get("baud", 115200)
         self._serial = None
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         self._decoder = NmeaDecoder()
-        self._on_message: Optional[Callable] = None
+        self._on_message: Callable | None = None
 
     def set_callback(self, cb: Callable) -> None:
         """Register receiver for decoded messages."""

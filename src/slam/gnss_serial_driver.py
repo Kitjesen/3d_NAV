@@ -59,7 +59,7 @@ _GGA_QUALITY = {
 }
 
 
-def _parse_latlon(raw: str, hemi: str) -> Optional[float]:
+def _parse_latlon(raw: str, hemi: str) -> float | None:
     """Parse NMEA ddmm.mmmmm + N/S/E/W to decimal degrees."""
     if not raw or not hemi:
         return None
@@ -78,7 +78,7 @@ def _parse_latlon(raw: str, hemi: str) -> Optional[float]:
         return None
 
 
-def parse_gga(fields: list[str]) -> Optional[dict[str, Any]]:
+def parse_gga(fields: list[str]) -> dict[str, Any] | None:
     """Parse $GNGGA / $GPGGA sentence fields into a dict.
 
     Returns None if sentence has no valid position.
@@ -141,7 +141,7 @@ class GnssSerialDriver:
         self,
         port: str = "/dev/ttyUSB0",
         baud: int = 115200,
-        callback: Optional[Callable] = None,
+        callback: Callable | None = None,
         timeout: float = 1.0,
     ) -> None:
         self._port = port
@@ -149,7 +149,7 @@ class GnssSerialDriver:
         self._callback = callback
         self._timeout = timeout
         self._serial = None
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         self._seq = 0
 

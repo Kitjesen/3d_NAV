@@ -10,10 +10,10 @@ from typing import Any, Optional
 @dataclass
 class UdevMatch:
     """udev attribute match for auto-discovery."""
-    vendor_id: Optional[str] = None
-    product_id: Optional[str] = None
-    port_path: Optional[str] = None
-    serial: Optional[str] = None
+    vendor_id: str | None = None
+    product_id: str | None = None
+    port_path: str | None = None
+    serial: str | None = None
 
 
 @dataclass
@@ -32,7 +32,7 @@ class DeviceSpec:
     driver: str
     description: str = ""
     enabled: bool = True
-    udev_match: Optional[UdevMatch] = None
+    udev_match: UdevMatch | None = None
     serial: dict[str, Any] = field(default_factory=dict)
     network: dict[str, Any] = field(default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)

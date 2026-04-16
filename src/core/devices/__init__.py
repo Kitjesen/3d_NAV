@@ -27,12 +27,12 @@ from core.devices.manager import DeviceManager
 from core.devices.spec import DeviceSpec, load_device_specs
 
 __all__ = [
+    "Decoder",
     "Device",
     "DeviceManager",
     "DeviceSpec",
     "DeviceStatus",
     "DeviceType",
-    "Decoder",
     "decoder_registry",
     "load_device_specs",
     "register_decoder",

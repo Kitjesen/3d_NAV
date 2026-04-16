@@ -52,8 +52,8 @@ class DeviceManager(Module, layer=0):
         self._specs: list[DeviceSpec] = []
         self._devices: dict[str, Device] = {}
         self._running = False
-        self._status_thread: Optional[threading.Thread] = None
-        self._hotplug_thread: Optional[threading.Thread] = None
+        self._status_thread: threading.Thread | None = None
+        self._hotplug_thread: threading.Thread | None = None
         self._shutdown = threading.Event()
 
         # subscribers: callbacks for decoded messages, keyed by device id
@@ -108,8 +108,8 @@ class DeviceManager(Module, layer=0):
     def _import_drivers(self) -> None:
         """Trigger driver registration by importing the package."""
         try:
-            import core.devices.drivers   # noqa: F401
-            import core.devices.decoders  # noqa: F401
+            import core.devices.decoders
+            import core.devices.drivers
         except Exception as e:
             logger.warning("DeviceManager: driver import failed: %s", e)
 
@@ -158,7 +158,7 @@ class DeviceManager(Module, layer=0):
                     logger.debug("DeviceManager dispatch %s: %s", device_id, e)
         return _dispatch
 
-    def get_device(self, device_id: str) -> Optional[Device]:
+    def get_device(self, device_id: str) -> Device | None:
         return self._devices.get(device_id)
 
     def all_devices(self) -> list[Device]:

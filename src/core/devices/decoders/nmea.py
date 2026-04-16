@@ -26,7 +26,7 @@ def _checksum(sentence: str) -> bool:
         return False
 
 
-def _parse_latlon(raw: str, hemi: str) -> Optional[float]:
+def _parse_latlon(raw: str, hemi: str) -> float | None:
     if not raw or not hemi:
         return None
     try:
@@ -69,7 +69,7 @@ class NmeaDecoder(Decoder):
             if fix is not None:
                 yield fix
 
-    def _parse_gga(self, fields: list[str]) -> Optional[GnssFix]:
+    def _parse_gga(self, fields: list[str]) -> GnssFix | None:
         if len(fields) < 15:
             return None
 

@@ -42,5 +42,5 @@ def decoder_registry() -> dict[str, type[Decoder]]:
     return dict(_decoders)
 
 
-def get_decoder(name: str) -> Optional[type[Decoder]]:
+def get_decoder(name: str) -> type[Decoder] | None:
     return _decoders.get(name)
