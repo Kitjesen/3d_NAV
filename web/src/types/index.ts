@@ -64,6 +64,11 @@ export interface GlobalPathEvent {
   points: PathPoint[]
 }
 
+export interface LocalPathEvent {
+  type: 'local_path'
+  points: PathPoint[]
+}
+
 export interface MapCloudEvent {
   type: 'map_cloud'
   points: number[]   // flat [x,y,z, x,y,z, …]
@@ -107,6 +112,7 @@ export type SSEEvent =
   | CostmapEvent
   | SlopeGridEvent
   | AgentMessageEvent
+  | LocalPathEvent
 
 export interface SSEState {
   odometry: OdometryEvent | null
@@ -116,6 +122,7 @@ export interface SSEState {
   slamStatus: SlamStatusEvent | null
   robotStatus: RobotStatusEvent | null
   globalPath: GlobalPathEvent | null
+  localPath: LocalPathEvent | null
   mapCloud: MapCloudEvent | null
   costmap: CostmapEvent | null
   slopeGrid: SlopeGridEvent | null

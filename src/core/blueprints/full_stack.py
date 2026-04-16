@@ -104,11 +104,35 @@ def full_stack_blueprint(
     _needs_lidar = slam_profile not in ("", "none", "bridge")
     _lidar_ip = config.get("lidar_ip")
 
+    # GNSS module (optional — reads gnss.enabled from robot_config.yaml)
+    _gnss_bp = Blueprint()
+    try:
+        from core.config import get_config
+        _gnss_cfg = get_config().raw.get("gnss", {})
+        if _gnss_cfg.get("enabled", False):
+            from slam.gnss_module import GnssModule
+            _gnss_bp = Blueprint()
+            _gnss_bp.add(GnssModule,
+                         serial_port=_gnss_cfg.get("device", "/dev/wtrtk980"),
+                         serial_baud=_gnss_cfg.get("baud", 115200),
+                         device_model=_gnss_cfg.get("model", "WTRTK-980"),
+                         origin_lat=(_gnss_cfg.get("origin") or {}).get("lat"),
+                         origin_lon=(_gnss_cfg.get("origin") or {}).get("lon"),
+                         origin_alt=(_gnss_cfg.get("origin") or {}).get("alt"),
+                         auto_init_origin=(_gnss_cfg.get("origin") or {}).get("auto_init", True),
+                         min_sat_used=(_gnss_cfg.get("quality") or {}).get("min_sat_used", 8),
+                         max_hdop=(_gnss_cfg.get("quality") or {}).get("max_hdop", 2.5),
+                         )
+    except Exception as _e:
+        import logging as _log
+        _log.getLogger(__name__).debug("GNSS not loaded: %s", _e)
+
     bp = autoconnect(
         driver(robot, **driver_config),
         lidar(ip=_lidar_ip, enabled=_needs_lidar),
         sim_lidar(scene_xml=scene_xml),
         slam(slam_profile),
+        _gnss_bp,
         maps(**config)         if enable_map_modules else Blueprint(),
         perception(detector, encoder, **perception_config)
                                if enable_semantic else Blueprint(),
@@ -252,6 +276,7 @@ def full_stack_blueprint(
     _w("SafetyRingModule", "execution_eval", "GatewayModule", "execution_eval")
     _w("SafetyRingModule", "dialogue_state", "GatewayModule", "dialogue_state")
     _w("NavigationModule", "global_path", "GatewayModule", "global_path")
+    _w("LocalPlannerModule", "local_path", "GatewayModule", "local_path")
 
     # Semantic planner → chat (SSE agent_message)
     _w("SemanticPlannerModule", "agent_message", "GatewayModule", "agent_message")

@@ -28,6 +28,7 @@ const INITIAL_STATE: SSEState = {
   slamStatus: null,
   robotStatus: null,
   globalPath: null,
+  localPath: null,
   mapCloud: null,
   costmap: null,
   slopeGrid: null,
@@ -99,6 +100,9 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               case 'global_path':
                 next.globalPath = event as never
+                break
+              case 'local_path':
+                next.localPath = event as never
                 break
               case 'map_cloud':
                 next.mapCloud = event as never

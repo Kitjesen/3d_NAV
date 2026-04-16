@@ -55,7 +55,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from core.module import Module
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
-from core.msgs.nav import Odometry
+from core.msgs.nav import Odometry, Path
 from core.msgs.semantic import ExecutionEval, SafetyState, SceneGraph
 from core.msgs.sensor import PointCloud2
 from core.registry import register
@@ -240,6 +240,7 @@ class GatewayModule(Module, layer=6):
     execution_eval: In[ExecutionEval]
     dialogue_state: In[dict]
     global_path:    In[list]  # from NavigationModule — list of np.ndarray [x,y,z]
+    local_path:     In[Path]  # from LocalPlannerModule — obstacle-free local path
     costmap:        In[dict]  # from TraversabilityCostModule — fused cost grid
     slope_grid:     In[dict]  # from TraversabilityCostModule — slope in degrees
     agent_message:  In[dict]  # from SemanticPlanner — chat-facing messages
@@ -334,6 +335,7 @@ class GatewayModule(Module, layer=6):
         self.execution_eval.subscribe(self._on_eval)
         self.dialogue_state.subscribe(self._on_dialogue)
         self.global_path.subscribe(self._on_global_path)
+        self.local_path.subscribe(self._on_local_path)
         self.costmap.subscribe(self._on_costmap)
         self.slope_grid.subscribe(self._on_slope_grid)
         self.agent_message.subscribe(self._on_agent_message)
@@ -549,6 +551,20 @@ class GatewayModule(Module, layer=6):
         with self._state_lock:
             self._last_path = points
         self.push_event({"type": "global_path", "points": points})
+
+    def _on_local_path(self, path: Path) -> None:
+        """Push local planner path as SSE (updated at ~10Hz, throttle to ~2Hz)."""
+        self._local_path_throttle = getattr(self, '_local_path_throttle', 0) + 1
+        if self._local_path_throttle % 5 != 0:
+            return
+        try:
+            points = [
+                {"x": float(p.pose.position.x), "y": float(p.pose.position.y)}
+                for p in path.poses
+            ] if hasattr(path, 'poses') else []
+            self.push_event({"type": "local_path", "points": points})
+        except Exception:
+            pass
 
     def _on_costmap(self, cm: dict) -> None:
         """Throttle OccupancyGridModule costmap to ~2 Hz and push as SSE."""

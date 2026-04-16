@@ -37,6 +37,7 @@ interface Scene3DProps {
   yaw:          number
   trail:        Array<[number, number]>
   path:         PathPoint[]
+  localPath:    PathPoint[]
   layers:       Layers
   pointSize:    number
   onPendingGoal: (x: number, y: number) => void
@@ -81,7 +82,7 @@ function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) 
 }
 
 export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
-  { cloudFlat, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, layers, pointSize, onPendingGoal, pendingGoal },
+  { cloudFlat, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, localPath, layers, pointSize, onPendingGoal, pendingGoal },
   ref,
 ) {
   const mountRef   = useRef<HTMLDivElement>(null)
@@ -95,6 +96,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
   const voxelRef   = useRef<THREE.InstancedMesh | null>(null)
   const trailLineRef = useRef<THREE.Line | null>(null)
   const pathLineRef  = useRef<THREE.Line | null>(null)
+  const localPathRef = useRef<THREE.Line | null>(null)
   const robotRef   = useRef<THREE.Group | null>(null)
   const goalRef        = useRef<THREE.Mesh | null>(null)
   const pendingGoalRef = useRef<THREE.Mesh | null>(null)
@@ -290,6 +292,21 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     scene.add(line)
     pathLineRef.current = line
   }, [path, layers.path])
+
+  // ── Local path (amber, thinner — obstacle-avoidance path from LocalPlanner)
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+    if (localPathRef.current) { removeFrom(scene, localPathRef.current); localPathRef.current = null }
+    if (!layers.path || localPath.length < 2) return
+
+    const pts = localPath.map(p => new THREE.Vector3(p.x, 0.12, -p.y))
+    const geo = new THREE.BufferGeometry().setFromPoints(pts)
+    const mat = new THREE.LineBasicMaterial({ color: 0xf59e0b, linewidth: 1 })  // amber
+    const line = new THREE.Line(geo, mat)
+    scene.add(line)
+    localPathRef.current = line
+  }, [localPath, layers.path])
 
   // ── Robot model ─────────────────────────────────────────────────
   useEffect(() => {

@@ -77,6 +77,11 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     (p): p is PathPoint =>
       p != null && typeof p.x === 'number' && typeof p.y === 'number'
   )
+  const rawLocalPath = sseState.localPath?.points ?? []
+  const localPathPts = rawLocalPath.filter(
+    (p): p is PathPoint =>
+      p != null && typeof p.x === 'number' && typeof p.y === 'number'
+  )
   const odom   = sseState.odometry
   // Sanity filter: reject absurd values (SLAM may emit garbage when lost).
   // Reasonable bounds: |pos| < 10km, |vel| < 10 m/s (quadruped max ~3 m/s).
@@ -432,6 +437,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
               yaw={yaw}
               trail={trail}
               path={path}
+              localPath={localPathPts}
               layers={layers}
               pointSize={pointSize}
               onPendingGoal={handlePendingGoal}
