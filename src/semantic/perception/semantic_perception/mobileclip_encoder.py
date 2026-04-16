@@ -79,44 +79,12 @@ class MobileCLIPEncoder:
             return "cpu"
 
     def load_model(self) -> None:
-        """加载文本编码器 (尝试 MobileCLIP → fallback open_clip)。"""
+        """Load open_clip text encoder (OpenAI ViT-B/32 weights)."""
         self._device = self._resolve_device()
-        if self._try_load_mobileclip():
-            return
         self._load_openclip_text_only()
 
-    def _try_load_mobileclip(self) -> bool:
-        """尝试加载 Apple MobileCLIP。"""
-        try:
-            import mobileclip
-            import torch
-
-            logger.info("Loading MobileCLIP text encoder...")
-            model, _, _preprocess = mobileclip.create_model_and_transforms(
-                "mobileclip_s2", pretrained="/mobileclip_s2.pt"
-            )
-            self._tokenizer = mobileclip.get_tokenizer("mobileclip_s2")
-            model = model.to(self._device)
-            model.eval()
-            self._model = model
-
-            with torch.no_grad():
-                dummy_tokens = self._tokenizer(["test"]).to(self._device)
-                feat = model.encode_text(dummy_tokens)
-                self._feature_dim = feat.shape[-1]
-
-            logger.info(
-                "MobileCLIP loaded: feature_dim=%d, device=%s",
-                self._feature_dim, self._device,
-            )
-            return True
-
-        except (ImportError, FileNotFoundError, Exception) as e:
-            logger.info("MobileCLIP not available (%s), using open_clip", e)
-            return False
-
     def _load_openclip_text_only(self) -> None:
-        """Fallback: 用 open_clip 只加载文本编码器。"""
+        """Load open_clip text encoder — OpenAI ViT-B/32."""
         import open_clip
         import torch
 

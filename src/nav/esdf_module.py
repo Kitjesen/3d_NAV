@@ -63,17 +63,18 @@ class ESDFModule(Module, layer=2):
         self._interval = 1.0 / publish_hz
 
     def setup(self) -> None:
+        try:
+            import scipy.ndimage  # noqa: F401  — required by distance_transform_edt
+        except ImportError as e:
+            raise RuntimeError(
+                "ESDFModule requires scipy for distance_transform_edt. "
+                "Install with: pip install scipy"
+            ) from e
         self.occupancy_grid.subscribe(self._on_grid)
         self.occupancy_grid.set_policy("throttle", interval=self._interval)
 
     def _on_grid(self, og: OccupancyGrid) -> None:
-        try:
-            from scipy.ndimage import distance_transform_edt
-        except ImportError:
-            logger.warning("ESDFModule: scipy not available — publishing zero field")
-            z = np.zeros_like(og.grid, dtype=np.float32)
-            self.esdf.publish(self._pack(og, z, z, z))
-            return
+        from scipy.ndimage import distance_transform_edt  # verified at setup()
 
         obstacle_mask = og.grid >= self._obs_thr  # True = obstacle
         free_mask = ~obstacle_mask

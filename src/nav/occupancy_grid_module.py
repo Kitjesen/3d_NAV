@@ -71,6 +71,13 @@ class OccupancyGridModule(Module, layer=2):
         self._kernel: np.ndarray | None = None    # circular dilation kernel
 
     def setup(self) -> None:
+        try:
+            import scipy.ndimage  # noqa: F401  — required by _inflate
+        except ImportError as e:
+            raise RuntimeError(
+                "OccupancyGridModule requires scipy for binary_dilation. "
+                "Install with: pip install scipy"
+            ) from e
         self._kernel = self._make_circle_kernel(self._inf_radius, self._res)
         self.map_cloud.subscribe(self._on_cloud)
         self.odometry.subscribe(self._on_odom)

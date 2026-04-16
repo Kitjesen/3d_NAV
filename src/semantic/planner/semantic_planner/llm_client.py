@@ -627,11 +627,11 @@ class MockLLMClient(LLMClientBase):
         except (json.JSONDecodeError, TypeError, KeyError, ValueError):
             pass  # Mock client: scene graph parsing is best-effort
 
-        # 2. 确定目标物体
+        # 2. 确定目标物体 — MockLLM 不做真实推理,confidence 始终为 0
         target_label = ""
         target_x, target_y, target_z = 1.0, 0.0, 0.0
-        confidence = 0.72
-        reasoning = "Mock LLM: 根据语义推断导航目标"
+        confidence = 0.0
+        reasoning = "MockLLM: rule-based keyword match (not real inference)"
 
         # 按房间关键词匹配
         preferred_labels: list[str] = []
@@ -658,7 +658,7 @@ class MockLLMClient(LLMClientBase):
                             target_x, target_y = float(pos[0]), float(pos[1])
                             target_z = float(pos[2]) if len(pos) > 2 else 0.0
                         target_label = obj.get("label", pref)
-                        confidence = 0.80
+                        # confidence stays 0 — callers must not treat Mock as authoritative
                         break
                 if target_label:
                     break
@@ -696,6 +696,7 @@ class MockLLMClient(LLMClientBase):
             "target_label": target_label,
             "confidence": confidence,
             "reasoning": reasoning,
+            "mock": True,  # explicit flag — downstream must not treat as real inference
         }
         return _json.dumps(response, ensure_ascii=False)
 

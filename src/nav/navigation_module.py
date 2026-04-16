@@ -92,7 +92,7 @@ class NavigationModule(Module, layer=5):
         max_replan_count: int = 3,
         downsample_dist: float = 2.0,
         enable_ros2_bridge: bool = False,
-        allow_direct_goal_fallback: bool = True,
+        allow_direct_goal_fallback: bool = False,
         goal_update_epsilon: float = 0.25,
         **kw,
     ):

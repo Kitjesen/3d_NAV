@@ -5,6 +5,7 @@ logic from the mission FSM.
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -58,15 +59,18 @@ class WaypointTracker:
         threshold: float = 1.5,
         stuck_timeout: float = 10.0,
         stuck_dist: float = 0.15,
+        stuck_yaw_rad: float = 0.35,  # ~20° — yaw drift below this counts as "stuck"
     ) -> None:
         self._threshold = threshold
         self._stuck_timeout = stuck_timeout
         self._stuck_dist = stuck_dist
+        self._stuck_yaw = stuck_yaw_rad
 
         self._path: list[np.ndarray] = []
         self._wp_index: int = 0
         self._last_progress_time: float = 0.0
         self._last_progress_pos: np.ndarray = np.zeros(3)
+        self._last_progress_yaw: float | None = None  # None until first yaw-aware update
         self._stuck_warn_sent: bool = False
         self._stuck_sent: bool = False
 
@@ -74,12 +78,22 @@ class WaypointTracker:
     # Public API                                                           #
     # ------------------------------------------------------------------ #
 
-    def reset(self, path: list[np.ndarray], robot_pos: np.ndarray) -> None:
-        """Start tracking a new path. Clears all stuck state."""
+    def reset(
+        self,
+        path: list[np.ndarray],
+        robot_pos: np.ndarray,
+        robot_yaw: float | None = None,
+    ) -> None:
+        """Start tracking a new path. Clears all stuck state.
+
+        Pass ``robot_yaw`` (radians) to enable yaw-aware stuck detection.
+        Without yaw, legacy distance-only behaviour applies.
+        """
         self._path = path
         self._wp_index = 0
         self._last_progress_time = time.time()
         self._last_progress_pos = robot_pos.copy()
+        self._last_progress_yaw = robot_yaw
         self._stuck_warn_sent = False
         self._stuck_sent = False
 
@@ -96,12 +110,16 @@ class WaypointTracker:
         self._stuck_warn_sent = False
         self._stuck_sent = False
 
-    def update(self, robot_pos: np.ndarray) -> TrackerStatus:
+    def update(
+        self,
+        robot_pos: np.ndarray,
+        robot_yaw: float | None = None,
+    ) -> TrackerStatus:
         """Process a new odometry position.
 
-        Returns TrackerStatus with an optional event string.
-        On EV_WAYPOINT_REACHED the index has already been incremented —
-        call current_waypoint to get the next target.
+        Pass ``robot_yaw`` (radians) to enable yaw-aware stuck detection:
+        rotation in place counts as progress (prevents "robot spins a bit and
+        resets the timer forever" bug). Without yaw, legacy behaviour applies.
         """
         if not self._path or self._wp_index >= len(self._path):
             return TrackerStatus(self._wp_index, len(self._path))
@@ -112,6 +130,7 @@ class WaypointTracker:
             self._wp_index += 1
             self._last_progress_time = time.time()
             self._last_progress_pos = robot_pos.copy()
+            self._last_progress_yaw = robot_yaw
             self._stuck_warn_sent = False
             self._stuck_sent = False
 
@@ -126,10 +145,23 @@ class WaypointTracker:
         moved = np.linalg.norm(robot_pos[:2] - self._last_progress_pos[:2])
         elapsed = now - self._last_progress_time
 
-        # Reset if robot has moved enough
-        if moved >= self._stuck_dist:
+        # Yaw progress — only when caller supplies yaw on both reset/update
+        yaw_progress = False
+        if robot_yaw is not None and self._last_progress_yaw is not None:
+            dyaw = abs(
+                math.atan2(
+                    math.sin(robot_yaw - self._last_progress_yaw),
+                    math.cos(robot_yaw - self._last_progress_yaw),
+                )
+            )
+            yaw_progress = dyaw >= self._stuck_yaw
+
+        # Reset if robot has moved enough OR rotated enough
+        if moved >= self._stuck_dist or yaw_progress:
             self._last_progress_time = now
             self._last_progress_pos = robot_pos.copy()
+            if robot_yaw is not None:
+                self._last_progress_yaw = robot_yaw
             self._stuck_warn_sent = False
             self._stuck_sent = False
             return TrackerStatus(self._wp_index, len(self._path))

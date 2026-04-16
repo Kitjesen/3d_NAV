@@ -116,6 +116,14 @@ def parse_gga(fields: list[str]) -> dict[str, Any] | None:
     except ValueError:
         hdop = 99.9
 
+    # GGA field 14 (index 13) = age of differential corrections (seconds).
+    # Empty when no RTCM corrections are being received.
+    rtcm_age: float | None
+    try:
+        rtcm_age = float(fields[13]) if fields[13] else None
+    except (ValueError, IndexError):
+        rtcm_age = None
+
     return {
         'fix_type': fix_type,
         'lat': lat,
@@ -123,6 +131,7 @@ def parse_gga(fields: list[str]) -> dict[str, Any] | None:
         'alt': alt,
         'num_sat_used': num_sat,
         'hdop': hdop,
+        'rtcm_age_s': rtcm_age,
     }
 
 
@@ -152,6 +161,8 @@ class GnssSerialDriver:
         self._thread: threading.Thread | None = None
         self._running = False
         self._seq = 0
+        # Latest RTCM differential age from GGA field 14 — None if not received.
+        self.last_rtcm_age: float | None = None
 
     def start(self) -> bool:
         """Open serial port and start read thread. Returns True on success."""
@@ -225,6 +236,7 @@ class GnssSerialDriver:
 
                     self._seq += 1
                     hdop = parsed['hdop']
+                    self.last_rtcm_age = parsed.get('rtcm_age_s')
                     # Estimate covariance from HDOP (rough: cov ≈ (hdop * base_sigma)²)
                     base_sigma = 0.01 if parsed['fix_type'] == 4 else 0.1 if parsed['fix_type'] == 5 else 3.0
                     h_var = (hdop * base_sigma) ** 2

@@ -79,12 +79,11 @@ class TerrainModule(Module, layer=2):
         """Setup C++ terrain_core via nanobind binding."""
         _nav_core = try_import_nav_core()
         if _nav_core is None:
-            logger.info(
-                "TerrainModule: _nav_core.so not found — using simple backend.\n"
-                "  To enable C++ terrain analysis:\n  %s", nav_core_build_hint()
+            raise RuntimeError(
+                f"TerrainModule [nanobind]: _nav_core.so not found. "
+                f"Build C++ backend or explicitly choose backend='simple' for passthrough testing.\n"
+                f"  To build: {nav_core_build_hint()}"
             )
-            self._backend = "simple"
-            return
         try:
             params = _nav_core.TerrainParams()
             # Load from robot config if available
@@ -103,9 +102,13 @@ class TerrainModule(Module, layer=2):
 
             self._core = _nav_core.TerrainAnalysisCore(params)
             logger.info("TerrainModule [nanobind]: C++ terrain_core loaded")
+        except RuntimeError:
+            raise
         except Exception as e:
-            logger.warning("TerrainModule: _nav_core error: %s — using simple backend", e)
-            self._backend = "simple"
+            raise RuntimeError(
+                f"TerrainModule [nanobind]: _nav_core init failed: {e}. "
+                f"Install _nav_core.so or explicitly choose backend='simple'."
+            ) from e
 
     def _setup_native(self):
         """Setup C++ NativeModule backends (legacy)."""

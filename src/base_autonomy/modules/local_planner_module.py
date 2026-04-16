@@ -382,13 +382,11 @@ class LocalPlannerModule(Module, layer=2):
         """C++ LocalPlannerCore via nanobind — full CMU scoring in-process, zero ROS2."""
         _nav_core = try_import_nav_core()
         if _nav_core is None:
-            logger.info(
-                "LocalPlannerModule: _nav_core.so not found — using cmu_py backend.\n"
-                "  To enable C++ local planner:\n  %s", nav_core_build_hint()
+            raise RuntimeError(
+                f"LocalPlannerModule [nanobind]: _nav_core.so not found. "
+                f"Build the C++ backend or explicitly choose backend='cmu_py' / 'simple'.\n"
+                f"  To build: {nav_core_build_hint()}"
             )
-            self._backend = "cmu_py"
-            self._setup_cmu_py()
-            return
         try:
             params = _nav_core.LocalPlannerParams()
             try:
@@ -411,17 +409,19 @@ class LocalPlannerModule(Module, layer=2):
                 os.path.dirname(__file__), "..", "local_planner", "paths")
             paths_dir = os.path.normpath(paths_dir)
             if not self._core.load_paths(paths_dir):
-                logger.error("LocalPlannerModule [nanobind]: failed to load paths from %s", paths_dir)
-                self._core = None
-                self._backend = "cmu_py"
-                self._setup_cmu_py()
-                return
+                raise RuntimeError(
+                    f"LocalPlannerModule [nanobind]: failed to load paths from {paths_dir}. "
+                    f"Cannot start without path lookup table."
+                )
 
             logger.info("LocalPlannerModule [nanobind]: C++ LocalPlannerCore loaded (343 paths × 36 dirs)")
+        except RuntimeError:
+            raise
         except Exception as e:
-            logger.warning("LocalPlannerModule: _nav_core error: %s — using cmu_py backend", e)
-            self._backend = "cmu_py"
-            self._setup_cmu_py()
+            raise RuntimeError(
+                f"LocalPlannerModule [nanobind]: _nav_core init failed: {e}. "
+                f"Install _nav_core.so or explicitly choose backend='cmu_py' / 'simple'."
+            ) from e
 
     def _setup_cmu(self):
         try:
@@ -455,11 +455,11 @@ class LocalPlannerModule(Module, layer=2):
         paths_dir = os.path.normpath(paths_dir)
         self._path_data = _load_paths(paths_dir)
         if self._path_data is None:
-            logger.error(
-                "LocalPlannerModule [cmu_py]: failed to load paths — "
-                "falling back to simple backend"
+            raise RuntimeError(
+                f"LocalPlannerModule [cmu_py]: failed to load paths from {paths_dir}. "
+                f"Cannot start without path lookup table — use backend='simple' explicitly "
+                f"for passthrough testing only."
             )
-            self._backend = "simple"
 
     # ------------------------------------------------------------------ #
     # Module lifecycle                                                     #
@@ -499,11 +499,12 @@ class LocalPlannerModule(Module, layer=2):
                 self._run_nanobind(odom.ts if hasattr(odom, "ts") else time.time())
             else:
                 if not self._warned_no_core:
-                    logger.warning(
+                    logger.error(
                         "LocalPlannerModule: nanobind _core is None — "
-                        "publishing straight-line fallback path")
+                        "not publishing any path. This should never happen "
+                        "if setup() succeeded.")
                     self._warned_no_core = True
-                self._publish_straight_line()
+                return
         elif self._backend == "cmu_py" and self._latest_waypoint is not None:
             now = time.time()
             if now - self._last_cmu_py_time >= 1.0:
@@ -597,9 +598,8 @@ class LocalPlannerModule(Module, layer=2):
             return
         if self._core is None:
             if not self._warned_no_core:
-                logger.warning("LocalPlannerModule: _core lost at runtime, publishing fallback")
+                logger.error("LocalPlannerModule: _core lost at runtime — not publishing path")
                 self._warned_no_core = True
-            self._publish_straight_line()
             return
 
         self._core.set_vehicle(
@@ -629,38 +629,6 @@ class LocalPlannerModule(Module, layer=2):
                 ))
             self.local_path.publish(Path(poses=poses))
 
-    def _publish_straight_line(self) -> None:
-        """Fallback: publish a straight-line path toward the current waypoint.
-
-        Used when the planning backend is unavailable (_core None, _path_data
-        None) so PathFollowerModule still gets *some* path rather than nothing.
-        No obstacle avoidance — just go toward the goal.
-        """
-        wp = self._latest_waypoint
-        if wp is None:
-            return
-        gx = wp.pose.position.x
-        gy = wp.pose.position.y
-        gz = getattr(wp.pose.position, "z", 0.0)
-        rx, ry, rz = self._robot_pos
-
-        # Interpolate a few points along the straight line
-        dist = math.sqrt((gx - rx) ** 2 + (gy - ry) ** 2)
-        n_pts = max(2, int(dist / 0.5))
-        poses = []
-        for i in range(n_pts):
-            t = (i + 1) / n_pts
-            poses.append(PoseStamped(
-                pose=Pose(
-                    position=Vector3(rx + t * (gx - rx),
-                                     ry + t * (gy - ry),
-                                     rz + t * (gz - rz)),
-                    orientation=Quaternion(0, 0, 0, 1),
-                ),
-                frame_id="map",
-            ))
-        self.local_path.publish(Path(poses=poses))
-
     # ------------------------------------------------------------------ #
     # CMU Python scorer                                                    #
     # ------------------------------------------------------------------ #
@@ -672,11 +640,11 @@ class LocalPlannerModule(Module, layer=2):
             return
         if self._path_data is None:
             if not self._warned_no_path_data:
-                logger.warning(
+                logger.error(
                     "LocalPlannerModule [cmu_py]: _path_data is None — "
-                    "publishing straight-line fallback")
+                    "not publishing any path. This should never happen "
+                    "if setup() succeeded.")
                 self._warned_no_path_data = True
-            self._publish_straight_line()
             return
 
         pd = self._path_data

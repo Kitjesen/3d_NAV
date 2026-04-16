@@ -82,6 +82,11 @@ class CLIPEncoder:
         self._tokenizer = None
         self._feature_dim: int = 0
 
+        # Degraded state — True when GPU load failed and fell back to CPU.
+        # Gateway health endpoint surfaces this so operators see degradation.
+        self._degraded: bool = False
+        self._degraded_reason: str = ""
+
         # 特征缓存（LRU）
         self._image_cache: dict[str, np.ndarray] = {}
         self._text_cache: dict[str, np.ndarray] = {}
@@ -102,6 +107,16 @@ class CLIPEncoder:
         """缓存命中率"""
         total = self._cache_hits + self._cache_misses
         return self._cache_hits / total if total > 0 else 0.0
+
+    @property
+    def is_degraded(self) -> bool:
+        """True if CLIP fell back to CPU (10-100x slower than GPU)."""
+        return self._degraded
+
+    @property
+    def degraded_reason(self) -> str:
+        """Human-readable reason why the encoder is running in degraded mode."""
+        return self._degraded_reason
 
     def load_model(self) -> None:
         """加载 CLIP 模型"""
@@ -140,8 +155,9 @@ class CLIPEncoder:
             )
             raise
         except RuntimeError as e:
-            logger.error(f"CLIP model load failed (GPU/runtime error): {e}")
-            logger.warning("Falling back to CPU...")
+            logger.error("CLIP GPU load failed: %s — falling back to CPU (10-100x slower)", e)
+            self._degraded = True
+            self._degraded_reason = f"GPU load failed: {e}"
             try:
                 self._device = "cpu"
                 self._model, _, self._preprocess = open_clip.create_model_and_transforms(
