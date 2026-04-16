@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from core.module import Module
+from core.module import Module, skill
 from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.gnss import GnssFixType, GnssOdom
 from core.msgs.nav import Odometry
@@ -895,4 +895,83 @@ class SlamBridgeModule(Module, layer=1):
             "visual_fusion_active": self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL) and self._last_visual_odom is not None,
             "visual_fused_count": self._visual_fused_count,
         }
+        info["gnss_fusion"] = self._gnss_health_snapshot()
         return info
+
+    # -- AI-callable skills ------------------------------------------------
+
+    def _gnss_health_snapshot(self) -> dict[str, Any]:
+        """Shared payload for @skill and health() — matches Out port schema."""
+        return {
+            "enabled": self._gnss_fusion,
+            "alignment_locked": self._gnss_map_offset is not None,
+            "map_offset": (
+                None if self._gnss_map_offset is None
+                else [float(self._gnss_map_offset[0]),
+                      float(self._gnss_map_offset[1])]
+            ),
+            "antenna_offset_body": self._gnss_antenna_offset.tolist(),
+            "last_residual_m": float(self._gnss_last_residual_m),
+            "fused_count": int(self._gnss_fused_count),
+            "relock_count": int(self._gnss_relock_count),
+            "last_relock_ts": float(self._gnss_last_relock_ts),
+            "last_fix_type": (
+                self._last_gnss_odom.fix_type.name
+                if self._last_gnss_odom is not None else "NONE"
+            ),
+            "last_gnss_age_s": (
+                float(_time.time() - self._last_gnss_rx_ts)
+                if self._last_gnss_rx_ts > 0 else float("inf")
+            ),
+        }
+
+    @skill
+    def get_gnss_fusion_status(self) -> str:
+        """Return GNSS-SLAM fusion health: alignment, residual, fix quality,
+        relock count, and last GNSS sample age. Use this to diagnose outdoor
+        drift or suspected GNSS signal loss."""
+        import json
+        return json.dumps(self._gnss_health_snapshot(), default=str)
+
+    @skill
+    def relock_gnss_alignment(self) -> str:
+        """Force re-locking of the GNSS↔SLAM alignment offset. The next
+        valid RTK fix received while SLAM is healthy will establish a new
+        offset. Use this after a known map switch or after diagnosing that
+        the current alignment drifted."""
+        import json
+        prev = (
+            None if self._gnss_map_offset is None
+            else [float(self._gnss_map_offset[0]),
+                  float(self._gnss_map_offset[1])]
+        )
+        self._gnss_map_offset = None
+        self._gnss_residual_history.clear()
+        self._gnss_relock_count += 1
+        self._gnss_last_relock_ts = _time.time()
+        logger.warning(
+            "GNSS-SLAM alignment manually relocked (prev=%s)", prev)
+        return json.dumps({
+            "status": "relocked",
+            "previous_offset": prev,
+            "relock_count": self._gnss_relock_count,
+        })
+
+    @skill
+    def set_gnss_fusion(self, enabled: bool) -> str:
+        """Enable or disable the GNSS-SLAM fusion runtime switch. When
+        disabled, SLAM odometry is published without any GNSS correction
+        (equivalent to pure LiDAR-inertial SLAM). Persisted only in this
+        process — does not write robot_config.yaml."""
+        import json
+        self._gnss_fusion = bool(enabled)
+        if not self._gnss_fusion:
+            # Dropping the alignment is kinder than leaving a stale offset
+            self._gnss_map_offset = None
+            self._gnss_residual_history.clear()
+        logger.warning("GNSS fusion runtime switch: %s",
+                        "ON" if self._gnss_fusion else "OFF")
+        return json.dumps({
+            "status": "ok",
+            "enabled": self._gnss_fusion,
+        })

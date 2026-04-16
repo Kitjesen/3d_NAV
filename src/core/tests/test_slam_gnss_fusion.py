@@ -617,5 +617,72 @@ class TestE2EAutoWire(unittest.TestCase):
                 pass
 
 
+class TestGnssSkillMethods(unittest.TestCase):
+    """@skill methods on SlamBridgeModule — exposed to MCP / REPL."""
+
+    def test_get_gnss_fusion_status_returns_json(self):
+        import json
+        m = _make_bridge()
+        m.setup()
+        _prime_healthy(m)
+        m._on_gnss_odom(_make_gnss_odom(e=3.0, n=4.0))
+        m._fuse_odometry(_make_slam_odom(x=10.0, y=20.0))
+
+        s = m.get_gnss_fusion_status()
+        parsed = json.loads(s)
+        self.assertTrue(parsed["enabled"])
+        self.assertTrue(parsed["alignment_locked"])
+        self.assertEqual(parsed["last_fix_type"], "RTK_FIXED")
+        self.assertIn("map_offset", parsed)
+        self.assertIn("antenna_offset_body", parsed)
+
+    def test_relock_clears_offset(self):
+        import json
+        m = _make_bridge()
+        m.setup()
+        _prime_healthy(m)
+        m._on_gnss_odom(_make_gnss_odom(e=3.0, n=4.0))
+        m._fuse_odometry(_make_slam_odom(x=10.0, y=20.0))
+        self.assertIsNotNone(m._gnss_map_offset)
+        prev_count = m._gnss_relock_count
+
+        s = m.relock_gnss_alignment()
+        parsed = json.loads(s)
+        self.assertEqual(parsed["status"], "relocked")
+        self.assertIsNone(m._gnss_map_offset)
+        self.assertEqual(m._gnss_relock_count, prev_count + 1)
+
+    def test_set_gnss_fusion_toggles_and_clears_offset(self):
+        import json
+        m = _make_bridge()
+        m.setup()
+        _prime_healthy(m)
+        m._on_gnss_odom(_make_gnss_odom(e=3.0, n=4.0))
+        m._fuse_odometry(_make_slam_odom(x=10.0, y=20.0))
+        self.assertTrue(m._gnss_fusion)
+        self.assertIsNotNone(m._gnss_map_offset)
+
+        s = m.set_gnss_fusion(False)
+        parsed = json.loads(s)
+        self.assertEqual(parsed["status"], "ok")
+        self.assertFalse(parsed["enabled"])
+        self.assertFalse(m._gnss_fusion)
+        # Disabling also drops the stale offset
+        self.assertIsNone(m._gnss_map_offset)
+
+        # Re-enable works
+        m.set_gnss_fusion(True)
+        self.assertTrue(m._gnss_fusion)
+
+    def test_skills_are_discoverable_by_mcp(self):
+        """@skill decorator must flag methods so MCP auto-discovery picks
+        them up via Module.get_skill_infos()."""
+        m = _make_bridge()
+        skills = {info.func_name for info in m.get_skill_infos()}
+        self.assertIn("get_gnss_fusion_status", skills)
+        self.assertIn("relock_gnss_alignment", skills)
+        self.assertIn("set_gnss_fusion", skills)
+
+
 if __name__ == "__main__":
     unittest.main()

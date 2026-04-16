@@ -63,6 +63,7 @@ class SafetyRingModule(Module, layer=0):
     cmd_vel: In[Twist]
     mission_status: In[dict]
     localization_status: In[dict]
+    gnss_fusion_health: In[dict]
 
     # -- Outputs --
     stop_cmd: Out[int]           # 0=clear, 1=soft, 2=hard
@@ -112,6 +113,20 @@ class SafetyRingModule(Module, layer=0):
         self._loc_state: str = "UNINIT"
         self._loc_confidence: float = 0.0
 
+        # GNSS fusion state (populated from gnss_fusion_health port)
+        self._gnss_enabled: bool = False
+        self._gnss_alignment_locked: bool = False
+        self._gnss_last_fix_type: str = "NONE"
+        self._gnss_age_s: float = float("inf")
+        self._gnss_residual_m: float = 0.0
+        self._gnss_relock_count: int = 0
+        # Thresholds — when SLAM is DEGRADED we check these to decide whether
+        # the root cause is GNSS loss ("GNSS signal lost") vs SLAM sensor
+        # degeneracy ("SLAM localization weak"). Separate messages help
+        # operators diagnose faster.
+        self._gnss_max_age_warn_s: float = 5.0
+        self._gnss_healthy_fix_types: set = {"RTK_FIXED", "RTK_FLOAT"}
+
         # Ring 3 state
         self._latest_mission: dict | None = None
         self._instruction = ""
@@ -122,6 +137,7 @@ class SafetyRingModule(Module, layer=0):
         self.cmd_vel.subscribe(self._on_cmdvel)
         self.mission_status.subscribe(self._on_mission)
         self.localization_status.subscribe(self._on_localization_status)
+        self.gnss_fusion_health.subscribe(self._on_gnss_fusion_health)
 
     # -- Ring 1: Reflex Safety -----------------------------------------------
 
@@ -228,14 +244,25 @@ class SafetyRingModule(Module, layer=0):
 
     def _publish_dialogue(self):
         mission = self._latest_mission or {}
-        self.dialogue_state.publish({
+        payload = {
             "safety": self._safety_level.name,
             "assessment": self._assessment.value,
             "mission": mission.get("state", "IDLE"),
             "instruction": self._instruction,
             "localization": self._loc_state,
             "ts": time.time(),
-        })
+        }
+        # Attach GNSS root-cause diagnosis when localization is impaired,
+        # so operators can distinguish "sky-blocked/no-RTK" from
+        # "LiDAR degeneracy in corridor".
+        if self._loc_state in ("DEGRADED", "LOST"):
+            payload["loc_root_cause"] = self._degraded_root_cause()
+            payload["gnss_fix_type"] = self._gnss_last_fix_type
+            payload["gnss_age_s"] = (
+                None if not math.isfinite(self._gnss_age_s)
+                else round(self._gnss_age_s, 2)
+            )
+        self.dialogue_state.publish(payload)
 
     # -- Input callbacks -----------------------------------------------------
 
@@ -278,6 +305,39 @@ class SafetyRingModule(Module, layer=0):
         self._loc_state = msg.get("state", "UNINIT")
         self._loc_confidence = msg.get("confidence", 0.0)
         self._publish_safety()
+
+    def _on_gnss_fusion_health(self, msg: dict) -> None:
+        self._gnss_enabled = bool(msg.get("enabled", False))
+        self._gnss_alignment_locked = bool(msg.get("alignment_locked", False))
+        self._gnss_last_fix_type = str(msg.get("last_fix_type", "NONE"))
+        self._gnss_age_s = float(msg.get("last_gnss_age_s", float("inf")))
+        self._gnss_residual_m = float(msg.get("last_residual_m", 0.0))
+        self._gnss_relock_count = int(msg.get("relock_count", 0))
+
+    def _gnss_healthy(self) -> bool:
+        """True iff GNSS is currently providing fusion-quality data."""
+        if not self._gnss_enabled:
+            return False
+        if self._gnss_last_fix_type not in self._gnss_healthy_fix_types:
+            return False
+        return self._gnss_age_s <= self._gnss_max_age_warn_s
+
+    def _degraded_root_cause(self) -> str:
+        """Diagnose why localization is DEGRADED.
+
+        Returns: 'gnss_lost' | 'slam_weak' | 'both' | 'unknown'.
+        Only meaningful when _loc_state in ('DEGRADED', 'LOST').
+        """
+        gnss_ok = self._gnss_healthy()
+        # When GNSS fusion is disabled, degradation is always SLAM-side
+        if not self._gnss_enabled:
+            return "slam_weak"
+        if gnss_ok:
+            return "slam_weak"
+        # GNSS is enabled and unhealthy — is SLAM also weak?
+        if self._loc_confidence < 0.3:
+            return "both"
+        return "gnss_lost"
 
     # -- AI-callable skills -----------------------------------------------
 
