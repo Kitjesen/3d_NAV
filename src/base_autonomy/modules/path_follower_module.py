@@ -92,7 +92,50 @@ class PathFollowerModule(Module, layer=2):
         elif self._backend == "pure_pursuit":
             self._setup_native()
         else:
-            logger.info("PathFollowerModule: pid backend")
+            self._setup_pid()
+
+    # ── pid backend setup (W2-4 adaptive Pure Pursuit) ────────────────────
+
+    def _setup_pid(self) -> None:
+        """W2-4: configure adaptive Pure Pursuit for the pid fallback backend.
+
+        Parameters (config-overridable via robot_config.yaml path_follower):
+          k_v   — variable-lookahead slope (m per m/s of speed)
+          L_min — minimum lookahead distance (m)
+          L_max — maximum lookahead distance (m)
+          a_max — max acceleration for v_cmd ramp (m/s^2)
+          v_max — clamp ceiling for v_cmd (m/s), defaults to self._max_speed
+        """
+        self._pp_k_v: float = 0.5
+        self._pp_l_min: float = 0.5
+        self._pp_l_max: float = 2.0
+        self._pp_a_max: float = 1.0
+        self._pp_v_max: float = float(self._max_speed)
+
+        try:
+            from core.config import get_config
+            cfg = get_config()
+            pf = cfg.raw.get("path_follower", {}) if hasattr(cfg, "raw") else {}
+            if pf:
+                self._pp_k_v = float(pf.get("k_v", self._pp_k_v))
+                self._pp_l_min = float(pf.get("L_min", self._pp_l_min))
+                self._pp_l_max = float(pf.get("L_max", self._pp_l_max))
+                self._pp_a_max = float(pf.get("a_max", self._pp_a_max))
+                self._pp_v_max = float(pf.get("v_max", self._pp_v_max))
+                logger.info(
+                    "PathFollowerModule [pid]: loaded adaptive PP params "
+                    "(k_v=%.2f, L=[%.2f,%.2f], a_max=%.2f, v_max=%.2f)",
+                    self._pp_k_v, self._pp_l_min, self._pp_l_max,
+                    self._pp_a_max, self._pp_v_max,
+                )
+        except (ImportError, AttributeError, KeyError):
+            logger.info(
+                "PathFollowerModule [pid]: using default adaptive PP params "
+                "(k_v=0.5, L=[0.5,2.0], a_max=1.0) — override via robot_config.yaml"
+            )
+
+        # Previous-tick velocity for acceleration ramp
+        self._pp_v_prev: float = 0.0
 
     # ── nav_core backend setup ─────────────────────────────────────────────
 

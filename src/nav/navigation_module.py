@@ -72,6 +72,7 @@ class NavigationModule(Module, layer=5):
     cancel:       In[str]
     teleop_active: In[bool]
     localization_status: In[dict]
+    traversability: In[dict]  # W2-8: terrain class from TerrainModule
 
     # -- Outputs --
     waypoint:       Out[PoseStamped]
@@ -149,6 +150,10 @@ class NavigationModule(Module, layer=5):
         self._ros2_node = None
         self._ros2_wp_pub = None
 
+        # W2-8: latest terrain class from TerrainModule — defaults to "unknown"
+        # which triggers the conservative backup+rotate recovery strategy.
+        self._latest_traversability_class: str = "unknown"
+
     def setup(self) -> None:
         self._planner_svc.setup()
 
@@ -161,6 +166,7 @@ class NavigationModule(Module, layer=5):
         self.cancel.subscribe(self._on_cancel)
         self.teleop_active.subscribe(self._on_teleop_active)
         self.localization_status.subscribe(self._on_localization_status)
+        self.traversability.subscribe(self._on_traversability)
 
         if self._enable_ros2_bridge:
             try:
@@ -425,42 +431,114 @@ class NavigationModule(Module, layer=5):
 
     # ── Recovery motion ───────────────────────────────────────────────────
 
-    def _execute_recovery_motion(self) -> None:
-        """Execute backup + rotate recovery before replanning.
+    def _on_traversability(self, msg: dict) -> None:
+        """W2-8: update latest terrain class from TerrainModule."""
+        if not isinstance(msg, dict):
+            return
+        klass = msg.get("traversability_class") or msg.get("class")
+        if klass:
+            self._latest_traversability_class = str(klass)
 
-        Publishes direct cmd_vel via recovery_cmd_vel port:
-        1. Back up at -0.2 m/s for 1.5s
-        2. Rotate in place at 0.5 rad/s for 1.5s
-        This clears the robot from the stuck position.
+    # Recovery strategies keyed by terrain class. Each entry specifies the
+    # backup, rotate, and optional forward-nudge phases — setting a phase's
+    # duration to 0 skips it. The default strategy (1.5s backup + 1.5s rotate)
+    # kicks in for "unknown" or any class not listed below.
+    _RECOVERY_STRATEGIES: Dict[str, Dict[str, Any]] = {
+        "cliff": {
+            "strategy": "rotate_only",
+            "backup_speed": 0.0, "backup_duration": 0.0,
+            "rotate_speed": 0.3, "rotate_duration": 2.5,
+            "forward_speed": 0.0, "forward_duration": 0.0,
+        },
+        "unsafe_forward": {
+            "strategy": "rotate_only",
+            "backup_speed": 0.0, "backup_duration": 0.0,
+            "rotate_speed": 0.3, "rotate_duration": 2.5,
+            "forward_speed": 0.0, "forward_duration": 0.0,
+        },
+        "narrow": {
+            "strategy": "short_backup_rotate",
+            "backup_speed": -0.15, "backup_duration": 0.8,
+            "rotate_speed": 0.5,   "rotate_duration": 0.8,
+            "forward_speed": 0.0,  "forward_duration": 0.0,
+        },
+        "corridor": {
+            "strategy": "short_backup_rotate",
+            "backup_speed": -0.15, "backup_duration": 0.8,
+            "rotate_speed": 0.5,   "rotate_duration": 0.8,
+            "forward_speed": 0.0,  "forward_duration": 0.0,
+        },
+        "stuck_in_soft": {
+            "strategy": "long_backup_nudge",
+            "backup_speed": -0.15, "backup_duration": 2.0,
+            "rotate_speed": 0.0,   "rotate_duration": 0.0,
+            "forward_speed": 0.15, "forward_duration": 0.5,
+        },
+        "grip_loss": {
+            "strategy": "long_backup_nudge",
+            "backup_speed": -0.15, "backup_duration": 2.0,
+            "rotate_speed": 0.0,   "rotate_duration": 0.0,
+            "forward_speed": 0.15, "forward_duration": 0.5,
+        },
+    }
+
+    _DEFAULT_RECOVERY_STRATEGY: Dict[str, Any] = {
+        "strategy": "default_backup_rotate",
+        "backup_speed": -0.2, "backup_duration": 1.5,
+        "rotate_speed": 0.5,  "rotate_duration": 1.5,
+        "forward_speed": 0.0, "forward_duration": 0.0,
+    }
+
+    def _execute_recovery_motion(self) -> None:
+        """W2-8: context-aware stuck recovery.
+
+        Picks a recovery strategy based on the latest terrain class reported
+        by TerrainModule. Emits adapter_status {"event":"recovery_started",
+        "strategy":..., "reason":...} so operators can see which branch ran.
         """
-        backup_speed = -0.2  # m/s backward
-        rotate_speed = 0.5   # rad/s
-        step_duration = 1.5  # seconds per step
+        klass = getattr(self, "_latest_traversability_class", "unknown")
+        strat = self._RECOVERY_STRATEGIES.get(klass, self._DEFAULT_RECOVERY_STRATEGY)
+
+        self.adapter_status.publish({
+            "event":    "recovery_started",
+            "strategy": strat["strategy"],
+            "reason":   klass,
+            "ts":       time.time(),
+        })
+        logger.info(
+            "Recovery: strategy=%s, reason=%s", strat["strategy"], klass,
+        )
+
         step_hz = 10
 
-        logger.info("Recovery: backing up at %.1f m/s for %.1fs", backup_speed, step_duration)
-        steps = int(step_duration * step_hz)
-        for _ in range(steps):
-            if self._state != MissionState.EXECUTING:
-                return
-            self.recovery_cmd_vel.publish(Twist(
-                linear=Vector3(backup_speed, 0.0, 0.0),
-                angular=Vector3(0.0, 0.0, 0.0),
-            ))
-            time.sleep(1.0 / step_hz)
+        def _drive(linear_x: float, angular_z: float, duration: float) -> bool:
+            """Publish a fixed cmd_vel for `duration` seconds at step_hz."""
+            if duration <= 0.0:
+                return True
+            steps = int(duration * step_hz)
+            for _ in range(steps):
+                if self._state != MissionState.EXECUTING:
+                    return False
+                self.recovery_cmd_vel.publish(Twist(
+                    linear=Vector3(linear_x, 0.0, 0.0),
+                    angular=Vector3(0.0, 0.0, angular_z),
+                ))
+                time.sleep(1.0 / step_hz)
+            return True
 
-        # Alternate rotate direction based on replan count
-        direction = 1.0 if self._replan_count % 2 == 1 else -1.0
-        rot = rotate_speed * direction
-        logger.info("Recovery: rotating at %.1f rad/s for %.1fs", rot, step_duration)
-        for _ in range(steps):
-            if self._state != MissionState.EXECUTING:
+        # Backup phase
+        if not _drive(strat["backup_speed"], 0.0, strat["backup_duration"]):
+            return
+
+        # Rotate phase — alternate direction per replan to avoid dead-lock
+        if strat["rotate_duration"] > 0.0 and strat["rotate_speed"] != 0.0:
+            direction = 1.0 if self._replan_count % 2 == 1 else -1.0
+            if not _drive(0.0, strat["rotate_speed"] * direction, strat["rotate_duration"]):
                 return
-            self.recovery_cmd_vel.publish(Twist(
-                linear=Vector3(0.0, 0.0, 0.0),
-                angular=Vector3(0.0, 0.0, rot),
-            ))
-            time.sleep(1.0 / step_hz)
+
+        # Forward nudge phase (slip/grip terrain)
+        if not _drive(strat["forward_speed"], 0.0, strat["forward_duration"]):
+            return
 
         # Stop
         self.recovery_cmd_vel.publish(Twist.zero())

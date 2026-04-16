@@ -525,7 +525,19 @@ class PerceptionModule(Module, layer=3):
     def _project_to_3d_fallback(
         self, detections_2d: list, depth: np.ndarray, tf_camera_to_world: np.ndarray,
     ) -> list:
-        """Simplified 3D projection when projection module is unavailable (Windows/tests)."""
+        """W2-1: masked-depth 3D projection (replaces center-pixel fallback).
+
+        For each 2D detection:
+          1. Gather all depth pixels inside the bbox.
+          2. Filter invalid (0, non-finite, out of [min_depth, max_depth]).
+          3. If fewer than _FALLBACK_MIN_DEPTH_PIXELS valid, drop the detection
+             (we refuse to fabricate a 3D position from sparse/unreliable depth).
+          4. Take the median of the valid samples as representative depth
+             (robust to outliers and reflections).
+          5. Back-project the bbox centre pixel using median depth to get a
+             camera-frame 3D point; transform to world.
+          6. Attach confidence_3d = valid_pixels / total_pixels.
+        """
         results = []
         intr = self._latest_intrinsics
         if intr is None:
@@ -536,19 +548,51 @@ class PerceptionModule(Module, layer=3):
         ccx = getattr(intr, "cx", 320.0)
         ccy = getattr(intr, "cy", 240.0)
 
+        min_valid_pixels = int(getattr(self, "_FALLBACK_MIN_DEPTH_PIXELS", 20))
+        h_img, w_img = depth.shape[:2]
+
         for det2d in detections_2d:
             bbox = det2d.bbox
-            px = (bbox[0] + bbox[2]) / 2
-            py = (bbox[1] + bbox[3]) / 2
-            iy, ix = int(py), int(px)
-            h, w = depth.shape[:2]
-            if not (0 <= iy < h and 0 <= ix < w):
+            x1 = max(0, int(bbox[0]))
+            y1 = max(0, int(bbox[1]))
+            x2 = min(w_img, int(bbox[2]))
+            y2 = min(h_img, int(bbox[3]))
+            if x2 <= x1 or y2 <= y1:
                 continue
-            d = float(depth[iy, ix]) * self._depth_scale
-            if d < self._min_depth or d > self._max_depth:
+
+            roi = depth[y1:y2, x1:x2]
+            total_pixels = roi.size
+            if total_pixels == 0:
                 continue
-            p_cam = np.array([(px - ccx) * d / fx, (py - ccy) * d / fy, d])
+
+            # Apply depth scale once, then filter valid range
+            roi_m = roi.astype(np.float32) * self._depth_scale
+            finite_mask = np.isfinite(roi_m) & (roi_m > 0.0)
+            range_mask = (roi_m >= self._min_depth) & (roi_m <= self._max_depth)
+            valid_mask = finite_mask & range_mask
+            valid_depths = roi_m[valid_mask]
+
+            if valid_depths.size < min_valid_pixels:
+                continue
+
+            d_median = float(np.median(valid_depths))
+            confidence_3d = float(valid_depths.size) / float(total_pixels)
+
+            # Back-project bbox centre using median depth
+            px = (bbox[0] + bbox[2]) / 2.0
+            py = (bbox[1] + bbox[3]) / 2.0
+            p_cam = np.array([
+                (px - ccx) * d_median / fx,
+                (py - ccy) * d_median / fy,
+                d_median,
+            ])
             p_world = (tf_camera_to_world @ np.array([*p_cam, 1.0]))[:3]
+
+            # Approximate 3D extent from bbox pixel extent × depth / focal
+            bbox_w_px = max(1.0, float(bbox[2] - bbox[0]))
+            bbox_h_px = max(1.0, float(bbox[3] - bbox[1]))
+            width_3d = bbox_w_px * d_median / fx
+            height_3d = bbox_h_px * d_median / fy
 
             class _FallbackDet3D:
                 """Minimal duck-typed Detection3D for fallback path."""
@@ -559,9 +603,12 @@ class PerceptionModule(Module, layer=3):
             det3d.label = det2d.label
             det3d.score = det2d.score
             det3d.bbox_2d = bbox
-            det3d.depth = d
+            det3d.depth = d_median
             det3d.features = getattr(det2d, "features", np.array([]))
             det3d.points = np.empty((0, 3))
+            det3d.confidence_3d = confidence_3d
+            det3d.width_3d = width_3d
+            det3d.height_3d = height_3d
             results.append(det3d)
         return results
 

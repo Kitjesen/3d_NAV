@@ -11,6 +11,7 @@ BPU YOLO 濡偓濞村娅?閳?D-Robotics Nash BPU 閸旂娀鈧喓娈?COC
   - COCO 80 缁?閳?text_prompt 閺嶅洨閺勭姴鐨?(閸忕厧瀵偓閺€鎹愮槤濮瑰洦甯撮崣?
 """
 
+import logging
 import os
 from typing import List, Optional
 
@@ -18,6 +19,8 @@ import cv2
 import numpy as np
 
 from .detector_base import Detection2D, DetectorBase
+
+logger = logging.getLogger(__name__)
 
 # COCO 80 缁鎮?(娑?ultralytics/YOLO 娑撯偓閼?
 COCO_NAMES = [
@@ -663,14 +666,53 @@ class BPUDetector(DetectorBase):
     # ================================================================
 
     def _generate_masks(self, raw, kept_mc, outputs, scale, pad_x, pad_y):
-        """Generate instance masks from proto and coefficient tensors."""
+        """W2-3: decode instance masks from proto + coefficients.
+
+        - ``kept_mc is None`` → return all None (nothing to decode).
+        - proto tensor missing → log ERROR exactly once (guarded by
+          ``_proto_missing_logged``) and return all None. This is the ex-stub
+          path that previously returned zeros silently.
+        - otherwise: sigmoid(mask_coeff · proto.flat) reshape → threshold 0.5
+          → upsample to bbox pixel size → AND with bbox region.
+        """
         masks_list = [None] * len(raw)
-        if kept_mc is None or not self._proto_name or self._proto_name not in outputs:
+        if kept_mc is None:
             return masks_list
 
-        proto = outputs[self._proto_name][0]  # (160, 160, 32)
+        # Resolve proto tensor name: primary, then override fallback.
+        proto_key: Optional[str] = None
+        if self._proto_name and self._proto_name in outputs:
+            proto_key = self._proto_name
+        else:
+            override = getattr(self, "_proto_tensor_name_override", None)
+            if override and override in outputs:
+                proto_key = override
+
+        if proto_key is None:
+            if not getattr(self, "_proto_missing_logged", False):
+                logger.error(
+                    "BPUDetector._generate_masks: proto tensor not found in "
+                    "model outputs (tried '%s' and override '%s'). "
+                    "Masks will be None — instance segmentation disabled.",
+                    self._proto_name,
+                    getattr(self, "_proto_tensor_name_override", None),
+                )
+                self._proto_missing_logged = True
+            return masks_list
+
+        proto = outputs[proto_key][0]
+        # Accept both (ph, pw, 32) and (32, ph, pw) layouts — transpose as needed.
+        if proto.ndim == 3 and proto.shape[0] == 32 and proto.shape[-1] != 32:
+            proto = np.transpose(proto, (1, 2, 0))
         ph, pw = proto.shape[:2]
-        proto_flat = proto.reshape(-1, 32)
+        if proto.shape[-1] != kept_mc.shape[-1]:
+            logger.error(
+                "BPUDetector._generate_masks: proto channels=%d != kept_mc channels=%d",
+                proto.shape[-1], kept_mc.shape[-1],
+            )
+            return masks_list
+
+        proto_flat = proto.reshape(-1, proto.shape[-1])
         all_masks = proto_flat @ kept_mc.T
         np.clip(all_masks, -50, 50, out=all_masks)
         all_masks = 1.0 / (1.0 + np.exp(-all_masks))
@@ -687,7 +729,20 @@ class BPUDetector(DetectorBase):
             crop = all_masks[by1:by2, bx1:bx2, idx]
             ox1, oy1, ox2, oy2 = box.astype(int)
             cw, ch = max(1, ox2 - ox1), max(1, oy2 - oy1)
-            mask_resized = cv2.resize(crop, (cw, ch), interpolation=cv2.INTER_LINEAR)
+            if crop.size == 0:
+                mask_resized = np.zeros((ch, cw), dtype=np.float32)
+            else:
+                try:
+                    import cv2 as _cv2
+                    mask_resized = _cv2.resize(
+                        crop.astype(np.float32), (cw, ch),
+                        interpolation=_cv2.INTER_LINEAR,
+                    )
+                except ImportError:
+                    # numpy nearest-neighbour fallback for dev without cv2.
+                    ys = (np.arange(ch) * crop.shape[0] / ch).astype(int)
+                    xs = (np.arange(cw) * crop.shape[1] / cw).astype(int)
+                    mask_resized = crop[np.ix_(ys, xs)]
             masks_list[idx] = (mask_resized > 0.5, ox1, oy1)
 
         return masks_list

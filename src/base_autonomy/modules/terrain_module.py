@@ -206,15 +206,11 @@ class TerrainModule(Module, layer=2):
         else:
             return
 
-        # GIL hot-path: cap at 30K points to keep tolist() < 100ms.
-        # LiDAR @10Hz delivers ~100K points; downsample to keep uvicorn alive.
-        MAX_POINTS = 30_000
-        if len(pts4) > MAX_POINTS:
-            stride = len(pts4) // MAX_POINTS
-            pts4 = pts4[::stride][:MAX_POINTS]
-
-        # Flatten to 1D for C++ (Nx4 → 4N flat)
-        flat = pts4.ravel().tolist()  # TODO: zero-copy via nb::ndarray when available
+        # W2-5: pass numpy array directly — no 30K truncation, no .tolist()
+        # conversion. nanobind reads the buffer protocol, so this is close to
+        # zero-copy without requiring the full nb::ndarray<float, ndim<1>>
+        # binding refactor (follow-up C++ change).
+        flat = np.ascontiguousarray(pts4, dtype=np.float32).ravel()
         ts = getattr(cloud, 'ts', time.time())
 
         result = self._core.process(flat, ts)
