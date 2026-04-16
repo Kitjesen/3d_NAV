@@ -76,6 +76,11 @@ class ROS2SimDriverModule(Module, layer=1):
         info_topic: str = "/camera/color/camera_info",
         cmd_vel_topic: str = "/nav/cmd_vel",
         qos_depth: int = 10,
+        # In real-robot nav mode, CameraBridgeModule (perception stack)
+        # owns the camera/depth topics. Subscribing here AGAIN duplicates
+        # the high-bandwidth depth stream and starves uvicorn of GIL.
+        # Default off — turn on only for true MuJoCo simulation runs.
+        enable_camera: bool = False,
         **kw,
     ):
         super().__init__(**kw)
@@ -88,6 +93,7 @@ class ROS2SimDriverModule(Module, layer=1):
         self._info_topic = info_topic
         self._cmd_vel_topic = cmd_vel_topic
         self._qos_depth = qos_depth
+        self._enable_camera = enable_camera
 
         self._node = None
         self._pub_cmd_vel = None
@@ -120,17 +126,26 @@ class ROS2SimDriverModule(Module, layer=1):
 
             self._node = Node(self._node_name)
 
-            # Subscribers
+            # Always-on subscribers (low bandwidth)
             self._node.create_subscription(
                 ROS2Odom, self._odom_topic, self._on_ros2_odom, qos)
             self._node.create_subscription(
                 PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos)
-            self._node.create_subscription(
-                ROS2Image, self._image_topic, self._on_ros2_image, qos)
-            self._node.create_subscription(
-                ROS2Image, self._depth_topic, self._on_ros2_depth, qos)
-            self._node.create_subscription(
-                CameraInfo, self._info_topic, self._on_ros2_info, qos)
+
+            # Camera + depth — high bandwidth, only when explicitly enabled
+            # (real-robot nav uses CameraBridgeModule which owns these topics)
+            if self._enable_camera:
+                self._node.create_subscription(
+                    ROS2Image, self._image_topic, self._on_ros2_image, qos)
+                self._node.create_subscription(
+                    ROS2Image, self._depth_topic, self._on_ros2_depth, qos)
+                self._node.create_subscription(
+                    CameraInfo, self._info_topic, self._on_ros2_info, qos)
+                logger.info(
+                    "ROS2SimDriverModule: camera subscriptions enabled "
+                    "(%s, %s, %s)",
+                    self._image_topic, self._depth_topic, self._info_topic,
+                )
 
             # Goal pose subscriber — bridges ROS2 /nav/goal_pose to Module port
             from geometry_msgs.msg import PoseStamped as ROS2PoseStamped
