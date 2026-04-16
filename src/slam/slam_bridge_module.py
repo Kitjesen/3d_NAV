@@ -308,8 +308,7 @@ class SlamBridgeModule(Module, layer=1):
                 self._loc_state = LOC_DIVERGED
 
             # Auto-relocalize (with cooldown)
-            if (now - self._drift_last_relocalize > self._drift_relocalize_cooldown
-                    and self._drift_last_good_pos is not None):
+            if now - self._drift_last_relocalize > self._drift_relocalize_cooldown:
                 self._drift_last_relocalize = now
                 threading.Thread(
                     target=self._auto_relocalize,
@@ -320,11 +319,16 @@ class SlamBridgeModule(Module, layer=1):
         return False
 
     def _auto_relocalize(self) -> None:
-        """Trigger relocalize via ROS2 service using last known good position."""
+        """Trigger relocalize via ROS2 service using last known good position.
+
+        If no good position was ever recorded (SLAM diverged from startup),
+        falls back to origin (0, 0, 0).
+        """
         import os, subprocess
         pos = self._drift_last_good_pos
         yaw = self._drift_last_good_yaw
         if pos is None:
+            logger.warning("Drift guard: no good position recorded, relocalize to origin")
             pos = np.zeros(3)
             yaw = 0.0
 
