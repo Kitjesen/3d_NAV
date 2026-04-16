@@ -113,10 +113,10 @@ brainstem:
 # 驱动: ironoa/um982_ros2_driver (systemd: gnss.service)
 # 融合: fastlio2_gnss backend (GTSAM PGO 全局约束)
 gnss:
-  enabled: false                   # 全局开关，未接入前保持 false
+  enabled: true                     # WTRTK-980 已接入
   model: "WTRTK-980"
-  device: "/dev/ttyUSB0"           # UART 设备 (CH340 USB-UART)
-  baud: 115200                     # UM980 默认 115200 (可通过 CONFIG COM1 460800 提速)
+  device: "/dev/wtrtk980"          # udev symlink → CH340 ttyUSBx (稳定名)
+  baud: 115200                     # UM980 默认 115200
 
   # 天线相对 body 原点的安装偏移 (m, body frame)
   antenna_offset:
