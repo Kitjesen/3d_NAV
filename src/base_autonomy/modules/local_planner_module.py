@@ -186,14 +186,14 @@ def _score_paths_numpy(
     group_of_path: np.ndarray,
     grid_voxel_num_x: int,
     grid_voxel_num_y: int,
+    # W2-6: grid params were hardcoded; now configurable with CMU defaults.
+    grid_voxel_size: float = 0.02,
+    grid_voxel_offset_x: float = 3.2,
+    grid_voxel_offset_y: float = 5.25,
+    search_radius: float = 0.45,
 ) -> np.ndarray:
     """Vectorised path scoring.  Returns clearPathPerGroupScore[36 * GROUP_NUM]."""
 
-    # Grid params (mirror VoxelGridParams defaults)
-    grid_voxel_size    = 0.02
-    grid_voxel_offset_x = 3.2
-    grid_voxel_offset_y = 5.25
-    search_radius       = 0.45
     inv_gs = 1.0 / grid_voxel_size
     offset_x_half = grid_voxel_offset_x + grid_voxel_size * 0.5
     offset_y_half = grid_voxel_offset_y + grid_voxel_size * 0.5
@@ -356,6 +356,36 @@ class LocalPlannerModule(Module, layer=2):
         # One-shot warning flags
         self._warned_no_core: bool = False
         self._warned_no_path_data: bool = False
+
+        # W2-6: cmu_py grid parameters — pulled from config at setup() if the
+        # `local_planner_grid` section is present, otherwise keep CMU defaults.
+        # Exposing them as instance attrs makes them unit-testable and lets the
+        # stack factory override per-robot without touching magic numbers.
+        self._grid_voxel_size: float = 0.02
+        self._grid_voxel_offset_x: float = 3.2
+        self._grid_voxel_offset_y: float = 5.25
+        self._grid_search_radius: float = 0.45
+        try:
+            from core.config import get_config
+            cfg = get_config()
+            lpg = cfg.raw.get("local_planner_grid", {}) if hasattr(cfg, "raw") else {}
+            if lpg:
+                self._grid_voxel_size = float(lpg.get("voxel_size", self._grid_voxel_size))
+                self._grid_voxel_offset_x = float(lpg.get("x_offset", self._grid_voxel_offset_x))
+                self._grid_voxel_offset_y = float(lpg.get("y_offset", self._grid_voxel_offset_y))
+                self._grid_search_radius = float(lpg.get("search_radius", self._grid_search_radius))
+                logger.info(
+                    "LocalPlannerModule: loaded grid params from config "
+                    "(voxel=%.3f, x_off=%.2f, y_off=%.2f, radius=%.2f)",
+                    self._grid_voxel_size, self._grid_voxel_offset_x,
+                    self._grid_voxel_offset_y, self._grid_search_radius,
+                )
+        except (ImportError, AttributeError, KeyError):
+            logger.info(
+                "LocalPlannerModule: using default grid params "
+                "(voxel=0.02, x_off=3.2, y_off=5.25, radius=0.45) — "
+                "add local_planner_grid to robot_config.yaml to override"
+            )
 
     def setup(self):
         self.odometry.subscribe(self._on_odom)

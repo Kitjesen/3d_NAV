@@ -17,12 +17,54 @@ VLM 开放词汇 bbox 检测 — "图里有X吗？在哪？"
   函数接受任何有 chat_with_image(text_prompt, image_base64, system_prompt) 方法的客户端。
 """
 
+import asyncio
+import hashlib
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# ================================================================
+#  W2-11: in-memory bbox cache with exponential-backoff retry
+# ================================================================
+
+_CACHE_TTL_S: float = 5.0
+_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.5, 3.0)  # 3 attempts total
+
+# Module-level cache: key -> {"bbox": [x,y,x,y], "confidence": float, "ts": float}
+_bbox_cache: dict[str, dict[str, Any]] = {}
+
+
+def _cache_key(target_object: str, image_base64: str) -> str:
+    """Stable cache key from (target, image hash)."""
+    img_hash = hashlib.md5(image_base64.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return f"{target_object}|{img_hash}"
+
+
+def _cache_put(key: str, bbox: list[float], confidence: float = 1.0) -> None:
+    """Store bbox with timestamp; older entries aren't purged until access."""
+    _bbox_cache[key] = {
+        "bbox": list(bbox),
+        "confidence": float(confidence),
+        "ts": time.time(),
+    }
+
+
+def _cache_get(key: str, allow_stale: bool = False) -> dict[str, Any] | None:
+    """Fetch cache entry. Returns None when missing or (when allow_stale=False)
+    past the TTL. `allow_stale=True` is used by the retry-exhaustion path to
+    return a low-confidence stale reading instead of nothing."""
+    entry = _bbox_cache.get(key)
+    if entry is None:
+        return None
+    age = time.time() - entry["ts"]
+    if allow_stale:
+        return entry
+    return entry if age < _CACHE_TTL_S else None
 
 
 async def query_object_bbox(
@@ -31,37 +73,65 @@ async def query_object_bbox(
     target_description: str,
     language: str = "zh",
 ) -> list[float] | None:
-    """
-    用 VLM 在当前图像中定位目标物体的 bbox。
+    """Locate a single object bbox via VLM, with retry + cache.
 
-    Args:
-        llm_client: LLM 客户端（需支持 chat_with_image），
-                    或 GoalResolver 实例（内部会自动选择可用的视觉后端）
-        image_base64: JPEG 图像的 base64 编码
-        target_description: 目标描述（如 "红色椅子", "gym entrance"）
-        language: "zh" 或 "en"
-
-    Returns:
-        [x1, y1, x2, y2] 像素坐标（浮点数），或 None（未找到/解析失败）
+    Behaviour:
+      1. Fresh cache hit within TTL — return immediately, no VLM call.
+      2. Call VLM with exponential-backoff retries at 0.5s / 1.5s / 3.0s.
+      3. On success, populate cache and return the bbox.
+      4. On all retries failing, return a stale cache entry (low confidence)
+         if one exists; else None. NEVER returns a fabricated value.
     """
     client = _resolve_vision_client(llm_client)
     if client is None:
         logger.warning("query_object_bbox: no vision-capable client available")
         return None
 
+    key = _cache_key(target_description, image_base64)
+
+    # Fresh cache short-circuits the VLM call entirely.
+    fresh = _cache_get(key, allow_stale=False)
+    if fresh is not None:
+        return list(fresh["bbox"])
+
     system_prompt, user_prompt = _build_bbox_prompt(target_description, language)
 
-    try:
-        response = await client.chat_with_image(
-            text_prompt=user_prompt,
-            image_base64=image_base64,
-            system_prompt=system_prompt,
-        )
-    except Exception as e:
-        logger.warning("query_object_bbox: VLM call failed: %s", e)
-        return None
+    last_exc: Exception | None = None
+    for attempt_idx, backoff in enumerate(_RETRY_BACKOFFS, start=1):
+        try:
+            response = await client.chat_with_image(
+                text_prompt=user_prompt,
+                image_base64=image_base64,
+                system_prompt=system_prompt,
+            )
+            bbox = _extract_bbox_from_response(response)
+            if bbox is not None:
+                _cache_put(key, bbox, confidence=1.0)
+            return bbox
+        except Exception as e:
+            last_exc = e
+            logger.warning(
+                "query_object_bbox attempt %d/%d failed: %s",
+                attempt_idx, len(_RETRY_BACKOFFS), e,
+            )
+            if attempt_idx < len(_RETRY_BACKOFFS):
+                await asyncio.sleep(backoff)
 
-    return _extract_bbox_from_response(response)
+    # All retries exhausted — try stale cache before giving up.
+    stale = _cache_get(key, allow_stale=True)
+    if stale is not None:
+        logger.error(
+            "query_object_bbox: all %d retries failed (last err=%s); "
+            "returning stale cache entry (age=%.1fs) at low confidence",
+            len(_RETRY_BACKOFFS), last_exc, time.time() - stale["ts"],
+        )
+        return list(stale["bbox"])
+
+    logger.error(
+        "query_object_bbox: all %d retries failed (last err=%s) and no cache",
+        len(_RETRY_BACKOFFS), last_exc,
+    )
+    return None
 
 
 async def query_multiple_objects(

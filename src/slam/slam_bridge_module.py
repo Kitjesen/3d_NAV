@@ -605,20 +605,34 @@ class SlamBridgeModule(Module, layer=1):
         # directly: first 3 DOFs are translational (tx, ty, tz).
         # Otherwise fall back to heuristic based on fitness/ratio.
         if self._dof_mask is not None and len(self._dof_mask) >= 3:
-            # DOF mask: 1.0 = constrained, 0.0 = degenerate
-            # Invert: degenerate axes get alpha, constrained get 0
+            # W2-9: strict preference for Hessian eigenvalue-based mask when
+            # available. DOF mask: 1.0=constrained, 0.0=degenerate.
+            # Invert: degenerate axes get alpha, constrained get 0.
+            logger.debug(
+                "slam_bridge: fusing via eigenvalue DOF mask (trans=%s)",
+                self._dof_mask[:3].tolist(),
+            )
             trans_mask = self._dof_mask[:3]  # tx, ty, tz
             degen_mask = np.where(trans_mask < 0.5, alpha, 0.0)
             # Always reduce Z fusion weight (vertical usually stable from IMU)
             degen_mask[2] *= 0.3
         elif self._effective_ratio < self._feature_ratio_critical:
-            # Full translational degeneracy — blend all XYZ
+            # Full translational degeneracy — blend all XYZ (heuristic fallback)
+            logger.debug(
+                "slam_bridge: heuristic full-XYZ path (effective_ratio=%.3f)",
+                self._effective_ratio,
+            )
             degen_mask = np.array([alpha, alpha, alpha * 0.3])
         elif self._icp_fitness > self._fitness_critical:
-            # Corridor-like: blend XY, keep Z from SLAM
+            # Corridor-like: blend XY, keep Z from SLAM (heuristic fallback)
+            logger.debug(
+                "slam_bridge: heuristic corridor path (icp_fitness=%.3f)",
+                self._icp_fitness,
+            )
             degen_mask = np.array([alpha, alpha, 0.0])
         else:
-            # Partial: blend X (along-axis of highest uncertainty)
+            # Partial: blend X (along-axis of highest uncertainty) — heuristic
+            logger.debug("slam_bridge: heuristic partial-X path")
             degen_mask = np.array([alpha, alpha * 0.3, 0.0])
 
         # Selective blend: fused = slam * (1 - mask) + visual * mask

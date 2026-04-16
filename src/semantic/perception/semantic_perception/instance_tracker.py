@@ -159,6 +159,11 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         # ── Neuro-Symbolic Belief GCN (KG-BELIEF) ──
         self._belief_model = None  # Optional[BeliefPredictor]
 
+        # W2-2: warn once if intrinsics_fx is 0 — avoid per-frame log spam,
+        # also prevents silently using a default 600 px focal length that
+        # would produce wrong 3D extents on any camera that isn't 640×480.
+        self._warned_no_fx: bool = False
+
     @property
     def objects(self) -> dict[int, TrackedObject]:
         with self._lock:
@@ -210,6 +215,18 @@ class InstanceTracker(BeliefPropagationMixin, RoomManagerMixin):
         Returns:
             本帧匹配/新建的 TrackedObject 列表
         """
+        # W2-2: warn once if caller forgot to provide camera focal length —
+        # fx=0 would otherwise fall back to a 600 px default that mis-scales
+        # 3D extents on any non-640x480 camera.
+        if intrinsics_fx <= 0.0 and not self._warned_no_fx:
+            logger.warning(
+                "InstanceTracker.update() called with intrinsics_fx=%s — "
+                "3D extent estimation will be skipped for this detection "
+                "batch. Pass camera fx from intrinsics to enable it.",
+                intrinsics_fx,
+            )
+            self._warned_no_fx = True
+
         with self._lock:
             matched: list[TrackedObject] = []
 

@@ -41,6 +41,16 @@ from core.stream import In, Out
 logger = logging.getLogger(__name__)
 
 
+# W2-7: scipy is required for bilinear resampling. Verified once at module
+# import; setup() raises loudly if it's missing (Wave 1 no-silent-fallback
+# discipline). Tests patch this flag to simulate the absence.
+try:
+    import scipy.ndimage  # noqa: F401
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    _SCIPY_AVAILABLE = False
+
+
 def _resample_to_grid(
     src: np.ndarray,
     src_origin: np.ndarray,
@@ -50,26 +60,40 @@ def _resample_to_grid(
     dst_res: float,
     fill: float = 0.0,
 ) -> np.ndarray:
-    """Nearest-neighbour resample src grid onto dst grid coordinates."""
+    """Bilinear resample src grid onto dst grid coordinates via scipy.
+
+    W2-7: nearest-neighbour was previously used and produced aliasing at grid
+    edges where slope/cost discontinuities confused the planner. Bilinear
+    gives continuous interpolated values between source cells.
+    """
+    if not _SCIPY_AVAILABLE:
+        raise RuntimeError(
+            "_resample_to_grid requires scipy — call TraversabilityCostModule.setup() "
+            "first to see the pre-flight check error."
+        )
+    from scipy.ndimage import map_coordinates
+
     dst_h, dst_w = dst_shape
     # Build dst cell centres in world coords
     ys = dst_origin[1] + (np.arange(dst_h) + 0.5) * dst_res
     xs = dst_origin[0] + (np.arange(dst_w) + 0.5) * dst_res
 
-    # Map to src cell indices
-    src_ix = np.floor((xs - src_origin[0]) / src_res).astype(np.int32)
-    src_iy = np.floor((ys - src_origin[1]) / src_res).astype(np.int32)
+    # Map world coords to fractional src cell indices (row = y-axis, col = x-axis)
+    src_row = (ys - src_origin[1]) / src_res - 0.5   # shape (dst_h,)
+    src_col = (xs - src_origin[0]) / src_res - 0.5   # shape (dst_w,)
 
-    # 2D index grids
-    ix_grid = np.broadcast_to(src_ix[None, :], (dst_h, dst_w))
-    iy_grid = np.broadcast_to(src_iy[:, None], (dst_h, dst_w))
+    # 2D coordinate arrays for map_coordinates (row, col order)
+    row_grid = np.broadcast_to(src_row[:, None], dst_shape)
+    col_grid = np.broadcast_to(src_col[None, :], dst_shape)
+    coords = np.array([row_grid.ravel(), col_grid.ravel()])
 
-    valid = (
-        (ix_grid >= 0) & (ix_grid < src.shape[1])
-        & (iy_grid >= 0) & (iy_grid < src.shape[0])
-    )
-    out = np.full(dst_shape, fill, dtype=np.float32)
-    out[valid] = src[iy_grid[valid], ix_grid[valid]]
+    out = map_coordinates(
+        src.astype(np.float64),
+        coords,
+        order=1,              # bilinear
+        mode="constant",
+        cval=float(fill),
+    ).reshape(dst_shape).astype(np.float32)
     return out
 
 
@@ -137,6 +161,12 @@ class TraversabilityCostModule(Module, layer=2):
         self._last_publish: float = 0.0
 
     def setup(self) -> None:
+        if not _SCIPY_AVAILABLE:
+            raise RuntimeError(
+                "TraversabilityCostModule requires scipy for bilinear "
+                "resampling between elevation/ESDF and costmap grids. "
+                "Install with: pip install scipy"
+            )
         self.costmap.subscribe(self._on_costmap)
         self.elevation_map.subscribe(self._on_elevation)
         self.esdf.subscribe(self._on_esdf)

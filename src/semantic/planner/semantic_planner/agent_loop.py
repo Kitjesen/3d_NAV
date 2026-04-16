@@ -299,6 +299,26 @@ class AgentLoop:
         self._max_steps = max_steps
         self._timeout = timeout
         self._vlm_agent = None  # lazy-initialized on first VLM tool call
+
+        # W2-12: tool-call audit log + required-argument schemas for the 7
+        # canonical agent tools. Each `run()` step that reaches `_execute_tool`
+        # records one audit entry with result_summary (either the short tool
+        # output or `VALIDATION_ERROR: ...`).
+        self._tool_call_audit: list[dict[str, Any]] = []
+        self._tool_schemas: dict[str, dict[str, Any]] = {
+            "navigate_to":        {"required": ["x", "y"]},
+            "navigate_to_object": {"required": ["label"]},
+            "detect_object":      {"required": ["label"]},
+            "query_memory":       {"required": ["query"]},
+            "tag_location":       {"required": ["name"]},
+            "say":                {"required": ["message"]},
+            "done":               {"required": []},
+            "describe_scene":     {"required": []},
+            "assess_situation":   {"required": []},
+        }
+        self._known_tool_names: set[str] = {
+            t["function"]["name"] for t in self._tools
+        } | set(self._handlers.keys())
         logger.info(
             "AgentLoop: %d tools (%d discovered + %d legacy + %d builtin)",
             len(self._tools), len(tool_list), len(legacy_tools), len(_BUILTIN_TOOLS),
@@ -427,6 +447,24 @@ class AgentLoop:
                         break
         return {"content": text}
 
+    def _validate_tool_call(self, name: str, args: dict) -> str | None:
+        """W2-12: return an error string if the call is invalid, else None.
+
+        Catches (a) LLM hallucinated tool names, (b) missing required args.
+        """
+        if not name:
+            return "empty tool name"
+        if name not in self._known_tool_names:
+            sample = sorted(self._known_tool_names)[:8]
+            return (
+                f"unknown tool '{name}'. Valid tools start with: {sample}"
+            )
+        schema = self._tool_schemas.get(name, {})
+        for field in schema.get("required", []):
+            if field not in args:
+                return f"missing required argument '{field}' for tool '{name}'"
+        return None
+
     async def _execute_tool(self, tool_call: dict, state: AgentState) -> str:
         """Execute a single tool call and append results to message history."""
         fn = tool_call.get("function", {})
@@ -442,6 +480,30 @@ class AgentLoop:
             "content": None,
             "tool_calls": [tool_call],
         })
+
+        # W2-12: validate BEFORE executing — feed error back to LLM for
+        # self-correction instead of silently skipping.
+        validation_err = self._validate_tool_call(name, args)
+        if validation_err is not None:
+            summary = f"VALIDATION_ERROR: {validation_err}"
+            self._tool_call_audit.append({
+                "ts": time.time(),
+                "step": state.step,
+                "tool_name": name,
+                "args": args,
+                "result_summary": summary,
+            })
+            error_msg = (
+                f"VALIDATION_ERROR for tool '{name}': {validation_err}. "
+                f"Please emit a corrected tool call."
+            )
+            state.messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.get("id", ""),
+                "content": error_msg,
+            })
+            logger.warning("AgentLoop step %d: %s", state.step, summary)
+            return summary
 
         # Handle done() specially
         if name == "done":
@@ -478,6 +540,15 @@ class AgentLoop:
             "role": "system",
             "content": f"Updated state: position=({ctx['robot_x']:.1f},{ctx['robot_y']:.1f}), "
                        f"nav_status={ctx['nav_status']}, visible={ctx['visible_objects'][:100]}",
+        })
+
+        # W2-12: audit log for every valid call that executed.
+        self._tool_call_audit.append({
+            "ts": time.time(),
+            "step": state.step,
+            "tool_name": name,
+            "args": args,
+            "result_summary": (result[:200] if isinstance(result, str) else str(result)[:200]),
         })
 
         logger.info("AgentLoop step %d: %s(%s) → %s",
