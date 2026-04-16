@@ -301,13 +301,17 @@ class GnssModule(Module, layer=1):
     # -- lifecycle ----------------------------------------------------------
 
     def setup(self) -> None:
-        """Try DDS subscription first, then serial driver, then stub."""
+        """Try serial driver first (if configured), then DDS, then stub.
+
+        Serial is preferred because it doesn't need a separate ROS2
+        GNSS driver service — just pyserial reading the UART directly.
+        """
+        if self._serial_port:
+            if self._try_start_serial():
+                return
         if self._try_start_dds():
             return
-        if self._serial_port:
-            self._try_start_serial()
-        else:
-            logger.info("GnssModule: no DDS and no serial_port — stub mode")
+        logger.info("GnssModule: no serial and no DDS — stub mode")
 
     def _try_start_serial(self) -> bool:
         """Start direct serial NMEA reader as DDS fallback."""
