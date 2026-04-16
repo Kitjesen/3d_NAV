@@ -404,6 +404,83 @@ class TestResidualGuard(unittest.TestCase):
         self.assertAlmostEqual(m._gnss_map_offset[1], 10.0)
 
 
+class TestAntennaOffset(unittest.TestCase):
+    """The antenna reports its own ENU position, not the body's. When the
+    robot rotates, the lever-arm offset couples with orientation and
+    introduces apparent horizontal motion that must be subtracted before
+    fusing into the body-centric SLAM pose.
+    """
+
+    def test_default_is_zero_offset(self):
+        m = _make_bridge()
+        self.assertTrue((m._gnss_antenna_offset == 0.0).all())
+
+    def test_invalid_offset_shape_rejected(self):
+        with self.assertRaises(ValueError):
+            _make_bridge(gnss_antenna_offset=(0.1, 0.2))
+
+    def test_offset_lockframe_at_zero_yaw(self):
+        """At yaw=0 with antenna at (0.5, 0, 0) body, the antenna is 0.5m
+        ahead of body in +X map direction. Lock should record the offset
+        assuming GNSS reports antenna pos."""
+        m = _make_bridge(gnss_antenna_offset=(0.5, 0.0, 0.0))
+        m.setup()
+        _prime_healthy(m)
+
+        # SLAM says body is at (10, 20). With yaw=0, antenna is at (10.5, 20).
+        # If GNSS reports antenna=(3, 4), the body-equivalent GNSS is
+        # (3 - 0.5, 4 - 0.0) = (2.5, 4.0). Offset = (10 - 2.5, 20 - 4) = (7.5, 16).
+        m._on_gnss_odom(_make_gnss_odom(e=3.0, n=4.0))
+        m._fuse_odometry(_make_slam_odom(x=10.0, y=20.0, qw=1.0))
+
+        self.assertIsNotNone(m._gnss_map_offset)
+        self.assertAlmostEqual(m._gnss_map_offset[0], 7.5, places=5)
+        self.assertAlmostEqual(m._gnss_map_offset[1], 16.0, places=5)
+
+    def test_offset_rotates_with_yaw(self):
+        """Rotate robot 90° CCW (yaw=+π/2). Antenna at (0.5, 0, 0) body
+        now points in +Y direction of map. So antenna_map_offset = (0, 0.5).
+        """
+        import math
+        from core.msgs.geometry import Quaternion
+
+        m = _make_bridge(gnss_antenna_offset=(0.5, 0.0, 0.0))
+        m.setup()
+        _prime_healthy(m)
+
+        q = Quaternion.from_yaw(math.pi / 2)
+        slam = Odometry(
+            pose=Pose(
+                position=Vector3(x=10.0, y=20.0, z=0.0),
+                orientation=q,
+            ),
+            ts=time.time(),
+        )
+
+        # Body at (10, 20), yaw=90° → antenna at (10, 20.5) in map
+        # GNSS reports antenna (3, 4) → body-equivalent (3 - 0, 4 - 0.5) = (3, 3.5)
+        # Offset = (10 - 3, 20 - 3.5) = (7, 16.5)
+        m._on_gnss_odom(_make_gnss_odom(e=3.0, n=4.0))
+        m._fuse_odometry(slam)
+
+        self.assertIsNotNone(m._gnss_map_offset)
+        self.assertAlmostEqual(m._gnss_map_offset[0], 7.0, places=5)
+        self.assertAlmostEqual(m._gnss_map_offset[1], 16.5, places=5)
+
+    def test_zero_offset_fast_path(self):
+        """When antenna offset is (0,0,0) we skip rotation math — result
+        should match the pre-offset implementation exactly."""
+        m = _make_bridge(gnss_antenna_offset=(0.0, 0.0, 0.0))
+        m.setup()
+        _prime_healthy(m)
+
+        m._on_gnss_odom(_make_gnss_odom(e=3.0, n=4.0))
+        m._fuse_odometry(_make_slam_odom(x=10.0, y=20.0))
+
+        self.assertAlmostEqual(m._gnss_map_offset[0], 7.0)
+        self.assertAlmostEqual(m._gnss_map_offset[1], 16.0)
+
+
 class TestGnssFusionHealthPort(unittest.TestCase):
 
     def test_health_port_exists(self):
@@ -439,6 +516,105 @@ class TestGnssFusionHealthPort(unittest.TestCase):
         self.assertEqual(snap["last_fix_type"], "RTK_FIXED")
         self.assertGreaterEqual(snap["fused_count"], 1)
         self.assertEqual(snap["relock_count"], 0)
+
+
+class TestE2EAutoWire(unittest.TestCase):
+    """End-to-end contract: `autoconnect(GnssModule, SlamBridgeModule)` must
+    auto-wire ``GnssModule.gnss_odom`` → ``SlamBridgeModule.gnss_odom`` by
+    matching (port_name, msg_type). This protects against someone renaming a
+    port and silently breaking drift anchoring on real hardware.
+    """
+
+    def _build_system(self):
+        from core.blueprint import autoconnect
+        from slam.gnss_module import GnssModule
+        from slam.slam_bridge_module import SlamBridgeModule
+
+        bp = autoconnect(
+            GnssModule.blueprint(origin_lat=31.0, origin_lon=121.0,
+                                  origin_alt=0.0,
+                                  auto_init_origin=False,
+                                  min_sat_used=0,  # tests skip sat count
+                                  max_hdop=99.0,   # tests skip HDOP
+                                  status_rate_hz=0.0),
+            SlamBridgeModule.blueprint(
+                odom_timeout=0.1, cloud_timeout=0.2, watchdog_hz=20),
+        )
+        return bp.build()
+
+    def test_autoconnect_wires_gnss_to_slam_bridge(self):
+        from core.msgs.gnss import GnssFix, GnssFixType
+
+        system = self._build_system()
+        system.start()   # runs setup(), which subscribes the bridge to gnss_odom
+        try:
+            gnss = system.modules["GnssModule"]
+            bridge = system.modules["SlamBridgeModule"]
+
+            # Fresh bridge: no GNSS received yet
+            self.assertIsNone(bridge._last_gnss_odom)
+
+            # Inject a fix that passes the GNSS quality gate
+            fix = GnssFix(
+                lat=31.00001, lon=121.00001, alt=10.0,
+                fix_type=GnssFixType.RTK_FIXED,
+                covariance=(0.01, 0, 0, 0, 0.01, 0, 0, 0, 0.04),
+                num_sat=12, num_sat_used=12,
+                ts=time.time(),
+            )
+            gnss.inject_fix(fix)
+
+            # After a single fix, SlamBridgeModule should have received the
+            # derived GnssOdom via the auto-wired port.
+            self.assertIsNotNone(bridge._last_gnss_odom)
+            self.assertGreater(bridge._last_gnss_rx_ts, 0.0)
+            self.assertEqual(
+                bridge._last_gnss_odom.fix_type, GnssFixType.RTK_FIXED
+            )
+        finally:
+            try:
+                system.stop()
+            except Exception:
+                pass
+
+    def test_end_to_end_fusion_with_lock(self):
+        """Inject GNSS, inject SLAM odom through fusion, verify offset locks."""
+        from core.msgs.gnss import GnssFix, GnssFixType
+        from slam.slam_bridge_module import DEGEN_NONE, LOC_TRACKING
+
+        system = self._build_system()
+        system.start()
+        try:
+            gnss = system.modules["GnssModule"]
+            bridge = system.modules["SlamBridgeModule"]
+            # Prime health state so the lock is permitted
+            bridge._loc_state = LOC_TRACKING
+            bridge._degen_level = DEGEN_NONE
+
+            # Inject a good RTK fix — autoconnect pipes it into the bridge
+            fix = GnssFix(
+                lat=31.0, lon=121.0, alt=0.0,
+                fix_type=GnssFixType.RTK_FIXED,
+                covariance=(0.01, 0, 0, 0, 0.01, 0, 0, 0, 0.04),
+                num_sat=12, num_sat_used=12,
+                ts=time.time(),
+            )
+            gnss.inject_fix(fix)
+
+            # Drive a SLAM odometry sample through the fusion — this locks
+            # the offset (first-frame behaviour).
+            slam = _make_slam_odom(x=5.0, y=7.0)
+            fused = bridge._fuse_odometry(slam)
+
+            self.assertIsNotNone(bridge._gnss_map_offset)
+            # First frame must not alter the pose
+            self.assertAlmostEqual(fused.pose.position.x, 5.0)
+            self.assertAlmostEqual(fused.pose.position.y, 7.0)
+        finally:
+            try:
+                system.stop()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

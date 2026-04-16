@@ -34,6 +34,16 @@ def slam(profile: str = "fastlio2", enable_visual_backup: bool = True) -> Bluepr
       "localizer" → start slam + localizer services (navigation mode)
       "bridge"    → subscribe only, assume SLAM already running
       "none"/""   → empty (stub/dev mode)
+
+    GNSS fusion config is read from robot_config.yaml gnss.* section and
+    passed to SlamBridgeModule as kwargs:
+      gnss.antenna_offset.{x,y,z}  → gnss_antenna_offset (lever-arm)
+      gnss.fusion.enabled          → gnss_fusion
+      gnss.fusion.alpha_{healthy,degraded}  → gnss_alpha_{healthy,degraded}
+      gnss.fusion.rtk_float_scale  → gnss_rtk_float_scale
+      gnss.fusion.max_{age_s,std_m} → gnss_max_{age_s,std_m}
+      gnss.fusion.residual_{warn_m,warn_duration_s,warn_ratio}
+                                    → gnss_residual_*
     """
     bp = Blueprint()
 
@@ -73,7 +83,7 @@ def slam(profile: str = "fastlio2", enable_visual_backup: bool = True) -> Bluepr
     # Bridge ROS2 topics into Python Module ports
     try:
         from slam.slam_bridge_module import SlamBridgeModule
-        bp.add(SlamBridgeModule)
+        bp.add(SlamBridgeModule, **_read_gnss_fusion_kwargs())
     except ImportError as e:
         logger.warning("SlamBridgeModule not available: %s", e)
 
@@ -97,3 +107,47 @@ def slam_module_name(profile: str) -> str:
     if not profile or profile == "none":
         return ""
     return "SlamBridgeModule"
+
+
+def _read_gnss_fusion_kwargs() -> dict:
+    """Load SlamBridgeModule GNSS fusion kwargs from robot_config.yaml.
+
+    Returns an empty dict on any failure so SlamBridgeModule falls back to its
+    own hardcoded defaults — never blocks SLAM startup because of config quirks.
+    """
+    try:
+        from core.config import get_config
+        raw = get_config().raw.get("gnss") or {}
+    except Exception as e:
+        logger.debug("GNSS fusion config unavailable: %s", e)
+        return {}
+
+    kwargs: dict = {}
+
+    ant = raw.get("antenna_offset") or {}
+    if ant:
+        kwargs["gnss_antenna_offset"] = (
+            float(ant.get("x", 0.0)),
+            float(ant.get("y", 0.0)),
+            float(ant.get("z", 0.0)),
+        )
+
+    fusion = raw.get("fusion") or {}
+    # Map robot_config keys → SlamBridgeModule kwargs. Only set keys that are
+    # explicitly present to let the Module's own defaults stand otherwise.
+    _key_map = {
+        "enabled":               "gnss_fusion",
+        "alpha_healthy":         "gnss_alpha_healthy",
+        "alpha_degraded":        "gnss_alpha_degraded",
+        "rtk_float_scale":       "gnss_rtk_float_scale",
+        "max_age_s":             "gnss_max_age_s",
+        "max_std_m":             "gnss_max_std_m",
+        "residual_warn_m":       "gnss_residual_warn_m",
+        "residual_warn_duration_s": "gnss_residual_warn_duration_s",
+        "residual_warn_ratio":   "gnss_residual_warn_ratio",
+    }
+    for src, dst in _key_map.items():
+        if src in fusion:
+            kwargs[dst] = fusion[src]
+
+    return kwargs

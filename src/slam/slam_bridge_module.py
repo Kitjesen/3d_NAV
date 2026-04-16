@@ -137,6 +137,16 @@ class SlamBridgeModule(Module, layer=1):
         self._gnss_alpha_healthy: float = kw.get("gnss_alpha_healthy", 0.05)
         self._gnss_alpha_degraded: float = kw.get("gnss_alpha_degraded", 0.5)
         self._gnss_rtk_float_scale: float = kw.get("gnss_rtk_float_scale", 0.3)
+        # Antenna position in body frame (metres). GNSS reports the antenna's
+        # ENU position, so we compensate by rotating this offset into the map
+        # frame (via SLAM orientation) and subtracting — giving the body
+        # origin position that can be fused with SLAM odometry.
+        _ant = kw.get("gnss_antenna_offset", (0.0, 0.0, 0.0))
+        self._gnss_antenna_offset: np.ndarray = np.asarray(_ant, dtype=float)
+        if self._gnss_antenna_offset.shape != (3,):
+            raise ValueError(
+                f"gnss_antenna_offset must be length-3, got {self._gnss_antenna_offset.shape}"
+            )
         self._last_gnss_odom: GnssOdom | None = None
         self._last_gnss_rx_ts: float = 0.0
         self._gnss_map_offset: np.ndarray | None = None  # shape (2,) XY, map = enu + offset
@@ -617,7 +627,17 @@ class SlamBridgeModule(Module, layer=1):
             return odom
 
         slam_xy = np.array([odom.pose.position.x, odom.pose.position.y])
-        gnss_xy = np.array([g.east, g.north])
+
+        # Lever-arm compensation: GNSS reports the antenna, SLAM reports the
+        # body. Rotate the antenna offset from body to map frame using current
+        # SLAM orientation, then subtract its XY from the GNSS ENU position
+        # so both operands refer to the body origin.
+        if self._gnss_antenna_offset.any():
+            R_body2map = odom.pose.orientation.to_rotation_matrix()
+            a_map = R_body2map @ self._gnss_antenna_offset
+            gnss_xy = np.array([g.east - a_map[0], g.north - a_map[1]])
+        else:
+            gnss_xy = np.array([g.east, g.north])
 
         # One-shot alignment: lock the map↔ENU translation while SLAM healthy
         if self._gnss_map_offset is None:
