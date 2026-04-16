@@ -9,10 +9,12 @@ Backends
 ``"wavefront"`` — pure-Python BFS frontier (:mod:`nav.frontier_explorer_module`).
   Zero external deps, good for simulation and constrained hardware.
 
-``"tare"``      — CMU TARE hierarchical planner, C++ ROS2 node launched via
+``"tare"``      — CMU TARE hierarchical planner (vendored in-tree at
+  ``src/exploration/tare_planner``). C++ ROS2 node launched via
   NativeModule. Needs the tare_planner colcon package to be built
-  (``scripts/build/build_tare.sh``). When the binary is missing the stack
-  falls back to ``wavefront`` so dev/CI doesn't break.
+  (``scripts/build/fetch_ortools.sh`` + ``scripts/build/build_tare.sh``).
+  When the binary is missing the stack falls back to ``wavefront`` so
+  dev/CI doesn't break.
 
 ``"none"``      — empty Blueprint (no exploration).
 """
@@ -46,7 +48,7 @@ def exploration(backend: str = "wavefront", **kw) -> Blueprint:
             logger.warning(
                 "TARE backend unavailable — falling back to wavefront "
                 "frontier explorer. Build TARE via "
-                "scripts/build/build_tare.sh on S100P.")
+                "scripts/build/fetch_ortools.sh + build_tare.sh on S100P.")
             _add_wavefront(bp, **kw)
     else:
         raise ValueError(
@@ -76,7 +78,7 @@ def _add_tare(bp: Blueprint, **kw) -> bool:
         if not os.path.exists(binary):
             logger.warning(
                 "TARE binary not found at %s — build with "
-                "scripts/build/build_tare.sh first", binary)
+                "scripts/build/fetch_ortools.sh + build_tare.sh first", binary)
             return False
     except Exception as e:
         logger.debug("TARE pre-check failed: %s", e)

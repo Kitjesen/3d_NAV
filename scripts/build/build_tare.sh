@@ -2,23 +2,25 @@
 # ══════════════════════════════════════════════════════════
 # TARE Planner colcon build
 #
-# Third-party: https://github.com/caochao39/tare_planner (humble-jazzy)
-# Clone via `git submodule update --init --recursive` first.
-#
-# On S100P (aarch64) OR-Tools is vendored inside the repo and supported
-# by upstream — no extra install step needed. Depends on PCL + Eigen +
-# libgoogle-glog-dev from apt.
+# Vendored in-tree under src/exploration/tare_planner (BSD, per upstream
+# package.xml). OR-Tools binaries are NOT committed — run
+# scripts/build/fetch_ortools.sh first to download them for your arch.
 # ══════════════════════════════════════════════════════════
 set -e
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$_SCRIPT_DIR/../.." && pwd)"
-TARE_DIR="$WORKSPACE_DIR/third_party/tare_planner"
+TARE_DIR="$WORKSPACE_DIR/src/exploration/tare_planner"
+ORTOOLS_DIR="$TARE_DIR/or-tools"
 
-if [ ! -d "$TARE_DIR/src/tare_planner" ]; then
-    echo "ERROR: $TARE_DIR/src/tare_planner not found."
-    echo "Run first:  git submodule update --init --recursive"
+if [ ! -f "$TARE_DIR/CMakeLists.txt" ]; then
+    echo "ERROR: $TARE_DIR/CMakeLists.txt not found — vendored tree missing?"
     exit 1
+fi
+
+if [ ! -f "$ORTOOLS_DIR/lib/libortools.so" ]; then
+    echo ">>> [TARE] OR-Tools not yet fetched. Running fetch_ortools.sh..."
+    bash "$_SCRIPT_DIR/fetch_ortools.sh"
 fi
 
 echo ">>> [TARE] Sourcing ROS 2 Humble..."
@@ -36,13 +38,15 @@ if ! dpkg -s libgoogle-glog-dev >/dev/null 2>&1; then
     sudo apt-get install -y libgoogle-glog-dev libpcl-dev
 fi
 
-echo ">>> [TARE] colcon build tare_planner..."
-cd "$TARE_DIR"
-# Only build the tare_planner package — ignore vehicle_simulator etc.
+echo ">>> [TARE] colcon build tare_planner (from LingTu workspace)..."
+cd "$WORKSPACE_DIR"
+# Build only the tare_planner package — colcon will auto-discover it by
+# walking the workspace and picking up the package.xml at
+# src/exploration/tare_planner/.
 colcon build \
     --symlink-install \
     --packages-select tare_planner \
     --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-echo ">>> [TARE] Done. Source with:"
-echo "    source $TARE_DIR/install/setup.bash"
+echo ">>> [TARE] Done. Source LingTu's install:"
+echo "    source $WORKSPACE_DIR/install/setup.bash"

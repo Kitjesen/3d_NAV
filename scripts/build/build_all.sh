@@ -40,7 +40,7 @@ build_ros() {
     echo ">>> [ROS] Done. Run: source install/setup.bash"
 }
 
-# ── 3. TARE Planner (submodule, 独立 colcon workspace) ──
+# ── 3. TARE Planner (vendored in-tree, linked via fetched OR-Tools) ──
 build_tare() {
     echo ">>> [TARE] Building TARE Planner..."
     if [ -f "$_SCRIPT_DIR/build_tare.sh" ]; then

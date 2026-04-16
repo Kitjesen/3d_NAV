@@ -1,12 +1,14 @@
 """NativeModule factory for the TARE exploration planner (CMU).
 
-Launches the `tare_planner` C++ ROS2 node from the `third_party/tare_planner`
-submodule. The binary must be built beforehand via
-``scripts/build/build_tare.sh`` so the colcon install prefix layout matches
-what ``core.native_install.exe`` expects.
+Launches the ``tare_planner`` C++ ROS2 node vendored in-tree at
+``src/exploration/tare_planner``. Build with ``scripts/build/build_tare.sh``
+(which auto-invokes ``fetch_ortools.sh`` on first run). The binary lands
+under the LingTu colcon install prefix where ``core.native_install.exe``
+resolves it.
 
-Topic contract is fixed via remappings so the TARE node slots into LingTu's
-existing DDS naming (``/nav/*``) without patching upstream code.
+Topic remappings below put the TARE node in LingTu's ``/nav/*`` and
+``/exploration/*`` namespaces so the rest of the stack is unaware a
+third-party node is running.
 """
 
 from __future__ import annotations
