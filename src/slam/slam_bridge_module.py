@@ -24,6 +24,7 @@ import numpy as np
 
 from core.module import Module
 from core.msgs.geometry import Pose, Quaternion, Vector3
+from core.msgs.gnss import GnssFixType, GnssOdom
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
@@ -60,6 +61,9 @@ class SlamBridgeModule(Module, layer=1):
 
     # Visual odometry input for selective DOF fusion during degeneracy
     visual_odom: In[Odometry]
+
+    # GNSS ENU odometry for global drift anchoring (auto-wired from GnssModule)
+    gnss_odom: In[GnssOdom]
 
     def __init__(
         self,
@@ -122,10 +126,29 @@ class SlamBridgeModule(Module, layer=1):
         self._visual_anchor_T: np.ndarray | None = None  # SLAM pose when visual odom activated
         self._visual_fused_count: int = 0
 
+        # GNSS fusion — gently anchor long-term SLAM drift with RTK position.
+        # Only XY is fused (Z / orientation stay with SLAM since GNSS altitude is
+        # noisy and position alone gives no heading). Alignment is locked once,
+        # then GNSS pulls SLAM toward global truth with weight alpha per frame.
+        self._gnss_fusion: bool = kw.get("gnss_fusion", True)
+        self._gnss_max_age_s: float = kw.get("gnss_max_age_s", 2.0)
+        self._gnss_max_std_m: float = kw.get("gnss_max_std_m", 1.0)
+        self._gnss_alpha_healthy: float = kw.get("gnss_alpha_healthy", 0.05)
+        self._gnss_alpha_degraded: float = kw.get("gnss_alpha_degraded", 0.5)
+        self._gnss_rtk_float_scale: float = kw.get("gnss_rtk_float_scale", 0.3)
+        self._last_gnss_odom: GnssOdom | None = None
+        self._last_gnss_rx_ts: float = 0.0
+        self._gnss_map_offset: np.ndarray | None = None  # shape (2,) XY, map = enu + offset
+        self._gnss_fused_count: int = 0
+
     def setup(self) -> None:
         # Visual odometry input for selective fusion
         if self._visual_odom_fusion:
             self.visual_odom.subscribe(self._on_visual_odom)
+
+        # GNSS input for global position anchoring
+        if self._gnss_fusion:
+            self.gnss_odom.subscribe(self._on_gnss_odom)
 
         # Try cyclonedds first (lightweight, no ROS2 env needed)
         if self._try_cyclonedds():
@@ -441,6 +464,11 @@ class SlamBridgeModule(Module, layer=1):
         self._last_visual_odom = odom
 
     def _fuse_odometry(self, slam_odom: Odometry) -> Odometry:
+        """Two-stage fusion: visual (DOF-selective) then GNSS (global anchor)."""
+        after_visual = self._fuse_visual(slam_odom)
+        return self._fuse_gnss_position(after_visual)
+
+    def _fuse_visual(self, slam_odom: Odometry) -> Odometry:
         """Selectively blend visual odometry into degenerate DOF directions.
 
         When degeneracy is NONE/MILD: pass SLAM odom unchanged.
@@ -530,6 +558,102 @@ class SlamBridgeModule(Module, layer=1):
         )
         self._last_slam_odom = fused_odom
         return fused_odom
+
+    # ── GNSS global position anchoring ──────────────────────────────────
+
+    def _on_gnss_odom(self, odom: GnssOdom) -> None:
+        """Store latest GNSS ENU odometry; used by _fuse_gnss_position."""
+        self._last_gnss_odom = odom
+        self._last_gnss_rx_ts = _time.time()
+
+    def _fuse_gnss_position(self, odom: Odometry) -> Odometry:
+        """Blend RTK GNSS ENU position into SLAM XY to anchor long-term drift.
+
+        Strategy
+        --------
+        1. Gate on fix quality (RTK only), freshness, horizontal std.
+        2. First qualifying sample while SLAM is healthy locks the
+           ``map ↔ enu`` translation offset (one-shot alignment).
+        3. Subsequent samples: weighted blend of SLAM XY with aligned GNSS XY.
+           Weight rises when SLAM is degraded so GNSS carries more load.
+        4. Z and orientation untouched — GNSS altitude is too noisy and a
+           single position doesn't define heading.
+        """
+        if not self._gnss_fusion or self._last_gnss_odom is None:
+            return odom
+
+        g = self._last_gnss_odom
+
+        # Freshness: drop if the last received sample is stale
+        age = _time.time() - self._last_gnss_rx_ts
+        if age > self._gnss_max_age_s:
+            return odom
+
+        # Quality: only RTK (fixed or float) carries position-level authority.
+        # SINGLE/DGPS are too coarse (> 1 m) to help a LiDAR SLAM anchor.
+        if g.fix_type not in (GnssFixType.RTK_FIXED, GnssFixType.RTK_FLOAT):
+            return odom
+
+        # Noise gate
+        h_var = max(g.cov_e, 0.0) + max(g.cov_n, 0.0)
+        h_std = (h_var * 0.5) ** 0.5
+        if h_std > self._gnss_max_std_m:
+            return odom
+
+        slam_xy = np.array([odom.pose.position.x, odom.pose.position.y])
+        gnss_xy = np.array([g.east, g.north])
+
+        # One-shot alignment: lock the map↔ENU translation while SLAM healthy
+        if self._gnss_map_offset is None:
+            if self._loc_state != LOC_TRACKING:
+                return odom
+            if self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL):
+                return odom
+            self._gnss_map_offset = slam_xy - gnss_xy
+            logger.info(
+                "GNSS-SLAM alignment locked: map_offset=(%.3f, %.3f) m "
+                "(fix=%s, std=%.2fm)",
+                self._gnss_map_offset[0], self._gnss_map_offset[1],
+                g.fix_type.name, h_std,
+            )
+            return odom
+
+        # GNSS in SLAM map frame
+        gnss_in_map = gnss_xy + self._gnss_map_offset
+
+        # Weight: degraded SLAM → trust GNSS more
+        if self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL):
+            alpha = self._gnss_alpha_degraded
+        else:
+            alpha = self._gnss_alpha_healthy
+        if g.fix_type == GnssFixType.RTK_FLOAT:
+            alpha *= self._gnss_rtk_float_scale
+
+        fused_xy = slam_xy * (1.0 - alpha) + gnss_in_map * alpha
+
+        self._gnss_fused_count += 1
+        if self._gnss_fused_count % 50 == 1:
+            logger.info(
+                "GNSS-SLAM fusion active: alpha=%.2f, fix=%s, std=%.2fm, "
+                "slam=(%.2f,%.2f) gnss=(%.2f,%.2f) fused=(%.2f,%.2f)",
+                alpha, g.fix_type.name, h_std,
+                slam_xy[0], slam_xy[1],
+                gnss_in_map[0], gnss_in_map[1],
+                fused_xy[0], fused_xy[1],
+            )
+
+        return Odometry(
+            pose=Pose(
+                position=Vector3(
+                    x=float(fused_xy[0]),
+                    y=float(fused_xy[1]),
+                    z=odom.pose.position.z,
+                ),
+                orientation=odom.pose.orientation,
+            ),
+            twist=odom.twist,
+            ts=odom.ts,
+        )
 
     # ── Localization health watchdog ──────────────────────────────��──────
 

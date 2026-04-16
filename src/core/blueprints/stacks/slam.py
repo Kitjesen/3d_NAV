@@ -3,6 +3,11 @@
 Optionally includes DepthVisualOdomModule for degeneracy-resilient fusion.
 When SLAM detects corridor/open-field degeneracy (SEVERE/CRITICAL),
 visual odometry from the depth camera selectively fuses into degenerate DOFs.
+
+GNSS fusion: when GnssModule is present in the system (from full_stack.py's
+_gnss_bp), its ``gnss_odom`` port auto-wires into SlamBridgeModule.gnss_odom
+via Blueprint._do_auto_wire (matches by port_name + msg_type). No explicit
+wire() call needed — do not add one here unless the port names diverge.
 """
 
 from __future__ import annotations
