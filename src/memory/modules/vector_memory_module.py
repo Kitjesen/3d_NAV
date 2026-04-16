@@ -65,8 +65,10 @@ class VectorMemoryModule(Module, layer=3):
         self._store_interval = store_interval
         self._max_results = max_results
 
-        self._collection = None  # ChromaDB collection
-        self._encoder = None     # CLIP text/image encoder
+        self._collection = None      # ChromaDB collection
+        self._encoder = None         # CLIP text/image encoder (set in _init_encoder)
+        self._st_model = None        # sentence-transformers model (fallback to CLIP)
+        self._encoder_type = "none"  # "clip" | "sentence_transformers" | "none"
         self._use_chromadb = False
 
         self._max_np_entries: int = kw.get("max_np_entries", 10000)
@@ -92,12 +94,45 @@ class VectorMemoryModule(Module, layer=3):
         self._init_store()
 
     def _init_encoder(self) -> None:
+        # Attempt 1: CLIP encoder (preferred — full image+text support).
+        # A smoke-test encode call verifies the model weights are actually usable,
+        # not just that the class imports.
         try:
             from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
-            self._encoder = CLIPEncoder(model_name="mobileclip")
-            logger.info("VectorMemoryModule: CLIP encoder ready")
+            candidate = CLIPEncoder(model_name="mobileclip")
+            test_result = candidate.encode_text(["test"])
+            if test_result is not None and len(test_result) > 0:
+                self._encoder = candidate
+                self._encoder_type = "clip"
+                logger.info("VectorMemoryModule: CLIP encoder ready")
+                return
+            logger.info("VectorMemoryModule: CLIP encoder smoke-test returned empty — trying sentence-transformers")
         except ImportError:
-            logger.warning("VectorMemoryModule: CLIP encoder not available, text-only mode")
+            logger.info("VectorMemoryModule: CLIP encoder not available, trying sentence-transformers")
+        except Exception as exc:
+            logger.warning("VectorMemoryModule: CLIP encoder init failed (%s), trying sentence-transformers", exc)
+
+        # Attempt 2: sentence-transformers (CPU-safe, 384-dim, semantically meaningful).
+        try:
+            from sentence_transformers import SentenceTransformer
+            self._st_model = SentenceTransformer("all-MiniLM-L6-v2")
+            self._encoder_type = "sentence_transformers"
+            logger.info("VectorMemoryModule: sentence-transformers encoder ready (all-MiniLM-L6-v2, 384-dim)")
+            return
+        except ImportError:
+            pass
+        except Exception as exc:
+            logger.warning("VectorMemoryModule: sentence-transformers model load failed: %s", exc)
+
+        # No usable semantic encoder — hard fail.  Hash-based fallbacks destroy semantic
+        # matching ("backpack" and "bag" hash to unrelated buckets).  Install one of:
+        #   pip install sentence-transformers   # CPU-safe, recommended
+        # or ensure the CLIP encoder package is importable.
+        raise RuntimeError(
+            "VectorMemoryModule: no text encoder available.\n"
+            "Install sentence-transformers:  pip install sentence-transformers\n"
+            "Or ensure the CLIP encoder (semantic.perception.semantic_perception.clip_encoder) is importable."
+        )
 
     def _init_store(self) -> None:
         try:
@@ -167,7 +202,15 @@ class VectorMemoryModule(Module, layer=3):
             # deque(maxlen) auto-evicts oldest entry — no manual pop needed
 
     def _encode_text(self, text: str) -> np.ndarray | None:
-        if self._encoder is not None and hasattr(self._encoder, "encode_text"):
+        """Encode text to a unit-L2-normalized embedding vector.
+
+        Priority: CLIP → sentence-transformers → _hash_embedding (only when
+        setup() was bypassed, i.e. _encoder_type == "none").  In production
+        setup() always calls _init_encoder() which hard-fails before leaving
+        _encoder_type at "none", so the hash path is only hit in unit tests
+        that instantiate the module without calling setup().
+        """
+        if self._encoder_type == "clip" and self._encoder is not None:
             try:
                 results = self._encoder.encode_text([text])
                 if results is not None and len(results) > 0:
@@ -176,9 +219,23 @@ class VectorMemoryModule(Module, layer=3):
                     if norm > 1e-8:
                         vec /= norm
                         return vec
-            except Exception as e:
-                logger.debug("VectorMemory: encode_text failed: %s", e)
-        # Fallback: simple bag-of-words hash embedding
+            except Exception as exc:
+                logger.debug("VectorMemory: CLIP encode_text failed: %s", exc)
+            return None
+
+        if self._encoder_type == "sentence_transformers" and self._st_model is not None:
+            try:
+                vec = np.array(
+                    self._st_model.encode(text, normalize_embeddings=True),
+                    dtype=np.float32,
+                ).flatten()
+                return vec
+            except Exception as exc:
+                logger.debug("VectorMemory: sentence-transformers encode failed: %s", exc)
+            return None
+
+        # _encoder_type == "none": setup() was not called (unit-test bypass path).
+        # Use hash embedding so existing tests that skip setup() still function.
         return self._hash_embedding(text)
 
     @staticmethod
@@ -271,7 +328,8 @@ class VectorMemoryModule(Module, layer=3):
         info["entry_count"] = entry_count
         info["backend"] = "chromadb" if self._use_chromadb else "numpy"
         info["store_count"] = self._store_count
-        info["encoder_ready"] = self._encoder is not None
+        info["encoder_ready"] = self._encoder_type != "none"
+        info["encoder_type"] = self._encoder_type
         info["persist_dir"] = self._persist_dir
         return info
 

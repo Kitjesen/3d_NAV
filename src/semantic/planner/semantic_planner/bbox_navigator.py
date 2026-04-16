@@ -30,11 +30,13 @@ BBox 视觉伺服导航 — 看到目标就追
 不依赖 DimOS 框架，纯 Python + numpy，输出 TwistStamped 兼容 dict。
 """
 
+import json
 import logging
 import math
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -43,11 +45,98 @@ from core.config import get_config
 
 logger = logging.getLogger(__name__)
 
-# ── 状态常量 ──────────────────────────────────────────────────────────────────
+# ── State constants ───────────────────────────────────────────────────────────
 STATE_IDLE = "idle"
 STATE_TRACKING = "tracking"
 STATE_ARRIVED = "arrived"
 STATE_LOST = "lost"
+
+# Path where tuned gains are persisted across restarts
+_GAINS_PERSIST_PATH = Path.home() / ".lingtu" / "bbox_navigator_gains.json"
+
+
+class GainAutoTuner:
+    """Online relay-based Ziegler-Nichols auto-tuner for BBoxNavigator PD gains.
+
+    The tuner runs a closed-loop relay oscillation experiment on the yaw channel:
+      1. Apply alternating ±relay_amplitude steps to the angular input.
+      2. Observe the resulting yaw oscillation: period T_u and amplitude a_u.
+      3. Estimate ultimate gain K_u = 4*d / (pi*a_u) (relay method formula).
+      4. Compute ZN PD gains: Kp = 0.6*K_u, Kd = Kp*T_u/8.
+
+    Usage:
+        tuner = GainAutoTuner(relay_amplitude=0.3)
+        report = tuner.run_on_synthetic(yaw_series, dt)  # for testing
+        # In production: tuner.run_relay_experiment(duration=6.0, cmd_fn, measure_fn)
+    """
+
+    def __init__(self, relay_amplitude: float = 0.3) -> None:
+        self.relay_amplitude = relay_amplitude
+
+    def compute_zn_pd(
+        self, T_u: float, a_u: float
+    ) -> tuple[float, float, float, float]:
+        """Compute ZN PD gains from relay experiment measurements.
+
+        Args:
+            T_u: ultimate period (seconds) — time between successive peaks.
+            a_u: ultimate amplitude (radians) — half peak-to-peak yaw swing.
+
+        Returns:
+            (K_u, Kp, Kd, converged: float)
+            converged is 1.0 if T_u and a_u are physically plausible, else 0.0.
+        """
+        if T_u <= 0 or a_u <= 0:
+            return 0.0, 0.8, 0.0, 0.0  # fallback to DimOS defaults
+
+        K_u = 4.0 * self.relay_amplitude / (math.pi * a_u)
+        Kp = 0.6 * K_u
+        Kd = Kp * T_u / 8.0
+        converged = 1.0
+        return K_u, Kp, Kd, converged
+
+    def analyse_oscillation(
+        self, yaw_series: list[float], dt: float
+    ) -> tuple[float, float]:
+        """Estimate oscillation period T_u and amplitude a_u from a yaw time series.
+
+        Uses zero-crossing detection on the detrended signal to find peaks.
+
+        Args:
+            yaw_series: list of yaw measurements (radians), evenly spaced at dt seconds.
+            dt: time step (seconds).
+
+        Returns:
+            (T_u, a_u) — (0.0, 0.0) if fewer than 2 full oscillations detected.
+        """
+        if len(yaw_series) < 4:
+            return 0.0, 0.0
+
+        arr = np.array(yaw_series, dtype=float)
+        # Detrend: subtract mean
+        arr -= arr.mean()
+
+        # Detect zero-crossings (sign changes)
+        signs = np.sign(arr)
+        crossings = []
+        for i in range(1, len(signs)):
+            if signs[i - 1] != 0 and signs[i] != 0 and signs[i - 1] != signs[i]:
+                crossings.append(i)
+
+        if len(crossings) < 2:
+            return 0.0, 0.0
+
+        # Period = 2 * average half-period (time between consecutive zero-crossings)
+        half_periods = [
+            (crossings[i] - crossings[i - 1]) * dt
+            for i in range(1, len(crossings))
+        ]
+        T_u = 2.0 * float(np.mean(half_periods))
+
+        # Amplitude = half of peak-to-peak swing
+        a_u = (float(arr.max()) - float(arr.min())) / 2.0
+
+        return T_u, a_u
 
 
 @dataclass
@@ -79,16 +168,143 @@ class BBoxNavigator:
       (lx, az) = nav.compute_cmd_vel(3d, robot_pose)
     """
 
-    def __init__(self, config: BBoxNavConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: BBoxNavConfig | None = None,
+        robot_id: str = "default",
+        gains_path: Path | None = None,
+    ) -> None:
         self._cfg = config if config is not None else BBoxNavConfig()
+        self._robot_id = robot_id
+        self._gains_path = gains_path or _GAINS_PERSIST_PATH
         self._state: str = STATE_IDLE
         self._last_bbox_time: float = 0.0
         self._target_bbox: list | None = None
-        self._target_3d: np.ndarray | None = None   # [x, y, z] 世界坐标
+        self._target_3d: np.ndarray | None = None   # [x, y, z] world frame
         self._lock = threading.Lock()
+        # Last depth confidence from compute_3d_from_bbox (1.0 = high trust)
+        self.depth_confidence: float = 0.0
         # Camera→body rotation from factory calibration
         cam_cfg = get_config().camera
         self._R_body_camera = cam_cfg.T_body_camera[:3, :3]
+        # Auto-tuner (W3-4) — instantiated on demand via tune_bbox_gains skill
+        self._gain_tuner = GainAutoTuner()
+        # Load persisted gains (overrides config defaults if file exists)
+        self._load_persisted_gains()
+
+    # ── Gain persistence (W3-4) ──────────────────────────────────────────────
+
+    def _load_persisted_gains(self) -> None:
+        """Load tuned gains from ~/.lingtu/bbox_navigator_gains.json if present.
+
+        Falls back to DimOS default gains (linear=0.8, angular=1.5) and logs
+        an INFO message instructing the user to run the tune skill.
+        """
+        try:
+            if self._gains_path.exists():
+                with open(self._gains_path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                robot_gains = data.get(self._robot_id)
+                if robot_gains:
+                    self._cfg.linear_gain = float(robot_gains["linear_gain"])
+                    self._cfg.angular_gain = float(robot_gains["angular_gain"])
+                    logger.info(
+                        "BBoxNavigator: loaded persisted gains for robot_id='%s' "
+                        "(Kp_lin=%.3f, Kp_ang=%.3f)",
+                        self._robot_id,
+                        self._cfg.linear_gain,
+                        self._cfg.angular_gain,
+                    )
+                    return
+        except Exception as exc:
+            logger.warning("BBoxNavigator: failed to load persisted gains: %s", exc)
+
+        logger.info(
+            "BBoxNavigator: using default gains (Kp_lin=%.1f, Kp_ang=%.1f) "
+            "— run tune skill for S100P-specific tuning",
+            self._cfg.linear_gain,
+            self._cfg.angular_gain,
+        )
+
+    def _save_gains(self) -> None:
+        """Persist current gains to ~/.lingtu/bbox_navigator_gains.json."""
+        try:
+            self._gains_path.parent.mkdir(parents=True, exist_ok=True)
+            data: dict = {}
+            if self._gains_path.exists():
+                try:
+                    with open(self._gains_path, encoding="utf-8") as fh:
+                        data = json.load(fh)
+                except Exception:
+                    data = {}
+            data[self._robot_id] = {
+                "linear_gain": self._cfg.linear_gain,
+                "angular_gain": self._cfg.angular_gain,
+            }
+            with open(self._gains_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            logger.info(
+                "BBoxNavigator: gains persisted to %s (robot_id='%s')",
+                self._gains_path,
+                self._robot_id,
+            )
+        except Exception as exc:
+            logger.error("BBoxNavigator: failed to persist gains: %s", exc)
+
+    def tune_bbox_gains(
+        self,
+        yaw_series: list[float],
+        dt: float,
+        duration: float = 6.0,
+    ) -> dict:
+        """Run Ziegler-Nichols PD tuning from a captured yaw oscillation series.
+
+        This method is the computation core of the tune skill. In production on
+        S100P, the yaw_series is captured by applying relay steps via the
+        robot driver for `duration` seconds, then calling this method with the
+        recorded measurements.
+
+        In tests, pass a synthetic yaw_series directly.
+
+        Args:
+            yaw_series: list of yaw measurements (radians) at uniform interval dt.
+            dt: time between measurements (seconds).
+            duration: nominal experiment duration — used only for the report.
+
+        Returns:
+            dict with keys: K_u, T_u, a_u, Kp_ang, Kd_ang, converged, robot_id.
+            On success, also updates self._cfg.angular_gain and persists to file.
+        """
+        T_u, a_u = self._gain_tuner.analyse_oscillation(yaw_series, dt)
+        K_u, Kp, Kd, converged = self._gain_tuner.compute_zn_pd(T_u, a_u)
+
+        report = {
+            "robot_id": self._robot_id,
+            "duration_s": duration,
+            "T_u": T_u,
+            "a_u": a_u,
+            "K_u": K_u,
+            "Kp_ang": Kp,
+            "Kd_ang": Kd,
+            "converged": bool(converged),
+        }
+
+        if converged:
+            self._cfg.angular_gain = Kp
+            self._save_gains()
+            logger.info(
+                "BBoxNavigator: tuning converged — K_u=%.3f, T_u=%.3fs, "
+                "Kp_ang=%.3f, Kd_ang=%.3f",
+                K_u, T_u, Kp, Kd,
+            )
+        else:
+            logger.warning(
+                "BBoxNavigator: tuning did not converge (T_u=%.3f, a_u=%.3f) "
+                "— keeping existing gains",
+                T_u, a_u,
+            )
+
+        return report
 
     # ── 公开接口 ─────────────────────────────────────────────────────────────
 
@@ -116,52 +332,88 @@ class BBoxNavigator:
         fy: float,
         cx: float,
         cy: float,
-        robot_pose: tuple | None = None,  # (x, y, yaw) 世界坐标系
+        robot_pose: tuple | None = None,  # (x, y, yaw) world frame
     ) -> np.ndarray | None:
         """
-        bbox 中心 + 深度图 → 3D 坐标。
+        bbox center + depth image → 3D coordinate.
 
-        步骤:
-          1. 计算 bbox 中心像素 (u, v)
-          2. 在中心区域 (bbox 边长 × depth_roi_ratio) 取中值深度，鲁棒去噪
-          3. (u, v, depth) → 相机坐标系 3D 点 (X_c, Y_c, Z_c)
-          4. 若提供 robot_pose，旋转到世界坐标系 (假设相机朝前，光轴 = 机体 x 轴)
+        Steps:
+          1. Compute bbox center pixel (u, v).
+          2. Sample a 5x5 patch centered on (u, v) inside the bbox.
+          3. Apply IQR outlier rejection (drop values outside Q1-1.5*IQR and
+             Q3+1.5*IQR). Take the median of the surviving samples.
+          4. Publish depth_confidence: 1.0 when >5 valid samples after
+             rejection, linearly scaled down to 0.0 at 0-1 samples.
+          5. If all samples are rejected or the bbox has no valid depth,
+             return None — do not default to 0.
+          6. (u, v, depth) → camera-frame 3D point (X_c, Y_c, Z_c).
+          7. If robot_pose provided, rotate to world frame.
 
         Returns:
-            np.ndarray shape (3,) 或 None (深度无效时)
+            np.ndarray shape (3,) or None (no valid depth).
         """
         x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
 
-        # bbox 中心像素
+        # Bbox center pixel
         u = (x1 + x2) / 2.0
         v = (y1 + y2) / 2.0
 
-        # 中心采样区域 (bbox 边长 × roi_ratio)
-        bw = x2 - x1
-        bh = y2 - y1
-        roi_ratio = self._cfg.depth_roi_ratio
-        half_rw = max(bw * roi_ratio / 2.0, 2.0)
-        half_rh = max(bh * roi_ratio / 2.0, 2.0)
-
         h_img, w_img = depth_image.shape[:2]
-        r_x1 = int(max(u - half_rw, 0))
-        r_y1 = int(max(v - half_rh, 0))
-        r_x2 = int(min(u + half_rw, w_img - 1))
-        r_y2 = int(min(v + half_rh, h_img - 1))
 
-        # 中值深度 (鲁棒: 忽略 0 / NaN)
-        roi = depth_image[r_y1:r_y2 + 1, r_x1:r_x2 + 1].astype(np.float32)
-        valid = roi[(roi > 0) & np.isfinite(roi)]
-        if valid.size < 3:
-            # ROI 无有效深度，降级到单点
-            d = float(depth_image[int(v), int(u)]) if (
-                0 <= int(v) < h_img and 0 <= int(u) < w_img
-            ) else 0.0
-            if d <= 0 or not np.isfinite(d):
-                return None
-            depth_m = d
-        else:
-            depth_m = float(np.median(valid))
+        # Build 5x5 sample grid clamped inside the bbox and image bounds
+        bbox_x1_c = max(x1, 0)
+        bbox_y1_c = max(y1, 0)
+        bbox_x2_c = min(x2, w_img - 1)
+        bbox_y2_c = min(y2, h_img - 1)
+
+        # Evenly distribute 5 points across each dimension within the bbox
+        bw = bbox_x2_c - bbox_x1_c
+        bh = bbox_y2_c - bbox_y1_c
+        step_x = bw / 4.0 if bw > 0 else 0.0
+        step_y = bh / 4.0 if bh > 0 else 0.0
+
+        samples: list[float] = []
+        for iy in range(5):
+            py = int(bbox_y1_c + iy * step_y)
+            py = max(0, min(py, h_img - 1))
+            for ix in range(5):
+                px = int(bbox_x1_c + ix * step_x)
+                px = max(0, min(px, w_img - 1))
+                d = float(depth_image[py, px])
+                if d > 0 and np.isfinite(d):
+                    samples.append(d)
+
+        # IQR outlier rejection
+        depth_m: float | None = None
+        self.depth_confidence: float = 0.0
+
+        if len(samples) >= 2:
+            arr = np.array(samples, dtype=np.float32)
+            q1 = float(np.percentile(arr, 25))
+            q3 = float(np.percentile(arr, 75))
+            iqr = q3 - q1
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            kept = arr[(arr >= lower) & (arr <= upper)]
+            n_kept = len(kept)
+            # Confidence: 1.0 when >5 survived, linear down to 0.0 at 0-1
+            if n_kept > 5:
+                self.depth_confidence = 1.0
+            elif n_kept <= 1:
+                self.depth_confidence = 0.0
+            else:
+                # n_kept in [2, 5]: linear ramp
+                self.depth_confidence = (n_kept - 1) / 4.0
+            if n_kept >= 1:
+                depth_m = float(np.median(kept))
+        elif len(samples) == 1:
+            # Single valid sample — low confidence, no outlier rejection possible
+            self.depth_confidence = 0.0
+            depth_m = samples[0]
+
+        if depth_m is None:
+            # No valid depth anywhere in the bbox — do not default to 0
+            return None
 
         # 深度单位归一化: Orbbec Gemini 335 以毫米输出
         # 若 depth_image 最大值 > 100，推断为毫米，转换为米

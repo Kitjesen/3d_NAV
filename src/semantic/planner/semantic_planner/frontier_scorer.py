@@ -23,11 +23,58 @@ import logging
 import math
 import time as _time_mod
 from collections import deque
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import logging
+
 import numpy as np
+import yaml
 
 from core.utils.sanitize import safe_json_dumps
+
+logger = logging.getLogger(__name__)
+
+# W3-2: frontier semantic prior weight — loaded from config on first call.
+_DEFAULT_SEMANTIC_PRIOR_WEIGHT: float = 0.15
+_frontier_config_weight: float = _DEFAULT_SEMANTIC_PRIOR_WEIGHT
+_frontier_weights_loaded: bool = False
+
+
+def _load_semantic_scoring_yaml() -> dict:
+    """Load config/semantic_scoring.yaml from the repo root."""
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+    yaml_path = repo_root / "config" / "semantic_scoring.yaml"
+    try:
+        with open(yaml_path, encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+    except (FileNotFoundError, OSError):
+        return {}
+
+
+def _load_frontier_weights() -> None:
+    """Load frontier_scorer.semantic_prior_weight from config (once)."""
+    global _frontier_config_weight, _frontier_weights_loaded
+    if _frontier_weights_loaded:
+        return
+    _frontier_weights_loaded = True
+    try:
+        section = _load_semantic_scoring_yaml().get("frontier_scorer")
+        if section is None:
+            logger.info(
+                "frontier_scorer section absent — using default weights. "
+                "See config/semantic_scoring.yaml to tune."
+            )
+            return
+        _frontier_config_weight = float(
+            section.get("semantic_prior_weight", _DEFAULT_SEMANTIC_PRIOR_WEIGHT)
+        )
+        logger.debug(
+            "frontier_scorer semantic_prior_weight=%.3f loaded from config",
+            _frontier_config_weight,
+        )
+    except Exception as exc:
+        logger.warning("Failed to load frontier_scorer weights from config: %s", exc)
 
 from .frontier_types import (
     # 辅助常量

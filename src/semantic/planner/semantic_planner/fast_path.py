@@ -19,7 +19,11 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+import yaml
 
 if TYPE_CHECKING:
     from .goal_resolver import GoalResult
@@ -28,11 +32,58 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# ── 多源置信度权重 (AdaNav 不确定性融合) ──
-WEIGHT_LABEL_MATCH = 0.35       # 标签文本匹配
-WEIGHT_CLIP_SIM = 0.35          # CLIP 视觉-语言相似度
-WEIGHT_DETECTOR_SCORE = 0.15    # 检测器置信度
-WEIGHT_SPATIAL_HINT = 0.15      # 空间关系提示命中
+# ── Multi-source confidence weights (AdaNav uncertainty fusion) ──
+# Loaded from config/semantic_scoring.yaml [fast_path_fusion] on first call.
+# These defaults match the original hardcoded values.
+_DEFAULTS_FAST_PATH: dict = {
+    "label": 0.35,
+    "clip": 0.35,
+    "detector": 0.15,
+    "spatial": 0.15,
+}
+WEIGHT_LABEL_MATCH: float = _DEFAULTS_FAST_PATH["label"]
+WEIGHT_CLIP_SIM: float = _DEFAULTS_FAST_PATH["clip"]
+WEIGHT_DETECTOR_SCORE: float = _DEFAULTS_FAST_PATH["detector"]
+WEIGHT_SPATIAL_HINT: float = _DEFAULTS_FAST_PATH["spatial"]
+_fast_path_weights_loaded: bool = False
+
+
+def _load_semantic_scoring_yaml() -> dict:
+    """Load config/semantic_scoring.yaml from the repo root."""
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+    yaml_path = repo_root / "config" / "semantic_scoring.yaml"
+    try:
+        with open(yaml_path, encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+    except (FileNotFoundError, OSError):
+        return {}
+
+
+def _load_fast_path_weights() -> None:
+    """Load fast_path_fusion weights from config/semantic_scoring.yaml (once)."""
+    global WEIGHT_LABEL_MATCH, WEIGHT_CLIP_SIM, WEIGHT_DETECTOR_SCORE
+    global WEIGHT_SPATIAL_HINT, _fast_path_weights_loaded
+    if _fast_path_weights_loaded:
+        return
+    _fast_path_weights_loaded = True
+    try:
+        section = _load_semantic_scoring_yaml().get("fast_path_fusion")
+        if section is None:
+            logger.info(
+                "fast_path_fusion section absent — using default weights. "
+                "See config/semantic_scoring.yaml to tune."
+            )
+            return
+        WEIGHT_LABEL_MATCH = float(section.get("label", _DEFAULTS_FAST_PATH["label"]))
+        WEIGHT_CLIP_SIM = float(section.get("clip", _DEFAULTS_FAST_PATH["clip"]))
+        WEIGHT_DETECTOR_SCORE = float(section.get("detector", _DEFAULTS_FAST_PATH["detector"]))
+        WEIGHT_SPATIAL_HINT = float(section.get("spatial", _DEFAULTS_FAST_PATH["spatial"]))
+        logger.debug(
+            "fast_path_fusion weights loaded: label=%.2f clip=%.2f detector=%.2f spatial=%.2f",
+            WEIGHT_LABEL_MATCH, WEIGHT_CLIP_SIM, WEIGHT_DETECTOR_SCORE, WEIGHT_SPATIAL_HINT,
+        )
+    except Exception as exc:
+        logger.warning("Failed to load fast_path_fusion weights from config: %s", exc)
 
 
 class FastPathMixin:
@@ -100,6 +151,7 @@ class FastPathMixin:
         Returns:
             GoalResult or None (None = 需要 Slow Path)
         """
+        _load_fast_path_weights()  # idempotent, loads from config on first call
         from core.utils.sanitize import safe_json_loads
 
         from .goal_resolver import GoalResult
@@ -315,6 +367,22 @@ class FastPathMixin:
                 f" {src_tag}"
             ).strip()
             scored.append((obj, fused_score, reason))
+            # Scoring audit log — enables offline weight learning (W3-2 Phase 2)
+            logger.debug(
+                "%s",
+                {
+                    "module": "fast_path_fusion",
+                    "candidate_id": obj.get("id"),
+                    "sub_scores": {
+                        "label": round(label_score, 4),
+                        "clip": round(clip_score, 4),
+                        "detector": round(detector_score, 4),
+                        "spatial": round(spatial_score, 4),
+                    },
+                    "weighted_total": round(fused_score, 4),
+                    "ts": time.time(),
+                },
+            )
 
         if not scored:
             return self._try_room_fallback(instruction, keywords, sg, clip_encoder)

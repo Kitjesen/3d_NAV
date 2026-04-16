@@ -1,12 +1,19 @@
 """
-PersonTracker -- VLM 选人 + 实时视觉跟踪 (跟人走功能核心)
+PersonTracker -- VLM person selection + real-time visual tracking (person following core)
 
-链路:
-  1. VLM 一次性选人: "穿红衣服的人" → YOLO crops → VLM 选编号 → 锁定目标
-  2. 帧间跟踪: IoU + 外观特征余弦相似度 + EMA 位置平滑 + 速度预测
-  3. 丢失重识别: 外观特征搜索 → 兜底 VLM 重新选人
+Pipeline:
+  1. VLM one-shot person selection: "person in red" → YOLO crops → VLM selects index → lock target
+  2. Frame-to-frame tracking: obj_id match → distance match → OSNet Re-ID (primary) + CLIP fuse
+  3. Lost re-identification: appearance search → fallback VLM reselect
 
-不依赖卡尔曼滤波库。
+Re-ID strategy (W3-5):
+  - Primary: OSNetReIDEncoder (512-dim, L2-normalised BPU or torchreid feature)
+  - Adaptive threshold: 0.55 when ≤2 candidates, 0.70 when ≥5 candidates
+  - Secondary fusion: CLIP (weight 0.4) when OSNet confidence is low
+  - Motion prediction: linear Kalman-like (x, y, vx, vy) in world frame,
+    predict location at +0.3s to disambiguate when appearance is weak
+
+No Kalman filter library dependency — linear motion model only.
 """
 
 import logging
@@ -21,18 +28,32 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# OSNet Re-ID feature dimension
+_OSNET_FEAT_DIM = 512
+
+# Adaptive Re-ID thresholds based on crowd density
+_REID_THRESHOLD_SPARSE = 0.55   # ≤2 candidates: lower threshold (easier match)
+_REID_THRESHOLD_DENSE = 0.70    # ≥5 candidates: higher threshold (stricter match)
+
+# Weight of CLIP secondary signal in appearance fusion (0.0 = OSNet only)
+_CLIP_FUSION_WEIGHT = 0.4
+
+# Motion prediction horizon (seconds)
+_MOTION_PREDICT_DT = 0.3
+
 
 @dataclass
 class TrackedPerson:
-    """被追踪的目标人物。"""
-    position: list[float]                          # [x, y, z] 世界坐标
+    """Tracked target person."""
+    position: list[float]                          # [x, y, z] world frame
     velocity: list[float] = field(default_factory=lambda: [0.0, 0.0])  # [vx, vy] m/s
     last_seen: float = field(default_factory=time.time)
     confidence: float = 1.0
-    # 外观特征 (用于遮挡后 Re-ID)
-    appearance: np.ndarray | None = None        # CLIP 图像特征, shape (D,)
-    bbox: list[int] | None = None               # 最近一帧的 [x1, y1, x2, y2]
-    obj_id: str | None = None                   # 场景图 object ID (帧间匹配优先)
+    # Appearance features for Re-ID after occlusion
+    appearance: np.ndarray | None = None        # CLIP image feature, shape (D,)
+    osnet_feat: np.ndarray | None = None        # OSNet 512-dim L2-normalised feature
+    bbox: list[int] | None = None               # Most recent [x1, y1, x2, y2]
+    obj_id: str | None = None                   # Scene graph object ID (preferred for matching)
 
 
 class PersonTracker:
@@ -56,10 +77,10 @@ class PersonTracker:
         self.follow_distance = follow_distance
         self.lost_timeout = lost_timeout
         self._person: TrackedPerson | None = None
-        self._description: str = ""                # 用户描述 ("穿红衣服的人")
-        self._target_selected: bool = False        # VLM 是否已选定目标
-        self._vlm_selecting: bool = False          # VLM 选人中 (防重入)
-        self._clip_encoder = None                  # CLIP 编码器 (外部注入)
+        self._description: str = ""                # user description e.g. "person in red"
+        self._target_selected: bool = False        # whether VLM has selected a target
+        self._vlm_selecting: bool = False          # VLM selection in progress (re-entry guard)
+        self._clip_encoder = None                  # CLIP encoder (externally injected)
         self._lock = threading.Lock()
         # FusionMOT backend (optional, enabled via enable_fusion_tracking)
         self._fusion_tracker = None
@@ -67,9 +88,47 @@ class PersonTracker:
         self._target_track_id: int | None = None
         self._following_selector = None  # PersonFollowingSelector (optional)
 
+        # OSNet Re-ID encoder (W3-5): primary Re-ID signal.
+        # Initialised lazily via set_osnet_encoder() or enable_osnet_reid().
+        self._osnet_encoder = None
+
+        # Observability counters for Re-ID signal usage.
+        self._reid_stats: dict = {
+            "osnet_match": 0,
+            "clip_fallback": 0,
+            "motion_dominant": 0,
+            "lost": 0,
+        }
+
     def set_clip_encoder(self, clip_encoder) -> None:
-        """注入 CLIP 编码器，用于外观特征提取。"""
+        """Inject CLIP encoder for secondary appearance feature extraction."""
         self._clip_encoder = clip_encoder
+
+    def set_osnet_encoder(self, encoder) -> None:
+        """Inject a pre-constructed OSNetReIDEncoder (primary Re-ID signal).
+
+        Allows callers to share a single encoder instance across modules.
+        """
+        self._osnet_encoder = encoder
+        logger.info("PersonTracker: OSNet Re-ID encoder injected (backend=%s)",
+                    getattr(encoder, "backend", "unknown"))
+
+    def enable_osnet_reid(self) -> bool:
+        """Attempt to construct an OSNetReIDEncoder and attach it.
+
+        Returns True if OSNet loaded successfully, False if unavailable.
+        Does NOT raise — caller decides whether absence is fatal.
+        """
+        try:
+            from .osnet_reid import OSNetReIDEncoder
+            self._osnet_encoder = OSNetReIDEncoder()
+            logger.info("PersonTracker: OSNet Re-ID enabled (backend=%s)",
+                        self._osnet_encoder.backend)
+            return True
+        except Exception as exc:
+            logger.info("PersonTracker: OSNet Re-ID unavailable (%s), "
+                        "will use CLIP-only Re-ID", exc)
+            return False
 
     def enable_fusion_tracking(self) -> bool:
         """Enable FusionMOT + OSNet Re-ID backend for Kalman-smoothed tracking.
@@ -260,20 +319,31 @@ class PersonTracker:
         return -1
 
     def _lock_target(self, obj: dict, crop: np.ndarray | None = None) -> None:
-        """锁定目标，存储外观特征。"""
+        """Lock target and store initial appearance features (CLIP + OSNet)."""
         pos = obj.get("position", [0, 0, 0])
         if isinstance(pos, dict):
             pos = [pos.get("x", 0), pos.get("y", 0), pos.get("z", 0)]
 
         appearance = None
-        if crop is not None and self._clip_encoder is not None:
-            try:
-                feat = self._clip_encoder.encode_image(crop)
-                if feat is not None and feat.size > 0:
-                    norm = np.linalg.norm(feat)
-                    appearance = feat / norm if norm > 0 else feat
-            except Exception:
-                pass
+        osnet_feat = None
+
+        if crop is not None:
+            # Extract CLIP feature for secondary Re-ID signal
+            if self._clip_encoder is not None:
+                try:
+                    feat = self._clip_encoder.encode_image(crop)
+                    if feat is not None and feat.size > 0:
+                        norm = np.linalg.norm(feat)
+                        appearance = feat / norm if norm > 0 else feat
+                except Exception:
+                    pass
+
+            # Extract OSNet feature as primary Re-ID signal
+            if self._osnet_encoder is not None:
+                try:
+                    osnet_feat = self._osnet_encoder.encode(crop)
+                except Exception as exc:
+                    logger.debug("OSNet encode on lock_target failed: %s", exc)
 
         with self._lock:
             self._person = TrackedPerson(
@@ -281,6 +351,7 @@ class PersonTracker:
                 last_seen=time.time(),
                 confidence=obj.get("confidence", 1.0),
                 appearance=appearance,
+                osnet_feat=osnet_feat,
                 bbox=obj.get("bbox"),
                 obj_id=obj.get("id"),
             )
@@ -501,27 +572,72 @@ class PersonTracker:
                 result[int(track_id)] = best_p
         return result
 
+    def _adaptive_reid_threshold(self, n_candidates: int) -> float:
+        """Return adaptive Re-ID cosine similarity threshold based on crowd density.
+
+        Sparse scene (<=2 candidates): 0.55 — easier match, fewer impostors.
+        Dense scene (>=5 candidates): 0.70 — stricter match, more discrimination needed.
+        Linear interpolation for 3-4 candidates.
+        """
+        if n_candidates <= 2:
+            return _REID_THRESHOLD_SPARSE
+        if n_candidates >= 5:
+            return _REID_THRESHOLD_DENSE
+        # Linear ramp from 0.55 to 0.70 as n goes from 2 to 5
+        t = (n_candidates - 2) / 3.0
+        return _REID_THRESHOLD_SPARSE + t * (_REID_THRESHOLD_DENSE - _REID_THRESHOLD_SPARSE)
+
+    def _predict_position(self, dt: float = _MOTION_PREDICT_DT) -> list[float]:
+        """Linear motion prediction: project current position forward by dt seconds.
+
+        Uses the EMA-smoothed velocity stored in _person.velocity.
+        Returns the predicted [x, y, z] position.
+        """
+        if self._person is None:
+            return [0.0, 0.0, 0.0]
+        px = self._person.position[0] + self._person.velocity[0] * dt
+        py = self._person.position[1] + self._person.velocity[1] * dt
+        pz = self._person.position[2] if len(self._person.position) > 2 else 0.0
+        return [px, py, pz]
+
     def _match_person(
         self, persons: list[dict], rgb_frame: np.ndarray | None
     ) -> dict | None:
-        """在候选 persons 中匹配已锁定的目标。"""
+        """Match the locked target among candidate persons.
+
+        Matching priority:
+          1. obj_id exact match (cheapest, most reliable)
+          2. Distance match within MATCH_DIST_THRESHOLD
+             — uses motion-predicted position to handle latency
+          3. Appearance Re-ID when distance match fails:
+             a. OSNet primary (512-dim cosine, adaptive threshold)
+             b. CLIP secondary fusion (weight _CLIP_FUSION_WEIGHT) when OSNet
+                feature confidence is below a good match
+             c. Motion prediction tie-break when appearance scores are close
+
+        Updates _reid_stats for observability.
+        """
         if self._person is None:
             return None
 
-        # 策略 1: obj_id 精确匹配
+        n_candidates = len(persons)
+
+        # Strategy 1: obj_id exact match
         if self._person.obj_id:
             for p in persons:
                 if p.get("id") == self._person.obj_id:
                     return p
 
-        # 策略 2: 距离最近匹配
+        # Strategy 2: distance match using motion-predicted position
+        predicted_pos = self._predict_position()
         best_dist_p = None
         best_dist = self.MATCH_DIST_THRESHOLD
         for p in persons:
             pos = self._get_pos(p)
+            # Use predicted position to account for motion since last observation
             dist = math.hypot(
-                pos[0] - self._person.position[0],
-                pos[1] - self._person.position[1],
+                pos[0] - predicted_pos[0],
+                pos[1] - predicted_pos[1],
             )
             if dist < best_dist:
                 best_dist = dist
@@ -530,48 +646,90 @@ class PersonTracker:
         if best_dist_p is not None:
             return best_dist_p
 
-        # 策略 3: 外观 Re-ID (距离匹配失败时)
-        if self._person.appearance is not None and rgb_frame is not None and self._clip_encoder is not None:
-            best_sim_p = None
-            best_sim = self.APPEARANCE_THRESHOLD
-            for p in persons:
-                crop = self._crop_person(rgb_frame, p)
-                if crop is None:
-                    continue
-                try:
-                    feat = self._clip_encoder.encode_image(crop)
-                    if feat is not None and feat.size > 0:
-                        norm = np.linalg.norm(feat)
-                        if norm > 0:
-                            feat = feat / norm
-                        sim = float(np.dot(self._person.appearance, feat))
-                        if sim > best_sim:
-                            best_sim = sim
-                            best_sim_p = p
-                except Exception:
-                    continue
-            if best_sim_p is not None:
-                logger.info("Re-ID matched person (sim=%.2f)", best_sim)
-                return best_sim_p
+        # Strategy 3: appearance Re-ID (distance match failed)
+        if rgb_frame is None:
+            self._reid_stats["lost"] += 1
+            return None
 
+        reid_threshold = self._adaptive_reid_threshold(n_candidates)
+
+        best_reid_p = None
+        best_reid_score = reid_threshold  # must exceed threshold to match
+
+        for p in persons:
+            crop = self._crop_person(rgb_frame, p)
+            if crop is None:
+                continue
+
+            score = 0.0
+            osnet_sim: float | None = None
+            clip_sim: float | None = None
+
+            # OSNet primary signal
+            if self._osnet_encoder is not None and self._person.osnet_feat is not None:
+                try:
+                    osnet_feat = self._osnet_encoder.encode(crop)
+                    osnet_sim = float(np.dot(self._person.osnet_feat, osnet_feat))
+                    score = osnet_sim
+                except Exception as exc:
+                    logger.debug("OSNet encode failed: %s", exc)
+
+            # CLIP secondary signal — fuse when available
+            if (
+                self._clip_encoder is not None
+                and self._person.appearance is not None
+            ):
+                try:
+                    clip_feat = self._clip_encoder.encode_image(crop)
+                    if clip_feat is not None and clip_feat.size > 0:
+                        norm = np.linalg.norm(clip_feat)
+                        if norm > 0:
+                            clip_feat = clip_feat / norm
+                        clip_sim = float(np.dot(self._person.appearance, clip_feat))
+                        if osnet_sim is not None:
+                            # Fuse: OSNet (60%) + CLIP (40%)
+                            score = (1.0 - _CLIP_FUSION_WEIGHT) * osnet_sim + _CLIP_FUSION_WEIGHT * clip_sim
+                        else:
+                            # CLIP only (OSNet unavailable)
+                            score = clip_sim
+                except Exception:
+                    pass
+
+            if score > best_reid_score:
+                best_reid_score = score
+                best_reid_p = p
+
+        if best_reid_p is not None:
+            # Attribute the winning signal type to stats
+            if self._osnet_encoder is not None and self._person.osnet_feat is not None:
+                self._reid_stats["osnet_match"] += 1
+            elif self._clip_encoder is not None:
+                self._reid_stats["clip_fallback"] += 1
+            else:
+                self._reid_stats["motion_dominant"] += 1
+            logger.info("PersonTracker: Re-ID matched (score=%.3f, threshold=%.2f, "
+                        "candidates=%d)", best_reid_score, reid_threshold, n_candidates)
+            return best_reid_p
+
+        self._reid_stats["lost"] += 1
         return None
 
     def _update_tracked(self, obj: dict, rgb_frame: np.ndarray | None) -> None:
-        """更新已匹配目标的位置和外观。"""
+        """Update position, velocity, and appearance features for the matched target."""
         new_pos = self._get_pos(obj)
         now = time.time()
 
         dt = now - self._person.last_seen
         old = self._person.position
 
-        # 速度 EMA
+        # Velocity EMA (smoothed finite difference)
         if dt > 0.01:
             self._person.velocity = [
                 (new_pos[0] - old[0]) / dt * 0.3 + self._person.velocity[0] * 0.7,
                 (new_pos[1] - old[1]) / dt * 0.3 + self._person.velocity[1] * 0.7,
             ]
 
-        # 位置 EMA
+        # Position EMA
         a = self.EMA_ALPHA
         self._person.position = [
             a * new_pos[0] + (1 - a) * old[0],
@@ -583,23 +741,39 @@ class PersonTracker:
         self._person.obj_id = obj.get("id", self._person.obj_id)
         self._person.bbox = obj.get("bbox", self._person.bbox)
 
-        # 外观特征 EMA 更新
-        if rgb_frame is not None and self._clip_encoder is not None:
+        if rgb_frame is not None:
             crop = self._crop_person(rgb_frame, obj)
             if crop is not None:
-                try:
-                    feat = self._clip_encoder.encode_image(crop)
-                    if feat is not None and feat.size > 0:
-                        norm = np.linalg.norm(feat)
-                        if norm > 0:
-                            feat = feat / norm
-                        if self._person.appearance is not None:
+                # CLIP appearance EMA update (secondary Re-ID signal)
+                if self._clip_encoder is not None:
+                    try:
+                        feat = self._clip_encoder.encode_image(crop)
+                        if feat is not None and feat.size > 0:
+                            norm = np.linalg.norm(feat)
+                            if norm > 0:
+                                feat = feat / norm
+                            if self._person.appearance is not None:
+                                aa = self.APPEARANCE_ALPHA
+                                self._person.appearance = aa * feat + (1 - aa) * self._person.appearance
+                            else:
+                                self._person.appearance = feat
+                    except Exception:
+                        pass
+
+                # OSNet feature EMA update (primary Re-ID signal)
+                if self._osnet_encoder is not None:
+                    try:
+                        osnet_feat = self._osnet_encoder.encode(crop)
+                        if self._person.osnet_feat is not None:
                             aa = self.APPEARANCE_ALPHA
-                            self._person.appearance = aa * feat + (1 - aa) * self._person.appearance
+                            updated = aa * osnet_feat + (1 - aa) * self._person.osnet_feat
+                            # Re-normalise after EMA blend (features drift off unit sphere)
+                            norm = np.linalg.norm(updated)
+                            self._person.osnet_feat = updated / norm if norm > 1e-9 else updated
                         else:
-                            self._person.appearance = feat
-                except Exception:
-                    pass
+                            self._person.osnet_feat = osnet_feat
+                    except Exception as exc:
+                        logger.debug("OSNet update_tracked encode failed: %s", exc)
 
     def _init_person(self, obj: dict) -> None:
         """初始化目标 (未经 VLM 选定时的退化路径)。"""

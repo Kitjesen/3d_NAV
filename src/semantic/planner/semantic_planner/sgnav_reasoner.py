@@ -18,14 +18,66 @@ import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import yaml
 
 from .frontier_scorer import Frontier
 from .prompt_templates import build_sgnav_subgraph_prompt
 
 logger = logging.getLogger(__name__)
+
+# ── Default heuristic subgraph scoring weights ──
+# Loaded from config/semantic_scoring.yaml [sgnav_heuristic] on first call.
+_DEFAULTS_SGNAV: dict = {
+    "keyword": 0.55,
+    "relation": 0.20,
+    "distance": 0.15,
+    "richness": 0.10,
+}
+_SGNAV_WEIGHTS: dict = dict(_DEFAULTS_SGNAV)
+_sgnav_weights_loaded: bool = False
+
+
+def _load_semantic_scoring_yaml() -> dict:
+    """Load config/semantic_scoring.yaml from the repo root."""
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+    yaml_path = repo_root / "config" / "semantic_scoring.yaml"
+    try:
+        with open(yaml_path, encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+    except (FileNotFoundError, OSError):
+        return {}
+
+
+def _load_sgnav_weights() -> None:
+    """Load sgnav_heuristic weights from config/semantic_scoring.yaml (once)."""
+    global _SGNAV_WEIGHTS, _sgnav_weights_loaded
+    if _sgnav_weights_loaded:
+        return
+    _sgnav_weights_loaded = True
+    try:
+        section = _load_semantic_scoring_yaml().get("sgnav_heuristic")
+        if section is None:
+            logger.info(
+                "sgnav_heuristic section absent — using default weights. "
+                "See config/semantic_scoring.yaml to tune."
+            )
+            return
+        _SGNAV_WEIGHTS["keyword"] = float(section.get("keyword", _DEFAULTS_SGNAV["keyword"]))
+        _SGNAV_WEIGHTS["relation"] = float(section.get("relation", _DEFAULTS_SGNAV["relation"]))
+        _SGNAV_WEIGHTS["distance"] = float(section.get("distance", _DEFAULTS_SGNAV["distance"]))
+        _SGNAV_WEIGHTS["richness"] = float(section.get("richness", _DEFAULTS_SGNAV["richness"]))
+        logger.debug(
+            "sgnav_heuristic weights loaded: keyword=%.2f relation=%.2f "
+            "distance=%.2f richness=%.2f",
+            _SGNAV_WEIGHTS["keyword"], _SGNAV_WEIGHTS["relation"],
+            _SGNAV_WEIGHTS["distance"], _SGNAV_WEIGHTS["richness"],
+        )
+    except Exception as exc:
+        logger.warning("Failed to load sgnav_heuristic weights from config: %s", exc)
 
 
 @dataclass
@@ -569,6 +621,12 @@ class SGNavReasoner:
         candidates: list[SubgraphCandidate],
         robot_position: dict[str, float],
     ) -> tuple[dict[str, float], dict[str, str]]:
+        _load_sgnav_weights()  # idempotent, loads from config on first call
+        w_kw = _SGNAV_WEIGHTS["keyword"]
+        w_rel = _SGNAV_WEIGHTS["relation"]
+        w_dist = _SGNAV_WEIGHTS["distance"]
+        w_rich = _SGNAV_WEIGHTS["richness"]
+
         keywords = self._extract_keywords(instruction)
         relation_words = {
             "near", "left", "right", "front", "behind", "on", "above", "below",
@@ -606,10 +664,10 @@ class SGNavReasoner:
             relation_bonus = 0.1 if relation_hint and cand.relation_count > 0 else 0.0
 
             score = (
-                0.55 * keyword_score
-                + 0.2 * relation_score
-                + 0.15 * distance_score
-                + 0.1 * richness_score
+                w_kw * keyword_score
+                + w_rel * relation_score
+                + w_dist * distance_score
+                + w_rich * richness_score
                 + relation_bonus
             )
             score = min(max(score, 0.0), 1.0)
@@ -618,6 +676,22 @@ class SGNavReasoner:
             reasons[cand.subgraph_id] = (
                 f"kw={keyword_score:.2f}, rel={relation_score:.2f}, "
                 f"dist={distance_score:.2f}, rich={richness_score:.2f}"
+            )
+            # Scoring audit log — enables offline weight learning (W3-2 Phase 2)
+            logger.debug(
+                "%s",
+                {
+                    "module": "sgnav_heuristic",
+                    "candidate_id": cand.subgraph_id,
+                    "sub_scores": {
+                        "keyword": round(keyword_score, 4),
+                        "relation": round(relation_score, 4),
+                        "distance": round(distance_score, 4),
+                        "richness": round(richness_score, 4),
+                    },
+                    "weighted_total": round(score, 4),
+                    "ts": time.time(),
+                },
             )
 
         return scores, reasons

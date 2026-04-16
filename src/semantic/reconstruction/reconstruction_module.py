@@ -34,6 +34,77 @@ from .color_projector import ColorProjector
 from .semantic_labeler import SemanticLabeler
 
 
+class TSDFColorVolume:
+    """W3-3: thin wrapper around Open3D ScalableTSDFVolume with colour fusion.
+
+    Replaces the old raw voxel accumulation (no weighting, frame-over-frame
+    overwrites, ghosting from pose noise). TSDF gives proper weighted fusion
+    with median-like behaviour near surfaces — noisy poses no longer smear
+    geometry.
+
+    Raises RuntimeError on construction if open3d is not installed (Wave 1
+    no-silent-fallback discipline). Real TSDF runs on S100P where open3d
+    is available; unit tests mock the open3d module.
+    """
+
+    def __init__(
+        self,
+        voxel_length: float = 0.04,
+        sdf_trunc: float = 0.15,
+    ) -> None:
+        try:
+            import open3d as o3d
+        except ImportError as e:
+            raise RuntimeError(
+                "TSDFColorVolume requires open3d. "
+                "Install with: pip install open3d"
+            ) from e
+
+        self.voxel_length = float(voxel_length)
+        self.sdf_trunc = float(sdf_trunc)
+        color_type = o3d.pipelines.integration.TSDFVolumeColorType.RGB8
+        self._volume = o3d.pipelines.integration.ScalableTSDFVolume(
+            voxel_length=self.voxel_length,
+            sdf_trunc=self.sdf_trunc,
+            color_type=color_type,
+        )
+
+    def integrate(
+        self,
+        depth: np.ndarray,
+        color: np.ndarray,
+        K: np.ndarray,
+        extrinsic: np.ndarray,
+    ) -> None:
+        """Integrate one RGB-D frame into the TSDF volume."""
+        import open3d as o3d
+        h, w = depth.shape[:2]
+        color_img = o3d.geometry.Image(color)
+        depth_img = o3d.geometry.Image(depth)
+        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            color_img, depth_img,
+            depth_scale=1000.0, depth_trunc=5.0,
+            convert_rgb_to_intensity=False,
+        )
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(
+            width=w, height=h,
+            fx=float(K[0, 0]), fy=float(K[1, 1]),
+            cx=float(K[0, 2]), cy=float(K[1, 2]),
+        )
+        self._volume.integrate(rgbd, intrinsic, extrinsic)
+
+    def extract_point_cloud(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return (pts: Nx3 float32, colors: Nx3 float32 in [0,1])."""
+        pcd = self._volume.extract_point_cloud()
+        pts = np.asarray(pcd.points).astype(np.float32)
+        colors = np.asarray(pcd.colors).astype(np.float32)
+        return pts, colors
+
+    def extract_mesh(self):
+        """Extract a triangle mesh from the fused volume."""
+        return self._volume.extract_triangle_mesh()
+
+
 class ReconstructionModule(Module, layer=3):
     _run_in_worker = True
     _worker_group = "perception"

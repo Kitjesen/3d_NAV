@@ -61,11 +61,30 @@ class SemanticMapperModule(Module, layer=3):
         self,
         save_dir: str = "",
         save_interval_s: float = 30.0,
+        min_observations_for_commit: int = 1,
         **kw,
     ):
         super().__init__(**kw)
         self._save_dir = save_dir or _DEFAULT_SAVE_DIR
         self._save_interval = save_interval_s
+
+        # Minimum times a (room, object_label) pair must be observed before
+        # it is committed to RoomObjectKG.  Default=1 preserves backward-compatible
+        # behaviour (every observation commits).  Set to 3 or higher in production
+        # deployments to filter single-frame misdetections.
+        self._min_obs: int = min_observations_for_commit
+
+        # Per-(room_name, object_label) raw observation counter accumulated on
+        # every scene-graph update.  A pair is forwarded to KG only once its
+        # counter reaches _min_obs.
+        self._obs_counts: dict[tuple[str, str], int] = {}
+
+        # Dirichlet-Multinomial posterior counts: per-room raw tallies used to
+        # compute P(O|R) = (count(R,O) + alpha) / (sum_O' count(R,O') + alpha*K)
+        # with alpha=1.0 (Laplace) and K = observed object types in room R.
+        # Updated unconditionally (before and after the gate threshold).
+        self._dm_counts: dict[str, dict[str, int]] = {}  # room → {label → count}
+        self._dm_alpha: float = 1.0
 
         self._kg = None         # RoomObjectKG — lazy init in setup()
         self._tsg = None        # TopologySemGraph — lazy init in setup()
@@ -146,15 +165,67 @@ class SemanticMapperModule(Module, layer=3):
     # ── Core update logic ─────────────────────────────────────────────────────
 
     def _update_kg(self, sg: SceneGraph) -> None:
+        """Update RoomObjectKG with Bayesian Dirichlet-Multinomial smoothing gate.
+
+        Each (room, label) pair must be observed at least _min_obs times before
+        being committed to the KG.  This prevents single misdetections (e.g.
+        "person in kitchen") from polluting future scene understanding.
+
+        DM counts are updated unconditionally so get_posterior() always reflects
+        the current evidence, even for sub-threshold observations.
+        When _min_obs == 1 (the default), every observation commits immediately,
+        preserving backward-compatible behaviour.
+        """
         if self._kg is None:
             return
+
         for region in sg.regions:
             room_name = (region.name or "").strip()
             if not room_name:
                 continue
             labels, confs = self._extract_objects(sg, region.object_ids)
-            if labels:
-                self._kg.observe_room(room_name, labels, confs)
+            if not labels:
+                continue
+
+            # Always update DM counts (used by get_posterior regardless of gate).
+            room_dm = self._dm_counts.setdefault(room_name, {})
+            for lbl in labels:
+                room_dm[lbl] = room_dm.get(lbl, 0) + 1
+
+            # Accumulate per-(room, label) observation counts and gate KG writes.
+            committed_labels: list[str] = []
+            committed_confs: list[float] = []
+            for lbl, conf in zip(labels, confs):
+                key = (room_name, lbl)
+                prev = self._obs_counts.get(key, 0)
+                self._obs_counts[key] = prev + 1
+                if self._obs_counts[key] == self._min_obs and self._min_obs > 1:
+                    # First time this pair crosses the threshold — log it.
+                    logger.info(
+                        "SemanticMapper: (%s, %s) reached %d observations — committing to KG",
+                        room_name, lbl, self._min_obs,
+                    )
+                if self._obs_counts[key] >= self._min_obs:
+                    committed_labels.append(lbl)
+                    committed_confs.append(conf)
+
+            if committed_labels:
+                self._kg.observe_room(room_name, committed_labels, committed_confs)
+
+    def get_posterior(self, room: str, label: str) -> float:
+        """Return Dirichlet-Multinomial posterior P(label | room).
+
+        P(O|R) = (count(R,O) + alpha) / (sum_O count(R,O) + alpha*K)
+        where alpha=1.0 (Laplace smoothing) and K is the number of distinct
+        object types observed in room R.  Returns 0.0 for unseen rooms.
+        """
+        room_dm = self._dm_counts.get(room, {})
+        if not room_dm:
+            return 0.0
+        count_ro = room_dm.get(label, 0)
+        k = len(room_dm)
+        total = sum(room_dm.values())
+        return (count_ro + self._dm_alpha) / (total + self._dm_alpha * k)
 
     def _update_tsg(self, sg: SceneGraph) -> None:
         if self._tsg is None:
