@@ -40,8 +40,8 @@ class DeviceManager(Module, layer=0):
     def __init__(
         self,
         config_path: str = "config/devices.yaml",
-        status_rate_hz: float = 2.0,
-        enable_hotplug: bool = True,
+        status_rate_hz: float = 0.5,            # 2Hz → 0.5Hz, GIL friendly
+        enable_hotplug: bool = False,           # default off — saves a thread
         **kw: Any,
     ) -> None:
         super().__init__(**kw)

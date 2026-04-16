@@ -117,7 +117,9 @@ def full_stack_blueprint(
             from core.devices import DeviceManager
             _device_bp.add(DeviceManager,
                            config_path=str(_devices_yaml),
-                           enable_hotplug=os.environ.get("LINGTU_HOTPLUG", "1") == "1")
+                           # Hot-plug off by default (uses extra thread, GIL pressure).
+                           # Enable with LINGTU_HOTPLUG=1 if needed.
+                           enable_hotplug=os.environ.get("LINGTU_HOTPLUG", "0") == "1")
     except Exception as _e:
         import logging as _log
         _log.getLogger(__name__).debug("DeviceManager not loaded: %s", _e)
