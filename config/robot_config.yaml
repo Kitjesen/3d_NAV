@@ -172,6 +172,19 @@ gnss:
     residual_warn_duration_s: 10.0 # 残差观察窗口 (秒)
     residual_warn_ratio: 0.7       # 窗口内超阈值比例 → 触发重锁
 
+# ── 自主探索 ──
+# 两个后端 binary-compatible 输出 exploration_goal: Out[PoseStamped]:
+#   wavefront  — 纯 Python BFS frontier (src/nav/frontier_explorer_module.py)
+#   tare       — CMU TARE 分层规划 (third_party/tare_planner 子模块)
+#   none       — 关掉探索
+exploration:
+  backend: "none"                  # none | wavefront | tare
+  # TARE 预调好的场景: campus | forest | garage | indoor | matterport | tunnel
+  tare_scenario: "forest"
+  tare_auto_start: true            # 启动时立即发 start 信号给 TARE
+  # 可选：覆盖 TARE 的 yaml 配置绝对路径 (不填则用 install/share 默认)
+  tare_config: ""
+
 # ── 路径跟踪控制增益 ──
 control:
   yaw_rate_gain: 7.5

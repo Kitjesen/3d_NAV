@@ -31,6 +31,7 @@ from core.utils.calibration_check import run_calibration_check
 
 from .stacks import (
     driver,
+    exploration,
     gateway,
     lidar,
     maps,
@@ -175,6 +176,11 @@ def full_stack_blueprint(
         planner_stack(llm, semantic_save_dir)
                                if enable_semantic else Blueprint(),
         navigation(planner_backend, tomogram, enable_native, **config),
+        exploration(
+            backend=config.get("exploration_backend", "none"),
+            tare_scenario=config.get("tare_scenario", "forest"),
+            auto_start=config.get("exploration_auto_start", True),
+        ),
         safety(),
         gateway(
             gateway_port,

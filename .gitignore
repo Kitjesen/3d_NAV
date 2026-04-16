@@ -103,6 +103,8 @@ client/flutter_monitor/web/.dart_tool/
 # ── Third-party (use scripts/clone_semantic_deps.sh to restore) ──
 third_party/
 !third_party/.gitkeep
+!third_party/tare_planner/
+# tare_planner is a git submodule; track the link, ignore its contents
 
 # ── Generated test/paper output ──
 paper_figures/
