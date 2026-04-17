@@ -104,7 +104,7 @@ export function BagRecorder() {
           className={styles.btnRec}
           onClick={stop}
           disabled={busy}
-          title={status?.path}
+          title={`正在录制: ${status?.path}\n点击停止`}
         >
           <Square size={10} fill="currentColor" />
           <span className={styles.recDot} />
@@ -117,7 +117,16 @@ export function BagRecorder() {
           className={styles.btnIdle}
           onClick={start}
           disabled={busy}
-          title="录制 rosbag — 默认 10 分钟上限,可手动停"
+          title={
+            '录制 rosbag — 默认 10 分钟上限,可手动停\n' +
+            '录制话题:\n' +
+            '  /nav/lidar_scan  MID-360 Livox\n' +
+            '  /nav/imu  /nav/odometry  /nav/map_cloud\n' +
+            '  /nav/registered_cloud  /localization_quality\n' +
+            '  /nav/goal_pose  /nav/cmd_vel\n' +
+            '  /exploration/way_point  /path  /runtime  /finish\n' +
+            '  /camera/camera_info  (不含相机 raw)'
+          }
         >
           <Circle size={11} fill="currentColor" />
           <span>录制</span>
