@@ -1410,9 +1410,14 @@ class GatewayModule(Module, layer=6):
                                 pass
                 except OSError:
                     pass
-            home = _os.path.expanduser("~")
+            # Check the disk where bags actually land (~/data), not the root
+            # home disk — those can be on different mounts (S100P: / is 50GB
+            # eMMC, ~/data is 240GB NVMe).
+            bag_disk = _os.path.expanduser("~/data")
+            if not _os.path.isdir(bag_disk):
+                bag_disk = _os.path.expanduser("~")
             try:
-                du = _shutil.disk_usage(home)
+                du = _shutil.disk_usage(bag_disk)
                 disk_free, disk_total = du.free, du.total
             except OSError:
                 disk_free, disk_total = 0, 0
