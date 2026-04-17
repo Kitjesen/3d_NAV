@@ -541,7 +541,18 @@
   flex-direction: column;
   gap: var(--s-3);
   min-height: 0;
+  /* 右栏内容超过可视高度时滚动,不再被挤出屏幕底部 */
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hi) transparent;
+  padding-right: 4px;
   animation: fade-in 0.5s var(--ease-spring) 0.15s both;
+}
+
+.sidePanel::-webkit-scrollbar { width: 4px; }
+.sidePanel::-webkit-scrollbar-thumb {
+  background: var(--border-hi);
+  border-radius: 2px;
 }
 
 .statCard {
