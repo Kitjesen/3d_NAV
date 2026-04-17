@@ -290,6 +290,12 @@ class GatewayModule(Module, layer=6):
         # All modules dict (set by on_system_modules)
         self._all_modules: dict[str, Any] = {}
 
+        # rosbag recording state
+        self._bag_proc: Any = None       # subprocess.Popen
+        self._bag_path: str = ""
+        self._bag_started_ts: float = 0.0
+        self._bag_lock = threading.Lock()
+
         # Map cloud accumulator for /map/viewer
         self._map_points: np.ndarray | None = None
         self._map_cloud_lock = threading.Lock()
@@ -1289,6 +1295,132 @@ class GatewayModule(Module, layer=6):
             else:
                 mode = "stopped"
             return {"mode": mode, "services": services}
+
+        # ── rosbag recording ───────────────────────────────────────────
+        @app.post("/api/v1/bag/start", summary="Start rosbag recording")
+        async def bag_start(body: dict | None = None):
+            """Kick off `scripts/record_bag.sh` as a subprocess.
+
+            Body (all optional):
+              duration: seconds to record (default: 600 — long enough for most tests)
+              prefix:   filename prefix (default: "web")
+
+            Returns {"status":"started","path":..,"pid":..} or 409 if already recording.
+            """
+            import pathlib as _plib
+            import shlex as _shlex
+            import subprocess as _sp
+            body = body or {}
+            duration = int(body.get("duration", 600))
+            prefix = str(body.get("prefix", "web"))[:40]
+            prefix = "".join(c for c in prefix if c.isalnum() or c in "-_") or "web"
+
+            with gw._bag_lock:
+                if gw._bag_proc is not None and gw._bag_proc.poll() is None:
+                    return JSONResponse(
+                        status_code=409,
+                        content={"error": "recording_in_progress",
+                                 "path": gw._bag_path,
+                                 "pid": gw._bag_proc.pid},
+                    )
+
+                # Resolve script path relative to the repo root (this file lives
+                # at src/gateway/gateway_module.py — repo root is two parents up).
+                repo_root = _plib.Path(__file__).resolve().parent.parent.parent
+                script = repo_root / "scripts" / "record_bag.sh"
+                if not script.exists():
+                    return JSONResponse(
+                        status_code=500,
+                        content={"error": "script_not_found", "path": str(script)},
+                    )
+
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                bag_dir = os.path.expanduser(
+                    f"~/data/bags/{prefix}_{stamp}")
+
+                cmd = ["bash", str(script), str(duration), prefix]
+                try:
+                    proc = _sp.Popen(
+                        cmd,
+                        stdout=_sp.DEVNULL,
+                        stderr=_sp.DEVNULL,
+                        start_new_session=True,
+                    )
+                except FileNotFoundError as e:
+                    return JSONResponse(
+                        status_code=500,
+                        content={"error": "bash_not_found", "detail": str(e)},
+                    )
+
+                gw._bag_proc = proc
+                gw._bag_path = bag_dir
+                gw._bag_started_ts = time.time()
+                return {
+                    "status":    "started",
+                    "path":      bag_dir,
+                    "pid":       proc.pid,
+                    "duration":  duration,
+                    "prefix":    prefix,
+                }
+
+        @app.post("/api/v1/bag/stop", summary="Stop rosbag recording")
+        async def bag_stop():
+            """Send SIGTERM to the rosbag subprocess (graceful — flushes cache)."""
+            import signal as _sig
+            with gw._bag_lock:
+                proc = gw._bag_proc
+                if proc is None or proc.poll() is not None:
+                    return JSONResponse(
+                        status_code=404,
+                        content={"error": "not_recording"})
+                try:
+                    # Kill the entire process group (timeout + ros2 bag children)
+                    os.killpg(os.getpgid(proc.pid), _sig.SIGTERM)
+                except (ProcessLookupError, PermissionError, AttributeError):
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                # Don't wait — the script may need ~1s to flush. Status endpoint
+                # will report finished once poll() returns.
+                return {"status": "stopping", "path": gw._bag_path,
+                        "pid": proc.pid}
+
+        @app.get("/api/v1/bag/status", summary="rosbag recording status")
+        async def bag_status():
+            """Return current recording state + disk usage if a bag exists."""
+            import shutil as _shutil
+            with gw._bag_lock:
+                proc = gw._bag_proc
+                path = gw._bag_path
+                started_ts = gw._bag_started_ts
+
+            recording = proc is not None and proc.poll() is None
+            size_bytes = 0
+            if path and os.path.isdir(path):
+                try:
+                    for root, _dirs, files in os.walk(path):
+                        for f in files:
+                            fp = os.path.join(root, f)
+                            try:
+                                size_bytes += os.path.getsize(fp)
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+            disk_free = _shutil.disk_usage(
+                os.path.expanduser("~"))._asdict() if os.path.exists(
+                os.path.expanduser("~")) else {"free": 0, "total": 0}
+            return {
+                "recording":   recording,
+                "path":        path,
+                "duration_s":  (time.time() - started_ts) if started_ts else 0.0,
+                "size_bytes":  size_bytes,
+                "pid":         proc.pid if proc else None,
+                "exit_code":   proc.returncode if proc and proc.poll() is not None else None,
+                "disk_free":   disk_free.get("free", 0),
+                "disk_total":  disk_free.get("total", 0),
+            }
 
         @app.get("/api/v1/diagnostic_pack", summary="Export diagnostic tarball")
         async def diagnostic_pack():

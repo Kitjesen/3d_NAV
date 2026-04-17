@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Settings, Radio } from 'lucide-react'
 import type { SSEState, Tab } from '../types'
+import { BagRecorder } from './BagRecorder'
 import { SettingsMenu } from './SettingsMenu'
 import styles from './Topbar.module.css'
 
@@ -144,6 +145,7 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
       </div>
 
       <div className={styles.right}>
+        <BagRecorder />
         <button
           className={styles.btnIcon}
           aria-label="设置"
