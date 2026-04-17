@@ -1,14 +1,83 @@
 # 全局路径规划器选型决策
 
 > 决策日期: 2026-04-03
+> 最近更新: 2026-04-17(补充运行时链路图)
 > 状态: 已实施
+
+---
+
+## TL;DR — 外场快速查阅
+
+**Web 点击"发送目标"走的是什么规划器?**
+→ **看当前 profile**。`lingtu.py nav`(生产默认) = **PCT** (基于 pcd 3D 地形规划)。
+→ 永远**不要**默认说 A*。A* 只在 `map / sim / dev / stub / sim_nav` 里用。
+
+快速判断命令:
+```bash
+ssh sunrise@192.168.66.190 "ps aux | grep 'lingtu.py' | grep -v grep"
+# 输出含 "lingtu.py nav" → pct
+# 输出含 "lingtu.py map" → astar (建图不规划,但即使规划也是 astar)
+```
+
+---
+
+## 运行时链路:Web 点击 → cmd_vel
+
+```
+[Web: scene tab]
+  用户点击 3D 场景地面
+  → pendingGoal = {x, y}
+  → 弹"发送/取消"确认面板
+  用户点"发送"
+  → POST /api/v1/goto  body: {x, y}
+
+[Gateway: gateway_module.py]
+  /api/v1/goto 路由
+  → PlannerService.send_instruction(kind="goto", x, y)
+  → SemanticPlannerModule.goal_pose Out[PoseStamped]
+
+[NavigationModule: src/nav/navigation_module.py]
+  goal_pose In[PoseStamped] 接收
+  → mission FSM: IDLE → PLANNING
+  → GlobalPlannerService.plan(start=robot_pos, goal=user_goal)
+
+[GlobalPlannerService: src/nav/global_planner_service.py]
+  根据 planner= 参数选后端:
+    "pct"   → _PCTBackend (ele_planner.so, C++ aarch64)   ← nav profile 实际走这里
+    "astar" → _AStarBackend (pure Python, 8-连通)
+  输入: tomogram.pickle (从 map_cloud + elevation_map 烘的分层断层图)
+  输出: path np.ndarray (N, 3) 世界坐标 [x, y, z]
+
+[WaypointTracker: src/nav/waypoint_tracker.py]
+  按距离下采样 path → waypoints
+  → NavigationModule.waypoint Out[PoseStamped] 逐点发出
+  → 监控到达/卡住,触发下一个 waypoint 或 stuck recovery
+
+[PathFollower: src/nav/core/path_follower_core.hpp (Pure Pursuit)]
+  waypoint In → 当前 robot_pos
+  → 计算前瞻点 → Pure Pursuit 曲率 → cmd_vel
+
+[CmdVelMux: src/nav/cmd_vel_mux_module.py]
+  优先级仲裁(0.5s 超时):
+    teleop 100 > visual_servo 80 > recovery 60 > path_follower 40
+  → 发到 driver_cmd_vel Out
+
+[Driver: src/drivers/thunder/thunder_driver.py]
+  driver_cmd_vel → gRPC Walk → brainstem
+  → 电机 torque
+```
+
+**关键事实**:
+- nav profile 下规划器 = **PCT (C++ ele_planner.so)**,地图源是 tomogram(pcd → elevation → 分层断层)
+- 不经过 ROS2 `/nav/goal_pose` 话题。Module-First 架构下,goal 在 Python 进程内直接 Port→Port
+- C++ autonomy 包(terrain_analysis + local_planner + path_follower ROS2 node)在 `enable_native=False` 时**不参与**,由 Python autonomy chain 全程替代
 
 ---
 
 ## 决策
 
-**S100P 生产环境使用 PCT 官方 `ele_planner.so`（`planner="pct"`）。**
-**仿真/CI/开发机使用纯 Python A*（`planner="astar"`）作跨平台替代。**
+**S100P 生产环境使用 PCT 官方 `ele_planner.so`(`planner="pct"`)。**
+**仿真/CI/开发机使用纯 Python A*(`planner="astar"`)作跨平台替代。**
 
 ---
 
