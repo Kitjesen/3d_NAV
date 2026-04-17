@@ -15,11 +15,22 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type WebRTCError = null | 'unavailable' | 'signalling' | 'ice'
 
+export interface WebRTCStats {
+  enabled:      boolean
+  active_peers: number
+  bitrate_bps:  number
+  fps:          number
+  max_bitrate:  number
+  /** Avg encode time per frame across all peers, ms. */
+  encode_avg_ms?: number
+}
+
 export interface WebRTCState {
   stream:    MediaStream | null
   connected: boolean
   error:     WebRTCError
   reconnect: () => void
+  stats:     WebRTCStats | null
 }
 
 export function useWebRTC(path: string = '/api/v1/webrtc/offer'): WebRTCState {
@@ -27,6 +38,7 @@ export function useWebRTC(path: string = '/api/v1/webrtc/offer'): WebRTCState {
   const [connected, setConnected] = useState(false)
   const [error, setError]         = useState<WebRTCError>(null)
   const [nonce, setNonce]         = useState(0)
+  const [stats, setStats]         = useState<WebRTCStats | null>(null)
   const pcRef     = useRef<RTCPeerConnection | null>(null)
   const abortRef  = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
@@ -131,5 +143,26 @@ export function useWebRTC(path: string = '/api/v1/webrtc/offer'): WebRTCState {
     }
   }, [path, nonce, teardown])
 
-  return { stream, connected, error, reconnect }
+  // Stats polling: 1 Hz while the PC is live.  Cheap — the server does
+  // aggregation.  Stops when the peer is closed or the hook unmounts.
+  useEffect(() => {
+    if (!connected) {
+      setStats(null)
+      return
+    }
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const resp = await fetch('/api/v1/webrtc/stats', { cache: 'no-store' })
+        if (!resp.ok) return
+        const json = await resp.json() as WebRTCStats
+        if (!cancelled) setStats(json)
+      } catch { /* network blip — next tick retries */ }
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [connected])
+
+  return { stream, connected, error, reconnect, stats }
 }

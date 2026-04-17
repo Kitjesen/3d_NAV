@@ -81,3 +81,33 @@ def test_image_callback_caches_latest_frame():
     assert mod._latest_bgr is not None
     assert mod._latest_bgr.shape == (48, 64, 3)
     assert int(mod._latest_bgr[0, 0, 1]) == 255
+
+
+def test_max_bitrate_precedence_param_over_env(monkeypatch):
+    monkeypatch.setenv("LINGTU_WEBRTC_BITRATE", "800000")
+    mod = WebRTCStreamModule(max_bitrate=1_200_000)
+    # Explicit argument wins over the environment variable.
+    assert mod._max_bitrate == 1_200_000
+
+
+def test_max_bitrate_env_fallback(monkeypatch):
+    monkeypatch.setenv("LINGTU_WEBRTC_BITRATE", "900000")
+    mod = WebRTCStreamModule()
+    assert mod._max_bitrate == 900_000
+
+
+def test_max_bitrate_bogus_env_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("LINGTU_WEBRTC_BITRATE", "not-a-number")
+    mod = WebRTCStreamModule()
+    assert mod._max_bitrate == 2_500_000
+
+
+def test_collect_stats_idle_returns_zero_peers():
+    import asyncio
+
+    mod = WebRTCStreamModule(max_bitrate=1_000_000)
+    stats = asyncio.run(mod.collect_stats())
+    assert stats["enabled"] is True
+    assert stats["active_peers"] == 0
+    assert stats["max_bitrate"] == 1_000_000
+    assert stats["peers"] == []

@@ -1003,6 +1003,26 @@ class GatewayModule(Module, layer=6):
 
         # ── Navigation ─────────────────────────────────────────────────────
 
+        @app.get(
+            "/api/v1/webrtc/stats",
+            summary="WebRTC peer telemetry (bitrate, fps, encode time)",
+        )
+        async def get_webrtc_stats():
+            """Poll-friendly endpoint for the camera HUD.
+
+            Returns ``{"enabled": false}`` when aiortc is missing so the UI
+            can hide the HUD instead of showing an error.
+            """
+            if gw._webrtc is None:
+                return {"enabled": False, "active_peers": 0}
+            try:
+                return await gw._webrtc.collect_stats()
+            except Exception as e:
+                logger.debug("webrtc stats error: %s", e)
+                return JSONResponse(
+                    {"enabled": True, "error": str(e)}, status_code=500,
+                )
+
         @app.post(
             "/api/v1/webrtc/offer",
             summary="WebRTC SDP offer/answer exchange for low-latency camera",

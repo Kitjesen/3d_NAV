@@ -32,7 +32,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -128,8 +130,25 @@ class WebRTCStreamModule(Module, layer=6):
 
     _run_in_main: bool = False
 
-    def __init__(self, **kw: Any) -> None:
+    def __init__(
+        self,
+        *,
+        max_bitrate: int | None = None,
+        **kw: Any,
+    ) -> None:
         super().__init__(**kw)
+        # Bitrate ceiling applied to the outbound RTP stream via
+        # RTCRtpSender.setParameters once the PeerConnection is alive.
+        # Defaults tuned for 720p30 over a LAN; override with env var
+        # for WAN / constrained networks.
+        env_br = os.environ.get("LINGTU_WEBRTC_BITRATE")
+        if max_bitrate is None and env_br:
+            try:
+                max_bitrate = int(env_br)
+            except ValueError:
+                logger.warning("ignoring invalid LINGTU_WEBRTC_BITRATE=%r", env_br)
+        self._max_bitrate = max_bitrate or 2_500_000
+
         self._latest_bgr: np.ndarray | None = None
         self._raw_lock = threading.Lock()
         # asyncio primitives are created lazily on the gateway's event loop
@@ -140,6 +159,10 @@ class WebRTCStreamModule(Module, layer=6):
         self._source_track: Any = None
         self._relay: Any = None
         self._gateway: Any = None
+        self._start_ts = time.time()
+        # Per-peer cached stats deltas — used to compute instantaneous bitrate
+        # from RTCStatsReport byte counters (getStats reports cumulative only).
+        self._prev_stats: dict[Any, tuple[float, int, int]] = {}
 
     # -- Module lifecycle ---------------------------------------------------
 
@@ -212,14 +235,116 @@ class WebRTCStreamModule(Module, layer=6):
                 await pc.close()
                 self._pcs.discard(pc)
 
-        pc.addTrack(self._relay.subscribe(self._source_track))
+        sender = pc.addTrack(self._relay.subscribe(self._source_track))
 
         await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
+
+        # Cap outbound bitrate — prevents libx264 from flooding a weak
+        # uplink or the encoder's internal rate-control from spiking and
+        # blowing the jitter buffer.  Browsers honour this via REMB/TWCC.
+        try:
+            from aiortc import RTCRtpSendParameters, RTCRtpEncodingParameters
+            params = sender.getParameters() if hasattr(sender, "getParameters") else None
+            if params is None:
+                params = RTCRtpSendParameters(encodings=[RTCRtpEncodingParameters()])
+            if not params.encodings:
+                params.encodings = [RTCRtpEncodingParameters()]
+            params.encodings[0].maxBitrate = self._max_bitrate
+            await sender.setParameters(params)
+        except Exception as e:
+            logger.debug("setParameters maxBitrate failed: %s", e)
+
         return {
             "sdp": _force_h264_first(pc.localDescription.sdp),
             "type": pc.localDescription.type,
+        }
+
+    # -- Stats (polled by Gateway /api/v1/webrtc/stats) ---------------------
+
+    async def collect_stats(self) -> dict:
+        """Summarise live RTCPeerConnection stats.
+
+        Returns per-peer bitrate / fps / encode time + an aggregate block
+        suitable for rendering in a browser HUD.  Safe to call from the
+        gateway's event loop — each getStats is awaited sequentially with
+        a soft cap so a stuck peer can't freeze the response.
+        """
+        if self._loop is None:
+            return {
+                "enabled": _HAVE_WEBRTC,
+                "active_peers": 0,
+                "max_bitrate": self._max_bitrate,
+                "peers": [],
+            }
+
+        peers_out: list[dict] = []
+        now = time.time()
+        # list() copy so discard during iteration (failed PC cleanup) is safe.
+        for pc in list(self._pcs):
+            row: dict[str, Any] = {
+                "state": getattr(pc, "connectionState", "unknown"),
+                "ice_state": getattr(pc, "iceConnectionState", "unknown"),
+                "bitrate_bps": 0,
+                "fps": 0.0,
+                "frames_encoded": 0,
+                "encode_avg_ms": 0.0,
+                "packets_lost": 0,
+            }
+            try:
+                report = await asyncio.wait_for(pc.getStats(), timeout=0.25)
+            except (asyncio.TimeoutError, Exception) as e:
+                row["error"] = type(e).__name__
+                peers_out.append(row)
+                continue
+
+            bytes_sent = 0
+            packets_sent = 0
+            frames_encoded = 0
+            total_encode_time = 0.0
+            packets_lost = 0
+            for stat in report.values():
+                kind = getattr(stat, "type", "")
+                if kind == "outbound-rtp" and getattr(stat, "kind", "") == "video":
+                    bytes_sent = int(getattr(stat, "bytesSent", 0) or 0)
+                    packets_sent = int(getattr(stat, "packetsSent", 0) or 0)
+                    frames_encoded = int(getattr(stat, "framesEncoded", 0) or 0)
+                    total_encode_time = float(getattr(stat, "totalEncodeTime", 0.0) or 0.0)
+                elif kind == "remote-inbound-rtp":
+                    packets_lost = int(getattr(stat, "packetsLost", 0) or 0)
+
+            prev = self._prev_stats.get(pc)
+            if prev is not None:
+                prev_t, prev_bytes, prev_frames = prev
+                dt = max(now - prev_t, 1e-3)
+                row["bitrate_bps"] = int((bytes_sent - prev_bytes) * 8 / dt)
+                row["fps"] = round((frames_encoded - prev_frames) / dt, 1)
+            self._prev_stats[pc] = (now, bytes_sent, frames_encoded)
+
+            row["frames_encoded"] = frames_encoded
+            row["packets_sent"] = packets_sent
+            row["packets_lost"] = packets_lost
+            if frames_encoded > 0:
+                row["encode_avg_ms"] = round(total_encode_time / frames_encoded * 1000, 2)
+            peers_out.append(row)
+
+        # Drop stats history for closed peers to avoid unbounded growth.
+        self._prev_stats = {pc: v for pc, v in self._prev_stats.items() if pc in self._pcs}
+
+        agg_bitrate = sum(p["bitrate_bps"] for p in peers_out)
+        agg_fps = max((p["fps"] for p in peers_out), default=0.0)
+        enc_times = [p["encode_avg_ms"] for p in peers_out if p.get("encode_avg_ms")]
+        agg_enc_ms = round(sum(enc_times) / len(enc_times), 1) if enc_times else 0.0
+        return {
+            "enabled": _HAVE_WEBRTC,
+            "active_peers": len(peers_out),
+            "max_bitrate": self._max_bitrate,
+            "bitrate_bps": agg_bitrate,
+            "fps": agg_fps,
+            "encode_avg_ms": agg_enc_ms,
+            "uptime_s": round(now - self._start_ts, 1),
+            "peers": peers_out,
         }
 
     # -- Diagnostics --------------------------------------------------------

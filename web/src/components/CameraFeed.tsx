@@ -31,8 +31,22 @@ export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
   const usingRtc     = !fallback
   const hasVideo     = usingRtc ? rtc.connected : jpeg.imgSrc != null
   const isConnected  = usingRtc ? rtc.connected : jpeg.connected
-  const sourceLabel  = usingRtc ? '720p · H.264 · WebRTC' : '640 × 480 · MJPEG'
   const onReconnect  = usingRtc ? rtc.reconnect : jpeg.reconnect
+
+  // Live HUD label: WebRTC exposes getStats, JPEG path doesn't.  Prefer
+  // real numbers over the static "720p · H.264" caption when available.
+  let sourceLabel: string
+  if (!usingRtc) {
+    sourceLabel = '640 × 480 · MJPEG'
+  } else if (rtc.stats && rtc.stats.active_peers > 0) {
+    const mbps = (rtc.stats.bitrate_bps / 1_000_000).toFixed(2)
+    const fps  = rtc.stats.fps.toFixed(0)
+    const enc  = rtc.stats.encode_avg_ms
+    const encStr = typeof enc === 'number' ? ` · ${enc.toFixed(0)}ms enc` : ''
+    sourceLabel = `H.264 · ${fps}fps · ${mbps} Mbit/s${encStr}`
+  } else {
+    sourceLabel = 'H.264 · WebRTC (建立中…)'
+  }
 
   return (
     <div className={styles.cameraFeed}>
