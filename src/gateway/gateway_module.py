@@ -34,6 +34,8 @@ SSE
 WebSocket
   WS   /ws/teleop            {type:joy, lx,ly,az} | {type:stop}
                              ← binary JPEG camera frames
+  WS   /ws/cloud             ← binary point-cloud frames (quantized int16,
+                                see core.utils.binary_codec)
 
 Blueprint usage::
 
@@ -303,6 +305,15 @@ class GatewayModule(Module, layer=6):
         self._map_cloud_lock = threading.Lock()
         self._map_cloud_count: int = 0
         self._map_voxel_size: float = 0.15
+
+        # Binary cloud channel — one frame buffer + per-client asyncio.Queue.
+        # Points are quantized int16 (see core.utils.binary_codec) so a 60k
+        # cloud is ~360 KB instead of ~1.4 MB JSON, and the browser decodes
+        # it as a zero-copy Int16Array.  See /ws/cloud endpoint.
+        self._cloud_lock = threading.Lock()
+        self._latest_cloud_buf: bytes | None = None
+        self._cloud_seq: int = 0
+        self._cloud_subs: list[asyncio.Queue] = []
 
         # Odometry rate tracking (sliding window for SLAM Hz display)
         self._odom_timestamps: list = []  # last 20 timestamps
@@ -640,8 +651,21 @@ class GatewayModule(Module, layer=6):
         else:
             pts_send = pts_all
 
-        flat = pts_send[:, :3].astype(np.float32).flatten().tolist()
-        self.push_event({"type": "map_cloud", "points": flat, "count": len(pts_send)})
+        # Binary path — encode once, fan out to /ws/cloud subscribers.
+        # The old JSON SSE event would allocate ~180k Python floats per frame
+        # (60k * 3 .tolist()) and serialize ~1.4 MB of text; the binary frame
+        # is 6 bytes/point + 28 byte header.
+        from core.utils.binary_codec import encode_pointcloud
+        buf = encode_pointcloud(pts_send[:, :3])
+        self._publish_cloud_frame(buf)
+        # Tiny SSE meta event so legacy UI bits (status bar, point count)
+        # still see "map updated" — payload stays under 100 B.
+        self.push_event({
+            "type": "map_cloud",
+            "count": int(len(pts_send)),
+            "seq": self._cloud_seq,
+            "bytes": len(buf),
+        })
 
     def _get_slam_profile(self) -> str:
         """Return current SLAM profile (cached 5s): fastlio2 / localizer / stopped."""
@@ -845,6 +869,36 @@ class GatewayModule(Module, layer=6):
         with self._sse_lock:
             try:
                 self._sse_queues.remove(q)
+            except ValueError:
+                pass
+
+    # -- Binary cloud fan-out ----------------------------------------------
+
+    def _publish_cloud_frame(self, buf: bytes) -> None:
+        """Thread-safe: store latest binary cloud + wake /ws/cloud clients."""
+        with self._cloud_lock:
+            self._latest_cloud_buf = buf
+            self._cloud_seq += 1
+            subs = list(self._cloud_subs)
+        for q in subs:
+            try:
+                q.put_nowait(buf)
+            except asyncio.QueueFull:
+                pass  # slow client — drop frame, never block producer
+
+    def _cloud_subscribe(self) -> tuple[asyncio.Queue, bytes | None]:
+        # maxsize=2 keeps memory bounded; cloud frames supersede each other,
+        # so a backlog longer than that is wasted bandwidth.
+        q: asyncio.Queue = asyncio.Queue(maxsize=2)
+        with self._cloud_lock:
+            self._cloud_subs.append(q)
+            latest = self._latest_cloud_buf
+        return q, latest
+
+    def _cloud_unsubscribe(self, q: asyncio.Queue) -> None:
+        with self._cloud_lock:
+            try:
+                self._cloud_subs.remove(q)
             except ValueError:
                 pass
 
@@ -2248,6 +2302,30 @@ class GatewayModule(Module, layer=6):
                 logger.info("Teleop WS disconnected (%d clients)", gw._teleop_clients)
 
         app.add_websocket_route("/ws/teleop", ws_teleop_endpoint)
+
+        # ── WebSocket binary point cloud ───────────────────────────────────
+        # Replaces the old SSE "map_cloud" JSON payload.  Each frame is a
+        # quantized int16 packet (see core.utils.binary_codec).  The browser
+        # consumes it via a WebWorker that produces a Float32Array used
+        # directly as the geometry's position buffer — no per-point JS
+        # allocation, no main-thread parsing.
+        async def ws_cloud_endpoint(ws: StarletteWebSocket):
+            await ws.accept()
+            q, latest = gw._cloud_subscribe()
+            try:
+                if latest is not None:
+                    await ws.send_bytes(latest)
+                while True:
+                    buf = await q.get()
+                    await ws.send_bytes(buf)
+            except StarletteWebSocketDisconnect:
+                pass
+            except Exception as e:
+                logger.debug("cloud ws send failed: %s", e)
+            finally:
+                gw._cloud_unsubscribe(q)
+
+        app.add_websocket_route("/ws/cloud", ws_cloud_endpoint)
 
         # Serve React dashboard (web/dist/) at root — must be last mount
         import os as _os

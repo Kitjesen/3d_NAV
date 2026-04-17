@@ -10,6 +10,12 @@ import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import type { PathPoint, CostmapEvent, SlopeGridEvent, SceneGraphEvent } from '../types'
+import type { BinaryCloud } from '../hooks/useBinaryCloud'
+
+// Pre-allocated GPU capacity for the live point cloud.  60k matches the
+// gateway's per-frame cap; 200k gives headroom for future tuning without
+// reallocating the BufferGeometry on the GPU.
+const CLOUD_CAPACITY = 200_000
 
 export interface Scene3DHandle {
   resetCamera(): void
@@ -27,7 +33,7 @@ interface Layers {
 }
 
 interface Scene3DProps {
-  cloudFlat:    number[]
+  cloud:        BinaryCloud
   savedMapFlat?: number[]
   costmap:      CostmapEvent | null
   slopeGrid:    SlopeGridEvent | null
@@ -47,31 +53,9 @@ interface Scene3DProps {
 const Z_FLOOR   = -0.2  // include floor-level scan points
 const Z_CEIL    = 2.8   // ignore points above ceiling (m)
 
-// Turbo colormap (matches Foxglove/dimos default)
-// Polynomial approximation of Google's turbo colormap
-// Neutral cool→warm gradient for point cloud height coloring.
-// Low (floor)   → cool teal (matches --accent)
-// Mid           → neutral dim gray
-// High (ceiling) → warm amber
-// No rainbow — stays visually quiet so cost map / path are primary focus.
-function turboColor(col: THREE.Color, t: number) {
-  t = Math.max(0, Math.min(1, t))
-  // Low teal (0.18, 0.55, 0.50) → mid gray (0.55, 0.55, 0.55) → high amber (0.78, 0.60, 0.35)
-  const lerp = (a: number, b: number, x: number) => a + (b - a) * x
-  let r: number, g: number, b: number
-  if (t < 0.5) {
-    const u = t * 2
-    r = lerp(0.18, 0.55, u)
-    g = lerp(0.55, 0.55, u)
-    b = lerp(0.50, 0.55, u)
-  } else {
-    const u = (t - 0.5) * 2
-    r = lerp(0.55, 0.78, u)
-    g = lerp(0.55, 0.60, u)
-    b = lerp(0.55, 0.35, u)
-  }
-  col.setRGB(r, g, b)
-}
+// Turbo-style height colormap is now applied inside the cloud decoder
+// worker (see web/src/workers/cloudDecoder.ts) so the main thread never
+// iterates per point.
 
 function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) {
   if (!obj) return
@@ -82,7 +66,7 @@ function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) 
 }
 
 export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
-  { cloudFlat, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, localPath, layers, pointSize, onPendingGoal, pendingGoal },
+  { cloud, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, localPath, layers, pointSize, onPendingGoal, pendingGoal },
   ref,
 ) {
   const mountRef   = useRef<HTMLDivElement>(null)
@@ -197,58 +181,69 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     if (gridRef.current) gridRef.current.visible = layers.grid
   }, [layers.grid])
 
-  // ── Voxel height map ────────────────────────────────────────────
+  // ── Live point cloud (in-place GPU update) ──────────────────────
+  // The mesh + buffers are allocated ONCE at CLOUD_CAPACITY.  Each frame
+  // we copy the worker-decoded Float32Array into the existing attribute
+  // and bump needsUpdate + drawRange — no dispose, no GC pressure, no
+  // per-point JS work on the main thread (the worker already did colors).
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
-
-    if (voxelRef.current) {
-      scene.remove(voxelRef.current)
-      voxelRef.current.geometry.dispose()
-      ;(voxelRef.current.material as THREE.Material).dispose()
-      voxelRef.current = null
-    }
-
-    if (!layers.cloud || cloudFlat.length < 3) return
-
-    // Collect all valid points (skip floor/ceiling noise)
-    const positions: number[] = []
-    const colors:    number[] = []
-
-    // First pass: collect Z values for percentile range
-    const allZ: number[] = []
-    for (let i = 2; i < cloudFlat.length; i += 3) {
-      const wz = cloudFlat[i]
-      if (wz > Z_FLOOR && wz < Z_CEIL) allZ.push(wz)
-    }
-    if (allZ.length === 0) return
-    allZ.sort((a, b) => a - b)
-    const zLo = allZ[Math.floor(allZ.length * 0.02)]
-    const zHi = allZ[Math.floor(allZ.length * 0.98)]
-    const zSpan = Math.max(zHi - zLo, 0.1)
-
-    // Second pass: build point positions + per-point colors
-    const col = new THREE.Color()
-    for (let i = 0; i + 2 < cloudFlat.length; i += 3) {
-      const wx = cloudFlat[i], wy = cloudFlat[i + 1], wz = cloudFlat[i + 2]
-      if (wz < Z_FLOOR || wz > Z_CEIL) continue
-      positions.push(wx, wz, -wy)   // Three.js: Y=height, Z=-worldY
-      const t = Math.max(0, Math.min(1, (wz - zLo) / zSpan))
-      turboColor(col, t)
-      colors.push(col.r, col.g, col.b)
-    }
-    if (positions.length === 0) return
+    if (voxelRef.current) return  // already initialised
 
     const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-    geo.setAttribute('color',    new THREE.Float32BufferAttribute(colors,    3))
+    const posAttr = new THREE.BufferAttribute(new Float32Array(CLOUD_CAPACITY * 3), 3)
+    const colAttr = new THREE.BufferAttribute(new Float32Array(CLOUD_CAPACITY * 3), 3)
+    posAttr.setUsage(THREE.DynamicDrawUsage)
+    colAttr.setUsage(THREE.DynamicDrawUsage)
+    geo.setAttribute('position', posAttr)
+    geo.setAttribute('color', colAttr)
+    geo.setDrawRange(0, 0)
+    // Bounding sphere is recomputed lazily; set a generous one so frustum
+    // culling never hides points before the first real frame arrives.
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 200)
 
-    const mat  = new THREE.PointsMaterial({ size: pointSize, vertexColors: true, sizeAttenuation: true })
+    const mat = new THREE.PointsMaterial({
+      size: pointSize, vertexColors: true, sizeAttenuation: true,
+    })
     const mesh = new THREE.Points(geo, mat)
-
+    mesh.frustumCulled = false
     scene.add(mesh)
     voxelRef.current = mesh as unknown as THREE.InstancedMesh
-  }, [cloudFlat, layers.cloud])
+    // pointSize is updated by the dedicated "Live point size update" effect
+    // below, so this initialiser only runs once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const mesh = voxelRef.current as unknown as THREE.Points | null
+    if (!mesh) return
+    mesh.visible = layers.cloud
+  }, [layers.cloud])
+
+  useEffect(() => {
+    const mesh = voxelRef.current as unknown as THREE.Points | null
+    if (!mesh) return
+    const geo = mesh.geometry
+    const posAttr = geo.getAttribute('position') as THREE.BufferAttribute
+    const colAttr = geo.getAttribute('color') as THREE.BufferAttribute
+    const n = Math.min(cloud.count, CLOUD_CAPACITY)
+    if (n === 0) {
+      geo.setDrawRange(0, 0)
+      return
+    }
+    ;(posAttr.array as Float32Array).set(cloud.positions.subarray(0, n * 3))
+    ;(colAttr.array as Float32Array).set(cloud.colors.subarray(0, n * 3))
+    // Tell Three.js exactly which sub-range changed so the WebGL driver
+    // uploads only the live points instead of the full CLOUD_CAPACITY buffer.
+    posAttr.clearUpdateRanges()
+    posAttr.addUpdateRange(0, n * 3)
+    colAttr.clearUpdateRanges()
+    colAttr.addUpdateRange(0, n * 3)
+    posAttr.needsUpdate = true
+    colAttr.needsUpdate = true
+    geo.setDrawRange(0, n)
+  }, [cloud.seq, cloud.count, cloud.positions, cloud.colors])
 
   // ── Live point size update ─────────────────────────────────────
   useEffect(() => {

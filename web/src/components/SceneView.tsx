@@ -7,6 +7,7 @@ import {
 import type { SSEState, MapInfo, PathPoint, ToastKind, SlamProfile } from '../types'
 import * as api from '../services/api'
 import { useCamera } from '../hooks/useCamera'
+import { useBinaryCloud } from '../hooks/useBinaryCloud'
 import { PromptModal, ConfirmModal } from './Modal'
 import { Scene3D, type Scene3DHandle } from './Scene3D'
 import styles from './SceneView.module.css'
@@ -73,6 +74,9 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const [slamSwitchTarget, setSlamSwitchTarget] = useState<SlamProfile | null>(null)
 
   const { imgSrc: cameraImgSrc, connected: cameraConnected } = useCamera()
+  // Binary point-cloud channel (replaces SSE JSON map_cloud).  The hook
+  // owns the WebSocket + decoder worker; we just consume the latest frame.
+  const cloud = useBinaryCloud()
 
   const rawPath = sseState.globalPath?.points ?? []
   const path = rawPath.filter(
@@ -105,7 +109,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const hasGoal      = missionState === 'EXECUTING' || missionState === 'PLANNING'
   const slamMode     = sseState.slamStatus?.mode ?? '—'
   const slamHz       = sseState.slamStatus?.slam_hz ?? 0
-  const cloudFlat    = sseState.mapCloud?.points ?? []
+  // Legacy SSE map_cloud now carries only metadata (count/seq) — points
+  // are streamed over /ws/cloud and live in `cloud.positions`.
 
   // ── Load map list ─────────────────────────────────────────────
   const loadMaps = useCallback(async () => {
@@ -441,7 +446,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
           <div className={styles.canvasWrap}>
             <Scene3D
               ref={scene3DRef}
-              cloudFlat={cloudFlat}
+              cloud={cloud}
               savedMapFlat={savedMapFlat ?? sseState.savedMap?.points}
               costmap={sseState.costmap ?? null}
               slopeGrid={sseState.slopeGrid ?? null}
