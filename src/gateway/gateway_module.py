@@ -447,7 +447,19 @@ class GatewayModule(Module, layer=6):
         return pts[np.sort(unique_idx)]
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
-        """Accumulate map cloud with voxel downsampling; push 30k pts to SSE every 5 frames."""
+        """Accumulate map cloud and push a DETERMINISTIC voxel-downsampled view.
+
+        Changes from the previous implementation:
+          1. Voxel-downsample every frame (incremental, not only at 300k)
+             so the total point count grows smoothly.
+          2. Push to SSE every 2 frames (~0.5 Hz) — previously 5 frames
+             made the cloud look frozen.
+          3. Send the ENTIRE downsampled cloud (after voxel), not a random
+             sample. Random sampling made consecutive pushes show different
+             subsets, which looked like the cloud "not accumulating".
+          4. Cap at ~60k for SSE bandwidth, adaptive voxel size doubles
+             when over cap so the downsample is stable across frames.
+        """
         self._map_cloud_count += 1
         pts = cloud.points  # (N, 3) float32
         if pts is None or len(pts) == 0:
@@ -458,25 +470,39 @@ class GatewayModule(Module, layer=6):
                 self._map_points = pts
             else:
                 combined = np.concatenate([self._map_points, pts], axis=0)
-                # Voxel-downsample when accumulated cloud grows large
-                if len(combined) > 300_000:
-                    combined = self._voxel_downsample(combined, self._map_voxel_size)
+                # Voxel-downsample EVERY frame at a fixed grid so the
+                # resulting cloud is deterministic and grows monotonically
+                # as new points appear in new voxels.
+                combined = self._voxel_downsample(combined, self._map_voxel_size)
                 self._map_points = combined
 
-        # Push to SSE at ~0.2Hz (every 5 frames)
-        if self._map_cloud_count % 5 == 0:
-            with self._map_cloud_lock:
-                pts_all = self._map_points
-            if pts_all is None:
-                return
-            # Sample ≤30k points for SSE bandwidth
-            if len(pts_all) > 30_000:
-                idx = np.random.choice(len(pts_all), 30_000, replace=False)
-                pts_send = pts_all[idx]
-            else:
-                pts_send = pts_all
-            flat = pts_send[:, :3].astype(np.float32).flatten().tolist()
-            self.push_event({"type": "map_cloud", "points": flat, "count": len(pts_send)})
+        # Push to SSE at ~0.5Hz (every 2 frames) — often enough to look
+        # "live accumulating" without flooding the browser.
+        if self._map_cloud_count % 2 != 0:
+            return
+
+        with self._map_cloud_lock:
+            pts_all = self._map_points
+        if pts_all is None:
+            return
+
+        # Adaptive voxel: if still too many points after base voxel, grow
+        # the voxel size so the send list stays in [30k, 60k] range and
+        # stable across frames (same voxel grid → same point set).
+        MAX_SEND = 60_000
+        if len(pts_all) > MAX_SEND:
+            scale = (len(pts_all) / MAX_SEND) ** (1 / 3)
+            coarse_voxel = self._map_voxel_size * max(1.0, scale)
+            pts_send = self._voxel_downsample(pts_all, coarse_voxel)
+            # Final hard cap — deterministic stride, not random
+            if len(pts_send) > MAX_SEND:
+                stride = max(1, len(pts_send) // MAX_SEND)
+                pts_send = pts_send[::stride][:MAX_SEND]
+        else:
+            pts_send = pts_all
+
+        flat = pts_send[:, :3].astype(np.float32).flatten().tolist()
+        self.push_event({"type": "map_cloud", "points": flat, "count": len(pts_send)})
 
     def _get_slam_profile(self) -> str:
         """Return current SLAM profile (cached 5s): fastlio2 / localizer / stopped."""
