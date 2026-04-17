@@ -50,7 +50,9 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     grid: true, cloud: true, trail: true, path: true, goal: true, robot: true, costmap: false, slope: false,
   })
   const [maps, setMaps] = useState<MapInfo[]>([])
-  const [pointSize, setPointSize] = useState(0.05)
+  // Default 0.12 (12cm sphere per point) — with ~18k points in a room-scale
+  // scene this gives a visually dense cloud. User can shrink via slider.
+  const [pointSize, setPointSize] = useState(0.12)
   const [savedMapFlat, setSavedMapFlat] = useState<number[] | undefined>(undefined)
   const [relocOpen, setRelocOpen] = useState(false)
   const [relocDropOpen, setRelocDropOpen] = useState(false)
