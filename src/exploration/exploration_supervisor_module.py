@@ -83,7 +83,7 @@ class ExplorationSupervisorModule(Module, layer=5):
         self._fallback_timeout_s = float(fallback_timeout_s)
         self._interval = 1.0 / max(float(poll_hz), 0.5)
 
-        self._last_stats: Optional[dict] = None
+        self._last_stats: dict | None = None
         self._last_stats_ts: float = 0.0
         self._mode: str = MODE_UNINIT
         self._reason: str = "no tare_stats received yet"
@@ -91,7 +91,7 @@ class ExplorationSupervisorModule(Module, layer=5):
         self._degraded_ticks: int = 0
         self._fallback_requested: bool = False
         self._shutdown = threading.Event()
-        self._watchdog: Optional[threading.Thread] = None
+        self._watchdog: threading.Thread | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -149,7 +149,7 @@ class ExplorationSupervisorModule(Module, layer=5):
             "ts": _time.time(),
         })
 
-    def _evaluate(self) -> tuple[str, str, Optional[float]]:
+    def _evaluate(self) -> tuple[str, str, float | None]:
         """Classify current state and return (mode, reason, wp_age_seconds)."""
         stats = self._last_stats
         if stats is None:

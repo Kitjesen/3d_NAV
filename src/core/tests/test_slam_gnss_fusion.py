@@ -442,6 +442,7 @@ class TestAntennaOffset(unittest.TestCase):
         now points in +Y direction of map. So antenna_map_offset = (0, 0.5).
         """
         import math
+
         from core.msgs.geometry import Quaternion
 
         m = _make_bridge(gnss_antenna_offset=(0.5, 0.0, 0.0))

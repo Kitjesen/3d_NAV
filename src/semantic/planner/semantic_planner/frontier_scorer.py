@@ -26,8 +26,6 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import logging
-
 import numpy as np
 import yaml
 

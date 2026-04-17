@@ -5,9 +5,7 @@ import { useToast } from './hooks/useToast'
 import { Topbar } from './components/Topbar'
 import { CameraFeed } from './components/CameraFeed'
 import { ChatPanel } from './components/ChatPanel'
-import { GpsCard } from './components/GpsCard'
-import { GnssCard } from './components/GnssCard'
-import { GnssFusionCard } from './components/GnssFusionCard'
+import { LocalizationCard } from './components/LocalizationCard'
 import { StatusBar } from './components/StatusBar'
 import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
@@ -57,18 +55,18 @@ function Dashboard() {
             </FloatingWidget>
 
             <FloatingWidget
-              id="gps"
+              id="localization"
               defaultPos={{ x: 1016, y: 0 }}
-              defaultSize={{ w: 440, h: 510 }}
-              minSize={{ w: 280, h: 340 }}
+              defaultSize={{ w: 460, h: 380 }}
+              minSize={{ w: 300, h: 280 }}
             >
-              <GpsCard sseState={sseState} />
+              <LocalizationCard sseState={sseState} />
             </FloatingWidget>
 
             <FloatingWidget
               id="minimap"
-              defaultPos={{ x: 1472, y: 0 }}
-              defaultSize={{ w: 420, h: 510 }}
+              defaultPos={{ x: 1492, y: 0 }}
+              defaultSize={{ w: 400, h: 380 }}
               minSize={{ w: 240, h: 260 }}
             >
               <MiniMap sseState={sseState} />
@@ -76,29 +74,11 @@ function Dashboard() {
 
             <FloatingWidget
               id="chat"
-              defaultPos={{ x: 1016, y: 526 }}
-              defaultSize={{ w: 456, h: 404 }}
-              minSize={{ w: 340, h: 280 }}
+              defaultPos={{ x: 1016, y: 396 }}
+              defaultSize={{ w: 876, h: 534 }}
+              minSize={{ w: 340, h: 260 }}
             >
               <ChatPanel sseState={sseState} />
-            </FloatingWidget>
-
-            <FloatingWidget
-              id="gnss"
-              defaultPos={{ x: 1488, y: 526 }}
-              defaultSize={{ w: 420, h: 404 }}
-              minSize={{ w: 280, h: 340 }}
-            >
-              <GnssCard sseState={sseState} />
-            </FloatingWidget>
-
-            <FloatingWidget
-              id="gnss-fusion"
-              defaultPos={{ x: 1488, y: 940 }}
-              defaultSize={{ w: 420, h: 340 }}
-              minSize={{ w: 280, h: 260 }}
-            >
-              <GnssFusionCard sseState={sseState} />
             </FloatingWidget>
 
             <button

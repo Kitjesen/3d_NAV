@@ -439,7 +439,6 @@ class VisualServoModule(Module, layer=4):
         yaw_samples: list[float] = []
         dt = 0.05  # 20 Hz sampling
         n_steps = int(duration / dt)
-        relay_amplitude = self._bbox_nav._gain_tuner.relay_amplitude
 
         odom_available = False
         try:

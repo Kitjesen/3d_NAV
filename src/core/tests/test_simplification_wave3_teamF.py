@@ -30,7 +30,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Helpers to mock heavy deps before importing modules under test
 # ---------------------------------------------------------------------------
@@ -259,7 +258,7 @@ class TestGainAutoTuner(unittest.TestCase):
     def test_zn_degenerate_returns_defaults(self):
         """T_u=0 or a_u=0 → converged=0.0, returns safe default gains."""
         tuner = self._make_tuner()
-        K_u, Kp, Kd, converged = tuner.compute_zn_pd(0.0, 0.5)
+        _K_u, Kp, _Kd, converged = tuner.compute_zn_pd(0.0, 0.5)
         self.assertEqual(converged, 0.0)
         # Should return the DimOS default angular gain (1.5) or any safe value
         self.assertGreater(Kp, 0.0)

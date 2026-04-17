@@ -72,7 +72,7 @@ class OccupancyGridModule(Module, layer=2):
 
     def setup(self) -> None:
         try:
-            import scipy.ndimage  # noqa: F401  — required by _inflate
+            import scipy.ndimage
         except ImportError as e:
             raise RuntimeError(
                 "OccupancyGridModule requires scipy for binary_dilation. "

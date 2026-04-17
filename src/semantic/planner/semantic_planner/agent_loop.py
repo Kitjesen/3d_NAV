@@ -460,9 +460,9 @@ class AgentLoop:
                 f"unknown tool '{name}'. Valid tools start with: {sample}"
             )
         schema = self._tool_schemas.get(name, {})
-        for field in schema.get("required", []):
-            if field not in args:
-                return f"missing required argument '{field}' for tool '{name}'"
+        for required_field in schema.get("required", []):
+            if required_field not in args:
+                return f"missing required argument '{required_field}' for tool '{name}'"
         return None
 
     async def _execute_tool(self, tool_call: dict, state: AgentState) -> str:

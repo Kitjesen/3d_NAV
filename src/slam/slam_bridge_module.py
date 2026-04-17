@@ -373,7 +373,8 @@ class SlamBridgeModule(Module, layer=1):
         If no good position was ever recorded (SLAM diverged from startup),
         falls back to origin (0, 0, 0).
         """
-        import os, subprocess
+        import os
+        import subprocess
         pos = self._drift_last_good_pos
         yaw = self._drift_last_good_yaw
         if pos is None:

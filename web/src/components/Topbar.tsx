@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Settings, Radio } from 'lucide-react'
 import type { SSEState, Tab } from '../types'
+import { SettingsMenu } from './SettingsMenu'
 import styles from './Topbar.module.css'
 
 const SLAM_MODE_ZH: Record<string, string> = {
@@ -43,6 +45,7 @@ interface TopbarProps {
 }
 
 export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const estop = sseState.safetyState?.estop ?? false
   const odom = sseState.odometry
   const posLabel =
@@ -141,10 +144,17 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
       </div>
 
       <div className={styles.right}>
-        <button className={styles.btnIcon} aria-label="设置">
+        <button
+          className={styles.btnIcon}
+          aria-label="设置"
+          aria-expanded={settingsOpen}
+          onClick={() => setSettingsOpen(v => !v)}
+        >
           <Settings size={16} />
         </button>
       </div>
+
+      <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </header>
   )
 }

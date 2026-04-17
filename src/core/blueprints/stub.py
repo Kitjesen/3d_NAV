@@ -23,19 +23,33 @@ from core.blueprint import Blueprint
 from core.module import Module
 from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
+from core.msgs.semantic import SceneGraph
+from core.msgs.sensor import Image
 from core.registry import register
 from core.stream import In, Out
 
 
 @register("driver", "stub", priority=0, description="Fake driver for CI/testing, no hardware")
 class StubDogModule(Module, layer=1):
-    """Stub driver for CI/testing.  No hardware.  Publishes fake odometry."""
+    """Stub driver for CI/testing.  No hardware.  Publishes fake odometry.
+
+    Also declares (but does not publish) the camera/depth/scene_graph Out
+    ports that real drivers expose. Lets `full_stack_blueprint()` autowire
+    downstream consumers (Perception, Reconstruction, Teleop, VisualServo,
+    DepthVisualOdom) without errors. Consumers simply never see any frame
+    when running against the stub — correct behaviour for CI.
+    """
 
     # -- Port declarations (same interface as HanDogModule) --
     cmd_vel: In[Twist]
     stop_signal: In[int]
     odometry: Out[Odometry]
     alive: Out[bool]
+    # Camera / perception placeholders — declared for wire compatibility,
+    # never published by the stub driver.
+    camera_image: Out[Image]
+    depth_image: Out[Image]
+    scene_graph: Out[SceneGraph]
 
     def __init__(self, initial_x: float = 0.0, initial_y: float = 0.0,
                  initial_yaw: float = 0.0, **kw: Any) -> None:

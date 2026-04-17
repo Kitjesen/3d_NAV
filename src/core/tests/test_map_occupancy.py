@@ -18,7 +18,6 @@ import pytest
 
 from nav.services.nav_services.map_manager_module import MapManagerModule
 
-
 # ── PCD helpers ────────────────────────────────────────────────────────────
 
 def _write_ascii_pcd(path: Path, points: np.ndarray) -> None:

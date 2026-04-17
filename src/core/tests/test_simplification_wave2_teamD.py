@@ -8,9 +8,14 @@ from __future__ import annotations
 import math
 import time
 import unittest
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from base_autonomy.modules.path_follower_module import PathFollowerModule
+    from nav.navigation_module import NavigationModule
 
 # ---------------------------------------------------------------------------
 # W2-4: PathFollower adaptive Pure Pursuit
@@ -19,7 +24,7 @@ import numpy as np
 class TestAdaptivePurePursuit(unittest.TestCase):
     """Verify the adaptive Pure Pursuit improvements in the pid backend."""
 
-    def _make_module(self, max_speed: float = 0.5) -> "PathFollowerModule":
+    def _make_module(self, max_speed: float = 0.5) -> PathFollowerModule:
         from base_autonomy.modules.path_follower_module import PathFollowerModule
 
         m = PathFollowerModule(backend="pid", max_speed=max_speed)
@@ -109,10 +114,6 @@ class TestTerrainModuleNumpyPath(unittest.TestCase):
         m = TerrainModule(backend="simple")
         m.setup()  # simple backend — no C++ needed
 
-        # Build a 60K-point cloud — previously would be halved
-        N = 60_000
-        pts = np.random.rand(N, 3).astype(np.float32)
-
         # Read the source to confirm the old truncation constant is gone
         import inspect
         src = inspect.getsource(TerrainModule._process_nanobind)
@@ -141,7 +142,7 @@ class TestTerrainModuleNumpyPath(unittest.TestCase):
 class TestContextAwareRecovery(unittest.TestCase):
     """Verify recovery strategies are selected based on traversability class."""
 
-    def _make_nav(self) -> "NavigationModule":
+    def _make_nav(self) -> NavigationModule:
         """Create a NavigationModule with mocked planner and tracker."""
         from nav.navigation_module import MissionState, NavigationModule
 

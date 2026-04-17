@@ -9,7 +9,6 @@ import types
 import unittest
 from unittest.mock import MagicMock, patch
 
-
 # ---------------------------------------------------------------------------
 # W2-2: InstanceTracker — fx=0 should warn once and skip 3D extent
 # ---------------------------------------------------------------------------
@@ -118,6 +117,7 @@ class TestTraversabilityCostResample(unittest.TestCase):
     def test_resample_bilinear_centre_cell(self):
         """Bilinear resample of a uniform grid returns the same constant value."""
         import numpy as np
+
         from nav.traversability_cost_module import _resample_to_grid
 
         src = np.full((4, 4), 50.0, dtype=np.float32)
@@ -147,6 +147,7 @@ class TestTraversabilityCostResample(unittest.TestCase):
         a value in the 20-30 band unambiguously proves bilinear is active.
         """
         import numpy as np
+
         from nav.traversability_cost_module import _resample_to_grid
 
         src = np.array([[0.0, 0.0], [0.0, 100.0]], dtype=np.float32)
@@ -223,8 +224,8 @@ class TestSlamBridgeDofMaskPreference(unittest.TestCase):
 
     def _make_odom(self, x=0.0, y=0.0, z=0.0):
         """Build a minimal Odometry-like object."""
+        from core.msgs.geometry import Pose, Quaternion, Vector3
         from core.msgs.nav import Odometry
-        from core.msgs.geometry import Pose, Vector3, Quaternion
         return Odometry(
             pose=Pose(
                 position=Vector3(x, y, z),
@@ -244,7 +245,7 @@ class TestSlamBridgeDofMaskPreference(unittest.TestCase):
 
         slam_odom = self._make_odom(0.0, 0.0, 0.0)
         with patch("logging.Logger.debug") as mock_debug:
-            result = bridge._fuse_odometry(slam_odom)
+            bridge._fuse_odometry(slam_odom)
 
         debug_msgs = [str(c) for c in mock_debug.call_args_list]
         eigenvalue_logged = any("eigenvalue" in m for m in debug_msgs)
@@ -258,7 +259,7 @@ class TestSlamBridgeDofMaskPreference(unittest.TestCase):
 
         slam_odom = self._make_odom(0.0, 0.0, 0.0)
         with patch("logging.Logger.debug") as mock_debug:
-            result = bridge._fuse_odometry(slam_odom)
+            bridge._fuse_odometry(slam_odom)
 
         debug_msgs = [str(c) for c in mock_debug.call_args_list]
         heuristic_logged = any("heuristic" in m for m in debug_msgs)
@@ -273,7 +274,7 @@ class TestSlamBridgeDofMaskPreference(unittest.TestCase):
 
         slam_odom = self._make_odom(0.0, 0.0, 0.0)
         with patch("logging.Logger.debug") as mock_debug:
-            result = bridge._fuse_odometry(slam_odom)
+            bridge._fuse_odometry(slam_odom)
 
         debug_msgs = [str(c) for c in mock_debug.call_args_list]
         heuristic_logged = any("heuristic" in m for m in debug_msgs)

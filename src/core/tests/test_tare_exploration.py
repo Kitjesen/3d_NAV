@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from core.msgs.geometry import PoseStamped
 
-
 # ─── Bridge module ───────────────────────────────────────────────────────────
 
 class TestTAREExplorerModulePorts(unittest.TestCase):
@@ -128,6 +127,7 @@ class TestTAREskills(unittest.TestCase):
 
     def test_get_tare_status_returns_json(self):
         import json
+
         from exploration.tare_explorer_module import TAREExplorerModule
         m = TAREExplorerModule(auto_start=False)
         parsed = json.loads(m.get_tare_status())

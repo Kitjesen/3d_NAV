@@ -64,7 +64,7 @@ class ESDFModule(Module, layer=2):
 
     def setup(self) -> None:
         try:
-            import scipy.ndimage  # noqa: F401  — required by distance_transform_edt
+            import scipy.ndimage
         except ImportError as e:
             raise RuntimeError(
                 "ESDFModule requires scipy for distance_transform_edt. "

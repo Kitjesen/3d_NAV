@@ -16,7 +16,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Helper: build a minimal fake sentence-transformers package
 # ---------------------------------------------------------------------------

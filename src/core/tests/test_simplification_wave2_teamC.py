@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Helpers — build a minimal PerceptionModule without importing ROS2 or torch
 # ---------------------------------------------------------------------------
@@ -200,7 +199,7 @@ class TestGenerateMasks(unittest.TestCase):
         self.assertEqual(len(masks), 2)
         for i, m in enumerate(masks):
             self.assertIsNotNone(m, f"mask {i} should not be None")
-            mask_crop, ox1, oy1 = m
+            mask_crop, _ox1, _oy1 = m
             self.assertEqual(mask_crop.dtype, bool, "mask dtype must be bool")
             # Crop dimensions match bbox pixel size
             box = raw[i][0].astype(int)

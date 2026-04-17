@@ -1741,14 +1741,22 @@ class GatewayModule(Module, layer=6):
         import sys
         old_interval = sys.getswitchinterval()
         sys.setswitchinterval(0.001)
+        uvicorn = None
         try:
-            import uvicorn
+            import uvicorn as _uv
+            uvicorn = _uv
+        except ImportError:
+            logger.error("uvicorn not installed — run: pip install 'uvicorn[standard]'")
+            return
+        try:
+            # uvloop only ships for Linux/macOS; "auto" picks uvloop where
+            # available and falls back to asyncio on Windows.
             config = uvicorn.Config(
                 self._app,
                 host=self._host,
                 port=self._port,
                 log_level="warning",
-                loop="uvloop",
+                loop="auto",
                 ws="auto",
                 lifespan="off",
                 timeout_keep_alive=30,
@@ -1758,8 +1766,6 @@ class GatewayModule(Module, layer=6):
             logger.info("uvicorn server.run() starting on %s:%d", self._host, self._port)
             server.run()
             logger.error("uvicorn server.run() returned unexpectedly")
-        except ImportError:
-            logger.error("uvicorn not installed — run: pip install 'uvicorn[standard]'")
         except Exception:
             logger.exception("uvicorn crashed")
         finally:

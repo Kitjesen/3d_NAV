@@ -443,7 +443,7 @@ class NavigationModule(Module, layer=5):
     # backup, rotate, and optional forward-nudge phases — setting a phase's
     # duration to 0 skips it. The default strategy (1.5s backup + 1.5s rotate)
     # kicks in for "unknown" or any class not listed below.
-    _RECOVERY_STRATEGIES: Dict[str, Dict[str, Any]] = {
+    _RECOVERY_STRATEGIES: dict[str, dict[str, Any]] = {
         "cliff": {
             "strategy": "rotate_only",
             "backup_speed": 0.0, "backup_duration": 0.0,
@@ -482,7 +482,7 @@ class NavigationModule(Module, layer=5):
         },
     }
 
-    _DEFAULT_RECOVERY_STRATEGY: Dict[str, Any] = {
+    _DEFAULT_RECOVERY_STRATEGY: dict[str, Any] = {
         "strategy": "default_backup_rotate",
         "backup_speed": -0.2, "backup_duration": 1.5,
         "rotate_speed": 0.5,  "rotate_duration": 1.5,

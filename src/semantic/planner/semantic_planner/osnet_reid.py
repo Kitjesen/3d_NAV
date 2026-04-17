@@ -27,7 +27,7 @@ _OSNET_INPUT_W = 128
 _OSNET_FEAT_DIM = 512
 
 
-def _try_load_bpu(model_path: str) -> Optional[object]:
+def _try_load_bpu(model_path: str) -> object | None:
     """Attempt to load the BPU .hbm model via bpu_infer.
 
     Returns the loaded BPU model handle, or None if bpu_infer is unavailable.
@@ -51,7 +51,7 @@ def _try_load_bpu(model_path: str) -> Optional[object]:
         ) from exc
 
 
-def _try_load_torchreid() -> Optional[object]:
+def _try_load_torchreid() -> object | None:
     """Attempt to load OSNet via torchreid (for dev/non-BPU machines).
 
     Returns a callable extractor, or None if torchreid is unavailable.

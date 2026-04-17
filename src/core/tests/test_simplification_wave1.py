@@ -16,7 +16,6 @@ import numpy as np
 
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
 
-
 # ---------------------------------------------------------------------------
 # W1-1  LocalPlannerModule — no silent fallback to straight-line paths
 # ---------------------------------------------------------------------------
@@ -124,6 +123,7 @@ class TestW1WaypointTrackerYaw(unittest.TestCase):
     def test_distance_only_legacy_behaviour_preserved(self):
         """Callers that don't supply yaw see the original distance-only logic."""
         import time as _t
+
         from nav.waypoint_tracker import EV_STUCK, EV_STUCK_WARN
         tracker = self._mk()
         path = [np.array([5.0, 0.0, 0.0])]
@@ -154,6 +154,7 @@ class TestW1WaypointTrackerYaw(unittest.TestCase):
     def test_tiny_spin_with_no_distance_eventually_triggers_stuck(self):
         """Sub-threshold yaw + sub-threshold dist = still stuck after warn."""
         import time as _t
+
         from nav.waypoint_tracker import EV_STUCK, EV_STUCK_WARN
         tracker = self._mk()
         path = [np.array([5.0, 0.0, 0.0])]

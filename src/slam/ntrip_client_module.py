@@ -228,15 +228,15 @@ class NtripClientModule(Module, layer=1):
             while b"\r\n\r\n" not in header and b"ICY 200 OK" not in header:
                 chunk = sock.recv(512)
                 if not chunk:
-                    raise IOError("NTRIP caster closed during handshake")
+                    raise OSError("NTRIP caster closed during handshake")
                 header += chunk
                 if len(header) > 8192:
-                    raise IOError("NTRIP handshake too long — likely not a caster")
+                    raise OSError("NTRIP handshake too long — likely not a caster")
 
             if b"ICY 200 OK" not in header and b" 200 " not in header:
                 # Surface 401 / 404 to logs for diagnosis
                 snippet = header[:200].decode("ascii", errors="replace").strip()
-                raise IOError(f"NTRIP handshake rejected: {snippet}")
+                raise OSError(f"NTRIP handshake rejected: {snippet}")
 
             # Trim any body-start bytes that came after the header
             sep = header.find(b"\r\n\r\n")
@@ -259,10 +259,10 @@ class NtripClientModule(Module, layer=1):
 
                 try:
                     chunk = sock.recv(self._read_chunk)
-                except socket.timeout:
+                except TimeoutError:
                     continue
                 if not chunk:
-                    raise IOError("NTRIP caster closed the stream")
+                    raise OSError("NTRIP caster closed the stream")
                 self._handle_rtcm(chunk)
         finally:
             try:

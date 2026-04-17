@@ -680,7 +680,7 @@ class BPUDetector(DetectorBase):
             return masks_list
 
         # Resolve proto tensor name: primary, then override fallback.
-        proto_key: Optional[str] = None
+        proto_key: str | None = None
         if self._proto_name and self._proto_name in outputs:
             proto_key = self._proto_name
         else:

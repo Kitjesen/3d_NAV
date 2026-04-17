@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # import; setup() raises loudly if it's missing (Wave 1 no-silent-fallback
 # discipline). Tests patch this flag to simulate the absence.
 try:
-    import scipy.ndimage  # noqa: F401
+    import scipy.ndimage
     _SCIPY_AVAILABLE = True
 except ImportError:
     _SCIPY_AVAILABLE = False

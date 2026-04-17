@@ -255,7 +255,7 @@ class TestSemanticScoringWeightsConfig:
             relation_count=2,
         )
         with caplog.at_level(logging.DEBUG):
-            scores, reasons = reasoner._score_subgraphs_heuristic(
+            scores, _reasons = reasoner._score_subgraphs_heuristic(
                 instruction="find the chair",
                 candidates=[cand],
                 robot_position={"x": 0.0, "y": 0.0},

@@ -19,7 +19,6 @@ from core.config import RobotConfig, get_config
 from core.native_install import DDS_ENV, exe, share
 from core.native_module import NativeModule, NativeModuleConfig
 
-
 # ── Topic remappings: TARE default  →  LingTu /nav/* ─────────────────────────
 # TARE's upstream topic names are terse (`/terrain_map`, `/state_estimation`,
 # `/registered_scan`). We remap them onto LingTu's canonical ``/nav/*``

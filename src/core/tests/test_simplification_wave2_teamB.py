@@ -14,7 +14,6 @@ from unittest import mock
 
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -36,7 +35,7 @@ def _make_bbox_navigator():
     with mock.patch(
         "semantic_planner.bbox_navigator.get_config", return_value=mock_cfg
     ):
-        from semantic_planner.bbox_navigator import BBoxNavigator, BBoxNavConfig
+        from semantic_planner.bbox_navigator import BBoxNavConfig, BBoxNavigator
         nav = BBoxNavigator(BBoxNavConfig())
     return nav
 
@@ -261,7 +260,7 @@ class TestW212AgentLoopValidation(unittest.TestCase):
         }
         llm = _AsyncMockLLM([bad_call, good_call])
         loop = self._make_loop(llm)
-        state = _run(loop.run("navigate"))
+        _run(loop.run("navigate"))
 
         rejected = [e for e in loop._tool_call_audit if e["tool_name"] == "navigate_to"]
         self.assertTrue(len(rejected) >= 1)
