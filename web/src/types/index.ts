@@ -75,6 +75,32 @@ export interface MapCloudEvent {
   count: number
 }
 
+export interface SavedMapEvent {
+  type: 'saved_map'  // localizer-refined static map, map frame, the 底图
+  points: number[]
+  count: number
+}
+
+export interface SessionEvent {
+  type: 'session'
+  data: {
+    mode: 'idle' | 'mapping' | 'navigating' | 'exploring'
+    active_map: string | null
+    map_has_pcd: boolean
+    map_has_tomogram: boolean
+    since: number
+    pending: boolean
+    error: string
+    icp_quality: number
+    localizer_ready: boolean
+    can_start_mapping: boolean
+    can_start_navigating: boolean
+    can_start_exploring: boolean
+    can_end: boolean
+    explorer_available: boolean
+  }
+}
+
 export interface CostmapEvent {
   type: 'costmap'
   grid_b64: string   // base64-encoded uint8 flat array (0=free, 100=occupied)
@@ -109,6 +135,8 @@ export type SSEEvent =
   | RobotStatusEvent
   | GlobalPathEvent
   | MapCloudEvent
+  | SavedMapEvent
+  | SessionEvent
   | CostmapEvent
   | SlopeGridEvent
   | AgentMessageEvent
@@ -124,6 +152,8 @@ export interface SSEState {
   globalPath: GlobalPathEvent | null
   localPath: LocalPathEvent | null
   mapCloud: MapCloudEvent | null
+  savedMap: SavedMapEvent | null
+  session: SessionEvent['data'] | null
   costmap: CostmapEvent | null
   slopeGrid: SlopeGridEvent | null
   agentMessage: AgentMessageEvent | null  // latest agent chat message (ts dedups)

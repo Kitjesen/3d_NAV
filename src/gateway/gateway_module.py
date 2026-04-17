@@ -234,6 +234,8 @@ class GatewayModule(Module, layer=6):
     # -- Inputs (module → cache) --------------------------------------------
     odometry:       In[Odometry]
     map_cloud:      In[PointCloud2]
+    saved_map:      In[PointCloud2]  # refined static map from localizer (map frame)
+    icp_quality:    In[float]        # /localization_quality — lower=better, 0 = no data
     scene_graph:    In[SceneGraph]
     safety_state:   In[SafetyState]
     mission_status: In[dict]
@@ -321,6 +323,18 @@ class GatewayModule(Module, layer=6):
         self._cached_slam_profile: str = "—"
         self._slam_profile_ts: float = 0.0
 
+        # ── Session state machine (single source of truth) ─────────────────
+        # Every mode transition must go through /api/v1/session/start|end.
+        # Frontend Topbar/Panel render from this state; no other code path
+        # should invoke svc.ensure/stop directly (deprecated /slam/switch
+        # forwards here).
+        self._session_mode: str = "idle"        # idle | mapping | navigating
+        self._session_map: str | None = None    # active map name for navigating
+        self._session_since: float = time.time()
+        self._session_error: str = ""            # last error from start/end
+        self._session_pending: bool = False      # True while transitioning
+        self._icp_quality: float = 0.0           # from localization_quality
+
         # Autonomous exploration state + frontier explorer module ref
         self._exploring: bool = False
         self._frontier_explorer: Any = None
@@ -338,6 +352,10 @@ class GatewayModule(Module, layer=6):
         self.odometry.subscribe(self._on_odometry)
         self.map_cloud.subscribe(self._on_map_cloud)
         self.map_cloud.set_policy("latest")
+        self.saved_map.subscribe(self._on_saved_map)
+        self.saved_map.set_policy("latest")
+        self.icp_quality.subscribe(self._on_icp_quality)
+        self.icp_quality.set_policy("latest")
         self.scene_graph.subscribe(self._on_scene_graph)
         self.safety_state.subscribe(self._on_safety)
         self.mission_status.subscribe(self._on_mission)
@@ -446,6 +464,119 @@ class GatewayModule(Module, layer=6):
         _, unique_idx = np.unique(voxels, axis=0, return_index=True)
         return pts[np.sort(unique_idx)]
 
+    def _on_icp_quality(self, q: float) -> None:
+        try:
+            self._icp_quality = float(q)
+        except Exception:
+            pass
+
+    # ── Session state helpers ─────────────────────────────────────────────
+
+    def _session_detect_current_mode(self) -> tuple[str, str | None]:
+        """Reflect what's actually running into session state (truth vs claim)."""
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
+            status = svc.status("slam", "slam_pgo", "localizer")
+            slam_active = status.get("slam") in ("running", "active")
+            pgo_active = status.get("slam_pgo") in ("running", "active")
+            loc_active = status.get("localizer") in ("running", "active")
+            if loc_active and slam_active:
+                return "navigating", self._session_active_map_name()
+            if pgo_active and slam_active:
+                # Autonomous exploration is a mapping session with frontier
+                # explorer actively driving goal poses.
+                if self._exploring:
+                    return "exploring", None
+                return "mapping", None
+            return "idle", None
+        except Exception:
+            return "idle", None
+
+    def _session_active_map_name(self) -> str | None:
+        """Read active map symlink target."""
+        import os
+        maps_dir = os.path.expanduser("~/data/nova/maps")
+        active = os.path.join(maps_dir, "active")
+        if not os.path.islink(active):
+            return None
+        try:
+            return os.readlink(active)
+        except OSError:
+            return None
+
+    def _session_snapshot(self) -> dict:
+        """Full session state for GET /session + SSE."""
+        active_map = self._session_active_map_name()
+        has_tomogram = False
+        has_pcd = False
+        if active_map:
+            import os
+            base = os.path.expanduser(f"~/data/nova/maps/{active_map}")
+            has_pcd = os.path.isfile(os.path.join(base, "map.pcd"))
+            has_tomogram = os.path.isfile(os.path.join(base, "tomogram.pickle"))
+        icp = self._icp_quality
+        loc_ready = (
+            self._session_mode == "navigating"
+            and icp > 0.0
+            and icp < 0.5
+        )
+        # Gate which transitions are allowed from current state.
+        idle = self._session_mode == "idle" and not self._session_pending
+        can_start_mapping = idle
+        can_start_navigating = (
+            idle
+            and active_map is not None
+            and has_pcd
+            and has_tomogram
+        )
+        can_start_exploring = idle and self._frontier_explorer is not None
+        can_end = self._session_mode != "idle" and not self._session_pending
+        return {
+            "mode": self._session_mode,
+            "active_map": active_map,
+            "map_has_pcd": has_pcd,
+            "map_has_tomogram": has_tomogram,
+            "since": self._session_since,
+            "pending": self._session_pending,
+            "error": self._session_error,
+            "icp_quality": icp,
+            "localizer_ready": loc_ready,
+            "can_start_mapping": can_start_mapping,
+            "can_start_navigating": can_start_navigating,
+            "can_start_exploring": can_start_exploring,
+            "can_end": can_end,
+            "explorer_available": self._frontier_explorer is not None,
+        }
+
+    def _on_saved_map(self, cloud: PointCloud2) -> None:
+        """Push saved static map (refined by localizer, map frame) as底图.
+
+        Unlike _on_map_cloud which accumulates, this is a latest-snapshot
+        push: the localizer publishes the full refined map each tick, so we
+        just downsample and forward. Lower update rate — every 10 frames
+        (~1 Hz, enough for stable 底图).
+        """
+        self._saved_map_count = getattr(self, "_saved_map_count", 0) + 1
+        if self._saved_map_count % 10 != 1:
+            return
+        pts = cloud.points
+        if pts is None or len(pts) == 0:
+            return
+        pts = pts[:, :3].astype(np.float32)
+        finite = np.isfinite(pts).all(axis=1)
+        bounded = (np.abs(pts) < 500.0).all(axis=1)
+        pts = pts[finite & bounded]
+        if len(pts) == 0:
+            return
+        # Cap at 80k for bandwidth — viz only, not used for algorithms
+        MAX_SEND = 80_000
+        if len(pts) > MAX_SEND:
+            idx = np.random.choice(len(pts), MAX_SEND, replace=False)
+            pts = pts[idx]
+        flat = pts[:, :3].flatten().tolist()
+        self.push_event({"type": "saved_map", "points": flat, "count": len(pts)})
+
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
         """Accumulate map cloud and push a DETERMINISTIC voxel-downsampled view.
 
@@ -465,6 +596,14 @@ class GatewayModule(Module, layer=6):
         if pts is None or len(pts) == 0:
             return
         pts = pts[:, :3].astype(np.float32)
+        # Reject outliers: SLAM divergence can spit out points at 1e7+ meters,
+        # and NaN/Inf can leak from uninitialized frames. Keep only plausible
+        # world-frame points within a 500m box around origin.
+        finite = np.isfinite(pts).all(axis=1)
+        bounded = (np.abs(pts) < 500.0).all(axis=1)
+        pts = pts[finite & bounded]
+        if len(pts) == 0:
+            return
         with self._map_cloud_lock:
             if self._map_points is None:
                 self._map_points = pts
@@ -1067,6 +1206,7 @@ class GatewayModule(Module, layer=6):
                                 "safety":   gw._safety,
                                 "mission":  gw._mission,
                                 "mode":     gw._mode,
+                                "session":  gw._session_snapshot(),
                             },
                         }
                     yield f"data: {json.dumps(snapshot)}\n\n"
@@ -1648,6 +1788,135 @@ class GatewayModule(Module, layer=6):
             flat = pts[:, :3].astype(np.float32).flatten().tolist()
             return {"count": len(pts), "points": flat}
 
+        # ── Session state machine endpoints ────────────────────────────────
+        # Single source of truth for "what mode is the robot in?".
+        # Every SLAM/localizer start/stop MUST go through here.
+
+        @app.get("/api/v1/session", summary="Current session state + capabilities")
+        async def session_get():
+            # Refresh inferred mode on read — in case externals (systemd, CLI)
+            # changed service state behind our back.
+            inferred_mode, inferred_map = gw._session_detect_current_mode()
+            if inferred_mode != gw._session_mode:
+                gw._session_mode = inferred_mode
+                gw._session_map = inferred_map
+                gw._session_since = time.time()
+            return gw._session_snapshot()
+
+        @app.post("/api/v1/session/start", summary="Enter mapping or navigating mode")
+        async def session_start(body: dict):
+            mode = (body.get("mode") or "").strip().lower()
+            map_name = body.get("map_name", "") or ""
+            if mode not in ("mapping", "navigating", "exploring"):
+                return JSONResponse(
+                    {"success": False, "message": f"Unknown mode: {mode!r}. Use 'mapping' | 'navigating' | 'exploring'."},
+                    status_code=400,
+                )
+            if mode == "exploring" and gw._frontier_explorer is None:
+                return JSONResponse(
+                    {"success": False, "message": "FrontierExplorer module not running — start lingtu with 'explore' profile."},
+                    status_code=503,
+                )
+            if gw._session_mode != "idle":
+                return JSONResponse(
+                    {"success": False, "message": f"Already in {gw._session_mode}. Call /session/end first."},
+                    status_code=409,
+                )
+            if gw._session_pending:
+                return JSONResponse({"success": False, "message": "Another transition in progress"}, status_code=409)
+
+            # Navigating requires a valid map with both PCD and tomogram.
+            if mode == "navigating":
+                if not map_name:
+                    return JSONResponse({"success": False, "message": "map_name is required for navigating"}, status_code=400)
+                import os
+                base = os.path.expanduser(f"~/data/nova/maps/{map_name}")
+                if not os.path.isfile(os.path.join(base, "map.pcd")):
+                    return JSONResponse({"success": False, "message": f"Map '{map_name}' has no map.pcd"}, status_code=400)
+                if not os.path.isfile(os.path.join(base, "tomogram.pickle")):
+                    return JSONResponse(
+                        {"success": False, "message": f"Map '{map_name}' has no tomogram — build it first (REPL: map build {map_name})"},
+                        status_code=400,
+                    )
+                # Point the 'active' symlink at the requested map so localizer loads it.
+                active = os.path.expanduser("~/data/nova/maps/active")
+                try:
+                    if os.path.islink(active) or os.path.exists(active):
+                        os.remove(active)
+                    os.symlink(map_name, active)
+                except OSError as e:
+                    return JSONResponse({"success": False, "message": f"Failed to activate map: {e}"}, status_code=500)
+
+            gw._session_pending = True
+            gw._session_error = ""
+            try:
+                from core.service_manager import get_service_manager
+                svc = get_service_manager()
+                if mode == "mapping" or mode == "exploring":
+                    svc.stop("localizer")
+                    svc.ensure("slam", "slam_pgo")
+                    ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
+                else:  # navigating
+                    svc.stop("slam_pgo")
+                    svc.ensure("slam", "localizer")
+                    ok = svc.wait_ready("slam", "localizer", timeout=10.0)
+                if not ok:
+                    gw._session_error = "Services not ready after 10s"
+                    return JSONResponse({"success": False, "message": gw._session_error}, status_code=500)
+
+                # For exploring: activate FrontierExplorer on top of mapping stack.
+                if mode == "exploring":
+                    try:
+                        gw._frontier_explorer.begin_exploration()
+                        gw._exploring = True
+                    except Exception as e:
+                        gw._session_error = f"Explorer start failed: {e}"
+                        return JSONResponse({"success": False, "message": gw._session_error}, status_code=500)
+
+                gw._session_mode = mode
+                gw._session_map = map_name if mode == "navigating" else None
+                gw._session_since = time.time()
+                gw.push_event({"type": "session", "data": gw._session_snapshot()})
+                return {"success": True, "session": gw._session_snapshot()}
+            except Exception as e:
+                gw._session_error = str(e)
+                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            finally:
+                gw._session_pending = False
+
+        @app.post("/api/v1/session/end", summary="Exit current mode and return to idle")
+        async def session_end():
+            if gw._session_mode == "idle":
+                return {"success": True, "session": gw._session_snapshot()}
+            if gw._session_pending:
+                return JSONResponse({"success": False, "message": "Transition in progress"}, status_code=409)
+            gw._session_pending = True
+            try:
+                # Stop autonomous exploration first if it's running, then tear
+                # down SLAM services. Order matters: explorer publishes goals,
+                # don't leave it running without a running mapping stack.
+                if gw._exploring and gw._frontier_explorer is not None:
+                    try:
+                        gw._frontier_explorer.end_exploration()
+                    except Exception as e:
+                        logger.warning("session/end: end_exploration failed: %s", e)
+                    gw._exploring = False
+                    gw.push_event({"type": "exploring", "active": False})
+                from core.service_manager import get_service_manager
+                svc = get_service_manager()
+                svc.stop("slam_pgo", "localizer", "slam")
+                gw._session_mode = "idle"
+                gw._session_map = None
+                gw._session_since = time.time()
+                gw._session_error = ""
+                gw.push_event({"type": "session", "data": gw._session_snapshot()})
+                return {"success": True, "session": gw._session_snapshot()}
+            except Exception as e:
+                gw._session_error = str(e)
+                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            finally:
+                gw._session_pending = False
+
         @app.post("/api/v1/slam/switch", summary="Hot-switch SLAM profile")
         async def slam_switch(body: dict):
             profile = body.get("profile", "")
@@ -1726,6 +1995,15 @@ class GatewayModule(Module, layer=6):
                 },
                 "points": pts[:, :3].tolist(),
             }
+
+        @app.post("/api/v1/map_cloud/reset", summary="Clear accumulated map cloud (viz only, SLAM ikd-tree untouched)")
+        async def reset_map_cloud():
+            with gw._map_cloud_lock:
+                gw._map_points = None
+                gw._map_cloud_count = 0
+            # Push an empty cloud so the frontend drops its buffer immediately.
+            gw.push_event({"type": "map_cloud", "points": [], "count": 0})
+            return {"success": True, "message": "Accumulated map cloud cleared"}
 
         @app.get("/map/viewer", summary="Interactive 3D map viewer")
         async def map_viewer(map: str = ""):

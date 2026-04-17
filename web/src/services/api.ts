@@ -85,6 +85,54 @@ export async function saveMap(name: string): Promise<void> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
+// --- Session state machine ---
+
+export interface SessionState {
+  mode: 'idle' | 'mapping' | 'navigating' | 'exploring'
+  active_map: string | null
+  map_has_pcd: boolean
+  map_has_tomogram: boolean
+  since: number
+  pending: boolean
+  error: string
+  icp_quality: number
+  localizer_ready: boolean
+  can_start_mapping: boolean
+  can_start_navigating: boolean
+  can_start_exploring: boolean
+  can_end: boolean
+  explorer_available: boolean
+}
+
+export async function fetchSession(): Promise<SessionState> {
+  const res = await fetch('/api/v1/session')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function startSession(mode: 'mapping' | 'navigating' | 'exploring', mapName?: string): Promise<SessionState> {
+  const res = await fetch('/api/v1/session/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, map_name: mapName ?? '' }),
+  })
+  const data = await res.json()
+  if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`)
+  return data.session as SessionState
+}
+
+export async function endSession(): Promise<SessionState> {
+  const res = await fetch('/api/v1/session/end', { method: 'POST' })
+  const data = await res.json()
+  if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`)
+  return data.session as SessionState
+}
+
+export async function resetMapCloud(): Promise<void> {
+  const res = await fetch('/api/v1/map_cloud/reset', { method: 'POST' })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
 export async function fetchSavedMapPoints(name: string): Promise<number[]> {
   const res = await fetch(`/api/v1/maps/${encodeURIComponent(name)}/points?max_points=30000`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)

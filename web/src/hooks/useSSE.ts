@@ -30,6 +30,8 @@ const INITIAL_STATE: SSEState = {
   globalPath: null,
   localPath: null,
   mapCloud: null,
+  savedMap: null,
+  session: null,
   costmap: null,
   slopeGrid: null,
   agentMessage: null,
@@ -76,6 +78,7 @@ export function useSSE(url: string = '/api/v1/events') {
                 if (d.odometry) next.odometry = { type: 'odometry', ...d.odometry as object } as never
                 if (d.mission)  next.missionStatus = { type: 'mission_status', ...d.mission as object } as never
                 if (d.safety)   next.safetyState = { type: 'safety_state', ...d.safety as object } as never
+                if (d.session)  next.session = d.session as never
                 break
               }
               case 'odometry':
@@ -106,6 +109,12 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               case 'map_cloud':
                 next.mapCloud = event as never
+                break
+              case 'saved_map':
+                next.savedMap = event as never
+                break
+              case 'session':
+                next.session = (evt.data ?? evt) as never
                 break
               case 'costmap':
                 next.costmap = event as never

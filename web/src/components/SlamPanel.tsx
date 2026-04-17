@@ -1,42 +1,155 @@
-import { useState } from 'react'
-import { Radio, Navigation, OctagonX, Activity } from 'lucide-react'
-import type { SSEState, SlamProfile, ToastKind } from '../types'
+import { useState, useEffect, useCallback } from 'react'
+import { Radio, Navigation, OctagonX, Activity, Map as MapIcon, AlertTriangle, Compass } from 'lucide-react'
+import type { SSEState, ToastKind, MapInfo } from '../types'
 import * as api from '../services/api'
+import { ConfirmModal } from './Modal'
 import styles from './SlamPanel.module.css'
+
+type SessionMode = 'idle' | 'mapping' | 'navigating' | 'exploring'
 
 interface SlamPanelProps {
   sseState: SSEState
   showToast: (msg: string, kind?: ToastKind) => void
 }
 
-const PROFILE_LABELS: Record<SlamProfile, string> = {
-  fastlio2:  'SLAM 建图',
-  localizer: '导航巡航',
-  stop:      '停止',
+const MODE_LABEL: Record<SessionMode, string> = {
+  idle:        '空闲',
+  mapping:     'SLAM 建图',
+  navigating:  '导航巡航',
+  exploring:   '自主探索',
 }
 
+interface PendingAction {
+  kind: 'start-mapping' | 'start-navigating' | 'start-exploring' | 'end'
+  mapName?: string
+  title: string
+  message: string
+  confirmLabel: string
+}
+
+/**
+ * Session-driven SLAM control. Single source of truth is backend /api/v1/session.
+ * All transitions require explicit user confirmation. Buttons disable themselves
+ * when transitions aren't allowed (no active map, wrong mode, transition pending).
+ */
 export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
-  const [pending, setPending] = useState<SlamProfile | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [pending, setPending] = useState<PendingAction | null>(null)
+  const [maps, setMaps] = useState<MapInfo[]>([])
+  const [selectedMap, setSelectedMap] = useState<string>('')
+  const [lastSession, setLastSession] = useState(sseState.session)
 
-  const slamStatus = sseState.slamStatus
-  const currentMode: string = slamStatus?.mode ?? 'stop'
+  // Keep latest session from SSE, fallback to REST once if SSE hasn't delivered.
+  useEffect(() => {
+    if (sseState.session) setLastSession(sseState.session)
+  }, [sseState.session])
+  useEffect(() => {
+    if (!lastSession) {
+      api.fetchSession().then(s => setLastSession(s)).catch(() => {})
+    }
+  }, [lastSession])
 
-  const handle = async (profile: SlamProfile) => {
-    if (pending) return
-    setPending(profile)
+  const session = lastSession
+  const mode: SessionMode = session?.mode ?? 'idle'
+
+  // Navigable maps = has both PCD and tomogram.
+  const loadMaps = useCallback(async () => {
     try {
-      await api.switchSlamMode(profile)
-      const label = PROFILE_LABELS[profile]
-      showToast(`已切换: ${label}`, 'success')
+      const all = await api.fetchMaps()
+      const navigable = all.filter(m => m.has_pcd && m.has_tomogram)
+      setMaps(navigable)
+      if (!selectedMap && session?.active_map && navigable.some(m => m.name === session.active_map)) {
+        setSelectedMap(session.active_map)
+      } else if (!selectedMap && navigable.length > 0) {
+        setSelectedMap(navigable[0].name)
+      }
+    } catch { /* noop */ }
+  }, [selectedMap, session?.active_map])
+  useEffect(() => { loadMaps() }, [loadMaps])
+
+  const requestStartMapping = () => {
+    setPending({
+      kind: 'start-mapping',
+      title: '进入 SLAM 建图模式',
+      message: '机器狗会开始建立新地图。如果当前有定位任务会被终止。请确认后开始。',
+      confirmLabel: '开始建图',
+    })
+  }
+
+  const requestStartNavigating = () => {
+    if (!selectedMap) {
+      showToast('请先选择一张含 tomogram 的地图', 'error')
+      return
+    }
+    setPending({
+      kind: 'start-navigating',
+      mapName: selectedMap,
+      title: `进入导航巡航：${selectedMap}`,
+      message: `将激活地图 "${selectedMap}" 并启动 Localizer 进行 ICP 定位。确认后进入巡航模式。`,
+      confirmLabel: '开始巡航',
+    })
+  }
+
+  const requestStartExploring = () => {
+    setPending({
+      kind: 'start-exploring',
+      title: '启动自主探索',
+      message: '机器狗会开启 SLAM 建图，同时 FrontierExplorer 自动挑选未知区域边界作为目标。确认后开始。',
+      confirmLabel: '开始探索',
+    })
+  }
+
+  const requestEnd = () => {
+    setPending({
+      kind: 'end',
+      title: `结束当前 ${MODE_LABEL[mode]}?`,
+      message: '会停止 SLAM 和 Localizer，机器狗返回空闲。未保存的建图数据将丢失。',
+      confirmLabel: '结束会话',
+    })
+  }
+
+  const confirmPending = async () => {
+    if (!pending) return
+    const action = pending
+    setPending(null)
+    setBusy(true)
+    try {
+      if (action.kind === 'start-mapping') {
+        const s = await api.startSession('mapping')
+        setLastSession(s)
+        showToast('已进入 SLAM 建图', 'success')
+      } else if (action.kind === 'start-navigating') {
+        const s = await api.startSession('navigating', action.mapName)
+        setLastSession(s)
+        showToast(`已进入导航巡航 (${action.mapName})`, 'success')
+      } else if (action.kind === 'start-exploring') {
+        const s = await api.startSession('exploring')
+        setLastSession(s)
+        showToast('自主探索启动', 'success')
+      } else {
+        const s = await api.endSession()
+        setLastSession(s)
+        showToast('会话已结束', 'success')
+      }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      showToast(`切换失败: ${msg}`, 'error')
+      showToast(`切换失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
     } finally {
-      setPending(null)
+      setBusy(false)
     }
   }
 
-  const modeActive = (p: SlamProfile) => currentMode === p || (p === 'stop' && currentMode === 'stop')
+  const pendingTx = session?.pending ?? false
+  const canStartMapping = (session?.can_start_mapping ?? false) && !busy && !pendingTx
+  const canStartNavigating = (session?.can_start_navigating ?? false) && !busy && !pendingTx && !!selectedMap
+  const canStartExploring = (session?.can_start_exploring ?? false) && !busy && !pendingTx
+  const explorerAvailable = session?.explorer_available ?? false
+  const canEnd = (session?.can_end ?? false) && !busy && !pendingTx
+
+  const slamStatus = sseState.slamStatus
+  const quality = session?.icp_quality ?? 0
+  const qualityClass = quality <= 0 ? '' : quality < 0.15 ? styles.qualityGood : quality < 0.3 ? styles.qualityWarn : styles.qualityBad
+
+  const noNavigableMap = maps.length === 0
 
   return (
     <div className={styles.slamPanel}>
@@ -45,39 +158,87 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
           <Radio size={15} />
           SLAM 模式
         </span>
+        <span className={`${styles.modePill} ${mode === 'idle' ? styles.modePillIdle : mode === 'mapping' ? styles.modePillMapping : mode === 'exploring' ? styles.modePillExploring : styles.modePillNavigating}`}>
+          当前：{MODE_LABEL[mode]}
+        </span>
       </div>
 
+      {/* Start mapping */}
       <div className={styles.section}>
-        <p className={styles.sectionLabel}>运行模式</p>
-        <div className={styles.modeGroup}>
-          <button
-            className={modeActive('fastlio2') ? styles.modeBtnActive : styles.modeBtn}
-            onClick={() => handle('fastlio2')}
-            disabled={pending !== null}
-            aria-pressed={modeActive('fastlio2')}
-          >
-            <span className={styles.modeIcon}><Navigation size={14} /></span>
-            <span className={styles.modeText}>SLAM 建图</span>
-            {modeActive('fastlio2') && <span className={styles.modeDot} />}
-            {pending === 'fastlio2' && <span className={styles.modeSpinner} />}
-          </button>
-
-          <button
-            className={modeActive('localizer') ? styles.modeBtnActive : styles.modeBtn}
-            onClick={() => handle('localizer')}
-            disabled={pending !== null}
-            aria-pressed={modeActive('localizer')}
-          >
-            <span className={styles.modeIcon}><Activity size={14} /></span>
-            <span className={styles.modeText}>导航巡航</span>
-            {modeActive('localizer') && <span className={styles.modeDot} />}
-            {pending === 'localizer' && <span className={styles.modeSpinner} />}
-          </button>
-        </div>
+        <p className={styles.sectionLabel}>建图</p>
+        <button
+          className={canStartMapping ? styles.primaryBtn : styles.primaryBtnDisabled}
+          onClick={canStartMapping ? requestStartMapping : undefined}
+          disabled={!canStartMapping}
+        >
+          <Navigation size={14} />
+          <span>开始 SLAM 建图</span>
+          {pendingTx && mode === 'idle' && <span className={styles.spinnerInline} />}
+        </button>
+        {mode !== 'idle' && <p className={styles.hint}>当前非空闲，请先结束会话</p>}
       </div>
 
+      {/* Exploring (autonomous) */}
       <div className={styles.section}>
-        <p className={styles.sectionLabel}>统计信息</p>
+        <p className={styles.sectionLabel}>自主探索</p>
+        {!explorerAvailable ? (
+          <p className={styles.warnHint}>
+            <AlertTriangle size={12} /> FrontierExplorer 模块未加载。用 <code>lingtu.py explore</code> profile 启动才能用。
+          </p>
+        ) : (
+          <button
+            className={canStartExploring ? styles.primaryBtn : styles.primaryBtnDisabled}
+            onClick={canStartExploring ? requestStartExploring : undefined}
+            disabled={!canStartExploring}
+          >
+            <Compass size={14} />
+            <span>开始自主探索</span>
+            {pendingTx && mode === 'idle' && <span className={styles.spinnerInline} />}
+          </button>
+        )}
+      </div>
+
+      {/* Navigating with map selector */}
+      <div className={styles.section}>
+        <p className={styles.sectionLabel}>导航巡航</p>
+        {noNavigableMap ? (
+          <p className={styles.warnHint}>
+            <AlertTriangle size={12} /> 没有可导航的地图。先建图并构建 tomogram，再来这里。
+          </p>
+        ) : (
+          <>
+            <label className={styles.mapSelectLabel}>
+              <MapIcon size={12} />
+              <span>选择地图</span>
+            </label>
+            <select
+              className={styles.mapSelect}
+              value={selectedMap}
+              onChange={e => setSelectedMap(e.target.value)}
+              disabled={mode !== 'idle'}
+            >
+              {maps.map(m => (
+                <option key={m.name} value={m.name}>
+                  {m.name}{m.is_active ? ' (激活)' : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              className={canStartNavigating ? styles.primaryBtn : styles.primaryBtnDisabled}
+              onClick={canStartNavigating ? requestStartNavigating : undefined}
+              disabled={!canStartNavigating}
+            >
+              <Activity size={14} />
+              <span>开始巡航</span>
+              {pendingTx && mode === 'idle' && <span className={styles.spinnerInline} />}
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Stats */}
+      <div className={styles.section}>
+        <p className={styles.sectionLabel}>运行状态</p>
         <div className={styles.statsGrid}>
           <div className={styles.statCard}>
             <span className={styles.statLabel}>SLAM 频率</span>
@@ -92,32 +253,42 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
             </span>
           </div>
           <div className={styles.statCard}>
-            <span className={styles.statLabel}>退化次数</span>
-            <span className={`${styles.statValue} ${slamStatus && slamStatus.degeneracy_count > 0 ? styles.statWarn : ''}`}>
-              {slamStatus ? slamStatus.degeneracy_count : '--'}
+            <span className={styles.statLabel}>ICP 质量</span>
+            <span className={`${styles.statValue} ${qualityClass}`}>
+              {quality > 0 ? quality.toFixed(3) : '--'}
             </span>
           </div>
           <div className={styles.statCard}>
-            <span className={styles.statLabel}>当前模式</span>
-            <span className={`${styles.statValue} ${styles.statMode}`}>
-              {slamStatus?.mode ?? '--'}
+            <span className={styles.statLabel}>Localizer</span>
+            <span className={`${styles.statValue} ${session?.localizer_ready ? styles.statOk : styles.statDim}`}>
+              {mode !== 'navigating' ? '停止' : session?.localizer_ready ? '就绪' : '对齐中…'}
             </span>
           </div>
         </div>
       </div>
 
+      {/* End / Stop */}
       <div className={styles.sectionEstop}>
         <button
-          className={styles.estopBtn}
-          onClick={() => handle('stop')}
-          disabled={pending !== null}
-          aria-label="紧急停止 SLAM"
+          className={canEnd ? styles.estopBtn : styles.estopBtnDisabled}
+          onClick={canEnd ? requestEnd : undefined}
+          disabled={!canEnd}
+          aria-label="结束当前会话"
         >
           <OctagonX size={16} />
-          紧急停止
+          结束会话
         </button>
-        <p className={styles.estopHint}>停止所有 SLAM 进程</p>
+        <p className={styles.estopHint}>停止 SLAM / Localizer，回到空闲</p>
       </div>
+
+      <ConfirmModal
+        open={pending !== null}
+        title={pending?.title ?? ''}
+        message={pending?.message ?? ''}
+        confirmLabel={pending?.confirmLabel ?? '确认'}
+        onConfirm={confirmPending}
+        onCancel={() => setPending(null)}
+      />
     </div>
   )
 }

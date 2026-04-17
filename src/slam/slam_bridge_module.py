@@ -55,6 +55,7 @@ class SlamBridgeModule(Module, layer=1):
     """
 
     map_cloud:             Out[PointCloud2]
+    saved_map:             Out[PointCloud2]  # refined static map from localizer (map frame)
     odometry:              Out[Odometry]
     localization_quality:  Out[float]
     alive:                 Out[bool]
@@ -73,6 +74,7 @@ class SlamBridgeModule(Module, layer=1):
         odom_topic: str = "/nav/odometry",
         quality_topic: str = "/localization_quality",
         registered_cloud_topic: str = "/nav/registered_cloud",
+        saved_map_topic: str = "/nav/saved_map_cloud",
         **kw,
     ):
         super().__init__(**kw)
@@ -80,6 +82,7 @@ class SlamBridgeModule(Module, layer=1):
         self._odom_topic = odom_topic
         self._quality_topic = quality_topic
         self._registered_cloud_topic = registered_cloud_topic
+        self._saved_map_topic = saved_map_topic
         self._reader = None
         self._rclpy_node = None  # fallback
         self._odom_recv_ts: list = []  # raw receive timestamps for true Hz
@@ -203,6 +206,7 @@ class SlamBridgeModule(Module, layer=1):
             self._reader = ROS2TopicReader()
             self._reader.on_odometry(self._odom_topic, self._on_dds_odom)
             self._reader.on_pointcloud2(self._cloud_topic, self._on_dds_cloud)
+            self._reader.on_pointcloud2(self._saved_map_topic, self._on_dds_saved_map)
             self._reader.on_float32(self._quality_topic, self._on_dds_quality)
             # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
             # for localizer mode (avoids duplicate accumulation when both topics fire)
@@ -226,6 +230,7 @@ class SlamBridgeModule(Module, layer=1):
             self._rclpy_node = Node("slam_bridge")
             get_shared_executor().add_node(self._rclpy_node)
             self._rclpy_node.create_subscription(PointCloud2, self._cloud_topic, self._on_rclpy_cloud, qos)
+            self._rclpy_node.create_subscription(PointCloud2, self._saved_map_topic, self._on_rclpy_saved_map, qos)
             # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
             # for localizer mode (avoids duplicate accumulation when both topics fire)
             self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
@@ -483,6 +488,25 @@ class SlamBridgeModule(Module, layer=1):
         except Exception as e:
             logger.debug("SlamBridge dds cloud error: %s", e)
 
+    def _on_dds_saved_map(self, msg) -> None:
+        """DDS saved-map PointCloud2 → Module saved_map Out."""
+        try:
+            n = msg.width * msg.height
+            if n == 0:
+                return
+            step = msg.point_step
+            raw = np.array(msg.data, dtype=np.uint8).reshape(n, step)
+            xyz = np.zeros((n, 3), dtype=np.float32)
+            xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+            xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+            xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+            valid = np.isfinite(xyz).all(axis=1)
+            xyz = xyz[valid]
+            if xyz.shape[0] > 0:
+                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+        except Exception as e:
+            logger.debug("SlamBridge dds saved_map error: %s", e)
+
     # ── rclpy callbacks (fallback) ───────────────────────────────────────
 
     def _on_rclpy_odom(self, msg) -> None:
@@ -527,6 +551,30 @@ class SlamBridgeModule(Module, layer=1):
             if xyz.shape[0] > 0:
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
                 self._last_cloud_time = _time.time()
+        except Exception as e:
+            logger.debug("SlamBridge rclpy cloud error: %s", e)
+
+    def _on_rclpy_saved_map(self, msg) -> None:
+        try:
+            n = msg.width * msg.height
+            if n == 0:
+                return
+            step = msg.point_step
+            if step == 16:
+                pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
+                xyz = pts[:, :3].copy()
+            else:
+                raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
+                xyz = np.zeros((n, 3), dtype=np.float32)
+                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+            valid = np.isfinite(xyz).all(axis=1)
+            xyz = xyz[valid]
+            if xyz.shape[0] > 0:
+                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+        except Exception as e:
+            logger.debug("SlamBridge rclpy saved_map error: %s", e)
         except Exception as e:
             logger.debug("SlamBridge rclpy cloud error: %s", e)
 

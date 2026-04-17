@@ -164,6 +164,15 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     prevTrailEndRef.current = null
   }, [])
 
+  const handleClearCloud = useCallback(async () => {
+    try {
+      await api.resetMapCloud()
+      showToast('已清除累积点云', 'success')
+    } catch (e) {
+      showToast(`清除失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }, [showToast])
+
   const handleSaveMap = () => setSaveModalOpen(true)
 
   const confirmSaveMap = async (name: string) => {
@@ -333,6 +342,9 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         <button className={styles.toolbarBtn} onClick={handleClearTrail}>
           <Trash2 size={12} /> 清除轨迹
         </button>
+        <button className={styles.toolbarBtn} onClick={handleClearCloud} title="仅清浏览器可视化，不动 SLAM ikd-tree">
+          <Cloud size={12} /> 清除点云
+        </button>
         <button className={styles.toolbarBtnPrimary} onClick={handleSaveMap}>
           <Save size={12} /> 保存地图
         </button>
@@ -430,7 +442,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
             <Scene3D
               ref={scene3DRef}
               cloudFlat={cloudFlat}
-              savedMapFlat={savedMapFlat}
+              savedMapFlat={savedMapFlat ?? sseState.savedMap?.points}
               costmap={sseState.costmap ?? null}
               slopeGrid={sseState.slopeGrid ?? null}
               sceneGraph={sseState.sceneGraph ?? null}

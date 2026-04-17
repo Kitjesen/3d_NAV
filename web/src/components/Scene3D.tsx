@@ -265,10 +265,10 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     if (trailLineRef.current) { removeFrom(scene, trailLineRef.current); trailLineRef.current = null }
     if (!layers.trail || trail.length < 2) return
 
-    const pts = trail.map(([x, y]) => new THREE.Vector3(x, 0.06, -y))
+    const pts = trail.map(([x, y]) => new THREE.Vector3(x, 0.25, -y))
     const line = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(pts),
-      new THREE.LineBasicMaterial({ color: 0x5eead4, transparent: true, opacity: 0.75 }),
+      new THREE.LineBasicMaterial({ color: 0xff9f43, transparent: true, opacity: 0.95 }),
     )
     scene.add(line)
     trailLineRef.current = line
@@ -591,8 +591,13 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
       savedMapRef.current = null
     }
     if (!savedMapFlat || savedMapFlat.length < 3) return
+    // 防御：底图点数特别大时，取步长采样避免 GPU 崩溃
+    const MAX_SAVED_PTS = 80_000
+    const totalTriples = Math.floor(savedMapFlat.length / 3)
+    const stride = totalTriples > MAX_SAVED_PTS ? Math.ceil(totalTriples / MAX_SAVED_PTS) : 1
     const positions: number[] = []
-    for (let i = 0; i + 2 < savedMapFlat.length; i += 3) {
+    const step = stride * 3
+    for (let i = 0; i + 2 < savedMapFlat.length; i += step) {
       const wx = savedMapFlat[i], wy = savedMapFlat[i + 1], wz = savedMapFlat[i + 2]
       if (wz < Z_FLOOR || wz > Z_CEIL) continue
       positions.push(wx, wz, -wy)
@@ -600,7 +605,8 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     if (positions.length === 0) return
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-    const mat = new THREE.PointsMaterial({ size: 0.06, color: 0x5566aa, sizeAttenuation: true, opacity: 0.7, transparent: true })
+    // 底图：暗蓝灰，作 reference；实时扫描会以暖色叠在上面
+    const mat = new THREE.PointsMaterial({ size: 0.05, color: 0x334466, sizeAttenuation: true, opacity: 0.55, transparent: true })
     const pts = new THREE.Points(geo, mat)
     scene.add(pts)
     savedMapRef.current = pts
