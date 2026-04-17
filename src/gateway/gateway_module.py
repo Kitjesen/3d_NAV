@@ -1290,6 +1290,104 @@ class GatewayModule(Module, layer=6):
                 mode = "stopped"
             return {"mode": mode, "services": services}
 
+        @app.get("/api/v1/diagnostic_pack", summary="Export diagnostic tarball")
+        async def diagnostic_pack():
+            """One-shot diagnostic snapshot for remote support.
+
+            Produces a gzipped tarball containing:
+              - health.json          current /api/v1/health dict
+              - modules.json         per-module port_summary() dict
+              - git_head.txt         git rev-parse HEAD + short commit
+              - robot_config.yaml    copy of config/robot_config.yaml
+              - logs/                latest N log files from the active run
+
+            Returns the tarball as a FileResponse so Dashboard can download
+            it directly. Falls back to an in-memory tempfile so we don't leak
+            to disk on dev machines.
+            """
+            import io
+            import json as _json
+            import os
+            import pathlib
+            import subprocess
+            import tarfile
+            import tempfile
+            from datetime import datetime
+
+            from fastapi.responses import FileResponse
+
+            repo_root = pathlib.Path(__file__).resolve().parent.parent.parent
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            tmp_path = pathlib.Path(tempfile.gettempdir()) / f"diag_{stamp}.tar.gz"
+
+            def _add_text(tar: tarfile.TarFile, arcname: str, text: str) -> None:
+                data = text.encode("utf-8")
+                info = tarfile.TarInfo(arcname)
+                info.size = len(data)
+                info.mtime = int(_time.time())
+                tar.addfile(info, io.BytesIO(data))
+
+            with tarfile.open(tmp_path, "w:gz") as tar:
+                # 1. Health snapshot — reuse the same health() call the HTTP route uses
+                try:
+                    health_data = _json.dumps(await health(), indent=2, ensure_ascii=False,
+                                              default=str)
+                except Exception as exc:
+                    health_data = _json.dumps({"error": str(exc)})
+                _add_text(tar, "diag/health.json", health_data)
+
+                # 2. Module port summaries
+                modules_info: Dict[str, Any] = {}
+                for name, module in gw._system_modules.items():
+                    try:
+                        if hasattr(module, "port_summary"):
+                            modules_info[name] = module.port_summary()
+                        elif hasattr(module, "health"):
+                            modules_info[name] = module.health()
+                    except Exception as exc:
+                        modules_info[name] = {"error": str(exc)}
+                _add_text(tar, "diag/modules.json",
+                          _json.dumps(modules_info, indent=2, ensure_ascii=False,
+                                      default=str))
+
+                # 3. Git HEAD
+                try:
+                    git_out = subprocess.check_output(
+                        ["git", "rev-parse", "HEAD"], cwd=repo_root,
+                        stderr=subprocess.DEVNULL, timeout=3,
+                    ).decode().strip()
+                    short = git_out[:12]
+                except Exception:
+                    git_out, short = "unknown", "unknown"
+                _add_text(tar, "diag/git_head.txt", f"{git_out}\nshort: {short}\n")
+
+                # 4. Robot config
+                cfg_path = repo_root / "config" / "robot_config.yaml"
+                if cfg_path.exists():
+                    tar.add(str(cfg_path), arcname="diag/robot_config.yaml")
+
+                # 5. Latest logs (scan ./logs/ and pick newest directory)
+                logs_root = repo_root / "logs"
+                if logs_root.exists():
+                    # Latest modified subdir only (logs/<timestamp>_<profile>/)
+                    subs = sorted(
+                        [p for p in logs_root.iterdir() if p.is_dir()],
+                        key=lambda p: p.stat().st_mtime, reverse=True,
+                    )[:1]
+                    for sub in subs:
+                        for logfile in sub.glob("*.log"):
+                            try:
+                                tar.add(str(logfile),
+                                        arcname=f"diag/logs/{sub.name}/{logfile.name}")
+                            except Exception:
+                                pass
+
+            return FileResponse(
+                path=str(tmp_path),
+                filename=f"lingtu_diag_{stamp}.tar.gz",
+                media_type="application/gzip",
+            )
+
         @app.get("/api/v1/slam/maps", summary="List maps from filesystem")
         async def slam_maps():
             """Filesystem scan fallback — works even without MapManagerModule."""

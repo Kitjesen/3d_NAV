@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# install_hooks.sh — install L1 pre-commit + L2 pre-push hooks into .git/hooks/
+#
+# Idempotent. Re-running overwrites previous versions.
+
+set -e
+cd "$(dirname "$0")/../.."
+
+REPO_ROOT="$(pwd)"
+HOOK_DIR="$REPO_ROOT/.git/hooks"
+
+if [[ ! -d "$HOOK_DIR" ]]; then
+  echo "ERROR: $HOOK_DIR not found — are you inside a git repo?"
+  exit 1
+fi
+
+# ─── pre-commit: pytest must be green ───────────────────────────────────────
+cat > "$HOOK_DIR/pre-commit" <<'HOOK'
+#!/usr/bin/env bash
+# LingTu L1 — block commit if any framework test fails.
+set -e
+echo "[L1 pre-commit] running pytest src/core/tests/ ..."
+cd "$(git rev-parse --show-toplevel)"
+PYTHONIOENCODING=utf-8 python -m pytest src/core/tests/ -q --tb=no 2>&1 | tail -6
+echo "[L1 pre-commit] OK"
+HOOK
+
+# ─── pre-push: pytest + stub blueprint smoke ────────────────────────────────
+cat > "$HOOK_DIR/pre-push" <<'HOOK'
+#!/usr/bin/env bash
+# LingTu L2 — block push if L1 or stub build fails.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+echo "[L2 pre-push] running pytest src/core/tests/ ..."
+PYTHONIOENCODING=utf-8 python -m pytest src/core/tests/ -q --tb=no 2>&1 | tail -6
+echo "[L2 pre-push] running stub blueprint smoke build ..."
+PYTHONIOENCODING=utf-8 python -c "
+import sys
+sys.path.insert(0, 'src')
+from core.blueprints.full_stack import full_stack_blueprint
+bp = full_stack_blueprint(profile='stub')
+system = bp.build()
+print('[L2] stub profile build OK — %d modules' % len(system._modules))
+"
+echo "[L2 pre-push] OK"
+HOOK
+
+chmod +x "$HOOK_DIR/pre-commit" "$HOOK_DIR/pre-push"
+echo "Installed L1 pre-commit + L2 pre-push hooks at $HOOK_DIR"
+echo "Bypass (emergency only): git commit --no-verify / git push --no-verify"

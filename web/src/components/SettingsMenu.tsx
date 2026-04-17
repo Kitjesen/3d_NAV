@@ -223,8 +223,27 @@ function DiagSection({ onBack, onOpen }: { onBack: () => void; onOpen: () => voi
           hint="SLAM Hz / uvicorn latency / CPU"
           onClick={() => window.open('/api/v1/metrics', '_blank')} />
         <ActionRow icon={<Download size={14} />} title="导出诊断包"
-          hint="打包 logs + config + health 为 tar.gz"
-          onClick={() => alert('诊断包导出(待实装):SSH tar czf diag.tgz logs config')} />
+          hint="打包 logs + config + health + git HEAD 为 tar.gz"
+          onClick={async () => {
+            try {
+              const resp = await fetch('/api/v1/diagnostic_pack')
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+              const blob = await resp.blob()
+              const disp = resp.headers.get('content-disposition') || ''
+              const m = disp.match(/filename="?([^"]+)"?/)
+              const name = m ? m[1] : `lingtu_diag_${Date.now()}.tar.gz`
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = name
+              document.body.appendChild(a)
+              a.click()
+              a.remove()
+              URL.revokeObjectURL(url)
+            } catch (e) {
+              alert(`诊断包导出失败: ${e instanceof Error ? e.message : e}`)
+            }
+          }} />
       </div>
     </>
   )
