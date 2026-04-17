@@ -306,6 +306,11 @@ class GatewayModule(Module, layer=6):
         self._map_cloud_count: int = 0
         self._map_voxel_size: float = 0.15
 
+        # WebRTCStreamModule reference (set by on_system_modules).  Kept as
+        # an attribute so the /api/v1/webrtc/offer route can check presence
+        # without an AttributeError when aiortc is not installed.
+        self._webrtc: Any = None
+
         # Binary cloud channel — one frame buffer + per-client asyncio.Queue.
         # Points are quantized int16 (see core.utils.binary_codec) so a 60k
         # cloud is ~360 KB instead of ~1.4 MB JSON, and the browser decodes
@@ -398,6 +403,9 @@ class GatewayModule(Module, layer=6):
     def on_system_modules(self, modules: dict[str, Any]) -> None:
         self._map_mgr = modules.get("MapManagerModule")
         self._all_modules = modules
+        # WebRTCStreamModule handles its own ICE/SDP dance; we just forward
+        # POST /api/v1/webrtc/offer to it.  See the route below.
+        self._webrtc = modules.get("WebRTCStreamModule")
         self._frontier_explorer = next(
             (m for m in modules.values()
              if m.__class__.__name__ == "WavefrontFrontierExplorer"),
@@ -994,6 +1002,28 @@ class GatewayModule(Module, layer=6):
             )
 
         # ── Navigation ─────────────────────────────────────────────────────
+
+        @app.post(
+            "/api/v1/webrtc/offer",
+            summary="WebRTC SDP offer/answer exchange for low-latency camera",
+        )
+        async def post_webrtc_offer(request: Request):
+            """Forward a browser offer to WebRTCStreamModule.
+
+            Returns 503 when aiortc is not installed or the module is not
+            wired into the blueprint, so the browser can fall back to the
+            JPEG-over-WS path without retrying.
+            """
+            if gw._webrtc is None:
+                return JSONResponse(
+                    {"error": "webrtc_unavailable"}, status_code=503,
+                )
+            body = await request.json()
+            try:
+                answer = await gw._webrtc.handle_offer(body)
+            except ValueError as e:
+                return JSONResponse({"error": str(e)}, status_code=400)
+            return answer
 
         @app.post("/api/v1/goal", summary="Send navigation goal")
         async def post_goal(body: GoalRequest):

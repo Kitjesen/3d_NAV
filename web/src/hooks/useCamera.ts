@@ -21,6 +21,10 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
       wsRef.current = null
     }
 
+    // Empty url signals "stay idle" — used by CameraFeed when the WebRTC
+    // path is in charge.  Avoids opening a phantom /ws/teleop connection.
+    if (!url) return
+
     // Build absolute ws URL from current location + path
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}${url}`

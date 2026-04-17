@@ -1,47 +1,62 @@
-import { useRef, useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { Camera, StopCircle, RefreshCw } from 'lucide-react'
 import { useCamera } from '../hooks/useCamera'
+import { useWebRTC } from '../hooks/useWebRTC'
 import { CameraHud } from './CameraHud'
 import type { SSEState } from '../types'
 import styles from './CameraFeed.module.css'
 
 interface CameraFeedProps {
-  onStop: () => void
-  estop: boolean
+  onStop:   () => void
+  estop:    boolean
   sseState: SSEState
 }
 
 export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
-  const { imgSrc, connected, reconnect } = useCamera('/ws/teleop')
-  const imgRef = useRef<HTMLImageElement>(null)
+  // Prefer WebRTC (H.264, ~100 ms glass-to-glass).  If the gateway
+  // returns 503 (aiortc not installed) we fall through to the legacy
+  // JPEG-over-WS stream without any user action.
+  const rtc = useWebRTC()
+  const fallback = rtc.error === 'unavailable'
+  const jpeg = useCamera(fallback ? '/ws/teleop' : '')  // empty URL → idle
 
-  // Revoke old object URL is handled inside the hook.
-  // We just need to update the img src.
+  const videoRef = useRef<HTMLVideoElement>(null)
   useEffect(() => {
-    if (imgRef.current && imgSrc) {
-      imgRef.current.src = imgSrc
+    if (!videoRef.current) return
+    if (rtc.stream && videoRef.current.srcObject !== rtc.stream) {
+      videoRef.current.srcObject = rtc.stream
     }
-  }, [imgSrc])
+  }, [rtc.stream])
+
+  const usingRtc     = !fallback
+  const hasVideo     = usingRtc ? rtc.connected : jpeg.imgSrc != null
+  const isConnected  = usingRtc ? rtc.connected : jpeg.connected
+  const sourceLabel  = usingRtc ? '720p · H.264 · WebRTC' : '640 × 480 · MJPEG'
+  const onReconnect  = usingRtc ? rtc.reconnect : jpeg.reconnect
 
   return (
     <div className={styles.cameraFeed}>
-      {/* Video area */}
       <div className={styles.viewport}>
-        {imgSrc ? (
-          <img
-            ref={imgRef}
+        {usingRtc ? (
+          <video
+            ref={videoRef}
             className={styles.img}
-            alt="机器人相机画面"
-            src={imgSrc}
+            autoPlay
+            muted
+            playsInline
           />
-        ) : (
+        ) : jpeg.imgSrc ? (
+          <img className={styles.img} alt="机器人相机画面" src={jpeg.imgSrc} />
+        ) : null}
+
+        {!hasVideo && (
           <div className={styles.placeholder}>
             <Camera size={48} strokeWidth={1} className={styles.placeholderIcon} />
             <span className={styles.placeholderLabel}>
-              {connected ? '等待画面帧…' : '无相机画面'}
+              {isConnected ? '等待画面帧…' : '无相机画面'}
             </span>
-            {!connected && (
-              <button className={styles.reconnectBtn} onClick={reconnect}>
+            {!isConnected && (
+              <button className={styles.reconnectBtn} onClick={onReconnect}>
                 <RefreshCw size={14} />
                 重新连接
               </button>
@@ -49,20 +64,16 @@ export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
           </div>
         )}
 
-        {/* Connection badge */}
-        <div className={connected ? styles.camBadgeLive : styles.camBadgeOff}>
+        <div className={isConnected ? styles.camBadgeLive : styles.camBadgeOff}>
           <span className={styles.camBadgeDot} />
-          {connected ? '直播' : '离线'}
+          {isConnected ? '直播' : '离线'}
         </div>
 
-        {/* Telemetry HUD overlay */}
         <CameraHud sseState={sseState} />
 
-        {/* ESTOP overlay — full-screen flash when active */}
         {estop && <div className={styles.estopOverlay}>急停激活</div>}
       </div>
 
-      {/* Controls strip */}
       <div className={styles.controls}>
         <button
           className={styles.btnStop}
@@ -72,7 +83,7 @@ export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
           <StopCircle size={18} />
           紧急停止
         </button>
-        <span className={styles.hint}>640 × 480 · MJPEG</span>
+        <span className={styles.hint}>{sourceLabel}</span>
       </div>
     </div>
   )

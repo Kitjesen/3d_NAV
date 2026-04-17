@@ -48,6 +48,16 @@ def gateway(
         except ImportError:
             pass
 
+        # WebRTC module: shares the camera stream with TeleopModule but
+        # encodes it as H.264 and speaks SDP on /api/v1/webrtc/offer for
+        # ~100 ms glass-to-glass latency.  Imports are wrapped because
+        # aiortc is an optional dependency on development machines.
+        try:
+            from webrtc.webrtc_stream_module import WebRTCStreamModule
+            bp.add(WebRTCStreamModule)
+        except ImportError:
+            logger.info("WebRTCStreamModule unavailable (aiortc not installed)")
+
     if enable_rerun:
         try:
             from gateway.rerun_bridge_module import RerunBridgeModule

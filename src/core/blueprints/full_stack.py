@@ -346,6 +346,11 @@ def full_stack_blueprint(
     _w(_camera_src_t, _color_port_t, "TeleopModule", "color_image")
     _w("PerceptionModule", "scene_graph", "TeleopModule", "scene_graph")
     _w("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
+    # WebRTC camera — shares the same image source as TeleopModule, but
+    # encodes it as H.264 for ~100 ms glass-to-glass instead of JPEG@10fps.
+    # Wiring is best-effort: if WebRTCStreamModule isn't in the blueprint
+    # (aiortc not installed) the _w helper silently no-ops.
+    _w(_camera_src_t, _color_port_t, "WebRTCStreamModule", "color_image")
 
     # ── CmdVelMux: priority-based velocity arbitration ──
     # All cmd_vel sources → CmdVelMux (separate input ports per source)
