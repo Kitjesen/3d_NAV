@@ -143,6 +143,12 @@ function SystemSection({ onBack, onOpenModal }: {
         <ActionRow icon={<Terminal size={14} />} title="实时日志"
           hint="logs/{timestamp}_{profile}/lingtu.log"
           onClick={() => alert('日志查看器(待实装):请在 SSH 终端 tail -f logs/lingtu.log')} />
+        <ActionRow icon={<RefreshCw size={14} />} title="恢复默认布局"
+          hint="清除已保存的 FloatingWidget 位置/尺寸"
+          onClick={async () => {
+            const { resetAllLayouts } = await import('./FloatingWidget')
+            resetAllLayouts()
+          }} />
         <ActionRow icon={<Power size={14} />} title="重启 LingTu" dangerous
           hint="优雅停止后重新启动所有模块"
           onClick={() => {

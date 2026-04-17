@@ -1466,31 +1466,33 @@ class GatewayModule(Module, layer=6):
                 data = text.encode("utf-8")
                 info = tarfile.TarInfo(arcname)
                 info.size = len(data)
-                info.mtime = int(_time.time())
+                info.mtime = int(time.time())
                 tar.addfile(info, io.BytesIO(data))
 
             with tarfile.open(tmp_path, "w:gz") as tar:
-                # 1. Health snapshot — reuse the same health() call the HTTP route uses
-                try:
-                    health_data = _json.dumps(await health(), indent=2, ensure_ascii=False,
-                                              default=str)
-                except Exception as exc:
-                    health_data = _json.dumps({"error": str(exc)})
-                _add_text(tar, "diag/health.json", health_data)
-
-                # 2. Module port summaries
-                modules_info: Dict[str, Any] = {}
-                for name, module in gw._system_modules.items():
+                # 1/2. Module port summaries + health snapshot merged.
+                # We intentionally don't try to reuse the /api/v1/health route
+                # because that's a FastAPI closure bound to the Request object.
+                modules_info: dict[str, Any] = {}
+                for name, module in gw._all_modules.items():
                     try:
-                        if hasattr(module, "port_summary"):
-                            modules_info[name] = module.port_summary()
-                        elif hasattr(module, "health"):
+                        if hasattr(module, "health"):
                             modules_info[name] = module.health()
+                        elif hasattr(module, "port_summary"):
+                            modules_info[name] = module.port_summary()
                     except Exception as exc:
                         modules_info[name] = {"error": str(exc)}
                 _add_text(tar, "diag/modules.json",
                           _json.dumps(modules_info, indent=2, ensure_ascii=False,
                                       default=str))
+                _add_text(tar, "diag/health.json",
+                          _json.dumps(
+                              {"modules_ok": sum(1 for v in modules_info.values()
+                                                 if "error" not in v),
+                               "modules_fail": sum(1 for v in modules_info.values()
+                                                   if "error" in v),
+                               "count": len(modules_info)},
+                              indent=2, ensure_ascii=False, default=str))
 
                 # 3. Git HEAD
                 try:

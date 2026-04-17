@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from 'react'
-import { RotateCcw } from 'lucide-react'
 import { useSSE } from './hooks/useSSE'
 import { useToast } from './hooks/useToast'
 import { Topbar } from './components/Topbar'
@@ -11,7 +10,7 @@ import { MapView } from './components/MapView'
 import { SlamPanel } from './components/SlamPanel'
 import { SceneView } from './components/SceneView'
 import { MiniMap } from './components/MiniMap'
-import { FloatingWidget, resetAllLayouts } from './components/FloatingWidget'
+import { FloatingWidget } from './components/FloatingWidget'
 import { ToastContainer } from './components/Toast'
 import { LoginPage } from './components/LoginPage'
 import { Landing } from './components/Landing'
@@ -81,14 +80,6 @@ function Dashboard() {
               <ChatPanel sseState={sseState} />
             </FloatingWidget>
 
-            <button
-              className="reset-layout-btn"
-              onClick={resetAllLayouts}
-              title="恢复默认布局"
-            >
-              <RotateCcw size={13} />
-              重置布局
-            </button>
           </div>
         )}
         {activeTab === 'scene' && <SceneView sseState={sseState} showToast={showToast} />}
