@@ -1307,8 +1307,8 @@ class GatewayModule(Module, layer=6):
 
             Returns {"status":"started","path":..,"pid":..} or 409 if already recording.
             """
+            import os as _os
             import pathlib as _plib
-            import shlex as _shlex
             import subprocess as _sp
             body = body or {}
             duration = int(body.get("duration", 600))
@@ -1335,7 +1335,7 @@ class GatewayModule(Module, layer=6):
                     )
 
                 stamp = time.strftime("%Y%m%d_%H%M%S")
-                bag_dir = os.path.expanduser(
+                bag_dir = _os.path.expanduser(
                     f"~/data/bags/{prefix}_{stamp}")
 
                 cmd = ["bash", str(script), str(duration), prefix]
@@ -1366,6 +1366,7 @@ class GatewayModule(Module, layer=6):
         @app.post("/api/v1/bag/stop", summary="Stop rosbag recording")
         async def bag_stop():
             """Send SIGTERM to the rosbag subprocess (graceful — flushes cache)."""
+            import os as _os
             import signal as _sig
             with gw._bag_lock:
                 proc = gw._bag_proc
@@ -1375,7 +1376,7 @@ class GatewayModule(Module, layer=6):
                         content={"error": "not_recording"})
                 try:
                     # Kill the entire process group (timeout + ros2 bag children)
-                    os.killpg(os.getpgid(proc.pid), _sig.SIGTERM)
+                    _os.killpg(_os.getpgid(proc.pid), _sig.SIGTERM)
                 except (ProcessLookupError, PermissionError, AttributeError):
                     try:
                         proc.terminate()
@@ -1389,6 +1390,7 @@ class GatewayModule(Module, layer=6):
         @app.get("/api/v1/bag/status", summary="rosbag recording status")
         async def bag_status():
             """Return current recording state + disk usage if a bag exists."""
+            import os as _os
             import shutil as _shutil
             with gw._bag_lock:
                 proc = gw._bag_proc
@@ -1397,20 +1399,23 @@ class GatewayModule(Module, layer=6):
 
             recording = proc is not None and proc.poll() is None
             size_bytes = 0
-            if path and os.path.isdir(path):
+            if path and _os.path.isdir(path):
                 try:
-                    for root, _dirs, files in os.walk(path):
+                    for root, _dirs, files in _os.walk(path):
                         for f in files:
-                            fp = os.path.join(root, f)
+                            fp = _os.path.join(root, f)
                             try:
-                                size_bytes += os.path.getsize(fp)
+                                size_bytes += _os.path.getsize(fp)
                             except OSError:
                                 pass
                 except OSError:
                     pass
-            disk_free = _shutil.disk_usage(
-                os.path.expanduser("~"))._asdict() if os.path.exists(
-                os.path.expanduser("~")) else {"free": 0, "total": 0}
+            home = _os.path.expanduser("~")
+            try:
+                du = _shutil.disk_usage(home)
+                disk_free, disk_total = du.free, du.total
+            except OSError:
+                disk_free, disk_total = 0, 0
             return {
                 "recording":   recording,
                 "path":        path,
@@ -1418,8 +1423,8 @@ class GatewayModule(Module, layer=6):
                 "size_bytes":  size_bytes,
                 "pid":         proc.pid if proc else None,
                 "exit_code":   proc.returncode if proc and proc.poll() is not None else None,
-                "disk_free":   disk_free.get("free", 0),
-                "disk_total":  disk_free.get("total", 0),
+                "disk_free":   disk_free,
+                "disk_total":  disk_total,
             }
 
         @app.get("/api/v1/diagnostic_pack", summary="Export diagnostic tarball")
