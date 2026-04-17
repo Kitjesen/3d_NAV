@@ -385,7 +385,25 @@ class SlamBridgeModule(Module, layer=1):
         map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
         pcd_path = os.path.join(map_dir, "active", "map.pcd")
         if not os.path.isfile(pcd_path):
-            logger.warning("Drift guard: no active map PCD for relocalize: %s", pcd_path)
+            # No active map to relocalize against (mapping mode or never saved).
+            # Fallback: restart the SLAM systemd service to clear the IEKF
+            # state — Fast-LIO2 starts fresh at the robot's current pose.
+            # This costs ~3s of blank odometry but recovers from divergence.
+            logger.error(
+                "Drift guard: no active map PCD (%s) — falling back to "
+                "systemctl restart slam to clear IEKF state",
+                pcd_path)
+            try:
+                subprocess.run(
+                    ["sudo", "systemctl", "restart", "slam"],
+                    capture_output=True, text=True, timeout=15,
+                    check=False,
+                )
+                logger.warning("Drift guard: slam service restarted")
+                self._drift_bad_count = 0
+                self._drift_last_good_pos = None  # reset so first new frame becomes anchor
+            except Exception as e:
+                logger.error("Drift guard: slam restart failed: %s", e)
             return
 
         logger.warning(
