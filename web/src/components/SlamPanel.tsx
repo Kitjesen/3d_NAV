@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Radio, Navigation, OctagonX, Activity, Map as MapIcon, AlertTriangle, Compass } from 'lucide-react'
+import { Radio, Navigation, OctagonX, Activity, Map as MapIcon, AlertTriangle, Compass, LocateFixed } from 'lucide-react'
 import type { SSEState, ToastKind, MapInfo } from '../types'
 import * as api from '../services/api'
 import { ConfirmModal } from './Modal'
@@ -145,6 +145,26 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
   const explorerAvailable = session?.explorer_available ?? false
   const canEnd = (session?.can_end ?? false) && !busy && !pendingTx
 
+  // 3D-BBS auto-relocalize: only valid while navigating (localizer alive).
+  const [autoRelocBusy, setAutoRelocBusy] = useState(false)
+  const canAutoReloc = mode === 'navigating' && !autoRelocBusy && !pendingTx
+  const handleAutoReloc = useCallback(async () => {
+    setAutoRelocBusy(true)
+    try {
+      showToast('正在全图搜索位姿… (2-3 秒)', 'info')
+      const r = await api.autoRelocalize()
+      if (r.success) {
+        showToast('自动重定位已触发，查看 ICP 分数', 'success')
+      } else {
+        showToast(`重定位失败: ${r.message}`, 'error')
+      }
+    } catch (e) {
+      showToast(`请求失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    } finally {
+      setAutoRelocBusy(false)
+    }
+  }, [showToast])
+
   const slamStatus = sseState.slamStatus
   const quality = session?.icp_quality ?? 0
   const qualityClass = quality <= 0 ? '' : quality < 0.15 ? styles.qualityGood : quality < 0.3 ? styles.qualityWarn : styles.qualityBad
@@ -233,6 +253,24 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
               {pendingTx && mode === 'idle' && <span className={styles.spinnerInline} />}
             </button>
           </>
+        )}
+      </div>
+
+      {/* Auto-relocalize (BBS3D, no initial guess) */}
+      <div className={styles.section}>
+        <p className={styles.sectionLabel}>自动重定位</p>
+        <button
+          className={canAutoReloc ? styles.primaryBtn : styles.primaryBtnDisabled}
+          onClick={canAutoReloc ? handleAutoReloc : undefined}
+          disabled={!canAutoReloc}
+          title="3D-BBS 全图分支定界搜索，无需手动给初始位姿"
+        >
+          <LocateFixed size={14} />
+          <span>自动重定位 (3D-BBS)</span>
+          {autoRelocBusy && <span className={styles.spinnerInline} />}
+        </button>
+        {mode !== 'navigating' && (
+          <p className={styles.hint}>仅巡航模式可用（localizer 需运行）</p>
         )}
       </div>
 

@@ -23,6 +23,7 @@ find_package(message_filters REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(interface REQUIRED)
 find_package(pcl_conversions REQUIRED)
+find_package(std_srvs REQUIRED)
 
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
@@ -33,15 +34,17 @@ find_package(yaml-cpp REQUIRED)
 include_directories(
   ${EIGEN3_INCLUDE_DIR}
   ${PCL_INCLUDE_DIRS}
+  /usr/local/include/bbs3d
 )
 
 
 set(SRC_LIST src/localizers/commons.cpp
-             src/localizers/icp_localizer.cpp)
+             src/localizers/icp_localizer.cpp
+             src/localizers/bbs3d_global_localizer.cpp)
 
 add_executable(localizer_node src/localizer_node.cpp ${SRC_LIST})
-ament_target_dependencies(localizer_node rclcpp std_msgs sensor_msgs nav_msgs message_filters pcl_conversions tf2_ros geometry_msgs interface)
-target_link_libraries(localizer_node ${PCL_LIBRARIES}  yaml-cpp) 
+ament_target_dependencies(localizer_node rclcpp std_msgs sensor_msgs nav_msgs message_filters pcl_conversions tf2_ros geometry_msgs interface std_srvs)
+target_link_libraries(localizer_node ${PCL_LIBRARIES}  yaml-cpp /usr/local/lib/libcpu_bbs3d.so)
 
 
 install(TARGETS localizer_node DESTINATION lib/${PROJECT_NAME})

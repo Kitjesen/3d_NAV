@@ -1,5 +1,7 @@
+#include <atomic>
 #include <queue>
 #include <mutex>
+#include <thread>
 #include <filesystem>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -15,8 +17,10 @@
 
 #include "localizers/commons.h"
 #include "localizers/icp_localizer.h"
+#include "localizers/bbs3d_global_localizer.h"
 #include "interface/srv/relocalize.hpp"
 #include "interface/srv/is_valid.hpp"
+#include <std_srvs/srv/trigger.hpp>
 #include <yaml-cpp/yaml.h>
 
 using namespace std::chrono_literals;
@@ -75,6 +79,16 @@ public:
 
         m_reloc_check_srv = this->create_service<interface::srv::IsValid>("relocalize_check", std::bind(&LocalizerNode::relocCheckCB, this, std::placeholders::_1, std::placeholders::_2));
 
+        // Global (no-guess) relocalization service — branch-and-bound over
+        // the full map. Call this when the robot is "kidnapped" or boots in
+        // an unknown pose. On success, sets initial_guess so the tracking
+        // timer picks up seamlessly.
+        m_bbs3d = std::make_shared<BBS3DGlobalLocalizer>();
+        m_global_reloc_srv = this->create_service<std_srvs::srv::Trigger>(
+            "global_relocalize",
+            std::bind(&LocalizerNode::globalRelocCB, this,
+                      std::placeholders::_1, std::placeholders::_2));
+
         m_map_cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("map_cloud", 10);
         m_quality_pub = this->create_publisher<std_msgs::msg::Float32>("/localization_quality", 10);
 
@@ -87,8 +101,20 @@ public:
             {
                 if (m_localizer->loadMap(m_config.static_map_path))
                 {
+                    // Also feed the same PCD into bbs3d so /global_relocalize
+                    // works out of the box without a second load.
+                    {
+                        CloudType::Ptr raw(new CloudType);
+                        pcl::PCDReader reader;
+                        if (reader.read(m_config.static_map_path, *raw) == 0) {
+                            m_bbs3d->set_map(raw);
+                        } else {
+                            RCLCPP_WARN(this->get_logger(),
+                                "BBS3D: failed to read pcd for global localizer");
+                        }
+                    }
                     std::lock_guard<std::mutex> lock(m_state.message_mutex);
-                    
+
                     Eigen::AngleAxisd yaw_angle(m_config.initial_yaw, Eigen::Vector3d::UnitZ());
                     m_state.initial_guess.setIdentity(); 
                     m_state.initial_guess.block<3, 3>(0, 0) = yaw_angle.toRotationMatrix().cast<float>();
@@ -202,6 +228,16 @@ public:
         }
 
         bool result = m_localizer->align(initial_guess);
+
+        // Log only when tracking state flips (loss / recovery), not every frame.
+        if (result != m_state.localize_success) {
+            RCLCPP_INFO(this->get_logger(),
+                "ICP tracking %s: fitness=%.4f t=[%.3f,%.3f,%.3f]",
+                result ? "LOCKED" : "LOST",
+                m_localizer->getLastFitnessScore(),
+                initial_guess(0, 3), initial_guess(1, 3), initial_guess(2, 3));
+        }
+
         if (result)
         {
             M3D map_body_r = initial_guess.block<3, 3>(0, 0).cast<double>();
@@ -317,6 +353,68 @@ public:
             response->valid = m_state.localize_success;
         return;
     }
+
+    // One-shot global relocalization: BBS3D over the full map, then hand
+    // coarse pose to the tracking timer as initial_guess. No arguments —
+    // uses the already-loaded map and the most recent scan.
+    //
+    // BBS3D CPU takes ~1-3 s; we run it on a detached worker thread so the
+    // single-threaded executor's 10ms timer keeps serving tracking. The
+    // service returns immediately with "accepted" and the worker posts the
+    // result via a status flag you can poll with /nav/global_relocalize_status
+    // (or just watch /localization_quality — it drops to a real number when
+    // bbs3d finishes and the tracking ICP picks up).
+    void globalRelocCB(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*req*/,
+                       std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+    {
+        if (m_bbs3d_running.exchange(true)) {
+            response->success = false;
+            response->message = "bbs3d already running";
+            return;
+        }
+        if (!m_bbs3d || !m_bbs3d->has_map()) {
+            m_bbs3d_running = false;
+            response->success = false;
+            response->message = "bbs3d map not loaded (static_map_path empty?)";
+            return;
+        }
+        if (!m_state.message_received) {
+            m_bbs3d_running = false;
+            response->success = false;
+            response->message = "no scan received yet";
+            return;
+        }
+        CloudType::Ptr scan_copy(new CloudType);
+        {
+            std::lock_guard<std::mutex> msg_lock(m_state.message_mutex);
+            *scan_copy = *m_state.last_cloud;
+        }
+        RCLCPP_INFO(this->get_logger(),
+            "BBS3D: spawning worker for %zu scan pts", scan_copy->size());
+
+        std::thread([this, scan_copy]() {
+            auto r = m_bbs3d->localize(scan_copy);
+            if (!r.success) {
+                RCLCPP_WARN(this->get_logger(), "BBS3D: %s", r.message.c_str());
+                m_bbs3d_running = false;
+                return;
+            }
+            {
+                std::lock_guard<std::mutex> svc_lock(m_state.service_mutex);
+                m_state.initial_guess = r.pose;
+                m_state.service_received = true;
+                m_state.localize_success = false;
+            }
+            RCLCPP_INFO(this->get_logger(),
+                "BBS3D: ok in %.0f ms score=%.2f t=[%.2f,%.2f,%.2f]",
+                r.elapsed_ms, r.score_percentage,
+                r.pose(0, 3), r.pose(1, 3), r.pose(2, 3));
+            m_bbs3d_running = false;
+        }).detach();
+
+        response->success = true;
+        response->message = "bbs3d dispatched; watch /localization_quality";
+    }
     void publishMapCloud(builtin_interfaces::msg::Time &time)
     {
         if (m_map_cloud_pub->get_subscription_count() < 1)
@@ -337,6 +435,9 @@ private:
 
     ICPConfig m_localizer_config;
     std::shared_ptr<ICPLocalizer> m_localizer;
+    std::shared_ptr<BBS3DGlobalLocalizer> m_bbs3d;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr m_global_reloc_srv;
+    std::atomic<bool> m_bbs3d_running{false};
     message_filters::Subscriber<sensor_msgs::msg::PointCloud2> m_cloud_sub;
     message_filters::Subscriber<nav_msgs::msg::Odometry> m_odom_sub;
     rclcpp::TimerBase::SharedPtr m_timer;

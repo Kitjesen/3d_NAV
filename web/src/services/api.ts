@@ -149,6 +149,16 @@ export async function relocalize(mapName: string, x: number, y: number, yaw: num
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
+// Global (no-guess) relocalize via 3D-BBS. Fires the worker in localizer;
+// the 2-4 s scan runs async, so the response is immediate. Fitness appears
+// on /localization_quality after the worker finishes.
+export async function autoRelocalize(): Promise<{ success: boolean; message: string }> {
+  const res = await fetch('/api/v1/slam/auto_relocalize', { method: 'POST' })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`)
+  return data
+}
+
 // --- Auth ---
 
 export async function login(key: string): Promise<{ ok: boolean; message?: string }> {

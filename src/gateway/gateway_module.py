@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import queue
 import threading
@@ -565,11 +566,35 @@ class GatewayModule(Module, layer=6):
     # -- Module subscription callbacks -------------------------------------
 
     def _on_odometry(self, odom: Odometry) -> None:
+        # Odometry comes from Fast-LIO2 in the odom frame (zero = robot's
+        # boot position). For navigating mode the frontend cares about the
+        # *map* frame, so compose with the localizer-emitted map→odom TF
+        # before publishing. In idle/mapping modes the TF is identity and
+        # this is a no-op; in navigating it's the difference between "狗
+        # at (0, 0)" and "狗 at (-3.14, -0.07)".
+        ox = float(odom.x)
+        oy = float(odom.y)
+        oz = float(getattr(odom, "z", 0.0))
+        oyaw = float(getattr(odom, "yaw", 0.0))
+        if self._has_map_odom_tf:
+            T = self._T_map_odom
+            px = T[0, 0] * ox + T[0, 1] * oy + T[0, 2] * oz + T[0, 3]
+            py = T[1, 0] * ox + T[1, 1] * oy + T[1, 2] * oz + T[1, 3]
+            pz = T[2, 0] * ox + T[2, 1] * oy + T[2, 2] * oz + T[2, 3]
+            # yaw of (map_R_odom * odom_R_body): extract yaw from rotation.
+            r00, r01 = T[0, 0], T[0, 1]
+            r10, r11 = T[1, 0], T[1, 1]
+            map_odom_yaw = math.atan2(r10, r00)
+            yaw = oyaw + map_odom_yaw
+            # Normalize to [-pi, pi]
+            while yaw > math.pi:  yaw -= 2.0 * math.pi
+            while yaw < -math.pi: yaw += 2.0 * math.pi
+            ox, oy, oz, oyaw = float(px), float(py), float(pz), yaw
         d = {
-            "x":  odom.x,
-            "y":  odom.y,
-            "z":  getattr(odom, "z", 0.0),
-            "yaw": getattr(odom, "yaw", 0.0),
+            "x":  ox,
+            "y":  oy,
+            "z":  oz,
+            "yaw": oyaw,
             "vx": odom.twist.linear.x  if odom.twist else 0.0,
             "wz": odom.twist.angular.z if odom.twist else 0.0,
             "ts": odom.ts,
@@ -2324,6 +2349,39 @@ class GatewayModule(Module, layer=6):
             except Exception as e:
                 return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 
+        @app.post("/api/v1/slam/auto_relocalize",
+                  summary="Global relocalize via 3D-BBS (no guess required)")
+        async def slam_auto_relocalize():
+            """Call /nav/global_relocalize ROS2 service — BBS3D kidnap-robot recovery.
+            Returns immediately; the worker finishes in ~1-3 s and updates the
+            ICP tracking loop. Watch /localization_quality / session snapshot
+            for the resulting fitness.
+            """
+            import subprocess
+            # NOTE: do NOT override RMW here — localizer_node runs with the
+            # default fastrtps, setting cyclonedds on the client side creates
+            # a silent discovery mismatch that makes the service appear
+            # registered but unreachable.
+            _ros_env = (
+                "source /opt/ros/humble/setup.bash && "
+                "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+                "unset RMW_IMPLEMENTATION; "
+            )
+            try:
+                r = subprocess.run(
+                    ["bash", "-c",
+                     _ros_env +
+                     "ros2 service call /nav/global_relocalize "
+                     "std_srvs/srv/Trigger '{}'"],
+                    capture_output=True, text=True, timeout=10)
+                ok = "success=True" in r.stdout
+                msg = r.stdout[-300:] if r.stdout else (r.stderr[-300:] or "no output")
+                return {"success": ok, "message": msg}
+            except subprocess.TimeoutExpired:
+                return JSONResponse({"success": False, "message": "call timeout > 10s"}, status_code=504)
+            except Exception as e:
+                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
         @app.post("/api/v1/slam/relocalize", summary="Relocalize against a saved map")
         async def slam_relocalize(body: dict):
             """Call /relocalize ROS2 service to localize robot in a saved map."""
@@ -2335,8 +2393,14 @@ class GatewayModule(Module, layer=6):
             yaw  = float(body.get("yaw", 0.0))
             if not map_name:
                 return JSONResponse({"success": False, "message": "map_name required"}, status_code=400)
-            map_dir  = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
+            # Primary: ~/data/nova/maps/ (production). Fallback to the legacy
+            # ~/data/inovxio/data/maps/ if someone restored that path.
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
             pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+            if not os.path.isfile(pcd_path):
+                alt = os.path.expanduser(f"~/data/inovxio/data/maps/{map_name}/map.pcd")
+                if os.path.isfile(alt):
+                    pcd_path = alt
             if not os.path.isfile(pcd_path):
                 return JSONResponse({"success": False, "message": f"Map not found: {pcd_path}"}, status_code=404)
             _ros_env = (
