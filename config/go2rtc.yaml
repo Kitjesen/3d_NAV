@@ -1,0 +1,67 @@
+# go2rtc.yaml — LingTu camera sidecar config.
+#
+# Media path (Orbbec Gemini L335 / 335L):
+#   The depth + IR streams are consumed inside Python via the Orbbec SDK /
+#   ROS2 bridge for SLAM and perception.  The RGB sensor is additionally
+#   exposed as a plain UVC device (/dev/video*), which is the channel
+#   go2rtc reads here for the browser teleop feed.  Two independent
+#   readers on the same device are fine at the kernel level (v4l2 supports
+#   multiple consumers via /dev/video<N>).
+#
+# HW encode:
+#   "#hardware" makes go2rtc rewrite the ffmpeg pipeline to use whatever
+#   v4l2_m2m / vaapi / rkmpp encoder is available on the host.  On RDK
+#   S100P (Nash BPU) go2rtc can target the kernel v4l2 codec node if the
+#   BSP exposes one; if not, it falls back to libx264 software — which is
+#   still faster than aiortc's Python-wrapped x264 because SRTP/RTP stay
+#   in Go.
+#
+# Discover your camera:
+#   v4l2-ctl --list-devices
+#   v4l2-ctl -d /dev/video0 --list-formats-ext     # supported input formats
+#   ls /dev/video*
+#
+# Override without editing this file:
+#   LINGTU_GO2RTC_CAMERA=/dev/video2 sudo -E systemctl restart go2rtc
+#   (reads the env var via the systemd unit's EnvironmentFile support —
+#    see scripts/install_go2rtc.sh to enable that pattern).
+
+api:
+  # Bind to loopback only; GatewayModule reverse-proxies /api/v1/webrtc/whep
+  # so browsers still reach go2rtc through port 5050.  Set to 0.0.0.0 if
+  # you want to point a browser directly at :1984 for debugging.
+  listen: "127.0.0.1:1984"
+  origin: "*"        # CORS; gateway strips this in production
+
+# WebRTC transport: host-only ICE for single-LAN deployment (no STUN/TURN).
+# Listen port must match what the browser can actually reach — for a
+# product shipping on a closed LAN that's the robot's IP directly.
+webrtc:
+  listen: ":8555/tcp"        # TCP fallback for networks that drop UDP
+  candidates:
+    - "stun:stun.l.google.com:19302"  # harmless on LAN, useful for mDNS
+
+# Log level: debug / info / warn / error / panic / trace
+log:
+  level: info
+
+# Streams — give each camera a short name; the WHEP src= query-string
+# argument selects which one to play.
+streams:
+  # Primary RGB teleop feed.  "ffmpeg:" prefix = let ffmpeg ingest; the
+  # "#video=h264#hardware" suffix asks go2rtc to encode to H.264 with
+  # HW acceleration when available.  "#input=-input_format mjpeg" tells
+  # ffmpeg to request the UVC camera's MJPEG output (Orbbec Gemini
+  # delivers MJPEG at higher fps than raw YUY2).
+  cam:
+    - "ffmpeg:device?video=/dev/video0&input_format=mjpeg&video_size=1280x720&framerate=30#video=h264#hardware"
+
+  # Optional second stream — same device but 640x480 for constrained
+  # uplinks.  Uncomment and select with ?src=cam_lq in the browser.
+  # cam_lq:
+  #   - "ffmpeg:device?video=/dev/video0&input_format=mjpeg&video_size=640x480&framerate=30#video=h264#hardware"
+
+# Uncomment to record to disk for debugging; paths are relative to go2rtc cwd.
+# record:
+#   path: /var/log/go2rtc/rec
+#   segment: 60s

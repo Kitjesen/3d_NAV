@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Camera, StopCircle, RefreshCw } from 'lucide-react'
 import { useCamera } from '../hooks/useCamera'
 import { useWebRTC } from '../hooks/useWebRTC'
+import { useWHEP } from '../hooks/useWHEP'
 import { CameraHud } from './CameraHud'
 import type { SSEState } from '../types'
 import styles from './CameraFeed.module.css'
@@ -12,46 +13,71 @@ interface CameraFeedProps {
   sseState: SSEState
 }
 
+type Source = 'whep' | 'rtc' | 'jpeg'
+
 export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
-  // Prefer WebRTC (H.264, ~100 ms glass-to-glass).  If the gateway
-  // returns 503 (aiortc not installed) we fall through to the legacy
-  // JPEG-over-WS stream without any user action.
-  const rtc = useWebRTC()
-  const fallback = rtc.error === 'unavailable'
-  const jpeg = useCamera(fallback ? '/ws/teleop' : '')  // empty URL → idle
+  // Three-tier fallback, fastest-first:
+  //   1. go2rtc WHEP sidecar (native Go, ~30–60 ms LAN)
+  //   2. aiortc Python WebRTC (~80–150 ms LAN, same protocol)
+  //   3. JPEG-over-WebSocket (~250 ms, universal fallback)
+  // Each hook idles (no WS / no PC) until the previous tier reports an
+  // "unavailable" error, so we never open three connections at once.
+  const whep = useWHEP()
+  const rtcIdle = whep.error !== 'unavailable'  // still trying WHEP
+  const rtc = useWebRTC(rtcIdle ? '' : '/api/v1/webrtc/offer')
+  const jpegIdle = rtc.error !== 'unavailable' || whep.error !== 'unavailable'
+  const jpeg = useCamera(jpegIdle ? '' : '/ws/teleop')
+
+  // Pick the tier that is actually producing video.  WHEP "connecting"
+  // blocks fallback — if go2rtc is present but slow, we wait; if it's
+  // absent the status probe fails fast and the hook emits 'unavailable'.
+  let source: Source
+  if (whep.stream) source = 'whep'
+  else if (whep.error === 'unavailable' && rtc.stream) source = 'rtc'
+  else if (whep.error === 'unavailable' && rtc.error === 'unavailable') source = 'jpeg'
+  else source = whep.error === 'unavailable' ? 'rtc' : 'whep'  // still building
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  const liveStream = source === 'whep' ? whep.stream : source === 'rtc' ? rtc.stream : null
   useEffect(() => {
     if (!videoRef.current) return
-    if (rtc.stream && videoRef.current.srcObject !== rtc.stream) {
-      videoRef.current.srcObject = rtc.stream
+    if (liveStream && videoRef.current.srcObject !== liveStream) {
+      videoRef.current.srcObject = liveStream
     }
-  }, [rtc.stream])
+  }, [liveStream])
 
-  const usingRtc     = !fallback
-  const hasVideo     = usingRtc ? rtc.connected : jpeg.imgSrc != null
-  const isConnected  = usingRtc ? rtc.connected : jpeg.connected
-  const onReconnect  = usingRtc ? rtc.reconnect : jpeg.reconnect
+  const hasVideo =
+    source === 'whep' ? whep.connected :
+    source === 'rtc'  ? rtc.connected  :
+    jpeg.imgSrc != null
+  const isConnected =
+    source === 'whep' ? whep.connected :
+    source === 'rtc'  ? rtc.connected  :
+    jpeg.connected
+  const onReconnect =
+    source === 'whep' ? whep.reconnect :
+    source === 'rtc'  ? rtc.reconnect  :
+    jpeg.reconnect
 
-  // Live HUD label: WebRTC exposes getStats, JPEG path doesn't.  Prefer
-  // real numbers over the static "720p · H.264" caption when available.
   let sourceLabel: string
-  if (!usingRtc) {
+  if (source === 'jpeg') {
     sourceLabel = '640 × 480 · MJPEG'
+  } else if (source === 'whep') {
+    sourceLabel = whep.connected ? '图传 · Go2RTC · H.264' : '图传 · Go2RTC (建立中…)'
   } else if (rtc.stats && rtc.stats.active_peers > 0) {
     const mbps = (rtc.stats.bitrate_bps / 1_000_000).toFixed(2)
     const fps  = rtc.stats.fps.toFixed(0)
     const enc  = rtc.stats.encode_avg_ms
     const encStr = typeof enc === 'number' ? ` · ${enc.toFixed(0)}ms enc` : ''
-    sourceLabel = `H.264 · ${fps}fps · ${mbps} Mbit/s${encStr}`
+    sourceLabel = `aiortc · H.264 · ${fps}fps · ${mbps} Mbit/s${encStr}`
   } else {
-    sourceLabel = 'H.264 · WebRTC (建立中…)'
+    sourceLabel = 'aiortc · WebRTC (建立中…)'
   }
 
   return (
     <div className={styles.cameraFeed}>
       <div className={styles.viewport}>
-        {usingRtc ? (
+        {(source === 'whep' || source === 'rtc') ? (
           <video
             ref={videoRef}
             className={styles.img}

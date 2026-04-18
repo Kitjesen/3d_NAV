@@ -4,6 +4,14 @@
 端到端延迟压到 80–150 ms（LAN，软编）。本文档记录如何在 S100P 上部署、
 如何量化延迟、以及 Phase B（硬编）的路线图。
 
+**三档方案现状**（`CameraFeed` 自动选最快可用的）：
+
+| 优先级 | 名字 | 实现 | 延迟 (LAN) | CPU | 状态 |
+|--------|------|------|----------|-----|------|
+| 1 | 图传（go2rtc sidecar） | Go 二进制 + ffmpeg | **30-60ms** | <5% | 需 `install_go2rtc.sh` |
+| 2 | aiortc（Python） | 当前默认 | 80-150ms | ~30% | 开箱 |
+| 3 | JPEG-over-WS（fallback） | cv2.imencode | 250-400ms | 高 | 永远兜底 |
+
 ## 1. 最小部署
 
 ```bash
@@ -86,7 +94,71 @@ curl -s http://localhost:5050/api/v1/webrtc/stats | jq
 | 偶发冻结 / 长尾卡顿 | 网络抖动 / 编码打嗝 | 降 `LINGTU_WEBRTC_BITRATE`；或看 `encode_avg_ms` 是否飙高 |
 | `ICE failed` 瞬间断线 | 浏览器与机器人走了非同网段 IP | 确保 host candidate 双方可达；LAN 场景禁用 VPN |
 
-## 5. Phase B 路线（S100P Nash BPU 硬编）
+## 5. 图传模式（Go2RTC sidecar，推荐生产路径）
+
+aiortc 软编 + Python SRTP/RTP 在 A78AE 上剩下约 15-20 ms 纯 Python overhead
+压不下去了。如果需要 <80 ms 稳定体验，起一个 go2rtc Go 进程做相机热路径。
+
+### 5.1 架构
+
+```
+Orbbec Gemini 335L
+  ├─ RGB UVC (/dev/video0)  ─→ go2rtc  ─(WebRTC/UDP)→  浏览器 <video>
+  │                            │
+  │                            └─(WHEP POST /sdp)──▶ Gateway :5050
+  │                                                   反代 /api/v1/webrtc/whep
+  └─ Depth/IR (OBK SDK) ──▶ ROS2 ──▶ CameraBridge ──▶ SLAM/感知 (不变)
+```
+
+媒体走 UDP 直连 go2rtc，不经过 Python；Python 只代理一次 SDP 握手。
+
+### 5.2 部署（在机器人 S100P 上）
+
+```bash
+# 1. 安装
+sudo bash scripts/install_go2rtc.sh
+# 2. 如果相机设备号不是 /dev/video0:
+v4l2-ctl --list-devices                          # 找到 RGB 节点
+sudo sed -i 's|/dev/video0|/dev/videoN|' /etc/go2rtc/go2rtc.yaml
+sudo systemctl restart go2rtc
+# 3. 验证
+curl -s http://localhost:1984/api/streams | jq
+```
+
+浏览器刷新后，`CameraFeed` 右下角 hint 会显示 `图传 · Go2RTC · H.264`。
+HUD 仅 aiortc 路径有，WHEP 路径用 `chrome://webrtc-internals` 看。
+
+### 5.3 硬件编码开启确认
+
+`config/go2rtc.yaml` 默认在 ffmpeg pipeline 加了 `#hardware`，go2rtc 会
+自动探测 v4l2_m2m / vaapi / rkmpp。开启成功的话：
+
+```bash
+journalctl -u go2rtc -n 50 | grep -i 'codec\|encode\|hw'
+# 看到 "v4l2m2m" 或 "hobot" 字样 → HW 编码命中
+# 看到 "libx264" → 回落软编 (仍然比 aiortc 快,因为 Go 侧 SRTP 零开销)
+```
+
+S100P Nash BPU 如果 BSP 没暴露 v4l2 codec 节点（高概率），当前只能走
+软编 x264；下一阶段用 `hobot_codec` ROS2 节点预编码 + go2rtc RTSP 入站
+拼起来（见 §6）。
+
+### 5.4 单端口约束
+
+go2rtc 默认监听 `:1984`，但 `config/go2rtc.yaml` 改成 `127.0.0.1:1984`
+只接受本机访问。浏览器通过 Gateway :5050 的 `/api/v1/webrtc/whep` 反代
+拿到 SDP answer，然后真正的媒体包走 WebRTC UDP 直连（ICE host
+candidate = 机器人 LAN IP）。用户只开 :5050 一个端口即可。
+
+WebRTC UDP 端口范围由 go2rtc `webrtc.listen` 控制，默认自动。如果防火墙
+锁死 UDP，config 里加 `webrtc: { listen: ':8555/tcp' }` 走 TCP 候选。
+
+### 5.5 关掉 go2rtc 回到 aiortc
+
+`sudo systemctl stop go2rtc` → 前端 `/api/v1/webrtc/go2rtc/status` 探测
+失败 → `CameraFeed` 自动退到 aiortc 路径。不需要前端改配置。
+
+## 6. Phase B 路线（S100P Nash BPU 硬编）
 
 当前软编在 A78AE 上占 ~30 % 单核，持续跑有热节流风险。Phase B 方案：
 
