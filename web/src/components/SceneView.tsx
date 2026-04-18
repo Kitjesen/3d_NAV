@@ -48,7 +48,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [saveModalOpen, setSaveModalOpen] = useState(false)
   const [layers, setLayers] = useState<Layers>({
-    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true, costmap: false, slope: false,
+    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true, costmap: true, slope: false,
   })
   const [maps, setMaps] = useState<MapInfo[]>([])
   // Default 0.12 (12cm sphere per point) — with ~18k points in a room-scale
@@ -63,6 +63,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const [relocY, setRelocY] = useState('0')
   const [relocYaw, setRelocYaw] = useState('0')
   const [relocPending, setRelocPending] = useState(false)
+  // Track whether the user has manually edited reloc inputs; until then we
+  // mirror live odometry so the defaults reflect the robot's current pose
+  // instead of the unhelpful (0, 0, 0).
+  const [relocDirty, setRelocDirty] = useState(false)
   const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
 
   // Map management modals
@@ -147,10 +151,45 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     }
   }, [odom])
 
+  // ── Sync reloc inputs with odometry until user edits ──────────
+  // When the panel is closed (or user hasn't edited yet) keep X/Y/Yaw mirroring
+  // current odom so opening it shows useful defaults.  Once the user edits any
+  // field we stop overwriting (relocDirty=true).
+  useEffect(() => {
+    if (relocDirty || !odom) return
+    setRelocX(robotX.toFixed(2))
+    setRelocY(robotY.toFixed(2))
+    setRelocYaw(yaw.toFixed(3))
+  }, [odom, robotX, robotY, yaw, relocDirty])
+
+  // ── Default active map for reloc panel ─────────────────────────
+  const activeMapName = sseState.session?.active_map ?? null
+  useEffect(() => {
+    if (!relocMap && activeMapName) setRelocMap(activeMapName)
+  }, [activeMapName, relocMap])
+
   // ── Handlers ──────────────────────────────────────────────────
   const handlePendingGoal = useCallback((x: number, y: number) => {
     setPendingGoal({ x, y })
   }, [])
+
+  const handleSceneRelocalize = useCallback(async (x: number, y: number) => {
+    const mapName = sseState.session?.active_map
+    if (!mapName) {
+      showToast('请先加载一张地图后再重定位', 'error')
+      return
+    }
+    const useYaw = typeof odom?.yaw === 'number' && Number.isFinite(odom.yaw) ? odom.yaw : 0
+    showToast(`重定位中… (${x.toFixed(2)}, ${y.toFixed(2)})`, 'info')
+    try {
+      await api.relocalize(mapName, x, y, useYaw)
+      const q = sseState.session?.icp_quality
+      const qStr = typeof q === 'number' ? ` quality=${q.toFixed(2)}` : ''
+      showToast(`重定位成功${qStr}`, 'success')
+    } catch (e: unknown) {
+      showToast(`重定位失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }, [sseState.session, odom, showToast])
 
   const handleConfirmGoal = useCallback(async () => {
     if (!pendingGoal) return
@@ -460,10 +499,11 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
               layers={layers}
               pointSize={pointSize}
               onPendingGoal={handlePendingGoal}
+              onRelocalize={handleSceneRelocalize}
               pendingGoal={pendingGoal}
             />
             <div className={styles.canvasOverlayTop}>
-              <span className={styles.scaleLabel}>3D 场景视图  ·  拖拽旋转  ·  滚轮缩放  ·  点击放置目标</span>
+              <span className={styles.scaleLabel}>3D 场景视图  ·  拖拽旋转  ·  滚轮缩放  ·  点击放置目标  ·  Shift+点击重定位</span>
             </div>
             <div className={styles.robotOverlay}>
               <span>位置 {odomValid ? `(${robotX.toFixed(2)}, ${robotY.toFixed(2)})` : '(--, --)'}</span>
@@ -649,13 +689,16 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 <div className={styles.relocInputRow}>
                   <label>X</label>
                   <input className={styles.relocInput} type="number" step="0.1"
-                    value={relocX} onChange={e => setRelocX(e.target.value)} />
+                    value={relocX}
+                    onChange={e => { setRelocDirty(true); setRelocX(e.target.value) }} />
                   <label>Y</label>
                   <input className={styles.relocInput} type="number" step="0.1"
-                    value={relocY} onChange={e => setRelocY(e.target.value)} />
+                    value={relocY}
+                    onChange={e => { setRelocDirty(true); setRelocY(e.target.value) }} />
                   <label>Yaw</label>
                   <input className={styles.relocInput} type="number" step="0.1"
-                    value={relocYaw} onChange={e => setRelocYaw(e.target.value)} />
+                    value={relocYaw}
+                    onChange={e => { setRelocDirty(true); setRelocYaw(e.target.value) }} />
                 </div>
                 <button
                   className={styles.relocConfirmBtn}

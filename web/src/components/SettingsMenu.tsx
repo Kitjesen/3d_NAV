@@ -20,6 +20,7 @@ import {
   ListChecks, AlertTriangle, Gauge, ArrowRight,
   GitBranch, LogOut,
 } from 'lucide-react'
+import { resetAllLayouts } from './FloatingWidget'
 import styles from './SettingsMenu.module.css'
 
 type Section = 'home' | 'system' | 'modules' | 'calib' | 'diag' | 'about'
@@ -145,8 +146,7 @@ function SystemSection({ onBack, onOpenModal }: {
           onClick={() => alert('日志查看器(待实装):请在 SSH 终端 tail -f logs/lingtu.log')} />
         <ActionRow icon={<RefreshCw size={14} />} title="恢复默认布局"
           hint="清除已保存的 FloatingWidget 位置/尺寸"
-          onClick={async () => {
-            const { resetAllLayouts } = await import('./FloatingWidget')
+          onClick={() => {
             resetAllLayouts()
           }} />
         <ActionRow icon={<Power size={14} />} title="重启 LingTu" dangerous

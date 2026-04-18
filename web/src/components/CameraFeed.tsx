@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Camera, StopCircle, RefreshCw } from 'lucide-react'
 import { useCamera } from '../hooks/useCamera'
 import { useWebRTC } from '../hooks/useWebRTC'
@@ -12,12 +12,23 @@ interface CameraFeedProps {
   sseState: SSEState
 }
 
+// If WebRTC doesn't produce a video frame within this window, fall back
+// to MJPEG. ICE failures on certain networks (VPN, NAT) can leave peers
+// stuck in 'checking' forever — we can't wait.
+const WEBRTC_TIMEOUT_MS = 8_000
+
 export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
-  // Prefer WebRTC (H.264, ~100 ms glass-to-glass).  If the gateway
-  // returns 503 (aiortc not installed) we fall through to the legacy
-  // JPEG-over-WS stream without any user action.
+  // Prefer WebRTC (H.264, ~100 ms glass-to-glass).  Fall back to JPEG when:
+  //   - gateway says 'unavailable' (aiortc missing)
+  //   - WebRTC fails to produce a stream within WEBRTC_TIMEOUT_MS (ICE stuck)
   const rtc = useWebRTC()
-  const fallback = rtc.error === 'unavailable'
+  const [timedOut, setTimedOut] = useState(false)
+  useEffect(() => {
+    if (rtc.connected || rtc.error) { setTimedOut(false); return }
+    const t = setTimeout(() => setTimedOut(true), WEBRTC_TIMEOUT_MS)
+    return () => clearTimeout(t)
+  }, [rtc.connected, rtc.error])
+  const fallback = rtc.error === 'unavailable' || timedOut
   const jpeg = useCamera(fallback ? '/ws/teleop' : '')  // empty URL → idle
 
   const videoRef = useRef<HTMLVideoElement>(null)

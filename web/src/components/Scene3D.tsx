@@ -47,6 +47,7 @@ interface Scene3DProps {
   layers:       Layers
   pointSize:    number
   onPendingGoal: (x: number, y: number) => void
+  onRelocalize?: (x: number, y: number) => void
   pendingGoal?:  { x: number; y: number } | null
 }
 
@@ -66,7 +67,7 @@ function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) 
 }
 
 export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
-  { cloud, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, localPath, layers, pointSize, onPendingGoal, pendingGoal },
+  { cloud, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, localPath, layers, pointSize, onPendingGoal, onRelocalize, pendingGoal },
   ref,
 ) {
   const mountRef   = useRef<HTMLDivElement>(null)
@@ -420,7 +421,9 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
 
     const { grid_b64, cols, resolution, origin } = costmap
     const bytes = Uint8Array.from(atob(grid_b64), c => c.charCodeAt(0))
-    const rows  = Math.round(bytes.length / cols)
+    // Prefer explicit rows from backend; fall back to byte-length inference
+    // for older events that only carry cols.
+    const rows  = costmap.rows ?? Math.round(bytes.length / cols)
     if (rows <= 0 || cols <= 0) return
 
     // Draw costmap to an offscreen canvas
@@ -659,10 +662,10 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
   }, [sceneGraph])
 
   // ── Click vs drag detection ────────────────────────────────────
-  const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
+  const mouseDownPos = useRef<{ x: number; y: number; shift: boolean } | null>(null)
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    mouseDownPos.current = { x: e.clientX, y: e.clientY }
+    mouseDownPos.current = { x: e.clientX, y: e.clientY, shift: e.shiftKey }
   }
 
   const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -687,7 +690,15 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     const hits = raycaster.current.intersectObject(floor)
     if (hits.length > 0) {
       const p = hits[0].point
-      onPendingGoal(p.x, -p.z)  // convert Three.js back to world coords
+      const wx = p.x
+      const wy = -p.z  // convert Three.js back to world coords
+      // Shift+click → relocalize (set initial pose); plain click → goal
+      const shiftDown = (down.shift || e.shiftKey)
+      if (shiftDown && onRelocalize) {
+        onRelocalize(wx, wy)
+      } else {
+        onPendingGoal(wx, wy)
+      }
     }
   }
 

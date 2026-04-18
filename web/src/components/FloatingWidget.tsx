@@ -67,17 +67,29 @@ export function FloatingWidget({
   minSize = { w: 260, h: 180 },
   children,
 }: FloatingWidgetProps) {
-  // Load persisted layout or use defaults
+  // Load persisted layout or use defaults — clamp to viewport so small
+  // screens don't end up with widgets outside the visible area (console-canvas
+  // has overflow:hidden, which would otherwise clip them out of reach).
   const [layout, setLayout] = useState<Layout>(() => {
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1920
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 1080
+    const pad = 16
+    const clamp = (L: Layout): Layout => {
+      const w = Math.max(minSize.w, Math.min(L.w, vw - 2 * pad))
+      const h = Math.max(minSize.h, Math.min(L.h, vh - 2 * pad))
+      const x = Math.max(0, Math.min(vw - w - pad, L.x))
+      const y = Math.max(0, Math.min(vh - h - pad, L.y))
+      return { ...L, x, y, w, h }
+    }
     const stored = loadLayouts()[id]
-    if (stored) return stored
-    return {
+    if (stored) return clamp(stored)
+    return clamp({
       x: defaultPos.x,
       y: defaultPos.y,
       w: defaultSize.w,
       h: defaultSize.h,
       z: ++globalZ,
-    }
+    })
   })
 
   const [dragMode, setDragMode] = useState<DragMode>(null)

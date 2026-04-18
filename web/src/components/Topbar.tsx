@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Settings, Radio } from 'lucide-react'
+import { Settings, Radio, RotateCcw } from 'lucide-react'
+import { resetAllLayouts } from './FloatingWidget'
 import type { SSEState, Tab } from '../types'
 import { BagRecorder } from './BagRecorder'
 import { SettingsMenu } from './SettingsMenu'
@@ -212,6 +213,20 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
 
       <div className={styles.right}>
         <BagRecorder />
+        {activeTab === 'console' && (
+          <button
+            className={styles.btnIcon}
+            aria-label="重置控制台布局"
+            title="重置控制台布局（清除拖拽保存的位置/尺寸）"
+            onClick={() => {
+              if (confirm('重置控制台的 FloatingWidget 位置和尺寸？页面将刷新。')) {
+                resetAllLayouts()
+              }
+            }}
+          >
+            <RotateCcw size={16} />
+          </button>
+        )}
         <button
           className={styles.btnIcon}
           aria-label="设置"
