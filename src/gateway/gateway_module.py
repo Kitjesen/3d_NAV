@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -99,6 +100,10 @@ class CmdVelRequest(BaseModel):
 
 class InstructionRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1024)
+
+
+class BitrateRequest(BaseModel):
+    bps: int
 
 
 class ModeRequest(BaseModel):
@@ -238,6 +243,7 @@ class GatewayModule(Module, layer=6):
     map_cloud:      In[PointCloud2]
     saved_map:      In[PointCloud2]  # refined static map from localizer (map frame)
     icp_quality:    In[float]        # /localization_quality — lower=better, 0 = no data
+    map_odom_tf:    In[dict]         # from SlamBridge — {tx,ty,tz,qx,qy,qz,qw,valid} for map→odom
     scene_graph:    In[SceneGraph]
     safety_state:   In[SafetyState]
     mission_status: In[dict]
@@ -306,6 +312,12 @@ class GatewayModule(Module, layer=6):
         self._map_cloud_count: int = 0
         self._map_voxel_size: float = 0.15
 
+        # map→odom TF (from localizer via SlamBridge). Applied to odom-frame
+        # map_cloud before SSE so the frontend sees it overlaid with saved_map
+        # (which is already in map frame). Identity until localizer converges.
+        self._T_map_odom: np.ndarray = np.eye(4, dtype=np.float64)
+        self._has_map_odom_tf: bool = False
+
         # WebRTCStreamModule reference (set by on_system_modules).  Kept as
         # an attribute so the /api/v1/webrtc/offer route can check presence
         # without an AttributeError when aiortc is not installed.
@@ -372,6 +384,8 @@ class GatewayModule(Module, layer=6):
         self.saved_map.set_policy("latest")
         self.icp_quality.subscribe(self._on_icp_quality)
         self.icp_quality.set_policy("latest")
+        self.map_odom_tf.subscribe(self._on_map_odom_tf)
+        self.map_odom_tf.set_policy("latest")
         self.scene_graph.subscribe(self._on_scene_graph)
         self.safety_state.subscribe(self._on_safety)
         self.mission_status.subscribe(self._on_mission)
@@ -394,7 +408,114 @@ class GatewayModule(Module, layer=6):
                 target=self._run_server, daemon=True, name="gateway"
             )
             self._server_thread.start()
+        # Background: load active map.pcd from disk and push as saved_map
+        # event so the frontend底图 always has the stored map regardless of
+        # whether localizer has converged. Re-pushes periodically so late-
+        # connecting SSE clients also get it.
+        self._saved_map_loader_thread = threading.Thread(
+            target=self._saved_map_loader_loop, daemon=True, name="saved_map_loader"
+        )
+        self._saved_map_loader_thread.start()
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
+
+    def _saved_map_loader_loop(self) -> None:
+        """Load active/map.pcd once per active-map change, push periodically.
+
+        - Reads ~/data/nova/maps/active/map.pcd (symlink target).
+        - Downsamples to MAX_SEND points.
+        - Pushes as SSE saved_map event every 10s so new clients get it.
+        - Re-loads if active symlink target changes (user picked a new map).
+        """
+        import os, time as _t
+        MAX_SEND = 80_000
+        last_target = None
+        cached_flat: list[float] | None = None
+        cached_count = 0
+        while True:
+            try:
+                active = os.path.expanduser("~/data/nova/maps/active")
+                target = os.readlink(active) if os.path.islink(active) else None
+                pcd_path = os.path.expanduser(f"~/data/nova/maps/{target}/map.pcd") if target else None
+                if target != last_target or cached_flat is None:
+                    last_target = target
+                    cached_flat = None
+                    cached_count = 0
+                    if pcd_path and os.path.isfile(pcd_path):
+                        pts = self._load_pcd_xyz(pcd_path)
+                        if pts is not None and len(pts) > 0:
+                            if len(pts) > MAX_SEND:
+                                idx = np.random.choice(len(pts), MAX_SEND, replace=False)
+                                pts = pts[idx]
+                            cached_flat = pts[:, :3].astype(np.float32).flatten().tolist()
+                            cached_count = len(pts)
+                            logger.info("saved_map loader: loaded %s (%d pts)", target, cached_count)
+                if cached_flat:
+                    self.push_event({"type": "saved_map", "points": cached_flat, "count": cached_count})
+            except Exception as e:
+                logger.debug("saved_map loader error: %s", e)
+            _t.sleep(10.0)
+
+    @staticmethod
+    def _load_pcd_xyz(path: str) -> np.ndarray | None:
+        """Minimal PCD XYZ loader — supports ascii and binary little-endian."""
+        try:
+            with open(path, "rb") as f:
+                head_bytes = b""
+                while b"DATA" not in head_bytes.split(b"\n")[-1].upper() if b"DATA" in head_bytes else True:
+                    line = f.readline()
+                    if not line:
+                        break
+                    head_bytes += line
+                    if line.upper().startswith(b"DATA"):
+                        break
+                header = head_bytes.decode("ascii", errors="ignore")
+                fields = []
+                sizes: list[int] = []
+                count = 0
+                fmt = "ascii"
+                for ln in header.splitlines():
+                    ln = ln.strip()
+                    if ln.startswith("FIELDS"):
+                        fields = ln.split()[1:]
+                    elif ln.startswith("SIZE"):
+                        sizes = [int(x) for x in ln.split()[1:]]
+                    elif ln.startswith("POINTS"):
+                        count = int(ln.split()[1])
+                    elif ln.startswith("DATA"):
+                        fmt = ln.split()[1].lower()
+                if not fields or "x" not in fields or "y" not in fields:
+                    return None
+                xi, yi, zi = fields.index("x"), fields.index("y"), fields.index("z") if "z" in fields else -1
+                if fmt == "ascii":
+                    pts = []
+                    for ln in f.read().decode(errors="ignore").splitlines():
+                        parts = ln.split()
+                        if len(parts) < len(fields): continue
+                        try:
+                            x, y = float(parts[xi]), float(parts[yi])
+                            z = float(parts[zi]) if zi >= 0 else 0.0
+                            pts.append((x, y, z))
+                        except ValueError:
+                            pass
+                    return np.array(pts, dtype=np.float32) if pts else None
+                if fmt == "binary":
+                    if not sizes: sizes = [4] * len(fields)
+                    stride = sum(sizes)
+                    raw = np.frombuffer(f.read(), dtype=np.uint8)
+                    n = count or (len(raw) // stride)
+                    raw = raw[: n * stride].reshape(n, stride)
+                    offsets = [sum(sizes[:i]) for i in range(len(sizes))]
+                    out = np.zeros((n, 3), dtype=np.float32)
+                    out[:, 0] = np.frombuffer(raw[:, offsets[xi]:offsets[xi]+4].tobytes(), dtype=np.float32)
+                    out[:, 1] = np.frombuffer(raw[:, offsets[yi]:offsets[yi]+4].tobytes(), dtype=np.float32)
+                    if zi >= 0:
+                        out[:, 2] = np.frombuffer(raw[:, offsets[zi]:offsets[zi]+4].tobytes(), dtype=np.float32)
+                    finite = np.isfinite(out).all(axis=1)
+                    return out[finite]
+        except Exception as e:
+            logger.debug("PCD load failed %s: %s", path, e)
+            return None
+        return None
 
     def stop(self) -> None:
         self._server_thread = None
@@ -488,6 +609,132 @@ class GatewayModule(Module, layer=6):
             self._icp_quality = float(q)
         except Exception:
             pass
+
+    # ── Last-known-pose persistence (auto-relocalize on session/start) ────
+    # Keeps a tiny JSON snapshot of the last *successful* relocalize call so
+    # that a daemon restart doesn't force the operator to Shift+click again.
+    # Only written when the user explicitly relocalized and the localizer
+    # reported success; never overwritten by raw odometry (which can drift).
+    _LAST_POSE_PATH = os.path.expanduser("~/.lingtu/last_nav_pose.json")
+    _LAST_POSE_MAX_AGE_S = 7 * 24 * 3600  # 1 week
+
+    def _persist_last_nav_pose(
+        self, map_name: str, x: float, y: float, yaw: float,
+        quality: float | None,
+    ) -> None:
+        """Atomically snapshot the last successful relocalize pose to disk."""
+        try:
+            path = self._LAST_POSE_PATH
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            payload = {
+                "map_name": map_name,
+                "x": float(x), "y": float(y), "yaw": float(yaw),
+                "quality": float(quality) if quality is not None else None,
+                "saved_at": time.time(),
+            }
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, path)
+            logger.info("gateway: persisted last_nav_pose map=%s (%.2f, %.2f, yaw=%.2f)",
+                        map_name, x, y, yaw)
+        except Exception as e:
+            logger.warning("gateway: persist last_nav_pose failed: %s", e)
+
+    def _load_last_nav_pose(self, map_name: str) -> dict | None:
+        """Return persisted pose if map matches and snapshot is fresh, else None."""
+        try:
+            path = self._LAST_POSE_PATH
+            if not os.path.isfile(path):
+                return None
+            with open(path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if d.get("map_name") != map_name:
+                return None
+            age = time.time() - float(d.get("saved_at", 0.0))
+            if age > self._LAST_POSE_MAX_AGE_S:
+                logger.info("gateway: last_nav_pose too old (%.1fh), ignoring", age / 3600)
+                return None
+            return d
+        except Exception as e:
+            logger.debug("gateway: load last_nav_pose failed: %s", e)
+            return None
+
+    def _spawn_auto_relocalize(self, map_name: str) -> None:
+        """Fire-and-forget: if we have a persisted pose for this map, replay
+        it as a /relocalize service call ~2s after localizer comes up.
+
+        Runs in a daemon thread so session/start returns immediately — the
+        operator sees mode=navigating right away, and the ICP converges in
+        the background using the last known pose instead of (0,0,0).
+        """
+        d = self._load_last_nav_pose(map_name)
+        if d is None:
+            return
+        x, y, yaw = d["x"], d["y"], d["yaw"]
+
+        def _worker() -> None:
+            import subprocess as _sp
+            time.sleep(2.5)  # give localizer time to finish loading static map
+            try:
+                map_dir = os.environ.get(
+                    "NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
+                pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+                if not os.path.isfile(pcd_path):
+                    logger.warning("auto-relocalize: map pcd missing: %s", pcd_path)
+                    return
+                env = (
+                    "source /opt/ros/humble/setup.bash && "
+                    "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+                    "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                )
+                cmd = (
+                    env
+                    + f"ros2 service call /nav/relocalize interface/srv/Relocalize "
+                      f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
+                      f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""
+                )
+                r = _sp.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=20)
+                ok = "success=True" in r.stdout
+                logger.info("auto-relocalize: map=%s pose=(%.2f,%.2f,yaw=%.2f) ok=%s",
+                            map_name, x, y, yaw, ok)
+            except Exception as e:
+                logger.warning("auto-relocalize worker failed: %s", e)
+
+        threading.Thread(
+            target=_worker, daemon=True, name="gateway-auto-reloc",
+        ).start()
+
+    def _on_map_odom_tf(self, tf: dict) -> None:
+        """Cache localizer's map→odom transform as a 4x4 matrix.
+
+        Applied to Fast-LIO2's odom-frame map_cloud before SSE push so the
+        frontend renders it in the same frame as saved_map (which is already
+        in map frame).  Until the localizer converges (quality > 0), this
+        stays identity so the cloud is still visible, just not yet aligned.
+        """
+        if not tf or not tf.get("valid", False):
+            return
+        try:
+            tx, ty, tz = float(tf["tx"]), float(tf["ty"]), float(tf["tz"])
+            qx, qy, qz, qw = (float(tf["qx"]), float(tf["qy"]),
+                              float(tf["qz"]), float(tf["qw"]))
+            # Quaternion → 3x3 rotation (Hamilton convention, right-handed)
+            xx, yy, zz = qx * qx, qy * qy, qz * qz
+            xy, xz, yz = qx * qy, qx * qz, qy * qz
+            wx, wy, wz = qw * qx, qw * qy, qw * qz
+            R = np.array([
+                [1 - 2 * (yy + zz),     2 * (xy - wz),     2 * (xz + wy)],
+                [    2 * (xy + wz), 1 - 2 * (xx + zz),     2 * (yz - wx)],
+                [    2 * (xz - wy),     2 * (yz + wx), 1 - 2 * (xx + yy)],
+            ], dtype=np.float64)
+            T = np.eye(4, dtype=np.float64)
+            T[:3, :3] = R
+            T[:3, 3] = [tx, ty, tz]
+            self._T_map_odom = T
+            self._has_map_odom_tf = True
+        except Exception as e:
+            logger.debug("gateway: _on_map_odom_tf parse failed: %s", e)
 
     # ── Session state helpers ─────────────────────────────────────────────
 
@@ -597,18 +844,17 @@ class GatewayModule(Module, layer=6):
         self.push_event({"type": "saved_map", "points": flat, "count": len(pts)})
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
-        """Accumulate map cloud and push a DETERMINISTIC voxel-downsampled view.
+        """Mode-aware cloud handling.
 
-        Changes from the previous implementation:
-          1. Voxel-downsample every frame (incremental, not only at 300k)
-             so the total point count grows smoothly.
-          2. Push to SSE every 2 frames (~0.5 Hz) — previously 5 frames
-             made the cloud look frozen.
-          3. Send the ENTIRE downsampled cloud (after voxel), not a random
-             sample. Random sampling made consecutive pushes show different
-             subsets, which looked like the cloud "not accumulating".
-          4. Cap at ~60k for SSE bandwidth, adaptive voxel size doubles
-             when over cap so the downsample is stable across frames.
+        mapping / exploring  → accumulate with voxel dedup (growing global map)
+        navigating           → replace every frame, no accumulation
+            Rationale: in navigating mode the map→odom TF keeps micro-adjusting
+            while ICP converges. Accumulating odom-frame points then transforming
+            on every send makes the *whole* accumulated cloud drift as TF shifts,
+            producing the "flying" ghost effect. Replacing per frame makes the
+            live scan track the robot cleanly, while saved_map carries the
+            stable底图 layer.
+        idle                 → keep latest, don't grow
         """
         self._map_cloud_count += 1
         pts = cloud.points  # (N, 3) float32
@@ -623,14 +869,14 @@ class GatewayModule(Module, layer=6):
         pts = pts[finite & bounded]
         if len(pts) == 0:
             return
+        mode = self._session_mode
         with self._map_cloud_lock:
-            if self._map_points is None:
+            if mode in ("navigating", "idle") or self._map_points is None:
+                # Replace — latest scan only, no accumulation
                 self._map_points = pts
             else:
+                # mapping / exploring — grow the global map via voxel dedup
                 combined = np.concatenate([self._map_points, pts], axis=0)
-                # Voxel-downsample EVERY frame at a fixed grid so the
-                # resulting cloud is deterministic and grows monotonically
-                # as new points appear in new voxels.
                 combined = self._voxel_downsample(combined, self._map_voxel_size)
                 self._map_points = combined
 
@@ -658,6 +904,15 @@ class GatewayModule(Module, layer=6):
                 pts_send = pts_send[::stride][:MAX_SEND]
         else:
             pts_send = pts_all
+
+        # Apply map→odom TF so the frontend sees odom-frame map_cloud
+        # (Fast-LIO2 live accumulation) aligned with map-frame saved_map.
+        # Identity until localizer converges — cloud still renders, just in
+        # odom frame which is off-center from saved_map until ICP succeeds.
+        if self._has_map_odom_tf:
+            p = pts_send[:, :3].astype(np.float64)
+            pts_map = (self._T_map_odom[:3, :3] @ p.T).T + self._T_map_odom[:3, 3]
+            pts_send = pts_map.astype(np.float32)
 
         # Binary path — encode once, fan out to /ws/cloud subscribers.
         # The old JSON SSE event would allocate ~180k Python floats per frame
@@ -938,7 +1193,7 @@ class GatewayModule(Module, layer=6):
 
     def _build_app(self):
         try:
-            from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+            from fastapi import Body, FastAPI, Request, WebSocket, WebSocketDisconnect
             from fastapi.exceptions import RequestValidationError
             from fastapi.middleware.cors import CORSMiddleware
             from fastapi.responses import JSONResponse, StreamingResponse
@@ -1027,7 +1282,7 @@ class GatewayModule(Module, layer=6):
             "/api/v1/webrtc/offer",
             summary="WebRTC SDP offer/answer exchange for low-latency camera",
         )
-        async def post_webrtc_offer(request: Request):
+        async def post_webrtc_offer(body: dict = Body(...)):
             """Forward a browser offer to WebRTCStreamModule.
 
             Returns 503 when aiortc is not installed or the module is not
@@ -1038,12 +1293,31 @@ class GatewayModule(Module, layer=6):
                 return JSONResponse(
                     {"error": "webrtc_unavailable"}, status_code=503,
                 )
-            body = await request.json()
             try:
                 answer = await gw._webrtc.handle_offer(body)
             except ValueError as e:
                 return JSONResponse({"error": str(e)}, status_code=400)
             return answer
+
+        @app.post(
+            "/api/v1/webrtc/bitrate",
+            summary="Live-tune WebRTC max bitrate without reconnect",
+        )
+        async def post_webrtc_bitrate(body: BitrateRequest):
+            """Hot-swap encoder cap on all active senders.
+
+            Body: ``{"bps": 1500000}``.  Clamped to [100kbps, 10Mbps].
+            Used for on-site spot-checking weak-network behaviour — the
+            browser's REMB/TWCC keeps the existing peer connection.
+            """
+            if gw._webrtc is None:
+                return JSONResponse(
+                    {"error": "webrtc_unavailable"}, status_code=503,
+                )
+            try:
+                return await gw._webrtc.set_max_bitrate(body.bps)
+            except ValueError as e:
+                return JSONResponse({"error": str(e)}, status_code=400)
 
         @app.post("/api/v1/goal", summary="Send navigation goal")
         async def post_goal(body: GoalRequest):
@@ -1968,6 +2242,12 @@ class GatewayModule(Module, layer=6):
                     gw._session_error = "Services not ready after 10s"
                     return JSONResponse({"success": False, "message": gw._session_error}, status_code=500)
 
+                # Auto-replay last known relocalize pose so the operator doesn't
+                # need to Shift+click on the map after every daemon restart.
+                # Runs in a background thread so this endpoint returns fast.
+                if mode == "navigating" and map_name:
+                    gw._spawn_auto_relocalize(map_name)
+
                 # For exploring: activate FrontierExplorer on top of mapping stack.
                 if mode == "exploring":
                     try:
@@ -2068,13 +2348,33 @@ class GatewayModule(Module, layer=6):
                 r = subprocess.run(
                     ["bash", "-c",
                      _ros_env +
-                     f"ros2 service call /relocalize interface/srv/Relocalize "
+                     f"ros2 service call /nav/relocalize interface/srv/Relocalize "
                      f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
                      f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""],
                     capture_output=True, text=True, timeout=30)
                 ok = "success=True" in r.stdout
+                # Parse ICP quality (score/fitness) if the service echoed it —
+                # frontend colour-codes toast by magnitude: <0.1 good, 0.1-0.3
+                # marginal, >0.3 or None failed. Use the current cached value
+                # from /localization_quality as a fallback so a user calling
+                # this endpoint after a stale run still sees a number.
+                quality = None
+                for line in r.stdout.splitlines():
+                    ll = line.lower().strip()
+                    if any(k in ll for k in ("quality:", "score:", "fitness:")):
+                        try:
+                            quality = float(ll.split(":", 1)[-1].strip())
+                            break
+                        except ValueError:
+                            pass
+                if quality is None and ok:
+                    quality = float(getattr(gw, "_icp_quality", 0.0))
+                # Snapshot the successful pose so next daemon start can auto-
+                # relocalize without the operator re-clicking on the map.
+                if ok:
+                    gw._persist_last_nav_pose(map_name, x, y, yaw, quality)
                 msg = r.stdout[-300:] if not ok else f"Relocalized to {map_name}"
-                return {"success": ok, "message": msg}
+                return {"success": ok, "message": msg, "quality": quality}
             except Exception as e:
                 return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 

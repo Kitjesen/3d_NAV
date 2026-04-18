@@ -61,6 +61,7 @@ class SlamBridgeModule(Module, layer=1):
     alive:                 Out[bool]
     localization_status:   Out[dict]
     gnss_fusion_health:    Out[dict]
+    map_odom_tf:           Out[dict]  # {tx,ty,tz,qx,qy,qz,qw,valid} — localizer-emitted map→odom
 
     # Visual odometry input for selective DOF fusion during degeneracy
     visual_odom: In[Odometry]
@@ -208,6 +209,11 @@ class SlamBridgeModule(Module, layer=1):
             self._reader.on_pointcloud2(self._cloud_topic, self._on_dds_cloud)
             self._reader.on_pointcloud2(self._saved_map_topic, self._on_dds_saved_map)
             self._reader.on_float32(self._quality_topic, self._on_dds_quality)
+            # Subscribe to /tf so we can relay map→odom transform (from localizer ICP).
+            # Downstream GatewayModule applies this to map_cloud points before SSE
+            # so frontend sees both saved_map (already map frame) and map_cloud
+            # (Fast-LIO2 odom frame) overlaid in the same reference frame.
+            self._reader.on_tf("/tf", self._on_dds_tf)
             # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
             # for localizer mode (avoids duplicate accumulation when both topics fire)
             logger.info("SlamBridgeModule: using cyclonedds (lightweight)")
@@ -506,6 +512,33 @@ class SlamBridgeModule(Module, layer=1):
                 self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
         except Exception as e:
             logger.debug("SlamBridge dds saved_map error: %s", e)
+
+    def _on_dds_tf(self, msg) -> None:
+        """DDS /tf TFMessage → extract map→odom, relay as dict to map_odom_tf Out.
+
+        /tf is fan-in from every broadcaster, so we walk transforms and pick
+        the specific (parent=map, child=odom) pair the localizer publishes.
+        Downstream GatewayModule applies this to odom-frame point clouds so
+        the browser sees saved_map + map_cloud overlaid correctly.
+        """
+        try:
+            transforms = getattr(msg, "transforms", None) or []
+            for t in transforms:
+                parent = getattr(t.header, "frame_id", "") or ""
+                child = getattr(t, "child_frame_id", "") or ""
+                if parent == "map" and child == "odom":
+                    trans = t.transform.translation
+                    rot = t.transform.rotation
+                    tf_msg = {
+                        "tx": float(trans.x), "ty": float(trans.y), "tz": float(trans.z),
+                        "qx": float(rot.x),   "qy": float(rot.y),
+                        "qz": float(rot.z),   "qw": float(rot.w),
+                        "valid": True,
+                    }
+                    self.map_odom_tf.publish(tf_msg)
+                    return
+        except Exception as e:
+            logger.debug("SlamBridge dds tf error: %s", e)
 
     # ── rclpy callbacks (fallback) ───────────────────────────────────────
 

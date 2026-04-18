@@ -76,6 +76,8 @@ class CameraBridgeModule(Module, layer=1):
         self._node = None
         self._running = False
         self._rclpy_available = False
+        self._dds_reader = None
+        self._backend = "stub"  # "dds" | "rclpy" | "stub"
 
         # Undistortion maps — computed once on first camera_info with nonzero distortion
         self._undistort_maps: tuple[np.ndarray, np.ndarray] | None = None
@@ -92,7 +94,38 @@ class CameraBridgeModule(Module, layer=1):
         self._shutdown_event = threading.Event()
 
     def setup(self) -> None:
-        self._create_ros2_node()
+        # Prefer DDS — works without `source /opt/ros/humble/setup.bash`
+        # and survives the rclpy + uvicorn + aiortc thread conflict that
+        # kills lingtu on-boot when ROS2 env is sourced.  slam_bridge +
+        # gnss_module follow the same DDS-first policy.
+        if self._create_dds_reader():
+            self._backend = "dds"
+            return
+        if self._create_ros2_node():
+            self._backend = "rclpy"
+            return
+        self._backend = "stub"
+        logger.info("CameraBridgeModule: stub mode — no DDS or rclpy available")
+
+    def _create_dds_reader(self) -> bool:
+        """Subscribe via raw cyclonedds — no rclpy, no ROS2 env needed."""
+        try:
+            from core.dds import ROS2TopicReader
+        except ImportError:
+            return False
+        reader = ROS2TopicReader()
+        reader.on_image(self._color_topic, self._on_ros2_color)
+        reader.on_image(self._depth_topic, self._on_ros2_depth)
+        reader.on_camera_info(self._info_topic, self._on_ros2_info)
+        if not reader.start():
+            return False
+        reader.spin_background()
+        self._dds_reader = reader
+        logger.info(
+            "CameraBridgeModule (DDS): color=%s depth=%s info=%s",
+            self._color_topic, self._depth_topic, self._info_topic,
+        )
+        return True
 
     def _create_ros2_node(self) -> bool:
         """Create ROS2 node and subscriptions. Returns True on success."""
@@ -142,17 +175,20 @@ class CameraBridgeModule(Module, layer=1):
 
     def start(self) -> None:
         super().start()
-        if self._node is None:
+        if self._backend == "stub":
             self.alive.publish(False)
             return
         self._running = True
         self.alive.publish(True)
-        # Start stale-data watchdog for auto-recovery
-        self._shutdown_event.clear()
-        self._watchdog_thread = threading.Thread(
-            target=self._watchdog_loop, daemon=True,
-            name="camera-bridge-watchdog")
-        self._watchdog_thread.start()
+        # Auto-recovery watchdog only applies to rclpy path (L1 reconnect
+        # requires rclpy subscription reuse).  DDS path is auto-discovered
+        # by cyclonedds when the camera node comes back up.
+        if self._backend == "rclpy":
+            self._shutdown_event.clear()
+            self._watchdog_thread = threading.Thread(
+                target=self._watchdog_loop, daemon=True,
+                name="camera-bridge-watchdog")
+            self._watchdog_thread.start()
 
     def stop(self) -> None:
         self._running = False
@@ -160,6 +196,12 @@ class CameraBridgeModule(Module, layer=1):
         if self._watchdog_thread and self._watchdog_thread.is_alive():
             self._watchdog_thread.join(timeout=2.0)
         self._watchdog_thread = None
+        if self._dds_reader:
+            try:
+                self._dds_reader.stop()
+            except Exception:
+                pass
+            self._dds_reader = None
         if self._node:
             try:
                 self._node.destroy_node()

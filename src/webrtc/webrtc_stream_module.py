@@ -79,13 +79,23 @@ if _HAVE_WEBRTC:
             self._mod._frame_event.clear()
             bgr = self._mod._latest_bgr
             if bgr is None:
-                # Event fired with no frame attached — wait for the next one
-                # instead of returning garbage.
                 return await self.recv()
             pts, time_base = await self.next_timestamp()
-            frame = VideoFrame.from_ndarray(bgr, format="bgr24")
+            try:
+                frame = VideoFrame.from_ndarray(bgr, format="bgr24")
+            except Exception as e:
+                n = getattr(self, "_recv_err_count", 0) + 1
+                self._recv_err_count = n
+                if n == 1 or n % 50 == 0:
+                    logger.warning("VideoFrame.from_ndarray failed (#%d) shape=%s dtype=%s: %s",
+                                   n, getattr(bgr, "shape", None), getattr(bgr, "dtype", None), e)
+                return await self.recv()
             frame.pts = pts
             frame.time_base = time_base
+            n = getattr(self, "_recv_count", 0) + 1
+            self._recv_count = n
+            if n == 1 or n % 100 == 0:
+                logger.info("WebRTC track.recv: served frame #%d shape=%s", n, bgr.shape)
             return frame
 
 
@@ -202,6 +212,12 @@ class WebRTCStreamModule(Module, layer=6):
             return
         with self._raw_lock:
             self._latest_bgr = data
+        # Instrumentation: every 100 frames log so we can confirm the wire
+        # is live and roughly measure source FPS without per-frame noise.
+        n = getattr(self, "_rx_count", 0) + 1
+        self._rx_count = n
+        if n == 1 or n % 100 == 0:
+            logger.info("WebRTC _on_image: got frame #%d shape=%s", n, getattr(data, "shape", None))
         ev = self._frame_event
         loop = self._loop
         if ev is not None and loop is not None:
@@ -235,7 +251,10 @@ class WebRTCStreamModule(Module, layer=6):
                 await pc.close()
                 self._pcs.discard(pc)
 
-        sender = pc.addTrack(self._relay.subscribe(self._source_track))
+        # Diagnostic: bypass MediaRelay to see if its subscribe() is what
+        # prevents the underlying track.recv() from being scheduled.  We
+        # pay single-consumer cost (one encode per peer) until confirmed.
+        sender = pc.addTrack(_LatestFrameTrack(self))
 
         await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
         answer = await pc.createAnswer()
@@ -260,6 +279,37 @@ class WebRTCStreamModule(Module, layer=6):
             "sdp": _force_h264_first(pc.localDescription.sdp),
             "type": pc.localDescription.type,
         }
+
+    # -- Dynamic bitrate control --------------------------------------------
+
+    async def set_max_bitrate(self, bps: int) -> dict:
+        """Update encoder cap live; applies to every active video sender.
+
+        Lets a user tune the cap from the browser without dropping the
+        peer connection — useful for on-site bandwidth spot-checks.
+        The new value also becomes the default for any subsequent offers.
+        """
+        bps = int(bps)
+        if bps < 100_000 or bps > 10_000_000:
+            raise ValueError(f"bitrate out of range: {bps} bps (allowed 100000..10000000)")
+        self._max_bitrate = bps
+        applied = 0
+        for pc in list(self._pcs):
+            for sender in pc.getSenders():
+                if not sender.track or getattr(sender.track, "kind", "") != "video":
+                    continue
+                try:
+                    params = sender.getParameters() if hasattr(sender, "getParameters") else None
+                    if params is None or not getattr(params, "encodings", None):
+                        continue
+                    params.encodings[0].maxBitrate = bps
+                    await sender.setParameters(params)
+                    applied += 1
+                except Exception as e:
+                    logger.debug("set_max_bitrate sender update failed: %s", e)
+        logger.info("WebRTC max bitrate set to %d bps (applied to %d sender%s)",
+                    bps, applied, "" if applied == 1 else "s")
+        return {"max_bitrate": self._max_bitrate, "applied_senders": applied}
 
     # -- Stats (polled by Gateway /api/v1/webrtc/stats) ---------------------
 
