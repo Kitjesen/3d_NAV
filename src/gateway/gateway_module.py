@@ -243,7 +243,7 @@ class GatewayModule(Module, layer=6):
     odometry:       In[Odometry]
     map_cloud:      In[PointCloud2]
     saved_map:      In[PointCloud2]  # refined static map from localizer (map frame)
-    icp_quality:    In[float]        # /localization_quality — lower=better, 0 = no data
+    localization_quality: In[float]  # ICP fitness from SlamBridge — lower=better
     map_odom_tf:    In[dict]         # from SlamBridge — {tx,ty,tz,qx,qy,qz,qw,valid} for map→odom
     scene_graph:    In[SceneGraph]
     safety_state:   In[SafetyState]
@@ -383,8 +383,8 @@ class GatewayModule(Module, layer=6):
         self.map_cloud.set_policy("latest")
         self.saved_map.subscribe(self._on_saved_map)
         self.saved_map.set_policy("latest")
-        self.icp_quality.subscribe(self._on_icp_quality)
-        self.icp_quality.set_policy("latest")
+        self.localization_quality.subscribe(self._on_icp_quality)
+        self.localization_quality.set_policy("latest")
         self.map_odom_tf.subscribe(self._on_map_odom_tf)
         self.map_odom_tf.set_policy("latest")
         self.scene_graph.subscribe(self._on_scene_graph)
@@ -1072,7 +1072,14 @@ class GatewayModule(Module, layer=6):
             pass
 
     def _on_costmap(self, cm: dict) -> None:
-        """Throttle OccupancyGridModule costmap to ~2 Hz and push as SSE."""
+        """Throttle OccupancyGridModule costmap to ~2 Hz and push as SSE.
+
+        Costmap is generated in odom frame (OccupancyGridModule). When
+        navigating, shift the grid origin into map frame so it overlays the
+        saved map底图. Grid cells stay axis-aligned — if map→odom has
+        significant yaw, cells will be slightly skewed; acceptable for
+        short-term ICP tracking (yaw error typically < 5°).
+        """
         self._costmap_throttle += 1
         if self._costmap_throttle % 5 != 0:
             return
@@ -1087,19 +1094,31 @@ class GatewayModule(Module, layer=6):
             # grid[iy, ix]: shape[0]=rows(Y), shape[1]=cols(X)
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
+            origin = [float(v) for v in cm.get("origin", [0.0, 0.0])]
+            if self._has_map_odom_tf:
+                T = self._T_map_odom
+                ox, oy = origin[0], origin[1]
+                origin = [
+                    float(T[0, 0] * ox + T[0, 1] * oy + T[0, 3]),
+                    float(T[1, 0] * ox + T[1, 1] * oy + T[1, 3]),
+                ]
             self.push_event({
                 "type":       "costmap",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
                 "rows":       rows,
                 "cols":       cols,
                 "resolution": float(cm.get("resolution", 0.1)),
-                "origin":     [float(v) for v in cm.get("origin", [0.0, 0.0])],
+                "origin":     origin,
             })
         except Exception as exc:
             logger.debug("_on_costmap serialize failed: %s", exc)
 
     def _on_slope_grid(self, data: dict) -> None:
-        """Push slope grid as SSE event for web visualization."""
+        """Push slope grid as SSE event for web visualization.
+
+        Same origin-shift as _on_costmap so the slope overlay aligns with
+        the map底图 in navigating mode.
+        """
         grid = data.get("grid")
         if grid is None:
             return
@@ -1111,13 +1130,21 @@ class GatewayModule(Module, layer=6):
             g = _np.clip(grid * (255.0 / 90.0), 0, 255).astype(_np.uint8)
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
+            origin = [float(v) for v in data.get("origin", [0.0, 0.0])]
+            if self._has_map_odom_tf:
+                T = self._T_map_odom
+                ox, oy = origin[0], origin[1]
+                origin = [
+                    float(T[0, 0] * ox + T[0, 1] * oy + T[0, 3]),
+                    float(T[1, 0] * ox + T[1, 1] * oy + T[1, 3]),
+                ]
             self.push_event({
                 "type":       "slope_grid",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
                 "rows":       rows,
                 "cols":       cols,
                 "resolution": float(data.get("resolution", 0.2)),
-                "origin":     [float(v) for v in data.get("origin", [0.0, 0.0])],
+                "origin":     origin,
             })
         except Exception as exc:
             logger.debug("_on_slope_grid serialize failed: %s", exc)
