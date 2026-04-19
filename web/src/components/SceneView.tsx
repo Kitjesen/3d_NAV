@@ -41,7 +41,18 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const scene3DRef = useRef<Scene3DHandle>(null)
 
   // Trail: state so Scene3D re-renders on movement
-  const [trail, setTrail] = useState<Array<[number, number]>>([])
+  // Persist trail in sessionStorage so a page refresh or tab re-open doesn't
+  // erase the last N minutes of track. Cleared on explicit 清除轨迹 click
+  // or end of browser session. Keyed per active map so switching maps
+  // doesn't carry over the wrong trail.
+  const trailStorageKey = (map: string | null | undefined) =>
+    `lingtu.trail.${map ?? 'none'}`
+  const [trail, setTrail] = useState<Array<[number, number]>>(() => {
+    try {
+      // We don't yet know the map here; lazy-load on mount via useEffect below.
+      return []
+    } catch { return [] }
+  })
   const prevTrailEndRef = useRef<[number, number] | null>(null)
 
   const [slamPending, setSlamPending] = useState<SlamProfile | null>(null)
@@ -139,6 +150,26 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   }, [relocDropOpen])
 
   // ── Trail tracking ────────────────────────────────────────────
+  const activeMap = sseState.session?.active_map
+  // Load persisted trail when active_map changes (or first mount).
+  useEffect(() => {
+    if (!activeMap) return
+    try {
+      const raw = sessionStorage.getItem(trailStorageKey(activeMap))
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Array<[number, number]>
+      if (Array.isArray(parsed)) {
+        const clean = parsed.filter(
+          (p): p is [number, number] =>
+            Array.isArray(p) && p.length === 2 &&
+            Number.isFinite(p[0]) && Number.isFinite(p[1])
+        ).slice(-TRAIL_MAX)
+        setTrail(clean)
+        if (clean.length > 0) prevTrailEndRef.current = clean[clean.length - 1]
+      }
+    } catch { /* ignore */ }
+  }, [activeMap])
+
   useEffect(() => {
     if (odom == null) return
     const last = prevTrailEndRef.current
@@ -150,6 +181,19 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
       })
     }
   }, [odom])
+
+  // Persist trail on change (throttle: only every ~1 s to keep sessionStorage
+  // writes cheap on long runs).
+  const trailSaveThrottleRef = useRef(0)
+  useEffect(() => {
+    if (!activeMap) return
+    const now = Date.now()
+    if (now - trailSaveThrottleRef.current < 1000) return
+    trailSaveThrottleRef.current = now
+    try {
+      sessionStorage.setItem(trailStorageKey(activeMap), JSON.stringify(trail))
+    } catch { /* quota hit? ignore */ }
+  }, [trail, activeMap])
 
   // ── Sync reloc inputs with odometry until user edits ──────────
   // When the panel is closed (or user hasn't edited yet) keep X/Y/Yaw mirroring
@@ -206,7 +250,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const handleClearTrail = useCallback(() => {
     setTrail([])
     prevTrailEndRef.current = null
-  }, [])
+    try {
+      if (activeMap) sessionStorage.removeItem(trailStorageKey(activeMap))
+    } catch { /* ignore */ }
+  }, [activeMap])
 
   const handleClearCloud = useCallback(async () => {
     try {

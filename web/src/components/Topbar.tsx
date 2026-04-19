@@ -72,12 +72,16 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
   const activeMap = session?.active_map ?? '--'
   const icpQ = session?.icp_quality ?? 0
   const icpLabel = icpQ > 0 ? icpQ.toFixed(3) : '--'
+  // ICP health thresholds:
+  //   <0.15 healthy (green)
+  //   0.15-0.3 warning (yellow)
+  //   >=0.3 critical (red + pulse) — drift watchdog will auto-recover soon
   const icpClass =
     sessMode !== 'navigating' ? styles.navPlanning
     : icpQ <= 0 ? styles.navPlanning
-    : icpQ < 0.15 ? '' // healthy (default styling)
+    : icpQ < 0.15 ? '' // healthy default
     : icpQ < 0.3 ? styles.navPlanning
-    : styles.navFailed
+    : `${styles.navFailed} ${styles.icpPulse}`
   const locReady = !!session?.localizer_ready
   const locLabel = sessMode !== 'navigating' ? '--' : locReady ? '就绪' : '对齐中'
   const sessionModeClass =
