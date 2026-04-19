@@ -28,7 +28,18 @@ logger = logging.getLogger(__name__)
 # ── ROS2 message types as cyclonedds IDL structs ────────────────────────────
 # typename must match ROS2 DDS type name exactly for subscription to work.
 
+import os as _os
+
+# Kill switch: LINGTU_DISABLE_DDS=1 forces the rclpy fallback everywhere.
+# Use this when cyclonedds segfaults during Topic() init — typically a
+# QoS/GUID mismatch between a fastrtps publisher (e.g. orbbec_camera
+# launched by rclpy) and a cyclonedds subscriber on the same topic.
+# Workaround: LINGTU_DISABLE_DDS=1 ./start_lingtu.sh
+_DDS_KILL = _os.environ.get("LINGTU_DISABLE_DDS", "").strip() in ("1", "true", "yes")
+
 try:
+    if _DDS_KILL:
+        raise ImportError("LINGTU_DISABLE_DDS set — forcing rclpy fallback")
     from cyclonedds.domain import DomainParticipant
     from cyclonedds.idl import IdlStruct, types
     from cyclonedds.qos import Policy, Qos

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState, memo } from 'react'
 import {
-  Compass, Grid3x3, Navigation, Route, Target, Bot, Layers as LayersIcon, Mountain,
+  Compass, Grid3x3, Navigation, Route, Target, Bot, Layers as LayersIcon,
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle, Pencil, X,
   MapPinned, Cloud, Maximize2, Radio, Activity, LocateFixed, VideoOff,
 } from 'lucide-react'
@@ -362,7 +362,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
           <LayerBtn k="goal"  icon={<Target size={11} />}     label="目标"  />
           <LayerBtn k="robot"   icon={<Bot size={11} />}        label="本机"  />
           <LayerBtn k="costmap" icon={<LayersIcon size={11} />} label="代价"  />
-          <LayerBtn k="slope"   icon={<Mountain size={11} />}   label="坡度"  />
+          {/* 坡度层暂时隐藏 — slope grid TF 对齐未彻底修复,看起来飘.
+              保留 Scene3D / SSE 渲染代码,待 TF 修好后恢复按钮. */}
         </div>
 
         <span className={styles.divider} />

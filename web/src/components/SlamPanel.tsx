@@ -150,34 +150,46 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
   const canAutoReloc = mode === 'navigating' && !autoRelocBusy && !pendingTx
   const handleAutoReloc = useCallback(async () => {
     setAutoRelocBusy(true)
+    // BBS3D 有随机性 + 个别帧 ICP refine 可能偏离,自动重试 3 次直到
+    // 稳定锁定 (fitness < 0.1). 每次 HTTP 调用本身 async,总窗口 ≤25s.
+    const MAX_ATTEMPTS = 3
+    const LOCK_THRESHOLD = 0.1
+    const PER_ATTEMPT_MS = 8_000
     try {
-      showToast('正在全图搜索位姿… (2-3 秒)', 'info')
-      const r = await api.autoRelocalize()
-      if (!r.success) {
-        showToast(`重定位失败: ${r.message}`, 'error')
-        return
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        showToast(
+          attempt === 1
+            ? '正在全图搜索位姿… (2-3 秒)'
+            : `第 ${attempt}/${MAX_ATTEMPTS} 次尝试 (上次 fitness 未达标)`,
+          'info',
+        )
+        const r = await api.autoRelocalize()
+        if (!r.success) {
+          showToast(`重定位请求失败: ${r.message}`, 'error')
+          return
+        }
+        const startT = Date.now()
+        let bestICP = Infinity
+        while (Date.now() - startT < PER_ATTEMPT_MS) {
+          await new Promise(r => setTimeout(r, 400))
+          try {
+            const s = await api.fetchSession()
+            if (s.icp_quality > 0 && s.icp_quality < bestICP) bestICP = s.icp_quality
+            if (s.localizer_ready && s.icp_quality > 0 && s.icp_quality < LOCK_THRESHOLD) {
+              showToast(`对齐成功 (ICP=${s.icp_quality.toFixed(3)}) · 尝试 ${attempt} 次`, 'success')
+              return
+            }
+          } catch { /* ignore */ }
+        }
+        // attempt didn't lock within 8s; if best ICP is "good enough" (< 0.3)
+        // accept it with a warning instead of retrying to avoid thrashing.
+        if (bestICP < 0.3) {
+          showToast(`对齐质量一般 (ICP=${bestICP.toFixed(3)},建议推狗走一下让 SLAM 稳定)`, 'info')
+          return
+        }
+        // else: loop, retry bbs3d
       }
-      // bbs3d worker is async; the HTTP call returned "dispatched" but the
-      // ICP alignment happens ~1-3 s later. Poll session.icp_quality and
-      // wait for a real lock (quality < 0.1 + localizer_ready) before
-      // showing success, or timeout after 8 s.
-      const startT = Date.now()
-      const DEADLINE = 8_000
-      let success = false
-      while (Date.now() - startT < DEADLINE) {
-        await new Promise(r => setTimeout(r, 500))
-        try {
-          const s = await api.fetchSession()
-          if (s.localizer_ready && s.icp_quality > 0 && s.icp_quality < 0.1) {
-            success = true
-            showToast(`对齐成功 (ICP=${s.icp_quality.toFixed(3)}) · 狗在 map 里的位置已锁定`, 'success')
-            break
-          }
-        } catch { /* ignore polling errors */ }
-      }
-      if (!success) {
-        showToast('全图搜索未找到匹配,可能地图与当前环境差异过大', 'error')
-      }
+      showToast('全图搜索 3 次均未锁定 — 地图与当前环境可能差异过大,建议重新建图', 'error')
     } catch (e) {
       showToast(`请求失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
     } finally {

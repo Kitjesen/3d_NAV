@@ -31,7 +31,11 @@ def _make_scene_cfg(resolution=0.2, slice_dh=0.5, ground_h=0.0, **trav_kw):
     t.kernel_size = trav_kw.get('kernel_size', 7)
     t.interval_min = trav_kw.get('interval_min', 0.50)
     t.interval_free = trav_kw.get('interval_free', 0.65)
-    t.slope_max = trav_kw.get('slope_max', 0.40)
+    # 0.60 rad ≈ 34°: quadrupeds routinely handle ramps and low stairs at
+    # this slope; prior 0.40 (~23°) was too timid and flagged legal ramps as
+    # impassable. If you need to lock the robot to flat corridors, override
+    # via robot_config.yaml tomogram.slope_max.
+    t.slope_max = trav_kw.get('slope_max', 0.60)
     t.step_max = trav_kw.get('step_max', 0.30)
     t.standable_ratio = trav_kw.get('standable_ratio', 0.40)
     t.cost_barrier = trav_kw.get('cost_barrier', 50.0)
@@ -48,7 +52,7 @@ def _load_tomogram_config():
     defaults = dict(
         resolution=0.2, slice_dh=0.5, ground_h=0.0,
         kernel_size=7, interval_min=0.50, interval_free=0.65,
-        slope_max=0.40, step_max=0.17, standable_ratio=0.20,
+        slope_max=0.60, step_max=0.17, standable_ratio=0.20,
         cost_barrier=50.0, safe_margin=0.4, inflation=0.2,
     )
     try:

@@ -84,7 +84,11 @@
   font-weight: var(--t-label-weight);
   letter-spacing: var(--t-label-track);
   cursor: pointer;
-  transition: all 0.15s var(--ease-out);
+  /* 不能用 transition:all — 父组件 10Hz SSE re-render 触发 transform/
+     shadow 每帧重启过渡 → hover 闪烁. */
+  transition:
+    background-color 0.15s var(--ease-out),
+    color 0.15s var(--ease-out);
   white-space: nowrap;
 }
 
