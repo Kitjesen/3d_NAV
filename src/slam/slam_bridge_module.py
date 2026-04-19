@@ -509,7 +509,13 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                # Transform odom-frame points to map frame so downstream
+                # (OccupancyGridModule, Gateway) sees coords consistent with
+                # the odometry we publish. Without this, map_cloud lives in
+                # Fast-LIO2 odom origin but robot_xy is map-frame → costmap
+                # rendered at rotated/translated position.
+                xyz_map = self._apply_map_odom_to_points(xyz)
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
                 self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge dds cloud error: %s", e)
@@ -532,6 +538,18 @@ class SlamBridgeModule(Module, layer=1):
                 self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
         except Exception as e:
             logger.debug("SlamBridge dds saved_map error: %s", e)
+
+    def _apply_map_odom_to_points(self, xyz: np.ndarray) -> np.ndarray:
+        """Transform an (N, 3) point cloud from odom frame to map frame using
+        the cached map→odom TF. Returns the same array if TF not yet cached.
+        Vectorized — avoids a per-point loop for tens of thousands of points.
+        """
+        T = getattr(self, "_T_map_odom", None)
+        if T is None or xyz.shape[0] == 0:
+            return xyz
+        R = T[:3, :3].astype(np.float32)
+        t = T[:3, 3].astype(np.float32)
+        return (xyz @ R.T) + t
 
     def _apply_map_odom_to_odometry(self, odom: Odometry) -> Odometry:
         """Transform odom from Fast-LIO2 odom frame into map frame using the
@@ -708,7 +726,13 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                # Transform odom-frame points to map frame so downstream
+                # (OccupancyGridModule, Gateway) sees coords consistent with
+                # the odometry we publish. Without this, map_cloud lives in
+                # Fast-LIO2 odom origin but robot_xy is map-frame → costmap
+                # rendered at rotated/translated position.
+                xyz_map = self._apply_map_odom_to_points(xyz)
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
                 self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge rclpy cloud error: %s", e)
