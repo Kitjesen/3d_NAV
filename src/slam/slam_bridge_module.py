@@ -203,7 +203,13 @@ class SlamBridgeModule(Module, layer=1):
 
     def _try_cyclonedds(self) -> bool:
         try:
-            from core.dds import ROS2TopicReader
+            from core.dds import ROS2TopicReader, _HAS_CYCLONEDDS
+            # Honour the LINGTU_DISABLE_DDS kill switch — ROS2TopicReader
+            # still imports (stub-safe) but its start() returns False;
+            # without this check we'd silently construct a dead reader
+            # instead of falling through to the rclpy path.
+            if not _HAS_CYCLONEDDS:
+                return False
             self._reader = ROS2TopicReader()
             self._reader.on_odometry(self._odom_topic, self._on_dds_odom)
             self._reader.on_pointcloud2(self._cloud_topic, self._on_dds_cloud)
