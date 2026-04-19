@@ -159,10 +159,15 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
       if (!raw) return
       const parsed = JSON.parse(raw) as Array<[number, number]>
       if (Array.isArray(parsed)) {
+        // Filter: finite + within plausible map bounds (|xy| < 100m).
+        // Older sessions captured odom-frame divergence points (±1000m)
+        // which, when re-played as a line string, drew a huge spiderweb
+        // across the scene. This bound prunes them on load.
         const clean = parsed.filter(
           (p): p is [number, number] =>
             Array.isArray(p) && p.length === 2 &&
-            Number.isFinite(p[0]) && Number.isFinite(p[1])
+            Number.isFinite(p[0]) && Number.isFinite(p[1]) &&
+            Math.abs(p[0]) < 100 && Math.abs(p[1]) < 100
         ).slice(-TRAIL_MAX)
         setTrail(clean)
         if (clean.length > 0) prevTrailEndRef.current = clean[clean.length - 1]
