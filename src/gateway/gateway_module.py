@@ -566,35 +566,16 @@ class GatewayModule(Module, layer=6):
     # -- Module subscription callbacks -------------------------------------
 
     def _on_odometry(self, odom: Odometry) -> None:
-        # Odometry comes from Fast-LIO2 in the odom frame (zero = robot's
-        # boot position). For navigating mode the frontend cares about the
-        # *map* frame, so compose with the localizer-emitted map→odom TF
-        # before publishing. In idle/mapping modes the TF is identity and
-        # this is a no-op; in navigating it's the difference between "狗
-        # at (0, 0)" and "狗 at (-3.14, -0.07)".
-        ox = float(odom.x)
-        oy = float(odom.y)
-        oz = float(getattr(odom, "z", 0.0))
-        oyaw = float(getattr(odom, "yaw", 0.0))
-        if self._has_map_odom_tf:
-            T = self._T_map_odom
-            px = T[0, 0] * ox + T[0, 1] * oy + T[0, 2] * oz + T[0, 3]
-            py = T[1, 0] * ox + T[1, 1] * oy + T[1, 2] * oz + T[1, 3]
-            pz = T[2, 0] * ox + T[2, 1] * oy + T[2, 2] * oz + T[2, 3]
-            # yaw of (map_R_odom * odom_R_body): extract yaw from rotation.
-            r00, r01 = T[0, 0], T[0, 1]
-            r10, r11 = T[1, 0], T[1, 1]
-            map_odom_yaw = math.atan2(r10, r00)
-            yaw = oyaw + map_odom_yaw
-            # Normalize to [-pi, pi]
-            while yaw > math.pi:  yaw -= 2.0 * math.pi
-            while yaw < -math.pi: yaw += 2.0 * math.pi
-            ox, oy, oz, oyaw = float(px), float(py), float(pz), yaw
+        # SlamBridge now applies map→odom TF on its publish side, so the
+        # odom that reaches Gateway is already in map frame. Re-applying
+        # the TF here would double-transform and push the frontend cursor
+        # ~2m off from where it actually is (observed: 顶栏 -3.42,-0.46 vs
+        # PCT start -1.27,-2.24). Pass through as-is.
         d = {
-            "x":  ox,
-            "y":  oy,
-            "z":  oz,
-            "yaw": oyaw,
+            "x":  float(odom.x),
+            "y":  float(odom.y),
+            "z":  float(getattr(odom, "z", 0.0)),
+            "yaw": float(getattr(odom, "yaw", 0.0)),
             "vx": odom.twist.linear.x  if odom.twist else 0.0,
             "wz": odom.twist.angular.z if odom.twist else 0.0,
             "ts": odom.ts,
