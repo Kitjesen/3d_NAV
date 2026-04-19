@@ -535,23 +535,64 @@ class SlamBridgeModule(Module, layer=1):
 
     def _apply_map_odom_to_odometry(self, odom: Odometry) -> Odometry:
         """Transform odom from Fast-LIO2 odom frame into map frame using the
-        localizer-emitted map→odom TF. No-op when TF is not yet cached
-        (identity), keeping semantics compatible with pre-localizer frames.
+        localizer-emitted map→odom TF. No-op when TF is not yet cached.
+        Composes both translation and rotation — forgetting the rotation
+        makes map.yaw == odom.yaw which is wrong whenever the BBS3D align
+        produced a non-zero yaw (very common, e.g. -104° here).
         """
         T = getattr(self, "_T_map_odom", None)
         if T is None:
             return odom
+        import numpy as _np
+        # Position: map_p = T_map_odom * odom_p
         p = odom.pose.position
         ox, oy, oz = float(p.x), float(p.y), float(p.z)
-        px = T[0, 0] * ox + T[0, 1] * oy + T[0, 2] * oz + T[0, 3]
-        py = T[1, 0] * ox + T[1, 1] * oy + T[1, 2] * oz + T[1, 3]
-        pz = T[2, 0] * ox + T[2, 1] * oy + T[2, 2] * oz + T[2, 3]
-        # Compose map_R_odom with odom_R_body — easier to skip on the
-        # quaternion and recompose at the consumer if yaw-only suffices.
-        # For NavigationModule planning, position alone is what matters.
-        odom.pose.position.x = float(px)
-        odom.pose.position.y = float(py)
-        odom.pose.position.z = float(pz)
+        odom.pose.position.x = float(T[0, 0] * ox + T[0, 1] * oy + T[0, 2] * oz + T[0, 3])
+        odom.pose.position.y = float(T[1, 0] * ox + T[1, 1] * oy + T[1, 2] * oz + T[1, 3])
+        odom.pose.position.z = float(T[2, 0] * ox + T[2, 1] * oy + T[2, 2] * oz + T[2, 3])
+        # Rotation: map_R_body = map_R_odom * odom_R_body
+        # Convert odom quat → 3x3, multiply, convert back to quat.
+        q = odom.pose.orientation
+        qx, qy, qz, qw = float(q.x), float(q.y), float(q.z), float(q.w)
+        xx, yy, zz = qx * qx, qy * qy, qz * qz
+        xy, xz, yz = qx * qy, qx * qz, qy * qz
+        wx, wy, wzz = qw * qx, qw * qy, qw * qz
+        R_body = _np.array([
+            [1 - 2 * (yy + zz),     2 * (xy - wzz),    2 * (xz + wy)],
+            [    2 * (xy + wzz), 1 - 2 * (xx + zz),    2 * (yz - wx)],
+            [    2 * (xz - wy),     2 * (yz + wx), 1 - 2 * (xx + yy)],
+        ], dtype=_np.float64)
+        R_map = T[:3, :3] @ R_body
+        # 3x3 → quat (Shepperd-style, stable for any rotation)
+        tr = R_map[0, 0] + R_map[1, 1] + R_map[2, 2]
+        if tr > 0:
+            S = 2.0 * _np.sqrt(tr + 1.0)
+            nw = 0.25 * S
+            nx = (R_map[2, 1] - R_map[1, 2]) / S
+            ny = (R_map[0, 2] - R_map[2, 0]) / S
+            nz = (R_map[1, 0] - R_map[0, 1]) / S
+        elif (R_map[0, 0] > R_map[1, 1]) and (R_map[0, 0] > R_map[2, 2]):
+            S = 2.0 * _np.sqrt(1.0 + R_map[0, 0] - R_map[1, 1] - R_map[2, 2])
+            nw = (R_map[2, 1] - R_map[1, 2]) / S
+            nx = 0.25 * S
+            ny = (R_map[0, 1] + R_map[1, 0]) / S
+            nz = (R_map[0, 2] + R_map[2, 0]) / S
+        elif R_map[1, 1] > R_map[2, 2]:
+            S = 2.0 * _np.sqrt(1.0 + R_map[1, 1] - R_map[0, 0] - R_map[2, 2])
+            nw = (R_map[0, 2] - R_map[2, 0]) / S
+            nx = (R_map[0, 1] + R_map[1, 0]) / S
+            ny = 0.25 * S
+            nz = (R_map[1, 2] + R_map[2, 1]) / S
+        else:
+            S = 2.0 * _np.sqrt(1.0 + R_map[2, 2] - R_map[0, 0] - R_map[1, 1])
+            nw = (R_map[1, 0] - R_map[0, 1]) / S
+            nx = (R_map[0, 2] + R_map[2, 0]) / S
+            ny = (R_map[1, 2] + R_map[2, 1]) / S
+            nz = 0.25 * S
+        odom.pose.orientation.x = float(nx)
+        odom.pose.orientation.y = float(ny)
+        odom.pose.orientation.z = float(nz)
+        odom.pose.orientation.w = float(nw)
         return odom
 
     def _cache_map_odom_tf(self, tx, ty, tz, qx, qy, qz, qw):
