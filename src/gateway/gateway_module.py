@@ -911,14 +911,10 @@ class GatewayModule(Module, layer=6):
         else:
             pts_send = pts_all
 
-        # Apply map→odom TF so the frontend sees odom-frame map_cloud
-        # (Fast-LIO2 live accumulation) aligned with map-frame saved_map.
-        # Identity until localizer converges — cloud still renders, just in
-        # odom frame which is off-center from saved_map until ICP succeeds.
-        if self._has_map_odom_tf:
-            p = pts_send[:, :3].astype(np.float64)
-            pts_map = (self._T_map_odom[:3, :3] @ p.T).T + self._T_map_odom[:3, 3]
-            pts_send = pts_map.astype(np.float32)
+        # NOTE: SlamBridge now applies map→odom TF on the points before
+        # publishing (commit d79c409). Re-transforming here would double-
+        # shift the cloud and make it fly away from the saved_map底图 every
+        # time the localizer refines TF. Points arrive already in map frame.
 
         # Binary path — encode once, fan out to /ws/cloud subscribers.
         # The old JSON SSE event would allocate ~180k Python floats per frame
