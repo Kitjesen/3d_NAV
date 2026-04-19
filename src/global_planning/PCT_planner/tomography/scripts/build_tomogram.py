@@ -29,7 +29,10 @@ def _make_scene_cfg(resolution=0.2, slice_dh=0.5, ground_h=0.0, **trav_kw):
     m.ground_h = ground_h
     t = TravCfg()
     t.kernel_size = trav_kw.get('kernel_size', 7)
-    t.interval_min = trav_kw.get('interval_min', 0.50)
+    # interval_min: min vertical clearance for robot clearance check (m).
+    # Lowered 0.50 → 0.30 so sparse-ground cells in older maps (pre-
+    # corrected sweep density) still qualify as traversable.
+    t.interval_min = trav_kw.get('interval_min', 0.30)
     t.interval_free = trav_kw.get('interval_free', 0.65)
     # 0.60 rad ≈ 34°: quadrupeds routinely handle ramps and low stairs at
     # this slope; prior 0.40 (~23°) was too timid and flagged legal ramps as
@@ -37,7 +40,10 @@ def _make_scene_cfg(resolution=0.2, slice_dh=0.5, ground_h=0.0, **trav_kw):
     # via robot_config.yaml tomogram.slope_max.
     t.slope_max = trav_kw.get('slope_max', 0.60)
     t.step_max = trav_kw.get('step_max', 0.30)
-    t.standable_ratio = trav_kw.get('standable_ratio', 0.40)
+    # standable_ratio: fraction of points in a 0.2×0.2 cell that must be
+    # locally flat. Lowered 0.40 → 0.20 for older maps with lower scan
+    # density — otherwise most cells fail and A* can't find a path at all.
+    t.standable_ratio = trav_kw.get('standable_ratio', 0.20)
     t.cost_barrier = trav_kw.get('cost_barrier', 50.0)
     t.safe_margin = trav_kw.get('safe_margin', 1.2)
     t.inflation = trav_kw.get('inflation', 0.2)
@@ -52,7 +58,7 @@ def _load_tomogram_config():
     defaults = dict(
         resolution=0.2, slice_dh=0.5, ground_h=0.0,
         kernel_size=7, interval_min=0.50, interval_free=0.65,
-        slope_max=0.60, step_max=0.17, standable_ratio=0.20,
+        slope_max=0.60, step_max=0.17, standable_ratio=0.10,
         cost_barrier=50.0, safe_margin=0.4, inflation=0.2,
     )
     try:
@@ -116,7 +122,14 @@ def build_tomogram_from_pcd(
 
     points_max = np.max(points, axis=0)
     points_min = np.min(points, axis=0)
-    points_min[-1] = ground_h
+    # Clamp points_min[z] to ground_h *only if the cloud's min z is above
+    # ground_h*. Original code overrode unconditionally which made
+    # slice_h0 = ground_h + slice_dh = 0.5m in typical configs — then
+    # pos2slice(z≈0) rounded to slice -1 → clamped to 0 → hit the "below
+    # ground" barrier layer. Keeping the real min z for maps with
+    # negative-z points (e.g. robot body at z=0, floor at z=-0.9).
+    if points_min[-1] > ground_h:
+        points_min[-1] = ground_h
     map_dim_x = int(np.ceil((points_max[0] - points_min[0]) / resolution)) + 4
     map_dim_y = int(np.ceil((points_max[1] - points_min[1]) / resolution)) + 4
     n_slice_init = int(np.ceil((points_max[2] - points_min[2]) / slice_dh))

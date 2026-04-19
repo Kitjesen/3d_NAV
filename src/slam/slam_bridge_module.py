@@ -246,6 +246,16 @@ class SlamBridgeModule(Module, layer=1):
             # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
             # for localizer mode (avoids duplicate accumulation when both topics fire)
             self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
+            # Also subscribe to /tf so map→odom reaches downstream even when
+            # cyclonedds is disabled (LINGTU_DISABLE_DDS=1). Without this,
+            # NavigationModule plans from odom-frame (0,0) instead of the
+            # localizer-aligned map-frame position — PCT finds wrong start.
+            try:
+                from tf2_msgs.msg import TFMessage
+                self._rclpy_node.create_subscription(
+                    TFMessage, "/tf", self._on_rclpy_tf, qos)
+            except Exception as _e:
+                logger.warning("SlamBridge: /tf rclpy sub failed: %s", _e)
             # Subscribe to degeneracy metrics if available
             self._subscribe_degeneracy_rclpy(self._rclpy_node, qos)
             logger.info("SlamBridgeModule: using rclpy (fallback)")
@@ -469,6 +479,10 @@ class SlamBridgeModule(Module, layer=1):
             if self._check_drift(fused):
                 return  # don't publish garbage to downstream modules
 
+            # Apply map→odom TF so downstream (NavigationModule, Gateway)
+            # sees map-frame positions. Without this, planner uses odom
+            # frame (robot boot origin) and PCT lookups hit wrong cells.
+            fused = self._apply_map_odom_to_odometry(fused)
             self.odometry.publish(fused)
             now = _time.time()
             self._last_odom_time = now
@@ -519,6 +533,64 @@ class SlamBridgeModule(Module, layer=1):
         except Exception as e:
             logger.debug("SlamBridge dds saved_map error: %s", e)
 
+    def _apply_map_odom_to_odometry(self, odom: Odometry) -> Odometry:
+        """Transform odom from Fast-LIO2 odom frame into map frame using the
+        localizer-emitted map→odom TF. No-op when TF is not yet cached
+        (identity), keeping semantics compatible with pre-localizer frames.
+        """
+        T = getattr(self, "_T_map_odom", None)
+        if T is None:
+            return odom
+        p = odom.pose.position
+        ox, oy, oz = float(p.x), float(p.y), float(p.z)
+        px = T[0, 0] * ox + T[0, 1] * oy + T[0, 2] * oz + T[0, 3]
+        py = T[1, 0] * ox + T[1, 1] * oy + T[1, 2] * oz + T[1, 3]
+        pz = T[2, 0] * ox + T[2, 1] * oy + T[2, 2] * oz + T[2, 3]
+        # Compose map_R_odom with odom_R_body — easier to skip on the
+        # quaternion and recompose at the consumer if yaw-only suffices.
+        # For NavigationModule planning, position alone is what matters.
+        odom.pose.position.x = float(px)
+        odom.pose.position.y = float(py)
+        odom.pose.position.z = float(pz)
+        return odom
+
+    def _cache_map_odom_tf(self, tx, ty, tz, qx, qy, qz, qw):
+        """Cache map→odom as 4x4 for downstream variance-free transforms."""
+        import numpy as _np
+        xx, yy, zz = qx * qx, qy * qy, qz * qz
+        xy, xz, yz = qx * qy, qx * qz, qy * qz
+        wx, wy, wz = qw * qx, qw * qy, qw * qz
+        R = _np.array([
+            [1 - 2 * (yy + zz),     2 * (xy - wz),     2 * (xz + wy)],
+            [    2 * (xy + wz), 1 - 2 * (xx + zz),     2 * (yz - wx)],
+            [    2 * (xz - wy),     2 * (yz + wx), 1 - 2 * (xx + yy)],
+        ], dtype=_np.float64)
+        T = _np.eye(4, dtype=_np.float64)
+        T[:3, :3] = R
+        T[:3, 3] = [tx, ty, tz]
+        self._T_map_odom = T
+
+    def _on_rclpy_tf(self, msg) -> None:
+        try:
+            for t in msg.transforms:
+                parent = t.header.frame_id or ""
+                child = t.child_frame_id or ""
+                if parent == "map" and child == "odom":
+                    tr = t.transform.translation
+                    q = t.transform.rotation
+                    self._cache_map_odom_tf(
+                        float(tr.x), float(tr.y), float(tr.z),
+                        float(q.x), float(q.y), float(q.z), float(q.w))
+                    self.map_odom_tf.publish({
+                        "tx": float(tr.x), "ty": float(tr.y), "tz": float(tr.z),
+                        "qx": float(q.x), "qy": float(q.y),
+                        "qz": float(q.z), "qw": float(q.w),
+                        "valid": True,
+                    })
+                    return
+        except Exception as e:
+            logger.debug("SlamBridge rclpy tf error: %s", e)
+
     def _on_dds_tf(self, msg) -> None:
         """DDS /tf TFMessage → extract map→odom, relay as dict to map_odom_tf Out.
 
@@ -541,6 +613,9 @@ class SlamBridgeModule(Module, layer=1):
                         "qz": float(rot.z),   "qw": float(rot.w),
                         "valid": True,
                     }
+                    self._cache_map_odom_tf(
+                        tf_msg["tx"], tf_msg["ty"], tf_msg["tz"],
+                        tf_msg["qx"], tf_msg["qy"], tf_msg["qz"], tf_msg["qw"])
                     self.map_odom_tf.publish(tf_msg)
                     return
         except Exception as e:
@@ -565,6 +640,10 @@ class SlamBridgeModule(Module, layer=1):
                 ),
             )
             fused = self._fuse_odometry(slam_odom)
+            # Apply map→odom TF so downstream (NavigationModule, Gateway)
+            # sees map-frame positions. Without this, planner uses odom
+            # frame (robot boot origin) and PCT lookups hit wrong cells.
+            fused = self._apply_map_odom_to_odometry(fused)
             self.odometry.publish(fused)
             self._last_odom_time = _time.time()
         except Exception as e:
