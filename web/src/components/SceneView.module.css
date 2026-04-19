@@ -125,7 +125,13 @@
   font-weight: var(--t-label-weight);
   letter-spacing: var(--t-label-track);
   cursor: pointer;
-  transition: all 0.15s var(--ease-out);
+  /* 不能用 `transition: all`: 父组件每秒 re-render 多次 (SSE 10Hz),
+     `all` 会让 transform/box-shadow 等属性每次 re-render 重启过渡 →
+     hover 状态闪烁. 只对明确 hover 会改的属性开过渡. */
+  transition:
+    background-color 0.15s var(--ease-out),
+    color 0.15s var(--ease-out),
+    border-color 0.15s var(--ease-out);
 }
 
 .toolbarBtn:hover {

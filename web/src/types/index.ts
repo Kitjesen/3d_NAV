@@ -107,15 +107,18 @@ export interface CostmapEvent {
   rows: number       // number of rows (Y axis)
   cols: number       // number of columns (X axis)
   resolution: number // meters per cell
-  origin: [number, number]  // world [x, y] of bottom-left corner
+  origin: [number, number]  // world [x, y] of bottom-left corner in map frame
+  yaw?: number       // rad, map→odom yaw applied to grid orientation (navigating mode)
 }
 
 export interface SlopeGridEvent {
   type: 'slope_grid'
   grid_b64: string   // base64-encoded uint8 (0-90° mapped to 0-255)
   cols: number
+  rows?: number
   resolution: number
   origin: [number, number]
+  yaw?: number
 }
 
 export interface AgentMessageEvent {

@@ -1095,6 +1095,8 @@ class GatewayModule(Module, layer=6):
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
             origin = [float(v) for v in cm.get("origin", [0.0, 0.0])]
+            # Yaw of map→odom so the frontend can rotate the grid.
+            yaw = 0.0
             if self._has_map_odom_tf:
                 T = self._T_map_odom
                 ox, oy = origin[0], origin[1]
@@ -1102,6 +1104,7 @@ class GatewayModule(Module, layer=6):
                     float(T[0, 0] * ox + T[0, 1] * oy + T[0, 3]),
                     float(T[1, 0] * ox + T[1, 1] * oy + T[1, 3]),
                 ]
+                yaw = math.atan2(T[1, 0], T[0, 0])
             self.push_event({
                 "type":       "costmap",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
@@ -1109,6 +1112,7 @@ class GatewayModule(Module, layer=6):
                 "cols":       cols,
                 "resolution": float(cm.get("resolution", 0.1)),
                 "origin":     origin,
+                "yaw":        float(yaw),
             })
         except Exception as exc:
             logger.debug("_on_costmap serialize failed: %s", exc)
@@ -1131,6 +1135,7 @@ class GatewayModule(Module, layer=6):
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
             origin = [float(v) for v in data.get("origin", [0.0, 0.0])]
+            yaw = 0.0
             if self._has_map_odom_tf:
                 T = self._T_map_odom
                 ox, oy = origin[0], origin[1]
@@ -1138,6 +1143,7 @@ class GatewayModule(Module, layer=6):
                     float(T[0, 0] * ox + T[0, 1] * oy + T[0, 3]),
                     float(T[1, 0] * ox + T[1, 1] * oy + T[1, 3]),
                 ]
+                yaw = math.atan2(T[1, 0], T[0, 0])
             self.push_event({
                 "type":       "slope_grid",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
@@ -1145,6 +1151,7 @@ class GatewayModule(Module, layer=6):
                 "cols":       cols,
                 "resolution": float(data.get("resolution", 0.2)),
                 "origin":     origin,
+                "yaw":        float(yaw),
             })
         except Exception as exc:
             logger.debug("_on_slope_grid serialize failed: %s", exc)

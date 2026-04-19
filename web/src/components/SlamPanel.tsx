@@ -153,10 +153,30 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
     try {
       showToast('正在全图搜索位姿… (2-3 秒)', 'info')
       const r = await api.autoRelocalize()
-      if (r.success) {
-        showToast('自动重定位已触发，查看 ICP 分数', 'success')
-      } else {
+      if (!r.success) {
         showToast(`重定位失败: ${r.message}`, 'error')
+        return
+      }
+      // bbs3d worker is async; the HTTP call returned "dispatched" but the
+      // ICP alignment happens ~1-3 s later. Poll session.icp_quality and
+      // wait for a real lock (quality < 0.1 + localizer_ready) before
+      // showing success, or timeout after 8 s.
+      const startT = Date.now()
+      const DEADLINE = 8_000
+      let success = false
+      while (Date.now() - startT < DEADLINE) {
+        await new Promise(r => setTimeout(r, 500))
+        try {
+          const s = await api.fetchSession()
+          if (s.localizer_ready && s.icp_quality > 0 && s.icp_quality < 0.1) {
+            success = true
+            showToast(`对齐成功 (ICP=${s.icp_quality.toFixed(3)}) · 狗在 map 里的位置已锁定`, 'success')
+            break
+          }
+        } catch { /* ignore polling errors */ }
+      }
+      if (!success) {
+        showToast('全图搜索未找到匹配,可能地图与当前环境差异过大', 'error')
       }
     } catch (e) {
       showToast(`请求失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
