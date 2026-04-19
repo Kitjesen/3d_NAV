@@ -420,41 +420,42 @@ class GatewayModule(Module, layer=6):
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
 
     def _saved_map_loader_loop(self) -> None:
-        """Load active/map.pcd once per active-map change, push periodically.
+        """Watch active/map.pcd symlink; push saved_map ONCE per change.
 
-        - Reads ~/data/nova/maps/active/map.pcd (symlink target).
-        - Downsamples to MAX_SEND points.
-        - Pushes as SSE saved_map event every 10s so new clients get it.
-        - Re-loads if active symlink target changes (user picked a new map).
+        Previous behaviour: push every 10 s for "new clients". But the
+        frontend rebuilds the entire 80k-point Three.js mesh on every
+        saved_map event → satellite flicker / GPU churn. Better: push only
+        when the active map actually changes, and cache `_last_saved_map`
+        so new SSE connections get it once from the snapshot.
         """
         import os, time as _t
         MAX_SEND = 80_000
         last_target = None
-        cached_flat: list[float] | None = None
-        cached_count = 0
         while True:
             try:
                 active = os.path.expanduser("~/data/nova/maps/active")
                 target = os.readlink(active) if os.path.islink(active) else None
-                pcd_path = os.path.expanduser(f"~/data/nova/maps/{target}/map.pcd") if target else None
-                if target != last_target or cached_flat is None:
+                if target != last_target:
                     last_target = target
-                    cached_flat = None
-                    cached_count = 0
+                    pcd_path = os.path.expanduser(f"~/data/nova/maps/{target}/map.pcd") if target else None
                     if pcd_path and os.path.isfile(pcd_path):
                         pts = self._load_pcd_xyz(pcd_path)
                         if pts is not None and len(pts) > 0:
                             if len(pts) > MAX_SEND:
                                 idx = np.random.choice(len(pts), MAX_SEND, replace=False)
                                 pts = pts[idx]
-                            cached_flat = pts[:, :3].astype(np.float32).flatten().tolist()
-                            cached_count = len(pts)
-                            logger.info("saved_map loader: loaded %s (%d pts)", target, cached_count)
-                if cached_flat:
-                    self.push_event({"type": "saved_map", "points": cached_flat, "count": cached_count})
+                            flat = pts[:, :3].astype(np.float32).flatten().tolist()
+                            count = len(pts)
+                            self._last_saved_map_event = {
+                                "type": "saved_map", "points": flat, "count": count,
+                            }
+                            self.push_event(self._last_saved_map_event)
+                            logger.info(
+                                "saved_map loader: loaded %s (%d pts) — pushed once",
+                                target, count)
             except Exception as e:
                 logger.debug("saved_map loader error: %s", e)
-            _t.sleep(10.0)
+            _t.sleep(5.0)
 
     @staticmethod
     def _load_pcd_xyz(path: str) -> np.ndarray | None:
@@ -822,32 +823,16 @@ class GatewayModule(Module, layer=6):
         }
 
     def _on_saved_map(self, cloud: PointCloud2) -> None:
-        """Push saved static map (refined by localizer, map frame) as底图.
+        """DDS-stream saved-map — intentionally ignored.
 
-        Unlike _on_map_cloud which accumulates, this is a latest-snapshot
-        push: the localizer publishes the full refined map each tick, so we
-        just downsample and forward. Lower update rate — every 10 frames
-        (~1 Hz, enough for stable 底图).
+        Localizer publishes a refined saved_map every tick (~10 Hz). That
+        previously got downsampled and re-pushed every 10 frames, but the
+        frontend rebuilds the whole 80k-pt mesh on each event → flicker.
+        The on-disk PCD pushed once by _saved_map_loader_loop is stable
+        enough for visualization — the localizer's runtime refinement
+        doesn't change the底图 meaningfully for the operator view.
         """
-        self._saved_map_count = getattr(self, "_saved_map_count", 0) + 1
-        if self._saved_map_count % 10 != 1:
-            return
-        pts = cloud.points
-        if pts is None or len(pts) == 0:
-            return
-        pts = pts[:, :3].astype(np.float32)
-        finite = np.isfinite(pts).all(axis=1)
-        bounded = (np.abs(pts) < 500.0).all(axis=1)
-        pts = pts[finite & bounded]
-        if len(pts) == 0:
-            return
-        # Cap at 80k for bandwidth — viz only, not used for algorithms
-        MAX_SEND = 80_000
-        if len(pts) > MAX_SEND:
-            idx = np.random.choice(len(pts), MAX_SEND, replace=False)
-            pts = pts[idx]
-        flat = pts[:, :3].flatten().tolist()
-        self.push_event({"type": "saved_map", "points": flat, "count": len(pts)})
+        return
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
         """Mode-aware cloud handling.
