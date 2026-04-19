@@ -1076,16 +1076,12 @@ class GatewayModule(Module, layer=6):
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
             origin = [float(v) for v in cm.get("origin", [0.0, 0.0])]
-            # Yaw of map→odom so the frontend can rotate the grid.
+            # OccupancyGridModule now ingests map-frame odom (SlamBridge applies
+            # TF before publish), so its grid.origin is already map-frame — no
+            # Gateway re-transform. Re-applying TF here double-shifted and
+            # caused costmap to orbit the robot each time the localizer
+            # refined map→odom. Leave yaw=0 since no rotation left to apply.
             yaw = 0.0
-            if self._has_map_odom_tf:
-                T = self._T_map_odom
-                ox, oy = origin[0], origin[1]
-                origin = [
-                    float(T[0, 0] * ox + T[0, 1] * oy + T[0, 3]),
-                    float(T[1, 0] * ox + T[1, 1] * oy + T[1, 3]),
-                ]
-                yaw = math.atan2(T[1, 0], T[0, 0])
             self.push_event({
                 "type":       "costmap",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
@@ -1116,15 +1112,9 @@ class GatewayModule(Module, layer=6):
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
             origin = [float(v) for v in data.get("origin", [0.0, 0.0])]
+            # Same reasoning as _on_costmap — slope grid origin is already in
+            # map frame since SlamBridge upstream.
             yaw = 0.0
-            if self._has_map_odom_tf:
-                T = self._T_map_odom
-                ox, oy = origin[0], origin[1]
-                origin = [
-                    float(T[0, 0] * ox + T[0, 1] * oy + T[0, 3]),
-                    float(T[1, 0] * ox + T[1, 1] * oy + T[1, 3]),
-                ]
-                yaw = math.atan2(T[1, 0], T[0, 0])
             self.push_event({
                 "type":       "slope_grid",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
