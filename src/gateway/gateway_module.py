@@ -313,6 +313,15 @@ class GatewayModule(Module, layer=6):
         self._map_cloud_count: int = 0
         self._map_voxel_size: float = 0.15
 
+        # Dynamic-obstacle removal — hit-count voting per voxel.
+        # Phase 1 of docs/05-specialized/dynamic_obstacle_removal.md.
+        # 同一 voxel 被多少帧观测到 = hit count。墙被扫 30-100 次,人走过每
+        # 位置只 1-3 次。发送到 Web 时过滤 hit < min_hits 的格子,动态残影
+        # 自然消失。只在 mapping / exploring 模式下生效。
+        self._voxel_hits: dict[int, int] = {}
+        self._voxel_min_hits: int = int(os.environ.get("LINGTU_MAP_MIN_HITS", "3"))
+        self._voxel_key_offset: int = 1 << 19  # pad to keep packed keys non-negative
+
         # map→odom TF (from localizer via SlamBridge). Applied to odom-frame
         # map_cloud before SSE so the frontend sees it overlaid with saved_map
         # (which is already in map frame). Identity until localizer converges.
@@ -870,6 +879,12 @@ class GatewayModule(Module, layer=6):
                 combined = np.concatenate([self._map_points, pts], axis=0)
                 combined = self._voxel_downsample(combined, self._map_voxel_size)
                 self._map_points = combined
+                # Increment per-voxel hit count using this frame's unique voxels
+                # (pre-accumulation). Loop over ~500 unique voxels per frame
+                # costs <1ms in Python — negligible vs numpy concat cost above.
+                frame_keys = np.unique(self._pack_voxel_keys(pts))
+                for k in frame_keys:
+                    self._voxel_hits[int(k)] = self._voxel_hits.get(int(k), 0) + 1
 
         # Push to SSE at ~0.5Hz (every 2 frames) — often enough to look
         # "live accumulating" without flooding the browser.
@@ -895,6 +910,24 @@ class GatewayModule(Module, layer=6):
                 pts_send = pts_send[::stride][:MAX_SEND]
         else:
             pts_send = pts_all
+
+        # Dynamic-obstacle filter — drop voxels hit fewer than min_hits times
+        # in mapping / exploring modes. 动态物体 (行人) 只在几帧内命中一个
+        # voxel,墙/家具长期命中数十帧。阈值一卡残影即散。
+        if (
+            mode in ("mapping", "exploring")
+            and self._voxel_min_hits > 1
+            and self._voxel_hits
+            and len(pts_send) > 0
+        ):
+            stable_arr = np.fromiter(
+                (k for k, c in self._voxel_hits.items() if c >= self._voxel_min_hits),
+                dtype=np.int64,
+            )
+            if stable_arr.size > 0:
+                all_keys = self._pack_voxel_keys(pts_send)
+                mask = np.isin(all_keys, stable_arr)
+                pts_send = pts_send[mask]
 
         # NOTE: SlamBridge now applies map→odom TF on the points before
         # publishing (commit d79c409). Re-transforming here would double-
@@ -946,6 +979,18 @@ class GatewayModule(Module, layer=6):
         keys = (pts[:, :3] / voxel).astype(np.int32)
         _, idx = np.unique(keys, axis=0, return_index=True)
         return pts[idx]
+
+    def _pack_voxel_keys(self, pts_xyz: np.ndarray) -> np.ndarray:
+        """Pack (x,y,z) voxel coords into int64 keys for dict lookup.
+
+        Uses 20-bit axis coord (±524k after offset) packed into one int64
+        so voxel_hits can be a fast int→int dict instead of a tuple-key dict.
+        At voxel_size=0.15m this covers ±78km world range. Handles negative
+        coords via self._voxel_key_offset.
+        """
+        k = (pts_xyz[:, :3] / self._map_voxel_size).astype(np.int64)
+        k = (k + self._voxel_key_offset) & 0xFFFFF
+        return (k[:, 0] << 40) | (k[:, 1] << 20) | k[:, 2]
 
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         with self._state_lock:
@@ -2245,6 +2290,11 @@ class GatewayModule(Module, layer=6):
                     svc.stop("localizer")
                     svc.ensure("slam", "slam_pgo")
                     ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
+                    # Fresh mapping run — drop stale hit counts from prior session
+                    # so the min_hits threshold doesn't lock in yesterday's map.
+                    with gw._map_cloud_lock:
+                        gw._map_points = None
+                        gw._voxel_hits.clear()
                 else:  # navigating
                     svc.stop("slam_pgo")
                     svc.ensure("slam", "localizer")
@@ -2455,6 +2505,7 @@ class GatewayModule(Module, layer=6):
             with gw._map_cloud_lock:
                 gw._map_points = None
                 gw._map_cloud_count = 0
+                gw._voxel_hits.clear()
             # Push an empty cloud so the frontend drops its buffer immediately.
             gw.push_event({"type": "map_cloud", "points": [], "count": 0})
             return {"success": True, "message": "Accumulated map cloud cleared"}
