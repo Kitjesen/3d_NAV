@@ -57,12 +57,20 @@ const Z_CEIL    = 2.8   // ignore points above ceiling (m)
 // worker (see web/src/workers/cloudDecoder.ts) so the main thread never
 // iterates per point.
 
+function cssColor(name: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
+}
+
 function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) {
   if (!obj) return
   scene.remove(obj)
   if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose()
   const mat = (obj as THREE.Mesh).material
-  if (mat) Array.isArray(mat) ? mat.forEach(m => m.dispose()) : mat.dispose()
+  if (mat) {
+    if (Array.isArray(mat)) mat.forEach(m => m.dispose())
+    else mat.dispose()
+  }
 }
 
 export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
@@ -111,7 +119,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     const w = mount.clientWidth, h = mount.clientHeight
 
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x07070e)
+    scene.background = new THREE.Color(cssColor('--scene-bg', '#07070e'))
     sceneRef.current = scene
 
     const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 500)
@@ -167,9 +175,18 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     })
     ro.observe(mount)
 
+    const themeObserver = new MutationObserver(() => {
+      scene.background = new THREE.Color(cssColor('--scene-bg', '#07070e'))
+    })
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    })
+
     return () => {
       cancelAnimationFrame(rafRef.current)
       ro.disconnect()
+      themeObserver.disconnect()
       controls.dispose()
       renderer.dispose()
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement)
@@ -615,7 +632,10 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
       sgGroupRef.current.traverse(obj => {
         if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose()
         const mat = (obj as THREE.Mesh | THREE.Sprite).material as THREE.Material | THREE.Material[]
-        if (mat) Array.isArray(mat) ? mat.forEach(m => m.dispose()) : mat.dispose()
+        if (mat) {
+          if (Array.isArray(mat)) mat.forEach(m => m.dispose())
+          else mat.dispose()
+        }
       })
       scene.remove(sgGroupRef.current)
       sgGroupRef.current = null

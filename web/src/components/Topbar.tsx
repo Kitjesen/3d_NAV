@@ -3,6 +3,8 @@ import { Settings, Radio } from 'lucide-react'
 import type { SSEState, Tab } from '../types'
 import { BagRecorder } from './BagRecorder'
 import { SettingsMenu } from './SettingsMenu'
+import { ThemeToggle } from './ThemeToggle'
+import { useTheme } from '../hooks/useTheme'
 import styles from './Topbar.module.css'
 
 const SLAM_MODE_ZH: Record<string, string> = {
@@ -53,6 +55,7 @@ const SESSION_MODE_ZH: Record<string, string> = {
 
 export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const { theme, toggle } = useTheme()
   const estop = sseState.safetyState?.estop ?? false
   const odom = sseState.odometry
   const posLabel =
@@ -212,6 +215,7 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
 
       <div className={styles.right}>
         <BagRecorder />
+        <ThemeToggle theme={theme} onToggle={toggle} />
         <button
           className={styles.btnIcon}
           aria-label="设置"

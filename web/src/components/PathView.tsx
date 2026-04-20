@@ -229,7 +229,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
   const trailRef = useRef<Array<[number, number]>>([])
   const transformRef = useRef<ViewTransform>({ scale: 40, originX: 0, originY: 0 })
   const [hoverCoords, setHoverCoords] = useState<[number, number] | null>(null)
-  const [pathLength, setPathLength] = useState(0)
+  const [trailLength, setTrailLength] = useState(0)
 
   const rawPath = sseState.globalPath?.points ?? []
   const path = rawPath.filter(
@@ -240,6 +240,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
   const robotX = typeof odom?.x === 'number' ? odom.x : 0
   const robotY = typeof odom?.y === 'number' ? odom.y : 0
   const yaw    = typeof odom?.yaw === 'number' ? odom.yaw : 0
+  const pathLength = path.length
 
   // Accumulate position trail
   useEffect(() => {
@@ -248,12 +249,8 @@ export function PathView({ sseState, showToast }: PathViewProps) {
     if (trailRef.current.length > TRAIL_MAX) {
       trailRef.current.shift()
     }
+    setTrailLength(trailRef.current.length)
   }, [odom])
-
-  // Update path point count for stats
-  useEffect(() => {
-    setPathLength(path.length)
-  }, [path.length])
 
   // Main render loop
   const render = useCallback(() => {
@@ -383,7 +380,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
         </div>
         <div className={styles.stat}>
           <span className={styles.statLabel}>历史轨迹</span>
-          <span className={styles.statValue}>{trailRef.current.length}</span>
+          <span className={styles.statValue}>{trailLength}</span>
         </div>
       </div>
     </div>
