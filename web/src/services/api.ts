@@ -76,13 +76,31 @@ export async function renameMap(oldName: string, newName: string): Promise<void>
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
-export async function saveMap(name: string): Promise<void> {
+export interface SaveMapResult {
+  success: boolean
+  name: string
+  path?: string
+  size?: string
+  dynamic_filter?: {
+    success: boolean
+    orig_count?: number
+    clean_count?: number
+    dropped?: number
+    elapsed_s?: number
+    error?: string
+  }
+}
+
+export async function saveMap(name: string): Promise<SaveMapResult> {
+  // Save can take up to ~2 min on a busy robot because PGO + DUFOMap
+  // run synchronously. Default fetch has no timeout which is what we want.
   const res = await fetch('/api/v1/map/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<SaveMapResult>
 }
 
 // --- Session state machine ---

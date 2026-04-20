@@ -2675,11 +2675,37 @@ class GatewayModule(Module, layer=6):
             except Exception:
                 pass  # PGO save is optional
 
+            # Step 1½ — DUFOMap dynamic-obstacle filter (optional, gated by env).
+            # 必须在 tomogram/occupancy 之前跑,否则下游带动态残影。
+            # 详见 docs/05-specialized/dynamic_obstacle_removal.md Phase 2。
+            dufo_result: dict | None = None
+            if os.environ.get("LINGTU_SAVE_DYNAMIC_FILTER", "1") not in ("0", "false", "False"):
+                try:
+                    from nav.services.nav_services.dynamic_filter import refilter_map
+                    dufo_result = refilter_map(save_dir, timeout_s=300.0)
+                    if dufo_result.get("success"):
+                        orig = dufo_result.get("orig_count", 0)
+                        clean = dufo_result.get("clean_count", 0)
+                        dropped = dufo_result.get("dropped", 0)
+                        pct = 100 * dropped / max(1, orig)
+                        logger.info(
+                            "map/save: dynamic filter %d→%d (-%d, %.1f%%) in %.1fs",
+                            orig, clean, dropped, pct, dufo_result.get("elapsed_s", 0.0),
+                        )
+                    else:
+                        logger.warning("map/save: dynamic filter skipped: %s",
+                                       dufo_result.get("error"))
+                except Exception as e:
+                    logger.warning("map/save: dynamic filter crashed (non-fatal): %s", e)
+
             has_pcd = os.path.isfile(pcd_path)
             if has_pcd:
                 size = os.path.getsize(pcd_path)
-                return {"success": True, "name": name, "path": save_dir,
+                resp = {"success": True, "name": name, "path": save_dir,
                         "size": f"{size/1024/1024:.1f}MB"}
+                if dufo_result is not None:
+                    resp["dynamic_filter"] = dufo_result
+                return resp
             else:
                 return JSONResponse(
                     {"success": False, "name": name, "errors": errors},

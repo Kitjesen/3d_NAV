@@ -273,9 +273,17 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
 
   const confirmSaveMap = async (name: string) => {
     setSaveModalOpen(false)
+    // 告诉用户动态过滤 + PGO 正在跑,保存需要较长时间
+    showToast(`正在保存并清洗动态障碍: ${name}…`, 'info')
     try {
-      await api.saveMap(name)
-      showToast(`已保存: ${name}`, 'success')
+      const r = await api.saveMap(name)
+      const df = r.dynamic_filter
+      if (df && df.success && df.dropped !== undefined && df.orig_count) {
+        const pct = (100 * df.dropped / df.orig_count).toFixed(1)
+        showToast(`已保存: ${name} · 清除 ${df.dropped} 动态点 (${pct}%)`, 'success')
+      } else {
+        showToast(`已保存: ${name}`, 'success')
+      }
       loadMaps()
     } catch { showToast('保存失败', 'error') }
   }
