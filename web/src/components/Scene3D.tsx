@@ -80,8 +80,8 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
   // Scene objects — recreated on data change
   const voxelRef   = useRef<THREE.InstancedMesh | null>(null)
   const trailLineRef = useRef<THREE.Line | null>(null)
-  const pathLineRef  = useRef<THREE.Line | null>(null)
-  const localPathRef = useRef<THREE.Line | null>(null)
+  const pathLineRef  = useRef<THREE.Mesh | null>(null)
+  const localPathRef = useRef<THREE.Mesh | null>(null)
   const robotRef   = useRef<THREE.Group | null>(null)
   const goalRef        = useRef<THREE.Mesh | null>(null)
   const pendingGoalRef = useRef<THREE.Mesh | null>(null)
@@ -270,38 +270,42 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     trailLineRef.current = line
   }, [trail, layers.trail])
 
-  // ── Path ────────────────────────────────────────────────────────
+  // ── Global path — purple TubeGeometry (slightly thinner than local path).
+  // 管子比局部路径细一档,维持视觉层次: 全局粗略 + 局部精细。
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
     if (pathLineRef.current) { removeFrom(scene, pathLineRef.current); pathLineRef.current = null }
     if (!layers.path || path.length < 2) return
 
-    const rawPts = path.map(p => new THREE.Vector3(p.x, 0.1, -p.y))
-    // Catmull-Rom spline for smooth path display
+    const rawPts = path.map(p => new THREE.Vector3(p.x, 0.18, -p.y))
     const curve = new THREE.CatmullRomCurve3(rawPts, false, 'catmullrom', 0.5)
-    const pts = curve.getPoints(Math.max(rawPts.length * 6, 60))
-    const line = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints(pts),
-      new THREE.LineBasicMaterial({ color: 0xa855f7 }),
-    )
-    scene.add(line)
-    pathLineRef.current = line
+    const tubularSegments = Math.max(rawPts.length * 6, 60)
+    const geo = new THREE.TubeGeometry(curve, tubularSegments, 0.04, 6, false)
+    const mat = new THREE.MeshBasicMaterial({ color: 0xa855f7 })  // purple
+    const mesh = new THREE.Mesh(geo, mat)
+    scene.add(mesh)
+    pathLineRef.current = mesh
   }, [path, layers.path])
 
-  // ── Local path (amber, thinner — obstacle-avoidance path from LocalPlanner)
+  // ── Local path — neon-green TubeGeometry.
+  // 用 Tube 而不是 Line,因为 WebGL 的 LineBasicMaterial.linewidth 在 Chrome/Edge
+  // 被 ANGLE 硬限制为 1px,1.5m 的避障路径在屏幕上就是一根发丝,肉眼看不见。
+  // z=0.28 抬到紫色全局 (z=0.10) 和底图点云之上,不会被盖。
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
     if (localPathRef.current) { removeFrom(scene, localPathRef.current); localPathRef.current = null }
     if (!layers.path || localPath.length < 2) return
 
-    const pts = localPath.map(p => new THREE.Vector3(p.x, 0.12, -p.y))
-    const geo = new THREE.BufferGeometry().setFromPoints(pts)
-    const mat = new THREE.LineBasicMaterial({ color: 0xf59e0b, linewidth: 1 })  // amber
-    const line = new THREE.Line(geo, mat)
-    scene.add(line)
-    localPathRef.current = line
+    const rawPts = localPath.map(p => new THREE.Vector3(p.x, 0.28, -p.y))
+    const curve = new THREE.CatmullRomCurve3(rawPts, false, 'catmullrom', 0.5)
+    const tubularSegments = Math.max(rawPts.length * 4, 40)
+    const geo = new THREE.TubeGeometry(curve, tubularSegments, 0.06, 6, false)
+    const mat = new THREE.MeshBasicMaterial({ color: 0x00ffa3 })  // neon green
+    const mesh = new THREE.Mesh(geo, mat)
+    scene.add(mesh)
+    localPathRef.current = mesh
   }, [localPath, layers.path])
 
   // ── Robot model ─────────────────────────────────────────────────
