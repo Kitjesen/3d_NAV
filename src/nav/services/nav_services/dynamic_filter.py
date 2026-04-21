@@ -35,10 +35,25 @@ DUFOMAP_BIN = os.environ.get(
     "LINGTU_DUFOMAP_BIN",
     os.path.expanduser("~/src/dufomap/build/dufomap_run"),
 )
-DUFOMAP_CONFIG = os.environ.get(
-    "LINGTU_DUFOMAP_CONFIG",
-    os.path.expanduser("~/src/dufomap/assets/config.toml"),
-)
+
+
+def _default_config_path() -> str:
+    """Prefer project's config/dufomap.toml (Livox-tuned), fall back to upstream."""
+    # Walk up from this file (src/nav/services/nav_services/) to repo root,
+    # then check config/dufomap.toml.
+    here = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        cand = os.path.join(here, "config", "dufomap.toml")
+        if os.path.isfile(cand):
+            return cand
+        parent = os.path.dirname(here)
+        if parent == here:
+            break
+        here = parent
+    return os.path.expanduser("~/src/dufomap/assets/config.toml")
+
+
+DUFOMAP_CONFIG = os.environ.get("LINGTU_DUFOMAP_CONFIG", _default_config_path())
 
 
 def _read_pcd_binary(path: Path) -> np.ndarray:
