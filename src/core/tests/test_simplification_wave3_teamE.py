@@ -73,7 +73,7 @@ def _block_all_encoders_import(name, *args, **kwargs):
 # ---------------------------------------------------------------------------
 
 try:
-    import sentence_transformers as _  # noqa: F401
+    import sentence_transformers as _
     _HAVE_ST = True
 except Exception:
     _HAVE_ST = False

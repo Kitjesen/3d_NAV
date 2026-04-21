@@ -24,7 +24,10 @@ export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
   const rtc = useWebRTC()
   const [timedOut, setTimedOut] = useState(false)
   useEffect(() => {
-    if (rtc.connected || rtc.error) { setTimedOut(false); return }
+    if (rtc.connected || rtc.error) {
+      const t = setTimeout(() => setTimedOut(false), 0)
+      return () => clearTimeout(t)
+    }
     const t = setTimeout(() => setTimedOut(true), WEBRTC_TIMEOUT_MS)
     return () => clearTimeout(t)
   }, [rtc.connected, rtc.error])

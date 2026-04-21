@@ -151,6 +151,15 @@
   line-height: 1.2;
 }
 
+.statStatusValue {
+  font-family: var(--font-ui);
+  font-size: 22px;
+  font-weight: 650;
+  color: var(--t-value-lg-color);
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
 .statWarn { color: var(--warn); }
 
 .statMode {

@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { Settings, Radio, RotateCcw } from 'lucide-react'
-import { resetAllLayouts } from './FloatingWidget'
+import { resetAllLayouts } from './floatingWidgetLayout'
 import type { SSEState, Tab } from '../types'
 import { BagRecorder } from './BagRecorder'
 import { SettingsMenu } from './SettingsMenu'
+import { ThemeToggle } from './ThemeToggle'
+import { useTheme } from '../hooks/useTheme'
 import styles from './Topbar.module.css'
 
 const SLAM_MODE_ZH: Record<string, string> = {
@@ -54,6 +56,7 @@ const SESSION_MODE_ZH: Record<string, string> = {
 
 export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const { theme, toggle } = useTheme()
   const estop = sseState.safetyState?.estop ?? false
   const odom = sseState.odometry
   const posLabel =
@@ -231,6 +234,7 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
             <RotateCcw size={16} />
           </button>
         )}
+        <ThemeToggle theme={theme} onToggle={toggle} />
         <button
           className={styles.btnIcon}
           aria-label="设置"

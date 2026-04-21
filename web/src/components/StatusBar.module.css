@@ -3,50 +3,58 @@
 .statusBar {
   display: flex;
   align-items: center;
-  gap: var(--s-2);
+  gap: 9px;
   height: var(--statusbar-h);
-  padding: 0 var(--s-4);
-  background: var(--glass-lo);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  border-top: 1px solid var(--border);
+  padding: 0 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
+    rgba(7, 8, 13, 0.92);
+  backdrop-filter: blur(18px) saturate(130%);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
   flex-shrink: 0;
   overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
 }
 
 .icon {
   color: var(--text-faint);
   flex-shrink: 0;
-  opacity: 0.7;
+  opacity: 0.48;
 }
 
 .item {
   display: flex;
-  align-items: baseline;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   white-space: nowrap;
 }
 
 .label {
-  font-size: var(--t-overline-size);
-  font-weight: var(--t-overline-weight);
-  color: var(--t-overline-color);
-  text-transform: uppercase;
-  letter-spacing: var(--t-overline-track);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(140, 140, 150, 0.68);
+  text-transform: none;
+  letter-spacing: 0;
+  line-height: 1;
 }
 
 .value {
-  font-family: var(--font-mono);
-  font-size: var(--t-value-size);
-  font-weight: var(--t-value-weight);
-  color: var(--t-value-color);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 650;
+  color: rgba(228, 228, 232, 0.92);
   font-variant-numeric: tabular-nums;
-  letter-spacing: var(--t-value-track);
+  font-feature-settings: 'tnum' 1, 'ss01' 1, 'cv11' 1;
+  letter-spacing: 0;
+  line-height: 1;
 }
 
 .sep {
-  color: var(--text-mute);
-  font-size: 12px;
+  color: rgba(85, 85, 95, 0.56);
+  font-size: 10px;
   flex-shrink: 0;
   user-select: none;
 }
@@ -55,10 +63,10 @@
 .navFail   { color: var(--red); }
 
 .estop {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.02em;
   color: var(--red);
   animation: blink-red 0.6s step-end infinite;
 }
@@ -87,4 +95,24 @@
   background: var(--accent);
   box-shadow: 0 0 6px var(--accent-glow), 0 0 0 2px rgba(94, 234, 212, 0.12);
   animation: pulse-soft 2.4s var(--ease-in-out) infinite;
+}
+
+:global(html[data-theme="light"]) .statusBar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.62)),
+    rgba(244, 246, 250, 0.86);
+  border-top-color: rgba(15, 23, 42, 0.10);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+:global(html[data-theme="light"]) .label {
+  color: rgba(88, 97, 116, 0.72);
+}
+
+:global(html[data-theme="light"]) .value {
+  color: rgba(21, 25, 35, 0.92);
+}
+
+:global(html[data-theme="light"]) .sep {
+  color: rgba(138, 147, 164, 0.62);
 }

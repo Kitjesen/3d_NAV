@@ -45,6 +45,7 @@ export function useSSE(url: string = '/api/v1/events') {
   const esRef = useRef<EventSource | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
+  const connectRef = useRef<() => void>(() => {})
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
@@ -144,10 +145,14 @@ export function useSSE(url: string = '/api/v1/events') {
       esRef.current = null
       setState(prev => ({ ...prev, connected: false }))
       reconnectTimer.current = setTimeout(() => {
-        if (mountedRef.current) connect()
+        if (mountedRef.current) connectRef.current()
       }, 3000)
     }
   }, [url])
+
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   useEffect(() => {
     mountedRef.current = true

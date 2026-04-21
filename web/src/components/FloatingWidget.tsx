@@ -1,52 +1,17 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, type CSSProperties } from 'react'
+import {
+  cleanupOldLayouts,
+  loadLayouts,
+  saveLayouts,
+  type Layout,
+} from './floatingWidgetLayout'
 import styles from './FloatingWidget.module.css'
 
 // ── Global z-index counter — shared across all widgets ──────────
 let globalZ = 10
 
-// ── Layout persistence ──────────────────────────────────────────
-interface Layout {
-  x: number
-  y: number
-  w: number
-  h: number
-  z: number
-}
-
-const LS_KEY = 'lingtu-widget-layouts-v4'
-const LS_OLD_KEYS = [
-  'lingtu-widget-layouts-v1',
-  'lingtu-widget-layouts-v2',
-  'lingtu-widget-layouts-v3',
-]
-
 // Clean up any stale keys from previous layout generations
-try {
-  for (const k of LS_OLD_KEYS) localStorage.removeItem(k)
-} catch { /* noop */ }
-
-function loadLayouts(): Record<string, Layout> {
-  try {
-    const raw = localStorage.getItem(LS_KEY)
-    return raw ? JSON.parse(raw) : {}
-  } catch {
-    return {}
-  }
-}
-
-function saveLayouts(layouts: Record<string, Layout>) {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(layouts))
-  } catch { /* quota or unavailable */ }
-}
-
-export function resetAllLayouts() {
-  try {
-    localStorage.removeItem(LS_KEY)
-    for (const k of LS_OLD_KEYS) localStorage.removeItem(k)
-  } catch { /* noop */ }
-  window.location.reload()
-}
+cleanupOldLayouts()
 
 // ── Props ───────────────────────────────────────────────────────
 
@@ -55,18 +20,55 @@ export interface FloatingWidgetProps {
   defaultPos: { x: number; y: number }
   defaultSize: { w: number; h: number }
   minSize?: { w: number; h: number }
+  responsiveLayout?: ResponsiveLayout
+  dragHandleLeft?: string
   children: React.ReactNode
 }
 
 type DragMode = null | 'move' | 'e' | 's' | 'n' | 'w' | 'se' | 'sw' | 'ne' | 'nw'
+
+interface Bounds {
+  width: number
+  height: number
+}
+
+type ResponsiveLayout = (bounds: Bounds) => Omit<Layout, 'z'>
+
+function clampLayout(layout: Layout, bounds: Bounds, minSize: { w: number; h: number }): Layout {
+  const maxWidth = Math.max(1, bounds.width)
+  const maxHeight = Math.max(1, bounds.height)
+  const minW = Math.min(minSize.w, maxWidth)
+  const minH = Math.min(minSize.h, maxHeight)
+  const w = Math.min(Math.max(layout.w, minW), maxWidth)
+  const h = Math.min(Math.max(layout.h, minH), maxHeight)
+  const maxX = Math.max(0, maxWidth - w)
+  const maxY = Math.max(0, maxHeight - h)
+
+  return {
+    ...layout,
+    x: Math.max(0, Math.min(maxX, layout.x)),
+    y: Math.max(0, Math.min(maxY, layout.y)),
+    w,
+    h,
+  }
+}
+
+function isSameLayout(a: Layout, b: Layout): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h && a.z === b.z
+}
 
 export function FloatingWidget({
   id,
   defaultPos,
   defaultSize,
   minSize = { w: 260, h: 180 },
+  responsiveLayout,
+  dragHandleLeft,
   children,
 }: FloatingWidgetProps) {
+  const minW = minSize.w
+  const minH = minSize.h
+
   // Load persisted layout or use defaults — clamp to viewport so small
   // screens don't end up with widgets outside the visible area (console-canvas
   // has overflow:hidden, which would otherwise clip them out of reach).
@@ -93,6 +95,7 @@ export function FloatingWidget({
   })
 
   const [dragMode, setDragMode] = useState<DragMode>(null)
+  const widgetRef = useRef<HTMLDivElement>(null)
   const dragStartRef = useRef<{
     mouseX: number
     mouseY: number
@@ -101,6 +104,61 @@ export function FloatingWidget({
     startW: number
     startH: number
   } | null>(null)
+
+  const getBounds = useCallback((): Bounds => {
+    const parent = widgetRef.current?.parentElement
+    if (parent) {
+      return {
+        width: parent.clientWidth,
+        height: parent.clientHeight,
+      }
+    }
+    return {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }
+  }, [])
+
+  const clampToCurrentBounds = useCallback((current: Layout) => (
+    clampLayout(current, getBounds(), { w: minW, h: minH })
+  ), [getBounds, minW, minH])
+
+  const applyResponsiveLayout = useCallback(() => {
+    if (!responsiveLayout) return
+
+    const bounds = getBounds()
+    const desired = responsiveLayout(bounds)
+    setLayout(prev => {
+      const next = clampLayout({ ...prev, ...desired }, bounds, { w: minW, h: minH })
+      return isSameLayout(prev, next) ? prev : next
+    })
+  }, [getBounds, minW, minH, responsiveLayout])
+
+  useLayoutEffect(() => {
+    const clamp = () => {
+      if (responsiveLayout) {
+        applyResponsiveLayout()
+        return
+      }
+
+      setLayout(prev => {
+        const next = clampToCurrentBounds(prev)
+        return isSameLayout(prev, next) ? prev : next
+      })
+    }
+
+    clamp()
+
+    const parent = widgetRef.current?.parentElement
+    const ro = parent ? new ResizeObserver(clamp) : null
+    if (parent) ro?.observe(parent)
+    window.addEventListener('resize', clamp)
+
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', clamp)
+    }
+  }, [applyResponsiveLayout, clampToCurrentBounds, responsiveLayout])
 
   // Persist layout whenever it changes
   useEffect(() => {
@@ -149,30 +207,24 @@ export function FloatingWidget({
         } else {
           // Resize modes
           if (dragMode.includes('e')) {
-            next.w = Math.max(minSize.w, start.startW + dx)
+            next.w = Math.max(minW, start.startW + dx)
           }
           if (dragMode.includes('w')) {
-            const newW = Math.max(minSize.w, start.startW - dx)
+            const newW = Math.max(minW, start.startW - dx)
             next.x = start.startX + (start.startW - newW)
             next.w = newW
           }
           if (dragMode.includes('s')) {
-            next.h = Math.max(minSize.h, start.startH + dy)
+            next.h = Math.max(minH, start.startH + dy)
           }
           if (dragMode.includes('n')) {
-            const newH = Math.max(minSize.h, start.startH - dy)
+            const newH = Math.max(minH, start.startH - dy)
             next.y = start.startY + (start.startH - newH)
             next.h = newH
           }
         }
 
-        // Clamp to viewport
-        const maxX = window.innerWidth - next.w
-        const maxY = window.innerHeight - next.h
-        next.x = Math.max(0, Math.min(maxX, next.x))
-        next.y = Math.max(0, Math.min(maxY, next.y))
-
-        return next
+        return clampToCurrentBounds(next)
       })
     }
 
@@ -187,34 +239,39 @@ export function FloatingWidget({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [dragMode, minSize.w, minSize.h])
+  }, [dragMode, minW, minH, clampToCurrentBounds])
 
   const wrapperClass = [
     styles.widget,
     dragMode === 'move' ? styles.widgetDragging : '',
     dragMode && dragMode !== 'move' ? styles.widgetResizing : '',
   ].filter(Boolean).join(' ')
+  const widgetStyle: CSSProperties & { '--drag-handle-left'?: string } = {
+    left: layout.x,
+    top: layout.y,
+    width: layout.w,
+    height: layout.h,
+    zIndex: layout.z,
+    '--drag-handle-left': dragHandleLeft,
+  }
 
   return (
     <div
+      ref={widgetRef}
       id={`widget-${id}`}
       className={wrapperClass}
-      style={{
-        left: layout.x,
-        top: layout.y,
-        width: layout.w,
-        height: layout.h,
-        zIndex: layout.z,
-      }}
+      style={widgetStyle}
       onMouseDown={bringToFront}
     >
       {/* Invisible drag strip at the top — only visible on hover */}
       <div
         className={styles.dragStrip}
-        onMouseDown={(e) => startAction('move', e)}
-        title="拖动移动"
       >
-        <span className={styles.dragGrabber} />
+        <span
+          className={styles.dragGrabber}
+          onMouseDown={(e) => startAction('move', e)}
+          title="拖动移动"
+        />
       </div>
 
       <div className={styles.body}>{children}</div>

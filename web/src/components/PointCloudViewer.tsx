@@ -112,7 +112,9 @@ function lookAt(ex:number,ey:number,ez:number, tx:number,ty:number,tz:number) {
   const m = new Float32Array(16)
   let zx=ex-tx,zy=ey-ty,zz=ez-tz, l=Math.hypot(zx,zy,zz)+1e-10
   zx/=l; zy/=l; zz/=l
-  let ux=0, uy=1, uz=0; if (Math.abs(zy)>0.99) { ux=1; uy=0 }
+  let ux=0, uy=1
+  const uz=0
+  if (Math.abs(zy)>0.99) { ux=1; uy=0 }
   let xx=uy*zz-uz*zy, xy=uz*zx-ux*zz, xz=ux*zy-uy*zx
   l=Math.hypot(xx,xy,xz)+1e-10; xx/=l; xy/=l; xz/=l
   const yx=zy*xz-zz*xy, yy=zz*xx-zx*xz, yz=zx*xy-zy*xx
