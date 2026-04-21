@@ -2,24 +2,25 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  width: 36px;
+  height: 36px;
+  background: var(--lt-glass);
+  border: 1px solid var(--lt-border);
+  border-radius: 50%;
   cursor: pointer;
-  color: var(--text-dim);
-  transition: background 0.15s var(--ease-out),
-              color 0.15s var(--ease-out),
-              border-color 0.15s var(--ease-out),
-              transform 0.08s var(--ease-out);
+  color: var(--lt-text-dim);
+  transition: background 0.22s var(--lt-ease-spring),
+              color 0.22s var(--lt-ease-spring),
+              border-color 0.22s var(--lt-ease-spring),
+              transform 0.18s var(--lt-ease-spring);
   flex-shrink: 0;
 }
 
 .toggle:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
-  border-color: var(--border-hi);
+  background: var(--lt-glass-hi);
+  color: var(--lt-text);
+  border-color: var(--lt-border-hi);
+  transform: scale(1.08);
 }
 
 .toggle:active {
@@ -36,12 +37,4 @@
 @keyframes iconReveal {
   from { opacity: 0; transform: rotate(-30deg) scale(0.7); }
   to   { opacity: 1; transform: rotate(0deg) scale(1); }
-}
-
-:global(html[data-theme="light"]) .toggle {
-  background: rgba(255, 255, 255, 0.72);
-}
-
-:global(html[data-theme="light"]) .toggle:hover {
-  background: rgba(255, 255, 255, 0.96);
 }

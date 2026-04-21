@@ -11,7 +11,7 @@
  * 组会演示阶段:OTA、诊断、关于走真实 API(/api/v1/health, /docs);其余
  * 先以 placeholder 方式进入二级菜单,显示"敬请期待"并给出后端对接的 hint.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   X, Settings, Cpu, Wrench, Activity, Info, Package,
   Download, RefreshCw, Terminal, Power,
@@ -20,7 +20,7 @@ import {
   ListChecks, AlertTriangle, Gauge, ArrowRight,
   GitBranch, LogOut,
 } from 'lucide-react'
-import { resetAllLayouts } from './floatingWidgetLayout'
+import { resetAllLayouts } from './FloatingWidget'
 import styles from './SettingsMenu.module.css'
 
 type Section = 'home' | 'system' | 'modules' | 'calib' | 'diag' | 'about'
@@ -36,36 +36,34 @@ export function SettingsMenu({ open, onClose }: SettingsMenuProps) {
   const [modal, setModal] = useState<Modal>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
-  const handleClose = useCallback(() => {
-    setSection('home')
-    setModal(null)
-    onClose()
-  }, [onClose])
-
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (modal) setModal(null)
         else if (section !== 'home') setSection('home')
-        else handleClose()
+        else onClose()
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open, handleClose, section, modal])
+  }, [open, onClose, section, modal])
+
+  useEffect(() => {
+    if (!open) { setSection('home'); setModal(null) }
+  }, [open])
 
   if (!open) return null
 
   return (
     <>
-      <div className={styles.backdrop} onClick={handleClose} />
+      <div className={styles.backdrop} onClick={onClose} />
       <aside ref={panelRef} className={styles.panel} role="dialog" aria-label="设置">
         <div className={styles.panelHeader}>
           <div className={styles.panelTitle}>
             <Settings size={14} /> {sectionTitle(section)}
           </div>
-          <button className={styles.iconBtn} onClick={handleClose} aria-label="关闭">
+          <button className={styles.iconBtn} onClick={onClose} aria-label="关闭">
             <X size={14} />
           </button>
         </div>
@@ -148,7 +146,9 @@ function SystemSection({ onBack, onOpenModal }: {
           onClick={() => alert('日志查看器(待实装):请在 SSH 终端 tail -f logs/lingtu.log')} />
         <ActionRow icon={<RefreshCw size={14} />} title="恢复默认布局"
           hint="清除已保存的 FloatingWidget 位置/尺寸"
-          onClick={resetAllLayouts} />
+          onClick={() => {
+            resetAllLayouts()
+          }} />
         <ActionRow icon={<Power size={14} />} title="重启 LingTu" dangerous
           hint="优雅停止后重新启动所有模块"
           onClick={() => {
@@ -385,10 +385,7 @@ function OtaField({ label, value }: { label: string; value: string }) {
 /* ─── Diagnostics Modal ────────────────────────────────────────── */
 
 function DiagModal({ onClose }: { onClose: () => void }) {
-  const [health, setHealth] = useState<{
-    modules?: Record<string, string>
-    error?: string
-  } | null>(null)
+  const [health, setHealth] = useState<any>(null)
 
   useEffect(() => {
     fetch('/api/v1/health')

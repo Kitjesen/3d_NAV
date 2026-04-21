@@ -203,7 +203,7 @@ class SlamBridgeModule(Module, layer=1):
 
     def _try_cyclonedds(self) -> bool:
         try:
-            from core.dds import _HAS_CYCLONEDDS, ROS2TopicReader
+            from core.dds import ROS2TopicReader, _HAS_CYCLONEDDS
             # Honour the LINGTU_DISABLE_DDS kill switch — ROS2TopicReader
             # still imports (stub-safe) but its start() returns False;
             # without this check we'd silently construct a dead reader
@@ -758,6 +758,8 @@ class SlamBridgeModule(Module, layer=1):
                 self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
         except Exception as e:
             logger.debug("SlamBridge rclpy saved_map error: %s", e)
+        except Exception as e:
+            logger.debug("SlamBridge rclpy cloud error: %s", e)
 
     # ── Degeneracy metric callbacks ─────────────────────────────────────────
 

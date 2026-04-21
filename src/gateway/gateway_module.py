@@ -437,8 +437,7 @@ class GatewayModule(Module, layer=6):
         when the active map actually changes, and cache `_last_saved_map`
         so new SSE connections get it once from the snapshot.
         """
-        import os
-        import time as _t
+        import os, time as _t
         MAX_SEND = 80_000
         last_target = None
         while True:
@@ -502,8 +501,7 @@ class GatewayModule(Module, layer=6):
                     pts = []
                     for ln in f.read().decode(errors="ignore").splitlines():
                         parts = ln.split()
-                        if len(parts) < len(fields):
-                            continue
+                        if len(parts) < len(fields): continue
                         try:
                             x, y = float(parts[xi]), float(parts[yi])
                             z = float(parts[zi]) if zi >= 0 else 0.0
@@ -512,8 +510,7 @@ class GatewayModule(Module, layer=6):
                             pass
                     return np.array(pts, dtype=np.float32) if pts else None
                 if fmt == "binary":
-                    if not sizes:
-                        sizes = [4] * len(fields)
+                    if not sizes: sizes = [4] * len(fields)
                     stride = sum(sizes)
                     raw = np.frombuffer(f.read(), dtype=np.uint8)
                     n = count or (len(raw) // stride)
@@ -666,7 +663,7 @@ class GatewayModule(Module, layer=6):
             path = self._LAST_POSE_PATH
             if not os.path.isfile(path):
                 return None
-            with open(path, encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 d = json.load(f)
             if d.get("map_name") != map_name:
                 return None

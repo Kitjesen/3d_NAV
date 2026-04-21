@@ -75,7 +75,7 @@ def encode_pointcloud(
     return header + payload
 
 
-def decode_pointcloud(buf: bytes) -> tuple[np.ndarray, np.ndarray | None]:
+def decode_pointcloud(buf: bytes) -> Tuple[np.ndarray, np.ndarray | None]:
     """Inverse of :func:`encode_pointcloud` — used by tests, not in hot path."""
     if len(buf) < HEADER_SIZE:
         raise ValueError("buffer too small for header")

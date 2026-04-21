@@ -333,10 +333,8 @@ class _PCTBackend:
                 np.array([goal_pos[0], goal_pos[1]], dtype=np.float64)))
         except Exception:
             goal_h = float(goal[2]) if len(goal) > 2 else 0.0
-        if not np.isfinite(start_h):
-            start_h = 0.0
-        if not np.isfinite(goal_h):
-            goal_h = 0.0
+        if not np.isfinite(start_h): start_h = 0.0
+        if not np.isfinite(goal_h):  goal_h = 0.0
 
         try:
             result = self._planner.plan(start_pos, goal_pos, start_h, goal_h)

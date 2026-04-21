@@ -16,7 +16,6 @@
 - **[BUILD_GUIDE.md](./01-getting-started/BUILD_GUIDE.md)** — 构建指南
 - **[DEPLOY.md](./01-getting-started/DEPLOY.md)** — 部署指南
 - **[PROJECT_OVERVIEW_ZH.md](./01-getting-started/PROJECT_OVERVIEW_ZH.md)** — 项目总览（中文）
-- **[PROJECT_LEARNING_AND_MAC_GUIDE_ZH.md](./01-getting-started/PROJECT_LEARNING_AND_MAC_GUIDE_ZH.md)** — 项目学习路线与 Mac 可改内容指南
 
 ---
 
@@ -163,7 +162,6 @@ WebRTC、网关、通信优化等专项技术文档。
 - **[project_summary.md](./08-project-management/project_summary.md)** — 项目总结
 - **[final_project_summary.md](./08-project-management/final_project_summary.md)** — 最终项目总结
 - **[project_final_status.md](./08-project-management/project_final_status.md)** — 项目最终状态
-- **[CODEX_SESSION_HISTORY_2026-04-18_ZH.md](./08-project-management/CODEX_SESSION_HISTORY_2026-04-18_ZH.md)** — Codex 会话续接记录（中文）
 
 **交付**
 - **[PROJECT_COMPLETE.md](./08-project-management/PROJECT_COMPLETE.md)** — 项目完成报告

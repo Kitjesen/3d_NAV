@@ -13,9 +13,9 @@ import pytest
 
 try:
     from webrtc.webrtc_stream_module import (
-        _HAVE_WEBRTC,
         WebRTCStreamModule,
         _force_h264_first,
+        _HAVE_WEBRTC,
     )
 except ImportError:  # pragma: no cover — module itself should always import
     pytest.skip("WebRTCStreamModule not importable", allow_module_level=True)

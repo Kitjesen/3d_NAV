@@ -8,16 +8,12 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.035)),
-    var(--bg-layer-1);
+  background: var(--glass-hi);
   backdrop-filter: blur(40px) saturate(120%);
   -webkit-backdrop-filter: blur(40px) saturate(120%);
-  border: 1px solid var(--border-hi);
+  border: 1px solid var(--border);
   border-radius: var(--r-xl);
-  box-shadow:
-    0 14px 36px rgba(0, 0, 0, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow-md);
   overflow: hidden;
   animation: fade-in 0.6s var(--ease-spring) 0.1s both;
 }
@@ -29,10 +25,7 @@
   position: relative;
   z-index: 10;
   display: flex;
-  min-height: 42px;
   padding: 0 var(--s-3);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
   border-bottom: 1px solid var(--border);
 }
 
@@ -44,10 +37,10 @@
 .tab,
 .tabActive {
   flex: 1;
-  padding: 13px 8px 11px;
+  padding: 10px 8px;
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-bottom: 1px solid transparent;
   margin-bottom: -1px;
   font-family: var(--font-ui);
   font-size: 12px;
@@ -59,13 +52,12 @@
 }
 
 .tab:hover {
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-dim);
 }
 
 .tabActive {
   color: var(--text);
-  border-bottom-color: rgba(228, 228, 232, 0.84);
+  border-bottom-color: var(--text);
   font-weight: 600;
 }
 
@@ -74,7 +66,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 18px;
+  padding: var(--s-4);
   min-height: 0;
 }
 
@@ -83,8 +75,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 26px;
-  margin-bottom: 14px;
+  margin-bottom: var(--s-3);
 }
 
 .title {
@@ -135,8 +126,8 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1px;
-  background: rgba(255, 255, 255, 0.055);
-  border: 1px solid rgba(255, 255, 255, 0.075);
+  background: var(--border);
+  border: 1px solid var(--border);
   border-radius: var(--r-md);
   overflow: hidden;
   align-content: start;
@@ -148,7 +139,7 @@
   flex-direction: column;
   gap: 4px;
   padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--glass-hi);
 }
 
 .fieldLabel {

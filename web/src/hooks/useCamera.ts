@@ -13,7 +13,6 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
   const prevBlobRef = useRef<string | null>(null)
-  const connectRef = useRef<() => void>(() => {})
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
@@ -57,7 +56,7 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
       if (!mountedRef.current) return
       setConnected(false)
       reconnectTimer.current = setTimeout(() => {
-        if (mountedRef.current) connectRef.current()
+        if (mountedRef.current) connect()
       }, 3000)
     }
 
@@ -69,10 +68,6 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
   const reconnect = useCallback(() => {
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
     connect()
-  }, [connect])
-
-  useEffect(() => {
-    connectRef.current = connect
   }, [connect])
 
   useEffect(() => {
