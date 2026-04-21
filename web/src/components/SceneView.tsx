@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useMemo, useState, memo } from 'react'
 import {
-  Compass, Grid3x3, Navigation, Route, Target, Bot, Layers as LayersIcon, Mountain,
+  Compass, Grid3x3, Navigation, Route, Target, Bot, Layers as LayersIcon,
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle, Pencil, X,
   MapPinned, Cloud, Maximize2, Radio, Activity, LocateFixed, VideoOff,
 } from 'lucide-react'
@@ -43,14 +43,25 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const scene3DRef = useRef<Scene3DHandle>(null)
 
   // Trail: state so Scene3D re-renders on movement
-  const [trail, setTrail] = useState<Array<[number, number]>>([])
+  // Persist trail in sessionStorage so a page refresh or tab re-open doesn't
+  // erase the last N minutes of track. Cleared on explicit 清除轨迹 click
+  // or end of browser session. Keyed per active map so switching maps
+  // doesn't carry over the wrong trail.
+  const trailStorageKey = (map: string | null | undefined) =>
+    `lingtu.trail.${map ?? 'none'}`
+  const [trail, setTrail] = useState<Array<[number, number]>>(() => {
+    try {
+      // We don't yet know the map here; lazy-load on mount via useEffect below.
+      return []
+    } catch { return [] }
+  })
   const prevTrailEndRef = useRef<[number, number] | null>(null)
 
   const [slamPending, setSlamPending] = useState<SlamProfile | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(true)
   const [saveModalOpen, setSaveModalOpen] = useState(false)
   const [layers, setLayers] = useState<Layers>({
-    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true, costmap: false, slope: false,
+    grid: true, cloud: true, trail: true, path: true, goal: true, robot: true, costmap: true, slope: false,
   })
   const [maps, setMaps] = useState<MapInfo[]>([])
   // Default 0.12 (12cm sphere per point) — with ~18k points in a room-scale
@@ -66,6 +77,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const [relocY, setRelocY] = useState('0')
   const [relocYaw, setRelocYaw] = useState('0')
   const [relocPending, setRelocPending] = useState(false)
+  // Track whether the user has manually edited reloc inputs; until then we
+  // mirror live odometry so the defaults reflect the robot's current pose
+  // instead of the unhelpful (0, 0, 0).
+  const [relocDirty, setRelocDirty] = useState(false)
   const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
 
   // Map management modals
@@ -147,6 +162,31 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   }, [relocDropOpen])
 
   // ── Trail tracking ────────────────────────────────────────────
+  const activeMap = sseState.session?.active_map
+  // Load persisted trail when active_map changes (or first mount).
+  useEffect(() => {
+    if (!activeMap) return
+    try {
+      const raw = sessionStorage.getItem(trailStorageKey(activeMap))
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Array<[number, number]>
+      if (Array.isArray(parsed)) {
+        // Filter: finite + within plausible map bounds (|xy| < 100m).
+        // Older sessions captured odom-frame divergence points (±1000m)
+        // which, when re-played as a line string, drew a huge spiderweb
+        // across the scene. This bound prunes them on load.
+        const clean = parsed.filter(
+          (p): p is [number, number] =>
+            Array.isArray(p) && p.length === 2 &&
+            Number.isFinite(p[0]) && Number.isFinite(p[1]) &&
+            Math.abs(p[0]) < 100 && Math.abs(p[1]) < 100
+        ).slice(-TRAIL_MAX)
+        setTrail(clean)
+        if (clean.length > 0) prevTrailEndRef.current = clean[clean.length - 1]
+      }
+    } catch { /* ignore */ }
+  }, [activeMap])
+
   useEffect(() => {
     if (odom == null) return
     const last = prevTrailEndRef.current
@@ -159,10 +199,58 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     }
   }, [odom])
 
+  // Persist trail on change (throttle: only every ~1 s to keep sessionStorage
+  // writes cheap on long runs).
+  const trailSaveThrottleRef = useRef(0)
+  useEffect(() => {
+    if (!activeMap) return
+    const now = Date.now()
+    if (now - trailSaveThrottleRef.current < 1000) return
+    trailSaveThrottleRef.current = now
+    try {
+      sessionStorage.setItem(trailStorageKey(activeMap), JSON.stringify(trail))
+    } catch { /* quota hit? ignore */ }
+  }, [trail, activeMap])
+
+  // ── Sync reloc inputs with odometry until user edits ──────────
+  // When the panel is closed (or user hasn't edited yet) keep X/Y/Yaw mirroring
+  // current odom so opening it shows useful defaults.  Once the user edits any
+  // field we stop overwriting (relocDirty=true).
+  useEffect(() => {
+    if (relocDirty || !odom) return
+    setRelocX(robotX.toFixed(2))
+    setRelocY(robotY.toFixed(2))
+    setRelocYaw(yaw.toFixed(3))
+  }, [odom, robotX, robotY, yaw, relocDirty])
+
+  // ── Default active map for reloc panel ─────────────────────────
+  const activeMapName = sseState.session?.active_map ?? null
+  useEffect(() => {
+    if (!relocMap && activeMapName) setRelocMap(activeMapName)
+  }, [activeMapName, relocMap])
+
   // ── Handlers ──────────────────────────────────────────────────
   const handlePendingGoal = useCallback((x: number, y: number) => {
     setPendingGoal({ x, y })
   }, [])
+
+  const handleSceneRelocalize = useCallback(async (x: number, y: number) => {
+    const mapName = sseState.session?.active_map
+    if (!mapName) {
+      showToast('请先加载一张地图后再重定位', 'error')
+      return
+    }
+    const useYaw = typeof odom?.yaw === 'number' && Number.isFinite(odom.yaw) ? odom.yaw : 0
+    showToast(`重定位中… (${x.toFixed(2)}, ${y.toFixed(2)})`, 'info')
+    try {
+      await api.relocalize(mapName, x, y, useYaw)
+      const q = sseState.session?.icp_quality
+      const qStr = typeof q === 'number' ? ` quality=${q.toFixed(2)}` : ''
+      showToast(`重定位成功${qStr}`, 'success')
+    } catch (e: unknown) {
+      showToast(`重定位失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }, [sseState.session, odom, showToast])
 
   const handleConfirmGoal = useCallback(async () => {
     if (!pendingGoal) return
@@ -179,7 +267,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const handleClearTrail = useCallback(() => {
     setTrail([])
     prevTrailEndRef.current = null
-  }, [])
+    try {
+      if (activeMap) sessionStorage.removeItem(trailStorageKey(activeMap))
+    } catch { /* ignore */ }
+  }, [activeMap])
 
   const handleClearCloud = useCallback(() => {
     setCloudClearedSeq(cloud.seq)
@@ -190,9 +281,17 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
 
   const confirmSaveMap = async (name: string) => {
     setSaveModalOpen(false)
+    // 告诉用户动态过滤 + PGO 正在跑,保存需要较长时间
+    showToast(`正在保存并清洗动态障碍: ${name}…`, 'info')
     try {
-      await api.saveMap(name)
-      showToast(`已保存: ${name}`, 'success')
+      const r = await api.saveMap(name)
+      const df = r.dynamic_filter
+      if (df && df.success && df.dropped !== undefined && df.orig_count) {
+        const pct = (100 * df.dropped / df.orig_count).toFixed(1)
+        showToast(`已保存: ${name} · 清除 ${df.dropped} 动态点 (${pct}%)`, 'success')
+      } else {
+        showToast(`已保存: ${name}`, 'success')
+      }
       loadMaps()
     } catch { showToast('保存失败', 'error') }
   }
@@ -331,7 +430,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
           <LayerBtn k="goal"  icon={<Target size={11} />}     label="目标"  />
           <LayerBtn k="robot"   icon={<Bot size={11} />}        label="本机"  />
           <LayerBtn k="costmap" icon={<LayersIcon size={11} />} label="代价"  />
-          <LayerBtn k="slope"   icon={<Mountain size={11} />}   label="坡度"  />
+          {/* 坡度层暂时隐藏 — slope grid TF 对齐未彻底修复,看起来飘.
+              保留 Scene3D / SSE 渲染代码,待 TF 修好后恢复按钮. */}
         </div>
 
         <span className={styles.divider} />
@@ -468,10 +568,11 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
               layers={layers}
               pointSize={pointSize}
               onPendingGoal={handlePendingGoal}
+              onRelocalize={handleSceneRelocalize}
               pendingGoal={pendingGoal}
             />
             <div className={styles.canvasOverlayTop}>
-              <span className={styles.scaleLabel}>3D 场景视图  ·  拖拽旋转  ·  滚轮缩放  ·  点击放置目标</span>
+              <span className={styles.scaleLabel}>3D 场景视图  ·  拖拽旋转  ·  滚轮缩放  ·  点击放置目标  ·  Shift+点击重定位</span>
             </div>
             <div className={styles.robotOverlay}>
               <span>位置 {odomValid ? `(${robotX.toFixed(2)}, ${robotY.toFixed(2)})` : '(--, --)'}</span>
@@ -657,13 +758,16 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 <div className={styles.relocInputRow}>
                   <label>X</label>
                   <input className={styles.relocInput} type="number" step="0.1"
-                    value={relocX} onChange={e => setRelocX(e.target.value)} />
+                    value={relocX}
+                    onChange={e => { setRelocDirty(true); setRelocX(e.target.value) }} />
                   <label>Y</label>
                   <input className={styles.relocInput} type="number" step="0.1"
-                    value={relocY} onChange={e => setRelocY(e.target.value)} />
+                    value={relocY}
+                    onChange={e => { setRelocDirty(true); setRelocY(e.target.value) }} />
                   <label>Yaw</label>
                   <input className={styles.relocInput} type="number" step="0.1"
-                    value={relocYaw} onChange={e => setRelocYaw(e.target.value)} />
+                    value={relocYaw}
+                    onChange={e => { setRelocDirty(true); setRelocYaw(e.target.value) }} />
                 </div>
                 <button
                   className={styles.relocConfirmBtn}

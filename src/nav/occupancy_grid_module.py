@@ -51,9 +51,13 @@ class OccupancyGridModule(Module, layer=2):
         self,
         resolution: float = 0.2,         # metres per cell
         map_radius: float = 30.0,         # half-width of robot-centric grid (m)
-        z_min: float = 0.10,              # ignore points below this height
+        # z_min 0.10 → 0.30: 10cm 之内包括地板起伏、地毯边、落叶, 经常被
+        # 误判为障碍; 四足狗 ≥ 30cm 的障碍才真的需要避.
+        z_min: float = 0.30,              # ignore points below this height
         z_max: float = 2.00,              # ignore points above this height
-        inflation_radius: float = 0.50,   # obstacle inflation radius (m)
+        # 0.50 → 0.25: 原值对四足 (宽 ~40cm) 太激进, 单个障碍膨胀 50cm
+        # 叠加后撑满整条走廊. 0.25 = 狗半宽 + 5cm 余量, 视觉更贴合.
+        inflation_radius: float = 0.25,   # obstacle inflation radius (m)
         robot_clear_radius: float = 0.60, # clear self footprint from local costmap
         publish_hz: float = 2.0,
         **kw,

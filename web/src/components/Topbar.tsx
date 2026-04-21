@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Settings, Radio } from 'lucide-react'
+import { Settings, Radio, RotateCcw } from 'lucide-react'
+import { resetAllLayouts } from './floatingWidgetLayout'
 import type { SSEState, Tab } from '../types'
 import { BagRecorder } from './BagRecorder'
 import { SettingsMenu } from './SettingsMenu'
@@ -74,12 +75,16 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
   const activeMap = session?.active_map ?? '--'
   const icpQ = session?.icp_quality ?? 0
   const icpLabel = icpQ > 0 ? icpQ.toFixed(3) : '--'
+  // ICP health thresholds:
+  //   <0.15 healthy (green)
+  //   0.15-0.3 warning (yellow)
+  //   >=0.3 critical (red + pulse) — drift watchdog will auto-recover soon
   const icpClass =
     sessMode !== 'navigating' ? styles.navPlanning
     : icpQ <= 0 ? styles.navPlanning
-    : icpQ < 0.15 ? '' // healthy (default styling)
+    : icpQ < 0.15 ? '' // healthy default
     : icpQ < 0.3 ? styles.navPlanning
-    : styles.navFailed
+    : `${styles.navFailed} ${styles.icpPulse}`
   const locReady = !!session?.localizer_ready
   const locLabel = sessMode !== 'navigating' ? '--' : locReady ? '就绪' : '对齐中'
   const sessionModeClass =
@@ -215,6 +220,20 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
 
       <div className={styles.right}>
         <BagRecorder />
+        {activeTab === 'console' && (
+          <button
+            className={styles.btnIcon}
+            aria-label="重置控制台布局"
+            title="重置控制台布局（清除拖拽保存的位置/尺寸）"
+            onClick={() => {
+              if (confirm('重置控制台的 FloatingWidget 位置和尺寸？页面将刷新。')) {
+                resetAllLayouts()
+              }
+            }}
+          >
+            <RotateCcw size={16} />
+          </button>
+        )}
         <ThemeToggle theme={theme} onToggle={toggle} />
         <button
           className={styles.btnIcon}

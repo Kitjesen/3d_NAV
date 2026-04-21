@@ -61,6 +61,7 @@ class SlamBridgeModule(Module, layer=1):
     alive:                 Out[bool]
     localization_status:   Out[dict]
     gnss_fusion_health:    Out[dict]
+    map_odom_tf:           Out[dict]  # {tx,ty,tz,qx,qy,qz,qw,valid} — localizer-emitted map→odom
 
     # Visual odometry input for selective DOF fusion during degeneracy
     visual_odom: In[Odometry]
@@ -202,12 +203,23 @@ class SlamBridgeModule(Module, layer=1):
 
     def _try_cyclonedds(self) -> bool:
         try:
-            from core.dds import ROS2TopicReader
+            from core.dds import ROS2TopicReader, _HAS_CYCLONEDDS
+            # Honour the LINGTU_DISABLE_DDS kill switch — ROS2TopicReader
+            # still imports (stub-safe) but its start() returns False;
+            # without this check we'd silently construct a dead reader
+            # instead of falling through to the rclpy path.
+            if not _HAS_CYCLONEDDS:
+                return False
             self._reader = ROS2TopicReader()
             self._reader.on_odometry(self._odom_topic, self._on_dds_odom)
             self._reader.on_pointcloud2(self._cloud_topic, self._on_dds_cloud)
             self._reader.on_pointcloud2(self._saved_map_topic, self._on_dds_saved_map)
             self._reader.on_float32(self._quality_topic, self._on_dds_quality)
+            # Subscribe to /tf so we can relay map→odom transform (from localizer ICP).
+            # Downstream GatewayModule applies this to map_cloud points before SSE
+            # so frontend sees both saved_map (already map frame) and map_cloud
+            # (Fast-LIO2 odom frame) overlaid in the same reference frame.
+            self._reader.on_tf("/tf", self._on_dds_tf)
             # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
             # for localizer mode (avoids duplicate accumulation when both topics fire)
             logger.info("SlamBridgeModule: using cyclonedds (lightweight)")
@@ -234,6 +246,16 @@ class SlamBridgeModule(Module, layer=1):
             # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
             # for localizer mode (avoids duplicate accumulation when both topics fire)
             self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
+            # Also subscribe to /tf so map→odom reaches downstream even when
+            # cyclonedds is disabled (LINGTU_DISABLE_DDS=1). Without this,
+            # NavigationModule plans from odom-frame (0,0) instead of the
+            # localizer-aligned map-frame position — PCT finds wrong start.
+            try:
+                from tf2_msgs.msg import TFMessage
+                self._rclpy_node.create_subscription(
+                    TFMessage, "/tf", self._on_rclpy_tf, qos)
+            except Exception as _e:
+                logger.warning("SlamBridge: /tf rclpy sub failed: %s", _e)
             # Subscribe to degeneracy metrics if available
             self._subscribe_degeneracy_rclpy(self._rclpy_node, qos)
             logger.info("SlamBridgeModule: using rclpy (fallback)")
@@ -457,6 +479,10 @@ class SlamBridgeModule(Module, layer=1):
             if self._check_drift(fused):
                 return  # don't publish garbage to downstream modules
 
+            # Apply map→odom TF so downstream (NavigationModule, Gateway)
+            # sees map-frame positions. Without this, planner uses odom
+            # frame (robot boot origin) and PCT lookups hit wrong cells.
+            fused = self._apply_map_odom_to_odometry(fused)
             self.odometry.publish(fused)
             now = _time.time()
             self._last_odom_time = now
@@ -483,7 +509,13 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                # Transform odom-frame points to map frame so downstream
+                # (OccupancyGridModule, Gateway) sees coords consistent with
+                # the odometry we publish. Without this, map_cloud lives in
+                # Fast-LIO2 odom origin but robot_xy is map-frame → costmap
+                # rendered at rotated/translated position.
+                xyz_map = self._apply_map_odom_to_points(xyz)
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
                 self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge dds cloud error: %s", e)
@@ -507,6 +539,147 @@ class SlamBridgeModule(Module, layer=1):
         except Exception as e:
             logger.debug("SlamBridge dds saved_map error: %s", e)
 
+    def _apply_map_odom_to_points(self, xyz: np.ndarray) -> np.ndarray:
+        """Transform an (N, 3) point cloud from odom frame to map frame using
+        the cached map→odom TF. Returns the same array if TF not yet cached.
+        Vectorized — avoids a per-point loop for tens of thousands of points.
+        """
+        T = getattr(self, "_T_map_odom", None)
+        if T is None or xyz.shape[0] == 0:
+            return xyz
+        R = T[:3, :3].astype(np.float32)
+        t = T[:3, 3].astype(np.float32)
+        return (xyz @ R.T) + t
+
+    def _apply_map_odom_to_odometry(self, odom: Odometry) -> Odometry:
+        """Transform odom from Fast-LIO2 odom frame into map frame using the
+        localizer-emitted map→odom TF. No-op when TF is not yet cached.
+        Composes both translation and rotation — forgetting the rotation
+        makes map.yaw == odom.yaw which is wrong whenever the BBS3D align
+        produced a non-zero yaw (very common, e.g. -104° here).
+        """
+        T = getattr(self, "_T_map_odom", None)
+        if T is None:
+            return odom
+        import numpy as _np
+        # Position: map_p = T_map_odom * odom_p
+        p = odom.pose.position
+        ox, oy, oz = float(p.x), float(p.y), float(p.z)
+        odom.pose.position.x = float(T[0, 0] * ox + T[0, 1] * oy + T[0, 2] * oz + T[0, 3])
+        odom.pose.position.y = float(T[1, 0] * ox + T[1, 1] * oy + T[1, 2] * oz + T[1, 3])
+        odom.pose.position.z = float(T[2, 0] * ox + T[2, 1] * oy + T[2, 2] * oz + T[2, 3])
+        # Rotation: map_R_body = map_R_odom * odom_R_body
+        # Convert odom quat → 3x3, multiply, convert back to quat.
+        q = odom.pose.orientation
+        qx, qy, qz, qw = float(q.x), float(q.y), float(q.z), float(q.w)
+        xx, yy, zz = qx * qx, qy * qy, qz * qz
+        xy, xz, yz = qx * qy, qx * qz, qy * qz
+        wx, wy, wzz = qw * qx, qw * qy, qw * qz
+        R_body = _np.array([
+            [1 - 2 * (yy + zz),     2 * (xy - wzz),    2 * (xz + wy)],
+            [    2 * (xy + wzz), 1 - 2 * (xx + zz),    2 * (yz - wx)],
+            [    2 * (xz - wy),     2 * (yz + wx), 1 - 2 * (xx + yy)],
+        ], dtype=_np.float64)
+        R_map = T[:3, :3] @ R_body
+        # 3x3 → quat (Shepperd-style, stable for any rotation)
+        tr = R_map[0, 0] + R_map[1, 1] + R_map[2, 2]
+        if tr > 0:
+            S = 2.0 * _np.sqrt(tr + 1.0)
+            nw = 0.25 * S
+            nx = (R_map[2, 1] - R_map[1, 2]) / S
+            ny = (R_map[0, 2] - R_map[2, 0]) / S
+            nz = (R_map[1, 0] - R_map[0, 1]) / S
+        elif (R_map[0, 0] > R_map[1, 1]) and (R_map[0, 0] > R_map[2, 2]):
+            S = 2.0 * _np.sqrt(1.0 + R_map[0, 0] - R_map[1, 1] - R_map[2, 2])
+            nw = (R_map[2, 1] - R_map[1, 2]) / S
+            nx = 0.25 * S
+            ny = (R_map[0, 1] + R_map[1, 0]) / S
+            nz = (R_map[0, 2] + R_map[2, 0]) / S
+        elif R_map[1, 1] > R_map[2, 2]:
+            S = 2.0 * _np.sqrt(1.0 + R_map[1, 1] - R_map[0, 0] - R_map[2, 2])
+            nw = (R_map[0, 2] - R_map[2, 0]) / S
+            nx = (R_map[0, 1] + R_map[1, 0]) / S
+            ny = 0.25 * S
+            nz = (R_map[1, 2] + R_map[2, 1]) / S
+        else:
+            S = 2.0 * _np.sqrt(1.0 + R_map[2, 2] - R_map[0, 0] - R_map[1, 1])
+            nw = (R_map[1, 0] - R_map[0, 1]) / S
+            nx = (R_map[0, 2] + R_map[2, 0]) / S
+            ny = (R_map[1, 2] + R_map[2, 1]) / S
+            nz = 0.25 * S
+        odom.pose.orientation.x = float(nx)
+        odom.pose.orientation.y = float(ny)
+        odom.pose.orientation.z = float(nz)
+        odom.pose.orientation.w = float(nw)
+        return odom
+
+    def _cache_map_odom_tf(self, tx, ty, tz, qx, qy, qz, qw):
+        """Cache map→odom as 4x4 for downstream variance-free transforms."""
+        import numpy as _np
+        xx, yy, zz = qx * qx, qy * qy, qz * qz
+        xy, xz, yz = qx * qy, qx * qz, qy * qz
+        wx, wy, wz = qw * qx, qw * qy, qw * qz
+        R = _np.array([
+            [1 - 2 * (yy + zz),     2 * (xy - wz),     2 * (xz + wy)],
+            [    2 * (xy + wz), 1 - 2 * (xx + zz),     2 * (yz - wx)],
+            [    2 * (xz - wy),     2 * (yz + wx), 1 - 2 * (xx + yy)],
+        ], dtype=_np.float64)
+        T = _np.eye(4, dtype=_np.float64)
+        T[:3, :3] = R
+        T[:3, 3] = [tx, ty, tz]
+        self._T_map_odom = T
+
+    def _on_rclpy_tf(self, msg) -> None:
+        try:
+            for t in msg.transforms:
+                parent = t.header.frame_id or ""
+                child = t.child_frame_id or ""
+                if parent == "map" and child == "odom":
+                    tr = t.transform.translation
+                    q = t.transform.rotation
+                    self._cache_map_odom_tf(
+                        float(tr.x), float(tr.y), float(tr.z),
+                        float(q.x), float(q.y), float(q.z), float(q.w))
+                    self.map_odom_tf.publish({
+                        "tx": float(tr.x), "ty": float(tr.y), "tz": float(tr.z),
+                        "qx": float(q.x), "qy": float(q.y),
+                        "qz": float(q.z), "qw": float(q.w),
+                        "valid": True,
+                    })
+                    return
+        except Exception as e:
+            logger.debug("SlamBridge rclpy tf error: %s", e)
+
+    def _on_dds_tf(self, msg) -> None:
+        """DDS /tf TFMessage → extract map→odom, relay as dict to map_odom_tf Out.
+
+        /tf is fan-in from every broadcaster, so we walk transforms and pick
+        the specific (parent=map, child=odom) pair the localizer publishes.
+        Downstream GatewayModule applies this to odom-frame point clouds so
+        the browser sees saved_map + map_cloud overlaid correctly.
+        """
+        try:
+            transforms = getattr(msg, "transforms", None) or []
+            for t in transforms:
+                parent = getattr(t.header, "frame_id", "") or ""
+                child = getattr(t, "child_frame_id", "") or ""
+                if parent == "map" and child == "odom":
+                    trans = t.transform.translation
+                    rot = t.transform.rotation
+                    tf_msg = {
+                        "tx": float(trans.x), "ty": float(trans.y), "tz": float(trans.z),
+                        "qx": float(rot.x),   "qy": float(rot.y),
+                        "qz": float(rot.z),   "qw": float(rot.w),
+                        "valid": True,
+                    }
+                    self._cache_map_odom_tf(
+                        tf_msg["tx"], tf_msg["ty"], tf_msg["tz"],
+                        tf_msg["qx"], tf_msg["qy"], tf_msg["qz"], tf_msg["qw"])
+                    self.map_odom_tf.publish(tf_msg)
+                    return
+        except Exception as e:
+            logger.debug("SlamBridge dds tf error: %s", e)
+
     # ── rclpy callbacks (fallback) ───────────────────────────────────────
 
     def _on_rclpy_odom(self, msg) -> None:
@@ -526,6 +699,10 @@ class SlamBridgeModule(Module, layer=1):
                 ),
             )
             fused = self._fuse_odometry(slam_odom)
+            # Apply map→odom TF so downstream (NavigationModule, Gateway)
+            # sees map-frame positions. Without this, planner uses odom
+            # frame (robot boot origin) and PCT lookups hit wrong cells.
+            fused = self._apply_map_odom_to_odometry(fused)
             self.odometry.publish(fused)
             self._last_odom_time = _time.time()
         except Exception as e:
@@ -549,7 +726,13 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                self.map_cloud.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+                # Transform odom-frame points to map frame so downstream
+                # (OccupancyGridModule, Gateway) sees coords consistent with
+                # the odometry we publish. Without this, map_cloud lives in
+                # Fast-LIO2 odom origin but robot_xy is map-frame → costmap
+                # rendered at rotated/translated position.
+                xyz_map = self._apply_map_odom_to_points(xyz)
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
                 self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge rclpy cloud error: %s", e)

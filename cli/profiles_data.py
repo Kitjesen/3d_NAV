@@ -90,6 +90,10 @@ PROFILES = {
     "nav": dict(
         _desc="Navigate using a saved map",
         _default_robot="s100p",
+        # External slam.service owns livox driver + fastlio2 + localizer on S100P.
+        # bridge mode has the SlamBridgeModule subscribe to /nav/odometry + /nav/map_cloud
+        # instead of starting our own livox NativeModule (which would fight the systemd one).
+        slam_profile="bridge",
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
         tomogram=_ACTIVE_TOMOGRAM,

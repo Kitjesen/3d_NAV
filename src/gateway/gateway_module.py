@@ -47,6 +47,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
+import os
 import queue
 import threading
 import time
@@ -99,6 +101,10 @@ class CmdVelRequest(BaseModel):
 
 class InstructionRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1024)
+
+
+class BitrateRequest(BaseModel):
+    bps: int
 
 
 class ModeRequest(BaseModel):
@@ -237,7 +243,8 @@ class GatewayModule(Module, layer=6):
     odometry:       In[Odometry]
     map_cloud:      In[PointCloud2]
     saved_map:      In[PointCloud2]  # refined static map from localizer (map frame)
-    icp_quality:    In[float]        # /localization_quality — lower=better, 0 = no data
+    localization_quality: In[float]  # ICP fitness from SlamBridge — lower=better
+    map_odom_tf:    In[dict]         # from SlamBridge — {tx,ty,tz,qx,qy,qz,qw,valid} for map→odom
     scene_graph:    In[SceneGraph]
     safety_state:   In[SafetyState]
     mission_status: In[dict]
@@ -306,6 +313,21 @@ class GatewayModule(Module, layer=6):
         self._map_cloud_count: int = 0
         self._map_voxel_size: float = 0.15
 
+        # Dynamic-obstacle removal — hit-count voting per voxel.
+        # Phase 1 of docs/05-specialized/dynamic_obstacle_removal.md.
+        # 同一 voxel 被多少帧观测到 = hit count。墙被扫 30-100 次,人走过每
+        # 位置只 1-3 次。发送到 Web 时过滤 hit < min_hits 的格子,动态残影
+        # 自然消失。只在 mapping / exploring 模式下生效。
+        self._voxel_hits: dict[int, int] = {}
+        self._voxel_min_hits: int = int(os.environ.get("LINGTU_MAP_MIN_HITS", "3"))
+        self._voxel_key_offset: int = 1 << 19  # pad to keep packed keys non-negative
+
+        # map→odom TF (from localizer via SlamBridge). Applied to odom-frame
+        # map_cloud before SSE so the frontend sees it overlaid with saved_map
+        # (which is already in map frame). Identity until localizer converges.
+        self._T_map_odom: np.ndarray = np.eye(4, dtype=np.float64)
+        self._has_map_odom_tf: bool = False
+
         # WebRTCStreamModule reference (set by on_system_modules).  Kept as
         # an attribute so the /api/v1/webrtc/offer route can check presence
         # without an AttributeError when aiortc is not installed.
@@ -370,8 +392,10 @@ class GatewayModule(Module, layer=6):
         self.map_cloud.set_policy("latest")
         self.saved_map.subscribe(self._on_saved_map)
         self.saved_map.set_policy("latest")
-        self.icp_quality.subscribe(self._on_icp_quality)
-        self.icp_quality.set_policy("latest")
+        self.localization_quality.subscribe(self._on_icp_quality)
+        self.localization_quality.set_policy("latest")
+        self.map_odom_tf.subscribe(self._on_map_odom_tf)
+        self.map_odom_tf.set_policy("latest")
         self.scene_graph.subscribe(self._on_scene_graph)
         self.safety_state.subscribe(self._on_safety)
         self.mission_status.subscribe(self._on_mission)
@@ -394,7 +418,115 @@ class GatewayModule(Module, layer=6):
                 target=self._run_server, daemon=True, name="gateway"
             )
             self._server_thread.start()
+        # Background: load active map.pcd from disk and push as saved_map
+        # event so the frontend底图 always has the stored map regardless of
+        # whether localizer has converged. Re-pushes periodically so late-
+        # connecting SSE clients also get it.
+        self._saved_map_loader_thread = threading.Thread(
+            target=self._saved_map_loader_loop, daemon=True, name="saved_map_loader"
+        )
+        self._saved_map_loader_thread.start()
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
+
+    def _saved_map_loader_loop(self) -> None:
+        """Watch active/map.pcd symlink; push saved_map ONCE per change.
+
+        Previous behaviour: push every 10 s for "new clients". But the
+        frontend rebuilds the entire 80k-point Three.js mesh on every
+        saved_map event → satellite flicker / GPU churn. Better: push only
+        when the active map actually changes, and cache `_last_saved_map`
+        so new SSE connections get it once from the snapshot.
+        """
+        import os, time as _t
+        MAX_SEND = 80_000
+        last_target = None
+        while True:
+            try:
+                active = os.path.expanduser("~/data/nova/maps/active")
+                target = os.readlink(active) if os.path.islink(active) else None
+                if target != last_target:
+                    last_target = target
+                    pcd_path = os.path.expanduser(f"~/data/nova/maps/{target}/map.pcd") if target else None
+                    if pcd_path and os.path.isfile(pcd_path):
+                        pts = self._load_pcd_xyz(pcd_path)
+                        if pts is not None and len(pts) > 0:
+                            if len(pts) > MAX_SEND:
+                                idx = np.random.choice(len(pts), MAX_SEND, replace=False)
+                                pts = pts[idx]
+                            flat = pts[:, :3].astype(np.float32).flatten().tolist()
+                            count = len(pts)
+                            self._last_saved_map_event = {
+                                "type": "saved_map", "points": flat, "count": count,
+                            }
+                            self.push_event(self._last_saved_map_event)
+                            logger.info(
+                                "saved_map loader: loaded %s (%d pts) — pushed once",
+                                target, count)
+            except Exception as e:
+                logger.debug("saved_map loader error: %s", e)
+            _t.sleep(5.0)
+
+    @staticmethod
+    def _load_pcd_xyz(path: str) -> np.ndarray | None:
+        """Minimal PCD XYZ loader — supports ascii and binary little-endian."""
+        try:
+            with open(path, "rb") as f:
+                head_bytes = b""
+                while b"DATA" not in head_bytes.split(b"\n")[-1].upper() if b"DATA" in head_bytes else True:
+                    line = f.readline()
+                    if not line:
+                        break
+                    head_bytes += line
+                    if line.upper().startswith(b"DATA"):
+                        break
+                header = head_bytes.decode("ascii", errors="ignore")
+                fields = []
+                sizes: list[int] = []
+                count = 0
+                fmt = "ascii"
+                for ln in header.splitlines():
+                    ln = ln.strip()
+                    if ln.startswith("FIELDS"):
+                        fields = ln.split()[1:]
+                    elif ln.startswith("SIZE"):
+                        sizes = [int(x) for x in ln.split()[1:]]
+                    elif ln.startswith("POINTS"):
+                        count = int(ln.split()[1])
+                    elif ln.startswith("DATA"):
+                        fmt = ln.split()[1].lower()
+                if not fields or "x" not in fields or "y" not in fields:
+                    return None
+                xi, yi, zi = fields.index("x"), fields.index("y"), fields.index("z") if "z" in fields else -1
+                if fmt == "ascii":
+                    pts = []
+                    for ln in f.read().decode(errors="ignore").splitlines():
+                        parts = ln.split()
+                        if len(parts) < len(fields): continue
+                        try:
+                            x, y = float(parts[xi]), float(parts[yi])
+                            z = float(parts[zi]) if zi >= 0 else 0.0
+                            pts.append((x, y, z))
+                        except ValueError:
+                            pass
+                    return np.array(pts, dtype=np.float32) if pts else None
+                if fmt == "binary":
+                    if not sizes: sizes = [4] * len(fields)
+                    stride = sum(sizes)
+                    raw = np.frombuffer(f.read(), dtype=np.uint8)
+                    n = count or (len(raw) // stride)
+                    raw = raw[: n * stride].reshape(n, stride)
+                    offsets = [sum(sizes[:i]) for i in range(len(sizes))]
+                    out = np.zeros((n, 3), dtype=np.float32)
+                    out[:, 0] = np.frombuffer(raw[:, offsets[xi]:offsets[xi]+4].tobytes(), dtype=np.float32)
+                    out[:, 1] = np.frombuffer(raw[:, offsets[yi]:offsets[yi]+4].tobytes(), dtype=np.float32)
+                    if zi >= 0:
+                        out[:, 2] = np.frombuffer(raw[:, offsets[zi]:offsets[zi]+4].tobytes(), dtype=np.float32)
+                    finite = np.isfinite(out).all(axis=1)
+                    return out[finite]
+        except Exception as e:
+            logger.debug("PCD load failed %s: %s", path, e)
+            return None
+        return None
 
     def stop(self) -> None:
         self._server_thread = None
@@ -444,11 +576,16 @@ class GatewayModule(Module, layer=6):
     # -- Module subscription callbacks -------------------------------------
 
     def _on_odometry(self, odom: Odometry) -> None:
+        # SlamBridge now applies map→odom TF on its publish side, so the
+        # odom that reaches Gateway is already in map frame. Re-applying
+        # the TF here would double-transform and push the frontend cursor
+        # ~2m off from where it actually is (observed: 顶栏 -3.42,-0.46 vs
+        # PCT start -1.27,-2.24). Pass through as-is.
         d = {
-            "x":  odom.x,
-            "y":  odom.y,
-            "z":  getattr(odom, "z", 0.0),
-            "yaw": getattr(odom, "yaw", 0.0),
+            "x":  float(odom.x),
+            "y":  float(odom.y),
+            "z":  float(getattr(odom, "z", 0.0)),
+            "yaw": float(getattr(odom, "yaw", 0.0)),
             "vx": odom.twist.linear.x  if odom.twist else 0.0,
             "wz": odom.twist.angular.z if odom.twist else 0.0,
             "ts": odom.ts,
@@ -488,6 +625,132 @@ class GatewayModule(Module, layer=6):
             self._icp_quality = float(q)
         except Exception:
             pass
+
+    # ── Last-known-pose persistence (auto-relocalize on session/start) ────
+    # Keeps a tiny JSON snapshot of the last *successful* relocalize call so
+    # that a daemon restart doesn't force the operator to Shift+click again.
+    # Only written when the user explicitly relocalized and the localizer
+    # reported success; never overwritten by raw odometry (which can drift).
+    _LAST_POSE_PATH = os.path.expanduser("~/.lingtu/last_nav_pose.json")
+    _LAST_POSE_MAX_AGE_S = 7 * 24 * 3600  # 1 week
+
+    def _persist_last_nav_pose(
+        self, map_name: str, x: float, y: float, yaw: float,
+        quality: float | None,
+    ) -> None:
+        """Atomically snapshot the last successful relocalize pose to disk."""
+        try:
+            path = self._LAST_POSE_PATH
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            payload = {
+                "map_name": map_name,
+                "x": float(x), "y": float(y), "yaw": float(yaw),
+                "quality": float(quality) if quality is not None else None,
+                "saved_at": time.time(),
+            }
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, path)
+            logger.info("gateway: persisted last_nav_pose map=%s (%.2f, %.2f, yaw=%.2f)",
+                        map_name, x, y, yaw)
+        except Exception as e:
+            logger.warning("gateway: persist last_nav_pose failed: %s", e)
+
+    def _load_last_nav_pose(self, map_name: str) -> dict | None:
+        """Return persisted pose if map matches and snapshot is fresh, else None."""
+        try:
+            path = self._LAST_POSE_PATH
+            if not os.path.isfile(path):
+                return None
+            with open(path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if d.get("map_name") != map_name:
+                return None
+            age = time.time() - float(d.get("saved_at", 0.0))
+            if age > self._LAST_POSE_MAX_AGE_S:
+                logger.info("gateway: last_nav_pose too old (%.1fh), ignoring", age / 3600)
+                return None
+            return d
+        except Exception as e:
+            logger.debug("gateway: load last_nav_pose failed: %s", e)
+            return None
+
+    def _spawn_auto_relocalize(self, map_name: str) -> None:
+        """Fire-and-forget: if we have a persisted pose for this map, replay
+        it as a /relocalize service call ~2s after localizer comes up.
+
+        Runs in a daemon thread so session/start returns immediately — the
+        operator sees mode=navigating right away, and the ICP converges in
+        the background using the last known pose instead of (0,0,0).
+        """
+        d = self._load_last_nav_pose(map_name)
+        if d is None:
+            return
+        x, y, yaw = d["x"], d["y"], d["yaw"]
+
+        def _worker() -> None:
+            import subprocess as _sp
+            time.sleep(2.5)  # give localizer time to finish loading static map
+            try:
+                map_dir = os.environ.get(
+                    "NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
+                pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+                if not os.path.isfile(pcd_path):
+                    logger.warning("auto-relocalize: map pcd missing: %s", pcd_path)
+                    return
+                env = (
+                    "source /opt/ros/humble/setup.bash && "
+                    "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+                    "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                )
+                cmd = (
+                    env
+                    + f"ros2 service call /nav/relocalize interface/srv/Relocalize "
+                      f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
+                      f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""
+                )
+                r = _sp.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=20)
+                ok = "success=True" in r.stdout
+                logger.info("auto-relocalize: map=%s pose=(%.2f,%.2f,yaw=%.2f) ok=%s",
+                            map_name, x, y, yaw, ok)
+            except Exception as e:
+                logger.warning("auto-relocalize worker failed: %s", e)
+
+        threading.Thread(
+            target=_worker, daemon=True, name="gateway-auto-reloc",
+        ).start()
+
+    def _on_map_odom_tf(self, tf: dict) -> None:
+        """Cache localizer's map→odom transform as a 4x4 matrix.
+
+        Applied to Fast-LIO2's odom-frame map_cloud before SSE push so the
+        frontend renders it in the same frame as saved_map (which is already
+        in map frame).  Until the localizer converges (quality > 0), this
+        stays identity so the cloud is still visible, just not yet aligned.
+        """
+        if not tf or not tf.get("valid", False):
+            return
+        try:
+            tx, ty, tz = float(tf["tx"]), float(tf["ty"]), float(tf["tz"])
+            qx, qy, qz, qw = (float(tf["qx"]), float(tf["qy"]),
+                              float(tf["qz"]), float(tf["qw"]))
+            # Quaternion → 3x3 rotation (Hamilton convention, right-handed)
+            xx, yy, zz = qx * qx, qy * qy, qz * qz
+            xy, xz, yz = qx * qy, qx * qz, qy * qz
+            wx, wy, wz = qw * qx, qw * qy, qw * qz
+            R = np.array([
+                [1 - 2 * (yy + zz),     2 * (xy - wz),     2 * (xz + wy)],
+                [    2 * (xy + wz), 1 - 2 * (xx + zz),     2 * (yz - wx)],
+                [    2 * (xz - wy),     2 * (yz + wx), 1 - 2 * (xx + yy)],
+            ], dtype=np.float64)
+            T = np.eye(4, dtype=np.float64)
+            T[:3, :3] = R
+            T[:3, 3] = [tx, ty, tz]
+            self._T_map_odom = T
+            self._has_map_odom_tf = True
+        except Exception as e:
+            logger.debug("gateway: _on_map_odom_tf parse failed: %s", e)
 
     # ── Session state helpers ─────────────────────────────────────────────
 
@@ -569,46 +832,29 @@ class GatewayModule(Module, layer=6):
         }
 
     def _on_saved_map(self, cloud: PointCloud2) -> None:
-        """Push saved static map (refined by localizer, map frame) as底图.
+        """DDS-stream saved-map — intentionally ignored.
 
-        Unlike _on_map_cloud which accumulates, this is a latest-snapshot
-        push: the localizer publishes the full refined map each tick, so we
-        just downsample and forward. Lower update rate — every 10 frames
-        (~1 Hz, enough for stable 底图).
+        Localizer publishes a refined saved_map every tick (~10 Hz). That
+        previously got downsampled and re-pushed every 10 frames, but the
+        frontend rebuilds the whole 80k-pt mesh on each event → flicker.
+        The on-disk PCD pushed once by _saved_map_loader_loop is stable
+        enough for visualization — the localizer's runtime refinement
+        doesn't change the底图 meaningfully for the operator view.
         """
-        self._saved_map_count = getattr(self, "_saved_map_count", 0) + 1
-        if self._saved_map_count % 10 != 1:
-            return
-        pts = cloud.points
-        if pts is None or len(pts) == 0:
-            return
-        pts = pts[:, :3].astype(np.float32)
-        finite = np.isfinite(pts).all(axis=1)
-        bounded = (np.abs(pts) < 500.0).all(axis=1)
-        pts = pts[finite & bounded]
-        if len(pts) == 0:
-            return
-        # Cap at 80k for bandwidth — viz only, not used for algorithms
-        MAX_SEND = 80_000
-        if len(pts) > MAX_SEND:
-            idx = np.random.choice(len(pts), MAX_SEND, replace=False)
-            pts = pts[idx]
-        flat = pts[:, :3].flatten().tolist()
-        self.push_event({"type": "saved_map", "points": flat, "count": len(pts)})
+        return
 
     def _on_map_cloud(self, cloud: PointCloud2) -> None:
-        """Accumulate map cloud and push a DETERMINISTIC voxel-downsampled view.
+        """Mode-aware cloud handling.
 
-        Changes from the previous implementation:
-          1. Voxel-downsample every frame (incremental, not only at 300k)
-             so the total point count grows smoothly.
-          2. Push to SSE every 2 frames (~0.5 Hz) — previously 5 frames
-             made the cloud look frozen.
-          3. Send the ENTIRE downsampled cloud (after voxel), not a random
-             sample. Random sampling made consecutive pushes show different
-             subsets, which looked like the cloud "not accumulating".
-          4. Cap at ~60k for SSE bandwidth, adaptive voxel size doubles
-             when over cap so the downsample is stable across frames.
+        mapping / exploring  → accumulate with voxel dedup (growing global map)
+        navigating           → replace every frame, no accumulation
+            Rationale: in navigating mode the map→odom TF keeps micro-adjusting
+            while ICP converges. Accumulating odom-frame points then transforming
+            on every send makes the *whole* accumulated cloud drift as TF shifts,
+            producing the "flying" ghost effect. Replacing per frame makes the
+            live scan track the robot cleanly, while saved_map carries the
+            stable底图 layer.
+        idle                 → keep latest, don't grow
         """
         self._map_cloud_count += 1
         pts = cloud.points  # (N, 3) float32
@@ -623,16 +869,22 @@ class GatewayModule(Module, layer=6):
         pts = pts[finite & bounded]
         if len(pts) == 0:
             return
+        mode = self._session_mode
         with self._map_cloud_lock:
-            if self._map_points is None:
+            if mode in ("navigating", "idle") or self._map_points is None:
+                # Replace — latest scan only, no accumulation
                 self._map_points = pts
             else:
+                # mapping / exploring — grow the global map via voxel dedup
                 combined = np.concatenate([self._map_points, pts], axis=0)
-                # Voxel-downsample EVERY frame at a fixed grid so the
-                # resulting cloud is deterministic and grows monotonically
-                # as new points appear in new voxels.
                 combined = self._voxel_downsample(combined, self._map_voxel_size)
                 self._map_points = combined
+                # Increment per-voxel hit count using this frame's unique voxels
+                # (pre-accumulation). Loop over ~500 unique voxels per frame
+                # costs <1ms in Python — negligible vs numpy concat cost above.
+                frame_keys = np.unique(self._pack_voxel_keys(pts))
+                for k in frame_keys:
+                    self._voxel_hits[int(k)] = self._voxel_hits.get(int(k), 0) + 1
 
         # Push to SSE at ~0.5Hz (every 2 frames) — often enough to look
         # "live accumulating" without flooding the browser.
@@ -658,6 +910,29 @@ class GatewayModule(Module, layer=6):
                 pts_send = pts_send[::stride][:MAX_SEND]
         else:
             pts_send = pts_all
+
+        # Dynamic-obstacle filter — drop voxels hit fewer than min_hits times
+        # in mapping / exploring modes. 动态物体 (行人) 只在几帧内命中一个
+        # voxel,墙/家具长期命中数十帧。阈值一卡残影即散。
+        if (
+            mode in ("mapping", "exploring")
+            and self._voxel_min_hits > 1
+            and self._voxel_hits
+            and len(pts_send) > 0
+        ):
+            stable_arr = np.fromiter(
+                (k for k, c in self._voxel_hits.items() if c >= self._voxel_min_hits),
+                dtype=np.int64,
+            )
+            if stable_arr.size > 0:
+                all_keys = self._pack_voxel_keys(pts_send)
+                mask = np.isin(all_keys, stable_arr)
+                pts_send = pts_send[mask]
+
+        # NOTE: SlamBridge now applies map→odom TF on the points before
+        # publishing (commit d79c409). Re-transforming here would double-
+        # shift the cloud and make it fly away from the saved_map底图 every
+        # time the localizer refines TF. Points arrive already in map frame.
 
         # Binary path — encode once, fan out to /ws/cloud subscribers.
         # The old JSON SSE event would allocate ~180k Python floats per frame
@@ -704,6 +979,18 @@ class GatewayModule(Module, layer=6):
         keys = (pts[:, :3] / voxel).astype(np.int32)
         _, idx = np.unique(keys, axis=0, return_index=True)
         return pts[idx]
+
+    def _pack_voxel_keys(self, pts_xyz: np.ndarray) -> np.ndarray:
+        """Pack (x,y,z) voxel coords into int64 keys for dict lookup.
+
+        Uses 20-bit axis coord (±524k after offset) packed into one int64
+        so voxel_hits can be a fast int→int dict instead of a tuple-key dict.
+        At voxel_size=0.15m this covers ±78km world range. Handles negative
+        coords via self._voxel_key_offset.
+        """
+        k = (pts_xyz[:, :3] / self._map_voxel_size).astype(np.int64)
+        k = (k + self._voxel_key_offset) & 0xFFFFF
+        return (k[:, 0] << 40) | (k[:, 1] << 20) | k[:, 2]
 
     def _on_scene_graph(self, sg: SceneGraph) -> None:
         with self._state_lock:
@@ -792,7 +1079,14 @@ class GatewayModule(Module, layer=6):
             pass
 
     def _on_costmap(self, cm: dict) -> None:
-        """Throttle OccupancyGridModule costmap to ~2 Hz and push as SSE."""
+        """Throttle OccupancyGridModule costmap to ~2 Hz and push as SSE.
+
+        Costmap is generated in odom frame (OccupancyGridModule). When
+        navigating, shift the grid origin into map frame so it overlays the
+        saved map底图. Grid cells stay axis-aligned — if map→odom has
+        significant yaw, cells will be slightly skewed; acceptable for
+        short-term ICP tracking (yaw error typically < 5°).
+        """
         self._costmap_throttle += 1
         if self._costmap_throttle % 5 != 0:
             return
@@ -807,19 +1101,31 @@ class GatewayModule(Module, layer=6):
             # grid[iy, ix]: shape[0]=rows(Y), shape[1]=cols(X)
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
+            origin = [float(v) for v in cm.get("origin", [0.0, 0.0])]
+            # OccupancyGridModule now ingests map-frame odom (SlamBridge applies
+            # TF before publish), so its grid.origin is already map-frame — no
+            # Gateway re-transform. Re-applying TF here double-shifted and
+            # caused costmap to orbit the robot each time the localizer
+            # refined map→odom. Leave yaw=0 since no rotation left to apply.
+            yaw = 0.0
             self.push_event({
                 "type":       "costmap",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
                 "rows":       rows,
                 "cols":       cols,
                 "resolution": float(cm.get("resolution", 0.1)),
-                "origin":     [float(v) for v in cm.get("origin", [0.0, 0.0])],
+                "origin":     origin,
+                "yaw":        float(yaw),
             })
         except Exception as exc:
             logger.debug("_on_costmap serialize failed: %s", exc)
 
     def _on_slope_grid(self, data: dict) -> None:
-        """Push slope grid as SSE event for web visualization."""
+        """Push slope grid as SSE event for web visualization.
+
+        Same origin-shift as _on_costmap so the slope overlay aligns with
+        the map底图 in navigating mode.
+        """
         grid = data.get("grid")
         if grid is None:
             return
@@ -831,13 +1137,18 @@ class GatewayModule(Module, layer=6):
             g = _np.clip(grid * (255.0 / 90.0), 0, 255).astype(_np.uint8)
             rows = int(g.shape[0])
             cols = int(g.shape[1]) if g.ndim >= 2 else rows
+            origin = [float(v) for v in data.get("origin", [0.0, 0.0])]
+            # Same reasoning as _on_costmap — slope grid origin is already in
+            # map frame since SlamBridge upstream.
+            yaw = 0.0
             self.push_event({
                 "type":       "slope_grid",
                 "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
                 "rows":       rows,
                 "cols":       cols,
                 "resolution": float(data.get("resolution", 0.2)),
-                "origin":     [float(v) for v in data.get("origin", [0.0, 0.0])],
+                "origin":     origin,
+                "yaw":        float(yaw),
             })
         except Exception as exc:
             logger.debug("_on_slope_grid serialize failed: %s", exc)
@@ -938,7 +1249,7 @@ class GatewayModule(Module, layer=6):
 
     def _build_app(self):
         try:
-            from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+            from fastapi import Body, FastAPI, Request, WebSocket, WebSocketDisconnect
             from fastapi.exceptions import RequestValidationError
             from fastapi.middleware.cors import CORSMiddleware
             from fastapi.responses import JSONResponse, StreamingResponse
@@ -1027,7 +1338,7 @@ class GatewayModule(Module, layer=6):
             "/api/v1/webrtc/offer",
             summary="WebRTC SDP offer/answer exchange for low-latency camera",
         )
-        async def post_webrtc_offer(request: Request):
+        async def post_webrtc_offer(body: dict = Body(...)):
             """Forward a browser offer to WebRTCStreamModule.
 
             Returns 503 when aiortc is not installed or the module is not
@@ -1038,12 +1349,31 @@ class GatewayModule(Module, layer=6):
                 return JSONResponse(
                     {"error": "webrtc_unavailable"}, status_code=503,
                 )
-            body = await request.json()
             try:
                 answer = await gw._webrtc.handle_offer(body)
             except ValueError as e:
                 return JSONResponse({"error": str(e)}, status_code=400)
             return answer
+
+        @app.post(
+            "/api/v1/webrtc/bitrate",
+            summary="Live-tune WebRTC max bitrate without reconnect",
+        )
+        async def post_webrtc_bitrate(body: BitrateRequest):
+            """Hot-swap encoder cap on all active senders.
+
+            Body: ``{"bps": 1500000}``.  Clamped to [100kbps, 10Mbps].
+            Used for on-site spot-checking weak-network behaviour — the
+            browser's REMB/TWCC keeps the existing peer connection.
+            """
+            if gw._webrtc is None:
+                return JSONResponse(
+                    {"error": "webrtc_unavailable"}, status_code=503,
+                )
+            try:
+                return await gw._webrtc.set_max_bitrate(body.bps)
+            except ValueError as e:
+                return JSONResponse({"error": str(e)}, status_code=400)
 
         @app.post("/api/v1/goal", summary="Send navigation goal")
         async def post_goal(body: GoalRequest):
@@ -1960,6 +2290,11 @@ class GatewayModule(Module, layer=6):
                     svc.stop("localizer")
                     svc.ensure("slam", "slam_pgo")
                     ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
+                    # Fresh mapping run — drop stale hit counts from prior session
+                    # so the min_hits threshold doesn't lock in yesterday's map.
+                    with gw._map_cloud_lock:
+                        gw._map_points = None
+                        gw._voxel_hits.clear()
                 else:  # navigating
                     svc.stop("slam_pgo")
                     svc.ensure("slam", "localizer")
@@ -1967,6 +2302,12 @@ class GatewayModule(Module, layer=6):
                 if not ok:
                     gw._session_error = "Services not ready after 10s"
                     return JSONResponse({"success": False, "message": gw._session_error}, status_code=500)
+
+                # Auto-replay last known relocalize pose so the operator doesn't
+                # need to Shift+click on the map after every daemon restart.
+                # Runs in a background thread so this endpoint returns fast.
+                if mode == "navigating" and map_name:
+                    gw._spawn_auto_relocalize(map_name)
 
                 # For exploring: activate FrontierExplorer on top of mapping stack.
                 if mode == "exploring":
@@ -2044,6 +2385,39 @@ class GatewayModule(Module, layer=6):
             except Exception as e:
                 return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 
+        @app.post("/api/v1/slam/auto_relocalize",
+                  summary="Global relocalize via 3D-BBS (no guess required)")
+        async def slam_auto_relocalize():
+            """Call /nav/global_relocalize ROS2 service — BBS3D kidnap-robot recovery.
+            Returns immediately; the worker finishes in ~1-3 s and updates the
+            ICP tracking loop. Watch /localization_quality / session snapshot
+            for the resulting fitness.
+            """
+            import subprocess
+            # NOTE: do NOT override RMW here — localizer_node runs with the
+            # default fastrtps, setting cyclonedds on the client side creates
+            # a silent discovery mismatch that makes the service appear
+            # registered but unreachable.
+            _ros_env = (
+                "source /opt/ros/humble/setup.bash && "
+                "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+                "unset RMW_IMPLEMENTATION; "
+            )
+            try:
+                r = subprocess.run(
+                    ["bash", "-c",
+                     _ros_env +
+                     "ros2 service call /nav/global_relocalize "
+                     "std_srvs/srv/Trigger '{}'"],
+                    capture_output=True, text=True, timeout=10)
+                ok = "success=True" in r.stdout
+                msg = r.stdout[-300:] if r.stdout else (r.stderr[-300:] or "no output")
+                return {"success": ok, "message": msg}
+            except subprocess.TimeoutExpired:
+                return JSONResponse({"success": False, "message": "call timeout > 10s"}, status_code=504)
+            except Exception as e:
+                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
         @app.post("/api/v1/slam/relocalize", summary="Relocalize against a saved map")
         async def slam_relocalize(body: dict):
             """Call /relocalize ROS2 service to localize robot in a saved map."""
@@ -2055,8 +2429,14 @@ class GatewayModule(Module, layer=6):
             yaw  = float(body.get("yaw", 0.0))
             if not map_name:
                 return JSONResponse({"success": False, "message": "map_name required"}, status_code=400)
-            map_dir  = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
+            # Primary: ~/data/nova/maps/ (production). Fallback to the legacy
+            # ~/data/inovxio/data/maps/ if someone restored that path.
+            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
             pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+            if not os.path.isfile(pcd_path):
+                alt = os.path.expanduser(f"~/data/inovxio/data/maps/{map_name}/map.pcd")
+                if os.path.isfile(alt):
+                    pcd_path = alt
             if not os.path.isfile(pcd_path):
                 return JSONResponse({"success": False, "message": f"Map not found: {pcd_path}"}, status_code=404)
             _ros_env = (
@@ -2068,13 +2448,33 @@ class GatewayModule(Module, layer=6):
                 r = subprocess.run(
                     ["bash", "-c",
                      _ros_env +
-                     f"ros2 service call /relocalize interface/srv/Relocalize "
+                     f"ros2 service call /nav/relocalize interface/srv/Relocalize "
                      f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
                      f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""],
                     capture_output=True, text=True, timeout=30)
                 ok = "success=True" in r.stdout
+                # Parse ICP quality (score/fitness) if the service echoed it —
+                # frontend colour-codes toast by magnitude: <0.1 good, 0.1-0.3
+                # marginal, >0.3 or None failed. Use the current cached value
+                # from /localization_quality as a fallback so a user calling
+                # this endpoint after a stale run still sees a number.
+                quality = None
+                for line in r.stdout.splitlines():
+                    ll = line.lower().strip()
+                    if any(k in ll for k in ("quality:", "score:", "fitness:")):
+                        try:
+                            quality = float(ll.split(":", 1)[-1].strip())
+                            break
+                        except ValueError:
+                            pass
+                if quality is None and ok:
+                    quality = float(getattr(gw, "_icp_quality", 0.0))
+                # Snapshot the successful pose so next daemon start can auto-
+                # relocalize without the operator re-clicking on the map.
+                if ok:
+                    gw._persist_last_nav_pose(map_name, x, y, yaw, quality)
                 msg = r.stdout[-300:] if not ok else f"Relocalized to {map_name}"
-                return {"success": ok, "message": msg}
+                return {"success": ok, "message": msg, "quality": quality}
             except Exception as e:
                 return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 
@@ -2105,6 +2505,7 @@ class GatewayModule(Module, layer=6):
             with gw._map_cloud_lock:
                 gw._map_points = None
                 gw._map_cloud_count = 0
+                gw._voxel_hits.clear()
             # Push an empty cloud so the frontend drops its buffer immediately.
             gw.push_event({"type": "map_cloud", "points": [], "count": 0})
             return {"success": True, "message": "Accumulated map cloud cleared"}
@@ -2274,11 +2675,37 @@ class GatewayModule(Module, layer=6):
             except Exception:
                 pass  # PGO save is optional
 
+            # Step 1½ — DUFOMap dynamic-obstacle filter (optional, gated by env).
+            # 必须在 tomogram/occupancy 之前跑,否则下游带动态残影。
+            # 详见 docs/05-specialized/dynamic_obstacle_removal.md Phase 2。
+            dufo_result: dict | None = None
+            if os.environ.get("LINGTU_SAVE_DYNAMIC_FILTER", "1") not in ("0", "false", "False"):
+                try:
+                    from nav.services.nav_services.dynamic_filter import refilter_map
+                    dufo_result = refilter_map(save_dir, timeout_s=300.0)
+                    if dufo_result.get("success"):
+                        orig = dufo_result.get("orig_count", 0)
+                        clean = dufo_result.get("clean_count", 0)
+                        dropped = dufo_result.get("dropped", 0)
+                        pct = 100 * dropped / max(1, orig)
+                        logger.info(
+                            "map/save: dynamic filter %d→%d (-%d, %.1f%%) in %.1fs",
+                            orig, clean, dropped, pct, dufo_result.get("elapsed_s", 0.0),
+                        )
+                    else:
+                        logger.warning("map/save: dynamic filter skipped: %s",
+                                       dufo_result.get("error"))
+                except Exception as e:
+                    logger.warning("map/save: dynamic filter crashed (non-fatal): %s", e)
+
             has_pcd = os.path.isfile(pcd_path)
             if has_pcd:
                 size = os.path.getsize(pcd_path)
-                return {"success": True, "name": name, "path": save_dir,
+                resp = {"success": True, "name": name, "path": save_dir,
                         "size": f"{size/1024/1024:.1f}MB"}
+                if dufo_result is not None:
+                    resp["dynamic_filter"] = dufo_result
+                return resp
             else:
                 return JSONResponse(
                     {"success": False, "name": name, "errors": errors},

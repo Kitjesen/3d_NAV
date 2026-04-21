@@ -47,6 +47,7 @@ interface Scene3DProps {
   layers:       Layers
   pointSize:    number
   onPendingGoal: (x: number, y: number) => void
+  onRelocalize?: (x: number, y: number) => void
   pendingGoal?:  { x: number; y: number } | null
 }
 
@@ -74,7 +75,7 @@ function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) 
 }
 
 export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
-  { cloud, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, localPath, layers, pointSize, onPendingGoal, pendingGoal },
+  { cloud, savedMapFlat, costmap, slopeGrid, sceneGraph, robotX, robotY, yaw, trail, path, localPath, layers, pointSize, onPendingGoal, onRelocalize, pendingGoal },
   ref,
 ) {
   const mountRef   = useRef<HTMLDivElement>(null)
@@ -87,8 +88,8 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
   // Scene objects — recreated on data change
   const voxelRef   = useRef<THREE.InstancedMesh | null>(null)
   const trailLineRef = useRef<THREE.Line | null>(null)
-  const pathLineRef  = useRef<THREE.Line | null>(null)
-  const localPathRef = useRef<THREE.Line | null>(null)
+  const pathLineRef  = useRef<THREE.Mesh | null>(null)
+  const localPathRef = useRef<THREE.Mesh | null>(null)
   const robotRef   = useRef<THREE.Group | null>(null)
   const goalRef        = useRef<THREE.Mesh | null>(null)
   const pendingGoalRef = useRef<THREE.Mesh | null>(null)
@@ -286,38 +287,42 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     trailLineRef.current = line
   }, [trail, layers.trail])
 
-  // ── Path ────────────────────────────────────────────────────────
+  // ── Global path — purple TubeGeometry (slightly thinner than local path).
+  // 管子比局部路径细一档,维持视觉层次: 全局粗略 + 局部精细。
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
     if (pathLineRef.current) { removeFrom(scene, pathLineRef.current); pathLineRef.current = null }
     if (!layers.path || path.length < 2) return
 
-    const rawPts = path.map(p => new THREE.Vector3(p.x, 0.1, -p.y))
-    // Catmull-Rom spline for smooth path display
+    const rawPts = path.map(p => new THREE.Vector3(p.x, 0.18, -p.y))
     const curve = new THREE.CatmullRomCurve3(rawPts, false, 'catmullrom', 0.5)
-    const pts = curve.getPoints(Math.max(rawPts.length * 6, 60))
-    const line = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints(pts),
-      new THREE.LineBasicMaterial({ color: 0xa855f7 }),
-    )
-    scene.add(line)
-    pathLineRef.current = line
+    const tubularSegments = Math.max(rawPts.length * 6, 60)
+    const geo = new THREE.TubeGeometry(curve, tubularSegments, 0.04, 6, false)
+    const mat = new THREE.MeshBasicMaterial({ color: 0xa855f7 })  // purple
+    const mesh = new THREE.Mesh(geo, mat)
+    scene.add(mesh)
+    pathLineRef.current = mesh
   }, [path, layers.path])
 
-  // ── Local path (amber, thinner — obstacle-avoidance path from LocalPlanner)
+  // ── Local path — neon-green TubeGeometry.
+  // 用 Tube 而不是 Line,因为 WebGL 的 LineBasicMaterial.linewidth 在 Chrome/Edge
+  // 被 ANGLE 硬限制为 1px,1.5m 的避障路径在屏幕上就是一根发丝,肉眼看不见。
+  // z=0.28 抬到紫色全局 (z=0.10) 和底图点云之上,不会被盖。
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
     if (localPathRef.current) { removeFrom(scene, localPathRef.current); localPathRef.current = null }
     if (!layers.path || localPath.length < 2) return
 
-    const pts = localPath.map(p => new THREE.Vector3(p.x, 0.12, -p.y))
-    const geo = new THREE.BufferGeometry().setFromPoints(pts)
-    const mat = new THREE.LineBasicMaterial({ color: 0xf59e0b, linewidth: 1 })  // amber
-    const line = new THREE.Line(geo, mat)
-    scene.add(line)
-    localPathRef.current = line
+    const rawPts = localPath.map(p => new THREE.Vector3(p.x, 0.28, -p.y))
+    const curve = new THREE.CatmullRomCurve3(rawPts, false, 'catmullrom', 0.5)
+    const tubularSegments = Math.max(rawPts.length * 4, 40)
+    const geo = new THREE.TubeGeometry(curve, tubularSegments, 0.06, 6, false)
+    const mat = new THREE.MeshBasicMaterial({ color: 0x00ffa3 })  // neon green
+    const mesh = new THREE.Mesh(geo, mat)
+    scene.add(mesh)
+    localPathRef.current = mesh
   }, [localPath, layers.path])
 
   // ── Robot model ─────────────────────────────────────────────────
@@ -426,10 +431,12 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     if (!scene) return
 
     if (costmapMeshRef.current) {
-      scene.remove(costmapMeshRef.current)
-      costmapMeshRef.current.geometry.dispose()
-      ;(costmapMeshRef.current.material as THREE.MeshBasicMaterial).map?.dispose()
-      ;(costmapMeshRef.current.material as THREE.Material).dispose()
+      const m = costmapMeshRef.current as THREE.Mesh & { _group?: THREE.Group }
+      const parent = m._group ?? m
+      scene.remove(parent)
+      m.geometry.dispose()
+      ;(m.material as THREE.MeshBasicMaterial).map?.dispose()
+      ;(m.material as THREE.Material).dispose()
       costmapMeshRef.current = null
     }
 
@@ -437,7 +444,9 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
 
     const { grid_b64, cols, resolution, origin } = costmap
     const bytes = Uint8Array.from(atob(grid_b64), c => c.charCodeAt(0))
-    const rows  = Math.round(bytes.length / cols)
+    // Prefer explicit rows from backend; fall back to byte-length inference
+    // for older events that only carry cols.
+    const rows  = costmap.rows ?? Math.round(bytes.length / cols)
     if (rows <= 0 || cols <= 0) return
 
     // Draw costmap to an offscreen canvas
@@ -447,39 +456,53 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     const ctx = canvas.getContext('2d')!
     const img = ctx.createImageData(cols, rows)
 
+    // VGSwarm (ICRA 2024) style continuous gradient: 5-stop palette on
+    // cost ∈ [0,100]. Stops are in sRGB — smooth in perceptual space
+    // rather than HSL to avoid rainbow banding.
+    //   0   fully transparent (free)
+    //   20  cool teal     rgb( 46,196,182)  — traversable margin
+    //   40  warm yellow   rgb(255,214, 90)  — soft edge
+    //   60  saturated orange rgb(255,133, 38) — danger ring
+    //   80  deep red      rgb(231, 72, 72)   — imminent collision
+    //   100 lethal crimson rgb(183, 28, 28)  — wall / lethal
+    const STOPS: Array<[number, number, number, number, number]> = [
+      [  0,  46, 196, 182,   0],
+      [ 20,  46, 196, 182,  70],
+      [ 40, 255, 214,  90, 120],
+      [ 60, 255, 133,  38, 170],
+      [ 80, 231,  72,  72, 210],
+      [100, 183,  28,  28, 235],
+    ]
+    const interp = (v: number): [number, number, number, number] => {
+      for (let i = 0; i < STOPS.length - 1; i++) {
+        const [a, ar, ag, ab, aa] = STOPS[i]
+        const [b, br, bg, bb, ba] = STOPS[i + 1]
+        if (v <= b) {
+          const t = (v - a) / Math.max(1e-6, b - a)
+          return [
+            Math.round(ar + (br - ar) * t),
+            Math.round(ag + (bg - ag) * t),
+            Math.round(ab + (bb - ab) * t),
+            Math.round(aa + (ba - aa) * t),
+          ]
+        }
+      }
+      return [STOPS[STOPS.length - 1][1], STOPS[STOPS.length - 1][2],
+              STOPS[STOPS.length - 1][3], STOPS[STOPS.length - 1][4]]
+    }
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const val  = bytes[r * cols + c]
         const o    = (r * cols + c) * 4
-        // Unified cool→warm single-axis gradient (no rainbow).
-        //   0         transparent (free space)
-        //   1-40      accent dim (safe fringe, teal tint, low alpha)
-        //   40-80     neutral warm (rising cost)
-        //   80-100    red (impassable)
         if (val === 0) {
           img.data[o] = img.data[o+1] = img.data[o+2] = img.data[o+3] = 0
-        } else if (val >= 80) {
-          // LETHAL / high cost → muted red
-          const t = Math.min(1, (val - 80) / 20)
-          img.data[o]     = 200
-          img.data[o + 1] = Math.round(60 - 20 * t)
-          img.data[o + 2] = Math.round(60 - 20 * t)
-          img.data[o + 3] = Math.round(110 + 20 * t)
-        } else if (val >= 40) {
-          // mid cost → warm neutral (desaturated amber)
-          const t = (val - 40) / 40
-          img.data[o]     = Math.round(140 + 60 * t)
-          img.data[o + 1] = Math.round(100 - 40 * t)
-          img.data[o + 2] = Math.round(80 - 20 * t)
-          img.data[o + 3] = Math.round(70 + 40 * t)
-        } else {
-          // low cost → teal (matches --accent), very subtle
-          const t = val / 40
-          img.data[o]     = Math.round(40 + 20 * t)
-          img.data[o + 1] = Math.round(140 + 40 * t)
-          img.data[o + 2] = Math.round(130 + 30 * t)
-          img.data[o + 3] = Math.round(20 + 40 * t)
+          continue
         }
+        const [R, G, B, A] = interp(val)
+        img.data[o]     = R
+        img.data[o + 1] = G
+        img.data[o + 2] = B
+        img.data[o + 3] = A
       }
     }
     ctx.putImageData(img, 0, 0)
@@ -495,15 +518,35 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     const mat   = new THREE.MeshBasicMaterial({
       map: tex, transparent: true, depthWrite: false,
     })
+    // Grid origin = bottom-left corner in *map* world coords (backend has
+    // already composed T_map_odom translation). `yaw` is the map→odom yaw
+    // in map frame (CCW around world Z). We rotate the center offset in
+    // world XY to get the true mesh center. Three.js uses (worldX, Z_up,
+    // -worldY), so positive world-yaw maps to NEGATIVE rotation around
+    // Three's up axis — that's the symptom森哥 saw (mirror flip).
+    const yaw = (costmap as { yaw?: number }).yaw ?? 0
+    const hx = sizeX / 2, hy = sizeY / 2
+    const cosY = Math.cos(yaw), sinY = Math.sin(yaw)
+    const cx = origin[0] + cosY * hx - sinY * hy
+    const cy = origin[1] + sinY * hx + cosY * hy
+    // Two-layer transform so the yaw stays in world space and doesn't get
+    // entangled with the plane's -PI/2 X-rotation:
+    //   Group: world-space yaw + translation (CCW yaw in map frame maps to
+    //          negative rotation around Three's Y because we mirror world
+    //          Y to -Z in scene coords).
+    //   Mesh:  lies flat on world XZ (x-rotation only).
     const mesh = new THREE.Mesh(geo, mat)
     mesh.rotation.x = -Math.PI / 2
-    mesh.position.set(
-      origin[0] + sizeX / 2,
-      0.01,
-      -(origin[1] + sizeY / 2),
-    )
-    scene.add(mesh)
+    const group = new THREE.Group()
+    // Derivation: plane local (mx, my) after x-rotation → Three (mx, 0, -my).
+    // World CCW yaw in map frame composes with the y-mirror into +yaw around
+    // Three Y. Don't negate.
+    group.rotation.y = yaw
+    group.position.set(cx, 0.01, -cy)
+    group.add(mesh)
+    scene.add(group)
     costmapMeshRef.current = mesh
+    ;(mesh as THREE.Mesh & { _group?: THREE.Group })._group = group
   }, [costmap, layers.costmap])
 
   // ── Costmap visibility toggle ──────────────────────────────────
@@ -517,10 +560,11 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     if (!scene) return
 
     if (slopeMeshRef.current) {
-      scene.remove(slopeMeshRef.current)
-      slopeMeshRef.current.geometry.dispose()
-      ;(slopeMeshRef.current.material as THREE.MeshBasicMaterial).map?.dispose()
-      ;(slopeMeshRef.current.material as THREE.Material).dispose()
+      const m = slopeMeshRef.current as THREE.Mesh & { _group?: THREE.Group }
+      scene.remove(m._group ?? m)
+      m.geometry.dispose()
+      ;(m.material as THREE.MeshBasicMaterial).map?.dispose()
+      ;(m.material as THREE.Material).dispose()
       slopeMeshRef.current = null
     }
 
@@ -581,14 +625,19 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     const mat = new THREE.MeshBasicMaterial({
       map: tex, transparent: true, depthWrite: false,
     })
+    const sYaw = (slopeGrid as { yaw?: number }).yaw ?? 0
+    const hxS = sizeX / 2, hyS = sizeY / 2
+    const cosS = Math.cos(sYaw), sinS = Math.sin(sYaw)
+    const cxS = origin[0] + cosS * hxS - sinS * hyS
+    const cyS = origin[1] + sinS * hxS + cosS * hyS
     const mesh = new THREE.Mesh(geo, mat)
     mesh.rotation.x = -Math.PI / 2
-    mesh.position.set(
-      origin[0] + sizeX / 2,
-      0.02,
-      -(origin[1] + sizeY / 2),
-    )
-    scene.add(mesh)
+    const groupS = new THREE.Group()
+    groupS.rotation.y = sYaw
+    groupS.position.set(cxS, 0.02, -cyS)
+    groupS.add(mesh)
+    ;(mesh as THREE.Mesh & { _group?: THREE.Group })._group = groupS
+    scene.add(groupS)
     slopeMeshRef.current = mesh
   }, [slopeGrid, layers.slope])
 
@@ -679,10 +728,10 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
   }, [sceneGraph])
 
   // ── Click vs drag detection ────────────────────────────────────
-  const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
+  const mouseDownPos = useRef<{ x: number; y: number; shift: boolean } | null>(null)
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    mouseDownPos.current = { x: e.clientX, y: e.clientY }
+    mouseDownPos.current = { x: e.clientX, y: e.clientY, shift: e.shiftKey }
   }
 
   const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -707,7 +756,15 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
     const hits = raycaster.current.intersectObject(floor)
     if (hits.length > 0) {
       const p = hits[0].point
-      onPendingGoal(p.x, -p.z)  // convert Three.js back to world coords
+      const wx = p.x
+      const wy = -p.z  // convert Three.js back to world coords
+      // Shift+click → relocalize (set initial pose); plain click → goal
+      const shiftDown = (down.shift || e.shiftKey)
+      if (shiftDown && onRelocalize) {
+        onRelocalize(wx, wy)
+      } else {
+        onPendingGoal(wx, wy)
+      }
     }
   }
 

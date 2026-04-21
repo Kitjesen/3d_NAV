@@ -76,13 +76,31 @@ export async function renameMap(oldName: string, newName: string): Promise<void>
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 }
 
-export async function saveMap(name: string): Promise<void> {
+export interface SaveMapResult {
+  success: boolean
+  name: string
+  path?: string
+  size?: string
+  dynamic_filter?: {
+    success: boolean
+    orig_count?: number
+    clean_count?: number
+    dropped?: number
+    elapsed_s?: number
+    error?: string
+  }
+}
+
+export async function saveMap(name: string): Promise<SaveMapResult> {
+  // Save can take up to ~2 min on a busy robot because PGO + DUFOMap
+  // run synchronously. Default fetch has no timeout which is what we want.
   const res = await fetch('/api/v1/map/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<SaveMapResult>
 }
 
 // --- Session state machine ---
@@ -147,6 +165,16 @@ export async function relocalize(mapName: string, x: number, y: number, yaw: num
     body: JSON.stringify({ map_name: mapName, x, y, yaw }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+// Global (no-guess) relocalize via 3D-BBS. Fires the worker in localizer;
+// the 2-4 s scan runs async, so the response is immediate. Fitness appears
+// on /localization_quality after the worker finishes.
+export async function autoRelocalize(): Promise<{ success: boolean; message: string }> {
+  const res = await fetch('/api/v1/slam/auto_relocalize', { method: 'POST' })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`)
+  return data
 }
 
 // --- Auth ---

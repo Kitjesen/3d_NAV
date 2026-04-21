@@ -72,6 +72,17 @@ def _block_all_encoders_import(name, *args, **kwargs):
 # W3-1 tests
 # ---------------------------------------------------------------------------
 
+try:
+    import sentence_transformers as _  # noqa: F401
+    _HAVE_ST = True
+except Exception:
+    _HAVE_ST = False
+
+
+@unittest.skipUnless(
+    _HAVE_ST,
+    "sentence_transformers not installed in CI — skip encoder selection tests "
+    "that rely on patching the live package.")
 class TestVectorMemoryEncoderType(unittest.TestCase):
     """W3-1: _encoder_type attribute and encoder selection logic."""
 

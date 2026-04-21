@@ -317,8 +317,24 @@ class _PCTBackend:
 
         start_pos = np.asarray(start[:2], dtype=np.float64)
         goal_pos  = np.asarray(goal[:2],  dtype=np.float64)
-        start_h   = float(start[2]) if len(start) > 2 else 0.0
-        goal_h    = float(goal[2])  if len(goal)  > 2 else 0.0
+        # Heights: use the tomogram's surface height at each XY cell instead
+        # of the robot's raw z. Localizer TF often puts the robot body at
+        # z ≈ -0.6 (map frame), which pos2slice rounds to slice 0 — that
+        # layer is the "below ground" barrier. By asking the planner wrapper
+        # for the surface height at each XY, we guarantee slice hits the
+        # actual traversable layer.
+        try:
+            start_h = float(self._planner.get_surface_height(
+                np.array([start_pos[0], start_pos[1]], dtype=np.float64)))
+        except Exception:
+            start_h = float(start[2]) if len(start) > 2 else 0.0
+        try:
+            goal_h = float(self._planner.get_surface_height(
+                np.array([goal_pos[0], goal_pos[1]], dtype=np.float64)))
+        except Exception:
+            goal_h = float(goal[2]) if len(goal) > 2 else 0.0
+        if not np.isfinite(start_h): start_h = 0.0
+        if not np.isfinite(goal_h):  goal_h = 0.0
 
         try:
             result = self._planner.plan(start_pos, goal_pos, start_h, goal_h)

@@ -124,14 +124,13 @@ class VectorMemoryModule(Module, layer=3):
         except Exception as exc:
             logger.warning("VectorMemoryModule: sentence-transformers model load failed: %s", exc)
 
-        # No usable semantic encoder — hard fail.  Hash-based fallbacks destroy semantic
-        # matching ("backpack" and "bag" hash to unrelated buckets).  Install one of:
-        #   pip install sentence-transformers   # CPU-safe, recommended
-        # or ensure the CLIP encoder package is importable.
-        raise RuntimeError(
-            "VectorMemoryModule: no text encoder available.\n"
-            "Install sentence-transformers:  pip install sentence-transformers\n"
-            "Or ensure the CLIP encoder (semantic.perception.semantic_perception.clip_encoder) is importable."
+        # No encoder available — soft-fail instead of crashing the whole stack.
+        # Industrial reliability: a single optional memory module must not take down
+        # nav/safety. Vector queries return empty until an encoder is installed.
+        self._encoder_type = "disabled"
+        logger.error(
+            "VectorMemoryModule: no text encoder available — module DISABLED. "
+            "Vector queries will return empty until you run: pip install sentence-transformers"
         )
 
     def _init_store(self) -> None:

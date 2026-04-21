@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>LingTu 系统手册</title>
+  <style>
+
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+  <style type="text/css">@page { size: A4; margin: 18mm 15mm; }
+body {
+font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+max-width: 900px;
+margin: 2em auto;
+padding: 0 2em;
+line-height: 1.6;
+color: #222;
+}
+h1 { color: #0e1020; border-bottom: 3px solid #5eead4; padding-bottom: .3em; font-size: 1.9em; }
+h2 { color: #2c3e50; border-bottom: 1px solid #ccc; padding-bottom: .2em; margin-top: 2em; font-size: 1.4em; }
+h3 { color: #2c3e50; margin-top: 1.5em; font-size: 1.15em; }
+code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: Consolas, "Courier New", monospace; color: #c7254e; }
+pre { background: #2d2d2d; color: #f0f0f0; padding: 1em; border-radius: 5px; overflow-x: auto; font-size: 0.88em; }
+pre code { background: transparent; color: inherit; padding: 0; }
+table { border-collapse: collapse; margin: 1em 0; width: 100%; }
+th, td { border: 1px solid #ccc; padding: 6px 12px; text-align: left; }
+th { background: #f0f0f0; }
+blockquote { border-left: 4px solid #5eead4; padding-left: 1em; color: #555; background: #f8fffd; margin: 1em 0; }
+a { color: #0066cc; }
+hr { border: none; border-top: 1px solid #ccc; margin: 2em 0; }
+#TOC { background: #f9f9f9; padding: 1em 2em; border-radius: 5px; margin-bottom: 2em; }
+#TOC ul { list-style: none; padding-left: 1em; }
+</style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">LingTu 系统手册</h1>
+<p class="subtitle">四足机器人自主导航全栈 — 架构 / 算法 / 运维 /
+外场操作</p>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#lingtu-系统手册" id="toc-lingtu-系统手册">LingTu
+系统手册</a>
+<ul>
+<li><a href="#第一部分-系统全景" id="toc-第一部分-系统全景">第一部分 ·
+系统全景</a>
+<ul>
+<li><a href="#lingtu-是什么" id="toc-lingtu-是什么">1. LingTu
+是什么</a></li>
+<li><a href="#架构总览6-层" id="toc-架构总览6-层">2. 架构总览(6
+层)</a></li>
+<li><a href="#核心概念" id="toc-核心概念">3. 核心概念</a></li>
+</ul></li>
+<li><a href="#第二部分-感知与定位" id="toc-第二部分-感知与定位">第二部分
+· 感知与定位</a>
+<ul>
+<li><a href="#传感器" id="toc-传感器">4. 传感器</a></li>
+<li><a href="#slam-定位" id="toc-slam-定位">5. SLAM / 定位</a></li>
+<li><a href="#地图层" id="toc-地图层">6. 地图层</a></li>
+</ul></li>
+<li><a href="#第三部分-规划与控制" id="toc-第三部分-规划与控制">第三部分
+· 规划与控制</a>
+<ul>
+<li><a href="#全局规划-pct" id="toc-全局规划-pct">7. 全局规划
+PCT</a></li>
+<li><a href="#局部规划-cmu-预采样" id="toc-局部规划-cmu-预采样">8.
+局部规划 — CMU 预采样</a></li>
+<li><a href="#路径跟踪-pure-pursuit" id="toc-路径跟踪-pure-pursuit">9.
+路径跟踪 — Pure Pursuit</a></li>
+<li><a href="#cmdvelmux-优先级仲裁" id="toc-cmdvelmux-优先级仲裁">10.
+CmdVelMux 优先级仲裁</a></li>
+<li><a href="#waypointtracker-mission-fsm" id="toc-waypointtracker-mission-fsm">WaypointTracker + Mission
+FSM</a></li>
+</ul></li>
+<li><a href="#第四部分-语义与智能" id="toc-第四部分-语义与智能">第四部分
+· 语义与智能</a>
+<ul>
+<li><a href="#semanticplannermodule-5-级-goal-resolver" id="toc-semanticplannermodule-5-级-goal-resolver">11.
+SemanticPlannerModule — 5 级 Goal Resolver</a></li>
+<li><a href="#visualservomodule-视觉伺服-跟人" id="toc-visualservomodule-视觉伺服-跟人">12. VisualServoModule —
+视觉伺服 + 跟人</a></li>
+<li><a href="#记忆层" id="toc-记忆层">13. 记忆层</a></li>
+<li><a href="#agent-loop-llm-多步" id="toc-agent-loop-llm-多步">14.
+Agent Loop — LLM 多步</a></li>
+</ul></li>
+<li><a href="#第五部分-安全与接口" id="toc-第五部分-安全与接口">第五部分
+· 安全与接口</a>
+<ul>
+<li><a href="#safety-层" id="toc-safety-层">15. Safety 层</a></li>
+<li><a href="#gateway-dashboard-mcp" id="toc-gateway-dashboard-mcp">16.
+Gateway / Dashboard / MCP</a></li>
+<li><a href="#teleop-录-bag" id="toc-teleop-录-bag">17. Teleop + 录
+bag</a></li>
+<li><a href="#视频流方案对比" id="toc-视频流方案对比">视频流方案对比</a></li>
+</ul></li>
+<li><a href="#第六部分-运维与外场" id="toc-第六部分-运维与外场">第六部分
+· 运维与外场</a>
+<ul>
+<li><a href="#s100p-部署" id="toc-s100p-部署">18. S100P 部署</a></li>
+<li><a href="#外场操作" id="toc-外场操作">19. 外场操作</a></li>
+<li><a href="#故障处理速查表" id="toc-故障处理速查表">20.
+故障处理速查表</a></li>
+<li><a href="#标定" id="toc-标定">21. 标定</a></li>
+</ul></li>
+<li><a href="#第七部分-附录" id="toc-第七部分-附录">第七部分 · 附录</a>
+<ul>
+<li><a href="#性能指标s100p-aarch64" id="toc-性能指标s100p-aarch64">22.
+性能指标(S100P aarch64)</a></li>
+<li><a href="#已知限制-路线图" id="toc-已知限制-路线图">23. 已知限制 /
+路线图</a></li>
+<li><a href="#cli-http-api-faq" id="toc-cli-http-api-faq">24. CLI / HTTP
+API / FAQ</a></li>
+</ul></li>
+<li><a href="#致谢" id="toc-致谢">致谢</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="lingtu-系统手册">LingTu 系统手册</h1>
+<blockquote>
+<p><strong>对象</strong>:想完整理解 LingTu 的工程师 +
+想在外场驾驶它的操作员。 <strong>阅读建议</strong>:第一次先过第 1-3
+节(全景)+ 第 19 节(外场操作),其他按需查。
+<strong>版本</strong>:v1.8,2026-04-19。</p>
+</blockquote>
+<hr />
+<h2 id="第一部分-系统全景">第一部分 · 系统全景</h2>
+<h3 id="lingtu-是什么">1. LingTu 是什么</h3>
+<p>LingTu(灵途)是<strong>四足机器人在户外 /
+越野环境下的自主导航系统</strong>。</p>
+<p><strong>产品定位</strong>: - 不是 SLAM 库、不是规划器库 —
+是<strong>从传感器到电机的完整栈</strong> - 不是遥控工具 —
+是<strong>自主决策系统</strong>(给目标,机器人自己走过去 + 避障 + 恢复) -
+不是仿真玩具 — 是<strong>生产级,跑在真实硬件上</strong>(S100P /
+地瓜机器人 RDK X5)</p>
+<p><strong>目标硬件</strong>: - <strong>计算</strong>:S100P(Nash BPU 128
+TOPS,aarch64,Ubuntu 22.04 + ROS2 Humble) - <strong>LiDAR</strong>:Livox
+MID-360(10 Hz,360° × 59°) - <strong>相机</strong>:Orbbec Gemini 335(深度
++ RGB) - <strong>IMU</strong>:Livox 内置 + IMU 融合 -
+<strong>GNSS</strong>:WTRTK-980 RTK(可选,外场加强) -
+<strong>运动控制</strong>:brainstem 四足控制板(Dart + gRPC)</p>
+<p><strong>设计理念</strong>: 1. <strong>Module-First</strong>:Module
+是唯一运行时单元,Blueprint 是唯一组装方式 2.
+<strong>组合而非继承</strong>:9 个 stack 工厂函数组合出完整系统 3.
+<strong>插件化后端</strong>:算法层面零
+if/else,<code>@register(&quot;category&quot;,&quot;name&quot;)</code> 切换实现 4.
+<strong>C++ 做重活</strong>:Python 负责编排,C++ 负责算法热路径(nanobind
+桥接) 5. <strong>raw DDS 而非 rclpy</strong>:生产不依赖 ROS2 Python
+运行时</p>
+<h3 id="架构总览6-层">2. 架构总览(6 层)</h3>
+<pre><code>L6  Interface      Gateway(HTTP/WS/SSE) · MCP Server · Teleop
+─────────────────────────────────────────────────────────────
+L5  Planning       NavigationModule · GlobalPlannerService · WaypointTracker
+─────────────────────────────────────────────────────────────
+L4  Decision       SemanticPlanner · LLM · VisualServo · AgentLoop
+─────────────────────────────────────────────────────────────
+L3  Perception     Detector(BPU) · Encoder(CLIP) · Reconstruction
+                   SemanticMapper · Episodic · Tagged · VectorMemory
+─────────────────────────────────────────────────────────────
+L2  Maps           OccupancyGrid · ESDF · ElevationMap · Terrain
+                   LocalPlanner · PathFollower · TraversabilityCost
+─────────────────────────────────────────────────────────────
+L1  Hardware       ThunderDriver · CameraBridge · SLAM(Fast-LIO2/Localizer)
+─────────────────────────────────────────────────────────────
+L0  Safety         SafetyRing · GeofenceManager · CmdVelMux</code></pre>
+<p><strong>规则</strong>:高层可以依赖低层,<strong>低层不能依赖高层</strong>。跨层通信通过
+Module 端口(Port)而非直接 import。</p>
+<h3 id="核心概念">3. 核心概念</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>概念</th>
+<th>含义</th>
+<th>代码入口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Module</strong></td>
+<td>运行时单元,持有 In/Out 端口 + lifecycle (setup/start/stop)</td>
+<td><code>core.module.Module</code></td>
+</tr>
+<tr>
+<td><strong>Port</strong></td>
+<td>带类型 + 背压策略的消息通道</td>
+<td><code>core.stream.In[T] / Out[T]</code></td>
+</tr>
+<tr>
+<td><strong>Blueprint</strong></td>
+<td>组装 Module 的 DSL,支持 autoconnect / 显式 wire / 多种
+transport</td>
+<td><code>core.blueprint.Blueprint</code></td>
+</tr>
+<tr>
+<td><strong>Stack</strong></td>
+<td>预组装好的一组相关 Module(driver / slam / maps 等)</td>
+<td><code>core.blueprints.stacks.*</code></td>
+</tr>
+<tr>
+<td><strong>Registry</strong></td>
+<td>后端插件系统,<code>@register(&quot;slam&quot;,&quot;fastlio2&quot;)</code></td>
+<td><code>core.registry</code></td>
+</tr>
+<tr>
+<td><strong>NativeModule</strong></td>
+<td>C++ 子进程包装,watchdog + SIGTERM</td>
+<td><code>core.native_module</code></td>
+</tr>
+<tr>
+<td><strong>Profile</strong></td>
+<td>启动预设,CLI <code>lingtu.py &lt;profile&gt;</code></td>
+<td><code>cli/profiles_data.py</code></td>
+</tr>
+<tr>
+<td><strong>Session</strong></td>
+<td>全系统状态机,idle / mapping / navigating</td>
+<td>Gateway 单一真源</td>
+</tr>
+</tbody>
+</table>
+<p><strong>背压策略</strong>(Out port 可选): | 策略 | 行为 | 用途 |
+|—|—|—| | <code>all</code> | 全量广播,不丢 | 默认 | |
+<code>latest</code> | 只保留最新,丢旧 | 高频传感器 | |
+<code>throttle(dt)</code> | 最大速率 | 降频 | | <code>sample(n)</code> |
+每 n 帧取 1 | 降采样 | | <code>buffer(size)</code> | 批量积攒 | 批处理
+|</p>
+<p><strong>Profile 清单</strong>(<code>cli/profiles_data.py</code>): |
+Profile | 用途 | |—|—| | <code>stub</code> | 框架测试,无硬件 | |
+<code>dev</code> | 语义开发,stub driver | | <code>map</code> |
+建图模式(fastlio2 + pgo) | | <code>nav</code> |
+<strong>生产导航</strong>,slam_profile=bridge | | <code>explore</code> |
+自主探索(frontier + PCT) | | <code>tare_explore</code> | CMU TARE
+分层探索 | | <code>sim</code> | MuJoCo 全栈仿真 | | <code>sim_nav</code>
+| 纯 Python 导航仿真,无 ROS2 |</p>
+<hr />
+<h2 id="第二部分-感知与定位">第二部分 · 感知与定位</h2>
+<h3 id="传感器">4. 传感器</h3>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>设备</th>
+<th>话题</th>
+<th>频率</th>
+<th>订阅方</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Livox MID-360 LiDAR</td>
+<td><code>/nav/lidar_scan</code>, <code>/nav/imu</code></td>
+<td>10 Hz / 200 Hz</td>
+<td>Fast-LIO2</td>
+</tr>
+<tr>
+<td>Orbbec Gemini 335</td>
+<td><code>/camera/color/image_raw</code>,
+<code>/camera/depth/image_raw</code>,
+<code>/camera/camera_info</code></td>
+<td>~7 Hz (默认) / 30 Hz (可调)</td>
+<td>CameraBridge</td>
+</tr>
+<tr>
+<td>GNSS WTRTK-980</td>
+<td><code>/gnss/fix</code> (串口 NMEA → DDS)</td>
+<td>10 Hz</td>
+<td>GnssModule</td>
+</tr>
+<tr>
+<td>IMU</td>
+<td><code>/nav/imu</code>(Livox 内置)</td>
+<td>200 Hz</td>
+<td>Fast-LIO2</td>
+</tr>
+</tbody>
+</table>
+<p><strong>CameraBridge
+两套订阅后端</strong>(<code>src/drivers/thunder/camera_bridge_module.py</code>):
+- <strong>DDS-first</strong>(raw cyclonedds):无 ROS2 env
+也能跑,是生产路径 - <strong>rclpy fallback</strong>:装了 ROS2 Python
+运行时时用,带 watchdog + USB 重置 + L1/L2/L3 自恢复</p>
+<p><strong>相机旋转</strong>:<code>config/robot_config.yaml:camera.rotate=270</code>,因为相机在机身上竖装。CameraBridge
+在 <code>_on_ros2_color</code> 里 apply
+<code>cv2.rotate</code>,下游拿到的已经是”正向”帧。</p>
+<h3 id="slam-定位">5. SLAM / 定位</h3>
+<p><strong>两种 SLAM 模式</strong>(由 profile 决定):</p>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>模式</th>
+<th>slam_profile</th>
+<th>作用</th>
+<th>使用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>建图</td>
+<td><code>fastlio2</code></td>
+<td>Fast-LIO2 从 0 累积地图</td>
+<td><code>lt session map</code></td>
+</tr>
+<tr>
+<td>定位</td>
+<td><code>localizer</code></td>
+<td>Fast-LIO2(里程计)+ ICP Localizer(对齐 saved map)</td>
+<td><code>lt session nav</code></td>
+</tr>
+<tr>
+<td>桥接</td>
+<td><code>bridge</code></td>
+<td>订阅外部 systemd <code>slam.service</code> 提供的话题</td>
+<td><strong>nav profile 默认</strong></td>
+</tr>
+<tr>
+<td>关闭</td>
+<td><code>none</code></td>
+<td>不跑 SLAM</td>
+<td>stub/dev</td>
+</tr>
+</tbody>
+</table>
+<p><strong>TF 链</strong>:</p>
+<pre><code>map  ──(Localizer ICP)──→  odom  ──(Fast-LIO2)──→  body  ──(静态标定)──→  lidar/camera</code></pre>
+<ul>
+<li>Localizer 发 <code>map → odom</code> TF,ICP 收敛时才发</li>
+<li>Fast-LIO2 发 <code>odom → body</code>,里程计实时</li>
+<li><code>base_link → sensors</code> 从 calibration 结果静态发</li>
+</ul>
+<p><strong>SlamBridgeModule</strong>(本 session 新增): - 订阅
+<code>/nav/odometry</code>, <code>/nav/map_cloud</code>,
+<code>/nav/saved_map_cloud</code>, <code>/localization_quality</code>,
+<code>/tf</code> - 抽 map→odom 变换通过
+<code>map_odom_tf: Out[dict]</code> 发给 Gateway - Gateway 对 map_cloud
+点云应用变换后再发 SSE → 浏览器看到 map_cloud 与 saved_map 对齐</p>
+<p><strong>漂移守卫</strong>: - Fast-LIO2 长期静置(&gt;1h)IEKF
+协方差爆炸,odometry 输出 (-500000, 200000) 之类 - slam_bridge
+检测位置突变(&gt;500m)或速度超限(&gt;5 m/s) - 连续 5 帧坏 → 停止转发
+odometry + 尝试触发 <code>sudo systemctl restart slam</code> -
+这是<strong>应急补丁</strong>,根因(C++ IEKF)待修</p>
+<p><strong>localization_quality</strong> 语义: - 浮点数,<strong>低 =
+好</strong>(0.0 完美,0.1-0.3 正常,&gt;0.3 警告,-1.0 ICP 失败)</p>
+<h3 id="地图层">6. 地图层</h3>
+<p>四种地图<strong>共存</strong>,各司其职:</p>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>地图</th>
+<th>数据结构</th>
+<th>用途</th>
+<th>产生者</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>PCD</strong></td>
+<td>三维点云(pcl)</td>
+<td>SLAM 原始输出 + Localizer 参考</td>
+<td>Fast-LIO2 <code>map save</code></td>
+</tr>
+<tr>
+<td><strong>OccupancyGrid</strong></td>
+<td>2D uint8 网格</td>
+<td>2D A* / RVIZ 显示</td>
+<td><code>OccupancyGridModule</code> 从点云投影</td>
+</tr>
+<tr>
+<td><strong>ElevationMap</strong></td>
+<td>2D float 网格</td>
+<td>地形高度 / 坡度分析</td>
+<td><code>ElevationMapModule</code></td>
+</tr>
+<tr>
+<td><strong>ESDF</strong></td>
+<td>2D 欧式有符号距离场</td>
+<td>LocalPlanner 避障打分</td>
+<td><code>ESDFModule</code></td>
+</tr>
+<tr>
+<td><strong>Tomogram</strong></td>
+<td>分层(slice)多层高度图</td>
+<td><strong>PCT 全局规划输入</strong></td>
+<td><code>_build_tomogram</code> 从 PCD 构建</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Tomogram 构建时机</strong>: 建图后调
+<code>lt map save &lt;name&gt;</code> 触发完整 pipeline: 1.
+<code>/nav/save_map</code> → <code>map.pcd</code> + poses.txt 2.
+<code>_build_tomogram(pcd)</code> → <code>tomogram.pickle</code> 3.
+<code>_build_occupancy_snapshot</code> → <code>occupancy.npz</code> +
+<code>map.pgm</code> + <code>map.yaml</code></p>
+<p>存放:<code>~/data/inovxio/data/maps/&lt;map_name&gt;/</code></p>
+<p><strong>TraversabilityCostModule</strong>(L2 融合): -
+输入:OccupancyGrid + ElevationMap + ESDF + Terrain -
+输出:<code>fused_cost</code> 给 NavigationModule,<code>slope_grid</code>
+给 Gateway 显示</p>
+<hr />
+<h2 id="第三部分-规划与控制">第三部分 · 规划与控制</h2>
+<h3 id="全局规划-pct">7. 全局规划 PCT</h3>
+<p><strong>PCT_Planner</strong> 来源:HKU/HKUST 开源(GPLv2)。论文:<a href="https://arxiv.org/abs/2310.07780">Efficient Trajectory Planning
+for Off-Road</a>。</p>
+<p><strong>产物</strong>: - <code>ele_planner.so</code> — 3D
+A*(hex-grid,多 slice) - <code>traj_opt.so</code> — GPMP 轨迹优化(最小
+jerk) - <code>a_star.so</code> - <code>libele_planner_lib.so</code></p>
+<p><strong>只有 aarch64 binary</strong>,x86 开发机自动 fallback
+<code>_AStarBackend</code>(纯 Python 2D A*)。</p>
+<p><strong>算法步骤</strong>(<code>planner_wrapper.py: TomogramPlanner.plan()</code>):
+1. world → grid index(<code>pos2idx</code>) 2. 高度 → slice
+index(<code>pos2slice</code>)← 处理楼梯 / 多层 3. C++ ele_planner.so 做
+3D A*(带 traversability + slice 切换代价) 4. C++ traj_opt.so 做
+GPMP(高斯过程运动规划,平滑连续曲线) 5. grid → world</p>
+<p><strong>输出</strong>:<code>np.ndarray (N, 3)</code>,含 z。</p>
+<p><strong>性能</strong>(S100P, 30m 场地):80-300 ms / plan。</p>
+<p><strong>Goal Safety
+BFS</strong>(<code>global_planner_service.py</code>):用户点的 goal
+可能在障碍里,BFS 挪到最近可通行 cell 再传给 PCT。不保证一定可解,失败则
+mission_status=FAILED。</p>
+<h3 id="局部规划-cmu-预采样">8. 局部规划 — CMU 预采样</h3>
+<p><strong>来源</strong>:CMU <code>base_autonomy</code>,TARE 原班人马。
+<strong>核心</strong>:<code>src/nav/core/include/nav_core/local_planner_core.hpp</code>。</p>
+<p><strong>思路</strong>:离线生成 ~1000
+条候选路径,在线快速打分选最优。<strong>不做在线 MPC 优化。</strong></p>
+<p><strong>候选路径库</strong>: -
+<code>src/base_autonomy/local_planner/paths/*.ply</code> — MATLAB 生成 -
+7 组,每组 ~150 条,长度 1-2m 的弧线</p>
+<p><strong>在线(10 Hz)</strong>: 1. 按 robot yaw 把路径库旋转 36
+方向(OpenMP 并行) 2. 每条 voxel 对 terrain_map 检查碰撞 → 标记 blocked
+3. <code>scorePath()</code> 打分:
+<code>score = (1 − √√(方向误差)) × 旋转代价² × terrain可通行权重</code>
+4. 组间聚合 → 最优 group → 组内选单条 5. 发
+<code>local_path</code>(20-30 点)</p>
+<p><strong>加速</strong>: | 技术 | 收益 | |—|—| | SoA + CSR 稀疏 | cache
+友好 | | <code>scorePathFast</code> LUT(pow025 查表) |
+<strong>2.08x</strong> | | OpenMP 并行 36 方向 | aarch64 四核 | | xsimd
+NEON / AVX | 批量旋转 | | LTO + <code>-ffast-math</code> | 跨函数内联
+|</p>
+<p><strong>耗时</strong>:3-8 ms / frame。</p>
+<h3 id="路径跟踪-pure-pursuit">9. 路径跟踪 — Pure Pursuit</h3>
+<p><strong>来源</strong>:CMU base_autonomy,适配四足参数。
+<strong>核心</strong>:<code>src/nav/core/include/nav_core/path_follower_core.hpp</code>。</p>
+<pre><code>L = clamp(v × k_lookahead, L_min, L_max)      # 自适应 lookahead
+P = find_lookahead_point(local_path, L)
+α = heading_to_P − robot_yaw
+κ = 2 sin(α) / L                              # Pure Pursuit 曲率
+cmd.linear.x  = v_target                      # 0.3-0.8 m/s 保守值
+cmd.angular.z = κ × v_target</code></pre>
+<p><strong>四足适配</strong>: -
+<code>no_rot_at_goal=true</code>:到终点不原地转 - 加速度限幅:避免
+v_target 跃变导致抖动</p>
+<p><strong>耗时</strong>:&lt;1 ms。</p>
+<h3 id="cmdvelmux-优先级仲裁">10. CmdVelMux 优先级仲裁</h3>
+<p>所有 cmd_vel 源<strong>都不直接</strong>发 driver,经过
+<code>CmdVelMux</code>:</p>
+<table>
+<thead>
+<tr>
+<th>源</th>
+<th>优先级</th>
+<th>超时</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Teleop</strong>(摇杆 / WebSocket)</td>
+<td><strong>100</strong></td>
+<td>0.5 s</td>
+</tr>
+<tr>
+<td>VisualServo(视觉伺服)</td>
+<td>80</td>
+<td>0.5 s</td>
+</tr>
+<tr>
+<td>NavigationModule recovery(倒车)</td>
+<td>60</td>
+<td>0.5 s</td>
+</tr>
+<tr>
+<td>PathFollowerModule(巡航)</td>
+<td>40</td>
+<td>0.5 s</td>
+</tr>
+</tbody>
+</table>
+<p>无活跃源时输出零速。操作员摇杆一动,PathFollower 自动让位。</p>
+<h3 id="waypointtracker-mission-fsm">WaypointTracker + Mission FSM</h3>
+<p>NavigationModule 用 WaypointTracker 把长 global_path 拆成连续
+waypoints,每帧推送当前目标给 LocalPlanner。</p>
+<p><strong>Mission 状态</strong>(<code>lt status</code> 可见):</p>
+<pre><code>IDLE ──goto──→ PLANNING ──ok──→ EXECUTING ──arrived──→ ARRIVED
+  ↑              │                 │                    │
+  │            fail                stuck                 │
+  └── cancel ── FAILED ←──── RECOVERING ──can&#39;t recover──┘</code></pre>
+<p>卡住检测:2s 位移 &lt;0.1m → 触发 recovery(倒车 0.3s + replan)。连续 3
+次失败 → FAILED。</p>
+<hr />
+<h2 id="第四部分-语义与智能">第四部分 · 语义与智能</h2>
+<h3 id="semanticplannermodule-5-级-goal-resolver">11.
+SemanticPlannerModule — 5 级 Goal Resolver</h3>
+<p>用户说”去厨房”或”找红色椅子”,怎么变成 <code>goal_pose</code>?</p>
+<p><strong>5
+级链路</strong>(<code>src/semantic/planner/.../goal_resolver.py</code>):</p>
+<pre><code>1. Tag Lookup        精确/模糊匹配 TaggedLocationStore    → goal_pose
+2. Fast Path         场景图关键字 + CLIP 匹配(&lt;200ms)   → goal_pose
+3. Vector Memory     CLIP embedding + ChromaDB 检索       → goal_pose
+4. Frontier          拓扑图信息增益探索                   → goal_pose
+5. Visual Servo      VLM bbox 检测 + PD 跟踪              → goal_pose/cmd_vel</code></pre>
+<p><strong>Fast-Slow 双进程</strong>: - <strong>Fast
+Path</strong>(System 1, ~0.17 ms):场景图关键字 + CLIP 分数 +
+空间推理,融合权重
+<code>label 35% + CLIP 35% + detector 15% + spatial 15%</code>,阈值 0.75
+- <strong>Slow Path</strong>(System 2, ~2 s):LLM 推理 + ESCA 选择性
+grounding(200 object → 15 object,92.5% token 削减) - <strong>AdaNav
+熵触发</strong>:候选分数熵 &gt;1.5 且 confidence &lt;0.85 → 强制升级到
+Slow Path</p>
+<h3 id="visualservomodule-视觉伺服-跟人">12. VisualServoModule —
+视觉伺服 + 跟人</h3>
+<p><strong>双通道输出</strong>,按距离切换: -
+<strong>远(&gt;3m)</strong>:发 <code>goal_pose</code> → NavigationModule
+正常规划 - <strong>近(&lt;3m)</strong>:发 <code>cmd_vel</code> →
+CmdVelMux(优先级 80)→ 绕过规划,直接 PD 跟踪</p>
+<p><strong>组件</strong>: - <code>BBoxNavigator</code>:bbox + 深度 → 3D
+位置 → PD 控制 - <code>PersonTracker</code>:VLM 选人 + CLIP Re-ID 防丢失
+- <code>vlm_bbox_query</code>:Open-vocabulary 检测(Grounding-DINO 或
+YoloE)</p>
+<h3 id="记忆层">13. 记忆层</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>模块</th>
+<th>存储内容</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SemanticMapperModule</strong></td>
+<td>SceneGraph → RoomObjectKG + TopologySemGraph,30s 自动存盘</td>
+<td>场景级对象知识</td>
+</tr>
+<tr>
+<td><strong>EpisodicMemoryModule</strong></td>
+<td>机器人经历的”事件”</td>
+<td>回溯 / 报告</td>
+</tr>
+<tr>
+<td><strong>TaggedLocationsModule</strong></td>
+<td>用户命名的位置(“厨房”,“充电桩”)</td>
+<td>高优先 goal resolution</td>
+</tr>
+<tr>
+<td><strong>VectorMemoryModule</strong></td>
+<td>CLIP embedding 向量库</td>
+<td>模糊语义检索</td>
+</tr>
+<tr>
+<td><strong>TopologicalMemory</strong></td>
+<td>拓扑图节点 + 连通关系</td>
+<td>frontier 探索</td>
+</tr>
+</tbody>
+</table>
+<p>存储路径:<code>data/memory/global|sites|robots|missions/</code>(Markdown
+是长期真源,向量库只是缓存)。</p>
+<h3 id="agent-loop-llm-多步">14. Agent Loop — LLM 多步</h3>
+<p><code>src/semantic/planner/.../agent_loop.py</code>:观察 → 思考 →
+行动循环,7 个 LLM 工具: - <code>navigate_to(x, y)</code> -
+<code>navigate_to_object(label)</code> -
+<code>detect_object(query)</code> - <code>query_memory(text)</code> -
+<code>tag_location(name)</code> - <code>say(text)</code> — 对话反馈 -
+<code>done(summary)</code> — 终止</p>
+<p>限制:最多 10 步 / 120s。支持 OpenAI function-calling + text JSON
+fallback。</p>
+<p><strong>支持的 LLM</strong>(<code>@register(&quot;llm&quot;, ...)</code>): |
+注册名 | 环境变量 | |—|—| | <code>kimi</code> |
+<code>MOONSHOT_API_KEY</code>(国内直连) | | <code>openai</code> |
+<code>OPENAI_API_KEY</code> | | <code>claude</code> |
+<code>ANTHROPIC_API_KEY</code> | | <code>qwen</code> |
+<code>DASHSCOPE_API_KEY</code>(国内备胎) | | <code>mock</code> |
+不调外部 |</p>
+<hr />
+<h2 id="第五部分-安全与接口">第五部分 · 安全与接口</h2>
+<h3 id="safety-层">15. Safety 层</h3>
+<p><strong>SafetyRingModule</strong>(L0): - 输入:obstacle_map,
+safety_distance, dialogue_state, current path -
+输出:<code>stop_cmd</code>(0=clear, 1=soft 减速, 2=hard 急停) -
+硬停:前向 0.3m 有障碍 + 速度 &gt;0.2 m/s - 软停:前向 0.8m 有障碍 -
+对话状态:用户说”继续”,softstop 松开;“停”,升级 hardstop</p>
+<p><strong>GeofenceManagerModule</strong>: - 读
+<code>config/geofence.yaml</code>,圆形 / 多边形边界 - 发
+<code>boundary</code> 点云给 LocalPlanner 作硬障碍 - 机器人越界:触发
+safety stop</p>
+<p><strong>急停分发</strong>:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>bp.wire(<span class="st">&quot;SafetyRingModule&quot;</span>, <span class="st">&quot;stop_cmd&quot;</span>, <span class="st">&quot;ThunderDriver&quot;</span>, <span class="st">&quot;stop_signal&quot;</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>bp.wire(<span class="st">&quot;SafetyRingModule&quot;</span>, <span class="st">&quot;stop_cmd&quot;</span>, <span class="st">&quot;NavigationModule&quot;</span>, <span class="st">&quot;stop_signal&quot;</span>)</span></code></pre></div>
+<h3 id="gateway-dashboard-mcp">16. Gateway / Dashboard / MCP</h3>
+<p><strong>GatewayModule</strong>(L6,
+<code>src/gateway/gateway_module.py</code>): - FastAPI + uvicorn,端口
+5050 - <strong>HTTP</strong>:<code>/api/v1/*</code> 约 30 个 endpoint -
+<strong>SSE</strong>:<code>/api/v1/events</code> 推送 odometry / mission
+/ scene_graph / map_cloud / … -
+<strong>WebSocket</strong>:<code>/ws/teleop</code>(JPEG
+摇杆)、<code>/ws/cloud</code>(二进制点云)、<code>/ws/webrtc/*</code>(视频流)
+- 静态托管 Dashboard(<code>web/dist/</code>)</p>
+<p><strong>主要 endpoints</strong>: - <code>GET  /api/v1/session</code>
+— 当前模式 + 地图 + ICP quality -
+<code>POST /api/v1/session/start {mode, map_name}</code> —
+切模式(自动启动 slam / localizer) -
+<code>POST /api/v1/session/end</code> — 退回 idle -
+<code>POST /api/v1/goal {x, y, z}</code> — 发导航目标 -
+<code>POST /api/v1/slam/relocalize {map_name, x, y, yaw}</code> —
+手动重定位 - <code>POST /api/v1/cmd/stop</code> — 急停 -
+<code>POST /api/v1/bag/start {duration, prefix}</code> — 录 bag -
+<code>POST /api/v1/webrtc/bitrate {bps}</code> — 动态调视频码率 -
+<code>GET  /api/v1/webrtc/stats</code> — 视频流统计 -
+<code>POST /api/v1/map_cloud/reset</code> — 清空浏览器侧累积点云</p>
+<p><strong>MCPServerModule</strong>(<code>src/gateway/mcp_server.py</code>):
+- JSON-RPC 端口 <code>8090/mcp</code> - 16 个 tool(auto-discovered
+<code>@skill</code>)供 Claude / GPT 通过 MCP 协议直接控制 -
+注册:<code>claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp</code></p>
+<p><strong>重定位位姿持久化</strong>(本 session 新加): - 成功
+<code>/slam/relocalize</code> 后 →
+<code>~/.lingtu/last_nav_pose.json</code> 原子落盘 - 下次
+<code>session/start navigating</code> 后台 worker 2.5s 后自动调
+relocalize 用持久化位姿 - 意义:断电重启不用再 shift+click</p>
+<h3 id="teleop-录-bag">17. Teleop + 录 bag</h3>
+<p><strong>TeleopModule</strong>(<code>src/drivers/teleop_module.py</code>):
+- 订阅 <code>color_image</code>,JPEG 编码 30 fps,推
+<code>/ws/teleop</code> - 接收浏览器 WebSocket
+摇杆:<code>{&quot;type&quot;:&quot;joy&quot;, &quot;lx&quot;:0.5, &quot;ly&quot;:0.0, &quot;az&quot;:-0.3}</code> - 内置
+3s 空闲自动松手 - 发 cmd_vel → CmdVelMux(优先级 100)</p>
+<p><strong>录 bag</strong>(<code>scripts/record_bag.sh</code>): -
+<code>ros2 bag record</code> 13 个话题(nav / exploration / localization
+/ camera_info) - 不录相机 raw(避免数据爆炸) - 存
+<code>~/data/bags/&lt;prefix&gt;_&lt;ts&gt;/</code></p>
+<p><strong>录制话题清单</strong>:</p>
+<pre><code>/nav/{lidar_scan, imu, odometry, map_cloud, registered_cloud, cmd_vel, goal_pose}
+/localization_quality
+/exploration/{way_point, path, runtime, finish}
+/camera/camera_info</code></pre>
+<h3 id="视频流方案对比">视频流方案对比</h3>
+<table>
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+<col style="width: 20%" />
+</colgroup>
+<thead>
+<tr>
+<th>方案</th>
+<th>延迟</th>
+<th>码率</th>
+<th>CPU</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>JPEG-over-WS</strong>(<code>/ws/teleop</code>)</td>
+<td>200 ms</td>
+<td>4 Mbps</td>
+<td>30% 一核</td>
+<td>生产可用</td>
+</tr>
+<tr>
+<td><strong>WebRTC + H.264</strong>(本 session 尝试)</td>
+<td>100 ms 目标</td>
+<td>1.5 Mbps</td>
+<td>30% 一核</td>
+<td>码率调节 API 通 · 编码器卡住(aarch64 libx264)</td>
+</tr>
+<tr>
+<td><strong>Phase B: hobot_codec BPU 硬编</strong></td>
+<td>&lt;50 ms</td>
+<td>1.5 Mbps</td>
+<td>&lt;5%</td>
+<td><strong>路线图</strong></td>
+</tr>
+</tbody>
+</table>
+<p>当前森哥用 JPEG 足够,WebRTC 等硬编方案。</p>
+<hr />
+<h2 id="第六部分-运维与外场">第六部分 · 运维与外场</h2>
+<h3 id="s100p-部署">18. S100P 部署</h3>
+<p><strong>目录布局</strong>:</p>
+<pre><code>~/data/SLAM/navigation/         → ~/data/inovxio/lingtu/ (软链接)
+~/data/inovxio/lingtu/          源码根
+  ├── lingtu.py                 CLI 入口
+  ├── cli/profiles_data.py      profile 配置
+  ├── src/                      Python 源码
+  ├── install/                  colcon 构建(ROS2 package)
+  └── web/dist/                 Dashboard 静态资源
+/tmp/lingtu_nav.log             tmux 内 lingtu 运行日志
+~/data/inovxio/data/maps/       建图输出
+  └── &lt;map_name&gt;/
+       ├── map.pcd              SLAM 点云
+       ├── tomogram.pickle      PCT 输入
+       ├── map.pgm + map.yaml   RVIZ 兼容
+       └── poses.txt            PGO 输出
+~/data/bags/                    rosbag 存放
+~/.lingtu/last_nav_pose.json    断电恢复持久化位姿
+/etc/systemd/system/            slam.service / localizer.service / camera.service
+/usr/local/bin/lt               外场 CLI 脚本
+/opt/ros/humble/                ROS2 Humble</code></pre>
+<p><strong>systemd 服务</strong>: - <code>slam.service</code> —
+Fast-LIO2 + Livox driver - <code>localizer.service</code> — ICP
+Localizer(加载 saved map) - <code>camera.service</code> — Orbbec launch
+- <code>lingtu.service</code> — <em>当前未用</em>,外场用 tmux
+手动启动</p>
+<p><strong>启动方式</strong>(tmux 稳定模式):</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">tmux</span> kill-session <span class="at">-t</span> lingtu <span class="dv">2</span><span class="op">&gt;</span>/dev/null</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">tmux</span> new-session <span class="at">-d</span> <span class="at">-s</span> lingtu <span class="at">-x</span> 200 <span class="at">-y</span> 50 <span class="dt">\</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&#39;cd ~/data/SLAM/navigation &amp;&amp; python3 lingtu.py nav --llm mock --no-repl 2&gt;&amp;1 | tee /tmp/lingtu_nav.log&#39;</span></span></code></pre></div>
+<p><strong>防火墙</strong>:<code>iptables ROBOT_REMOTE</code> 默认
+DROP,需显式开放 5050/8090。<code>lt restart</code> 后检查。</p>
+<p><strong>CycloneDDS</strong>:生产用 raw cyclonedds(不走 rclpy),S100P
+已验证。本地 Windows 用 DDS fallback 需额外配。</p>
+<h3 id="外场操作">19. 外场操作</h3>
+<h4 id="秒健康检查">5 秒健康检查</h4>
+<div class="sourceCode" id="cb10"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ssh</span> sunrise@192.168.66.190</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span></span></code></pre></div>
+<p>输出关键字段 → 判断表:</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>绿</th>
+<th>黄</th>
+<th>红</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mode</td>
+<td>navigating/mapping</td>
+<td>idle</td>
+<td>空</td>
+</tr>
+<tr>
+<td>icp_quality</td>
+<td>0 &lt; x &lt; 0.3</td>
+<td>0.3-0.5</td>
+<td>0 / -1</td>
+</tr>
+<tr>
+<td>localizer_ready</td>
+<td>true</td>
+<td>—</td>
+<td>false</td>
+</tr>
+<tr>
+<td>/nav/odometry</td>
+<td>8-10 Hz</td>
+<td>3-8</td>
+<td>&lt;3 / 空</td>
+</tr>
+<tr>
+<td>/localization_quality</td>
+<td>~10 Hz</td>
+<td>—</td>
+<td>空</td>
+</tr>
+</tbody>
+</table>
+<p>红了 → 第 20 节故障处理。</p>
+<h4 id="导航流程90-外场任务">导航流程(90% 外场任务)</h4>
+<div class="sourceCode" id="cb11"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Step 1: 确认在导航模式</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span>                             <span class="co"># 看 mode</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> session nav                 <span class="co"># 若 idle → 切到导航(默认加载上次用的地图)</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> session nav my_custom_map   <span class="co"># 指定地图</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Step 2: 重定位(给 ICP 一个合理初始位姿)</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> reloc 0 0 0                 <span class="co"># 如果机器人在地图原点朝东</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> reloc 2.5 <span class="at">-1.3</span> 1.57         <span class="co"># 如果在(2.5, -1.3)朝北</span></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a><span class="co">#  → 等 3 秒看 icp_quality &lt; 0.3 为成功</span></span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a><span class="co"># Step 3: 发导航目标</span></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> nav 5 3                     <span class="co"># 去(5, 3)</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a><span class="co"># Step 4: 看进度 / 急停</span></span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span>                             <span class="co"># 看 mission 状态</span></span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> stop                        <span class="co"># 急停,cmd_vel 归零</span></span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a><span class="co"># Step 5: 录 bag(故障复现)</span></span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> record start                <span class="co"># 开始</span></span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> record                      <span class="co"># 查状态</span></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> record stop                 <span class="co"># 结束</span></span></code></pre></div>
+<h4 id="建图流程">建图流程</h4>
+<div class="sourceCode" id="cb12"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 切到建图模式</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> session end</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> session map</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="co"># 遥控或自主走完场地</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="co"># ...</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="co"># 保存地图(触发完整 pipeline:pcd + tomogram + occupancy)</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> map save my_lab_20260419</span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a><span class="co"># 切到导航用新地图</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> session end</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> map use my_lab_20260419</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a><span class="ex">lt</span> session nav my_lab_20260419</span></code></pre></div>
+<h4 id="避障自动">避障(自动)</h4>
+<p>避障<strong>不需要你主动开</strong>,只要: 1. Session 在
+<code>navigating</code> 模式 2. <code>icp_quality</code> 正常 3.
+发了导航目标</p>
+<p>系统自动: - LocalPlanner 每帧重打分 1000 条候选路径 - Terrain
+输出可通行性 - CmdVelMux 按优先级选最终速度</p>
+<h3 id="故障处理速查表">20. 故障处理速查表</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>症状</th>
+<th>判断</th>
+<th>修复</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>浏览器打不开 Dashboard</td>
+<td><code>ping 192.168.66.190</code> 不通</td>
+<td>检查 WiFi / 机器人电源</td>
+</tr>
+<tr>
+<td><code>lt</code> 所有命令 “connection refused”</td>
+<td><code>ps -ef \| grep lingtu</code> 无结果</td>
+<td><code>lt restart</code></td>
+</tr>
+<tr>
+<td><code>icp_quality = -1</code> 或 <code>0</code></td>
+<td>ICP 从(0,0,0)对不上</td>
+<td><code>lt reloc X Y YAW</code>(估计真实位置)</td>
+</tr>
+<tr>
+<td>位置显示 <code>(-5000, 20000)</code> 之类</td>
+<td>Fast-LIO2 静置漂移</td>
+<td><code>sudo systemctl restart slam</code> 然后
+<code>lt reloc</code></td>
+</tr>
+<tr>
+<td>浏览器摄像头黑屏</td>
+<td><code>lt cam</code> 重启;若
+<code>lsusb \| grep Bootloader</code></td>
+<td><strong>物理拔插 Orbbec USB</strong></td>
+</tr>
+<tr>
+<td>规划失败</td>
+<td><code>lt log</code> 看错误(目标在障碍里?)</td>
+<td>换目标点</td>
+</tr>
+<tr>
+<td>点云和 saved map 错位</td>
+<td>localizer 没 ready</td>
+<td>先 reloc</td>
+</tr>
+<tr>
+<td><code>lt</code> 命令不存在</td>
+<td>未装</td>
+<td><code>scp lt → /usr/local/bin/lt + chmod +x</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>踩过的坑</strong>(已记录): - <strong>Orbbec
+<code>color_fps:=30</code> 锁 bootloader</strong> — 不要给
+<code>gemini_330_series.launch.py</code> 传这参数,否则固件卡死要物理拔插
+- <strong>rclpy + uvicorn + aiortc 启动冲突</strong> — 三者 thread
+调度不兼容,用 DDS fallback 绕开 - <strong>iptables ROBOT_REMOTE 默认挡
+5050/8090</strong> — 每次部署或重启要开 - <strong>SSH 长命令含分号 exit
+255</strong> — 写 heredoc 脚本再执行</p>
+<h3 id="标定">21. 标定</h3>
+<p>出厂标定工具箱:<code>calibration/</code>,覆盖 S100P 全部传感器。</p>
+<p><strong>SOP</strong>: | 步骤 | 内容 | 工具 | 时间 | |—|—|—|—| | 1 |
+相机内参(棋盘格 9×6) |
+<code>calibration/camera/calibrate_intrinsic.py</code> | ~5 min | | 2 |
+IMU 噪声(Allan Variance) |
+<code>calibration/imu/allan_variance_ros2/</code> | 2-3 hr | | 3 |
+LiDAR-IMU 外参(8 字运动) |
+<code>calibration/lidar_imu/LiDAR_IMU_Init/</code> | ~2 min | | 4 |
+相机-LiDAR 外参(target-less) |
+<code>calibration/camera_lidar/direct_visual_lidar_calibration/</code> |
+~10 min | | 5 | 一键应用 | <code>calibration/apply_calibration.py</code>
+| 秒 | | 6 | 一键验证 | <code>calibration/verify.py</code> | 秒 |</p>
+<p><strong>标定参数归宿</strong>:<code>config/robot_config.yaml</code>(single
+source of truth)。</p>
+<p><strong>运行时校验</strong>:<code>src/core/utils/calibration_check.py</code>
+启动时检查,FAIL 级阻止启动(焦距为 0、旋转矩阵非正交)。</p>
+<hr />
+<h2 id="第七部分-附录">第七部分 · 附录</h2>
+<h3 id="性能指标s100p-aarch64">22. 性能指标(S100P aarch64)</h3>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>耗时</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PCT 全局规划(30m 场地)</td>
+<td>80-300 ms</td>
+</tr>
+<tr>
+<td>LocalPlanner 一帧(1000 path × 36 rot)</td>
+<td>3-8 ms</td>
+</tr>
+<tr>
+<td>PathFollower 一帧</td>
+<td>&lt;1 ms</td>
+</tr>
+<tr>
+<td>CmdVelMux 仲裁</td>
+<td>&lt;0.1 ms</td>
+</tr>
+<tr>
+<td>Fast Path goal resolve</td>
+<td>0.17 ms</td>
+</tr>
+<tr>
+<td>Slow Path(LLM)goal resolve</td>
+<td>~2 s</td>
+</tr>
+<tr>
+<td>JPEG 编码(720p)</td>
+<td>30-35 ms</td>
+</tr>
+<tr>
+<td>CLIP 编码 1 帧</td>
+<td>45 ms(BPU)/ 150 ms(CPU)</td>
+</tr>
+<tr>
+<td><strong>端到端 goal → cmd_vel(稳态)</strong></td>
+<td><strong>&lt;15 ms</strong></td>
+</tr>
+<tr>
+<td><strong>端到端 goal → 机器人动</strong>(冷启 PCT)</td>
+<td><strong>~300 ms</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="已知限制-路线图">23. 已知限制 / 路线图</h3>
+<p><strong>红色</strong>(生产阻塞): | # | 问题 | 状态 | |—|—|—| | R1 |
+Fast-LIO2 静置 &gt;1h 漂移爆表 | <strong>修复中</strong>(C++ IEKF
+协方差上限) | | R2 | WebRTC libx264 在 aarch64 encoder 卡住 |
+<strong>路线图</strong>(hobot_codec BPU 硬编) |</p>
+<p><strong>黄色</strong>(外场体验): | # | 问题 | 状态 | |—|—|—| | Y1 |
+相机默认 7 fps(orbbec color_fps=0 自选) | 参数组合未找到稳定 30 fps 方案
+| | Y2 | PCT 仅 aarch64,x86 无法复现 | 接受,A* 备胎 | | Y3 | ChromaDB
+可选,缺失时 VectorMemory 软失败 | 接受 | | Y4 | 真实 ROS2
+集成测试缺失,1537 pytest 全 mock | 路线图 |</p>
+<p><strong>绿色</strong>(优化): | # | 问题 | 状态 | |—|—|—| | G1 |
+gateway_module.py 2700+ 行,耦合严重 | 路线图,Session + SSE + HTTP 拆开 |
+| G2 | Monitoring / alerting 缺失 | 路线图,Prometheus + 企业微信 |</p>
+<h3 id="cli-http-api-faq">24. CLI / HTTP API / FAQ</h3>
+<p><strong><code>lt</code> 命令</strong>(SSH 后用):</p>
+<pre><code>lt                      一眼看全系统
+lt nav X Y              发导航目标
+lt reloc X Y YAW        重定位(弧度 yaw)
+lt stop                 急停
+
+lt session nav [MAP]    切导航模式
+lt session map          切建图模式
+lt session end          结束 session
+
+lt map list             列地图
+lt map save &lt;name&gt;      保存
+lt map use &lt;name&gt;       切换
+
+lt record start/stop    录 bag
+lt log / lt logf        看日志
+lt restart              重启 lingtu
+lt cam                  重启相机</code></pre>
+<p><strong>关键 HTTP
+路径</strong>:<code>http://192.168.66.190:5050/api/v1/</code> 见第 16 节
+Gateway 清单。</p>
+<p><strong>关键文件路径速查</strong>:</p>
+<pre><code>~/data/SLAM/navigation/              lingtu 源码(软链)
+/tmp/lingtu_nav.log                  运行日志
+~/data/inovxio/data/maps/            地图
+~/data/bags/                         rosbag
+~/.lingtu/last_nav_pose.json         重定位持久化
+/etc/systemd/system/{slam,localizer,camera}.service
+/usr/local/bin/lt                    外场 CLI
+config/robot_config.yaml             机器人参数(标定 + v_target + lookahead 等所有)
+cli/profiles_data.py                 profile 配置</code></pre>
+<p><strong>FAQ</strong>:</p>
+<p><strong>Q: 为什么不直接用 nav2?</strong> A: nav2 太重,四足不需要
+behavior tree 那一套;PCT 的 3D 地形规划 nav2 没有;我们要 Module-First
+不走 lifecycle node。但 OccupancyGrid 兼容 nav2 map server(map.pgm +
+map.yaml 输出),可以互用地图。</p>
+<p><strong>Q: 建图时机器人能不能远程控制?</strong> A:
+能。建图模式下依然可以 <code>lt nav X Y</code>(PCT
+规划走已建图区域)或摇杆,但通常手动推 / 摇杆效果更好。</p>
+<p><strong>Q: 没网能用吗?</strong> A: 能。LLM 用 <code>--llm mock</code>
+走关键词路径(Fast Path 够用)。只有 Slow Path(多步 reasoning)需要云端
+API。</p>
+<p><strong>Q: 跑 lingtu.py 本地(Windows)?</strong> A: 能(profile
+<code>dev</code> 或 <code>sim</code>)。PCT 自动降 A*,CameraBridge stub
+模式,SLAM <code>none</code>。适合改代码 + 测框架,不适合实测导航。</p>
+<p><strong>Q: 断电后机器人丢自己的位置吗?</strong> A: 本 session 修了 —
+<code>~/.lingtu/last_nav_pose.json</code>
+持久化上次成功重定位的位姿,下次 <code>session/start navigating</code>
+后台 worker 自动恢复,不用再 shift+click。</p>
+<p><strong>Q: 两个操作路径冲突吗?</strong> A: Dashboard 和
+<code>lt</code> 共用同一套后端
+API,同时用没问题。浏览器看画面,<code>lt</code> 发命令是常见组合。</p>
+<hr />
+<h2 id="致谢">致谢</h2>
+<ul>
+<li><strong>PCT_Planner</strong>:HKU/HKUST Bowen Yang &amp; Jie
+Cheng,GPLv2</li>
+<li><strong>base_autonomy</strong>(LocalPlanner / PathFollower /
+Terrain):CMU Chao Cao 团队 TARE</li>
+<li><strong>Fast-LIO2</strong>:HKU-Mars Xu Wei</li>
+<li><strong>Orbbec SDK</strong>:奥比中光</li>
+<li><strong>Livox ROS2 driver</strong>:Livox 开源</li>
+</ul>
+<hr />
+<p><em>本手册是 LingTu 的单一真源。子文档(按主题)见
+<code>docs/*</code>,操作细节变更请同步更新这里。</em></p>
+</body>
+</html>

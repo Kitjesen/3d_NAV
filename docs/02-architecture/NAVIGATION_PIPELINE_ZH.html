@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>LingTu 导航规划栈 — 从全局到局部</title>
+  <style>
+
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+  <style type="text/css">@page { size: A4; margin: 18mm 15mm; }
+body {
+font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+max-width: 900px;
+margin: 2em auto;
+padding: 0 2em;
+line-height: 1.6;
+color: #222;
+}
+h1 { color: #0e1020; border-bottom: 3px solid #5eead4; padding-bottom: .3em; font-size: 1.9em; }
+h2 { color: #2c3e50; border-bottom: 1px solid #ccc; padding-bottom: .2em; margin-top: 2em; font-size: 1.4em; }
+h3 { color: #2c3e50; margin-top: 1.5em; font-size: 1.15em; }
+code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: Consolas, "Courier New", monospace; color: #c7254e; }
+pre { background: #2d2d2d; color: #f0f0f0; padding: 1em; border-radius: 5px; overflow-x: auto; font-size: 0.88em; }
+pre code { background: transparent; color: inherit; padding: 0; }
+table { border-collapse: collapse; margin: 1em 0; width: 100%; }
+th, td { border: 1px solid #ccc; padding: 6px 12px; text-align: left; }
+th { background: #f0f0f0; }
+blockquote { border-left: 4px solid #5eead4; padding-left: 1em; color: #555; background: #f8fffd; margin: 1em 0; }
+a { color: #0066cc; }
+hr { border: none; border-top: 1px solid #ccc; margin: 2em 0; }
+#TOC { background: #f9f9f9; padding: 1em 2em; border-radius: 5px; margin-bottom: 2em; }
+#TOC ul { list-style: none; padding-left: 1em; }
+</style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">LingTu 导航规划栈 — 从全局到局部</h1>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#lingtu-导航规划栈-从全局到局部" id="toc-lingtu-导航规划栈-从全局到局部">LingTu 导航规划栈 —
+从全局到局部</a>
+<ul>
+<li><a href="#一屏速览" id="toc-一屏速览">0. 一屏速览</a></li>
+<li><a href="#pct_planner-是什么现状" id="toc-pct_planner-是什么现状">1.
+PCT_Planner 是什么,现状</a></li>
+<li><a href="#tomogram-pct-的输入" id="toc-tomogram-pct-的输入">2.
+Tomogram — PCT 的输入</a></li>
+<li><a href="#全局规划-_pctbackend.plan-展开" id="toc-全局规划-_pctbackend.plan-展开">3. 全局规划 —
+<code>_PCTBackend.plan()</code> 展开</a></li>
+<li><a href="#a-备胎-_astarbackend" id="toc-a-备胎-_astarbackend">4. A*
+备胎 — <code>_AStarBackend</code></a></li>
+<li><a href="#全局-局部-解耦waypointtracker" id="toc-全局-局部-解耦waypointtracker">5. 全局 → 局部
+解耦:WaypointTracker</a></li>
+<li><a href="#局部规划-cmu-预采样路径" id="toc-局部规划-cmu-预采样路径">6. 局部规划 — CMU 预采样路径</a></li>
+<li><a href="#路径跟踪-pathfollower-pure-pursuit" id="toc-路径跟踪-pathfollower-pure-pursuit">7. 路径跟踪 — PathFollower
+(Pure Pursuit)</a></li>
+<li><a href="#cmdvelmux-优先级仲裁" id="toc-cmdvelmux-优先级仲裁">8.
+CmdVelMux — 优先级仲裁</a></li>
+<li><a href="#navigationmodule-状态机" id="toc-navigationmodule-状态机">9. NavigationModule 状态机</a></li>
+<li><a href="#和语义层的关系" id="toc-和语义层的关系">10.
+和语义层的关系</a></li>
+<li><a href="#关键文件快查" id="toc-关键文件快查">11.
+关键文件快查</a></li>
+<li><a href="#已知问题-技术债" id="toc-已知问题-技术债">12. 已知问题 /
+技术债</a></li>
+<li><a href="#性能汇总s100p-aarch64" id="toc-性能汇总s100p-aarch64">13.
+性能汇总(S100P aarch64)</a></li>
+<li><a href="#想深入看哪块" id="toc-想深入看哪块">14.
+想深入看哪块</a></li>
+<li><a href="#相关文档" id="toc-相关文档">15. 相关文档</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="lingtu-导航规划栈-从全局到局部">LingTu 导航规划栈 —
+从全局到局部</h1>
+<blockquote>
+<p>对象:想理解 LingTu 是怎么把一个 <code>(x, y)</code>
+目标变成机器狗动作的工程师。 假设:你懂 ROS2 / 点云 / A* 基础。
+最后更新:2026-04-19</p>
+</blockquote>
+<hr />
+<h2 id="一屏速览">0. 一屏速览</h2>
+<pre><code>用户点目标 (x, y)
+    ↓
+GatewayModule.goal_pose
+    ↓
+NavigationModule._plan()            ← 全局规划入口
+    ↓
+GlobalPlannerService                ← 选 PCT / A*
+    ↓
+_PCTBackend.plan()                  ← C++ ele_planner.so + traj_opt.so
+    ↓
+global_path (N, 3)                  ← 含 z,处理台阶
+    ↓
+NavigationModule 每帧发 waypoint    ← WaypointTracker 推进
+    ↓
+LocalPlannerModule                  ← CMU 预采样 + 打分避障
+    ↓
+local_path (20-30 点)
+    ↓
+PathFollowerModule                  ← Pure Pursuit
+    ↓
+CmdVelMux (优先级仲裁)
+    ↓
+ThunderDriver / ROS2SimDriver → motors</code></pre>
+<hr />
+<h2 id="pct_planner-是什么现状">1. PCT_Planner 是什么,现状</h2>
+<h3 id="来源与许可">来源与许可</h3>
+<ul>
+<li><strong>出处</strong>:HKU/HKUST,Bowen Yang &amp; Jie Cheng
+开源(GPLv2)</li>
+<li><strong>路径</strong>:<code>src/global_planning/PCT_planner/</code></li>
+<li><strong>论文</strong>:<a href="https://arxiv.org/abs/2310.07780">Efficient Trajectory Planning
+for Autonomous Off-Road Driving in Unstructured Environments</a></li>
+<li>我们<strong>直接集成,没 fork</strong>,保留上游结构便于跟进</li>
+</ul>
+<h3 id="目录结构">目录结构</h3>
+<pre><code>src/global_planning/PCT_planner/
+├── planner/
+│   ├── lib/                        ← 编译产物 (aarch64)
+│   │   ├── ele_planner.so          ← 3D A*(核心)
+│   │   ├── a_star.so
+│   │   ├── traj_opt.so             ← GPMP 轨迹优化
+│   │   └── libele_planner_lib.so
+│   ├── scripts/
+│   │   └── planner_wrapper.py      ← TomogramPlanner Python 包装
+│   └── src/ele_planner/            ← C++ 源码
+├── tomography/                     ← tomogram 构建算法
+├── launch/                         ← ROS2 launch(未使用)
+└── rsc/                            ← 示例 pcd / tomogram</code></pre>
+<h3 id="集成层">集成层</h3>
+<p><code>src/global_planning/pct_adapters/src/global_planner_module.py</code>:
+- 注册 <code>@register(&quot;planner_backend&quot;, &quot;pct&quot;)</code> →
+<code>_PCTBackend</code> - 启动时尝试
+<code>import planner_wrapper.TomogramPlanner</code>,加载 tomogram.pickle
+- 失败(.so 不在,x86)时<strong>不 crash</strong>,降级到
+<code>_AStarBackend</code> 纯 Python 2D A*</p>
+<h3 id="当前运行状态s100plingtu.py-nav">当前运行状态(S100P,<code>lingtu.py nav</code>)</h3>
+<pre><code>[INFO] PCT ele_planner loaded: /home/sunrise/data/nova/maps/active/tomogram.pickle
+       map_dim=[95, 71]  slices=2
+[INFO] PCT: extracted 2D grid for goal safety BFS: shape=(71, 95) res=0.200</code></pre>
+<ul>
+<li><code>map_dim=[95, 71]</code>:95×71 网格,分辨率 0.2m,约 19m × 14m
+场地</li>
+<li><code>slices=2</code>:当前地图两层(地面 + 一层高物)</li>
+<li>goal safety
+BFS:<code>global_planner_service.py:_find_safe_goal()</code> 把 goal
+挪到最近可通行 cell,避免用户点在墙里</li>
+</ul>
+<h3 id="平台约束">平台约束</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>平台</th>
+<th>PCT 可用</th>
+<th>实际 backend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>S100P (aarch64)</td>
+<td>✅ .so 原生编译</td>
+<td><code>pct</code></td>
+</tr>
+<tr>
+<td>Windows / x86 开发机</td>
+<td>❌ binary 不兼容</td>
+<td>自动 fallback <code>astar</code>(2D 纯 Python)</td>
+</tr>
+<tr>
+<td>CI 容器</td>
+<td>❌</td>
+<td><code>astar</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="tomogram-pct-的输入">2. Tomogram — PCT 的输入</h2>
+<h3 id="什么是-tomogram">什么是 tomogram</h3>
+<p>Tomogram 是把点云”切片”成<strong>多层可通行性图</strong>的数据结构: -
+每层 = 一个高度区间(地面 / 1 米高 / 2 米高) - 每格 = 该层在该 XY
+位置的(可通行性,elevation,gradient) - 层间关系 = “从第 N 层到第 N+1
+层需要跨越多少高度”→ 建模台阶/斜坡</p>
+<h3 id="构建时机">构建时机</h3>
+<p>地图建图完成后,REPL / HTTP 调用 <code>map save &lt;name&gt;</code>
+触发: 1. <code>/nav/save_map</code> → Fast-LIO2 写 <code>map.pcd</code>
+2. <code>/pgo/save_maps</code> → Pose Graph Optimization 写
+<code>poses.txt</code> + patches 3.
+<code>_build_tomogram(pcd, elevation_map)</code> →
+<strong><code>tomogram.pickle</code></strong> ← PCT 读这个 4.
+<code>_build_occupancy_snapshot</code> → <code>occupancy.npz</code> +
+<code>map.pgm</code> + <code>map.yaml</code>(RVIZ 兼容)</p>
+<p>存放:<code>~/data/inovxio/data/maps/&lt;map_name&gt;/tomogram.pickle</code></p>
+<h3 id="建图后没-build-tomogram-会怎样">建图后没 build tomogram
+会怎样</h3>
+<p><code>session_start navigating {map_name}</code> 会检查
+<code>tomogram.pickle</code> 存在:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="kw">not</span> os.path.isfile(os.path.join(base, <span class="st">&quot;tomogram.pickle&quot;</span>)):</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> error(<span class="st">&quot;Map has no tomogram — build it first&quot;</span>)</span></code></pre></div>
+<p>强制要求,否则 PCT 没输入跑不了。</p>
+<hr />
+<h2 id="全局规划-_pctbackend.plan-展开">3. 全局规划 —
+<code>_PCTBackend.plan()</code> 展开</h2>
+<p>调用位置:<code>NavigationModule._plan()</code> 收到 goal_pose
+后。</p>
+<h3 id="步骤">步骤</h3>
+<div class="sourceCode" id="cb5"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 入口:src/global_planning/pct_adapters/src/global_planner_module.py</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>backend.plan(start<span class="op">=</span>np.array([x, y, z]), goal<span class="op">=</span>np.array([x, y, z]))</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="co"># TomogramPlanner.plan() 内部(planner_wrapper.py):</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="fl">1.</span> world → grid index   (pos2idx)     <span class="co"># (-1.5, 2.3) → (i=7, j=19)</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="fl">2.</span> 高度 → <span class="bu">slice</span> index   (pos2slice)   <span class="co"># z=0.3 → layer 0, z=1.1 → layer 1</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a><span class="fl">3.</span> C<span class="op">++</span> ele_planner.so 做 <span class="dv">3</span><span class="er">D</span> A<span class="op">*</span>:</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>   <span class="op">-</span> Hex<span class="op">-</span>grid 邻接(<span class="dv">6</span> 邻)<span class="op">+</span> 垂直邻接(上下 <span class="bu">slice</span>)</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>   <span class="op">-</span> cost <span class="op">=</span> 距离 <span class="op">+</span> traversability 权重 <span class="op">+</span> <span class="bu">slice</span> 切换惩罚</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>   <span class="op">-</span> 结果:grid index 序列 [(i0,j0,s0), (i1,j1,s1), ...]</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a><span class="fl">4.</span> C<span class="op">++</span> traj_opt.so 做 GPMP 轨迹优化:</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>   <span class="op">-</span> Gaussian Process Motion Planning</span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>   <span class="op">-</span> 最小化 jerk <span class="op">+</span> 保持避障 <span class="op">+</span> 端点约束</span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>   <span class="op">-</span> 输出平滑连续曲线</span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a><span class="fl">5.</span> grid index → world  (transTrajGrid2Map)</span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>   <span class="op">-</span> 输出:np.ndarray (N, <span class="dv">3</span>)  [[x, y, z], ...]</span></code></pre></div>
+<h3 id="输出">输出</h3>
+<ul>
+<li>若 success:<code>np.ndarray (N, 3)</code>,N 通常 50-200 个点</li>
+<li>若 fail:<code>[]</code>(空 list)→ NavigationModule
+mission_status=FAILED,外场 toast”规划失败”</li>
+</ul>
+<h3 id="性能s100p30m-场地">性能(S100P,30m 场地)</h3>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>耗时</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pos2idx / pos2slice</td>
+<td>&lt;1 ms</td>
+</tr>
+<tr>
+<td>ele_planner 3D A*</td>
+<td>30-150 ms</td>
+</tr>
+<tr>
+<td>traj_opt GPMP</td>
+<td>40-120 ms</td>
+</tr>
+<tr>
+<td>grid→world</td>
+<td>&lt;1 ms</td>
+</tr>
+<tr>
+<td><strong>总计</strong></td>
+<td><strong>80-300 ms</strong></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="a-备胎-_astarbackend">4. A* 备胎 —
+<code>_AStarBackend</code></h2>
+<p>跨平台兼容(x86 / CI)用。</p>
+<ul>
+<li>纯 Python <code>heapq</code> + 8 连通</li>
+<li>只用 tomogram 的 <strong>ground-floor slice</strong>(单层 2D)</li>
+<li>无轨迹优化,输出格栅锯齿路径</li>
+<li>200×200 格子数秒量级,性能差</li>
+</ul>
+<p><strong>仅用于</strong>:开发测试,不用于生产导航。详见
+<code>docs/02-architecture/PLANNER_SELECTION.md</code>。</p>
+<hr />
+<h2 id="全局-局部-解耦waypointtracker">5. 全局 → 局部
+解耦:WaypointTracker</h2>
+<p>PCT 全局路径是<strong>稀疏长路径</strong>(30m 可能 200
+点),直接跟踪一帧一跳不合理。中间层 <code>WaypointTracker</code>
+负责拆解:</p>
+<h3 id="职责">职责</h3>
+<ul>
+<li>存:完整 global_path + 当前 <code>current_waypoint_index</code></li>
+<li>推进:每帧 <code>advance_if_reached(robot_pos)</code>,到达半径
+<code>waypoint_threshold=0.5m</code> 就 <code>index += 1</code></li>
+<li>卡住:<code>is_stuck(robot_pos)</code>— 2s 内位移 &lt;0.1m 判定,触发
+recovery</li>
+<li>下采样:global_path 上点太密时按 <code>downsample_dist=0.8m</code>
+间隔取</li>
+</ul>
+<h3 id="navigationmodule-定频广播">NavigationModule 定频广播</h3>
+<p><code>navigation_module.py:635</code> 每帧(10 Hz):</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="va">self</span>.waypoint.publish(Pose(</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>    position<span class="op">=</span>current_waypoint_world,</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    orientation<span class="op">=</span>look_at_next_waypoint_yaw</span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>))</span></code></pre></div>
+<p><strong>语义</strong>:“<strong>局部规划器,你现在朝这个点走</strong>”。LocalPlanner
+不关心后续 waypoints,只处理当前这个。</p>
+<hr />
+<h2 id="局部规划-cmu-预采样路径">6. 局部规划 — CMU 预采样路径</h2>
+<p>源:CMU <code>base_autonomy</code> 开源(TARE 原班人马 Chao Cao)。
+我们的包装:<code>src/base_autonomy/modules/local_planner_module.py</code>。
+C++
+核心:<code>src/nav/core/include/nav_core/local_planner_core.hpp</code>。</p>
+<h3 id="算法思路">算法思路</h3>
+<p><strong>不走在线优化(MPC)</strong>,而是<strong>离线生成候选路径库,在线快速打分</strong>。</p>
+<h3 id="候选路径库离线matlab-生成">候选路径库(离线,MATLAB 生成)</h3>
+<p><code>src/base_autonomy/local_planner/paths/</code>:</p>
+<pre><code>pathList.txt           ~1000 条候选路径(PLY 格式)
+correspondences.txt    每条 path 与 voxel 的对应关系
+pathAll.ply            可视化
+startPaths.ply / paths.ply</code></pre>
+<p><strong>结构</strong>: - 7 组(group),每组 ~150 条路径 - 每条 path
+是一条<strong>长度 1-2m 的弧线</strong>,固定 3D 形状 -
+组与组按方向分布(直走 / 左偏 / 左弯 / …)</p>
+<h3 id="在线打分每帧-10-hz">在线打分(每帧 10 Hz)</h3>
+<p>输入: - <code>waypoint</code> — 来自 NavigationModule,当前目标点 -
+<code>terrain_map</code> — 来自 TerrainModule,障碍物点云(已滤地面) -
+<code>odometry</code> — 机器人当前位姿 - <code>boundary</code> — 来自
+GeofenceManagerModule,硬边界 - <code>added_obstacles</code> —
+外部注入的障碍</p>
+<p>流程(<code>local_planner_core.hpp</code>):</p>
+<pre><code>1. 按 robot yaw 把候选路径库旋转到 body frame (36 个方向,OpenMP 并行)
+2. 对每条候选 path,检查 voxel 是否和 terrain_map 中障碍重合 → 标记 blocked
+3. 对每条可通行 path,scorePath():
+     score = (1 − √√(方向误差权重)) × 旋转代价² × terrain可通行权重
+4. 按 group 聚合,选最优组,从该组内选最优单条 path
+5. 发布为 nav_msgs/Path(20-30 点)</code></pre>
+<h3 id="加速">加速</h3>
+<table>
+<thead>
+<tr>
+<th>技术</th>
+<th>收益</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SoA (Structure of Arrays) + CSR 稀疏</td>
+<td>cache 连续,消除 stride-4 访存</td>
+</tr>
+<tr>
+<td><code>scorePathFast</code> LUT(替代 sqrt(sqrt))</td>
+<td><strong>2.08x</strong> 速度</td>
+</tr>
+<tr>
+<td>OpenMP 并行 36 方向</td>
+<td>aarch64 四核线性加速</td>
+</tr>
+<tr>
+<td>xsimd ARM NEON / x86 AVX</td>
+<td>批量旋转点云</td>
+</tr>
+<tr>
+<td>LTO + <code>-ffast-math</code></td>
+<td>跨函数内联</td>
+</tr>
+</tbody>
+</table>
+<h3 id="输出-1">输出</h3>
+<p><code>nav_msgs/Path</code>,20-30 点,约 1.5-2m
+前瞻,机器人坐标系下的弧线。</p>
+<hr />
+<h2 id="路径跟踪-pathfollower-pure-pursuit">7. 路径跟踪 — PathFollower
+(Pure Pursuit)</h2>
+<p>源:CMU <code>base_autonomy</code> 同源。
+我们的包装:<code>src/base_autonomy/modules/path_follower_module.py</code>。
+C++
+核心:<code>src/nav/core/include/nav_core/path_follower_core.hpp</code>。</p>
+<h3 id="pure-pursuit-核心">Pure Pursuit 核心</h3>
+<p>给定: - robot pose (x, y, yaw) - local_path (沿途点序列) - current
+velocity v</p>
+<p>算法:</p>
+<pre><code>1. 自适应 lookahead:
+     L = clamp(v × k_lookahead, L_min, L_max)
+     = clamp(v × 0.4, 0.5, 2.0)    默认参数
+2. 在 local_path 上找距离机器人 L 的前瞻点 P
+3. 令 α = heading_to_P − robot_yaw
+4. 曲率 κ = 2 sin(α) / L
+5. cmd_vel.linear.x  = v_target (配置项,默认 0.6 m/s)
+6. cmd_vel.angular.z = κ × v_target
+7. 加速度限幅:avoid v_target 跃变 → 平滑上升</code></pre>
+<h3 id="四足适配">四足适配</h3>
+<ul>
+<li>v_target 比较保守(0.3-0.8 m/s),四足抖动容忍度低</li>
+<li><code>no_rot_at_goal=true</code>:到终点不原地转,避免抖</li>
+<li><code>no_rot_at_stop=false</code>:急停后允许原地转绕障</li>
+</ul>
+<hr />
+<h2 id="cmdvelmux-优先级仲裁">8. CmdVelMux — 优先级仲裁</h2>
+<p>所有产生 cmd_vel 的模块都<strong>不直接</strong>发给
+driver,而是统一经过 <code>CmdVelMux</code>:</p>
+<table>
+<thead>
+<tr>
+<th>源</th>
+<th>优先级</th>
+<th>超时</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TeleopModule(摇杆/WS)</td>
+<td><strong>100</strong></td>
+<td>0.5 s</td>
+</tr>
+<tr>
+<td>VisualServoModule(视觉伺服)</td>
+<td>80</td>
+<td>0.5 s</td>
+</tr>
+<tr>
+<td>NavigationModule recovery(倒车)</td>
+<td>60</td>
+<td>0.5 s</td>
+</tr>
+<tr>
+<td>PathFollowerModule(正常巡航)</td>
+<td>40</td>
+<td>0.5 s</td>
+</tr>
+</tbody>
+</table>
+<p><strong>仲裁规则</strong>: - 每个源独立发到自己的 In port -
+最高优先级 “active”(最近 0.5s 内有发)的源胜出 - 无源 active
+时输出零速(安全默认)</p>
+<p><strong>意义</strong>:操作员摇杆一动,PathFollower
+自动让位;视觉伺服追丢目标 0.5s 后,自动回退到 PathFollower。</p>
+<hr />
+<h2 id="navigationmodule-状态机">9. NavigationModule 状态机</h2>
+<p><code>src/nav/navigation_module.py</code> 的 mission FSM:</p>
+<pre><code>IDLE ── goto ──→ PLANNING ── ok ──→ EXECUTING ── arrived ──→ ARRIVED
+  ↑                 │                  │                        │
+  │                 fail                │ stuck                   │
+  └── cancel ────── FAILED ←─────── RECOVERING ──── can&#39;t recover ┘</code></pre>
+<h3 id="状态含义与暴露">状态含义与暴露</h3>
+<p>外场通过 <code>lt status</code>(或浏览器 Topbar)看
+<code>mission.state</code>:</p>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IDLE</td>
+<td>空闲,可接受 goal</td>
+</tr>
+<tr>
+<td>PLANNING</td>
+<td>正在调 PCT</td>
+</tr>
+<tr>
+<td>EXECUTING</td>
+<td>跟 global_path 中</td>
+</tr>
+<tr>
+<td>RECOVERING</td>
+<td>卡住,正在倒车 + replan</td>
+</tr>
+<tr>
+<td>ARRIVED</td>
+<td>到达目标半径 0.5m 内</td>
+</tr>
+<tr>
+<td>FAILED</td>
+<td>规划失败 / 超 max_recoveries / 目标不可达</td>
+</tr>
+<tr>
+<td>CANCELLED</td>
+<td>用户 <code>lt stop</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="recovery-路径">Recovery 路径</h3>
+<p>卡住(2s 位移 &lt;0.1m)→ 触发: 1. 广播
+<code>recovery_cmd_vel</code>(后退 0.3s @ 0.3 m/s) 2. 重新调
+<code>_plan()</code> 再规划 3. 连续 3 次卡住 → FAILED</p>
+<hr />
+<h2 id="和语义层的关系">10. 和语义层的关系</h2>
+<p>这套”<strong>几何规划栈</strong>”(PCT + Local +
+PathFollower)下游,还有一层<strong>语义</strong>负责把自然语言 /
+视觉目标转成 goal_pose:</p>
+<pre><code>用户说&quot;去厨房找红色椅子&quot;
+   ↓
+SemanticPlannerModule
+   ├─ GoalResolver (Fast-Slow) — 把&quot;厨房&quot;解成坐标
+   ├─ VisualServoModule       — &quot;找红色椅子&quot;切视觉伺服
+   └─ AgentLoop               — 多步 agent(LLM tool calling)
+   ↓
+goal_pose 或 cmd_vel(视觉伺服走旁路)
+   ↓
+上述几何规划栈</code></pre>
+<p>见 <code>docs/06-semantic-nav/</code>
+目录。几何层对语义层透明:<strong>收到 goal 就规划,不关心 goal
+从哪来</strong>。</p>
+<hr />
+<h2 id="关键文件快查">11. 关键文件快查</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>文件</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>src/global_planning/PCT_planner/planner/scripts/planner_wrapper.py</code></td>
+<td>TomogramPlanner</td>
+</tr>
+<tr>
+<td><code>src/global_planning/PCT_planner/planner/lib/ele_planner.so</code></td>
+<td>C++ 3D A*</td>
+</tr>
+<tr>
+<td><code>src/global_planning/PCT_planner/planner/lib/traj_opt.so</code></td>
+<td>GPMP 轨迹优化</td>
+</tr>
+<tr>
+<td><code>src/global_planning/pct_adapters/src/global_planner_module.py</code></td>
+<td><code>_PCTBackend</code> / <code>_AStarBackend</code> 注册</td>
+</tr>
+<tr>
+<td><code>src/nav/global_planner_service.py</code></td>
+<td>统一 plan() 入口 + goal safety BFS</td>
+</tr>
+<tr>
+<td><code>src/nav/navigation_module.py</code></td>
+<td>Mission FSM + WaypointTracker 调度</td>
+</tr>
+<tr>
+<td><code>src/nav/waypoint_tracker.py</code></td>
+<td>到达检测 + 卡住检测</td>
+</tr>
+<tr>
+<td><code>src/base_autonomy/modules/local_planner_module.py</code></td>
+<td>CMU LocalPlanner Python 包装</td>
+</tr>
+<tr>
+<td><code>src/nav/core/include/nav_core/local_planner_core.hpp</code></td>
+<td>CMU LocalPlanner C++ 核心</td>
+</tr>
+<tr>
+<td><code>src/base_autonomy/modules/path_follower_module.py</code></td>
+<td>Pure Pursuit Python 包装</td>
+</tr>
+<tr>
+<td><code>src/nav/core/include/nav_core/path_follower_core.hpp</code></td>
+<td>Pure Pursuit C++ 核心</td>
+</tr>
+<tr>
+<td><code>src/nav/cmd_vel_mux_module.py</code></td>
+<td>优先级仲裁</td>
+</tr>
+<tr>
+<td><code>config/robot_config.yaml</code></td>
+<td>lookahead / v_target / waypoint_threshold 等所有参数</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="已知问题-技术债">12. 已知问题 / 技术债</h2>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>#</th>
+<th>问题</th>
+<th>影响</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>PCT 只有 aarch64 binary</td>
+<td>开发机 / CI 不能跑生产 planner</td>
+<td>接受(用 A* 备胎),无 ROI 重编译</td>
+</tr>
+<tr>
+<td>2</td>
+<td>tomogram 离线构建</td>
+<td>exploring 模式(未知场地)不能用 PCT</td>
+<td>接受,explore 用 frontier + A*</td>
+</tr>
+<tr>
+<td>3</td>
+<td>PCT 失败处理简单</td>
+<td>start/goal 在障碍里 → BFS 挪到最近 cell,不保证可解</td>
+<td>已有 LERa 恢复路径(3 步 look-explain-replan)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>GPMP 不处理动态障碍</td>
+<td>规划时 tomogram 是静态快照</td>
+<td>局部层 LocalPlanner 兜底(terrain_map 实时更新)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>LocalPlanner paths/ 是 MATLAB 生成</td>
+<td>想改路径分布要重跑 MATLAB</td>
+<td>低优,当前 1000 条够用</td>
+</tr>
+<tr>
+<td>6</td>
+<td>CmdVelMux 超时固定 0.5s</td>
+<td>某些场景(语义规划慢)可能断连</td>
+<td>可配置但少用</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="性能汇总s100p-aarch64">13. 性能汇总(S100P aarch64)</h2>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>耗时</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PCT 全局规划(30m 场地)</td>
+<td>80-300 ms</td>
+</tr>
+<tr>
+<td>LocalPlanner 一帧(1000 path × 36 rot)</td>
+<td>3-8 ms</td>
+</tr>
+<tr>
+<td>PathFollower 一帧</td>
+<td>&lt;1 ms</td>
+</tr>
+<tr>
+<td>CmdVelMux 仲裁</td>
+<td>&lt;0.1 ms</td>
+</tr>
+<tr>
+<td><strong>端到端 goal → cmd_vel(稳态)</strong></td>
+<td><strong>&lt;15 ms</strong></td>
+</tr>
+<tr>
+<td><strong>端到端 goal → 机器人开始动</strong>(冷启 PCT)</td>
+<td><strong>~300 ms</strong></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="想深入看哪块">14. 想深入看哪块</h2>
+<ul>
+<li><strong>ele_planner 3D A* 怎么对台阶打分</strong> → 读
+<code>src/global_planning/PCT_planner/planner/src/ele_planner/</code>
+C++ 源,<code>TomogramPlanner.plan()</code> 论文第 3 节</li>
+<li><strong>GPMP 轨迹优化</strong> → 论文第 4 节 +
+<code>traj_opt.so</code> 绑定</li>
+<li><strong>CMU LocalPlanner scorePath 系数调优</strong> →
+<code>config/robot_config.yaml:local_planner.*</code> + benchmark 在
+<code>src/nav/core/test/</code></li>
+<li><strong>PCT 失败的 LERa 恢复</strong> →
+<code>src/semantic/planner/.../action_executor.py</code> 的
+Look-Explain-Replan</li>
+<li><strong>Fast-Slow 语义规划</strong> →
+<code>docs/06-semantic-nav/</code> + <code>goal_resolver.py</code></li>
+</ul>
+<hr />
+<h2 id="相关文档">15. 相关文档</h2>
+<ul>
+<li><code>docs/02-architecture/PLANNER_SELECTION.md</code> — PCT vs A*
+选型决策 + 运行时链路速查</li>
+<li><code>docs/02-architecture/ARCHITECTURE.md</code> — 整个 LingTu
+模块/Blueprint 架构</li>
+<li><code>docs/02-architecture/ALGORITHM_REFERENCE.md</code> —
+各算法的学术出处</li>
+<li><code>docs/01-getting-started/FIELD_OPERATION_ZH.md</code> —
+外场操作手册(怎么用这套栈)</li>
+<li><code>docs/06-semantic-nav/</code> — 语义规划层</li>
+</ul>
+</body>
+</html>

@@ -28,7 +28,18 @@ logger = logging.getLogger(__name__)
 # ── ROS2 message types as cyclonedds IDL structs ────────────────────────────
 # typename must match ROS2 DDS type name exactly for subscription to work.
 
+import os as _os
+
+# Kill switch: LINGTU_DISABLE_DDS=1 forces the rclpy fallback everywhere.
+# Use this when cyclonedds segfaults during Topic() init — typically a
+# QoS/GUID mismatch between a fastrtps publisher (e.g. orbbec_camera
+# launched by rclpy) and a cyclonedds subscriber on the same topic.
+# Workaround: LINGTU_DISABLE_DDS=1 ./start_lingtu.sh
+_DDS_KILL = _os.environ.get("LINGTU_DISABLE_DDS", "").strip() in ("1", "true", "yes")
+
 try:
+    if _DDS_KILL:
+        raise ImportError("LINGTU_DISABLE_DDS set — forcing rclpy fallback")
     from cyclonedds.domain import DomainParticipant
     from cyclonedds.idl import IdlStruct, types
     from cyclonedds.qos import Policy, Qos
@@ -159,6 +170,28 @@ try:
         step: types.uint32
         data: types.sequence[types.uint8]
 
+    @dataclass
+    class DDS_RegionOfInterest(IdlStruct, typename="sensor_msgs::msg::dds_::RegionOfInterest_"):
+        x_offset: types.uint32
+        y_offset: types.uint32
+        height: types.uint32
+        width: types.uint32
+        do_rectify: bool
+
+    @dataclass
+    class DDS_CameraInfo(IdlStruct, typename="sensor_msgs::msg::dds_::CameraInfo_"):
+        header: DDS_Header
+        height: types.uint32
+        width: types.uint32
+        distortion_model: str
+        d: types.sequence[types.float64]
+        k: types.array[types.float64, 9]
+        r: types.array[types.float64, 9]
+        p: types.array[types.float64, 12]
+        binning_x: types.uint32
+        binning_y: types.uint32
+        roi: DDS_RegionOfInterest
+
     # ── tf2_msgs ──
 
     @dataclass
@@ -195,6 +228,7 @@ if _HAS_CYCLONEDDS:
         "odometry": DDS_Odometry,
         "pointcloud2": DDS_PointCloud2,
         "image": DDS_Image,
+        "camera_info": DDS_CameraInfo,
         "occupancygrid": DDS_OccupancyGrid,
         "path": DDS_Path,
         "tfmessage": DDS_TFMessage,
@@ -347,6 +381,10 @@ class ROS2TopicReader(DDSReader):
     def on_image(self, topic: str, callback: Callable):
         if _HAS_CYCLONEDDS:
             self.subscribe(topic, DDS_Image, callback)
+
+    def on_camera_info(self, topic: str, callback: Callable):
+        if _HAS_CYCLONEDDS:
+            self.subscribe(topic, DDS_CameraInfo, callback)
 
     def on_occupancy_grid(self, topic: str, callback: Callable):
         if _HAS_CYCLONEDDS:

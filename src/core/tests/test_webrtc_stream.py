@@ -107,7 +107,10 @@ def test_collect_stats_idle_returns_zero_peers():
 
     mod = WebRTCStreamModule(max_bitrate=1_000_000)
     stats = asyncio.run(mod.collect_stats())
-    assert stats["enabled"] is True
+    # `enabled` mirrors `_HAVE_WEBRTC` — in CI without aiortc installed it's
+    # False. Either way, the shape of the dict and the idle-peer invariants
+    # must hold.
+    assert stats["enabled"] == _HAVE_WEBRTC
     assert stats["active_peers"] == 0
     assert stats["max_bitrate"] == 1_000_000
     assert stats["peers"] == []

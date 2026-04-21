@@ -208,6 +208,18 @@
 .navFailed    { color: var(--red); }
 .navPlanning  { color: var(--warn); }
 
+/* ICP critical pulse — only runs when ICP > 0.3 (drift watchdog will
+   auto-recover, but the user should see something is off). Use opacity
+   instead of color change to avoid re-rendering layout every beat. */
+.icpPulse {
+  animation: icp-pulse 0.9s ease-in-out infinite;
+}
+@keyframes icp-pulse {
+  0%   { opacity: 1.0; text-shadow: 0 0 4px var(--red); }
+  50%  { opacity: 0.45; text-shadow: 0 0 8px var(--red); }
+  100% { opacity: 1.0; text-shadow: 0 0 4px var(--red); }
+}
+
 .divider {
   width: 1px;
   height: 14px;
