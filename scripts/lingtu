@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+# lingtu — unified CLI for Lingtu operations + monitoring.
+#
+# 所有日常运维 + 建图/导航切换 + 状态查询的唯一入口。取代:
+#   - scripts/mapping_status.sh
+#   - scripts/lingtu_status.sh
+#   - 零散 curl / systemctl 命令
+#
+# 用法:
+#   lingtu status              # 一次状态快照
+#   lingtu watch               # 持续监控 (watch -c -n 1)
+#   lingtu map start           # 进 mapping 模式
+#   lingtu map save <name>     # 保存地图 (PGO + DUFOMap + tomogram)
+#   lingtu map end             # 结束当前 session → idle
+#   lingtu map list            # 列出已保存地图
+#   lingtu nav start <map>     # 进 navigating 模式, 加载指定地图
+#   lingtu nav stop            # 结束 (同 map end)
+#   lingtu nav goal X Y [YAW]  # 发导航目标 (map frame)
+#   lingtu svc status          # SLAM 相关服务状态
+#   lingtu svc restart slam    # 重启 Fast-LIO2
+#   lingtu svc restart all     # 重启 lingtu + 清飞值
+#   lingtu log drift           # 看 drift watchdog 日志
+#   lingtu log dufomap         # 看 DUFOMap 保存日志
+#   lingtu log error           # 看最近报错
+#   lingtu log tail            # 实时滚动 (journalctl -f)
+#   lingtu health              # REST /api/v1/health 详情
+#
+# 本机使用 (Windows/Mac SSH 到 S100P):
+#   ssh sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu status"
+#
+# 建议设 alias 到本机 ~/.bashrc:
+#   alias lingtu='ssh sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu"'
+#   alias lingwatch='ssh -t sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu watch"'
+set -u
+GW="${GW:-http://localhost:5050}"
+MAP_DIR="${MAP_DIR:-$HOME/data/nova/maps}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Colors (stripped when piping / non-tty)
+if [ -t 1 ]; then
+    B='\033[1m'; G='\033[32m'; Y='\033[33m'; R='\033[31m'; C='\033[36m'; M='\033[35m'; D='\033[2m'; N='\033[0m'
+else
+    B=''; G=''; Y=''; R=''; C=''; M=''; D=''; N=''
+fi
+
+# ── JSON helper (feed blob via stdin, run python snippet) ──
+pjson() { echo "$1" | python3 -c "
+import sys,json,math
+try: d=json.load(sys.stdin)
+except Exception:
+    print('-'); sys.exit(0)
+$2
+" 2>/dev/null || echo '-'; }
+
+# ── Subcommand: status (one-shot status board) ──
+cmd_status() {
+    echo -e "${B}=== Lingtu @ $(date '+%H:%M:%S') ===${N}"
+    local SESS HEALTH STATE PATHJ
+    SESS=$(curl -s --max-time 2 "$GW/api/v1/session" 2>/dev/null || echo '{}')
+    HEALTH=$(curl -s --max-time 2 "$GW/api/v1/health" 2>/dev/null || echo '{}')
+    STATE=$(curl -s --max-time 2 "$GW/api/v1/state" 2>/dev/null || echo '{}')
+    PATHJ=$(curl -s --max-time 2 "$GW/api/v1/path" 2>/dev/null || echo '{}')
+
+    local MODE MAP CAN_M MC
+    MODE=$(pjson "$SESS" 'print(d.get("mode","?"))')
+    MAP=$(pjson "$SESS" 'print(d.get("active_map") or "-")')
+    CAN_M=$(pjson "$SESS" 'print(d.get("can_start_mapping",False))')
+    case "$MODE" in
+        mapping|exploring) MC="${G}${MODE}${N}" ;;
+        navigating)        MC="${C}${MODE}${N}" ;;
+        idle)              MC="${D}${MODE}${N}" ;;
+        *)                 MC="${R}${MODE}${N}" ;;
+    esac
+    printf "${B}[1] Session${N}   mode=%b  map=${C}%s${N}  can_map=%s\n" "$MC" "$MAP" "$CAN_M"
+
+    local HZ LIVE LOC LOC_CAUSE HZC LOCC
+    HZ=$(pjson "$HEALTH" 'print(d["sensors"]["slam"].get("hz","?"))')
+    LIVE=$(pjson "$HEALTH" 'print(d.get("map_points",0))')
+    LOC=$(pjson "$STATE" 'print(d.get("dialogue",{}).get("localization","-"))')
+    LOC_CAUSE=$(pjson "$STATE" 'print(d.get("dialogue",{}).get("loc_root_cause","") or "")')
+    if awk "BEGIN{exit !($HZ < 5)}" 2>/dev/null; then HZC="${R}${HZ}${N}"
+    elif awk "BEGIN{exit !($HZ < 20)}" 2>/dev/null; then HZC="${Y}${HZ}${N}"
+    else HZC="${G}${HZ}${N}"; fi
+    case "$LOC" in
+        GOOD|OK)  LOCC="${G}${LOC}${N}" ;;
+        DEGRADED) LOCC="${Y}${LOC}${N}${D} (${LOC_CAUSE})${N}" ;;
+        LOST)     LOCC="${R}${LOC}${N}${D} (${LOC_CAUSE})${N}" ;;
+        *)        LOCC="$LOC" ;;
+    esac
+    printf "${B}[2] SLAM${N}      hz=${HZC}Hz  live_pts=%s  loc=%b\n" "$LIVE" "$LOCC"
+
+    local RX RY RZ YAW VX WZ ABSURD
+    RX=$(pjson "$STATE" 'print(round(float(d["odometry"].get("x",0)),2))')
+    RY=$(pjson "$STATE" 'print(round(float(d["odometry"].get("y",0)),2))')
+    RZ=$(pjson "$STATE" 'print(round(float(d["odometry"].get("z",0)),2))')
+    YAW=$(pjson "$STATE" 'print(round(math.degrees(float(d["odometry"].get("yaw",0))),1))')
+    VX=$(pjson "$STATE" 'print(round(float(d["odometry"].get("vx",0)),2))')
+    WZ=$(pjson "$STATE" 'print(round(float(d["odometry"].get("wz",0)),2))')
+    ABSURD=$(pjson "$STATE" 'o=d["odometry"]; print(1 if max(abs(float(o.get("x",0))),abs(float(o.get("y",0))))>10000 else 0)')
+    if [ "$ABSURD" = "1" ]; then
+        printf "${B}[3] Robot${N}     ${R}ODOM DIVERGED${N} x=%s y=%s — watchdog 60s 内会救\n" "$RX" "$RY"
+    else
+        printf "${B}[3] Robot${N}     xy=(%s,%s) z=%s yaw=%s°  v=%sm/s w=%srad/s\n" "$RX" "$RY" "$RZ" "$YAW" "$VX" "$WZ"
+    fi
+
+    local MSTATE WP_I WP_T REPLAN SPEED DEG MSC DEGC
+    MSTATE=$(pjson "$STATE" 'print(d.get("mission",{}).get("state","?"))')
+    WP_I=$(pjson "$STATE" 'print(d.get("mission",{}).get("wp_index",0))')
+    WP_T=$(pjson "$STATE" 'print(d.get("mission",{}).get("wp_total",0))')
+    REPLAN=$(pjson "$HEALTH" 'print(d["sensors"]["navigation"].get("replan_count",0))')
+    SPEED=$(pjson "$STATE" 'print(d.get("mission",{}).get("speed_scale",1.0))')
+    DEG=$(pjson "$STATE" 'print(d.get("mission",{}).get("degeneracy","-"))')
+    case "$MSTATE" in
+        EXECUTING|PLANNING|SUCCEEDED) MSC="${G}${MSTATE}${N}" ;;
+        FAILED|ABORTED)               MSC="${R}${MSTATE}${N}" ;;
+        IDLE|STANDBY)                 MSC="${D}${MSTATE}${N}" ;;
+        *)                            MSC="${Y}${MSTATE}${N}" ;;
+    esac
+    case "$DEG" in
+        NONE|OK)  DEGC="${G}${DEG}${N}" ;;
+        WARN)     DEGC="${Y}${DEG}${N}" ;;
+        CRITICAL) DEGC="${R}${DEG}${N}" ;;
+        *)        DEGC="$DEG" ;;
+    esac
+    printf "${B}[4] Mission${N}   state=%b  wp=%s/%s  replan=%s  speed=%s  deg=%b\n" "$MSC" "$WP_I" "$WP_T" "$REPLAN" "$SPEED" "$DEGC"
+
+    local PPTS PSTATS
+    PPTS=$(pjson "$PATHJ" 'p=d.get("path",[]); print(len(p) if isinstance(p,list) else 0)')
+    if [ "$PPTS" = "0" ] || [ "$PPTS" = "-" ]; then
+        printf "${B}[5] Path${N}      ${D}(no active plan)${N}\n"
+    else
+        PSTATS=$(echo "$PATHJ" | python3 -c "
+import sys,json,math
+try:
+    d=json.load(sys.stdin); pts=d.get('path',[]); r=d.get('robot',{}) or {}
+    if not pts: print('- - -'); sys.exit(0)
+    L=sum(math.hypot(pts[i-1].get('x',0)-pts[i].get('x',0), pts[i-1].get('y',0)-pts[i].get('y',0)) for i in range(1,len(pts)))
+    f=math.hypot(r.get('x',0)-pts[0].get('x',0), r.get('y',0)-pts[0].get('y',0))
+    g=math.hypot(r.get('x',0)-pts[-1].get('x',0), r.get('y',0)-pts[-1].get('y',0))
+    print(f'{L:.1f} {f:.2f} {g:.2f}')
+except Exception: print('- - -')
+" 2>/dev/null)
+        read PLEN DN DGOAL <<< "$PSTATS"
+        printf "${B}[5] Path${N}      pts=%s  len=%sm  next=%sm  goal=%sm\n" "$PPTS" "$PLEN" "$DN" "$DGOAL"
+    fi
+
+    local TELE TELE_N SAFETY SC
+    TELE=$(pjson "$STATE" 'print(d.get("teleop",{}).get("active",False))')
+    TELE_N=$(pjson "$STATE" 'print(d.get("teleop",{}).get("clients",0))')
+    SAFETY=$(pjson "$STATE" 'print(d.get("safety",{}).get("level","-"))')
+    case "$SAFETY" in
+        0)   SC="${G}OK${N}" ;;
+        1)   SC="${Y}WARN${N}" ;;
+        2|3) SC="${R}STOP${N}" ;;
+        *)   SC="$SAFETY" ;;
+    esac
+    printf "${B}[6] Ctrl${N}      teleop=%s(%s)  safety=%b\n" "$TELE" "$TELE_N" "$SC"
+
+    local LATEST NAME MTIME PCD BAK PAT DUFO CLEAN DIRTY DROP PCT
+    LATEST=$(ls -dt "$MAP_DIR"/*/ 2>/dev/null | head -1)
+    if [ -n "$LATEST" ]; then
+        NAME=$(basename "$LATEST")
+        MTIME=$(stat -c '%y' "$LATEST" 2>/dev/null | cut -d' ' -f2 | cut -d. -f1)
+        PCD="-"; BAK="-"; PAT="-"; DUFO=""
+        [ -f "$LATEST/map.pcd" ]         && PCD=$(du -h "$LATEST/map.pcd" | cut -f1)
+        [ -f "$LATEST/map.pcd.predufo" ] && BAK=$(du -h "$LATEST/map.pcd.predufo" | cut -f1)
+        [ -d "$LATEST/patches" ]         && PAT=$(ls "$LATEST/patches" 2>/dev/null | wc -l)
+        if [ -f "$LATEST/map.pcd" ] && [ -f "$LATEST/map.pcd.predufo" ]; then
+            CLEAN=$(stat -c %s "$LATEST/map.pcd" | awk '{printf "%d",$1/16}')
+            DIRTY=$(stat -c %s "$LATEST/map.pcd.predufo" | awk '{printf "%d",$1/16}')
+            DROP=$((DIRTY-CLEAN))
+            [ "$DIRTY" -gt 0 ] && PCT=$(awk -v d=$DROP -v t=$DIRTY 'BEGIN{printf "%.1f",100*d/t}') || PCT=0
+            DUFO="${G}dufo -${DROP}pts (${PCT}%)${N}"
+        fi
+        printf "${B}[7] Map${N}       %s ${D}@%s${N}  map=%s  bak=%s  patches=%s  %b\n" "$NAME" "$MTIME" "$PCD" "$BAK" "$PAT" "$DUFO"
+    else
+        printf "${B}[7] Map${N}       ${D}(no maps)${N}\n"
+    fi
+
+    local LOG
+    LOG=$(journalctl -u lingtu.service --since '10 min ago' --no-pager 2>/dev/null \
+        | grep -iE 'drift_watchdog|dufomap|dynamic_filter|\[ERROR\]' \
+        | grep -vE 'VectorMemory|sentence_trans|webrtc.*dispose' | tail -3)
+    if [ -n "$LOG" ]; then
+        printf "${B}[8] Log${N}       ${D}(recent drift/dufomap/error)${N}\n"
+        echo "$LOG" | sed "s/^/             /"
+    fi
+}
+
+# ── Subcommand: watch (persistent refresh) ──
+cmd_watch() { exec watch -c -n "${1:-1}" bash "${BASH_SOURCE[0]}" status; }
+
+# ── Subcommand: map ──
+cmd_map() {
+    local action="${1:-}"
+    case "$action" in
+        start)
+            curl -s -X POST -H "Content-Type: application/json" -d '{"mode":"mapping"}' \
+                "$GW/api/v1/session/start" | python3 -m json.tool ;;
+        save)
+            local name="${2:-}"
+            [ -z "$name" ] && { echo "Usage: lingtu map save <name>"; exit 1; }
+            echo -e "${D}Saving & cleaning dynamic obstacles (15-60s)...${N}"
+            curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"$name\"}" \
+                "$GW/api/v1/map/save" | python3 -m json.tool ;;
+        end|stop)
+            curl -s -X POST "$GW/api/v1/session/end" | python3 -m json.tool ;;
+        list|ls)
+            curl -s "$GW/api/v1/maps" -X POST -H "Content-Type: application/json" \
+                -d '{"action":"list"}' | python3 -m json.tool | head -60 ;;
+        *) echo "Usage: lingtu map [start|save <name>|end|list]"; exit 1 ;;
+    esac
+}
+
+# ── Subcommand: nav ──
+cmd_nav() {
+    local action="${1:-}"
+    case "$action" in
+        start)
+            local map="${2:-}"
+            [ -z "$map" ] && { echo "Usage: lingtu nav start <map>"; exit 1; }
+            curl -s -X POST -H "Content-Type: application/json" \
+                -d "{\"mode\":\"navigating\",\"map\":\"$map\"}" \
+                "$GW/api/v1/session/start" | python3 -m json.tool ;;
+        stop|end)
+            curl -s -X POST "$GW/api/v1/session/end" | python3 -m json.tool ;;
+        goal)
+            local x="${2:-}"; local y="${3:-}"; local yaw="${4:-0}"
+            [ -z "$x" ] || [ -z "$y" ] && { echo "Usage: lingtu nav goal X Y [YAW]"; exit 1; }
+            curl -s -X POST -H "Content-Type: application/json" \
+                -d "{\"x\":$x,\"y\":$y,\"yaw\":$yaw}" \
+                "$GW/api/v1/goal" | python3 -m json.tool ;;
+        *) echo "Usage: lingtu nav [start <map>|stop|goal X Y [YAW]]"; exit 1 ;;
+    esac
+}
+
+# ── Subcommand: svc ──
+cmd_svc() {
+    local action="${1:-status}"
+    case "$action" in
+        status)
+            for s in lingtu slam slam_pgo localizer; do
+                local en act
+                en=$(systemctl is-enabled "$s.service" 2>/dev/null || echo '-')
+                act=$(systemctl is-active  "$s.service" 2>/dev/null || echo '-')
+                case "$act" in
+                    active)   act="${G}${act}${N}" ;;
+                    inactive) act="${D}${act}${N}" ;;
+                    failed)   act="${R}${act}${N}" ;;
+                esac
+                printf "  %-12s enabled=%-10s active=%b\n" "$s" "$en" "$act"
+            done ;;
+        restart)
+            local target="${2:-}"
+            case "$target" in
+                slam)   sudo systemctl restart slam.service; echo "slam.service restarted" ;;
+                lingtu) sudo systemctl restart lingtu.service; echo "lingtu.service restarted" ;;
+                all)    sudo systemctl restart slam.service slam_pgo.service localizer.service lingtu.service
+                        echo "all SLAM + lingtu services restarted" ;;
+                *) echo "Usage: lingtu svc restart [slam|lingtu|all]"; exit 1 ;;
+            esac ;;
+        stop)
+            local target="${2:-all}"
+            case "$target" in
+                all) sudo systemctl stop slam.service slam_pgo.service localizer.service
+                     echo "SLAM services stopped" ;;
+                *)   sudo systemctl stop "$target.service"; echo "$target stopped" ;;
+            esac ;;
+        *) echo "Usage: lingtu svc [status|restart <target>|stop <target>]"; exit 1 ;;
+    esac
+}
+
+# ── Subcommand: log ──
+cmd_log() {
+    local filter="${1:-all}"
+    case "$filter" in
+        drift)
+            journalctl -u lingtu.service --since '1 hour ago' --no-pager 2>/dev/null \
+                | grep -i 'drift_watchdog' | tail -20 ;;
+        dufomap)
+            journalctl -u lingtu.service --since '1 hour ago' --no-pager 2>/dev/null \
+                | grep -iE 'dufomap|dynamic_filter|map/save.*filter' | tail -20 ;;
+        error)
+            journalctl -u lingtu.service --since '30 min ago' --no-pager 2>/dev/null \
+                | grep -iE '\[ERROR\]|traceback|exception' \
+                | grep -vE 'VectorMemory|sentence_trans' | tail -20 ;;
+        tail)
+            exec journalctl -u lingtu.service -f --no-pager 2>/dev/null ;;
+        all)
+            journalctl -u lingtu.service --since '10 min ago' --no-pager 2>/dev/null \
+                | tail -30 ;;
+        *) echo "Usage: lingtu log [drift|dufomap|error|tail|all]"; exit 1 ;;
+    esac
+}
+
+# ── Subcommand: health ──
+cmd_health() {
+    curl -s "$GW/api/v1/health" 2>/dev/null | python3 -m json.tool
+}
+
+# ── Top-level dispatch ──
+case "${1:-status}" in
+    status|s)       cmd_status ;;
+    watch|w)        shift; cmd_watch "$@" ;;
+    map|m)          shift; cmd_map   "$@" ;;
+    nav|n)          shift; cmd_nav   "$@" ;;
+    svc|service)    shift; cmd_svc   "$@" ;;
+    log|l)          shift; cmd_log   "$@" ;;
+    health|h)       cmd_health ;;
+    help|-h|--help)
+        sed -n '2,/^set -u/p' "$0" | sed 's/^# //;s/^#//' ;;
+    *)
+        echo "Unknown command: $1"
+        echo "Run 'lingtu help' for usage."
+        exit 1 ;;
+esac
