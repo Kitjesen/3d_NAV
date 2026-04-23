@@ -2748,17 +2748,35 @@ class GatewayModule(Module, layer=6):
                     status_code=404,
                 )
             try:
-                # Swap: current → .predufo-restored-<ts>, backup → map.pcd
+                # Swap: current → .replaced-<ts>, backup → map.pcd
                 # This keeps the current (filtered) PCD discoverable in case
                 # the user decides the rollback was a mistake.
                 import time as _t
                 if pcd.is_file():
                     shutil.copy(pcd, target / f"map.pcd.replaced-{int(_t.time())}")
                 shutil.copy(backup, pcd)
+
+                # Cleanup old .replaced-* backups — keep only most recent 3.
+                # Without this,每次 restore 积一份, 长期磁盘涨爆。
+                replaced = sorted(
+                    target.glob("map.pcd.replaced-*"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                pruned = 0
+                for old in replaced[3:]:
+                    try:
+                        old.unlink()
+                        pruned += 1
+                    except Exception as e:
+                        logger.warning("cleanup old backup failed: %s", e)
+
                 return {
                     "success": True,
                     "name": name,
                     "restored_size": pcd.stat().st_size,
+                    "replaced_backups_kept": min(len(replaced), 3),
+                    "replaced_backups_pruned": pruned,
                     "note": "tomogram/occupancy 需重建才能让 planner 用新点云",
                 }
             except Exception as e:
