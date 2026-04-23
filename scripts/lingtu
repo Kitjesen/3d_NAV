@@ -13,6 +13,7 @@
 #   lingtu map save <name>     # 保存地图 (PGO + DUFOMap + tomogram)
 #   lingtu map end             # 结束当前 session → idle
 #   lingtu map list            # 列出已保存地图
+#   lingtu map restore <name>  # 恢复 DUFOMap 清洗前的备份 (.predufo → map.pcd)
 #   lingtu nav start <map>     # 进 navigating 模式, 加载指定地图
 #   lingtu nav stop            # 结束 (同 map end)
 #   lingtu nav goal X Y [YAW]  # 发导航目标 (map frame)
@@ -208,7 +209,13 @@ cmd_map() {
         list|ls)
             curl -s "$GW/api/v1/maps" -X POST -H "Content-Type: application/json" \
                 -d '{"action":"list"}' | python3 -m json.tool | head -60 ;;
-        *) echo "Usage: lingtu map [start|save <name>|end|list]"; exit 1 ;;
+        restore)
+            local name="${2:-}"
+            [ -z "$name" ] && { echo "Usage: lingtu map restore <name>"; exit 1; }
+            echo -e "${D}Restoring map.pcd from DUFOMap pre-filter backup...${N}"
+            curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"$name\"}" \
+                "$GW/api/v1/map/restore_predufo" | python3 -m json.tool ;;
+        *) echo "Usage: lingtu map [start|save <name>|end|list|restore <name>]"; exit 1 ;;
     esac
 }
 

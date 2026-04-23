@@ -68,6 +68,16 @@ lingtu map start              # 进 mapping 模式 (启动 slam + slam_pgo)
 lingtu map save lab_0423      # PGO 保存 + DUFOMap 清洗 + tomogram/grid 重建
 lingtu map end                # 结束回 idle (全停 SLAM)
 lingtu map list               # 列已保存地图
+lingtu map restore lab_0423   # 恢复 DUFOMap 清洗前的备份 (predufo → map.pcd)
+```
+
+`restore` 场景: DUFOMap 误删了静态物体 → 把 `map.pcd.predufo` 还原成 `map.pcd`。
+当前 (已被替换的) `map.pcd` 会备份成 `map.pcd.replaced-<ts>` 保留 (双保险)。
+恢复后 tomogram / occupancy 需要重建才能让 planner 用新点云:
+```bash
+curl -X POST -H "Content-Type: application/json" \
+    -d '{"action":"build_tomogram","name":"lab_0423"}' \
+    http://localhost:5050/api/v1/maps
 ```
 
 `save` 预计 15-60 秒。Toast 或返回 JSON 包含 `dynamic_filter` 统计:

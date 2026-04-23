@@ -2710,6 +2710,64 @@ class GatewayModule(Module, layer=6):
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=500)
 
+        @app.post("/api/v1/map/restore_predufo",
+                  summary="Restore map.pcd from DUFOMap pre-filter backup")
+        async def restore_predufo(body: dict):
+            """One-click rollback of DUFOMap dynamic filter.
+
+            dynamic_filter.refilter_map 保存时会把清洗前的 map.pcd 备份到
+            map.pcd.predufo。如果森哥发现 DUFOMap 误删了好点 (比如把静态
+            物体识别成动态删掉了), 这个 endpoint 把备份恢复回 map.pcd。
+
+            Body: {"name": "<map_name>"}
+
+            下游 tomogram / occupancy 需要重建才能生效 — 可选后跟调:
+                POST /api/v1/maps {"action":"build_tomogram","name":"<name>"}
+            """
+            import os
+            import shutil
+            import pathlib
+            name = body.get("name", "")
+            if not name:
+                return JSONResponse(
+                    {"success": False, "message": "需要 name"},
+                    status_code=400,
+                )
+            map_dir = os.environ.get(
+                "NAV_MAP_DIR",
+                os.path.expanduser("~/data/nova/maps"),
+            )
+            target = pathlib.Path(map_dir) / name
+            pcd = target / "map.pcd"
+            backup = target / "map.pcd.predufo"
+            if not backup.is_file():
+                return JSONResponse(
+                    {"success": False,
+                     "message": f"No predufo backup for {name}. "
+                                "DUFOMap may not have run on this map."},
+                    status_code=404,
+                )
+            try:
+                # Swap: current → .predufo-restored-<ts>, backup → map.pcd
+                # This keeps the current (filtered) PCD discoverable in case
+                # the user decides the rollback was a mistake.
+                import time as _t
+                if pcd.is_file():
+                    shutil.copy(pcd, target / f"map.pcd.replaced-{int(_t.time())}")
+                shutil.copy(backup, pcd)
+                return {
+                    "success": True,
+                    "name": name,
+                    "restored_size": pcd.stat().st_size,
+                    "note": "tomogram/occupancy 需重建才能让 planner 用新点云",
+                }
+            except Exception as e:
+                logger.exception("restore_predufo failed")
+                return JSONResponse(
+                    {"success": False, "message": str(e)},
+                    status_code=500,
+                )
+
         @app.post("/api/v1/map/activate", summary="Set active map (symlink)")
         async def activate_map(body: dict):
             import os
