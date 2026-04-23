@@ -361,6 +361,23 @@ class GatewayModule(Module, layer=6):
         self._cached_slam_profile: str = "—"
         self._slam_profile_ts: float = 0.0
 
+        # SLAM drift watchdog — 兜底 Fast-LIO2 静置 IEKF 溢出 (xy 飞到万亿米级).
+        # 每 interval 秒查 odom, 超阈值自动 stop+ensure slam.service 重置 IEKF.
+        # 详见 docs/05-specialized/slam_drift_watchdog.md (TBD) + memory.
+        self._drift_watchdog_enabled: bool = os.environ.get(
+            "LINGTU_DRIFT_WATCHDOG", "1") not in ("0", "false", "False")
+        self._drift_watchdog_interval: float = float(
+            os.environ.get("LINGTU_DRIFT_WATCHDOG_INTERVAL", "60"))
+        self._drift_watchdog_xy_limit: float = float(
+            os.environ.get("LINGTU_DRIFT_WATCHDOG_XY_LIMIT", "1000"))
+        self._drift_watchdog_v_limit: float = float(
+            os.environ.get("LINGTU_DRIFT_WATCHDOG_V_LIMIT", "10"))
+        self._drift_watchdog_cooldown: float = float(
+            os.environ.get("LINGTU_DRIFT_WATCHDOG_COOLDOWN", "300"))
+        self._drift_last_restart_ts: float = 0.0
+        self._drift_restart_count: int = 0
+        self._drift_watchdog_thread: threading.Thread | None = None
+
         # ── Session state machine (single source of truth) ─────────────────
         # Every mode transition must go through /api/v1/session/start|end.
         # Frontend Topbar/Panel render from this state; no other code path
@@ -426,7 +443,118 @@ class GatewayModule(Module, layer=6):
             target=self._saved_map_loader_loop, daemon=True, name="saved_map_loader"
         )
         self._saved_map_loader_thread.start()
+
+        # Drift watchdog — 兜底 Fast-LIO2 静置 IEKF 溢出.
+        if self._drift_watchdog_enabled:
+            self._drift_watchdog_thread = threading.Thread(
+                target=self._drift_watchdog_loop, daemon=True, name="drift_watchdog",
+            )
+            self._drift_watchdog_thread.start()
+
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
+
+    def _drift_watchdog_loop(self) -> None:
+        """Periodic sanity check on odom; restart slam.service if IEKF diverged.
+
+        Fast-LIO2 IEKF co-variance grows unbounded under static poses (no new
+        LiDAR observations to suppress it). After hours of idle, xy can blow
+        out to trillions of metres. We detect via absolute bounds and restart
+        slam.service (+ the current session's companion services) to reset
+        the IEKF to zero.
+
+        Cooldown: at most one restart per LINGTU_DRIFT_WATCHDOG_COOLDOWN
+        seconds (default 5 min). If we're still flapping after that, most
+        likely a real hardware/SLAM bug — keep triggering but log warning.
+        """
+        xy_lim = self._drift_watchdog_xy_limit
+        v_lim  = self._drift_watchdog_v_limit
+        interval = self._drift_watchdog_interval
+        logger.info(
+            "drift_watchdog: enabled, interval=%.0fs, |xy|<%.0fm, |v|<%.1fm/s",
+            interval, xy_lim, v_lim,
+        )
+        while True:
+            try:
+                time.sleep(interval)
+                with self._state_lock:
+                    odom = dict(self._odom) if self._odom else {}
+                if not odom:
+                    continue
+                x = abs(float(odom.get("x", 0.0)))
+                y = abs(float(odom.get("y", 0.0)))
+                z = abs(float(odom.get("z", 0.0)))
+                v = abs(float(odom.get("vx", 0.0)))
+                xy_bad = (x > xy_lim or y > xy_lim or z > xy_lim)
+                v_bad  = (v > v_lim)
+                if not (xy_bad or v_bad):
+                    continue
+                # Divergence detected
+                now = time.time()
+                since = now - self._drift_last_restart_ts
+                if since < self._drift_watchdog_cooldown:
+                    logger.warning(
+                        "drift_watchdog: still diverged (xy=%.0f,%.0f v=%.1f) but "
+                        "cooldown (%.0fs) not elapsed — skipping restart",
+                        x, y, v, self._drift_watchdog_cooldown - since,
+                    )
+                    continue
+                logger.error(
+                    "drift_watchdog: IEKF DIVERGED xy=(%.0f,%.0f) z=%.0f v=%.1f — "
+                    "restarting slam.service + session companions",
+                    x, y, z, v,
+                )
+                self._drift_restart_do_restart(xy=x, y_abs=y, v=v)
+                self._drift_last_restart_ts = time.time()
+                self._drift_restart_count += 1
+            except Exception as e:
+                logger.exception("drift_watchdog tick failed: %s", e)
+
+    def _drift_restart_do_restart(self, *, xy: float, y_abs: float, v: float) -> None:
+        """Stop SLAM services, clear odom cache, ensure session-appropriate
+        services back up. Pushes SSE event so Web shows a banner.
+        """
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
+        except Exception as e:
+            logger.error("drift_watchdog: service_manager unavailable: %s", e)
+            return
+
+        # Snapshot session mode BEFORE stopping services
+        mode = self._session_mode
+        try:
+            svc.stop("slam", "slam_pgo", "localizer")
+        except Exception as e:
+            logger.warning("drift_watchdog: svc.stop failed (continuing): %s", e)
+
+        # Clear stale odom — prevents downstream modules acting on trillion-meter
+        # coordinates while slam re-initialises.
+        with self._state_lock:
+            self._odom = {}
+            self._odom_timestamps.clear()
+
+        self.push_event({
+            "type": "slam_drift",
+            "level": "error",
+            "xy": max(xy, y_abs),
+            "v": v,
+            "action": "slam_restart",
+            "count": self._drift_restart_count + 1,
+        })
+
+        # Re-ensure based on session mode. idle → don't restart anything.
+        time.sleep(2.0)
+        try:
+            if mode in ("mapping", "exploring"):
+                svc.ensure("slam", "slam_pgo")
+                svc.wait_ready("slam", "slam_pgo", timeout=10.0)
+            elif mode == "navigating":
+                svc.ensure("slam", "localizer")
+                svc.wait_ready("slam", "localizer", timeout=10.0)
+            # idle: leave stopped; will be started when user picks a mode
+            logger.info("drift_watchdog: restart complete (mode=%s)", mode)
+        except Exception as e:
+            logger.error("drift_watchdog: ensure failed: %s", e)
 
     def _saved_map_loader_loop(self) -> None:
         """Watch active/map.pcd symlink; push saved_map ONCE per change.
