@@ -164,8 +164,16 @@ Note: `calibration/` lives at repo root (not under `src/`). See [Sensor Calibrat
 | `src/memory/modules/vector_memory_module.py` | CLIP + ChromaDB vector search |
 | `src/drivers/teleop_module.py` | WebSocket joystick + camera stream |
 | `src/slam/slam_module.py` | SLAM managed mode (fastlio2/pointlio/localizer) |
-| `src/slam/slam_bridge_module.py` | ROS2 SLAM bridge mode |
+| `src/slam/slam_bridge_module.py` | ROS2 SLAM bridge mode (map→odom TF transform point) |
+| `src/gateway/gateway_module.py` | FastAPI HTTP/WS/SSE + drift watchdog + save hooks |
+| `src/nav/services/nav_services/dynamic_filter.py` | DUFOMap wrapper (subprocess repack/run/backup) |
+| `src/nav/services/nav_services/map_manager_module.py` | Save pipeline: PGO → DUFOMap → tomogram → occupancy |
+| `scripts/lingtu` | **Unified Operations CLI** (status/watch/map/nav/svc/log/health) |
+| `scripts/build_dufomap.sh` | Idempotent aarch64 build of DUFOMap (apt + patch + cmake) |
+| `scripts/dufomap_offline_test.py` | Standalone validator: run DUFOMap on existing map, print stats |
 | `config/robot_config.yaml` | Robot physical parameters (single source of truth) |
+| `config/dufomap.toml` | Lingtu-tuned DUFOMap config (Livox Mid-360 thresholds) |
+| `docs/05-specialized/dynamic_obstacle_removal.md` | DUFOMap Phase 2 design + roadmap |
 
 ## Build and Test Commands
 
@@ -385,10 +393,61 @@ bp.wire("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
 ## S100P Deployment
 
 - **SSH**: `ssh sunrise@192.168.66.190`
-- **Nav code**: `~/data/SLAM/navigation/`
+- **Nav code**: `~/data/SLAM/navigation/` (symlink → `~/data/inovxio/lingtu/`)
 - **Nav deploy**: `/opt/lingtu/nav/`
 - **CycloneDDS**: Built from source at `~/cyclonedds/install/` (Unitree approach)
 - **Python**: 3.10.12, cyclonedds==0.10.5
+- **DUFOMap binary**: `~/src/dufomap/build/dufomap_run` (see `scripts/build_dufomap.sh`)
+- **Default map dir**: `~/data/nova/maps/` (was `~/data/inovxio/data/maps/` — migrated)
+
+## Operations CLI (`scripts/lingtu`)
+
+单一入口 CLI 取代多个零散脚本和 curl / systemctl。建议本机 `alias`:
+
+```bash
+alias lingtu='ssh sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu"'
+alias lingwatch='ssh -t sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu watch"'
+```
+
+| 子命令 | 用途 |
+|---|---|
+| `lingtu status` | 一屏 8 区状态 (session / SLAM / robot / mission / path / ctrl / map / log) |
+| `lingtu watch` | `watch -c -n 1` 持续刷新 — 建图/导航时副屏开这个 |
+| `lingtu map start\|save <name>\|end\|list` | 建图 session 生命周期 |
+| `lingtu nav start <map>\|stop\|goal X Y [YAW]` | 导航 session + 发目标 |
+| `lingtu svc status\|restart [slam\|lingtu\|all]` | systemctl wrapper |
+| `lingtu log drift\|dufomap\|error\|tail\|all` | journalctl 过滤器 |
+| `lingtu health` | REST `/api/v1/health` 原样 dump |
+
+## Dynamic Obstacle Removal (Phase 1 + 2)
+
+建图过程 + 保存时双重过滤,消除人/物走过留下的拖尾。
+
+- **Phase 1** `voxel hit-count voting` (`gateway_module.py:_on_map_cloud` mapping 分支)
+  - 每帧 map_cloud 来, 每个 voxel hit_count +1
+  - 发 SSE 前过滤 `hit < LINGTU_MAP_MIN_HITS` (默认 3) 的 voxel
+  - **只影响 Web 实时视图**
+- **Phase 2** `DUFOMap (ray-casting + void detection)`
+  - 保存地图时在 PGO 之后 tomogram 之前跑一次 offline filter
+  - 读 `<map>/patches/*.pcd` + `poses.txt`, 写回干净 `map.pcd`, 备份为 `map.pcd.predufo`
+  - **影响磁盘 PCD** → 导航时加载就是干净底图
+  - 跑的是 C++ binary `~/src/dufomap/build/dufomap_run` + `config/dufomap.toml` (Lingtu 调参)
+  - env `LINGTU_SAVE_DYNAMIC_FILTER=0` 关闭
+
+详见 `docs/05-specialized/dynamic_obstacle_removal.md`。
+
+## SLAM Drift Watchdog
+
+Fast-LIO2 IEKF 长时间静置会协方差发散,xy 飘到 10¹² 米。Gateway 后台线程
+(`_drift_watchdog_loop`) 每 60s 检查 odom,超阈值自动:
+
+1. `svc.stop("slam","slam_pgo","localizer")` — 终结飞掉的 IEKF
+2. 清 `self._odom` 缓存
+3. SSE 推 `slam_drift` 事件
+4. 按当前 session mode `svc.ensure(...)` 重拉服务
+5. 300s 冷却防抖
+
+Env: `LINGTU_DRIFT_WATCHDOG=0` (关) / `_INTERVAL` / `_XY_LIMIT` / `_V_LIMIT` / `_COOLDOWN`。
 
 ## Sensor Calibration (`calibration/`)
 
