@@ -187,13 +187,35 @@ def refilter_map(map_dir: str | Path, *, timeout_s: float = 300.0) -> dict:
                     "error": f"invalid clean pcd (count={clean_count})",
                     "elapsed_s": time.time() - t0}
 
-        # Backup original then overwrite
+        # Backup original. If backup fails (disk full / permission), ABORT —
+        # we must not overwrite without a restorable backup.
         backup = map_dir / "map.pcd.predufo"
         try:
             shutil.copy(orig_map, backup)
         except Exception as e:
-            logger.warning("dynamic_filter: backup failed (non-fatal): %s", e)
-        shutil.copy(clean, orig_map)
+            logger.error("dynamic_filter: backup failed, aborting: %s", e)
+            return {"success": False,
+                    "error": f"backup failed: {e}",
+                    "elapsed_s": time.time() - t0}
+
+        # Atomic overwrite: copy to sibling tmp then rename.
+        # shutil.copy is NOT atomic — a crash mid-copy leaves a half-written
+        # map.pcd that SLAM will fail to load next time. os.replace on the
+        # same filesystem is POSIX-atomic.
+        tmp_new = orig_map.with_suffix(".pcd.tmp")
+        try:
+            shutil.copy(clean, tmp_new)
+            os.replace(tmp_new, orig_map)
+        except Exception as e:
+            logger.error("dynamic_filter: atomic overwrite failed: %s", e)
+            try:
+                if tmp_new.exists():
+                    tmp_new.unlink()
+            except Exception:
+                pass
+            return {"success": False,
+                    "error": f"overwrite failed: {e}",
+                    "elapsed_s": time.time() - t0}
 
         elapsed = time.time() - t0
         dropped = orig_count - clean_count if orig_count > 0 else 0

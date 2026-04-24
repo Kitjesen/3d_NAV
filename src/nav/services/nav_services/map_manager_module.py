@@ -225,29 +225,11 @@ class MapManagerModule(Module, layer=6):
                 "message": f"ROS2 not available: {e}",
             }
 
-        # Step 1½ — DUFOMap dynamic-obstacle filter (optional, gated by env var).
-        # Must run BEFORE tomogram / occupancy build, otherwise downstream
-        # planning artifacts inherit the dynamic residue.
+        # Step 1½ — DUFOMap dynamic-obstacle filter (shared with gateway path).
+        # 走统一 helper 以防两处逻辑漂移 (env var / 参数 / 错误处理).
         # 详见 docs/05-specialized/dynamic_obstacle_removal.md Phase 2.
-        dufo_result: dict[str, Any] | None = None
-        if os.environ.get("LINGTU_SAVE_DYNAMIC_FILTER", "1") not in ("0", "false", "False"):
-            try:
-                from nav.services.nav_services.dynamic_filter import refilter_map
-                dufo_result = refilter_map(map_dir)
-                if dufo_result.get("success"):
-                    orig = dufo_result.get("orig_count", 0)
-                    clean = dufo_result.get("clean_count", 0)
-                    dropped = dufo_result.get("dropped", 0)
-                    pct = 100 * dropped / max(1, orig)
-                    logger.info(
-                        "map_save: dynamic filter %d→%d pts (-%d, %.1f%%) in %.1fs",
-                        orig, clean, dropped, pct, dufo_result.get("elapsed_s", 0.0),
-                    )
-                else:
-                    logger.warning("map_save: dynamic filter skipped: %s",
-                                   dufo_result.get("error"))
-            except Exception as e:
-                logger.warning("map_save: dynamic filter crashed (non-fatal): %s", e)
+        from gateway.gateway_module import _apply_dynamic_filter_step1half
+        dufo_result: dict[str, Any] | None = _apply_dynamic_filter_step1half(map_dir)
 
         # Step 2 — Auto-build tomogram (required for global planner)
         tomo_result = self._build_tomogram(name)

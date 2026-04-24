@@ -149,6 +149,68 @@ class MapRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _safe_map_name(name: str) -> str | None:
+    """Validate a map name from user input. Return error message or None.
+
+    Rejects anything that could be used for path traversal or absolute paths.
+    Allows only alphanumerics + underscore + hyphen + dot (single, not ..).
+    Max 100 chars to prevent abuse.
+
+    Examples:
+        _safe_map_name("lab_0424")        → None (ok)
+        _safe_map_name("../etc/passwd")   → "unsafe: ..."
+        _safe_map_name("a/b")             → "unsafe: ..."
+        _safe_map_name("")                → "empty name"
+    """
+    if not name or not isinstance(name, str):
+        return "empty name"
+    if len(name) > 100:
+        return "name too long (max 100)"
+    if "/" in name or "\\" in name or ".." in name:
+        return f"unsafe characters in name: {name!r}"
+    if name.startswith(".") or name.startswith("-"):
+        return f"name cannot start with . or -: {name!r}"
+    # Whitelist safe chars
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9_\-\.]+", name):
+        return f"only [A-Za-z0-9_.-] allowed: {name!r}"
+    return None
+
+
+def _apply_dynamic_filter_step1half(save_dir: "str | os.PathLike[str]") -> "dict | None":
+    """Shared Step 1½ — DUFOMap dynamic-obstacle filter call.
+
+    Both /api/v1/map/save (Web direct) and MapManager._map_save (MCP path)
+    must run DUFOMap filter after PGO and before tomogram build. This helper
+    is the single source of truth to prevent the two call sites from
+    drifting apart (as they did with env var naming in an earlier commit).
+
+    Returns None if the filter is disabled (env var); otherwise the
+    dict from refilter_map (always sets 'success': bool).
+    """
+    if os.environ.get("LINGTU_SAVE_DYNAMIC_FILTER", "1") in ("0", "false", "False", "FALSE", "no", "off", ""):
+        return None
+    try:
+        from nav.services.nav_services.dynamic_filter import refilter_map
+        result = refilter_map(save_dir, timeout_s=300.0)
+        if result.get("success"):
+            orig = result.get("orig_count", 0)
+            clean = result.get("clean_count", 0)
+            dropped = result.get("dropped", 0)
+            pct = 100 * dropped / max(1, orig)
+            logger.info(
+                "dynamic_filter: %s %d→%d pts (-%d, %.1f%%) in %.1fs",
+                os.path.basename(str(save_dir)), orig, clean, dropped, pct,
+                result.get("elapsed_s", 0.0),
+            )
+        else:
+            logger.warning("dynamic_filter: skipped: %s", result.get("error"))
+        return result
+    except Exception as e:
+        logger.warning("dynamic_filter: crashed (non-fatal): %s", e)
+        return {"success": False, "error": str(e)}
+
+
 def _parse_since(since: str) -> float:
     """Parse a human-readable 'since' string to a Unix timestamp.
 
@@ -1016,6 +1078,19 @@ class GatewayModule(Module, layer=6):
                 frame_keys = np.unique(self._pack_voxel_keys(pts))
                 for k in frame_keys:
                     self._voxel_hits[int(k)] = self._voxel_hits.get(int(k), 0) + 1
+
+                # GC: prevent unbounded dict growth on long mapping runs (4h+).
+                # 当 dict 超 200k 条时, 淘汰 hit==1 的瞬态 voxel (保留 >=2 的真实观测)。
+                # 典型 8k voxel/min × 60min = 480k, 建图 25+min 就会触发一次。
+                if len(self._voxel_hits) > 200_000:
+                    before = len(self._voxel_hits)
+                    self._voxel_hits = {
+                        k: c for k, c in self._voxel_hits.items() if c >= 2
+                    }
+                    logger.info(
+                        "voxel_hits GC: %d → %d entries (dropped hit==1)",
+                        before, len(self._voxel_hits),
+                    )
 
         # Push to SSE at ~0.5Hz (every 2 frames) — often enough to look
         # "live accumulating" without flooding the browser.
@@ -2377,6 +2452,10 @@ class GatewayModule(Module, layer=6):
                     {"success": False, "message": f"Unknown mode: {mode!r}. Use 'mapping' | 'navigating' | 'exploring'."},
                     status_code=400,
                 )
+            if map_name:
+                err = _safe_map_name(map_name)
+                if err is not None:
+                    return JSONResponse({"success": False, "message": err}, status_code=400)
             if mode == "exploring" and gw._frontier_explorer is None:
                 return JSONResponse(
                     {"success": False, "message": "FrontierExplorer module not running — start lingtu with 'explore' profile."},
@@ -2728,9 +2807,10 @@ class GatewayModule(Module, layer=6):
             import shutil
             import pathlib
             name = body.get("name", "")
-            if not name:
+            err = _safe_map_name(name)
+            if err is not None:
                 return JSONResponse(
-                    {"success": False, "message": "需要 name"},
+                    {"success": False, "message": err},
                     status_code=400,
                 )
             map_dir = os.environ.get(
@@ -2748,13 +2828,17 @@ class GatewayModule(Module, layer=6):
                     status_code=404,
                 )
             try:
-                # Swap: current → .replaced-<ts>, backup → map.pcd
+                # Swap: current → .replaced-<ts_ns>, backup → map.pcd
                 # This keeps the current (filtered) PCD discoverable in case
                 # the user decides the rollback was a mistake.
+                # time_ns: 纳秒级 ts 防止同一秒多次 restore 互相覆盖备份.
                 import time as _t
                 if pcd.is_file():
-                    shutil.copy(pcd, target / f"map.pcd.replaced-{int(_t.time())}")
-                shutil.copy(backup, pcd)
+                    shutil.copy(pcd, target / f"map.pcd.replaced-{_t.time_ns()}")
+                # Atomic replace (shutil.copy 非原子,进程崩会半写 map.pcd).
+                tmp_new = pcd.with_suffix(".pcd.tmp")
+                shutil.copy(backup, tmp_new)
+                os.replace(tmp_new, pcd)
 
                 # Cleanup old .replaced-* backups — keep only most recent 3.
                 # Without this,每次 restore 积一份, 长期磁盘涨爆。
@@ -2791,8 +2875,9 @@ class GatewayModule(Module, layer=6):
             import os
             import pathlib
             name = body.get("name", "")
-            if not name:
-                return JSONResponse({"success": False, "message": "需要 name"}, status_code=400)
+            err = _safe_map_name(name)
+            if err is not None:
+                return JSONResponse({"success": False, "message": err}, status_code=400)
             map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
             target = os.path.join(map_dir, name)
             if not os.path.isdir(target):
@@ -2812,8 +2897,13 @@ class GatewayModule(Module, layer=6):
             import pathlib
             old = body.get("old_name", "")
             new = body.get("new_name", "")
-            if not old or not new:
-                return JSONResponse({"success": False, "message": "需要 old_name 和 new_name"}, status_code=400)
+            err_old = _safe_map_name(old)
+            err_new = _safe_map_name(new)
+            if err_old or err_new:
+                return JSONResponse(
+                    {"success": False,
+                     "message": err_old or err_new},
+                    status_code=400)
             map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
             old_path = os.path.join(map_dir, old)
             new_path = os.path.join(map_dir, new)
@@ -2843,6 +2933,10 @@ class GatewayModule(Module, layer=6):
             if not name:
                 from datetime import datetime
                 name = "map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Path traversal guard — reject dangerous names before any filesystem op.
+            err = _safe_map_name(name)
+            if err is not None:
+                return JSONResponse({"success": False, "message": err}, status_code=400)
             map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
             save_dir = os.path.join(map_dir, name)
             os.makedirs(save_dir, exist_ok=True)
@@ -2885,25 +2979,9 @@ class GatewayModule(Module, layer=6):
             # Step 1½ — DUFOMap dynamic-obstacle filter (optional, gated by env).
             # 必须在 tomogram/occupancy 之前跑,否则下游带动态残影。
             # 详见 docs/05-specialized/dynamic_obstacle_removal.md Phase 2。
-            dufo_result: dict | None = None
-            if os.environ.get("LINGTU_SAVE_DYNAMIC_FILTER", "1") not in ("0", "false", "False"):
-                try:
-                    from nav.services.nav_services.dynamic_filter import refilter_map
-                    dufo_result = refilter_map(save_dir, timeout_s=300.0)
-                    if dufo_result.get("success"):
-                        orig = dufo_result.get("orig_count", 0)
-                        clean = dufo_result.get("clean_count", 0)
-                        dropped = dufo_result.get("dropped", 0)
-                        pct = 100 * dropped / max(1, orig)
-                        logger.info(
-                            "map/save: dynamic filter %d→%d (-%d, %.1f%%) in %.1fs",
-                            orig, clean, dropped, pct, dufo_result.get("elapsed_s", 0.0),
-                        )
-                    else:
-                        logger.warning("map/save: dynamic filter skipped: %s",
-                                       dufo_result.get("error"))
-                except Exception as e:
-                    logger.warning("map/save: dynamic filter crashed (non-fatal): %s", e)
+            # 调用统一 helper (module-level `_apply_dynamic_filter_step1half`)
+            # 以避免 Web 直调路径和 MapManager 路径的逻辑漂移。
+            dufo_result = _apply_dynamic_filter_step1half(save_dir)
 
             has_pcd = os.path.isfile(pcd_path)
             if has_pcd:
