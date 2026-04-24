@@ -45,7 +45,11 @@ _MOTION_PREDICT_DT = 0.3
 @dataclass
 class TrackedPerson:
     """Tracked target person."""
-    position: list[float]                          # [x, y, z] world frame
+    position: list[float]                          # [x, y, z] EMA-smoothed, world frame
+    # Last raw (unsmoothed) measurement, used for velocity finite-difference
+    # so that the velocity estimator isn't doubly low-passed through the
+    # position EMA.
+    last_raw_pos: list[float] | None = None
     velocity: list[float] = field(default_factory=lambda: [0.0, 0.0])  # [vx, vy] m/s
     last_seen: float = field(default_factory=time.time)
     confidence: float = 1.0
@@ -348,6 +352,7 @@ class PersonTracker:
         with self._lock:
             self._person = TrackedPerson(
                 position=list(pos[:3]),
+                last_raw_pos=list(pos[:3]),
                 last_seen=time.time(),
                 confidence=obj.get("confidence", 1.0),
                 appearance=appearance,
@@ -720,22 +725,27 @@ class PersonTracker:
         now = time.time()
 
         dt = now - self._person.last_seen
-        old = self._person.position
+        old_smoothed = self._person.position
+        old_raw = self._person.last_raw_pos or old_smoothed
 
-        # Velocity EMA (smoothed finite difference)
+        # Velocity EMA on the raw finite difference. Clamp dt so a long
+        # occlusion gap (or stale timestamp after re-lock) can't collapse the
+        # velocity to ~0. Skip the update if dt is pathologically small.
         if dt > 0.01:
+            dt_v = min(dt, 0.2)
             self._person.velocity = [
-                (new_pos[0] - old[0]) / dt * 0.3 + self._person.velocity[0] * 0.7,
-                (new_pos[1] - old[1]) / dt * 0.3 + self._person.velocity[1] * 0.7,
+                (new_pos[0] - old_raw[0]) / dt_v * 0.3 + self._person.velocity[0] * 0.7,
+                (new_pos[1] - old_raw[1]) / dt_v * 0.3 + self._person.velocity[1] * 0.7,
             ]
 
         # Position EMA
         a = self.EMA_ALPHA
         self._person.position = [
-            a * new_pos[0] + (1 - a) * old[0],
-            a * new_pos[1] + (1 - a) * old[1],
-            a * new_pos[2] + (1 - a) * old[2],
+            a * new_pos[0] + (1 - a) * old_smoothed[0],
+            a * new_pos[1] + (1 - a) * old_smoothed[1],
+            a * new_pos[2] + (1 - a) * old_smoothed[2],
         ]
+        self._person.last_raw_pos = list(new_pos[:3])
         self._person.last_seen = now
         self._person.confidence = obj.get("confidence", 1.0)
         self._person.obj_id = obj.get("id", self._person.obj_id)
@@ -780,6 +790,7 @@ class PersonTracker:
         pos = self._get_pos(obj)
         self._person = TrackedPerson(
             position=list(pos[:3]),
+            last_raw_pos=list(pos[:3]),
             last_seen=time.time(),
             confidence=obj.get("confidence", 1.0),
             obj_id=obj.get("id"),

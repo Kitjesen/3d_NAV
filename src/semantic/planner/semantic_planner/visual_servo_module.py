@@ -75,6 +75,7 @@ class VisualServoModule(Module, layer=4):
     def __init__(
         self,
         servo_takeover_distance: float = 3.0,
+        servo_takeover_hysteresis: float = 0.3,
         follow_distance: float = 1.5,
         target_distance: float = 1.5,
         lost_timeout: float = 5.0,
@@ -82,6 +83,10 @@ class VisualServoModule(Module, layer=4):
     ):
         super().__init__(**kw)
         self._takeover_dist = servo_takeover_distance
+        # Asymmetric threshold prevents flapping between goal_pose / cmd_vel
+        # when the target hovers near the boundary.
+        self._takeover_enter = servo_takeover_distance - servo_takeover_hysteresis
+        self._takeover_exit = servo_takeover_distance + servo_takeover_hysteresis
 
         self._bbox_nav = BBoxNavigator(config=BBoxNavConfig(
             target_distance=target_distance,
@@ -225,7 +230,14 @@ class VisualServoModule(Module, layer=4):
         if target_3d is None:
             return
 
-        if distance > self._takeover_dist:
+        # Hysteresis: only switch modes when crossing the outer threshold
+        # relative to current state. Sticky behaviour while inside the band.
+        if self._servo_active:
+            use_servo = distance <= self._takeover_exit
+        else:
+            use_servo = distance < self._takeover_enter
+
+        if not use_servo:
             # Far range: publish goal_pose → NavigationModule handles it
             self._release_servo()
             self._publish_goal_from_3d(target_3d)
