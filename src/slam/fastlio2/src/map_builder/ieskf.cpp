@@ -109,6 +109,7 @@ void IESKF::injectZUPT(double sigma_v, double sigma_pos)
 void IESKF::update()
 {
     State predict_x = m_x;
+    M21D P_prior = m_P;  // snapshot predict-time covariance for degenerate-DOF retention
     SharedState shared_data;
     shared_data.iter_num = 0;
     shared_data.res = 1e10;
@@ -116,7 +117,11 @@ void IESKF::update()
     M21D H = M21D::Identity();
     V21D b;
 
-    bool skip_lidar_update = false;
+    // Observability-Constrained state — populated on first iteration
+    bool has_degeneracy = false;
+    bool pathological = false;  // condition_number explodes or all 6 DOF degenerate
+    Eigen::Matrix<double, 6, 6> saved_evecs = Eigen::Matrix<double, 6, 6>::Identity();
+    Eigen::Matrix<double, 6, 1> saved_mask  = Eigen::Matrix<double, 6, 1>::Ones();
 
     for (size_t i = 0; i < m_max_iter; i++)
     {
@@ -140,7 +145,6 @@ void IESKF::update()
         // ── Degeneracy detection (DALI-SLAM / Zhang 2016 approach) ──────
         // Analyze the 6x6 pose block of the LiDAR Hessian (rotation + translation)
         // to detect degenerate directions where LiDAR provides no constraint.
-        // When degenerate, remap the solution to suppress updates along those axes.
         if (i == 0)  // Only compute on first iteration (H structure is stable)
         {
             Eigen::Matrix<double, 6, 6> H_pose = shared_data.H.block<6, 6>(0, 0);
@@ -174,23 +178,31 @@ void IESKF::update()
                 (6.0 - degen_count) / 6.0;
             shared_data.degeneracy.detected = (degen_count > 0);
 
-            // ── Severe degeneracy: skip LiDAR update entirely ──────────
-            // When >= 3 DOFs are degenerate or condition number is extreme,
-            // LiDAR provides too few constraints — IMU prediction is safer.
-            if (degen_count >= 3 || shared_data.degeneracy.condition_number > 1e8)
+            // Save eigenbasis for OC delta/P projection outside this block
+            saved_evecs = evecs;
+            saved_mask  = mask;
+            has_degeneracy = (degen_count > 0);
+
+            // ── Pathological degeneracy: eigenvectors themselves are unreliable ─
+            // Only when ALL 6 DOFs are degenerate or H is near-singular do we fall
+            // back to pure IMU prediction. In all other cases (including 3-5 DOF
+            // degenerate, which previously skipped), we keep LiDAR constraints on
+            // the observable subspace via OC delta projection below.
+            if (degen_count >= 6 || shared_data.degeneracy.condition_number > 1e12)
             {
-                skip_lidar_update = true;
+                pathological = true;
                 break;
             }
 
-            // ── Partial degeneracy (1-2 DOFs): project to well-constrained subspace
+            // ── Partial Hessian remapping (Zhang 2016) — still useful for 1-5 DOF
+            // to make the information-form solve well-conditioned. OC projection
+            // on delta afterward is the safety net that guarantees state does not
+            // drift along unobservable directions.
             if (degen_count > 0)
             {
-                // Save prior contribution (must not be overwritten)
                 M21D H_prior = J.transpose() * P_ldlt.solve(J);
                 V21D b_prior = J.transpose() * P_ldlt.solve(delta);
 
-                // Build projection matrix: V_good * V_good^T
                 Eigen::Matrix<double, 6, 6> P_good = Eigen::Matrix<double, 6, 6>::Zero();
                 for (int d = 0; d < 6; ++d)
                 {
@@ -198,19 +210,33 @@ void IESKF::update()
                         P_good += evecs.col(d) * evecs.col(d).transpose();
                 }
                 Eigen::Matrix<double, 6, 6> P_bad = Eigen::Matrix<double, 6, 6>::Identity() - P_good;
-                double regularize = evals(5) * 0.01;  // Stronger regularization
+                double regularize = evals(5) * 0.01;
                 Eigen::Matrix<double, 6, 6> H_lidar_remapped =
                     P_good * H_pose * P_good + P_bad * regularize;
                 Eigen::Matrix<double, 6, 1> b_lidar_remapped =
                     P_good * shared_data.b.head<6>();
 
-                // Reconstruct H = prior + remapped LiDAR (preserving prior!)
                 H.block<6, 6>(0, 0) = H_prior.block<6, 6>(0, 0) + H_lidar_remapped;
                 b.block<6, 1>(0, 0) = b_prior.block<6, 1>(0, 0) + b_lidar_remapped;
             }
         }
 
         delta = -H.ldlt().solve(b);
+
+        // ── Observability-Constrained state update (Huang et al. 2019) ──
+        // Project delta onto the observable subspace in eigenbasis coordinates.
+        // Degenerate DOFs receive zero update — state along those directions is
+        // carried by IMU prediction alone, not corrupted by virtual LiDAR signal.
+        if (has_degeneracy)
+        {
+            Eigen::Matrix<double, 6, 1> dp_eig = saved_evecs.transpose() * delta.head<6>();
+            for (int d = 0; d < 6; ++d)
+            {
+                if (saved_mask(d) < 0.5)
+                    dp_eig(d) = 0.0;
+            }
+            delta.head<6>() = saved_evecs * dp_eig;
+        }
 
         m_x += delta;
         shared_data.iter_num += 1;
@@ -222,8 +248,9 @@ void IESKF::update()
     // Store degeneracy info for external access (ROS2 publisher)
     m_degeneracy = shared_data.degeneracy;
 
-    // Severe degeneracy: revert to IMU prediction, clamp covariance to prevent unbounded growth
-    if (skip_lidar_update)
+    // Pathological degeneracy: revert to IMU prediction entirely (eigenbasis
+    // is numerically unreliable so OC projection cannot be trusted either).
+    if (pathological)
     {
         m_x = predict_x;
         clampCovariance();
@@ -234,5 +261,28 @@ void IESKF::update()
     L.block<3, 3>(0, 0) = Jr(delta.segment<3>(0));
     L.block<3, 3>(6, 6) = Jr(delta.segment<3>(6));
     m_P = L * H.ldlt().solve(L.transpose());  // P = L * H^{-1} * L^T
+
+    // ── Observability-Constrained covariance update ─────────────────────
+    // Posterior P for degenerate DOFs is optimistic (information-form solve
+    // sees the regularized H, not the true zero-information Hessian). Retain
+    // predict-time P along those directions so downstream drift monitors and
+    // fusion weights see the true uncertainty.
+    if (has_degeneracy)
+    {
+        Eigen::Matrix<double, 6, 6> P_post_pose  = m_P.block<6, 6>(0, 0);
+        Eigen::Matrix<double, 6, 6> P_prior_pose = P_prior.block<6, 6>(0, 0);
+        Eigen::Matrix<double, 6, 6> P_post_eig   = saved_evecs.transpose() * P_post_pose  * saved_evecs;
+        Eigen::Matrix<double, 6, 6> P_prior_eig  = saved_evecs.transpose() * P_prior_pose * saved_evecs;
+        for (int d = 0; d < 6; ++d)
+        {
+            if (saved_mask(d) < 0.5)
+            {
+                P_post_eig.row(d) = P_prior_eig.row(d);
+                P_post_eig.col(d) = P_prior_eig.col(d);
+            }
+        }
+        m_P.block<6, 6>(0, 0) = saved_evecs * P_post_eig * saved_evecs.transpose();
+    }
+
     clampCovariance();
 }
