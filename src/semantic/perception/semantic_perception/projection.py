@@ -47,6 +47,7 @@ class Detection3D:
     features: np.ndarray        # 语义特征向量 (Mobile-CLIP text encoding)
     points: np.ndarray = field(default_factory=lambda: np.empty((0, 3)))
     # USS-Nav: 物体点云 (N, 3) world frame, 降采样后
+    track_id: int | None = None  # Optional 2D tracker id (BoT-SORT/ByteTrack)
 
 
 def bbox_center_depth(

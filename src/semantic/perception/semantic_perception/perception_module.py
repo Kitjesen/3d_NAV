@@ -115,6 +115,8 @@ class PerceptionModule(Module, layer=3):
         self._detector = None
         self._clip_encoder = None
         self._sim_scene_observer = None
+        self._detector_tracker = None
+        self._detector_tracker_warning_logged = False
         self._frame_count: int = 0
         self._latest_depth: np.ndarray | None = None
         self._latest_intrinsics: Any | None = None
@@ -247,6 +249,7 @@ class PerceptionModule(Module, layer=3):
 
         # Detector backend (optional -- graceful degrade)
         self._detector = self._init_detector()
+        self._detector_tracker = self._init_detector_tracker()
 
         # Encoder (optional)
         self._clip_encoder = self._init_clip_encoder()
@@ -430,6 +433,22 @@ class PerceptionModule(Module, layer=3):
             logger.warning("Detector %r unavailable: %s", self._detector_type, e)
         return None
 
+    def _init_detector_tracker(self):
+        """Create a low-latency 2D tracker for detector outputs when available."""
+        if self._detector_type != "bpu" or self._detector is None:
+            return None
+        try:
+            from semantic.perception.semantic_perception.bpu_tracker import BPUTracker
+
+            tracker = BPUTracker(self._detector, tracker_type="botsort")
+            logger.info("BPUTracker loaded: BPU detector outputs will include track_id")
+            return tracker
+        except Exception as e:
+            logger.warning(
+                "BPUTracker unavailable (%s) -- falling back to raw BPU detections", e
+            )
+            return None
+
     def _init_clip_encoder(self):
         """Lazy-import encoder backend based on encoder_type."""
         try:
@@ -454,6 +473,15 @@ class PerceptionModule(Module, layer=3):
 
     def _run_detector(self, bgr: np.ndarray) -> list:
         """Run detector, return Detection2D list."""
+        if self._detector_tracker is not None:
+            try:
+                return self._detector_tracker.track(bgr, self._default_classes)
+            except Exception as e:
+                if not self._detector_tracker_warning_logged:
+                    logger.warning(
+                        "2D detector tracking failed (%s) -- using raw detections", e
+                    )
+                    self._detector_tracker_warning_logged = True
         if self._detector is None:
             return []
         try:
@@ -519,6 +547,7 @@ class PerceptionModule(Module, layer=3):
                 bbox_2d=det2d.bbox, depth=center_depth,
                 features=getattr(det2d, "features", np.array([])),
                 points=points if points is not None else np.empty((0, 3)),
+                track_id=getattr(det2d, "track_id", None),
             ))
         return results
 
@@ -606,6 +635,7 @@ class PerceptionModule(Module, layer=3):
             det3d.depth = d_median
             det3d.features = getattr(det2d, "features", np.array([]))
             det3d.points = np.empty((0, 3))
+            det3d.track_id = getattr(det2d, "track_id", None)
             det3d.confidence_3d = confidence_3d
             det3d.width_3d = width_3d
             det3d.height_3d = height_3d
@@ -621,7 +651,9 @@ class PerceptionModule(Module, layer=3):
             pos = d.position
             feat = getattr(d, "features", None)
             has_feat = feat is not None and hasattr(feat, "size") and feat.size > 0
+            track_id = getattr(d, "track_id", None)
             results.append(CoreDetection3D(
+                id=f"track_{track_id}" if track_id is not None else "",
                 label=d.label,
                 confidence=d.score,
                 position=Vector3(float(pos[0]), float(pos[1]), float(pos[2])),
@@ -651,14 +683,17 @@ class PerceptionModule(Module, layer=3):
                 px, py, pz = 0.0, 0.0, 0.0
             label = str(obj.get("label", ""))
             matched_det = self._match_detection_metadata(label, px, py, pz)
+            object_id = str(obj.get("id", ""))
             bbox_2d = []
             clip_feature = None
             if matched_det is not None:
+                if matched_det.id:
+                    object_id = matched_det.id
                 bbox_2d = [float(x) for x in matched_det.bbox_2d]
                 if matched_det.clip_feature is not None:
                     clip_feature = np.array(matched_det.clip_feature, copy=True)
             objects.append(CoreDetection3D(
-                id=str(obj.get("id", "")),
+                id=object_id,
                 label=label,
                 confidence=float(obj.get("confidence", obj.get("score", 0))),
                 position=Vector3(px, py, pz),
@@ -737,6 +772,7 @@ class PerceptionModule(Module, layer=3):
         info["detector_type"] = self._detector_type
         info["encoder_type"] = self._encoder_type
         info["detector_ready"] = self._detector is not None
+        info["detector_tracker_ready"] = self._detector_tracker is not None
         info["encoder_ready"] = self._clip_encoder is not None
         info["tracker_ready"] = self._tracker is not None
         tracked = 0

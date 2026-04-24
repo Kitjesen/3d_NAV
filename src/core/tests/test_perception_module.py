@@ -60,6 +60,7 @@ class FakeDetection2D:
     label: str = "chair"
     features: np.ndarray = field(default_factory=lambda: np.array([]))
     mask: object = None
+    track_id: int | None = None
 
 
 class FakeDetector:
@@ -541,3 +542,50 @@ class TestDetectorConfiguration:
         )
         backend.load_model.assert_called_once_with()
         assert created is backend
+
+    @patch("semantic.perception.semantic_perception.bpu_tracker.BPUTracker")
+    def test_init_detector_tracker_for_bpu(self, tracker_cls):
+        backend = MagicMock()
+        tracker = MagicMock()
+        tracker_cls.return_value = tracker
+
+        mod = PerceptionModule(detector_type="bpu")
+        mod._detector = backend
+
+        created = mod._init_detector_tracker()
+
+        tracker_cls.assert_called_once_with(backend, tracker_type="botsort")
+        assert created is tracker
+
+    def test_run_detector_prefers_detector_tracker(self):
+        mod = PerceptionModule(detector_type="bpu")
+        mod._default_classes = "person"
+        mod._detector = MagicMock()
+        mod._detector_tracker = MagicMock()
+        mod._detector_tracker.track.return_value = ["tracked"]
+
+        result = mod._run_detector(np.zeros((32, 32, 3), dtype=np.uint8))
+
+        assert result == ["tracked"]
+        mod._detector_tracker.track.assert_called_once()
+        mod._detector.detect.assert_not_called()
+
+    def test_convert_detections_preserves_detector_track_id(self):
+        mod = PerceptionModule()
+        det = type(
+            "ProjDet",
+            (),
+            {
+                "position": np.array([1.0, 2.0, 3.0]),
+                "label": "person",
+                "score": 0.87,
+                "bbox_2d": np.array([10, 20, 30, 60], dtype=np.float32),
+                "features": np.array([]),
+                "track_id": 42,
+            },
+        )()
+
+        converted = mod._convert_detections([det])
+
+        assert converted[0].id == "track_42"
+        assert converted[0].label == "person"
