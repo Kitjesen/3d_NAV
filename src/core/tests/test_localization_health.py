@@ -128,6 +128,121 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# SlamBridgeModule degeneracy parsing + covariance tracking
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
+    """Locks in the index ordering for the /slam/degeneracy_detail 11-float
+    Float32MultiArray published by FastLIO2 lio_node.cpp.
+
+    Regression guard: a previous version of _on_rclpy_degeneracy_detail read
+    d[0] as effective_ratio and d[1] as condition_number, but the C++ publisher
+    emits [cond_number, min_eig, max_eig, eff_ratio, degen_count, mask*6].
+    """
+
+    def _make(self):
+        from slam.slam_bridge_module import SlamBridgeModule
+        return SlamBridgeModule(watchdog_hz=100)
+
+    def _make_msg(self, cond, min_eig, max_eig, eff_ratio, degen_count, mask):
+        """Build a stand-in for the Float32MultiArray ROS message."""
+        class _M:
+            pass
+        msg = _M()
+        msg.data = [float(cond), float(min_eig), float(max_eig),
+                    float(eff_ratio), float(degen_count)] + [float(x) for x in mask]
+        return msg
+
+    def test_degeneracy_detail_index_order(self):
+        """d[0]=cond, d[3]=effective_ratio, d[4]=degen_count, d[5:11]=mask."""
+        m = self._make()
+        msg = self._make_msg(
+            cond=123.4, min_eig=0.01, max_eig=5.0,
+            eff_ratio=0.67, degen_count=2,
+            mask=[1, 1, 0, 0, 1, 1],
+        )
+        m._on_rclpy_degeneracy_detail(msg)
+        self.assertAlmostEqual(m._condition_number, 123.4, places=3)
+        self.assertAlmostEqual(m._effective_ratio, 0.67, places=3)
+        self.assertEqual(m._degenerate_dof_count, 2)
+        self.assertEqual(m._dof_mask.tolist(), [1.0, 1.0, 0.0, 0.0, 1.0, 1.0])
+
+    def test_severe_warning_triggers_above_cond_threshold(self):
+        """condition_number > 1e6 triggers a throttled SEVERE warning."""
+        import logging
+        m = self._make()
+        msg = self._make_msg(cond=5e6, min_eig=1e-7, max_eig=5.0,
+                             eff_ratio=0.33, degen_count=4,
+                             mask=[1, 1, 0, 0, 0, 0])
+        with self.assertLogs("slam.slam_bridge_module", level=logging.WARNING) as cm:
+            m._on_rclpy_degeneracy_detail(msg)
+        joined = " ".join(cm.output)
+        self.assertIn("SEVERE", joined)
+        self.assertIn("cond", joined.lower())
+
+    def test_severe_warning_is_throttled(self):
+        """Two SEVERE cases within 30s emit exactly one warning."""
+        import logging
+        m = self._make()
+        msg = self._make_msg(cond=5e6, min_eig=1e-7, max_eig=5.0,
+                             eff_ratio=0.33, degen_count=4,
+                             mask=[1, 1, 0, 0, 0, 0])
+        with self.assertLogs("slam.slam_bridge_module", level=logging.WARNING) as cm:
+            m._on_rclpy_degeneracy_detail(msg)
+            m._on_rclpy_degeneracy_detail(msg)  # second call — should be throttled
+        severe_lines = [l for l in cm.output if "SEVERE" in l]
+        self.assertEqual(len(severe_lines), 1,
+                         f"Expected exactly one SEVERE warning, got {len(severe_lines)}: {severe_lines}")
+
+    def test_cov_warning_tracks_odometry_covariance(self):
+        """_max_pos_cov follows the largest of cov[0,7,14] from ROS Odometry."""
+        m = self._make()
+
+        class _Ros2Odom:
+            class _Pose:
+                class _P: pass
+                class _Q: pass
+                pose = None
+                covariance = None
+            class _Twist:
+                class _Lin: pass
+                class _Ang: pass
+                twist = None
+            header = type("_H", (), {"stamp": type("_S", (), {"sec": 0, "nanosec": 0})})()
+
+        # Build a simple fake ROS2 Odometry with covariance[0] = 150.0
+        msg = _Ros2Odom()
+        msg.pose = _Ros2Odom._Pose()
+        p = _Ros2Odom._Pose._P()
+        p.x, p.y, p.z = 1.0, 2.0, 3.0
+        q = _Ros2Odom._Pose._Q()
+        q.x, q.y, q.z, q.w = 0.0, 0.0, 0.0, 1.0
+        class _PP:
+            pass
+        pose_obj = _PP()
+        pose_obj.position = p
+        pose_obj.orientation = q
+        msg.pose.pose = pose_obj
+        msg.pose.covariance = [0.0] * 36
+        msg.pose.covariance[0] = 150.0  # x variance — triggers cov_warning
+        msg.pose.covariance[7] = 4.0
+        msg.pose.covariance[14] = 0.5
+
+        msg.twist = _Ros2Odom._Twist()
+        lin = _Ros2Odom._Twist._Lin()
+        lin.x = lin.y = lin.z = 0.0
+        ang = _Ros2Odom._Twist._Ang()
+        ang.x = ang.y = ang.z = 0.0
+        tw = _PP()
+        tw.linear = lin
+        tw.angular = ang
+        msg.twist.twist = tw
+
+        m._on_rclpy_odom(msg)
+        self.assertAlmostEqual(m._max_pos_cov, 150.0, places=3)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # SafetyRingModule localization tests
 # ──────────────────────────────────────────────────────────────────────────────
 

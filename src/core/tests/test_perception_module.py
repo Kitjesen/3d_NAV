@@ -19,12 +19,6 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-_cv2_available = True
-try:
-    import cv2  # noqa: F401
-except ImportError:
-    _cv2_available = False
-
 from core import Blueprint, In, Module, Out, autoconnect
 from core.msgs.geometry import Pose, Quaternion, Vector3
 from core.msgs.nav import Odometry
@@ -522,7 +516,6 @@ class TestDetectorConfiguration:
         backend.load_model.assert_called_once_with()
         assert created is backend
 
-    @pytest.mark.skipif(not _cv2_available, reason="cv2 not installed — bpu_detector module not importable")
     @patch("semantic.perception.semantic_perception.bpu_detector.BPUDetector")
     def test_init_bpu_detector_forwards_recall_params(self, bpu_cls):
         backend = MagicMock()

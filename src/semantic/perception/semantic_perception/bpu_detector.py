@@ -15,10 +15,20 @@ import logging
 import os
 from typing import List, Optional
 
-import cv2
 import numpy as np
 
 from .detector_base import Detection2D, DetectorBase
+
+
+def _require_cv2():
+    """Lazy cv2 import — raises ImportError with a clear message at runtime.
+
+    Kept out of module top-level so the module can be imported (and its
+    classes patched) in environments without opencv-python installed,
+    e.g. unit test CI that mocks BPUDetector entirely.
+    """
+    import cv2  # noqa: F401  (re-exported below)
+    return cv2
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +406,7 @@ class BPUDetector(DetectorBase):
 
     def _detect_yoloe(self, outputs, allowed, scale, pad_x, pad_y, h0, w0):
         """Decode YOLOE end-to-end output [1, 300, 38] into detections."""
+        cv2 = _require_cv2()
         det_out = outputs[self._yoloe_det_name][0]  # (300, 38)
         # 38 = 4(bbox xyxy) + 1(score) + 1(class_id) + 32(mask_coeffs)
         results: list[Detection2D] = []
@@ -530,6 +541,7 @@ class BPUDetector(DetectorBase):
     # ================================================================
 
     def _preprocess(self, bgr):
+        cv2 = _require_cv2()
         h0, w0 = bgr.shape[:2]
         sz = self.INPUT_SIZE
         scale = min(sz / h0, sz / w0)

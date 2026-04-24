@@ -13,12 +13,6 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-_cv2_available = True
-try:
-    import cv2  # noqa: F401
-except ImportError:
-    _cv2_available = False
-
 from core import Blueprint, In, Module, Out, autoconnect
 from semantic.perception.semantic_perception.detector_module import (
     DetectionResult,
@@ -258,7 +252,6 @@ class TestDetectorBackendConfiguration(unittest.TestCase):
         )
         self.assertIs(backend, yolo_world_cls.return_value)
 
-    @unittest.skipUnless(_cv2_available, "cv2 not installed — bpu_detector module not importable")
     @patch("semantic.perception.semantic_perception.bpu_detector.BPUDetector")
     def test_bpu_backend_receives_recall_parameters(self, bpu_cls):
         mod = DetectorModule(
