@@ -160,6 +160,18 @@ public:
             m_builder_config.stationary_thresh = config["stationary_thresh"].as<double>();
         if (config["acc_scale"])
             m_node_config.acc_scale = config["acc_scale"].as<double>();
+
+        // ZUPT parameters (optional, fall back to Config defaults)
+        if (config["imu_static_acc_thresh"])
+            m_builder_config.imu_static_acc_thresh  = config["imu_static_acc_thresh"].as<double>();
+        if (config["imu_static_gyro_thresh"])
+            m_builder_config.imu_static_gyro_thresh = config["imu_static_gyro_thresh"].as<double>();
+        if (config["zupt_min_static_frames"])
+            m_builder_config.zupt_min_static_frames = config["zupt_min_static_frames"].as<int>();
+        if (config["zupt_sigma_v"])
+            m_builder_config.zupt_sigma_v   = config["zupt_sigma_v"].as<double>();
+        if (config["zupt_sigma_pos"])
+            m_builder_config.zupt_sigma_pos = config["zupt_sigma_pos"].as<double>();
     }
 
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg)
@@ -277,6 +289,17 @@ public:
         odom.twist.twist.linear.x = vel.x();
         odom.twist.twist.linear.y = vel.y();
         odom.twist.twist.linear.z = vel.z();
+
+        // Fill pose covariance from IESKF P matrix for downstream drift monitoring.
+        // IESKF state: [θ_wi(0:3), t_wi(3:6), ...]; ROS: row-major [x,y,z,roll,pitch,yaw]
+        const auto &P = m_kf->P();
+        odom.pose.covariance[0]  = P(3, 3);  // x
+        odom.pose.covariance[7]  = P(4, 4);  // y
+        odom.pose.covariance[14] = P(5, 5);  // z
+        odom.pose.covariance[21] = P(0, 0);  // roll
+        odom.pose.covariance[28] = P(1, 1);  // pitch
+        odom.pose.covariance[35] = P(2, 2);  // yaw
+
         odom_pub->publish(odom);
     }
 

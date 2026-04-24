@@ -12,6 +12,8 @@ public:
     void undistort(SyncPackage &package);
 
 private:
+    void checkIMUStationary(const Vec<IMUData> &batch);
+
     Config m_config;
     std::shared_ptr<IESKF> m_kf;
     double m_last_propagate_end_time;
@@ -21,4 +23,7 @@ private:
     V3D m_last_gyro;
     M12D m_Q;
     IMUData m_last_imu;
+
+    // ZUPT static detection state
+    int m_static_frame_count = 0;
 };

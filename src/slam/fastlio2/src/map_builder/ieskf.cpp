@@ -73,6 +73,37 @@ void IESKF::predict(const Input &inp, double dt, const M12D &Q)
 
     m_x += delta;
     m_P = m_F * m_P * m_F.transpose() + m_G * Q * m_G.transpose();
+    clampCovariance();
+}
+
+void IESKF::clampCovariance()
+{
+    for (int i = 0; i < 21; ++i)
+        m_P(i, i) = std::min(m_P(i, i), P_MAX[i]);
+}
+
+void IESKF::injectZUPT(double sigma_v, double sigma_pos)
+{
+    // Observe velocity states [12:15] with z = 0 (robot is stationary)
+    Eigen::Matrix<double, 3, 21> H_zupt = Eigen::Matrix<double, 3, 21>::Zero();
+    H_zupt.block<3, 3>(0, 12) = Eigen::Matrix3d::Identity();
+
+    Eigen::Matrix3d R_zupt = Eigen::Matrix3d::Identity() * sigma_v * sigma_v;
+    V3D innov = -m_x.v;  // z - H*x = 0 - v
+
+    Eigen::Matrix3d S = H_zupt * m_P * H_zupt.transpose() + R_zupt;
+    Eigen::Matrix<double, 21, 3> K = m_P * H_zupt.transpose() * S.inverse();
+
+    m_x += K * innov;
+    m_P = (M21D::Identity() - K * H_zupt) * m_P;
+
+    // Tighten position covariance when robot is confirmed stationary
+    if (sigma_pos > 0.0)
+    {
+        for (int i = 3; i < 6; ++i)
+            m_P(i, i) = std::min(m_P(i, i), sigma_pos * sigma_pos);
+    }
+    clampCovariance();
 }
 
 void IESKF::update()
@@ -191,10 +222,11 @@ void IESKF::update()
     // Store degeneracy info for external access (ROS2 publisher)
     m_degeneracy = shared_data.degeneracy;
 
-    // Severe degeneracy: revert to IMU prediction, don't update covariance
+    // Severe degeneracy: revert to IMU prediction, clamp covariance to prevent unbounded growth
     if (skip_lidar_update)
     {
         m_x = predict_x;
+        clampCovariance();
         return;
     }
 
@@ -202,4 +234,5 @@ void IESKF::update()
     L.block<3, 3>(0, 0) = Jr(delta.segment<3>(0));
     L.block<3, 3>(6, 6) = Jr(delta.segment<3>(6));
     m_P = L * H.ldlt().solve(L.transpose());  // P = L * H^{-1} * L^T
+    clampCovariance();
 }

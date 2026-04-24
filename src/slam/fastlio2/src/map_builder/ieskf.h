@@ -85,11 +85,29 @@ public:
 
     void update();
 
+    // Clamp P diagonal to physical upper bounds (prevents unbounded covariance growth)
+    void clampCovariance();
+
+    // ZUPT: inject zero-velocity pseudo-observation to constrain drift during static periods
+    void injectZUPT(double sigma_v = 0.02, double sigma_pos = 0.1);
+
     State &x() { return m_x; }
 
     M21D &P() { return m_P; }
 
     const DegeneracyInfo &degeneracy() const { return m_degeneracy; }
+
+    // Per-dimension P diagonal upper bounds for 21-state IESKF:
+    // [θ_wi(0:3), t_wi(3:6), θ_il(6:9), t_il(9:12), v(12:15), bg(15:18), ba(18:21)]
+    static constexpr double P_MAX[21] = {
+        9.87,  9.87,  9.87,   // θ_wi  (π² rad²)
+        1e4,   1e4,   1e4,    // t_wi  (100 m std²)
+        1e-4,  1e-4,  1e-4,   // θ_il  extrinsic rotation
+        1e-2,  1e-2,  1e-2,   // t_il  extrinsic translation
+        1e2,   1e2,   1e2,    // v     (10 m/s std²)
+        1e-2,  1e-2,  1e-2,   // bg    gyro bias
+        1.0,   1.0,   1.0,    // ba    acc bias
+    };
 
 private:
     size_t m_max_iter = 10;

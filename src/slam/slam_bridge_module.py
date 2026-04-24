@@ -122,11 +122,13 @@ class SlamBridgeModule(Module, layer=1):
         self._degen_level: str = DEGEN_NONE
         self._icp_fitness: float = 0.0
         self._effective_ratio: float = 1.0  # effective features / total features
-        self._eigenvalue_ratio: float = 0.0  # min/max eigenvalue of Hessian
+        self._eigenvalue_ratio: float = 0.0  # condition number (max_eig / min_eig)
         self._condition_number: float = 0.0
         self._degenerate_dof_count: int = 0
         self._eigenvalues: np.ndarray | None = None  # 6-DOF eigenvalues
         self._dof_mask: np.ndarray | None = None  # 1.0=constrained, 0.0=degenerate
+        self._max_pos_cov: float = 0.0        # max position covariance from Odometry
+        self._last_severe_warn: float = 0.0   # throttle SEVERE degeneracy warning
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
         self._fitness_warn: float = kw.get("fitness_warn", 0.15)
@@ -698,6 +700,11 @@ class SlamBridgeModule(Module, layer=1):
                     angular=Vector3(x=float(t.angular.x), y=float(t.angular.y), z=float(t.angular.z)),
                 ),
             )
+            # Track max position covariance from IESKF P matrix (filled by lio_node.cpp)
+            cov = msg.pose.covariance  # 36-element row-major 6x6
+            if len(cov) >= 15:
+                self._max_pos_cov = max(float(cov[0]), float(cov[7]), float(cov[14]))
+
             fused = self._fuse_odometry(slam_odom)
             # Apply map→odom TF so downstream (NavigationModule, Gateway)
             # sees map-frame positions. Without this, planner uses odom
@@ -778,27 +785,37 @@ class SlamBridgeModule(Module, layer=1):
     def _on_rclpy_degeneracy_detail(self, msg) -> None:
         """Detailed degeneracy metrics from Hessian eigenvalue analysis.
 
-        Float32MultiArray with 11 floats:
-          [0]  effective_ratio
-          [1]  condition_number
-          [2]  min_eigenvalue
-          [3]  max_eigenvalue
+        Float32MultiArray with 11 floats (matches C++ publishDegeneracy()):
+          [0]  condition_number
+          [1]  min_eigenvalue
+          [2]  max_eigenvalue
+          [3]  effective_ratio
           [4]  degenerate_dof_count
-          [5..10] eigenvalues (6 DOFs, sorted ascending)
+          [5..10] dof_mask (6 DOFs)
         """
         d = msg.data
         if len(d) < 11:
             return
-        self._effective_ratio = float(d[0])
-        self._condition_number = float(d[1])
-        self._eigenvalue_ratio = float(d[1])  # condition_number = max/min
+        self._condition_number = float(d[0])
+        self._eigenvalue_ratio = float(d[0])  # condition_number = max_eig / min_eig
+        self._effective_ratio = float(d[3])
         self._degenerate_dof_count = int(d[4])
-        self._eigenvalues = np.array([float(d[5 + i]) for i in range(6)])
-        # Derive DOF mask: eigenvalue < 1% of max → degenerate (0.0)
-        max_eig = float(d[3])
-        if max_eig > 0:
-            threshold = max_eig * 0.01
-            self._dof_mask = np.where(self._eigenvalues >= threshold, 1.0, 0.0)
+        self._dof_mask = np.array([float(d[5 + i]) for i in range(6)])
+        # Reconstruct eigenvalues from mask (approximate; mask gives 0/1 per DOF)
+        max_eig = float(d[2])
+        min_eig = float(d[1])
+        self._eigenvalues = np.array([min_eig if self._dof_mask[i] < 0.5 else max_eig
+                                      for i in range(6)])
+
+        # SEVERE early warning — throttled to once per 30s
+        now = _time.time()
+        if self._condition_number > 1e6 and (now - self._last_severe_warn) > 30.0:
+            self._last_severe_warn = now
+            logger.warning(
+                "SEVERE SLAM degeneracy: cond=%.2e, effective_ratio=%.3f, degen_dofs=%d — "
+                "covariance growth likely; consider stopping or relocating robot",
+                self._condition_number, self._effective_ratio, self._degenerate_dof_count)
+
         self._last_degen_time = _time.time()
         self._update_degeneracy_level()
 
@@ -1225,6 +1242,8 @@ class SlamBridgeModule(Module, layer=1):
                 "effective_ratio": round(self._effective_ratio, 3),
                 "condition_number": round(self._condition_number, 1),
                 "degenerate_dof_count": self._degenerate_dof_count,
+                "cov_warning": self._max_pos_cov > 100.0,
+                "max_pos_cov": round(self._max_pos_cov, 3),
             })
 
             self._shutdown_event.wait(timeout=interval)

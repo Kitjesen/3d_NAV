@@ -367,9 +367,9 @@ class GatewayModule(Module, layer=6):
         self._drift_watchdog_enabled: bool = os.environ.get(
             "LINGTU_DRIFT_WATCHDOG", "1") not in ("0", "false", "False")
         self._drift_watchdog_interval: float = float(
-            os.environ.get("LINGTU_DRIFT_WATCHDOG_INTERVAL", "60"))
+            os.environ.get("LINGTU_DRIFT_WATCHDOG_INTERVAL", "5"))
         self._drift_watchdog_xy_limit: float = float(
-            os.environ.get("LINGTU_DRIFT_WATCHDOG_XY_LIMIT", "1000"))
+            os.environ.get("LINGTU_DRIFT_WATCHDOG_XY_LIMIT", "50"))
         self._drift_watchdog_v_limit: float = float(
             os.environ.get("LINGTU_DRIFT_WATCHDOG_V_LIMIT", "10"))
         self._drift_watchdog_cooldown: float = float(

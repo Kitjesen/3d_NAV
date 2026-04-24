@@ -1,3 +1,4 @@
+#include <cmath>
 #include "imu_processor.h"
 
 IMUProcessor::IMUProcessor(Config &config, std::shared_ptr<IESKF> kf) : m_config(config), m_kf(kf)
@@ -98,6 +99,8 @@ void IMUProcessor::undistort(SyncPackage &package)
     m_last_imu = m_imu_cache.back();
     m_last_propagate_end_time = propagate_time_end;
 
+    checkIMUStationary(m_imu_cache);
+
     M3D cur_r_wi = m_kf->x().r_wi;
     V3D cur_t_wi = m_kf->x().t_wi;
     M3D cur_r_il = m_kf->x().r_il;
@@ -128,5 +131,50 @@ void IMUProcessor::undistort(SyncPackage &package)
             if (it_pcl == package.cloud->points.begin())
                 break;
         }
+    }
+}
+
+void IMUProcessor::checkIMUStationary(const Vec<IMUData> &batch)
+{
+    if (batch.size() < 2)
+        return;
+
+    // Compute mean of acc and gyro over the batch
+    V3D acc_mean = V3D::Zero();
+    V3D gyro_mean = V3D::Zero();
+    for (const auto &imu : batch)
+    {
+        acc_mean += imu.acc;
+        gyro_mean += imu.gyro;
+    }
+    const double n = static_cast<double>(batch.size());
+    acc_mean /= n;
+    gyro_mean /= n;
+
+    // Compute variance
+    double acc_var = 0.0;
+    double gyro_var = 0.0;
+    for (const auto &imu : batch)
+    {
+        acc_var  += (imu.acc  - acc_mean).squaredNorm();
+        gyro_var += (imu.gyro - gyro_mean).squaredNorm();
+    }
+    acc_var  /= n;
+    gyro_var /= n;
+
+    if (acc_var  < m_config.imu_static_acc_thresh * m_config.imu_static_acc_thresh &&
+        gyro_var < m_config.imu_static_gyro_thresh * m_config.imu_static_gyro_thresh)
+    {
+        m_static_frame_count++;
+        if (m_static_frame_count >= m_config.zupt_min_static_frames)
+        {
+            m_kf->injectZUPT(m_config.zupt_sigma_v, m_config.zupt_sigma_pos);
+            // Keep counter at threshold — continue injecting ZUPT every frame while static
+            m_static_frame_count = m_config.zupt_min_static_frames;
+        }
+    }
+    else
+    {
+        m_static_frame_count = 0;
     }
 }
