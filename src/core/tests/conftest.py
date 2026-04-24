@@ -17,11 +17,6 @@ for _p in _paths:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-# Script-style integration harnesses that use sys.exit() at module scope
-# are not pytest-compatible. Exclude them from collection so that
-# `pytest src/core/tests/` doesn't raise INTERNALERROR on SystemExit.
-# Run them directly:  python3 src/core/tests/test_cross_module_integration.py
-collect_ignore = [
-    "test_cross_module_integration.py",
-    "test_integration_36.py",
-]
+# Integration harnesses run module-level setup at import time.
+# Both files now expose proper def test_*() functions and guard sys.exit()
+# in `if __name__ == "__main__":`, so pytest can collect them safely.

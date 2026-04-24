@@ -90,12 +90,38 @@ class TAREExplorerModule(Module, layer=5):
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
+    def preflight(self) -> str | None:
+        """Verify that at least one DDS backend is reachable before the system starts."""
+        has_cyclonedds = False
+        has_rclpy = False
+        try:
+            import cyclonedds  # noqa: F401
+            has_cyclonedds = True
+        except ImportError:
+            pass
+        try:
+            import rclpy  # noqa: F401
+            has_rclpy = True
+        except ImportError:
+            pass
+        if not has_cyclonedds and not has_rclpy:
+            return (
+                "TAREExplorerModule requires cyclonedds or rclpy, but neither is installed. "
+                "Install cyclonedds-python or source a ROS2 workspace."
+            )
+        return None
+
     def setup(self) -> None:
         if self._try_cyclonedds():
             return
         if self._try_rclpy():
             return
-        logger.info("TAREExplorerModule: no DDS backend, running in stub mode")
+        # preflight() guarantees at least one package is importable, so reaching
+        # here means runtime init failed despite the package being present.
+        logger.warning(
+            "TAREExplorerModule: DDS backend import succeeded but init failed; "
+            "no waypoints will be produced."
+        )
 
     def start(self) -> None:
         super().start()

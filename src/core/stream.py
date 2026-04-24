@@ -54,6 +54,7 @@ class Out(Generic[T]):
     __slots__ = (
         "_callbacks",
         "_last_ts",
+        "_last_error_log_ts",
         "_lock",
         "_msg_count",
         "_msg_type",
@@ -81,8 +82,9 @@ class Out(Generic[T]):
         self._rate_window_start: float = 0.0
         self._rate_window_count: int = 0
         self._rate_hz: float = 0.0
-        # Error counting
+        # Error counting + rate-limited logging (at most once per 5 seconds)
         self._publish_errors: int = 0
+        self._last_error_log_ts: float = 0.0
 
     # -- core API ------------------------------------------------------------------
 
@@ -105,14 +107,24 @@ class Out(Generic[T]):
                 cb(msg)
             except Exception:
                 self._publish_errors += 1
-                logger.exception("Out[%s] callback error", self._name)
+                if now - self._last_error_log_ts >= 5.0:
+                    self._last_error_log_ts = now
+                    logger.exception(
+                        "Out[%s] callback error (total errors: %d)",
+                        self._name, self._publish_errors,
+                    )
         # External transport
         if self._transport and self._transport_topic:
             try:
                 self._transport.publish(self._transport_topic, msg)
             except Exception:
                 self._publish_errors += 1
-                logger.exception("Out[%s] transport publish error", self._name)
+                if now - self._last_error_log_ts >= 5.0:
+                    self._last_error_log_ts = now
+                    logger.exception(
+                        "Out[%s] transport publish error (total errors: %d)",
+                        self._name, self._publish_errors,
+                    )
 
     # -- public API ----------------------------------------------------------------
 

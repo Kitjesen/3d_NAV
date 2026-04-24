@@ -273,10 +273,19 @@ T("36.WaypointTracker stuck", got_stuck)
 
 # ============================================================
 print()
-passed = sum(1 for _, ok in results if ok)
-failed = sum(1 for _, ok in results if not ok)
-print(f"========== {passed} PASSED, {failed} FAILED / {len(results)} total ==========")
-if failed:
+_passed = sum(1 for _, ok in results if ok)
+_failed = sum(1 for _, ok in results if not ok)
+print(f"========== {_passed} PASSED, {_failed} FAILED / {len(results)} total ==========")
+if _failed:
     for name, ok in results:
         if not ok:
             print(f"  FAIL: {name}")
+
+
+def test_integration_36_all_pass() -> None:
+    """Pytest entry point: assert every individual module integration check passed."""
+    failed_tests = [(name, ok) for name, ok in results if not ok]
+    assert not failed_tests, (
+        "%d/%d integration checks FAILED:\n%s"
+        % (len(failed_tests), len(results), "\n".join(f"  FAIL: {n}" for n, _ in failed_tests))
+    )

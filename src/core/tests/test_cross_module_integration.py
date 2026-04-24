@@ -270,22 +270,35 @@ except Exception as e:
     test(30, "Zero auto_wire ambiguity", False, str(e))
 
 # ==== Summary ====
-passed = sum(1 for v in results.values() if v)
-failed = sum(1 for v in results.values() if not v)
-total = len(results)
+_passed = sum(1 for v in results.values() if v)
+_failed = sum(1 for v in results.values() if not v)
+_total = len(results)
 print(flush=True)
 print("=" * 60, flush=True)
-print("Summary: %d/%d PASSED, %d/%d FAILED" % (passed, total, failed, total), flush=True)
+print("Summary: %d/%d PASSED, %d/%d FAILED" % (_passed, _total, _failed, _total), flush=True)
 print("=" * 60, flush=True)
 
-# Stop system (may block on server threads, so use os._exit as fallback)
-def _final_stop():
-    time.sleep(5)
-    os._exit(0 if failed == 0 else 1)
-t = threading.Thread(target=_final_stop, daemon=True)
-t.start()
-try:
-    system.stop()
-except Exception:
-    pass
-sys.exit(0 if failed == 0 else 1)
+
+def test_cross_module_integration_all_pass() -> None:
+    """Pytest entry point: assert that every numbered integration check passed."""
+    failed_tests = {k: v for k, v in results.items() if not v}
+    assert not failed_tests, (
+        "%d/%d integration tests FAILED: %s" % (len(failed_tests), _total, sorted(failed_tests))
+    )
+
+
+if __name__ == "__main__":
+    import os as _os
+
+    # Stop system (may block on server threads, so use os._exit as fallback)
+    def _final_stop():
+        time.sleep(5)
+        _os._exit(0 if _failed == 0 else 1)
+
+    t = threading.Thread(target=_final_stop, daemon=True)
+    t.start()
+    try:
+        system.stop()
+    except Exception:
+        pass
+    sys.exit(0 if _failed == 0 else 1)

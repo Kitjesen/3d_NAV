@@ -51,6 +51,18 @@ class MissionState:
     CANCELLED  = "CANCELLED"
     PATROLLING = "PATROLLING"
 
+    # Legal state transitions. Any state → IDLE is always allowed (stop/cancel/reset).
+    TRANSITIONS: dict[str, frozenset[str]] = {
+        "IDLE":       frozenset(["PLANNING", "PATROLLING"]),
+        "PLANNING":   frozenset(["EXECUTING", "FAILED", "IDLE", "CANCELLED"]),
+        "EXECUTING":  frozenset(["SUCCESS", "FAILED", "STUCK", "IDLE", "PLANNING", "CANCELLED"]),
+        "PATROLLING": frozenset(["EXECUTING", "SUCCESS", "FAILED", "STUCK", "IDLE", "PLANNING", "CANCELLED"]),
+        "SUCCESS":    frozenset(["IDLE", "PLANNING", "PATROLLING"]),
+        "FAILED":     frozenset(["IDLE", "PLANNING", "PATROLLING"]),
+        "STUCK":      frozenset(["IDLE", "PLANNING", "CANCELLED"]),
+        "CANCELLED":  frozenset(["IDLE", "PLANNING", "PATROLLING"]),
+    }
+
 
 @register("navigation", "default", description="Unified navigation module")
 class NavigationModule(Module, layer=5):
@@ -196,6 +208,12 @@ class NavigationModule(Module, layer=5):
     # ── Mission FSM ───────────────────────────────────────────────────────
 
     def _set_state(self, state: str) -> None:
+        allowed = MissionState.TRANSITIONS.get(self._state, frozenset())
+        if state != self._state and state not in allowed:
+            logger.warning(
+                "NavigationModule: illegal state transition %s → %s (allowed: %s)",
+                self._state, state, sorted(allowed),
+            )
         self._state = state
         self.planner_status.publish(state)
         self.mission_status.publish({
@@ -252,7 +270,7 @@ class NavigationModule(Module, layer=5):
             # Save current mission state so we can resume
             if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
                 self._pre_teleop_goal = self._goal.copy() if self._goal is not None else None
-                self._pre_teleop_state = self._state.value
+                self._pre_teleop_state = self._state
                 self._tracker.clear()
                 self._set_state(MissionState.IDLE)
                 logger.info("NavigationModule: paused for teleop (saved goal)")

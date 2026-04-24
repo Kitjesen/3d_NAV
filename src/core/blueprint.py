@@ -505,14 +505,49 @@ def _do_auto_wire(
                 )
 
 
+def _find_cycle(adj: dict[str, list[str]], nodes: list[str]) -> list[str]:
+    """DFS-based cycle finder. Returns one cycle path, or empty list if none found."""
+    visited: set[str] = set()
+    stack: list[str] = []
+    stack_set: set[str] = set()
+
+    def dfs(node: str) -> list[str]:
+        visited.add(node)
+        stack.append(node)
+        stack_set.add(node)
+        for neighbor in adj.get(node, []):
+            if neighbor not in visited:
+                cycle = dfs(neighbor)
+                if cycle:
+                    return cycle
+            elif neighbor in stack_set:
+                # Found cycle — extract it from current stack
+                idx = stack.index(neighbor)
+                return stack[idx:]
+        stack.pop()
+        stack_set.discard(node)
+        return []
+
+    for n in nodes:
+        if n not in visited:
+            cycle = dfs(n)
+            if cycle:
+                return cycle
+    return []
+
+
 def _topo_sort(
     instances: dict[str, Any],
     connections: list[tuple[str, str, str, str]],
 ) -> list[str]:
-    """Kahn's topological sort; falls back to registration order on cycles.
+    """Kahn's topological sort; falls back to layer order on cycles.
 
     Upstream modules start first.  Within each topological level, lower-layer
     modules are sorted before higher-layer ones.
+
+    Robotics control loops are inherently cyclic (odometry flows up while
+    cmd_vel flows down). When a cycle is detected, the involved modules are
+    logged at WARNING level and sorted by layer number as a sensible fallback.
     """
     in_degree: dict[str, int] = {n: 0 for n in instances}
     adj: dict[str, list[str]] = defaultdict(list)
@@ -540,8 +575,17 @@ def _topo_sort(
         ready = sorted(ready + newly_ready, key=lambda n: instances[n].layer or 0)
 
     if len(result) < len(instances):
-        # Cycle detected — append remaining nodes in registration order
         remaining = [n for n in instances if n not in set(result)]
+        cycle = _find_cycle(adj, remaining)
+        cycle_str = " → ".join(cycle + [cycle[0]]) if cycle else str(remaining)
+        logger.warning(
+            "Wire cycle detected — startup order may be imprecise for: %s. "
+            "Cycle: %s. Falling back to layer-sorted order. "
+            "This is expected for control loops (e.g. odometry ↑ / cmd_vel ↓).",
+            remaining, cycle_str,
+        )
+        # Sort remaining by layer so lower layers still start before higher ones
+        remaining.sort(key=lambda n: instances[n].layer or 0)
         result.extend(remaining)
 
     return result
