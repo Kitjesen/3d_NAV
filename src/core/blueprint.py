@@ -584,8 +584,9 @@ def _topo_sort(
             "This is expected for control loops (e.g. odometry ↑ / cmd_vel ↓).",
             remaining, cycle_str,
         )
-        # Sort remaining by layer so lower layers still start before higher ones
-        remaining.sort(key=lambda n: instances[n].layer or 0)
+        # Sort remaining by layer descending: higher-layer orchestrators start first
+        # so they're ready to accept data when lower-layer hardware comes up.
+        remaining.sort(key=lambda n: instances[n].layer or 0, reverse=True)
         result.extend(remaining)
 
     return result

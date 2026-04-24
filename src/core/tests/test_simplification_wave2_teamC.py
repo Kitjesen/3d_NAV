@@ -133,6 +133,13 @@ class TestProjectTo3dFallback(unittest.TestCase):
         self.assertAlmostEqual(c, 0.5, delta=0.02)
 
 
+_cv2_available = True
+try:
+    import cv2  # noqa: F401
+except ImportError:
+    _cv2_available = False
+
+
 # ---------------------------------------------------------------------------
 # W2-3 Tests — BPUDetector._generate_masks
 # ---------------------------------------------------------------------------
@@ -184,6 +191,7 @@ def _make_raw_and_mc(n=2):
     return raw, kept_mc
 
 
+@unittest.skipUnless(_cv2_available, "cv2 not installed in this environment")
 class TestGenerateMasks(unittest.TestCase):
 
     # -- W2-3-A: normal path produces boolean masks with bbox intersection --

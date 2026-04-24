@@ -12,6 +12,12 @@ from unittest.mock import patch
 
 import numpy as np
 
+_scipy_available = True
+try:
+    import scipy.ndimage  # noqa: F401
+except ImportError:
+    _scipy_available = False
+
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from core.msgs.nav import OccupancyGrid, Odometry, Path
 from core.msgs.semantic import ExecutionEval, SafetyState
@@ -224,6 +230,7 @@ class TestGlobalPlannerService(unittest.TestCase):
 from nav.occupancy_grid_module import OccupancyGridModule
 
 
+@unittest.skipUnless(_scipy_available, "scipy not installed in this environment")
 class TestOccupancyGridModule(unittest.TestCase):
 
     def _make_module(self, **kw):

@@ -84,6 +84,14 @@ class TestW1NavigationDefaultSafe(unittest.TestCase):
 # W1-4 / W1-5  OccupancyGrid / ESDF — scipy is a hard dependency now
 # ---------------------------------------------------------------------------
 
+_scipy_available = True
+try:
+    import scipy.ndimage  # noqa: F401
+except ImportError:
+    _scipy_available = False
+
+
+@unittest.skipUnless(_scipy_available, "scipy not installed in this environment")
 class TestW1ScipyHardDependency(unittest.TestCase):
     def test_occupancy_setup_succeeds_with_scipy(self):
         """If scipy is installed the module sets up cleanly."""

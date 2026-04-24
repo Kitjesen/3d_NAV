@@ -14,6 +14,12 @@ import time
 import numpy as np
 import pytest
 
+_scipy_available = True
+try:
+    import scipy.ndimage  # noqa: F401
+except ImportError:
+    _scipy_available = False
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 _SCENE = os.path.normpath(os.path.join(
@@ -40,6 +46,7 @@ def _build_sim_nav():
     )
 
 
+@pytest.mark.skipif(not _scipy_available, reason="scipy not installed in this environment")
 class TestSimNavEndToEnd:
 
     def test_blueprint_has_required_modules(self):

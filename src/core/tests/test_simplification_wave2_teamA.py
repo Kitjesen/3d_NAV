@@ -107,10 +107,18 @@ class TestLocalPlannerGridParams(unittest.TestCase):
         self.assertEqual(m._grid_search_radius, 0.45)
 
 
+_scipy_available = True
+try:
+    import scipy.ndimage  # noqa: F401
+except ImportError:
+    _scipy_available = False
+
+
 # ---------------------------------------------------------------------------
 # W2-7: TraversabilityCost — bilinear resampling + scipy guard
 # ---------------------------------------------------------------------------
 
+@unittest.skipUnless(_scipy_available, "scipy not installed in this environment")
 class TestTraversabilityCostResample(unittest.TestCase):
     """W2-7: _resample_to_grid uses bilinear; setup raises if scipy absent."""
 
