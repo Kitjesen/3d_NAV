@@ -25,9 +25,9 @@ help:
 	@echo "    make format      - clang-format all C++ sources"
 	@echo "    make lint        - clang-tidy"
 	@echo ""
-	@echo "  Launch (legacy ROS2 launch files):"
-	@echo "    make mapping     - start mapping mode"
-	@echo "    make navigation  - start navigation mode"
+	@echo "  Launch (Module-First profiles via lingtu.py):"
+	@echo "    make mapping     - start mapping mode (lingtu.py map)"
+	@echo "    make navigation  - start navigation mode (lingtu.py s100p)"
 	@echo ""
 
 build:
@@ -90,10 +90,10 @@ py-fix:
 	@echo "Done."
 
 mapping:
-	@bash -c "source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch launch/navigation_bringup.launch.py"
+	@bash -c "source /opt/ros/humble/setup.bash && source install/setup.bash && python3 lingtu.py map"
 
 navigation:
-	@bash -c "source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch launch/navigation_run.launch.py"
+	@bash -c "source /opt/ros/humble/setup.bash && source install/setup.bash && python3 lingtu.py s100p"
 
 sync-version:
 	@bash scripts/sync_versions.sh
