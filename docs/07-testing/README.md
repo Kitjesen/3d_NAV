@@ -1,47 +1,50 @@
-# LingTu 回归流程
+# LingTu Regression Suite
 
-三层回归,覆盖从本地 commit 到 S100P 真机的全链路。
+Three layers, from local commit to S100P field run.
 
-| 层 | 触发 | 内容 | 耗时 | 强制 |
-|----|------|------|------|------|
-| **L1** `pre-commit` hook | `git commit` | `pytest src/core/tests/ -q` 必绿 | ~90s | ✅ |
-| **L2** `pre-push` hook | `git push` | L1 + `stub profile` 冒烟 build | ~30s 额外 | ✅ |
-| **L3** S100P 每周 | 周五下班前人工 | 跑 `p0_*.sh` 4 个脚本 + 录视频 | ~30 分钟 | ✅ |
+| Layer | Trigger | Content | Time | Required |
+|---|---|---|---|---|
+| L1 pre-commit hook | `git commit` | `pytest src/core/tests/ -q` must pass | ~90 s | Yes |
+| L2 pre-push hook | `git push` | L1 plus `stub` profile smoke build | ~30 s extra | Yes |
+| L3 S100P weekly | Friday afternoon, manual | Run `p0_*.sh` four scripts and capture video | ~30 min | Yes |
 
 ---
 
-## L1 / L2 本地 hooks 安装
+## Install local L1 / L2 hooks
 
 ```bash
-# 一次性安装到仓库 (`.git/hooks/` 仓库本地,不入版本)
+# One-shot install into .git/hooks/ (not version-controlled)
 bash docs/07-testing/install_hooks.sh
 ```
 
-安装后:
-- `git commit` 前自动跑 `pytest src/core/tests/ -q`,失败则 commit 被阻止
-- `git push` 前再跑一次 pytest + `full_stack_blueprint(profile="stub")` 能 `build().start()`
+After install:
+- `git commit` runs `pytest src/core/tests/ -q`; the commit aborts on failure.
+- `git push` runs pytest plus a `full_stack_blueprint(profile="stub").build().start()` smoke check.
 
-**绕过**(紧急情况):
+Bypass (emergencies only):
+
 ```bash
 git commit --no-verify -m "..."
 git push --no-verify
 ```
-但必须在 PR 描述里说明原因,审核者会挑战。
+
+The PR description must state the reason; the reviewer will challenge it.
 
 ---
 
-## L3 真机 P0 脚本
+## L3 P0 scripts on the robot
 
-每个 P0 脚本自成一体,`set -e`,日志写入 `~/data/nav_logs/YYYYMMDD_HHMMSS_<script>.log`。
+Each P0 script is self-contained, uses `set -e`, and writes its log to `~/data/nav_logs/YYYYMMDD_HHMMSS_<script>.log`.
 
-| 脚本 | 覆盖 | 输入 | 通过判据 |
-|------|------|------|---------|
-| `p0_cold_boot.sh` | 系统冷启动 | 无 | 20+ modules OK + Gateway 5050 返回 `health.status="ok"` 并稳定 3 分钟 |
-| `p0_mapping.sh` | 建图 → 保存 → 激活 | 人工手持走一圈 | 出 `map.pcd` + `tomogram.pickle` + `occupancy.npz` + `map.pgm/map.yaml` |
-| `p0_goto.sh` | 点目标 → 到达 | 提前激活好一张图 | Dashboard 发 goal,`mission_status=SUCCESS` 或 `EV_PATH_COMPLETE` 事件 |
-| `p0_estop.sh` | 紧急停止反射 | 人工按 Dashboard E-stop 按钮 | 100 ms 内 CmdVelMux 输出 `Twist.zero()`,log 有 watchdog 记录 |
+| Script | Coverage | Input | Pass criteria |
+|---|---|---|---|
+| `p0_cold_boot.sh` | System cold start | None | At least 20 modules up, Gateway `/api/v1/health` returns `status="ok"` and is stable for 3 minutes |
+| `p0_mapping.sh` | Map -> save -> activate | Walk the robot for ~3 min | `map.pcd` + `tomogram.pickle` + `occupancy.npz` + `map.pgm` / `map.yaml` produced |
+| `p0_goto.sh` | Click goal -> arrive | Pre-loaded active map | `mission_status=SUCCESS` or `EV_PATH_COMPLETE` event |
+| `p0_estop.sh` | E-stop reflex | Operator presses dashboard E-stop | Within 100 ms `CmdVelMux` outputs `Twist.zero()`; watchdog log entry present |
 
-### 运行方式(Sunrise SSH)
+### Run on Sunrise (S100P)
+
 ```bash
 ssh sunrise@192.168.66.190
 cd ~/data/SLAM/navigation
@@ -49,31 +52,33 @@ git pull --ff-only origin main
 bash docs/07-testing/p0_all.sh | tee ~/data/nav_logs/$(date +%Y%m%d_%H%M%S)_p0_all.log
 ```
 
-跑完:
-1. 结果记录到 `vault/实机记录/YYYY-MM-DD.md`(PASS / FAIL / BLOCKED + 原因)
-2. `BACKLOG.md` 里对应条目更新状态 + 最近真机日期
-3. 失败 case 单独在 `docs/08-known-issues/` 开 issue 追踪
+After the run:
+1. Record `PASS / FAIL / BLOCKED` plus reason in `vault/实机记录/YYYY-MM-DD.md`.
+2. Update the matching item in `BACKLOG.md` (status + last-on-robot date).
+3. Failure cases get their own ticket under `docs/08-project-management/known-issues/` (when that location is created).
 
 ---
 
-## 禁忌
+## Rules
 
-- ❌ SSH 里裸敲命令跑验证 → 必须走脚本
-- ❌ 跳过 pre-commit / pre-push → 除非紧急 + PR 说明
-- ❌ BACKLOG 外开 PR → 新条目先入表
-- ❌ 长期 `blocked` 不跟踪 → 每周 L3 必须刷新状态
+- Never run validation commands ad hoc over SSH; always go through a script.
+- Never bypass pre-commit / pre-push without an emergency rationale in the PR.
+- New PRs must update `BACKLOG.md` first.
+- Items in `blocked` must be re-evaluated every Friday.
 
 ---
 
-## 脚本清单
+## Script inventory
 
-- `install_hooks.sh` — 安装 L1/L2 本地 git hooks
-- `p0_cold_boot.sh` — P0-01 冷启动
-- `p0_mapping.sh` — P0-02 建图
-- `p0_goto.sh` — P0-03 导航
-- `p0_estop.sh` — P0-04 紧急停止
-- `p0_all.sh` — 串行跑完 P0-01 到 P0-04
-- `p1_tare_explore.sh` — P1-01 TARE 探索(未写,后续补)
-- `p1_gnss_fusion.sh` — P1-02 GNSS 融合(未写)
-- `p1_follow_person.sh` — P1-04 OSNet 跟人(未写)
-- `p1_degraded.sh` — P1-05 退化(未写)
+- `install_hooks.sh` — install L1 / L2 git hooks.
+- `p0_cold_boot.sh` — P0-01 cold start.
+- `p0_mapping.sh` — P0-02 mapping.
+- `p0_goto.sh` — P0-03 navigate to a point.
+- `p0_estop.sh` — P0-04 emergency stop.
+- `p0_all.sh` — chain P0-01 through P0-04.
+- `p1_tare_explore.sh` — P1-01 TARE exploration (TBD).
+- `p1_gnss_fusion.sh` — P1-02 GNSS fusion (TBD).
+- `p1_follow_person.sh` — P1-04 OSNet person follow (TBD).
+- `p1_degraded.sh` — P1-05 sensor degradation (TBD).
+
+The single tracked baseline document remaining in this folder is `SUPERVISION_BENCHMARK_BASELINE_2026-04-05.md` (frozen for the supervision tracker migration).

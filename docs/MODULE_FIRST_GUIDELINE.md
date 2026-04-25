@@ -1,63 +1,75 @@
-# LingTu Module-First 准则
+# Module-First Guidelines
 
-> Module 就是 Node。不需要两层。
+> Module is the Node. There is no second tier.
 
-## 核心原则
+These eight rules govern how new code is added to LingTu. They reflect what
+is actually enforced by `core/blueprint.py`, `core/module.py`, and the
+existing modules; they are not aspirational.
 
-### 1. Module 是唯一运行单元
+## 1. Module is the only runtime unit
 
 ```
-正确:  Module(算法 + In/Out 端口) → Blueprint 编排 → lingtu.py 启动
-错误:  Module(算法) + ROS2 Node(适配器) + launch 文件 → 三层维护
+Right:  Module (algorithm + In/Out ports) → Blueprint orchestration → lingtu.py
+Wrong:  Module + ROS2 Node adapter + launch file → three layers to maintain
 ```
 
-每个功能只有一个实现，住在 Module 里。
-不存在 "xxx.py (ROS2 Node)" + "xxx_module.py (Module)" 这种成对文件。
+Each capability has exactly one implementation, living in a Module.
+There must not be paired files like `xxx.py` (ROS2 Node) plus
+`xxx_module.py` (Module).
 
-### 2. Blueprint 是可复用的系统组合，任何脚本都能启动
+## 2. Blueprint is the only orchestration
 
-LingTu 是库，不是应用。Blueprint 就是入口。
+LingTu is a library. The entry script (`lingtu.py` → `cli.main.main`) just
+parses CLI flags and calls `full_stack_blueprint(**cfg).build()`. Any
+script can do the same:
 
 ```python
-# 一行启动 (生产)
-from drivers.thunder.blueprints import thunder_semantic
-thunder_semantic(dog_host="192.168.66.190", llm="kimi").build().start()
+from core.blueprint import autoconnect
+from core.blueprints.stacks import (
+    driver, slam, maps, perception, memory, planner,
+    navigation, exploration, safety, gateway,
+)
 
-# 一行启动 (测试)
-from drivers.sim.stub import stub_blueprint
-stub_blueprint().build().start()
-
-# 自由组合
-from core import autoconnect
-autoconnect(
-    ThunderDriver.blueprint(dog_host="192.168.66.190"),
-    DetectorModule.blueprint(detector="bpu"),
-    NavigationModule.blueprint(planner="astar"),
-    SafetyRingModule.blueprint(),
-).build().start()
+system = autoconnect(
+    driver("thunder", dog_host="192.168.66.190"),
+    slam("localizer"),
+    maps(),
+    perception("bpu"),
+    memory(),
+    planner("kimi"),
+    navigation("astar"),
+    exploration("none"),
+    safety(),
+    gateway(5050),
+).build()
+system.start()
 ```
 
-`lingtu.py` 是一个带 CLI 参数的便利脚本，不是架构约束。
-不使用 `ros2 launch`。不使用 `ros2 run`。
+`ros2 launch` is not used to start Module-First systems. `ros2 run` is not
+used either.
 
-### 3. 通信走 In/Out + Transport，不走 ROS2 topic
+## 3. Communication uses In/Out + Transport
 
 ```
 Module A ──Out[Odometry]──wire──In[Odometry]──→ Module B
 
-transport 选择:
-  callback  — 同进程直调，零延迟 (默认)
-  dds       — 跨进程解耦 (cyclonedds, 不是 rclpy)
-  shm       — 大数据高带宽 (点云、图像)
+transport options (per-wire, see core.blueprint._resolve_transport):
+  None / "local"  — direct callback, zero latency (default)
+  "dds"           — CycloneDDS for cross-process decoupling
+  "shm"           — shared memory for high-bandwidth payloads
 ```
 
-不使用 rclpy.Publisher / rclpy.Subscription。
-不使用 ROS2 QoS profile（我们的 backpressure policy 替代）。
+Modules don't `import rclpy.publisher` or `rclpy.subscription`. ROS2 QoS
+profiles aren't used either; the framework's backpressure policies
+(`latest`, `throttle`, `sample`, `buffer`, `all`) take their place.
 
-### 4. C++ 节点走 NativeModule，不走 ros2 run
+## 4. C++ nodes go through NativeModule
+
+A C++ executable becomes a child process supervised by Python:
 
 ```python
-# NativeModule 管理 C++ 子进程
+from core.native_module import NativeModule, NativeModuleConfig
+
 class AutonomyModule(Module, layer=2):
     def setup(self):
         self._terrain = NativeModule(NativeModuleConfig(
@@ -67,23 +79,24 @@ class AutonomyModule(Module, layer=2):
         self._terrain.start()  # watchdog + auto-restart
 ```
 
-C++ 节点仍然是独立可执行文件，但由 Python Module 启动和管理。
-不使用 launch 文件编排 C++ 节点。
+C++ binaries stay first-class executables, but they are launched and
+restarted from Python — not from a `launch.py` file.
 
-### 5. 传感器直连，不绕 ROS2 driver
+## 5. Sensors connect directly, no ROS2 driver in the middle
 
 ```
-正确:  Module 直接调 SDK → publish Out[Image]
-        ThunderDriver → gRPC → brainstem (已实现)
-        CameraModule → cv2.VideoCapture / SDK → Out[Image]
+Right:  Module calls SDK directly → publishes Out[Image]
+        ThunderDriver → gRPC → brainstem
+        CameraBridgeModule → SDK → Out[color_image]/Out[depth_image]
 
-错误:  ros2 run livox_driver → /livox/lidar topic → rclpy 订阅
+Wrong:  ros2 run livox_driver → /livox/lidar topic → rclpy subscriber
 ```
 
-如果传感器有 Python SDK，Module 直接调。
-如果传感器只有 C++ driver，用 NativeModule 管子进程 + SHM/DDS 读数据。
+If a sensor has a Python SDK, the Module talks to it directly. If only a
+C++ driver exists, wrap it in a `NativeModule` and read its data via
+SHM/DDS.
 
-### 6. 消息类型只有一套: core.msgs
+## 6. There is exactly one message catalogue: `core.msgs`
 
 ```python
 from core.msgs.nav import Odometry, Path
@@ -92,119 +105,87 @@ from core.msgs.semantic import SceneGraph, SafetyState
 from core.msgs.sensor import Image, CameraIntrinsics
 ```
 
-不 import `sensor_msgs.msg`、`nav_msgs.msg`、`std_msgs.msg`。
-ROS2 消息类型只在 NativeModule 的 C++ 子进程内部使用。
+Modules do not `import sensor_msgs.msg`, `nav_msgs.msg`, or `std_msgs.msg`.
+ROS2 message types only appear inside the C++ subprocess of a
+`NativeModule`.
 
-### 7. 配置走构造函数参数，不走 ROS2 parameter
+## 7. Configuration is constructor parameters, not ROS2 parameters
 
 ```python
-# 正确: Blueprint 参数
+# Right — Blueprint config
 bp.add(DetectorModule, detector="bpu", confidence=0.5)
 
-# 正确: CLI 参数
-python lingtu.py --detector bpu
+# Right — CLI override
+python lingtu.py nav --detector bpu
 
-# 错误: ROS2 declare_parameter / get_parameter
+# Wrong — ROS2 parameters
 self.declare_parameter("detector", "yoloe")
 ```
 
-### 8. 可插拔走 Registry，不走 if/else
+Configuration that is shared across modules lives in
+`config/robot_config.yaml`, loaded via `core.config.get_config()`.
+
+## 8. Pluggable backends use the Registry, not `if`
 
 ```python
-# 注册 (在实现文件里)
+# Register where the implementation lives
 @register("detector", "bpu", platforms={"aarch64"})
 class BPUDetector: ...
 
 @register("detector", "yoloe")
 class YOLOeDetector: ...
 
-# 查找 (在 Module 里)
+# Resolve where the Module lives
 DetectorCls = get("detector", args.detector)
 ```
 
-不在 Module 里写 `if name == "bpu": from ... import BPU`。
+Modules do not contain `if name == "bpu": from ... import BPU`.
 
 ---
 
-## 文件命名规范
+## File naming
 
 ```
 src/nav/
-  navigation_module.py      # Module (唯一实现)
-  safety_ring_module.py     # Module (唯一实现)
+  navigation_module.py        # Module — the only implementation
+  safety_ring_module.py       # Module — the only implementation
+  cmd_vel_mux_module.py       # Module — the only implementation
 
 src/semantic/perception/semantic_perception/
-  detector_module.py        # Module
-  encoder_module.py         # Module
-  service.py                # Service (纯算法编排，Module 调用)
-  instance_tracker.py       # 纯算法 (被 Service 调用)
+  perception_module.py        # Module
+  encoder_module.py           # Module
+  instance_tracker.py         # pure algorithm called by the Module
 
 src/drivers/thunder/
-  han_dog_module.py         # Module (直连 brainstem gRPC)
+  thunder_driver.py / han_dog_module.py   # Module — gRPC client
 ```
 
-**不再保留的文件模式:**
-- `xxx_node.py` — ROS2 Node 入口，由 Module 替代
-- `xxx.launch.py` — launch 文件，由 lingtu.py 替代
-- `xxx_mixin.py` — ROS2 mixin，逻辑应在 Module 或 Service 里
+Patterns that no longer exist in this repo:
 
-### 保留 ROS2 Node 的唯一例外
+- `xxx_node.py` ROS2 Node entry points
+- `xxx.launch.py` launch files for Module-First systems
+- `xxx_mixin.py` ROS2 mixins
+- `launch/subsystems/` and `scripts/legacy/` (deleted in commits 6fd7257
+  and fe99873)
 
-SLAM (Fast-LIO2 / Point-LIO) — 这是 C++ 且深度耦合 ROS2 TF/PCL。
-通过 NativeModule 启动，不需要 Python 适配器。
+The single exception is the SLAM stack: Fast-LIO2 / Point-LIO / Localizer
+are kept as ROS2 C++ nodes because they are deeply coupled to TF and PCL.
+They are launched and supervised from `slam.SLAMModule` /
+`slam.SlamBridgeModule` via `NativeModule`. Their algorithm-side launch
+files live under `launch/profiles/` and are loaded by the Module — not by
+a human running `ros2 launch`.
 
----
+## Verification checklist
 
-## 迁移判断流程
+After a clean-up pass, the following should all be true:
 
-```
-一个 ROS2 Node 文件:
-  │
-  ├─ 已有对应 *_module.py?
-  │   ├─ YES → Module 是完整实现?
-  │   │   ├─ YES → 删除 ROS2 Node 文件
-  │   │   └─ NO  → 补全 Module，再删 Node
-  │   └─ NO  → 新建 Module，迁移算法逻辑，删 Node
-  │
-  ├─ 是 C++ 可执行文件?
-  │   └─ YES → NativeModule 管理，不需要 Python Node
-  │
-  └─ 是传感器驱动?
-      ├─ 有 Python SDK → Module 直连
-      └─ 只有 C++ → NativeModule + SHM/DDS
-```
-
----
-
-## 当前待清理文件
-
-| 文件 | 状态 | 行动 |
-|------|------|------|
-| `nav/rings/nav_rings/safety_monitor.py` | 已有 SafetyRingModule | 删除 |
-| `nav/rings/nav_rings/evaluator.py` | 已有 SafetyRingModule | 删除 |
-| `nav/rings/nav_rings/dialogue_manager.py` | 已有 SafetyRingModule | 删除 |
-| `nav/services/nav_services/map_manager.py` | 已有 MapManagerModule | 删除 |
-| `nav/services/nav_services/patrol_manager.py` | 已有 PatrolManagerModule | 删除 |
-| `nav/services/nav_services/geofence_manager.py` | 已有 GeofenceManagerModule | 删除 |
-| `nav/services/nav_services/task_scheduler.py` | 已有 TaskSchedulerModule | 删除 |
-| `nav/services/nav_services/mission_logger.py` | 已有 memory Module | 删除 |
-| `semantic/.../perception_node.py` | 已有 DetectorModule + Service | 删除 |
-| `semantic/.../planner_node.py` | 已有 SemanticPlannerModule | 删除 |
-| `semantic/.../agent_node.py` | 被 MCPServerModule 替代 | 删除 |
-| `semantic/reconstruction/reconstruction_node.py` | 已有 ReconstructionModule | 删除 |
-| `drivers/thunder/driver_node.py` | 已有 ThunderDriver | 删除 |
-| `memory/logging/mission_logger.py` | ROS2 Node 版本 | 新建 Module 后删除 |
-| `launch/subsystems/*.launch.py` | 全部由 lingtu.py 替代 | 归档到 launch/legacy/ |
-| `scripts/services/*.sh` | ros2 run 脚本 | 归档到 scripts/legacy/ |
-
----
-
-## 验证标准
-
-清理完成后:
-
-1. `grep -r "import rclpy" src/` — 只出现在 C++ 包的 Python binding 和 legacy/ 目录
-2. `grep -r "class.*Node" src/` — 只出现在 legacy/ 或 NativeModule 启动的 C++ 节点
-3. `python lingtu.py --robot stub` — 全栈启动，零 ROS2 依赖
-4. `python lingtu.py --robot thunder` — S100P 真机启动，SLAM 走 NativeModule
-5. 644+ tests pass (不依赖 rclpy)
+1. `grep -r "import rclpy" src/` returns hits only inside SlamBridge / Native
+   subprocess Python wrappers.
+2. `grep -r "class .*Node" src/` returns hits only in C++-driven helper
+   files.
+3. `python lingtu.py stub` builds and starts a system with zero ROS2
+   dependencies.
+4. `python lingtu.py s100p` (or `lingtu.py nav`) starts on the S100P with
+   SLAM running through `NativeModule`.
+5. `python -m pytest src/core/tests/ -q` passes (around 1000 framework
+   tests; no `rclpy` required).

@@ -1,229 +1,167 @@
-# LingTu 快速上手
+# LingTu Quick Start
 
-## 安装
+## Install
 
 ```bash
 cd ~/data/inovxio/lingtu
 pip install -e .
 ```
 
-安装后 `lingtu` 命令全局可用。
+After install the `lingtu` console script (`lingtu_cli:main`) is on `$PATH`
+and is equivalent to `python lingtu.py`.
 
-## 环境准备（S100P）
+## Robot environment (S100P)
 
 ```bash
-# 每次开机后执行一次
+# Once per shell — usually added to ~/.bashrc
 source /opt/ros/humble/setup.bash
-source /opt/nova/lingtu/v1.8.0/install/setup.bash
+source ~/data/inovxio/lingtu/install/setup.bash   # only after `make build`
 ```
 
-建议加到 `~/.bashrc` 中。
+Only ROS2 + the colcon overlay are sourced; LingTu does not require any
+extra `setup.bash` or env script.
 
-## 六种运行模式
+## Profiles
 
-| 命令 | 用途 | 需要硬件 |
-|------|------|---------|
-| `lingtu map` | 建图 | LiDAR + IMU |
-| `lingtu nav` | 导航（有地图） | LiDAR + IMU + 相机 |
-| `lingtu explore` | 探索（无地图） | LiDAR + IMU + 相机 |
-| `lingtu sim` | MuJoCo 仿真 | 无 |
-| `lingtu dev` | 语义管道开发 | 无 |
-| `lingtu stub` | 框架测试 | 无 |
+The full table is in [`AGENTS.md`](./AGENTS.md) (section 3 "Profiles").
+The canonical source is `cli/profiles_data.py`.
 
-## 典型工作流
+| Command | Purpose | Hardware |
+|---------|---------|----------|
+| `lingtu stub` | framework only | none |
+| `lingtu dev` | semantic pipeline, mock LLM | none |
+| `lingtu sim_nav` | pure-Python navigation sim | none |
+| `lingtu sim` | MuJoCo full stack | none (CPU MuJoCo) |
+| `lingtu map` | build a map with Fast-LIO2 + PGO | LiDAR + IMU |
+| `lingtu nav` | navigate using a saved map (PCT planner) | LiDAR + IMU + camera |
+| `lingtu explore` | wavefront frontier exploration | LiDAR + IMU + camera |
+| `lingtu tare_explore` | CMU TARE hierarchical explorer | LiDAR + IMU + camera + built TARE binary |
 
-### 第一步：建图
+`lingtu --list` lists what is currently registered.
 
-首次到新环境，插上 LiDAR，运行：
+## Typical session
+
+### 1. Build a map
 
 ```bash
 lingtu map
 ```
 
-遥控机器人走一圈后：
+Drive the robot manually around the area, then in the REPL:
 
 ```
 > map save building_a
 ```
 
-系统自动保存点云 + 生成导航用的栅格地图。
+`MapManagerModule` writes `map.pcd`, an offline DUFOMap pass cleans dynamic
+obstacles, and the gateway publishes a `tomogram.pickle` and an
+`occupancy.npz` for the planner. Default location is `~/data/nova/maps/<name>/`
+(override with `NAV_MAP_DIR`).
 
-### 第二步：导航
+### 2. Navigate
 
 ```bash
 lingtu nav
 ```
 
-选择地图并开始导航：
+Then in the REPL:
 
 ```
-> map use building_a
-> go 体育馆
+> map use building_a       # set the active tomogram
+> navigate 5 3             # x, y in map frame
+> go 体育馆                  # natural-language instruction (semantic planner)
+> stop                     # zero cmd_vel + cancel mission
+> status                   # mission state, ports, hz
+> teleop status            # teleop client count + lease
 ```
 
-### 其他导航指令
+### 3. Stop the daemon
 
-```
-> go 红色椅子旁边          # 一句话导航
-> go 上次放背包的地方       # 向量记忆搜索
-> agent 找到灭火器然后标记   # 多步 Agent（自动规划执行）
-> stop                      # 急停
-> cancel                    # 取消当前任务
-> status                    # 查看系统状态
+```bash
+lingtu stop
 ```
 
-## REPL 命令速查
-
-启动后输入 `help` 查看所有命令。
-
-### 导航
+## REPL command summary
 
 ```
-go <目标>              一句话导航（自然语言）
-navigate <x> <y>       坐标导航
-stop                   急停
-cancel                 取消任务
-status                 系统状态
+navigate / nav x y [z]    Pose goal in map frame
+go <text>                 Natural-language instruction
+agent <text>              Multi-turn AgentLoop (7 LLM tools, 10 step cap)
+stop                      Emergency stop (publishes 2 to all stop_signal ports)
+cancel                    Cancel current mission
+status / s                Module list + mission state
+health / h                System health report
+map list|save|use|build|delete       Map lifecycle
+smap status|rooms|save|load|query    Semantic map (RoomObjectKG + topology)
+vmem query|stats          Vector memory (CLIP + ChromaDB or numpy fallback)
+teleop status|release     Teleop lease and clients
+rerun on|off|status       Rerun visualization bridge (port 9090 by default)
+watch / w [interval]      Auto-refresh status (default 2 s)
+live                      Full-screen dashboard with hotkeys
+module / m <name>         Inspect a single module
+connections / c           List all wires
+log debug|info|warning|error    Set root log level
+config                    Print resolved profile
+quit / q / exit           Leave the REPL
 ```
 
-### 地图管理
+The REPL is `cli/repl.py`. It only runs when `stdin` is a TTY and
+`--no-repl` was not passed.
 
-```
-map list               列出所有地图（* 标记当前）
-map save <名称>        保存当前 SLAM 地图
-map use <名称>         切换活跃地图
-map build <名称>       重建栅格地图
-map delete <名称>      删除地图
-```
+## Lifecycle commands (run without entering the REPL)
 
-### 语义地图
-
-```
-smap status            KG + 拓扑图统计
-smap rooms             列出所有已知房间
-smap save              立即保存语义地图
-smap load <目录>       加载语义地图
-smap query <文本>      查询哪个房间有该物体
+```bash
+lingtu stop                Stop the running daemon (SIGTERM)
+lingtu restart             Stop and relaunch with the same argv
+lingtu status              External run state (add --json)
+lingtu show-config nav     Resolved config (add --json)
+lingtu log -f              Follow the run log
+lingtu doctor              scripts/doctor.py
+lingtu rerun               scripts/rerun_live.py
+lingtu --list              List profiles
+lingtu --version           Print version
 ```
 
-### 向量记忆
+`lingtu --daemon` forks via `setsid`; the PID and run state live in
+`.lingtu/run.pid` and `.lingtu/run.json` (see `cli/run_state.py`).
 
-```
-vmem query <文本>      模糊搜索历史位置
-vmem stats             记忆统计
-```
+## Overrides
 
-### Agent
+Any profile field can be overridden on the command line. The full set is
+listed in `AGENTS.md` section 20. Common ones:
 
-```
-agent <多步指令>       多轮 Agent（自动执行多个步骤）
-```
-
-示例：
-```
-> agent 找到红色椅子，走过去，标记为休息区
+```bash
+lingtu nav --llm mock              # bypass real LLM
+lingtu nav --planner astar         # force pure-Python A*
+lingtu nav --detector yoloe        # alternative detector
+lingtu sim --no-native             # disable C++ autonomy stack
+lingtu nav --no-semantic           # geometric only
 ```
 
-### 遥控器
+## Network ports
 
-```
-teleop status          遥控状态（客户端数、端口）
-teleop release         释放手动控制
-```
+| Port | Service | Module |
+|------|---------|--------|
+| 5050 | REST + SSE + `/ws/teleop` | `GatewayModule` (and `TeleopModule` shares it) |
+| 8090 | MCP JSON-RPC | `MCPServerModule` |
+| 9090 | Rerun web UI (when `--rerun`) | `RerunBridgeModule` |
 
-手机/浏览器连接：`ws://<机器人IP>:5050/ws/teleop`
-
-发送 JSON：`{"type": "joy", "lx": 0.5, "ly": 0.0, "az": -0.3}`
-
-3 秒无操作自动释放，恢复自主导航。
-
-### 监控
-
-```
-health                 详细健康检查
-watch                  实时状态刷新
-module <名称>          查看单个模块详情
-connections            显示所有端口连线
-log debug|info         切换日志级别
-config                 显示当前配置
-```
-
-## MCP（AI Agent 控制）
-
-系统启动后，MCP 服务在 `http://<机器人IP>:8090/mcp` 自动运行。
-
-### 连接 Claude Code
+## MCP
 
 ```bash
 claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 ```
 
-连接后 Claude Code 可以直接控制机器人：
-- 导航：navigate_to, navigate_to_object, stop, get_navigation_status
-- 感知：get_room_summary, query_room_for_object, find_object
-- 记忆：query_location, tag_location, get_memory_stats
-- 伺服：follow_person, stop_servo
-- 系统：emergency_stop, get_teleop_status
+`MCPServerModule` auto-discovers `@skill` methods from every module in
+`SystemHandle`. The current tool catalogue is in `AGENTS.md` section 18.
 
-### 19 个 MCP Tools
+## Troubleshooting
 
-| 类别 | Tools |
-|------|-------|
-| 导航 | navigate_to, stop_navigation, cancel_mission, get_navigation_status, start_patrol |
-| 语义地图 | get_room_summary, query_room_for_object, get_exploration_target, get_semantic_status |
-| 向量搜索 | query_location, get_memory_stats |
-| 视觉伺服 | find_object, follow_person, stop_servo, get_servo_status |
-| 安全 | get_safety_status, emergency_stop |
-| 遥控 | get_teleop_status, force_release |
-
-## 网络端口
-
-| 端口 | 服务 | 说明 |
-|------|------|------|
-| 5050 | Gateway | HTTP/WebSocket/SSE API |
-| 8090 | MCP | AI Agent JSON-RPC |
-| 5050 | Teleop | /ws/teleop (同 Gateway 端口) |
-
-## 参数覆盖
-
-任何 profile 的参数都可以用 `--` 覆盖：
-
-```bash
-lingtu nav --llm mock           # 用 mock LLM（不需要 API key）
-lingtu nav --detector yoloe     # 换检测器
-lingtu nav --planner pct        # 换规划器
-lingtu nav --daemon             # 后台运行
-lingtu stop                     # 停止后台进程
-```
-
-## Xbox 手柄遥控
-
-插上 Xbox 手柄 USB，启动 joy 节点：
-
-```bash
-ros2 run joy joy_node
-```
-
-手柄操作：
-
-```
-右摇杆 Y     前进/后退
-右摇杆 X     左右平移
-左摇杆 X     转向 (yaw 角速度)
-LT (左扳机)  按住 = 手动接管，松开 = 恢复自主导航
-```
-
-**核心：按住 LT 接管，松开 LT 恢复导航。避障始终生效。**
-
-手柄由 C++ pathFollower 直接处理，不需要启动 lingtu。
-
-## 故障排查
-
-| 问题 | 解决 |
-|------|------|
-| `ros2 not found` | `source /opt/ros/humble/setup.bash` |
-| `Port already in use` | 系统会自动清理，或手动 `fuser -k 5050/tcp` |
-| `No map loaded` | 先 `lingtu map` 建图，再 `map use <名称>` |
-| `GoalResolver not available` | 检查 `DASHSCOPE_API_KEY` 环境变量 |
-| CLIP 加载失败 | 检查 `~/.cache/huggingface/` 模型文件 |
-| SSH 断开 | 用 `lingtu nav --daemon` 后台运行 |
+| Symptom | Fix |
+|---------|-----|
+| `ros2: command not found` | `source /opt/ros/humble/setup.bash` |
+| Port 5050 / 8090 already in use | `cli.runtime_extra.kill_residual_ports` runs `fuser -k` on startup; otherwise kill manually |
+| `No active map` | `lingtu map` first, then `map save <name>` and `map use <name>` |
+| Slow Path / LLM unavailable | Set `MOONSHOT_API_KEY` (Kimi), `DASHSCOPE_API_KEY` (Qwen), `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or run with `--llm mock` |
+| SSH session drops | `lingtu nav --daemon`, then `lingtu log -f` and `lingtu stop` |
+| TARE binary missing | `scripts/build/fetch_ortools.sh && scripts/build/build_tare.sh` |

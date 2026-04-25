@@ -1,435 +1,362 @@
-# 故障排除指南
+# Troubleshooting Guide
 
-> 涵盖编译错误和运行时常见故障的排查步骤。
+Diagnose build, runtime, localization, planning, communication, and OTA failures on the
+S100P deployment. The production entry is `python lingtu.py` orchestrated by
+`lingtu.service`; lower-level ROS2 nodes (`livox`, `fastlio2`, `localizer`) run as
+`robot-lidar.service` / `robot-fastlio2.service` / `robot-localizer.service`.
 
----
-
-## 目录
-
-- [编译错误](#编译错误)
-- [运行时故障](#运行时故障)
-- [定位问题](#定位问题)
-- [规划问题](#规划问题)
-- [通信问题](#通信问题)
-- [OTA 问题](#ota-问题)
+If your symptom isn't here, capture a 60s window with `lingtu log all` and check
+`docs/04-deployment/lingtu_cli.md` for richer status commands.
 
 ---
 
-## 编译错误
+## Contents
 
-### tf2_ros/buffer_interface.hpp 找不到
+- [Build errors](#build-errors)
+- [Runtime startup](#runtime-startup)
+- [Localization](#localization)
+- [Planning](#planning)
+- [Communication](#communication)
+- [OTA](#ota)
 
-**错误**:
+---
+
+## Build errors
+
+### `tf2_ros/buffer_interface.hpp` not found
+
 ```
 fatal error: tf2_ros/buffer_interface.hpp: No such file or directory
 ```
 
-**原因**: `tf2_ros` 包未正确安装。
+`tf2_ros` is missing.
 
-**解决**:
 ```bash
-sudo apt update
 sudo apt install ros-humble-tf2-ros ros-humble-tf2 ros-humble-tf2-geometry-msgs
 ```
 
-### tf2_geometry_msgs/tf2_geometry_msgs.hpp 找不到
+### `tf2_geometry_msgs/tf2_geometry_msgs.hpp` not found
 
-**错误**:
-```
-fatal error: tf2_geometry_msgs/tf2_geometry_msgs.hpp: No such file or directory
-```
+CMake dependency missing. In the offending `CMakeLists.txt`:
 
-**原因**: `visualization_tools` 的 `CMakeLists.txt` 缺少依赖。
-
-**解决**:
-在 `visualization_tools/CMakeLists.txt` 中添加:
 ```cmake
 find_package(tf2_geometry_msgs REQUIRED)
+# add to ament_target_dependencies(... tf2_geometry_msgs)
 ```
-并在 `ament_target_dependencies` 中加入 `tf2_geometry_msgs`。
 
-### GTSAM not found
+### GTSAM not found / `libgtsam.so.4: cannot open`
 
-**错误**: CMake 找不到 GTSAM 库。
+GTSAM is vendored under
+`src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/`. Either
+rebuild it:
 
-**解决**:
 ```bash
-# 确认 GTSAM 已编译
-ls src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib/libgtsam.so.4
-
-# 未编译则重新编译
 cd src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1
 mkdir -p build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=../install -DGTSAM_BUILD_TESTS=OFF -DGTSAM_WITH_TBB=OFF
 make -j$(nproc) && make install
 ```
 
-### libgtsam.so.4: cannot open (运行时)
+or extend `LD_LIBRARY_PATH` (the `lingtu.service` unit already does this via
+`source install/setup.bash`):
 
-**原因**: `LD_LIBRARY_PATH` 未配置。
-
-**解决**:
 ```bash
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib
-# 加入 ~/.bashrc 永久生效
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$(pwd)/src/global_planning/PCT_planner/planner/lib/3rdparty/gtsam-4.1.1/install/lib"
 ```
 
-### CMake CMP0074 策略警告
+### `_nav_core` import fails after build
 
-**解决**: 构建时忽略开发者警告:
 ```bash
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev
+bash scripts/build_nav_core.sh        # rebuild nanobind extension
+ls src/_nav_core*.so                   # symlink should exist
+python3 -c "import sys; sys.path.insert(0, 'src'); import _nav_core; print(_nav_core.LocalPlannerCore)"
 ```
 
-### 通用依赖安装
+### OR-Tools missing for TARE planner
 
 ```bash
-sudo apt install ros-humble-desktop-full libusb-dev python3-colcon-common-extensions python-is-python3 python3-pip
-pip install transforms3d pyyaml numpy scipy scikit-learn
+bash scripts/build/fetch_ortools.sh    # arch-aware fetch (~130 MB)
+bash scripts/build/build_tare.sh
+```
+
+The script handles both `x86_64` and `aarch64` (S100P uses the AlmaLinux-8.10 aarch64
+release; glibc-compatible with Ubuntu 22.04).
+
+### Generic dependency install
+
+```bash
+sudo apt install ros-humble-desktop-full libusb-dev python3-colcon-common-extensions \
+    python-is-python3 python3-pip
+pip install transforms3d pyyaml numpy scipy scikit-learn nanobind
 rosdep install --from-paths src --ignore-src -r -y
 ```
 
 ---
 
-## 运行时故障
+## Runtime startup
 
-### TF 变换 `map → odom` 未发布
+### `lingtu.service` fails to start
 
-**症状**: RViz 中数据不显示，模块报 TF lookup 失败。
-
-**排查**:
 ```bash
-# 检查 TF 树是否完整
-ros2 run tf2_tools view_frames
+sudo systemctl status lingtu
+journalctl -u lingtu -n 80 --no-pager
+```
 
-# 检查各变换是否存在
+Common causes:
+
+| Cause                             | Fix                                                           |
+|-----------------------------------|---------------------------------------------------------------|
+| `robot-fastlio2` not yet ready    | `lingtu` waits up to 60 s; check `journalctl -u robot-fastlio2` |
+| Missing API key for LLM module    | `eval $(grep MOONSHOT_API_KEY ~/.bashrc)` and re-`systemctl restart lingtu` |
+| `_nav_core.so` missing            | `bash scripts/build_nav_core.sh` then restart                  |
+| Port 5050 / 8090 already bound    | `ss -tnlp | grep -E '5050|8090'` — kill stragglers             |
+
+### TF chain `map -> odom -> body` broken
+
+```bash
+ros2 run tf2_tools view_frames                   # writes frames.pdf
 ros2 run tf2_ros tf2_echo map odom
 ros2 run tf2_ros tf2_echo odom body
 ```
 
-**可能原因**:
-| 原因 | 解决 |
-|------|------|
-| PGO / Localizer 未启动 | 启动对应节点 |
-| PGO 未检测到回环 | 正常现象，首次回环前 `map→odom` 为单位变换 |
-| Localizer 未调用 `/relocalize` | 调用重定位服务并确认返回 success |
-| Fast-LIO2 未运行 | 检查 LiDAR 驱动和 fastlio2 节点 |
+| Cause                              | Fix                                                  |
+|------------------------------------|------------------------------------------------------|
+| `robot-localizer` not running      | `sudo systemctl start robot-localizer`               |
+| No active map loaded               | `lingtu nav start <map_name>`                        |
+| Fast-LIO2 hasn't published         | `ros2 topic hz /Odometry` — expect ~100 Hz           |
 
-### 坐标系 frame_id 不正确
-
-**验证各关键话题的 frame_id**:
-```bash
-ros2 topic echo /cloud_map --field header.frame_id --once       # 期望: odom
-ros2 topic echo /terrain_map --field header.frame_id --once     # 期望: odom
-ros2 topic echo /terrain_map_ext --field header.frame_id --once # 期望: odom
-ros2 topic echo /path --field header.frame_id --once            # 期望: body
-```
-
-如果不正确，参考 [CHANGELOG.md](CHANGELOG.md) 中的坐标系修复记录。
-
-### 话题频率异常
+### Topic frame_ids wrong
 
 ```bash
-# 检查关键话题频率
-ros2 topic hz /Odometry           # 期望: ~100Hz
-ros2 topic hz /cloud_map          # 期望: ~10Hz
-ros2 topic hz /terrain_map        # 期望: ~5Hz
-ros2 topic hz /cmd_vel            # 期望: ~20Hz (运动时)
+ros2 topic echo /cloud_map      --field header.frame_id --once   # expect: odom
+ros2 topic echo /terrain_map    --field header.frame_id --once   # expect: odom
+ros2 topic echo /path           --field header.frame_id --once   # expect: body
 ```
 
-**频率过低的常见原因**:
-- CPU 过载: `htop` 检查 CPU 占用
-- 点云数据量过大: 增大 `laserVoxelSize` 参数
-- 网络带宽不足 (分布式部署时)
+### Topic rates wrong
 
-### HealthMonitor 报 FAULT
-
-**排查**:
 ```bash
-ros2 topic echo /robot_health
+ros2 topic hz /Odometry       # expect ~100 Hz
+ros2 topic hz /cloud_map      # expect ~10 Hz
+ros2 topic hz /terrain_map    # expect ~5 Hz
+ros2 topic hz /cmd_vel        # expect ~20 Hz when moving
 ```
 
-| 告警 | 含义 | 解决 |
-|------|------|------|
-| SLAM < 20Hz | 里程计频率不足 | 检查 LiDAR 数据 + Fast-LIO2 |
-| TF 断裂 | map→odom→body 链不完整 | 见上方 TF 排查 |
-| 地形分析 < 1Hz | terrain_analysis 节点异常 | 重启节点 |
-| 定位质量 ≥ 0.3 | ICP 配准不佳 | 换更好的初始位姿重新 relocalize |
+If everything is slow, check CPU with `htop` and inspect the SLAM voxel size in
+`config/robot_config.yaml` under `local_planner.laser_voxel_size`.
 
 ---
 
-## 定位问题
+## Localization
 
-### 机器人位置跳变
+### Position jumps / drift
 
-**可能原因**:
-1. **Fast-LIO2 退化**: 特征点不足 (如长走廊/空旷场地)
-2. **Localizer ICP 不收敛**: 初始位姿偏差过大
-3. **地图文件不正确**: 加载了错误的 PCD 文件
+Common causes:
+1. Fast-LIO2 degeneracy in long corridors / open fields.
+2. Localizer ICP didn't converge (initial pose too far from truth).
+3. Wrong PCD loaded.
 
-**排查**:
 ```bash
-# 检查定位质量
-ros2 topic echo /localization_quality   # < 0.1 为优, ≥ 0.3 为差
-
-# 检查里程计协方差
+ros2 topic echo /localization_quality            # < 0.1 good, >= 0.3 poor
 ros2 topic echo /Odometry --field pose.covariance
-
-# 重新定位
 ros2 service call /relocalize interface/srv/Relocalize \
-  "{pcd_path: '/path/to/map.pcd', x: 0.0, y: 0.0, z: 0.0, yaw: 0.0, pitch: 0.0, roll: 0.0}"
+    "{pcd_path: '/home/sunrise/data/nova/maps/active/map.pcd', x: 0.0, y: 0.0, z: 0.0, yaw: 0.0, pitch: 0.0, roll: 0.0}"
 ```
 
-### 重定位失败
+### IEKF blew up (xy ~ 1e12)
+
+The Fast-LIO2 IEKF can diverge after long static periods. The Gateway watchdog
+(`_drift_watchdog_loop` in `src/gateway/gateway_module.py`) auto-recovers every 60 s
+when xy or velocity exceeds limits:
+
+1. Stop SLAM services.
+2. Clear cached odom.
+3. Push `slam_drift` SSE event.
+4. Re-`ensure(...)` services for the current session mode.
+5. 300 s cooldown.
+
+To reset manually:
 
 ```bash
-# 检查服务是否可用
+lingtu svc restart slam
+```
+
+Tunables (env vars on `lingtu.service`):
+`LINGTU_DRIFT_WATCHDOG=0` disables. `_INTERVAL` / `_XY_LIMIT` / `_V_LIMIT` / `_COOLDOWN`
+override defaults.
+
+### Relocalization fails
+
+```bash
 ros2 service list | grep relocalize
-
-# 检查 Localizer 节点状态
 ros2 node info /localizer
-
-# 检查 PCD 文件是否存在且可读
-ls -la /path/to/map.pcd
+ls -la /home/sunrise/data/nova/maps/active/map.pcd
 ```
 
 ---
 
-## 规划问题
+## Planning
 
-### local_planner 不发布路径
+### Local planner publishes nothing
 
-**排查清单**:
-1. `/terrain_map` 是否有数据: `ros2 topic hz /terrain_map`
-2. `/way_point` 是否已设置: `ros2 topic echo /way_point`
-3. 手柄 `/joy` 是否发送速度指令 (手动模式): `ros2 topic echo /joy`
-4. 是否所有路径都被障碍物阻塞: 在 RViz 中查看 `/free_paths`
+Checklist:
 
-### 机器人持续减速 (`/slow_down` 不断触发)
+1. `/terrain_map` flowing — `ros2 topic hz /terrain_map`.
+2. Goal set — `lingtu status` `[5] Path` should show waypoints.
+3. All candidate paths blocked — open `http://<robot>:5050/api/v1/free_paths` (debug
+   endpoint exposes the same data RViz used to render `/free_paths`).
 
-```bash
-ros2 topic echo /slow_down
-```
+### `cmd_vel` arbitration confusion
 
-| slow_down 值 | 含义 | 调参建议 |
-|-------------|------|---------|
-| 1 | 大障碍物/陡坡 (penaltyScore > 0.15) | 增大 `obstacleHeightThre` |
-| 2 | 中等地形代价 (penaltyScore > 0.10) | 增大 `laserVoxelSize` 降低密度 |
-| 3 | 可选路径 < 5 | 增大 `adjacentRange` 扩大搜索范围 |
+`CmdVelMux` (L0, `src/nav/cmd_vel_mux_module.py`) arbitrates by priority:
 
-详细调参参见 [PARAMETER_TUNING.md](PARAMETER_TUNING.md)
+| Source             | Priority | Timeout |
+|--------------------|----------|---------|
+| Teleop joystick    | 100      | 0.5 s   |
+| VisualServo        | 80       | 0.5 s   |
+| Recovery (stuck)   | 60       | 0.5 s   |
+| PathFollower       | 40       | 0.5 s   |
 
-### 全局规划器无路径
+Inspect live arbitration:
 
 ```bash
-# 检查 Tomogram 是否加载
-ros2 topic echo /tomogram   # 应有点云数据
-
-# 检查目标点是否在地图范围内
-# 检查 traversability 权重是否过高
+curl http://<robot>:5050/api/v1/cmd_vel_mux
 ```
+
+### Global planner returns empty path
+
+1. Verify map is loaded: `lingtu status` `[1] Session map=`.
+2. Goal must be inside the tomogram bounds.
+3. Drop `w_traversability` in `src/global_planning/PCT_planner/config/params.yaml`.
+4. Rebuild tomogram via the Gateway:
+   ```bash
+   curl -X POST -H 'Content-Type: application/json' \
+       -d '{"action":"build_tomogram","name":"<map_name>"}' \
+       http://<robot>:5050/api/v1/maps
+   ```
 
 ---
 
-## 通信问题
+## Communication
 
-### Flutter App 无法连接 Nav Board
-
-**排查**:
-```bash
-# 检查 gRPC Gateway 是否运行
-ros2 node info /grpc_gateway
-
-# 检查端口监听
-ss -tlnp | grep 50051
-
-# 检查 WiFi 连通性 (从手机 ping 导航板)
-ping 192.168.4.1
-```
-
-### gRPC 断联后机器人不减速
-
-**检查断联降级是否生效**:
-```bash
-# 心跳是否在发送
-ros2 topic echo /slow_down
-
-# 检查 GrpcGateway 日志
-ros2 topic echo /rosout --filter "grpc_gateway"
-```
-
-断联降级仅在 AUTONOMOUS 模式下生效，其他模式不触发。
-
-### Dog Board 连接失败
+### REPL / Gateway not reachable on port 5050
 
 ```bash
-# 检查 Dog Board 网络可达
-ping 192.168.4.100   # Dog Board IP
-
-# 检查 CMS 端口
-nc -zv 192.168.4.100 13145
-
-# 检查 han_dog_bridge 状态
-ros2 node info /han_dog_bridge
+ss -tnlp | grep -E "5050|8090|13145"
+sudo systemctl status lingtu
 ```
 
-### 遥控时 SafetyGate 避障不生效
+S100P firewall: `iptables -L -n | grep 5050` — the `ROBOT_REMOTE` chain may be blocking.
+See `memory/feedback_orbbec_color_fps_trap.md` for the recurring port reset on reboot.
 
-**检查 `/terrain_map` 是否有数据**:
+### MCP tools fail from external client
+
 ```bash
-ros2 topic hz /terrain_map   # 期望: ~5Hz
-ros2 topic echo /terrain_map --once | head -5
+curl http://<robot>:8090/mcp/tools
+claude mcp add --transport http lingtu http://<robot>:8090/mcp
 ```
 
-如果无数据，检查 `terrain_analysis` 是否启动：
+If MCP is up but tools error, the framework module behind the tool may be down — see
+`lingtu status` `[1] Session` for module health.
+
+### brainstem (`robot-brainstem`) unresponsive on port 13145
+
 ```bash
-ros2 node list | grep terrain
+journalctl -u robot-brainstem -n 30
+sudo systemctl restart robot-brainstem
 ```
 
-**检查参数是否正确加载**:
-```bash
-ros2 param get /grpc_gateway obstacle_height_thre  # 期望: 0.2
-ros2 param get /grpc_gateway stop_distance          # 期望: 0.8
-ros2 param get /grpc_gateway slow_distance          # 期望: 2.0
-```
+The Gateway and ThunderDriver both depend on this gRPC server. Restarting it forces
+a new control lease.
 
-**检查 SafetyGate 是否在 TELEOP 模式**:
-- SafetyGate 仅在 TELEOP 模式下发布 `/cmd_vel`
-- 非 TELEOP 模式下 `limit_reasons` 会包含 `not_teleop_mode`
-- 通过 App 的 `TeleopFeedback.limit_reasons` 确认当前限幅原因
+### Teleop joystick has no effect
 
-### 遥控/自主模式切换后机器人不受控
+`TeleopModule` runs inside `lingtu.service`. Symptoms and fixes:
 
-**`/cmd_vel` 仲裁问题**:
-- SafetyGate (TELEOP) 和 pathFollower (AUTONOMOUS) 都发布到 `/cmd_vel`
-- ModeManager 在模式切换时自动处理：
-  - 进入 TELEOP → StopPathFollower (发 `/stop=1`, `/speed=0`)
-  - 退出 TELEOP → SafetyGate 发零速度清除残余
-  - 进入 AUTONOMOUS → StartPathFollower (发 `/stop=0`)
-- 如果仍有问题，手动确认：
-```bash
-ros2 topic echo /stop          # 检查 stop 信号
-ros2 topic echo /speed         # 检查 speed 信号
-ros2 topic hz /cmd_vel         # 检查发布频率
-```
+1. WS connection dropped — refresh the joystick UI at `http://<robot>:5050/teleop`.
+2. 3 s idle auto-release fired — re-engage the joystick.
+3. Mux outranked — VisualServo or Recovery is publishing higher priority. Check
+   `/api/v1/cmd_vel_mux`.
 
 ---
 
-## OTA 问题
+## OTA
 
-### DownloadFromUrl 失败
+OTA is implemented by `ota-agent.service` (`/opt/lingtu/nav/ota/`). It polls a
+registered server URL, downloads signed releases, and atomically swaps the
+`/opt/lingtu/current` symlink. The legacy in-process gRPC OTA service (`grpc_gateway`,
+`data_service.cpp`) was removed.
 
-**排查**:
+### `ota-agent` can't reach server
+
 ```bash
-# 检查机器人是否能访问外网
+journalctl -u ota-agent -n 50 --no-pager
 curl -I https://github.com
-
-# 检查 DNS
-nslookup github.com
-
-# 检查磁盘空间
-df -h /tmp/ota_staging/
+df -h /tmp
 ```
 
-### ApplyUpdate SHA256 校验失败
-
-**原因**: 文件传输损坏或 manifest 中的 SHA256 不匹配。
-
-**解决**:
-```bash
-# 手动验证
-sha256sum /tmp/ota_staging/policy_walk_v2.3.onnx
-# 对比 manifest.json 中的值
-```
-
-### 回滚失败
+### SHA256 mismatch
 
 ```bash
-# 检查备份目录
-ls -la /opt/robot/ota/backup/
-
-# 检查已安装 manifest
-cat /opt/robot/ota/installed_manifest.json | python3 -m json.tool
+sha256sum /tmp/ota_staging/<artifact>
+# compare with manifest.json from release
 ```
 
-### 依赖检查失败 (v2)
+Release pipeline issue — the artifact and manifest got out of sync. Re-publish the
+release.
 
-**错误**: "Missing dependency: nav_firmware >= 1.2.0"
+### Rollback
 
-**原因**: 制品声明了 `dependencies`，但前置制品未安装或版本过旧。
-
-**解决**:
 ```bash
-# 查看已安装版本
-cat /opt/robot/ota/installed_manifest.json | python3 -c "
-import json,sys; d=json.load(sys.stdin)
-for k,v in d.items(): print(f'  {k}: v{v.get(\"version\",\"?\")}')"
-
-# 先安装依赖制品，再安装目标制品
-# 或使用 force=true 跳过检查 (不推荐)
+ls -la /opt/lingtu/releases/
+sudo ln -sfn /opt/lingtu/releases/<previous_version> /opt/lingtu/current
+sudo systemctl restart lingtu
 ```
 
-### 事务日志残留 (安装中断恢复)
+The `ota-agent` records each install in `/opt/lingtu/nav/ota/installed_manifest.json`;
+there is no in-process rollback RPC anymore.
 
-**症状**: CheckUpdateReadiness 返回 `stale_transaction` 警告。
+### Stale transaction log after power loss
 
-**原因**: 上次安装被中断（断电/崩溃），留下未完成的事务日志。
-
-**排查**:
 ```bash
-# 查看残留事务
-ls /opt/robot/ota/backup/txn_*.json
-cat /opt/robot/ota/backup/txn_policy_walk.json
-
-# 手动清理（如果确认不需要恢复）
-rm /opt/robot/ota/backup/txn_*.json
+ls /opt/lingtu/nav/ota/backup/txn_*.json   # if present, last install was interrupted
+sudo rm /opt/lingtu/nav/ota/backup/txn_*.json
 ```
 
-### COLD 更新安全检查
-
-**错误**: "COLD 更新: 安装前需确保机器人坐下并禁用电机"
-
-**解决**: 在 App 中先执行 `SetMode(IDLE)` → `SitDown` → `Disable`，确认机器人完全静止后再安装。
+The agent self-recovers on next boot but if `lingtu.service` won't start after an
+interrupted install, manually roll back the symlink (above).
 
 ---
 
-## 快速诊断命令集
+## Quick diagnostics
 
 ```bash
-# === 系统状态总览 ===
-ros2 node list                              # 所有运行节点
-ros2 topic list                             # 所有话题
-ros2 service list                           # 所有服务
-ros2 run tf2_tools view_frames              # TF 树可视化
+# One-screen status from the laptop
+lingtu status
 
-# === 关键频率检查 ===
-ros2 topic hz /Odometry &
-ros2 topic hz /cloud_map &
-ros2 topic hz /terrain_map &
-ros2 topic hz /cmd_vel &
-wait
+# Service summary
+sudo systemctl list-units 'robot-*' lingtu.service ota-agent.service
 
-# === 坐标系验证 ===
-for topic in /cloud_map /terrain_map /terrain_map_ext /path; do
-  echo -n "$topic: "
-  ros2 topic echo $topic --field header.frame_id --once 2>/dev/null
+# Critical topic rates (run on robot)
+for t in /Odometry /cloud_map /terrain_map /cmd_vel; do
+    echo -n "$t  "; timeout 2 ros2 topic hz $t 2>/dev/null | tail -1
 done
 
-# === 安全状态 ===
-ros2 topic echo /robot_health --once
-ros2 topic echo /slow_down --once
-ros2 topic echo /stop --once
+# Frame ID sanity
+for t in /cloud_map /terrain_map /path; do
+    echo -n "$t: "
+    ros2 topic echo $t --field header.frame_id --once 2>/dev/null
+done
+
+# Active SLAM drift watchdog state
+curl http://<robot>:5050/api/v1/health | jq '.slam'
 ```
 
 ---
 
-## 相关文档
+## Related
 
-- [BUILD_GUIDE.md](BUILD_GUIDE.md) — 编译步骤和依赖安装
-- [PARAMETER_TUNING.md](PARAMETER_TUNING.md) — 参数调优
-- [ARCHITECTURE.md](ARCHITECTURE.md) — 系统架构
-- [CHANGELOG.md](CHANGELOG.md) — 变更记录
-
----
-
-*最后更新: 2026-02-08*
+- `docs/03-development/PARAMETER_TUNING.md` — tuning defaults and effects
+- `docs/04-deployment/README.md` — service layout, deployment basics
+- `docs/04-deployment/lingtu_cli.md` — operations CLI reference
+- `docs/05-specialized/slam_drift_watchdog.md` — drift watchdog internals

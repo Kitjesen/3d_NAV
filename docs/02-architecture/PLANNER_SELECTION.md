@@ -1,181 +1,170 @@
-# 全局路径规划器选型决策
+# Global Planner Selection
 
-> 决策日期: 2026-04-03
-> 最近更新: 2026-04-17(补充运行时链路图)
-> 状态: 已实施
+This is the rationale for which global-planner backend a given profile
+uses. The runtime contract is defined by `_PCTBackend` and `_AStarBackend`
+(both registered under `core.registry`), and used by
+`src/nav/global_planner_service.py`.
 
----
+## TL;DR
 
-## TL;DR — 外场快速查阅
+**On the S100P (`lingtu.py nav` / `s100p` / `explore` / `tare_explore`)
+the planner is `pct`.** A* is only used in `map`, `sim`, `sim_nav`, `dev`,
+and `stub` because `ele_planner.so` is built for aarch64.
 
-**Web 点击"发送目标"走的是什么规划器?**
-→ **看当前 profile**。`lingtu.py nav`(生产默认) = **PCT** (基于 pcd 3D 地形规划)。
-→ 永远**不要**默认说 A*。A* 只在 `map / sim / dev / stub / sim_nav` 里用。
+Quick check:
 
-快速判断命令:
 ```bash
 ssh sunrise@192.168.66.190 "ps aux | grep 'lingtu.py' | grep -v grep"
-# 输出含 "lingtu.py nav" → pct
-# 输出含 "lingtu.py map" → astar (建图不规划,但即使规划也是 astar)
+# Output containing 'lingtu.py nav' → pct
+# Output containing 'lingtu.py map' → astar (mapping doesn't usually plan)
 ```
 
----
-
-## 运行时链路:Web 点击 → cmd_vel
+## Runtime path: Web click → cmd_vel
 
 ```
 [Web: scene tab]
-  用户点击 3D 场景地面
+  user clicks the 3-D ground
   → pendingGoal = {x, y}
-  → 弹"发送/取消"确认面板
-  用户点"发送"
-  → POST /api/v1/goto  body: {x, y}
+  → confirm panel
+  → POST /api/v1/goto {x, y}
 
-[Gateway: gateway_module.py]
-  /api/v1/goto 路由
+[GatewayModule]
+  /api/v1/goto handler
   → PlannerService.send_instruction(kind="goto", x, y)
   → SemanticPlannerModule.goal_pose Out[PoseStamped]
 
-[NavigationModule: src/nav/navigation_module.py]
-  goal_pose In[PoseStamped] 接收
+[NavigationModule  src/nav/navigation_module.py]
+  goal_pose In[PoseStamped]
   → mission FSM: IDLE → PLANNING
-  → GlobalPlannerService.plan(start=robot_pos, goal=user_goal)
+  → GlobalPlannerService.plan(start=robot_pose, goal=user_goal)
 
-[GlobalPlannerService: src/nav/global_planner_service.py]
-  根据 planner= 参数选后端:
-    "pct"   → _PCTBackend (ele_planner.so, C++ aarch64)   ← nav profile 实际走这里
-    "astar" → _AStarBackend (pure Python, 8-连通)
-  输入: tomogram.pickle (从 map_cloud + elevation_map 烘的分层断层图)
-  输出: path np.ndarray (N, 3) 世界坐标 [x, y, z]
+[GlobalPlannerService  src/nav/global_planner_service.py]
+  picks the backend by `planner=` argument:
+    "pct"   → _PCTBackend (ele_planner.so, aarch64 C++)
+    "astar" → _AStarBackend (pure Python, 8-connected)
+  Input:  tomogram.pickle (built from map_cloud + elevation_map)
+  Output: np.ndarray (N, 3) world-frame [x, y, z]
 
-[WaypointTracker: src/nav/waypoint_tracker.py]
-  按距离下采样 path → waypoints
-  → NavigationModule.waypoint Out[PoseStamped] 逐点发出
-  → 监控到达/卡住,触发下一个 waypoint 或 stuck recovery
+[WaypointTracker  src/nav/waypoint_tracker.py]
+  downsample path → waypoints
+  → NavigationModule.waypoint Out[PoseStamped] streamed point-by-point
+  → arrival / stuck detection, recovery, replan
 
-[PathFollower: src/nav/core/path_follower_core.hpp (Pure Pursuit)]
-  waypoint In → 当前 robot_pos
-  → 计算前瞻点 → Pure Pursuit 曲率 → cmd_vel
+[PathFollower  src/nav/core/path_follower_core.hpp]
+  waypoint + current pose → Pure Pursuit → cmd_vel
 
-[CmdVelMux: src/nav/cmd_vel_mux_module.py]
-  优先级仲裁(0.5s 超时):
+[CmdVelMux  src/nav/cmd_vel_mux_module.py]
+  priority arbitration with 0.5 s freshness:
     teleop 100 > visual_servo 80 > recovery 60 > path_follower 40
-  → 发到 driver_cmd_vel Out
+  → driver_cmd_vel Out
 
-[Driver: src/drivers/thunder/thunder_driver.py]
-  driver_cmd_vel → gRPC Walk → brainstem
-  → 电机 torque
+[ThunderDriver  src/drivers/thunder/thunder_driver.py]
+  driver_cmd_vel → gRPC Walk → brainstem → motors
 ```
 
-**关键事实**:
-- nav profile 下规划器 = **PCT (C++ ele_planner.so)**,地图源是 tomogram(pcd → elevation → 分层断层)
-- 不经过 ROS2 `/nav/goal_pose` 话题。Module-First 架构下,goal 在 Python 进程内直接 Port→Port
-- C++ autonomy 包(terrain_analysis + local_planner + path_follower ROS2 node)在 `enable_native=False` 时**不参与**,由 Python autonomy chain 全程替代
+Important:
 
----
+- The `nav` profile uses **PCT** (C++ `ele_planner.so`), with the
+  tomogram built offline from the saved PCD via the elevation map.
+- Goals do **not** travel through the ROS2 `/nav/goal_pose` topic; in the
+  Module-First architecture the goal stays in-process Port → Port.
+- The C++ autonomy ROS2 nodes (`terrain_analysis` + `local_planner` +
+  `path_follower`) are not used when `enable_native=False`. The Python
+  autonomy chain replaces them.
 
-## 决策
+## Backend catalogue
 
-**S100P 生产环境使用 PCT 官方 `ele_planner.so`(`planner="pct"`)。**
-**仿真/CI/开发机使用纯 Python A*(`planner="astar"`)作跨平台替代。**
+### 1. PCT `ele_planner.so` — production, S100P only
 
----
+| Property | Value |
+|----------|-------|
+| Registry name | `pct` |
+| Implementation | C++ (HKU/HKUST, GPLv2) |
+| Entry | `_PCTBackend` → `TomogramPlanner.plan()` |
+| C++ source | `src/global_planning/PCT_planner/planner/lib/src/ele_planner/` |
+| Compiled `.so` | `planner/lib/ele_planner.so` (aarch64 only) |
+| Map format | Tomogram `.pickle` (multi-layer traversability + elevation + gradient) |
+| Capabilities | 3D terrain awareness (stairs, ramps), GPMP trajectory optimisation, slope penalties |
+| Output | `np.ndarray (N, 3)` world coordinates |
 
-## 规划器清单
+Used by the `nav`, `explore`, `tare_explore`, and `s100p` profiles.
 
-### 1. PCT `ele_planner.so` — **生产环境，S100P 专用**
+### 2. Pure-Python A* — fallback for non-aarch64
 
-| 属性 | 值 |
-|------|-----|
-| 注册名 | `"pct"` |
-| 实现 | C++，由 HKUST Bowen Yang / Jie Cheng 开发，GPLv2 |
-| 入口 | `_PCTBackend` → `TomogramPlanner.plan()` |
-| 文件 | `src/global_planning/PCT_planner/planner/lib/src/ele_planner/` |
-| .so 路径 | `planner/lib/ele_planner.so`（aarch64 编译，仅 S100P 可用） |
-| 地图格式 | Tomogram `.pickle`（多层 traversability + elevation + gradient） |
-| 规划能力 | 3D 地形感知（楼梯/坡道）、GPMP 轨迹优化、坡度约束 |
-| 输出格式 | `np.ndarray (N, 3)`，世界坐标 [x, y, z] |
+| Property | Value |
+|----------|-------|
+| Registry name | `astar` |
+| Implementation | `_AStarBackend`, 8-connected A* |
+| File | `src/global_planning/pct_adapters/src/global_planner_module.py` |
+| Map format | The same tomogram pickle, but only the ground-floor slice |
+| Capabilities | 2D, no trajectory optimisation, no slope awareness |
+| Reason for existing | `ele_planner.so` is aarch64-only; CI and dev machines need a backend |
 
-**使用场景**: `nav`、`explore`、`s100p` profiles（真机导航）
+Used by `map`, `sim`, `sim_nav`, `dev`, `stub`.
 
----
+## Why we don't use Python A* in production
 
-### 2. 纯 Python A* — **替代方案，开发机/CI/仿真**
+The `_AStarBackend` plus the legacy `pct_planner_astar.py` have several
+issues that make them unsuitable for the real robot:
 
-| 属性 | 值 |
-|------|-----|
-| 注册名 | `"astar"` |
-| 实现 | 我们自己写的，`_AStarBackend`，8-连通 A* |
-| 文件 | `src/global_planning/pct_adapters/src/global_planner_module.py` |
-| 地图格式 | 同 Tomogram `.pickle`，只取 ground-floor slice |
-| 规划能力 | 2D 平面，无轨迹优化，无坡度感知 |
-| 存在理由 | `ele_planner.so` 是 aarch64 二进制，开发机/CI 无法运行 |
+1. `_AStarBackend.plan()` reconstructs the path without inserting the
+   start cell into `came_from`, so the start point is sometimes dropped.
+2. `pct_planner_astar.py` falls back to a straight line from start to
+   goal when A* fails *and* still publishes `FAILED` — execution
+   continues despite the contradiction.
+3. 2-D only — the ground-floor slice cannot represent stairs or ramps.
+4. No trajectory smoothing, the resulting waypoint stream is jagged.
+5. Pure Python with `dict`-based open / closed sets — a 200×200 grid can
+   take tens of seconds.
 
-**使用场景**: `sim`、`dev`、`stub`、`map` profiles
+Treat A* purely as a portability shim, not as a quality option.
 
----
+## Profile mapping
 
-## 为什么不用我们自己的 Python A*（`astar`）做生产
+| Profile | Robot | Planner | Reason |
+|---------|-------|---------|--------|
+| `nav` | S100P | `pct` | Real robot, needs 3D terrain awareness |
+| `explore` | S100P | `pct` | Same |
+| `tare_explore` | S100P | `pct` | TARE provides waypoints; PCT plans the path |
+| `s100p` | S100P | `pct` | Same as `nav` |
+| `map` | S100P | `astar` | Mapping doesn't plan in earnest |
+| `sim` | MuJoCo | `astar` | `ele_planner.so` won't load on x86 |
+| `sim_nav` | stub | `astar` | Pure Python sim, no aarch64 binaries |
+| `dev` | stub | `astar` | No hardware, no tomogram |
+| `stub` | stub | `astar` | CI only |
 
-我们自己实现的 `_astar` 和 `_astar_3d`（在 `pct_planner_astar.py`）存在以下问题：
-
-1. **`_AStarBackend.plan()` 路径重建 bug** — `(si,sj)` 起点不加入 came_from，路径丢失起点
-2. **`pct_planner_astar.py` 直线兜底** — A* 失败时 `cells = [(si,sj),(gi,gj)]`，同时发 FAILED，但继续执行
-3. **仅 2D** — `_AStarBackend` 只用 ground-floor slice，无法处理楼梯/坡道
-4. **无轨迹优化** — 输出锯齿格栅路径，四足执行抖动大
-5. **慢** — 纯 Python `dict` g_score，200×200 格子可能数十秒
-
-**结论**: 这两套代码存在的唯一理由是跨平台兼容，不是质量。
-
----
-
-## Profile 映射
-
-| Profile | 机器人 | 规划器 | 理由 |
-|---------|--------|--------|------|
-| `nav` | S100P | **`pct`** | 真机导航，需要 3D 地形感知 |
-| `explore` | S100P | **`pct`** | 真机探索，同上 |
-| `s100p` | S100P | **`pct`** | 真机，同上 |
-| `sim` | MuJoCo | `astar` | ele_planner.so 无法在 x86 运行 |
-| `map` | S100P | `astar` | 建图阶段无需高质量规划 |
-| `dev` | stub | `astar` | 无硬件，无 tomogram |
-| `stub` | stub | `astar` | CI 测试，无硬件 |
-
----
-
-## PCT 后端接口说明
+## `_PCTBackend` API
 
 ```python
-# global_planner_module.py 中的 _PCTBackend
+backend = _PCTBackend(
+    tomogram_path="/path/to/building.pickle",
+    obstacle_thr=49.9,
+)
 
-backend = _PCTBackend(tomogram_path="/path/to/building.pickle", obstacle_thr=49.9)
-
-# 规划（返回 np.ndarray (N,3) 或 [] 如果失败）
 path = backend.plan(
     start=np.array([x, y, z]),
     goal=np.array([x, y, z]),
 )
 if not path:
-    # 真实失败，触发 LERa 恢复
+    # genuine failure — triggers LERa recovery
     ...
 ```
 
-`TomogramPlanner.plan()` 内部流程：
-1. 世界坐标 → grid index（`pos2idx`）
-2. 高度 → slice index（`pos2slice`）
-3. C++ `ele_planner` 做 3D A*（`a_star.so`）
-4. C++ `GPMP` 做轨迹优化（`traj_opt.so`）
-5. Grid index → 世界坐标（`transTrajGrid2Map`）
+`TomogramPlanner.plan()` internally:
 
----
+1. world coordinates → grid index (`pos2idx`)
+2. height → slice index (`pos2slice`)
+3. C++ `ele_planner` runs 3D A* (`a_star.so`)
+4. C++ `GPMP` smooths the trajectory (`traj_opt.so`)
+5. grid index → world coordinates (`transTrajGrid2Map`)
 
-## 相关文件
+## Files of record
 
-| 文件 | 作用 |
+| File | Role |
 |------|------|
-| `src/global_planning/pct_adapters/src/global_planner_module.py` | `_PCTBackend` / `_AStarBackend` 注册 |
-| `src/global_planning/PCT_planner/planner/scripts/planner_wrapper.py` | `TomogramPlanner` 包装 C++ .so |
-| `src/global_planning/PCT_planner/planner/lib/src/ele_planner/` | C++ 规划器源码 |
-| `src/nav/global_planner_service.py` | `GlobalPlannerService`，`NavigationModule` 使用 |
-| `cli/profiles_data.py` | Profile 规划器配置 |
-| `src/core/blueprints/full_stack.py` | Blueprint 默认 `planner_backend="astar"` |
+| `src/global_planning/pct_adapters/src/global_planner_module.py` | `_PCTBackend` and `_AStarBackend` registration |
+| `src/global_planning/PCT_planner/planner/scripts/planner_wrapper.py` | `TomogramPlanner` Python wrapper around the `.so` |
+| `src/global_planning/PCT_planner/planner/lib/src/ele_planner/` | C++ source |
+| `src/nav/global_planner_service.py` | `GlobalPlannerService` consumed by `NavigationModule` |
+| `cli/profiles_data.py` | Profile `planner` field |
+| `src/core/blueprints/full_stack.py` | Blueprint default `planner_backend="astar"` |

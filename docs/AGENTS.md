@@ -15,21 +15,23 @@ LingTu (灵途) is an autonomous navigation system for quadruped robots in outdo
 
 ```bash
 # Framework tests (no ROS2 needed, runs on any machine)
-python -m pytest src/core/tests/ -q       # 640 tests
+python -m pytest src/core/tests/ -q       # ~1000+ framework tests
 
 # CLI with interactive REPL (profile-based)
 python lingtu.py                          # interactive profile selector
 python lingtu.py stub                     # no hardware, framework testing
 python lingtu.py sim                      # MuJoCo simulation (full stack)
+python lingtu.py sim_nav                  # pure-Python sim, no ROS2 / C++
 python lingtu.py dev                      # semantic pipeline, no C++ nodes
-python lingtu.py s100p                    # real S100P robot (BPU + Kimi)
-python lingtu.py explore                  # exploration, no pre-built map
+python lingtu.py nav                      # real S100P navigation (BPU + Qwen + PCT)
+python lingtu.py explore                  # wavefront frontier exploration
+python lingtu.py tare_explore             # CMU TARE hierarchical exploration
 python lingtu.py map                      # mapping mode (SLAM + save)
 python lingtu.py --list                   # list all profiles
 
 # Override any profile flag
-python lingtu.py s100p --llm mock         # real robot but mock LLM
-python lingtu.py s100p --daemon           # background daemon (S100P)
+python lingtu.py nav --llm mock           # real robot but mock LLM
+python lingtu.py nav --daemon             # background daemon
 python lingtu.py stop                     # stop running daemon
 
 # Composable factory API (each line = one functional stack)
@@ -110,17 +112,19 @@ High layers depend on low layers only. L5→L2 (waypoint→PathFollower) is comm
 | PathFollower | `nav_core` (C++ nanobind), `pure_pursuit`, `pid`                                     |
 
 
-### Profiles (Complete)
+### Profiles (Complete — see `cli/profiles_data.py`)
 
 
-| Profile   | Driver     | SLAM      | LLM  | Planner | Native | Semantic | Gateway | Use Case                    |
-| --------- | ---------- | --------- | ---- | ------- | ------ | -------- | ------- | --------------------------- |
-| `stub`    | stub       | none      | mock | astar   | no     | no       | yes     | Framework testing           |
-| `dev`     | stub       | none      | mock | astar   | no     | yes      | yes     | Semantic pipeline dev       |
-| `sim`     | sim_mujoco | bridge    | mock | astar   | yes    | yes      | yes     | MuJoCo full simulation      |
-| `map`     | s100p      | fastlio2  | mock | astar   | no     | no       | yes     | Build map with SLAM         |
-| `nav`     | s100p      | localizer | qwen | astar   | no     | yes      | yes     | Navigate with pre-built map |
-| `explore` | s100p      | fastlio2  | qwen | astar   | no     | yes      | yes     | Exploration (no map)        |
+| Profile          | Driver     | SLAM     | LLM  | Planner | Native | Semantic | Gateway | Use Case                       |
+| ---------------- | ---------- | -------- | ---- | ------- | ------ | -------- | ------- | ------------------------------ |
+| `stub`           | stub       | none     | mock | astar   | no     | no       | yes     | Framework testing              |
+| `dev`            | stub       | none     | mock | astar   | no     | yes      | yes     | Semantic pipeline dev          |
+| `sim`            | sim_mujoco | bridge   | mock | astar   | yes    | yes      | yes     | MuJoCo full simulation         |
+| `sim_nav`        | stub       | none     | mock | astar   | no     | no       | yes     | Pure-Python sim, no ROS2 / C++ |
+| `map`            | s100p      | fastlio2 | mock | astar   | no     | no       | yes     | Build map with SLAM            |
+| `nav`            | s100p      | bridge   | qwen | pct     | no     | yes      | yes     | Navigate with pre-built map    |
+| `explore`        | s100p      | fastlio2 | qwen | pct     | no     | yes      | yes     | Wavefront exploration          |
+| `tare_explore`   | s100p      | fastlio2 | qwen | pct     | no     | yes      | yes     | CMU TARE explorer              |
 
 
 ### Robot Presets
@@ -220,7 +224,10 @@ lingtu/
 
 ```bash
 # Framework tests (primary, no ROS2 needed)
-python -m pytest src/core/tests/ -q                    # 640 tests, ~5s
+python -m pytest src/core/tests/ -q                    # ~1000+ tests
+
+# Native nav_core only (no ROS2 needed) — used by Python autonomy chain
+make nav_core                                          # builds _nav_core.so
 
 # ROS2 build (for C++ nodes on S100P only)
 source /opt/ros/humble/setup.bash
@@ -277,22 +284,33 @@ bp.wire("SafetyRingModule", "stop_cmd", driver_name, "stop_signal")
 bp.wire("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal")
 
 # SLAM odometry priority for NavigationModule
-bp.wire(slam_module_name, "odometry", "NavigationModule", "odometry")
+bp.wire("SlamBridgeModule", "odometry", "NavigationModule", "odometry")
+# SLAM map_cloud → all consumers (OccupancyGrid, ElevationMap, Terrain, …)
+bp.wire("SlamBridgeModule", "map_cloud", "OccupancyGridModule", "map_cloud")
+# (and the same for ElevationMapModule, TerrainModule, VoxelGridModule, RerunBridgeModule, GatewayModule)
 
-# Autonomy chain (when enable_native=True)
-bp.wire("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint")
-bp.wire("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map")
+# Autonomy chain (when enable_native=True; otherwise Python autonomy module replaces it)
+bp.wire("NavigationModule", "waypoint",   "LocalPlannerModule", "waypoint")
+bp.wire("TerrainModule",   "terrain_map", "LocalPlannerModule", "terrain_map")
 bp.wire("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path")
-bp.wire("PathFollowerModule", "cmd_vel", driver_name, "cmd_vel")
+bp.wire("LocalPlannerModule", "local_path", "SafetyRingModule",  "path")
 
 # Visual servo dual channel
 bp.wire("SemanticPlannerModule", "servo_target", "VisualServoModule", "servo_target")
-bp.wire("VisualServoModule", "goal_pose", "NavigationModule", "goal_pose")
-bp.wire("VisualServoModule", "cmd_vel", driver_name, "cmd_vel")
+bp.wire("VisualServoModule",     "goal_pose",    "NavigationModule",  "goal_pose")
+bp.wire("VisualServoModule",     "nav_stop",     "NavigationModule",  "stop_signal")
 
-# Teleop
-bp.wire("TeleopModule", "cmd_vel", driver_name, "cmd_vel")
-bp.wire("TeleopModule", "nav_stop", "NavigationModule", "stop_signal")
+# CmdVelMux: priority arbitration over all cmd_vel sources
+bp.wire("TeleopModule",       "cmd_vel",          "CmdVelMux", "teleop_cmd_vel")
+bp.wire("VisualServoModule",  "cmd_vel",          "CmdVelMux", "visual_servo_cmd_vel")
+bp.wire("NavigationModule",   "recovery_cmd_vel", "CmdVelMux", "recovery_cmd_vel")
+bp.wire("PathFollowerModule", "cmd_vel",          "CmdVelMux", "path_follower_cmd_vel")
+bp.wire("CmdVelMux",          "driver_cmd_vel",    driver_name, "cmd_vel")
+# SafetyRing observes the mux winner
+bp.wire("CmdVelMux",          "driver_cmd_vel",   "SafetyRingModule", "cmd_vel")
+
+# Teleop active signal pauses NavigationModule
+bp.wire("TeleopModule", "teleop_active", "NavigationModule", "teleop_active")
 ```
 
 ## 13. Semantic Navigation
@@ -324,7 +342,7 @@ Instruction: "go to where I left the backpack"
 Two output channels based on distance:
 
 - Far (> 3m): `goal_pose → NavigationModule → planning stack`
-- Near (< 3m): `cmd_vel → Driver directly (PD servo, bypasses planner)`
+- Near (< 3m): `cmd_vel → CmdVelMux → driver` (PD servo, bypasses planner; mux gives it priority 80, above PathFollower at 40)
 
 Components: BBoxNavigator (bbox+depth→3D→PD), PersonTracker (VLM select+CLIP Re-ID), vlm_bbox_query (open-vocab detection).
 
@@ -473,9 +491,9 @@ claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 WebSocket joystick at `ws://<robot>:5050/ws/teleop`:
 
 - Phone/browser sends `{"type": "joy", "lx": 0.5, "ly": 0.0, "az": -0.3}`
-- Robot streams JPEG camera frames back
-- 3s idle → auto-releases to autonomous navigation
-- cmd_vel priority: Teleop > VisualServo > PathFollower
+- Robot streams JPEG camera frames back (or H.264 via `WebRTCStreamModule` when `aiortc` is installed)
+- 3 s idle → auto-releases to autonomous navigation
+- cmd_vel priority (`CmdVelMux`): Teleop 100 > VisualServo 80 > Recovery 60 > PathFollower 40, each with 0.5 s freshness
 
 ## 20. CLI Reference (`cli/`)
 

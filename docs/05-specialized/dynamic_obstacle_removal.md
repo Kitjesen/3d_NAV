@@ -1,178 +1,179 @@
-# 建图动态障碍物去除
+# Dynamic Obstacle Removal
 
-> Live-mapping 阶段把"正在移动的人/物"从累积地图中剔除,使保存的底图
-> 只含静态几何。
+> Strip moving people / objects out of the cumulative map so the saved
+> baseline contains only static geometry.
 
-## 问题
+## Problem
 
-当前建图链路 `Fast-LIO2 → SlamBridge → Gateway._on_map_cloud` 只做 0.15m
-voxel 去重,**不做动态过滤**。人慢走穿过走廊,每个位置的体素各被占一
-次,保存下来就是一条人形蠕虫拖尾。
+The mapping pipeline `Fast-LIO2 → SlamBridge → Gateway._on_map_cloud` only
+applies a 0.15 m voxel dedup. Fast-LIO2 itself is purely geometric and does
+not classify static vs dynamic points; the localizer's ICP refinement only
+converges, it does not delete points. A person walking down a corridor leaves
+a worm-shaped trail in the saved PCD.
 
-Fast-LIO2 是纯几何 LIO,不区分静态/动态点;Localizer refine 只做 ICP 收敛,
-也不删点。
-
-## 现状基线 (v1.7.5)
+Baseline behaviour (v1.7.5):
 
 ```python
-# gateway_module.py:864-872  (mapping 分支)
+# gateway_module.py — mapping branch
 combined = np.concatenate([self._map_points, pts])
-combined = _voxel_downsample(combined, 0.15)  # 只去重,不去动态
+combined = _voxel_downsample(combined, 0.15)   # dedup, no dynamic removal
 self._map_points = combined
 ```
 
-## 选型对比
+## Method Survey
 
-| 方法 | 机构/年份 | 模式 | 速度/帧 | 室内 | 集成难度 |
-|---|---|---|---|---|---|
-| **Dynablox** | ETH-ASL RA-L'23 | online | 58ms | ★★★★★ | 高 (ROS1 only) |
-| **DUFOMap** | KTH RA-L'24 | online+offline | 0.06ms | ★★★☆☆ (稀疏 LiDAR 掉点) | 中 (pip 无 aarch64 wheel,要源码编) |
-| **BeautyMap** | HKUST RA-L'24 | offline only | 中 | ★★★★☆ | 中 (保存时批处理) |
-| **ERASOR** | KAIST ICRA'21 | offline | 中 | ★★★☆☆ (偏室外) | 中 |
-| **Hit-count voting** | 自研 | online | <1ms | ★★★☆☆ | **极低 (30 行改 Gateway)** |
+| Method | Source | Mode | Per-frame | Indoor | Integration cost |
+|--------|--------|------|-----------|--------|------------------|
+| Dynablox | ETH-ASL RA-L'23 | online | 58 ms | strong | high (ROS1 only) |
+| **DUFOMap** | **KTH RA-L'24** | **online + offline** | **0.06 ms** | medium (sparse LiDAR) | medium (build from source on aarch64) |
+| BeautyMap | HKUST RA-L'24 | offline only | medium | strong | medium |
+| ERASOR | KAIST ICRA'21 | offline | medium | medium (outdoor bias) | medium |
+| Hit-count voting | ours | online | < 1 ms | medium | trivial |
 
-### 选型决策
+**Picked combination:** hit-count voting for the live view + DUFOMap as a save-time
+refinement. Dynablox is ROS1-only; porting to ROS2 Humble on S100P is not
+worth the engineering cost.
 
-**不做 Dynablox**: ROS1 Noetic only,S100P 是 ROS2 Humble,port 成本远大于收益。
+## Phase 1 — Hit-count voting (live)
 
-**目标组合**: `Hit-count voting (实时) + DUFOMap (保存前 offline refine)`。
-
-- Hit-count voting: 建图过程中 Web 看到的就是过滤后的,低延迟无依赖
-- DUFOMap: 保存时再跑一遍,静态地图精度到 SOTA
-
-## 三阶段路线
-
-### Phase 1 — Hit-count voting (~1 天,立即上线)
-
-在 `Gateway._on_map_cloud` mapping 分支加体素命中计数:
+In `gateway_module.py:_on_map_cloud` (mapping branch) we keep an observation
+counter per voxel:
 
 ```python
-# 每个体素 key → observation count
-voxel_hits: Dict[Tuple[int,int,int], int]
+voxel_hits: Dict[Tuple[int, int, int], int]
 
-# 来一帧:
+# per incoming frame
 for voxel_key in voxelize(pts):
     voxel_hits[key] += 1
 
-# 查询/保存时过滤:
-stable = {k for k,c in voxel_hits.items() if c >= MIN_HITS}
+# at query / publish
+stable = {k for k, c in voxel_hits.items() if c >= MIN_HITS}
 ```
 
-参数:
-- `MIN_HITS = 5` (起始) — 墙被扫 30-100 次,人走过每位置 1-3 次
-- `voxel_size = 0.15m` — 匹配现有下采样
-- 建图过程每 N 秒清一次 `hit = 1` 的点 (可选,降内存)
+Tunables:
 
-**局限**:
-- 需要机器人移动多帧才有效 (静置站立建图没用)
-- 人长时间停留在一处会被认成"静态"
-- 慢速动态物体 (如慢走的狗) 可能漏网
+- `MIN_HITS = 3` (env `LINGTU_MAP_MIN_HITS`). Walls get hit 30-100 times in a
+  typical building loop; a person walking past leaves 1-3 hits per voxel.
+- `voxel_size = 0.15 m` (matches the existing dedup grid).
 
-**收益**: 典型场景 (人快步走过走廊) 去除率 70-85%。
+Limitations:
 
-### Phase 2 — DUFOMap 保存时后处理 **✅ 已上线 (commit 7871561 + a444018)**
+- Needs the robot to move — standing-still mapping accumulates no votes.
+- A person standing still for a long time becomes "static" by this measure.
+- Slow movers (e.g. a meandering dog) leak through.
 
-原计划依赖 Python 绑定 (`pip install dufomap`), 但**aarch64 没预编译 wheel**。
-实际落地:
+Live SSE point-cloud stream uses this filter; saved PCD goes through Phase 2
+on top.
 
-**2.1 C++ binary 替代 Python 绑定**
+## Phase 2 — DUFOMap save-time refinement (shipped)
 
-直接编 DUFOMap 的 `dufomap_run` C++ 可执行, Gateway 走 subprocess 调用。
-完全脱 ROS, 零新 rclpy 依赖。
+We do not depend on the Python `dufomap` package — there is no aarch64 wheel
+on PyPI and building the binding in-process is fragile. Instead we ship a
+subprocess wrapper.
 
-**2.2 PGO patches 作为输入源** (不是累积 map.pcd)
+### Inputs
 
-发现关键点: DUFOMap 做 ray-casting 需要 **每帧位姿 + 每帧激光**, 不能只
-读累积地图。PGO 已经 dump 了这两个:
-- `<map>/patches/*.pcd` — 每关键帧 body-frame 激光 (~1500 点)
-- `<map>/poses.txt` — 每行 `patch.pcd tx ty tz qw qx qy qz`
+DUFOMap needs **per-frame poses + per-frame scans** for ray-casting; a fused
+`map.pcd` is not enough. PGO already dumps both:
 
-`dynamic_filter.refilter_map` 的流程:
-```
-1. 读 poses.txt 建 dict
-2. 对每个 patch.pcd: 读点云 + 重写 VIEWPOINT = 对应 pose
-3. 写入 tmpdir/pcd/*.pcd (DUFOMap 期望的目录结构)
-4. subprocess.run(dufomap_run, tmpdir, config.toml)
-5. 读 tmpdir/dufomap_output.pcd → 备份原 map.pcd → 覆盖
-```
+- `<map>/patches/*.pcd` — body-frame keyframe scans (~1500 pts each)
+- `<map>/poses.txt` — `patch.pcd tx ty tz qw qx qy qz` per line
 
-**2.3 集成点**: `MapManager._map_save` + `Gateway /api/v1/map/save` 两条路径
+`src/nav/services/nav_services/dynamic_filter.py:refilter_map` does:
 
-Web 按钮走 `/api/v1/map/save` (line 2628), MCP/程序调 `/api/v1/maps action=save`。
-**两处都插了 Step 1½**, 保证不管走哪条路径都过 DUFOMap。
+1. Parse `poses.txt`.
+2. For each patch: read points, rewrite the PCD `VIEWPOINT` header to the
+   patch pose.
+3. Stage in a temp dir as `<tmp>/pcd/*.pcd`.
+4. `subprocess.run(dufomap_run, tmp, config.toml, timeout=300s)`.
+5. Backup `map.pcd → map.pcd.predufo`, then atomic `os.replace` into
+   `map.pcd`. If the backup itself fails, the function aborts and leaves the
+   original PCD intact.
 
-**2.4 幂等构建脚本 `scripts/build_dufomap.sh`**
+### Integration points
 
-从裸 aarch64 Ubuntu 22.04 跑到 `dufomap_run` 可执行一条命令:
-- apt 装 libtbb-dev + liblz4-dev (+ wget fallback 装 liblzf-dev,
-  因为清华代理挂的时候直下 .deb)
-- git clone recursive
-- patch ufomap 三个 header 的 `#include <immintrin.h>` 加 `__BMI2__`
-  守卫 (aarch64 没 x86 intrinsics)
-- cmake + build
+Both save paths run Phase 2 unconditionally:
 
-**2.5 Lingtu 专用 DUFOMap 调参** `config/dufomap.toml`
+| Caller | File |
+|--------|------|
+| Web button `POST /api/v1/map/save` | `src/gateway/gateway_module.py` |
+| MCP / programmatic save | `src/nav/services/nav_services/map_manager_module.py:_map_save` |
 
-默认为 KITTI 64 线密激光调的, Livox Mid-360 稀疏, 放松阈值:
-| 参数 | 默认 | Lingtu |
-|---|---|---|
+### Build script
+
+`scripts/build_dufomap.sh` is idempotent on a bare aarch64 Ubuntu 22.04:
+
+- `apt install libtbb-dev liblz4-dev` (with a wget fallback for `liblzf-dev`
+  when the campus mirror flakes).
+- `git clone --recursive`.
+- Patches three UFOMap headers to gate `#include <immintrin.h>` behind
+  `__BMI2__` (the upstream headers assume x86).
+- `cmake -DCMAKE_BUILD_TYPE=Release && make`.
+- Output binary: `~/src/dufomap/build/dufomap_run`.
+
+### LingTu DUFOMap config
+
+Default DUFOMap config is tuned for KITTI-class 64-line LiDAR. Livox Mid-360
+is sparse and non-repetitive, so we ship `config/dufomap.toml` with looser
+thresholds:
+
+| Parameter | Upstream | LingTu |
+|-----------|----------|--------|
 | `inflate_unknown` | 1 | **2** |
 | `inflate_hits_dist` | 0.2 | **0.15** |
-| `min_range` | 0.2 | **0.3** (过滤狗自己腿) |
-| `max_range` | -1 | **30.0** (Livox 远端噪点多) |
+| `min_range` | 0.2 | **0.3** (clip the dog's own legs) |
+| `max_range` | -1 | **30.0** (Livox far-field is noisy) |
 
-**2.6 性能实测 (corrected_20260406_224020, 105 patches × ~1600 pts)**
-- 总处理时间: **0.6s** (aarch64, DUFOMap 内部 OpenMP)
-- Python wrapper 开销 (scp repack + subprocess IPC): 额外 ~0.1s
-- 静态场景删除率: 0.01% (预期, 没动态物体可删)
-- 有动态物体场景: 待验证 (Task #23)
+### Measured cost (S100P aarch64)
 
-### Phase 3 — 实时 DUFOMap (~1 周,可选)
+105 patches × ~1600 pts (`corrected_20260406_224020`):
 
-将 DUFOMap 搬进 Gateway `_on_map_cloud` 实时管线,每帧调 `dufo.run`,
-Web 看到的就是 DUFOMap 过滤版。
+- DUFOMap (OpenMP) total: ~0.6 s.
+- Python wrapper overhead (repack + IPC): ~0.1 s.
+- Static-only scene drop rate: 0.01 % (expected — nothing to remove).
+- Dynamic scene drop rate: pending real-data benchmark.
 
-**风险**:
-- Mid-360 非重复扫描单帧 ~2k 点,稀疏度可能触及 DUFOMap 74% AA 下限
-- 需要 RTF 实测,如果效果不如 Phase 1 + Phase 2 组合,此阶段放弃
+## Phase 3 — Live DUFOMap (parked)
 
-## 验收标准
+Calling DUFOMap per frame inside `_on_map_cloud` would push the live SSE map
+through the same filter. Risk: Mid-360 single frames are ~2k points which is
+near DUFOMap's 74 % availability lower bound for the published benchmarks.
+Won't pursue unless Phase 1 + 2 prove insufficient.
 
-- [x] Phase 1 上线 (commit b4530d5)
-- [x] Phase 2 上线 (commit 7871561 + a444018)
-- [x] DUFOMap binary aarch64 编译通过 (~/src/dufomap/build/dufomap_run)
-- [x] 离线测试通过 (105 patches, 0.6s, -23 pts on static map)
-- [x] Lingtu config 参数生效
-- [ ] **Task #23**: 有动态物体的新图实测, 残影去除 >= 60%
-- [ ] localizer 加载新 PCD 后 ICP fitness 不退化
-- [ ] Gateway CPU 峰值 < 原值 +30% (保存瞬间)
+## Acceptance Criteria
 
-## 关键文件
+- [x] Phase 1 deployed.
+- [x] Phase 2 deployed; DUFOMap binary builds clean on aarch64.
+- [x] Offline test passes (105 patches, 0.6 s, –23 pts on a static map).
+- [x] LingTu config in effect at save time.
+- [ ] Real-world dynamic-scene test — residual ghost rate ≥ 60 % reduction.
+- [ ] Localizer ICP fitness on the new PCD ≥ baseline.
+- [ ] Save-time gateway CPU peak < baseline + 30 %.
 
-| 文件 | 角色 |
-|---|---|
-| `src/gateway/gateway_module.py:_on_map_cloud` | Phase 1: mapping 分支 voxel_hits 投票 |
-| `src/gateway/gateway_module.py:/api/v1/map/save` | Phase 2: Web 按钮直调路径, Step 1½ DUFOMap |
-| `src/nav/services/nav_services/map_manager_module.py:_map_save` | Phase 2: MCP 路径, Step 1½ DUFOMap |
-| `src/nav/services/nav_services/dynamic_filter.py` | DUFOMap wrapper + patches repack + 备份/覆盖 |
-| `scripts/build_dufomap.sh` | 幂等 aarch64 构建脚本 |
-| `scripts/dufomap_offline_test.py` | 独立验证脚本 |
-| `config/dufomap.toml` | Lingtu 专用 DUFOMap 调参 |
-| `~/src/dufomap/build/dufomap_run` | S100P 上实际执行的 C++ binary |
+## Key Files
 
-## 环境变量
+| File | Role |
+|------|------|
+| `src/gateway/gateway_module.py` (`_on_map_cloud`, `/api/v1/map/save`) | Phase 1 voxel voting + Phase 2 entry on the web path |
+| `src/nav/services/nav_services/map_manager_module.py:_map_save` | Phase 2 entry on the MCP path |
+| `src/nav/services/nav_services/dynamic_filter.py` | DUFOMap subprocess wrapper, atomic overwrite, backup |
+| `scripts/build_dufomap.sh` | Idempotent aarch64 build |
+| `scripts/dufomap_offline_test.py` | Standalone offline validator |
+| `config/dufomap.toml` | LingTu-tuned DUFOMap config |
+| `~/src/dufomap/build/dufomap_run` (S100P) | C++ binary executed via subprocess |
 
-| 变量 | 默认 | 含义 |
-|---|---|---|
-| `LINGTU_MAP_MIN_HITS` | 3 | Phase 1 voxel 投票阈值 |
-| `LINGTU_SAVE_DYNAMIC_FILTER` | 1 | Phase 2 总开关 (=0 关闭) |
-| `LINGTU_DUFOMAP_BIN` | `~/src/dufomap/build/dufomap_run` | DUFOMap 可执行路径 |
-| `LINGTU_DUFOMAP_CONFIG` | `<repo>/config/dufomap.toml` | DUFOMap 配置路径 |
+## Environment Variables
 
-## 参考
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `LINGTU_MAP_MIN_HITS` | 3 | Phase 1 voxel vote threshold |
+| `LINGTU_SAVE_DYNAMIC_FILTER` | 1 | Phase 2 master switch (0 disables) |
+| `LINGTU_DUFOMAP_BIN` | `~/src/dufomap/build/dufomap_run` | DUFOMap binary path |
+| `LINGTU_DUFOMAP_CONFIG` | `<repo>/config/dufomap.toml` | DUFOMap config path |
 
-- [Dynablox (ETH-ASL RA-L'23)](https://github.com/ethz-asl/dynablox)
-- [DUFOMap (KTH RA-L'24)](https://github.com/KTH-RPL/dufomap)
-- [BeautyMap (HKUST RA-L'24)](https://github.com/MKJia/BeautyMap)
-- [KTH DynamicMap_Benchmark (ITSC'23)](https://github.com/KTH-RPL/DynamicMap_Benchmark)
-- [Awesome-LiDAR-Mapping curated list](https://github.com/hwan0806/Awesome-LiDAR-Mapping)
+## References
+
+- [Dynablox — ETH-ASL, RA-L 2023](https://github.com/ethz-asl/dynablox)
+- [DUFOMap — KTH-RPL, RA-L 2024](https://github.com/KTH-RPL/dufomap)
+- [BeautyMap — HKUST, RA-L 2024](https://github.com/MKJia/BeautyMap)
+- [DynamicMap_Benchmark — KTH-RPL, ITSC 2023](https://github.com/KTH-RPL/DynamicMap_Benchmark)

@@ -1,116 +1,123 @@
-# MapPilot 调参速查表
+# LingTu Tuning Cheat Sheet
 
-> 修改参数后重启对应节点即可生效，无需重新编译。
+> Edit YAML, restart the systemd service, no rebuild needed.
 
----
-
-## 1. 语义探索 — `config/semantic_exploration.yaml`
-
-### Frontier 评分权重（四项之和 ≈ 1.0）
-
-| 参数 | 默认值 | 范围 | 影响 |
-|------|--------|------|------|
-| `frontier_distance_weight` | 0.25 | 0.1–0.4 | 偏好近处 frontier（越高→越不愿远探） |
-| `frontier_novelty_weight` | 0.35 | 0.2–0.5 | 偏好未探索区域（越高→探索范围更广） |
-| `frontier_language_weight` | 0.20 | 0.1–0.3 | 语言指令相关性（越高→更贴近目标描述） |
-| `frontier_grounding_weight` | 0.20 | 0.1–0.3 | 场景图空间线索（越高→更依赖已知对象位置） |
-
-**典型调参场景**：
-- 机器人原地打转 → 降低 `frontier_distance_weight`，提高 `frontier_novelty_weight`
-- 目标附近但找不到 → 提高 `frontier_grounding_weight` 和 `frontier_language_weight`
-- 探索效率低 → 提高 `frontier_novelty_distance`（当前 5.0 m）
-
-### 其他探索参数
-
-| 参数 | 默认值 | 影响 |
-|------|--------|------|
-| `frontier_score_threshold` | 0.15 | 最低接受分，降低→接受更多候选 frontier |
-| `frontier_min_size` | 5 cells | 过小的 frontier 被过滤，降低→探索细缝隙 |
-| `frontier_max_count` | 10 | 评分前保留的候选数，增大→评分开销增加 |
-| `confidence_threshold` | 0.5 | 低于此置信度触发 Frontier 探索 |
-| `arrival_radius` | 1.0 m | 到达判定半径 |
-
----
-
-## 2. 语义规划 — `config/semantic_planner.yaml`
-
-### LLM 后端
-
-| 参数 | 默认值 | 影响 |
-|------|--------|------|
-| `backend` | `kimi` | 切换 LLM：`kimi` / `openai` / `claude` / `qwen` / `mock` |
-| `model` | `kimi-k2.5` | 对应后端的模型名 |
-| `timeout_sec` (主) | 15.0 s | Kimi 响应超时，超时→触发备用或报错 |
-| `timeout_sec` (备) | 10.0 s | 备用 LLM（qwen-turbo）超时 |
-| `confidence_threshold` | 0.6 | 低于此置信度触发探索而非直接导航 |
-
-**无网络/离线运行**：
-```bash
-export MOONSHOT_API_KEY=""
-# 修改 config/semantic_planner.yaml: backend: "mock"
-ros2 launch launch/navigation_explore.launch.py target:="找到充电桩"
-```
-
-### Frontier 评分（语义规划模式）
-
-| 参数 | 默认值 | 范围 | 说明 |
-|------|--------|------|------|
-| `frontier_distance_weight` | 0.2 | 0.1–0.4 | 同上，此处用于语义规划模式 |
-| `frontier_novelty_weight` | 0.3 | 0.2–0.5 | |
-| `frontier_language_weight` | 0.2 | 0.1–0.3 | |
-| `frontier_grounding_weight` | 0.3 | 0.1–0.4 | |
-| `frontier_grounding_keyword_bonus` | 0.4 | 0.2–0.6 | 指令关键词命中加分，最影响语义导航精度 |
-| `frontier_cooccurrence_bonus` | 0.25 | 0.1–0.4 | 共现先验加分（目标常与某物体同现时）|
-
----
-
-## 3. 机器人参数 — `config/robot_config.yaml`
-
-| 参数 | 默认值 | 范围 | 影响 |
-|------|--------|------|------|
-| `stuck_timeout` | 10.0 s | 5–20 s | 卡死检测灵敏度。降低→更快恢复，但可能误触 |
-| `max_linear_vel` | — | — | 最大线速度（查文件确认当前值）|
-| `max_angular_vel` | — | — | 最大角速度 |
-
-**卡死调参**：
-- 频繁误判卡死 → 增大 `stuck_timeout`（≥12s）
-- 真实卡死恢复慢 → 减小 `stuck_timeout`（≤8s）
-
----
-
-## 4. 语义感知 — `config/semantic_perception.yaml`
-
-| 参数 | 默认值 | 影响 |
-|------|--------|------|
-| `confidence_threshold` | — | YOLO 检测置信度门槛，降低→更多检测但噪声增加 |
-
----
-
-## 5. 快速验证命令
+The single source of truth for runtime parameters is `config/robot_config.yaml`. Other YAML files
+(`config/semantic_*.yaml`, `config/pointlio.yaml`, `config/far_planner.yaml`,
+`config/dufomap.toml`) hold module-specific overrides. After editing, restart the affected
+service:
 
 ```bash
-# 检查当前参数是否生效
-ros2 param get /semantic_planner confidence_threshold
-ros2 param get /frontier_explorer frontier_novelty_weight
-
-# 在线热更新（部分参数支持）
-ros2 param set /frontier_explorer frontier_novelty_weight 0.4
-
-# 查看所有可设参数
-ros2 param list /semantic_planner
+sudo systemctl restart lingtu          # algorithm layer (gateway + nav + perception)
+sudo systemctl restart robot-fastlio2  # SLAM only
 ```
 
 ---
 
-## 6. 参数调优流程
+## 1. Robot kinematic limits — `config/robot_config.yaml`
 
+| Key                     | Default | Range     | Effect                                                       |
+|-------------------------|---------|-----------|--------------------------------------------------------------|
+| `robot.max_linear_vel`  | 1.0 m/s | 0.3-2.0   | Path-follower velocity ceiling                               |
+| `robot.max_angular_vel` | 1.0 rad/s | 0.3-2.0 | Turn-rate ceiling                                            |
+| `robot.stuck_timeout`   | 10.0 s  | 5-20      | Stuck detector window (`waypoint_tracker.py`)                |
+| `robot.stuck_dist_thre` | 0.15 m  | 0.05-0.30 | Min displacement within window before declaring stuck        |
+| `robot.cruise_speed`    | 0.6 m/s | 0.3-1.0   | Default mission speed                                        |
+
+Tuning notes:
+- False stuck triggers in tight indoor turns -> raise `stuck_timeout` to 12-15.
+- Slow recovery in open terrain -> drop to 7-8.
+
+## 2. Local planner — `config/robot_config.yaml` `local_planner.*`
+
+The C++ local planner lives in `src/nav/core/include/nav_core/local_planner_full.hpp`
+and is called from Python via `_nav_core` (nanobind). Parameters are read once at
+`LocalPlannerModule.start()`.
+
+| Key                            | Default | Effect                                                   |
+|--------------------------------|---------|----------------------------------------------------------|
+| `local_planner.path_scale`     | 1.0     | Candidate path length multiplier                         |
+| `local_planner.dir_weight`     | 0.02    | Direction-alignment cost (higher -> straighter paths)    |
+| `local_planner.slope_weight`   | 0.0     | Per-voxel slope penalty (0 disables, 3-6 outdoor)        |
+| `local_planner.adjacent_range` | 3.5 m   | Obstacle consideration radius                            |
+| `local_planner.obstacle_height_thre` | 0.2 m | Z above ground that counts as obstacle                |
+| `local_planner.check_obstacle` | true    | Enable collision filtering                               |
+| `local_planner.two_way_drive`  | true    | Allow reverse motion candidates                          |
+
+Symptom -> change:
+- Robot oscillates around path -> raise `dir_weight` to 0.05, lower `path_scale` to 0.8.
+- Cuts corners in narrow halls -> drop `adjacent_range` to 2.5.
+- Climbs ramps it should avoid -> set `slope_weight` to 4-6.
+
+## 3. Path follower — `config/robot_config.yaml` `path_follower.*`
+
+The path follower is also `_nav_core` C++ (`PathFollowerCore`). Lookahead is adaptive:
+`L = base + ratio * speed`.
+
+| Key                              | Default | Effect                                              |
+|----------------------------------|---------|-----------------------------------------------------|
+| `path_follower.base_look_ahead`  | 0.3 m   | Lookahead at zero velocity                          |
+| `path_follower.look_ahead_ratio` | 0.5     | Extra lookahead per m/s                             |
+| `path_follower.yaw_rate_gain`    | 7.5     | Proportional turning gain                           |
+| `path_follower.max_yaw_rate`     | 45 deg/s | Hard limit on commanded yaw                        |
+| `path_follower.stop_dis_thre`    | 0.5 m   | Stop distance to final waypoint                     |
+
+Symptom -> change:
+- Snaking left-right on straight path -> drop `yaw_rate_gain` to 5-6, raise `base_look_ahead`.
+- Sluggish turns -> raise `yaw_rate_gain` to 10-12.
+
+## 4. Global planner backend — `core.registry`
+
+Two backends are registered in `src/global_planning/`:
+- `astar` — pure Python, default for `stub`/`dev`/`s100p` profiles.
+- `pct` — C++ `ele_planner.so` (PCT planner).
+
+Switch via the profile flag or REPL:
+
+```bash
+python lingtu.py s100p --planner pct
 ```
-1. 修改 config/*.yaml
-2. 重启节点: ros2 launch launch/navigation_explore.launch.py target:="..."
-3. 观察日志: ros2 topic echo /nav/semantic_status
-4. 定量评估: tests/benchmark/eval_navigation.sh
+
+PCT-specific tuning lives in `src/global_planning/PCT_planner/config/params.yaml`.
+
+## 5. Frontier exploration — `config/semantic_exploration.yaml`
+
+Used only by the `explore` profile. Weights should sum to ~1.0.
+
+| Key                               | Default | Effect                                              |
+|-----------------------------------|---------|-----------------------------------------------------|
+| `frontier_distance_weight`        | 0.25    | Prefer near frontiers                               |
+| `frontier_novelty_weight`         | 0.35    | Prefer unexplored regions                           |
+| `frontier_language_weight`        | 0.20    | Bias by language goal embedding                     |
+| `frontier_grounding_weight`       | 0.20    | Bias by scene-graph spatial cue                     |
+| `frontier_score_threshold`        | 0.15    | Reject candidates below this                        |
+| `frontier_min_size`               | 5 cells | Minimum frontier patch size                         |
+| `confidence_threshold`            | 0.5     | Below this, drop into frontier mode                 |
+
+## 6. Semantic planner — `config/semantic_planner.yaml`
+
+| Key                  | Default       | Effect                                                |
+|----------------------|---------------|-------------------------------------------------------|
+| `backend`            | `kimi`        | LLM: kimi / openai / claude / qwen / mock             |
+| `model`              | `kimi-k2.5`   | Model name                                            |
+| `timeout_sec`        | 15.0 s        | Primary LLM timeout                                   |
+| `confidence_threshold` | 0.6         | Below this, fall back to exploration                  |
+
+Offline mode: set `backend: mock` and unset `MOONSHOT_API_KEY`.
+
+## 7. Perception — `config/semantic_perception.yaml`
+
+| Key                            | Default | Effect                                          |
+|--------------------------------|---------|-------------------------------------------------|
+| `detector.confidence_threshold`| 0.4     | YOLO/BPU detection cutoff                       |
+| `detector.iou_threshold`       | 0.45    | NMS overlap threshold                           |
+
+## 8. Verifying changes
+
+```bash
+python -m pytest src/core/tests/ -q             # framework tests, no robot needed
+ssh sunrise@192.168.66.190 'lingtu status'       # one-screen status on the robot
+ssh sunrise@192.168.66.190 'lingtu health'       # GET /api/v1/health
 ```
 
----
-
-*最后更新: 2026-03-20*
+Web Gateway exposes module config snapshot at `http://<robot>:5050/api/v1/config`.

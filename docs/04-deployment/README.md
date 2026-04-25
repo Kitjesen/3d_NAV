@@ -1,214 +1,238 @@
-# LingTu S100P 部署手册
+# LingTu S100P Deployment
 
-> 迷路了？从这里开始。
-
----
-
-## 一眼看全局
-
-```bash
-systemctl status robot-brainstem robot-camera lingtu
-```
-
-或者看日志：
-```bash
-journalctl -u robot-slam -u lingtu -f --since "5 min ago"
-```
+How LingTu is laid out on the Sunrise robot, how to install, update, roll back, and
+diagnose the running stack. The single production entry is `python lingtu.py`,
+orchestrated by `lingtu.service`. There is no Docker, no `colcon launch` orchestration,
+and no `grpc_gateway` daemon in the current build.
 
 ---
 
-## 三层架构
+## One-liner status
 
-```
-硬件层  robot-camera     orbbec gemini330  → /camera/...  [systemd]
-
-控制层  robot-brainstem  Dart gRPC:13145   → 腿部运动控制  [systemd]
-
-算法层  lingtu           python lingtu.py  → HTTP:5050 MCP:8090  [systemd]
-          └─ 内部管理:
-               livox_ros_driver2  → /nav/lidar_scan /nav/imu
-               fastlio2 lio_node  → /nav/odometry /nav/registered_cloud
-               localizer_node     → /nav/odometry (有地图时覆盖)
+```bash
+ssh sunrise@192.168.66.190 'systemctl status lingtu robot-brainstem robot-camera robot-lidar robot-fastlio2 robot-localizer'
+ssh sunrise@192.168.66.190 'lingtu status'
 ```
 
-**原则**：robot-* 是地基，lingtu 是住在上面的房子。OTA 只更新 lingtu。
-
-> **注**：`robot-lidar` / `robot-fastlio2` / `robot-localizer` service 文件已备份在
-> `docs/04-deployment/services/`，当前 disabled。lingtu 以 managed 模式自行启动这三个
-> 节点。未来切换到 bridge 模式后可独立启用。
+The `lingtu` CLI gives you an 8-section snapshot — see `lingtu_cli.md`.
 
 ---
 
-## 服务清单（当前启用）
+## Three-layer architecture on the robot
 
-| 服务 | 作用 | 进程 | enabled |
-|------|------|------|---------|
-| `robot-camera` | Orbbec Gemini 330 相机 | `component_container` | ✓ |
-| `robot-brainstem` | 腿部运动控制 gRPC:13145 | `dart han_dog/bin/server.dart` | ✓ |
-| `lingtu` | 导航算法主栈 (含 SLAM) | `python3 lingtu.py nav` | ✓ |
+```
+Hardware       robot-camera         Orbbec Gemini 330           [systemd]
+               robot-lidar          Livox MID-360 driver         [systemd]
+
+Control        robot-brainstem      Dart gRPC :13145             [systemd]
+
+SLAM           robot-fastlio2       Fast-LIO2 odometry           [systemd]
+               robot-localizer      ICP localizer (needs map)    [systemd]
+
+Algorithm      lingtu               python lingtu.py nav          [systemd]
+                                    HTTP :5050  MCP :8090
+```
+
+Principle: `robot-*` services are the foundation; `lingtu` is the application that
+lives on top. OTA only updates `lingtu` (the contents of `/opt/lingtu/current`).
+The five `robot-*` services are stable and rarely change.
 
 ---
 
-## 常用命令
+## Service inventory (current)
 
-### 启动全部
-```bash
-sudo systemctl start robot-brainstem robot-camera lingtu
+| Service             | Role                                  | Process                                   | Enabled |
+|---------------------|---------------------------------------|-------------------------------------------|:-------:|
+| `robot-lidar`       | Livox MID-360 driver                  | `livox_ros_driver2_node`                  | yes     |
+| `robot-camera`      | Orbbec Gemini 330                     | `component_container` (orbbec_camera)     | yes     |
+| `robot-brainstem`   | Quadruped leg control gRPC :13145     | `dart han_dog/bin/server.dart`            | yes     |
+| `robot-fastlio2`    | LiDAR-IMU SLAM                        | `fastlio2 lio_node`                       | yes     |
+| `robot-localizer`   | ICP localizer (uses prebuilt map)     | `localizer_node`                          | yes     |
+| `lingtu`            | Algorithm stack (gateway + nav + sem) | `python3 lingtu.py nav`                   | yes     |
+| `ota-agent`         | OTA poller / installer                | `python3 -m ota_agent.main`               | yes     |
+
+Service unit files live in `docs/04-deployment/services/`:
+
+```
+robot-lidar.service
+robot-camera.service
+robot-brainstem.service
+robot-fastlio2.service
+robot-localizer.service
+lingtu.service
+lingtu.target            # umbrella unit pulling in robot-* + lingtu
+ros2-env.sh              # shared ROS2 environment (sourced by service ExecStart)
+install.sh               # idempotent installer
 ```
 
-### 只停算法层（保留腿控 + 相机）
-```bash
-sudo systemctl stop lingtu
-```
-
-### 停止全部
-```bash
-sudo systemctl stop lingtu robot-brainstem robot-camera
-```
-
-### 重启单个服务
-```bash
-sudo systemctl restart lingtu
-```
-
-### 看某服务日志
-```bash
-journalctl -u lingtu -f
-journalctl -u robot-fastlio2 -n 100
-```
-
-### 检查端口
-```bash
-ss -tnlp | grep -E "13145|5050|8090"
-```
+> The previous `slam.service` was removed and replaced with `robot-fastlio2.service` +
+> `robot-localizer.service`. The legacy `nav-*.service` family (12 disabled stubs from a
+> prior generation), `lingtu_*.service`, `askme*.service`, and the in-process
+> `grpc_gateway`-style `ota-daemon.service` are all gone — see `S100P_STACK_INVENTORY.md`
+> for the historical cleanup decisions.
 
 ---
 
-## 目录布局
+## Filesystem layout on the robot
 
 ```
 /opt/lingtu/
-  current -> releases/v2.0.0/    ← symlink，OTA 切换这个
+  current -> releases/v2.0.0/   # symlink — OTA flips this
   releases/
-    v2.0.0/                      ← 当前版本（不可变）
+    v2.0.0/                     # immutable, current release
+    v1.9.x/                     # kept for rollback
   config/
-    ros2-env.sh                  ← ROS2 环境变量（所有服务共用）
-  logs/                          ← lingtu 运行日志
-  models/                        ← BPU .hbm 模型
+    ros2-env.sh                 # shared ROS2 environment
+  nav/
+    ota/                        # ota-agent state, manifests, backups
+  logs/                         # algorithm-layer runtime logs
+  models/                       # BPU .hbm and ONNX
 
 /etc/systemd/system/
-  robot-lidar.service
-  robot-camera.service
-  robot-brainstem.service
-  robot-fastlio2.service
-  robot-localizer.service
+  robot-{lidar,camera,brainstem,fastlio2,localizer}.service
   lingtu.service
+  lingtu.target
+  ota-agent.service
 
 /home/sunrise/data/
-  SLAM/navigation/               ← ROS2 工作区（colcon build 产物在此）
-  brainstem/                     ← Dart brainstem 源码
-  dart-sdk/                      ← Dart SDK
-  nova/maps/                     ← 预建地图 (.pcd)
-    active/map.pcd               ← localizer 使用的地图
+  nova/maps/                    # prebuilt PCD maps
+    active/map.pcd              # localizer reads this
 ```
 
----
-
-## OTA 更新 LingTu
-
-1. 推新代码到 GitHub，打 tag `v2.x.x`
-2. OTA Agent 自动拉取，安装到 `/opt/lingtu/releases/v2.x.x/`
-3. 切 symlink：`ln -sfn /opt/lingtu/releases/v2.x.x /opt/lingtu/current`
-4. 重启：`sudo systemctl restart lingtu`
-5. 健康检查：`curl http://localhost:5050/health`
-
-**只有 `/opt/lingtu/current` 被更新，robot-* 服务不受影响。**
+Source on the robot lives in `~/data/SLAM/navigation/` (a symlink to the active git
+checkout). The `lingtu.service` unit shipped under `docs/04-deployment/services/` runs
+out of `/opt/lingtu/current/`; the unit currently checked into `scripts/deploy/`
+points at `~/data/inovxio/lingtu/` instead — that's the developer-shell variant used
+during the migration to immutable releases. New robots should use the
+`docs/04-deployment/services/` files.
 
 ---
 
-## 回滚
+## Installing on a new robot
 
 ```bash
-# 查看可用版本
-ls /opt/lingtu/releases/
+# 1. Clone repo to ~/data/SLAM/navigation
+ssh sunrise@<robot> 'git clone https://github.com/Kitjesen/lingtu ~/data/SLAM/navigation'
 
-# 切回旧版本
+# 2. Build native modules
+ssh sunrise@<robot> 'cd ~/data/SLAM/navigation && bash scripts/build_nav_core.sh'
+
+# 3. Build ROS2 workspace
+ssh sunrise@<robot> 'cd ~/data/SLAM/navigation && source /opt/ros/humble/setup.bash && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release'
+
+# 4. Install service units
+ssh sunrise@<robot> 'cd ~/data/SLAM/navigation && bash docs/04-deployment/services/install.sh'
+
+# 5. Start everything
+ssh sunrise@<robot> 'sudo systemctl start lingtu.target'
+```
+
+`install.sh` copies the six service files to `/etc/systemd/system/`, copies
+`ros2-env.sh` to `/opt/lingtu/config/`, runs `daemon-reload`, and `enable`s all of
+them. It is idempotent.
+
+---
+
+## OTA update flow
+
+1. Push to `main` and tag `v2.x.x`.
+2. CI builds + signs the artifact, publishes a GitHub Release.
+3. `ota-agent` polls the configured server URL (`/opt/lingtu/nav/ota/config.yaml`).
+4. On match: download, verify Ed25519 signature, verify SHA256, stage to
+   `/opt/lingtu/releases/v2.x.x/`.
+5. Atomic symlink swap: `ln -sfn /opt/lingtu/releases/v2.x.x /opt/lingtu/current`.
+6. `systemctl restart lingtu`.
+7. Health check: `curl http://localhost:5050/api/v1/health`.
+
+Only `/opt/lingtu/current` moves. The five `robot-*` services keep running. See
+`OTA_GUIDE.md` for the manifest schema and signing details.
+
+---
+
+## Rollback
+
+```bash
+ssh sunrise@<robot>
+ls /opt/lingtu/releases/
 sudo ln -sfn /opt/lingtu/releases/v1.9.0 /opt/lingtu/current
 sudo systemctl restart lingtu
+curl http://localhost:5050/api/v1/health
 ```
+
+If `ota-agent` shipped a bad release and the robot is unreachable: power-cycle, then
+roll back via SSH (the `robot-*` services come up first; `lingtu.service` follows).
 
 ---
 
-## 故障排查
+## Common operations
 
-### lingtu 启动失败
+| Need                              | Command                                                 |
+|-----------------------------------|---------------------------------------------------------|
+| Start everything                  | `sudo systemctl start lingtu.target`                    |
+| Stop algorithm layer only         | `sudo systemctl stop lingtu`                            |
+| Restart SLAM after drift          | `sudo systemctl restart robot-fastlio2 robot-localizer` |
+| Tail algorithm logs               | `journalctl -u lingtu -f`                               |
+| Tail SLAM logs                    | `journalctl -u robot-fastlio2 -f`                       |
+| Verify ports                      | `ss -tnlp \| grep -E '13145\|5050\|8090'`               |
+| One-screen status                 | `lingtu status`                                         |
+| Watch status (1 Hz refresh)       | `lingtu watch`                                          |
+
+---
+
+## Diagnostics
+
+### `lingtu` won't start
+
 ```bash
-journalctl -u lingtu -n 50
-# 常见原因：ROS2 topic 没准备好 → 检查 robot-fastlio2 是否在跑
-systemctl status robot-fastlio2
+journalctl -u lingtu -n 80 --no-pager
+sudo systemctl status robot-fastlio2     # depends on this; lingtu won't be useful without it
+ss -tnlp | grep -E "5050|8090"           # leftover process holding the port?
 ```
 
-### LiDAR 没数据
+### LiDAR no data
+
 ```bash
-journalctl -u robot-lidar -n 30
-# 检查 USB 连接 + MID360 IP (192.168.1.1xx)
-ros2 topic hz /nav/lidar_scan
+journalctl -u robot-lidar -n 40
+ros2 topic hz /livox/lidar
+ip addr show eth1                        # MID-360 sub-net (192.168.1.x)
 ```
 
-### SLAM 漂移 / 定位丢失
+### Drift / lost localization
+
 ```bash
-# 重启定位栈
+ros2 topic hz /Odometry                  # expect ~100 Hz
+ros2 topic echo /localization_quality
 sudo systemctl restart robot-fastlio2 robot-localizer
-# 查看定位频率
-ros2 topic hz /nav/odometry
 ```
 
-### brainstem 无响应（gRPC:13145）
+The Gateway has a SLAM drift watchdog (`src/gateway/gateway_module.py`
+`_drift_watchdog_loop`) that auto-restarts SLAM services when xy or velocity diverge.
+See `docs/05-specialized/slam_drift_watchdog.md`.
+
+### `robot-brainstem` (port 13145) unresponsive
+
 ```bash
 journalctl -u robot-brainstem -n 30
 sudo systemctl restart robot-brainstem
 ```
 
-### 端口冲突（老进程残留）
+ThunderDriver and the Gateway control plane both wait for this gRPC server.
+
+### Stale processes after a crash
+
 ```bash
-# 查找占用端口的进程
 ss -tnlp | grep -E "13145|5050|8090"
-# 如果有不属于 systemd 管理的进程
 ps aux | grep -E "lingtu|fastlio|localizer|dart"
-# 清理后重启服务
 sudo systemctl restart lingtu
 ```
 
 ---
 
-## 开机自启配置
+## Pinned references
 
-```bash
-# 启用开机自启（已配置好）
-sudo systemctl enable robot-brainstem robot-camera lingtu
-
-# 查看当前 enable 状态
-systemctl list-unit-files | grep -E "robot-|^lingtu"
-```
-
----
-
-## service 文件位置
-
-所有 service 文件模板在 git 仓库：
-```
-lingtu/docs/04-deployment/services/
-  robot-lidar.service
-  robot-camera.service
-  robot-brainstem.service
-  robot-fastlio2.service
-  robot-localizer.service
-  lingtu.service
-  ros2-env.sh          ← 环境变量脚本（所有 ROS2 服务共用）
-```
-
-安装到机器人：
-```bash
-# 在 lingtu 仓库根目录执行
-bash docs/04-deployment/services/install.sh
-```
+- `GOVERNANCE.md` — six principles for deployment hygiene (historical 2026-04 cleanup)
+- `S100P_STACK_INVENTORY.md` — what was on the robot before consolidation, and why
+  the stack looks the way it does today
+- `OTA_GUIDE.md` — OTA design, signing, manifest schema, rollback
+- `lingtu_cli.md` — operations CLI subcommands
+- `services/` — actual systemd unit files installed on the robot

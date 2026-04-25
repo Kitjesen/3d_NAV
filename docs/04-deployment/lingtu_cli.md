@@ -1,86 +1,83 @@
-# Lingtu Operations CLI
+# `lingtu` Operations CLI
 
-单一入口, 取代分散的 curl / systemctl / journalctl / Web 按钮。
-Script: `scripts/lingtu`, 部署在 S100P `/home/sunrise/data/SLAM/navigation/scripts/lingtu`。
+A single SSH-friendly entry point that replaces ad-hoc `curl`, `systemctl`, and
+`journalctl` invocations. The script lives at `scripts/lingtu` and is deployed on the
+robot at `/home/sunrise/data/SLAM/navigation/scripts/lingtu`.
 
-## 本机 alias 配置 (一次性)
+This is the operations CLI run **on the robot**. The Python entry `lingtu.py` (with
+profiles like `s100p`, `sim`, `dev`, `map`, `explore`, `stub`) is the application
+itself, started by `lingtu.service`.
 
-在本地 `~/.bashrc` (Linux/Mac) 或 `~/.zshrc` 加:
+---
+
+## Local alias (one-time setup)
 
 ```bash
+# ~/.bashrc / ~/.zshrc
 alias lingtu='ssh sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu"'
 alias lingwatch='ssh -t sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu watch"'
 ```
 
-`source ~/.bashrc` 后:
+After `source ~/.bashrc`:
 
 ```bash
-lingtu status       # 一屏状态
-lingwatch           # 副屏放着实时监控
+lingtu status     # one-screen snapshot
+lingwatch         # secondary screen, live refresh
 ```
 
-## 子命令全表
+---
 
-### `status` — 一屏 8 区快照
+## Subcommands
+
+### `status` — 8-section snapshot
 
 ```
 === Lingtu @ 17:26:52 ===
-[1] Session   mode=idle  map=corrected_20260406_224020  can_map=True
-[2] SLAM      hz=0.0Hz  live_pts=0  loc=-
-[3] Robot     xy=(-,-) z=- yaw=-°  v=-m/s w=-rad/s
-[4] Mission   state=IDLE  wp=0/0  replan=0  speed=1.0  deg=NONE
+[1] Session   mode=idle   map=corrected_20260406_224020   can_map=True
+[2] SLAM      hz=10.0Hz   live_pts=0   loc=GOOD
+[3] Robot     xy=(1.2, -0.4)   z=0.05   yaw=12.3 deg   v=0.0 m/s   w=0.0 rad/s
+[4] Mission   state=IDLE   wp=0/0   replan=0   speed=1.0   deg=NONE
 [5] Path      (no active plan)
-[6] Ctrl      teleop=False(0)  safety=STOP
-[7] Map       active  @02:57:26  map.pcd=2.6M  predufo=-  patches=105
-[8] Log       (recent drift/dufomap/error)
+[6] Ctrl      teleop=False(0)   safety=OK
+[7] Map       active   @02:57:26   map.pcd=2.6M   predufo=-   patches=105
+[8] Log       (recent drift / dufomap / error)
 ```
 
-**每一区读什么**:
+| Section       | Field                  | Healthy                            | Bad                            |
+|---------------|------------------------|------------------------------------|--------------------------------|
+| [1] Session   | `mode`                 | `idle` / `mapping` / `navigating`  | -                              |
+| [2] SLAM      | `hz`                   | 20-47 Hz (mapping), 10 Hz (nav)    | 0 Hz means service is down     |
+| [2] SLAM      | `loc`                  | `GOOD` / `OK`                      | `DEGRADED` / `LOST`            |
+| [3] Robot     | `xy`                   | within ~+-50 m indoors             | `ODOM DIVERGED` => IEKF blew   |
+| [4] Mission   | `state`                | `IDLE` / `EXECUTING`               | `FAILED`                       |
+| [4] Mission   | `deg`                  | `NONE`                             | `CRITICAL`                     |
+| [5] Path      | `pts/len/next/goal`    | populated when navigating          | -                              |
+| [6] Ctrl      | `safety`               | `OK (0)` / `WARN (1)`              | `STOP (2/3)`                   |
+| [7] Map       | `dufo -N pts (X%)`     | dynamic-removal stats present      | -                              |
+| [8] Log       | drift / dufomap / err  | quiet                              | recent entries imply trouble   |
 
-| 区 | 字段 | 正常值 | 异常信号 |
-|---|---|---|---|
-| [1] Session | `mode` | idle / mapping / navigating | - |
-| [2] SLAM | `hz` | 20-47 Hz (mapping), 10 Hz (navigating) | 0 Hz = 服务没起 |
-| [2] SLAM | `loc` | GOOD / OK | DEGRADED / LOST |
-| [3] Robot | `xy` | 合理范围 (< ±50m 室内) | `ODOM DIVERGED` = IEKF 飞了 |
-| [4] Mission | `state` | IDLE / EXECUTING | FAILED |
-| [4] Mission | `deg` | NONE | CRITICAL |
-| [5] Path | `pts/len/next/goal` | 导航时有值 | - |
-| [6] Ctrl | `safety` | OK (0) / WARN (1) | STOP (2/3) |
-| [7] Map | `dufo -Npts (X%)` | 有动态物体图 > 0% | - |
-| [8] Log | drift / dufomap / error | - | - |
-
-### `watch [interval]` — 持续监控
+### `watch [interval]` — continuous monitor
 
 ```bash
-lingtu watch       # 默认每 1 秒
-lingtu watch 2     # 每 2 秒
+lingtu watch       # 1 second
+lingtu watch 2     # 2 seconds
 ```
 
-内部 = `watch -c -n <interval> bash <script> status`。
+Internally `watch -c -n <interval> bash <script> status`. Keep it on a side screen
+during mapping / navigation runs.
 
-**建图/导航时副屏开这个**, 所有状态变化 1 秒刷新一次。
-
-### `map` — 建图 session
+### `map` — mapping session
 
 ```bash
-lingtu map start              # 进 mapping 模式 (启动 slam + slam_pgo)
-lingtu map save lab_0423      # PGO 保存 + DUFOMap 清洗 + tomogram/grid 重建
-lingtu map end                # 结束回 idle (全停 SLAM)
-lingtu map list               # 列已保存地图
-lingtu map restore lab_0423   # 恢复 DUFOMap 清洗前的备份 (predufo → map.pcd)
+lingtu map start              # enter mapping (starts robot-fastlio2 + slam_pgo)
+lingtu map save lab_0423      # PGO save + DUFOMap clean + tomogram + occupancy rebuild
+lingtu map end                # back to idle (stops SLAM)
+lingtu map list               # list saved maps
+lingtu map restore lab_0423   # restore predufo backup -> map.pcd (DUFOMap was too aggressive)
 ```
 
-`restore` 场景: DUFOMap 误删了静态物体 → 把 `map.pcd.predufo` 还原成 `map.pcd`。
-当前 (已被替换的) `map.pcd` 会备份成 `map.pcd.replaced-<ts>` 保留 (双保险)。
-恢复后 tomogram / occupancy 需要重建才能让 planner 用新点云:
-```bash
-curl -X POST -H "Content-Type: application/json" \
-    -d '{"action":"build_tomogram","name":"lab_0423"}' \
-    http://localhost:5050/api/v1/maps
-```
+`save` takes 15-60 s. Toast / JSON return contains DUFOMap stats:
 
-`save` 预计 15-60 秒。Toast 或返回 JSON 包含 `dynamic_filter` 统计:
 ```json
 {
   "success": true,
@@ -95,95 +92,117 @@ curl -X POST -H "Content-Type: application/json" \
 }
 ```
 
-### `nav` — 导航 session
+`restore` use case: DUFOMap removed static structure by mistake. `map.pcd.predufo` is
+restored to `map.pcd`; the discarded `map.pcd` is preserved as
+`map.pcd.replaced-<ts>` (double safety). After restoring, rebuild the tomogram and
+occupancy grid:
 
 ```bash
-lingtu nav start corrected_20260406_224020    # 进 navigating + 加载地图 (启动 slam + localizer)
-lingtu nav goal 3.5 2.1 0.0                   # 发 map-frame 目标 (x, y, yaw)
-lingtu nav stop                               # 同 map end
+curl -X POST -H 'Content-Type: application/json' \
+    -d '{"action":"build_tomogram","name":"lab_0423"}' \
+    http://localhost:5050/api/v1/maps
 ```
 
-### `svc` — systemd 服务控制
+### `nav` — navigation session
 
 ```bash
-lingtu svc status                     # 4 个核心服务的 enable / active 状态
-lingtu svc restart slam               # 重启 Fast-LIO2
-lingtu svc restart lingtu             # 重启 gateway (清 odom 缓存)
-lingtu svc restart all                # 重启所有 SLAM + gateway
-lingtu svc stop slam                  # 停单个服务
+lingtu nav start corrected_20260406_224020    # navigating + load map (starts robot-fastlio2 + robot-localizer)
+lingtu nav goal 3.5 2.1 0.0                   # send map-frame goal (x, y, yaw)
+lingtu nav stop                               # same as map end
 ```
 
-### `log` — journalctl 过滤
+### `svc` — systemd service control
 
 ```bash
-lingtu log drift      # drift_watchdog 触发历史
-lingtu log dufomap    # DUFOMap 保存统计 (最近 1 小时)
-lingtu log error      # 最近 30 分钟 ERROR 级报错 (过滤 VectorMemory/webrtc 噪声)
-lingtu log tail       # 实时滚动 (Ctrl+C 退出)
-lingtu log all        # 最近 10 分钟全部
+lingtu svc status               # 6 core services: enabled / active
+lingtu svc restart slam         # restart Fast-LIO2 (i.e. robot-fastlio2.service)
+lingtu svc restart lingtu       # restart algorithm layer (clears odom cache)
+lingtu svc restart all          # restart SLAM + lingtu
+lingtu svc stop slam            # stop a single service
 ```
 
-### `health` — REST 原样
+The aliases `slam` / `lingtu` / `lidar` / `camera` / `brainstem` / `localizer` map to
+the corresponding systemd unit. There is no `slam.service` anymore; `slam` aliases
+to `robot-fastlio2.service`.
+
+### `log` — journalctl filters
+
+```bash
+lingtu log drift      # drift_watchdog firings
+lingtu log dufomap    # DUFOMap save stats (last hour)
+lingtu log error      # last 30 min ERROR-level (filters VectorMemory / WebRTC noise)
+lingtu log tail       # live tail (Ctrl+C to exit)
+lingtu log all        # last 10 min, everything
+```
+
+### `health` — REST passthrough
 
 ```bash
 lingtu health         # GET /api/v1/health | python3 -m json.tool
 ```
 
-完整模块清单 + 各传感器状态 + 细粒度 hz/fps 统计。
+Full module roster, per-sensor status, fine-grained Hz/FPS metrics.
 
-## 典型工作流
+---
 
-### 工作流 A: 建图 (含动态物体验证)
+## Workflows
+
+### A. Mapping with dynamic-object validation
 
 ```bash
-# 1. 副屏开监控
-lingwatch
-
-# 2. 主屏操作
-lingtu status                         # 确认 idle + can_map=True
-lingtu map start                      # 进 mapping
-# 等 5-10 秒, lingwatch 看 mode=mapping, hz>20, robot xy=(0,0)
-# 手机/Web 推狗走, 中间让人走过 15 秒
-lingtu map save lab_0423_test         # 保存 (~30s)
-# lingwatch 看 [7] Map 出现 "dufo -N pts (X%)" 就成功了
-lingtu log dufomap | tail -5          # 再看一眼日志确认
+lingtu watch                                  # secondary screen
+# then on the primary screen:
+lingtu status                                 # confirm idle + can_map=True
+lingtu map start                              # enter mapping
+# wait 5-10 s; lingwatch should show mode=mapping, hz>20, robot xy=(0,0)
+# drive the robot through the area; let a person walk through for ~15 s
+lingtu map save lab_0423_test                 # ~30 s
+# lingwatch [7] Map should show "dufo -N pts (X%)"
+lingtu log dufomap | tail -5                  # confirm in the log
 ```
 
-### 工作流 B: 加载地图 + 导航
+### B. Load a map and navigate
 
 ```bash
-lingtu map list                       # 找地图名
-lingtu nav start lab_0423_test        # 进 navigating
-# lingwatch 看 mode=navigating, loc=GOOD
-lingtu nav goal 3.5 2.1               # 点一个目标
-# lingwatch 看 [5] Path 出现 pts/len/goal,  [4] Mission=EXECUTING
-# wp 递增, 到 wp=N/N 后 state=SUCCEEDED
+lingtu map list
+lingtu nav start lab_0423_test                # navigating
+# lingwatch shows mode=navigating, loc=GOOD
+lingtu nav goal 3.5 2.1
+# [5] Path populates, [4] Mission state=EXECUTING, wp counts up
+# on success: state=SUCCEEDED
 ```
 
-### 工作流 C: 故障排查
+### C. Diagnostic playbook
 
 ```bash
-# 情况 1: Robot 显示 ODOM DIVERGED
-#   → 等 60s watchdog 自动救, 或:
+# Case 1: ODOM DIVERGED on the Robot row
+#   wait up to 60 s for the watchdog to auto-recover, or:
 lingtu svc restart slam
 
-# 情况 2: 保存失败
+# Case 2: map save failed
 lingtu log error | tail -20
 lingtu log dufomap
 
-# 情况 3: SLAM 启动不起来
+# Case 3: SLAM won't start
 lingtu svc status
-# 如果 slam=inactive 且 mode=mapping, 尝试:
+# if slam=inactive while mode=mapping:
 lingtu map end && sleep 2 && lingtu map start
 ```
 
-## 退出码约定
+---
 
-- 0 成功
-- 1 参数错 (用法错)
-- 2 运行时错 (curl/ssh/systemctl 失败)
+## Exit codes
 
-## 相关文档
+| Code | Meaning                                  |
+|------|------------------------------------------|
+| 0    | success                                  |
+| 1    | argument / usage error                   |
+| 2    | runtime error (curl / ssh / systemctl)   |
 
-- `docs/05-specialized/dynamic_obstacle_removal.md` — DUFOMap Phase 1 + 2 实装
-- `docs/05-specialized/slam_drift_watchdog.md` — IEKF 飞值兜底机制
+---
+
+## Related
+
+- `docs/04-deployment/README.md` — deployment overview, service inventory
+- `docs/05-specialized/dynamic_obstacle_removal.md` — DUFOMap Phase 1 + 2
+- `docs/05-specialized/slam_drift_watchdog.md` — IEKF divergence watchdog
