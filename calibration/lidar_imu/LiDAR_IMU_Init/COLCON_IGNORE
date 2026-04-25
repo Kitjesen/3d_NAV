@@ -1,0 +1,4 @@
+# Skipped by colcon — this is a ROS1 (catkin) package vendored as a
+# standalone calibration tool. ROS2 (ament_cmake) workspace can't build
+# it directly. Use the ros2_adapter/ bridge in this dir to run it from a
+# rosbag against a separate catkin workspace.

@@ -1,0 +1,5 @@
+# Skipped by colcon by default — requires Iridescence (koide3 OpenGL viz)
+# which is not installed by default. To enable: install Iridescence then
+# remove this file.
+#   git clone https://github.com/koide3/iridescence
+#   cd iridescence && mkdir build && cd build && cmake .. && make && sudo make install
