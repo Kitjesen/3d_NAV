@@ -1,0 +1,3 @@
+# Robot mesh files (binary, tracked externally — large STL exports
+# from CAD pipeline live alongside the URDF only on dev machines).
+*.STL
