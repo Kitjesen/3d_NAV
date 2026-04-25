@@ -1,22 +1,20 @@
-"""Exploration stack: swappable frontier / TARE backend.
+"""Exploration stack: TARE backend only.
 
-Two backends share the same output contract — ``Out[PoseStamped]
-exploration_goal`` — so downstream Modules (NavigationModule in particular)
-don't need to know which one is active.
+Since 2026-04-25, wavefront frontier has been removed from this stack
+(it lives on in `nav.frontier_explorer_module` for the standalone
+NavigationModule frontier_explorer option, but is no longer selectable
+from the exploration stack).
 
 Backends
 --------
-``"wavefront"`` — pure-Python BFS frontier (:mod:`nav.frontier_explorer_module`).
-  Zero external deps, good for simulation and constrained hardware.
-
-``"tare"``      — CMU TARE hierarchical planner (vendored in-tree at
+``"tare"`` (default) — CMU TARE hierarchical planner (vendored in-tree at
   ``src/exploration/tare_planner``). C++ ROS2 node launched via
-  NativeModule. Needs the tare_planner colcon package to be built
+  NativeModule. Requires tare_planner colcon package to be built
   (``scripts/build/fetch_ortools.sh`` + ``scripts/build/build_tare.sh``).
-  When the binary is missing the stack falls back to ``wavefront`` so
-  dev/CI doesn't break.
+  If the binary is missing the stack raises — no silent fallback — so
+  misconfiguration is visible, not covered up.
 
-``"none"``      — empty Blueprint (no exploration).
+``"none"`` — empty Blueprint (no exploration).
 """
 
 from __future__ import annotations
@@ -29,42 +27,37 @@ from core.blueprint import Blueprint
 logger = logging.getLogger(__name__)
 
 
-def exploration(backend: str = "wavefront", **kw) -> Blueprint:
+def exploration(backend: str = "tare", **kw) -> Blueprint:
     """Build an exploration stack Blueprint.
 
     Args:
-        backend: "wavefront" | "tare" | "none".
-        **kw:    forwarded to the module constructor of the chosen backend.
+        backend: "tare" | "none". Wavefront is no longer selectable here;
+                 use ``exploration(backend="none")`` + NavigationModule's
+                 embedded frontier if you need the old pure-Python BFS.
+        **kw:    forwarded to the module constructor.
     """
     bp = Blueprint()
 
     if not backend or backend == "none":
         return bp
 
-    if backend == "wavefront":
-        _add_wavefront(bp, **kw)
-    elif backend == "tare":
+    if backend == "tare":
         if not _add_tare(bp, **kw):
-            logger.warning(
-                "TARE backend unavailable — falling back to wavefront "
-                "frontier explorer. Build TARE via "
-                "scripts/build/fetch_ortools.sh + build_tare.sh on S100P.")
-            _add_wavefront(bp, **kw)
-    else:
-        raise ValueError(
-            f"Unknown exploration backend '{backend}'. "
-            "Options: wavefront, tare, none."
-        )
+            raise RuntimeError(
+                "TARE backend requested but binary not available. "
+                "Build it with:\n"
+                "  scripts/build/fetch_ortools.sh\n"
+                "  scripts/build/build_tare.sh\n"
+                "Or disable exploration: exploration(backend='none')."
+            )
+        return bp
 
-    return bp
-
-
-def _add_wavefront(bp: Blueprint, **kw) -> None:
-    try:
-        from nav.frontier_explorer_module import WavefrontFrontierExplorer
-        bp.add(WavefrontFrontierExplorer, **_wavefront_kwargs(kw))
-    except ImportError as e:
-        logger.warning("WavefrontFrontierExplorer unavailable: %s", e)
+    raise ValueError(
+        f"Unknown exploration backend {backend!r}. "
+        "Options: 'tare' (default), 'none'. "
+        "'wavefront' was removed — see nav.frontier_explorer_module for "
+        "standalone use."
+    )
 
 
 def _add_tare(bp: Blueprint, **kw) -> bool:
@@ -110,13 +103,6 @@ def _add_tare(bp: Blueprint, **kw) -> bool:
     except Exception as e:
         logger.warning("TARE module load failed: %s", e)
         return False
-
-
-def _wavefront_kwargs(kw: dict) -> dict:
-    """Filter TARE-specific kwargs out of the wavefront path."""
-    return {k: v for k, v in kw.items()
-            if not k.startswith("tare_")
-            and k not in ("auto_start",)}
 
 
 def _tare_kwargs(kw: dict) -> dict:

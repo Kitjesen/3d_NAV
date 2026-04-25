@@ -30,15 +30,41 @@ find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(Eigen3 REQUIRED)
 
- include_directories(
-  ${catkin_INCLUDE_DIRS}
+# OR-Tools v9.15+ requires three things to compile its .pb.h gencode:
+#   1. The vendored protobuf v6.33 headers (or-tools/include/google/protobuf/)
+#      MUST be searched BEFORE /usr/include/google/protobuf (v3.12 from
+#      libprotobuf-dev) or compile barfs on PROTOBUF_VERSION mismatch.
+#   2. OR_PROTO_DLL macro defined empty — generated structs use it as a
+#      DLL export attribute placeholder; without it, parsing fails with
+#      "expected initializer before 'TableStruct_…'".
+#   3. USE_* feature flags matching how OR-Tools was built.
+# We set these at DIRECTORY scope (not via target_link_libraries
+# ortools::ortools) because tare_planner's link chain has multiple
+# targets whose .cpp transitively #includes tsp_solver.h via
+# grid_world.h/viewpoint_manager.h but doesn't directly link tsp_solver
+# (e.g. planning_env, tare_visualizer). INTERFACE propagation only flows
+# through direct link deps, not through header include chains.
+list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/or-tools")
+find_package(ortools CONFIG REQUIRED)
+include_directories(BEFORE SYSTEM
+  ${CMAKE_CURRENT_SOURCE_DIR}/or-tools/include
+)
+add_compile_definitions(
+  OR_PROTO_DLL=
+  USE_MATH_OPT
+  USE_BOP
+  USE_CBC
+  USE_CLP
+  USE_GLOP
+  USE_HIGHS
+  USE_PDLP
+  USE_SCIP
+)
+
+include_directories(
   ${PCL_INCLUDE_DIRS}
   include
-  or-tools/include
   ${EIGEN3_INCLUDE_DIR}
-  /opt/ros/humble/include
-  # /usr/local/include
-  # /usr/include
 )
 
 get_property(dirs DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES)
@@ -71,7 +97,12 @@ ament_target_dependencies(pointcloud_utils rclcpp std_msgs nav_msgs geometry_msg
 
 add_library(tsp_solver src/tsp_solver/tsp_solver.cpp)
 ament_target_dependencies(tsp_solver rclcpp std_msgs nav_msgs geometry_msgs sensor_msgs tf2_ros tf2_geometry_msgs tf2)
-target_link_libraries(tsp_solver ${catkin_LIBRARIES} ${CMAKE_CURRENT_SOURCE_DIR}/or-tools/lib/libortools.so)
+# Plain signature (no PUBLIC) — ament_target_dependencies above already
+# locked the plain-signature mode for this target. ortools::ortools is an
+# IMPORTED INTERFACE target, so its INTERFACE_COMPILE_DEFINITIONS
+# (OR_PROTO_DLL) and INTERFACE_INCLUDE_DIRECTORIES (vendored protobuf
+# v6.33) propagate transitively to consumers (grid_world, tare_visualizer).
+target_link_libraries(tsp_solver ortools::ortools)
 
 add_library(viewpoint src/viewpoint/viewpoint.cpp)
 ament_target_dependencies(viewpoint rclcpp std_msgs nav_msgs geometry_msgs sensor_msgs tf2_ros tf2_geometry_msgs tf2)

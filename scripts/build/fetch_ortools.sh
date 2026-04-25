@@ -12,7 +12,7 @@
 # ══════════════════════════════════════════════════════════
 set -euo pipefail
 
-VERSION="${ORTOOLS_VERSION:-9.10.4067}"
+VERSION="${ORTOOLS_VERSION:-9.15.6755}"
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "$_SCRIPT_DIR/../.." && pwd)"
 DEST="$WORKSPACE_DIR/src/exploration/tare_planner/or-tools"
@@ -21,18 +21,23 @@ ARCH="$(uname -m)"
 case "$ARCH" in
     x86_64|amd64)
         OT_ARCH="amd64"
+        OT_OS="ubuntu-22.04"
         ;;
     aarch64|arm64)
-        OT_ARCH="arm64"
+        OT_ARCH="aarch64"
+        # OR-Tools v9.11+ dropped Ubuntu aarch64 builds and only ships
+        # AlmaLinux-8.10 for ARM. AlmaLinux 8 uses glibc 2.28, which is
+        # binary-compatible with Ubuntu 22.04 (glibc 2.35). Tested on S100P.
+        OT_OS="AlmaLinux-8.10"
         ;;
     *)
-        echo "ERROR: unsupported architecture '$ARCH' — OR-Tools only ships amd64 / arm64"
+        echo "ERROR: unsupported architecture '$ARCH' — OR-Tools only ships amd64 / aarch64"
         exit 1
         ;;
 esac
 
-# OR-Tools dropped Ubuntu detection after 9.x; 22.04 tarballs work for Humble.
-TARBALL="or-tools_${OT_ARCH}_ubuntu-22.04_cpp_v${VERSION}.tar.gz"
+TARBALL="or-tools_${OT_ARCH}_${OT_OS}_cpp_v${VERSION}.tar.gz"
+# v{VERSION%.*} gives e.g. 9.15 from 9.15.6755 (matches release tag)
 URL="https://github.com/google/or-tools/releases/download/v${VERSION%.*}/${TARBALL}"
 
 echo ">>> [OR-Tools] Fetching ${TARBALL}"
