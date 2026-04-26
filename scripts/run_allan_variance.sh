@@ -3,12 +3,12 @@
 #
 # Background:
 #   The lio.yaml / pointlio.yaml IMU noise params (na/ng/nba/nbg) ship at
-#   conservative defaults (na=0.01, ng=0.01). For Livox Mid-360's BMI088
-#   the gyro noise is typically ~0.0002-0.001 rad/s/√Hz — i.e. the default
-#   is 10-50x too high, causing IEKF to under-trust the gyro and accumulate
-#   covariance during static periods (one of the reported divergence modes).
-#   This script automates the standard Allan Variance procedure to land
-#   sensor-specific values.
+#   conservative defaults (na=0.01, ng=0.01). Mid-360's built-in IMU is
+#   the TDK InvenSense ICM-40609-D, whose typical gyro noise is
+#   ~6.6e-5 rad/s/√Hz — i.e. the default ng is ~150x too high, causing
+#   IEKF to under-trust the gyro and accumulate covariance during static
+#   periods (one of the reported divergence modes). This script automates
+#   the standard Allan Variance procedure to land sensor-specific values.
 #
 # Phases (run individually or via `all`):
 #   record   ros2 bag record /livox/imu (default 3h, IEEE 952-1997 minimum)
