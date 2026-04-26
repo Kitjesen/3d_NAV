@@ -19,7 +19,6 @@ from gateway.gateway_module import (
     _safe_map_name,
 )
 
-
 # ── _safe_map_name: accept/reject matrix ──────────────────────────────────
 
 @pytest.mark.parametrize("name", [
@@ -178,8 +177,8 @@ def test_helper_importable_from_both_sites():
     """Both gateway_module and map_manager_module now import
     `_apply_dynamic_filter_step1half`. Verify the helper is the same callable
     (no accidental duplication / drift)."""
-    from gateway.gateway_module import _apply_dynamic_filter_step1half as a
     # map_manager imports lazily inside _map_save to avoid circular import,
     # but we can verify the same module namespace
     import gateway.gateway_module as gm
+    from gateway.gateway_module import _apply_dynamic_filter_step1half as a
     assert gm._apply_dynamic_filter_step1half is a

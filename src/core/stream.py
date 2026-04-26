@@ -53,8 +53,8 @@ class Out(Generic[T]):
 
     __slots__ = (
         "_callbacks",
-        "_last_ts",
         "_last_error_log_ts",
+        "_last_ts",
         "_lock",
         "_msg_count",
         "_msg_type",

@@ -14,7 +14,6 @@ import pytest
 
 from nav.services.nav_services import dynamic_filter as df
 
-
 # ── PCD I/O round-trip ────────────────────────────────────────────────────
 
 def test_read_write_pcd_binary_roundtrip(tmp_path: Path):
@@ -129,7 +128,8 @@ def test_refilter_map_subprocess_failure(tmp_path: Path, monkeypatch):
     """Subprocess exits nonzero → success=False, original map.pcd intact."""
     # Fake binary
     fake_bin = tmp_path / "fake_dufomap"
-    fake_bin.touch(); fake_bin.chmod(0o755)
+    fake_bin.touch()
+    fake_bin.chmod(0o755)
     monkeypatch.setattr(df, "DUFOMAP_BIN", str(fake_bin))
 
     # Build a minimal valid map dir
@@ -156,7 +156,8 @@ def test_refilter_map_success_creates_backup(tmp_path: Path, monkeypatch):
     """Happy path: backs up original, overwrites map.pcd with cleaned output."""
     # Fake binary
     fake_bin = tmp_path / "fake_dufomap"
-    fake_bin.touch(); fake_bin.chmod(0o755)
+    fake_bin.touch()
+    fake_bin.chmod(0o755)
     monkeypatch.setattr(df, "DUFOMAP_BIN", str(fake_bin))
 
     # Minimal map dir
@@ -199,7 +200,8 @@ def test_refilter_map_success_creates_backup(tmp_path: Path, monkeypatch):
 def test_refilter_map_subprocess_timeout(tmp_path: Path, monkeypatch):
     """TimeoutExpired → success=False, original intact."""
     fake_bin = tmp_path / "fake_dufomap"
-    fake_bin.touch(); fake_bin.chmod(0o755)
+    fake_bin.touch()
+    fake_bin.chmod(0o755)
     monkeypatch.setattr(df, "DUFOMAP_BIN", str(fake_bin))
 
     map_dir = tmp_path / "m"

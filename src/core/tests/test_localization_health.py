@@ -200,13 +200,17 @@ class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
 
         class _Ros2Odom:
             class _Pose:
-                class _P: pass
-                class _Q: pass
+                class _P:
+                    pass
+                class _Q:
+                    pass
                 pose = None
                 covariance = None
             class _Twist:
-                class _Lin: pass
-                class _Ang: pass
+                class _Lin:
+                    pass
+                class _Ang:
+                    pass
                 twist = None
             header = type("_H", (), {"stamp": type("_S", (), {"sec": 0, "nanosec": 0})})()
 
