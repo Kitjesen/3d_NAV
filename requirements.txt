@@ -6,6 +6,9 @@ PyYAML>=6.0
 scipy>=1.10
 scikit-learn>=1.0
 
+# Gateway HTTP API (FastAPI body validation in gateway_module.py)
+pydantic>=2.0
+
 # LLM
 openai>=1.0
 requests>=2.28
@@ -16,4 +19,3 @@ jieba>=0.42
 # 可选: Agent 模式 (pip install -r requirements-agent.txt)
 # langchain-core>=0.2
 # langchain-openai>=0.1
-# pydantic>=2.0

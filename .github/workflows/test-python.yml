@@ -51,9 +51,12 @@ jobs:
           python-version: '3.10'
           cache: pip
       - name: Install dependencies
-        # opencv-python-headless needed by bpu_detector.py (module-level import)
-        # which is reachable via mock.patch in test_perception_*.py.
-        run: pip install numpy scipy pyyaml pytest opencv-python-headless
+        # opencv-python-headless: required by bpu_detector.py (module-level
+        #   import), reachable via mock.patch in test_perception_*.py.
+        # pydantic: required by gateway_module.py (BaseModel/Field/
+        #   field_validator), reachable via test_gateway_helpers.py +
+        #   test_cross_module_integration.py.
+        run: pip install numpy scipy pyyaml pytest opencv-python-headless pydantic
       - name: Run core tests
         run: python -m pytest src/core/tests/ -q --tb=short
         env:

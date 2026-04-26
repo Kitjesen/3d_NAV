@@ -204,13 +204,20 @@ class TeleopModule(Module, layer=6):
 
     # -- idle timeout -------------------------------------------------------
 
+    def _check_idle(self) -> None:
+        """One-shot idle check: release teleop if joystick has gone quiet
+        beyond the release timeout. Pulled out of the loop so tests can
+        invoke a single tick deterministically.
+        """
+        if (self._active
+                and time.monotonic() - self._last_joy_time > self._release_timeout):
+            self._release()
+
     def _idle_check_loop(self) -> None:
         """Background thread: release teleop if joystick goes quiet."""
         while self._running:
             time.sleep(0.5)
-            if (self._active
-                    and time.monotonic() - self._last_joy_time > self._release_timeout):
-                self._release()
+            self._check_idle()
 
     # -- detection overlay ----------------------------------------------------
 
