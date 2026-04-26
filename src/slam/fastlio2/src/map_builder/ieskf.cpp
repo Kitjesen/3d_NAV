@@ -247,6 +247,10 @@ void IESKF::update()
 
     // Store degeneracy info for external access (ROS2 publisher)
     m_degeneracy = shared_data.degeneracy;
+    m_degeneracy.iter_num = static_cast<int>(shared_data.iter_num);
+    // Loop exited via m_stop_func only if iter_num < m_max_iter; equality means
+    // we ran the max iterations without convergence — flag for diagnostics.
+    m_degeneracy.converged = (shared_data.iter_num < m_max_iter);
 
     // Pathological degeneracy: revert to IMU prediction entirely (eigenbasis
     // is numerically unreliable so OC projection cannot be trusted either).
@@ -254,6 +258,7 @@ void IESKF::update()
     {
         m_x = predict_x;
         clampCovariance();
+        m_degeneracy.pos_cov_trace = m_P.diagonal().segment<3>(3).sum();
         return;
     }
 
@@ -285,4 +290,5 @@ void IESKF::update()
     }
 
     clampCovariance();
+    m_degeneracy.pos_cov_trace = m_P.diagonal().segment<3>(3).sum();
 }

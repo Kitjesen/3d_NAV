@@ -167,6 +167,42 @@ class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
         self.assertEqual(m._degenerate_dof_count, 2)
         self.assertEqual(m._dof_mask.tolist(), [1.0, 1.0, 0.0, 0.0, 1.0, 1.0])
 
+    def test_legacy_11_field_payload_keeps_iekf_defaults(self):
+        """Old fastlio2 publishers emit only 11 floats; new IEKF state stays default."""
+        m = self._make()
+        msg = self._make_msg(cond=10.0, min_eig=0.5, max_eig=5.0,
+                             eff_ratio=0.9, degen_count=0,
+                             mask=[1, 1, 1, 1, 1, 1])
+        # Sanity check: this is the legacy 11-float layout.
+        self.assertEqual(len(msg.data), 11)
+        m._on_rclpy_degeneracy_detail(msg)
+        self.assertEqual(m._pos_cov_trace, 0.0)
+        self.assertEqual(m._ieskf_iter_num, 0)
+        self.assertTrue(m._ieskf_converged)
+
+    def test_extended_14_field_payload_populates_iekf_diagnostics(self):
+        """New fastlio2 publishers append [pos_cov_trace, iter_num, converged]."""
+        m = self._make()
+        msg = self._make_msg(cond=10.0, min_eig=0.5, max_eig=5.0,
+                             eff_ratio=0.9, degen_count=0,
+                             mask=[1, 1, 1, 1, 1, 1])
+        msg.data = list(msg.data) + [0.123, 7.0, 1.0]  # extend to 14
+        m._on_rclpy_degeneracy_detail(msg)
+        self.assertAlmostEqual(m._pos_cov_trace, 0.123, places=6)
+        self.assertEqual(m._ieskf_iter_num, 7)
+        self.assertTrue(m._ieskf_converged)
+
+    def test_extended_payload_marks_non_convergence(self):
+        """converged < 0.5 in slot 13 flips _ieskf_converged to False."""
+        m = self._make()
+        msg = self._make_msg(cond=10.0, min_eig=0.5, max_eig=5.0,
+                             eff_ratio=0.9, degen_count=0,
+                             mask=[1, 1, 1, 1, 1, 1])
+        msg.data = list(msg.data) + [42.0, 5.0, 0.0]
+        m._on_rclpy_degeneracy_detail(msg)
+        self.assertFalse(m._ieskf_converged)
+        self.assertAlmostEqual(m._pos_cov_trace, 42.0, places=6)
+
     def test_severe_warning_triggers_above_cond_threshold(self):
         """condition_number > 1e6 triggers a throttled SEVERE warning."""
         import logging

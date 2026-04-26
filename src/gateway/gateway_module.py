@@ -318,6 +318,7 @@ class GatewayModule(Module, layer=6):
     slope_grid:     In[dict]  # from TraversabilityCostModule — slope in degrees
     agent_message:  In[dict]  # from SemanticPlanner — chat-facing messages
     gnss_fusion_health: In[dict]  # from SlamBridgeModule — GNSS/SLAM alignment diag
+    localization_status: In[dict] # from SlamBridgeModule — full SLAM health (cov_trace, iter_num, ...)
     tare_stats:         In[dict]  # from TAREExplorerModule — exploration diag
     supervisor_state:   In[dict]  # from ExplorationSupervisorModule — watchdog
 
@@ -486,6 +487,8 @@ class GatewayModule(Module, layer=6):
         self.slope_grid.subscribe(self._on_slope_grid)
         self.agent_message.subscribe(self._on_agent_message)
         self.gnss_fusion_health.subscribe(self._on_gnss_fusion_health)
+        self.localization_status.subscribe(self._on_localization_status)
+        self.localization_status.set_policy("latest")
         self.tare_stats.subscribe(self._on_tare_stats)
         self.supervisor_state.subscribe(self._on_exploration_supervisor)
         self._app = self._build_app()
@@ -1248,6 +1251,17 @@ class GatewayModule(Module, layer=6):
         """Forward SlamBridge gnss_fusion_health to SSE (type=gnss_fusion)."""
         d = state if isinstance(state, dict) else {"raw": str(state)}
         self.push_event({"type": "gnss_fusion", "data": d})
+
+    def _on_localization_status(self, state: dict) -> None:
+        """Forward SlamBridge localization_status to SSE (type=slam_diag).
+
+        Surfaces IEKF internals (`pos_cov_trace`, `ieskf_iter_num`,
+        `ieskf_converged`) plus the existing degeneracy fields so dashboards
+        and the drift watchdog can react before pose itself blows up.
+        """
+        if not isinstance(state, dict):
+            return
+        self.push_event({"type": "slam_diag", "data": state})
 
     def _on_tare_stats(self, stats: dict) -> None:
         """Forward TAREExplorerModule tare_stats to SSE (type=tare_stats)."""

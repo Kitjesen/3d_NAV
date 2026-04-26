@@ -128,6 +128,14 @@ class SlamBridgeModule(Module, layer=1):
         self._eigenvalues: np.ndarray | None = None  # 6-DOF eigenvalues
         self._dof_mask: np.ndarray | None = None  # 1.0=constrained, 0.0=degenerate
         self._max_pos_cov: float = 0.0        # max position covariance from Odometry
+        # IEKF internals exposed via /slam/degeneracy_detail (extended layout v2):
+        #   pos_cov_trace = trace of position covariance (m²); growing trace is the
+        #     earliest signal of IEKF divergence — leads pose blow-up by 30-60s.
+        #   ieskf_iter_num = iterations the last update actually consumed.
+        #   ieskf_converged = whether the loop exited via stop_func (vs hitting max_iter).
+        self._pos_cov_trace: float = 0.0
+        self._ieskf_iter_num: int = 0
+        self._ieskf_converged: bool = True
         self._last_severe_warn: float = 0.0   # throttle SEVERE degeneracy warning
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
@@ -785,13 +793,17 @@ class SlamBridgeModule(Module, layer=1):
     def _on_rclpy_degeneracy_detail(self, msg) -> None:
         """Detailed degeneracy metrics from Hessian eigenvalue analysis.
 
-        Float32MultiArray with 11 floats (matches C++ publishDegeneracy()):
+        Float32MultiArray, original 11-float layout extended to 14:
           [0]  condition_number
           [1]  min_eigenvalue
           [2]  max_eigenvalue
           [3]  effective_ratio
           [4]  degenerate_dof_count
           [5..10] dof_mask (6 DOFs)
+          [11] pos_cov_trace (m²)        — IEKF position covariance trace (NEW)
+          [12] iter_num                   — IEKF iterations actually used (NEW)
+          [13] converged (1.0 / 0.0)      — whether stop_func fired (NEW)
+        Older publishers send only 11 floats; the extra fields are read with len guard.
         """
         d = msg.data
         if len(d) < 11:
@@ -801,6 +813,10 @@ class SlamBridgeModule(Module, layer=1):
         self._effective_ratio = float(d[3])
         self._degenerate_dof_count = int(d[4])
         self._dof_mask = np.array([float(d[5 + i]) for i in range(6)])
+        if len(d) >= 14:
+            self._pos_cov_trace = float(d[11])
+            self._ieskf_iter_num = int(d[12])
+            self._ieskf_converged = bool(d[13] >= 0.5)
         # Reconstruct eigenvalues from mask (approximate; mask gives 0/1 per DOF)
         max_eig = float(d[2])
         min_eig = float(d[1])
@@ -1244,6 +1260,9 @@ class SlamBridgeModule(Module, layer=1):
                 "degenerate_dof_count": self._degenerate_dof_count,
                 "cov_warning": self._max_pos_cov > 100.0,
                 "max_pos_cov": round(self._max_pos_cov, 3),
+                "pos_cov_trace": round(self._pos_cov_trace, 4),
+                "ieskf_iter_num": self._ieskf_iter_num,
+                "ieskf_converged": self._ieskf_converged,
             })
 
             self._shutdown_event.wait(timeout=interval)

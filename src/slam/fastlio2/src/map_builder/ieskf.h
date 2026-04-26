@@ -26,6 +26,14 @@ struct DegeneracyInfo
     Eigen::Matrix<double, 6, 1> eigenvalues = Eigen::Matrix<double, 6, 1>::Zero();
     // Per-DOF degeneracy mask: 1.0 = well-constrained, 0.0 = degenerate
     Eigen::Matrix<double, 6, 1> dof_mask = Eigen::Matrix<double, 6, 1>::Ones();
+    // Position covariance trace (m²) — sum of t_wi diagonals after the update.
+    // Surfacing this lets external monitors detect IEKF divergence ~30-60s before
+    // pose itself blows up, which is when watchdog finally trips on |xy|.
+    double pos_cov_trace = 0.0;
+    // Iterations actually used in the last update. iter_num == m_max_iter without
+    // converging suggests the Jacobian is ill-conditioned for current observations.
+    int iter_num = 0;
+    bool converged = true;           // false if loop exited at m_max_iter without stop_func
 };
 
 struct SharedState

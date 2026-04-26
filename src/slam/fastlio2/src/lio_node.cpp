@@ -414,11 +414,19 @@ public:
         ratio_msg.data = static_cast<float>(degen.effective_ratio);
         m_degen_pub->publish(ratio_msg);
 
-        // Publish detailed degeneracy info as Float32MultiArray
-        // [condition_number, min_eigenvalue, max_eigenvalue, effective_ratio,
-        //  degen_dof_count, mask_rx, mask_ry, mask_rz, mask_tx, mask_ty, mask_tz]
+        // Publish detailed degeneracy info as Float32MultiArray.
+        // Layout (older subscribers ignore extra trailing fields):
+        // [0]   condition_number
+        // [1]   min_eigenvalue
+        // [2]   max_eigenvalue
+        // [3]   effective_ratio
+        // [4]   degenerate_dof_count
+        // [5-10] dof_mask (rx,ry,rz,tx,ty,tz)
+        // [11]  pos_cov_trace (m²)             — IEKF position covariance trace
+        // [12]  iter_num                       — IEKF iterations actually used
+        // [13]  converged (1.0 if converged, 0.0 if hit max_iter)
         std_msgs::msg::Float32MultiArray detail_msg;
-        detail_msg.data.resize(11);
+        detail_msg.data.resize(14);
         detail_msg.data[0]  = static_cast<float>(degen.condition_number);
         detail_msg.data[1]  = static_cast<float>(degen.min_eigenvalue);
         detail_msg.data[2]  = static_cast<float>(degen.max_eigenvalue);
@@ -426,6 +434,9 @@ public:
         detail_msg.data[4]  = static_cast<float>(degen.degenerate_dof_count);
         for (int d = 0; d < 6; ++d)
             detail_msg.data[5 + d] = static_cast<float>(degen.dof_mask(d));
+        detail_msg.data[11] = static_cast<float>(degen.pos_cov_trace);
+        detail_msg.data[12] = static_cast<float>(degen.iter_num);
+        detail_msg.data[13] = degen.converged ? 1.0f : 0.0f;
         m_degen_detail_pub->publish(detail_msg);
 
         if (degen.detected)
