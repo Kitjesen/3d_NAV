@@ -207,7 +207,7 @@ sudo systemctl restart robot-fastlio2 robot-localizer
 
 The Gateway has a SLAM drift watchdog (`src/gateway/gateway_module.py`
 `_drift_watchdog_loop`) that auto-restarts SLAM services when xy or velocity diverge.
-See `docs/05-specialized/slam_drift_watchdog.md`.
+See `docs/archive/05-specialized/slam_drift_watchdog.md`.
 
 ### `robot-brainstem` (port 13145) unresponsive
 

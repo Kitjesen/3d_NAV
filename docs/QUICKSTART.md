@@ -23,7 +23,7 @@ extra `setup.bash` or env script.
 
 ## Profiles
 
-The full table is in [`AGENTS.md`](./AGENTS.md) (section 3 "Profiles").
+The full table is in [`archive/AGENTS.md`](./archive/AGENTS.md) (section 3 "Profiles").
 The canonical source is `cli/profiles_data.py`.
 
 | Command | Purpose | Hardware |
@@ -128,7 +128,7 @@ lingtu --version           Print version
 ## Overrides
 
 Any profile field can be overridden on the command line. The full set is
-listed in `AGENTS.md` section 20. Common ones:
+listed in `archive/AGENTS.md` section 20. Common ones:
 
 ```bash
 lingtu nav --llm mock              # bypass real LLM
@@ -153,7 +153,7 @@ claude mcp add --transport http lingtu http://192.168.66.190:8090/mcp
 ```
 
 `MCPServerModule` auto-discovers `@skill` methods from every module in
-`SystemHandle`. The current tool catalogue is in `AGENTS.md` section 18.
+`SystemHandle`. The current tool catalogue is in `archive/AGENTS.md` section 18.
 
 ## Troubleshooting
 

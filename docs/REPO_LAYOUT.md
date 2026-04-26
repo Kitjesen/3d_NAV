@@ -83,16 +83,16 @@ brain/lingtu/
 
 There are **no** Module-First ROS2 launch files. The Module is the runtime
 unit; SLAM and other C++ subsystems are managed via `NativeModule` (see
-`docs/MODULE_FIRST_GUIDELINE.md`).
+`docs/archive/MODULE_FIRST_GUIDELINE.md`).
 
 ## Where things actually live
 
 | You want… | Read |
 |-----------|------|
-| The eight architectural rules | `docs/MODULE_FIRST_GUIDELINE.md` |
+| The eight architectural rules | `docs/archive/MODULE_FIRST_GUIDELINE.md` |
 | Which modules a profile pulls in | `cli/profiles_data.py` + `src/core/blueprints/full_stack.py` |
 | All cross-stack wires | `src/core/blueprints/full_stack.py` |
 | Which backends are registered for a category | `src/core/registry.py` plus the `@register(...)` calls in each Module file |
 | Robot physical parameters | `config/robot_config.yaml` (single source of truth) |
 | Calibration SOP | `calibration/README.md` |
-| Operations CLI on the robot | `scripts/lingtu` + `docs/AGENTS.md` |
+| Operations CLI on the robot | `scripts/lingtu` + `docs/archive/AGENTS.md` |

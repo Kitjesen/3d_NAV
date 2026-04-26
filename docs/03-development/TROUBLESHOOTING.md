@@ -359,4 +359,4 @@ curl http://<robot>:5050/api/v1/health | jq '.slam'
 - `docs/03-development/PARAMETER_TUNING.md` — tuning defaults and effects
 - `docs/04-deployment/README.md` — service layout, deployment basics
 - `docs/04-deployment/lingtu_cli.md` — operations CLI reference
-- `docs/05-specialized/slam_drift_watchdog.md` — drift watchdog internals
+- `docs/archive/05-specialized/slam_drift_watchdog.md` — drift watchdog internals

@@ -204,5 +204,5 @@ lingtu map end && sleep 2 && lingtu map start
 ## Related
 
 - `docs/04-deployment/README.md` — deployment overview, service inventory
-- `docs/05-specialized/dynamic_obstacle_removal.md` — DUFOMap Phase 1 + 2
-- `docs/05-specialized/slam_drift_watchdog.md` — IEKF divergence watchdog
+- `docs/archive/05-specialized/dynamic_obstacle_removal.md` — DUFOMap Phase 1 + 2
+- `docs/archive/05-specialized/slam_drift_watchdog.md` — IEKF divergence watchdog

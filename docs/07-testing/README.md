@@ -55,7 +55,7 @@ bash docs/07-testing/p0_all.sh | tee ~/data/nav_logs/$(date +%Y%m%d_%H%M%S)_p0_a
 After the run:
 1. Record `PASS / FAIL / BLOCKED` plus reason in `vault/实机记录/YYYY-MM-DD.md`.
 2. Update the matching item in `BACKLOG.md` (status + last-on-robot date).
-3. Failure cases get their own ticket under `docs/08-project-management/known-issues/` (when that location is created).
+3. Failure cases get their own ticket under `docs/archive/08-project-management/known-issues/` (when that location is created).
 
 ---
 
