@@ -29,6 +29,7 @@ from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
 from core.stream import In, Out
+from core.utils.scene_mode_detector import SceneModeDetector, SceneModeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,9 @@ class SlamBridgeModule(Module, layer=1):
     # jump because the new value is the correct one; smoothing would erase
     # the very correction PGO just produced.
     map_frame_jump_event:  Out[dict]  # {ts, dt_m, dyaw_deg, prev: {...}, next: {...}}
+    # N2: indoor / outdoor classification with hysteresis. Other modules
+    # subscribe to gate behaviour (PGO GNSS factor, Kabsch yaw, speed limits).
+    scene_mode:            Out[str]   # "indoor" | "outdoor" | "unknown"
 
     # Visual odometry input for selective DOF fusion during degeneracy
     visual_odom: In[Odometry]
@@ -160,6 +164,15 @@ class SlamBridgeModule(Module, layer=1):
         # catches yaw-flip relocalisations from BBS3D global localisation.
         self._jump_t_threshold_m: float = float(kw.get("jump_t_threshold_m", 1.0))
         self._jump_r_threshold_deg: float = float(kw.get("jump_r_threshold_deg", 30.0))
+
+        # N2: scene mode (indoor/outdoor) detector. Manual override flows
+        # through env var LINGTU_SCENE_MODE; auto detection from GNSS health
+        # is fed in _on_gnss_odom() and the watchdog loop.
+        self._scene_mode_detector = SceneModeDetector(SceneModeConfig(
+            hold_seconds=float(kw.get("scene_mode_hold_s", 5.0)),
+            gnss_max_age_s=float(kw.get("gnss_max_age_for_fallback_s", 2.0)),
+        ))
+        self._last_published_scene_mode: Optional[str] = None
         self._last_severe_warn: float = 0.0   # throttle SEVERE degeneracy warning
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
@@ -1108,9 +1121,27 @@ class SlamBridgeModule(Module, layer=1):
     # ── GNSS global position anchoring ──────────────────────────────────
 
     def _on_gnss_odom(self, odom: GnssOdom) -> None:
-        """Store latest GNSS ENU odometry; used by _fuse_gnss_position."""
+        """Store latest GNSS ENU odometry; used by _fuse_gnss_position
+        and SceneModeDetector for indoor/outdoor classification (N2)."""
         self._last_gnss_odom = odom
         self._last_gnss_rx_ts = _time.time()
+        # Feed scene-mode detector — fix_type names align with GnssFixType enum.
+        try:
+            self._scene_mode_detector.observe_gnss(
+                fix_type=odom.fix_type.name, age_s=0.0, now=self._last_gnss_rx_ts)
+            self._maybe_publish_scene_mode()
+        except Exception as e:
+            logger.debug("scene_mode observe_gnss failed: %s", e)
+
+    def _maybe_publish_scene_mode(self) -> None:
+        """Publish scene_mode whenever the effective mode changes."""
+        cur = self._scene_mode_detector.mode
+        if cur != self._last_published_scene_mode:
+            self._last_published_scene_mode = cur
+            try:
+                self.scene_mode.publish(cur)
+            except Exception as e:
+                logger.debug("scene_mode publish failed: %s", e)
 
     def _fuse_gnss_position(self, odom: Odometry) -> Odometry:
         """Blend RTK GNSS ENU position into SLAM XY to anchor long-term drift.
@@ -1405,7 +1436,16 @@ class SlamBridgeModule(Module, layer=1):
                 "ieskf_converged": self._ieskf_converged,
                 "localizer_health": self._localizer_health,
                 "localizer_health_fitness": round(self._localizer_health_fitness, 4),
+                "scene_mode": self._scene_mode_detector.mode,
             })
+
+            # N2: feed indoor evidence to detector when GNSS has been silent
+            # for too long. Without this, the detector would never converge
+            # to "indoor" on a robot that simply has no GNSS module wired.
+            if self._last_gnss_rx_ts == 0.0 \
+                    or (now - self._last_gnss_rx_ts) > self._gnss_max_age_for_fallback_s:
+                self._scene_mode_detector.observe_no_gnss(now=now)
+                self._maybe_publish_scene_mode()
 
             self._shutdown_event.wait(timeout=interval)
 
