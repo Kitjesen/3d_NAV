@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 LOC_UNINIT = "UNINIT"        # No data received yet
 LOC_TRACKING = "TRACKING"    # Receiving data, quality OK
 LOC_DEGRADED = "DEGRADED"    # Receiving data, quality poor (cloud timeout or degeneracy)
+# DEGRADED for too long with healthy GNSS available → flag fallback so downstream
+# consumers (NavigationModule) can run cautiously while we still refine the
+# state. The actual GNSS+IMU dead-reckoning takeover lands in S2.5 once the
+# fault-injection harness exists; this state is the wiring half.
+LOC_FALLBACK_GNSS_ONLY = "FALLBACK_GNSS_ONLY"
 LOC_LOST = "LOST"            # No odometry for > timeout
 LOC_DIVERGED = "DIVERGED"    # Odometry values physically impossible → auto-relocalize
 
@@ -193,6 +198,17 @@ class SlamBridgeModule(Module, layer=1):
         self._gnss_last_residual_m: float = 0.0
         self._gnss_relock_count: int = 0
         self._gnss_last_relock_ts: float = 0.0
+
+        # FALLBACK_GNSS_ONLY transition tracking. Wall-clock time we first
+        # entered DEGRADED in the current degraded streak; cleared on recovery.
+        # Once we have been DEGRADED for `_fallback_after_degraded_s` AND GNSS
+        # is healthy (RTK_FIXED/FLOAT, fresh) we promote to FALLBACK so
+        # downstream Navigation can shed speed.
+        self._degraded_since: float = 0.0
+        self._fallback_after_degraded_s: float = float(
+            kw.get("fallback_after_degraded_s", 10.0))
+        self._gnss_max_age_for_fallback_s: float = float(
+            kw.get("gnss_max_age_for_fallback_s", 2.0))
 
     def setup(self) -> None:
         # Visual odometry input for selective fusion
@@ -1186,6 +1202,21 @@ class SlamBridgeModule(Module, layer=1):
             ),
         })
 
+    def _is_gnss_healthy(self, now: float) -> bool:
+        """True when GNSS is fresh and at RTK_FIXED/FLOAT precision.
+
+        Used to gate the LOC_DEGRADED → LOC_FALLBACK_GNSS_ONLY transition:
+        promoting to fallback only makes sense if we have a globally-anchored
+        position to fall back to.
+        """
+        if self._last_gnss_odom is None or self._last_gnss_rx_ts <= 0:
+            return False
+        age = now - self._last_gnss_rx_ts
+        if age > self._gnss_max_age_for_fallback_s:
+            return False
+        return self._last_gnss_odom.fix_type in (
+            GnssFixType.RTK_FIXED, GnssFixType.RTK_FLOAT)
+
     # ── Localization health watchdog ──────────────────────────────��──────
 
     def _watchdog_loop(self) -> None:
@@ -1216,6 +1247,20 @@ class SlamBridgeModule(Module, layer=1):
                 new_state = LOC_TRACKING
                 confidence = max(0.0, 1.0 - odom_age / self._odom_timeout)
 
+            # Promote sustained DEGRADED to FALLBACK_GNSS_ONLY when GNSS is
+            # healthy. Today this only changes the published state so
+            # NavigationModule can run cautiously; the GNSS+IMU dead-reckoning
+            # takeover lands in S2.5 once fault-injection tooling exists.
+            if new_state == LOC_DEGRADED:
+                if self._degraded_since == 0.0:
+                    self._degraded_since = now
+                if (now - self._degraded_since) > self._fallback_after_degraded_s \
+                        and self._is_gnss_healthy(now):
+                    new_state = LOC_FALLBACK_GNSS_ONLY
+                    confidence = max(confidence, 0.4)
+            else:
+                self._degraded_since = 0.0
+
             # Reduce confidence based on degeneracy
             # Boost confidence when visual fusion is active
             visual_active = (self._last_visual_odom is not None
@@ -1235,9 +1280,15 @@ class SlamBridgeModule(Module, layer=1):
                 elif new_state == LOC_DEGRADED and self._degen_level != DEGEN_NONE:
                     logger.warning("Localization DEGRADED: SLAM degeneracy %s",
                                    self._degen_level)
+                elif new_state == LOC_FALLBACK_GNSS_ONLY:
+                    logger.warning(
+                        "Localization FALLBACK_GNSS_ONLY: DEGRADED for %.1fs with "
+                        "healthy GNSS — Navigation should run cautiously",
+                        now - self._degraded_since)
                 elif new_state == LOC_TRACKING and self._loc_state in (
-                        LOC_LOST, LOC_DEGRADED, LOC_DIVERGED):
-                    logger.info("Localization recovered -> TRACKING")
+                        LOC_LOST, LOC_DEGRADED, LOC_DIVERGED, LOC_FALLBACK_GNSS_ONLY):
+                    logger.info("Localization recovered -> TRACKING from %s",
+                                self._loc_state)
                     self._reconnect_count = 0
                     self._drift_bad_count = 0
                 self._loc_state = new_state

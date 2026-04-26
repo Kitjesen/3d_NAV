@@ -342,25 +342,35 @@ class NavigationModule(Module, layer=5):
         self._apply_degeneracy_speed_limit()
 
     def _apply_degeneracy_speed_limit(self) -> None:
-        """Scale navigation speed based on SLAM degeneracy level.
+        """Scale navigation speed based on SLAM health.
 
-        NONE     → 1.0x (full speed)
-        MILD     → 0.7x (slight reduction)
-        SEVERE   → 0.4x (cautious)
-        CRITICAL → pause (handled by DEGRADED→LOST path above)
+        FALLBACK_GNSS_ONLY → 0.3x (cautious — SLAM has been DEGRADED for >10s
+                                   with healthy GNSS; we are essentially flying
+                                   on absolute fixes plus dead reckoning).
+        DEGEN SEVERE       → 0.4x
+        DEGEN MILD         → 0.7x
+        otherwise          → 1.0x
+
+        CRITICAL is handled by the DEGRADED→LOST path above (mission pauses).
         """
         prev_scale = self._speed_scale
-        if self._degen_level == "SEVERE":
+        reason = ""
+        if self._loc_state == "FALLBACK_GNSS_ONLY":
+            self._speed_scale = 0.3
+            reason = "FALLBACK_GNSS_ONLY"
+        elif self._degen_level == "SEVERE":
             self._speed_scale = 0.4
+            reason = "degeneracy=SEVERE"
         elif self._degen_level == "MILD":
             self._speed_scale = 0.7
+            reason = "degeneracy=MILD"
         else:
             self._speed_scale = 1.0
 
         if self._speed_scale != prev_scale and self._state == MissionState.EXECUTING:
             if self._speed_scale < 1.0:
-                logger.info("Navigation speed scaled to %.0f%% (degeneracy: %s)",
-                            self._speed_scale * 100, self._degen_level)
+                logger.info("Navigation speed scaled to %.0f%% (%s)",
+                            self._speed_scale * 100, reason)
             else:
                 logger.info("Navigation speed restored to 100%%")
 

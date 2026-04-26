@@ -127,6 +127,126 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         m.stop()  # Should not raise
 
 
+class TestSlamBridgeFallbackTransition(unittest.TestCase):
+    """LOC_DEGRADED → LOC_FALLBACK_GNSS_ONLY promotion when GNSS is healthy.
+
+    Wires the state machine half. The actual GNSS+IMU dead-reckoning takeover
+    lands in S2.5 once fault-injection tooling exists; these tests lock in
+    that the transition fires under the right preconditions and reverts on
+    SLAM recovery.
+    """
+
+    def _make(self, **kw):
+        from slam.slam_bridge_module import SlamBridgeModule
+        defaults = {
+            "odom_timeout": 0.1,
+            "cloud_timeout": 0.2,
+            "watchdog_hz": 50,
+            "fallback_after_degraded_s": 0.05,  # short for unit test
+            "gnss_max_age_for_fallback_s": 1.0,
+        }
+        defaults.update(kw)
+        return SlamBridgeModule(**defaults)
+
+    def _stub_healthy_gnss(self, m):
+        """Plant a fresh RTK_FIXED GnssOdom directly so the watchdog sees
+        GNSS as healthy without spinning up the GNSS subscription path."""
+        from core.msgs.gnss import GnssFixType, GnssOdom
+        m._last_gnss_odom = GnssOdom(
+            east=0.0, north=0.0, up=0.0, ve=0.0, vn=0.0, vu=0.0,
+            cov_e=0.01, cov_n=0.01, cov_u=0.04,
+            fix_type=GnssFixType.RTK_FIXED, ts=time.time(),
+        )
+        m._last_gnss_rx_ts = time.time()
+
+    def test_degraded_promotes_to_fallback_when_gnss_healthy(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        # Force DEGRADED by leaving cloud stale, odom fresh.
+        self._stub_healthy_gnss(m)
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        # Hold long enough to clear fallback_after_degraded_s.
+        time.sleep(0.15)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertIn("FALLBACK_GNSS_ONLY", states,
+                      f"Expected fallback transition, saw: {set(states)}")
+
+    def test_degraded_stays_degraded_without_gnss(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        # No GNSS planted → fallback gate must keep us at DEGRADED.
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        time.sleep(0.15)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertIn("DEGRADED", states)
+        self.assertNotIn("FALLBACK_GNSS_ONLY", states)
+
+    def test_degraded_stays_degraded_with_stale_gnss(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        # GNSS rx > gnss_max_age_for_fallback_s → fallback gate closed.
+        self._stub_healthy_gnss(m)
+        m._last_gnss_rx_ts = time.time() - 5.0  # stale
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        time.sleep(0.15)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertNotIn("FALLBACK_GNSS_ONLY", states)
+
+    def test_degraded_stays_degraded_when_only_single_fix(self):
+        """Single-point GNSS isn't precise enough to anchor on."""
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        from core.msgs.gnss import GnssFixType, GnssOdom
+        m._last_gnss_odom = GnssOdom(
+            east=0.0, north=0.0, up=0.0, ve=0.0, vn=0.0, vu=0.0,
+            cov_e=0.5, cov_n=0.5, cov_u=1.0,
+            fix_type=GnssFixType.SINGLE, ts=time.time(),
+        )
+        m._last_gnss_rx_ts = time.time()
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        time.sleep(0.15)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertNotIn("FALLBACK_GNSS_ONLY", states)
+
+    def test_recovery_from_fallback_back_to_tracking(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        self._stub_healthy_gnss(m)
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        time.sleep(0.15)  # enter FALLBACK
+        # Now restore both odom and cloud freshness — keep them fresh while we
+        # observe recovery so the watchdog does not race us into LOST.
+        for _ in range(20):
+            m._last_odom_time = time.time()
+            m._last_cloud_time = time.time()
+            time.sleep(0.01)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertIn("FALLBACK_GNSS_ONLY", states)
+        # After recovery, TRACKING should appear after the FALLBACK index.
+        fb_idx = max(i for i, s in enumerate(states) if s == "FALLBACK_GNSS_ONLY")
+        self.assertIn("TRACKING", states[fb_idx + 1:])
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # SlamBridgeModule degeneracy parsing + covariance tracking
 # ──────────────────────────────────────────────────────────────────────────────
@@ -607,6 +727,24 @@ class TestNavigationDegeneracyResponse(unittest.TestCase):
             "degeneracy": "NONE",
         })
         self.assertAlmostEqual(m._speed_scale, 1.0)
+
+    def test_fallback_gnss_only_caps_speed_below_severe(self):
+        """FALLBACK is a more cautious mode than DEGEN SEVERE — slower scale."""
+        m, _MS = self._make()
+        m._on_localization_status({
+            "state": "FALLBACK_GNSS_ONLY", "confidence": 0.4,
+            "degeneracy": "SEVERE",
+        })
+        self.assertAlmostEqual(m._speed_scale, 0.3)
+
+    def test_fallback_overrides_mild_degeneracy(self):
+        """Even if degeneracy is only MILD, FALLBACK state forces 0.3x."""
+        m, _MS = self._make()
+        m._on_localization_status({
+            "state": "FALLBACK_GNSS_ONLY", "confidence": 0.4,
+            "degeneracy": "MILD",
+        })
+        self.assertAlmostEqual(m._speed_scale, 0.3)
 
 
 if __name__ == "__main__":
