@@ -36,6 +36,7 @@ struct NodeConfig
     int scan_line = 4;          // number of scan lines (4 for Mid-360, 16 for VLP-16)
     int timestamp_unit = NS;    // 0=SEC, 1=MS, 2=US, 3=NS
     double acc_scale = 10.0;    // IMU acceleration scale (10.0 for Livox g-units, 1.0 for standard m/s²)
+    double time_diff_lidar_to_imu = 0.0;  // seconds; added to LiDAR timestamps to align them with IMU clock (LI-Init output)
 };
 struct StateData
 {
@@ -160,6 +161,22 @@ public:
             m_builder_config.stationary_thresh = config["stationary_thresh"].as<double>();
         if (config["acc_scale"])
             m_node_config.acc_scale = config["acc_scale"].as<double>();
+        if (config["time_diff_lidar_to_imu"])
+        {
+            m_node_config.time_diff_lidar_to_imu = config["time_diff_lidar_to_imu"].as<double>();
+            if (std::abs(m_node_config.time_diff_lidar_to_imu) > 0.1)
+            {
+                RCLCPP_ERROR(this->get_logger(),
+                    "time_diff_lidar_to_imu = %.6f s exceeds plausible ±0.1s range — likely calibration error",
+                    m_node_config.time_diff_lidar_to_imu);
+            }
+            else if (m_node_config.time_diff_lidar_to_imu != 0.0)
+            {
+                RCLCPP_INFO(this->get_logger(),
+                    "Applying LiDAR→IMU time offset: %.6f s",
+                    m_node_config.time_diff_lidar_to_imu);
+            }
+        }
 
         // ZUPT parameters (optional, fall back to Config defaults)
         if (config["imu_static_acc_thresh"])
@@ -199,7 +216,7 @@ public:
     {
         CloudType::Ptr cloud = Utils::livox2PCL(msg, m_builder_config.lidar_filter_num, m_builder_config.lidar_min_range, m_builder_config.lidar_max_range);
         std::lock_guard<std::mutex> lock(m_state_data.lidar_mutex);
-        double timestamp = Utils::getSec(msg->header);
+        double timestamp = Utils::getSec(msg->header) + m_node_config.time_diff_lidar_to_imu;
         if (timestamp < m_state_data.last_lidar_time)
         {
             RCLCPP_WARN(this->get_logger(), "Lidar Message is out of order");
@@ -214,7 +231,7 @@ public:
                                                m_node_config.scan_line, m_node_config.timestamp_unit,
                                                m_builder_config.lidar_min_range, m_builder_config.lidar_max_range);
         std::lock_guard<std::mutex> lock(m_state_data.lidar_mutex);
-        double timestamp = Utils::getSec(msg->header);
+        double timestamp = Utils::getSec(msg->header) + m_node_config.time_diff_lidar_to_imu;
         if (timestamp < m_state_data.last_lidar_time)
         {
             RCLCPP_WARN(this->get_logger(), "Lidar Message is out of order");

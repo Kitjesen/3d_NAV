@@ -62,6 +62,19 @@ def save_yaml(path: Path, data: dict) -> None:
                   allow_unicode=True)
 
 
+def pointlio_section(cfg: dict, section: str) -> dict:
+    """Return the nested ROS2 parameter section dict for pointlio.yaml.
+
+    pointlio.yaml uses the ROS2 parameter file layout
+    `/** -> ros__parameters -> {common,mapping,preprocess,...}`.
+    Writes into the dict returned here are reflected in the original tree.
+    Creates missing intermediate nodes.
+    """
+    root = cfg.setdefault("/**", {})
+    params = root.setdefault("ros__parameters", {})
+    return params.setdefault(section, {})
+
+
 def apply_camera_intrinsics(calib_path: str, dry_run: bool = False) -> None:
     """Apply camera intrinsic calibration to robot_config.yaml."""
     logger.info("\n== Camera Intrinsics ==")
@@ -155,16 +168,17 @@ def apply_imu_noise(calib_path: str, dry_run: bool = False) -> None:
         save_yaml(FASTLIO2_CONFIG, cfg)
         logger.info("  Updated: %s", FASTLIO2_CONFIG.name)
 
-    # Update Point-LIO config
+    # Update Point-LIO config (ROS2 nested layout: /**.ros__parameters.mapping.*)
     if POINTLIO_CONFIG.exists():
         backup_file(POINTLIO_CONFIG)
         cfg = load_yaml(POINTLIO_CONFIG)
-        cfg["imu_meas_acc_cov"] = float(na)
-        cfg["imu_meas_omg_cov"] = float(ng)
+        mapping = pointlio_section(cfg, "mapping")
+        mapping["imu_meas_acc_cov"] = float(na)
+        mapping["imu_meas_omg_cov"] = float(ng)
         if nba:
-            cfg["b_acc_cov"] = float(nba)
+            mapping["b_acc_cov"] = float(nba)
         if nbg:
-            cfg["b_gyr_cov"] = float(nbg)
+            mapping["b_gyr_cov"] = float(nbg)
         save_yaml(POINTLIO_CONFIG, cfg)
         logger.info("  Updated: %s", POINTLIO_CONFIG.name)
 
@@ -213,6 +227,14 @@ def apply_lidar_imu(calib_path: str, dry_run: bool = False) -> None:
     save_yaml(ROBOT_CONFIG, cfg)
     logger.info("  Updated: %s lidar section", ROBOT_CONFIG.name)
 
+    if abs(time_offset) > 0.1:
+        logger.warning(
+            "  WARNING: time_offset %.6f s exceeds plausible ±0.1s — "
+            "likely calibration error, not writing to configs", time_offset)
+        write_time_offset = False
+    else:
+        write_time_offset = True
+
     # Update Fast-LIO2 config
     if FASTLIO2_CONFIG.exists():
         backup_file(FASTLIO2_CONFIG)
@@ -220,18 +242,22 @@ def apply_lidar_imu(calib_path: str, dry_run: bool = False) -> None:
         if r_il:
             cfg["r_il"] = r_il
         cfg["t_il"] = t_il
+        if write_time_offset:
+            cfg["time_diff_lidar_to_imu"] = round(time_offset, 6)
         save_yaml(FASTLIO2_CONFIG, cfg)
         logger.info("  Updated: %s", FASTLIO2_CONFIG.name)
 
-    # Update Point-LIO config
+    # Update Point-LIO config (ROS2 nested layout)
     if POINTLIO_CONFIG.exists():
         backup_file(POINTLIO_CONFIG)
         cfg = load_yaml(POINTLIO_CONFIG)
+        mapping = pointlio_section(cfg, "mapping")
         if r_il:
-            cfg["extrinsic_R"] = r_il
-        cfg["extrinsic_T"] = t_il
-        if time_offset != 0.0:
-            cfg["time_diff_lidar_to_imu"] = round(time_offset, 6)
+            mapping["extrinsic_R"] = r_il
+        mapping["extrinsic_T"] = t_il
+        if write_time_offset:
+            common = pointlio_section(cfg, "common")
+            common["time_diff_lidar_to_imu"] = round(time_offset, 6)
         save_yaml(POINTLIO_CONFIG, cfg)
         logger.info("  Updated: %s", POINTLIO_CONFIG.name)
 

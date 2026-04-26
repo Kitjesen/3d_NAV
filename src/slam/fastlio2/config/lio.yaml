@@ -40,6 +40,11 @@ imu_init_num: 20
 near_search_num: 5
 ieskf_max_iter: 5
 
+# LiDAR↔IMU time offset (seconds). Aligns LiDAR clock to IMU clock by adding this
+# value to LiDAR message timestamps in the callback. Calibrated by LI-Init or similar;
+# applied automatically by `calibration/apply_calibration.py`. Plausible range: [-0.1, 0.1].
+time_diff_lidar_to_imu: 0.0
+
 gravity_align: true
 esti_il: false
 
