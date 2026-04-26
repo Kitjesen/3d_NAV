@@ -129,6 +129,42 @@ def apply_camera_intrinsics(calib_path: str, dry_run: bool = False) -> None:
     logger.info("  Updated: %s", ROBOT_CONFIG.name)
 
 
+# BMI088 (Livox Mid-360 built-in IMU) datasheet typical values, used as a
+# sanity-check reference. If a calibration result lies outside [low/5, high*5]
+# we warn — the most common cause is recording on a vibrating surface or with
+# other ROS nodes still pumping CPU heat into the IMU.
+# Source: Bosch BMI088 datasheet v1.9, Sections 5.1 (accel) / 5.2 (gyro).
+BMI088_REFERENCE = {
+    "na":  (3.0e-3, 1.0e-2),   # accel noise density (m/s²/√Hz)
+    "ng":  (2.0e-4, 1.0e-3),   # gyro noise density (rad/s/√Hz)
+    "nba": (1.0e-5, 1.0e-3),   # accel random walk
+    "nbg": (1.0e-6, 1.0e-4),   # gyro random walk
+}
+
+
+def _sanity_check_imu_noise(name: str, value: float) -> None:
+    """Compare measured IMU noise to BMI088 datasheet typical range and warn
+    if it is wildly off. Tolerance is intentionally loose (±5x) — Allan
+    Variance is sensitive to environment and sensor batch variance, but a
+    1-2 order-of-magnitude miss usually points at procedural error."""
+    if name not in BMI088_REFERENCE:
+        return
+    low, high = BMI088_REFERENCE[name]
+    if value < low / 5:
+        logger.warning(
+            "  WARNING: %s=%.6g is unusually LOW for BMI088 (datasheet typical %.2g–%.2g). "
+            "Possible causes: integration window too short, IMU saturated, units mis-converted.",
+            name, value, low, high)
+    elif value > high * 5:
+        logger.warning(
+            "  WARNING: %s=%.6g is unusually HIGH for BMI088 (datasheet typical %.2g–%.2g). "
+            "Possible causes: vibration during recording, thermal drift, AC vent draft.",
+            name, value, low, high)
+    else:
+        logger.info("  %s=%.6g is within BMI088 expected range (%.2g–%.2g)",
+                    name, value, low, high)
+
+
 def apply_imu_noise(calib_path: str, dry_run: bool = False) -> None:
     """Apply IMU noise parameters to SLAM configs."""
     logger.info("\n== IMU Noise Parameters ==")
@@ -150,6 +186,14 @@ def apply_imu_noise(calib_path: str, dry_run: bool = False) -> None:
         logger.info("  Accel random walk  (nba): %.8f", nba)
     if nbg:
         logger.info("  Gyro random walk   (nbg): %.8f", nbg)
+
+    # Datasheet-grounded sanity warnings (BMI088 = Livox Mid-360 built-in IMU)
+    _sanity_check_imu_noise("na", float(na))
+    _sanity_check_imu_noise("ng", float(ng))
+    if nba is not None:
+        _sanity_check_imu_noise("nba", float(nba))
+    if nbg is not None:
+        _sanity_check_imu_noise("nbg", float(nbg))
 
     if dry_run:
         logger.info("  [DRY RUN] Would update lio.yaml and pointlio.yaml")
