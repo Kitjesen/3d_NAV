@@ -388,9 +388,12 @@ public:
     {
         if (!syncPackage())
             return;
+        if (m_first_sync_time == 0.0)
+            m_first_sync_time = m_package.cloud_end_time;
         auto t1 = std::chrono::high_resolution_clock::now();
         m_builder->process(m_package);
         auto t2 = std::chrono::high_resolution_clock::now();
+        warnIfStuck();
 
         if (m_node_config.print_time_cost)
         {
@@ -461,6 +464,44 @@ public:
         }
     }
 
+    // Surface two silent failure modes that S0.5 already exposes structurally
+    // (via /slam/degeneracy_detail) but that have no human-facing log:
+    //   - IEKF iteration loop hits m_max_iter without stop_func firing
+    //     → likely ill-conditioned Jacobian for the current observation set
+    //   - IMU init buffer never fills → wrong topic / dead driver / saturated IMU
+    // Throttled hard so a sustained issue does not drown the log.
+    void warnIfStuck()
+    {
+        // IEKF non-convergence — only meaningful once we are past initialisation.
+        if (m_builder->status() == BuilderStatus::MAPPING)
+        {
+            const auto &degen = m_kf->degeneracy();
+            if (!degen.converged)
+            {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                    "IEKF did not converge: iter_num=%d/%d, cond=%.2g — "
+                    "Jacobian likely ill-conditioned for current scan",
+                    degen.iter_num, m_builder_config.ieskf_max_iter,
+                    degen.condition_number);
+            }
+        }
+
+        // IMU init stuck — if we have synced packages but builder is still in
+        // IMU_INIT after a few seconds, something is wrong with the IMU stream.
+        if (m_builder->status() == BuilderStatus::IMU_INIT && m_first_sync_time > 0.0)
+        {
+            const double elapsed = m_package.cloud_end_time - m_first_sync_time;
+            if (elapsed > 5.0)
+            {
+                auto progress = m_builder->imu_processor()->initProgress();
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                    "IMU init stuck for %.1fs: collected %d/%d samples — "
+                    "check /livox/imu topic, IMU sample rate, time_diff_lidar_to_imu",
+                    elapsed, progress.first, progress.second);
+            }
+        }
+    }
+
 private:
     rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr m_lidar_sub;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr m_pcl2_sub;
@@ -482,6 +523,10 @@ private:
     std::shared_ptr<MapBuilder> m_builder;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf_broadcaster;
     rclcpp::Service<interface::srv::SaveMaps>::SharedPtr m_save_map_srv;
+
+    // Wall-clock (LiDAR-clock) of the first successfully-synced package; used by
+    // warnIfStuck() to detect IMU init never completing.
+    double m_first_sync_time = 0.0;
 };
 
 int main(int argc, char **argv)
