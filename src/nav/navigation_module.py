@@ -85,6 +85,11 @@ class NavigationModule(Module, layer=5):
     teleop_active: In[bool]
     localization_status: In[dict]
     traversability: In[dict]  # W2-8: terrain class from TerrainModule
+    # P4: TF jump events from SlamBridgeModule. PGO loop closures and BBS3D
+    # relocalisations can move map→odom by metres in a single tick. Cached
+    # global path + waypoint then point at the wrong place. We force a replan
+    # on the next planning tick to catch up.
+    map_frame_jump_event: In[dict]
 
     # -- Outputs --
     waypoint:       Out[PoseStamped]
@@ -179,6 +184,7 @@ class NavigationModule(Module, layer=5):
         self.teleop_active.subscribe(self._on_teleop_active)
         self.localization_status.subscribe(self._on_localization_status)
         self.traversability.subscribe(self._on_traversability)
+        self.map_frame_jump_event.subscribe(self._on_map_frame_jump)
 
         if self._enable_ros2_bridge:
             try:
@@ -316,6 +322,28 @@ class NavigationModule(Module, layer=5):
         self._failure_reason = f"cancelled: {msg}" if msg else "cancelled"
         self._set_state(MissionState.CANCELLED)
         logger.info("Mission cancelled: %s", msg)
+
+    def _on_map_frame_jump(self, event: dict) -> None:
+        """SlamBridge detected a map↔odom TF discontinuity (P4).
+
+        The cached global path / waypoint were planned in the *old* map frame.
+        Force an immediate replan so we don't drive the robot toward a
+        coordinate that no longer matches reality. Costmap is in odom frame
+        so it remains valid; ESDF / OccupancyGrid handle their own clear via
+        their own subscription to this event.
+        """
+        if not isinstance(event, dict):
+            return
+        dt_m = event.get("dt_m", 0.0)
+        dyaw = event.get("dyaw_deg", 0.0)
+        # Only act if we have an active mission — idle robot doesn't care.
+        if self._state in (MissionState.EXECUTING, MissionState.PATROLLING) \
+                and self._goal is not None:
+            logger.warning(
+                "TF jump (Δt=%.2fm Δyaw=%.1f°) → forced replan",
+                dt_m, dyaw)
+            self._tracker.clear()  # invalidate current waypoint tracking
+            self._plan()
 
     def _on_localization_status(self, msg: dict) -> None:
         prev = self._loc_state

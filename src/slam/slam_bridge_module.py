@@ -67,6 +67,13 @@ class SlamBridgeModule(Module, layer=1):
     localization_status:   Out[dict]
     gnss_fusion_health:    Out[dict]
     map_odom_tf:           Out[dict]  # {tx,ty,tz,qx,qy,qz,qw,valid} — localizer-emitted map→odom
+    # P4: TF jump events. Cartographer-style — when the localizer's map→odom
+    # transform jumps (PGO optimisation, BBS3D relocalisation, manual reset),
+    # downstream consumers (NavigationModule, OccupancyGrid, ESDF) need to
+    # invalidate cached state and replan/re-accumulate. We do NOT smooth the
+    # jump because the new value is the correct one; smoothing would erase
+    # the very correction PGO just produced.
+    map_frame_jump_event:  Out[dict]  # {ts, dt_m, dyaw_deg, prev: {...}, next: {...}}
 
     # Visual odometry input for selective DOF fusion during degeneracy
     visual_odom: In[Odometry]
@@ -147,6 +154,12 @@ class SlamBridgeModule(Module, layer=1):
         self._localizer_health: str = "UNKNOWN"
         self._localizer_health_fitness: float = 0.0
         self._localizer_health_ts: float = 0.0
+
+        # P4: TF jump thresholds. Translation gate (m) is the dominant trigger
+        # for PGO loop closures (typically 0.5-3 m corrections); rotation gate
+        # catches yaw-flip relocalisations from BBS3D global localisation.
+        self._jump_t_threshold_m: float = float(kw.get("jump_t_threshold_m", 1.0))
+        self._jump_r_threshold_deg: float = float(kw.get("jump_r_threshold_deg", 30.0))
         self._last_severe_warn: float = 0.0   # throttle SEVERE degeneracy warning
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
@@ -654,7 +667,13 @@ class SlamBridgeModule(Module, layer=1):
         return odom
 
     def _cache_map_odom_tf(self, tx, ty, tz, qx, qy, qz, qw):
-        """Cache map→odom as 4x4 for downstream variance-free transforms."""
+        """Cache map→odom as 4x4 for downstream variance-free transforms.
+
+        Also detects discontinuities (PGO optimisation, BBS3D relocalisation)
+        and emits map_frame_jump_event so NavigationModule + costmap modules
+        can replan / clear cached state. Jump thresholds default to 1.0 m
+        translation or 30° rotation; both configurable via kw.
+        """
         import numpy as _np
         xx, yy, zz = qx * qx, qy * qy, qz * qz
         xy, xz, yz = qx * qy, qx * qz, qy * qz
@@ -667,6 +686,39 @@ class SlamBridgeModule(Module, layer=1):
         T = _np.eye(4, dtype=_np.float64)
         T[:3, :3] = R
         T[:3, 3] = [tx, ty, tz]
+
+        # ── Jump detection ────────────────────────────────────────────────
+        # Compare against the previous cached T. First call sets baseline only.
+        prev_T = getattr(self, "_T_map_odom", None)
+        if prev_T is not None:
+            dt_vec = T[:3, 3] - prev_T[:3, 3]
+            dt_norm = float(_np.linalg.norm(dt_vec))
+            # Rotation angle between two rotation matrices = arccos((tr(R_rel) - 1) / 2)
+            R_rel = T[:3, :3] @ prev_T[:3, :3].T
+            tr = float(_np.clip((_np.trace(R_rel) - 1.0) * 0.5, -1.0, 1.0))
+            dyaw_rad = float(_np.arccos(tr))
+            dyaw_deg = dyaw_rad * 180.0 / _np.pi
+            jump_t_thresh = getattr(self, "_jump_t_threshold_m", 1.0)
+            jump_r_thresh = getattr(self, "_jump_r_threshold_deg", 30.0)
+            if dt_norm > jump_t_thresh or dyaw_deg > jump_r_thresh:
+                logger.warning(
+                    "map↔odom TF JUMPED: |Δt|=%.2fm Δyaw=%.1f° "
+                    "(prev=[%.2f,%.2f,%.2f] → new=[%.2f,%.2f,%.2f])",
+                    dt_norm, dyaw_deg,
+                    prev_T[0, 3], prev_T[1, 3], prev_T[2, 3],
+                    T[0, 3], T[1, 3], T[2, 3])
+                try:
+                    self.map_frame_jump_event.publish({
+                        "ts": _time.time(),
+                        "dt_m": round(dt_norm, 4),
+                        "dyaw_deg": round(dyaw_deg, 2),
+                        "prev_xyz": [float(prev_T[0, 3]), float(prev_T[1, 3]),
+                                     float(prev_T[2, 3])],
+                        "new_xyz": [float(T[0, 3]), float(T[1, 3]), float(T[2, 3])],
+                    })
+                except Exception as e:
+                    logger.debug("map_frame_jump_event publish failed: %s", e)
+
         self._T_map_odom = T
 
     def _on_rclpy_tf(self, msg) -> None:

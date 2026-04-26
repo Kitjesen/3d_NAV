@@ -459,6 +459,64 @@ class TestSlamBridgeLocalizerHealth(unittest.TestCase):
         self.assertEqual(m._localizer_health, "GARBAGE")
 
 
+class TestSlamBridgeTFJumpDetection(unittest.TestCase):
+    """P4: detect map↔odom TF discontinuities and publish events."""
+
+    def _make(self, **kw):
+        from slam.slam_bridge_module import SlamBridgeModule
+        defaults = {"jump_t_threshold_m": 1.0, "jump_r_threshold_deg": 30.0}
+        defaults.update(kw)
+        return SlamBridgeModule(watchdog_hz=100, **defaults)
+
+    def test_first_call_does_not_emit_jump(self):
+        """No baseline → cannot diff → first call must NOT emit a jump event."""
+        m = self._make()
+        events = []
+        m.map_frame_jump_event._add_callback(events.append)
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)
+        self.assertEqual(len(events), 0)
+
+    def test_small_translation_does_not_emit(self):
+        m = self._make()
+        events = []
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)
+        m.map_frame_jump_event._add_callback(events.append)
+        m._cache_map_odom_tf(0.1, 0.1, 0, 0, 0, 0, 1)  # √0.02 ≈ 0.14m
+        self.assertEqual(len(events), 0)
+
+    def test_large_translation_emits_jump(self):
+        m = self._make()
+        events = []
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)
+        m.map_frame_jump_event._add_callback(events.append)
+        m._cache_map_odom_tf(2.0, 0, 0, 0, 0, 0, 1)  # 2m jump > 1m threshold
+        self.assertEqual(len(events), 1)
+        evt = events[0]
+        self.assertGreater(evt["dt_m"], 1.0)
+        self.assertEqual(evt["new_xyz"], [2.0, 0.0, 0.0])
+
+    def test_large_rotation_emits_jump(self):
+        """A 60° yaw jump (no translation) should still emit even though Δt=0."""
+        import math
+        m = self._make()
+        events = []
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)  # identity
+        m.map_frame_jump_event._add_callback(events.append)
+        # 60° yaw rotation as quaternion
+        half = math.radians(60.0) / 2.0
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, math.sin(half), math.cos(half))
+        self.assertEqual(len(events), 1)
+        self.assertGreater(events[0]["dyaw_deg"], 30.0)
+
+    def test_threshold_overrides_via_kw(self):
+        m = self._make(jump_t_threshold_m=10.0)  # very loose
+        events = []
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)
+        m.map_frame_jump_event._add_callback(events.append)
+        m._cache_map_odom_tf(2.0, 0, 0, 0, 0, 0, 1)  # 2m, well below 10m
+        self.assertEqual(len(events), 0)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # SafetyRingModule localization tests
 # ──────────────────────────────────────────────────────────────────────────────
