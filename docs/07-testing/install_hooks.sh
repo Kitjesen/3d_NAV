@@ -38,7 +38,16 @@ PYTHONIOENCODING=utf-8 python -c "
 import sys
 sys.path.insert(0, 'src')
 from core.blueprints.full_stack import full_stack_blueprint
-bp = full_stack_blueprint(profile='stub')
+# full_stack_blueprint() has no 'profile' kwarg — that arg used to be silently
+# absorbed by **config (so we got a full hardware stack instead of a stub).
+# Build a real lightweight stub: stub driver, no SLAM, no native C++ nodes,
+# no semantic stack — purely the framework wire-up smoke check.
+bp = full_stack_blueprint(
+    robot='stub',
+    slam_profile='none',
+    enable_native=False,
+    enable_semantic=False,
+)
 system = bp.build()
 print('[L2] stub profile build OK — %d modules' % len(system._modules))
 "

@@ -90,9 +90,12 @@ PROFILES = {
     "nav": dict(
         _desc="Navigate using a saved map",
         _default_robot="s100p",
-        # External slam.service owns livox driver + fastlio2 + localizer on S100P.
-        # bridge mode has the SlamBridgeModule subscribe to /nav/odometry + /nav/map_cloud
-        # instead of starting our own livox NativeModule (which would fight the systemd one).
+        # Bridge mode: SlamBridgeModule subscribes to /nav/odometry + /nav/map_cloud
+        # produced by external ROS2 SLAM nodes (lidar.service for the Livox driver,
+        # plus a Fast-LIO2/PGO/Localizer chain managed outside lingtu). This profile
+        # intentionally overrides the s100p preset's "localizer" because on the real
+        # robot the SLAM stack runs as separate systemd units; spawning our own
+        # NativeModule SLAM here would race them on the LiDAR USB device.
         slam_profile="bridge",
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
