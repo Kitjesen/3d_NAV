@@ -177,7 +177,7 @@ def _safe_map_name(name: str) -> str | None:
     return None
 
 
-def _apply_dynamic_filter_step1half(save_dir: "str | os.PathLike[str]") -> "dict | None":
+def _apply_dynamic_filter_step1half(save_dir: str | os.PathLike[str]) -> dict | None:
     """Shared Step 1½ — DUFOMap dynamic-obstacle filter call.
 
     Both /api/v1/map/save (Web direct) and MapManager._map_save (MCP path)
@@ -2804,8 +2804,8 @@ class GatewayModule(Module, layer=6):
                 POST /api/v1/maps {"action":"build_tomogram","name":"<name>"}
             """
             import os
-            import shutil
             import pathlib
+            import shutil
             name = body.get("name", "")
             err = _safe_map_name(name)
             if err is not None:

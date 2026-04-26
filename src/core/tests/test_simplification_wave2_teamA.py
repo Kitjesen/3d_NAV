@@ -109,7 +109,7 @@ class TestLocalPlannerGridParams(unittest.TestCase):
 
 _scipy_available = True
 try:
-    import scipy.ndimage  # noqa: F401
+    import scipy.ndimage
 except ImportError:
     _scipy_available = False
 

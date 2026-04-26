@@ -577,7 +577,7 @@ def _topo_sort(
     if len(result) < len(instances):
         remaining = [n for n in instances if n not in set(result)]
         cycle = _find_cycle(adj, remaining)
-        cycle_str = " → ".join(cycle + [cycle[0]]) if cycle else str(remaining)
+        cycle_str = " → ".join([*cycle, cycle[0]]) if cycle else str(remaining)
         logger.warning(
             "Wire cycle detected — startup order may be imprecise for: %s. "
             "Cycle: %s. Falling back to layer-sorted order. "

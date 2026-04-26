@@ -95,12 +95,12 @@ class TAREExplorerModule(Module, layer=5):
         has_cyclonedds = False
         has_rclpy = False
         try:
-            import cyclonedds  # noqa: F401
+            import cyclonedds
             has_cyclonedds = True
         except ImportError:
             pass
         try:
-            import rclpy  # noqa: F401
+            import rclpy
             has_rclpy = True
         except ImportError:
             pass

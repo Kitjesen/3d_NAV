@@ -27,7 +27,7 @@ def _require_cv2():
     classes patched) in environments without opencv-python installed,
     e.g. unit test CI that mocks BPUDetector entirely.
     """
-    import cv2  # noqa: F401  (re-exported below)
+    import cv2
     return cv2
 
 logger = logging.getLogger(__name__)

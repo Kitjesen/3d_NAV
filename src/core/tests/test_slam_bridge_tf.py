@@ -21,7 +21,6 @@ from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.nav import Odometry
 from slam.slam_bridge_module import SlamBridgeModule
 
-
 # ── Harness: bind unbound methods to a minimal holder ─────────────────────
 
 class _TFHolder:
