@@ -323,6 +323,7 @@ class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
         self.assertFalse(m._ieskf_converged)
         self.assertAlmostEqual(m._pos_cov_trace, 42.0, places=6)
 
+
     def test_severe_warning_triggers_above_cond_threshold(self):
         """condition_number > 1e6 triggers a throttled SEVERE warning."""
         import logging
@@ -400,6 +401,62 @@ class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
 
         m._on_rclpy_odom(msg)
         self.assertAlmostEqual(m._max_pos_cov, 150.0, places=3)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# P3: localizer-side multi-frame health (/nav/localization_health subscription)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestSlamBridgeLocalizerHealth(unittest.TestCase):
+    """P3: parse multi-frame confirmed localizer health from
+    /nav/localization_health String topic."""
+
+    def _make(self):
+        from slam.slam_bridge_module import SlamBridgeModule
+        return SlamBridgeModule(watchdog_hz=100)
+
+    def _msg(self, data):
+        class _M:
+            pass
+        m = _M()
+        m.data = data
+        return m
+
+    def test_initial_health_is_unknown(self):
+        m = self._make()
+        self.assertEqual(m._localizer_health, "UNKNOWN")
+        self.assertEqual(m._localizer_health_fitness, 0.0)
+
+    def test_locked_payload_parsed(self):
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("LOCKED|fitness=0.0234"))
+        self.assertEqual(m._localizer_health, "LOCKED")
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.0234, places=4)
+
+    def test_lost_payload_parsed(self):
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("LOST|fitness=0.45"))
+        self.assertEqual(m._localizer_health, "LOST")
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.45, places=4)
+
+    def test_recovered_payload_parsed(self):
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("RECOVERED|fitness=0.05"))
+        self.assertEqual(m._localizer_health, "RECOVERED")
+
+    def test_payload_without_fitness_keeps_state(self):
+        """Defensive: payload missing the |fitness=... suffix should still
+        update state without raising."""
+        m = self._make()
+        m._localizer_health_fitness = 0.1
+        m._on_rclpy_localization_health(self._msg("LOST"))
+        self.assertEqual(m._localizer_health, "LOST")
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.1, places=4)
+
+    def test_malformed_payload_does_not_crash(self):
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("garbage|fitness=NaN"))
+        self.assertEqual(m._localizer_health, "GARBAGE")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -141,6 +141,12 @@ class SlamBridgeModule(Module, layer=1):
         self._pos_cov_trace: float = 0.0
         self._ieskf_iter_num: int = 0
         self._ieskf_converged: bool = True
+        # Localizer-side multi-frame health (LOCKED / LOST / RECOVERED / UNKNOWN).
+        # Set by the /nav/localization_health subscription (P3); reflects the
+        # ICP-side N-of-M confirmed state, not the per-frame ICP success flag.
+        self._localizer_health: str = "UNKNOWN"
+        self._localizer_health_fitness: float = 0.0
+        self._localizer_health_ts: float = 0.0
         self._last_severe_warn: float = 0.0   # throttle SEVERE degeneracy warning
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
@@ -306,7 +312,7 @@ class SlamBridgeModule(Module, layer=1):
         """
         try:
             from rclpy.qos import QoSProfile, ReliabilityPolicy
-            from std_msgs.msg import Float32, Float32MultiArray
+            from std_msgs.msg import Float32, Float32MultiArray, String
             sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
             node.create_subscription(
                 Float32, self._quality_topic, self._on_rclpy_quality, sensor_qos)
@@ -315,6 +321,14 @@ class SlamBridgeModule(Module, layer=1):
             node.create_subscription(
                 Float32MultiArray, self._degeneracy_detail_topic,
                 self._on_rclpy_degeneracy_detail, sensor_qos)
+            # Localizer-side multi-frame health: LOCKED / LOST / RECOVERED.
+            # Reliability needs to be RELIABLE (not BEST_EFFORT) — we cannot
+            # afford to drop a LOST → RECOVERED transition; navigation depends
+            # on it.
+            health_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+            node.create_subscription(
+                String, "/nav/localization_health",
+                self._on_rclpy_localization_health, health_qos)
         except Exception as e:
             logger.debug("Degeneracy subscription unavailable: %s", e)
 
@@ -805,6 +819,29 @@ class SlamBridgeModule(Module, layer=1):
         self._effective_ratio = float(msg.data)
         self._last_degen_time = _time.time()
         self._update_degeneracy_level()
+
+    def _on_rclpy_localization_health(self, msg) -> None:
+        """Multi-frame confirmed localizer health from /nav/localization_health.
+
+        Payload format: ``"<state>|fitness=<value>"`` produced by
+        LocalizerNode::updateAndPublishHealth(). Decode into separate fields
+        and publish via localization_status so Gateway / NavigationModule can
+        react without per-frame ICP jitter.
+        """
+        try:
+            payload = str(msg.data)
+            state, _, rest = payload.partition("|")
+            self._localizer_health = state.strip().upper() or "UNKNOWN"
+            if rest.startswith("fitness="):
+                try:
+                    self._localizer_health_fitness = float(rest.split("=", 1)[1])
+                except ValueError:
+                    pass
+            self._localizer_health_ts = _time.time()
+            logger.info("Localizer health → %s (fitness=%.4f)",
+                        self._localizer_health, self._localizer_health_fitness)
+        except Exception as e:
+            logger.debug("localization_health parse failed: %s", e)
 
     def _on_rclpy_degeneracy_detail(self, msg) -> None:
         """Detailed degeneracy metrics from Hessian eigenvalue analysis.
@@ -1314,6 +1351,8 @@ class SlamBridgeModule(Module, layer=1):
                 "pos_cov_trace": round(self._pos_cov_trace, 4),
                 "ieskf_iter_num": self._ieskf_iter_num,
                 "ieskf_converged": self._ieskf_converged,
+                "localizer_health": self._localizer_health,
+                "localizer_health_fitness": round(self._localizer_health_fitness, 4),
             })
 
             self._shutdown_event.wait(timeout=interval)

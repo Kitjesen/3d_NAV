@@ -18,6 +18,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include "localizers/commons.h"
 #include "localizers/icp_localizer.h"
@@ -95,6 +96,10 @@ public:
 
         m_map_cloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("map_cloud", 10);
         m_quality_pub = this->create_publisher<std_msgs::msg::Float32>("/localization_quality", 10);
+        // Externalised lost/lock health for SlamBridge → Gateway consumption.
+        // Multi-frame confirmation gate (see updateAndPublishHealth) prevents
+        // single-frame ICP hiccups from spuriously alarming Navigation.
+        m_health_pub = this->create_publisher<std_msgs::msg::String>("/nav/localization_health", 10);
 
         m_timer = this->create_wall_timer(10ms, std::bind(&LocalizerNode::timerCB, this));
 
@@ -356,8 +361,52 @@ public:
             m_quality_pub->publish(quality_msg);
         }
 
+        // Externalised LOCKED/LOST health (multi-frame confirmed)
+        updateAndPublishHealth(result, fitness);
+
         sendBroadCastTF(current_time);
         publishMapCloud(current_time);
+    }
+
+    // HDL-Localization style multi-frame health gate. The internal
+    // m_state.localize_success can flip per frame; this layer only flips
+    // the externally-published health after N consecutive same-direction
+    // frames so navigation does not see ICP single-frame jitter.
+    void updateAndPublishHealth(bool result, float fitness)
+    {
+        if (result)
+        {
+            m_consec_locked++;
+            m_consec_lost = 0;
+        }
+        else
+        {
+            m_consec_lost++;
+            m_consec_locked = 0;
+        }
+
+        std::string desired = m_published_health;
+        if (m_consec_lost >= LOST_CONFIRM_FRAMES)
+            desired = "LOST";
+        else if (m_consec_locked >= RECOVER_CONFIRM_FRAMES && m_published_health != "UNKNOWN")
+            desired = "RECOVERED";
+        else if (m_consec_locked >= RECOVER_CONFIRM_FRAMES && m_published_health == "UNKNOWN")
+            desired = "LOCKED";
+
+        if (desired != m_published_health)
+        {
+            std_msgs::msg::String msg;
+            // payload format: "<state>|fitness=<value>" — keeps subscribers
+            // (SlamBridgeModule) able to parse with str.split('|').
+            msg.data = desired + "|fitness=" + std::to_string(fitness);
+            m_health_pub->publish(msg);
+            RCLCPP_INFO(this->get_logger(),
+                "Localization health → %s (fitness=%.4f)", desired.c_str(), fitness);
+            m_published_health = desired;
+            // After a RECOVERED transition the next steady state is LOCKED; do
+            // not re-publish each frame, just collapse on next state change.
+            if (desired == "RECOVERED") m_published_health = "LOCKED";
+        }
     }
     void syncCB(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &cloud_msg, const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg)
     {
@@ -586,6 +635,18 @@ private:
     rclcpp::Service<interface::srv::IsValid>::SharedPtr m_reloc_check_srv;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr m_map_cloud_pub;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr m_quality_pub;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr m_health_pub;
+
+    // Multi-frame confirmation state for /nav/localization_health.
+    // HDL-Localization pattern: a single bad ICP frame is not enough to
+    // declare LOST; require N consecutive bad frames first, and likewise N
+    // consecutive good frames before re-declaring RECOVERED. Otherwise a
+    // momentary scan match dip would flap the public health state.
+    int m_consec_lost   = 0;
+    int m_consec_locked = 0;
+    std::string m_published_health = "UNKNOWN";  // last value sent on m_health_pub
+    static constexpr int LOST_CONFIRM_FRAMES = 5;
+    static constexpr int RECOVER_CONFIRM_FRAMES = 3;
 };
 int main(int argc, char **argv)
 {
