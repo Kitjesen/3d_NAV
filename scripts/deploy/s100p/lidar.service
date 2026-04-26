@@ -1,8 +1,11 @@
 [Unit]
 Description=S100P Livox MID-360 LiDAR Driver
 After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
+TimeoutStopSec=15
 Type=simple
 User=sunrise
 WorkingDirectory=/home/sunrise/data/inovxio/lingtu

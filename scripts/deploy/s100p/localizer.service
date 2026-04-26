@@ -2,8 +2,11 @@
 Description=S100P ICP Localizer
 After=slam.service
 Wants=slam.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
+TimeoutStopSec=15
 Type=simple
 User=sunrise
 WorkingDirectory=/home/sunrise/data/inovxio/lingtu
