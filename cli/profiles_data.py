@@ -109,7 +109,7 @@ PROFILES = {
         gateway_port=5050,
     ),
     "explore": dict(
-        _desc="Explore unknown area (wavefront frontier)",
+        _desc="Explore unknown area (wavefront frontier under navigation stack)",
         _default_robot="s100p",
         slam_profile="fastlio2",
         llm="qwen",
@@ -117,8 +117,12 @@ PROFILES = {
         enable_native=False,    # same reason as nav profile above
         enable_semantic=True,
         enable_gateway=True,
+        # WavefrontFrontierExplorer is provided by navigation() stack (via
+        # enable_frontier=True), not by exploration() stack — the latter is
+        # TARE-only since 1c457f3. Keep exploration_backend="none" so we
+        # don't try to spawn a TARE NativeModule on top of wavefront.
         enable_frontier=True,
-        exploration_backend="wavefront",
+        exploration_backend="none",
         gateway_port=5050,
     ),
     "tare_explore": dict(

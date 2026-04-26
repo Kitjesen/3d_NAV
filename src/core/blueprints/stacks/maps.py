@@ -72,7 +72,9 @@ def maps(**config) -> Blueprint:
             "map_dir",
             os.environ.get(
                 "NAV_MAP_DIR",
-                os.path.expanduser("~/data/inovxio/data/maps"),
+                # Canonical sunrise map dir — see note in
+                # MapManagerModule.__init__ for why this must match.
+                os.path.expanduser("~/data/nova/maps"),
             ),
         )
         bp.add(MapManagerModule, map_dir=map_dir)

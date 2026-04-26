@@ -69,7 +69,11 @@ class MapManagerModule(Module, layer=6):
             "map_dir",
             os.environ.get(
                 "NAV_MAP_DIR",
-                os.path.expanduser("~/data/inovxio/data/maps"),
+                # Canonical map dir on sunrise — REPL `map list`, Gateway,
+                # and cli/profiles_data.py:_resolve_tomogram all read from
+                # here. Stay consistent or saved maps won't be visible to
+                # the nav profile.
+                os.path.expanduser("~/data/nova/maps"),
             ),
         )
         self._data_dir = Path(default_data_dir)
@@ -193,6 +197,11 @@ class MapManagerModule(Module, layer=6):
         try:
             import subprocess
 
+            # save_patches=true makes PGO dump per-frame patch PCDs +
+            # poses.txt alongside map.pcd. DUFOMap (Step 1.5) and the
+            # raycasting occupancy builder both REQUIRE patches; without
+            # them DUFOMap silently no-ops (returns "PGO output incomplete")
+            # and dynamic-obstacle filtering is inert.
             result = subprocess.run(
                 [
                     "ros2",
@@ -200,7 +209,7 @@ class MapManagerModule(Module, layer=6):
                     "call",
                     "/pgo/save_maps",
                     "interface/srv/SaveMaps",
-                    f"{{file_path: '{pcd_path}'}}",
+                    f"{{file_path: '{pcd_path}', save_patches: true}}",
                 ],
                 capture_output=True,
                 text=True,
