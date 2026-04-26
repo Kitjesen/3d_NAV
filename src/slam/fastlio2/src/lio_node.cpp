@@ -36,7 +36,11 @@ struct NodeConfig
     int scan_line = 4;          // number of scan lines (4 for Mid-360, 16 for VLP-16)
     int timestamp_unit = NS;    // 0=SEC, 1=MS, 2=US, 3=NS
     double acc_scale = 10.0;    // IMU acceleration scale (10.0 for Livox g-units, 1.0 for standard m/s²)
-    double time_diff_lidar_to_imu = 0.0;  // seconds; added to LiDAR timestamps to align them with IMU clock (LI-Init output)
+    // LI-Init output: positive value means IMU lags LiDAR by this many seconds.
+    // Applied IMU-side (subtracted from IMU stamps in imuCB) for parity with
+    // upstream FAST-LIO / Point-LIO so published odometry stamps stay on the
+    // LiDAR wall clock.
+    double time_diff_lidar_to_imu = 0.0;
 };
 struct StateData
 {
@@ -194,7 +198,14 @@ public:
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg)
     {
         std::lock_guard<std::mutex> lock(m_state_data.imu_mutex);
-        double timestamp = Utils::getSec(msg->header);
+        // Upstream FAST-LIO / Point-LIO subtract `time_diff_lidar_to_imu` from
+        // the IMU stamp to align IMU clock onto the LiDAR timeline. We follow
+        // the same convention so the published odometry stamps live on the
+        // LiDAR wall clock (matches /cloud_registered stamps for TF lookups).
+        // Equivalent to LI-Init's documented "SUBTRACT this value from IMU
+        // timestamp OR ADD this value to LiDAR timestamp"; we pick the IMU
+        // side for parity with upstream.
+        double timestamp = Utils::getSec(msg->header) - m_node_config.time_diff_lidar_to_imu;
         if (timestamp < m_state_data.last_imu_time)
         {
             RCLCPP_WARN(this->get_logger(), "IMU Message is out of order");
@@ -216,7 +227,9 @@ public:
     {
         CloudType::Ptr cloud = Utils::livox2PCL(msg, m_builder_config.lidar_filter_num, m_builder_config.lidar_min_range, m_builder_config.lidar_max_range);
         std::lock_guard<std::mutex> lock(m_state_data.lidar_mutex);
-        double timestamp = Utils::getSec(msg->header) + m_node_config.time_diff_lidar_to_imu;
+        // LiDAR timestamps stay raw — the time_diff offset is applied on the
+        // IMU side in imuCB so output odom stamps remain on the LiDAR clock.
+        double timestamp = Utils::getSec(msg->header);
         if (timestamp < m_state_data.last_lidar_time)
         {
             RCLCPP_WARN(this->get_logger(), "Lidar Message is out of order");
@@ -231,7 +244,8 @@ public:
                                                m_node_config.scan_line, m_node_config.timestamp_unit,
                                                m_builder_config.lidar_min_range, m_builder_config.lidar_max_range);
         std::lock_guard<std::mutex> lock(m_state_data.lidar_mutex);
-        double timestamp = Utils::getSec(msg->header) + m_node_config.time_diff_lidar_to_imu;
+        // See lidarCB — offset is applied IMU-side, not here.
+        double timestamp = Utils::getSec(msg->header);
         if (timestamp < m_state_data.last_lidar_time)
         {
             RCLCPP_WARN(this->get_logger(), "Lidar Message is out of order");
