@@ -309,6 +309,16 @@ def full_stack_blueprint(
     # Gateway + MCP state feeds — explicit wires to avoid auto-wire ambiguity
     _w("PerceptionModule", "scene_graph", "GatewayModule", "scene_graph")
     _w("PerceptionModule", "scene_graph", "MCPServerModule", "scene_graph")
+    # Memory + reconstruction scene_graph fan-out — explicit so auto_wire
+    # doesn't flag ambiguity when StubDog (test) also declares scene_graph
+    # Out as a wire-compatibility placeholder.
+    _w("PerceptionModule", "scene_graph", "ReconstructionModule", "scene_graph")
+    _w("PerceptionModule", "scene_graph", "SemanticMapperModule", "scene_graph")
+    _w("PerceptionModule", "scene_graph", "EpisodicMemoryModule", "scene_graph")
+    _w("PerceptionModule", "scene_graph", "VectorMemoryModule", "scene_graph")
+    _w("PerceptionModule", "scene_graph", "TemporalMemoryModule", "scene_graph")
+    _w("PerceptionModule", "scene_graph", "SemanticPlannerModule", "scene_graph")
+    _w("PerceptionModule", "scene_graph", "VisualServoModule", "scene_graph")
     _w("SafetyRingModule", "safety_state", "GatewayModule", "safety_state")
     _w("SafetyRingModule", "safety_state", "MCPServerModule", "safety_state")
     _w("NavigationModule", "mission_status", "GatewayModule", "mission_status")

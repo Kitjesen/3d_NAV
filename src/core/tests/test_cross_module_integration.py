@@ -70,9 +70,16 @@ try:
     path_conns = [c for c in system.connections
                   if c[0] == "LocalPlannerModule" and c[1] == "local_path"
                      and c[2] == "PathFollowerModule" and c[3] == "local_path"]
-    cmd_conns = [c for c in system.connections
-                 if c[0] == "PathFollowerModule" and c[1] == "cmd_vel"
-                    and c[2] == "StubDogModule" and c[3] == "cmd_vel"]
+    # cmd_vel now goes through CmdVelMux for priority arbitration:
+    #   PathFollowerModule.cmd_vel → CmdVelMux.path_follower_cmd_vel
+    #   CmdVelMux.driver_cmd_vel   → StubDogModule.cmd_vel
+    cmd_conns_to_mux = [c for c in system.connections
+                        if c[0] == "PathFollowerModule" and c[1] == "cmd_vel"
+                           and c[2] == "CmdVelMux"]
+    mux_to_driver = [c for c in system.connections
+                     if c[0] == "CmdVelMux" and c[1] == "driver_cmd_vel"
+                        and c[2] == "StubDogModule" and c[3] == "cmd_vel"]
+    cmd_conns = cmd_conns_to_mux if (cmd_conns_to_mux and mux_to_driver) else []
     test(20, "Non-native stack uses Python autonomy chain",
          nav._enable_ros2_bridge is False
          and lp._backend in ("nanobind", "cmu_py", "simple")
@@ -205,7 +212,10 @@ try:
     teleop = system.get_module("TeleopModule")
     teleop._on_joy({"lx": 0.5, "ly": 0.0, "az": 0.1})
     active_after = teleop._active
-    teleop._last_joy_time = time.time() - teleop._release_timeout - 1.0
+    # TeleopModule uses time.monotonic() (not time.time()) for joy
+    # timestamps. Mock an idle timestamp using the same clock so the
+    # release branch in _check_idle actually fires.
+    teleop._last_joy_time = time.monotonic() - teleop._release_timeout - 1.0
     teleop._check_idle()
     released = not teleop._active
     test(26, "Teleop priority: _on_joy active, check_idle releases",
@@ -251,12 +261,12 @@ except Exception as e:
 # ==== Test 29: @skill MCP discovery ====
 try:
     mcp = system.get_module("MCPServerModule")
-    from gateway.mcp_server import TOOLS
-    static_count = len(TOOLS)
-    dynamic_count = len(mcp._dynamic_tools)
-    total = static_count + dynamic_count
+    # MCPServerModule was refactored to a single _tool_list (no longer split
+    # static TOOLS + _dynamic_tools). The list is populated in
+    # on_system_modules() by walking @skill methods of all modules.
+    tool_count = len(getattr(mcp, "_tool_list", []))
     test(29, "@skill MCP discovery: tool count > 0",
-         total > 0, "static=%d, dynamic=%d, total=%d" % (static_count, dynamic_count, total))
+         tool_count > 0, "tool_list len=%d" % tool_count)
 except Exception as e:
     test(29, "@skill MCP discovery", False, str(e))
 

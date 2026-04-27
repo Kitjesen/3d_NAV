@@ -159,17 +159,23 @@ class TestExplorationStackFactory(unittest.TestCase):
         with self.assertRaises(ValueError):
             exploration(backend="bogus")
 
-    def test_wavefront_adds_frontier_explorer(self):
+    def test_wavefront_backend_removed(self):
+        """commit 1c457f3 moved 'wavefront' out of this stack — wavefront
+        now lives only in nav.frontier_explorer_module (added separately
+        via navigation(enable_frontier=True)). exploration() should reject
+        the legacy backend name explicitly."""
         from core.blueprints.stacks.exploration import exploration
-        bp = exploration(backend="wavefront")
-        self.assertIn("WavefrontFrontierExplorer", _module_names(bp))
+        with self.assertRaises(ValueError):
+            exploration(backend="wavefront")
 
-    def test_tare_falls_back_to_wavefront_when_binary_missing(self):
-        """No TARE binary on dev machine — stack must fall back silently."""
+    def test_tare_raises_when_binary_missing(self):
+        """No TARE binary on dev machine — stack must raise (no silent
+        fallback) so misconfiguration is visible. See exploration.py
+        docstring: 'If the binary is missing the stack raises — no silent
+        fallback — so misconfiguration is visible, not covered up.'"""
         from core.blueprints.stacks.exploration import exploration
-        bp = exploration(backend="tare")
-        # TARE NativeModule must NOT be present; fallback wavefront may be
-        self.assertNotIn("tare_explorer", _module_names(bp))
+        with self.assertRaises(RuntimeError):
+            exploration(backend="tare")
 
 
 # ─── NativeModule factory ────────────────────────────────────────────────────

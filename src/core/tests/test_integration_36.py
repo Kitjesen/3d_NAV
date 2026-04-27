@@ -227,7 +227,7 @@ T("28.Zero ambiguity", len(warnings) == 0)
 
 # 29 MCP skills
 mcp = system.modules.get("MCPServerModule")
-T("29.MCP skills", mcp is not None and len(getattr(mcp, "_dynamic_tools", [])) > 0)
+T("29.MCP skills", mcp is not None and len(getattr(mcp, "_tool_list", [])) > 0)
 
 # 30 Profile builds
 for pname, kw in [
