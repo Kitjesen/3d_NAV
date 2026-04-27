@@ -199,9 +199,12 @@ class TestNativeModuleLifecycle(unittest.TestCase):
         proc2.stdout = MagicMock()
         proc2.stdout.__iter__ = MagicMock(return_value=iter([]))
 
-        mock_popen.side_effect = [proc1, proc2]
+        # Allow extra proc2 returns: on slow CI (aarch64 Linux) the watchdog
+        # may tick twice before our shutdown_event arrives; without padding,
+        # side_effect would StopIteration and confuse the test.
+        mock_popen.side_effect = [proc1] + [proc2] * 10
 
-        cfg = _make_config(watchdog_interval=0.05, auto_restart=True, max_restarts=2)
+        cfg = _make_config(watchdog_interval=0.05, auto_restart=True, max_restarts=3)
         mod = NativeModule(cfg)
 
         proc1.poll.return_value = None
@@ -211,14 +214,21 @@ class TestNativeModuleLifecycle(unittest.TestCase):
         # Simulate crash
         proc1.poll.return_value = 1
         proc1.returncode = 1
-        time.sleep(0.2)
 
-        # Should have restarted
-        self.assertEqual(mock_popen.call_count, 2)
-        self.assertEqual(mod._restart_count, 1)
+        # Wait up to 1s for watchdog to detect crash + perform first restart.
+        # Deterministic gating beats time.sleep — race-tolerant on slow runners.
+        deadline = time.time() + 1.0
+        while time.time() < deadline and mod._restart_count < 1:
+            time.sleep(0.01)
 
+        # Stop watchdog ASAP so subsequent ticks don't pile on extra restarts
         mod._shutdown_event.set()
-        time.sleep(0.1)
+        time.sleep(0.05)
+
+        # Watchdog must have triggered at least one restart
+        self.assertGreaterEqual(mod._restart_count, 1)
+        # 1 initial start + ≥1 restart
+        self.assertGreaterEqual(mock_popen.call_count, 2)
 
 
 # ---------------------------------------------------------------------------

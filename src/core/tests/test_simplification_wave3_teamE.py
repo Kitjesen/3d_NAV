@@ -120,8 +120,11 @@ class TestVectorMemoryEncoderType(unittest.TestCase):
         self.assertEqual(mod._encoder_type, "sentence_transformers")
         self.assertIsNotNone(mod._st_model)
 
-    def test_hard_fail_when_both_encoders_missing(self):
-        """RuntimeError raised in _init_encoder when neither CLIP nor sentence-transformers is available."""
+    def test_graceful_disable_when_both_encoders_missing(self):
+        """When neither CLIP nor sentence-transformers is importable,
+        _init_encoder marks the module as 'disabled' (no hard exception)
+        so the rest of the system can still start; queries then return
+        empty + log a clear instruction to install the package."""
         VectorMemoryModule = self._fresh_vmm_class()
         mod = VectorMemoryModule.__new__(VectorMemoryModule)
         VectorMemoryModule.__init__(mod)
@@ -132,9 +135,9 @@ class TestVectorMemoryEncoderType(unittest.TestCase):
         saved_st = sys.modules.pop("sentence_transformers", None)
         try:
             with patch("builtins.__import__", side_effect=_block_all_encoders_import):
-                with self.assertRaises(RuntimeError) as ctx:
-                    mod._init_encoder()
-            self.assertIn("sentence-transformers", str(ctx.exception))
+                # Should NOT raise — graceful disable instead.
+                mod._init_encoder()
+            self.assertEqual(mod._encoder_type, "disabled")
         finally:
             if saved_st is not None:
                 sys.modules["sentence_transformers"] = saved_st
