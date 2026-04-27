@@ -458,6 +458,47 @@ class TestSlamBridgeLocalizerHealth(unittest.TestCase):
         m._on_rclpy_localization_health(self._msg("garbage|fitness=NaN"))
         self.assertEqual(m._localizer_health, "GARBAGE")
 
+    def test_r4_extended_payload_parses_iter_and_cov(self):
+        """R4: small_gicp adds iter + cov fields. Parser must pick them up
+        for downstream three-axis health gating."""
+        m = self._make()
+        m._on_rclpy_localization_health(
+            self._msg("LOCKED|fitness=0.0234|iter=8|cov=0.12"))
+        self.assertEqual(m._localizer_health, "LOCKED")
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.0234, places=4)
+        self.assertEqual(m._localizer_health_iter, 8)
+        self.assertAlmostEqual(m._localizer_health_cov_trace, 0.12, places=4)
+
+    def test_r4_v1_payload_keeps_iter_and_cov_at_default(self):
+        """Backward-compat: a robot still publishing the v1 P3 payload
+        (no iter / no cov) must NOT raise and must keep the iter/cov
+        fields at their -1 sentinel."""
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("LOCKED|fitness=0.05"))
+        self.assertEqual(m._localizer_health, "LOCKED")
+        self.assertEqual(m._localizer_health_iter, -1)
+        self.assertEqual(m._localizer_health_cov_trace, -1.0)
+
+    def test_r4_unknown_keys_ignored(self):
+        """Forward-compat: future localizer payload may add keys we don't
+        know yet; parser must skip them silently without affecting known
+        fields."""
+        m = self._make()
+        m._on_rclpy_localization_health(
+            self._msg("LOCKED|fitness=0.05|iter=3|cov=0.01|future_key=42"))
+        self.assertEqual(m._localizer_health_iter, 3)
+        self.assertAlmostEqual(m._localizer_health_cov_trace, 0.01, places=4)
+
+    def test_r4_field_order_independent(self):
+        """Keys after the leading state must be order-independent."""
+        m = self._make()
+        m._on_rclpy_localization_health(
+            self._msg("LOST|cov=5.5|iter=10|fitness=0.4"))
+        self.assertEqual(m._localizer_health, "LOST")
+        self.assertEqual(m._localizer_health_iter, 10)
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.4, places=4)
+        self.assertAlmostEqual(m._localizer_health_cov_trace, 5.5, places=4)
+
 
 class TestSlamBridgeTFJumpDetection(unittest.TestCase):
     """P4: detect map↔odom TF discontinuities and publish events."""

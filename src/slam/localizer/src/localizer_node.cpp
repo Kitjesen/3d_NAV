@@ -396,12 +396,24 @@ public:
         if (desired != m_published_health)
         {
             std_msgs::msg::String msg;
-            // payload format: "<state>|fitness=<value>" — keeps subscribers
-            // (SlamBridgeModule) able to parse with str.split('|').
-            msg.data = desired + "|fitness=" + std::to_string(fitness);
+            // R4: extended payload format
+            //   "<state>|fitness=<v>|iter=<n>|cov=<v>"
+            // Keys are pipe-separated and order-insensitive on the
+            // subscriber side. Adding fields is backward-compatible —
+            // older parsers ignore unknown keys after the first '|'.
+            // iter and cov come from small_gicp's RegistrationResult /
+            // Hessian respectively, replacing the single-axis fitness
+            // gate the original P3 commit was forced to settle for.
+            const int  iter = m_localizer->getLastIterations();
+            const double cov = m_localizer->getLastPosCovTrace();
+            msg.data = desired
+                     + "|fitness=" + std::to_string(fitness)
+                     + "|iter="    + std::to_string(iter)
+                     + "|cov="     + std::to_string(cov);
             m_health_pub->publish(msg);
             RCLCPP_INFO(this->get_logger(),
-                "Localization health → %s (fitness=%.4f)", desired.c_str(), fitness);
+                "Localization health → %s (fitness=%.4f iter=%d cov=%.4f)",
+                desired.c_str(), fitness, iter, cov);
             m_published_health = desired;
             // After a RECOVERED transition the next steady state is LOCKED; do
             // not re-publish each frame, just collapse on next state change.

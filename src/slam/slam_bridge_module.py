@@ -157,6 +157,11 @@ class SlamBridgeModule(Module, layer=1):
         # ICP-side N-of-M confirmed state, not the per-frame ICP success flag.
         self._localizer_health: str = "UNKNOWN"
         self._localizer_health_fitness: float = 0.0
+        # R4: small_gicp now exposes iter + Hessian-derived position cov.
+        # Both fields stay at -1 until the first /nav/localization_health
+        # message arrives carrying them.
+        self._localizer_health_iter: int = -1
+        self._localizer_health_cov_trace: float = -1.0
         self._localizer_health_ts: float = 0.0
 
         # P4: TF jump thresholds. Translation gate (m) is the dominant trigger
@@ -900,23 +905,40 @@ class SlamBridgeModule(Module, layer=1):
     def _on_rclpy_localization_health(self, msg) -> None:
         """Multi-frame confirmed localizer health from /nav/localization_health.
 
-        Payload format: ``"<state>|fitness=<value>"`` produced by
-        LocalizerNode::updateAndPublishHealth(). Decode into separate fields
-        and publish via localization_status so Gateway / NavigationModule can
-        react without per-frame ICP jitter.
+        Payload format (R4-extended, backward-compatible):
+            "<state>|fitness=<v>|iter=<n>|cov=<v>"
+        produced by LocalizerNode::updateAndPublishHealth(). The leading
+        "<state>|fitness=..." prefix is the original P3 contract; iter and
+        cov are R4 additions sourced from small_gicp's RegistrationResult
+        and Hessian respectively. Unknown keys (future fields) are skipped
+        without raising so older robots speaking the v1 payload still
+        update state correctly.
         """
         try:
             payload = str(msg.data)
-            state, _, rest = payload.partition("|")
-            self._localizer_health = state.strip().upper() or "UNKNOWN"
-            if rest.startswith("fitness="):
-                try:
-                    self._localizer_health_fitness = float(rest.split("=", 1)[1])
-                except ValueError:
-                    pass
+            parts = payload.split("|")
+            self._localizer_health = (parts[0].strip().upper() if parts else "") or "UNKNOWN"
+            for kv in parts[1:]:
+                key, _, val = kv.partition("=")
+                key = key.strip().lower()
+                if not val:
+                    continue
+                if key == "fitness":
+                    try: self._localizer_health_fitness = float(val)
+                    except ValueError: pass
+                elif key == "iter":
+                    try: self._localizer_health_iter = int(float(val))
+                    except ValueError: pass
+                elif key == "cov":
+                    try: self._localizer_health_cov_trace = float(val)
+                    except ValueError: pass
+                # Other keys silently ignored — forward-compat for future
+                # localizer payload extensions.
             self._localizer_health_ts = _time.time()
-            logger.info("Localizer health → %s (fitness=%.4f)",
-                        self._localizer_health, self._localizer_health_fitness)
+            logger.info(
+                "Localizer health → %s (fitness=%.4f iter=%d cov=%.4f)",
+                self._localizer_health, self._localizer_health_fitness,
+                self._localizer_health_iter, self._localizer_health_cov_trace)
         except Exception as e:
             logger.debug("localization_health parse failed: %s", e)
 
@@ -1448,6 +1470,8 @@ class SlamBridgeModule(Module, layer=1):
                 "ieskf_converged": self._ieskf_converged,
                 "localizer_health": self._localizer_health,
                 "localizer_health_fitness": round(self._localizer_health_fitness, 4),
+                "localizer_health_iter": self._localizer_health_iter,
+                "localizer_health_cov_trace": round(self._localizer_health_cov_trace, 4),
                 "scene_mode": self._scene_mode_detector.mode,
             })
 
