@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>      // std::snprintf in launchAutoBBS3D reason builder
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
@@ -303,41 +304,24 @@ public:
         }
 
         // ── (C) Drift watchdog: N consecutive bad frames → auto BBS3D ─
+        // Fast-reaction path: looks at raw fitness streak per frame.
+        // Independent from the multi-frame health gate (P3) which fires
+        // BBS3D from updateAndPublishHealth() on a slower, more
+        // conservative LOST decision. Both call launchAutoBBS3D() so the
+        // 60s cooldown + m_bbs3d_running mutex are shared.
         if (result && fitness > m_drift_bad_thresh) {
             m_drift_bad_count++;
         } else {
             m_drift_bad_count = 0;
         }
-        auto _now_dw = std::chrono::steady_clock::now();
-        auto _since_reloc = std::chrono::duration_cast<std::chrono::seconds>(
-            _now_dw - m_last_auto_reloc).count();
-        if (m_drift_bad_count >= m_drift_trigger_frames
-            && _since_reloc >= 60
-            && !m_bbs3d_running.exchange(true)) {
-            m_drift_bad_count = 0;
-            m_last_auto_reloc = _now_dw;
-            RCLCPP_WARN(this->get_logger(),
-                "Drift watchdog: fitness >%.2f for %d frames → auto BBS3D",
+        if (m_drift_bad_count >= m_drift_trigger_frames) {
+            char reason[96];
+            std::snprintf(reason, sizeof(reason),
+                "drift_streak fitness>%.2f for %d frames",
                 m_drift_bad_thresh, m_drift_trigger_frames);
-            CloudType::Ptr scan_copy(new CloudType);
-            { std::lock_guard<std::mutex> lk(m_state.message_mutex);
-              *scan_copy = *m_state.last_cloud; }
-            std::thread([this, scan_copy]() {
-                auto r = m_bbs3d->localize(scan_copy);
-                if (r.success) {
-                    std::lock_guard<std::mutex> svc(m_state.service_mutex);
-                    m_state.initial_guess = r.pose;
-                    m_state.service_received = true;
-                    m_state.localize_success = false;
-                    RCLCPP_INFO(this->get_logger(),
-                        "Drift recovery OK: t=[%.2f,%.2f,%.2f]",
-                        r.pose(0,3), r.pose(1,3), r.pose(2,3));
-                } else {
-                    RCLCPP_WARN(this->get_logger(),
-                        "Drift recovery failed: %s", r.message.c_str());
-                }
-                m_bbs3d_running = false;
-            }).detach();
+            if (launchAutoBBS3D(reason)) {
+                m_drift_bad_count = 0;
+            }
         }
 
         if (result)
@@ -414,11 +398,79 @@ public:
             RCLCPP_INFO(this->get_logger(),
                 "Localization health → %s (fitness=%.4f iter=%d cov=%.4f)",
                 desired.c_str(), fitness, iter, cov);
+
+            // P7a: on a fresh LOST transition, kick BBS3D for global
+            // re-localization. Without this, the multi-frame health
+            // gate would only *publish* LOST (so navigation slows /
+            // stops) but never *recover* — the recovery path was tied
+            // exclusively to the (C) drift watchdog's raw-fitness
+            // streak. Now LOST triggers recovery via the same shared
+            // helper (60s cooldown + atomic mutex prevent double-fire).
+            // We deliberately do not block the publish itself on the
+            // BBS3D launch — Navigation must see LOST before recovery
+            // begins so it can stop / hold position.
+            if (desired == "LOST" && m_published_health != "LOST") {
+                launchAutoBBS3D("multi-frame LOST (P3 health gate)");
+            }
+
             m_published_health = desired;
             // After a RECOVERED transition the next steady state is LOCKED; do
             // not re-publish each frame, just collapse on next state change.
             if (desired == "RECOVERED") m_published_health = "LOCKED";
         }
+    }
+
+    // P7a: shared launch path for auto BBS3D recovery. Returns true if
+    // this call actually started a BBS3D worker thread, false if the
+    // call was throttled (cooldown still active, BBS3D already running,
+    // map not loaded, or no scan received yet). Caller should NOT
+    // assume recovery happens — it is best-effort. Inputs:
+    //   reason — short tag included in logs to attribute which
+    //            trigger fired (drift_streak vs multi-frame LOST etc).
+    //
+    // The 60-second cooldown is the same value the (C) drift watchdog
+    // had: long enough that BBS3D (1-3 s on CPU) cannot self-trigger,
+    // short enough that a genuinely lost robot recovers within ~1 min.
+    bool launchAutoBBS3D(const std::string& reason)
+    {
+        auto _now = std::chrono::steady_clock::now();
+        auto _since = std::chrono::duration_cast<std::chrono::seconds>(
+            _now - m_last_auto_reloc).count();
+        if (_since < 60) return false;
+        if (!m_bbs3d || !m_bbs3d->has_map()) return false;
+        if (!m_state.message_received) return false;
+        if (m_bbs3d_running.exchange(true)) return false;
+
+        m_last_auto_reloc = _now;
+        RCLCPP_WARN(this->get_logger(),
+            "Auto BBS3D triggered: %s", reason.c_str());
+
+        CloudType::Ptr scan_copy(new CloudType);
+        { std::lock_guard<std::mutex> lk(m_state.message_mutex);
+          *scan_copy = *m_state.last_cloud; }
+        std::thread([this, scan_copy, reason]() {
+            auto r = m_bbs3d->localize(scan_copy);
+            if (r.success) {
+                std::lock_guard<std::mutex> svc(m_state.service_mutex);
+                m_state.initial_guess = r.pose;
+                m_state.service_received = true;
+                m_state.localize_success = false;
+                RCLCPP_INFO(this->get_logger(),
+                    "Auto-recovery OK (%s): t=[%.2f,%.2f,%.2f]",
+                    reason.c_str(), r.pose(0,3), r.pose(1,3), r.pose(2,3));
+                // Reset the LOST counter so the next LOCKED frame can
+                // promote to RECOVERED quickly. Without this reset the
+                // health gate would still see m_consec_lost ≥
+                // LOST_CONFIRM_FRAMES until enough good frames pass.
+                m_consec_lost = 0;
+            } else {
+                RCLCPP_WARN(this->get_logger(),
+                    "Auto-recovery failed (%s): %s",
+                    reason.c_str(), r.message.c_str());
+            }
+            m_bbs3d_running = false;
+        }).detach();
+        return true;
     }
     void syncCB(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &cloud_msg, const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg)
     {
@@ -654,8 +706,14 @@ private:
     // declare LOST; require N consecutive bad frames first, and likewise N
     // consecutive good frames before re-declaring RECOVERED. Otherwise a
     // momentary scan match dip would flap the public health state.
-    int m_consec_lost   = 0;
-    int m_consec_locked = 0;
+    // P7a: m_consec_lost can now be reset from the BBS3D worker thread
+    // (in launchAutoBBS3D's lambda on success), in addition to the
+    // per-frame increment/reset on the timer thread. Atomic prevents
+    // torn reads on the comparison `m_consec_lost >= LOST_CONFIRM_FRAMES`
+    // while the worker is mid-write. m_consec_locked is timer-only but
+    // declared atomic for symmetry — relaxed semantics are sufficient.
+    std::atomic<int> m_consec_lost{0};
+    std::atomic<int> m_consec_locked{0};
     std::string m_published_health = "UNKNOWN";  // last value sent on m_health_pub
     static constexpr int LOST_CONFIRM_FRAMES = 5;
     static constexpr int RECOVER_CONFIRM_FRAMES = 3;

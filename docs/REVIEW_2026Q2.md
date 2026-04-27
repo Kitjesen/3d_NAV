@@ -140,8 +140,43 @@ indoor+outdoor rosbags, threshold re-tuning.
 |---|---|---|
 | P5 GNSS yaw Kabsch alignment | Outdoor-only; not blocking indoor deploy | Python-only, ~1d |
 | P6 PGO `gtsam::GPSFactor` | Outdoor-only | C++ + GTSAM, ~2d |
-| P7 BBS3D ROS2 Action + auto kidnapped | Highest-risk refactor; left for last | ROS2 Action interface change, ~2d |
+| **P7a auto kidnapped** | ✅ Done — see commits below | LOST → BBS3D recovery via shared launch helper |
+| P7b BBS3D Topic→Action | Defer — the Trigger service + Float result is sufficient | Action interface only matters if we want progress feedback |
 | N3 iBTC visual loop closure | Long-corridor specialised; ROS1→ROS2 port | 1-2 weeks |
+
+### P7a: auto kidnapped trigger (LOST → BBS3D)
+
+The original review classified P7 as "ROS2 Action refactor + auto
+kidnapped trigger." On inspection these are separable: BBS3D already
+has a `std_srvs/Trigger` service for manual relocalize, and a (C) drift
+watchdog (raw fitness streak) that auto-fires on long bad streaks.
+The actual gap was that the **multi-frame health gate (P3) reaching
+LOST** never triggered recovery — it only published LOST so navigation
+slowed/stopped. Recovery was tied exclusively to the (C) watchdog's
+independent raw-fitness criterion, which can disagree with the P3
+multi-frame gate (the gate uses 3 frames at refine_score_thresh=0.1;
+the watchdog uses 30 frames at drift_bad_thresh=0.3).
+
+P7a refactors this so BOTH paths call a shared `launchAutoBBS3D()`
+helper. The helper owns the 60-second cooldown and the
+`m_bbs3d_running` mutex, so the two trigger sources cannot
+double-fire and cannot starve each other. On BBS3D success, the
+helper resets `m_consec_lost = 0` so the next LOCKED frame can
+promote to RECOVERED quickly.
+
+Concurrency note: `m_consec_lost` / `m_consec_locked` were changed
+from plain `int` to `std::atomic<int>` because the BBS3D worker
+thread can now write `m_consec_lost = 0` while the timer thread
+reads it for the LOST_CONFIRM_FRAMES comparison. Without atomic this
+would be a data race (UB on weakly-ordered ARM, observable as torn
+reads under contention).
+
+P7b — converting the BBS3D Trigger service to a ROS2 Action — is
+deferred. The Action interface only adds value if we want progress
+feedback ("BBS3D is at 35%, ETA 1.4s"). For automatic recovery the
+Trigger pattern is sufficient: the worker thread runs detached, and
+the next ICP frame picks up the new initial_guess. Revisit if a UI
+needs progress reporting.
 
 ---
 
