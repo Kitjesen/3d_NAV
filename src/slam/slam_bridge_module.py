@@ -686,7 +686,19 @@ class SlamBridgeModule(Module, layer=1):
         and emits map_frame_jump_event so NavigationModule + costmap modules
         can replan / clear cached state. Jump thresholds default to 1.0 m
         translation or 30° rotation; both configurable via kw.
-        """
+
+        Why hand-rolled
+        ---------------
+        ROS2 / tf2_ros has no native "transform discontinuity" notification.
+        The tf2 Buffer API only checks connectivity (canTransform) and
+        timeouts (transform_tolerance). Cartographer ROS, LIO-SAM, and
+        FAST-LIO-LOCALIZATION all push the responsibility of detecting and
+        reacting to PGO/relocalize-induced map↔odom jumps onto downstream
+        consumers — that is the deliberate, industry-standard pattern. The
+        Cartographer authors specifically reject smoothing the jump in the
+        publisher, because the jump itself is the optimised correction.
+        Hand-rolling this 60-line check at the consumer (here, SlamBridge)
+        is therefore the *only* canonical option."""
         import numpy as _np
         xx, yy, zz = qx * qx, qy * qy, qz * qz
         xy, xz, yz = qx * qy, qx * qz, qy * qz
