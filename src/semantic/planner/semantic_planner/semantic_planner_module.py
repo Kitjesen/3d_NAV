@@ -462,7 +462,16 @@ class SemanticPlannerModule(Module, layer=4):
             return {"subtasks": [instruction]}
         try:
             if self._decomposer_strategy == "rules":
-                return self._task_decomposer.decompose_with_rules(instruction)
+                plan = self._task_decomposer.decompose_with_rules(instruction)
+                if plan is None:
+                    return {"subtasks": [instruction]}
+                # decompose_with_rules returns a TaskPlan dataclass; normalize
+                # to the dict shape that _on_instruction reads ("subtasks").
+                return {
+                    "instruction": plan.instruction,
+                    "subtasks": [sg.target for sg in plan.subgoals],
+                    "subgoals": [sg.to_dict() for sg in plan.subgoals],
+                }
             return {"subtasks": [instruction]}
         except Exception:
             logger.exception("Task decomposition failed")
