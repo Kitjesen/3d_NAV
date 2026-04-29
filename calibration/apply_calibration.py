@@ -62,6 +62,19 @@ def save_yaml(path: Path, data: dict) -> None:
                   allow_unicode=True)
 
 
+def pointlio_section(cfg: dict, section: str) -> dict:
+    """Return the nested ROS2 parameter section dict for pointlio.yaml.
+
+    pointlio.yaml uses the ROS2 parameter file layout
+    `/** -> ros__parameters -> {common,mapping,preprocess,...}`.
+    Writes into the dict returned here are reflected in the original tree.
+    Creates missing intermediate nodes.
+    """
+    root = cfg.setdefault("/**", {})
+    params = root.setdefault("ros__parameters", {})
+    return params.setdefault(section, {})
+
+
 def apply_camera_intrinsics(calib_path: str, dry_run: bool = False) -> None:
     """Apply camera intrinsic calibration to robot_config.yaml."""
     logger.info("\n== Camera Intrinsics ==")
@@ -116,6 +129,48 @@ def apply_camera_intrinsics(calib_path: str, dry_run: bool = False) -> None:
     logger.info("  Updated: %s", ROBOT_CONFIG.name)
 
 
+# ICM-40609-D (Livox Mid-360 built-in IMU) datasheet typical values, used
+# as a sanity-check reference. If a calibration result lies outside
+# [low/5, high*5] we warn — the most common cause is recording on a
+# vibrating surface or with other ROS nodes still pumping CPU heat into
+# the IMU.
+# Source: TDK InvenSense ICM-40609-D datasheet DS-000330 v1.2:
+#   - Accelerometer Noise: 70 µg/√Hz typ → ~6.87e-4 m/s²/√Hz
+#   - Gyroscope Noise:    3.8 mdps/√Hz typ → ~6.63e-5 rad/s/√Hz
+# Note: ICM-40609 is ~10x quieter than BMI088, so the previous shipped
+# default of na=ng=0.01 in lio.yaml is ~15x / ~150x too high respectively.
+ICM40609_REFERENCE = {
+    "na":  (3.0e-4, 3.0e-3),   # accel noise density (m/s²/√Hz), typ ~7e-4
+    "ng":  (3.0e-5, 3.0e-4),   # gyro noise density (rad/s/√Hz),  typ ~6.6e-5
+    "nba": (1.0e-5, 1.0e-3),   # accel random walk — datasheet does not list,
+                               # range from typical Allan analyses on ICM4xxxx
+    "nbg": (1.0e-7, 1.0e-5),   # gyro random walk — same caveat
+}
+
+
+def _sanity_check_imu_noise(name: str, value: float) -> None:
+    """Compare measured IMU noise to ICM-40609 datasheet typical range and
+    warn if it is wildly off. Tolerance is intentionally loose (±5x) —
+    Allan Variance is sensitive to environment and sensor batch variance,
+    but a 1-2 order-of-magnitude miss usually points at procedural error."""
+    if name not in ICM40609_REFERENCE:
+        return
+    low, high = ICM40609_REFERENCE[name]
+    if value < low / 5:
+        logger.warning(
+            "  WARNING: %s=%.6g is unusually LOW for ICM-40609 (datasheet typical %.2g–%.2g). "
+            "Possible causes: integration window too short, IMU saturated, units mis-converted.",
+            name, value, low, high)
+    elif value > high * 5:
+        logger.warning(
+            "  WARNING: %s=%.6g is unusually HIGH for ICM-40609 (datasheet typical %.2g–%.2g). "
+            "Possible causes: vibration during recording, thermal drift, AC vent draft.",
+            name, value, low, high)
+    else:
+        logger.info("  %s=%.6g is within ICM-40609 expected range (%.2g–%.2g)",
+                    name, value, low, high)
+
+
 def apply_imu_noise(calib_path: str, dry_run: bool = False) -> None:
     """Apply IMU noise parameters to SLAM configs."""
     logger.info("\n== IMU Noise Parameters ==")
@@ -138,6 +193,14 @@ def apply_imu_noise(calib_path: str, dry_run: bool = False) -> None:
     if nbg:
         logger.info("  Gyro random walk   (nbg): %.8f", nbg)
 
+    # Datasheet-grounded sanity warnings (ICM-40609-D = Mid-360 built-in IMU)
+    _sanity_check_imu_noise("na", float(na))
+    _sanity_check_imu_noise("ng", float(ng))
+    if nba is not None:
+        _sanity_check_imu_noise("nba", float(nba))
+    if nbg is not None:
+        _sanity_check_imu_noise("nbg", float(nbg))
+
     if dry_run:
         logger.info("  [DRY RUN] Would update lio.yaml and pointlio.yaml")
         return
@@ -155,16 +218,17 @@ def apply_imu_noise(calib_path: str, dry_run: bool = False) -> None:
         save_yaml(FASTLIO2_CONFIG, cfg)
         logger.info("  Updated: %s", FASTLIO2_CONFIG.name)
 
-    # Update Point-LIO config
+    # Update Point-LIO config (ROS2 nested layout: /**.ros__parameters.mapping.*)
     if POINTLIO_CONFIG.exists():
         backup_file(POINTLIO_CONFIG)
         cfg = load_yaml(POINTLIO_CONFIG)
-        cfg["imu_meas_acc_cov"] = float(na)
-        cfg["imu_meas_omg_cov"] = float(ng)
+        mapping = pointlio_section(cfg, "mapping")
+        mapping["imu_meas_acc_cov"] = float(na)
+        mapping["imu_meas_omg_cov"] = float(ng)
         if nba:
-            cfg["b_acc_cov"] = float(nba)
+            mapping["b_acc_cov"] = float(nba)
         if nbg:
-            cfg["b_gyr_cov"] = float(nbg)
+            mapping["b_gyr_cov"] = float(nbg)
         save_yaml(POINTLIO_CONFIG, cfg)
         logger.info("  Updated: %s", POINTLIO_CONFIG.name)
 
@@ -213,6 +277,14 @@ def apply_lidar_imu(calib_path: str, dry_run: bool = False) -> None:
     save_yaml(ROBOT_CONFIG, cfg)
     logger.info("  Updated: %s lidar section", ROBOT_CONFIG.name)
 
+    if abs(time_offset) > 0.1:
+        logger.warning(
+            "  WARNING: time_offset %.6f s exceeds plausible ±0.1s — "
+            "likely calibration error, not writing to configs", time_offset)
+        write_time_offset = False
+    else:
+        write_time_offset = True
+
     # Update Fast-LIO2 config
     if FASTLIO2_CONFIG.exists():
         backup_file(FASTLIO2_CONFIG)
@@ -220,18 +292,22 @@ def apply_lidar_imu(calib_path: str, dry_run: bool = False) -> None:
         if r_il:
             cfg["r_il"] = r_il
         cfg["t_il"] = t_il
+        if write_time_offset:
+            cfg["time_diff_lidar_to_imu"] = round(time_offset, 6)
         save_yaml(FASTLIO2_CONFIG, cfg)
         logger.info("  Updated: %s", FASTLIO2_CONFIG.name)
 
-    # Update Point-LIO config
+    # Update Point-LIO config (ROS2 nested layout)
     if POINTLIO_CONFIG.exists():
         backup_file(POINTLIO_CONFIG)
         cfg = load_yaml(POINTLIO_CONFIG)
+        mapping = pointlio_section(cfg, "mapping")
         if r_il:
-            cfg["extrinsic_R"] = r_il
-        cfg["extrinsic_T"] = t_il
-        if time_offset != 0.0:
-            cfg["time_diff_lidar_to_imu"] = round(time_offset, 6)
+            mapping["extrinsic_R"] = r_il
+        mapping["extrinsic_T"] = t_il
+        if write_time_offset:
+            common = pointlio_section(cfg, "common")
+            common["time_diff_lidar_to_imu"] = round(time_offset, 6)
         save_yaml(POINTLIO_CONFIG, cfg)
         logger.info("  Updated: %s", POINTLIO_CONFIG.name)
 

@@ -29,6 +29,7 @@ from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
 from core.stream import In, Out
+from core.utils.scene_mode_detector import SceneModeDetector, SceneModeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,11 @@ logger = logging.getLogger(__name__)
 LOC_UNINIT = "UNINIT"        # No data received yet
 LOC_TRACKING = "TRACKING"    # Receiving data, quality OK
 LOC_DEGRADED = "DEGRADED"    # Receiving data, quality poor (cloud timeout or degeneracy)
+# DEGRADED for too long with healthy GNSS available → flag fallback so downstream
+# consumers (NavigationModule) can run cautiously while we still refine the
+# state. The actual GNSS+IMU dead-reckoning takeover lands in S2.5 once the
+# fault-injection harness exists; this state is the wiring half.
+LOC_FALLBACK_GNSS_ONLY = "FALLBACK_GNSS_ONLY"
 LOC_LOST = "LOST"            # No odometry for > timeout
 LOC_DIVERGED = "DIVERGED"    # Odometry values physically impossible → auto-relocalize
 
@@ -62,6 +68,16 @@ class SlamBridgeModule(Module, layer=1):
     localization_status:   Out[dict]
     gnss_fusion_health:    Out[dict]
     map_odom_tf:           Out[dict]  # {tx,ty,tz,qx,qy,qz,qw,valid} — localizer-emitted map→odom
+    # P4: TF jump events. Cartographer-style — when the localizer's map→odom
+    # transform jumps (PGO optimisation, BBS3D relocalisation, manual reset),
+    # downstream consumers (NavigationModule, OccupancyGrid, ESDF) need to
+    # invalidate cached state and replan/re-accumulate. We do NOT smooth the
+    # jump because the new value is the correct one; smoothing would erase
+    # the very correction PGO just produced.
+    map_frame_jump_event:  Out[dict]  # {ts, dt_m, dyaw_deg, prev: {...}, next: {...}}
+    # N2: indoor / outdoor classification with hysteresis. Other modules
+    # subscribe to gate behaviour (PGO GNSS factor, Kabsch yaw, speed limits).
+    scene_mode:            Out[str]   # "indoor" | "outdoor" | "unknown"
 
     # Visual odometry input for selective DOF fusion during degeneracy
     visual_odom: In[Odometry]
@@ -128,6 +144,40 @@ class SlamBridgeModule(Module, layer=1):
         self._eigenvalues: np.ndarray | None = None  # 6-DOF eigenvalues
         self._dof_mask: np.ndarray | None = None  # 1.0=constrained, 0.0=degenerate
         self._max_pos_cov: float = 0.0        # max position covariance from Odometry
+        # IEKF internals exposed via /slam/degeneracy_detail (extended layout v2):
+        #   pos_cov_trace = trace of position covariance (m²); growing trace is the
+        #     earliest signal of IEKF divergence — leads pose blow-up by 30-60s.
+        #   ieskf_iter_num = iterations the last update actually consumed.
+        #   ieskf_converged = whether the loop exited via stop_func (vs hitting max_iter).
+        self._pos_cov_trace: float = 0.0
+        self._ieskf_iter_num: int = 0
+        self._ieskf_converged: bool = True
+        # Localizer-side multi-frame health (LOCKED / LOST / RECOVERED / UNKNOWN).
+        # Set by the /nav/localization_health subscription (P3); reflects the
+        # ICP-side N-of-M confirmed state, not the per-frame ICP success flag.
+        self._localizer_health: str = "UNKNOWN"
+        self._localizer_health_fitness: float = 0.0
+        # R4: small_gicp now exposes iter + Hessian-derived position cov.
+        # Both fields stay at -1 until the first /nav/localization_health
+        # message arrives carrying them.
+        self._localizer_health_iter: int = -1
+        self._localizer_health_cov_trace: float = -1.0
+        self._localizer_health_ts: float = 0.0
+
+        # P4: TF jump thresholds. Translation gate (m) is the dominant trigger
+        # for PGO loop closures (typically 0.5-3 m corrections); rotation gate
+        # catches yaw-flip relocalisations from BBS3D global localisation.
+        self._jump_t_threshold_m: float = float(kw.get("jump_t_threshold_m", 1.0))
+        self._jump_r_threshold_deg: float = float(kw.get("jump_r_threshold_deg", 30.0))
+
+        # N2: scene mode (indoor/outdoor) detector. Manual override flows
+        # through env var LINGTU_SCENE_MODE; auto detection from GNSS health
+        # is fed in _on_gnss_odom() and the watchdog loop.
+        self._scene_mode_detector = SceneModeDetector(SceneModeConfig(
+            hold_seconds=float(kw.get("scene_mode_hold_s", 5.0)),
+            gnss_max_age_s=float(kw.get("gnss_max_age_for_fallback_s", 2.0)),
+        ))
+        self._last_published_scene_mode: Optional[str] = None
         self._last_severe_warn: float = 0.0   # throttle SEVERE degeneracy warning
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
@@ -185,6 +235,17 @@ class SlamBridgeModule(Module, layer=1):
         self._gnss_last_residual_m: float = 0.0
         self._gnss_relock_count: int = 0
         self._gnss_last_relock_ts: float = 0.0
+
+        # FALLBACK_GNSS_ONLY transition tracking. Wall-clock time we first
+        # entered DEGRADED in the current degraded streak; cleared on recovery.
+        # Once we have been DEGRADED for `_fallback_after_degraded_s` AND GNSS
+        # is healthy (RTK_FIXED/FLOAT, fresh) we promote to FALLBACK so
+        # downstream Navigation can shed speed.
+        self._degraded_since: float = 0.0
+        self._fallback_after_degraded_s: float = float(
+            kw.get("fallback_after_degraded_s", 10.0))
+        self._gnss_max_age_for_fallback_s: float = float(
+            kw.get("gnss_max_age_for_fallback_s", 2.0))
 
     def setup(self) -> None:
         # Visual odometry input for selective fusion
@@ -282,7 +343,7 @@ class SlamBridgeModule(Module, layer=1):
         """
         try:
             from rclpy.qos import QoSProfile, ReliabilityPolicy
-            from std_msgs.msg import Float32, Float32MultiArray
+            from std_msgs.msg import Float32, Float32MultiArray, String
             sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
             node.create_subscription(
                 Float32, self._quality_topic, self._on_rclpy_quality, sensor_qos)
@@ -291,6 +352,14 @@ class SlamBridgeModule(Module, layer=1):
             node.create_subscription(
                 Float32MultiArray, self._degeneracy_detail_topic,
                 self._on_rclpy_degeneracy_detail, sensor_qos)
+            # Localizer-side multi-frame health: LOCKED / LOST / RECOVERED.
+            # Reliability needs to be RELIABLE (not BEST_EFFORT) — we cannot
+            # afford to drop a LOST → RECOVERED transition; navigation depends
+            # on it.
+            health_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+            node.create_subscription(
+                String, "/nav/localization_health",
+                self._on_rclpy_localization_health, health_qos)
         except Exception as e:
             logger.debug("Degeneracy subscription unavailable: %s", e)
 
@@ -616,7 +685,25 @@ class SlamBridgeModule(Module, layer=1):
         return odom
 
     def _cache_map_odom_tf(self, tx, ty, tz, qx, qy, qz, qw):
-        """Cache map→odom as 4x4 for downstream variance-free transforms."""
+        """Cache map→odom as 4x4 for downstream variance-free transforms.
+
+        Also detects discontinuities (PGO optimisation, BBS3D relocalisation)
+        and emits map_frame_jump_event so NavigationModule + costmap modules
+        can replan / clear cached state. Jump thresholds default to 1.0 m
+        translation or 30° rotation; both configurable via kw.
+
+        Why hand-rolled
+        ---------------
+        ROS2 / tf2_ros has no native "transform discontinuity" notification.
+        The tf2 Buffer API only checks connectivity (canTransform) and
+        timeouts (transform_tolerance). Cartographer ROS, LIO-SAM, and
+        FAST-LIO-LOCALIZATION all push the responsibility of detecting and
+        reacting to PGO/relocalize-induced map↔odom jumps onto downstream
+        consumers — that is the deliberate, industry-standard pattern. The
+        Cartographer authors specifically reject smoothing the jump in the
+        publisher, because the jump itself is the optimised correction.
+        Hand-rolling this 60-line check at the consumer (here, SlamBridge)
+        is therefore the *only* canonical option."""
         import numpy as _np
         xx, yy, zz = qx * qx, qy * qy, qz * qz
         xy, xz, yz = qx * qy, qx * qz, qy * qz
@@ -629,6 +716,39 @@ class SlamBridgeModule(Module, layer=1):
         T = _np.eye(4, dtype=_np.float64)
         T[:3, :3] = R
         T[:3, 3] = [tx, ty, tz]
+
+        # ── Jump detection ────────────────────────────────────────────────
+        # Compare against the previous cached T. First call sets baseline only.
+        prev_T = getattr(self, "_T_map_odom", None)
+        if prev_T is not None:
+            dt_vec = T[:3, 3] - prev_T[:3, 3]
+            dt_norm = float(_np.linalg.norm(dt_vec))
+            # Rotation angle between two rotation matrices = arccos((tr(R_rel) - 1) / 2)
+            R_rel = T[:3, :3] @ prev_T[:3, :3].T
+            tr = float(_np.clip((_np.trace(R_rel) - 1.0) * 0.5, -1.0, 1.0))
+            dyaw_rad = float(_np.arccos(tr))
+            dyaw_deg = dyaw_rad * 180.0 / _np.pi
+            jump_t_thresh = getattr(self, "_jump_t_threshold_m", 1.0)
+            jump_r_thresh = getattr(self, "_jump_r_threshold_deg", 30.0)
+            if dt_norm > jump_t_thresh or dyaw_deg > jump_r_thresh:
+                logger.warning(
+                    "map↔odom TF JUMPED: |Δt|=%.2fm Δyaw=%.1f° "
+                    "(prev=[%.2f,%.2f,%.2f] → new=[%.2f,%.2f,%.2f])",
+                    dt_norm, dyaw_deg,
+                    prev_T[0, 3], prev_T[1, 3], prev_T[2, 3],
+                    T[0, 3], T[1, 3], T[2, 3])
+                try:
+                    self.map_frame_jump_event.publish({
+                        "ts": _time.time(),
+                        "dt_m": round(dt_norm, 4),
+                        "dyaw_deg": round(dyaw_deg, 2),
+                        "prev_xyz": [float(prev_T[0, 3]), float(prev_T[1, 3]),
+                                     float(prev_T[2, 3])],
+                        "new_xyz": [float(T[0, 3]), float(T[1, 3]), float(T[2, 3])],
+                    })
+                except Exception as e:
+                    logger.debug("map_frame_jump_event publish failed: %s", e)
+
         self._T_map_odom = T
 
     def _on_rclpy_tf(self, msg) -> None:
@@ -782,16 +902,60 @@ class SlamBridgeModule(Module, layer=1):
         self._last_degen_time = _time.time()
         self._update_degeneracy_level()
 
+    def _on_rclpy_localization_health(self, msg) -> None:
+        """Multi-frame confirmed localizer health from /nav/localization_health.
+
+        Payload format (R4-extended, backward-compatible):
+            "<state>|fitness=<v>|iter=<n>|cov=<v>"
+        produced by LocalizerNode::updateAndPublishHealth(). The leading
+        "<state>|fitness=..." prefix is the original P3 contract; iter and
+        cov are R4 additions sourced from small_gicp's RegistrationResult
+        and Hessian respectively. Unknown keys (future fields) are skipped
+        without raising so older robots speaking the v1 payload still
+        update state correctly.
+        """
+        try:
+            payload = str(msg.data)
+            parts = payload.split("|")
+            self._localizer_health = (parts[0].strip().upper() if parts else "") or "UNKNOWN"
+            for kv in parts[1:]:
+                key, _, val = kv.partition("=")
+                key = key.strip().lower()
+                if not val:
+                    continue
+                if key == "fitness":
+                    try: self._localizer_health_fitness = float(val)
+                    except ValueError: pass
+                elif key == "iter":
+                    try: self._localizer_health_iter = int(float(val))
+                    except ValueError: pass
+                elif key == "cov":
+                    try: self._localizer_health_cov_trace = float(val)
+                    except ValueError: pass
+                # Other keys silently ignored — forward-compat for future
+                # localizer payload extensions.
+            self._localizer_health_ts = _time.time()
+            logger.info(
+                "Localizer health → %s (fitness=%.4f iter=%d cov=%.4f)",
+                self._localizer_health, self._localizer_health_fitness,
+                self._localizer_health_iter, self._localizer_health_cov_trace)
+        except Exception as e:
+            logger.debug("localization_health parse failed: %s", e)
+
     def _on_rclpy_degeneracy_detail(self, msg) -> None:
         """Detailed degeneracy metrics from Hessian eigenvalue analysis.
 
-        Float32MultiArray with 11 floats (matches C++ publishDegeneracy()):
+        Float32MultiArray, original 11-float layout extended to 14:
           [0]  condition_number
           [1]  min_eigenvalue
           [2]  max_eigenvalue
           [3]  effective_ratio
           [4]  degenerate_dof_count
           [5..10] dof_mask (6 DOFs)
+          [11] pos_cov_trace (m²)        — IEKF position covariance trace (NEW)
+          [12] iter_num                   — IEKF iterations actually used (NEW)
+          [13] converged (1.0 / 0.0)      — whether stop_func fired (NEW)
+        Older publishers send only 11 floats; the extra fields are read with len guard.
         """
         d = msg.data
         if len(d) < 11:
@@ -801,6 +965,10 @@ class SlamBridgeModule(Module, layer=1):
         self._effective_ratio = float(d[3])
         self._degenerate_dof_count = int(d[4])
         self._dof_mask = np.array([float(d[5 + i]) for i in range(6)])
+        if len(d) >= 14:
+            self._pos_cov_trace = float(d[11])
+            self._ieskf_iter_num = int(d[12])
+            self._ieskf_converged = bool(d[13] >= 0.5)
         # Reconstruct eigenvalues from mask (approximate; mask gives 0/1 per DOF)
         max_eig = float(d[2])
         min_eig = float(d[1])
@@ -987,9 +1155,27 @@ class SlamBridgeModule(Module, layer=1):
     # ── GNSS global position anchoring ──────────────────────────────────
 
     def _on_gnss_odom(self, odom: GnssOdom) -> None:
-        """Store latest GNSS ENU odometry; used by _fuse_gnss_position."""
+        """Store latest GNSS ENU odometry; used by _fuse_gnss_position
+        and SceneModeDetector for indoor/outdoor classification (N2)."""
         self._last_gnss_odom = odom
         self._last_gnss_rx_ts = _time.time()
+        # Feed scene-mode detector — fix_type names align with GnssFixType enum.
+        try:
+            self._scene_mode_detector.observe_gnss(
+                fix_type=odom.fix_type.name, age_s=0.0, now=self._last_gnss_rx_ts)
+            self._maybe_publish_scene_mode()
+        except Exception as e:
+            logger.debug("scene_mode observe_gnss failed: %s", e)
+
+    def _maybe_publish_scene_mode(self) -> None:
+        """Publish scene_mode whenever the effective mode changes."""
+        cur = self._scene_mode_detector.mode
+        if cur != self._last_published_scene_mode:
+            self._last_published_scene_mode = cur
+            try:
+                self.scene_mode.publish(cur)
+            except Exception as e:
+                logger.debug("scene_mode publish failed: %s", e)
 
     def _fuse_gnss_position(self, odom: Odometry) -> Odometry:
         """Blend RTK GNSS ENU position into SLAM XY to anchor long-term drift.
@@ -1170,6 +1356,21 @@ class SlamBridgeModule(Module, layer=1):
             ),
         })
 
+    def _is_gnss_healthy(self, now: float) -> bool:
+        """True when GNSS is fresh and at RTK_FIXED/FLOAT precision.
+
+        Used to gate the LOC_DEGRADED → LOC_FALLBACK_GNSS_ONLY transition:
+        promoting to fallback only makes sense if we have a globally-anchored
+        position to fall back to.
+        """
+        if self._last_gnss_odom is None or self._last_gnss_rx_ts <= 0:
+            return False
+        age = now - self._last_gnss_rx_ts
+        if age > self._gnss_max_age_for_fallback_s:
+            return False
+        return self._last_gnss_odom.fix_type in (
+            GnssFixType.RTK_FIXED, GnssFixType.RTK_FLOAT)
+
     # ── Localization health watchdog ──────────────────────────────��──────
 
     def _watchdog_loop(self) -> None:
@@ -1200,6 +1401,20 @@ class SlamBridgeModule(Module, layer=1):
                 new_state = LOC_TRACKING
                 confidence = max(0.0, 1.0 - odom_age / self._odom_timeout)
 
+            # Promote sustained DEGRADED to FALLBACK_GNSS_ONLY when GNSS is
+            # healthy. Today this only changes the published state so
+            # NavigationModule can run cautiously; the GNSS+IMU dead-reckoning
+            # takeover lands in S2.5 once fault-injection tooling exists.
+            if new_state == LOC_DEGRADED:
+                if self._degraded_since == 0.0:
+                    self._degraded_since = now
+                if (now - self._degraded_since) > self._fallback_after_degraded_s \
+                        and self._is_gnss_healthy(now):
+                    new_state = LOC_FALLBACK_GNSS_ONLY
+                    confidence = max(confidence, 0.4)
+            else:
+                self._degraded_since = 0.0
+
             # Reduce confidence based on degeneracy
             # Boost confidence when visual fusion is active
             visual_active = (self._last_visual_odom is not None
@@ -1219,9 +1434,15 @@ class SlamBridgeModule(Module, layer=1):
                 elif new_state == LOC_DEGRADED and self._degen_level != DEGEN_NONE:
                     logger.warning("Localization DEGRADED: SLAM degeneracy %s",
                                    self._degen_level)
+                elif new_state == LOC_FALLBACK_GNSS_ONLY:
+                    logger.warning(
+                        "Localization FALLBACK_GNSS_ONLY: DEGRADED for %.1fs with "
+                        "healthy GNSS — Navigation should run cautiously",
+                        now - self._degraded_since)
                 elif new_state == LOC_TRACKING and self._loc_state in (
-                        LOC_LOST, LOC_DEGRADED, LOC_DIVERGED):
-                    logger.info("Localization recovered -> TRACKING")
+                        LOC_LOST, LOC_DEGRADED, LOC_DIVERGED, LOC_FALLBACK_GNSS_ONLY):
+                    logger.info("Localization recovered -> TRACKING from %s",
+                                self._loc_state)
                     self._reconnect_count = 0
                     self._drift_bad_count = 0
                 self._loc_state = new_state
@@ -1244,7 +1465,23 @@ class SlamBridgeModule(Module, layer=1):
                 "degenerate_dof_count": self._degenerate_dof_count,
                 "cov_warning": self._max_pos_cov > 100.0,
                 "max_pos_cov": round(self._max_pos_cov, 3),
+                "pos_cov_trace": round(self._pos_cov_trace, 4),
+                "ieskf_iter_num": self._ieskf_iter_num,
+                "ieskf_converged": self._ieskf_converged,
+                "localizer_health": self._localizer_health,
+                "localizer_health_fitness": round(self._localizer_health_fitness, 4),
+                "localizer_health_iter": self._localizer_health_iter,
+                "localizer_health_cov_trace": round(self._localizer_health_cov_trace, 4),
+                "scene_mode": self._scene_mode_detector.mode,
             })
+
+            # N2: feed indoor evidence to detector when GNSS has been silent
+            # for too long. Without this, the detector would never converge
+            # to "indoor" on a robot that simply has no GNSS module wired.
+            if self._last_gnss_rx_ts == 0.0 \
+                    or (now - self._last_gnss_rx_ts) > self._gnss_max_age_for_fallback_s:
+                self._scene_mode_detector.observe_no_gnss(now=now)
+                self._maybe_publish_scene_mode()
 
             self._shutdown_event.wait(timeout=interval)
 

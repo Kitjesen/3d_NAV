@@ -36,6 +36,11 @@ struct NodeConfig
     int scan_line = 4;          // number of scan lines (4 for Mid-360, 16 for VLP-16)
     int timestamp_unit = NS;    // 0=SEC, 1=MS, 2=US, 3=NS
     double acc_scale = 10.0;    // IMU acceleration scale (10.0 for Livox g-units, 1.0 for standard m/s²)
+    // LI-Init output: positive value means IMU lags LiDAR by this many seconds.
+    // Applied IMU-side (subtracted from IMU stamps in imuCB) for parity with
+    // upstream FAST-LIO / Point-LIO so published odometry stamps stay on the
+    // LiDAR wall clock.
+    double time_diff_lidar_to_imu = 0.0;
 };
 struct StateData
 {
@@ -160,6 +165,22 @@ public:
             m_builder_config.stationary_thresh = config["stationary_thresh"].as<double>();
         if (config["acc_scale"])
             m_node_config.acc_scale = config["acc_scale"].as<double>();
+        if (config["time_diff_lidar_to_imu"])
+        {
+            m_node_config.time_diff_lidar_to_imu = config["time_diff_lidar_to_imu"].as<double>();
+            if (std::abs(m_node_config.time_diff_lidar_to_imu) > 0.1)
+            {
+                RCLCPP_ERROR(this->get_logger(),
+                    "time_diff_lidar_to_imu = %.6f s exceeds plausible ±0.1s range — likely calibration error",
+                    m_node_config.time_diff_lidar_to_imu);
+            }
+            else if (m_node_config.time_diff_lidar_to_imu != 0.0)
+            {
+                RCLCPP_INFO(this->get_logger(),
+                    "Applying LiDAR→IMU time offset: %.6f s",
+                    m_node_config.time_diff_lidar_to_imu);
+            }
+        }
 
         // ZUPT parameters (optional, fall back to Config defaults)
         if (config["imu_static_acc_thresh"])
@@ -177,7 +198,14 @@ public:
     void imuCB(const sensor_msgs::msg::Imu::SharedPtr msg)
     {
         std::lock_guard<std::mutex> lock(m_state_data.imu_mutex);
-        double timestamp = Utils::getSec(msg->header);
+        // Upstream FAST-LIO / Point-LIO subtract `time_diff_lidar_to_imu` from
+        // the IMU stamp to align IMU clock onto the LiDAR timeline. We follow
+        // the same convention so the published odometry stamps live on the
+        // LiDAR wall clock (matches /cloud_registered stamps for TF lookups).
+        // Equivalent to LI-Init's documented "SUBTRACT this value from IMU
+        // timestamp OR ADD this value to LiDAR timestamp"; we pick the IMU
+        // side for parity with upstream.
+        double timestamp = Utils::getSec(msg->header) - m_node_config.time_diff_lidar_to_imu;
         if (timestamp < m_state_data.last_imu_time)
         {
             RCLCPP_WARN(this->get_logger(), "IMU Message is out of order");
@@ -199,6 +227,8 @@ public:
     {
         CloudType::Ptr cloud = Utils::livox2PCL(msg, m_builder_config.lidar_filter_num, m_builder_config.lidar_min_range, m_builder_config.lidar_max_range);
         std::lock_guard<std::mutex> lock(m_state_data.lidar_mutex);
+        // LiDAR timestamps stay raw — the time_diff offset is applied on the
+        // IMU side in imuCB so output odom stamps remain on the LiDAR clock.
         double timestamp = Utils::getSec(msg->header);
         if (timestamp < m_state_data.last_lidar_time)
         {
@@ -214,6 +244,7 @@ public:
                                                m_node_config.scan_line, m_node_config.timestamp_unit,
                                                m_builder_config.lidar_min_range, m_builder_config.lidar_max_range);
         std::lock_guard<std::mutex> lock(m_state_data.lidar_mutex);
+        // See lidarCB — offset is applied IMU-side, not here.
         double timestamp = Utils::getSec(msg->header);
         if (timestamp < m_state_data.last_lidar_time)
         {
@@ -357,9 +388,12 @@ public:
     {
         if (!syncPackage())
             return;
+        if (m_first_sync_time == 0.0)
+            m_first_sync_time = m_package.cloud_end_time;
         auto t1 = std::chrono::high_resolution_clock::now();
         m_builder->process(m_package);
         auto t2 = std::chrono::high_resolution_clock::now();
+        warnIfStuck();
 
         if (m_node_config.print_time_cost)
         {
@@ -397,11 +431,19 @@ public:
         ratio_msg.data = static_cast<float>(degen.effective_ratio);
         m_degen_pub->publish(ratio_msg);
 
-        // Publish detailed degeneracy info as Float32MultiArray
-        // [condition_number, min_eigenvalue, max_eigenvalue, effective_ratio,
-        //  degen_dof_count, mask_rx, mask_ry, mask_rz, mask_tx, mask_ty, mask_tz]
+        // Publish detailed degeneracy info as Float32MultiArray.
+        // Layout (older subscribers ignore extra trailing fields):
+        // [0]   condition_number
+        // [1]   min_eigenvalue
+        // [2]   max_eigenvalue
+        // [3]   effective_ratio
+        // [4]   degenerate_dof_count
+        // [5-10] dof_mask (rx,ry,rz,tx,ty,tz)
+        // [11]  pos_cov_trace (m²)             — IEKF position covariance trace
+        // [12]  iter_num                       — IEKF iterations actually used
+        // [13]  converged (1.0 if converged, 0.0 if hit max_iter)
         std_msgs::msg::Float32MultiArray detail_msg;
-        detail_msg.data.resize(11);
+        detail_msg.data.resize(14);
         detail_msg.data[0]  = static_cast<float>(degen.condition_number);
         detail_msg.data[1]  = static_cast<float>(degen.min_eigenvalue);
         detail_msg.data[2]  = static_cast<float>(degen.max_eigenvalue);
@@ -409,6 +451,9 @@ public:
         detail_msg.data[4]  = static_cast<float>(degen.degenerate_dof_count);
         for (int d = 0; d < 6; ++d)
             detail_msg.data[5 + d] = static_cast<float>(degen.dof_mask(d));
+        detail_msg.data[11] = static_cast<float>(degen.pos_cov_trace);
+        detail_msg.data[12] = static_cast<float>(degen.iter_num);
+        detail_msg.data[13] = degen.converged ? 1.0f : 0.0f;
         m_degen_detail_pub->publish(detail_msg);
 
         if (degen.detected)
@@ -416,6 +461,44 @@ public:
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                 "DEGENERACY DETECTED: %d/6 DOFs degenerate, cond=%.1f, eff_ratio=%.2f",
                 degen.degenerate_dof_count, degen.condition_number, degen.effective_ratio);
+        }
+    }
+
+    // Surface two silent failure modes that S0.5 already exposes structurally
+    // (via /slam/degeneracy_detail) but that have no human-facing log:
+    //   - IEKF iteration loop hits m_max_iter without stop_func firing
+    //     → likely ill-conditioned Jacobian for the current observation set
+    //   - IMU init buffer never fills → wrong topic / dead driver / saturated IMU
+    // Throttled hard so a sustained issue does not drown the log.
+    void warnIfStuck()
+    {
+        // IEKF non-convergence — only meaningful once we are past initialisation.
+        if (m_builder->status() == BuilderStatus::MAPPING)
+        {
+            const auto &degen = m_kf->degeneracy();
+            if (!degen.converged)
+            {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                    "IEKF did not converge: iter_num=%d/%d, cond=%.2g — "
+                    "Jacobian likely ill-conditioned for current scan",
+                    degen.iter_num, m_builder_config.ieskf_max_iter,
+                    degen.condition_number);
+            }
+        }
+
+        // IMU init stuck — if we have synced packages but builder is still in
+        // IMU_INIT after a few seconds, something is wrong with the IMU stream.
+        if (m_builder->status() == BuilderStatus::IMU_INIT && m_first_sync_time > 0.0)
+        {
+            const double elapsed = m_package.cloud_end_time - m_first_sync_time;
+            if (elapsed > 5.0)
+            {
+                auto progress = m_builder->imu_processor()->initProgress();
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                    "IMU init stuck for %.1fs: collected %d/%d samples — "
+                    "check /livox/imu topic, IMU sample rate, time_diff_lidar_to_imu",
+                    elapsed, progress.first, progress.second);
+            }
         }
     }
 
@@ -440,6 +523,10 @@ private:
     std::shared_ptr<MapBuilder> m_builder;
     std::shared_ptr<tf2_ros::TransformBroadcaster> m_tf_broadcaster;
     rclcpp::Service<interface::srv::SaveMaps>::SharedPtr m_save_map_srv;
+
+    // Wall-clock (LiDAR-clock) of the first successfully-synced package; used by
+    // warnIfStuck() to detect IMU init never completing.
+    double m_first_sync_time = 0.0;
 };
 
 int main(int argc, char **argv)

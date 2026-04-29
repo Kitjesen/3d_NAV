@@ -218,5 +218,65 @@ class TestCalibrationReport(unittest.TestCase):
         self.assertIn("1 warning", s)
 
 
+class TestTimeOffset(unittest.TestCase):
+    """Tests for the LiDAR↔IMU time offset cross-config consistency check."""
+
+    def _run_check(self, lio_offset=None, pointlio_offset=None, required=False):
+        """Invoke _check_time_offset with mocked yaml loads."""
+        from core.utils import calibration_check as cc
+
+        report = cc.CalibrationReport()
+
+        def fake_open(path, *args, **kwargs):
+            from io import StringIO
+            import yaml as _y
+            payload = {}
+            if str(path) == str(cc.FASTLIO2_CONFIG) and lio_offset is not None:
+                payload = {"time_diff_lidar_to_imu": lio_offset}
+            elif str(path) == str(cc.POINTLIO_CONFIG) and pointlio_offset is not None:
+                payload = {"time_diff_lidar_to_imu": pointlio_offset}
+            return StringIO(_y.dump(payload))
+
+        with patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.open", side_effect=fake_open):
+            cc._check_time_offset(report, required=required)
+        return report
+
+    def test_consistent_offsets_pass(self):
+        report = self._run_check(lio_offset=0.005, pointlio_offset=0.005)
+        self.assertEqual(len(report.errors), 0)
+        self.assertEqual(len(report.warnings), 0)
+        self.assertTrue(any("consistent" in i for i in report.info))
+
+    def test_mismatched_offsets_warn(self):
+        report = self._run_check(lio_offset=0.005, pointlio_offset=0.020)
+        self.assertEqual(len(report.errors), 0)
+        self.assertTrue(any("mismatch" in w for w in report.warnings))
+
+    def test_mismatched_offsets_error_when_required(self):
+        report = self._run_check(lio_offset=0.005, pointlio_offset=0.020, required=True)
+        self.assertTrue(any("mismatch" in e for e in report.errors))
+
+    def test_out_of_range_warns(self):
+        report = self._run_check(lio_offset=0.5, pointlio_offset=0.5)
+        self.assertTrue(any("exceeds plausible" in w for w in report.warnings))
+
+    def test_out_of_range_errors_when_required(self):
+        report = self._run_check(lio_offset=0.5, pointlio_offset=0.5, required=True)
+        self.assertTrue(any("exceeds plausible" in e for e in report.errors))
+
+    def test_missing_offsets_silent(self):
+        report = self._run_check(lio_offset=None, pointlio_offset=None)
+        self.assertEqual(len(report.errors), 0)
+        self.assertEqual(len(report.warnings), 0)
+        self.assertEqual(len(report.info), 0)
+
+    def test_only_one_config_present(self):
+        """If only one of the two configs has a value, range still checked, no mismatch."""
+        report = self._run_check(lio_offset=0.005, pointlio_offset=None)
+        self.assertEqual(len(report.errors), 0)
+        self.assertEqual(len(report.warnings), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

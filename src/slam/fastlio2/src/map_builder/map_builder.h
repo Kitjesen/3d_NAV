@@ -15,8 +15,9 @@ public:
     MapBuilder(Config &config, std::shared_ptr<IESKF> kf);
 
     void process(SyncPackage &package);
-    BuilderStatus status() { return m_status; }    
+    BuilderStatus status() { return m_status; }
     std::shared_ptr<LidarProcessor> lidar_processor(){return m_lidar_processor;}
+    std::shared_ptr<IMUProcessor> imu_processor(){return m_imu_processor;}
     void saveMap(const std::string &path);
 
 private:

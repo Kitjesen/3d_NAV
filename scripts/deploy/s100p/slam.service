@@ -2,8 +2,12 @@
 Description=S100P SLAM (Fast-LIO2)
 After=lidar.service
 Wants=lidar.service
+# Restart-storm protection: at most 3 restarts in 5 min, otherwise stay failed.
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
+TimeoutStopSec=15
 Type=simple
 User=sunrise
 WorkingDirectory=/home/sunrise/data/inovxio/lingtu

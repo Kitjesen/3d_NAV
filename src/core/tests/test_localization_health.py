@@ -127,6 +127,126 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         m.stop()  # Should not raise
 
 
+class TestSlamBridgeFallbackTransition(unittest.TestCase):
+    """LOC_DEGRADED → LOC_FALLBACK_GNSS_ONLY promotion when GNSS is healthy.
+
+    Wires the state machine half. The actual GNSS+IMU dead-reckoning takeover
+    lands in S2.5 once fault-injection tooling exists; these tests lock in
+    that the transition fires under the right preconditions and reverts on
+    SLAM recovery.
+    """
+
+    def _make(self, **kw):
+        from slam.slam_bridge_module import SlamBridgeModule
+        defaults = {
+            "odom_timeout": 0.1,
+            "cloud_timeout": 0.2,
+            "watchdog_hz": 50,
+            "fallback_after_degraded_s": 0.05,  # short for unit test
+            "gnss_max_age_for_fallback_s": 1.0,
+        }
+        defaults.update(kw)
+        return SlamBridgeModule(**defaults)
+
+    def _stub_healthy_gnss(self, m):
+        """Plant a fresh RTK_FIXED GnssOdom directly so the watchdog sees
+        GNSS as healthy without spinning up the GNSS subscription path."""
+        from core.msgs.gnss import GnssFixType, GnssOdom
+        m._last_gnss_odom = GnssOdom(
+            east=0.0, north=0.0, up=0.0, ve=0.0, vn=0.0, vu=0.0,
+            cov_e=0.01, cov_n=0.01, cov_u=0.04,
+            fix_type=GnssFixType.RTK_FIXED, ts=time.time(),
+        )
+        m._last_gnss_rx_ts = time.time()
+
+    def test_degraded_promotes_to_fallback_when_gnss_healthy(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        # Force DEGRADED by leaving cloud stale, odom fresh.
+        self._stub_healthy_gnss(m)
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        # Hold long enough to clear fallback_after_degraded_s.
+        time.sleep(0.15)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertIn("FALLBACK_GNSS_ONLY", states,
+                      f"Expected fallback transition, saw: {set(states)}")
+
+    def test_degraded_stays_degraded_without_gnss(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        # No GNSS planted → fallback gate must keep us at DEGRADED.
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        time.sleep(0.15)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertIn("DEGRADED", states)
+        self.assertNotIn("FALLBACK_GNSS_ONLY", states)
+
+    def test_degraded_stays_degraded_with_stale_gnss(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        # GNSS rx > gnss_max_age_for_fallback_s → fallback gate closed.
+        self._stub_healthy_gnss(m)
+        m._last_gnss_rx_ts = time.time() - 5.0  # stale
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        time.sleep(0.15)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertNotIn("FALLBACK_GNSS_ONLY", states)
+
+    def test_degraded_stays_degraded_when_only_single_fix(self):
+        """Single-point GNSS isn't precise enough to anchor on."""
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        from core.msgs.gnss import GnssFixType, GnssOdom
+        m._last_gnss_odom = GnssOdom(
+            east=0.0, north=0.0, up=0.0, ve=0.0, vn=0.0, vu=0.0,
+            cov_e=0.5, cov_n=0.5, cov_u=1.0,
+            fix_type=GnssFixType.SINGLE, ts=time.time(),
+        )
+        m._last_gnss_rx_ts = time.time()
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        time.sleep(0.15)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertNotIn("FALLBACK_GNSS_ONLY", states)
+
+    def test_recovery_from_fallback_back_to_tracking(self):
+        m = self._make()
+        received = []
+        m.localization_status._add_callback(received.append)
+        m.start()
+        self._stub_healthy_gnss(m)
+        m._last_odom_time = time.time()
+        m._last_cloud_time = time.time() - 0.5
+        time.sleep(0.15)  # enter FALLBACK
+        # Now restore both odom and cloud freshness — keep them fresh while we
+        # observe recovery so the watchdog does not race us into LOST.
+        for _ in range(20):
+            m._last_odom_time = time.time()
+            m._last_cloud_time = time.time()
+            time.sleep(0.01)
+        m.stop()
+        states = [r["state"] for r in received]
+        self.assertIn("FALLBACK_GNSS_ONLY", states)
+        # After recovery, TRACKING should appear after the FALLBACK index.
+        fb_idx = max(i for i, s in enumerate(states) if s == "FALLBACK_GNSS_ONLY")
+        self.assertIn("TRACKING", states[fb_idx + 1:])
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # SlamBridgeModule degeneracy parsing + covariance tracking
 # ──────────────────────────────────────────────────────────────────────────────
@@ -166,6 +286,43 @@ class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
         self.assertAlmostEqual(m._effective_ratio, 0.67, places=3)
         self.assertEqual(m._degenerate_dof_count, 2)
         self.assertEqual(m._dof_mask.tolist(), [1.0, 1.0, 0.0, 0.0, 1.0, 1.0])
+
+    def test_legacy_11_field_payload_keeps_iekf_defaults(self):
+        """Old fastlio2 publishers emit only 11 floats; new IEKF state stays default."""
+        m = self._make()
+        msg = self._make_msg(cond=10.0, min_eig=0.5, max_eig=5.0,
+                             eff_ratio=0.9, degen_count=0,
+                             mask=[1, 1, 1, 1, 1, 1])
+        # Sanity check: this is the legacy 11-float layout.
+        self.assertEqual(len(msg.data), 11)
+        m._on_rclpy_degeneracy_detail(msg)
+        self.assertEqual(m._pos_cov_trace, 0.0)
+        self.assertEqual(m._ieskf_iter_num, 0)
+        self.assertTrue(m._ieskf_converged)
+
+    def test_extended_14_field_payload_populates_iekf_diagnostics(self):
+        """New fastlio2 publishers append [pos_cov_trace, iter_num, converged]."""
+        m = self._make()
+        msg = self._make_msg(cond=10.0, min_eig=0.5, max_eig=5.0,
+                             eff_ratio=0.9, degen_count=0,
+                             mask=[1, 1, 1, 1, 1, 1])
+        msg.data = list(msg.data) + [0.123, 7.0, 1.0]  # extend to 14
+        m._on_rclpy_degeneracy_detail(msg)
+        self.assertAlmostEqual(m._pos_cov_trace, 0.123, places=6)
+        self.assertEqual(m._ieskf_iter_num, 7)
+        self.assertTrue(m._ieskf_converged)
+
+    def test_extended_payload_marks_non_convergence(self):
+        """converged < 0.5 in slot 13 flips _ieskf_converged to False."""
+        m = self._make()
+        msg = self._make_msg(cond=10.0, min_eig=0.5, max_eig=5.0,
+                             eff_ratio=0.9, degen_count=0,
+                             mask=[1, 1, 1, 1, 1, 1])
+        msg.data = list(msg.data) + [42.0, 5.0, 0.0]
+        m._on_rclpy_degeneracy_detail(msg)
+        self.assertFalse(m._ieskf_converged)
+        self.assertAlmostEqual(m._pos_cov_trace, 42.0, places=6)
+
 
     def test_severe_warning_triggers_above_cond_threshold(self):
         """condition_number > 1e6 triggers a throttled SEVERE warning."""
@@ -244,6 +401,161 @@ class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
 
         m._on_rclpy_odom(msg)
         self.assertAlmostEqual(m._max_pos_cov, 150.0, places=3)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# P3: localizer-side multi-frame health (/nav/localization_health subscription)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestSlamBridgeLocalizerHealth(unittest.TestCase):
+    """P3: parse multi-frame confirmed localizer health from
+    /nav/localization_health String topic."""
+
+    def _make(self):
+        from slam.slam_bridge_module import SlamBridgeModule
+        return SlamBridgeModule(watchdog_hz=100)
+
+    def _msg(self, data):
+        class _M:
+            pass
+        m = _M()
+        m.data = data
+        return m
+
+    def test_initial_health_is_unknown(self):
+        m = self._make()
+        self.assertEqual(m._localizer_health, "UNKNOWN")
+        self.assertEqual(m._localizer_health_fitness, 0.0)
+
+    def test_locked_payload_parsed(self):
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("LOCKED|fitness=0.0234"))
+        self.assertEqual(m._localizer_health, "LOCKED")
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.0234, places=4)
+
+    def test_lost_payload_parsed(self):
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("LOST|fitness=0.45"))
+        self.assertEqual(m._localizer_health, "LOST")
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.45, places=4)
+
+    def test_recovered_payload_parsed(self):
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("RECOVERED|fitness=0.05"))
+        self.assertEqual(m._localizer_health, "RECOVERED")
+
+    def test_payload_without_fitness_keeps_state(self):
+        """Defensive: payload missing the |fitness=... suffix should still
+        update state without raising."""
+        m = self._make()
+        m._localizer_health_fitness = 0.1
+        m._on_rclpy_localization_health(self._msg("LOST"))
+        self.assertEqual(m._localizer_health, "LOST")
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.1, places=4)
+
+    def test_malformed_payload_does_not_crash(self):
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("garbage|fitness=NaN"))
+        self.assertEqual(m._localizer_health, "GARBAGE")
+
+    def test_r4_extended_payload_parses_iter_and_cov(self):
+        """R4: small_gicp adds iter + cov fields. Parser must pick them up
+        for downstream three-axis health gating."""
+        m = self._make()
+        m._on_rclpy_localization_health(
+            self._msg("LOCKED|fitness=0.0234|iter=8|cov=0.12"))
+        self.assertEqual(m._localizer_health, "LOCKED")
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.0234, places=4)
+        self.assertEqual(m._localizer_health_iter, 8)
+        self.assertAlmostEqual(m._localizer_health_cov_trace, 0.12, places=4)
+
+    def test_r4_v1_payload_keeps_iter_and_cov_at_default(self):
+        """Backward-compat: a robot still publishing the v1 P3 payload
+        (no iter / no cov) must NOT raise and must keep the iter/cov
+        fields at their -1 sentinel."""
+        m = self._make()
+        m._on_rclpy_localization_health(self._msg("LOCKED|fitness=0.05"))
+        self.assertEqual(m._localizer_health, "LOCKED")
+        self.assertEqual(m._localizer_health_iter, -1)
+        self.assertEqual(m._localizer_health_cov_trace, -1.0)
+
+    def test_r4_unknown_keys_ignored(self):
+        """Forward-compat: future localizer payload may add keys we don't
+        know yet; parser must skip them silently without affecting known
+        fields."""
+        m = self._make()
+        m._on_rclpy_localization_health(
+            self._msg("LOCKED|fitness=0.05|iter=3|cov=0.01|future_key=42"))
+        self.assertEqual(m._localizer_health_iter, 3)
+        self.assertAlmostEqual(m._localizer_health_cov_trace, 0.01, places=4)
+
+    def test_r4_field_order_independent(self):
+        """Keys after the leading state must be order-independent."""
+        m = self._make()
+        m._on_rclpy_localization_health(
+            self._msg("LOST|cov=5.5|iter=10|fitness=0.4"))
+        self.assertEqual(m._localizer_health, "LOST")
+        self.assertEqual(m._localizer_health_iter, 10)
+        self.assertAlmostEqual(m._localizer_health_fitness, 0.4, places=4)
+        self.assertAlmostEqual(m._localizer_health_cov_trace, 5.5, places=4)
+
+
+class TestSlamBridgeTFJumpDetection(unittest.TestCase):
+    """P4: detect map↔odom TF discontinuities and publish events."""
+
+    def _make(self, **kw):
+        from slam.slam_bridge_module import SlamBridgeModule
+        defaults = {"jump_t_threshold_m": 1.0, "jump_r_threshold_deg": 30.0}
+        defaults.update(kw)
+        return SlamBridgeModule(watchdog_hz=100, **defaults)
+
+    def test_first_call_does_not_emit_jump(self):
+        """No baseline → cannot diff → first call must NOT emit a jump event."""
+        m = self._make()
+        events = []
+        m.map_frame_jump_event._add_callback(events.append)
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)
+        self.assertEqual(len(events), 0)
+
+    def test_small_translation_does_not_emit(self):
+        m = self._make()
+        events = []
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)
+        m.map_frame_jump_event._add_callback(events.append)
+        m._cache_map_odom_tf(0.1, 0.1, 0, 0, 0, 0, 1)  # √0.02 ≈ 0.14m
+        self.assertEqual(len(events), 0)
+
+    def test_large_translation_emits_jump(self):
+        m = self._make()
+        events = []
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)
+        m.map_frame_jump_event._add_callback(events.append)
+        m._cache_map_odom_tf(2.0, 0, 0, 0, 0, 0, 1)  # 2m jump > 1m threshold
+        self.assertEqual(len(events), 1)
+        evt = events[0]
+        self.assertGreater(evt["dt_m"], 1.0)
+        self.assertEqual(evt["new_xyz"], [2.0, 0.0, 0.0])
+
+    def test_large_rotation_emits_jump(self):
+        """A 60° yaw jump (no translation) should still emit even though Δt=0."""
+        import math
+        m = self._make()
+        events = []
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)  # identity
+        m.map_frame_jump_event._add_callback(events.append)
+        # 60° yaw rotation as quaternion
+        half = math.radians(60.0) / 2.0
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, math.sin(half), math.cos(half))
+        self.assertEqual(len(events), 1)
+        self.assertGreater(events[0]["dyaw_deg"], 30.0)
+
+    def test_threshold_overrides_via_kw(self):
+        m = self._make(jump_t_threshold_m=10.0)  # very loose
+        events = []
+        m._cache_map_odom_tf(0, 0, 0, 0, 0, 0, 1)
+        m.map_frame_jump_event._add_callback(events.append)
+        m._cache_map_odom_tf(2.0, 0, 0, 0, 0, 0, 1)  # 2m, well below 10m
+        self.assertEqual(len(events), 0)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -571,6 +883,24 @@ class TestNavigationDegeneracyResponse(unittest.TestCase):
             "degeneracy": "NONE",
         })
         self.assertAlmostEqual(m._speed_scale, 1.0)
+
+    def test_fallback_gnss_only_caps_speed_below_severe(self):
+        """FALLBACK is a more cautious mode than DEGEN SEVERE — slower scale."""
+        m, _MS = self._make()
+        m._on_localization_status({
+            "state": "FALLBACK_GNSS_ONLY", "confidence": 0.4,
+            "degeneracy": "SEVERE",
+        })
+        self.assertAlmostEqual(m._speed_scale, 0.3)
+
+    def test_fallback_overrides_mild_degeneracy(self):
+        """Even if degeneracy is only MILD, FALLBACK state forces 0.3x."""
+        m, _MS = self._make()
+        m._on_localization_status({
+            "state": "FALLBACK_GNSS_ONLY", "confidence": 0.4,
+            "degeneracy": "MILD",
+        })
+        self.assertAlmostEqual(m._speed_scale, 0.3)
 
 
 if __name__ == "__main__":

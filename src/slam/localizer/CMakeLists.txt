@@ -28,7 +28,27 @@ find_package(std_srvs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(OpenMP REQUIRED)
 
+# small_gicp (Koide 2024, MIT) — replaces pcl::IterativeClosestPoint in
+# icp_localizer to expose the registration Hessian, iteration count, and
+# converged flag. PCL's ICP wrapper exposed only fitness, which forced P3
+# multi-frame health gating to single-axis (fitness only). small_gicp is
+# header-only friendly via FetchContent and ships a drop-in PCL-style
+# RegistrationPCL adapter so the call sites change minimally.
+#
+# We prefer find_package first (system install path on S100P) and fall
+# back to FetchContent when absent so CI / fresh dev machines work.
+find_package(small_gicp QUIET)
+if(NOT small_gicp_FOUND)
+  message(STATUS "small_gicp not installed — fetching v1.0.0")
+  include(FetchContent)
+  FetchContent_Declare(small_gicp
+    GIT_REPOSITORY https://github.com/koide3/small_gicp.git
+    GIT_TAG v1.0.0
+  )
+  FetchContent_MakeAvailable(small_gicp)
+endif()
 
 
 include_directories(
@@ -44,7 +64,7 @@ set(SRC_LIST src/localizers/commons.cpp
 
 add_executable(localizer_node src/localizer_node.cpp ${SRC_LIST})
 ament_target_dependencies(localizer_node rclcpp std_msgs sensor_msgs nav_msgs message_filters pcl_conversions tf2_ros geometry_msgs interface std_srvs)
-target_link_libraries(localizer_node ${PCL_LIBRARIES}  yaml-cpp /usr/local/lib/libcpu_bbs3d.so)
+target_link_libraries(localizer_node ${PCL_LIBRARIES} yaml-cpp /usr/local/lib/libcpu_bbs3d.so small_gicp::small_gicp OpenMP::OpenMP_CXX)
 
 
 install(TARGETS localizer_node DESTINATION lib/${PROJECT_NAME})

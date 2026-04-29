@@ -318,6 +318,7 @@ class GatewayModule(Module, layer=6):
     slope_grid:     In[dict]  # from TraversabilityCostModule — slope in degrees
     agent_message:  In[dict]  # from SemanticPlanner — chat-facing messages
     gnss_fusion_health: In[dict]  # from SlamBridgeModule — GNSS/SLAM alignment diag
+    localization_status: In[dict] # from SlamBridgeModule — full SLAM health (cov_trace, iter_num, ...)
     tare_stats:         In[dict]  # from TAREExplorerModule — exploration diag
     supervisor_state:   In[dict]  # from ExplorationSupervisorModule — watchdog
 
@@ -440,6 +441,12 @@ class GatewayModule(Module, layer=6):
         self._drift_restart_count: int = 0
         self._drift_watchdog_thread: threading.Thread | None = None
 
+        # Crash-time black box. Records the gateway's view of the world (odom,
+        # slam_diag, gnss_fusion, map_odom_tf) and dumps to disk before the
+        # watchdog stops services, so we can attribute divergences offline.
+        from core.utils.blackbox_recorder import BlackBoxRecorder
+        self._blackbox = BlackBoxRecorder.from_env()
+
         # ── Session state machine (single source of truth) ─────────────────
         # Every mode transition must go through /api/v1/session/start|end.
         # Frontend Topbar/Panel render from this state; no other code path
@@ -486,6 +493,8 @@ class GatewayModule(Module, layer=6):
         self.slope_grid.subscribe(self._on_slope_grid)
         self.agent_message.subscribe(self._on_agent_message)
         self.gnss_fusion_health.subscribe(self._on_gnss_fusion_health)
+        self.localization_status.subscribe(self._on_localization_status)
+        self.localization_status.set_policy("latest")
         self.tare_stats.subscribe(self._on_tare_stats)
         self.supervisor_state.subscribe(self._on_exploration_supervisor)
         self._app = self._build_app()
@@ -584,6 +593,28 @@ class GatewayModule(Module, layer=6):
 
         # Snapshot session mode BEFORE stopping services
         mode = self._session_mode
+
+        # Black-box dump must happen BEFORE svc.stop, otherwise the
+        # localization_status / gnss / odom feeds dry up the moment slam exits
+        # and we lose the very tail-end of the divergence we want to study.
+        # Note: ``Path`` in this module imports the ROS message type, not
+        # pathlib.Path; the recorder returns a pathlib.Path so we leave this
+        # untyped to avoid the symbol clash.
+        dump_path = None
+        try:
+            dump_path = self._blackbox.dump(
+                reason="drift_watchdog",
+                metadata={
+                    "xy": float(xy),
+                    "y_abs": float(y_abs),
+                    "v": float(v),
+                    "session_mode": mode,
+                    "restart_count": self._drift_restart_count + 1,
+                },
+            )
+        except Exception as e:
+            logger.warning("drift_watchdog: blackbox dump failed (continuing): %s", e)
+
         try:
             svc.stop("slam", "slam_pgo", "localizer")
         except Exception as e:
@@ -595,14 +626,17 @@ class GatewayModule(Module, layer=6):
             self._odom = {}
             self._odom_timestamps.clear()
 
-        self.push_event({
+        evt: dict = {
             "type": "slam_drift",
             "level": "error",
             "xy": max(xy, y_abs),
             "v": v,
             "action": "slam_restart",
             "count": self._drift_restart_count + 1,
-        })
+        }
+        if dump_path is not None:
+            evt["dump_path"] = str(dump_path)
+        self.push_event(evt)
 
         # Re-ensure based on session mode. idle → don't restart anything.
         time.sleep(2.0)
@@ -789,6 +823,7 @@ class GatewayModule(Module, layer=6):
             self._odom_timestamps.append(time.time())
             if len(self._odom_timestamps) > 20:
                 self._odom_timestamps.pop(0)
+        self._blackbox.record("odom", d)
         self.push_event({"type": "odometry", "data": d})
 
         # Push slam_status at ~1Hz (every 10 odometry frames)
@@ -924,6 +959,7 @@ class GatewayModule(Module, layer=6):
         """
         if not tf or not tf.get("valid", False):
             return
+        self._blackbox.record("tf", tf)
         try:
             tx, ty, tz = float(tf["tx"]), float(tf["ty"]), float(tf["tz"])
             qx, qy, qz, qw = (float(tf["qx"]), float(tf["qy"]),
@@ -1247,7 +1283,20 @@ class GatewayModule(Module, layer=6):
     def _on_gnss_fusion_health(self, state: dict) -> None:
         """Forward SlamBridge gnss_fusion_health to SSE (type=gnss_fusion)."""
         d = state if isinstance(state, dict) else {"raw": str(state)}
+        self._blackbox.record("gnss", d)
         self.push_event({"type": "gnss_fusion", "data": d})
+
+    def _on_localization_status(self, state: dict) -> None:
+        """Forward SlamBridge localization_status to SSE (type=slam_diag).
+
+        Surfaces IEKF internals (`pos_cov_trace`, `ieskf_iter_num`,
+        `ieskf_converged`) plus the existing degeneracy fields so dashboards
+        and the drift watchdog can react before pose itself blows up.
+        """
+        if not isinstance(state, dict):
+            return
+        self._blackbox.record("slam_diag", state)
+        self.push_event({"type": "slam_diag", "data": state})
 
     def _on_tare_stats(self, stats: dict) -> None:
         """Forward TAREExplorerModule tare_stats to SSE (type=tare_stats)."""

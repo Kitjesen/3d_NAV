@@ -85,6 +85,11 @@ class NavigationModule(Module, layer=5):
     teleop_active: In[bool]
     localization_status: In[dict]
     traversability: In[dict]  # W2-8: terrain class from TerrainModule
+    # P4: TF jump events from SlamBridgeModule. PGO loop closures and BBS3D
+    # relocalisations can move map→odom by metres in a single tick. Cached
+    # global path + waypoint then point at the wrong place. We force a replan
+    # on the next planning tick to catch up.
+    map_frame_jump_event: In[dict]
 
     # -- Outputs --
     waypoint:       Out[PoseStamped]
@@ -179,6 +184,7 @@ class NavigationModule(Module, layer=5):
         self.teleop_active.subscribe(self._on_teleop_active)
         self.localization_status.subscribe(self._on_localization_status)
         self.traversability.subscribe(self._on_traversability)
+        self.map_frame_jump_event.subscribe(self._on_map_frame_jump)
 
         if self._enable_ros2_bridge:
             try:
@@ -317,6 +323,28 @@ class NavigationModule(Module, layer=5):
         self._set_state(MissionState.CANCELLED)
         logger.info("Mission cancelled: %s", msg)
 
+    def _on_map_frame_jump(self, event: dict) -> None:
+        """SlamBridge detected a map↔odom TF discontinuity (P4).
+
+        The cached global path / waypoint were planned in the *old* map frame.
+        Force an immediate replan so we don't drive the robot toward a
+        coordinate that no longer matches reality. Costmap is in odom frame
+        so it remains valid; ESDF / OccupancyGrid handle their own clear via
+        their own subscription to this event.
+        """
+        if not isinstance(event, dict):
+            return
+        dt_m = event.get("dt_m", 0.0)
+        dyaw = event.get("dyaw_deg", 0.0)
+        # Only act if we have an active mission — idle robot doesn't care.
+        if self._state in (MissionState.EXECUTING, MissionState.PATROLLING) \
+                and self._goal is not None:
+            logger.warning(
+                "TF jump (Δt=%.2fm Δyaw=%.1f°) → forced replan",
+                dt_m, dyaw)
+            self._tracker.clear()  # invalidate current waypoint tracking
+            self._plan()
+
     def _on_localization_status(self, msg: dict) -> None:
         prev = self._loc_state
         self._loc_state = msg.get("state", "UNINIT")
@@ -342,25 +370,35 @@ class NavigationModule(Module, layer=5):
         self._apply_degeneracy_speed_limit()
 
     def _apply_degeneracy_speed_limit(self) -> None:
-        """Scale navigation speed based on SLAM degeneracy level.
+        """Scale navigation speed based on SLAM health.
 
-        NONE     → 1.0x (full speed)
-        MILD     → 0.7x (slight reduction)
-        SEVERE   → 0.4x (cautious)
-        CRITICAL → pause (handled by DEGRADED→LOST path above)
+        FALLBACK_GNSS_ONLY → 0.3x (cautious — SLAM has been DEGRADED for >10s
+                                   with healthy GNSS; we are essentially flying
+                                   on absolute fixes plus dead reckoning).
+        DEGEN SEVERE       → 0.4x
+        DEGEN MILD         → 0.7x
+        otherwise          → 1.0x
+
+        CRITICAL is handled by the DEGRADED→LOST path above (mission pauses).
         """
         prev_scale = self._speed_scale
-        if self._degen_level == "SEVERE":
+        reason = ""
+        if self._loc_state == "FALLBACK_GNSS_ONLY":
+            self._speed_scale = 0.3
+            reason = "FALLBACK_GNSS_ONLY"
+        elif self._degen_level == "SEVERE":
             self._speed_scale = 0.4
+            reason = "degeneracy=SEVERE"
         elif self._degen_level == "MILD":
             self._speed_scale = 0.7
+            reason = "degeneracy=MILD"
         else:
             self._speed_scale = 1.0
 
         if self._speed_scale != prev_scale and self._state == MissionState.EXECUTING:
             if self._speed_scale < 1.0:
-                logger.info("Navigation speed scaled to %.0f%% (degeneracy: %s)",
-                            self._speed_scale * 100, self._degen_level)
+                logger.info("Navigation speed scaled to %.0f%% (%s)",
+                            self._speed_scale * 100, reason)
             else:
                 logger.info("Navigation speed restored to 100%%")
 

@@ -81,6 +81,18 @@ public:
         m_pgo_config.loop_submap_half_range = config["loop_submap_half_range"].as<int>();
         m_pgo_config.submap_resolution = config["submap_resolution"].as<double>();
         m_pgo_config.min_loop_detect_duration = config["min_loop_detect_duration"].as<double>();
+
+        // Scan Context (optional, defaults from Config{} if missing in YAML).
+        if (config["enable_scan_context"])
+            m_pgo_config.enable_scan_context = config["enable_scan_context"].as<bool>();
+        if (config["sc_distance_threshold"])
+            m_pgo_config.sc_distance_threshold = config["sc_distance_threshold"].as<double>();
+        if (config["sc_max_range"])
+            m_pgo_config.sc_max_range = config["sc_max_range"].as<double>();
+        if (config["sc_num_candidates"])
+            m_pgo_config.sc_num_candidates = config["sc_num_candidates"].as<int>();
+        if (config["sc_min_history_gap"])
+            m_pgo_config.sc_min_history_gap = config["sc_min_history_gap"].as<int>();
     }
     void syncCB(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &cloud_msg, const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg)
     {
