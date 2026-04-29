@@ -319,6 +319,20 @@ def full_stack_blueprint(
     _w("PerceptionModule", "scene_graph", "TemporalMemoryModule", "scene_graph")
     _w("PerceptionModule", "scene_graph", "SemanticPlannerModule", "scene_graph")
     _w("PerceptionModule", "scene_graph", "VisualServoModule", "scene_graph")
+
+    # Dataset recorder: same camera + odometry feeds as ReconstructionModule
+    if "DatasetRecorderModule" in _bp_names and _camera_src in _bp_names:
+        bp.wire(_camera_src, _color_out, "DatasetRecorderModule", "color_image")
+        bp.wire(_camera_src, "depth_image", "DatasetRecorderModule", "depth_image")
+        bp.wire(_camera_src, "camera_info", "DatasetRecorderModule", "camera_info")
+    _w(_drv, "odometry", "DatasetRecorderModule", "odometry")
+
+    # Keyframe exporter: same camera + odometry feeds as ReconstructionModule
+    if "ReconKeyframeExporterModule" in _bp_names and _camera_src in _bp_names:
+        bp.wire(_camera_src, _color_out, "ReconKeyframeExporterModule", "color_image")
+        bp.wire(_camera_src, "depth_image", "ReconKeyframeExporterModule", "depth_image")
+        bp.wire(_camera_src, "camera_info", "ReconKeyframeExporterModule", "camera_info")
+    _w(_drv, "odometry", "ReconKeyframeExporterModule", "odometry")
     _w("SafetyRingModule", "safety_state", "GatewayModule", "safety_state")
     _w("SafetyRingModule", "safety_state", "MCPServerModule", "safety_state")
     _w("NavigationModule", "mission_status", "GatewayModule", "mission_status")
