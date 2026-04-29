@@ -2,8 +2,6 @@
 
 LingTu (灵途) 机器人导航系统的 Web 控制台。Arc / Raycast 风格设计，玻璃拟态 + 可拖拽 Widget 布局。
 
-更详细的本地开发、页面说明、接口调试和润色工作流见 [FRONTEND_USAGE_ZH.md](./FRONTEND_USAGE_ZH.md)。
-
 ## Quick Start
 
 ```bash

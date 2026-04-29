@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, useState, memo } from 'react'
+import { useRef, useEffect, useCallback, useState, memo } from 'react'
 import {
   Compass, Grid3x3, Navigation, Route, Target, Bot, Layers as LayersIcon,
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle, Pencil, X,
@@ -37,8 +37,6 @@ const MAP_GROUPS: Array<{ label: string; filter: (m: MapInfo) => boolean }> = [
   { label: '空地图',   filter: m => !m.has_pcd },
 ]
 
-const EMPTY_CLOUD_POINTS = new Float32Array(0)
-
 function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const scene3DRef = useRef<Scene3DHandle>(null)
 
@@ -67,7 +65,6 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   // Default 0.12 (12cm sphere per point) — with ~18k points in a room-scale
   // scene this gives a visually dense cloud. User can shrink via slider.
   const [pointSize, setPointSize] = useState(0.12)
-  const [cloudClearedSeq, setCloudClearedSeq] = useState(-1)
   const [savedMapFlat, setSavedMapFlat] = useState<number[] | undefined>(undefined)
   const [relocOpen, setRelocOpen] = useState(false)
   const [relocDropOpen, setRelocDropOpen] = useState(false)
@@ -95,15 +92,6 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   // Binary point-cloud channel (replaces SSE JSON map_cloud).  The hook
   // owns the WebSocket + decoder worker; we just consume the latest frame.
   const cloud = useBinaryCloud()
-  const visibleCloud = useMemo(() => {
-    if (cloud.seq > cloudClearedSeq) return cloud
-    return {
-      ...cloud,
-      positions: EMPTY_CLOUD_POINTS,
-      colors: EMPTY_CLOUD_POINTS,
-      count: 0,
-    }
-  }, [cloud, cloudClearedSeq])
 
   const rawPath = sseState.globalPath?.points ?? []
   const path = rawPath.filter(
@@ -272,10 +260,14 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     } catch { /* ignore */ }
   }, [activeMap])
 
-  const handleClearCloud = useCallback(() => {
-    setCloudClearedSeq(cloud.seq)
-    showToast(cloud.count > 0 ? '已清除当前浏览器点云' : '当前没有点云可清除', cloud.count > 0 ? 'success' : 'info')
-  }, [cloud.count, cloud.seq, showToast])
+  const handleClearCloud = useCallback(async () => {
+    try {
+      await api.resetMapCloud()
+      showToast('已清除累积点云', 'success')
+    } catch (e) {
+      showToast(`清除失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+    }
+  }, [showToast])
 
   const handleSaveMap = () => setSaveModalOpen(true)
 
@@ -554,7 +546,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
           <div className={styles.canvasWrap}>
             <Scene3D
               ref={scene3DRef}
-              cloud={visibleCloud}
+              cloud={cloud}
               savedMapFlat={savedMapFlat ?? sseState.savedMap?.points}
               costmap={sseState.costmap ?? null}
               slopeGrid={sseState.slopeGrid ?? null}

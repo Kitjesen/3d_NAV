@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { useTheme } from '../hooks/useTheme'
-import { ThemeToggle } from './ThemeToggle'
+import { ThemeToggle, useTheme } from './ThemeToggle'
 import { CountUp } from './CountUp'
 import styles from './Landing.module.css'
 

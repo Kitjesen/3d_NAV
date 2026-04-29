@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import styles from './ThinkingBubble.module.css'
 
 // Braille dots spinner — classic Claude Code / ora library style
@@ -28,7 +28,7 @@ export function ThinkingBubble({ hint, startedAt }: Props) {
   const [frame, setFrame] = useState(0)
   const [verbIdx, setVerbIdx] = useState(() => Math.floor(Math.random() * VERBS.length))
   const [elapsed, setElapsed] = useState(0)
-  const [startTime] = useState(() => startedAt ?? Date.now())
+  const startRef = useRef(startedAt ?? Date.now())
 
   // Fast spinner (80ms) — matches Claude Code cadence
   useEffect(() => {
@@ -45,9 +45,9 @@ export function ThinkingBubble({ hint, startedAt }: Props) {
 
   // Elapsed counter (1s tick)
   useEffect(() => {
-    const t = setInterval(() => setElapsed(Math.floor((Date.now() - startTime) / 1000)), 1000)
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000)
     return () => clearInterval(t)
-  }, [startTime])
+  }, [])
 
   const label = hint || VERBS[verbIdx]
 

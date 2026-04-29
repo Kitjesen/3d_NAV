@@ -18,67 +18,6 @@ import * as api from './services/api'
 import type { Tab } from './types'
 import './App.css'
 
-interface WidgetBounds {
-  width: number
-  height: number
-}
-
-interface WidgetRect {
-  x: number
-  y: number
-  w: number
-  h: number
-}
-
-const CONSOLE_GAP = 16
-
-function getConsoleMetrics(bounds: WidgetBounds): {
-  camera: WidgetRect
-  controls: WidgetRect
-  chat: WidgetRect
-} {
-  const width = Math.max(1, bounds.width)
-  const height = Math.max(1, bounds.height)
-  const canUseColumns = width >= 1040
-
-  if (!canUseColumns) {
-    const controlsH = Math.min(380, Math.max(280, Math.round(height * 0.3)))
-    const chatH = Math.min(Math.max(260, Math.round(height * 0.28)), Math.max(1, height - controlsH - CONSOLE_GAP * 2))
-    const cameraH = Math.max(300, height - controlsH - chatH - CONSOLE_GAP * 2)
-    const chatY = cameraH + controlsH + CONSOLE_GAP * 2
-
-    return {
-      camera: { x: 0, y: 0, w: width, h: cameraH },
-      controls: { x: 0, y: cameraH + CONSOLE_GAP, w: width, h: controlsH },
-      chat: { x: 0, y: chatY, w: width, h: chatH },
-    }
-  }
-
-  const rightW = Math.min(876, Math.max(620, Math.round(width * 0.43)))
-  const leftW = Math.max(400, width - rightW - CONSOLE_GAP)
-  const rightX = leftW + CONSOLE_GAP
-  const controlsH = Math.min(380, Math.max(280, Math.round(height * 0.42)))
-  const chatY = controlsH + CONSOLE_GAP
-
-  return {
-    camera: { x: 0, y: 0, w: leftW, h: height },
-    controls: { x: rightX, y: 0, w: rightW, h: controlsH },
-    chat: { x: rightX, y: chatY, w: rightW, h: Math.max(1, height - chatY) },
-  }
-}
-
-function cameraLayout(bounds: WidgetBounds) {
-  return getConsoleMetrics(bounds).camera
-}
-
-function controlPanelLayout(bounds: WidgetBounds) {
-  return getConsoleMetrics(bounds).controls
-}
-
-function chatLayout(bounds: WidgetBounds) {
-  return getConsoleMetrics(bounds).chat
-}
-
 function Dashboard() {
   const sseState = useSSE('/api/v1/events')
   const { toasts, show: showToast, dismiss } = useToast()
@@ -110,23 +49,26 @@ function Dashboard() {
               defaultPos={{ x: 0, y: 0 }}
               defaultSize={{ w: 1000, h: 930 }}
               minSize={{ w: 400, h: 300 }}
-              responsiveLayout={cameraLayout}
             >
               <CameraFeed onStop={handleStop} estop={estop} sseState={sseState} />
             </FloatingWidget>
 
             <FloatingWidget
-              id="control-panels"
+              id="localization"
               defaultPos={{ x: 1016, y: 0 }}
-              defaultSize={{ w: 876, h: 380 }}
-              minSize={{ w: 620, h: 280 }}
-              responsiveLayout={controlPanelLayout}
-              dragHandleLeft="59%"
+              defaultSize={{ w: 460, h: 380 }}
+              minSize={{ w: 300, h: 280 }}
             >
-              <div className="control-panel-group">
-                <LocalizationCard sseState={sseState} />
-                <MiniMap sseState={sseState} />
-              </div>
+              <LocalizationCard sseState={sseState} />
+            </FloatingWidget>
+
+            <FloatingWidget
+              id="minimap"
+              defaultPos={{ x: 1492, y: 0 }}
+              defaultSize={{ w: 400, h: 380 }}
+              minSize={{ w: 240, h: 260 }}
+            >
+              <MiniMap sseState={sseState} />
             </FloatingWidget>
 
             <FloatingWidget
@@ -134,7 +76,6 @@ function Dashboard() {
               defaultPos={{ x: 1016, y: 396 }}
               defaultSize={{ w: 876, h: 534 }}
               minSize={{ w: 340, h: 260 }}
-              responsiveLayout={chatLayout}
             >
               <ChatPanel sseState={sseState} />
             </FloatingWidget>
@@ -153,6 +94,9 @@ function Dashboard() {
 }
 
 function App() {
+  const [authChecked, setAuthChecked] = useState(false)
+  const [loggedIn, setLoggedIn] = useState(false)
+
   // Landing page: ?landing bypasses auth and shows the marketing page
   const isLanding = typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).has('landing')
@@ -160,10 +104,6 @@ function App() {
   // Dev preview: ?login forces the login page to render
   const forceLogin = typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).has('login')
-  const bypassAuthCheck = isLanding || forceLogin
-
-  const [authChecked, setAuthChecked] = useState(bypassAuthCheck)
-  const [loggedIn, setLoggedIn] = useState(false)
 
   useEffect(() => {
     // Landing page needs scroll — remove dashboard overflow:hidden from html/body
@@ -188,7 +128,11 @@ function App() {
   }, [isLanding])
 
   useEffect(() => {
-    if (bypassAuthCheck) return
+    if (isLanding || forceLogin) {
+      setLoggedIn(false)
+      setAuthChecked(true)
+      return
+    }
     api.checkAuth()
       .then(data => {
         setLoggedIn(!data.auth_required)
@@ -199,7 +143,7 @@ function App() {
         setLoggedIn(true)
         setAuthChecked(true)
       })
-  }, [bypassAuthCheck])
+  }, [isLanding, forceLogin])
 
   if (isLanding) return <Landing />
   if (!authChecked) return null

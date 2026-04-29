@@ -70,7 +70,7 @@ if _HAVE_WEBRTC:
 
         kind = "video"
 
-        def __init__(self, module: WebRTCStreamModule) -> None:
+        def __init__(self, module: "WebRTCStreamModule") -> None:
             super().__init__()
             self._mod = module
 
@@ -264,7 +264,7 @@ class WebRTCStreamModule(Module, layer=6):
         # uplink or the encoder's internal rate-control from spiking and
         # blowing the jitter buffer.  Browsers honour this via REMB/TWCC.
         try:
-            from aiortc import RTCRtpEncodingParameters, RTCRtpSendParameters
+            from aiortc import RTCRtpSendParameters, RTCRtpEncodingParameters
             params = sender.getParameters() if hasattr(sender, "getParameters") else None
             if params is None:
                 params = RTCRtpSendParameters(encodings=[RTCRtpEncodingParameters()])

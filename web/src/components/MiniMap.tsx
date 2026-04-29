@@ -9,28 +9,6 @@ interface MiniMapProps {
 // Keep trail history across renders via module-level ref pattern
 const TRAIL_MAX = 200
 
-function drawEmptyScene(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  ctx.clearRect(0, 0, w, h)
-
-  const cell = 40
-  ctx.strokeStyle = getComputedStyle(document.documentElement)
-    .getPropertyValue('--border')
-    .trim() || 'rgba(255,255,255,0.05)'
-  ctx.globalAlpha = 0.45
-  ctx.lineWidth = 1
-  ctx.beginPath()
-  for (let x = 0; x <= w; x += cell) {
-    ctx.moveTo(x, 0)
-    ctx.lineTo(x, h)
-  }
-  for (let y = 0; y <= h; y += cell) {
-    ctx.moveTo(0, y)
-    ctx.lineTo(w, y)
-  }
-  ctx.stroke()
-  ctx.globalAlpha = 1
-}
-
 // World → canvas for the mini map (fixed viewport, no pan/zoom interaction)
 function worldToCanvas(
   wx: number, wy: number,
@@ -198,11 +176,6 @@ export function MiniMap({ sseState }: MiniMapProps) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     const odom = sseState.odometry
-    if (!odom) {
-      drawEmptyScene(ctx, w, h)
-      return
-    }
-
     const robotX = odom?.x ?? 0
     const robotY = odom?.y ?? 0
     const yaw = odom?.yaw ?? 0

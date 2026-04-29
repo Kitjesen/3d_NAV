@@ -330,7 +330,7 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
           </div>
           <div className={styles.statCard}>
             <span className={styles.statLabel}>Localizer</span>
-            <span className={`${styles.statStatusValue} ${session?.localizer_ready ? styles.statOk : styles.statDim}`}>
+            <span className={`${styles.statValue} ${session?.localizer_ready ? styles.statOk : styles.statDim}`}>
               {mode !== 'navigating' ? '停止' : session?.localizer_ready ? '就绪' : '对齐中…'}
             </span>
           </div>

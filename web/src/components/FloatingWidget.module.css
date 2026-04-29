@@ -40,7 +40,10 @@
   height: 36px;
   cursor: grab;
   z-index: 5;
-  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
   opacity: 0;
   transition: opacity 0.2s var(--ease-out);
 }
@@ -53,44 +56,19 @@
 
 /* A subtle "grabber" pill that appears on hover */
 .dragGrabber {
-  width: 64px;
-  height: 18px;
-  border-radius: 9px;
-  background: transparent;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  cursor: grab;
-  pointer-events: auto;
-  position: absolute;
-  left: var(--drag-handle-left, 50%);
-  top: 50%;
-  transform: translate(-50%, -50%);
-  transition: transform 0.15s var(--ease-out);
-}
-
-.dragGrabber::before {
-  content: '';
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  top: 7px;
+  width: 36px;
   height: 4px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  transition: background 0.15s var(--ease-out);
+  transition: background 0.15s var(--ease-out), transform 0.15s var(--ease-out);
 }
 
 .dragStrip:hover .dragGrabber {
-  transform: translate(-50%, -50%) scaleX(1.1);
-}
-
-.dragStrip:hover .dragGrabber::before {
   background: rgba(255, 255, 255, 0.35);
-}
-
-.dragGrabber:active {
-  cursor: grabbing;
+  transform: scaleX(1.1);
 }
 
 /* ── Child container — absolute-fills the widget ─────────── */
