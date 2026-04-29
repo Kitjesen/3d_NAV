@@ -179,6 +179,12 @@ class BBoxNavigator:
         self._gains_path = gains_path or _GAINS_PERSIST_PATH
         self._state: str = STATE_IDLE
         self._last_bbox_time: float = 0.0
+        # Timestamp of the last successful bbox→3D back-projection. Diverges
+        # from _last_bbox_time when depth fails (NaN, IQR rejects, empty
+        # mask) — used to trigger LOST on sustained depth failure even while
+        # bbox detections keep arriving.
+        self._last_valid_3d_time: float = 0.0
+        self._depth_fail_streak: int = 0
         self._target_bbox: list | None = None
         self._target_3d: np.ndarray | None = None   # [x, y, z] world frame
         self._lock = threading.Lock()
@@ -470,13 +476,10 @@ class BBoxNavigator:
         dy = float(target_3d[1]) - ry
         distance = float(np.sqrt(dx * dx + dy * dy))
 
-        # 角度误差，归一化到 [-π, π]
+        # 角度误差，归一化到 [-π, π]. Using modulo instead of a while-loop
+        # avoids an infinite loop if angle_error is NaN.
         angle_to_target = np.arctan2(dy, dx)
-        angle_error = angle_to_target - yaw
-        while angle_error > np.pi:
-            angle_error -= 2.0 * np.pi
-        while angle_error < -np.pi:
-            angle_error += 2.0 * np.pi
+        angle_error = (angle_to_target - yaw + np.pi) % (2.0 * np.pi) - np.pi
 
         # 角速度
         angular_z = float(np.clip(
@@ -546,6 +549,28 @@ class BBoxNavigator:
 
         if target_3d is None:
             with self._lock:
+                self._depth_fail_streak += 1
+                if self._last_valid_3d_time == 0.0:
+                    # First-ever 3D attempt failed — seed the timer so the
+                    # LOST transition below has something to diff against.
+                    self._last_valid_3d_time = now
+                elapsed_no_3d = now - self._last_valid_3d_time
+                if self._depth_fail_streak == 1:
+                    logger.warning(
+                        "BBoxNavigator: depth back-projection failed (bbox=%s)",
+                        bbox,
+                    )
+                if (
+                    self._state == STATE_TRACKING
+                    and elapsed_no_3d > self._cfg.lost_timeout
+                ):
+                    logger.info(
+                        "BBoxNavigator: target lost — no valid 3D for %.1fs (%d frames)",
+                        elapsed_no_3d,
+                        self._depth_fail_streak,
+                    )
+                    self._state = STATE_LOST
+                    self._target_3d = None
                 current_state = self._state
             return {
                 "state": current_state,
@@ -557,6 +582,8 @@ class BBoxNavigator:
 
         with self._lock:
             self._target_3d = target_3d
+            self._last_valid_3d_time = now
+            self._depth_fail_streak = 0
 
         # 距离计算 (XY 平面)
         rx, ry, _ = robot_pose
@@ -597,6 +624,8 @@ class BBoxNavigator:
             self._target_bbox = None
             self._target_3d = None
             self._last_bbox_time = 0.0
+            self._last_valid_3d_time = 0.0
+            self._depth_fail_streak = 0
 
     def tick_lost_check(self) -> None:
         """
