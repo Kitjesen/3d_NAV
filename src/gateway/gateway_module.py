@@ -1507,7 +1507,7 @@ class GatewayModule(Module, layer=6):
             from fastapi import Body, FastAPI, Request, WebSocket, WebSocketDisconnect
             from fastapi.exceptions import RequestValidationError
             from fastapi.middleware.cors import CORSMiddleware
-            from fastapi.responses import JSONResponse, StreamingResponse
+            from fastapi.responses import JSONResponse, Response, StreamingResponse
         except ImportError:
             logger.error("FastAPI not installed — run: pip install fastapi uvicorn")
             return None
@@ -1588,6 +1588,79 @@ class GatewayModule(Module, layer=6):
                 return JSONResponse(
                     {"enabled": True, "error": str(e)}, status_code=500,
                 )
+
+        # ── Go2RTC sidecar (image transmission accelerator) ────────────────
+        # go2rtc runs as its own systemd service (see scripts/install_go2rtc.sh)
+        # and handles the camera hot path natively in Go, bypassing aiortc's
+        # Python SRTP/RTP overhead.  We reverse-proxy its WHEP signalling and
+        # health endpoints so the browser stays on port 5050 (single origin,
+        # single auth surface).  Media itself never enters this process — it
+        # flows browser ↔ go2rtc over UDP directly via ICE host candidates.
+        #
+        # Browser flow:
+        #   1. GET  /api/v1/webrtc/go2rtc/status  → is go2rtc reachable?
+        #   2. POST /api/v1/webrtc/whep?src=cam   → SDP offer / answer
+        import os as _os
+        _go2rtc_upstream = _os.environ.get("LINGTU_GO2RTC_URL", "http://127.0.0.1:1984")
+
+        @app.get(
+            "/api/v1/webrtc/go2rtc/status",
+            summary="Probe the go2rtc sidecar (image transmission fast path)",
+        )
+        async def get_go2rtc_status():
+            try:
+                import httpx
+            except ImportError:
+                return {"available": False, "reason": "httpx_missing"}
+            try:
+                async with httpx.AsyncClient(timeout=0.5) as client:
+                    r = await client.get(f"{_go2rtc_upstream}/api/streams")
+                    if r.status_code != 200:
+                        return {"available": False, "status": r.status_code}
+                    data = r.json()
+                    # go2rtc returns {"name": {producers:[], consumers:[]}, ...}
+                    streams = list(data.keys()) if isinstance(data, dict) else []
+                    return {"available": True, "streams": streams}
+            except Exception as e:
+                return {"available": False, "reason": type(e).__name__}
+
+        @app.post(
+            "/api/v1/webrtc/whep",
+            summary="WHEP signalling proxy to go2rtc (image transmission path)",
+        )
+        async def post_webrtc_whep(request: Request):
+            """Forward a WHEP SDP offer to go2rtc.
+
+            WHEP (RFC 9725) is just ``POST <sdp offer> → <sdp answer>`` with
+            Content-Type application/sdp.  We proxy the bytes through; no
+            transcoding, no inspection.  Returns 503 if go2rtc is down so
+            the browser falls back to aiortc or JPEG.
+            """
+            try:
+                import httpx
+            except ImportError:
+                return JSONResponse(
+                    {"error": "httpx_missing"}, status_code=503,
+                )
+            src = request.query_params.get("src", "cam")
+            body = await request.body()
+            try:
+                async with httpx.AsyncClient(timeout=3.0) as client:
+                    r = await client.post(
+                        f"{_go2rtc_upstream}/api/webrtc?src={src}",
+                        content=body,
+                        headers={"content-type": "application/sdp"},
+                    )
+            except Exception as e:
+                logger.info("go2rtc unreachable: %s", e)
+                return JSONResponse(
+                    {"error": "go2rtc_unreachable"}, status_code=503,
+                )
+            return Response(
+                content=r.content,
+                status_code=r.status_code,
+                media_type=r.headers.get("content-type", "application/sdp"),
+            )
 
         @app.post(
             "/api/v1/webrtc/offer",

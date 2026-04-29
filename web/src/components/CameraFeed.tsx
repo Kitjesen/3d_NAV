@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Camera, StopCircle, RefreshCw } from 'lucide-react'
 import { useCamera } from '../hooks/useCamera'
 import { useWebRTC } from '../hooks/useWebRTC'
+import { useWHEP } from '../hooks/useWHEP'
 import { CameraHud } from './CameraHud'
 import type { SSEState } from '../types'
 import styles from './CameraFeed.module.css'
@@ -12,60 +13,92 @@ interface CameraFeedProps {
   sseState: SSEState
 }
 
-// If WebRTC doesn't produce a video frame within this window, fall back
-// to MJPEG. ICE failures on certain networks (VPN, NAT) can leave peers
-// stuck in 'checking' forever — we can't wait.
-const WEBRTC_TIMEOUT_MS = 8_000
+type Source = 'whep' | 'rtc' | 'jpeg'
+const STREAM_TIMEOUT_MS = 8_000
 
 export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
-  // Prefer WebRTC (H.264, ~100 ms glass-to-glass).  Fall back to JPEG when:
-  //   - gateway says 'unavailable' (aiortc missing)
-  //   - WebRTC fails to produce a stream within WEBRTC_TIMEOUT_MS (ICE stuck)
-  const rtc = useWebRTC()
-  const [timedOut, setTimedOut] = useState(false)
+  // Three-tier fallback, fastest-first:
+  //   1. go2rtc WHEP sidecar (native Go, ~30–60 ms LAN)
+  //   2. aiortc Python WebRTC (~80–150 ms LAN, same protocol)
+  //   3. JPEG-over-WebSocket (~250 ms, universal fallback)
+  // Each hook idles (no WS / no PC) until the previous tier fails or times out,
+  // so we avoid opening every transport at once while still escaping ICE stalls.
+  const whep = useWHEP()
+  const [whepTimedOut, setWhepTimedOut] = useState(false)
   useEffect(() => {
-    if (rtc.connected || rtc.error) {
-      const t = setTimeout(() => setTimedOut(false), 0)
-      return () => clearTimeout(t)
+    if (whep.connected || whep.stream || whep.error) {
+      setWhepTimedOut(false)
+      return
     }
-    const t = setTimeout(() => setTimedOut(true), WEBRTC_TIMEOUT_MS)
+    const t = setTimeout(() => setWhepTimedOut(true), STREAM_TIMEOUT_MS)
     return () => clearTimeout(t)
-  }, [rtc.connected, rtc.error])
-  const fallback = rtc.error === 'unavailable' || timedOut
-  const jpeg = useCamera(fallback ? '/ws/teleop' : '')  // empty URL → idle
+  }, [whep.connected, whep.stream, whep.error])
+
+  const whepFailed = whep.error != null || whepTimedOut
+  const rtc = useWebRTC(whepFailed ? '/api/v1/webrtc/offer' : '')
+  const [rtcTimedOut, setRtcTimedOut] = useState(false)
+  useEffect(() => {
+    if (!whepFailed || rtc.connected || rtc.stream || rtc.error) {
+      setRtcTimedOut(false)
+      return
+    }
+    const t = setTimeout(() => setRtcTimedOut(true), STREAM_TIMEOUT_MS)
+    return () => clearTimeout(t)
+  }, [whepFailed, rtc.connected, rtc.stream, rtc.error])
+
+  const rtcFailed = rtc.error != null || rtcTimedOut
+  const jpeg = useCamera(whepFailed && rtcFailed ? '/ws/teleop' : '')
+
+  // Pick the tier that is actually producing video. WHEP/RTC connection stalls
+  // are treated as soft failures after STREAM_TIMEOUT_MS, then the next tier
+  // starts without tearing down the earlier hook until React naturally idles it.
+  let source: Source
+  if (whep.stream) source = 'whep'
+  else if (whepFailed && rtc.stream) source = 'rtc'
+  else if (whepFailed && rtcFailed) source = 'jpeg'
+  else source = whepFailed ? 'rtc' : 'whep'
 
   const videoRef = useRef<HTMLVideoElement>(null)
+  const liveStream = source === 'whep' ? whep.stream : source === 'rtc' ? rtc.stream : null
   useEffect(() => {
     if (!videoRef.current) return
-    if (rtc.stream && videoRef.current.srcObject !== rtc.stream) {
-      videoRef.current.srcObject = rtc.stream
+    if (liveStream && videoRef.current.srcObject !== liveStream) {
+      videoRef.current.srcObject = liveStream
     }
-  }, [rtc.stream])
+  }, [liveStream])
 
-  const usingRtc     = !fallback
-  const hasVideo     = usingRtc ? rtc.connected : jpeg.imgSrc != null
-  const isConnected  = usingRtc ? rtc.connected : jpeg.connected
-  const onReconnect  = usingRtc ? rtc.reconnect : jpeg.reconnect
+  const hasVideo =
+    source === 'whep' ? whep.connected :
+    source === 'rtc'  ? rtc.connected  :
+    jpeg.imgSrc != null
+  const isConnected =
+    source === 'whep' ? whep.connected :
+    source === 'rtc'  ? rtc.connected  :
+    jpeg.connected
+  const onReconnect =
+    source === 'whep' ? whep.reconnect :
+    source === 'rtc'  ? rtc.reconnect  :
+    jpeg.reconnect
 
-  // Live HUD label: WebRTC exposes getStats, JPEG path doesn't.  Prefer
-  // real numbers over the static "720p · H.264" caption when available.
   let sourceLabel: string
-  if (!usingRtc) {
+  if (source === 'jpeg') {
     sourceLabel = '640 × 480 · MJPEG'
+  } else if (source === 'whep') {
+    sourceLabel = whep.connected ? '图传 · Go2RTC · H.264' : '图传 · Go2RTC (建立中…)'
   } else if (rtc.stats && rtc.stats.active_peers > 0) {
     const mbps = (rtc.stats.bitrate_bps / 1_000_000).toFixed(2)
     const fps  = rtc.stats.fps.toFixed(0)
     const enc  = rtc.stats.encode_avg_ms
     const encStr = typeof enc === 'number' ? ` · ${enc.toFixed(0)}ms enc` : ''
-    sourceLabel = `H.264 · ${fps}fps · ${mbps} Mbit/s${encStr}`
+    sourceLabel = `aiortc · H.264 · ${fps}fps · ${mbps} Mbit/s${encStr}`
   } else {
-    sourceLabel = 'H.264 · WebRTC (建立中…)'
+    sourceLabel = 'aiortc · WebRTC (建立中…)'
   }
 
   return (
     <div className={styles.cameraFeed}>
       <div className={styles.viewport}>
-        {usingRtc ? (
+        {(source === 'whep' || source === 'rtc') ? (
           <video
             ref={videoRef}
             className={styles.img}

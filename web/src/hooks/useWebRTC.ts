@@ -64,6 +64,11 @@ export function useWebRTC(path: string = '/api/v1/webrtc/offer'): WebRTCState {
 
   useEffect(() => {
     mountedRef.current = true
+    // Empty path = idle mode (CameraFeed uses this when a faster tier
+    // like go2rtc/WHEP is handling the stream).  Skip opening a
+    // PeerConnection at all.
+    if (!path) return () => { mountedRef.current = false }
+
     const abort = new AbortController()
     abortRef.current = abort
     // Host-only ICE for LAN deployment — no STUN/TURN needed, also
