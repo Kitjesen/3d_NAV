@@ -45,6 +45,13 @@ brain/lingtu/
 │
 ├── config/                # YAML / DDS / robot params (devices.yaml, robot_config.yaml, …)
 ├── calibration/           # Sensor calibration toolbox (camera, IMU, LiDAR, camera-LiDAR)
+│   ├── camera/            # Camera intrinsics (OpenCV checkerboard)
+│   ├── imu/               # IMU noise (Allan Variance, Autoliv)
+│   ├── lidar_imu/         # LiDAR-IMU extrinsics (HKU-MARS LI-Init)
+│   ├── camera_lidar/      # Camera-LiDAR extrinsics (target-less, koide3)
+│   ├── apply_calibration.py  # One-click apply → robot_config.yaml + SLAM configs
+│   ├── verify.py          # One-click verify (sanity checks + projection chain)
+│   └── README.md          # Full SOP with command-line examples
 ├── launch/                # ROS2 launch — ONLY algorithm-bridge launches now
 │   ├── _robot_config.py
 │   └── profiles/          # SLAM/planner profiles consumed by NativeModule subprocesses
@@ -62,6 +69,7 @@ brain/lingtu/
 ├── scripts/               # Build helpers, deploy, ota, proto, lingtu CLI shell wrapper
 │   ├── build/             # ROS workspace build helpers, fetch_ortools, build_tare, …
 │   ├── deploy/            # Installers, systemd, OTA, monitoring
+│   │   └── infra/stack/   # Docker + extra systemd + cron/logrotate (legacy deploy stack)
 │   ├── ota/               # Package and push to robot
 │   ├── proto/             # protoc helpers
 │   ├── lingtu             # Bash CLI for ops on the robot (status / map / nav / svc / log)

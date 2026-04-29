@@ -499,6 +499,56 @@ lidar:
 | `src/core/utils/calibration_check.py` | 运行时标定参数校验 (启动时调用) |
 | `config/robot_config.yaml` | 标定参数最终归宿 (single source of truth) |
 
+## Sensor Calibration (`calibration/`)
+
+出厂标定工具箱，覆盖 S100P 全部传感器。标定结果统一写入 `config/robot_config.yaml`。
+
+### 标定流程 (SOP)
+
+| Step | 内容 | 工具 | 时间 |
+|------|------|------|------|
+| 1 | 相机内参 (棋盘格 9×6) | `calibration/camera/calibrate_intrinsic.py` (OpenCV) | ~5 min |
+| 2 | IMU 噪声 (Allan Variance) | `calibration/imu/allan_variance_ros2/` (Autoliv) | ~2-3 hr |
+| 3 | LiDAR-IMU 外参 (8 字运动) | `calibration/lidar_imu/LiDAR_IMU_Init/` (HKU-MARS) | ~2 min |
+| 4 | 相机-LiDAR 外参 (target-less) | `calibration/camera_lidar/direct_visual_lidar_calibration/` (koide3) | ~10 min |
+| 5 | 一键应用 | `calibration/apply_calibration.py` → robot_config.yaml + SLAM configs | 秒级 |
+| 6 | 一键验证 | `calibration/verify.py` (焦距/畸变/旋转/投影链 sanity check) | 秒级 |
+
+### 标定参数输出
+
+```yaml
+# config/robot_config.yaml
+camera:
+  fx, fy, cx, cy              # Step 1 相机内参
+  dist_k1..k3, dist_p1..p2    # Step 1 畸变系数
+  position_x/y/z              # Step 4 相机-LiDAR 外参
+  roll, pitch, yaw            # Step 4 旋转
+
+lidar:
+  offset_x/y/z                # Step 3 LiDAR-IMU 外参 (t_il)
+  roll, pitch, yaw            # Step 3 旋转 (r_il)
+```
+
+`apply_calibration.py` 同时同步到 `src/slam/fastlio2/config/lio.yaml` 和 `config/pointlio.yaml` (na, ng, nba, nbg, r_il, t_il)。
+
+### 运行时校验
+
+`src/core/utils/calibration_check.py` 在 `full_stack_blueprint()` 启动时校验标定参数：
+- FAIL 级 (如焦距为 0、旋转矩阵非正交) → 阻止启动
+- WARN 级 (如畸变系数全零) → 日志警告，不阻断
+
+### 关键文件
+
+| File | Purpose |
+|------|---------|
+| `calibration/README.md` | 完整 SOP 文档 (含命令行示例) |
+| `calibration/apply_calibration.py` | 将 4 类标定结果写入 robot_config + SLAM 配置 |
+| `calibration/verify.py` | 一键验证: 参数范围 + 投影链 + 跨配置一致性 |
+| `calibration/camera/calibrate_intrinsic.py` | 相机内参 (capture/calibrate/verify 三合一) |
+| `calibration/lidar_imu/ros2_adapter/` | ROS2→ROS1 bridge 适配层 (rosbag 回放) |
+| `src/core/utils/calibration_check.py` | 运行时标定参数校验 (启动时调用) |
+| `config/robot_config.yaml` | 标定参数最终归宿 (single source of truth) |
+
 ## Code Style
 
 - **C++**: Google style (`.clang-format`, 2-space indent, 100 col)
