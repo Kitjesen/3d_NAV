@@ -32,6 +32,12 @@
 # 建议设 alias 到本机 ~/.bashrc:
 #   alias lingtu='ssh sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu"'
 #   alias lingwatch='ssh -t sunrise@192.168.66.190 "bash ~/data/SLAM/navigation/scripts/lingtu watch"'
+#
+# Current production service aliases:
+#   lingtu svc status          # robot-* service state + legacy conflict warning
+#   lingtu svc restart slam    # restart robot-fastlio2.service
+#   lingtu svc restart all     # restart robot-lidar + SLAM + localizer + lingtu
+#   lingtu doctor              # read-only service/topic/Gateway diagnostics
 set -u
 GW="${GW:-http://localhost:5050}"
 MAP_DIR="${MAP_DIR:-$HOME/data/nova/maps}"
@@ -242,42 +248,141 @@ cmd_nav() {
 }
 
 # ── Subcommand: svc ──
+svc_unit() {
+    case "${1:-}" in
+        lidar)      echo "robot-lidar.service" ;;
+        camera)     echo "robot-camera.service" ;;
+        brainstem)  echo "robot-brainstem.service" ;;
+        slam|fastlio2)
+                    echo "robot-fastlio2.service" ;;
+        localizer)  echo "robot-localizer.service" ;;
+        lingtu|app) echo "lingtu.service" ;;
+        robot-*.service|lingtu.service)
+                    echo "$1" ;;
+        robot-*)    echo "$1.service" ;;
+        *)          return 1 ;;
+    esac
+}
+
+print_service_row() {
+    local svc="$1" label="${2:-$1}" en act
+    en=$(systemctl is-enabled "$svc" 2>/dev/null | head -1 || echo '-')
+    act=$(systemctl is-active  "$svc" 2>/dev/null | head -1 || echo '-')
+    en="${en:-'-'}"
+    act="${act:-'-'}"
+    case "$act" in
+        active)   act="${G}${act}${N}" ;;
+        inactive) act="${D}${act}${N}" ;;
+        failed)   act="${R}${act}${N}" ;;
+    esac
+    printf "  %-14s %-24s enabled=%-10s active=%b\n" "$label" "$svc" "$en" "$act"
+}
+
+warn_legacy_services() {
+    local legacy active=()
+    for legacy in lidar.service slam.service localizer.service slam_pgo.service; do
+        if [ "$(systemctl is-active "$legacy" 2>/dev/null || true)" = "active" ]; then
+            active+=("$legacy")
+        fi
+    done
+    if [ "${#active[@]}" -gt 0 ]; then
+        printf "${Y}WARN${N}: legacy services are active and can conflict with robot-* stack: %s\n" "${active[*]}"
+    fi
+}
+
 cmd_svc() {
     local action="${1:-status}"
     case "$action" in
         status)
-            for s in lingtu slam slam_pgo localizer; do
-                local en act
-                en=$(systemctl is-enabled "$s.service" 2>/dev/null || echo '-')
-                act=$(systemctl is-active  "$s.service" 2>/dev/null || echo '-')
-                case "$act" in
-                    active)   act="${G}${act}${N}" ;;
-                    inactive) act="${D}${act}${N}" ;;
-                    failed)   act="${R}${act}${N}" ;;
-                esac
-                printf "  %-12s enabled=%-10s active=%b\n" "$s" "$en" "$act"
-            done ;;
+            print_service_row robot-lidar.service lidar
+            print_service_row robot-camera.service camera
+            print_service_row robot-brainstem.service brainstem
+            print_service_row robot-fastlio2.service slam
+            print_service_row robot-localizer.service localizer
+            print_service_row lingtu.service lingtu
+            warn_legacy_services ;;
         restart)
             local target="${2:-}"
             case "$target" in
-                slam)   sudo systemctl restart slam.service; echo "slam.service restarted" ;;
-                lingtu) sudo systemctl restart lingtu.service; echo "lingtu.service restarted" ;;
-                all)    sudo systemctl restart slam.service slam_pgo.service localizer.service lingtu.service
-                        echo "all SLAM + lingtu services restarted" ;;
-                *) echo "Usage: lingtu svc restart [slam|lingtu|all]"; exit 1 ;;
+                all)    sudo systemctl restart robot-lidar.service robot-fastlio2.service robot-localizer.service lingtu.service
+                        echo "robot LiDAR + SLAM + localizer + lingtu restarted" ;;
+                *)
+                        local unit
+                        unit=$(svc_unit "$target") || { echo "Usage: lingtu svc restart [lidar|slam|localizer|lingtu|camera|brainstem|all]"; exit 1; }
+                        sudo systemctl restart "$unit"
+                        echo "$unit restarted" ;;
             esac ;;
         stop)
             local target="${2:-all}"
             case "$target" in
-                all) sudo systemctl stop slam.service slam_pgo.service localizer.service
-                     echo "SLAM services stopped" ;;
-                *)   sudo systemctl stop "$target.service"; echo "$target stopped" ;;
+                all) sudo systemctl stop lingtu.service robot-localizer.service robot-fastlio2.service robot-lidar.service
+                     echo "robot LiDAR + SLAM + localizer + lingtu stopped" ;;
+                *)
+                    local unit
+                    unit=$(svc_unit "$target") || { echo "Usage: lingtu svc stop [lidar|slam|localizer|lingtu|camera|brainstem|all]"; exit 1; }
+                    sudo systemctl stop "$unit"; echo "$unit stopped" ;;
             esac ;;
         *) echo "Usage: lingtu svc [status|restart <target>|stop <target>]"; exit 1 ;;
     esac
 }
 
 # ── Subcommand: log ──
+# -- Subcommand: doctor --
+cmd_doctor() {
+    echo -e "${B}=== Lingtu Doctor @ $(date '+%H:%M:%S') ===${N}"
+    echo -e "${B}[1] Services${N}"
+    cmd_svc status
+
+    set +u
+    [ -f /opt/ros/humble/setup.bash ] && source /opt/ros/humble/setup.bash >/dev/null 2>&1
+    [ -f /opt/lingtu/current/install/setup.bash ] && source /opt/lingtu/current/install/setup.bash >/dev/null 2>&1
+    set -u
+
+    echo -e "${B}[2] ROS duplicate nodes${N}"
+    if command -v ros2 >/dev/null 2>&1; then
+        local dup
+        dup=$(ros2 node list 2>/dev/null | sort | uniq -d | grep -e livox_driver_node -e lio_node -e localizer_node || true)
+        if [ -n "$dup" ]; then
+            printf "${Y}WARN${N}: duplicate ROS node names detected:\n"
+            echo "$dup" | sed 's/^/  /'
+        else
+            echo "  ok: no duplicate Livox/Fast-LIO/localizer nodes"
+        fi
+    else
+        echo "  ros2 not found"
+    fi
+
+    echo -e "${B}[3] Localization topics${N}"
+    if command -v ros2 >/dev/null 2>&1; then
+        local topic pubs subs
+        for topic in /nav/lidar_scan /nav/imu /nav/odometry /nav/map_cloud /localization_quality; do
+            pubs=$(ros2 topic info "$topic" 2>/dev/null | awk '/Publisher count:/ {print $3}' | tail -1)
+            subs=$(ros2 topic info "$topic" 2>/dev/null | awk '/Subscription count:/ {print $3}' | tail -1)
+            pubs="${pubs:-0}"
+            subs="${subs:-0}"
+            if [ "$pubs" = "0" ]; then
+                printf "  ${R}%-24s publishers=%s subscribers=%s${N}\n" "$topic" "$pubs" "$subs"
+            else
+                printf "  ${G}%-24s publishers=%s subscribers=%s${N}\n" "$topic" "$pubs" "$subs"
+            fi
+        done
+    fi
+
+    echo -e "${B}[4] Gateway${N}"
+    curl -s --max-time 2 "$GW/api/v1/health" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("  gateway: unavailable")
+    raise SystemExit(0)
+slam=d.get("sensors",{}).get("slam",{})
+print("  gateway={} modules_ok={} modules_fail={}".format(d.get("status","?"), d.get("modules_ok","?"), d.get("modules_fail","?")))
+print("  slam_status={} slam_hz={} map_points={} has_odom={}".format(slam.get("status","?"), slam.get("hz", d.get("slam_hz","?")), d.get("map_points","?"), d.get("has_odom","?")))
+' || true
+}
+
+# -- Subcommand: log --
 cmd_log() {
     local filter="${1:-all}"
     case "$filter" in
@@ -312,6 +417,7 @@ case "${1:-status}" in
     map|m)          shift; cmd_map   "$@" ;;
     nav|n)          shift; cmd_nav   "$@" ;;
     svc|service)    shift; cmd_svc   "$@" ;;
+    doctor|diag)    shift; cmd_doctor "$@" ;;
     log|l)          shift; cmd_log   "$@" ;;
     health|h)       cmd_health ;;
     help|-h|--help)

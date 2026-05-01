@@ -193,14 +193,29 @@ ss -tnlp | grep -E "5050|8090"           # leftover process holding the port?
 
 ```bash
 journalctl -u robot-lidar -n 40
-ros2 topic hz /livox/lidar
-ip addr show eth1                        # MID-360 sub-net (192.168.1.x)
+lingtu doctor
+ros2 topic hz /nav/lidar_scan
+ros2 topic hz /nav/imu
+ip -br addr | grep 192.168.1            # MID-360 host sub-net, usually eth0=192.168.1.5
+```
+
+If `lingtu doctor` reports active legacy `lidar.service`, `slam.service`, or
+`localizer.service`, stop the duplicate stack before restarting the production
+`robot-*` services. Two Livox drivers will fight for the same UDP ports and can leave
+`/nav/lidar_scan` and `/nav/imu` with zero publishers.
+
+Legacy command references from older docs are wrong for the current stack:
+
+```bash
+journalctl -u robot-lidar -n 40
+ros2 topic hz /nav/lidar_scan            # not /livox/lidar in production
 ```
 
 ### Drift / lost localization
 
 ```bash
-ros2 topic hz /Odometry                  # expect ~100 Hz
+ros2 topic hz /nav/odometry              # expect live odometry
+ros2 topic hz /nav/map_cloud             # expect live map cloud in mapping/localization
 ros2 topic echo /localization_quality
 sudo systemctl restart robot-fastlio2 robot-localizer
 ```

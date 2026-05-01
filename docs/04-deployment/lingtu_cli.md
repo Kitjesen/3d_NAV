@@ -115,15 +115,35 @@ lingtu nav stop                               # same as map end
 
 ```bash
 lingtu svc status               # 6 core services: enabled / active
+lingtu doctor                   # read-only service/topic/Gateway diagnostics
 lingtu svc restart slam         # restart Fast-LIO2 (i.e. robot-fastlio2.service)
+lingtu svc restart lidar        # restart Livox driver (i.e. robot-lidar.service)
+lingtu svc restart localizer    # restart ICP localizer
 lingtu svc restart lingtu       # restart algorithm layer (clears odom cache)
-lingtu svc restart all          # restart SLAM + lingtu
+lingtu svc restart all          # restart LiDAR + SLAM + localizer + lingtu
 lingtu svc stop slam            # stop a single service
 ```
 
-The aliases `slam` / `lingtu` / `lidar` / `camera` / `brainstem` / `localizer` map to
-the corresponding systemd unit. There is no `slam.service` anymore; `slam` aliases
-to `robot-fastlio2.service`.
+The aliases `lidar` / `slam` / `localizer` / `lingtu` / `camera` / `brainstem` map
+to the corresponding production systemd unit. There is no `slam.service` anymore;
+`slam` aliases to `robot-fastlio2.service`. `svc status` warns if legacy
+`lidar.service`, `slam.service`, or `localizer.service` is still active because those
+services can duplicate ROS nodes and starve `/nav/lidar_scan` / `/nav/imu`.
+
+### `doctor` - localization chain diagnostics
+
+```bash
+lingtu doctor
+```
+
+This is read-only. It checks:
+
+- production `robot-*` service state
+- active legacy service conflicts
+- duplicate Livox/Fast-LIO/localizer ROS node names
+- publisher/subscriber counts for `/nav/lidar_scan`, `/nav/imu`, `/nav/odometry`,
+  `/nav/map_cloud`, and `/localization_quality`
+- Gateway `/api/v1/health` SLAM summary
 
 ### `log` — journalctl filters
 
