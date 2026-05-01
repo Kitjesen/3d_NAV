@@ -55,7 +55,6 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
-from pydantic import BaseModel, Field, field_validator
 
 from core.module import Module
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
@@ -66,12 +65,18 @@ from core.registry import register
 from core.stream import In, Out
 from gateway.schemas import (
     BitrateRequest,
-    ControlCommandResponse,
+    ClickNavRequest,
+    CmdVelRequest,
     GatewayErrorResponse,
-    LeaseResponse,
+    GoalRequest,
+    InstructionRequest,
+    LeaseRequest,
     MapLifecycleResponse,
+    MapRequest,
+    ModeRequest,
     SessionResponse,
     SessionTransitionResponse,
+    StopRequest,
 )
 from gateway.services.commands import CommandJournal
 from gateway.services.map_safety import (
@@ -87,103 +92,6 @@ from gateway.services.traffic import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Pydantic v2 request models
-# ---------------------------------------------------------------------------
-
-class GoalRequest(BaseModel):
-    x: float
-    y: float
-    z: float = 0.0
-    instruction: str | None = None
-    request_id: str | None = Field(default=None, max_length=128)
-    client_id: str = Field(default="unknown", max_length=128)
-
-
-class ClickNavRequest(BaseModel):
-    x: float
-    y: float
-    z: float = 0.0
-    request_id: str | None = Field(default=None, max_length=128)
-    client_id: str = Field(default="unknown", max_length=128)
-
-
-class CmdVelRequest(BaseModel):
-    vx: float
-    vy: float = 0.0
-    wz: float
-    request_id: str | None = Field(default=None, max_length=128)
-    client_id: str = Field(default="unknown", max_length=128)
-
-    @field_validator("vx", "wz")
-    @classmethod
-    def finite(cls, v: float) -> float:
-        import math
-        if not math.isfinite(v):
-            raise ValueError("must be finite")
-        return v
-
-
-class InstructionRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=1024)
-    request_id: str | None = Field(default=None, max_length=128)
-    client_id: str = Field(default="unknown", max_length=128)
-
-
-class StopRequest(BaseModel):
-    request_id: str | None = Field(default=None, max_length=128)
-    client_id: str = Field(default="unknown", max_length=128)
-
-
-class ModeRequest(BaseModel):
-    mode: str
-    request_id: str | None = Field(default=None, max_length=128)
-    client_id: str = Field(default="unknown", max_length=128)
-
-    @field_validator("mode")
-    @classmethod
-    def valid_mode(cls, v: str) -> str:
-        if v not in ("manual", "autonomous", "estop"):
-            raise ValueError(f"mode must be manual|autonomous|estop, got {v!r}")
-        return v
-
-
-class LeaseRequest(BaseModel):
-    action: str
-    client_id: str = "unknown"
-    ttl: float = Field(default=30.0, gt=0, le=3600)
-
-    @field_validator("action")
-    @classmethod
-    def valid_action(cls, v: str) -> str:
-        if v not in ("acquire", "release", "renew"):
-            raise ValueError(f"action must be acquire|release|renew, got {v!r}")
-        return v
-
-
-class MapRequest(BaseModel):
-    action: str
-    name:     str | None = None
-    new_name: str | None = None
-
-    @field_validator("action")
-    @classmethod
-    def valid_action(cls, v: str) -> str:
-        allowed = {
-            "list",
-            "save",
-            "use",
-            "build",
-            "delete",
-            "rename",
-            "set_active",
-            "build_tomogram",
-        }
-        if v not in allowed:
-            raise ValueError(f"action must be one of {allowed}")
-        return v
 
 
 # ---------------------------------------------------------------------------
@@ -1621,6 +1529,7 @@ class GatewayModule(Module, layer=6):
             register_app_routes,
             register_auth_routes,
             register_camera_routes,
+            register_command_routes,
             register_diagnostic_routes,
             register_map_routes,
             register_operation_routes,
@@ -1635,136 +1544,9 @@ class GatewayModule(Module, layer=6):
         register_diagnostic_routes(app, gw)
         register_map_routes(app, gw)
         register_status_routes(app, gw)
-
-        # Navigation
-
-        @app.post(
-            "/api/v1/goal",
-            summary="Send navigation goal",
-            response_model=ControlCommandResponse,
-        )
-        async def post_goal(body: GoalRequest):
-            def _publish() -> dict[str, Any]:
-                gw.goal_pose.publish(PoseStamped(
-                    pose=Pose(
-                        position=Vector3(body.x, body.y, body.z),
-                        orientation=Quaternion(0, 0, 0, 1),
-                    ),
-                    frame_id="map",
-                    ts=time.time(),
-                ))
-                if body.instruction:
-                    gw.instruction.publish(body.instruction)
-                return {"status": "ok", "goal": [body.x, body.y, body.z]}
-            return gw._run_control_command("goal", body, _publish)
-
-        @app.post(
-            "/api/v1/navigate/click",
-            summary="Navigate to map-viewer click point",
-            response_model=ControlCommandResponse,
-        )
-        async def post_navigate_click(body: ClickNavRequest):
-            def _publish() -> dict[str, Any]:
-                gw.goal_pose.publish(PoseStamped(
-                    pose=Pose(
-                        position=Vector3(body.x, body.y, body.z),
-                        orientation=Quaternion(0, 0, 0, 1),
-                    ),
-                    frame_id="map",
-                    ts=time.time(),
-                ))
-                return {"status": "ok", "goal": [body.x, body.y, body.z]}
-            return gw._run_control_command("navigate_click", body, _publish)
-
-        @app.post(
-            "/api/v1/cmd_vel",
-            summary="Direct velocity command",
-            response_model=ControlCommandResponse,
-        )
-        async def post_cmd_vel(body: CmdVelRequest):
-            def _publish() -> dict[str, Any]:
-                gw.cmd_vel.publish(Twist(
-                    linear=Vector3(body.vx, body.vy, 0),
-                    angular=Vector3(0, 0, body.wz),
-                ))
-                return {"status": "ok"}
-            return gw._run_control_command("cmd_vel", body, _publish)
-
-        @app.post(
-            "/api/v1/stop",
-            summary="Emergency stop",
-            response_model=ControlCommandResponse,
-        )
-        async def post_stop(body: StopRequest | None = None):
-            def _publish() -> dict[str, Any]:
-                gw.stop_cmd.publish(2)
-                gw.cmd_vel.publish(Twist())
-                return {"status": "stopped"}
-            return gw._run_control_command("stop", body, _publish)
-
-        @app.post(
-            "/api/v1/instruction",
-            summary="Natural language navigation instruction",
-            response_model=ControlCommandResponse,
-        )
-        async def post_instruction(body: InstructionRequest):
-            def _publish() -> dict[str, Any]:
-                gw.instruction.publish(body.text)
-                return {"status": "ok", "instruction": body.text}
-            return gw._run_control_command("instruction", body, _publish)
+        register_command_routes(app, gw)
 
         # ── Mode ───────────────────────────────────────────────────────────
-
-        @app.post(
-            "/api/v1/mode",
-            summary="Switch operating mode",
-            response_model=ControlCommandResponse,
-        )
-        async def post_mode(body: ModeRequest):
-            def _publish() -> dict[str, Any]:
-                with gw._state_lock:
-                    gw._mode = body.mode
-                gw.mode_cmd.publish(body.mode)
-                if body.mode == "estop":
-                    gw.stop_cmd.publish(2)
-                    gw.cmd_vel.publish(Twist())
-                return {"status": "ok", "mode": body.mode}
-            return gw._run_control_command("mode", body, _publish)
-
-        # Lease
-
-        @app.post(
-            "/api/v1/lease",
-            summary="Acquire/release/renew control lease",
-            response_model=LeaseResponse,
-            responses={
-                403: {"model": GatewayErrorResponse},
-                409: {"model": GatewayErrorResponse},
-            },
-        )
-        async def post_lease(body: LeaseRequest):
-            if body.action == "acquire":
-                ok = gw._lease.acquire(body.client_id, body.ttl)
-                if not ok:
-                    return JSONResponse(
-                        status_code=409,
-                        content={"error": "lease_conflict",
-                                 "detail": gw._lease.to_dict()},
-                    )
-                return {"status": "acquired", **gw._lease.to_dict()}
-
-            if body.action == "release":
-                gw._lease.release(body.client_id)
-                return {"status": "released"}
-
-            # renew
-            ok = gw._lease.renew(body.client_id, body.ttl)
-            if not ok:
-                return JSONResponse(
-                    status_code=403,
-                    content={"error": "not_lease_holder"},
-                )
-            return {"status": "renewed", **gw._lease.to_dict()}
 
         # ── Map management ─────────────────────────────────────────────────
 

@@ -99,6 +99,25 @@ def test_camera_routes_register_expected_snapshot_path():
     assert route.endpoint.__module__ == "gateway.routes.camera"
 
 
+def test_command_routes_register_expected_paths():
+    from fastapi import FastAPI
+
+    from gateway.routes.commands import register_command_routes
+
+    app = FastAPI()
+    register_command_routes(app, SimpleNamespace())
+
+    routes = {getattr(route, "path", ""): route for route in app.routes}
+    assert "/api/v1/goal" in routes
+    assert "/api/v1/navigate/click" in routes
+    assert "/api/v1/cmd_vel" in routes
+    assert "/api/v1/stop" in routes
+    assert "/api/v1/instruction" in routes
+    assert "/api/v1/mode" in routes
+    assert "/api/v1/lease" in routes
+    assert routes["/api/v1/goal"].endpoint.__module__ == "gateway.routes.commands"
+
+
 def test_map_route_file_resolution_rejects_path_escape(monkeypatch):
     from fastapi import HTTPException
 
@@ -177,6 +196,13 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/slam/maps"] == 1
     assert counts["/api/v1/map/points"] == 1
     assert counts["/api/v1/map_cloud/reset"] == 1
+    assert counts["/api/v1/goal"] == 1
+    assert counts["/api/v1/navigate/click"] == 1
+    assert counts["/api/v1/cmd_vel"] == 1
+    assert counts["/api/v1/stop"] == 1
+    assert counts["/api/v1/instruction"] == 1
+    assert counts["/api/v1/mode"] == 1
+    assert counts["/api/v1/lease"] == 1
     assert counts["/ws/teleop"] == 1
     assert counts["/ws/cloud"] == 1
 
@@ -208,6 +234,8 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/maps/{name}/points",
         "/api/v1/map_cloud/reset",
         "/api/v1/goal",
+        "/api/v1/navigate/click",
+        "/api/v1/cmd_vel",
         "/api/v1/stop",
         "/api/v1/instruction",
         "/api/v1/mode",

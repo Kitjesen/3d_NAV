@@ -1,0 +1,161 @@
+"""Control command routes for GatewayModule."""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from fastapi.responses import JSONResponse
+
+from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from gateway.schemas import (
+    ClickNavRequest,
+    CmdVelRequest,
+    ControlCommandResponse,
+    GatewayErrorResponse,
+    GoalRequest,
+    InstructionRequest,
+    LeaseRequest,
+    LeaseResponse,
+    ModeRequest,
+    StopRequest,
+)
+
+
+def register_command_routes(app, gw) -> None:
+    @app.post(
+        "/api/v1/goal",
+        summary="Send navigation goal",
+        response_model=ControlCommandResponse,
+    )
+    async def post_goal(body: GoalRequest):
+        def _publish() -> dict[str, Any]:
+            gw.goal_pose.publish(
+                PoseStamped(
+                    pose=Pose(
+                        position=Vector3(body.x, body.y, body.z),
+                        orientation=Quaternion(0, 0, 0, 1),
+                    ),
+                    frame_id="map",
+                    ts=time.time(),
+                )
+            )
+            if body.instruction:
+                gw.instruction.publish(body.instruction)
+            return {"status": "ok", "goal": [body.x, body.y, body.z]}
+
+        return gw._run_control_command("goal", body, _publish)
+
+    @app.post(
+        "/api/v1/navigate/click",
+        summary="Navigate to map-viewer click point",
+        response_model=ControlCommandResponse,
+    )
+    async def post_navigate_click(body: ClickNavRequest):
+        def _publish() -> dict[str, Any]:
+            gw.goal_pose.publish(
+                PoseStamped(
+                    pose=Pose(
+                        position=Vector3(body.x, body.y, body.z),
+                        orientation=Quaternion(0, 0, 0, 1),
+                    ),
+                    frame_id="map",
+                    ts=time.time(),
+                )
+            )
+            return {"status": "ok", "goal": [body.x, body.y, body.z]}
+
+        return gw._run_control_command("navigate_click", body, _publish)
+
+    @app.post(
+        "/api/v1/cmd_vel",
+        summary="Direct velocity command",
+        response_model=ControlCommandResponse,
+    )
+    async def post_cmd_vel(body: CmdVelRequest):
+        def _publish() -> dict[str, Any]:
+            gw.cmd_vel.publish(
+                Twist(
+                    linear=Vector3(body.vx, body.vy, 0),
+                    angular=Vector3(0, 0, body.wz),
+                )
+            )
+            return {"status": "ok"}
+
+        return gw._run_control_command("cmd_vel", body, _publish)
+
+    @app.post(
+        "/api/v1/stop",
+        summary="Emergency stop",
+        response_model=ControlCommandResponse,
+    )
+    async def post_stop(body: StopRequest | None = None):
+        def _publish() -> dict[str, Any]:
+            gw.stop_cmd.publish(2)
+            gw.cmd_vel.publish(Twist())
+            return {"status": "stopped"}
+
+        return gw._run_control_command("stop", body, _publish)
+
+    @app.post(
+        "/api/v1/instruction",
+        summary="Natural language navigation instruction",
+        response_model=ControlCommandResponse,
+    )
+    async def post_instruction(body: InstructionRequest):
+        def _publish() -> dict[str, Any]:
+            gw.instruction.publish(body.text)
+            return {"status": "ok", "instruction": body.text}
+
+        return gw._run_control_command("instruction", body, _publish)
+
+    @app.post(
+        "/api/v1/mode",
+        summary="Switch operating mode",
+        response_model=ControlCommandResponse,
+    )
+    async def post_mode(body: ModeRequest):
+        def _publish() -> dict[str, Any]:
+            with gw._state_lock:
+                gw._mode = body.mode
+            gw.mode_cmd.publish(body.mode)
+            if body.mode == "estop":
+                gw.stop_cmd.publish(2)
+                gw.cmd_vel.publish(Twist())
+            return {"status": "ok", "mode": body.mode}
+
+        return gw._run_control_command("mode", body, _publish)
+
+    @app.post(
+        "/api/v1/lease",
+        summary="Acquire/release/renew control lease",
+        response_model=LeaseResponse,
+        responses={
+            403: {"model": GatewayErrorResponse},
+            409: {"model": GatewayErrorResponse},
+        },
+    )
+    async def post_lease(body: LeaseRequest):
+        if body.action == "acquire":
+            ok = gw._lease.acquire(body.client_id, body.ttl)
+            if not ok:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "error": "lease_conflict",
+                        "detail": gw._lease.to_dict(),
+                    },
+                )
+            return {"status": "acquired", **gw._lease.to_dict()}
+
+        if body.action == "release":
+            gw._lease.release(body.client_id)
+            return {"status": "released"}
+
+        ok = gw._lease.renew(body.client_id, body.ttl)
+        if not ok:
+            return JSONResponse(
+                status_code=403,
+                content={"error": "not_lease_holder"},
+            )
+        return {"status": "renewed", **gw._lease.to_dict()}

@@ -1,10 +1,10 @@
-"""FastAPI response schemas for app/web Gateway contracts."""
+"""FastAPI request/response schemas for app/web Gateway contracts."""
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class GatewayResponseModel(BaseModel):
@@ -21,6 +21,100 @@ class GatewayErrorResponse(GatewayResponseModel):
 
 class BitrateRequest(BaseModel):
     bps: int
+
+
+class GoalRequest(BaseModel):
+    x: float
+    y: float
+    z: float = 0.0
+    instruction: str | None = None
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+
+class ClickNavRequest(BaseModel):
+    x: float
+    y: float
+    z: float = 0.0
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+
+class CmdVelRequest(BaseModel):
+    vx: float
+    vy: float = 0.0
+    wz: float
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("vx", "wz")
+    @classmethod
+    def finite(cls, v: float) -> float:
+        import math
+
+        if not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
+
+
+class InstructionRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1024)
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+
+class StopRequest(BaseModel):
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+
+class ModeRequest(BaseModel):
+    mode: str
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("mode")
+    @classmethod
+    def valid_mode(cls, v: str) -> str:
+        if v not in ("manual", "autonomous", "estop"):
+            raise ValueError(f"mode must be manual|autonomous|estop, got {v!r}")
+        return v
+
+
+class LeaseRequest(BaseModel):
+    action: str
+    client_id: str = "unknown"
+    ttl: float = Field(default=30.0, gt=0, le=3600)
+
+    @field_validator("action")
+    @classmethod
+    def valid_action(cls, v: str) -> str:
+        if v not in ("acquire", "release", "renew"):
+            raise ValueError(f"action must be acquire|release|renew, got {v!r}")
+        return v
+
+
+class MapRequest(BaseModel):
+    action: str
+    name: str | None = None
+    new_name: str | None = None
+
+    @field_validator("action")
+    @classmethod
+    def valid_action(cls, v: str) -> str:
+        allowed = {
+            "list",
+            "save",
+            "use",
+            "build",
+            "delete",
+            "rename",
+            "set_active",
+            "build_tomogram",
+        }
+        if v not in allowed:
+            raise ValueError(f"action must be one of {allowed}")
+        return v
 
 
 class ServerInfo(GatewayResponseModel):
