@@ -89,7 +89,7 @@ class BlackBoxRecorder:
                 self.enabled = False
 
     @classmethod
-    def from_env(cls) -> "BlackBoxRecorder":
+    def from_env(cls) -> BlackBoxRecorder:
         enabled = os.environ.get("LINGTU_BLACKBOX_ENABLED", "1") != "0"
         base = Path(os.environ.get(
             "LINGTU_BLACKBOX_DIR",
@@ -114,7 +114,7 @@ class BlackBoxRecorder:
 
     # ── dumping ───────────────────────────────────────────────────────────
 
-    def dump(self, reason: str, metadata: Optional[dict] = None) -> Optional[Path]:
+    def dump(self, reason: str, metadata: dict | None = None) -> Path | None:
         """Flush all ring buffers to ``base_dir/drift_<ts>/`` as JSONL files.
 
         Returns the dump directory path so the caller can attach it to whatever

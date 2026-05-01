@@ -75,6 +75,7 @@ tools/videos/*.gif
 
 # ── AI agent / OMC state ──
 **/.omc/
+**/.omx/
 .chat_history
 
 # ── Temporary files ──

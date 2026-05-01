@@ -29,7 +29,7 @@ from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
 from core.stream import In, Out
-from core.utils.scene_mode_detector import SceneModeDetector, SceneModeConfig
+from core.utils.scene_mode_detector import SceneModeConfig, SceneModeDetector
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ class SlamBridgeModule(Module, layer=1):
             hold_seconds=float(kw.get("scene_mode_hold_s", 5.0)),
             gnss_max_age_s=float(kw.get("gnss_max_age_for_fallback_s", 2.0)),
         ))
-        self._last_published_scene_mode: Optional[str] = None
+        self._last_published_scene_mode: str | None = None
         self._last_severe_warn: float = 0.0   # throttle SEVERE degeneracy warning
         self._last_degen_time: float = 0.0
         # Degeneracy thresholds (tunable)
@@ -926,14 +926,20 @@ class SlamBridgeModule(Module, layer=1):
                 if not val:
                     continue
                 if key == "fitness":
-                    try: self._localizer_health_fitness = float(val)
-                    except ValueError: pass
+                    try:
+                        self._localizer_health_fitness = float(val)
+                    except ValueError:
+                        pass
                 elif key == "iter":
-                    try: self._localizer_health_iter = int(float(val))
-                    except ValueError: pass
+                    try:
+                        self._localizer_health_iter = int(float(val))
+                    except ValueError:
+                        pass
                 elif key == "cov":
-                    try: self._localizer_health_cov_trace = float(val)
-                    except ValueError: pass
+                    try:
+                        self._localizer_health_cov_trace = float(val)
+                    except ValueError:
+                        pass
                 # Other keys silently ignored — forward-compat for future
                 # localizer payload extensions.
             self._localizer_health_ts = _time.time()

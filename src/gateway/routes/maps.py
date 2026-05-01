@@ -1,0 +1,436 @@
+"""Map lifecycle and viewer routes for GatewayModule."""
+
+from __future__ import annotations
+
+import logging
+import os
+import pathlib
+import shutil
+import subprocess
+from datetime import datetime
+
+import numpy as np
+from fastapi import HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.responses import HTMLResponse
+
+from gateway.schemas import MapLifecycleResponse, MapListResponse, MapPointsResponse
+from gateway.services.map_safety import (
+    apply_dynamic_filter_step1half,
+    safe_map_name,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _map_dir() -> str:
+    return os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+
+
+def _safe_map_file(name: str, filename: str) -> pathlib.Path:
+    base = pathlib.Path(_map_dir()).resolve()
+    path = (base / name / filename).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError as exc:
+        raise HTTPException(status_code=403) from exc
+    return path
+
+
+def register_map_routes(app, gw) -> None:
+    @app.get(
+        "/api/v1/slam/maps",
+        summary="List maps from filesystem",
+        response_model=MapListResponse,
+    )
+    async def slam_maps():
+        map_dir = _map_dir()
+        maps = []
+        active_target = ""
+        active_link = pathlib.Path(map_dir) / "active"
+        if active_link.is_symlink():
+            active_target = active_link.resolve().name
+
+        if os.path.isdir(map_dir):
+            for d in sorted(os.listdir(map_dir)):
+                full = os.path.join(map_dir, d)
+                if not os.path.isdir(full) or d.startswith("_") or d == "active":
+                    continue
+                pcd = os.path.join(full, "map.pcd")
+                has_pcd = os.path.isfile(pcd)
+                patches_dir = os.path.join(full, "patches")
+                patch_count = (
+                    len(os.listdir(patches_dir)) if os.path.isdir(patches_dir) else 0
+                )
+                has_tomogram = os.path.isfile(os.path.join(full, "tomogram.pickle"))
+                size_mb: float | None = None
+                if has_pcd:
+                    sz = os.path.getsize(pcd)
+                    size_mb = round(sz / 1024 / 1024, 1)
+                maps.append(
+                    {
+                        "name": d,
+                        "has_pcd": has_pcd,
+                        "has_tomogram": has_tomogram,
+                        "is_active": d == active_target,
+                        "size_mb": size_mb,
+                        "patch_count": patch_count,
+                    }
+                )
+        return {"maps": maps, "active": active_target, "map_dir": map_dir}
+
+    @app.get(
+        "/api/v1/maps/{name}/pcd",
+        summary="Serve raw PCD file for inline preview",
+        responses={
+            200: {
+                "content": {
+                    "application/octet-stream": {
+                        "schema": {"type": "string", "format": "binary"}
+                    }
+                }
+            }
+        },
+    )
+    async def get_map_pcd(name: str):
+        pcd_path = _safe_map_file(name, "map.pcd")
+        if not pcd_path.is_file():
+            raise HTTPException(status_code=404, detail=f"No PCD for map: {name}")
+        return FileResponse(
+            str(pcd_path),
+            media_type="application/octet-stream",
+            filename="map.pcd",
+        )
+
+    @app.get(
+        "/api/v1/maps/{name}/points",
+        summary="Saved map point cloud as JSON",
+        response_model=MapPointsResponse,
+    )
+    async def get_saved_map_points(name: str, max_points: int = 30000):
+        pcd_path = _safe_map_file(name, "map.pcd")
+        if not pcd_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Map not found: {name}")
+
+        with open(pcd_path, "rb") as f:
+            n_points, point_step = 0, 16
+            while True:
+                line = f.readline().decode("ascii", errors="ignore").strip()
+                if "POINTS" in line:
+                    n_points = int(line.split()[-1])
+                if "SIZE" in line:
+                    point_step = sum(int(s) for s in line.split()[1:])
+                if line.startswith("DATA"):
+                    break
+            data = f.read(n_points * point_step)
+        pts = np.frombuffer(
+            data[: n_points * point_step],
+            dtype=np.float32,
+        ).reshape(n_points, point_step // 4)[:, :3]
+        valid = np.isfinite(pts).all(axis=1)
+        pts = pts[valid]
+        if len(pts) > 0:
+            med = np.median(pts, axis=0)
+            pts = pts[np.abs(pts - med).max(axis=1) < 100]
+        if len(pts) > max_points:
+            idx = np.random.choice(len(pts), max_points, replace=False)
+            pts = pts[idx]
+        flat = pts[:, :3].astype(np.float32).flatten().tolist()
+        return {"count": len(pts), "layout": "flat_xyz", "points": flat}
+
+    @app.get(
+        "/api/v1/map/points",
+        summary="Map point cloud as JSON (from ikd-tree snapshot)",
+        response_model=MapPointsResponse,
+    )
+    async def get_map_points(max_points: int = 80000):
+        with gw._map_cloud_lock:
+            pts = gw._map_points
+        if pts is None or len(pts) == 0:
+            return {"count": 0, "layout": "xyz_rows", "points": []}
+        if len(pts) > max_points:
+            idx = np.random.choice(len(pts), max_points, replace=False)
+            pts = pts[idx]
+        return {
+            "count": len(pts),
+            "layout": "xyz_rows",
+            "bounds": {
+                "x": [float(pts[:, 0].min()), float(pts[:, 0].max())],
+                "y": [float(pts[:, 1].min()), float(pts[:, 1].max())],
+                "z": [float(pts[:, 2].min()), float(pts[:, 2].max())],
+            },
+            "points": pts[:, :3].tolist(),
+        }
+
+    @app.post(
+        "/api/v1/map_cloud/reset",
+        summary="Clear accumulated map cloud (viz only, SLAM ikd-tree untouched)",
+        response_model=MapLifecycleResponse,
+    )
+    async def reset_map_cloud():
+        with gw._map_cloud_lock:
+            gw._map_points = None
+            gw._map_cloud_count = 0
+            gw._voxel_hits.clear()
+        gw.push_event({"type": "map_cloud", "points": [], "count": 0})
+        return {"success": True, "message": "Accumulated map cloud cleared"}
+
+    @app.get("/map/viewer", summary="Interactive 3D map viewer")
+    async def map_viewer(map: str = ""):
+        if map:
+            html = gw._generate_viewer_from_pcd(map)
+        else:
+            html = gw._generate_viewer_live()
+        return HTMLResponse(html)
+
+    @app.get("/robot/meshes/{filename}", summary="Serve robot STL mesh files")
+    async def serve_robot_mesh(filename: str):
+        mesh_dir = os.environ.get(
+            "DOG_MESH_DIR",
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../../../products/quadruped_ws/dog_arm/meshes",
+            ),
+        )
+        safe_name = os.path.basename(filename)
+        path = os.path.join(mesh_dir, safe_name)
+        if not os.path.isfile(path):
+            return JSONResponse(
+                status_code=404,
+                content={"error": "mesh not found", "name": safe_name},
+            )
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "public, max-age=3600",
+            },
+        )
+
+    @app.post(
+        "/api/v1/map/restore_predufo",
+        summary="Restore map.pcd from DUFOMap pre-filter backup",
+        response_model=MapLifecycleResponse,
+        responses={
+            400: {"model": MapLifecycleResponse},
+            404: {"model": MapLifecycleResponse},
+            500: {"model": MapLifecycleResponse},
+        },
+    )
+    async def restore_predufo(body: dict):
+        name = body.get("name", "")
+        err = safe_map_name(name)
+        if err is not None:
+            return JSONResponse({"success": False, "message": err}, status_code=400)
+        map_dir = _map_dir()
+        target = pathlib.Path(map_dir) / name
+        pcd = target / "map.pcd"
+        backup = target / "map.pcd.predufo"
+        if not backup.is_file():
+            return JSONResponse(
+                {
+                    "success": False,
+                    "message": (
+                        f"No predufo backup for {name}. "
+                        "DUFOMap may not have run on this map."
+                    ),
+                },
+                status_code=404,
+            )
+        try:
+            import time as _t
+
+            if pcd.is_file():
+                shutil.copy(pcd, target / f"map.pcd.replaced-{_t.time_ns()}")
+            tmp_new = pcd.with_suffix(".pcd.tmp")
+            shutil.copy(backup, tmp_new)
+            os.replace(tmp_new, pcd)
+
+            replaced = sorted(
+                target.glob("map.pcd.replaced-*"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            pruned = 0
+            for old in replaced[3:]:
+                try:
+                    old.unlink()
+                    pruned += 1
+                except Exception as e:
+                    logger.warning("cleanup old backup failed: %s", e)
+
+            return {
+                "success": True,
+                "name": name,
+                "restored_size": pcd.stat().st_size,
+                "replaced_backups_kept": min(len(replaced), 3),
+                "replaced_backups_pruned": pruned,
+                "note": "tomogram/occupancy must be rebuilt before planner use",
+            }
+        except Exception as e:
+            logger.exception("restore_predufo failed")
+            return JSONResponse(
+                {"success": False, "message": str(e)},
+                status_code=500,
+            )
+
+    @app.post(
+        "/api/v1/map/activate",
+        summary="Set active map (symlink)",
+        response_model=MapLifecycleResponse,
+        responses={
+            400: {"model": MapLifecycleResponse},
+            404: {"model": MapLifecycleResponse},
+            500: {"model": MapLifecycleResponse},
+        },
+    )
+    async def activate_map(body: dict):
+        name = body.get("name", "")
+        err = safe_map_name(name)
+        if err is not None:
+            return JSONResponse({"success": False, "message": err}, status_code=400)
+        map_dir = _map_dir()
+        target = os.path.join(map_dir, name)
+        if not os.path.isdir(target):
+            return JSONResponse(
+                {"success": False, "message": f"Map does not exist: {name}"},
+                status_code=404,
+            )
+        active_link = pathlib.Path(map_dir) / "active"
+        try:
+            if active_link.is_symlink() or active_link.exists():
+                active_link.unlink()
+            active_link.symlink_to(name)
+            return {"success": True, "active": name}
+        except Exception as e:
+            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+    @app.post(
+        "/api/v1/map/rename",
+        summary="Rename a saved map",
+        response_model=MapLifecycleResponse,
+        responses={
+            400: {"model": MapLifecycleResponse},
+            404: {"model": MapLifecycleResponse},
+            409: {"model": MapLifecycleResponse},
+            500: {"model": MapLifecycleResponse},
+        },
+    )
+    async def rename_map(body: dict):
+        old = body.get("old_name", "")
+        new = body.get("new_name", "")
+        err_old = safe_map_name(old)
+        err_new = safe_map_name(new)
+        if err_old or err_new:
+            return JSONResponse(
+                {"success": False, "message": err_old or err_new},
+                status_code=400,
+            )
+        map_dir = _map_dir()
+        old_path = os.path.join(map_dir, old)
+        new_path = os.path.join(map_dir, new)
+        if not os.path.isdir(old_path):
+            return JSONResponse(
+                {"success": False, "message": f"Map does not exist: {old}"},
+                status_code=404,
+            )
+        if os.path.exists(new_path):
+            return JSONResponse(
+                {"success": False, "message": f"Name already exists: {new}"},
+                status_code=409,
+            )
+        try:
+            os.rename(old_path, new_path)
+            active_link = pathlib.Path(map_dir) / "active"
+            if active_link.is_symlink() and active_link.resolve().name == old:
+                active_link.unlink()
+                active_link.symlink_to(new_path)
+            return {"success": True, "old_name": old, "new_name": new}
+        except Exception as e:
+            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+    @app.post(
+        "/api/v1/map/save",
+        summary="Save current SLAM map",
+        response_model=MapLifecycleResponse,
+        responses={
+            400: {"model": MapLifecycleResponse},
+            500: {"model": MapLifecycleResponse},
+        },
+    )
+    async def save_map_now(body: dict | None = None):
+        if body is None:
+            body = {}
+        name = body.get("name", "")
+        if not name:
+            name = "map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        err = safe_map_name(name)
+        if err is not None:
+            return JSONResponse({"success": False, "message": err}, status_code=400)
+        map_dir = _map_dir()
+        save_dir = os.path.join(map_dir, name)
+        os.makedirs(save_dir, exist_ok=True)
+        pcd_path = os.path.join(save_dir, "map.pcd")
+        errors = []
+
+        ros_env = (
+            "source /opt/ros/humble/setup.bash && "
+            "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
+            "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+        )
+
+        try:
+            r = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    ros_env
+                    + f"ros2 service call /nav/save_map interface/srv/SaveMaps "
+                    + f"\"{{file_path: '{pcd_path}'}}\"",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if "success=True" not in r.stdout:
+                errors.append(
+                    f"Fast-LIO2: {r.stderr[-200:] if r.stderr else r.stdout[-200:]}"
+                )
+        except Exception as e:
+            errors.append(f"Fast-LIO2: {e}")
+
+        try:
+            subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    ros_env
+                    + f"ros2 service call /pgo/save_maps interface/srv/SaveMaps "
+                    + f"\"{{file_path: '{save_dir}', save_patches: true}}\"",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except Exception:
+            pass
+
+        dufo_result = apply_dynamic_filter_step1half(save_dir)
+
+        has_pcd = os.path.isfile(pcd_path)
+        if has_pcd:
+            size = os.path.getsize(pcd_path)
+            resp = {
+                "success": True,
+                "name": name,
+                "path": save_dir,
+                "size": f"{size / 1024 / 1024:.1f}MB",
+            }
+            if dufo_result is not None:
+                resp["dynamic_filter"] = dufo_result
+            return resp
+        return JSONResponse(
+            {"success": False, "name": name, "errors": errors},
+            status_code=500,
+        )

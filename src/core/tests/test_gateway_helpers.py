@@ -144,16 +144,17 @@ def test_apply_dynamic_filter_refilter_returns_failure(monkeypatch):
         }
 
 
-def test_apply_dynamic_filter_passes_save_dir(monkeypatch, tmp_path):
+def test_apply_dynamic_filter_passes_save_dir(monkeypatch):
     """save_dir argument must propagate to refilter_map first positional."""
     monkeypatch.setenv("LINGTU_SAVE_DYNAMIC_FILTER", "1")
+    save_dir = _FakeSaveDir("propagate")
     with patch("nav.services.nav_services.dynamic_filter.refilter_map") as mock_refilter:
         mock_refilter.return_value = {"success": True, "orig_count": 0,
                                        "clean_count": 0, "dropped": 0,
                                        "elapsed_s": 0.0}
-        _apply_dynamic_filter_step1half(tmp_path)
+        _apply_dynamic_filter_step1half(save_dir)
         args, kwargs = mock_refilter.call_args
-        assert args[0] == tmp_path
+        assert args[0] is save_dir
         # timeout_s kwarg must be 300.0 (tested indirectly via not raising)
         assert kwargs.get("timeout_s") == 300.0
 

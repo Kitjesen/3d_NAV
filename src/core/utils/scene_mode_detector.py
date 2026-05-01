@@ -72,14 +72,14 @@ class SceneModeDetector:
     A manual override of None falls back to auto.
     """
 
-    def __init__(self, config: Optional[SceneModeConfig] = None) -> None:
+    def __init__(self, config: SceneModeConfig | None = None) -> None:
         self.config = config or SceneModeConfig()
         env_mode = os.environ.get("LINGTU_SCENE_MODE", "").strip().lower() or None
         if env_mode and env_mode not in VALID_MODES:
             logger.warning(
                 "LINGTU_SCENE_MODE=%r is not one of %s — ignoring", env_mode, VALID_MODES)
             env_mode = None
-        self._manual: Optional[str] = env_mode if env_mode in (MODE_INDOOR, MODE_OUTDOOR) else None
+        self._manual: str | None = env_mode if env_mode in (MODE_INDOOR, MODE_OUTDOOR) else None
         self._auto_mode: str = MODE_UNKNOWN
         # Wall-clock of the most recent observation that *agreed* with the
         # currently-pending candidate. Together with config.hold_seconds this
@@ -104,7 +104,7 @@ class SceneModeDetector:
             return "init"
         return "auto"
 
-    def set_manual_mode(self, mode: Optional[str]) -> None:
+    def set_manual_mode(self, mode: str | None) -> None:
         """Set / clear manual override. Pass None to revert to auto detection."""
         if mode is not None:
             mode = mode.strip().lower()
@@ -117,7 +117,7 @@ class SceneModeDetector:
             logger.info("SceneMode: manual %r → effective %s", mode, new)
             self._last_change_ts = time.time()
 
-    def observe_gnss(self, fix_type: str, age_s: float, now: Optional[float] = None) -> bool:
+    def observe_gnss(self, fix_type: str, age_s: float, now: float | None = None) -> bool:
         """Feed a GNSS observation; returns True if the *auto* mode flipped.
 
         ``fix_type`` should be the upper-case name (e.g. ``"RTK_FIXED"``).
@@ -136,7 +136,7 @@ class SceneModeDetector:
             candidate = MODE_OUTDOOR
         return self._update_auto(candidate, now)
 
-    def observe_no_gnss(self, now: Optional[float] = None) -> bool:
+    def observe_no_gnss(self, now: float | None = None) -> bool:
         """Tick when no GNSS message has arrived recently (also indoor evidence)."""
         return self._update_auto(MODE_INDOOR, now if now is not None else time.time())
 

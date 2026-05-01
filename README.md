@@ -82,6 +82,14 @@ python lingtu.py doctor                 # diagnostics
 
 ## Architecture
 
+<p align="center">
+  <img src="docs/assets/lingtu-current-architecture.png" alt="LingTu current system architecture" width="920" />
+</p>
+
+LingTu is organized as a Module-First runtime: `Module` is the runtime unit,
+`Blueprint` is the composition unit, and `contracts` define the message
+boundaries used by Gateway, navigation, mapping, semantics, and safety.
+
 ```
 L0  Safety       SafetyRingModule + GeofenceManager + CmdVelMux
 L1  Hardware     Driver + CameraBridge + LiDAR + SLAM

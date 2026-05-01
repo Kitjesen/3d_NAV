@@ -13,12 +13,13 @@ _NATIVE_CAMERA_DRIVERS = {"MujocoDriverModule"}  # Only MuJoCo has built-in came
 def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -> Blueprint:
     """Visual perception: RGB-D semantic perception + optional encoder + 3D reconstruction."""
     bp = Blueprint()
-    try:
-        from core.service_manager import get_service_manager
-        svc = get_service_manager()
-        svc.ensure("camera")
-    except Exception:
-        pass
+    if config.get("manage_services", True):
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
+            svc.ensure("camera")
+        except Exception:
+            pass
 
     drv_name = config.get("_driver_cls_name", "")
     needs_camera_bridge = bool(config.get("force_camera_bridge")) or (

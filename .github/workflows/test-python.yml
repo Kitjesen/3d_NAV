@@ -44,6 +44,7 @@ jobs:
             cli
             config
             sim
+            calibration
             pyproject.toml
           sparse-checkout-cone-mode: false
       - uses: actions/setup-python@v5

@@ -5,8 +5,11 @@ import unittest
 from unittest.mock import patch
 
 from core.utils.scene_mode_detector import (
-    MODE_INDOOR, MODE_OUTDOOR, MODE_UNKNOWN,
-    SceneModeConfig, SceneModeDetector,
+    MODE_INDOOR,
+    MODE_OUTDOOR,
+    MODE_UNKNOWN,
+    SceneModeConfig,
+    SceneModeDetector,
 )
 
 

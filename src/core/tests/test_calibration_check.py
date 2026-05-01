@@ -229,6 +229,7 @@ class TestTimeOffset(unittest.TestCase):
 
         def fake_open(path, *args, **kwargs):
             from io import StringIO
+
             import yaml as _y
             payload = {}
             if str(path) == str(cc.FASTLIO2_CONFIG) and lio_offset is not None:

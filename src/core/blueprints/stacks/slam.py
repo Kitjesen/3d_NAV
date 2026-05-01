@@ -19,7 +19,11 @@ from core.blueprint import Blueprint
 logger = logging.getLogger(__name__)
 
 
-def slam(profile: str = "fastlio2", enable_visual_backup: bool = True) -> Blueprint:
+def slam(
+    profile: str = "fastlio2",
+    enable_visual_backup: bool = True,
+    manage_services: bool = True,
+) -> Blueprint:
     """SLAM / localization stack.
 
     C++ SLAM always runs as a separate systemd service (correct DDS isolation).
@@ -50,35 +54,36 @@ def slam(profile: str = "fastlio2", enable_visual_backup: bool = True) -> Bluepr
     if not profile or profile == "none":
         return bp
 
-    # Start the right systemd services for this mode
-    try:
-        from core.service_manager import get_service_manager
-        svc = get_service_manager()
+    # Start the right systemd services for this mode.
+    if manage_services:
+        try:
+            from core.service_manager import get_service_manager
+            svc = get_service_manager()
 
-        if profile == "fastlio2":
-            svc.stop("localizer")  # stop nav mode if running
-            svc.ensure("slam", "slam_pgo")
-            svc.wait_ready("slam", timeout=10.0)
-            logger.info("SLAM mapping services started (slam + pgo)")
+            if profile == "fastlio2":
+                svc.stop("localizer")  # stop nav mode if running
+                svc.ensure("slam", "slam_pgo")
+                svc.wait_ready("slam", timeout=10.0)
+                logger.info("SLAM mapping services started (slam + pgo)")
 
-        elif profile == "localizer":
-            svc.stop("slam_pgo")  # stop map mode if running
-            svc.ensure("slam", "localizer")
-            svc.wait_ready("slam", "localizer", timeout=10.0)
-            logger.info("SLAM localization services started (slam + localizer)")
+            elif profile == "localizer":
+                svc.stop("slam_pgo")  # stop map mode if running
+                svc.ensure("slam", "localizer")
+                svc.wait_ready("slam", "localizer", timeout=10.0)
+                logger.info("SLAM localization services started (slam + localizer)")
 
-        elif profile == "bridge":
-            pass  # assume SLAM already running
+            elif profile == "bridge":
+                pass  # assume SLAM already running
 
-    except Exception as e:
-        if profile in ("fastlio2", "localizer"):
-            logger.warning(
-                "SLAM service manager unavailable (no systemd?): %s. "
-                "SLAM C++ nodes will not be started automatically. "
-                "On S100P, ensure systemd services are configured. "
-                "On dev machines, SLAM is not needed (stub/dev profiles).", e)
-        else:
-            logger.debug("SLAM service manager: %s", e)
+        except Exception as e:
+            if profile in ("fastlio2", "localizer"):
+                logger.warning(
+                    "SLAM service manager unavailable (no systemd?): %s. "
+                    "SLAM C++ nodes will not be started automatically. "
+                    "On S100P, ensure systemd services are configured. "
+                    "On dev machines, SLAM is not needed (stub/dev profiles).", e)
+            else:
+                logger.debug("SLAM service manager: %s", e)
 
     # Bridge ROS2 topics into Python Module ports
     try:

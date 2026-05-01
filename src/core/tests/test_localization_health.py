@@ -318,7 +318,7 @@ class TestSlamBridgeDegeneracyParsing(unittest.TestCase):
         msg = self._make_msg(cond=10.0, min_eig=0.5, max_eig=5.0,
                              eff_ratio=0.9, degen_count=0,
                              mask=[1, 1, 1, 1, 1, 1])
-        msg.data = list(msg.data) + [42.0, 5.0, 0.0]
+        msg.data = [*list(msg.data), 42.0, 5.0, 0.0]
         m._on_rclpy_degeneracy_detail(msg)
         self.assertFalse(m._ieskf_converged)
         self.assertAlmostEqual(m._pos_cov_trace, 42.0, places=6)

@@ -263,7 +263,7 @@ def _check_lidar_imu_consistency(
         )
 
 
-def _extract_pointlio_time_offset() -> Optional[float]:
+def _extract_pointlio_time_offset() -> float | None:
     """Read time_diff_lidar_to_imu from pointlio.yaml.
 
     Supports both ROS2 parameter file layout (`/** -> ros__parameters -> common`)

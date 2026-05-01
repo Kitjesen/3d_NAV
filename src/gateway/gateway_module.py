@@ -22,7 +22,7 @@ REST
   POST /api/v1/instruction   {text}
   POST /api/v1/mode          {mode: manual|autonomous|estop}
   POST /api/v1/lease         {action: acquire|release|renew, client_id, ttl?}
-  POST /api/v1/maps          {action: list|save|use|build|delete|rename, name?, new_name?}
+  POST /api/v1/maps          {action: list|save|delete|rename|set_active|build_tomogram, name?, new_name?}
   GET  /api/v1/state         full snapshot (odom, safety, mission, mode, lease)
   GET  /api/v1/scene_graph
   GET  /api/v1/health
@@ -52,7 +52,7 @@ import os
 import queue
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field, field_validator
@@ -64,6 +64,27 @@ from core.msgs.semantic import ExecutionEval, SafetyState, SceneGraph
 from core.msgs.sensor import PointCloud2
 from core.registry import register
 from core.stream import In, Out
+from gateway.schemas import (
+    BitrateRequest,
+    ControlCommandResponse,
+    GatewayErrorResponse,
+    LeaseResponse,
+    MapLifecycleResponse,
+    SessionResponse,
+    SessionTransitionResponse,
+)
+from gateway.services.commands import CommandJournal
+from gateway.services.map_safety import (
+    apply_dynamic_filter_step1half as _map_apply_dynamic_filter_step1half,
+    safe_map_name as _map_safe_map_name,
+)
+from gateway.services.traffic import (
+    DEFAULT_CLOUD_QUEUE_MAXSIZE,
+    DEFAULT_SSE_QUEUE_MAXSIZE,
+    DROP_OLDEST_POLICY,
+    RECOMMENDED_CLIENT_RATES_HZ,
+    put_latest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,18 +98,24 @@ class GoalRequest(BaseModel):
     y: float
     z: float = 0.0
     instruction: str | None = None
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
 
 
 class ClickNavRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
 
 
 class CmdVelRequest(BaseModel):
     vx: float
     vy: float = 0.0
     wz: float
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
 
     @field_validator("vx", "wz")
     @classmethod
@@ -101,14 +128,19 @@ class CmdVelRequest(BaseModel):
 
 class InstructionRequest(BaseModel):
     text: str = Field(min_length=1, max_length=1024)
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
 
 
-class BitrateRequest(BaseModel):
-    bps: int
+class StopRequest(BaseModel):
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
 
 
 class ModeRequest(BaseModel):
     mode: str
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
 
     @field_validator("mode")
     @classmethod
@@ -139,7 +171,16 @@ class MapRequest(BaseModel):
     @field_validator("action")
     @classmethod
     def valid_action(cls, v: str) -> str:
-        allowed = {"list", "save", "use", "build", "delete", "rename"}
+        allowed = {
+            "list",
+            "save",
+            "use",
+            "build",
+            "delete",
+            "rename",
+            "set_active",
+            "build_tomogram",
+        }
         if v not in allowed:
             raise ValueError(f"action must be one of {allowed}")
         return v
@@ -211,29 +252,8 @@ def _apply_dynamic_filter_step1half(save_dir: str | os.PathLike[str]) -> dict | 
         return {"success": False, "error": str(e)}
 
 
-def _parse_since(since: str) -> float:
-    """Parse a human-readable 'since' string to a Unix timestamp.
-
-    Accepted formats: "1h", "30m", "30min", "5s", "2d", or a bare number
-    (treated as seconds-ago).  Returns ``time.time() - delta``.
-    """
-    import re as _re
-    now = time.time()
-    m = _re.match(r"^(\d+(?:\.\d+)?)\s*(s|sec|m|min|h|hour|d|day)?", since.strip().lower())
-    if m:
-        value = float(m.group(1))
-        unit = m.group(2) or "s"
-        if unit in ("h", "hour"):
-            return now - value * 3600
-        if unit in ("m", "min"):
-            return now - value * 60
-        if unit in ("d", "day"):
-            return now - value * 86400
-        return now - value
-    try:
-        return now - float(since)
-    except ValueError:
-        return now - 3600  # fallback: 1 hour
+_safe_map_name = _map_safe_map_name
+_apply_dynamic_filter_step1half = _map_apply_dynamic_filter_step1half
 
 
 # ---------------------------------------------------------------------------
@@ -347,11 +367,16 @@ class GatewayModule(Module, layer=6):
         self._last_path: list[dict] = []
 
         self._lease = _Lease()
+        self._command_journal = CommandJournal()
 
         # SSE fan-out — one asyncio.Queue per connected client.
         # Written from Module threads via push_event() (thread-safe).
         self._sse_lock:   threading.Lock = threading.Lock()
         self._sse_queues: list[asyncio.Queue] = []
+        self._sse_queue_maxsize: int = DEFAULT_SSE_QUEUE_MAXSIZE
+        self._sse_published_events: int = 0
+        self._sse_dropped_events: int = 0
+        self._sse_max_depth_seen: int = 0
 
         # Teleop: delegate to TeleopModule (set by on_system_modules)
         self._teleop_module = None
@@ -395,6 +420,10 @@ class GatewayModule(Module, layer=6):
         # an attribute so the /api/v1/webrtc/offer route can check presence
         # without an AttributeError when aiortc is not installed.
         self._webrtc: Any = None
+        self._go2rtc_upstream: str = os.environ.get(
+            "LINGTU_GO2RTC_URL",
+            "http://127.0.0.1:1984",
+        )
 
         # Binary cloud channel — one frame buffer + per-client asyncio.Queue.
         # Points are quantized int16 (see core.utils.binary_codec) so a 60k
@@ -404,6 +433,10 @@ class GatewayModule(Module, layer=6):
         self._latest_cloud_buf: bytes | None = None
         self._cloud_seq: int = 0
         self._cloud_subs: list[asyncio.Queue] = []
+        self._cloud_queue_maxsize: int = DEFAULT_CLOUD_QUEUE_MAXSIZE
+        self._cloud_published_frames: int = 0
+        self._cloud_dropped_frames: int = 0
+        self._cloud_max_depth_seen: int = 0
 
         # Odometry rate tracking (sliding window for SLAM Hz display)
         self._odom_timestamps: list = []  # last 20 timestamps
@@ -458,6 +491,7 @@ class GatewayModule(Module, layer=6):
         self._session_error: str = ""            # last error from start/end
         self._session_pending: bool = False      # True while transitioning
         self._icp_quality: float = 0.0           # from localization_quality
+        self._localization_status: dict | None = None
 
         # Autonomous exploration state + frontier explorer module ref
         self._exploring: bool = False
@@ -1292,8 +1326,11 @@ class GatewayModule(Module, layer=6):
         """
         if not isinstance(state, dict):
             return
-        self._blackbox.record("slam_diag", state)
-        self.push_event({"type": "slam_diag", "data": state})
+        d = dict(state)
+        with self._state_lock:
+            self._localization_status = d
+        self._blackbox.record("slam_diag", d)
+        self.push_event({"type": "slam_diag", "data": d})
 
     def _on_tare_stats(self, stats: dict) -> None:
         """Forward TAREExplorerModule tare_stats to SSE (type=tare_stats)."""
@@ -1424,14 +1461,19 @@ class GatewayModule(Module, layer=6):
         """Thread-safe: push an event to all connected SSE clients."""
         with self._sse_lock:
             queues = list(self._sse_queues)
+        dropped = 0
+        max_depth = 0
         for q in queues:
-            try:
-                q.put_nowait(event)
-            except asyncio.QueueFull:
-                pass  # slow client — skip frame rather than block
+            if put_latest(q, event):
+                dropped += 1
+            max_depth = max(max_depth, q.qsize())
+        with self._sse_lock:
+            self._sse_published_events += 1
+            self._sse_dropped_events += dropped
+            self._sse_max_depth_seen = max(self._sse_max_depth_seen, max_depth)
 
     def _sse_subscribe(self) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue(maxsize=128)
+        q: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_maxsize)
         with self._sse_lock:
             self._sse_queues.append(q)
         return q
@@ -1451,16 +1493,21 @@ class GatewayModule(Module, layer=6):
             self._latest_cloud_buf = buf
             self._cloud_seq += 1
             subs = list(self._cloud_subs)
+        dropped = 0
+        max_depth = 0
         for q in subs:
-            try:
-                q.put_nowait(buf)
-            except asyncio.QueueFull:
-                pass  # slow client — drop frame, never block producer
+            if put_latest(q, buf):
+                dropped += 1
+            max_depth = max(max_depth, q.qsize())
+        with self._cloud_lock:
+            self._cloud_published_frames += 1
+            self._cloud_dropped_frames += dropped
+            self._cloud_max_depth_seen = max(self._cloud_max_depth_seen, max_depth)
 
     def _cloud_subscribe(self) -> tuple[asyncio.Queue, bytes | None]:
         # maxsize=2 keeps memory bounded; cloud frames supersede each other,
         # so a backlog longer than that is wasted bandwidth.
-        q: asyncio.Queue = asyncio.Queue(maxsize=2)
+        q: asyncio.Queue = asyncio.Queue(maxsize=self._cloud_queue_maxsize)
         with self._cloud_lock:
             self._cloud_subs.append(q)
             latest = self._latest_cloud_buf
@@ -1472,6 +1519,52 @@ class GatewayModule(Module, layer=6):
                 self._cloud_subs.remove(q)
             except ValueError:
                 pass
+
+    def _traffic_stats_snapshot(self) -> dict[str, Any]:
+        with self._sse_lock:
+            sse_depths = [q.qsize() for q in self._sse_queues]
+            sse = {
+                "clients": len(self._sse_queues),
+                "queue_maxsize": self._sse_queue_maxsize,
+                "queue_depths": sse_depths,
+                "max_depth_seen": self._sse_max_depth_seen,
+                "published_events": self._sse_published_events,
+                "dropped_events": self._sse_dropped_events,
+                "drop_policy": DROP_OLDEST_POLICY,
+            }
+        with self._cloud_lock:
+            cloud_depths = [q.qsize() for q in self._cloud_subs]
+            cloud = {
+                "clients": len(self._cloud_subs),
+                "queue_maxsize": self._cloud_queue_maxsize,
+                "queue_depths": cloud_depths,
+                "max_depth_seen": self._cloud_max_depth_seen,
+                "published_frames": self._cloud_published_frames,
+                "dropped_frames": self._cloud_dropped_frames,
+                "drop_policy": DROP_OLDEST_POLICY,
+                "latest_seq": self._cloud_seq,
+            }
+        return {
+            "sse": sse,
+            "cloud": cloud,
+            "recommended_client_rates_hz": dict(RECOMMENDED_CLIENT_RATES_HZ),
+        }
+
+    def _command_stats_snapshot(self) -> dict[str, Any]:
+        return self._command_journal.snapshot()
+
+    def _run_control_command(
+        self,
+        command: str,
+        body: Any,
+        action: Callable[[], dict[str, Any]],
+    ) -> dict[str, Any]:
+        request_id = getattr(body, "request_id", None) if body is not None else None
+        client_id = getattr(body, "client_id", None) if body is not None else None
+        replay = self._command_journal.replay(command, request_id)
+        if replay is not None:
+            return replay
+        return self._command_journal.accept(command, request_id, client_id, action())
 
     # -- teleop internals (forwarded to TeleopModule) -------------------------
 
@@ -1501,10 +1594,9 @@ class GatewayModule(Module, layer=6):
 
     def _build_app(self):
         try:
-            from fastapi import Body, FastAPI, Request, WebSocket, WebSocketDisconnect
-            from fastapi.exceptions import RequestValidationError
+            from fastapi import FastAPI
             from fastapi.middleware.cors import CORSMiddleware
-            from fastapi.responses import JSONResponse, Response, StreamingResponse
+            from fastapi.responses import JSONResponse
         except ImportError:
             logger.error("FastAPI not installed — run: pip install fastapi uvicorn")
             return None
@@ -1524,328 +1616,132 @@ class GatewayModule(Module, layer=6):
 
         # -- API Key auth (disabled if LINGTU_API_KEY not set) -------------
         from gateway.auth import APIKeyMiddleware
+        from gateway.routes import (
+            mount_dashboard_assets,
+            register_app_routes,
+            register_auth_routes,
+            register_camera_routes,
+            register_diagnostic_routes,
+            register_map_routes,
+            register_operation_routes,
+            register_realtime_routes,
+            register_status_routes,
+        )
         app.add_middleware(APIKeyMiddleware)
 
         gw = self
 
-        # -- Auth endpoints (always public) --------------------------------
+        register_operation_routes(app, gw)
+        register_diagnostic_routes(app, gw)
+        register_map_routes(app, gw)
+        register_status_routes(app, gw)
 
-        @app.post("/api/v1/auth/login", summary="Login with API key")
-        async def auth_login(request: Request):
-            body = await request.json()
-            key = body.get("key", "")
-            from gateway.auth import _get_configured_key
-            configured = _get_configured_key()
-            if not configured:
-                return JSONResponse({"ok": True, "message": "认证未启用"})
-            import hashlib
-            import hmac as _hmac
-            if _hmac.compare_digest(
-                hashlib.sha256(key.encode()).hexdigest(),
-                hashlib.sha256(configured.encode()).hexdigest(),
-            ):
-                resp = JSONResponse({"ok": True, "message": "登录成功"})
-                resp.set_cookie("lingtu_api_key", key, httponly=True, max_age=86400 * 30)
-                return resp
-            return JSONResponse({"ok": False, "message": "Key 无效"}, status_code=403)
-
-        @app.get("/api/v1/auth/check", summary="Check if auth is required")
-        async def auth_check():
-            from gateway.auth import _get_configured_key
-            configured = _get_configured_key()
-            return {"auth_required": configured is not None}
-
-        # -- 422 Validation errors → clean JSON ----------------------------
-
-        @app.exception_handler(RequestValidationError)
-        async def validation_error(req: Request, exc: RequestValidationError):
-            return JSONResponse(
-                status_code=422,
-                content={"error": "validation_error", "detail": exc.errors()},
-            )
-
-        # ── Navigation ─────────────────────────────────────────────────────
-
-        @app.get(
-            "/api/v1/webrtc/stats",
-            summary="WebRTC peer telemetry (bitrate, fps, encode time)",
-        )
-        async def get_webrtc_stats():
-            """Poll-friendly endpoint for the camera HUD.
-
-            Returns ``{"enabled": false}`` when aiortc is missing so the UI
-            can hide the HUD instead of showing an error.
-            """
-            if gw._webrtc is None:
-                return {"enabled": False, "active_peers": 0}
-            try:
-                return await gw._webrtc.collect_stats()
-            except Exception as e:
-                logger.debug("webrtc stats error: %s", e)
-                return JSONResponse(
-                    {"enabled": True, "error": str(e)}, status_code=500,
-                )
-
-        # ── Go2RTC sidecar (image transmission accelerator) ────────────────
-        # go2rtc runs as its own systemd service (see scripts/install_go2rtc.sh)
-        # and handles the camera hot path natively in Go, bypassing aiortc's
-        # Python SRTP/RTP overhead.  We reverse-proxy its WHEP signalling and
-        # health endpoints so the browser stays on port 5050 (single origin,
-        # single auth surface).  Media itself never enters this process — it
-        # flows browser ↔ go2rtc over UDP directly via ICE host candidates.
-        #
-        # Browser flow:
-        #   1. GET  /api/v1/webrtc/go2rtc/status  → is go2rtc reachable?
-        #   2. POST /api/v1/webrtc/whep?src=cam   → SDP offer / answer
-        import os as _os
-        _go2rtc_upstream = _os.environ.get("LINGTU_GO2RTC_URL", "http://127.0.0.1:1984")
-
-        @app.get(
-            "/api/v1/webrtc/go2rtc/status",
-            summary="Probe the go2rtc sidecar (image transmission fast path)",
-        )
-        async def get_go2rtc_status():
-            try:
-                import httpx
-            except ImportError:
-                return {"available": False, "reason": "httpx_missing"}
-            try:
-                async with httpx.AsyncClient(timeout=0.5) as client:
-                    r = await client.get(f"{_go2rtc_upstream}/api/streams")
-                    if r.status_code != 200:
-                        return {"available": False, "status": r.status_code}
-                    data = r.json()
-                    # go2rtc returns {"name": {producers:[], consumers:[]}, ...}
-                    streams = list(data.keys()) if isinstance(data, dict) else []
-                    return {"available": True, "streams": streams}
-            except Exception as e:
-                return {"available": False, "reason": type(e).__name__}
+        # Navigation
 
         @app.post(
-            "/api/v1/webrtc/whep",
-            summary="WHEP signalling proxy to go2rtc (image transmission path)",
+            "/api/v1/goal",
+            summary="Send navigation goal",
+            response_model=ControlCommandResponse,
         )
-        async def post_webrtc_whep(request: Request):
-            """Forward a WHEP SDP offer to go2rtc.
-
-            WHEP (RFC 9725) is just ``POST <sdp offer> → <sdp answer>`` with
-            Content-Type application/sdp.  We proxy the bytes through; no
-            transcoding, no inspection.  Returns 503 if go2rtc is down so
-            the browser falls back to aiortc or JPEG.
-            """
-            try:
-                import httpx
-            except ImportError:
-                return JSONResponse(
-                    {"error": "httpx_missing"}, status_code=503,
-                )
-            src = request.query_params.get("src", "cam")
-            body = await request.body()
-            try:
-                async with httpx.AsyncClient(timeout=3.0) as client:
-                    r = await client.post(
-                        f"{_go2rtc_upstream}/api/webrtc?src={src}",
-                        content=body,
-                        headers={"content-type": "application/sdp"},
-                    )
-            except Exception as e:
-                logger.info("go2rtc unreachable: %s", e)
-                return JSONResponse(
-                    {"error": "go2rtc_unreachable"}, status_code=503,
-                )
-            return Response(
-                content=r.content,
-                status_code=r.status_code,
-                media_type=r.headers.get("content-type", "application/sdp"),
-            )
-
-        @app.post(
-            "/api/v1/webrtc/offer",
-            summary="WebRTC SDP offer/answer exchange for low-latency camera",
-        )
-        async def post_webrtc_offer(body: dict = Body(...)):
-            """Forward a browser offer to WebRTCStreamModule.
-
-            Returns 503 when aiortc is not installed or the module is not
-            wired into the blueprint, so the browser can fall back to the
-            JPEG-over-WS path without retrying.
-            """
-            if gw._webrtc is None:
-                return JSONResponse(
-                    {"error": "webrtc_unavailable"}, status_code=503,
-                )
-            try:
-                answer = await gw._webrtc.handle_offer(body)
-            except ValueError as e:
-                return JSONResponse({"error": str(e)}, status_code=400)
-            return answer
-
-        @app.post(
-            "/api/v1/webrtc/bitrate",
-            summary="Live-tune WebRTC max bitrate without reconnect",
-        )
-        async def post_webrtc_bitrate(body: BitrateRequest):
-            """Hot-swap encoder cap on all active senders.
-
-            Body: ``{"bps": 1500000}``.  Clamped to [100kbps, 10Mbps].
-            Used for on-site spot-checking weak-network behaviour — the
-            browser's REMB/TWCC keeps the existing peer connection.
-            """
-            if gw._webrtc is None:
-                return JSONResponse(
-                    {"error": "webrtc_unavailable"}, status_code=503,
-                )
-            try:
-                return await gw._webrtc.set_max_bitrate(body.bps)
-            except ValueError as e:
-                return JSONResponse({"error": str(e)}, status_code=400)
-
-        @app.post("/api/v1/goal", summary="Send navigation goal")
         async def post_goal(body: GoalRequest):
-            gw.goal_pose.publish(PoseStamped(
-                pose=Pose(
-                    position=Vector3(body.x, body.y, body.z),
-                    orientation=Quaternion(0, 0, 0, 1),
-                ),
-                frame_id="map",
-                ts=time.time(),
-            ))
-            if body.instruction:
-                gw.instruction.publish(body.instruction)
-            return {"status": "ok", "goal": [body.x, body.y, body.z]}
+            def _publish() -> dict[str, Any]:
+                gw.goal_pose.publish(PoseStamped(
+                    pose=Pose(
+                        position=Vector3(body.x, body.y, body.z),
+                        orientation=Quaternion(0, 0, 0, 1),
+                    ),
+                    frame_id="map",
+                    ts=time.time(),
+                ))
+                if body.instruction:
+                    gw.instruction.publish(body.instruction)
+                return {"status": "ok", "goal": [body.x, body.y, body.z]}
+            return gw._run_control_command("goal", body, _publish)
 
-        @app.post("/api/v1/navigate/click", summary="Navigate to map-viewer click point")
+        @app.post(
+            "/api/v1/navigate/click",
+            summary="Navigate to map-viewer click point",
+            response_model=ControlCommandResponse,
+        )
         async def post_navigate_click(body: ClickNavRequest):
-            gw.goal_pose.publish(PoseStamped(
-                pose=Pose(
-                    position=Vector3(body.x, body.y, body.z),
-                    orientation=Quaternion(0, 0, 0, 1),
-                ),
-                frame_id="map",
-                ts=time.time(),
-            ))
-            return {"status": "ok", "goal": [body.x, body.y, body.z]}
+            def _publish() -> dict[str, Any]:
+                gw.goal_pose.publish(PoseStamped(
+                    pose=Pose(
+                        position=Vector3(body.x, body.y, body.z),
+                        orientation=Quaternion(0, 0, 0, 1),
+                    ),
+                    frame_id="map",
+                    ts=time.time(),
+                ))
+                return {"status": "ok", "goal": [body.x, body.y, body.z]}
+            return gw._run_control_command("navigate_click", body, _publish)
 
-        @app.post("/api/v1/cmd_vel", summary="Direct velocity command")
+        @app.post(
+            "/api/v1/cmd_vel",
+            summary="Direct velocity command",
+            response_model=ControlCommandResponse,
+        )
         async def post_cmd_vel(body: CmdVelRequest):
-            gw.cmd_vel.publish(Twist(
-                linear=Vector3(body.vx, body.vy, 0),
-                angular=Vector3(0, 0, body.wz),
-            ))
-            return {"status": "ok"}
+            def _publish() -> dict[str, Any]:
+                gw.cmd_vel.publish(Twist(
+                    linear=Vector3(body.vx, body.vy, 0),
+                    angular=Vector3(0, 0, body.wz),
+                ))
+                return {"status": "ok"}
+            return gw._run_control_command("cmd_vel", body, _publish)
 
-        @app.post("/api/v1/stop", summary="Emergency stop")
-        async def post_stop():
-            gw.stop_cmd.publish(2)
-            gw.cmd_vel.publish(Twist())
-            return {"status": "stopped"}
+        @app.post(
+            "/api/v1/stop",
+            summary="Emergency stop",
+            response_model=ControlCommandResponse,
+        )
+        async def post_stop(body: StopRequest | None = None):
+            def _publish() -> dict[str, Any]:
+                gw.stop_cmd.publish(2)
+                gw.cmd_vel.publish(Twist())
+                return {"status": "stopped"}
+            return gw._run_control_command("stop", body, _publish)
 
-        @app.post("/api/v1/instruction", summary="Natural language navigation instruction")
+        @app.post(
+            "/api/v1/instruction",
+            summary="Natural language navigation instruction",
+            response_model=ControlCommandResponse,
+        )
         async def post_instruction(body: InstructionRequest):
-            gw.instruction.publish(body.text)
-            return {"status": "ok", "instruction": body.text}
+            def _publish() -> dict[str, Any]:
+                gw.instruction.publish(body.text)
+                return {"status": "ok", "instruction": body.text}
+            return gw._run_control_command("instruction", body, _publish)
 
         # ── Mode ───────────────────────────────────────────────────────────
 
-        @app.post("/api/v1/mode", summary="Switch operating mode")
+        @app.post(
+            "/api/v1/mode",
+            summary="Switch operating mode",
+            response_model=ControlCommandResponse,
+        )
         async def post_mode(body: ModeRequest):
-            with gw._state_lock:
-                gw._mode = body.mode
-            gw.mode_cmd.publish(body.mode)
-            if body.mode == "estop":
-                gw.stop_cmd.publish(2)
-                gw.cmd_vel.publish(Twist())
-            return {"status": "ok", "mode": body.mode}
+            def _publish() -> dict[str, Any]:
+                with gw._state_lock:
+                    gw._mode = body.mode
+                gw.mode_cmd.publish(body.mode)
+                if body.mode == "estop":
+                    gw.stop_cmd.publish(2)
+                    gw.cmd_vel.publish(Twist())
+                return {"status": "ok", "mode": body.mode}
+            return gw._run_control_command("mode", body, _publish)
 
-        # ── Memory ─────────────────────────────────────────────────────────
+        # Lease
 
-        def _temporal_store():
-            """Lazy-open TemporalStore at the same path TemporalMemoryModule uses."""
-            if gw._temporal_store is None:
-                try:
-                    import os as _os
-
-                    from memory.storage.temporal_store import TemporalStore as _TS
-                    mem_dir = _os.environ.get(
-                        "LINGTU_MEMORY_DIR",
-                        _os.path.join(_os.path.expanduser("~"), ".nova", "semantic"),
-                    )
-                    gw._temporal_store = _TS(_os.path.join(mem_dir, "temporal_memory.db"))
-                except Exception as exc:
-                    logger.warning("GatewayModule: TemporalStore unavailable: %s", exc)
-            return gw._temporal_store
-
-        @app.get("/api/v1/memory/temporal", summary="Query temporal entity observations")
-        async def get_temporal_memory(
-            label: str | None = None,
-            since: str | None = None,
-            near_x: float | None = None,
-            near_y: float | None = None,
-            radius: float | None = None,
-            limit: int = 100,
-        ):
-            since_ts = _parse_since(since) if since else None
-            store = _temporal_store()
-            if store is None:
-                return JSONResponse(
-                    status_code=503,
-                    content={"error": "temporal_store_unavailable",
-                             "detail": "TemporalMemoryModule not running or save_dir not set"},
-                )
-            loop = asyncio.get_event_loop()
-            rows = await loop.run_in_executor(
-                None,
-                lambda: store.query(
-                    label=label,
-                    since_ts=since_ts,
-                    near_x=near_x,
-                    near_y=near_y,
-                    radius=radius,
-                    limit=max(1, min(limit, 1000)),
-                ),
-            )
-            return {"observations": rows, "count": len(rows)}
-
-        @app.post("/api/v1/memory/temporal/semantic",
-                  summary="Semantic similarity search over temporal observations")
-        async def post_temporal_semantic(body: dict):
-            """Accept {embedding: [float,...], top_k: int, since: str, label: str}.
-
-            Returns observations ordered by CLIP cosine similarity to the
-            provided embedding vector.  Used by downstream agents / askme tool.
-            """
-            import numpy as _np
-            raw_emb = body.get("embedding")
-            if not raw_emb:
-                return JSONResponse(status_code=422,
-                                    content={"error": "embedding required"})
-            try:
-                query_vec = _np.asarray(raw_emb, dtype=_np.float32)
-            except Exception as exc:
-                return JSONResponse(status_code=422,
-                                    content={"error": f"invalid embedding: {exc}"})
-
-            since_ts = _parse_since(body["since"]) if body.get("since") else None
-            store = _temporal_store()
-            if store is None:
-                return JSONResponse(status_code=503,
-                                    content={"error": "temporal_store_unavailable"})
-
-            loop = asyncio.get_event_loop()
-            rows = await loop.run_in_executor(
-                None,
-                lambda: store.query_semantic(
-                    query_vec,
-                    top_k=int(body.get("top_k", 10)),
-                    since_ts=since_ts,
-                    label=body.get("label") or None,
-                ),
-            )
-            return {"observations": rows, "count": len(rows)}
-
-        # ── Lease ──────────────────────────────────────────────────────────
-
-        @app.post("/api/v1/lease", summary="Acquire/release/renew control lease")
+        @app.post(
+            "/api/v1/lease",
+            summary="Acquire/release/renew control lease",
+            response_model=LeaseResponse,
+            responses={
+                403: {"model": GatewayErrorResponse},
+                409: {"model": GatewayErrorResponse},
+            },
+        )
         async def post_lease(body: LeaseRequest):
             if body.action == "acquire":
                 ok = gw._lease.acquire(body.client_id, body.ttl)
@@ -1872,7 +1768,15 @@ class GatewayModule(Module, layer=6):
 
         # ── Map management ─────────────────────────────────────────────────
 
-        @app.post("/api/v1/maps", summary="Map lifecycle management")
+        @app.post(
+            "/api/v1/maps",
+            summary="Map lifecycle management",
+            response_model=MapLifecycleResponse,
+            responses={
+                400: {"model": GatewayErrorResponse},
+                503: {"model": GatewayErrorResponse},
+            },
+        )
         async def post_maps(body: MapRequest):
             mgr = gw._map_mgr
             if mgr is None:
@@ -1888,7 +1792,11 @@ class GatewayModule(Module, layer=6):
 
             mgr.map_response._add_callback(_capture)
             try:
-                cmd = {"action": body.action}
+                action = {
+                    "use": "set_active",
+                    "build": "build_tomogram",
+                }.get(body.action, body.action)
+                cmd = {"action": action}
                 if body.name:
                     cmd["name"] = body.name
                 if body.new_name:
@@ -1908,653 +1816,12 @@ class GatewayModule(Module, layer=6):
                 )
             return resp
 
-        # ── Explore ────────────────────────────────────────────────────────
-
-        @app.post("/api/v1/explore/start", summary="Start autonomous frontier exploration")
-        async def explore_start():
-            fe = gw._frontier_explorer
-            if fe is None:
-                return JSONResponse(status_code=503,
-                                    content={"error": "WavefrontFrontierExplorer not running"})
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, fe.begin_exploration)
-            gw._exploring = True
-            gw.push_event({"type": "exploring", "active": True})
-            return {"status": result}
-
-        @app.post("/api/v1/explore/stop", summary="Stop autonomous frontier exploration")
-        async def explore_stop():
-            fe = gw._frontier_explorer
-            if fe is None:
-                return JSONResponse(status_code=503,
-                                    content={"error": "WavefrontFrontierExplorer not running"})
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, fe.end_exploration)
-            gw._exploring = False
-            gw.push_event({"type": "exploring", "active": False})
-            return {"status": result}
-
-        @app.get("/api/v1/explore/status", summary="Exploration status")
-        async def explore_status():
-            fe = gw._frontier_explorer
-            if fe is None:
-                return {"available": False, "exploring": False}
-            h = fe.health() if hasattr(fe, "health") else {}
-            return {
-                "available":      True,
-                "exploring":      gw._exploring,
-                "frontier_count": h.get("frontier_count", 0),
-            }
-
-        # ── Telemetry ──────────────────────────────────────────────────────
-
-        @app.get("/api/v1/events",
-                 summary="SSE event stream",
-                 response_class=StreamingResponse)
-        async def sse_events():
-            q = gw._sse_subscribe()
-
-            async def _stream():
-                try:
-                    # Send a snapshot immediately so the client has initial state
-                    with gw._state_lock:
-                        snapshot = {
-                            "type": "snapshot",
-                            "data": {
-                                "odometry": gw._odom,
-                                "safety":   gw._safety,
-                                "mission":  gw._mission,
-                                "mode":     gw._mode,
-                                "session":  gw._session_snapshot(),
-                            },
-                        }
-                    yield f"data: {json.dumps(snapshot)}\n\n"
-
-                    while True:
-                        try:
-                            event = q.get_nowait()
-                        except asyncio.QueueEmpty:
-                            # Heartbeat every second to keep connection alive
-                            yield f"data: {json.dumps({'type': 'ping', 'ts': time.time()})}\n\n"
-                            await asyncio.sleep(1.0)
-                            continue
-                        yield f"data: {json.dumps(event)}\n\n"
-                        await asyncio.sleep(0)  # yield control to event loop
-                finally:
-                    gw._sse_unsubscribe(q)
-
-            return StreamingResponse(_stream(), media_type="text/event-stream",
-                                     headers={"Cache-Control": "no-cache",
-                                              "X-Accel-Buffering": "no"})
-
-        @app.get("/api/v1/state", summary="Full robot state snapshot")
-        async def get_state():
-            with gw._state_lock:
-                return {
-                    "odometry":  gw._odom,
-                    "safety":    gw._safety,
-                    "mission":   gw._mission,
-                    "eval":      gw._eval,
-                    "dialogue":  gw._dialogue,
-                    "mode":      gw._mode,
-                    "lease":     gw._lease.to_dict(),
-                    "teleop": {
-                        "active":  gw._teleop_active,
-                        "clients": gw._teleop_clients,
-                    },
-                }
-
-        @app.get("/api/v1/scene_graph", summary="Current scene graph")
-        async def get_scene_graph():
-            with gw._state_lock:
-                sg = gw._sg_json
-            return JSONResponse({"scene_graph": sg})
-
-        @app.get("/api/v1/locations", summary="List tagged navigation locations")
-        async def get_locations():
-            tlm = gw._tagged_loc_module
-            if tlm is None:
-                return JSONResponse({"locations": []})
-            try:
-                entries = list(tlm.store._store.values())
-                locations = [
-                    {
-                        "name": e.get("name", ""),
-                        "x": round(float(e.get("x", 0.0)), 3),
-                        "y": round(float(e.get("y", 0.0)), 3),
-                        "z": round(float(e.get("z", 0.0)), 3),
-                    }
-                    for e in entries
-                    if e.get("name")
-                ]
-            except Exception:
-                locations = []
-            return JSONResponse({"locations": locations})
-
-        @app.get("/api/v1/path", summary="Latest planned path")
-        async def get_path():
-            with gw._state_lock:
-                return {"path": gw._last_path, "robot": gw._odom}
-
-        @app.get("/api/v1/devices", summary="Hardware device registry status")
-        async def get_devices():
-            """Returns DeviceManager snapshot — all hardware devices + status."""
-            mgr = gw._all_modules.get("DeviceManager") if gw._all_modules else None
-            if mgr is None:
-                return {"devices": [], "manager": "not_loaded"}
-            try:
-                health = mgr.health()
-                return {
-                    "manager": "ok",
-                    "spec_count": health.get("spec_count", 0),
-                    "opened_count": health.get("opened_count", 0),
-                    "devices": health.get("devices", []),
-                }
-            except Exception as e:
-                return {"devices": [], "manager": "error", "error": str(e)}
-
-        @app.get("/api/v1/health", summary="System health overview")
-        async def get_health():
-            with gw._sse_lock:
-                n_sse = len(gw._sse_queues)
-            map_pts = gw._map_cloud_count
-            slam_hz = gw._get_slam_hz_cached()
-
-            # Sensor & module status summary
-            sensors: dict[str, Any] = {}
-            modules_ok = 0
-            modules_fail = 0
-            module_summary: dict[str, str] = {}
-
-            if gw._all_modules:
-                for name, mod in gw._all_modules.items():
-                    try:
-                        h = mod.health() if hasattr(mod, "health") else {}
-                        module_summary[name] = "ok"
-                        modules_ok += 1
-
-                        # Extract sensor-level info from key modules
-                        if "LidarModule" in name:
-                            lidar_h = h.get("lidar", {})
-                            sensors["lidar"] = {
-                                "status": lidar_h.get("state", "unknown"),
-                                "ip": lidar_h.get("ip", "?"),
-                                "cloud_hz": round(h.get("ports_out", {}).get("scan", {}).get("rate_hz", 0), 1),
-                            }
-                        elif "CameraBridge" in name:
-                            color_out = h.get("ports_out", {}).get("color_image", {})
-                            sensors["camera"] = {
-                                "status": "streaming" if color_out.get("msg_count", 0) > 0 else "idle",
-                                "fps": round(color_out.get("rate_hz", 0), 1),
-                                "frames": color_out.get("msg_count", 0),
-                            }
-                        elif "SlamBridge" in name or "SLAMModule" in name:
-                            odom_out = h.get("ports_out", {}).get("odometry", {})
-                            sensors["slam"] = {
-                                "status": "active" if odom_out.get("msg_count", 0) > 0 else "inactive",
-                                "hz": round(odom_out.get("rate_hz", 0), 1),
-                            }
-                        elif "Navigation" in name:
-                            sensors["navigation"] = {
-                                "state": h.get("mission_state", "idle"),
-                                "replan_count": h.get("replan_count", 0),
-                            }
-                    except Exception:
-                        module_summary[name] = "error"
-                        modules_fail += 1
-
-            # ── Brainstem gRPC probe (RobotControl :13145) ──
-            def _brainstem_probe():
-                import brainstem_api as bapi
-                import grpc
-                ch = grpc.insecure_channel("127.0.0.1:13145")
-                stub = bapi.RobotControlStub(ch)
-                state = stub.GetCmsState(bapi.Empty(), timeout=1.0)
-                fsm_map = {0: "ZERO", 1: "GROUNDED", 2: "STANDING",
-                           3: "WALKING", 4: "TRANSITIONING"}
-                info: dict[str, Any] = {
-                    "status": "connected",
-                    "host": "127.0.0.1:13145",
-                    "fsm": fsm_map.get(state.kind, str(state.kind)),
-                }
-                try:
-                    v = stub.GetVoltage(bapi.Empty(), timeout=1.0)
-                    if v.values:
-                        info["voltage_avg"] = round(sum(v.values) / len(v.values), 1)
-                except Exception:
-                    pass
-                ch.close()
-                return info
-
-            brainstem_info: dict[str, Any] = {"status": "not_probed"}
-            try:
-                loop = asyncio.get_event_loop()
-                brainstem_info = await loop.run_in_executor(None, _brainstem_probe)
-            except ImportError:
-                brainstem_info = {"status": "unavailable",
-                                 "reason": "brainstem_api not installed"}
-            except Exception as e:
-                brainstem_info = {"status": "unreachable",
-                                 "host": "127.0.0.1:13145",
-                                 "error": str(e)[:120]}
-
-            return {
-                "status": "ok" if modules_fail == 0 else "degraded",
-                "modules_ok": modules_ok,
-                "modules_fail": modules_fail,
-                "gateway": {
-                    "port": gw._port,
-                    "mode": gw._mode,
-                    "sse_clients": n_sse,
-                },
-                "teleop": {
-                    "active": gw._teleop_active,
-                    "clients": gw._teleop_clients,
-                },
-                "sensors": sensors,
-                "slam_hz": round(slam_hz, 1),
-                "map_points": map_pts,
-                "has_odom": gw._odom is not None,
-                "modules": module_summary,
-                "brainstem": brainstem_info,
-            }
-
-        # ── Liveness / Readiness probes ────────────────────────────────────
-
-        @app.get("/health", summary="Liveness probe")
-        async def liveness_health():
-            return {"status": "ok", "ts": time.time()}
-
-        @app.get("/ready", summary="Readiness probe")
-        async def readiness_ready():
-            if not gw._all_modules:
-                return JSONResponse(
-                    {"status": "not_started", "modules": {}},
-                    status_code=503,
-                )
-
-            module_health: dict[str, Any] = {}
-            all_ok = True
-            for name, mod in gw._all_modules.items():
-                try:
-                    h = mod.health() if hasattr(mod, "health") else {}
-                    module_health[name] = {"ok": True, "detail": h}
-                except Exception as e:
-                    module_health[name] = {"ok": False, "error": str(e)}
-                    all_ok = False
-
-            status_code = 200 if all_ok else 503
-            return JSONResponse(
-                {
-                    "status": "ready" if all_ok else "degraded",
-                    "modules": module_health,
-                    "ts": time.time(),
-                },
-                status_code=status_code,
-            )
-
-        # ── Dashboard + SLAM Control ──────────────────────────────────────
-
-        @app.get("/dashboard", summary="Map management dashboard")
-        async def dashboard():
-            from starlette.responses import HTMLResponse
-
-            from gateway.map_dashboard import generate_dashboard_html
-            return HTMLResponse(generate_dashboard_html())
-
-        @app.get("/api/v1/slam/status", summary="SLAM service status")
-        async def slam_status():
-            try:
-                from core.service_manager import get_service_manager
-                svc = get_service_manager()
-                services = svc.status("lidar", "slam", "slam_pgo", "localizer")
-            except Exception:
-                services = {"lidar": "unknown", "slam": "unknown", "slam_pgo": "unknown", "localizer": "unknown"}
-
-            if services.get("slam_pgo") in ("running", "active"):
-                mode = "fastlio2"
-            elif services.get("localizer") in ("running", "active"):
-                mode = "localizer"
-            elif services.get("slam") in ("running", "active"):
-                mode = "slam_only"
-            else:
-                mode = "stopped"
-            return {"mode": mode, "services": services}
-
-        # ── rosbag recording ───────────────────────────────────────────
-        @app.post("/api/v1/bag/start", summary="Start rosbag recording")
-        async def bag_start(body: dict | None = None):
-            """Kick off `scripts/record_bag.sh` as a subprocess.
-
-            Body (all optional):
-              duration: seconds to record (default: 600 — long enough for most tests)
-              prefix:   filename prefix (default: "web")
-
-            Returns {"status":"started","path":..,"pid":..} or 409 if already recording.
-            """
-            import os as _os
-            import pathlib as _plib
-            import subprocess as _sp
-            body = body or {}
-            duration = int(body.get("duration", 600))
-            prefix = str(body.get("prefix", "web"))[:40]
-            prefix = "".join(c for c in prefix if c.isalnum() or c in "-_") or "web"
-
-            with gw._bag_lock:
-                if gw._bag_proc is not None and gw._bag_proc.poll() is None:
-                    return JSONResponse(
-                        status_code=409,
-                        content={"error": "recording_in_progress",
-                                 "path": gw._bag_path,
-                                 "pid": gw._bag_proc.pid},
-                    )
-
-                # Resolve script path relative to the repo root (this file lives
-                # at src/gateway/gateway_module.py — repo root is two parents up).
-                repo_root = _plib.Path(__file__).resolve().parent.parent.parent
-                script = repo_root / "scripts" / "record_bag.sh"
-                if not script.exists():
-                    return JSONResponse(
-                        status_code=500,
-                        content={"error": "script_not_found", "path": str(script)},
-                    )
-
-                stamp = time.strftime("%Y%m%d_%H%M%S")
-                bag_dir = _os.path.expanduser(
-                    f"~/data/bags/{prefix}_{stamp}")
-
-                cmd = ["bash", str(script), str(duration), prefix]
-                try:
-                    proc = _sp.Popen(
-                        cmd,
-                        stdout=_sp.DEVNULL,
-                        stderr=_sp.DEVNULL,
-                        start_new_session=True,
-                    )
-                except FileNotFoundError as e:
-                    return JSONResponse(
-                        status_code=500,
-                        content={"error": "bash_not_found", "detail": str(e)},
-                    )
-
-                gw._bag_proc = proc
-                gw._bag_path = bag_dir
-                gw._bag_started_ts = time.time()
-                return {
-                    "status":    "started",
-                    "path":      bag_dir,
-                    "pid":       proc.pid,
-                    "duration":  duration,
-                    "prefix":    prefix,
-                }
-
-        @app.post("/api/v1/bag/stop", summary="Stop rosbag recording")
-        async def bag_stop():
-            """Send SIGTERM to the rosbag subprocess (graceful — flushes cache)."""
-            import os as _os
-            import signal as _sig
-            with gw._bag_lock:
-                proc = gw._bag_proc
-                if proc is None or proc.poll() is not None:
-                    return JSONResponse(
-                        status_code=404,
-                        content={"error": "not_recording"})
-                try:
-                    # Kill the entire process group (timeout + ros2 bag children)
-                    _os.killpg(_os.getpgid(proc.pid), _sig.SIGTERM)
-                except (ProcessLookupError, PermissionError, AttributeError):
-                    try:
-                        proc.terminate()
-                    except Exception:
-                        pass
-                # Don't wait — the script may need ~1s to flush. Status endpoint
-                # will report finished once poll() returns.
-                return {"status": "stopping", "path": gw._bag_path,
-                        "pid": proc.pid}
-
-        @app.get("/api/v1/bag/status", summary="rosbag recording status")
-        async def bag_status():
-            """Return current recording state + disk usage if a bag exists."""
-            import os as _os
-            import shutil as _shutil
-            with gw._bag_lock:
-                proc = gw._bag_proc
-                path = gw._bag_path
-                started_ts = gw._bag_started_ts
-
-            recording = proc is not None and proc.poll() is None
-            size_bytes = 0
-            if path and _os.path.isdir(path):
-                try:
-                    for root, _dirs, files in _os.walk(path):
-                        for f in files:
-                            fp = _os.path.join(root, f)
-                            try:
-                                size_bytes += _os.path.getsize(fp)
-                            except OSError:
-                                pass
-                except OSError:
-                    pass
-            # Check the disk where bags actually land (~/data), not the root
-            # home disk — those can be on different mounts (S100P: / is 50GB
-            # eMMC, ~/data is 240GB NVMe).
-            bag_disk = _os.path.expanduser("~/data")
-            if not _os.path.isdir(bag_disk):
-                bag_disk = _os.path.expanduser("~")
-            try:
-                du = _shutil.disk_usage(bag_disk)
-                disk_free, disk_total = du.free, du.total
-            except OSError:
-                disk_free, disk_total = 0, 0
-            return {
-                "recording":   recording,
-                "path":        path,
-                "duration_s":  (time.time() - started_ts) if started_ts else 0.0,
-                "size_bytes":  size_bytes,
-                "pid":         proc.pid if proc else None,
-                "exit_code":   proc.returncode if proc and proc.poll() is not None else None,
-                "disk_free":   disk_free,
-                "disk_total":  disk_total,
-            }
-
-        @app.get("/api/v1/diagnostic_pack", summary="Export diagnostic tarball")
-        async def diagnostic_pack():
-            """One-shot diagnostic snapshot for remote support.
-
-            Produces a gzipped tarball containing:
-              - health.json          current /api/v1/health dict
-              - modules.json         per-module port_summary() dict
-              - git_head.txt         git rev-parse HEAD + short commit
-              - robot_config.yaml    copy of config/robot_config.yaml
-              - logs/                latest N log files from the active run
-
-            Returns the tarball as a FileResponse so Dashboard can download
-            it directly. Falls back to an in-memory tempfile so we don't leak
-            to disk on dev machines.
-            """
-            import io
-            import json as _json
-            import os
-            import pathlib
-            import subprocess
-            import tarfile
-            import tempfile
-            from datetime import datetime
-
-            from fastapi.responses import FileResponse
-
-            repo_root = pathlib.Path(__file__).resolve().parent.parent.parent
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            tmp_path = pathlib.Path(tempfile.gettempdir()) / f"diag_{stamp}.tar.gz"
-
-            def _add_text(tar: tarfile.TarFile, arcname: str, text: str) -> None:
-                data = text.encode("utf-8")
-                info = tarfile.TarInfo(arcname)
-                info.size = len(data)
-                info.mtime = int(time.time())
-                tar.addfile(info, io.BytesIO(data))
-
-            with tarfile.open(tmp_path, "w:gz") as tar:
-                # 1/2. Module port summaries + health snapshot merged.
-                # We intentionally don't try to reuse the /api/v1/health route
-                # because that's a FastAPI closure bound to the Request object.
-                modules_info: dict[str, Any] = {}
-                for name, module in gw._all_modules.items():
-                    try:
-                        if hasattr(module, "health"):
-                            modules_info[name] = module.health()
-                        elif hasattr(module, "port_summary"):
-                            modules_info[name] = module.port_summary()
-                    except Exception as exc:
-                        modules_info[name] = {"error": str(exc)}
-                _add_text(tar, "diag/modules.json",
-                          _json.dumps(modules_info, indent=2, ensure_ascii=False,
-                                      default=str))
-                _add_text(tar, "diag/health.json",
-                          _json.dumps(
-                              {"modules_ok": sum(1 for v in modules_info.values()
-                                                 if "error" not in v),
-                               "modules_fail": sum(1 for v in modules_info.values()
-                                                   if "error" in v),
-                               "count": len(modules_info)},
-                              indent=2, ensure_ascii=False, default=str))
-
-                # 3. Git HEAD
-                try:
-                    git_out = subprocess.check_output(
-                        ["git", "rev-parse", "HEAD"], cwd=repo_root,
-                        stderr=subprocess.DEVNULL, timeout=3,
-                    ).decode().strip()
-                    short = git_out[:12]
-                except Exception:
-                    git_out, short = "unknown", "unknown"
-                _add_text(tar, "diag/git_head.txt", f"{git_out}\nshort: {short}\n")
-
-                # 4. Robot config
-                cfg_path = repo_root / "config" / "robot_config.yaml"
-                if cfg_path.exists():
-                    tar.add(str(cfg_path), arcname="diag/robot_config.yaml")
-
-                # 5. Latest logs (scan ./logs/ and pick newest directory)
-                logs_root = repo_root / "logs"
-                if logs_root.exists():
-                    # Latest modified subdir only (logs/<timestamp>_<profile>/)
-                    subs = sorted(
-                        [p for p in logs_root.iterdir() if p.is_dir()],
-                        key=lambda p: p.stat().st_mtime, reverse=True,
-                    )[:1]
-                    for sub in subs:
-                        for logfile in sub.glob("*.log"):
-                            try:
-                                tar.add(str(logfile),
-                                        arcname=f"diag/logs/{sub.name}/{logfile.name}")
-                            except Exception:
-                                pass
-
-            return FileResponse(
-                path=str(tmp_path),
-                filename=f"lingtu_diag_{stamp}.tar.gz",
-                media_type="application/gzip",
-            )
-
-        @app.get("/api/v1/slam/maps", summary="List maps from filesystem")
-        async def slam_maps():
-            """Filesystem scan fallback — works even without MapManagerModule."""
-            import os
-            import pathlib
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-            maps = []
-            active_target = ""
-            active_link = pathlib.Path(map_dir) / "active"
-            if active_link.is_symlink():
-                active_target = active_link.resolve().name
-
-            if os.path.isdir(map_dir):
-                for d in sorted(os.listdir(map_dir)):
-                    full = os.path.join(map_dir, d)
-                    if not os.path.isdir(full) or d.startswith("_") or d == "active":
-                        continue
-                    pcd = os.path.join(full, "map.pcd")
-                    has_pcd = os.path.isfile(pcd)
-                    patches_dir = os.path.join(full, "patches")
-                    patch_count = len(os.listdir(patches_dir)) if os.path.isdir(patches_dir) else 0
-                    has_tomogram = os.path.isfile(os.path.join(full, "tomogram.pickle"))
-                    size_mb: float | None = None
-                    if has_pcd:
-                        sz = os.path.getsize(pcd)
-                        size_mb = round(sz / 1024 / 1024, 1)
-                    maps.append({
-                        "name": d,
-                        "has_pcd": has_pcd,
-                        "has_tomogram": has_tomogram,
-                        "is_active": d == active_target,
-                        "size_mb": size_mb,
-                        "patch_count": patch_count,
-                    })
-            return {"maps": maps, "active": active_target, "map_dir": map_dir}
-
-        @app.get("/api/v1/maps/{name}/pcd", summary="Serve raw PCD file for inline preview")
-        async def get_map_pcd(name: str):
-            import os as _os
-            import pathlib
-
-            from fastapi import HTTPException
-            from fastapi.responses import FileResponse
-            map_dir = _os.environ.get("NAV_MAP_DIR", _os.path.expanduser("~/data/nova/maps"))
-            base = pathlib.Path(map_dir).resolve()
-            pcd_path = (base / name / "map.pcd").resolve()
-            if not str(pcd_path).startswith(str(base)):
-                raise HTTPException(status_code=403)
-            if not pcd_path.is_file():
-                raise HTTPException(status_code=404, detail=f"No PCD for map: {name}")
-            return FileResponse(str(pcd_path), media_type="application/octet-stream",
-                                filename="map.pcd")
-
-        @app.get("/api/v1/maps/{name}/points", summary="Saved map point cloud as JSON")
-        async def get_saved_map_points(name: str, max_points: int = 30000):
-            import os
-            import pathlib
-
-            from fastapi import HTTPException
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-            base = pathlib.Path(map_dir).resolve()
-            pcd_path = (base / name / "map.pcd").resolve()
-            if not str(pcd_path).startswith(str(base)):
-                raise HTTPException(status_code=403)
-            if not pcd_path.is_file():
-                raise HTTPException(status_code=404, detail=f"Map not found: {name}")
-            # Parse PCD binary (same logic as _load_map_for_viewer)
-            with open(pcd_path, "rb") as f:
-                n_points, point_step = 0, 16
-                while True:
-                    line = f.readline().decode("ascii", errors="ignore").strip()
-                    if "POINTS" in line:
-                        n_points = int(line.split()[-1])
-                    if "SIZE" in line:
-                        point_step = sum(int(s) for s in line.split()[1:])
-                    if line.startswith("DATA"):
-                        break
-                data = f.read(n_points * point_step)
-            pts = np.frombuffer(data[:n_points * point_step], dtype=np.float32).reshape(n_points, point_step // 4)[:, :3]
-            valid = np.isfinite(pts).all(axis=1)
-            pts = pts[valid]
-            if len(pts) > 0:
-                med = np.median(pts, axis=0)
-                pts = pts[np.abs(pts - med).max(axis=1) < 100]
-            if len(pts) > max_points:
-                idx = np.random.choice(len(pts), max_points, replace=False)
-                pts = pts[idx]
-            flat = pts[:, :3].astype(np.float32).flatten().tolist()
-            return {"count": len(pts), "points": flat}
-
-        # ── Session state machine endpoints ────────────────────────────────
-        # Single source of truth for "what mode is the robot in?".
-        # Every SLAM/localizer start/stop MUST go through here.
-
-        @app.get("/api/v1/session", summary="Current session state + capabilities")
+        @app.get(
+            "/api/v1/session",
+            summary="Current session state + capabilities",
+            response_model=SessionResponse,
+        )
         async def session_get():
-            # Refresh inferred mode on read — in case externals (systemd, CLI)
-            # changed service state behind our back.
             inferred_mode, inferred_map = gw._session_detect_current_mode()
             if inferred_mode != gw._session_mode:
                 gw._session_mode = inferred_mode
@@ -2562,90 +1829,148 @@ class GatewayModule(Module, layer=6):
                 gw._session_since = time.time()
             return gw._session_snapshot()
 
-        @app.post("/api/v1/session/start", summary="Enter mapping or navigating mode")
+        @app.post(
+            "/api/v1/session/start",
+            summary="Enter mapping or navigating mode",
+            response_model=SessionTransitionResponse,
+            responses={
+                400: {"model": SessionTransitionResponse},
+                409: {"model": SessionTransitionResponse},
+                500: {"model": SessionTransitionResponse},
+                503: {"model": SessionTransitionResponse},
+            },
+        )
         async def session_start(body: dict):
             mode = (body.get("mode") or "").strip().lower()
             map_name = body.get("map_name", "") or ""
             if mode not in ("mapping", "navigating", "exploring"):
                 return JSONResponse(
-                    {"success": False, "message": f"Unknown mode: {mode!r}. Use 'mapping' | 'navigating' | 'exploring'."},
+                    {
+                        "success": False,
+                        "message": (
+                            f"Unknown mode: {mode!r}. "
+                            "Use 'mapping' | 'navigating' | 'exploring'."
+                        ),
+                    },
                     status_code=400,
                 )
             if map_name:
                 err = _safe_map_name(map_name)
                 if err is not None:
-                    return JSONResponse({"success": False, "message": err}, status_code=400)
+                    return JSONResponse(
+                        {"success": False, "message": err},
+                        status_code=400,
+                    )
             if mode == "exploring" and gw._frontier_explorer is None:
                 return JSONResponse(
-                    {"success": False, "message": "FrontierExplorer module not running — start lingtu with 'explore' profile."},
+                    {
+                        "success": False,
+                        "message": (
+                            "FrontierExplorer module not running - start lingtu "
+                            "with 'explore' profile."
+                        ),
+                    },
                     status_code=503,
                 )
             if gw._session_mode != "idle":
                 return JSONResponse(
-                    {"success": False, "message": f"Already in {gw._session_mode}. Call /session/end first."},
+                    {
+                        "success": False,
+                        "message": (
+                            f"Already in {gw._session_mode}. "
+                            "Call /session/end first."
+                        ),
+                    },
                     status_code=409,
                 )
             if gw._session_pending:
-                return JSONResponse({"success": False, "message": "Another transition in progress"}, status_code=409)
+                return JSONResponse(
+                    {"success": False, "message": "Another transition in progress"},
+                    status_code=409,
+                )
 
-            # Navigating requires a valid map with both PCD and tomogram.
             if mode == "navigating":
                 if not map_name:
-                    return JSONResponse({"success": False, "message": "map_name is required for navigating"}, status_code=400)
-                import os
-                base = os.path.expanduser(f"~/data/nova/maps/{map_name}")
-                if not os.path.isfile(os.path.join(base, "map.pcd")):
-                    return JSONResponse({"success": False, "message": f"Map '{map_name}' has no map.pcd"}, status_code=400)
-                if not os.path.isfile(os.path.join(base, "tomogram.pickle")):
                     return JSONResponse(
-                        {"success": False, "message": f"Map '{map_name}' has no tomogram — build it first (REPL: map build {map_name})"},
+                        {
+                            "success": False,
+                            "message": "map_name is required for navigating",
+                        },
                         status_code=400,
                     )
-                # Point the 'active' symlink at the requested map so localizer loads it.
+                import os
+
+                base = os.path.expanduser(f"~/data/nova/maps/{map_name}")
+                if not os.path.isfile(os.path.join(base, "map.pcd")):
+                    return JSONResponse(
+                        {
+                            "success": False,
+                            "message": f"Map '{map_name}' has no map.pcd",
+                        },
+                        status_code=400,
+                    )
+                if not os.path.isfile(os.path.join(base, "tomogram.pickle")):
+                    return JSONResponse(
+                        {
+                            "success": False,
+                            "message": (
+                                f"Map '{map_name}' has no tomogram - build it "
+                                f"first (REPL: map build {map_name})"
+                            ),
+                        },
+                        status_code=400,
+                    )
                 active = os.path.expanduser("~/data/nova/maps/active")
                 try:
                     if os.path.islink(active) or os.path.exists(active):
                         os.remove(active)
                     os.symlink(map_name, active)
                 except OSError as e:
-                    return JSONResponse({"success": False, "message": f"Failed to activate map: {e}"}, status_code=500)
+                    return JSONResponse(
+                        {
+                            "success": False,
+                            "message": f"Failed to activate map: {e}",
+                        },
+                        status_code=500,
+                    )
 
             gw._session_pending = True
             gw._session_error = ""
             try:
                 from core.service_manager import get_service_manager
+
                 svc = get_service_manager()
                 if mode == "mapping" or mode == "exploring":
                     svc.stop("localizer")
                     svc.ensure("slam", "slam_pgo")
                     ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
-                    # Fresh mapping run — drop stale hit counts from prior session
-                    # so the min_hits threshold doesn't lock in yesterday's map.
                     with gw._map_cloud_lock:
                         gw._map_points = None
                         gw._voxel_hits.clear()
-                else:  # navigating
+                else:
                     svc.stop("slam_pgo")
                     svc.ensure("slam", "localizer")
                     ok = svc.wait_ready("slam", "localizer", timeout=10.0)
                 if not ok:
                     gw._session_error = "Services not ready after 10s"
-                    return JSONResponse({"success": False, "message": gw._session_error}, status_code=500)
+                    return JSONResponse(
+                        {"success": False, "message": gw._session_error},
+                        status_code=500,
+                    )
 
-                # Auto-replay last known relocalize pose so the operator doesn't
-                # need to Shift+click on the map after every daemon restart.
-                # Runs in a background thread so this endpoint returns fast.
                 if mode == "navigating" and map_name:
                     gw._spawn_auto_relocalize(map_name)
 
-                # For exploring: activate FrontierExplorer on top of mapping stack.
                 if mode == "exploring":
                     try:
                         gw._frontier_explorer.begin_exploration()
                         gw._exploring = True
                     except Exception as e:
                         gw._session_error = f"Explorer start failed: {e}"
-                        return JSONResponse({"success": False, "message": gw._session_error}, status_code=500)
+                        return JSONResponse(
+                            {"success": False, "message": gw._session_error},
+                            status_code=500,
+                        )
 
                 gw._session_mode = mode
                 gw._session_map = map_name if mode == "navigating" else None
@@ -2654,21 +1979,32 @@ class GatewayModule(Module, layer=6):
                 return {"success": True, "session": gw._session_snapshot()}
             except Exception as e:
                 gw._session_error = str(e)
-                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+                return JSONResponse(
+                    {"success": False, "message": str(e)},
+                    status_code=500,
+                )
             finally:
                 gw._session_pending = False
 
-        @app.post("/api/v1/session/end", summary="Exit current mode and return to idle")
+        @app.post(
+            "/api/v1/session/end",
+            summary="Exit current mode and return to idle",
+            response_model=SessionTransitionResponse,
+            responses={
+                409: {"model": SessionTransitionResponse},
+                500: {"model": SessionTransitionResponse},
+            },
+        )
         async def session_end():
             if gw._session_mode == "idle":
                 return {"success": True, "session": gw._session_snapshot()}
             if gw._session_pending:
-                return JSONResponse({"success": False, "message": "Transition in progress"}, status_code=409)
+                return JSONResponse(
+                    {"success": False, "message": "Transition in progress"},
+                    status_code=409,
+                )
             gw._session_pending = True
             try:
-                # Stop autonomous exploration first if it's running, then tear
-                # down SLAM services. Order matters: explorer publishes goals,
-                # don't leave it running without a running mapping stack.
                 if gw._exploring and gw._frontier_explorer is not None:
                     try:
                         gw._frontier_explorer.end_exploration()
@@ -2677,6 +2013,7 @@ class GatewayModule(Module, layer=6):
                     gw._exploring = False
                     gw.push_event({"type": "exploring", "active": False})
                 from core.service_manager import get_service_manager
+
                 svc = get_service_manager()
                 svc.stop("slam_pgo", "localizer", "slam")
                 gw._session_mode = "idle"
@@ -2687,553 +2024,18 @@ class GatewayModule(Module, layer=6):
                 return {"success": True, "session": gw._session_snapshot()}
             except Exception as e:
                 gw._session_error = str(e)
-                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
-            finally:
-                gw._session_pending = False
-
-        @app.post("/api/v1/slam/switch", summary="Hot-switch SLAM profile")
-        async def slam_switch(body: dict):
-            profile = body.get("profile", "")
-            if profile not in ("fastlio2", "localizer", "stop"):
-                return JSONResponse({"success": False, "message": f"Unknown profile: {profile}"}, status_code=400)
-            try:
-                from core.service_manager import get_service_manager
-                svc = get_service_manager()
-                if profile == "fastlio2":
-                    svc.stop("localizer")
-                    svc.ensure("slam", "slam_pgo")
-                    ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
-                elif profile == "localizer":
-                    svc.stop("slam_pgo")
-                    svc.ensure("slam", "localizer")
-                    ok = svc.wait_ready("slam", "localizer", timeout=10.0)
-                else:
-                    svc.stop("slam_pgo", "localizer", "slam")
-                    ok = True
-                return {"success": ok, "profile": profile, "message": f"Switched to {profile}" if ok else "Services not ready after 10s"}
-            except Exception as e:
-                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
-
-        @app.post("/api/v1/slam/auto_relocalize",
-                  summary="Global relocalize via 3D-BBS (no guess required)")
-        async def slam_auto_relocalize():
-            """Call /nav/global_relocalize ROS2 service — BBS3D kidnap-robot recovery.
-            Returns immediately; the worker finishes in ~1-3 s and updates the
-            ICP tracking loop. Watch /localization_quality / session snapshot
-            for the resulting fitness.
-            """
-            import subprocess
-            # NOTE: do NOT override RMW here — localizer_node runs with the
-            # default fastrtps, setting cyclonedds on the client side creates
-            # a silent discovery mismatch that makes the service appear
-            # registered but unreachable.
-            _ros_env = (
-                "source /opt/ros/humble/setup.bash && "
-                "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
-                "unset RMW_IMPLEMENTATION; "
-            )
-            try:
-                r = subprocess.run(
-                    ["bash", "-c",
-                     _ros_env +
-                     "ros2 service call /nav/global_relocalize "
-                     "std_srvs/srv/Trigger '{}'"],
-                    capture_output=True, text=True, timeout=10)
-                ok = "success=True" in r.stdout
-                msg = r.stdout[-300:] if r.stdout else (r.stderr[-300:] or "no output")
-                return {"success": ok, "message": msg}
-            except subprocess.TimeoutExpired:
-                return JSONResponse({"success": False, "message": "call timeout > 10s"}, status_code=504)
-            except Exception as e:
-                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
-
-        @app.post("/api/v1/slam/relocalize", summary="Relocalize against a saved map")
-        async def slam_relocalize(body: dict):
-            """Call /relocalize ROS2 service to localize robot in a saved map."""
-            import os
-            import subprocess
-            map_name = body.get("map_name", "")
-            x    = float(body.get("x",   0.0))
-            y    = float(body.get("y",   0.0))
-            yaw  = float(body.get("yaw", 0.0))
-            if not map_name:
-                return JSONResponse({"success": False, "message": "map_name required"}, status_code=400)
-            # Primary: ~/data/nova/maps/ (production). Fallback to the legacy
-            # ~/data/inovxio/data/maps/ if someone restored that path.
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-            pcd_path = os.path.join(map_dir, map_name, "map.pcd")
-            if not os.path.isfile(pcd_path):
-                alt = os.path.expanduser(f"~/data/inovxio/data/maps/{map_name}/map.pcd")
-                if os.path.isfile(alt):
-                    pcd_path = alt
-            if not os.path.isfile(pcd_path):
-                return JSONResponse({"success": False, "message": f"Map not found: {pcd_path}"}, status_code=404)
-            _ros_env = (
-                "source /opt/ros/humble/setup.bash && "
-                "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
-                "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
-            )
-            try:
-                r = subprocess.run(
-                    ["bash", "-c",
-                     _ros_env +
-                     f"ros2 service call /nav/relocalize interface/srv/Relocalize "
-                     f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
-                     f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""],
-                    capture_output=True, text=True, timeout=30)
-                ok = "success=True" in r.stdout
-                # Parse ICP quality (score/fitness) if the service echoed it —
-                # frontend colour-codes toast by magnitude: <0.1 good, 0.1-0.3
-                # marginal, >0.3 or None failed. Use the current cached value
-                # from /localization_quality as a fallback so a user calling
-                # this endpoint after a stale run still sees a number.
-                quality = None
-                for line in r.stdout.splitlines():
-                    ll = line.lower().strip()
-                    if any(k in ll for k in ("quality:", "score:", "fitness:")):
-                        try:
-                            quality = float(ll.split(":", 1)[-1].strip())
-                            break
-                        except ValueError:
-                            pass
-                if quality is None and ok:
-                    quality = float(getattr(gw, "_icp_quality", 0.0))
-                # Snapshot the successful pose so next daemon start can auto-
-                # relocalize without the operator re-clicking on the map.
-                if ok:
-                    gw._persist_last_nav_pose(map_name, x, y, yaw, quality)
-                msg = r.stdout[-300:] if not ok else f"Relocalized to {map_name}"
-                return {"success": ok, "message": msg, "quality": quality}
-            except Exception as e:
-                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
-
-        # ── Map 3D Viewer ─────────────────────────────────────────────────
-
-        @app.get("/api/v1/map/points", summary="Map point cloud as JSON (from ikd-tree snapshot)")
-        async def get_map_points(max_points: int = 80000):
-            # Read from latest snapshot (same source as viewer)
-            with gw._map_cloud_lock:
-                pts = gw._map_points
-            if pts is None or len(pts) == 0:
-                return {"count": 0, "points": []}
-            if len(pts) > max_points:
-                idx = np.random.choice(len(pts), max_points, replace=False)
-                pts = pts[idx]
-            return {
-                "count": len(pts),
-                "bounds": {
-                    "x": [float(pts[:, 0].min()), float(pts[:, 0].max())],
-                    "y": [float(pts[:, 1].min()), float(pts[:, 1].max())],
-                    "z": [float(pts[:, 2].min()), float(pts[:, 2].max())],
-                },
-                "points": pts[:, :3].tolist(),
-            }
-
-        @app.post("/api/v1/map_cloud/reset", summary="Clear accumulated map cloud (viz only, SLAM ikd-tree untouched)")
-        async def reset_map_cloud():
-            with gw._map_cloud_lock:
-                gw._map_points = None
-                gw._map_cloud_count = 0
-                gw._voxel_hits.clear()
-            # Push an empty cloud so the frontend drops its buffer immediately.
-            gw.push_event({"type": "map_cloud", "points": [], "count": 0})
-            return {"success": True, "message": "Accumulated map cloud cleared"}
-
-        @app.get("/map/viewer", summary="Interactive 3D map viewer")
-        async def map_viewer(map: str = ""):
-            from starlette.responses import HTMLResponse
-            if map:
-                html = gw._generate_viewer_from_pcd(map)
-            else:
-                # Live: snapshot from ikd-tree via save_map to temp file
-                html = gw._generate_viewer_live()
-            return HTMLResponse(html)
-
-        @app.get("/robot/meshes/{filename}", summary="Serve robot STL mesh files")
-        async def serve_robot_mesh(filename: str):
-            import os
-
-            from fastapi.responses import JSONResponse
-            from starlette.responses import FileResponse
-            mesh_dir = os.environ.get(
-                "DOG_MESH_DIR",
-                os.path.join(os.path.dirname(__file__),
-                             "../../../../products/quadruped_ws/dog_arm/meshes"),
-            )
-            safe_name = os.path.basename(filename)  # prevent path traversal
-            path = os.path.join(mesh_dir, safe_name)
-            if not os.path.isfile(path):
-                return JSONResponse(status_code=404, content={"error": "mesh not found", "name": safe_name})
-            return FileResponse(path, media_type="application/octet-stream",
-                                headers={"Access-Control-Allow-Origin": "*",
-                                         "Cache-Control": "public, max-age=3600"})
-
-        @app.get("/api/v1/camera/snapshot", summary="Camera JPEG snapshot")
-        async def camera_snapshot():
-            """Grab one JPEG frame via rclpy (fastrtps, matching camera driver)."""
-            import os
-            import subprocess
-            import tempfile
-
-            from starlette.responses import Response
-            out = os.path.join(tempfile.gettempdir(), "lingtu_cam_snap.jpg")
-            script = os.path.join(tempfile.gettempdir(), "lingtu_cam_snap.py")
-            # Write script to avoid shell escaping issues
-            with open(script, "w") as f:
-                f.write(
-                    "import rclpy, sys\n"
-                    "from sensor_msgs.msg import CompressedImage\n"
-                    "rclpy.init()\n"
-                    "n=rclpy.create_node('cam_snap')\n"
-                    "msg=[None]\n"
-                    "n.create_subscription(CompressedImage,'/camera/color/image_raw/compressed',lambda m:msg.__setitem__(0,m),1)\n"
-                    "import time; t=time.time()\n"
-                    "while msg[0] is None and time.time()-t<2: rclpy.spin_once(n,timeout_sec=0.1)\n"
-                    "n.destroy_node(); rclpy.shutdown()\n"
-                    f"open('{out}','wb').write(msg[0].data) if msg[0] else None\n"
-                )
-            try:
-                # Unset RMW to use default fastrtps (camera uses fastrtps)
-                env = os.environ.copy()
-                env.pop("RMW_IMPLEMENTATION", None)
-                subprocess.run(
-                    ["bash", "-c", f"source /opt/ros/humble/setup.bash && python3 {script}"],
-                    capture_output=True, timeout=6, env=env)
-                if os.path.isfile(out) and os.path.getsize(out) > 100:
-                    with open(out, "rb") as f:
-                        data = f.read()
-                    return Response(content=data, media_type="image/jpeg")
-                else:
-                    return JSONResponse({"error": "no frame"}, status_code=503)
-            except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=500)
-
-        @app.post("/api/v1/map/restore_predufo",
-                  summary="Restore map.pcd from DUFOMap pre-filter backup")
-        async def restore_predufo(body: dict):
-            """One-click rollback of DUFOMap dynamic filter.
-
-            dynamic_filter.refilter_map 保存时会把清洗前的 map.pcd 备份到
-            map.pcd.predufo。如果森哥发现 DUFOMap 误删了好点 (比如把静态
-            物体识别成动态删掉了), 这个 endpoint 把备份恢复回 map.pcd。
-
-            Body: {"name": "<map_name>"}
-
-            下游 tomogram / occupancy 需要重建才能生效 — 可选后跟调:
-                POST /api/v1/maps {"action":"build_tomogram","name":"<name>"}
-            """
-            import os
-            import pathlib
-            import shutil
-            name = body.get("name", "")
-            err = _safe_map_name(name)
-            if err is not None:
-                return JSONResponse(
-                    {"success": False, "message": err},
-                    status_code=400,
-                )
-            map_dir = os.environ.get(
-                "NAV_MAP_DIR",
-                os.path.expanduser("~/data/nova/maps"),
-            )
-            target = pathlib.Path(map_dir) / name
-            pcd = target / "map.pcd"
-            backup = target / "map.pcd.predufo"
-            if not backup.is_file():
-                return JSONResponse(
-                    {"success": False,
-                     "message": f"No predufo backup for {name}. "
-                                "DUFOMap may not have run on this map."},
-                    status_code=404,
-                )
-            try:
-                # Swap: current → .replaced-<ts_ns>, backup → map.pcd
-                # This keeps the current (filtered) PCD discoverable in case
-                # the user decides the rollback was a mistake.
-                # time_ns: 纳秒级 ts 防止同一秒多次 restore 互相覆盖备份.
-                import time as _t
-                if pcd.is_file():
-                    shutil.copy(pcd, target / f"map.pcd.replaced-{_t.time_ns()}")
-                # Atomic replace (shutil.copy 非原子,进程崩会半写 map.pcd).
-                tmp_new = pcd.with_suffix(".pcd.tmp")
-                shutil.copy(backup, tmp_new)
-                os.replace(tmp_new, pcd)
-
-                # Cleanup old .replaced-* backups — keep only most recent 3.
-                # Without this,每次 restore 积一份, 长期磁盘涨爆。
-                replaced = sorted(
-                    target.glob("map.pcd.replaced-*"),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                )
-                pruned = 0
-                for old in replaced[3:]:
-                    try:
-                        old.unlink()
-                        pruned += 1
-                    except Exception as e:
-                        logger.warning("cleanup old backup failed: %s", e)
-
-                return {
-                    "success": True,
-                    "name": name,
-                    "restored_size": pcd.stat().st_size,
-                    "replaced_backups_kept": min(len(replaced), 3),
-                    "replaced_backups_pruned": pruned,
-                    "note": "tomogram/occupancy 需重建才能让 planner 用新点云",
-                }
-            except Exception as e:
-                logger.exception("restore_predufo failed")
                 return JSONResponse(
                     {"success": False, "message": str(e)},
                     status_code=500,
                 )
-
-        @app.post("/api/v1/map/activate", summary="Set active map (symlink)")
-        async def activate_map(body: dict):
-            import os
-            import pathlib
-            name = body.get("name", "")
-            err = _safe_map_name(name)
-            if err is not None:
-                return JSONResponse({"success": False, "message": err}, status_code=400)
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-            target = os.path.join(map_dir, name)
-            if not os.path.isdir(target):
-                return JSONResponse({"success": False, "message": f"地图不存在: {name}"}, status_code=404)
-            active_link = pathlib.Path(map_dir) / "active"
-            try:
-                if active_link.is_symlink() or active_link.exists():
-                    active_link.unlink()
-                active_link.symlink_to(name)
-                return {"success": True, "active": name}
-            except Exception as e:
-                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
-
-        @app.post("/api/v1/map/rename", summary="Rename a saved map")
-        async def rename_map(body: dict):
-            import os
-            import pathlib
-            old = body.get("old_name", "")
-            new = body.get("new_name", "")
-            err_old = _safe_map_name(old)
-            err_new = _safe_map_name(new)
-            if err_old or err_new:
-                return JSONResponse(
-                    {"success": False,
-                     "message": err_old or err_new},
-                    status_code=400)
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-            old_path = os.path.join(map_dir, old)
-            new_path = os.path.join(map_dir, new)
-            if not os.path.isdir(old_path):
-                return JSONResponse({"success": False, "message": f"地图不存在: {old}"}, status_code=404)
-            if os.path.exists(new_path):
-                return JSONResponse({"success": False, "message": f"名称已占用: {new}"}, status_code=409)
-            try:
-                os.rename(old_path, new_path)
-                # Update active symlink if it pointed to old name
-                active_link = pathlib.Path(map_dir) / "active"
-                if active_link.is_symlink() and active_link.resolve().name == old:
-                    active_link.unlink()
-                    active_link.symlink_to(new_path)
-                return {"success": True, "old_name": old, "new_name": new}
-            except Exception as e:
-                return JSONResponse({"success": False, "message": str(e)}, status_code=500)
-
-        @app.post("/api/v1/map/save", summary="Save current SLAM map")
-        async def save_map_now(body: dict | None = None):
-            """One-click map save — calls ROS2 save_map service via subprocess."""
-            import os
-            import subprocess
-            if body is None:
-                body = {}
-            name = body.get("name", "")
-            if not name:
-                from datetime import datetime
-                name = "map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-            # Path traversal guard — reject dangerous names before any filesystem op.
-            err = _safe_map_name(name)
-            if err is not None:
-                return JSONResponse({"success": False, "message": err}, status_code=400)
-            map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-            save_dir = os.path.join(map_dir, name)
-            os.makedirs(save_dir, exist_ok=True)
-            pcd_path = os.path.join(save_dir, "map.pcd")
-            errors = []
-
-            # Common ROS2 env setup for subprocess calls
-            _ros_env = (
-                "source /opt/ros/humble/setup.bash && "
-                "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
-                "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
-            )
-
-            # Save via Fast-LIO2
-            try:
-                r = subprocess.run(
-                    ["bash", "-c",
-                     _ros_env +
-                     f"ros2 service call /nav/save_map interface/srv/SaveMaps "
-                     f"\"{{file_path: '{pcd_path}'}}\""],
-                    capture_output=True, text=True, timeout=30)
-                if "success=True" in r.stdout:
-                    pass
-                else:
-                    errors.append(f"Fast-LIO2: {r.stderr[-200:] if r.stderr else r.stdout[-200:]}")
-            except Exception as e:
-                errors.append(f"Fast-LIO2: {e}")
-
-            # Save via PGO (patches + poses)
-            try:
-                r = subprocess.run(
-                    ["bash", "-c",
-                     _ros_env +
-                     f"ros2 service call /pgo/save_maps interface/srv/SaveMaps "
-                     f"\"{{file_path: '{save_dir}', save_patches: true}}\""],
-                    capture_output=True, text=True, timeout=30)
-            except Exception:
-                pass  # PGO save is optional
-
-            # Step 1½ — DUFOMap dynamic-obstacle filter (optional, gated by env).
-            # 必须在 tomogram/occupancy 之前跑,否则下游带动态残影。
-            # 详见 docs/05-specialized/dynamic_obstacle_removal.md Phase 2。
-            # 调用统一 helper (module-level `_apply_dynamic_filter_step1half`)
-            # 以避免 Web 直调路径和 MapManager 路径的逻辑漂移。
-            dufo_result = _apply_dynamic_filter_step1half(save_dir)
-
-            has_pcd = os.path.isfile(pcd_path)
-            if has_pcd:
-                size = os.path.getsize(pcd_path)
-                resp = {"success": True, "name": name, "path": save_dir,
-                        "size": f"{size/1024/1024:.1f}MB"}
-                if dufo_result is not None:
-                    resp["dynamic_filter"] = dufo_result
-                return resp
-            else:
-                return JSONResponse(
-                    {"success": False, "name": name, "errors": errors},
-                    status_code=500)
-
-        # ── WebSocket teleop ───────────────────────────────────────────────
-        # Use Starlette's WebSocketRoute directly (app.add_websocket_route)
-        # instead of @app.websocket to bypass FastAPI's APIWebSocketRoute
-        # dependency-injection stack, which has a bug in 0.135.x that causes
-        # the handshake to be silently closed before the handler body runs.
-
-        from starlette.websockets import WebSocket as StarletteWebSocket
-        from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
-
-        async def ws_teleop_endpoint(ws: StarletteWebSocket):
-            await ws.accept()
-            gw._teleop_clients += 1
-            tm = gw._teleop_module
-            if tm is not None:
-                tm.on_client_connect()
-            logger.info("Teleop WS connected (%d clients)", gw._teleop_clients)
-
-            async def _send_frames():
-                """Push JPEG frames to this client at ~10 fps."""
-                while True:
-                    with gw._jpeg_lock:
-                        frame = gw._latest_jpeg
-                    if frame:
-                        try:
-                            await ws.send_bytes(frame)
-                        except Exception as e:
-                            logger.debug("teleop frame send failed: %s", e)
-                            break
-                    await asyncio.sleep(0.1)
-
-            frame_task = asyncio.create_task(_send_frames())
-            try:
-                while True:
-                    msg = await ws.receive()
-                    if msg["type"] == "websocket.disconnect":
-                        break
-                    raw = msg.get("text") or msg.get("bytes", b"").decode()
-                    if not raw:
-                        continue
-                    try:
-                        data = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    t = data.get("type", "")
-                    if t == "joy":
-                        gw._teleop_on_joy(
-                            float(data.get("lx", 0)),
-                            float(data.get("ly", 0)),
-                            float(data.get("az", 0)),
-                        )
-                    elif t == "stop":
-                        gw.stop_cmd.publish(2)
-                        if tm is not None:
-                            tm.force_release()
-                        else:
-                            gw.cmd_vel.publish(Twist())
-            except StarletteWebSocketDisconnect:
-                pass
             finally:
-                frame_task.cancel()
-                gw._teleop_clients = max(0, gw._teleop_clients - 1)
-                if tm is not None:
-                    tm.on_client_disconnect()
-                elif gw._teleop_clients == 0:
-                    gw._teleop_release()
-                logger.info("Teleop WS disconnected (%d clients)", gw._teleop_clients)
+                gw._session_pending = False
 
-        app.add_websocket_route("/ws/teleop", ws_teleop_endpoint)
-
-        # ── WebSocket binary point cloud ───────────────────────────────────
-        # Replaces the old SSE "map_cloud" JSON payload.  Each frame is a
-        # quantized int16 packet (see core.utils.binary_codec).  The browser
-        # consumes it via a WebWorker that produces a Float32Array used
-        # directly as the geometry's position buffer — no per-point JS
-        # allocation, no main-thread parsing.
-        async def ws_cloud_endpoint(ws: StarletteWebSocket):
-            await ws.accept()
-            q, latest = gw._cloud_subscribe()
-            try:
-                if latest is not None:
-                    await ws.send_bytes(latest)
-                while True:
-                    buf = await q.get()
-                    await ws.send_bytes(buf)
-            except StarletteWebSocketDisconnect:
-                pass
-            except Exception as e:
-                logger.debug("cloud ws send failed: %s", e)
-            finally:
-                gw._cloud_unsubscribe(q)
-
-        app.add_websocket_route("/ws/cloud", ws_cloud_endpoint)
-
-        # Serve React dashboard (web/dist/) at root — must be last mount
-        import os as _os
-        _web_dist = _os.path.normpath(
-            _os.path.join(_os.path.dirname(__file__), "..", "..", "web", "dist")
-        )
-        if _os.path.isdir(_web_dist):
-            from starlette.staticfiles import StaticFiles
-            from starlette.types import Receive, Scope, Send
-
-            # Prevent browser from caching index.html (hashed assets are fine)
-            _inner_app = StaticFiles(directory=_web_dist, html=True)
-
-            async def _no_cache_html(scope: Scope, receive: Receive, send: Send) -> None:
-                async def _send_with_headers(message: dict) -> None:
-                    if message.get("type") == "http.response.start":
-                        # Only add no-cache for HTML (index.html), not hashed assets
-                        path = scope.get("path", "")
-                        if not path.startswith("/assets/"):
-                            raw = list(message.get("headers", []))
-                            raw.append((b"cache-control", b"no-cache, no-store, must-revalidate"))
-                            message = {**message, "headers": raw}
-                    await send(message)
-                await _inner_app(scope, receive, _send_with_headers)
-
-            app.mount("/", _no_cache_html, name="dashboard")
-            logger.info("Dashboard served from %s", _web_dist)
+        register_auth_routes(app)
+        register_app_routes(app, gw)
+        register_camera_routes(app)
+        register_realtime_routes(app, gw)
+        mount_dashboard_assets(app)
 
         return app
 
@@ -3280,8 +2082,9 @@ class GatewayModule(Module, layer=6):
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
-        with self._sse_lock:
-            n_sse = len(self._sse_queues)
+        traffic = self._traffic_stats_snapshot()
+        commands = self._command_stats_snapshot()
+        n_sse = traffic["sse"]["clients"]
         with self._map_cloud_lock:
             map_pts = len(self._map_points) if self._map_points is not None else 0
         info["gateway"] = {
@@ -3292,6 +2095,8 @@ class GatewayModule(Module, layer=6):
             "has_odom":    self._odom is not None,
             "has_sg":      self._sg_json != "{}",
             "map_points":  map_pts,
+            "traffic":     traffic,
+            "commands":    commands,
         }
         return info
 
