@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -163,3 +164,146 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert map_list["path"] == "/api/v1/slam/maps"
     assert map_list["response_schema"] == "MapListResponse"
     assert "image/jpeg" in camera["response_content_types"]
+
+
+def test_app_web_cold_start_routes_return_stable_client_shapes():
+    from fastapi.testclient import TestClient
+
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._odom = {
+            "x": 1.25,
+            "y": -0.5,
+            "z": 0.0,
+            "yaw": 0.2,
+            "frame_id": "map",
+            "ts": 101.0,
+        }
+        gateway._mission = {"state": "idle"}
+        gateway._safety = {"level": 0}
+        gateway._mode = "manual"
+        gateway._last_path = [
+            {"x": 1.25, "y": -0.5, "z": 0.0},
+            {"x": 2.0, "y": 0.0, "z": 0.0},
+        ]
+        gateway._sg_json = json.dumps(
+            {
+                "frame_id": "map",
+                "ts": 102.0,
+                "objects": [
+                    {
+                        "id": "obj-1",
+                        "label": "dock",
+                        "x": 2.0,
+                        "y": 0.0,
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+        )
+
+    client = TestClient(gateway._app)
+
+    bootstrap = client.get("/api/v1/app/bootstrap")
+    state = client.get("/api/v1/state")
+    scene_graph = client.get("/api/v1/scene_graph")
+    locations = client.get("/api/v1/locations")
+    path = client.get("/api/v1/path")
+    capabilities = client.get("/api/v1/app/capabilities")
+
+    for response in (
+        bootstrap,
+        state,
+        scene_graph,
+        locations,
+        path,
+        capabilities,
+    ):
+        assert response.status_code == 200
+
+    bootstrap_payload = bootstrap.json()
+    state_payload = state.json()
+    scene_graph_payload = scene_graph.json()
+    locations_payload = locations.json()
+    path_payload = path.json()
+    capabilities_payload = capabilities.json()
+
+    assert bootstrap_payload["schema_version"] == 1
+    assert bootstrap_payload["traffic"]["client_policy"]["usage"] == "cold_start_only"
+    assert bootstrap_payload["links"]["state"] == "/api/v1/state"
+    assert bootstrap_payload["links"]["events"] == "/api/v1/events"
+    assert "scene_graph" not in bootstrap_payload["scene"]
+    assert "path" not in bootstrap_payload["path"]
+
+    assert state_payload["schema_version"] == 1
+    assert state_payload["links"]["events"] == "/api/v1/events"
+    assert state_payload["path"]["points"] == 2
+
+    assert scene_graph_payload["schema_version"] == 1
+    assert scene_graph_payload["frame_id"] == "map"
+    assert scene_graph_payload["count"] == 1
+    assert scene_graph_payload["objects"][0]["label"] == "dock"
+    assert scene_graph_payload["scene_graph"] is not None
+
+    assert locations_payload["schema_version"] == 1
+    assert locations_payload["locations"] == []
+    assert locations_payload["count"] == 0
+
+    assert path_payload["schema_version"] == 1
+    assert path_payload["count"] == 2
+    assert path_payload["robot"]["x"] == 1.25
+    assert path_payload["path"][1]["x"] == 2.0
+
+    assert capabilities_payload["schema_version"] == 1
+    assert (
+        capabilities_payload["endpoints"]["app"]["bootstrap"]["response_schema"]
+        == "AppBootstrapResponse"
+    )
+    assert (
+        capabilities_payload["endpoints"]["state"]["snapshot"]["response_schema"]
+        == "StateResponse"
+    )
+    assert capabilities_payload["links"]["events"] == "/api/v1/events"
+
+
+def test_app_web_events_stream_starts_with_snapshot_contract():
+    from gateway.gateway_module import GatewayModule
+
+    async def read_first_event(gateway):
+        route = next(
+            route
+            for route in gateway._app.routes
+            if route.path == "/api/v1/events"
+        )
+        response = await route.endpoint()
+        iterator = response.body_iterator
+        try:
+            chunk = await iterator.__anext__()
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
+        return response, chunk
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0, "yaw": 0.25, "ts": 201.0}
+        gateway._mission = {"state": "idle"}
+        gateway._safety = {"level": 0}
+        gateway._mode = "manual"
+
+    response, chunk = asyncio.run(read_first_event(gateway))
+    line = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+    payload = json.loads(line.strip().removeprefix("data: "))
+
+    assert response.media_type == "text/event-stream"
+    assert payload["type"] == "snapshot"
+    assert payload["data"]["odometry"]["x"] == 1.0
+    assert payload["data"]["mission"]["state"] == "idle"
+    assert payload["data"]["mode"] == "manual"
+    assert payload["data"]["session"]["mode"] in {"idle", "navigating", "mapping"}
+    assert gateway._traffic_stats_snapshot()["sse"]["clients"] == 0

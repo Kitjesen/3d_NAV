@@ -2,6 +2,12 @@
 
 Three layers, from local commit to S100P field run.
 
+Commit and push acceptance criteria live in
+[`COMMIT_PUSH_POLICY.md`](COMMIT_PUSH_POLICY.md). The short version is:
+commit messages follow the Lore protocol in `AGENTS.md`, local commits must pass
+the L1 test gate, and pushes must pass the L2 gate plus any focused checks for
+the touched subsystem.
+
 | Layer | Trigger | Content | Time | Required |
 |---|---|---|---|---|
 | L1 pre-commit hook | `git commit` | `pytest src/core/tests/ -q` must pass | ~90 s | Yes |
