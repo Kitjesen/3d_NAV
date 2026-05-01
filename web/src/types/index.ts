@@ -9,6 +9,143 @@ export interface MapInfo {
   patch_count?: number
 }
 
+export interface ServerInfo {
+  api_version: string
+  time: number
+}
+
+export interface EndpointSpec {
+  method: string
+  path: string
+  operation_id?: string | null
+  request_schema?: string | null
+  response_schema?: string | null
+  response_content_types: string[]
+  status_codes: string[]
+}
+
+export interface SceneGraphObject {
+  id?: string | null
+  label: string
+  x?: number | null
+  y?: number | null
+  z?: number | null
+  confidence?: number | null
+  distance?: number | null
+  bbox?: unknown
+  metadata: Record<string, unknown>
+}
+
+export interface SceneGraphRelation {
+  source?: string | null
+  target?: string | null
+  relation?: string | null
+  confidence?: number | null
+  metadata: Record<string, unknown>
+}
+
+export interface SceneGraphRegion {
+  id?: string | null
+  name?: string | null
+  label?: string | null
+  x?: number | null
+  y?: number | null
+  z?: number | null
+  polygon?: unknown
+  metadata: Record<string, unknown>
+}
+
+export interface SceneGraphResponse {
+  schema_version: number
+  frame_id: string
+  ts?: number | null
+  objects: SceneGraphObject[]
+  relations: SceneGraphRelation[]
+  regions: SceneGraphRegion[]
+  count: number
+  scene_graph?: unknown
+}
+
+export interface LocationEntry {
+  name: string
+  x: number
+  y: number
+  z: number
+  yaw?: number | null
+  tags: string[]
+  source?: string | null
+  ts?: number | null
+}
+
+export interface LocationsResponse {
+  schema_version: number
+  locations: LocationEntry[]
+  count: number
+  frame_id: string
+  ts?: number | null
+  source: string
+}
+
+export interface RobotPoseSummary {
+  x: number
+  y: number
+  z: number
+  yaw?: number | null
+  vx?: number | null
+  vy?: number | null
+  wz?: number | null
+  frame_id?: string | null
+  ts?: number | null
+}
+
+export interface PathResponse {
+  schema_version: number
+  path: PathPoint[]
+  robot: RobotPoseSummary | null
+  count: number
+  frame_id: string
+  ts?: number | null
+  source: string
+}
+
+export interface AppBootstrapResponse {
+  schema_version: number
+  server: ServerInfo
+  robot: Record<string, unknown>
+  session: SessionEvent['data'] | Record<string, unknown>
+  mission: Record<string, unknown>
+  safety: Record<string, unknown>
+  localization: Record<string, unknown>
+  navigation: Record<string, unknown>
+  control: Record<string, unknown>
+  map: Record<string, unknown>
+  scene: { available: boolean; endpoint: string }
+  path: { points: number; endpoint: string }
+  media: Record<string, unknown>
+  traffic: Record<string, unknown> & {
+    client_policy?: {
+      usage: string
+      poll_rates_hz: Record<string, number>
+      events_endpoint: string
+    }
+  }
+  capabilities: Record<string, boolean>
+  capabilities_endpoint: string
+  links: Record<string, string>
+}
+
+export interface AppCapabilitiesResponse {
+  schema_version: number
+  server: ServerInfo
+  auth: Record<string, unknown>
+  features: Record<string, boolean>
+  endpoints: Record<string, Record<string, EndpointSpec>>
+  probes: Record<string, EndpointSpec>
+  realtime: Record<string, unknown>
+  client_policy: Record<string, unknown>
+  links: Record<string, string>
+}
+
 export interface OdometryEvent {
   type: 'odometry'
   x: number
@@ -57,6 +194,10 @@ export interface PathPoint {
   x: number
   y: number
   z: number
+  yaw?: number | null
+  frame_id?: string | null
+  ts?: number | null
+  metadata?: Record<string, unknown>
 }
 
 export interface GlobalPathEvent {

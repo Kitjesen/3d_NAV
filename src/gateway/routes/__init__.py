@@ -9,6 +9,7 @@ from .diagnostics import register_diagnostic_routes
 from .maps import register_map_routes
 from .operations import register_operation_routes
 from .realtime import register_realtime_routes
+from .session import register_session_routes
 from .status import register_status_routes
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "register_map_routes",
     "register_operation_routes",
     "register_realtime_routes",
+    "register_session_routes",
     "register_status_routes",
 ]

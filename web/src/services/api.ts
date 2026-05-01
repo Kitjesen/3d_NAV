@@ -1,7 +1,43 @@
 // Centralized API service layer for LingTu web dashboard
 // All fetch() calls in one place.
 
-import type { MapInfo, SlamProfile } from '../types'
+import type {
+  AppBootstrapResponse,
+  AppCapabilitiesResponse,
+  LocationsResponse,
+  MapInfo,
+  PathResponse,
+  SceneGraphResponse,
+  SlamProfile,
+} from '../types'
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<T>
+}
+
+// --- App bootstrap / read APIs ---
+
+export async function fetchAppBootstrap(): Promise<AppBootstrapResponse> {
+  return fetchJson<AppBootstrapResponse>('/api/v1/app/bootstrap')
+}
+
+export async function fetchAppCapabilities(): Promise<AppCapabilitiesResponse> {
+  return fetchJson<AppCapabilitiesResponse>('/api/v1/app/capabilities')
+}
+
+export async function fetchSceneGraph(): Promise<SceneGraphResponse> {
+  return fetchJson<SceneGraphResponse>('/api/v1/scene_graph')
+}
+
+export async function fetchPath(): Promise<PathResponse> {
+  return fetchJson<PathResponse>('/api/v1/path')
+}
+
+export async function fetchLocations(): Promise<LocationsResponse> {
+  return fetchJson<LocationsResponse>('/api/v1/locations')
+}
 
 // --- Navigation ---
 
@@ -43,9 +79,7 @@ export async function switchSlamMode(profile: SlamProfile): Promise<void> {
 // --- Maps ---
 
 export async function fetchMaps(): Promise<MapInfo[]> {
-  const res = await fetch('/api/v1/slam/maps')
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const data = await res.json()
+  const data = await fetchJson<{ maps?: MapInfo[] }>('/api/v1/slam/maps')
   return data.maps || []
 }
 

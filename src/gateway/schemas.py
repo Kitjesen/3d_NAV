@@ -214,7 +214,45 @@ class LeaseResponse(GatewayResponseModel):
     expires_in: float | None = None
 
 
+class SceneGraphObject(GatewayResponseModel):
+    id: str | None = None
+    label: str = ""
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+    confidence: float | None = None
+    distance: float | None = None
+    bbox: Any = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SceneGraphRelation(GatewayResponseModel):
+    source: str | None = None
+    target: str | None = None
+    relation: str | None = None
+    confidence: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SceneGraphRegion(GatewayResponseModel):
+    id: str | None = None
+    name: str | None = None
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+    polygon: Any = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class SceneGraphResponse(GatewayResponseModel):
+    schema_version: int = 1
+    frame_id: str = "map"
+    ts: float | None = None
+    objects: list[SceneGraphObject] = Field(default_factory=list)
+    relations: list[SceneGraphRelation] = Field(default_factory=list)
+    regions: list[SceneGraphRegion] = Field(default_factory=list)
+    count: int = 0
     scene_graph: Any = None
 
 
@@ -223,15 +261,158 @@ class LocationEntry(GatewayResponseModel):
     x: float
     y: float
     z: float
+    yaw: float | None = None
+    tags: list[str] = Field(default_factory=list)
+    source: str | None = None
+    ts: float | None = None
 
 
 class LocationsResponse(GatewayResponseModel):
+    schema_version: int = 1
     locations: list[LocationEntry] = Field(default_factory=list)
+    count: int = 0
+    frame_id: str = "map"
+    ts: float | None = None
+    source: str = "tagged_locations"
+
+
+class PathPoint(GatewayResponseModel):
+    x: float
+    y: float
+    z: float = 0.0
+    yaw: float | None = None
+    frame_id: str | None = None
+    ts: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class RobotPoseSummary(GatewayResponseModel):
+    x: float
+    y: float
+    z: float = 0.0
+    yaw: float | None = None
+    vx: float | None = None
+    vy: float | None = None
+    wz: float | None = None
+    frame_id: str | None = None
+    ts: float | None = None
 
 
 class PathResponse(GatewayResponseModel):
-    path: list[Any] = Field(default_factory=list)
-    robot: Any = None
+    schema_version: int = 1
+    path: list[PathPoint] = Field(default_factory=list)
+    robot: RobotPoseSummary | None = None
+    count: int = 0
+    frame_id: str = "map"
+    ts: float | None = None
+    source: str = "gateway_cache"
+
+
+class LocalizationStatusResponse(GatewayResponseModel):
+    schema_version: int
+    state: str
+    ready: bool
+    has_odometry: bool
+    session_mode: str | None = None
+    active_map: str | None = None
+    icp_quality: float = 0.0
+    reported_state: Any = None
+    confidence: float | None = None
+    degeneracy: str | None = None
+    ts: float | None = None
+    can_relocalize: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class NavigationPathSummary(GatewayResponseModel):
+    points: int = 0
+    endpoint: str
+
+
+class NavigationControlActiveSource(GatewayResponseModel):
+    name: str
+    label: str
+    category: str
+    owner: str
+    priority: int | None = None
+    active: bool | None = None
+    age_ms: int | None = None
+
+
+class NavigationControlSummary(GatewayResponseModel):
+    mode: str
+    lease: dict[str, Any] = Field(default_factory=dict)
+    active_cmd_source: str
+    command_owner: str
+    source_category: str
+    manual_override: bool
+    autonomy_requested: bool
+    preempting_autonomy: bool
+    mux_available: bool
+    active_source: NavigationControlActiveSource
+    sources: dict[str, Any] = Field(default_factory=dict)
+    cmd_vel_mux: dict[str, Any] = Field(default_factory=dict)
+
+
+class NavigationLocalizationSummary(GatewayResponseModel):
+    state: str | None = None
+    ready: bool | None = None
+    degraded: bool = False
+    speed_scale: float | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class NavigationReadinessSummary(GatewayResponseModel):
+    can_accept_goal: bool
+    can_execute_autonomy: bool
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    localization_ready: bool
+    control_owner: str
+
+
+class NavigationProgressSummary(GatewayResponseModel):
+    wp_index: int = 0
+    wp_total: int = 0
+    fraction: float = 0.0
+    path_points: int = 0
+    replan_count: int = 0
+    active: bool = False
+    terminal: bool = False
+
+
+class NavigationDiagnosticsSummary(GatewayResponseModel):
+    reason_codes: list[str] = Field(default_factory=list)
+    failure_reason: str = ""
+    localization_reasons: list[str] = Field(default_factory=list)
+    cmd_vel_mux_available: bool = False
+
+
+class NavigationMissionSummary(GatewayResponseModel):
+    state: str
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class NavigationStatusResponse(GatewayResponseModel):
+    schema_version: int
+    state: str
+    has_odometry: bool
+    can_accept_goal: bool
+    wp_index: int = 0
+    wp_total: int = 0
+    replan_count: int = 0
+    speed_scale: float | None = None
+    failure_reason: str = ""
+    reason_codes: list[str] = Field(default_factory=list)
+    readiness: NavigationReadinessSummary
+    progress: NavigationProgressSummary
+    path: NavigationPathSummary
+    control: NavigationControlSummary
+    localization: NavigationLocalizationSummary
+    diagnostics: NavigationDiagnosticsSummary
+    mission: NavigationMissionSummary
+    ts: float
 
 
 class SessionResponse(GatewayResponseModel):
@@ -381,6 +562,7 @@ class StateResponse(GatewayResponseModel):
     teleop: TeleopSummary
     session: dict[str, Any]
     localization: dict[str, Any]
+    navigation: dict[str, Any] = Field(default_factory=dict)
     map: dict[str, Any]
     scene: dict[str, Any]
     path: dict[str, Any]
@@ -395,6 +577,7 @@ class AppBootstrapResponse(GatewayResponseModel):
     mission: dict[str, Any]
     safety: dict[str, Any]
     localization: dict[str, Any]
+    navigation: dict[str, Any]
     control: dict[str, Any]
     map: dict[str, Any]
     scene: dict[str, Any]

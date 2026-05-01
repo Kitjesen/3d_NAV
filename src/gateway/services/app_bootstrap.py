@@ -6,6 +6,13 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from gateway.services.runtime_status import (
+    build_localization_status_from_parts,
+    build_navigation_status,
+    safe_lease as _safe_lease,
+    safe_session as _safe_session,
+)
+
 
 APP_BOOTSTRAP_SCHEMA_VERSION = 1
 APP_CAPABILITIES_SCHEMA_VERSION = 1
@@ -17,6 +24,8 @@ CLIENT_LINKS: dict[str, str] = {
     "scene_graph": "/api/v1/scene_graph",
     "locations": "/api/v1/locations",
     "path": "/api/v1/path",
+    "localization_status": "/api/v1/localization/status",
+    "navigation_status": "/api/v1/navigation/status",
     "devices": "/api/v1/devices",
     "health": "/api/v1/health",
     "session": "/api/v1/session",
@@ -64,6 +73,14 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         "scene_graph": {"method": "GET", "path": CLIENT_LINKS["scene_graph"]},
         "locations": {"method": "GET", "path": CLIENT_LINKS["locations"]},
         "path": {"method": "GET", "path": CLIENT_LINKS["path"]},
+        "localization_status": {
+            "method": "GET",
+            "path": CLIENT_LINKS["localization_status"],
+        },
+        "navigation_status": {
+            "method": "GET",
+            "path": CLIENT_LINKS["navigation_status"],
+        },
         "devices": {"method": "GET", "path": CLIENT_LINKS["devices"]},
         "health": {"method": "GET", "path": CLIENT_LINKS["health"]},
     },
@@ -124,37 +141,6 @@ def _mapping(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _safe_session(gw: Any) -> dict[str, Any]:
-    try:
-        snapshot = gw._session_snapshot()
-        if isinstance(snapshot, Mapping):
-            return dict(snapshot)
-    except Exception:
-        pass
-    return {
-        "mode": getattr(gw, "_session_mode", "unknown"),
-        "active_map": getattr(gw, "_session_map", None),
-        "pending": bool(getattr(gw, "_session_pending", False)),
-        "error": "session_snapshot_unavailable",
-        "can_start_mapping": False,
-        "can_start_navigating": False,
-        "can_start_exploring": False,
-        "can_end": False,
-    }
-
-
-def _safe_lease(gw: Any) -> dict[str, Any]:
-    lease = getattr(gw, "_lease", None)
-    if hasattr(lease, "to_dict"):
-        try:
-            data = lease.to_dict()
-            if isinstance(data, Mapping):
-                return dict(data)
-        except Exception:
-            pass
-    return {}
-
-
 def _mission_summary(mission: Any) -> dict[str, Any]:
     raw = _mapping(mission)
     return {
@@ -170,36 +156,6 @@ def _safety_summary(safety: Any) -> dict[str, Any]:
         "level": level,
         "ok": level in (None, 0, "ok", "safe"),
         "raw": raw,
-    }
-
-
-def _localization_summary(
-    odometry: Any,
-    session: Mapping[str, Any],
-    icp_quality: float,
-    status: Any,
-) -> dict[str, Any]:
-    diagnostics = _mapping(status)
-    ready = bool(session.get("localizer_ready", False))
-    mode = session.get("mode")
-    has_odom = odometry is not None
-    if not has_odom:
-        state = "unknown"
-    elif ready:
-        state = "ready"
-    elif mode == "navigating":
-        state = "initializing" if icp_quality <= 0.0 else "degraded"
-    else:
-        state = "tracking"
-    return {
-        "state": state,
-        "ready": ready,
-        "has_odometry": has_odom,
-        "icp_quality": icp_quality,
-        "reported_state": diagnostics.get("state"),
-        "confidence": diagnostics.get("confidence"),
-        "degeneracy": diagnostics.get("degeneracy"),
-        "ts": diagnostics.get("ts"),
     }
 
 
@@ -293,6 +249,7 @@ def _feature_flags(gw: Any) -> dict[str, bool]:
         "health": True,
         "devices": True,
         "mapping": True,
+        "localization": True,
         "navigation": True,
         "exploration": getattr(gw, "_frontier_explorer", None) is not None,
         "teleop": True,
@@ -434,13 +391,27 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
 
     session = _safe_session(gw)
     icp_quality = float(getattr(gw, "_icp_quality", 0.0))
-    localization = _localization_summary(
+    localization = build_localization_status_from_parts(
         odometry,
         session,
         icp_quality,
         localization_status,
     )
+    navigation = build_navigation_status(gw)
     webrtc_available = getattr(gw, "_webrtc", None) is not None
+    traffic = _traffic_summary(gw)
+    control = dict(navigation.get("control", {}))
+    control.update(
+        {
+            "teleop": {
+                "active": bool(teleop_active),
+                "clients": int(teleop_clients),
+            },
+            "estop_clear": mode != "estop",
+            "can_send_commands": mode != "estop" and not bool(session.get("pending")),
+            "command_policy": _command_policy(gw),
+        }
+    )
 
     return {
         "schema_version": APP_BOOTSTRAP_SCHEMA_VERSION,
@@ -456,17 +427,8 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
         "mission": _mission_summary(mission),
         "safety": _safety_summary(safety),
         "localization": localization,
-        "control": {
-            "mode": mode,
-            "lease": _safe_lease(gw),
-            "teleop": {
-                "active": bool(teleop_active),
-                "clients": int(teleop_clients),
-            },
-            "estop_clear": mode != "estop",
-            "can_send_commands": mode != "estop" and not bool(session.get("pending")),
-            "command_policy": _command_policy(gw),
-        },
+        "navigation": navigation,
+        "control": control,
         "map": _map_summary(gw, session),
         "scene": {
             "available": bool(scene_graph_json) and scene_graph_json != "{}",
@@ -484,7 +446,14 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
             "webrtc_available": webrtc_available,
             "webrtc_offer": CLIENT_LINKS["webrtc_offer"],
         },
-        "traffic": _traffic_summary(gw),
+        "traffic": {
+            **traffic,
+            "client_policy": {
+                "usage": "cold_start_only",
+                "poll_rates_hz": traffic.get("recommended_client_rates_hz", {}),
+                "events_endpoint": CLIENT_LINKS["events"],
+            },
+        },
         "capabilities": _feature_flags(gw),
         "capabilities_endpoint": CLIENT_LINKS["capabilities"],
         "links": dict(CLIENT_LINKS),

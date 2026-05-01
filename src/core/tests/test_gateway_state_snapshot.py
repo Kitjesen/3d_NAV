@@ -40,9 +40,13 @@ def test_state_snapshot_preserves_legacy_fields_and_adds_client_contract():
     assert payload["teleop"] == {"active": True, "clients": 2}
     assert payload["localization"]["reported_state"] == "TRACKING"
     assert payload["localization"]["confidence"] == 0.8
+    assert payload["navigation"]["state"] == "running"
+    assert payload["navigation"]["path"]["points"] == 2
     assert payload["scene"]["available"] is True
     assert payload["path"]["points"] == 2
     assert payload["links"]["capabilities"] == "/api/v1/app/capabilities"
+    assert payload["links"]["localization_status"] == "/api/v1/localization/status"
+    assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
 
 
 def test_state_route_returns_stable_snapshot():
@@ -57,4 +61,5 @@ def test_state_route_returns_stable_snapshot():
     assert payload["schema_version"] == 1
     assert "odometry" in payload
     assert "teleop" in payload
+    assert "navigation" in payload
     assert payload["links"]["events"] == "/api/v1/events"

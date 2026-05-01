@@ -37,24 +37,45 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["robot"]["has_odometry"] is True
     assert payload["mission"]["state"] == "running"
     assert payload["safety"]["ok"] is True
-    assert payload["localization"]["state"] == "ready"
+    assert payload["localization"]["state"] == "degraded"
     assert payload["localization"]["reported_state"] == "DEGRADED"
     assert payload["localization"]["confidence"] == 0.4
+    assert payload["navigation"]["state"] == "running"
+    assert payload["navigation"]["path"]["points"] == 2
     assert payload["control"]["mode"] == "autonomous"
+    assert payload["control"]["active_cmd_source"] == "unknown"
+    assert payload["control"]["command_owner"] == "unknown"
     assert payload["control"]["estop_clear"] is True
     assert payload["path"]["points"] == 2
+    assert payload["path"]["endpoint"] == "/api/v1/path"
+    assert "path" not in payload["path"]
+    assert payload["scene"]["endpoint"] == "/api/v1/scene_graph"
+    assert "scene_graph" not in payload["scene"]
+    assert payload["traffic"]["client_policy"]["usage"] == "cold_start_only"
+    assert payload["traffic"]["client_policy"]["events_endpoint"] == "/api/v1/events"
     assert payload["capabilities"]["exploration"] is True
     assert payload["media"]["webrtc_available"] is True
     assert payload["capabilities_endpoint"] == "/api/v1/app/capabilities"
     assert payload["links"]["state"] == "/api/v1/state"
+    assert payload["links"]["localization_status"] == "/api/v1/localization/status"
+    assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
 
     capabilities = build_app_capabilities(gateway)
 
     assert capabilities["schema_version"] == 1
     assert capabilities["features"]["exploration"] is True
+    assert capabilities["features"]["localization"] is True
     assert capabilities["features"]["webrtc"] is True
     assert capabilities["endpoints"]["app"]["bootstrap"]["path"] == "/api/v1/app/bootstrap"
+    assert (
+        capabilities["endpoints"]["state"]["localization_status"]["path"]
+        == "/api/v1/localization/status"
+    )
+    assert (
+        capabilities["endpoints"]["state"]["navigation_status"]["path"]
+        == "/api/v1/navigation/status"
+    )
     assert capabilities["endpoints"]["control"]["goal"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["maps"]["path"] == "/api/v1/slam/maps"
     assert capabilities["endpoints"]["map"]["map_lifecycle"]["method"] == "POST"
@@ -78,7 +99,7 @@ def test_app_bootstrap_falls_back_when_session_snapshot_fails():
     payload = build_app_bootstrap(gateway)
 
     assert payload["session"]["error"] == "session_snapshot_unavailable"
-    assert payload["localization"]["state"] == "unknown"
+    assert payload["localization"]["state"] == "no_odometry"
 
 
 def test_app_bootstrap_route_endpoint_returns_payload():
@@ -102,6 +123,10 @@ def test_app_bootstrap_route_endpoint_returns_payload():
 
     assert capabilities["schema_version"] == 1
     assert capabilities["endpoints"]["state"]["snapshot"]["path"] == "/api/v1/state"
+    assert (
+        capabilities["endpoints"]["state"]["navigation_status"]["path"]
+        == "/api/v1/navigation/status"
+    )
 
 
 def test_app_capabilities_enriches_specs_from_openapi():
@@ -118,11 +143,21 @@ def test_app_capabilities_enriches_specs_from_openapi():
     capabilities = asyncio.run(route.endpoint())
 
     state = capabilities["endpoints"]["state"]["snapshot"]
+    scene_graph = capabilities["endpoints"]["state"]["scene_graph"]
+    locations = capabilities["endpoints"]["state"]["locations"]
+    path = capabilities["endpoints"]["state"]["path"]
+    localization = capabilities["endpoints"]["state"]["localization_status"]
+    navigation = capabilities["endpoints"]["state"]["navigation_status"]
     goal = capabilities["endpoints"]["control"]["goal"]
     map_list = capabilities["endpoints"]["map"]["maps"]
     camera = capabilities["endpoints"]["media"]["camera_snapshot"]
 
     assert state["response_schema"] == "StateResponse"
+    assert scene_graph["response_schema"] == "SceneGraphResponse"
+    assert locations["response_schema"] == "LocationsResponse"
+    assert path["response_schema"] == "PathResponse"
+    assert localization["response_schema"] == "LocalizationStatusResponse"
+    assert navigation["response_schema"] == "NavigationStatusResponse"
     assert goal["request_schema"] == "GoalRequest"
     assert goal["response_schema"] == "ControlCommandResponse"
     assert map_list["path"] == "/api/v1/slam/maps"

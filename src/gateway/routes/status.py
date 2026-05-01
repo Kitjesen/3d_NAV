@@ -13,14 +13,25 @@ from gateway.schemas import (
     DevicesResponse,
     HealthResponse,
     LivenessResponse,
+    LocalizationStatusResponse,
     LocationsResponse,
+    NavigationStatusResponse,
     PathResponse,
     ReadinessResponse,
     SceneGraphResponse,
     StateResponse,
 )
 from gateway.services.readiness import build_readiness_snapshot
+from gateway.services.runtime_status import (
+    build_localization_status,
+    build_navigation_status,
+)
 from gateway.services.state_snapshot import build_state_snapshot
+from gateway.services.telemetry_normalizers import (
+    build_locations_response,
+    build_path_response,
+    build_scene_graph_response,
+)
 
 
 def register_status_routes(app, gw) -> None:
@@ -89,7 +100,7 @@ def register_status_routes(app, gw) -> None:
     async def get_scene_graph():
         with gw._state_lock:
             sg = gw._sg_json
-        return {"scene_graph": sg}
+        return build_scene_graph_response(sg)
 
     @app.get(
         "/api/v1/locations",
@@ -99,22 +110,12 @@ def register_status_routes(app, gw) -> None:
     async def get_locations():
         tlm = gw._tagged_loc_module
         if tlm is None:
-            return {"locations": []}
+            return build_locations_response([])
         try:
             entries = list(tlm.store._store.values())
-            locations = [
-                {
-                    "name": e.get("name", ""),
-                    "x": round(float(e.get("x", 0.0)), 3),
-                    "y": round(float(e.get("y", 0.0)), 3),
-                    "z": round(float(e.get("z", 0.0)), 3),
-                }
-                for e in entries
-                if e.get("name")
-            ]
         except Exception:
-            locations = []
-        return {"locations": locations}
+            entries = []
+        return build_locations_response(entries)
 
     @app.get(
         "/api/v1/path",
@@ -123,7 +124,25 @@ def register_status_routes(app, gw) -> None:
     )
     async def get_path():
         with gw._state_lock:
-            return {"path": gw._last_path, "robot": gw._odom}
+            path = gw._last_path
+            robot = gw._odom
+        return build_path_response(path, robot)
+
+    @app.get(
+        "/api/v1/localization/status",
+        summary="Localization status for app and web clients",
+        response_model=LocalizationStatusResponse,
+    )
+    async def get_localization_status():
+        return build_localization_status(gw)
+
+    @app.get(
+        "/api/v1/navigation/status",
+        summary="Navigation mission and control status",
+        response_model=NavigationStatusResponse,
+    )
+    async def get_navigation_status():
+        return build_navigation_status(gw)
 
     @app.get(
         "/api/v1/devices",

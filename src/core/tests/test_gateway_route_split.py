@@ -81,10 +81,27 @@ def test_status_routes_register_expected_paths():
     assert "/api/v1/scene_graph" in paths
     assert "/api/v1/locations" in paths
     assert "/api/v1/path" in paths
+    assert "/api/v1/localization/status" in paths
+    assert "/api/v1/navigation/status" in paths
     assert "/api/v1/devices" in paths
     assert "/api/v1/health" in paths
     assert "/health" in paths
     assert "/ready" in paths
+
+
+def test_session_routes_register_expected_paths():
+    from fastapi import FastAPI
+
+    from gateway.routes.session import register_session_routes
+
+    app = FastAPI()
+    gw = SimpleNamespace()
+    register_session_routes(app, gw)
+
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/api/v1/session" in paths
+    assert "/api/v1/session/start" in paths
+    assert "/api/v1/session/end" in paths
 
 
 def test_camera_routes_register_expected_snapshot_path():
@@ -190,9 +207,14 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/diagnostic_pack"] == 1
     assert counts["/api/v1/events"] == 1
     assert counts["/api/v1/state"] == 1
+    assert counts["/api/v1/localization/status"] == 1
+    assert counts["/api/v1/navigation/status"] == 1
     assert counts["/api/v1/health"] == 1
     assert counts["/health"] == 1
     assert counts["/ready"] == 1
+    assert counts["/api/v1/session"] == 1
+    assert counts["/api/v1/session/start"] == 1
+    assert counts["/api/v1/session/end"] == 1
     assert counts["/api/v1/slam/maps"] == 1
     assert counts["/api/v1/map/points"] == 1
     assert counts["/api/v1/map_cloud/reset"] == 1
@@ -221,6 +243,8 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/scene_graph",
         "/api/v1/locations",
         "/api/v1/path",
+        "/api/v1/localization/status",
+        "/api/v1/navigation/status",
         "/api/v1/devices",
         "/api/v1/health",
         "/health",
@@ -309,8 +333,20 @@ def test_openapi_exposes_client_response_models():
     assert "LivenessResponse" in schemas
     assert "ControlCommandResponse" in schemas
     assert "SceneGraphResponse" in schemas
+    assert "SceneGraphObject" in schemas
+    assert "SceneGraphRelation" in schemas
+    assert "SceneGraphRegion" in schemas
     assert "LocationsResponse" in schemas
+    assert "LocationEntry" in schemas
     assert "PathResponse" in schemas
+    assert "PathPoint" in schemas
+    assert "RobotPoseSummary" in schemas
+    assert "LocalizationStatusResponse" in schemas
+    assert "NavigationStatusResponse" in schemas
+    assert "NavigationControlSummary" in schemas
+    assert "NavigationReadinessSummary" in schemas
+    assert "NavigationProgressSummary" in schemas
+    assert "NavigationDiagnosticsSummary" in schemas
     assert "AuthLoginResponse" in schemas
     assert "AuthCheckResponse" in schemas
     assert "LeaseResponse" in schemas
@@ -342,6 +378,12 @@ def test_openapi_exposes_client_response_models():
         "/LocationsResponse"
     )
     assert _schema_ref_for(openapi, "/api/v1/path").endswith("/PathResponse")
+    assert _schema_ref_for(openapi, "/api/v1/localization/status").endswith(
+        "/LocalizationStatusResponse"
+    )
+    assert _schema_ref_for(openapi, "/api/v1/navigation/status").endswith(
+        "/NavigationStatusResponse"
+    )
     assert _schema_ref_for(
         openapi, "/api/v1/goal", method="post"
     ).endswith("/ControlCommandResponse")
@@ -455,6 +497,31 @@ def test_openapi_exposes_client_response_models():
         "/AppCapabilitiesResponse"
     )
 
+    assert schemas["SceneGraphResponse"]["properties"]["objects"]["items"][
+        "$ref"
+    ].endswith("/SceneGraphObject")
+    assert schemas["SceneGraphResponse"]["properties"]["relations"]["items"][
+        "$ref"
+    ].endswith("/SceneGraphRelation")
+    assert schemas["SceneGraphResponse"]["properties"]["regions"]["items"][
+        "$ref"
+    ].endswith("/SceneGraphRegion")
+    assert schemas["LocationsResponse"]["properties"]["locations"]["items"][
+        "$ref"
+    ].endswith("/LocationEntry")
+    assert schemas["PathResponse"]["properties"]["path"]["items"]["$ref"].endswith(
+        "/PathPoint"
+    )
+    assert schemas["NavigationStatusResponse"]["properties"]["control"]["$ref"].endswith(
+        "/NavigationControlSummary"
+    )
+    assert schemas["NavigationStatusResponse"]["properties"]["readiness"][
+        "$ref"
+    ].endswith("/NavigationReadinessSummary")
+    assert schemas["NavigationStatusResponse"]["properties"]["progress"][
+        "$ref"
+    ].endswith("/NavigationProgressSummary")
+
     assert "application/sdp" in _content_for(
         openapi, "/api/v1/webrtc/whep", method="post"
     )
@@ -489,3 +556,19 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         manifest_paths.add(spec["path"])
 
     assert manifest_paths <= openapi_paths
+
+    key_specs = [
+        capabilities["endpoints"]["state"]["snapshot"],
+        capabilities["endpoints"]["state"]["scene_graph"],
+        capabilities["endpoints"]["state"]["locations"],
+        capabilities["endpoints"]["state"]["path"],
+        capabilities["endpoints"]["state"]["localization_status"],
+        capabilities["endpoints"]["state"]["navigation_status"],
+        capabilities["endpoints"]["state"]["devices"],
+        capabilities["endpoints"]["state"]["health"],
+        capabilities["endpoints"]["app"]["bootstrap"],
+        capabilities["endpoints"]["app"]["capabilities"],
+    ]
+    for spec in key_specs:
+        assert spec["response_schema"]
+        assert "application/json" in spec["response_content_types"]
