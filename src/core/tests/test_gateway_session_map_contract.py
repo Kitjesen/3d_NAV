@@ -141,14 +141,24 @@ def test_lease_route_validates_success_and_conflict_payloads():
     )
 
     acquired = LeaseResponse.model_validate(acquired_payload)
-    conflict = GatewayErrorResponse.model_validate(_payload(conflict_response))
+    conflict_payload = _payload(conflict_response)
+    conflict = GatewayErrorResponse.model_validate(conflict_payload)
     released = LeaseResponse.model_validate(released_payload)
 
+    assert acquired.schema_version == 1
+    assert acquired.ok is True
     assert acquired.status == "acquired"
     assert acquired.holder == "web"
     assert acquired.active is True
+    assert acquired.command.name == "lease"
+    assert conflict.schema_version == 1
+    assert conflict.ok is False
     assert conflict.error == "lease_conflict"
+    assert conflict.command is not None
+    assert conflict.command.name == "lease"
+    assert conflict.command.accepted is False
     assert released.status == "released"
+    assert released.active is False
 
 
 def test_session_routes_validate_idle_contracts():

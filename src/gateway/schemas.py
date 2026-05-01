@@ -13,10 +13,22 @@ class GatewayResponseModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class CommandReceipt(GatewayResponseModel):
+    name: str
+    request_id: str | None = None
+    client_id: str
+    accepted: bool
+    replay: bool
+    ts: float
+
+
 class GatewayErrorResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: Literal[False] = False
     error: str
     message: str | None = None
     detail: Any = None
+    command: CommandReceipt | None = None
 
 
 class BitrateRequest(BaseModel):
@@ -83,7 +95,8 @@ class ModeRequest(BaseModel):
 
 class LeaseRequest(BaseModel):
     action: str
-    client_id: str = "unknown"
+    client_id: str = Field(default="unknown", max_length=128)
+    request_id: str | None = Field(default=None, max_length=128)
     ttl: float = Field(default=30.0, gt=0, le=3600)
 
     @field_validator("action")
@@ -143,15 +156,6 @@ class ReadinessModuleStatus(GatewayResponseModel):
     error: str | None = None
 
 
-class CommandReceipt(GatewayResponseModel):
-    name: str
-    request_id: str | None = None
-    client_id: str
-    accepted: bool
-    replay: bool
-    ts: float
-
-
 class ReadinessResponse(GatewayResponseModel):
     schema_version: int
     status: str
@@ -191,6 +195,8 @@ class HealthResponse(GatewayResponseModel):
 
 
 class ControlCommandResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool = True
     status: str
     command: CommandReceipt
     goal: list[float] | None = None
@@ -208,7 +214,10 @@ class AuthCheckResponse(GatewayResponseModel):
 
 
 class LeaseResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool = True
     status: str
+    command: CommandReceipt
     holder: str | None = None
     active: bool | None = None
     expires_in: float | None = None

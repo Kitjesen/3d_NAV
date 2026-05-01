@@ -159,8 +159,7 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     try {
       const res = await api.sendInstruction(text)
       if (!res.ok) {
-        const err = await res.text()
-        addSystem(`错误：${res.status} ${err}`)
+        addSystem(`错误：${res.status}`)
         setThinking(null)
       }
       // else: thinking bubble stays visible until agent_message arrives

@@ -130,6 +130,8 @@ class CommandJournal:
         ts: float,
     ) -> dict[str, Any]:
         payload = dict(response)
+        payload.setdefault("schema_version", 1)
+        payload.setdefault("ok", accepted)
         payload["command"] = {
             "name": command,
             "request_id": request_id,

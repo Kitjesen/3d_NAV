@@ -332,6 +332,8 @@ def test_openapi_exposes_client_response_models():
     assert "DevicesResponse" in schemas
     assert "LivenessResponse" in schemas
     assert "ControlCommandResponse" in schemas
+    assert "GatewayErrorResponse" in schemas
+    assert "CommandReceipt" in schemas
     assert "SceneGraphResponse" in schemas
     assert "SceneGraphObject" in schemas
     assert "SceneGraphRelation" in schemas
@@ -521,6 +523,21 @@ def test_openapi_exposes_client_response_models():
     assert schemas["NavigationStatusResponse"]["properties"]["progress"][
         "$ref"
     ].endswith("/NavigationProgressSummary")
+    assert "schema_version" in schemas["ControlCommandResponse"]["properties"]
+    assert "ok" in schemas["ControlCommandResponse"]["properties"]
+    assert schemas["ControlCommandResponse"]["properties"]["command"]["$ref"].endswith(
+        "/CommandReceipt"
+    )
+    assert "schema_version" in schemas["GatewayErrorResponse"]["properties"]
+    assert "ok" in schemas["GatewayErrorResponse"]["properties"]
+    assert schemas["GatewayErrorResponse"]["properties"]["command"]["anyOf"][0][
+        "$ref"
+    ].endswith("/CommandReceipt")
+    assert "request_id" in schemas["LeaseRequest"]["properties"]
+    assert schemas["LeaseResponse"]["properties"]["command"]["$ref"].endswith(
+        "/CommandReceipt"
+    )
+    assert "command" in schemas["LeaseResponse"]["required"]
 
     assert "application/sdp" in _content_for(
         openapi, "/api/v1/webrtc/whep", method="post"

@@ -21,7 +21,7 @@ REST
   POST /api/v1/stop
   POST /api/v1/instruction   {text}
   POST /api/v1/mode          {mode: manual|autonomous|estop}
-  POST /api/v1/lease         {action: acquire|release|renew, client_id, ttl?}
+  POST /api/v1/lease         {action: acquire|release|renew, client_id, request_id?, ttl?}
   POST /api/v1/maps          {action: list|save|delete|rename|set_active|build_tomogram, name?, new_name?}
   GET  /api/v1/state         full snapshot (odom, safety, mission, mode, lease)
   GET  /api/v1/scene_graph

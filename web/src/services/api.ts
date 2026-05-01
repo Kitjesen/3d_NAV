@@ -4,6 +4,10 @@
 import type {
   AppBootstrapResponse,
   AppCapabilitiesResponse,
+  ControlCommandResponse,
+  GatewayErrorResponse,
+  LeaseAction,
+  LeaseResponse,
   LocationsResponse,
   MapInfo,
   PathResponse,
@@ -11,10 +15,45 @@ import type {
   SlamProfile,
 } from '../types'
 
+const WEB_CLIENT_ID = 'web-dashboard'
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<T>
+}
+
+function makeRequestId(prefix: string): string {
+  if (globalThis.crypto?.randomUUID) {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`
+  }
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+function commandBody<T extends Record<string, unknown>>(
+  prefix: string,
+  body: T,
+): T & { client_id: string; request_id: string } {
+  return {
+    ...body,
+    client_id: WEB_CLIENT_ID,
+    request_id: makeRequestId(prefix),
+  }
+}
+
+async function postJson<T>(url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const text = await res.text()
+  const data = text ? JSON.parse(text) : undefined
+  if (!res.ok) {
+    const error = data as GatewayErrorResponse | undefined
+    throw new Error(error?.message || error?.error || `HTTP ${res.status}`)
+  }
+  return data as T
 }
 
 // --- App bootstrap / read APIs ---
@@ -41,28 +80,39 @@ export async function fetchLocations(): Promise<LocationsResponse> {
 
 // --- Navigation ---
 
-export async function sendInstruction(text: string): Promise<Response> {
-  return fetch('/api/v1/instruction', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  })
+export async function sendInstruction(text: string): Promise<ControlCommandResponse> {
+  return postJson<ControlCommandResponse>(
+    '/api/v1/instruction',
+    commandBody('instruction', { text }),
+  )
 }
 
-export async function sendGoal(x: number, y: number): Promise<Response> {
-  return fetch('/api/v1/goal', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ x, y }),
-  })
+export async function sendGoal(x: number, y: number): Promise<ControlCommandResponse> {
+  return postJson<ControlCommandResponse>(
+    '/api/v1/goal',
+    commandBody('goal', { x, y }),
+  )
 }
 
-export async function sendStop(): Promise<Response> {
-  return fetch('/api/v1/stop', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
-  })
+export async function sendStop(): Promise<ControlCommandResponse> {
+  return postJson<ControlCommandResponse>(
+    '/api/v1/stop',
+    commandBody('stop', {}),
+  )
+}
+
+export async function sendMode(mode: 'manual' | 'autonomous' | 'estop'): Promise<ControlCommandResponse> {
+  return postJson<ControlCommandResponse>(
+    '/api/v1/mode',
+    commandBody('mode', { mode }),
+  )
+}
+
+export async function updateLease(action: LeaseAction, ttl = 30): Promise<LeaseResponse> {
+  return postJson<LeaseResponse>(
+    '/api/v1/lease',
+    commandBody('lease', { action, ttl }),
+  )
 }
 
 // --- SLAM ---

@@ -146,6 +146,53 @@ export interface AppCapabilitiesResponse {
   links: Record<string, string>
 }
 
+export interface CommandReceipt {
+  name: string
+  request_id?: string | null
+  client_id: string
+  accepted: boolean
+  replay: boolean
+  ts: number
+}
+
+export interface GatewayErrorResponse {
+  schema_version?: number
+  ok?: false
+  error: string
+  message?: string | null
+  detail?: unknown
+  command?: CommandReceipt
+}
+
+export interface ControlCommandResponse {
+  schema_version: number
+  ok: boolean
+  status: string
+  command: CommandReceipt
+  goal?: number[] | null
+  instruction?: string | null
+  mode?: string | null
+}
+
+export type LeaseAction = 'acquire' | 'release' | 'renew'
+
+export interface LeaseRequest {
+  action: LeaseAction
+  client_id?: string
+  request_id?: string | null
+  ttl?: number
+}
+
+export interface LeaseResponse {
+  schema_version: number
+  ok: boolean
+  status: string
+  command: CommandReceipt
+  holder?: string | null
+  active?: boolean | null
+  expires_in?: number | null
+}
+
 export interface OdometryEvent {
   type: 'odometry'
   x: number

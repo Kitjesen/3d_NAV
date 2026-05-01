@@ -35,8 +35,13 @@ def test_command_journal_replays_duplicate_request_id_without_republish():
 
     assert gateway.goal_pose.msg_count == 1
     assert gateway.instruction.msg_count == 1
+    assert model.schema_version == 1
+    assert model.ok is True
     assert model.status == "ok"
     assert model.goal == [1.0, 2.0, 0.0]
+    assert model.command.name == "goal"
+    assert model.command.request_id == "goal-001"
+    assert model.command.client_id == "web"
     assert first["command"]["accepted"] is True
     assert first["command"]["replay"] is False
     assert second["command"]["replay"] is True
@@ -58,10 +63,62 @@ def test_commands_without_request_id_preserve_existing_execute_every_time_behavi
 
     assert gateway.stop_cmd.msg_count == 2
     assert gateway.cmd_vel.msg_count == 2
+    assert model.schema_version == 1
+    assert model.ok is True
     assert model.status == "stopped"
     assert first["status"] == "stopped"
     assert first["command"]["request_id"] is None
     assert second["command"]["replay"] is False
+
+
+def test_lease_command_uses_receipt_and_replays_duplicate_request_id():
+    from gateway.gateway_module import GatewayModule, LeaseRequest
+    from gateway.schemas import LeaseResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    post_lease = _endpoint(gateway, "/api/v1/lease")
+
+    acquire = LeaseRequest(
+        action="acquire",
+        client_id="web",
+        ttl=30.0,
+        request_id="lease-001",
+    )
+    first = asyncio.run(post_lease(acquire))
+    second = asyncio.run(post_lease(acquire))
+    release = asyncio.run(
+        post_lease(
+            LeaseRequest(
+                action="release",
+                client_id="web",
+                ttl=30.0,
+                request_id="lease-release-001",
+            )
+        )
+    )
+
+    acquired = LeaseResponse.model_validate(first)
+    replayed = LeaseResponse.model_validate(second)
+    released = LeaseResponse.model_validate(release)
+    command_stats = gateway._command_journal.snapshot()
+
+    assert acquired.schema_version == 1
+    assert acquired.ok is True
+    assert acquired.status == "acquired"
+    assert acquired.holder == "web"
+    assert acquired.active is True
+    assert acquired.command.name == "lease"
+    assert acquired.command.request_id == "lease-001"
+    assert acquired.command.client_id == "web"
+    assert acquired.command.replay is False
+    assert replayed.command.replay is True
+    assert replayed.holder == "web"
+    assert released.status == "released"
+    assert released.active is False
+    assert released.command.request_id == "lease-release-001"
+    assert command_stats["accepted_commands"] == 2
+    assert command_stats["replayed_commands"] == 1
 
 
 def test_bootstrap_and_health_expose_command_policy():

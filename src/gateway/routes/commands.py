@@ -136,26 +136,47 @@ def register_command_routes(app, gw) -> None:
         },
     )
     async def post_lease(body: LeaseRequest):
-        if body.action == "acquire":
-            ok = gw._lease.acquire(body.client_id, body.ttl)
+        def _apply() -> dict[str, Any]:
+            if body.action == "acquire":
+                ok = gw._lease.acquire(body.client_id, body.ttl)
+                if not ok:
+                    raise PermissionError("lease_conflict")
+                return {"status": "acquired", **gw._lease.to_dict()}
+
+            if body.action == "release":
+                gw._lease.release(body.client_id)
+                return {"status": "released", **gw._lease.to_dict()}
+
+            ok = gw._lease.renew(body.client_id, body.ttl)
             if not ok:
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        "error": "lease_conflict",
-                        "detail": gw._lease.to_dict(),
-                    },
-                )
-            return {"status": "acquired", **gw._lease.to_dict()}
+                raise PermissionError("not_lease_holder")
+            return {"status": "renewed", **gw._lease.to_dict()}
 
-        if body.action == "release":
-            gw._lease.release(body.client_id)
-            return {"status": "released"}
-
-        ok = gw._lease.renew(body.client_id, body.ttl)
-        if not ok:
-            return JSONResponse(
-                status_code=403,
-                content={"error": "not_lease_holder"},
+        try:
+            return gw._run_control_command("lease", body, _apply)
+        except PermissionError as exc:
+            error = str(exc)
+            status_code = 409 if error == "lease_conflict" else 403
+            message = (
+                "control lease is held by another client"
+                if error == "lease_conflict"
+                else "client does not hold the active control lease"
             )
-        return {"status": "renewed", **gw._lease.to_dict()}
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": error,
+                    "message": message,
+                    "command": {
+                        "name": "lease",
+                        "request_id": body.request_id,
+                        "client_id": body.client_id,
+                        "accepted": False,
+                        "replay": False,
+                        "ts": time.time(),
+                    },
+                    "detail": gw._lease.to_dict(),
+                },
+            )
