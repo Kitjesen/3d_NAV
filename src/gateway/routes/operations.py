@@ -352,7 +352,7 @@ def register_operation_routes(app, gw) -> None:
         elif services.get("localizer") in ("running", "active"):
             mode = "localizer"
         elif services.get("slam") in ("running", "active"):
-            mode = "slam_only"
+            mode = "fastlio2"
         else:
             mode = "stopped"
         return {"mode": mode, "services": services}

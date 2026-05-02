@@ -63,6 +63,27 @@ def _as_float(value: Any, default: float | None = None) -> float | None:
         return default
 
 
+def _as_optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "0", "no", "n"}:
+            return False
+    return None
+
+
 def _reason_code_from_text(prefix: str, text: str) -> str:
     words: list[str] = []
     current: list[str] = []
@@ -192,6 +213,25 @@ def build_localization_status_from_parts(
         "reported_state": diagnostics.get("state"),
         "confidence": diagnostics.get("confidence"),
         "degeneracy": diagnostics.get("degeneracy"),
+        "icp_fitness": _as_float(diagnostics.get("icp_fitness")),
+        "effective_ratio": _as_float(diagnostics.get("effective_ratio")),
+        "condition_number": _as_float(diagnostics.get("condition_number")),
+        "degenerate_dof_count": _as_optional_int(
+            diagnostics.get("degenerate_dof_count")
+        ),
+        "pos_cov_trace": _as_float(diagnostics.get("pos_cov_trace")),
+        "ieskf_iter_num": _as_optional_int(diagnostics.get("ieskf_iter_num")),
+        "ieskf_converged": _as_optional_bool(diagnostics.get("ieskf_converged")),
+        "localizer_health": diagnostics.get("localizer_health"),
+        "localizer_health_fitness": _as_float(
+            diagnostics.get("localizer_health_fitness")
+        ),
+        "localizer_health_iter": _as_optional_int(
+            diagnostics.get("localizer_health_iter")
+        ),
+        "localizer_health_cov_trace": _as_float(
+            diagnostics.get("localizer_health_cov_trace")
+        ),
         "ts": diagnostics.get("ts"),
         "can_relocalize": state in {"degraded", "lost"} and odometry is not None,
         "reasons": reasons,

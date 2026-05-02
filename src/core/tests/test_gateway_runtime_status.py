@@ -73,6 +73,49 @@ def test_localization_status_route_returns_stable_schema():
     assert payload["reported_state"] == "TRACKING"
 
 
+def test_localization_status_exposes_slam_quality_diagnostics():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocalizationStatusResponse
+    from gateway.services.runtime_status import build_localization_status
+
+    gateway = GatewayModule()
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._localization_status = {
+            "state": "DEGRADED",
+            "confidence": 0.1,
+            "degeneracy": "CRITICAL",
+            "icp_fitness": 0.3049,
+            "effective_ratio": 1.0,
+            "condition_number": 50.4,
+            "degenerate_dof_count": 0,
+            "pos_cov_trace": 0.000017,
+            "ieskf_iter_num": 10,
+            "ieskf_converged": False,
+            "localizer_health": "DEGRADED",
+            "localizer_health_fitness": 0.3049,
+            "localizer_health_iter": 11,
+            "localizer_health_cov_trace": 0.000019,
+        }
+
+    payload = build_localization_status(gateway)
+    model = LocalizationStatusResponse.model_validate(payload)
+
+    assert model.state == "degraded"
+    assert model.icp_fitness == 0.3049
+    assert model.effective_ratio == 1.0
+    assert model.condition_number == 50.4
+    assert model.degenerate_dof_count == 0
+    assert model.pos_cov_trace == 0.000017
+    assert model.ieskf_iter_num == 10
+    assert model.ieskf_converged is False
+    assert model.localizer_health == "DEGRADED"
+    assert model.localizer_health_fitness == 0.3049
+    assert model.localizer_health_iter == 11
+    assert model.localizer_health_cov_trace == 0.000019
+    assert payload["raw"]["icp_fitness"] == 0.3049
+
+
 def test_navigation_status_reports_mission_path_and_control_source():
     from gateway.gateway_module import GatewayModule
     from gateway.services.runtime_status import build_navigation_status

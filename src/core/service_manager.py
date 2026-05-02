@@ -1,12 +1,12 @@
-"""ServiceManager — start/stop systemd services on demand.
+"""ServiceManager - start/stop robot systemd services on demand.
 
 Industrial pattern: only run what you need, release when done.
 
 Usage:
     svc = ServiceManager()
-    svc.start("nav-lidar", "nav-slam")   # pull up when needed
-    svc.stop("nav-lidar", "nav-slam")    # release when done
-    svc.ensure("nav-lidar")              # start only if not running
+    svc.start("lidar", "slam")   # pull up when needed
+    svc.stop("lidar", "slam")    # release when done
+    svc.ensure("lidar")          # start only if not running
 """
 
 from __future__ import annotations
@@ -14,76 +14,130 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
-from typing import List
 
 logger = logging.getLogger(__name__)
 
 
+SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
+    "lidar": ("robot-lidar.service", "lidar.service", "lidar"),
+    "camera": ("robot-camera.service", "camera.service", "camera"),
+    "brainstem": ("robot-brainstem.service", "brainstem.service", "brainstem"),
+    "slam": ("robot-fastlio2.service", "slam.service", "slam"),
+    "slam_pgo": ("robot-pgo.service", "slam_pgo.service", "slam_pgo"),
+    "localizer": ("robot-localizer.service", "localizer.service", "localizer"),
+}
+
+
 class ServiceManager:
-    """Manage systemd services — start on demand, stop on release."""
+    """Manage systemd services using stable logical robot service names."""
 
     def __init__(self):
-        self._started: list[str] = []  # services we started (we'll stop them)
+        self._started: list[str] = []  # concrete units we started
 
-    def is_running(self, service: str) -> bool:
-        """Check if a systemd service is active."""
+    def _candidate_units(self, service: str) -> tuple[str, ...]:
+        return SERVICE_ALIASES.get(service, (service,))
+
+    def _is_active_unit(self, unit: str) -> bool:
         try:
             result = subprocess.run(
-                ["systemctl", "is-active", "--quiet", service],
+                ["systemctl", "is-active", "--quiet", unit],
                 timeout=3,
             )
             return result.returncode == 0
         except Exception:
             return False
 
+    def _unit_exists(self, unit: str) -> bool:
+        try:
+            result = subprocess.run(
+                ["systemctl", "show", "-p", "LoadState", "--value", unit],
+                timeout=3,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return False
+        if result.returncode != 0:
+            return False
+        load_state = (result.stdout or "").strip()
+        return bool(load_state) and load_state not in {"not-found", "masked"}
+
+    def _resolve_start_unit(self, service: str) -> str:
+        candidates = self._candidate_units(service)
+        for unit in candidates:
+            if self._unit_exists(unit):
+                return unit
+        return candidates[0]
+
+    def _forget_started(self, *units: str) -> None:
+        for unit in units:
+            while unit in self._started:
+                self._started.remove(unit)
+
+    def is_running(self, service: str) -> bool:
+        """Check if a logical service or any of its concrete units is active."""
+        return any(self._is_active_unit(unit) for unit in self._candidate_units(service))
+
     def start(self, *services: str) -> list[str]:
-        """Start services. Returns list of actually started services."""
+        """Start services. Returns list of actually started logical services."""
         started = []
-        for svc in services:
-            if self.is_running(svc):
-                logger.debug("Service %s already running", svc)
+        for service in services:
+            if self.is_running(service):
+                logger.debug("Service %s already running", service)
                 continue
+            unit = self._resolve_start_unit(service)
             try:
                 subprocess.run(
-                    ["sudo", "systemctl", "start", svc],
-                    timeout=10, check=True,
+                    ["sudo", "systemctl", "start", unit],
+                    timeout=10,
+                    check=True,
                     capture_output=True,
                 )
-                self._started.append(svc)
-                started.append(svc)
-                logger.info("Started service: %s", svc)
+                self._started.append(unit)
+                started.append(service)
+                logger.info("Started service %s via unit %s", service, unit)
             except subprocess.CalledProcessError as e:
-                logger.error("Failed to start %s: %s", svc, e.stderr.decode()[:100])
+                stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr
+                logger.error("Failed to start %s: %s", service, str(stderr)[:100])
             except Exception as e:
-                logger.error("Failed to start %s: %s", svc, e)
+                logger.error("Failed to start %s: %s", service, e)
         return started
 
     def stop(self, *services: str) -> None:
-        """Stop services."""
-        for svc in services:
-            try:
-                subprocess.run(
-                    ["sudo", "systemctl", "stop", svc],
-                    timeout=10, capture_output=True,
-                )
-                if svc in self._started:
-                    self._started.remove(svc)
-                logger.info("Stopped service: %s", svc)
-            except Exception as e:
-                logger.warning("Failed to stop %s: %s", svc, e)
+        """Stop services.
+
+        Logical names stop every known concrete alias. This intentionally clears
+        old and new robot units together so profile switching cannot leave a
+        legacy service racing the current robot-* service.
+        """
+        for service in services:
+            for unit in self._candidate_units(service):
+                try:
+                    subprocess.run(
+                        ["sudo", "systemctl", "stop", unit],
+                        timeout=10,
+                        capture_output=True,
+                    )
+                    self._forget_started(unit, service)
+                    logger.info("Stopped service %s via unit %s", service, unit)
+                except Exception as e:
+                    logger.warning("Failed to stop %s (%s): %s", service, unit, e)
 
     def ensure(self, *services: str) -> None:
         """Ensure services are running (start if not)."""
         self.start(*services)
 
     def stop_all_started(self) -> None:
-        """Stop all services that we started (cleanup)."""
-        for svc in list(self._started):
-            self.stop(svc)
+        """Stop all services that this manager started."""
+        for unit in list(self._started):
+            self.stop(unit)
 
     def status(self, *services: str) -> dict:
         """Batch query service status. Returns {name: "running"|"stopped"}."""
-        return {svc: "running" if self.is_running(svc) else "stopped" for svc in services}
+        return {
+            svc: "running" if self.is_running(svc) else "stopped"
+            for svc in services
+        }
 
     def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
         """Wait until all services are active."""
@@ -107,7 +161,7 @@ def get_service_manager() -> ServiceManager:
     return _manager
 
 
-# Service groups — what each mode needs
+# Service groups: what each mode needs.
 SERVICES_LIDAR = ["lidar"]
 SERVICES_SLAM = ["slam"]
 SERVICES_SLAM_MAPPING = ["slam", "slam_pgo"]

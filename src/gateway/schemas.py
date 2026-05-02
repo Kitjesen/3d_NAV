@@ -328,6 +328,17 @@ class LocalizationStatusResponse(GatewayResponseModel):
     reported_state: Any = None
     confidence: float | None = None
     degeneracy: str | None = None
+    icp_fitness: float | None = None
+    effective_ratio: float | None = None
+    condition_number: float | None = None
+    degenerate_dof_count: int | None = None
+    pos_cov_trace: float | None = None
+    ieskf_iter_num: int | None = None
+    ieskf_converged: bool | None = None
+    localizer_health: str | None = None
+    localizer_health_fitness: float | None = None
+    localizer_health_iter: int | None = None
+    localizer_health_cov_trace: float | None = None
     ts: float | None = None
     can_relocalize: bool = False
     reasons: list[str] = Field(default_factory=list)

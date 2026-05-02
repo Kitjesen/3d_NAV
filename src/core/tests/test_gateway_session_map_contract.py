@@ -336,6 +336,54 @@ def test_operational_routes_validate_idle_json_contracts():
     assert webrtc_bitrate.error == "webrtc_unavailable"
 
 
+def test_slam_status_uses_logical_service_states(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+
+    class _FakeServiceManager:
+        def __init__(self, services):
+            self._services = services
+
+        def status(self, *names):
+            assert names == ("lidar", "slam", "slam_pgo", "localizer")
+            return dict(self._services)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    endpoint = _endpoint(gateway, "/api/v1/slam/status")
+
+    monkeypatch.setattr(
+        service_manager,
+        "get_service_manager",
+        lambda: _FakeServiceManager(
+            {
+                "lidar": "running",
+                "slam": "running",
+                "slam_pgo": "stopped",
+                "localizer": "running",
+            }
+        ),
+    )
+    localizer_payload = asyncio.run(endpoint())
+    assert localizer_payload["mode"] == "localizer"
+    assert localizer_payload["services"]["slam"] == "running"
+
+    monkeypatch.setattr(
+        service_manager,
+        "get_service_manager",
+        lambda: _FakeServiceManager(
+            {
+                "lidar": "running",
+                "slam": "running",
+                "slam_pgo": "stopped",
+                "localizer": "stopped",
+            }
+        ),
+    )
+    fastlio_payload = asyncio.run(endpoint())
+    assert fastlio_payload["mode"] == "fastlio2"
+
+
 def test_temporal_memory_response_accepts_observation_rows():
     from gateway.schemas import TemporalMemoryResponse
 
