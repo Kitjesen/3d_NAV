@@ -28,7 +28,7 @@ public:
         double roll_pitch_margin   = 0.2;   // rad (±11°) - IMU levels it
         double yaw_search_min      = -3.14159;
         double yaw_search_max      =  3.14159;
-        int    num_threads         = 6;     // S100P 8 cores, push harder
+        int    num_threads         = 1;     // Keep CPU BBS3D in-process recovery crash-isolated.
         int    timeout_ms          = 30000; // 30 s — CPU version needs more headroom
         Config() {}
     };

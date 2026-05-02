@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/voxel_grid.h>
-#include <small_gicp/pcl/pcl_registration.hpp>
+#include <pcl/registration/icp.h>
 
 struct ICPConfig
 {
@@ -17,10 +17,9 @@ struct ICPConfig
     double rough_score_thresh = 0.2;
     int rough_max_iteration = 5;
 
-    // Number of OpenMP threads for small_gicp parallel reduction. Set 0
-    // (default) to let the implementation pick something reasonable; set
-    // explicitly when running alongside SLAM/PGO that already saturate
-    // the CPU and we want to bound the localizer's footprint.
+    // Reserved for accelerated ICP backends. The runtime path currently uses
+    // PCL ICP because small_gicp has shown uncaught worker-thread exceptions
+    // on real robot scans.
     int num_threads = 4;
 };
 
@@ -57,13 +56,8 @@ public:
 private:
     ICPConfig m_config;
     pcl::VoxelGrid<PointType> m_voxel_filter;
-    // Drop-in replacement for pcl::IterativeClosestPoint. small_gicp's
-    // RegistrationPCL inherits from pcl::Registration so the call sites
-    // (setInputSource/Target, align) are unchanged. The win is the
-    // post-align getters: getFinalHessian() + getRegistrationResult()
-    // expose the diagnostics PCL ICP swallowed.
-    small_gicp::RegistrationPCL<PointType, PointType> m_refine_icp;
-    small_gicp::RegistrationPCL<PointType, PointType> m_rough_icp;
+    pcl::IterativeClosestPoint<PointType, PointType> m_refine_icp;
+    pcl::IterativeClosestPoint<PointType, PointType> m_rough_icp;
     CloudType::Ptr m_refine_inp;
     CloudType::Ptr m_rough_inp;
     CloudType::Ptr m_refine_tgt;

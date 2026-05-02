@@ -964,10 +964,21 @@ class GatewayModule(Module, layer=6):
             has_pcd = os.path.isfile(os.path.join(base, "map.pcd"))
             has_tomogram = os.path.isfile(os.path.join(base, "tomogram.pickle"))
         icp = self._icp_quality
+        localization_status = self._localization_status or {}
+        reported_state = str(localization_status.get("state", "") or "").upper()
+        degeneracy = str(localization_status.get("degeneracy", "") or "").upper()
+        localizer_health = str(
+            localization_status.get("localizer_health", "") or ""
+        ).upper()
+        confidence = localization_status.get("confidence")
+        confidence_ok = not isinstance(confidence, (int, float)) or confidence >= 0.5
         loc_ready = (
-            self._session_mode == "navigating"
-            and icp > 0.0
+            icp > 0.0
             and icp < 0.5
+            and reported_state in {"", "TRACKING", "OK", "READY"}
+            and degeneracy not in {"MILD", "MODERATE", "SEVERE", "CRITICAL"}
+            and localizer_health in {"", "UNKNOWN", "LOCKED", "RECOVERED", "OK", "READY"}
+            and confidence_ok
         )
         # Gate which transitions are allowed from current state.
         idle = self._session_mode == "idle" and not self._session_pending

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <exception>
 #include <cpu_bbs3d/bbs3d.hpp>
 
 namespace {
@@ -46,10 +47,20 @@ bool BBS3DGlobalLocalizer::set_map(const CloudType::Ptr& map_cloud) {
         mx = mx.cwiseMax(p);
     }
 
-    bbs_->set_tar_points(pts, cfg_.min_level_res, cfg_.max_level);
-    bbs_->set_trans_search_range(
-        mn - Eigen::Vector3d::Constant(cfg_.trans_search_margin),
-        mx + Eigen::Vector3d::Constant(cfg_.trans_search_margin));
+    try {
+        bbs_->set_tar_points(pts, cfg_.min_level_res, cfg_.max_level);
+        bbs_->set_trans_search_range(
+            mn - Eigen::Vector3d::Constant(cfg_.trans_search_margin),
+            mx + Eigen::Vector3d::Constant(cfg_.trans_search_margin));
+    } catch (const std::exception& e) {
+        has_map_ = false;
+        std::fprintf(stderr, "[BBS3D] set_map exception: %s\n", e.what());
+        return false;
+    } catch (...) {
+        has_map_ = false;
+        std::fprintf(stderr, "[BBS3D] set_map unknown exception\n");
+        return false;
+    }
     has_map_ = true;
     std::fprintf(stderr,
         "[BBS3D] map set: %zu pts, bbox=[%.1f,%.1f,%.1f]..[%.1f,%.1f,%.1f]\n",
@@ -65,21 +76,31 @@ BBS3DGlobalLocalizer::Result BBS3DGlobalLocalizer::localize(const CloudType::Ptr
     auto scan_pts = to_eigen(scan_cloud);
     if (scan_pts.empty()) { r.message = "scan has no finite points"; return r; }
 
-    bbs_->set_src_points(scan_pts);
+    try {
+        bbs_->set_src_points(scan_pts);
 
-    auto t0 = std::chrono::steady_clock::now();
-    bbs_->localize();
-    auto t1 = std::chrono::steady_clock::now();
-    r.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        auto t0 = std::chrono::steady_clock::now();
+        bbs_->localize();
+        auto t1 = std::chrono::steady_clock::now();
+        r.elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-    if (!bbs_->has_localized()) {
-        r.message = "bbs3d failed to converge / timed out";
+        if (!bbs_->has_localized()) {
+            r.message = "bbs3d failed to converge / timed out";
+            return r;
+        }
+
+        Eigen::Matrix4d pose_d = bbs_->get_global_pose();
+        r.pose = pose_d.cast<float>();
+        r.score_percentage = bbs_->get_best_score_percentage();
+    } catch (const std::exception& e) {
+        r.message = std::string("bbs3d exception: ") + e.what();
+        std::fprintf(stderr, "[BBS3D] localize exception: %s\n", e.what());
+        return r;
+    } catch (...) {
+        r.message = "bbs3d unknown exception";
+        std::fprintf(stderr, "[BBS3D] localize unknown exception\n");
         return r;
     }
-
-    Eigen::Matrix4d pose_d = bbs_->get_global_pose();
-    r.pose = pose_d.cast<float>();
-    r.score_percentage = bbs_->get_best_score_percentage();
     r.success = true;
     r.message = "ok";
     std::fprintf(stderr,

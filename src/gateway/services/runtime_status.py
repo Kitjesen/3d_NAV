@@ -148,6 +148,7 @@ def _localization_state(
     pending = bool(session.get("pending", False))
     reported = _reported_state(diagnostics.get("state"))
     degeneracy = _reported_state(diagnostics.get("degeneracy"))
+    localizer_health = _reported_state(diagnostics.get("localizer_health"))
     confidence = diagnostics.get("confidence")
 
     if odometry is None:
@@ -162,15 +163,22 @@ def _localization_state(
         reasons.append(f"reported_state:{reported.lower()}")
         return "lost", reasons
 
+    if localizer_health == "LOST":
+        reasons.append("localizer_health:lost")
+        return "lost", reasons
+
     if (
         reported in {"DEGRADED", "FALLBACK_GNSS_ONLY"}
-        or degeneracy in {"MILD", "MODERATE", "SEVERE"}
+        or degeneracy in {"MILD", "MODERATE", "SEVERE", "CRITICAL"}
+        or localizer_health == "DEGRADED"
         or isinstance(confidence, (int, float)) and confidence < 0.5
     ):
         if reported:
             reasons.append(f"reported_state:{reported.lower()}")
         if degeneracy and degeneracy != "NONE":
             reasons.append(f"degeneracy:{degeneracy.lower()}")
+        if localizer_health == "DEGRADED":
+            reasons.append("localizer_health:degraded")
         if isinstance(confidence, (int, float)) and confidence < 0.5:
             reasons.append("low_confidence")
         return "degraded", reasons

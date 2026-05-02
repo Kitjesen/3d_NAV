@@ -31,6 +31,18 @@ def test_localization_status_covers_product_states():
     assert payload["state"] == "tracking"
     assert payload["reported_state"] == "TRACKING"
 
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "localizer_health": "RECOVERED",
+        }
+    payload = build_localization_status(gateway)
+    assert payload["state"] == "ready"
+    assert payload["ready"] is True
+
     gateway._session_mode = "navigating"
     gateway._icp_quality = 0.2
     with gateway._state_lock:
@@ -55,6 +67,16 @@ def test_localization_status_covers_product_states():
     payload = build_localization_status(gateway)
     assert payload["state"] == "lost"
     assert payload["can_relocalize"] is True
+
+    with gateway._state_lock:
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "localizer_health": "LOST",
+        }
+    payload = build_localization_status(gateway)
+    assert payload["state"] == "lost"
+    assert "localizer_health:lost" in payload["reasons"]
 
 
 def test_localization_status_route_returns_stable_schema():

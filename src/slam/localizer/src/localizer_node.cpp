@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>      // std::snprintf in launchAutoBBS3D reason builder
+#include <exception>
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
@@ -165,7 +166,7 @@ public:
                               *scan_copy = *m_state.last_cloud; }
                             RCLCPP_INFO(this->get_logger(),
                                 "BBS3D: boot auto-relocalize (%zu pts)", scan_copy->size());
-                            auto r = m_bbs3d->localize(scan_copy);
+                            auto r = runBBS3D(scan_copy, "boot auto-relocalize");
                             if (r.success) {
                                 std::lock_guard<std::mutex> svc(m_state.service_mutex);
                                 m_state.initial_guess = r.pose;
@@ -452,7 +453,7 @@ public:
         { std::lock_guard<std::mutex> lk(m_state.message_mutex);
           *scan_copy = *m_state.last_cloud; }
         std::thread([this, scan_copy, reason]() {
-            auto r = m_bbs3d->localize(scan_copy);
+            auto r = runBBS3D(scan_copy, "auto recovery");
             if (r.success) {
                 std::lock_guard<std::mutex> svc(m_state.service_mutex);
                 m_state.initial_guess = r.pose;
@@ -645,7 +646,7 @@ public:
             "BBS3D: spawning worker for %zu scan pts", scan_copy->size());
 
         std::thread([this, scan_copy]() {
-            auto r = m_bbs3d->localize(scan_copy);
+            auto r = runBBS3D(scan_copy, "global relocalize");
             if (!r.success) {
                 RCLCPP_WARN(this->get_logger(), "BBS3D: %s", r.message.c_str());
                 m_bbs3d_running = false;
@@ -690,6 +691,7 @@ private:
     std::shared_ptr<BBS3DGlobalLocalizer> m_bbs3d;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr m_global_reloc_srv;
     std::atomic<bool> m_bbs3d_running{false};
+    std::mutex m_bbs3d_mutex;
 
     // Last-known pose persistence. Written on successful tracking lock
     // (fitness < 0.05). Read on boot to seed initial_guess — skips a 2-3 s
@@ -780,6 +782,29 @@ private:
             && x <= (m_map_max_x + kLastPoseMapMarginM)
             && y >= (m_map_min_y - kLastPoseMapMarginM)
             && y <= (m_map_max_y + kLastPoseMapMarginM);
+    }
+
+    BBS3DGlobalLocalizer::Result runBBS3D(const CloudType::Ptr& scan_cloud,
+                                          const char* context)
+    {
+        BBS3DGlobalLocalizer::Result r;
+        std::lock_guard<std::mutex> lock(m_bbs3d_mutex);
+        try {
+            if (!m_bbs3d) {
+                r.message = "bbs3d object not initialized";
+                return r;
+            }
+            return m_bbs3d->localize(scan_cloud);
+        } catch (const std::exception& e) {
+            r.message = std::string("bbs3d worker exception: ") + e.what();
+            RCLCPP_ERROR(this->get_logger(),
+                "BBS3D %s exception: %s", context, e.what());
+        } catch (...) {
+            r.message = "bbs3d worker unknown exception";
+            RCLCPP_ERROR(this->get_logger(),
+                "BBS3D %s unknown exception", context);
+        }
+        return r;
     }
 };
 int main(int argc, char **argv)
