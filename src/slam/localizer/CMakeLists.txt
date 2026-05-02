@@ -50,6 +50,14 @@ if(NOT small_gicp_FOUND)
   FetchContent_MakeAvailable(small_gicp)
 endif()
 
+if(TARGET small_gicp::small_gicp)
+  set(SMALL_GICP_TARGET small_gicp::small_gicp)
+elseif(TARGET small_gicp)
+  set(SMALL_GICP_TARGET small_gicp)
+else()
+  message(FATAL_ERROR "small_gicp target not found")
+endif()
+
 
 include_directories(
   ${EIGEN3_INCLUDE_DIR}
@@ -64,7 +72,7 @@ set(SRC_LIST src/localizers/commons.cpp
 
 add_executable(localizer_node src/localizer_node.cpp ${SRC_LIST})
 ament_target_dependencies(localizer_node rclcpp std_msgs sensor_msgs nav_msgs message_filters pcl_conversions tf2_ros geometry_msgs interface std_srvs)
-target_link_libraries(localizer_node ${PCL_LIBRARIES} yaml-cpp /usr/local/lib/libcpu_bbs3d.so small_gicp::small_gicp OpenMP::OpenMP_CXX)
+target_link_libraries(localizer_node ${PCL_LIBRARIES} yaml-cpp /usr/local/lib/libcpu_bbs3d.so ${SMALL_GICP_TARGET} OpenMP::OpenMP_CXX)
 
 
 install(TARGETS localizer_node DESTINATION lib/${PROJECT_NAME})
