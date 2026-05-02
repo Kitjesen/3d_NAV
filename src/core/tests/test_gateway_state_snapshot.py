@@ -29,6 +29,8 @@ def test_state_snapshot_preserves_legacy_fields_and_adds_client_contract():
     payload = build_state_snapshot(gateway)
 
     assert payload["schema_version"] == 1
+    assert payload["ts"] > 0
+    assert payload["server"]["time"] == payload["ts"]
     assert payload["server"]["api_version"] == "v1"
     assert payload["odometry"] == {"x": 1.0, "y": 2.0}
     assert payload["safety"] == {"level": 0}
@@ -59,6 +61,7 @@ def test_state_route_returns_stable_snapshot():
     payload = asyncio.run(route.endpoint())
 
     assert payload["schema_version"] == 1
+    assert payload["ts"] > 0
     assert "odometry" in payload
     assert "teleop" in payload
     assert "navigation" in payload

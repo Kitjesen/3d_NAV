@@ -337,11 +337,13 @@ def _enrich_endpoint_specs(
 def build_app_capabilities(gw: Any) -> dict[str, Any]:
     """Return stable client-facing API capabilities and traffic policies."""
     traffic = _traffic_summary(gw)
+    now = time.time()
     return {
         "schema_version": APP_CAPABILITIES_SCHEMA_VERSION,
+        "ts": now,
         "server": {
             "api_version": "v1",
-            "time": time.time(),
+            "time": now,
         },
         "auth": _auth_summary(),
         "features": _feature_flags(gw),
@@ -378,6 +380,7 @@ def build_app_capabilities(gw: Any) -> dict[str, Any]:
 
 def build_app_bootstrap(gw: Any) -> dict[str, Any]:
     """Return the first payload a mobile app or web client needs after login."""
+    now = time.time()
     with gw._state_lock:
         odometry = gw._odom
         mission = gw._mission
@@ -415,9 +418,10 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
 
     return {
         "schema_version": APP_BOOTSTRAP_SCHEMA_VERSION,
+        "ts": now,
         "server": {
             "api_version": "v1",
-            "time": time.time(),
+            "time": now,
         },
         "robot": {
             "online": True,

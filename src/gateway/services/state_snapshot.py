@@ -22,6 +22,7 @@ STATE_SNAPSHOT_SCHEMA_VERSION = 1
 
 def build_state_snapshot(gw: Any) -> dict[str, Any]:
     """Return /api/v1/state while preserving legacy top-level fields."""
+    now = time.time()
     with gw._state_lock:
         odometry = gw._odom
         safety = gw._safety
@@ -46,9 +47,10 @@ def build_state_snapshot(gw: Any) -> dict[str, Any]:
 
     return {
         "schema_version": STATE_SNAPSHOT_SCHEMA_VERSION,
+        "ts": now,
         "server": {
             "api_version": "v1",
-            "time": time.time(),
+            "time": now,
         },
         # Legacy fields kept stable for existing dashboards/scripts.
         "odometry": odometry,

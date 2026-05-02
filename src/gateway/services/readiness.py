@@ -3,10 +3,38 @@
 from __future__ import annotations
 
 import time
+import math
+from dataclasses import asdict, is_dataclass
+from numbers import Real
 from typing import Any
 
 
 READINESS_SCHEMA_VERSION = 1
+
+
+def _json_safe(value: Any) -> Any:
+    """Return a JSON-compliant value for readiness diagnostics."""
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Real):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    if is_dataclass(value):
+        return _json_safe(asdict(value))
+    if hasattr(value, "model_dump"):
+        try:
+            return _json_safe(value.model_dump())
+        except Exception:
+            return str(value)
+    if isinstance(value, dict):
+        return {str(_json_safe(key)): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
 
 
 def build_readiness_snapshot(gw: Any, now: float | None = None) -> tuple[dict[str, Any], int]:
@@ -34,7 +62,7 @@ def build_readiness_snapshot(gw: Any, now: float | None = None) -> tuple[dict[st
     for name, mod in modules.items():
         try:
             detail = mod.health() if hasattr(mod, "health") else {}
-            module_health[name] = {"ok": True, "detail": detail}
+            module_health[name] = {"ok": True, "detail": _json_safe(detail)}
         except Exception as exc:
             failed_modules.append(str(name))
             module_health[name] = {"ok": False, "error": str(exc)}

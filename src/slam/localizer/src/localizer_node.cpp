@@ -1,10 +1,12 @@
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>      // std::snprintf in launchAutoBBS3D reason builder
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -117,6 +119,7 @@ public:
                         CloudType::Ptr raw(new CloudType);
                         pcl::PCDReader reader;
                         if (reader.read(m_config.static_map_path, *raw) == 0) {
+                            updateMapBounds(raw);
                             m_bbs3d->set_map(raw);
                         } else {
                             RCLCPP_WARN(this->get_logger(),
@@ -591,7 +594,18 @@ public:
             return false;
         }
         if (!(f >> x >> y >> yaw)) return false;
-        return std::isfinite(x) && std::isfinite(y) && std::isfinite(yaw);
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(yaw)) {
+            return false;
+        }
+        if (!lastPoseInsideMapBounds(x, y)) {
+            RCLCPP_WARN(this->get_logger(),
+                "last_pose.txt pose [%.2f, %.2f] is outside map bbox "
+                "[%.2f, %.2f]..[%.2f, %.2f] (+%.1fm margin); ignoring, will run BBS3D",
+                x, y, m_map_min_x, m_map_min_y, m_map_max_x, m_map_max_y,
+                kLastPoseMapMarginM);
+            return false;
+        }
+        return true;
     }
 
     void writeLastPose(double x, double y, double yaw) {
@@ -682,6 +696,12 @@ private:
     // BBS3D scan if the robot hasn't moved. Lives next to the map pcd.
     std::string m_last_pose_path;
     std::atomic<int> m_last_pose_save_throttle{0};
+    static constexpr double kLastPoseMapMarginM = 1.0;
+    bool m_map_bounds_valid = false;
+    double m_map_min_x = 0.0;
+    double m_map_min_y = 0.0;
+    double m_map_max_x = 0.0;
+    double m_map_max_y = 0.0;
 
     // Drift watchdog: if ICP fitness stays bad for N consecutive frames,
     // auto-trigger BBS3D once. Prevents silent drift turning into lost.
@@ -717,6 +737,50 @@ private:
     std::string m_published_health = "UNKNOWN";  // last value sent on m_health_pub
     static constexpr int LOST_CONFIRM_FRAMES = 5;
     static constexpr int RECOVER_CONFIRM_FRAMES = 3;
+
+    void updateMapBounds(const CloudType::Ptr& map_cloud)
+    {
+        if (!map_cloud || map_cloud->empty()) {
+            m_map_bounds_valid = false;
+            return;
+        }
+
+        double min_x = std::numeric_limits<double>::infinity();
+        double min_y = std::numeric_limits<double>::infinity();
+        double max_x = -std::numeric_limits<double>::infinity();
+        double max_y = -std::numeric_limits<double>::infinity();
+        bool found = false;
+        for (const auto& p : map_cloud->points) {
+            if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+                continue;
+            }
+            min_x = std::min(min_x, static_cast<double>(p.x));
+            min_y = std::min(min_y, static_cast<double>(p.y));
+            max_x = std::max(max_x, static_cast<double>(p.x));
+            max_y = std::max(max_y, static_cast<double>(p.y));
+            found = true;
+        }
+
+        m_map_bounds_valid = found;
+        if (!found) {
+            return;
+        }
+        m_map_min_x = min_x;
+        m_map_min_y = min_y;
+        m_map_max_x = max_x;
+        m_map_max_y = max_y;
+    }
+
+    bool lastPoseInsideMapBounds(double x, double y) const
+    {
+        if (!m_map_bounds_valid) {
+            return true;
+        }
+        return x >= (m_map_min_x - kLastPoseMapMarginM)
+            && x <= (m_map_max_x + kLastPoseMapMarginM)
+            && y >= (m_map_min_y - kLastPoseMapMarginM)
+            && y <= (m_map_max_y + kLastPoseMapMarginM);
+    }
 };
 int main(int argc, char **argv)
 {

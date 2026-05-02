@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +18,17 @@ class _HealthyModule:
 class _BrokenModule:
     def health(self):
         raise RuntimeError("boom")
+
+
+class _NonFiniteModule:
+    def health(self):
+        return {
+            "state": "diagnostic",
+            "nan": math.nan,
+            "pos_inf": math.inf,
+            "nested": {"neg_inf": -math.inf},
+            "values": [1.0, math.nan],
+        }
 
 
 def test_readiness_snapshot_reports_not_started_without_modules():
@@ -70,3 +83,21 @@ def test_readiness_snapshot_reports_failed_modules_and_keeps_legacy_fields():
     assert payload["reasons"] == ["module_failed:Bad"]
     assert payload["modules"]["Bad"]["ok"] is False
     assert payload["modules"]["Bad"]["error"] == "boom"
+
+
+def test_readiness_snapshot_sanitizes_non_finite_health_values():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.readiness import build_readiness_snapshot
+
+    gateway = GatewayModule()
+    gateway._all_modules = {"A": _NonFiniteModule()}
+
+    payload, status_code = build_readiness_snapshot(gateway, now=126.0)
+
+    assert status_code == 200
+    detail = payload["modules"]["A"]["detail"]
+    assert detail["nan"] is None
+    assert detail["pos_inf"] is None
+    assert detail["nested"]["neg_inf"] is None
+    assert detail["values"] == [1.0, None]
+    json.dumps(payload, allow_nan=False)

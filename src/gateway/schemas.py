@@ -560,6 +560,7 @@ class WebRTCControlResponse(GatewayResponseModel):
 
 class StateResponse(GatewayResponseModel):
     schema_version: int
+    ts: float
     server: ServerInfo
     odometry: Any = None
     safety: Any = None
@@ -580,6 +581,7 @@ class StateResponse(GatewayResponseModel):
 
 class AppBootstrapResponse(GatewayResponseModel):
     schema_version: int
+    ts: float
     server: ServerInfo
     robot: dict[str, Any]
     session: dict[str, Any]
@@ -600,6 +602,7 @@ class AppBootstrapResponse(GatewayResponseModel):
 
 class AppCapabilitiesResponse(GatewayResponseModel):
     schema_version: int
+    ts: float
     server: ServerInfo
     auth: dict[str, Any]
     features: dict[str, bool]

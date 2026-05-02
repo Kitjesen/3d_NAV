@@ -1,7 +1,9 @@
 """conftest.py for src/core/tests/ -- add semantic package paths to sys.path."""
 
+import asyncio
 import os
 import sys
+import warnings
 
 _repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _src = os.path.join(_repo, "src")
@@ -16,6 +18,27 @@ _paths = [
 for _p in _paths:
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+
+class _CompatEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
+    """Keep legacy get_event_loop() tests working on newer Python versions."""
+
+    def get_event_loop(self):
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="There is no current event loop",
+                    category=DeprecationWarning,
+                )
+                return super().get_event_loop()
+        except RuntimeError:
+            loop = self.new_event_loop()
+            self.set_event_loop(loop)
+            return loop
+
+
+asyncio.set_event_loop_policy(_CompatEventLoopPolicy())
 
 # Integration harnesses run module-level setup at import time.
 # Both files now expose proper def test_*() functions and guard sys.exit()

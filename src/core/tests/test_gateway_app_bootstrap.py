@@ -34,6 +34,8 @@ def test_app_bootstrap_service_returns_client_contract():
     payload = build_app_bootstrap(gateway)
 
     assert payload["schema_version"] == 1
+    assert isinstance(payload["ts"], float)
+    assert payload["server"]["time"] == payload["ts"]
     assert payload["server"]["api_version"] == "v1"
     assert payload["robot"]["has_odometry"] is True
     assert payload["mission"]["state"] == "running"
@@ -65,6 +67,8 @@ def test_app_bootstrap_service_returns_client_contract():
     capabilities = build_app_capabilities(gateway)
 
     assert capabilities["schema_version"] == 1
+    assert isinstance(capabilities["ts"], float)
+    assert capabilities["server"]["time"] == capabilities["ts"]
     assert capabilities["features"]["exploration"] is True
     assert capabilities["features"]["localization"] is True
     assert capabilities["features"]["webrtc"] is True
@@ -117,12 +121,14 @@ def test_app_bootstrap_route_endpoint_returns_payload():
     payload = asyncio.run(route.endpoint())
 
     assert payload["schema_version"] == 1
+    assert payload["ts"] > 0
     assert payload["links"]["health"] == "/api/v1/health"
 
     cap_route = next(route for route in app.routes if route.path == "/api/v1/app/capabilities")
     capabilities = asyncio.run(cap_route.endpoint())
 
     assert capabilities["schema_version"] == 1
+    assert capabilities["ts"] > 0
     assert capabilities["endpoints"]["state"]["snapshot"]["path"] == "/api/v1/state"
     assert (
         capabilities["endpoints"]["state"]["navigation_status"]["path"]
@@ -232,6 +238,8 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     capabilities_payload = capabilities.json()
 
     assert bootstrap_payload["schema_version"] == 1
+    assert bootstrap_payload["ts"] > 0
+    assert bootstrap_payload["server"]["time"] == bootstrap_payload["ts"]
     assert bootstrap_payload["traffic"]["client_policy"]["usage"] == "cold_start_only"
     assert bootstrap_payload["links"]["state"] == "/api/v1/state"
     assert bootstrap_payload["links"]["events"] == "/api/v1/events"
@@ -239,6 +247,8 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert "path" not in bootstrap_payload["path"]
 
     assert state_payload["schema_version"] == 1
+    assert state_payload["ts"] > 0
+    assert state_payload["server"]["time"] == state_payload["ts"]
     assert state_payload["links"]["events"] == "/api/v1/events"
     assert state_payload["path"]["points"] == 2
 
@@ -258,6 +268,8 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert path_payload["path"][1]["x"] == 2.0
 
     assert capabilities_payload["schema_version"] == 1
+    assert capabilities_payload["ts"] > 0
+    assert capabilities_payload["server"]["time"] == capabilities_payload["ts"]
     assert (
         capabilities_payload["endpoints"]["app"]["bootstrap"]["response_schema"]
         == "AppBootstrapResponse"

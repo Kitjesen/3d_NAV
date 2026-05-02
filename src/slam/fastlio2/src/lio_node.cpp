@@ -4,6 +4,7 @@
 #include <memory>
 #include <iostream>
 #include <chrono>
+#include <algorithm>
 // #include <filesystem>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -36,6 +37,7 @@ struct NodeConfig
     int scan_line = 4;          // number of scan lines (4 for Mid-360, 16 for VLP-16)
     int timestamp_unit = NS;    // 0=SEC, 1=MS, 2=US, 3=NS
     double acc_scale = 10.0;    // IMU acceleration scale (10.0 for Livox g-units, 1.0 for standard m/s²)
+    double livox_scan_window = 0.1; // seconds; 0 disables packet aggregation
     // LI-Init output: positive value means IMU lags LiDAR by this many seconds.
     // Applied IMU-side (subtracted from IMU stamps in imuCB) for parity with
     // upstream FAST-LIO / Point-LIO so published odometry stamps stay on the
@@ -49,8 +51,10 @@ struct StateData
     std::mutex lidar_mutex;
     double last_lidar_time = -1.0;
     double last_imu_time = -1.0;
+    double livox_aggregate_start_time = -1.0;
     std::deque<IMUData> imu_buffer;
     std::deque<std::pair<double, pcl::PointCloud<pcl::PointXYZINormal>::Ptr>> lidar_buffer;
+    pcl::PointCloud<pcl::PointXYZINormal>::Ptr livox_aggregate_cloud;
     nav_msgs::msg::Path path;
 };
 
@@ -165,6 +169,12 @@ public:
             m_builder_config.stationary_thresh = config["stationary_thresh"].as<double>();
         if (config["acc_scale"])
             m_node_config.acc_scale = config["acc_scale"].as<double>();
+        if (config["livox_scan_window"])
+        {
+            m_node_config.livox_scan_window = config["livox_scan_window"].as<double>();
+            if (m_node_config.livox_scan_window < 0.0)
+                m_node_config.livox_scan_window = 0.0;
+        }
         if (config["time_diff_lidar_to_imu"])
         {
             m_node_config.time_diff_lidar_to_imu = config["time_diff_lidar_to_imu"].as<double>();
@@ -234,9 +244,17 @@ public:
         {
             RCLCPP_WARN(this->get_logger(), "Lidar Message is out of order");
             std::deque<std::pair<double, pcl::PointCloud<pcl::PointXYZINormal>::Ptr>>().swap(m_state_data.lidar_buffer);
+            resetLivoxAggregate();
         }
-        m_state_data.lidar_buffer.emplace_back(timestamp, cloud);
         m_state_data.last_lidar_time = timestamp;
+        if (!cloud || cloud->points.empty())
+            return;
+        if (m_node_config.livox_scan_window <= 0.0)
+        {
+            m_state_data.lidar_buffer.emplace_back(timestamp, cloud);
+            return;
+        }
+        appendLivoxPacket(timestamp, cloud);
     }
     void pcl2CB(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {
@@ -253,6 +271,49 @@ public:
         }
         m_state_data.lidar_buffer.emplace_back(timestamp, cloud);
         m_state_data.last_lidar_time = timestamp;
+    }
+
+    void resetLivoxAggregate()
+    {
+        m_state_data.livox_aggregate_start_time = -1.0;
+        m_state_data.livox_aggregate_cloud.reset();
+    }
+
+    void appendLivoxPacket(double timestamp, const CloudType::Ptr &cloud)
+    {
+        constexpr size_t kMaxAggregatedPoints = 30000;
+        const double max_stale_window = std::max(0.3, m_node_config.livox_scan_window * 3.0);
+        const bool start_new_scan =
+            !m_state_data.livox_aggregate_cloud ||
+            m_state_data.livox_aggregate_start_time < 0.0 ||
+            timestamp - m_state_data.livox_aggregate_start_time > max_stale_window;
+
+        if (start_new_scan)
+        {
+            m_state_data.livox_aggregate_start_time = timestamp;
+            m_state_data.livox_aggregate_cloud = std::make_shared<CloudType>();
+            m_state_data.livox_aggregate_cloud->reserve(4096);
+        }
+
+        const double relative_ms = (timestamp - m_state_data.livox_aggregate_start_time) * 1000.0;
+        auto &aggregate = *m_state_data.livox_aggregate_cloud;
+        aggregate.points.reserve(aggregate.points.size() + cloud->points.size());
+        for (const auto &point : cloud->points)
+        {
+            PointType adjusted = point;
+            adjusted.curvature += static_cast<float>(relative_ms);
+            aggregate.points.push_back(adjusted);
+        }
+        aggregate.width = static_cast<uint32_t>(aggregate.points.size());
+        aggregate.height = 1;
+        aggregate.is_dense = false;
+
+        const double duration = timestamp - m_state_data.livox_aggregate_start_time;
+        if (duration >= m_node_config.livox_scan_window || aggregate.points.size() >= kMaxAggregatedPoints)
+        {
+            m_state_data.lidar_buffer.emplace_back(m_state_data.livox_aggregate_start_time, m_state_data.livox_aggregate_cloud);
+            resetLivoxAggregate();
+        }
     }
 
     bool syncPackage()
