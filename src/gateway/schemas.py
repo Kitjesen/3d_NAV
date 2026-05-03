@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -593,9 +594,12 @@ class SessionResponse(GatewayResponseModel):
 
 
 class SessionTransitionResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
     success: bool
     session: SessionResponse | None = None
     message: str | None = None
+    ts: float = Field(default_factory=time.time)
 
 
 class MapInfo(GatewayResponseModel):

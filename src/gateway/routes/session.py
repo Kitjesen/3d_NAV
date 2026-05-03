@@ -33,6 +33,38 @@ _SLAM_PROFILE_ALIASES = {
 }
 
 
+def _transition_payload(
+    success: bool,
+    *,
+    session: dict[str, Any] | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "ok": bool(success),
+        "success": bool(success),
+        "ts": time.time(),
+    }
+    if session is not None:
+        payload["session"] = session
+    if message is not None:
+        payload["message"] = message
+    return payload
+
+
+def _transition_response(
+    success: bool,
+    *,
+    status_code: int,
+    session: dict[str, Any] | None = None,
+    message: str | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        _transition_payload(success, session=session, message=message),
+        status_code=status_code,
+    )
+
+
 def _body_mapping(body: Any) -> dict[str, Any]:
     if hasattr(body, "model_dump"):
         return body.model_dump(exclude_none=True)
@@ -80,15 +112,13 @@ def register_session_routes(app, gw) -> None:
         ).strip().lower()
         slam_profile = _normalize_slam_profile(slam_profile)
         if mode not in ("mapping", "navigating", "exploring"):
-            return JSONResponse(
-                {
-                    "success": False,
-                    "message": (
-                        f"Unknown mode: {mode!r}. "
-                        "Use 'mapping' | 'navigating' | 'exploring'."
-                    ),
-                },
+            return _transition_response(
+                False,
                 status_code=400,
+                message=(
+                    f"Unknown mode: {mode!r}. "
+                    "Use 'mapping' | 'navigating' | 'exploring'."
+                ),
             )
         if slam_profile and slam_profile not in (
             "fastlio2",
@@ -96,68 +126,56 @@ def register_session_routes(app, gw) -> None:
             "super_lio",
             "super_lio_relocation",
         ):
-            return JSONResponse(
-                {
-                    "success": False,
-                    "message": (
-                        f"Unknown slam_profile: {slam_profile!r}. "
-                        "Use 'fastlio2' | 'localizer' | 'super_lio' | "
-                        "'super_lio_relocation'."
-                    ),
-                },
+            return _transition_response(
+                False,
                 status_code=400,
+                message=(
+                    f"Unknown slam_profile: {slam_profile!r}. "
+                    "Use 'fastlio2' | 'localizer' | 'super_lio' | "
+                    "'super_lio_relocation'."
+                ),
             )
         if map_name:
             err = safe_map_name(map_name)
             if err is not None:
-                return JSONResponse(
-                    {"success": False, "message": err},
-                    status_code=400,
-                )
+                return _transition_response(False, status_code=400, message=err)
         if slam_profile == "super_lio_relocation" and mode != "navigating":
-            return JSONResponse(
-                {
-                    "success": False,
-                    "message": "super_lio_relocation requires navigating with map_name",
-                },
+            return _transition_response(
+                False,
                 status_code=400,
+                message="super_lio_relocation requires navigating with map_name",
             )
         if mode == "exploring" and gw._frontier_explorer is None:
-            return JSONResponse(
-                {
-                    "success": False,
-                    "message": (
-                        "FrontierExplorer module not running - start lingtu "
-                        "with 'explore' profile."
-                    ),
-                },
+            return _transition_response(
+                False,
                 status_code=503,
+                message=(
+                    "FrontierExplorer module not running - start lingtu "
+                    "with 'explore' profile."
+                ),
             )
         if gw._session_mode != "idle":
-            return JSONResponse(
-                {
-                    "success": False,
-                    "message": (
-                        f"Already in {gw._session_mode}. "
-                        "Call /session/end first."
-                    ),
-                },
+            return _transition_response(
+                False,
                 status_code=409,
+                message=(
+                    f"Already in {gw._session_mode}. "
+                    "Call /session/end first."
+                ),
             )
         if gw._session_pending:
-            return JSONResponse(
-                {"success": False, "message": "Another transition in progress"},
+            return _transition_response(
+                False,
                 status_code=409,
+                message="Another transition in progress",
             )
 
         if mode == "navigating":
             if not map_name:
-                return JSONResponse(
-                    {
-                        "success": False,
-                        "message": "map_name is required for navigating",
-                    },
+                return _transition_response(
+                    False,
                     status_code=400,
+                    message="map_name is required for navigating",
                 )
 
             map_root = nav_map_root()
@@ -165,31 +183,25 @@ def register_session_routes(app, gw) -> None:
             try:
                 base.relative_to(map_root)
             except ValueError:
-                return JSONResponse(
-                    {
-                        "success": False,
-                        "message": "map_name escapes NAV_MAP_DIR",
-                    },
+                return _transition_response(
+                    False,
                     status_code=400,
+                    message="map_name escapes NAV_MAP_DIR",
                 )
             if not (base / "map.pcd").is_file():
-                return JSONResponse(
-                    {
-                        "success": False,
-                        "message": f"Map '{map_name}' has no map.pcd",
-                    },
+                return _transition_response(
+                    False,
                     status_code=400,
+                    message=f"Map '{map_name}' has no map.pcd",
                 )
             if not (base / "tomogram.pickle").is_file():
-                return JSONResponse(
-                    {
-                        "success": False,
-                        "message": (
-                            f"Map '{map_name}' has no tomogram - build it "
-                            f"first (REPL: map build {map_name})"
-                        ),
-                    },
+                return _transition_response(
+                    False,
                     status_code=400,
+                    message=(
+                        f"Map '{map_name}' has no tomogram - build it "
+                        f"first (REPL: map build {map_name})"
+                    ),
                 )
             active = map_root / "active"
             try:
@@ -197,12 +209,10 @@ def register_session_routes(app, gw) -> None:
                     active.unlink()
                 os.symlink(map_name, str(active))
             except OSError as e:
-                return JSONResponse(
-                    {
-                        "success": False,
-                        "message": f"Failed to activate map: {e}",
-                    },
+                return _transition_response(
+                    False,
                     status_code=500,
+                    message=f"Failed to activate map: {e}",
                 )
 
         gw._session_pending = True
@@ -239,9 +249,10 @@ def register_session_routes(app, gw) -> None:
                 ok = svc.wait_ready("slam", "localizer", timeout=10.0)
             if not ok:
                 gw._session_error = "Services not ready after 10s"
-                return JSONResponse(
-                    {"success": False, "message": gw._session_error},
+                return _transition_response(
+                    False,
                     status_code=500,
+                    message=gw._session_error,
                 )
 
             if (
@@ -257,9 +268,10 @@ def register_session_routes(app, gw) -> None:
                     gw._exploring = True
                 except Exception as e:
                     gw._session_error = f"Explorer start failed: {e}"
-                    return JSONResponse(
-                        {"success": False, "message": gw._session_error},
+                    return _transition_response(
+                        False,
                         status_code=500,
+                        message=gw._session_error,
                     )
 
             gw._session_mode = mode
@@ -269,12 +281,13 @@ def register_session_routes(app, gw) -> None:
             gw._slam_profile_ts = time.time()
             gw._session_since = time.time()
             gw.push_event({"type": "session", "data": gw._session_snapshot()})
-            return {"success": True, "session": gw._session_snapshot()}
+            return _transition_payload(True, session=gw._session_snapshot())
         except Exception as e:
             gw._session_error = str(e)
-            return JSONResponse(
-                {"success": False, "message": str(e)},
+            return _transition_response(
+                False,
                 status_code=500,
+                message=str(e),
             )
         finally:
             gw._session_pending = False
@@ -290,11 +303,12 @@ def register_session_routes(app, gw) -> None:
     )
     async def session_end():
         if gw._session_mode == "idle":
-            return {"success": True, "session": gw._session_snapshot()}
+            return _transition_payload(True, session=gw._session_snapshot())
         if gw._session_pending:
-            return JSONResponse(
-                {"success": False, "message": "Transition in progress"},
+            return _transition_response(
+                False,
                 status_code=409,
+                message="Transition in progress",
             )
         gw._session_pending = True
         try:
@@ -323,12 +337,13 @@ def register_session_routes(app, gw) -> None:
             gw._session_since = time.time()
             gw._session_error = ""
             gw.push_event({"type": "session", "data": gw._session_snapshot()})
-            return {"success": True, "session": gw._session_snapshot()}
+            return _transition_payload(True, session=gw._session_snapshot())
         except Exception as e:
             gw._session_error = str(e)
-            return JSONResponse(
-                {"success": False, "message": str(e)},
+            return _transition_response(
+                False,
                 status_code=500,
+                message=str(e),
             )
         finally:
             gw._session_pending = False

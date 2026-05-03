@@ -17,6 +17,7 @@ import type {
   PlanPreviewResponse,
   SceneGraphResponse,
   SessionEvent,
+  SessionTransitionResponse,
   SlamProfile,
   StateResponse,
 } from '../types'
@@ -329,14 +330,14 @@ export async function startSession(mode: SessionMode, mapNameOrOptions?: string 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  const data = await res.json()
+  const data = await res.json() as SessionTransitionResponse
   if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`)
   return data.session as SessionState
 }
 
 export async function endSession(): Promise<SessionState> {
   const res = await fetch('/api/v1/session/end', { method: 'POST' })
-  const data = await res.json()
+  const data = await res.json() as SessionTransitionResponse
   if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`)
   return data.session as SessionState
 }

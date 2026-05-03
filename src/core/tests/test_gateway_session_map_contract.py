@@ -178,9 +178,34 @@ def test_session_routes_validate_idle_contracts():
     assert session.explorer_available is False
     assert session.explorer_unavailable_reason == "frontier_explorer_not_running"
     assert session.explorer_required_profile == "explore"
+    assert ended.schema_version == 1
+    assert ended.ok is True
     assert ended.success is True
+    assert ended.ts > 0
     assert ended.session is not None
     assert ended.session.mode == "idle"
+
+
+def test_session_start_rejects_invalid_mode_with_stable_contract():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionTransitionResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/session/start")({"mode": "bad"})
+    )
+
+    rejected = SessionTransitionResponse.model_validate(_payload(response))
+
+    assert response.status_code == 400
+    assert rejected.schema_version == 1
+    assert rejected.ok is False
+    assert rejected.success is False
+    assert rejected.session is None
+    assert rejected.ts > 0
+    assert "Unknown mode" in (rejected.message or "")
 
 
 def test_session_start_accepts_legacy_map_field(monkeypatch):
@@ -233,7 +258,10 @@ def test_session_start_accepts_legacy_map_field(monkeypatch):
         )
 
         transition = SessionTransitionResponse.model_validate(payload)
+        assert transition.schema_version == 1
+        assert transition.ok is True
         assert transition.success is True
+        assert transition.ts > 0
         assert transition.session is not None
         assert transition.session.mode == "navigating"
         assert transition.session.active_map == "demo"
@@ -290,7 +318,10 @@ def test_session_start_can_select_super_lio_backend(monkeypatch):
     )
 
     transition = SessionTransitionResponse.model_validate(payload)
+    assert transition.schema_version == 1
+    assert transition.ok is True
     assert transition.success is True
+    assert transition.ts > 0
     assert transition.session is not None
     assert transition.session.mode == "mapping"
     assert transition.session.slam_profile == "super_lio"
@@ -369,7 +400,10 @@ def test_session_start_can_select_super_lio_relocation_backend(monkeypatch):
         )
 
         transition = SessionTransitionResponse.model_validate(payload)
+        assert transition.schema_version == 1
+        assert transition.ok is True
         assert transition.success is True
+        assert transition.ts > 0
         assert transition.session is not None
         assert transition.session.mode == "navigating"
         assert transition.session.slam_profile == "super_lio_relocation"

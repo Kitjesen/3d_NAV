@@ -604,6 +604,16 @@ export interface SessionEvent {
   }
 }
 
+export interface SessionTransitionResponse {
+  schema_version: number
+  ok: boolean
+  success: boolean
+  session?: SessionEvent['data'] | null
+  message?: string | null
+  ts: number
+  [key: string]: unknown
+}
+
 export interface CostmapEvent {
   type: 'costmap'
   grid_b64: string   // base64-encoded uint8 flat array (0=free, 100=occupied)
