@@ -51,18 +51,81 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         self.assertAlmostEqual(received[0]["confidence"], 0.0)
 
     def test_odom_arrival_sets_tracking(self):
-        m = self._make()
+        m = self._make(odom_timeout=0.5, cloud_timeout=0.5)
         received = []
         m.localization_status._add_callback(received.append)
+        m._mark_odom_received()
+        m._mark_cloud_received()
         m.start()
-        # Simulate odom + cloud arrival
-        m._last_odom_time = time.time()
-        m._last_cloud_time = time.time()
-        time.sleep(0.15)
+        time.sleep(0.12)
         m.stop()
         # Should have transitioned to TRACKING
         states = [r["state"] for r in received]
         self.assertIn("TRACKING", states)
+
+    def test_super_lio_status_uses_odom_map_cloud_contract(self):
+        m = self._make(backend_profile="super_lio", odom_timeout=0.5, cloud_timeout=0.5)
+        received = []
+        m.localization_status._add_callback(received.append)
+        m._mark_odom_received()
+        m._mark_cloud_received()
+        m.start()
+        time.sleep(0.12)
+        m.stop()
+
+        tracking = next(r for r in received if r["state"] == "TRACKING")
+        self.assertEqual(tracking["backend"], "super_lio")
+        self.assertEqual(tracking["health_source"], "odom_map_cloud")
+        self.assertEqual(tracking["localizer_health"], "LIO_TRACKING")
+        self.assertTrue(tracking["pose_fresh"])
+        self.assertTrue(tracking["map_cloud_fresh"])
+        self.assertEqual(tracking["map_state"], "live_map_cloud")
+        self.assertTrue(tracking["map_save_supported"])
+        self.assertEqual(tracking["map_save_source"], "live_map_cloud_snapshot")
+        self.assertFalse(tracking["relocalization_supported"])
+        self.assertEqual(tracking["relocalization_state"], "unsupported")
+        self.assertEqual(tracking["recovery_action"], "none")
+
+    def test_watchdog_uses_running_localizer_contract(self):
+        m = self._make(backend_profile="bridge", odom_timeout=0.5, cloud_timeout=0.5)
+        m._current_backend_profile = lambda: "localizer"
+        m._relocalization_state = "unsupported"
+        received = []
+        m.localization_status._add_callback(received.append)
+        m._mark_odom_received()
+        m._mark_cloud_received()
+        m.start()
+        time.sleep(0.12)
+        m.stop()
+
+        tracking = next(r for r in received if r["state"] == "TRACKING")
+        self.assertEqual(tracking["backend"], "localizer")
+        self.assertFalse(tracking["map_save_supported"])
+        self.assertEqual(tracking["map_save_source"], "active_map")
+        self.assertTrue(tracking["relocalization_supported"])
+        self.assertEqual(tracking["relocalization_state"], "idle")
+        self.assertEqual(tracking["recovery_action"], "none")
+
+    def test_fresh_localizer_health_topic_overrides_synthesized_lio_health(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(backend_profile="super_lio", odom_timeout=0.5, cloud_timeout=0.5)
+        received = []
+        m.localization_status._add_callback(received.append)
+        m._on_rclpy_localization_health(Msg())
+        m._mark_odom_received()
+        m._mark_cloud_received()
+        m.start()
+        time.sleep(0.12)
+        m.stop()
+
+        tracking = next(r for r in received if r["state"] == "TRACKING")
+        self.assertEqual(tracking["health_source"], "localizer_health_topic")
+        self.assertEqual(tracking["localizer_health"], "LOCKED")
+        self.assertEqual(tracking["localizer_health_raw"], "LOCKED")
+        self.assertEqual(tracking["localizer_health_source"], "localizer_health_topic")
+        self.assertIsNotNone(tracking["localizer_health_topic_age_ms"])
 
     def test_odom_timeout_sets_lost(self):
         m = self._make()
@@ -70,25 +133,26 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         m.localization_status._add_callback(received.append)
         m.start()
         # Simulate odom arrival then timeout
-        m._last_odom_time = time.time()
-        m._last_cloud_time = time.time()
+        m._mark_odom_received()
+        m._mark_cloud_received()
         time.sleep(0.05)  # Within timeout — should be TRACKING
         # Now let odom age past timeout (0.1s)
         m._last_odom_time = time.time() - 0.2  # Artificially stale
-        time.sleep(0.15)
+        m._last_odom_mono = 0.0
+        time.sleep(0.2)
         m.stop()
         states = [r["state"] for r in received]
         self.assertIn("LOST", states)
 
     def test_cloud_timeout_sets_degraded(self):
-        m = self._make()
+        m = self._make(odom_timeout=0.5, cloud_timeout=0.05)
         received = []
         m.localization_status._add_callback(received.append)
+        m._mark_odom_received()
+        m._last_cloud_time = time.time() - 0.5
+        m._last_cloud_mono = 0.0
         m.start()
-        # odom fresh, cloud stale
-        m._last_odom_time = time.time()
-        m._last_cloud_time = time.time() - 0.5  # Past cloud_timeout (0.2s)
-        time.sleep(0.15)
+        time.sleep(0.12)
         m.stop()
         states = [r["state"] for r in received]
         self.assertIn("DEGRADED", states)
@@ -101,11 +165,14 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         # Go to LOST
         m._last_odom_time = time.time() - 0.5
         m._last_cloud_time = time.time() - 0.5
-        time.sleep(0.1)
+        m._last_odom_mono = 0.0
+        m._last_cloud_mono = 0.0
+        time.sleep(0.15)
         # Recover
-        m._last_odom_time = time.time()
-        m._last_cloud_time = time.time()
-        time.sleep(0.1)
+        for _ in range(10):
+            m._mark_odom_received()
+            m._mark_cloud_received()
+            time.sleep(0.02)
         m.stop()
         states = [r["state"] for r in received]
         self.assertIn("LOST", states)
@@ -139,8 +206,8 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
     def _make(self, **kw):
         from slam.slam_bridge_module import SlamBridgeModule
         defaults = {
-            "odom_timeout": 0.1,
-            "cloud_timeout": 0.2,
+            "odom_timeout": 1.0,
+            "cloud_timeout": 0.05,
             "watchdog_hz": 50,
             "fallback_after_degraded_s": 0.05,  # short for unit test
             "gnss_max_age_for_fallback_s": 1.0,
@@ -166,8 +233,9 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m.start()
         # Force DEGRADED by leaving cloud stale, odom fresh.
         self._stub_healthy_gnss(m)
-        m._last_odom_time = time.time()
+        m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
+        m._last_cloud_mono = 0.0
         # Hold long enough to clear fallback_after_degraded_s.
         time.sleep(0.15)
         m.stop()
@@ -181,8 +249,9 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m.localization_status._add_callback(received.append)
         m.start()
         # No GNSS planted → fallback gate must keep us at DEGRADED.
-        m._last_odom_time = time.time()
+        m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
+        m._last_cloud_mono = 0.0
         time.sleep(0.15)
         m.stop()
         states = [r["state"] for r in received]
@@ -197,8 +266,9 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         # GNSS rx > gnss_max_age_for_fallback_s → fallback gate closed.
         self._stub_healthy_gnss(m)
         m._last_gnss_rx_ts = time.time() - 5.0  # stale
-        m._last_odom_time = time.time()
+        m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
+        m._last_cloud_mono = 0.0
         time.sleep(0.15)
         m.stop()
         states = [r["state"] for r in received]
@@ -217,8 +287,9 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
             fix_type=GnssFixType.SINGLE, ts=time.time(),
         )
         m._last_gnss_rx_ts = time.time()
-        m._last_odom_time = time.time()
+        m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
+        m._last_cloud_mono = 0.0
         time.sleep(0.15)
         m.stop()
         states = [r["state"] for r in received]
@@ -230,14 +301,15 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m.localization_status._add_callback(received.append)
         m.start()
         self._stub_healthy_gnss(m)
-        m._last_odom_time = time.time()
+        m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
+        m._last_cloud_mono = 0.0
         time.sleep(0.15)  # enter FALLBACK
         # Now restore both odom and cloud freshness — keep them fresh while we
         # observe recovery so the watchdog does not race us into LOST.
         for _ in range(20):
-            m._last_odom_time = time.time()
-            m._last_cloud_time = time.time()
+            m._mark_odom_received()
+            m._mark_cloud_received()
             time.sleep(0.01)
         m.stop()
         states = [r["state"] for r in received]
@@ -812,15 +884,14 @@ class TestSlamDegeneracyDetection(unittest.TestCase):
 
     def test_degeneracy_affects_watchdog_confidence(self):
         from slam.slam_bridge_module import DEGEN_CRITICAL
-        m = self._make()
+        m = self._make(odom_timeout=0.5, cloud_timeout=0.5)
         received = []
         m.localization_status._add_callback(received.append)
-        m.start()
-        # Fresh odom + cloud, but critical degeneracy
-        m._last_odom_time = time.time()
-        m._last_cloud_time = time.time()
+        m._mark_odom_received()
+        m._mark_cloud_received()
         m._degen_level = DEGEN_CRITICAL
-        time.sleep(0.15)
+        m.start()
+        time.sleep(0.12)
         m.stop()
         # Should get DEGRADED with low confidence
         degraded = [r for r in received if r["state"] == "DEGRADED"]

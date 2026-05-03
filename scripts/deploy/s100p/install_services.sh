@@ -6,7 +6,7 @@
 
 set -e
 
-SERVICES=(lidar slam slam_pgo localizer)
+SERVICES=(lidar slam slam_pgo localizer super_lio)
 SRC_DIR="${1:-/tmp}"
 
 echo "=== Installing S100P SLAM services ==="
@@ -14,6 +14,10 @@ for svc in "${SERVICES[@]}"; do
     if [ -f "${SRC_DIR}/${svc}.service" ]; then
         sudo cp "${SRC_DIR}/${svc}.service" /etc/systemd/system/
         echo "  Installed: ${svc}.service"
+        if [ "$svc" = "super_lio" ]; then
+            sudo ln -sf /etc/systemd/system/super_lio.service /etc/systemd/system/robot-super-lio.service
+            echo "  Alias: robot-super-lio.service -> super_lio.service"
+        fi
     else
         echo "  MISSING: ${SRC_DIR}/${svc}.service"
     fi
@@ -30,5 +34,7 @@ echo ""
 echo "=== Done. Quick start: ==="
 echo "  sudo systemctl start lidar slam slam_pgo    # mapping mode"
 echo "  sudo systemctl start lidar slam localizer   # navigation mode"
+echo "  sudo systemctl start lidar super_lio        # experimental Super-LIO mode"
+echo "  sudo systemctl start robot-super-lio        # production alias"
 echo "  sudo systemctl status slam                  # check status"
 echo "  journalctl -u slam -f                       # follow logs"

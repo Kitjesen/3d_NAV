@@ -55,17 +55,19 @@ def test_logical_status_detects_robot_service_aliases(monkeypatch):
             "robot-lidar.service",
             "robot-fastlio2.service",
             "robot-localizer.service",
+            "robot-super-lio.service",
         }
     )
     monkeypatch.setattr(subprocess, "run", fake)
 
     svc = ServiceManager()
 
-    assert svc.status("lidar", "slam", "slam_pgo", "localizer") == {
+    assert svc.status("lidar", "slam", "slam_pgo", "localizer", "super_lio") == {
         "lidar": "running",
         "slam": "running",
         "slam_pgo": "stopped",
         "localizer": "running",
+        "super_lio": "running",
     }
 
 
@@ -97,6 +99,25 @@ def test_start_prefers_robot_unit_when_installed(monkeypatch):
     assert svc._started == ["robot-fastlio2.service"]
 
 
+def test_start_super_lio_prefers_robot_unit_when_installed(monkeypatch):
+    from core.service_manager import ServiceManager
+
+    fake = _FakeSystemctl(
+        loaded={
+            "robot-super-lio.service",
+            "super_lio.service",
+        }
+    )
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    svc = ServiceManager()
+
+    assert svc.start("super_lio") == ["super_lio"]
+    assert "robot-super-lio.service" in fake.active
+    assert ["sudo", "systemctl", "start", "robot-super-lio.service"] in fake.commands
+    assert svc._started == ["robot-super-lio.service"]
+
+
 def test_stop_clears_new_and_legacy_aliases(monkeypatch):
     from core.service_manager import ServiceManager
 
@@ -106,6 +127,8 @@ def test_stop_clears_new_and_legacy_aliases(monkeypatch):
             "slam.service",
             "robot-localizer.service",
             "localizer.service",
+            "robot-super-lio.service",
+            "super_lio.service",
         }
     )
     monkeypatch.setattr(subprocess, "run", fake)
@@ -113,12 +136,16 @@ def test_stop_clears_new_and_legacy_aliases(monkeypatch):
     svc = ServiceManager()
     svc._started = ["robot-fastlio2.service", "slam.service"]
 
-    svc.stop("slam", "localizer")
+    svc.stop("slam", "localizer", "super_lio")
 
     assert "robot-fastlio2.service" not in fake.active
     assert "slam.service" not in fake.active
     assert "robot-localizer.service" not in fake.active
     assert "localizer.service" not in fake.active
+    assert "robot-super-lio.service" not in fake.active
+    assert "super_lio.service" not in fake.active
     assert ["sudo", "systemctl", "stop", "robot-fastlio2.service"] in fake.commands
     assert ["sudo", "systemctl", "stop", "slam.service"] in fake.commands
+    assert ["sudo", "systemctl", "stop", "robot-super-lio.service"] in fake.commands
+    assert ["sudo", "systemctl", "stop", "super_lio.service"] in fake.commands
     assert svc._started == []

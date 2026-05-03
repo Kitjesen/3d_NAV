@@ -29,6 +29,14 @@ from gateway.schemas import (
 
 logger = logging.getLogger(__name__)
 
+_ACTIVE_SERVICE_STATES = {"running", "active"}
+_SLAM_STATUS_SERVICES = ("lidar", "slam", "slam_pgo", "localizer", "super_lio")
+_EXPLORER_UNAVAILABLE_DETAIL = {
+    "reason": "frontier_explorer_not_running",
+    "required_profile": "explore",
+    "action": "restart LingTu with the explore profile before starting exploration",
+}
+
 try:
     from fastapi import Request as FastAPIRequest
 except ImportError:  # FastAPI remains optional until routes are registered.
@@ -285,7 +293,13 @@ def register_operation_routes(app, gw) -> None:
         if fe is None:
             return JSONResponse(
                 status_code=503,
-                content={"error": "WavefrontFrontierExplorer not running"},
+                content={
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": "WavefrontFrontierExplorer not running",
+                    "message": "Exploration is unavailable in the current runtime profile.",
+                    "detail": dict(_EXPLORER_UNAVAILABLE_DETAIL),
+                },
             )
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, fe.begin_exploration)
@@ -304,7 +318,13 @@ def register_operation_routes(app, gw) -> None:
         if fe is None:
             return JSONResponse(
                 status_code=503,
-                content={"error": "WavefrontFrontierExplorer not running"},
+                content={
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": "WavefrontFrontierExplorer not running",
+                    "message": "Exploration is unavailable in the current runtime profile.",
+                    "detail": dict(_EXPLORER_UNAVAILABLE_DETAIL),
+                },
             )
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, fe.end_exploration)
@@ -320,7 +340,12 @@ def register_operation_routes(app, gw) -> None:
     async def explore_status():
         fe = gw._frontier_explorer
         if fe is None:
-            return {"available": False, "exploring": False}
+            return {
+                "available": False,
+                "exploring": False,
+                "frontier_count": 0,
+                **_EXPLORER_UNAVAILABLE_DETAIL,
+            }
         h = fe.health() if hasattr(fe, "health") else {}
         return {
             "available": True,
@@ -338,20 +363,23 @@ def register_operation_routes(app, gw) -> None:
             from core.service_manager import get_service_manager
 
             svc = get_service_manager()
-            services = svc.status("lidar", "slam", "slam_pgo", "localizer")
+            services = svc.status(*_SLAM_STATUS_SERVICES)
         except Exception:
             services = {
                 "lidar": "unknown",
                 "slam": "unknown",
                 "slam_pgo": "unknown",
                 "localizer": "unknown",
+                "super_lio": "unknown",
             }
 
-        if services.get("slam_pgo") in ("running", "active"):
+        if services.get("super_lio") in _ACTIVE_SERVICE_STATES:
+            mode = "super_lio"
+        elif services.get("slam_pgo") in _ACTIVE_SERVICE_STATES:
             mode = "fastlio2"
-        elif services.get("localizer") in ("running", "active"):
+        elif services.get("localizer") in _ACTIVE_SERVICE_STATES:
             mode = "localizer"
-        elif services.get("slam") in ("running", "active"):
+        elif services.get("slam") in _ACTIVE_SERVICE_STATES:
             mode = "fastlio2"
         else:
             mode = "stopped"
@@ -368,7 +396,7 @@ def register_operation_routes(app, gw) -> None:
     )
     async def slam_switch(body: dict):
         profile = body.get("profile", "")
-        if profile not in ("fastlio2", "localizer", "stop"):
+        if profile not in ("fastlio2", "localizer", "super_lio", "stop"):
             return JSONResponse(
                 {"success": False, "message": f"Unknown profile: {profile}"},
                 status_code=400,
@@ -378,16 +406,23 @@ def register_operation_routes(app, gw) -> None:
 
             svc = get_service_manager()
             if profile == "fastlio2":
-                svc.stop("localizer")
+                svc.stop("localizer", "super_lio")
                 svc.ensure("slam", "slam_pgo")
                 ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
             elif profile == "localizer":
-                svc.stop("slam_pgo")
+                svc.stop("slam_pgo", "super_lio")
                 svc.ensure("slam", "localizer")
                 ok = svc.wait_ready("slam", "localizer", timeout=10.0)
+            elif profile == "super_lio":
+                svc.stop("slam", "slam_pgo", "localizer")
+                svc.ensure("lidar", "super_lio")
+                ok = svc.wait_ready("lidar", "super_lio", timeout=10.0)
             else:
-                svc.stop("slam_pgo", "localizer", "slam")
+                svc.stop("super_lio", "slam_pgo", "localizer", "slam")
                 ok = True
+            if ok:
+                gw._cached_slam_profile = "stopped" if profile == "stop" else profile
+                gw._slam_profile_ts = time.time()
             return {
                 "success": ok,
                 "profile": profile,

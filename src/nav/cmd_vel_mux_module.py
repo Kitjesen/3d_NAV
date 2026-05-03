@@ -130,13 +130,14 @@ class CmdVelMux(Module, layer=0):
         now = time.time()
         sources = {}
         for name, src in self._sources.items():
-            age = now - src["last_time"]
+            last_time = src["last_time"]
+            age = now - last_time if last_time > 0.0 else None
             sources[name] = {
                 "priority": src["priority"],
-                "active": age <= self._source_timeout,
-                "age_ms": round(age * 1000),
+                "active": age is not None and age <= self._source_timeout,
+                "age_ms": round(age * 1000) if age is not None else None,
             }
         return {
-            "active_source": self._active,
+            "active_source": self._active or "none",
             "sources": sources,
         }

@@ -102,7 +102,7 @@ def full_stack_blueprint(
     perception_config = dict(config)
     perception_config["_driver_cls_name"] = drv
 
-    needs_lidar = slam_profile not in ("", "none", "bridge")
+    needs_lidar = slam_profile not in ("", "none", "bridge", "super_lio")
     lidar_ip = config.get("lidar_ip")
 
     device_bp = Blueprint()

@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 import time as _time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
@@ -89,9 +90,10 @@ class SlamBridgeModule(Module, layer=1):
         self,
         cloud_topic: str = "/nav/map_cloud",
         odom_topic: str = "/nav/odometry",
-        quality_topic: str = "/localization_quality",
+        quality_topic: str = "/nav/localization_quality",
         registered_cloud_topic: str = "/nav/registered_cloud",
         saved_map_topic: str = "/nav/saved_map_cloud",
+        backend_profile: str = "bridge",
         **kw,
     ):
         super().__init__(**kw)
@@ -100,13 +102,27 @@ class SlamBridgeModule(Module, layer=1):
         self._quality_topic = quality_topic
         self._registered_cloud_topic = registered_cloud_topic
         self._saved_map_topic = saved_map_topic
+        self._backend_profile = str(backend_profile or "bridge")
+        self._backend_detect_cache: str = self._backend_profile
+        self._backend_detect_mono: float = 0.0
+        self._backend_detect_interval: float = kw.get("backend_detect_interval", 1.0)
+        self._last_status_backend: str = self._backend_profile
         self._reader = None
         self._rclpy_node = None  # fallback
+        self._rclpy_executor = None
         self._odom_recv_ts: list = []  # raw receive timestamps for true Hz
+        self._pointcloud_worker_lock = threading.Lock()
+        self._pointcloud_worker_thread: threading.Thread | None = None
+        self._pointcloud_worker_drops: int = 0
+        self._saved_map_worker_lock = threading.Lock()
+        self._saved_map_worker_thread: threading.Thread | None = None
+        self._saved_map_worker_drops: int = 0
 
         # Localization health watchdog
         self._last_odom_time: float = 0.0
         self._last_cloud_time: float = 0.0
+        self._last_odom_mono: float = 0.0
+        self._last_cloud_mono: float = 0.0
         self._loc_state: str = LOC_UNINIT
         self._odom_timeout: float = kw.get("odom_timeout", 2.0)
         self._cloud_timeout: float = kw.get("cloud_timeout", 5.0)
@@ -118,6 +134,10 @@ class SlamBridgeModule(Module, layer=1):
         self._reconnect_timeout: float = kw.get("reconnect_timeout", 10.0)
         self._max_reconnects: int = kw.get("max_reconnects", 10)
         self._reconnect_count: int = 0
+        self._relocalization_state: str = "idle"
+        self._last_recovery_signal: str = "NONE"
+        self._last_recovery_action: str = "none"
+        self._last_recovery_ts: float = 0.0
 
         # Drift guard — detect odometry divergence and auto-relocalize
         self._drift_max_speed: float = kw.get("drift_max_speed", 5.0)       # m/s, quad max ~3
@@ -163,6 +183,9 @@ class SlamBridgeModule(Module, layer=1):
         self._localizer_health_iter: int = -1
         self._localizer_health_cov_trace: float = -1.0
         self._localizer_health_ts: float = 0.0
+        self._localizer_health_timeout: float = float(
+            kw.get("localizer_health_timeout", 2.0)
+        )
 
         # P4: TF jump thresholds. Translation gate (m) is the dominant trigger
         # for PGO loop closures (typically 0.5-3 m corrections); rotation gate
@@ -291,47 +314,105 @@ class SlamBridgeModule(Module, layer=1):
             return False
 
     def _try_rclpy(self) -> bool:
+        node = None
+        executor = None
         try:
             from nav_msgs.msg import Odometry as ROS2Odom
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from sensor_msgs.msg import PointCloud2
             from std_msgs.msg import Float32
+            try:
+                from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+            except Exception:
+                MutuallyExclusiveCallbackGroup = None
 
             from core.ros2_context import ensure_rclpy, get_shared_executor
 
             ensure_rclpy()
-            qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
-            self._rclpy_node = Node("slam_bridge")
-            get_shared_executor().add_node(self._rclpy_node)
-            self._rclpy_node.create_subscription(PointCloud2, self._cloud_topic, self._on_rclpy_cloud, qos)
-            self._rclpy_node.create_subscription(PointCloud2, self._saved_map_topic, self._on_rclpy_saved_map, qos)
+            odom_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+            cloud_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                depth=1,
+            )
+            saved_map_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+            status_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+            node = Node("slam_bridge")
+            executor = get_shared_executor()
+            executor.add_node(node)
+            odom_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
+            cloud_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
+            saved_map_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
+            status_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
+            self._create_subscription(
+                node, PointCloud2, self._cloud_topic, self._on_rclpy_cloud,
+                cloud_qos, callback_group=cloud_group)
+            self._create_subscription(
+                node, PointCloud2, self._saved_map_topic,
+                self._on_rclpy_saved_map, saved_map_qos,
+                callback_group=saved_map_group)
             # Note: only subscribe to cloud_topic — set cloud_topic="/nav/registered_cloud"
             # for localizer mode (avoids duplicate accumulation when both topics fire)
-            self._rclpy_node.create_subscription(ROS2Odom, self._odom_topic, self._on_rclpy_odom, qos)
+            self._create_subscription(
+                node, ROS2Odom, self._odom_topic, self._on_rclpy_odom,
+                odom_qos, callback_group=odom_group)
             # Also subscribe to /tf so map→odom reaches downstream even when
             # cyclonedds is disabled (LINGTU_DISABLE_DDS=1). Without this,
             # NavigationModule plans from odom-frame (0,0) instead of the
             # localizer-aligned map-frame position — PCT finds wrong start.
             try:
                 from tf2_msgs.msg import TFMessage
-                self._rclpy_node.create_subscription(
-                    TFMessage, "/tf", self._on_rclpy_tf, qos)
+                self._create_subscription(
+                    node, TFMessage, "/tf", self._on_rclpy_tf,
+                    status_qos, callback_group=status_group)
             except Exception as _e:
                 logger.warning("SlamBridge: /tf rclpy sub failed: %s", _e)
             # Subscribe to degeneracy metrics if available
-            self._subscribe_degeneracy_rclpy(self._rclpy_node, qos)
+            self._subscribe_degeneracy_rclpy(
+                node, status_qos, callback_group=status_group)
+            self._rclpy_node = node
+            self._rclpy_executor = executor
             logger.info("SlamBridgeModule: using rclpy (fallback)")
             return True
         except (ImportError, Exception) as e:
+            self._cleanup_rclpy_node(node=node, executor=executor)
             logger.debug("SlamBridgeModule: rclpy unavailable: %s", e)
             return False
 
-    def _subscribe_degeneracy_rclpy(self, node, qos) -> None:
+    @staticmethod
+    def _create_subscription(node, msg_type, topic, callback, qos, *, callback_group=None):
+        if callback_group is None:
+            return node.create_subscription(msg_type, topic, callback, qos)
+        try:
+            return node.create_subscription(
+                msg_type, topic, callback, qos, callback_group=callback_group)
+        except TypeError:
+            return node.create_subscription(msg_type, topic, callback, qos)
+
+    def _cleanup_rclpy_node(self, node=None, executor=None) -> None:
+        node = node if node is not None else self._rclpy_node
+        executor = executor if executor is not None else self._rclpy_executor
+        if node is None:
+            return
+        try:
+            if executor is not None:
+                executor.remove_node(node)
+        except Exception:
+            pass
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        if node is self._rclpy_node:
+            self._rclpy_node = None
+        if executor is self._rclpy_executor:
+            self._rclpy_executor = None
+
+    def _subscribe_degeneracy_rclpy(self, node, qos, *, callback_group=None) -> None:
         """Subscribe to SLAM degeneracy metrics via rclpy (best-effort).
 
         Topics:
-          /localization_quality     — Float32: ICP fitness score (lower=better)
+          /nav/localization_quality — Float32: ICP fitness score (lower=better)
           /slam/degeneracy          — Float32: effective_ratio (1.0=healthy)
           /slam/degeneracy_detail   — Float32MultiArray: 11-float detailed metrics
             [0]  effective_ratio
@@ -345,21 +426,26 @@ class SlamBridgeModule(Module, layer=1):
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from std_msgs.msg import Float32, Float32MultiArray, String
             sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
-            node.create_subscription(
-                Float32, self._quality_topic, self._on_rclpy_quality, sensor_qos)
-            node.create_subscription(
-                Float32, self._degeneracy_topic, self._on_rclpy_degeneracy, sensor_qos)
-            node.create_subscription(
-                Float32MultiArray, self._degeneracy_detail_topic,
-                self._on_rclpy_degeneracy_detail, sensor_qos)
+            self._create_subscription(
+                node, Float32, self._quality_topic, self._on_rclpy_quality,
+                sensor_qos, callback_group=callback_group)
+            self._create_subscription(
+                node, Float32, self._degeneracy_topic,
+                self._on_rclpy_degeneracy, sensor_qos,
+                callback_group=callback_group)
+            self._create_subscription(
+                node, Float32MultiArray, self._degeneracy_detail_topic,
+                self._on_rclpy_degeneracy_detail, sensor_qos,
+                callback_group=callback_group)
             # Localizer-side multi-frame health: LOCKED / LOST / RECOVERED.
             # Reliability needs to be RELIABLE (not BEST_EFFORT) — we cannot
             # afford to drop a LOST → RECOVERED transition; navigation depends
             # on it.
             health_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
-            node.create_subscription(
-                String, "/nav/localization_health",
-                self._on_rclpy_localization_health, health_qos)
+            self._create_subscription(
+                node, String, "/nav/localization_health",
+                self._on_rclpy_localization_health, health_qos,
+                callback_group=callback_group)
         except Exception as e:
             logger.debug("Degeneracy subscription unavailable: %s", e)
 
@@ -384,11 +470,14 @@ class SlamBridgeModule(Module, layer=1):
         if self._watchdog_thread and self._watchdog_thread.is_alive():
             self._watchdog_thread.join(timeout=2.0)
         self._watchdog_thread = None
+        for worker in (self._pointcloud_worker_thread, self._saved_map_worker_thread):
+            if worker and worker.is_alive():
+                worker.join(timeout=1.0)
+        self._pointcloud_worker_thread = None
+        self._saved_map_worker_thread = None
         if self._reader:
             self._reader.stop()
-        if self._rclpy_node:
-            self._rclpy_node.destroy_node()
-            self._rclpy_node = None
+        self._cleanup_rclpy_node()
         super().stop()
 
     # ── cyclonedds callbacks (parsed CDR) ────────────────────────────────
@@ -447,12 +536,19 @@ class SlamBridgeModule(Module, layer=1):
 
         if self._drift_bad_count >= self._drift_confirm_frames:
             now = _time.time()
+            contract = self._backend_contract(self._current_backend_profile())
             if self._loc_state != LOC_DIVERGED:
                 logger.error(
                     "Localization DIVERGED: pos=(%.1f,%.1f,%.1f) speed=%.1f "
                     "bad_frames=%d — suppressing odometry",
                     pos[0], pos[1], pos[2], speed, self._drift_bad_count)
                 self._loc_state = LOC_DIVERGED
+            self._last_recovery_signal = LOC_DIVERGED
+            self._last_recovery_action = str(contract["recovery_action"])
+            self._last_recovery_ts = now
+            self._relocalization_state = (
+                "requested" if contract["relocalization_supported"] else "unsupported"
+            )
 
             # Auto-relocalize (with cooldown)
             if now - self._drift_last_relocalize > self._drift_relocalize_cooldown:
@@ -465,6 +561,48 @@ class SlamBridgeModule(Module, layer=1):
 
         return False
 
+    def _restart_backend_for_recovery(self, profile: str) -> bool:
+        """Restart the active localization backend after drift divergence."""
+        import subprocess
+
+        backend = str(profile or "bridge").lower()
+        try:
+            from core.service_manager import get_service_manager
+
+            svc = get_service_manager()
+            if backend == "super_lio":
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio")
+                svc.ensure("lidar", "super_lio")
+                svc.wait_ready("lidar", "super_lio", timeout=15.0)
+            elif backend == "localizer":
+                svc.stop("localizer")
+                svc.ensure("slam", "localizer")
+                svc.wait_ready("slam", "localizer", timeout=15.0)
+            elif backend in {"fastlio2", "slam"}:
+                svc.stop("slam", "slam_pgo")
+                svc.ensure("slam", "slam_pgo")
+                svc.wait_ready("slam", timeout=15.0)
+            else:
+                svc.stop("slam")
+                svc.ensure("slam")
+                svc.wait_ready("slam", timeout=15.0)
+            return True
+        except Exception as e:
+            logger.warning("Drift guard: service_manager restart failed: %s", e)
+
+        service = "super_lio" if backend == "super_lio" else "slam"
+        try:
+            subprocess.run(
+                ["sudo", "systemctl", "restart", service],
+                capture_output=True, text=True, timeout=15,
+                check=False,
+            )
+            logger.warning("Drift guard: %s service restarted", service)
+            return True
+        except Exception as e:
+            logger.error("Drift guard: %s restart failed: %s", service, e)
+            return False
+
     def _auto_relocalize(self) -> None:
         """Trigger relocalize via ROS2 service using last known good position.
 
@@ -473,6 +611,8 @@ class SlamBridgeModule(Module, layer=1):
         """
         import os
         import subprocess
+        profile = self._current_backend_profile()
+        contract = self._backend_contract(profile)
         pos = self._drift_last_good_pos
         yaw = self._drift_last_good_yaw
         if pos is None:
@@ -482,6 +622,23 @@ class SlamBridgeModule(Module, layer=1):
 
         map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/inovxio/data/maps"))
         pcd_path = os.path.join(map_dir, "active", "map.pcd")
+        if (not contract["relocalization_supported"]) or not os.path.isfile(pcd_path):
+            self._relocalization_state = "unsupported"
+            self._last_recovery_action = str(contract["recovery_action"])
+            self._last_recovery_ts = _time.time()
+            logger.error(
+                "Drift guard: %s cannot use relocalize (pcd=%s, supported=%s); "
+                "running %s",
+                profile,
+                pcd_path,
+                contract["relocalization_supported"],
+                contract["recovery_action"],
+            )
+            if self._restart_backend_for_recovery(str(contract["backend"])):
+                self._drift_bad_count = 0
+                self._drift_last_good_pos = None  # reset so first new frame becomes anchor
+                self._relocalization_state = "restarted"
+            return
         if not os.path.isfile(pcd_path):
             # No active map to relocalize against (mapping mode or never saved).
             # Fallback: restart the SLAM systemd service to clear the IEKF
@@ -504,6 +661,9 @@ class SlamBridgeModule(Module, layer=1):
                 logger.error("Drift guard: slam restart failed: %s", e)
             return
 
+        self._relocalization_state = "requested"
+        self._last_recovery_action = "relocalize_service"
+        self._last_recovery_ts = _time.time()
         logger.warning(
             "Drift guard: auto-relocalize to (%.2f, %.2f, yaw=%.2f) using %s",
             pos[0], pos[1], yaw, pcd_path)
@@ -522,12 +682,148 @@ class SlamBridgeModule(Module, layer=1):
                 capture_output=True, text=True, timeout=30)
             logger.info("Drift guard: relocalize call completed")
             self._drift_bad_count = 0
+            self._relocalization_state = "completed"
         except Exception as e:
             logger.warning("Drift guard: relocalize failed: %s", e)
+            self._relocalization_state = "failed"
+
+    def _mark_odom_received(
+        self,
+        *,
+        wall_now: float | None = None,
+        mono_now: float | None = None,
+    ) -> None:
+        wall = _time.time() if wall_now is None else wall_now
+        mono = _time.monotonic() if mono_now is None else mono_now
+        self._last_odom_time = wall
+        self._last_odom_mono = mono
+        self._odom_recv_ts.append(wall)
+        if len(self._odom_recv_ts) > 30:
+            self._odom_recv_ts.pop(0)
+
+    def _mark_cloud_received(
+        self,
+        *,
+        wall_now: float | None = None,
+        mono_now: float | None = None,
+    ) -> None:
+        self._last_cloud_time = _time.time() if wall_now is None else wall_now
+        self._last_cloud_mono = _time.monotonic() if mono_now is None else mono_now
+
+    def _odom_age_s(self, *, mono_now: float | None = None) -> float:
+        if self._last_odom_mono > 0.0:
+            now = _time.monotonic() if mono_now is None else mono_now
+            return max(0.0, now - self._last_odom_mono)
+        if self._last_odom_time > 0.0:
+            return max(0.0, _time.time() - self._last_odom_time)
+        return float("inf")
+
+    def _cloud_age_s(self, *, mono_now: float | None = None) -> float:
+        if self._last_cloud_mono > 0.0:
+            now = _time.monotonic() if mono_now is None else mono_now
+            return max(0.0, now - self._last_cloud_mono)
+        if self._last_cloud_time > 0.0:
+            return max(0.0, _time.time() - self._last_cloud_time)
+        return float("inf")
+
+    def _backend_contract(self, profile: str | None = None) -> dict[str, Any]:
+        """Expose backend capabilities for Gateway/session consumers."""
+        backend = str(profile or self._backend_profile or "bridge").strip().lower()
+        if backend == "super_lio":
+            return {
+                "backend": "super_lio",
+                "health_source": "odom_map_cloud",
+                "map_save_supported": True,
+                "map_save_source": "live_map_cloud_snapshot",
+                "relocalization_supported": False,
+                "recovery_action": "restart_super_lio",
+            }
+        if backend == "localizer":
+            return {
+                "backend": "localizer",
+                "health_source": "localizer_health_topic",
+                "map_save_supported": False,
+                "map_save_source": "active_map",
+                "relocalization_supported": True,
+                "recovery_action": "relocalize_service",
+            }
+        if backend in {"fastlio2", "slam"}:
+            return {
+                "backend": "fastlio2",
+                "health_source": "odom_map_cloud",
+                "map_save_supported": True,
+                "map_save_source": "slam_save_maps",
+                "relocalization_supported": False,
+                "recovery_action": "restart_slam",
+            }
+        return {
+            "backend": backend or "bridge",
+            "health_source": "odom_map_cloud",
+            "map_save_supported": True,
+            "map_save_source": "slam_services_or_live_cloud",
+            "relocalization_supported": False,
+            "recovery_action": "restart_backend",
+        }
+
+    def _localizer_health_topic_fresh(self, now: float) -> bool:
+        return (
+            self._localizer_health_ts > 0.0
+            and (now - self._localizer_health_ts) <= self._localizer_health_timeout
+        )
+
+    @staticmethod
+    def _synthesized_localizer_health(state: str) -> str:
+        if state == LOC_TRACKING:
+            return "LIO_TRACKING"
+        if state in {LOC_DEGRADED, LOC_FALLBACK_GNSS_ONLY}:
+            return "LIO_DEGRADED"
+        if state == LOC_DIVERGED:
+            return "LIO_DIVERGED"
+        if state == LOC_LOST:
+            return "LIO_LOST"
+        return "UNKNOWN"
+
+    def _current_backend_profile(self) -> str:
+        """Best-effort running backend detection for status and recovery."""
+        configured = str(self._backend_profile or "bridge").strip().lower()
+        if configured not in {"", "bridge"}:
+            return configured
+        if os.name == "nt" or not os.path.isdir("/run/systemd/system"):
+            return configured or "bridge"
+        now = _time.monotonic()
+        if (
+            self._backend_detect_mono > 0.0
+            and now - self._backend_detect_mono < self._backend_detect_interval
+        ):
+            return self._backend_detect_cache or configured or "bridge"
+        self._backend_detect_mono = now
+        try:
+            from core.service_manager import get_service_manager
+
+            services = get_service_manager().status(
+                "super_lio", "slam_pgo", "localizer", "slam"
+            )
+            if services.get("super_lio") in ("running", "active"):
+                self._backend_detect_cache = "super_lio"
+                return "super_lio"
+            if services.get("localizer") in ("running", "active"):
+                self._backend_detect_cache = "localizer"
+                return "localizer"
+            if services.get("slam_pgo") in ("running", "active"):
+                self._backend_detect_cache = "fastlio2"
+                return "fastlio2"
+            if services.get("slam") in ("running", "active"):
+                self._backend_detect_cache = "slam"
+                return "slam"
+        except Exception:
+            pass
+        self._backend_detect_cache = configured or "bridge"
+        return configured or "bridge"
 
     def _on_dds_odom(self, msg) -> None:
         """DDS_Odometry → Module Odometry (with selective visual fusion + drift guard)."""
         try:
+            now = _time.time()
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             t = msg.twist.twist
@@ -554,17 +850,17 @@ class SlamBridgeModule(Module, layer=1):
             # sees map-frame positions. Without this, planner uses odom
             # frame (robot boot origin) and PCT lookups hit wrong cells.
             fused = self._apply_map_odom_to_odometry(fused)
+            # Mark receive freshness before synchronous downstream callbacks;
+            # slow Gateway/SSE/map consumers must not look like an odom outage.
+            self._mark_odom_received(wall_now=now)
             self.odometry.publish(fused)
-            now = _time.time()
-            self._last_odom_time = now
-            # Track raw receive rate (independent of downstream callback chain)
-            self._odom_recv_ts.append(now)
-            if len(self._odom_recv_ts) > 30:
-                self._odom_recv_ts.pop(0)
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
 
     def _on_dds_cloud(self, msg) -> None:
+        self._submit_pointcloud_worker(lambda: self._process_dds_cloud(msg))
+
+    def _process_dds_cloud(self, msg) -> None:
         """DDS_PointCloud2 → Module PointCloud2."""
         try:
             n = msg.width * msg.height
@@ -580,18 +876,16 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                # Transform odom-frame points to map frame so downstream
-                # (OccupancyGridModule, Gateway) sees coords consistent with
-                # the odometry we publish. Without this, map_cloud lives in
-                # Fast-LIO2 odom origin but robot_xy is map-frame → costmap
-                # rendered at rotated/translated position.
                 xyz_map = self._apply_map_odom_to_points(xyz)
+                self._mark_cloud_received()
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
-                self._last_cloud_time = _time.time()
         except Exception as e:
             logger.debug("SlamBridge dds cloud error: %s", e)
 
     def _on_dds_saved_map(self, msg) -> None:
+        self._submit_saved_map_worker(lambda: self._process_dds_saved_map(msg))
+
+    def _process_dds_saved_map(self, msg) -> None:
         """DDS saved-map PointCloud2 → Module saved_map Out."""
         try:
             n = msg.width * msg.height
@@ -609,6 +903,105 @@ class SlamBridgeModule(Module, layer=1):
                 self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
         except Exception as e:
             logger.debug("SlamBridge dds saved_map error: %s", e)
+
+    def _submit_pointcloud_worker(self, task: Callable[[], None]) -> bool:
+        """Run heavy point-cloud conversion outside the ROS executor.
+
+        Odom freshness is control-critical; live point clouds are visualization
+        and map-layer inputs that can tolerate dropped frames. Both the DDS
+        reader loop and rclpy fallback can otherwise spend too long converting
+        large PointCloud2 payloads inline and delay odom freshness updates.
+        """
+        if self._shutdown_event.is_set():
+            return False
+        if not self._pointcloud_worker_lock.acquire(blocking=False):
+            self._pointcloud_worker_drops += 1
+            return False
+
+        def run() -> None:
+            try:
+                if not self._shutdown_event.is_set():
+                    task()
+            finally:
+                self._pointcloud_worker_lock.release()
+
+        self._pointcloud_worker_thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="slam_bridge_pointcloud",
+        )
+        self._pointcloud_worker_thread.start()
+        return True
+
+    def _submit_saved_map_worker(self, task: Callable[[], None]) -> bool:
+        if self._shutdown_event.is_set():
+            return False
+        if not self._saved_map_worker_lock.acquire(blocking=False):
+            self._saved_map_worker_drops += 1
+            return False
+
+        def run() -> None:
+            try:
+                if not self._shutdown_event.is_set():
+                    task()
+            finally:
+                self._saved_map_worker_lock.release()
+
+        self._saved_map_worker_thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="slam_bridge_saved_map",
+        )
+        self._saved_map_worker_thread.start()
+        return True
+
+    def _process_rclpy_cloud(self, msg) -> None:
+        try:
+            n = msg.width * msg.height
+            if n == 0:
+                return
+            step = msg.point_step
+            if step == 16:
+                pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
+                xyz = pts[:, :3].copy()
+            else:
+                raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
+                xyz = np.zeros((n, 3), dtype=np.float32)
+                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+            valid = np.isfinite(xyz).all(axis=1)
+            xyz = xyz[valid]
+            if xyz.shape[0] > 0:
+                # Transform odom-frame points to map frame so downstream
+                # consumers see points in the same frame as odometry.
+                xyz_map = self._apply_map_odom_to_points(xyz)
+                self._mark_cloud_received()
+                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
+        except Exception as e:
+            logger.debug("SlamBridge rclpy cloud error: %s", e)
+
+    def _process_rclpy_saved_map(self, msg) -> None:
+        try:
+            n = msg.width * msg.height
+            if n == 0:
+                return
+            step = msg.point_step
+            if step == 16:
+                pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
+                xyz = pts[:, :3].copy()
+            else:
+                raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
+                xyz = np.zeros((n, 3), dtype=np.float32)
+                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
+                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
+                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
+            valid = np.isfinite(xyz).all(axis=1)
+            xyz = xyz[valid]
+            if xyz.shape[0] > 0:
+                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
+        except Exception as e:
+            logger.debug("SlamBridge rclpy saved_map error: %s", e)
 
     def _apply_map_odom_to_points(self, xyz: np.ndarray) -> np.ndarray:
         """Transform an (N, 3) point cloud from odom frame to map frame using
@@ -806,6 +1199,7 @@ class SlamBridgeModule(Module, layer=1):
 
     def _on_rclpy_odom(self, msg) -> None:
         try:
+            now = _time.time()
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             t = msg.twist.twist
@@ -830,63 +1224,16 @@ class SlamBridgeModule(Module, layer=1):
             # sees map-frame positions. Without this, planner uses odom
             # frame (robot boot origin) and PCT lookups hit wrong cells.
             fused = self._apply_map_odom_to_odometry(fused)
+            self._mark_odom_received(wall_now=now)
             self.odometry.publish(fused)
-            self._last_odom_time = _time.time()
         except Exception as e:
             logger.warning("SlamBridge rclpy odom error: %s", e)
 
     def _on_rclpy_cloud(self, msg) -> None:
-        try:
-            n = msg.width * msg.height
-            if n == 0:
-                return
-            step = msg.point_step
-            if step == 16:
-                pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
-                xyz = pts[:, :3].copy()
-            else:
-                raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
-                xyz = np.zeros((n, 3), dtype=np.float32)
-                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
-                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
-                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
-            valid = np.isfinite(xyz).all(axis=1)
-            xyz = xyz[valid]
-            if xyz.shape[0] > 0:
-                # Transform odom-frame points to map frame so downstream
-                # (OccupancyGridModule, Gateway) sees coords consistent with
-                # the odometry we publish. Without this, map_cloud lives in
-                # Fast-LIO2 odom origin but robot_xy is map-frame → costmap
-                # rendered at rotated/translated position.
-                xyz_map = self._apply_map_odom_to_points(xyz)
-                self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
-                self._last_cloud_time = _time.time()
-        except Exception as e:
-            logger.debug("SlamBridge rclpy cloud error: %s", e)
+        self._submit_pointcloud_worker(lambda: self._process_rclpy_cloud(msg))
 
     def _on_rclpy_saved_map(self, msg) -> None:
-        try:
-            n = msg.width * msg.height
-            if n == 0:
-                return
-            step = msg.point_step
-            if step == 16:
-                pts = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
-                xyz = pts[:, :3].copy()
-            else:
-                raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(n, step)
-                xyz = np.zeros((n, 3), dtype=np.float32)
-                xyz[:, 0] = np.frombuffer(raw[:, 0:4].tobytes(), dtype=np.float32)
-                xyz[:, 1] = np.frombuffer(raw[:, 4:8].tobytes(), dtype=np.float32)
-                xyz[:, 2] = np.frombuffer(raw[:, 8:12].tobytes(), dtype=np.float32)
-            valid = np.isfinite(xyz).all(axis=1)
-            xyz = xyz[valid]
-            if xyz.shape[0] > 0:
-                self.saved_map.publish(PointCloud2.from_numpy(xyz, frame_id="map"))
-        except Exception as e:
-            logger.debug("SlamBridge rclpy saved_map error: %s", e)
-        except Exception as e:
-            logger.debug("SlamBridge rclpy cloud error: %s", e)
+        self._submit_saved_map_worker(lambda: self._process_rclpy_saved_map(msg))
 
     # ── Degeneracy metric callbacks ─────────────────────────────────────────
 
@@ -1386,8 +1733,9 @@ class SlamBridgeModule(Module, layer=1):
         interval = 1.0 / self._watchdog_hz
         while not self._shutdown_event.is_set():
             now = _time.time()
-            odom_age = (now - self._last_odom_time) if self._last_odom_time > 0 else float("inf")
-            cloud_age = (now - self._last_cloud_time) if self._last_cloud_time > 0 else float("inf")
+            now_mono = _time.monotonic()
+            odom_age = self._odom_age_s(mono_now=now_mono)
+            cloud_age = self._cloud_age_s(mono_now=now_mono)
 
             if self._loc_state == LOC_DIVERGED:
                 # Drift guard set this — keep it until drift clears
@@ -1436,6 +1784,52 @@ class SlamBridgeModule(Module, layer=1):
                     # Visual fusion compensates for CRITICAL — upgrade to DEGRADED not LOST
                     confidence = max(confidence, 0.3)
 
+            contract = self._backend_contract(self._current_backend_profile())
+            localizer_topic_fresh = self._localizer_health_topic_fresh(now)
+            health_source = (
+                "localizer_health_topic"
+                if localizer_topic_fresh
+                else "odom_map_cloud"
+            )
+            effective_localizer_health = (
+                self._localizer_health
+                if localizer_topic_fresh
+                else self._synthesized_localizer_health(new_state)
+            )
+            pose_fresh = (
+                new_state not in {LOC_UNINIT, LOC_LOST, LOC_DIVERGED}
+                and odom_age <= self._odom_timeout
+            )
+            map_cloud_fresh = (
+                self._last_cloud_time > 0.0
+                and cloud_age <= self._cloud_timeout
+            )
+            if self._last_cloud_time == 0.0:
+                map_state = "waiting_for_map_cloud"
+            elif map_cloud_fresh:
+                map_state = "live_map_cloud"
+            else:
+                map_state = "map_cloud_stale"
+            relocalization_supported = bool(contract["relocalization_supported"])
+            if contract["backend"] != self._last_status_backend:
+                self._last_status_backend = str(contract["backend"])
+                self._relocalization_state = (
+                    "idle" if relocalization_supported else "unsupported"
+                )
+                if self._last_recovery_signal == "RECOVERED":
+                    self._last_recovery_signal = "NONE"
+                    self._last_recovery_action = "none"
+                    self._last_recovery_ts = 0.0
+            relocalization_state = self._relocalization_state
+            if not relocalization_supported and relocalization_state == "idle":
+                relocalization_state = "unsupported"
+                self._relocalization_state = relocalization_state
+            topic_age_ms = (
+                round(max(0.0, now - self._localizer_health_ts) * 1000.0, 1)
+                if self._localizer_health_ts > 0.0
+                else None
+            )
+
             if new_state != self._loc_state:
                 if new_state == LOC_LOST:
                     logger.warning("Localization LOST: no odometry for %.1fs", odom_age)
@@ -1453,6 +1847,12 @@ class SlamBridgeModule(Module, layer=1):
                                 self._loc_state)
                     self._reconnect_count = 0
                     self._drift_bad_count = 0
+                    self._last_recovery_signal = "RECOVERED"
+                    self._last_recovery_action = "none"
+                    self._last_recovery_ts = now
+                    self._relocalization_state = (
+                        "unsupported" if not relocalization_supported else "idle"
+                    )
                 self._loc_state = new_state
 
             # Auto-recovery: reconnect DDS/rclpy if LOST for too long
@@ -1466,6 +1866,20 @@ class SlamBridgeModule(Module, layer=1):
                 "odom_age_ms": round(odom_age * 1000, 1),
                 "cloud_age_ms": round(cloud_age * 1000, 1),
                 "confidence": round(confidence, 2),
+                "ts": now,
+                "mono_ts": now_mono,
+                "backend": contract["backend"],
+                "health_source": health_source,
+                "pose_fresh": pose_fresh,
+                "map_cloud_fresh": map_cloud_fresh,
+                "map_state": map_state,
+                "map_save_supported": bool(contract["map_save_supported"]),
+                "map_save_source": contract["map_save_source"],
+                "relocalization_supported": relocalization_supported,
+                "relocalization_state": relocalization_state,
+                "recovery_signal": self._last_recovery_signal,
+                "recovery_action": self._last_recovery_action,
+                "recovery_ts": self._last_recovery_ts,
                 "degeneracy": self._degen_level,
                 "icp_fitness": round(self._icp_fitness, 4),
                 "effective_ratio": round(self._effective_ratio, 3),
@@ -1476,7 +1890,10 @@ class SlamBridgeModule(Module, layer=1):
                 "pos_cov_trace": round(self._pos_cov_trace, 4),
                 "ieskf_iter_num": self._ieskf_iter_num,
                 "ieskf_converged": self._ieskf_converged,
-                "localizer_health": self._localizer_health,
+                "localizer_health": effective_localizer_health,
+                "localizer_health_raw": self._localizer_health,
+                "localizer_health_source": health_source,
+                "localizer_health_topic_age_ms": topic_age_ms,
                 "localizer_health_fitness": round(self._localizer_health_fitness, 4),
                 "localizer_health_iter": self._localizer_health_iter,
                 "localizer_health_cov_trace": round(self._localizer_health_cov_trace, 4),
@@ -1508,12 +1925,7 @@ class SlamBridgeModule(Module, layer=1):
             except Exception as e:
                 logger.debug("SlamBridge: reader.stop() cleanup error: %s", e)
             self._reader = None
-        if self._rclpy_node:
-            try:
-                self._rclpy_node.destroy_node()
-            except Exception as e:
-                logger.debug("SlamBridge: rclpy node cleanup error: %s", e)
-            self._rclpy_node = None
+        self._cleanup_rclpy_node()
 
         self._shutdown_event.wait(timeout=backoff)
         if self._shutdown_event.is_set():
@@ -1533,11 +1945,11 @@ class SlamBridgeModule(Module, layer=1):
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
-        now = _time.time()
+        now_mono = _time.monotonic()
         info["localization"] = {
             "state": self._loc_state,
-            "odom_age_ms": round((now - self._last_odom_time) * 1000, 1) if self._last_odom_time else -1,
-            "cloud_age_ms": round((now - self._last_cloud_time) * 1000, 1) if self._last_cloud_time else -1,
+            "odom_age_ms": round(self._odom_age_s(mono_now=now_mono) * 1000, 1) if self._last_odom_time else -1,
+            "cloud_age_ms": round(self._cloud_age_s(mono_now=now_mono) * 1000, 1) if self._last_cloud_time else -1,
             "degeneracy": self._degen_level,
             "icp_fitness": round(self._icp_fitness, 4),
             "effective_ratio": round(self._effective_ratio, 3),
@@ -1546,6 +1958,8 @@ class SlamBridgeModule(Module, layer=1):
             "dof_mask": self._dof_mask.tolist() if self._dof_mask is not None else None,
             "visual_fusion_active": self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL) and self._last_visual_odom is not None,
             "visual_fused_count": self._visual_fused_count,
+            "pointcloud_worker_drops": self._pointcloud_worker_drops,
+            "saved_map_worker_drops": self._saved_map_worker_drops,
         }
         info["gnss_fusion"] = self._gnss_health_snapshot()
         return info

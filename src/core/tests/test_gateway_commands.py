@@ -18,6 +18,17 @@ def test_command_journal_replays_duplicate_request_id_without_republish():
 
     gateway = GatewayModule()
     gateway.setup()
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "odom_age_ms": 100.0,
+            "localizer_health": "RECOVERED",
+        }
     post_goal = _endpoint(gateway, "/api/v1/goal")
 
     body = GoalRequest(

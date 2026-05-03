@@ -22,6 +22,60 @@ from gateway.schemas import (
 )
 
 
+def _command_rejected_response(
+    command: str,
+    body: Any,
+    *,
+    error: str,
+    message: str,
+    detail: dict[str, Any],
+    status_code: int = 409,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "schema_version": 1,
+            "ok": False,
+            "error": error,
+            "message": message,
+            "command": {
+                "name": command,
+                "request_id": getattr(body, "request_id", None),
+                "client_id": getattr(body, "client_id", "unknown"),
+                "accepted": False,
+                "replay": False,
+                "ts": time.time(),
+            },
+            "detail": detail,
+        },
+    )
+
+
+def _goal_readiness_rejection(gw, command: str, body: Any) -> JSONResponse | None:
+    from gateway.services.runtime_status import build_navigation_status
+
+    status = build_navigation_status(gw)
+    readiness = status.get("readiness", {})
+    blockers = list(readiness.get("blockers") or [])
+    if bool(status.get("can_accept_goal", False)) and not blockers:
+        return None
+    return _command_rejected_response(
+        command,
+        body,
+        error="navigation_not_ready",
+        message="Navigation cannot accept a goal in the current state.",
+        detail={
+            "state": status.get("state"),
+            "has_odometry": status.get("has_odometry"),
+            "session_mode": getattr(gw, "_session_mode", None),
+            "blockers": blockers,
+            "advisories": list(readiness.get("advisories") or []),
+            "localization": status.get("localization", {}),
+            "path": "/api/v1/navigation/status",
+        },
+    )
+
+
 def register_command_routes(app, gw) -> None:
     @app.post(
         "/api/v1/goal",
@@ -29,6 +83,10 @@ def register_command_routes(app, gw) -> None:
         response_model=ControlCommandResponse,
     )
     async def post_goal(body: GoalRequest):
+        rejection = _goal_readiness_rejection(gw, "goal", body)
+        if rejection is not None:
+            return rejection
+
         def _publish() -> dict[str, Any]:
             gw.goal_pose.publish(
                 PoseStamped(
@@ -52,6 +110,10 @@ def register_command_routes(app, gw) -> None:
         response_model=ControlCommandResponse,
     )
     async def post_navigate_click(body: ClickNavRequest):
+        rejection = _goal_readiness_rejection(gw, "navigate_click", body)
+        if rejection is not None:
+            return rejection
+
         def _publish() -> dict[str, Any]:
             gw.goal_pose.publish(
                 PoseStamped(

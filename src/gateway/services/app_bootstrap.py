@@ -404,6 +404,7 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
     webrtc_available = getattr(gw, "_webrtc", None) is not None
     traffic = _traffic_summary(gw)
     control = dict(navigation.get("control", {}))
+    nav_readiness = navigation.get("readiness", {})
     control.update(
         {
             "teleop": {
@@ -412,6 +413,8 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
             },
             "estop_clear": mode != "estop",
             "can_send_commands": mode != "estop" and not bool(session.get("pending")),
+            "can_send_goal": bool(navigation.get("can_accept_goal", False)),
+            "goal_blockers": list(nav_readiness.get("blockers") or []),
             "command_policy": _command_policy(gw),
         }
     )

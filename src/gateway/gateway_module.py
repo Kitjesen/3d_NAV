@@ -81,6 +81,10 @@ from gateway.services.map_safety import (
     apply_dynamic_filter_step1half as _map_apply_dynamic_filter_step1half,
     safe_map_name as _map_safe_map_name,
 )
+from gateway.services.runtime_status import (
+    classify_pose_freshness,
+    localizer_algorithm_healthy,
+)
 from gateway.services.traffic import (
     DEFAULT_CLOUD_QUEUE_MAXSIZE,
     DEFAULT_SSE_QUEUE_MAXSIZE,
@@ -359,7 +363,7 @@ class GatewayModule(Module, layer=6):
         # SLAM status SSE throttle (~1Hz at 10Hz odom)
         self._slam_status_throttle: int = 0
 
-        # Cached SLAM profile (fastlio2 / localizer / stopped) — refreshed every 5s
+        # Cached SLAM profile (fastlio2 / localizer / super_lio / stopped)
         self._cached_slam_profile: str = "—"
         self._slam_profile_ts: float = 0.0
 
@@ -393,6 +397,7 @@ class GatewayModule(Module, layer=6):
         # forwards here).
         self._session_mode: str = "idle"        # idle | mapping | navigating
         self._session_map: str | None = None    # active map name for navigating
+        self._session_slam_profile: str = "stopped"
         self._session_since: float = time.time()
         self._session_error: str = ""            # last error from start/end
         self._session_pending: bool = False      # True while transitioning
@@ -465,12 +470,12 @@ class GatewayModule(Module, layer=6):
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
 
     def _drift_watchdog_loop(self) -> None:
-        """Periodic sanity check on odom; restart slam.service if IEKF diverged.
+        """Periodic sanity check on odom; restart SLAM services if IEKF diverged.
 
         Fast-LIO2 IEKF co-variance grows unbounded under static poses (no new
         LiDAR observations to suppress it). After hours of idle, xy can blow
         out to trillions of metres. We detect via absolute bounds and restart
-        slam.service (+ the current session's companion services) to reset
+        the SLAM services (+ the current session's companion services) to reset
         the IEKF to zero.
 
         Cooldown: at most one restart per LINGTU_DRIFT_WATCHDOG_COOLDOWN
@@ -511,7 +516,7 @@ class GatewayModule(Module, layer=6):
                     continue
                 logger.error(
                     "drift_watchdog: IEKF DIVERGED xy=(%.0f,%.0f) z=%.0f v=%.1f — "
-                    "restarting slam.service + session companions",
+                    "restarting SLAM services + session companions",
                     x, y, z, v,
                 )
                 self._drift_restart_do_restart(xy=x, y_abs=y, v=v)
@@ -531,8 +536,21 @@ class GatewayModule(Module, layer=6):
             logger.error("drift_watchdog: service_manager unavailable: %s", e)
             return
 
-        # Snapshot session mode BEFORE stopping services
+        # Snapshot runtime state BEFORE stopping services. The nav profile keeps
+        # SLAM/localizer alive even while the mission session is idle so App/Web
+        # readiness and map state remain fresh.
         mode = self._session_mode
+        service_names = ("slam", "slam_pgo", "localizer", "super_lio")
+        running_before = {name: False for name in service_names}
+        for name in service_names:
+            try:
+                running_before[name] = bool(svc.is_running(name))
+            except Exception as e:
+                logger.warning(
+                    "drift_watchdog: failed to read service state for %s: %s",
+                    name,
+                    e,
+                )
 
         # Black-box dump must happen BEFORE svc.stop, otherwise the
         # localization_status / gnss / odom feeds dry up the moment slam exits
@@ -556,7 +574,7 @@ class GatewayModule(Module, layer=6):
             logger.warning("drift_watchdog: blackbox dump failed (continuing): %s", e)
 
         try:
-            svc.stop("slam", "slam_pgo", "localizer")
+            svc.stop("slam", "slam_pgo", "localizer", "super_lio")
         except Exception as e:
             logger.warning("drift_watchdog: svc.stop failed (continuing): %s", e)
 
@@ -578,17 +596,34 @@ class GatewayModule(Module, layer=6):
             evt["dump_path"] = str(dump_path)
         self.push_event(evt)
 
-        # Re-ensure based on session mode. idle → don't restart anything.
+        # Re-ensure based on session mode. Idle restores any localization
+        # services that were already running before this watchdog reset.
         time.sleep(2.0)
         try:
-            if mode in ("mapping", "exploring"):
-                svc.ensure("slam", "slam_pgo")
-                svc.wait_ready("slam", "slam_pgo", timeout=10.0)
+            restart_services: list[str] = []
+            if running_before.get("super_lio"):
+                restart_services = ["lidar", "super_lio"]
+            elif mode in ("mapping", "exploring"):
+                restart_services = ["slam", "slam_pgo"]
             elif mode == "navigating":
-                svc.ensure("slam", "localizer")
-                svc.wait_ready("slam", "localizer", timeout=10.0)
-            # idle: leave stopped; will be started when user picks a mode
-            logger.info("drift_watchdog: restart complete (mode=%s)", mode)
+                restart_services = ["slam", "localizer"]
+            else:
+                restart_services = [
+                    name for name in service_names if running_before.get(name)
+                ]
+                if (
+                    "localizer" in restart_services or "slam_pgo" in restart_services
+                ) and "slam" not in restart_services:
+                    restart_services.insert(0, "slam")
+
+            if restart_services:
+                svc.ensure(*restart_services)
+                svc.wait_ready(*restart_services, timeout=10.0)
+            logger.info(
+                "drift_watchdog: restart complete (mode=%s, restored=%s)",
+                mode,
+                ",".join(restart_services) if restart_services else "none",
+            )
         except Exception as e:
             logger.error("drift_watchdog: ensure failed: %s", e)
 
@@ -925,10 +960,21 @@ class GatewayModule(Module, layer=6):
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
-            status = svc.status("slam", "slam_pgo", "localizer")
+            status = svc.status("slam", "slam_pgo", "localizer", "super_lio")
             slam_active = status.get("slam") in ("running", "active")
             pgo_active = status.get("slam_pgo") in ("running", "active")
             loc_active = status.get("localizer") in ("running", "active")
+            super_lio_active = status.get("super_lio") in ("running", "active")
+            if super_lio_active:
+                if self._exploring:
+                    return "exploring", None
+                if self._session_mode in ("mapping", "navigating"):
+                    return self._session_mode, (
+                        self._session_active_map_name()
+                        if self._session_mode == "navigating"
+                        else None
+                    )
+                return "mapping", None
             if loc_active and slam_active:
                 return "navigating", self._session_active_map_name()
             if pgo_active and slam_active:
@@ -965,21 +1011,29 @@ class GatewayModule(Module, layer=6):
             has_tomogram = os.path.isfile(os.path.join(base, "tomogram.pickle"))
         icp = self._icp_quality
         localization_status = self._localization_status or {}
-        reported_state = str(localization_status.get("state", "") or "").upper()
-        degeneracy = str(localization_status.get("degeneracy", "") or "").upper()
-        localizer_health = str(
-            localization_status.get("localizer_health", "") or ""
-        ).upper()
-        confidence = localization_status.get("confidence")
-        confidence_ok = not isinstance(confidence, (int, float)) or confidence >= 0.5
+        slam_profile = self._get_slam_profile()
+        backend = str(
+            localization_status.get("backend")
+            or slam_profile
+            or self._session_slam_profile
+            or "stopped"
+        ).lower()
+        pose_fresh, pose_freshness = classify_pose_freshness(localization_status)
+        algorithm_healthy = localizer_algorithm_healthy(localization_status, icp)
+        confidence_ok = pose_fresh is not False
         loc_ready = (
-            icp > 0.0
-            and icp < 0.5
-            and reported_state in {"", "TRACKING", "OK", "READY"}
-            and degeneracy not in {"MILD", "MODERATE", "SEVERE", "CRITICAL"}
-            and localizer_health in {"", "UNKNOWN", "LOCKED", "RECOVERED", "OK", "READY"}
+            algorithm_healthy
             and confidence_ok
         )
+        relocalization_supported = localization_status.get("relocalization_supported")
+        if relocalization_supported is None:
+            relocalization_supported = backend not in {"super_lio", "fastlio2", "slam"}
+        map_save_supported = localization_status.get("map_save_supported")
+        if map_save_supported is None:
+            map_save_supported = backend in {"super_lio", "fastlio2", "slam"}
+        map_save_source = localization_status.get("map_save_source")
+        if map_save_source is None and backend == "super_lio":
+            map_save_source = "live_map_cloud_snapshot"
         # Gate which transitions are allowed from current state.
         idle = self._session_mode == "idle" and not self._session_pending
         can_start_mapping = idle
@@ -989,10 +1043,18 @@ class GatewayModule(Module, layer=6):
             and has_pcd
             and has_tomogram
         )
-        can_start_exploring = idle and self._frontier_explorer is not None
+        explorer_available = self._frontier_explorer is not None
+        explorer_unavailable_reason = (
+            None if explorer_available else "frontier_explorer_not_running"
+        )
+        explorer_required_profile = None if explorer_available else "explore"
+        can_start_exploring = idle and explorer_available
         can_end = self._session_mode != "idle" and not self._session_pending
         return {
             "mode": self._session_mode,
+            "slam_profile": slam_profile,
+            "localization_backend": backend,
+            "health_source": localization_status.get("health_source"),
             "active_map": active_map,
             "map_has_pcd": has_pcd,
             "map_has_tomogram": has_tomogram,
@@ -1001,11 +1063,23 @@ class GatewayModule(Module, layer=6):
             "error": self._session_error,
             "icp_quality": icp,
             "localizer_ready": loc_ready,
+            "localizer_algorithm_healthy": algorithm_healthy,
+            "pose_fresh": pose_fresh,
+            "pose_freshness": pose_freshness,
+            "map_state": localization_status.get("map_state"),
+            "map_save_supported": bool(map_save_supported),
+            "map_save_source": map_save_source,
+            "relocalization_supported": bool(relocalization_supported),
+            "relocalization_state": localization_status.get("relocalization_state"),
+            "recovery_signal": localization_status.get("recovery_signal"),
+            "recovery_action": localization_status.get("recovery_action"),
             "can_start_mapping": can_start_mapping,
             "can_start_navigating": can_start_navigating,
             "can_start_exploring": can_start_exploring,
             "can_end": can_end,
-            "explorer_available": self._frontier_explorer is not None,
+            "explorer_available": explorer_available,
+            "explorer_unavailable_reason": explorer_unavailable_reason,
+            "explorer_required_profile": explorer_required_profile,
         }
 
     def _on_saved_map(self, cloud: PointCloud2) -> None:
@@ -1141,7 +1215,7 @@ class GatewayModule(Module, layer=6):
         })
 
     def _get_slam_profile(self) -> str:
-        """Return current SLAM profile (cached 5s): fastlio2 / localizer / stopped."""
+        """Return current SLAM profile (cached 5s)."""
         now = time.time()
         if now - self._slam_profile_ts < 5.0:
             return self._cached_slam_profile
@@ -1149,8 +1223,10 @@ class GatewayModule(Module, layer=6):
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
-            services = svc.status("slam_pgo", "localizer", "slam")
-            if services.get("slam_pgo") in ("running", "active"):
+            services = svc.status("super_lio", "slam_pgo", "localizer", "slam")
+            if services.get("super_lio") in ("running", "active"):
+                profile = "super_lio"
+            elif services.get("slam_pgo") in ("running", "active"):
                 profile = "fastlio2"
             elif services.get("localizer") in ("running", "active"):
                 profile = "localizer"
@@ -1244,6 +1320,35 @@ class GatewayModule(Module, layer=6):
         if not isinstance(state, dict):
             return
         d = dict(state)
+        profile = self._get_slam_profile()
+        if profile and profile != "—":
+            d["backend"] = profile
+        if profile == "super_lio":
+            d.setdefault("health_source", "odom_map_cloud")
+            d["relocalization_supported"] = False
+            d.setdefault("relocalization_state", "unsupported")
+            d["map_save_supported"] = True
+            d.setdefault("map_save_source", "live_map_cloud_snapshot")
+            if "map_state" not in d:
+                d["map_state"] = (
+                    "live_map_cloud"
+                    if d.get("map_cloud_fresh")
+                    else "map_cloud_stale"
+                )
+            if "localizer_health" not in d:
+                state_name = str(d.get("state", "") or "").upper()
+                if state_name in {"LOST", "UNINIT", "UNINITIALIZED"}:
+                    d["localizer_health"] = "LIO_LOST"
+                elif state_name in {"DIVERGED"}:
+                    d["localizer_health"] = "LIO_DIVERGED"
+                elif state_name in {"DEGRADED", "FALLBACK_GNSS_ONLY"}:
+                    d["localizer_health"] = "LIO_DEGRADED"
+                else:
+                    d["localizer_health"] = "LIO_TRACKING"
+        elif profile == "localizer":
+            d.setdefault("relocalization_supported", True)
+        d["_gateway_received_ts"] = time.time()
+        d["_gateway_received_mono"] = time.monotonic()
         with self._state_lock:
             self._localization_status = d
         self._blackbox.record("slam_diag", d)

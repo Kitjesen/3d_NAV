@@ -11,22 +11,26 @@ WorkingDirectory=/opt/lingtu/current
 ExecStart=/bin/bash -c '\
   source /opt/ros/humble/setup.bash && \
   source /opt/lingtu/current/install/setup.bash && \
+  MAP_PATH=$${NAV_MAP_PATH:-/home/sunrise/data/nova/maps/active/map}; \
   exec /opt/lingtu/current/install/localizer/lib/localizer/localizer_node \
     --ros-args \
     -p config_path:=/opt/lingtu/current/install/localizer/share/localizer/config/localizer.yaml \
-    -p static_map_path:=/home/sunrise/data/inovxio/data/maps/active/map.pcd \
+    -p static_map_path:=$${MAP_PATH}.pcd \
     -p initial_x:=0.0 \
     -p initial_y:=0.0 \
     -p initial_z:=0.0 \
     -p initial_yaw:=0.0 \
     -r /cloud_registered:=/nav/registered_cloud \
     -r /Odometry:=/nav/odometry \
-    -r map_cloud:=/nav/map_cloud \
+    -r map_cloud:=/nav/saved_map_cloud \
+    -r /localization_quality:=/nav/localization_quality \
     -r relocalize:=/nav/relocalize \
-    -r relocalize_check:=/nav/relocalize_check'
+    -r relocalize_check:=/nav/relocalize_check \
+    -r global_relocalize:=/nav/global_relocalize'
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
+Environment=NAV_MAP_PATH=
 
 [Install]
 WantedBy=multi-user.target

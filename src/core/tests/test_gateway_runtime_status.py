@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -11,6 +12,12 @@ pytest.importorskip("fastapi")
 def _endpoint(gateway, path: str):
     gateway.setup()
     return next(route.endpoint for route in gateway._app.routes if route.path == path)
+
+
+def _payload(response_or_payload):
+    if hasattr(response_or_payload, "body"):
+        return json.loads(response_or_payload.body)
+    return response_or_payload
 
 
 def test_localization_status_covers_product_states():
@@ -42,6 +49,25 @@ def test_localization_status_covers_product_states():
     payload = build_localization_status(gateway)
     assert payload["state"] == "ready"
     assert payload["ready"] is True
+    assert payload["algorithm_healthy"] is True
+    assert payload["pose_fresh"] is True
+
+    gateway._icp_quality = 0.0
+    with gateway._state_lock:
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.89,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.0,
+            "localizer_health": "RECOVERED",
+            "localizer_health_source": "localizer_health_topic",
+            "localizer_health_fitness": 0.0246,
+            "odom_age_ms": 222.4,
+        }
+    payload = build_localization_status(gateway)
+    assert payload["state"] == "ready"
+    assert payload["ready"] is True
+    assert payload["algorithm_healthy"] is True
 
     gateway._session_mode = "navigating"
     gateway._icp_quality = 0.2
@@ -61,6 +87,44 @@ def test_localization_status_covers_product_states():
     assert payload["state"] == "degraded"
     assert payload["can_relocalize"] is True
     assert "low_confidence" in payload["reasons"]
+
+    with gateway._state_lock:
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.28,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 1440.0,
+            "cloud_age_ms": 120.0,
+            "localizer_health": "RECOVERED",
+        }
+    payload = build_localization_status(gateway)
+    assert payload["state"] == "ready"
+    assert payload["algorithm_healthy"] is True
+    assert payload["pose_fresh"] is True
+    assert payload["pose_freshness"] == "fresh"
+    assert payload["stale_odometry"] is False
+    assert payload["odom_age_ms"] == 1440.0
+    assert payload["reasons"] == []
+
+    with gateway._state_lock:
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.28,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 2500.0,
+            "cloud_age_ms": 120.0,
+            "localizer_health": "RECOVERED",
+        }
+    payload = build_localization_status(gateway)
+    assert payload["state"] == "degraded"
+    assert payload["algorithm_healthy"] is True
+    assert payload["pose_fresh"] is False
+    assert payload["pose_freshness"] == "stale"
+    assert payload["stale_odometry"] is True
+    assert payload["odom_age_ms"] == 2500.0
+    assert payload["reasons"] == ["reported_state:tracking", "stale_odometry"]
 
     with gateway._state_lock:
         gateway._localization_status = {"state": "LOST", "confidence": 0.0}
@@ -93,6 +157,25 @@ def test_localization_status_route_returns_stable_schema():
     assert payload["state"] == "tracking"
     assert payload["has_odometry"] is True
     assert payload["reported_state"] == "TRACKING"
+
+
+def test_localization_status_exposes_gateway_diagnostic_age():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocalizationStatusResponse
+    from gateway.services.runtime_status import build_localization_status
+
+    gateway = GatewayModule()
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+    gateway._on_localization_status({"state": "TRACKING", "confidence": 0.9})
+
+    payload = build_localization_status(gateway)
+    model = LocalizationStatusResponse.model_validate(payload)
+
+    assert model.diag_received_ts is not None
+    assert model.diag_age_ms is not None
+    assert model.diag_age_ms >= 0.0
+    assert "_gateway_received_mono" in payload["raw"]
 
 
 def test_localization_status_exposes_slam_quality_diagnostics():
@@ -136,6 +219,115 @@ def test_localization_status_exposes_slam_quality_diagnostics():
     assert model.localizer_health_iter == 11
     assert model.localizer_health_cov_trace == 0.000019
     assert payload["raw"]["icp_fitness"] == 0.3049
+
+
+def test_localization_status_accepts_super_lio_odom_map_health():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocalizationStatusResponse
+    from gateway.services.runtime_status import build_localization_status
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._localization_status = {
+            "backend": "super_lio",
+            "state": "TRACKING",
+            "confidence": 0.92,
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "map_cloud_fresh": True,
+            "map_state": "live_map_cloud",
+            "map_save_supported": True,
+            "map_save_source": "live_map_cloud_snapshot",
+            "relocalization_supported": False,
+            "relocalization_state": "unsupported",
+            "recovery_signal": "NONE",
+            "recovery_action": "none",
+            "localizer_health": "LIO_TRACKING",
+            "odom_age_ms": 120.0,
+            "cloud_age_ms": 80.0,
+        }
+
+    payload = build_localization_status(gateway)
+    model = LocalizationStatusResponse.model_validate(payload)
+
+    assert model.state == "ready"
+    assert model.ready is True
+    assert model.algorithm_healthy is True
+    assert model.backend == "super_lio"
+    assert model.health_source == "odom_map_cloud"
+    assert model.map_cloud_fresh is True
+    assert model.map_save_supported is True
+    assert model.map_save_source == "live_map_cloud_snapshot"
+    assert model.relocalization_supported is False
+    assert model.can_relocalize is False
+    assert model.recovery_signal == "NONE"
+    assert model.recovery_action == "none"
+
+
+def test_super_lio_degraded_state_does_not_offer_relocalize():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_localization_status
+
+    gateway = GatewayModule()
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._localization_status = {
+            "backend": "super_lio",
+            "state": "DEGRADED",
+            "confidence": 0.2,
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "relocalization_supported": False,
+            "localizer_health": "LIO_DEGRADED",
+        }
+
+    payload = build_localization_status(gateway)
+
+    assert payload["state"] == "degraded"
+    assert payload["relocalization_supported"] is False
+    assert payload["can_relocalize"] is False
+
+
+def test_session_snapshot_exposes_super_lio_backend_capabilities():
+    import time
+
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionResponse
+
+    gateway = GatewayModule()
+    gateway._cached_slam_profile = "super_lio"
+    gateway._slam_profile_ts = time.time()
+    gateway._session_mode = "mapping"
+    with gateway._state_lock:
+        gateway._localization_status = {
+            "backend": "super_lio",
+            "state": "TRACKING",
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "map_state": "live_map_cloud",
+            "map_save_supported": True,
+            "map_save_source": "live_map_cloud_snapshot",
+            "relocalization_supported": False,
+            "relocalization_state": "unsupported",
+            "recovery_signal": "NONE",
+            "recovery_action": "restart_super_lio",
+            "localizer_health": "LIO_TRACKING",
+        }
+
+    session = gateway._session_snapshot()
+    model = SessionResponse.model_validate(session)
+
+    assert model.slam_profile == "super_lio"
+    assert model.localization_backend == "super_lio"
+    assert model.health_source == "odom_map_cloud"
+    assert model.localizer_ready is True
+    assert model.map_save_supported is True
+    assert model.map_save_source == "live_map_cloud_snapshot"
+    assert model.relocalization_supported is False
+    assert model.relocalization_state == "unsupported"
+    assert model.recovery_action == "restart_super_lio"
 
 
 def test_navigation_status_reports_mission_path_and_control_source():
@@ -222,6 +414,245 @@ def test_navigation_status_handles_failed_mission_and_missing_mux():
     assert payload["diagnostics"]["failure_reason"] == "blocked"
 
 
+def test_navigation_status_blocks_autonomy_when_pose_is_stale_but_algorithm_healthy():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.28,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 2500.0,
+            "localizer_health": "RECOVERED",
+        }
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    payload = build_navigation_status(gateway)
+
+    assert payload["localization"]["algorithm_healthy"] is True
+    assert payload["localization"]["pose_fresh"] is False
+    assert "pose_stale" in payload["reason_codes"]
+    assert "pose_stale" in payload["readiness"]["blockers"]
+    assert payload["can_accept_goal"] is False
+    assert payload["readiness"]["can_accept_goal"] is False
+    assert payload["readiness"]["can_execute_autonomy"] is False
+
+
+def test_navigation_status_allows_fresh_pose_with_low_confidence_snapshot():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.28,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 1440.0,
+            "localizer_health": "RECOVERED",
+        }
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    payload = build_navigation_status(gateway)
+
+    assert payload["localization"]["algorithm_healthy"] is True
+    assert payload["localization"]["pose_fresh"] is True
+    assert payload["localization"]["pose_freshness"] == "fresh"
+    assert "pose_stale" not in payload["reason_codes"]
+    assert payload["can_accept_goal"] is True
+    assert payload["readiness"]["blockers"] == []
+    assert payload["readiness"]["can_accept_goal"] is True
+    assert payload["readiness"]["can_execute_autonomy"] is True
+
+    session = gateway._session_snapshot()
+    assert session["localizer_ready"] is True
+    assert session["pose_fresh"] is True
+    assert session["pose_freshness"] == "fresh"
+
+
+def test_navigation_status_uses_localizer_health_fitness_when_icp_quality_is_zero():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_localization_status, build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.0
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.92,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.0,
+            "odom_age_ms": 150.0,
+            "cloud_age_ms": 140.0,
+            "localizer_health": "RECOVERED",
+            "localizer_health_source": "localizer_health_topic",
+            "localizer_health_fitness": 0.0223,
+        }
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    localization = build_localization_status(gateway)
+    navigation = build_navigation_status(gateway)
+    session = gateway._session_snapshot()
+
+    assert localization["state"] == "ready"
+    assert localization["ready"] is True
+    assert localization["algorithm_healthy"] is True
+    assert localization["reasons"] == []
+    assert navigation["can_accept_goal"] is True
+    assert navigation["reason_codes"] == []
+    assert session["localizer_ready"] is True
+
+
+def test_navigation_status_blocks_ready_when_map_cloud_is_stale():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_localization_status, build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.0
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.92,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.0,
+            "odom_age_ms": 150.0,
+            "cloud_age_ms": 140.0,
+            "map_cloud_fresh": False,
+            "localizer_health": "RECOVERED",
+            "localizer_health_source": "localizer_health_topic",
+            "localizer_health_fitness": 0.0223,
+        }
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    localization = build_localization_status(gateway)
+    navigation = build_navigation_status(gateway)
+    session = gateway._session_snapshot()
+
+    assert localization["state"] == "initializing"
+    assert localization["ready"] is False
+    assert localization["algorithm_healthy"] is False
+    assert localization["reasons"] == ["localizer_not_ready"]
+    assert navigation["can_accept_goal"] is False
+    assert "localization_initializing" in navigation["reason_codes"]
+    assert session["localizer_ready"] is False
+
+
+def test_goal_route_rejects_stale_localization_without_publishing():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.28,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 2500.0,
+            "localizer_health": "RECOVERED",
+        }
+    sent_goals = []
+    gateway.goal_pose._add_callback(sent_goals.append)
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/goal")(
+            GoalRequest(
+                x=1.0,
+                y=2.0,
+                request_id="stale-goal",
+                client_id="web",
+            )
+        )
+    )
+    payload = _payload(response)
+    model = GatewayErrorResponse.model_validate(payload)
+
+    assert response.status_code == 409
+    assert model.error == "navigation_not_ready"
+    assert model.command is not None
+    assert model.command.name == "goal"
+    assert model.command.accepted is False
+    assert model.detail["blockers"] == ["pose_stale"]
+    assert sent_goals == []
+
+
+def test_goal_route_accepts_ready_navigation_goal():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import ControlCommandResponse
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.28,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 250.0,
+            "localizer_health": "RECOVERED",
+        }
+    sent_goals = []
+    gateway.goal_pose._add_callback(sent_goals.append)
+
+    payload = asyncio.run(
+        _endpoint(gateway, "/api/v1/goal")(
+            GoalRequest(
+                x=1.0,
+                y=2.0,
+                request_id="ready-goal",
+                client_id="web",
+            )
+        )
+    )
+    model = ControlCommandResponse.model_validate(payload)
+
+    assert model.ok is True
+    assert model.command.accepted is True
+    assert model.goal == [1.0, 2.0, 0.0]
+    assert len(sent_goals) == 1
+
+
 def test_navigation_status_reports_teleop_preemption_for_active_mission():
     from gateway.gateway_module import GatewayModule
     from gateway.services.runtime_status import build_navigation_status
@@ -284,3 +715,86 @@ def test_navigation_status_route_returns_stable_schema():
     assert payload["control"]["active_cmd_source"] == "unknown"
     assert "odometry_missing" in payload["reason_codes"]
     assert payload["readiness"]["blockers"] == ["odometry_missing"]
+
+
+def test_drift_watchdog_restores_idle_running_localization_services(monkeypatch):
+    import core.service_manager as service_manager
+    import gateway.gateway_module as gateway_module
+    from gateway.gateway_module import GatewayModule
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.running = {"slam", "localizer"}
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def is_running(self, service: str) -> bool:
+            return service in self.running
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+            self.running.difference_update(services)
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+            self.running.update(services)
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+    fake = FakeServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+    monkeypatch.setattr(gateway_module.time, "sleep", lambda _: None)
+
+    gateway = GatewayModule()
+    gateway._session_mode = "idle"
+    with gateway._state_lock:
+        gateway._odom = {"x": 999.0}
+        gateway._odom_timestamps.append(123.0)
+
+    gateway._drift_restart_do_restart(xy=999.0, y_abs=0.0, v=0.0)
+
+    assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio")) in fake.calls
+    assert ("ensure", ("slam", "localizer")) in fake.calls
+    assert ("wait_ready", ("slam", "localizer")) in fake.calls
+    assert gateway._odom == {}
+    assert gateway._odom_timestamps == []
+
+
+def test_drift_watchdog_restores_idle_running_super_lio_services(monkeypatch):
+    import core.service_manager as service_manager
+    import gateway.gateway_module as gateway_module
+    from gateway.gateway_module import GatewayModule
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.running = {"super_lio"}
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def is_running(self, service: str) -> bool:
+            return service in self.running
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+            self.running.difference_update(services)
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+            self.running.update(services)
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+    fake = FakeServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+    monkeypatch.setattr(gateway_module.time, "sleep", lambda _: None)
+
+    gateway = GatewayModule()
+    gateway._session_mode = "idle"
+
+    gateway._drift_restart_do_restart(xy=999.0, y_abs=0.0, v=0.0)
+
+    assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio")) in fake.calls
+    assert ("ensure", ("lidar", "super_lio")) in fake.calls
+    assert ("wait_ready", ("lidar", "super_lio")) in fake.calls

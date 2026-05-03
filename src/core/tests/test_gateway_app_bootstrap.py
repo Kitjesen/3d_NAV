@@ -49,6 +49,8 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["control"]["active_cmd_source"] == "unknown"
     assert payload["control"]["command_owner"] == "unknown"
     assert payload["control"]["estop_clear"] is True
+    assert payload["control"]["can_send_goal"] is True
+    assert payload["control"]["goal_blockers"] == []
     assert payload["path"]["points"] == 2
     assert payload["path"]["endpoint"] == "/api/v1/path"
     assert "path" not in payload["path"]
@@ -245,6 +247,8 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert bootstrap_payload["links"]["events"] == "/api/v1/events"
     assert "scene_graph" not in bootstrap_payload["scene"]
     assert "path" not in bootstrap_payload["path"]
+    assert "can_send_goal" in bootstrap_payload["control"]
+    assert isinstance(bootstrap_payload["control"]["goal_blockers"], list)
 
     assert state_payload["schema_version"] == 1
     assert state_payload["ts"] > 0

@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+
+class _FakeServiceManager:
+    def __init__(self):
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def stop(self, *services: str) -> None:
+        self.calls.append(("stop", services))
+
+    def ensure(self, *services: str) -> None:
+        self.calls.append(("ensure", services))
+
+    def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+        self.calls.append(("wait_ready", services))
+        return True
+
+
+def test_super_lio_profile_starts_experimental_service(monkeypatch):
+    import core.service_manager as service_manager
+    from core.blueprints.stacks.slam import slam
+
+    fake = _FakeServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+
+    slam("super_lio", enable_visual_backup=False)
+
+    assert ("stop", ("slam", "slam_pgo", "localizer")) in fake.calls
+    assert ("ensure", ("lidar", "super_lio")) in fake.calls
+    assert ("wait_ready", ("lidar", "super_lio")) in fake.calls
+
+
+def test_fastlio2_profile_stops_super_lio_before_mapping(monkeypatch):
+    import core.service_manager as service_manager
+    from core.blueprints.stacks.slam import slam
+
+    fake = _FakeServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+
+    slam("fastlio2", enable_visual_backup=False)
+
+    assert ("stop", ("localizer", "super_lio")) in fake.calls
+    assert ("ensure", ("slam", "slam_pgo")) in fake.calls

@@ -42,7 +42,10 @@ def register_session_routes(app, gw) -> None:
     )
     async def session_start(body: dict):
         mode = (body.get("mode") or "").strip().lower()
-        map_name = body.get("map_name", "") or ""
+        map_name = body.get("map_name") or body.get("map") or ""
+        slam_profile = (
+            body.get("slam_profile") or body.get("slam_backend") or ""
+        ).strip().lower()
         if mode not in ("mapping", "navigating", "exploring"):
             return JSONResponse(
                 {
@@ -50,6 +53,17 @@ def register_session_routes(app, gw) -> None:
                     "message": (
                         f"Unknown mode: {mode!r}. "
                         "Use 'mapping' | 'navigating' | 'exploring'."
+                    ),
+                },
+                status_code=400,
+            )
+        if slam_profile and slam_profile not in ("fastlio2", "localizer", "super_lio"):
+            return JSONResponse(
+                {
+                    "success": False,
+                    "message": (
+                        f"Unknown slam_profile: {slam_profile!r}. "
+                        "Use 'fastlio2' | 'localizer' | 'super_lio'."
                     ),
                 },
                 status_code=400,
@@ -139,15 +153,26 @@ def register_session_routes(app, gw) -> None:
             from core.service_manager import get_service_manager
 
             svc = get_service_manager()
-            if mode == "mapping" or mode == "exploring":
-                svc.stop("localizer")
+            backend = slam_profile or (
+                "localizer" if mode == "navigating" else "fastlio2"
+            )
+            if backend == "super_lio":
+                svc.stop("slam", "slam_pgo", "localizer")
+                svc.ensure("lidar", "super_lio")
+                ok = svc.wait_ready("lidar", "super_lio", timeout=10.0)
+                if mode == "mapping" or mode == "exploring":
+                    with gw._map_cloud_lock:
+                        gw._map_points = None
+                        gw._voxel_hits.clear()
+            elif mode == "mapping" or mode == "exploring":
+                svc.stop("localizer", "super_lio")
                 svc.ensure("slam", "slam_pgo")
                 ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
                 with gw._map_cloud_lock:
                     gw._map_points = None
                     gw._voxel_hits.clear()
             else:
-                svc.stop("slam_pgo")
+                svc.stop("slam_pgo", "super_lio")
                 svc.ensure("slam", "localizer")
                 ok = svc.wait_ready("slam", "localizer", timeout=10.0)
             if not ok:
@@ -157,7 +182,7 @@ def register_session_routes(app, gw) -> None:
                     status_code=500,
                 )
 
-            if mode == "navigating" and map_name:
+            if mode == "navigating" and map_name and backend != "super_lio":
                 gw._spawn_auto_relocalize(map_name)
 
             if mode == "exploring":
@@ -173,6 +198,9 @@ def register_session_routes(app, gw) -> None:
 
             gw._session_mode = mode
             gw._session_map = map_name if mode == "navigating" else None
+            gw._session_slam_profile = backend
+            gw._cached_slam_profile = backend
+            gw._slam_profile_ts = time.time()
             gw._session_since = time.time()
             gw.push_event({"type": "session", "data": gw._session_snapshot()})
             return {"success": True, "session": gw._session_snapshot()}
@@ -214,9 +242,12 @@ def register_session_routes(app, gw) -> None:
             from core.service_manager import get_service_manager
 
             svc = get_service_manager()
-            svc.stop("slam_pgo", "localizer", "slam")
+            svc.stop("super_lio", "slam_pgo", "localizer", "slam")
             gw._session_mode = "idle"
             gw._session_map = None
+            gw._session_slam_profile = "stopped"
+            gw._cached_slam_profile = "stopped"
+            gw._slam_profile_ts = time.time()
             gw._session_since = time.time()
             gw._session_error = ""
             gw.push_event({"type": "session", "data": gw._session_snapshot()})

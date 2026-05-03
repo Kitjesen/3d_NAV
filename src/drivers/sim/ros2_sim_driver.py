@@ -9,8 +9,7 @@ Usage::
 
     from drivers.sim.ros2_sim_driver import ROS2SimDriverModule
     bp.add(ROS2SimDriverModule,
-           node_name="lingtu_ros2_driver",
-           spin_rate=100.0)
+           node_name="lingtu_ros2_driver")
 """
 
 from __future__ import annotations
@@ -85,6 +84,8 @@ class ROS2SimDriverModule(Module, layer=1):
     ):
         super().__init__(**kw)
         self._node_name = node_name
+        # Kept for config/status compatibility. rclpy callbacks are handled by
+        # the shared executor, not a private per-module spin loop.
         self._spin_rate = spin_rate
         self._odom_topic = odom_topic
         self._cloud_topic = cloud_topic
@@ -96,12 +97,15 @@ class ROS2SimDriverModule(Module, layer=1):
         self._enable_camera = enable_camera
 
         self._node = None
+        self._executor = None
         self._pub_cmd_vel = None
-        self._spin_thread: threading.Thread | None = None
         self._running = False
         self._stopped = False
+        self._cloud_worker_lock = threading.Lock()
+        self._cloud_worker_thread: threading.Thread | None = None
+        self._cloud_worker_drops = 0
 
-        # Latest command, written by Module cmd_vel callback, read by spin thread
+        # Latest command, written by Module cmd_vel callback.
         self._cmd_vx = 0.0
         self._cmd_vy = 0.0
         self._cmd_wz = 0.0
@@ -110,37 +114,61 @@ class ROS2SimDriverModule(Module, layer=1):
         self.cmd_vel.subscribe(self._on_cmd_vel)
         self.stop_signal.subscribe(self._on_stop)
 
+        node = None
+        executor = None
         try:
-            import rclpy
             from geometry_msgs.msg import TwistStamped
             from nav_msgs.msg import Odometry as ROS2Odom
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
             from sensor_msgs.msg import CameraInfo, PointCloud2
             from sensor_msgs.msg import Image as ROS2Image
+            try:
+                from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+            except Exception:
+                MutuallyExclusiveCallbackGroup = None
 
-            if not rclpy.ok():
-                rclpy.init()
+            from core.ros2_context import ensure_rclpy, get_shared_executor
 
-            qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=self._qos_depth)
+            ensure_rclpy()
 
-            self._node = Node(self._node_name)
+            control_qos = QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                depth=self._qos_depth,
+            )
+            sensor_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                depth=1,
+            )
+
+            node = Node(self._node_name)
+            executor = get_shared_executor()
+            executor.add_node(node)
+            odom_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
+            cloud_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
+            camera_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
+            control_group = MutuallyExclusiveCallbackGroup() if MutuallyExclusiveCallbackGroup else None
 
             # Always-on subscribers (low bandwidth)
-            self._node.create_subscription(
-                ROS2Odom, self._odom_topic, self._on_ros2_odom, qos)
-            self._node.create_subscription(
-                PointCloud2, self._cloud_topic, self._on_ros2_cloud, qos)
+            self._create_subscription(
+                node, ROS2Odom, self._odom_topic, self._on_ros2_odom,
+                control_qos, callback_group=odom_group)
+            self._create_subscription(
+                node, PointCloud2, self._cloud_topic, self._on_ros2_cloud,
+                sensor_qos, callback_group=cloud_group)
 
             # Camera + depth — high bandwidth, only when explicitly enabled
             # (real-robot nav uses CameraBridgeModule which owns these topics)
             if self._enable_camera:
-                self._node.create_subscription(
-                    ROS2Image, self._image_topic, self._on_ros2_image, qos)
-                self._node.create_subscription(
-                    ROS2Image, self._depth_topic, self._on_ros2_depth, qos)
-                self._node.create_subscription(
-                    CameraInfo, self._info_topic, self._on_ros2_info, qos)
+                self._create_subscription(
+                    node, ROS2Image, self._image_topic, self._on_ros2_image,
+                    sensor_qos, callback_group=camera_group)
+                self._create_subscription(
+                    node, ROS2Image, self._depth_topic, self._on_ros2_depth,
+                    sensor_qos, callback_group=camera_group)
+                self._create_subscription(
+                    node, CameraInfo, self._info_topic, self._on_ros2_info,
+                    sensor_qos, callback_group=camera_group)
                 logger.info(
                     "ROS2SimDriverModule: camera subscriptions enabled "
                     "(%s, %s, %s)",
@@ -149,12 +177,16 @@ class ROS2SimDriverModule(Module, layer=1):
 
             # Goal pose subscriber — bridges ROS2 /nav/goal_pose to Module port
             from geometry_msgs.msg import PoseStamped as ROS2PoseStamped
-            self._node.create_subscription(
-                ROS2PoseStamped, "/nav/goal_pose", self._on_ros2_goal, qos)
+            self._create_subscription(
+                node, ROS2PoseStamped, "/nav/goal_pose", self._on_ros2_goal,
+                control_qos, callback_group=control_group)
 
             # Publisher
-            self._pub_cmd_vel = self._node.create_publisher(
-                TwistStamped, self._cmd_vel_topic, qos)
+            pub_cmd_vel = node.create_publisher(
+                TwistStamped, self._cmd_vel_topic, control_qos)
+            self._node = node
+            self._executor = executor
+            self._pub_cmd_vel = pub_cmd_vel
 
             logger.info(
                 "ROS2SimDriverModule: node '%s' created — odom=%s cloud=%s cmd_vel=%s",
@@ -162,38 +194,62 @@ class ROS2SimDriverModule(Module, layer=1):
             )
 
         except ImportError as e:
+            self._cleanup_ros2_node(node=node, executor=executor)
             logger.error("ROS2SimDriverModule: rclpy not available: %s", e)
         except Exception as e:
+            self._cleanup_ros2_node(node=node, executor=executor)
             logger.error("ROS2SimDriverModule: setup failed: %s", e)
 
     def start(self):
         super().start()
         if self._node is None:
+            self._running = False
             self.alive.publish(False)
             return
 
         self._running = True
-        self._spin_thread = threading.Thread(
-            target=self._spin_loop, name="ros2_sim_spin", daemon=True)
-        self._spin_thread.start()
         self.alive.publish(True)
-        logger.info("ROS2SimDriverModule: spin loop started at %.0f Hz", self._spin_rate)
+        logger.info("ROS2SimDriverModule: callbacks handled by shared ROS2 executor")
 
     def stop(self):
         self._running = False
-        if self._spin_thread:
-            self._spin_thread.join(timeout=3.0)
-            self._spin_thread = None
-        if self._node:
-            try:
-                self._node.destroy_node()
-            except Exception:
-                pass
-            self._node = None
+        if self._cloud_worker_thread and self._cloud_worker_thread.is_alive():
+            self._cloud_worker_thread.join(timeout=1.0)
+        self._cloud_worker_thread = None
+        self._cleanup_ros2_node()
         self.alive.publish(False)
         super().stop()
 
-    # -- ROS2 callbacks (called from spin thread) ----------------------------
+    def _cleanup_ros2_node(self, node=None, executor=None) -> None:
+        node = node if node is not None else self._node
+        executor = executor if executor is not None else self._executor
+        if node is not None:
+            try:
+                if executor is not None:
+                    executor.remove_node(node)
+            except Exception:
+                pass
+            try:
+                node.destroy_node()
+            except Exception:
+                pass
+        if node is self._node:
+            self._node = None
+        if executor is self._executor:
+            self._executor = None
+        self._pub_cmd_vel = None
+
+    @staticmethod
+    def _create_subscription(node, msg_type, topic, callback, qos, *, callback_group=None):
+        if callback_group is None:
+            return node.create_subscription(msg_type, topic, callback, qos)
+        try:
+            return node.create_subscription(
+                msg_type, topic, callback, qos, callback_group=callback_group)
+        except TypeError:
+            return node.create_subscription(msg_type, topic, callback, qos)
+
+    # -- ROS2 callbacks (called from shared executor) ------------------------
 
     def _on_ros2_odom(self, msg) -> None:
         """Convert ROS2 nav_msgs/Odometry → Module Odometry and publish."""
@@ -229,6 +285,31 @@ class ROS2SimDriverModule(Module, layer=1):
         self.odometry.publish(odom)
 
     def _on_ros2_cloud(self, msg) -> None:
+        self._submit_cloud_worker(lambda: self._process_ros2_cloud(msg))
+
+    def _submit_cloud_worker(self, task) -> bool:
+        if not self._running:
+            return False
+        if not self._cloud_worker_lock.acquire(blocking=False):
+            self._cloud_worker_drops += 1
+            return False
+
+        def run() -> None:
+            try:
+                if self._running:
+                    task()
+            finally:
+                self._cloud_worker_lock.release()
+
+        self._cloud_worker_thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="ros2_sim_driver_cloud",
+        )
+        self._cloud_worker_thread.start()
+        return True
+
+    def _process_ros2_cloud(self, msg) -> None:
         """Convert ROS2 sensor_msgs/PointCloud2 (XYZI, 16 bytes/pt) → Module PointCloud2."""
         try:
             n_pts = msg.width * msg.height
@@ -379,6 +460,8 @@ class ROS2SimDriverModule(Module, layer=1):
             self._cmd_wz = 0.0
             self._stopped = True
             self._publish_cmd_vel()
+            return
+        self._stopped = False
 
     # -- ROS2 publish helpers ------------------------------------------------
 
@@ -405,31 +488,6 @@ class ROS2SimDriverModule(Module, layer=1):
         except Exception as e:
             logger.warning("ROS2SimDriverModule: cmd_vel publish error: %s", e)
 
-    # -- Spin loop -----------------------------------------------------------
-
-    def _spin_loop(self) -> None:
-        """Drive rclpy.spin_once() at spin_rate Hz to deliver ROS2 callbacks."""
-        try:
-            import rclpy
-        except ImportError:
-            logger.error("ROS2SimDriverModule: rclpy unavailable in spin loop")
-            return
-
-        dt = 1.0 / self._spin_rate
-        while self._running and self._node is not None:
-            t0 = time.monotonic()
-            try:
-                rclpy.spin_once(self._node, timeout_sec=0.0)
-            except Exception as e:
-                logger.error("ROS2SimDriverModule: spin_once error: %s", e)
-                break
-            elapsed = time.monotonic() - t0
-            sleep_time = dt - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-
-        logger.info("ROS2SimDriverModule: spin loop ended")
-
     # -- Health --------------------------------------------------------------
 
     def health(self) -> dict[str, Any]:
@@ -442,6 +500,7 @@ class ROS2SimDriverModule(Module, layer=1):
             "odom_topic": self._odom_topic,
             "cloud_topic": self._cloud_topic,
             "cmd_vel_topic": self._cmd_vel_topic,
+            "cloud_worker_drops": self._cloud_worker_drops,
         }
         return info
 

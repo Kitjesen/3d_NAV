@@ -37,6 +37,35 @@ def _safe_map_file(name: str, filename: str) -> pathlib.Path:
     return path
 
 
+def _write_binary_xyz_pcd(path: pathlib.Path, points: np.ndarray) -> int:
+    pts = np.asarray(points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] < 3:
+        raise ValueError(f"points must be shaped (N, >=3), got {pts.shape}")
+    pts = pts[:, :3]
+    valid = np.isfinite(pts).all(axis=1) & (np.abs(pts) < 500.0).all(axis=1)
+    pts = pts[valid]
+    if len(pts) == 0:
+        raise ValueError("no valid points to save")
+    header = (
+        "# .PCD v0.7 - Point Cloud Data file format\n"
+        "VERSION 0.7\n"
+        "FIELDS x y z\n"
+        "SIZE 4 4 4\n"
+        "TYPE F F F\n"
+        "COUNT 1 1 1\n"
+        f"WIDTH {len(pts)}\n"
+        "HEIGHT 1\n"
+        "VIEWPOINT 0 0 0 1 0 0 0\n"
+        f"POINTS {len(pts)}\n"
+        "DATA binary\n"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        f.write(header.encode("ascii"))
+        f.write(pts.astype("<f4", copy=False).tobytes())
+    return int(len(pts))
+
+
 def register_map_routes(app, gw) -> None:
     @app.get(
         "/api/v1/slam/maps",
@@ -373,6 +402,12 @@ def register_map_routes(app, gw) -> None:
         os.makedirs(save_dir, exist_ok=True)
         pcd_path = os.path.join(save_dir, "map.pcd")
         errors = []
+        save_source = "slam_service"
+        slam_profile = "unknown"
+        try:
+            slam_profile = gw._get_slam_profile()
+        except Exception:
+            slam_profile = getattr(gw, "_session_slam_profile", "unknown")
 
         ros_env = (
             "source /opt/ros/humble/setup.bash && "
@@ -416,6 +451,22 @@ def register_map_routes(app, gw) -> None:
         except Exception:
             pass
 
+        if not os.path.isfile(pcd_path) and slam_profile == "super_lio":
+            try:
+                with gw._map_cloud_lock:
+                    pts = None if gw._map_points is None else gw._map_points.copy()
+                if pts is None or len(pts) == 0:
+                    errors.append("Super-LIO: live map_cloud snapshot unavailable")
+                else:
+                    point_count = _write_binary_xyz_pcd(pathlib.Path(pcd_path), pts)
+                    save_source = "live_map_cloud_snapshot"
+                    errors.append(
+                        "Super-LIO: saved live map_cloud snapshot "
+                        f"({point_count} points); relocalize service is unsupported"
+                    )
+            except Exception as e:
+                errors.append(f"Super-LIO snapshot: {e}")
+
         dufo_result = apply_dynamic_filter_step1half(save_dir)
 
         has_pcd = os.path.isfile(pcd_path)
@@ -426,9 +477,15 @@ def register_map_routes(app, gw) -> None:
                 "name": name,
                 "path": save_dir,
                 "size": f"{size / 1024 / 1024:.1f}MB",
+                "slam_profile": slam_profile,
+                "source": save_source,
+                "map_save_source": save_source,
+                "relocalization_supported": slam_profile != "super_lio",
             }
             if dufo_result is not None:
                 resp["dynamic_filter"] = dufo_result
+            if errors:
+                resp["warnings"] = errors
             return resp
         return JSONResponse(
             {"success": False, "name": name, "errors": errors},

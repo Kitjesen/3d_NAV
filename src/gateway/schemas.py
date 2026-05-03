@@ -327,6 +327,14 @@ class LocalizationStatusResponse(GatewayResponseModel):
     icp_quality: float = 0.0
     reported_state: Any = None
     confidence: float | None = None
+    algorithm_healthy: bool = False
+    backend: str | None = None
+    health_source: str | None = None
+    pose_fresh: bool | None = None
+    pose_freshness: str = "unknown"
+    stale_odometry: bool = False
+    odom_age_ms: float | None = None
+    cloud_age_ms: float | None = None
     degeneracy: str | None = None
     icp_fitness: float | None = None
     effective_ratio: float | None = None
@@ -335,11 +343,24 @@ class LocalizationStatusResponse(GatewayResponseModel):
     pos_cov_trace: float | None = None
     ieskf_iter_num: int | None = None
     ieskf_converged: bool | None = None
+    map_cloud_fresh: bool | None = None
+    map_state: str | None = None
+    map_save_supported: bool | None = None
+    map_save_source: str | None = None
+    relocalization_supported: bool = True
+    relocalization_state: str | None = None
+    recovery_signal: str | None = None
+    recovery_action: str | None = None
     localizer_health: str | None = None
+    localizer_health_raw: str | None = None
+    localizer_health_source: str | None = None
+    localizer_health_topic_age_ms: float | None = None
     localizer_health_fitness: float | None = None
     localizer_health_iter: int | None = None
     localizer_health_cov_trace: float | None = None
     ts: float | None = None
+    diag_received_ts: float | None = None
+    diag_age_ms: float | None = None
     can_relocalize: bool = False
     reasons: list[str] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -379,6 +400,9 @@ class NavigationLocalizationSummary(GatewayResponseModel):
     state: str | None = None
     ready: bool | None = None
     degraded: bool = False
+    algorithm_healthy: bool | None = None
+    pose_fresh: bool | None = None
+    pose_freshness: str | None = None
     speed_scale: float | None = None
     reasons: list[str] = Field(default_factory=list)
 
@@ -437,6 +461,9 @@ class NavigationStatusResponse(GatewayResponseModel):
 
 class SessionResponse(GatewayResponseModel):
     mode: str
+    slam_profile: str = "stopped"
+    localization_backend: str | None = None
+    health_source: str | None = None
     active_map: str | None = None
     map_has_pcd: bool = False
     map_has_tomogram: bool = False
@@ -445,11 +472,23 @@ class SessionResponse(GatewayResponseModel):
     error: str = ""
     icp_quality: float | None = None
     localizer_ready: bool = False
+    localizer_algorithm_healthy: bool = False
+    pose_fresh: bool | None = None
+    pose_freshness: str = "unknown"
+    map_state: str | None = None
+    map_save_supported: bool = False
+    map_save_source: str | None = None
+    relocalization_supported: bool = True
+    relocalization_state: str | None = None
+    recovery_signal: str | None = None
+    recovery_action: str | None = None
     can_start_mapping: bool = False
     can_start_navigating: bool = False
     can_start_exploring: bool = False
     can_end: bool = False
     explorer_available: bool = False
+    explorer_unavailable_reason: str | None = None
+    explorer_required_profile: str | None = None
 
 
 class SessionTransitionResponse(GatewayResponseModel):
@@ -513,6 +552,9 @@ class ExplorationStatusResponse(GatewayResponseModel):
     available: bool
     exploring: bool = False
     frontier_count: int = 0
+    reason: str | None = None
+    required_profile: str | None = None
+    action: str | None = None
 
 
 class SlamStatusResponse(GatewayResponseModel):

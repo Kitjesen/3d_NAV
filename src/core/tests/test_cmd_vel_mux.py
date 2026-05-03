@@ -119,6 +119,10 @@ class TestCmdVelMux(unittest.TestCase):
         """Initially no source is active."""
         mux = self._make_mux()
         self.assertEqual(mux._active, "")
+        h = mux.health()
+        self.assertEqual(h["active_source"], "none")
+        self.assertFalse(h["sources"]["teleop"]["active"])
+        self.assertIsNone(h["sources"]["teleop"]["age_ms"])
 
     def test_health_report(self):
         """Health report shows all sources and active state."""
@@ -128,6 +132,8 @@ class TestCmdVelMux(unittest.TestCase):
         self.assertEqual(h["active_source"], "teleop")
         self.assertIn("teleop", h["sources"])
         self.assertTrue(h["sources"]["teleop"]["active"])
+        self.assertIsNotNone(h["sources"]["teleop"]["age_ms"])
+        self.assertIsNone(h["sources"]["path_follower"]["age_ms"])
 
     def test_active_source_published(self):
         """active_source Out port publishes on source change."""

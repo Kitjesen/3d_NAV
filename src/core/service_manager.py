@@ -25,6 +25,12 @@ SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "slam": ("robot-fastlio2.service", "slam.service", "slam"),
     "slam_pgo": ("robot-pgo.service", "slam_pgo.service", "slam_pgo"),
     "localizer": ("robot-localizer.service", "localizer.service", "localizer"),
+    "super_lio": (
+        "robot-super-lio.service",
+        "super_lio.service",
+        "super-lio.service",
+        "super_lio",
+    ),
 }
 
 
@@ -166,5 +172,6 @@ SERVICES_LIDAR = ["lidar"]
 SERVICES_SLAM = ["slam"]
 SERVICES_SLAM_MAPPING = ["slam", "slam_pgo"]
 SERVICES_SLAM_NAV = ["slam", "localizer"]
+SERVICES_SUPER_LIO = ["lidar", "super_lio"]
 SERVICES_CAMERA = ["camera"]
 SERVICES_HARDWARE = SERVICES_LIDAR + SERVICES_CAMERA

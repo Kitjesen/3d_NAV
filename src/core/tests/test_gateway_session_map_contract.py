@@ -175,9 +175,121 @@ def test_session_routes_validate_idle_contracts():
     ended = SessionTransitionResponse.model_validate(end_payload)
 
     assert session.mode == "idle"
+    assert session.explorer_available is False
+    assert session.explorer_unavailable_reason == "frontier_explorer_not_running"
+    assert session.explorer_required_profile == "explore"
     assert ended.success is True
     assert ended.session is not None
     assert ended.session.mode == "idle"
+
+
+def test_session_start_accepts_legacy_map_field(monkeypatch):
+    import core.service_manager as service_manager
+    import gateway.routes.session as session_routes
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionTransitionResponse
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+    fake_service_manager = FakeServiceManager()
+    monkeypatch.setattr(
+        service_manager, "get_service_manager", lambda: fake_service_manager
+    )
+    monkeypatch.setattr(session_routes.os, "symlink", lambda src, dst: None)
+
+    root = Path.cwd() / ".tmp_gateway_tests" / uuid.uuid4().hex
+    try:
+        monkeypatch.setenv("HOME", str(root))
+        monkeypatch.setenv("USERPROFILE", str(root))
+        map_dir = root / "data" / "nova" / "maps" / "demo"
+        map_dir.mkdir(parents=True)
+        (map_dir / "map.pcd").write_bytes(b"pcd")
+        (map_dir / "tomogram.pickle").write_bytes(b"tomogram")
+
+        gateway = GatewayModule()
+        gateway.setup()
+        monkeypatch.setattr(gateway, "_spawn_auto_relocalize", lambda _: None)
+
+        payload = asyncio.run(
+            _endpoint(gateway, "/api/v1/session/start")(
+                {"mode": "navigating", "map": "demo"}
+            )
+        )
+
+        transition = SessionTransitionResponse.model_validate(payload)
+        assert transition.success is True
+        assert transition.session is not None
+        assert transition.session.mode == "navigating"
+        assert gateway._session_map == "demo"
+        assert ("ensure", ("slam", "localizer")) in fake_service_manager.calls
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_session_start_can_select_super_lio_backend(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionTransitionResponse
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+            self.services = {
+                "lidar": "running",
+                "slam": "stopped",
+                "slam_pgo": "stopped",
+                "localizer": "stopped",
+                "super_lio": "running",
+            }
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+        def status(self, *names):
+            return {name: self.services.get(name, "stopped") for name in names}
+
+    fake_service_manager = FakeServiceManager()
+    monkeypatch.setattr(
+        service_manager, "get_service_manager", lambda: fake_service_manager
+    )
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    payload = asyncio.run(
+        _endpoint(gateway, "/api/v1/session/start")(
+            {"mode": "mapping", "slam_profile": "super_lio"}
+        )
+    )
+
+    transition = SessionTransitionResponse.model_validate(payload)
+    assert transition.success is True
+    assert transition.session is not None
+    assert transition.session.mode == "mapping"
+    assert transition.session.slam_profile == "super_lio"
+    assert gateway._session_slam_profile == "super_lio"
+    assert ("stop", ("slam", "slam_pgo", "localizer")) in fake_service_manager.calls
+    assert ("ensure", ("lidar", "super_lio")) in fake_service_manager.calls
+    assert ("wait_ready", ("lidar", "super_lio")) in fake_service_manager.calls
 
 
 def test_map_routes_validate_json_contracts(monkeypatch):
@@ -232,6 +344,50 @@ def test_map_routes_validate_json_contracts(monkeypatch):
         assert missing_manager.error == "MapManagerModule not running"
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_map_save_falls_back_to_super_lio_live_cloud_snapshot(monkeypatch, tmp_path):
+    import numpy as np
+    import gateway.routes.maps as map_routes
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import MapLifecycleResponse
+
+    class FakeCompleted:
+        stdout = ""
+        stderr = "service unavailable"
+
+    monkeypatch.setenv("NAV_MAP_DIR", str(tmp_path))
+    monkeypatch.setattr(map_routes.subprocess, "run", lambda *a, **k: FakeCompleted())
+    monkeypatch.setattr(
+        map_routes,
+        "apply_dynamic_filter_step1half",
+        lambda _save_dir: {"success": False, "skipped": True},
+    )
+
+    gateway = GatewayModule()
+    gateway.setup()
+    monkeypatch.setattr(gateway, "_get_slam_profile", lambda: "super_lio")
+    with gateway._map_cloud_lock:
+        gateway._map_points = np.array(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            dtype=np.float32,
+        )
+
+    payload = asyncio.run(
+        _endpoint(gateway, "/api/v1/map/save")({"name": "super_lio_demo"})
+    )
+    model = MapLifecycleResponse.model_validate(payload)
+    pcd_path = tmp_path / "super_lio_demo" / "map.pcd"
+
+    assert model.success is True
+    assert payload["slam_profile"] == "super_lio"
+    assert payload["source"] == "live_map_cloud_snapshot"
+    assert payload["relocalization_supported"] is False
+    assert pcd_path.is_file()
+    data = pcd_path.read_bytes()
+    assert b"FIELDS x y z" in data
+    assert b"DATA binary\n" in data
+    assert len(data.split(b"DATA binary\n", 1)[1]) == 2 * 3 * 4
 
 
 def test_maps_route_accepts_legacy_and_canonical_actions():
@@ -327,8 +483,17 @@ def test_operational_routes_validate_idle_json_contracts():
     assert semantic_ok.count == 1
     assert semantic.error == "embedding required"
     assert explore_status.available is False
+    assert explore_status.reason == "frontier_explorer_not_running"
+    assert explore_status.required_profile == "explore"
     assert explore_start.error == "WavefrontFrontierExplorer not running"
-    assert slam_status.mode in {"fastlio2", "localizer", "slam_only", "stopped"}
+    assert explore_start.detail["reason"] == "frontier_explorer_not_running"
+    assert slam_status.mode in {
+        "fastlio2",
+        "localizer",
+        "slam_only",
+        "stopped",
+        "super_lio",
+    }
     assert slam_switch.success is False
     assert bag_status.recording is False
     assert bag_stop.error == "not_recording"
@@ -345,7 +510,7 @@ def test_slam_status_uses_logical_service_states(monkeypatch):
             self._services = services
 
         def status(self, *names):
-            assert names == ("lidar", "slam", "slam_pgo", "localizer")
+            assert names == ("lidar", "slam", "slam_pgo", "localizer", "super_lio")
             return dict(self._services)
 
     gateway = GatewayModule()
@@ -361,6 +526,7 @@ def test_slam_status_uses_logical_service_states(monkeypatch):
                 "slam": "running",
                 "slam_pgo": "stopped",
                 "localizer": "running",
+                "super_lio": "stopped",
             }
         ),
     )
@@ -377,11 +543,63 @@ def test_slam_status_uses_logical_service_states(monkeypatch):
                 "slam": "running",
                 "slam_pgo": "stopped",
                 "localizer": "stopped",
+                "super_lio": "stopped",
             }
         ),
     )
     fastlio_payload = asyncio.run(endpoint())
     assert fastlio_payload["mode"] == "fastlio2"
+
+    monkeypatch.setattr(
+        service_manager,
+        "get_service_manager",
+        lambda: _FakeServiceManager(
+            {
+                "lidar": "running",
+                "slam": "stopped",
+                "slam_pgo": "stopped",
+                "localizer": "stopped",
+                "super_lio": "running",
+            }
+        ),
+    )
+    super_lio_payload = asyncio.run(endpoint())
+    assert super_lio_payload["mode"] == "super_lio"
+    assert super_lio_payload["services"]["super_lio"] == "running"
+
+
+def test_slam_switch_can_select_super_lio(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+
+    class _FakeServiceManager:
+        def __init__(self):
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def stop(self, *names):
+            self.calls.append(("stop", names))
+
+        def ensure(self, *names):
+            self.calls.append(("ensure", names))
+
+        def wait_ready(self, *names, timeout: float = 15.0):
+            self.calls.append(("wait_ready", names))
+            return True
+
+    fake = _FakeServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    endpoint = _endpoint(gateway, "/api/v1/slam/switch")
+
+    payload = asyncio.run(endpoint({"profile": "super_lio"}))
+
+    assert payload["success"] is True
+    assert payload["profile"] == "super_lio"
+    assert ("stop", ("slam", "slam_pgo", "localizer")) in fake.calls
+    assert ("ensure", ("lidar", "super_lio")) in fake.calls
+    assert ("wait_ready", ("lidar", "super_lio")) in fake.calls
 
 
 def test_temporal_memory_response_accepts_observation_rows():
