@@ -57,6 +57,58 @@ def test_lingtu_doctor_reports_standard_quality_topic_with_legacy_hint():
     assert "legacy; remap to /nav/localization_quality" in text
 
 
+def test_lingtu_doctor_json_gates_runtime_readiness_freshness():
+    text = _read("scripts/lingtu")
+
+    assert "gateway.slam_stream" in text
+    assert "gateway.localization_status" in text
+    assert "LINGTU_DOCTOR_MIN_SLAM_HZ" in text
+    assert "LINGTU_DOCTOR_MAX_ODOM_AGE_MS" in text
+    assert "LINGTU_DOCTOR_MAX_LOC_DIAG_AGE_MS" in text
+    assert "LINGTU_DOCTOR_MAX_LOCALIZER_HEALTH_AGE_MS" in text
+    assert "odom_age_ms" in text
+    assert "diag_age_ms" in text
+    assert "localizer_health_topic_age_ms" in text
+    assert "map_cloud_fresh=false" in text
+
+
+def test_lingtu_doctor_realtime_smoke_is_explicit_non_motion_gate():
+    text = _read("scripts/lingtu")
+
+    assert "Usage: lingtu doctor [--non-motion] [--json] [--strict] [--realtime]" in text
+    assert "--realtime) realtime=1" in text
+    assert "gateway.realtime_sse" in text
+    assert "gateway.websocket_camera" in text
+    assert "gateway.websocket_cloud" in text
+    assert 'ws_smoke("/ws/camera", b"\\xff\\xd8\\xff"' in text
+    assert 'ws_smoke("/ws/cloud", b"PCL"' in text
+
+
+def test_lingtu_doctor_normalizes_structured_active_command_source():
+    text = _read("scripts/lingtu")
+
+    assert "def command_source_name(control):" in text
+    assert 'source.get("name") or source.get("source") or source.get("owner") or "none"' in text
+    assert 'isinstance(s,dict)' in text
+
+
+def test_lingtu_slamcheck_writes_float_relocation_initial_pose():
+    text = _read("scripts/lingtu")
+
+    assert "initial_pose=$(printf '[%.6f,%.6f,0.0,0.0,0.0,%.6f]'" in text
+    assert "SUPER_LIO_RELOCATION_INIT_POSE=${initial_pose:-[0.0,0.0,0.0,0.0,0.0,0.0]}" in text
+    assert "SUPER_LIO_RELOCATION_INIT_POSE=[0,0,0.0,0.0,0.0,0]" not in text
+
+
+def test_super_lio_relocation_service_uses_active_map_and_float_pose():
+    text = _read("scripts/deploy/s100p/super_lio_relocation.service")
+
+    assert "Environment=SUPER_LIO_RELOCATION_MAP_DIR=/home/sunrise/data/nova/maps/active" in text
+    assert "Environment=SUPER_LIO_RELOCATION_INIT_POSE=[0.0,0.0,0.0,0.0,0.0,0.0]" in text
+    assert '-p "lio.relocation.init_pose:=$${SUPER_LIO_RELOCATION_INIT_POSE}"' in text
+    assert '-p "lio.map.save_map_dir:=$${EFFECTIVE_MAP_DIR}"' in text
+
+
 def test_camera_deployment_retires_legacy_units():
     install = _read("docs/04-deployment/services/install.sh")
     readme = _read("docs/04-deployment/README.md")

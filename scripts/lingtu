@@ -39,6 +39,8 @@
 #   lingtu svc restart super_lio # restart robot-super-lio.service
 #   lingtu svc restart all     # restart robot-lidar + SLAM + localizer + lingtu
 #   lingtu doctor              # read-only service/topic/Gateway diagnostics
+#   lingtu doctor --non-motion --json --strict
+#   lingtu slamcheck super_lio # switch, verify Super-LIO Gateway contract, rollback
 set -u
 GW="${GW:-http://localhost:5050}"
 MAP_DIR="${MAP_DIR:-$HOME/data/nova/maps}"
@@ -287,6 +289,8 @@ svc_unit() {
         localizer)  echo "robot-localizer.service" ;;
         super_lio|super-lio|superlio)
                     echo "robot-super-lio.service" ;;
+        super_lio_relocation|super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation)
+                    echo "robot-super-lio-relocation.service" ;;
         lingtu|app) echo "lingtu.service" ;;
         robot-*.service|lingtu.service)
                     echo "$1" ;;
@@ -311,7 +315,7 @@ print_service_row() {
 
 warn_legacy_services() {
     local legacy active=()
-    for legacy in lidar.service camera.service orbbec-camera.service slam.service localizer.service slam_pgo.service super_lio.service super-lio.service; do
+    for legacy in lidar.service camera.service orbbec-camera.service slam.service localizer.service slam_pgo.service super_lio.service super-lio.service super_lio_relocation.service super_lio_reloc.service super-lio-relocation.service super-lio-reloc.service; do
         if [ "$(systemctl is-active "$legacy" 2>/dev/null || true)" = "active" ]; then
             active+=("$legacy")
         fi
@@ -331,27 +335,29 @@ cmd_svc() {
             print_service_row robot-fastlio2.service slam
             print_service_row robot-localizer.service localizer
             print_service_row robot-super-lio.service super_lio
+            print_service_row robot-super-lio-relocation.service super_lio_relocation
             print_service_row lingtu.service lingtu
             warn_legacy_services ;;
         restart)
             local target="${2:-}"
             case "$target" in
-                all)    sudo systemctl restart robot-lidar.service robot-fastlio2.service robot-localizer.service lingtu.service
-                        echo "robot LiDAR + SLAM + localizer + lingtu restarted" ;;
+                all)    sudo systemctl stop robot-super-lio-relocation.service robot-super-lio.service
+                        sudo systemctl restart robot-lidar.service robot-fastlio2.service robot-localizer.service lingtu.service
+                        echo "robot LiDAR + SLAM + localizer + lingtu restarted; Super-LIO services stopped" ;;
                 *)
                         local unit
-                        unit=$(svc_unit "$target") || { echo "Usage: lingtu svc restart [lidar|slam|localizer|super_lio|lingtu|camera|brainstem|all]"; exit 1; }
+                        unit=$(svc_unit "$target") || { echo "Usage: lingtu svc restart [lidar|slam|localizer|super_lio|super_lio_relocation|lingtu|camera|brainstem|all]"; exit 1; }
                         sudo systemctl restart "$unit"
                         echo "$unit restarted" ;;
             esac ;;
         stop)
             local target="${2:-all}"
             case "$target" in
-                all) sudo systemctl stop lingtu.service robot-super-lio.service robot-localizer.service robot-fastlio2.service robot-lidar.service
-                     echo "robot LiDAR + SLAM + localizer + Super-LIO + lingtu stopped" ;;
+                all) sudo systemctl stop lingtu.service robot-super-lio-relocation.service robot-super-lio.service robot-localizer.service robot-fastlio2.service robot-lidar.service
+                     echo "robot LiDAR + SLAM + localizer + Super-LIO + relocation + lingtu stopped" ;;
                 *)
                     local unit
-                    unit=$(svc_unit "$target") || { echo "Usage: lingtu svc stop [lidar|slam|localizer|super_lio|lingtu|camera|brainstem|all]"; exit 1; }
+                    unit=$(svc_unit "$target") || { echo "Usage: lingtu svc stop [lidar|slam|localizer|super_lio|super_lio_relocation|lingtu|camera|brainstem|all]"; exit 1; }
                     sudo systemctl stop "$unit"; echo "$unit stopped" ;;
             esac ;;
         *) echo "Usage: lingtu svc [status|restart <target>|stop <target>]"; exit 1 ;;
@@ -359,21 +365,626 @@ cmd_svc() {
 }
 
 # ── Subcommand: log ──
-# -- Subcommand: doctor --
-cmd_doctor() {
-    echo -e "${B}=== Lingtu Doctor @ $(date '+%H:%M:%S') ===${N}"
-    echo -e "${B}[1] Services${N}"
-    cmd_svc status
+doctor_usage() {
+    echo "Usage: lingtu doctor [--non-motion] [--json] [--strict] [--realtime]"
+}
 
+source_robot_env() {
     set +u
     [ -f /opt/ros/humble/setup.bash ] && source /opt/ros/humble/setup.bash >/dev/null 2>&1
     [ -f /opt/lingtu/current/install/setup.bash ] && source /opt/lingtu/current/install/setup.bash >/dev/null 2>&1
     set -u
+}
+
+cmd_doctor_json() {
+    local strict="${1:-0}" non_motion="${2:-0}" realtime="${3:-0}"
+    python3 - "$GW" "$strict" "$non_motion" "$realtime" <<'PY'
+import asyncio
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from collections import Counter
+from urllib.parse import urlparse
+
+gw = sys.argv[1].rstrip("/")
+strict = sys.argv[2] == "1"
+non_motion = sys.argv[3] == "1"
+realtime = sys.argv[4] == "1"
+checks = []
+
+
+def env_float(name, default):
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+MIN_SLAM_HZ = env_float("LINGTU_DOCTOR_MIN_SLAM_HZ", 1.0)
+MIN_MAP_POINTS = env_float("LINGTU_DOCTOR_MIN_MAP_POINTS", 1.0)
+MAX_ODOM_AGE_MS = env_float("LINGTU_DOCTOR_MAX_ODOM_AGE_MS", 1500.0)
+MAX_LOC_DIAG_AGE_MS = env_float("LINGTU_DOCTOR_MAX_LOC_DIAG_AGE_MS", 3000.0)
+MAX_LOCALIZER_HEALTH_AGE_MS = env_float("LINGTU_DOCTOR_MAX_LOCALIZER_HEALTH_AGE_MS", 3000.0)
+MAX_CLOUD_AGE_MS = env_float("LINGTU_DOCTOR_MAX_CLOUD_AGE_MS", 5000.0)
+MIN_LOCALIZATION_CONFIDENCE = env_float("LINGTU_DOCTOR_MIN_LOCALIZATION_CONFIDENCE", 0.5)
+REALTIME_TIMEOUT_S = env_float("LINGTU_DOCTOR_REALTIME_TIMEOUT_S", 6.0)
+
+
+def run(args, timeout=3):
+    try:
+        proc = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", "not found"
+    except subprocess.TimeoutExpired as exc:
+        return 124, (exc.stdout or "").strip(), "timeout"
+
+
+def http_json(path, timeout=3):
+    url = path if path.startswith("http") else f"{gw}{path}"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read(2_000_000).decode("utf-8", "replace")
+            code = resp.getcode()
+    except urllib.error.HTTPError as exc:
+        body = exc.read(2_000_000).decode("utf-8", "replace")
+        code = exc.code
+    except Exception as exc:
+        return None, None, str(exc)
+    try:
+        return code, json.loads(body or "{}"), None
+    except Exception as exc:
+        return code, None, f"invalid json: {exc}"
+
+
+def as_float(value):
+    try:
+        if value in (None, "", "unknown", "null"):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "ok", "ready", "active"}
+    return bool(value)
+
+
+def command_source_name(control):
+    source = control.get("active_cmd_source")
+    if source in (None, "", "unknown"):
+        source = control.get("active_source")
+    if isinstance(source, dict):
+        source = source.get("name") or source.get("source") or source.get("owner") or "none"
+    if source in (None, ""):
+        return "none"
+    return str(source)
+
+
+def check_age(payload, key, max_age_ms, blockers):
+    value = as_float(payload.get(key))
+    if value is None:
+        return None
+    if value > max_age_ms:
+        blockers.append(f"{key}>{max_age_ms:g}ms")
+    return value
+
+
+def sse_smoke(timeout_s):
+    url = f"{gw}/api/v1/events"
+    started = time.time()
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            lines = []
+            while time.time() - started < timeout_s and len(lines) < 12:
+                raw = resp.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", "replace").strip()
+                if line:
+                    lines.append(line[:200])
+                if line.startswith("data:"):
+                    return True, {"lines": lines, "first_data": line[:200]}
+            return False, {"lines": lines, "error": "no data line before timeout"}
+    except Exception as exc:
+        return False, {"error": repr(exc)}
+
+
+async def _ws_once(path, expected_prefix, timeout_s):
+    try:
+        import websockets
+    except Exception as exc:
+        return False, {"error": f"websockets unavailable: {exc}"}
+    parsed = urlparse(gw)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    url = f"{scheme}://{parsed.netloc}{path}"
+    try:
+        async with websockets.connect(url, max_size=8_000_000) as ws:
+            msg = await asyncio.wait_for(ws.recv(), timeout=timeout_s)
+            raw = msg.encode("utf-8") if isinstance(msg, str) else bytes(msg)
+            prefix_ok = raw.startswith(expected_prefix)
+            return prefix_ok, {"url": url, "bytes": len(raw), "prefix": raw[:3].hex()}
+    except Exception as exc:
+        return False, {"url": url, "error": repr(exc)}
+
+
+def ws_smoke(path, expected_prefix, timeout_s):
+    return asyncio.run(_ws_once(path, expected_prefix, timeout_s))
+
+
+def topic_counts(topic):
+    rc, out, err = run(["ros2", "topic", "info", topic], timeout=3)
+    pubs = 0
+    subs = 0
+    if rc == 127:
+        return None, None, "ros2 not found"
+    if rc != 0 and not out:
+        return 0, 0, err or f"ros2 topic info failed rc={rc}"
+    for line in out.splitlines():
+        if "Publisher count:" in line:
+            try:
+                pubs = int(line.rsplit(":", 1)[1].strip())
+            except ValueError:
+                pubs = 0
+        if "Subscription count:" in line:
+            try:
+                subs = int(line.rsplit(":", 1)[1].strip())
+            except ValueError:
+                subs = 0
+    return pubs, subs, None
+
+
+def add(check_id, status, level, message, evidence=None):
+    checks.append(
+        {
+            "id": check_id,
+            "status": status,
+            "level": level,
+            "message": message,
+            "evidence": evidence or {},
+        }
+    )
+
+
+canonical_services = [
+    "robot-lidar.service",
+    "robot-fastlio2.service",
+    "robot-localizer.service",
+    "lingtu.service",
+    "robot-camera.service",
+]
+for svc in canonical_services:
+    rc, out, err = run(["systemctl", "is-active", svc], timeout=2)
+    active = out.splitlines()[0] if out else "unknown"
+    if active == "active":
+        add(f"service.{svc}", "pass", "p0", f"{svc} is active", {"active": active})
+    elif svc == "robot-camera.service":
+        add(f"service.{svc}", "warn", "p1", f"{svc} is not active", {"active": active, "stderr": err})
+    else:
+        add(f"service.{svc}", "fail", "p0", f"{svc} is not active", {"active": active, "stderr": err})
+
+legacy_services = [
+    "lidar.service",
+    "slam.service",
+    "localizer.service",
+    "slam_pgo.service",
+    "super_lio.service",
+    "super-lio.service",
+    "super_lio_relocation.service",
+    "super_lio_reloc.service",
+    "super-lio-relocation.service",
+    "super-lio-reloc.service",
+]
+active_legacy = []
+for svc in legacy_services:
+    _, out, _ = run(["systemctl", "is-active", svc], timeout=2)
+    if out.splitlines()[:1] == ["active"]:
+        active_legacy.append(svc)
+if active_legacy:
+    add(
+        "service.legacy_conflicts",
+        "fail",
+        "p0",
+        "legacy SLAM/LiDAR/localizer services are active",
+        {"active": active_legacy},
+    )
+else:
+    add("service.legacy_conflicts", "pass", "p0", "no active legacy localization services")
+
+rc, nodes_out, nodes_err = run(["ros2", "node", "list"], timeout=5)
+if rc == 127:
+    add("ros.nodes", "fail", "p0", "ros2 CLI not found", {"stderr": nodes_err})
+else:
+    nodes = [line.strip() for line in nodes_out.splitlines() if line.strip()]
+    critical = {
+        "/livox_driver_node",
+        "/lio_node",
+        "/super_lio_node",
+        "/relocation_node",
+        "/localizer_node",
+        "/camera/camera",
+        "/camera/camera_container",
+    }
+    counts = Counter(nodes)
+    dup = sorted(node for node, count in counts.items() if count > 1 and node in critical)
+    if dup:
+        add("ros.duplicate_nodes", "fail", "p0", "duplicate critical ROS nodes detected", {"duplicates": dup})
+    else:
+        add("ros.duplicate_nodes", "pass", "p0", "no duplicate critical ROS nodes", {"count": len(nodes)})
+
+required_topics = ["/nav/lidar_scan", "/nav/imu", "/nav/odometry", "/nav/localization_health"]
+for topic in required_topics:
+    pubs, subs, err = topic_counts(topic)
+    if err == "ros2 not found":
+        add(f"topic.{topic}", "fail", "p0", "ros2 CLI not found", {"topic": topic})
+        continue
+    if pubs is None:
+        add(f"topic.{topic}", "fail", "p0", f"could not inspect {topic}", {"error": err})
+    elif pubs == 0:
+        add(f"topic.{topic}", "fail", "p0", f"{topic} has no publishers", {"publishers": pubs, "subscribers": subs, "error": err})
+    elif topic in {"/nav/lidar_scan", "/nav/imu", "/nav/odometry"} and pubs > 1:
+        add(f"topic.{topic}", "fail", "p0", f"{topic} has duplicate publishers", {"publishers": pubs, "subscribers": subs})
+    else:
+        add(f"topic.{topic}", "pass", "p0", f"{topic} has publishers", {"publishers": pubs, "subscribers": subs})
+
+for topic in ["/nav/map_cloud", "/nav/saved_map_cloud"]:
+    pubs, subs, err = topic_counts(topic)
+    if pubs is None:
+        add(f"topic.{topic}", "warn", "p1", f"could not inspect {topic}", {"error": err})
+    elif pubs == 0:
+        add(f"topic.{topic}", "warn", "p1", f"{topic} has no publishers", {"publishers": pubs, "subscribers": subs})
+    else:
+        add(f"topic.{topic}", "pass", "p1", f"{topic} has publishers", {"publishers": pubs, "subscribers": subs})
+
+quality_pubs, quality_subs, quality_err = topic_counts("/nav/localization_quality")
+if quality_pubs is None:
+    add("topic./nav/localization_quality", "warn", "p1", "could not inspect /nav/localization_quality", {"error": quality_err})
+elif quality_pubs > 0:
+    add(
+        "topic./nav/localization_quality",
+        "pass",
+        "p1",
+        "/nav/localization_quality has publishers",
+        {"publishers": quality_pubs, "subscribers": quality_subs},
+    )
+else:
+    legacy_pubs, legacy_subs, legacy_err = topic_counts("/localization_quality")
+    if legacy_pubs and legacy_pubs > 0:
+        add(
+            "topic./nav/localization_quality",
+            "warn",
+            "p1",
+            "legacy /localization_quality is publishing; remap to /nav/localization_quality",
+            {"publishers": 0, "subscribers": quality_subs, "legacy_publishers": legacy_pubs, "legacy_subscribers": legacy_subs},
+        )
+    else:
+        add(
+            "topic./nav/localization_quality",
+            "warn",
+            "p1",
+            "/nav/localization_quality has no publishers",
+            {"publishers": quality_pubs, "subscribers": quality_subs, "legacy_error": legacy_err},
+        )
+
+ready_code, ready, ready_err = http_json("/ready", timeout=3)
+if ready_err or not isinstance(ready, dict):
+    add("gateway.ready", "fail", "p0", "/ready unavailable", {"http_status": ready_code, "error": ready_err})
+else:
+    is_ready = bool(ready.get("ready"))
+    add(
+        "gateway.ready",
+        "pass" if is_ready else "fail",
+        "p0",
+        "/ready reports ready" if is_ready else "/ready reports not ready",
+        {"http_status": ready_code, "reasons": ready.get("reasons", []), "failed_modules": ready.get("failed_modules", [])},
+    )
+
+health_code, health, health_err = http_json("/api/v1/health", timeout=3)
+if health_err or not isinstance(health, dict):
+    add("gateway.health", "fail", "p0", "/api/v1/health unavailable", {"http_status": health_code, "error": health_err})
+else:
+    modules_fail = health.get("modules_fail", 0)
+    status = health.get("status")
+    slam = health.get("sensors", {}).get("slam", {})
+    slam_hz = as_float(slam.get("hz", health.get("slam_hz")))
+    map_points = as_float(health.get("map_points"))
+    has_odom = as_bool(health.get("has_odom"))
+    ok = status in {"ok", "degraded"} and modules_fail in {0, "0"}
+    add(
+        "gateway.health",
+        "pass" if ok else "fail",
+        "p0",
+        "Gateway health is usable" if ok else "Gateway health reports failing modules",
+        {
+            "http_status": health_code,
+            "status": status,
+            "modules_ok": health.get("modules_ok"),
+            "modules_fail": modules_fail,
+            "slam_status": slam.get("status"),
+            "slam_hz": slam_hz,
+            "map_points": health.get("map_points"),
+            "has_odom": health.get("has_odom"),
+        },
+    )
+    stream_blockers = []
+    if slam_hz is None or slam_hz < MIN_SLAM_HZ:
+        stream_blockers.append(f"slam_hz<{MIN_SLAM_HZ:g}")
+    if map_points is None or map_points < MIN_MAP_POINTS:
+        stream_blockers.append(f"map_points<{MIN_MAP_POINTS:g}")
+    if not has_odom:
+        stream_blockers.append("has_odom=false")
+    add(
+        "gateway.slam_stream",
+        "pass" if not stream_blockers else "fail",
+        "p0",
+        "SLAM stream is fresh enough for readiness" if not stream_blockers else "SLAM stream is not ready",
+        {
+            "slam_hz": slam_hz,
+            "min_slam_hz": MIN_SLAM_HZ,
+            "map_points": map_points,
+            "min_map_points": MIN_MAP_POINTS,
+            "has_odom": has_odom,
+            "blockers": stream_blockers,
+        },
+    )
+
+loc_code, loc, loc_err = http_json("/api/v1/localization/status", timeout=3)
+if loc_err or not isinstance(loc, dict):
+    add("gateway.localization_status", "fail", "p0", "localization status unavailable", {"http_status": loc_code, "error": loc_err})
+else:
+    state_value = str(loc.get("state") or loc.get("reported_state") or "").lower()
+    loc_ready = loc.get("ready")
+    if loc_ready is None:
+        loc_ready = state_value in {"ready", "tracking", "good", "ok", "recovered"}
+    pose_fresh = loc.get("pose_fresh")
+    if pose_fresh is None:
+        pose_fresh = str(loc.get("pose_freshness") or "").lower() in {"fresh", "ok"}
+    has_odometry = loc.get("has_odometry")
+    blockers = list(loc.get("reasons") or [])
+    if not as_bool(loc_ready):
+        blockers.append(f"state={state_value or 'unknown'}")
+    if pose_fresh is False:
+        blockers.append("pose_fresh=false")
+    if has_odometry is False:
+        blockers.append("has_odometry=false")
+    odom_age = check_age(loc, "odom_age_ms", MAX_ODOM_AGE_MS, blockers)
+    diag_age = check_age(loc, "diag_age_ms", MAX_LOC_DIAG_AGE_MS, blockers)
+    health_age = check_age(loc, "localizer_health_topic_age_ms", MAX_LOCALIZER_HEALTH_AGE_MS, blockers)
+    cloud_age = check_age(loc, "cloud_age_ms", MAX_CLOUD_AGE_MS, blockers)
+    if loc.get("map_cloud_fresh") is False:
+        blockers.append("map_cloud_fresh=false")
+    localizer_health = str(loc.get("localizer_health") or loc.get("localizer_health_raw") or "").upper()
+    if localizer_health and localizer_health in {"LOST", "DEGRADED", "UNHEALTHY", "ERROR"}:
+        blockers.append(f"localizer_health={localizer_health}")
+    add(
+        "gateway.localization_status",
+        "pass" if not blockers else "fail",
+        "p0",
+        "localization is ready and fresh" if not blockers else "localization is not ready or stale",
+        {
+            "http_status": loc_code,
+            "state": loc.get("state") or loc.get("reported_state"),
+            "backend": loc.get("backend") or loc.get("localization_backend"),
+            "pose_fresh": pose_fresh,
+            "has_odometry": has_odometry,
+            "odom_age_ms": odom_age,
+            "max_odom_age_ms": MAX_ODOM_AGE_MS,
+            "diag_age_ms": diag_age,
+            "max_diag_age_ms": MAX_LOC_DIAG_AGE_MS,
+            "localizer_health_topic_age_ms": health_age,
+            "max_localizer_health_age_ms": MAX_LOCALIZER_HEALTH_AGE_MS,
+            "cloud_age_ms": cloud_age,
+            "max_cloud_age_ms": MAX_CLOUD_AGE_MS,
+            "map_cloud_fresh": loc.get("map_cloud_fresh"),
+            "localizer_health": localizer_health or None,
+            "confidence": loc.get("confidence"),
+            "blockers": blockers,
+        },
+    )
+    confidence = as_float(loc.get("confidence"))
+    if confidence is not None:
+        add(
+            "gateway.localization_confidence",
+            "pass" if confidence >= MIN_LOCALIZATION_CONFIDENCE else "warn",
+            "p1",
+            "localization confidence is above warning threshold"
+            if confidence >= MIN_LOCALIZATION_CONFIDENCE
+            else "localization confidence is below warning threshold",
+            {"confidence": confidence, "min_confidence": MIN_LOCALIZATION_CONFIDENCE},
+        )
+
+nav_code, nav, nav_err = http_json("/api/v1/navigation/status", timeout=3)
+if nav_err or not isinstance(nav, dict):
+    add("gateway.navigation_status", "fail", "p0", "navigation status unavailable", {"http_status": nav_code, "error": nav_err})
+else:
+    readiness = nav.get("readiness") or {}
+    blockers = readiness.get("blockers") or []
+    can_accept = bool(nav.get("can_accept_goal", readiness.get("can_execute_autonomy", False)))
+    state = str(nav.get("state") or nav.get("mission", {}).get("state") or "unknown")
+    control = nav.get("control") or {}
+    active_source = command_source_name(control)
+    nav_ok = can_accept and not blockers
+    add(
+        "gateway.navigation_status",
+        "pass" if nav_ok else "fail",
+        "p0",
+        "navigation can accept goals" if nav_ok else "navigation readiness has blockers",
+        {"http_status": nav_code, "state": state, "can_accept_goal": can_accept, "blockers": blockers, "active_cmd_source": active_source},
+    )
+    if non_motion:
+        moving_states = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY"}
+        source_idle = str(active_source).lower() in {"", "none", "unknown", "null"}
+        state_idle = state.upper() not in moving_states
+        add(
+            "safety.non_motion_guard",
+            "pass" if source_idle and state_idle else "fail",
+            "p0",
+            "no active command source or executing mission" if source_idle and state_idle else "robot appears to have an active command source or mission",
+            {"state": state, "active_cmd_source": active_source},
+        )
+
+state_code, state_payload, state_err = http_json("/api/v1/state", timeout=3)
+if state_err or not isinstance(state_payload, dict):
+    add("gateway.state", "warn", "p1", "/api/v1/state unavailable", {"http_status": state_code, "error": state_err})
+else:
+    session = state_payload.get("session") or {}
+    localization = state_payload.get("localization") or {}
+    add(
+        "gateway.state",
+        "pass",
+        "p1",
+        "state snapshot available",
+        {
+            "http_status": state_code,
+            "session_mode": session.get("mode"),
+            "active_map": session.get("active_map"),
+            "localization_backend": localization.get("backend") or localization.get("localization_backend"),
+            "localization_state": localization.get("reported_state") or localization.get("state"),
+            "confidence": localization.get("confidence"),
+        },
+    )
+
+rc, lsusb_out, _ = run(["lsusb"], timeout=3)
+usb_text = lsusb_out.lower()
+camera_usb = any(token in usb_text for token in ["orbbec", "gemini", "astra", "2bc5"])
+add(
+    "camera.usb",
+    "pass" if camera_usb else "warn",
+    "p1",
+    "camera USB device is enumerated" if camera_usb else "camera USB device is not enumerated",
+    {"matched": camera_usb},
+)
+camera_topic_counts = {}
+for topic in ["/camera/color/image_raw", "/camera/depth/image_raw"]:
+    pubs, subs, err = topic_counts(topic)
+    camera_topic_counts[topic] = {"publishers": pubs, "subscribers": subs, "error": err}
+    if pubs is None:
+        add(f"camera.topic.{topic}", "warn", "p1", f"could not inspect {topic}", {"error": err})
+    elif pubs == 0:
+        add(f"camera.topic.{topic}", "warn", "p1", f"{topic} has no publishers", {"publishers": pubs, "subscribers": subs})
+    else:
+        add(f"camera.topic.{topic}", "pass", "p1", f"{topic} has publishers", {"publishers": pubs, "subscribers": subs})
+camera_topics_ready = all((camera_topic_counts.get(topic, {}).get("publishers") or 0) > 0 for topic in ["/camera/color/image_raw", "/camera/depth/image_raw"])
+video_nodes = sorted(glob.glob("/dev/video*") + glob.glob("/dev/v4l/by-id/*"))
+if video_nodes:
+    add("camera.video_nodes", "pass", "p1", "video devices exist", {"nodes": video_nodes[:8]})
+elif camera_usb and camera_topics_ready:
+    add(
+        "camera.video_nodes",
+        "pass",
+        "p1",
+        "SDK camera is publishing ROS topics without V4L nodes",
+        {"nodes": [], "camera_topics_ready": True},
+    )
+else:
+    add(
+        "camera.video_nodes",
+        "warn",
+        "p1",
+        "no /dev/video or /dev/v4l/by-id devices found",
+        {"nodes": [], "camera_topics_ready": camera_topics_ready},
+    )
+
+if realtime:
+    sse_ok, sse_evidence = sse_smoke(REALTIME_TIMEOUT_S)
+    add(
+        "gateway.realtime_sse",
+        "pass" if sse_ok else "fail",
+        "p1",
+        "SSE event stream produced data" if sse_ok else "SSE event stream did not produce data",
+        sse_evidence,
+    )
+    cam_ok, cam_evidence = ws_smoke("/ws/camera", b"\xff\xd8\xff", REALTIME_TIMEOUT_S)
+    add(
+        "gateway.websocket_camera",
+        "pass" if cam_ok else "fail",
+        "p1",
+        "camera WebSocket produced a JPEG frame" if cam_ok else "camera WebSocket did not produce a JPEG frame",
+        cam_evidence,
+    )
+    cloud_ok, cloud_evidence = ws_smoke("/ws/cloud", b"PCL", REALTIME_TIMEOUT_S)
+    add(
+        "gateway.websocket_cloud",
+        "pass" if cloud_ok else "fail",
+        "p1",
+        "cloud WebSocket produced a PCL frame" if cloud_ok else "cloud WebSocket did not produce a PCL frame",
+        cloud_evidence,
+    )
+
+summary = Counter(check["status"] for check in checks)
+report = {
+    "schema_version": 1,
+    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    "gateway": gw,
+    "mode": "non_motion" if non_motion else "default",
+    "ok": summary.get("fail", 0) == 0,
+    "summary": {
+        "pass": summary.get("pass", 0),
+        "warn": summary.get("warn", 0),
+        "fail": summary.get("fail", 0),
+    },
+    "blockers": [check for check in checks if check["status"] == "fail"],
+    "warnings": [check for check in checks if check["status"] == "warn"],
+    "checks": checks,
+}
+print(json.dumps(report, ensure_ascii=False, indent=2))
+if strict and summary.get("fail", 0):
+    sys.exit(1)
+PY
+}
+
+# -- Subcommand: doctor --
+cmd_doctor() {
+    local json=0 strict=0 non_motion=0 realtime=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --json) json=1 ;;
+            --strict) strict=1 ;;
+            --non-motion|--no-motion) non_motion=1 ;;
+            --realtime) realtime=1 ;;
+            -h|--help) doctor_usage; return 0 ;;
+            *) doctor_usage; return 1 ;;
+        esac
+        shift
+    done
+
+    source_robot_env
+
+    if [ "$json" = "1" ]; then
+        cmd_doctor_json "$strict" "$non_motion" "$realtime"
+        return $?
+    fi
+
+    echo -e "${B}=== Lingtu Doctor @ $(date '+%H:%M:%S') ===${N}"
+    [ "$non_motion" = "1" ] && echo "Mode: non-motion read-only verification"
+    echo -e "${B}[1] Services${N}"
+    cmd_svc status
 
     echo -e "${B}[2] ROS duplicate nodes${N}"
     if command -v ros2 >/dev/null 2>&1; then
         local dup
-        dup=$(ros2 node list 2>/dev/null | sort | uniq -d | grep -e livox_driver_node -e lio_node -e super_lio_node -e localizer_node -e '^/camera/camera$' -e '^/camera/camera_container$' || true)
+        dup=$(ros2 node list 2>/dev/null | sort | uniq -d | grep -e livox_driver_node -e lio_node -e super_lio_node -e relocation_node -e localizer_node -e '^/camera/camera$' -e '^/camera/camera_container$' || true)
         if [ -n "$dup" ]; then
             printf "${Y}WARN${N}: duplicate ROS node names detected:\n"
             echo "$dup" | sed 's/^/  /'
@@ -430,6 +1041,318 @@ slam=d.get("sensors",{}).get("slam",{})
 print("  gateway={} modules_ok={} modules_fail={}".format(d.get("status","?"), d.get("modules_ok","?"), d.get("modules_fail","?")))
 print("  slam_status={} slam_hz={} map_points={} has_odom={}".format(slam.get("status","?"), slam.get("hz", d.get("slam_hz","?")), d.get("map_points","?"), d.get("has_odom","?")))
 ' || true
+
+    echo -e "${B}[5] Navigation readiness${N}"
+    local NAVJ NST CAN_GO BLOCKERS CMD_SRC
+    NAVJ=$(curl -s --max-time 2 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
+    NST=$(pjson "$NAVJ" 'print(d.get("state") or d.get("mission",{}).get("state") or "-")')
+    CAN_GO=$(pjson "$NAVJ" 'print(d.get("can_accept_goal", d.get("readiness",{}).get("can_execute_autonomy", False)))')
+    BLOCKERS=$(pjson "$NAVJ" 'b=d.get("readiness",{}).get("blockers",[]); print(",".join(map(str,b)) if isinstance(b,list) and b else "-")')
+    CMD_SRC=$(pjson "$NAVJ" 'c=d.get("control",{}); s=c.get("active_cmd_source") or c.get("active_source") or "none"; print((s.get("name") or s.get("source") or s.get("owner") or "none") if isinstance(s,dict) else s)')
+    printf "  state=%s can_accept_goal=%s blockers=%s active_cmd_source=%s\n" "$NST" "$CAN_GO" "$BLOCKERS" "$CMD_SRC"
+    if [ "$non_motion" = "1" ]; then
+        case "$(echo "$CMD_SRC" | tr '[:upper:]' '[:lower:]')" in
+            ""|none|unknown|null) echo "  ok: non-motion guard sees no active command source" ;;
+            *) printf "  ${R}FAIL${N}: non-motion guard sees active command source: %s\n" "$CMD_SRC" ;;
+        esac
+    fi
+
+    echo -e "${B}[6] Camera readiness${N}"
+    if command -v lsusb >/dev/null 2>&1 && lsusb | grep -Eiq 'orbbec|gemini|astra|2bc5'; then
+        echo "  ok: camera USB device is enumerated"
+    else
+        printf "  ${Y}WARN${N}: camera USB device is not enumerated\n"
+    fi
+    local cam_color_pubs=0 cam_color_subs=0 cam_depth_pubs=0 cam_depth_subs=0
+    if command -v ros2 >/dev/null 2>&1; then
+        cam_color_pubs=$(ros2 topic info /camera/color/image_raw 2>/dev/null | awk '/Publisher count:/ {print $3}' | tail -1)
+        cam_color_subs=$(ros2 topic info /camera/color/image_raw 2>/dev/null | awk '/Subscription count:/ {print $3}' | tail -1)
+        cam_depth_pubs=$(ros2 topic info /camera/depth/image_raw 2>/dev/null | awk '/Publisher count:/ {print $3}' | tail -1)
+        cam_depth_subs=$(ros2 topic info /camera/depth/image_raw 2>/dev/null | awk '/Subscription count:/ {print $3}' | tail -1)
+        cam_color_pubs="${cam_color_pubs:-0}"
+        cam_color_subs="${cam_color_subs:-0}"
+        cam_depth_pubs="${cam_depth_pubs:-0}"
+        cam_depth_subs="${cam_depth_subs:-0}"
+    fi
+    if compgen -G "/dev/video*" >/dev/null || compgen -G "/dev/v4l/by-id/*" >/dev/null; then
+        echo "  ok: video device nodes exist"
+    elif [ "$cam_color_pubs" != "0" ] && [ "$cam_depth_pubs" != "0" ]; then
+        echo "  ok: SDK camera is publishing ROS image topics without V4L nodes"
+    else
+        printf "  ${Y}WARN${N}: no /dev/video or /dev/v4l/by-id device nodes found\n"
+    fi
+    if command -v ros2 >/dev/null 2>&1; then
+        local cam_topic cam_pubs cam_subs
+        for cam_topic in /camera/color/image_raw /camera/depth/image_raw /camera/device_status; do
+            case "$cam_topic" in
+                /camera/color/image_raw)
+                    cam_pubs="$cam_color_pubs"
+                    cam_subs="$cam_color_subs" ;;
+                /camera/depth/image_raw)
+                    cam_pubs="$cam_depth_pubs"
+                    cam_subs="$cam_depth_subs" ;;
+                *)
+                    cam_pubs=$(ros2 topic info "$cam_topic" 2>/dev/null | awk '/Publisher count:/ {print $3}' | tail -1)
+                    cam_subs=$(ros2 topic info "$cam_topic" 2>/dev/null | awk '/Subscription count:/ {print $3}' | tail -1) ;;
+            esac
+            cam_pubs="${cam_pubs:-0}"
+            cam_subs="${cam_subs:-0}"
+            if [ "$cam_pubs" = "0" ]; then
+                printf "  ${Y}%-30s publishers=%s subscribers=%s${N}\n" "$cam_topic" "$cam_pubs" "$cam_subs"
+            else
+                printf "  ${G}%-30s publishers=%s subscribers=%s${N}\n" "$cam_topic" "$cam_pubs" "$cam_subs"
+            fi
+        done
+    fi
+
+    if [ "$strict" = "1" ]; then
+        cmd_doctor_json "$strict" "$non_motion" "$realtime" >/dev/null
+        return $?
+    fi
+}
+
+# -- Subcommand: slamcheck --
+slamcheck_usage() {
+    echo "Usage: lingtu slamcheck super_lio|super_lio_relocation [--duration SEC] [--rollback previous|localizer|fastlio2|super_lio|super_lio_relocation|stop|none] [--save-map NAME] [--map NAME] [--initial-pose X Y YAW]"
+}
+
+cmd_slamcheck() {
+    local target="super_lio"
+    if [ "$#" -gt 0 ] && [[ "${1:-}" != --* ]]; then
+        target="$1"
+        shift
+    fi
+    case "$target" in
+        super_lio|super-lio|superlio) target="super_lio" ;;
+        super_lio_relocation|super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation) target="super_lio_relocation" ;;
+        *) slamcheck_usage; exit 1 ;;
+    esac
+
+    local duration=20 rollback=previous save_map="" map_name="" initial_pose=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --duration)
+                duration="${2:-}"
+                shift 2 ;;
+            --duration=*)
+                duration="${1#*=}"
+                shift ;;
+            --rollback)
+                rollback="${2:-}"
+                shift 2 ;;
+            --rollback=*)
+                rollback="${1#*=}"
+                shift ;;
+            --save-map)
+                save_map="${2:-}"
+                [ -z "$save_map" ] && { echo "Usage: --save-map NAME"; exit 1; }
+                shift 2 ;;
+            --save-map=*)
+                save_map="${1#*=}"
+                shift ;;
+            --map)
+                map_name="${2:-}"
+                [ -z "$map_name" ] && { echo "Usage: --map NAME"; exit 1; }
+                shift 2 ;;
+            --map=*)
+                map_name="${1#*=}"
+                shift ;;
+            --initial-pose)
+                [ "$#" -ge 4 ] || { slamcheck_usage; exit 1; }
+                initial_pose=$(printf '[%.6f,%.6f,0.0,0.0,0.0,%.6f]' "$2" "$3" "$4")
+                shift 4 ;;
+            *)
+                slamcheck_usage
+                exit 1 ;;
+        esac
+    done
+    case "$duration" in
+        ''|*[!0-9]*) echo "duration must be an integer number of seconds"; exit 1 ;;
+    esac
+    case "$rollback" in
+        previous|localizer|fastlio2|stop|none|super_lio|super-lio|superlio|super_lio_relocation|super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation) ;;
+        *) echo "rollback must be previous|localizer|fastlio2|super_lio|super_lio_relocation|stop|none"; exit 1 ;;
+    esac
+    if [ "$target" = "super_lio_relocation" ] && [ -z "$map_name" ]; then
+        map_name=$(readlink "$HOME/data/nova/maps/active" 2>/dev/null || true)
+    fi
+
+    local prev_status prev_mode rollback_profile switch_json switch_ok result=0
+    local target_unit="robot-super-lio.service"
+    if [ "$target" = "super_lio_relocation" ]; then
+        target_unit="robot-super-lio-relocation.service"
+    fi
+    prev_status=$(curl -s --max-time 4 "$GW/api/v1/slam/status" 2>/dev/null || echo '{}')
+    prev_mode=$(pjson "$prev_status" 'print(d.get("mode") or "stopped")')
+    case "$rollback" in
+        previous) rollback_profile="$prev_mode" ;;
+        super-lio|superlio) rollback_profile="super_lio" ;;
+        super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation) rollback_profile="super_lio_relocation" ;;
+        *) rollback_profile="$rollback" ;;
+    esac
+    case "$rollback_profile" in
+        stopped) rollback_profile="stop" ;;
+        ''|-) rollback_profile="none" ;;
+    esac
+    if [ "$rollback_profile" = "$target" ]; then
+        rollback_profile="none"
+    fi
+
+    echo -e "${B}=== Lingtu ${target} smoke @ $(date '+%H:%M:%S') ===${N}"
+    echo "Gateway: $GW"
+    echo "Previous SLAM mode: $prev_mode"
+
+    if [ "$target" = "super_lio_relocation" ]; then
+        [ -n "$map_name" ] || { echo -e "${R}FAIL${N}: --map NAME is required when no active map symlink exists"; return 1; }
+        local maps_root="$HOME/data/nova/maps" map_dir="$HOME/data/nova/maps/$map_name"
+        if [ ! -f "$map_dir/map.pcd" ]; then
+            echo -e "${R}FAIL${N}: map.pcd not found: $map_dir/map.pcd"
+            return 1
+        fi
+        ln -sfn "$map_name" "$maps_root/active"
+        sudo mkdir -p /run/lingtu
+        {
+            echo "SUPER_LIO_RELOCATION_MAP_DIR=$maps_root/active"
+            echo "SUPER_LIO_RELOCATION_MAP_NAME=map.pcd"
+            echo "SUPER_LIO_RELOCATION_UPDATE_MAP=false"
+            echo "SUPER_LIO_RELOCATION_INIT_POSE=${initial_pose:-[0.0,0.0,0.0,0.0,0.0,0.0]}"
+        } | sudo tee /run/lingtu/super_lio_relocation.env >/dev/null
+        echo "Relocation map: $map_name"
+    fi
+
+    sudo systemctl reset-failed "$target_unit" >/dev/null 2>&1 || true
+    local restart_count_before restart_count_after active_state
+    restart_count_before=$(systemctl show -p NRestarts --value "$target_unit" 2>/dev/null || echo 0)
+    case "$restart_count_before" in ''|*[!0-9]*) restart_count_before=0 ;; esac
+
+    switch_json=$(curl -s --max-time 15 -X POST -H "Content-Type: application/json" \
+        -d "{\"profile\":\"$target\"}" "$GW/api/v1/slam/switch" 2>/dev/null || echo '{}')
+    switch_ok=$(pjson "$switch_json" 'print(str(d.get("success", False)).lower())')
+    if [ "$switch_ok" != "true" ]; then
+        echo -e "${R}FAIL${N}: could not switch to $target"
+        echo "$switch_json" | python3 -m json.tool 2>/dev/null || echo "$switch_json"
+        if [ "$rollback_profile" != "none" ]; then
+            echo "Rollback SLAM mode after failed switch: $rollback_profile"
+            curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+                -d "{\"profile\":\"$rollback_profile\"}" "$GW/api/v1/slam/switch" \
+                | python3 -m json.tool 2>/dev/null || true
+        fi
+        return 1
+    fi
+
+    local deadline now ok=0 ok_samples=0 bad_after_ready=0 contract_ok=0 LOCJ SESS SLAMJ HEALTH
+    local backend health_source map_save_source saved_reloc restart_recovery recovery_method
+    local relocal_state recovery_signal recovery_action mode target_service slam_hz map_points
+    local expected_save_source expected_recovery
+    expected_save_source="live_map_cloud_snapshot"
+    expected_recovery="restart_super_lio"
+    if [ "$target" = "super_lio_relocation" ]; then
+        expected_save_source="active_map"
+        expected_recovery="restart_super_lio_relocation"
+    fi
+    deadline=$(( $(date +%s) + duration ))
+    while true; do
+        LOCJ=$(curl -s --max-time 4 "$GW/api/v1/localization/status" 2>/dev/null || echo '{}')
+        SESS=$(curl -s --max-time 4 "$GW/api/v1/session" 2>/dev/null || echo '{}')
+        SLAMJ=$(curl -s --max-time 4 "$GW/api/v1/slam/status" 2>/dev/null || echo '{}')
+        HEALTH=$(curl -s --max-time 4 "$GW/api/v1/health" 2>/dev/null || echo '{}')
+
+        backend=$(pjson "$LOCJ" 'print(d.get("backend") or d.get("localization_backend") or "-")')
+        [ "$backend" = "-" ] && backend=$(pjson "$SESS" 'print(d.get("localization_backend") or d.get("backend") or "-")')
+        health_source=$(pjson "$LOCJ" 'print(d.get("health_source") or d.get("localizer_health_source") or "-")')
+        [ "$health_source" = "-" ] && health_source=$(pjson "$SESS" 'print(d.get("health_source") or "-")')
+        map_save_source=$(pjson "$LOCJ" 'print(d.get("map_save_source") or "-")')
+        [ "$map_save_source" = "-" ] && map_save_source=$(pjson "$SESS" 'print(d.get("map_save_source") or "-")')
+        saved_reloc=$(pjson "$LOCJ" 'v=d.get("saved_map_relocalization_supported", d.get("relocalization_supported")); print(str(v).lower() if v is not None else "-")')
+        [ "$saved_reloc" = "-" ] && saved_reloc=$(pjson "$SESS" 'v=d.get("saved_map_relocalization_supported", d.get("relocalization_supported")); print(str(v).lower() if v is not None else "-")')
+        restart_recovery=$(pjson "$LOCJ" 'v=d.get("restart_recovery_supported"); print(str(v).lower() if v is not None else "-")')
+        [ "$restart_recovery" = "-" ] && restart_recovery=$(pjson "$SESS" 'v=d.get("restart_recovery_supported"); print(str(v).lower() if v is not None else "-")')
+        recovery_method=$(pjson "$LOCJ" 'print(d.get("recovery_method") or "-")')
+        [ "$recovery_method" = "-" ] && recovery_method=$(pjson "$SESS" 'print(d.get("recovery_method") or "-")')
+        relocal_state=$(pjson "$LOCJ" 'print(d.get("relocalization_state") or "-")')
+        [ "$relocal_state" = "-" ] && relocal_state=$(pjson "$SESS" 'print(d.get("relocalization_state") or "-")')
+        recovery_signal=$(pjson "$LOCJ" 'print(d.get("recovery_signal") or "-")')
+        [ "$recovery_signal" = "-" ] && recovery_signal=$(pjson "$SESS" 'print(d.get("recovery_signal") or "-")')
+        recovery_action=$(pjson "$LOCJ" 'print(d.get("recovery_action") or "-")')
+        [ "$recovery_action" = "-" ] && recovery_action=$(pjson "$SESS" 'print(d.get("recovery_action") or "-")')
+        mode=$(pjson "$SLAMJ" 'print(d.get("mode") or "-")')
+        target_service=$(pjson "$SLAMJ" "print((d.get('services') or {}).get('$target', '-'))")
+        slam_hz=$(pjson "$HEALTH" 'print(d.get("sensors",{}).get("slam",{}).get("hz", d.get("slam_hz", "-")))')
+        map_points=$(pjson "$HEALTH" 'print(d.get("map_points", "-"))')
+
+        printf "  mode=%s service=%s backend=%s health_src=%s save_src=%s hz=%s pts=%s saved_reloc=%s restart_rec=%s recovery=%s relocal=%s signal=%s action=%s\n" \
+            "$mode" "$target_service" "$backend" "$health_source" "$map_save_source" "$slam_hz" "$map_points" \
+            "$saved_reloc" "$restart_recovery" "$recovery_method" "$relocal_state" "$recovery_signal" "$recovery_action"
+
+        contract_ok=0
+        if [ "$mode" = "$target" ] \
+            && { [ "$target_service" = "active" ] || [ "$target_service" = "running" ]; } \
+            && [ "$backend" = "$target" ] \
+            && [ "$health_source" = "odom_map_cloud" ] \
+            && [ "$map_save_source" = "$expected_save_source" ] \
+            && [ "$saved_reloc" = "false" ] \
+            && [ "$restart_recovery" = "true" ] \
+            && [ "$recovery_method" = "$expected_recovery" ]; then
+            contract_ok=1
+            ok_samples=$((ok_samples + 1))
+        elif [ "$ok_samples" -gt 0 ]; then
+            bad_after_ready=1
+        fi
+
+        now=$(date +%s)
+        [ "$now" -ge "$deadline" ] && break
+        sleep 2
+    done
+
+    active_state=$(systemctl show -p ActiveState --value "$target_unit" 2>/dev/null || echo unknown)
+    restart_count_after=$(systemctl show -p NRestarts --value "$target_unit" 2>/dev/null || echo 0)
+    case "$restart_count_after" in ''|*[!0-9]*) restart_count_after=0 ;; esac
+    if [ "$ok_samples" -gt 0 ] \
+        && [ "$bad_after_ready" = "0" ] \
+        && [ "$active_state" = "active" ] \
+        && [ "$restart_count_after" = "$restart_count_before" ]; then
+        ok=1
+    fi
+
+    if [ "$ok" != "1" ]; then
+        echo -e "${R}FAIL${N}: ${target} Gateway contract did not stay ready within ${duration}s"
+        echo "  unit=${target_unit} active_state=${active_state} restarts_before=${restart_count_before} restarts_after=${restart_count_after} ok_samples=${ok_samples} bad_after_ready=${bad_after_ready}"
+        result=1
+    else
+        echo -e "${G}PASS${N}: ${target} Gateway contract stayed ready for ${ok_samples} samples"
+    fi
+
+    if [ -n "$save_map" ] && [ "$result" = "0" ]; then
+        if [ "$target" != "super_lio" ]; then
+            echo -e "${R}FAIL${N}: --save-map is only supported by super_lio normal smoke"
+            result=1
+        else
+        local save_json save_ok save_source saved_reloc_after
+        echo "Saving map snapshot: $save_map"
+        save_json=$(curl -s --max-time 90 -X POST -H "Content-Type: application/json" \
+            -d "{\"name\":\"$save_map\"}" "$GW/api/v1/map/save" 2>/dev/null || echo '{}')
+        save_ok=$(pjson "$save_json" 'print(str(d.get("success", False)).lower())')
+        save_source=$(pjson "$save_json" 'print(d.get("map_save_source") or d.get("source") or "-")')
+        saved_reloc_after=$(pjson "$save_json" 'v=d.get("saved_map_relocalization_supported", d.get("relocalization_supported")); print(str(v).lower() if v is not None else "-")')
+        echo "$save_json" | python3 -m json.tool 2>/dev/null || echo "$save_json"
+        if [ "$save_ok" != "true" ] || [ "$save_source" != "live_map_cloud_snapshot" ] || [ "$saved_reloc_after" != "false" ]; then
+            echo -e "${R}FAIL${N}: map-save response did not match Super-LIO snapshot contract"
+            result=1
+        else
+            echo -e "${G}PASS${N}: map-save response uses live_map_cloud_snapshot and keeps saved relocalization disabled"
+        fi
+        fi
+    fi
+
+    if [ "$rollback_profile" != "none" ]; then
+        echo "Rollback SLAM mode: $rollback_profile"
+        curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+            -d "{\"profile\":\"$rollback_profile\"}" "$GW/api/v1/slam/switch" \
+            | python3 -m json.tool 2>/dev/null || true
+    else
+        echo "Rollback skipped"
+    fi
+    return "$result"
 }
 
 # -- Subcommand: log --
@@ -451,10 +1374,13 @@ cmd_log() {
         super_lio|super-lio|superlio)
             journalctl -u robot-super-lio.service -u super_lio.service --since '1 hour ago' --no-pager 2>/dev/null \
                 | tail -40 ;;
+        super_lio_relocation|super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation)
+            journalctl -u robot-super-lio-relocation.service -u robot-super-lio-reloc.service -u super_lio_relocation.service -u super_lio_reloc.service -u super-lio-relocation.service --since '1 hour ago' --no-pager 2>/dev/null \
+                | tail -40 ;;
         all)
             journalctl -u lingtu.service --since '10 min ago' --no-pager 2>/dev/null \
                 | tail -30 ;;
-        *) echo "Usage: lingtu log [drift|dufomap|error|tail|super_lio|all]"; exit 1 ;;
+        *) echo "Usage: lingtu log [drift|dufomap|error|tail|super_lio|super_lio_relocation|all]"; exit 1 ;;
     esac
 }
 
@@ -471,6 +1397,9 @@ case "${1:-status}" in
     nav|n)          shift; cmd_nav   "$@" ;;
     svc|service)    shift; cmd_svc   "$@" ;;
     doctor|diag)    shift; cmd_doctor "$@" ;;
+    slamcheck|slam-check) shift; cmd_slamcheck "$@" ;;
+    super-lio-smoke|super_lio_smoke|superlio-smoke) shift; cmd_slamcheck super_lio "$@" ;;
+    super-lio-relocation-smoke|super_lio_relocation_smoke|super-lio-reloc-smoke|super_lio_reloc_smoke) shift; cmd_slamcheck super_lio_relocation "$@" ;;
     log|l)          shift; cmd_log   "$@" ;;
     health|h)       cmd_health ;;
     help|-h|--help)
