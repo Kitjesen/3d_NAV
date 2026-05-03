@@ -82,6 +82,7 @@ from gateway.services.map_safety import (
     safe_map_name as _map_safe_map_name,
 )
 from gateway.services.runtime_status import (
+    backend_capability_defaults,
     classify_pose_freshness,
     localizer_algorithm_healthy,
 )
@@ -1025,9 +1026,25 @@ class GatewayModule(Module, layer=6):
             algorithm_healthy
             and confidence_ok
         )
+        capability_defaults = backend_capability_defaults(backend)
         relocalization_supported = localization_status.get("relocalization_supported")
         if relocalization_supported is None:
-            relocalization_supported = backend not in {"super_lio", "fastlio2", "slam"}
+            relocalization_supported = capability_defaults["relocalization_supported"]
+        saved_map_relocalization_supported = localization_status.get(
+            "saved_map_relocalization_supported"
+        )
+        if saved_map_relocalization_supported is None:
+            saved_map_relocalization_supported = relocalization_supported
+        restart_recovery_supported = localization_status.get(
+            "restart_recovery_supported"
+        )
+        if restart_recovery_supported is None:
+            restart_recovery_supported = capability_defaults[
+                "restart_recovery_supported"
+            ]
+        recovery_method = localization_status.get("recovery_method")
+        if not recovery_method:
+            recovery_method = capability_defaults["recovery_method"]
         map_save_supported = localization_status.get("map_save_supported")
         if map_save_supported is None:
             map_save_supported = backend in {"super_lio", "fastlio2", "slam"}
@@ -1070,6 +1087,11 @@ class GatewayModule(Module, layer=6):
             "map_save_supported": bool(map_save_supported),
             "map_save_source": map_save_source,
             "relocalization_supported": bool(relocalization_supported),
+            "saved_map_relocalization_supported": bool(
+                saved_map_relocalization_supported
+            ),
+            "restart_recovery_supported": bool(restart_recovery_supported),
+            "recovery_method": recovery_method,
             "relocalization_state": localization_status.get("relocalization_state"),
             "recovery_signal": localization_status.get("recovery_signal"),
             "recovery_action": localization_status.get("recovery_action"),
@@ -1323,9 +1345,11 @@ class GatewayModule(Module, layer=6):
         profile = self._get_slam_profile()
         if profile and profile != "—":
             d["backend"] = profile
+        capability_defaults = backend_capability_defaults(profile)
         if profile == "super_lio":
             d.setdefault("health_source", "odom_map_cloud")
             d["relocalization_supported"] = False
+            d["saved_map_relocalization_supported"] = False
             d.setdefault("relocalization_state", "unsupported")
             d["map_save_supported"] = True
             d.setdefault("map_save_source", "live_map_cloud_snapshot")
@@ -1347,6 +1371,22 @@ class GatewayModule(Module, layer=6):
                     d["localizer_health"] = "LIO_TRACKING"
         elif profile == "localizer":
             d.setdefault("relocalization_supported", True)
+            d.setdefault("saved_map_relocalization_supported", True)
+        elif profile in {"fastlio2", "slam"}:
+            d.setdefault("relocalization_supported", False)
+            d.setdefault("saved_map_relocalization_supported", False)
+        d.setdefault(
+            "saved_map_relocalization_supported",
+            d.get(
+                "relocalization_supported",
+                capability_defaults["saved_map_relocalization_supported"],
+            ),
+        )
+        d.setdefault(
+            "restart_recovery_supported",
+            capability_defaults["restart_recovery_supported"],
+        )
+        d.setdefault("recovery_method", capability_defaults["recovery_method"])
         d["_gateway_received_ts"] = time.time()
         d["_gateway_received_mono"] = time.monotonic()
         with self._state_lock:

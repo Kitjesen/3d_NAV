@@ -83,6 +83,9 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         self.assertTrue(tracking["map_save_supported"])
         self.assertEqual(tracking["map_save_source"], "live_map_cloud_snapshot")
         self.assertFalse(tracking["relocalization_supported"])
+        self.assertFalse(tracking["saved_map_relocalization_supported"])
+        self.assertTrue(tracking["restart_recovery_supported"])
+        self.assertEqual(tracking["recovery_method"], "restart_super_lio")
         self.assertEqual(tracking["relocalization_state"], "unsupported")
         self.assertEqual(tracking["recovery_action"], "none")
 
@@ -103,6 +106,9 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         self.assertFalse(tracking["map_save_supported"])
         self.assertEqual(tracking["map_save_source"], "active_map")
         self.assertTrue(tracking["relocalization_supported"])
+        self.assertTrue(tracking["saved_map_relocalization_supported"])
+        self.assertTrue(tracking["restart_recovery_supported"])
+        self.assertEqual(tracking["recovery_method"], "relocalize_service")
         self.assertEqual(tracking["relocalization_state"], "idle")
         self.assertEqual(tracking["recovery_action"], "none")
 

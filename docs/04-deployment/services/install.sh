@@ -27,7 +27,16 @@ done
 sudo systemctl daemon-reload
 echo "[ok] systemd daemon-reload"
 
-# 5. Enable all services
+# 5. Retire legacy camera units. Running both a legacy Orbbec unit and
+# robot-camera.service creates duplicate /camera ROS node names.
+for legacy in camera.service orbbec-camera.service; do
+  sudo systemctl stop "$legacy" 2>/dev/null || true
+  sudo systemctl disable "$legacy" 2>/dev/null || true
+  sudo systemctl mask "$legacy" 2>/dev/null || true
+done
+echo "[ok] legacy camera units retired"
+
+# 6. Enable all services
 sudo systemctl enable robot-lidar robot-camera robot-brainstem robot-fastlio2 robot-localizer lingtu
 echo "[ok] all services enabled"
 

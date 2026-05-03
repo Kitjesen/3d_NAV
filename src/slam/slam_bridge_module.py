@@ -736,6 +736,9 @@ class SlamBridgeModule(Module, layer=1):
                 "map_save_supported": True,
                 "map_save_source": "live_map_cloud_snapshot",
                 "relocalization_supported": False,
+                "saved_map_relocalization_supported": False,
+                "restart_recovery_supported": True,
+                "recovery_method": "restart_super_lio",
                 "recovery_action": "restart_super_lio",
             }
         if backend == "localizer":
@@ -745,6 +748,9 @@ class SlamBridgeModule(Module, layer=1):
                 "map_save_supported": False,
                 "map_save_source": "active_map",
                 "relocalization_supported": True,
+                "saved_map_relocalization_supported": True,
+                "restart_recovery_supported": True,
+                "recovery_method": "relocalize_service",
                 "recovery_action": "relocalize_service",
             }
         if backend in {"fastlio2", "slam"}:
@@ -754,6 +760,9 @@ class SlamBridgeModule(Module, layer=1):
                 "map_save_supported": True,
                 "map_save_source": "slam_save_maps",
                 "relocalization_supported": False,
+                "saved_map_relocalization_supported": False,
+                "restart_recovery_supported": True,
+                "recovery_method": "restart_slam",
                 "recovery_action": "restart_slam",
             }
         return {
@@ -762,6 +771,9 @@ class SlamBridgeModule(Module, layer=1):
             "map_save_supported": True,
             "map_save_source": "slam_services_or_live_cloud",
             "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_backend",
             "recovery_action": "restart_backend",
         }
 
@@ -1876,6 +1888,13 @@ class SlamBridgeModule(Module, layer=1):
                 "map_save_supported": bool(contract["map_save_supported"]),
                 "map_save_source": contract["map_save_source"],
                 "relocalization_supported": relocalization_supported,
+                "saved_map_relocalization_supported": bool(
+                    contract["saved_map_relocalization_supported"]
+                ),
+                "restart_recovery_supported": bool(
+                    contract["restart_recovery_supported"]
+                ),
+                "recovery_method": contract["recovery_method"],
                 "relocalization_state": relocalization_state,
                 "recovery_signal": self._last_recovery_signal,
                 "recovery_action": self._last_recovery_action,

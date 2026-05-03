@@ -241,6 +241,9 @@ def test_localization_status_accepts_super_lio_odom_map_health():
             "map_save_supported": True,
             "map_save_source": "live_map_cloud_snapshot",
             "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_super_lio",
             "relocalization_state": "unsupported",
             "recovery_signal": "NONE",
             "recovery_action": "none",
@@ -261,6 +264,9 @@ def test_localization_status_accepts_super_lio_odom_map_health():
     assert model.map_save_supported is True
     assert model.map_save_source == "live_map_cloud_snapshot"
     assert model.relocalization_supported is False
+    assert model.saved_map_relocalization_supported is False
+    assert model.restart_recovery_supported is True
+    assert model.recovery_method == "restart_super_lio"
     assert model.can_relocalize is False
     assert model.recovery_signal == "NONE"
     assert model.recovery_action == "none"
@@ -287,6 +293,9 @@ def test_super_lio_degraded_state_does_not_offer_relocalize():
 
     assert payload["state"] == "degraded"
     assert payload["relocalization_supported"] is False
+    assert payload["saved_map_relocalization_supported"] is False
+    assert payload["restart_recovery_supported"] is True
+    assert payload["recovery_method"] == "restart_super_lio"
     assert payload["can_relocalize"] is False
 
 
@@ -310,6 +319,9 @@ def test_session_snapshot_exposes_super_lio_backend_capabilities():
             "map_save_supported": True,
             "map_save_source": "live_map_cloud_snapshot",
             "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_super_lio",
             "relocalization_state": "unsupported",
             "recovery_signal": "NONE",
             "recovery_action": "restart_super_lio",
@@ -326,6 +338,9 @@ def test_session_snapshot_exposes_super_lio_backend_capabilities():
     assert model.map_save_supported is True
     assert model.map_save_source == "live_map_cloud_snapshot"
     assert model.relocalization_supported is False
+    assert model.saved_map_relocalization_supported is False
+    assert model.restart_recovery_supported is True
+    assert model.recovery_method == "restart_super_lio"
     assert model.relocalization_state == "unsupported"
     assert model.recovery_action == "restart_super_lio"
 
@@ -528,6 +543,50 @@ def test_navigation_status_uses_localizer_health_fitness_when_icp_quality_is_zer
     assert navigation["can_accept_goal"] is True
     assert navigation["reason_codes"] == []
     assert session["localizer_ready"] is True
+
+
+def test_localizer_health_topic_recovered_marks_gateway_ready_when_icp_quality_is_zero():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_localization_status
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.0
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._localization_status = {
+            "backend": "localizer",
+            "state": "TRACKING",
+            "confidence": 0.91,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.0,
+            "odom_age_ms": 120.0,
+            "cloud_age_ms": 90.0,
+            "localizer_health": "RECOVERED",
+            "localizer_health_source": "localizer_health_topic",
+            "localizer_health_fitness": 0.0215,
+            "relocalization_supported": True,
+            "saved_map_relocalization_supported": True,
+            "restart_recovery_supported": True,
+            "recovery_method": "relocalize_service",
+            "relocalization_state": "idle",
+        }
+
+    payload = build_localization_status(gateway)
+
+    assert payload["state"] == "ready"
+    assert payload["ready"] is True
+    assert payload["algorithm_healthy"] is True
+    assert payload["backend"] == "localizer"
+    assert payload["localizer_health"] == "RECOVERED"
+    assert payload["localizer_health_source"] == "localizer_health_topic"
+    assert payload["localizer_health_fitness"] == 0.0215
+    assert payload["relocalization_supported"] is True
+    assert payload["saved_map_relocalization_supported"] is True
+    assert payload["restart_recovery_supported"] is True
+    assert payload["recovery_method"] == "relocalize_service"
+    assert payload["relocalization_state"] == "idle"
+    assert payload["reasons"] == []
 
 
 def test_navigation_status_blocks_ready_when_map_cloud_is_stale():

@@ -229,3 +229,36 @@ def test_camera_bridge_service_recovery_is_opt_in(monkeypatch):
     enabled = CameraBridgeModule(max_reconnects=3, allow_service_recovery=True)
     assert enabled._allow_service_recovery is True
     assert enabled._suppress_service_recovery(level=2) is False
+
+
+def test_camera_bridge_recovery_uses_robot_camera_service(monkeypatch):
+    import subprocess
+
+    import drivers.thunder.camera_bridge_module as camera_bridge
+    from drivers.thunder.camera_bridge_module import CameraBridgeModule
+
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(tuple(args))
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.delenv("LINGTU_CAMERA_SERVICE", raising=False)
+    monkeypatch.delenv("LINGTU_CAMERA_LEGACY_SERVICES", raising=False)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(camera_bridge.time, "sleep", lambda _seconds: None)
+
+    CameraBridgeModule._restart_camera_service()
+
+    assert ("sudo", "systemctl", "stop", "camera.service") in calls
+    assert ("sudo", "systemctl", "stop", "orbbec-camera.service") in calls
+    assert ("sudo", "systemctl", "stop", "robot-camera.service") in calls
+    assert ("sudo", "systemctl", "start", "robot-camera.service") in calls
+    assert ("sudo", "systemctl", "start", "camera.service") not in calls
+    assert any(call[:4] == ("sudo", "pkill", "-TERM", "-f") for call in calls)

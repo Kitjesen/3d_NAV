@@ -37,6 +37,11 @@ Principle: `robot-*` services are the foundation; `lingtu` is the application th
 lives on top. OTA only updates `lingtu` (the contents of `/opt/lingtu/current`).
 The five `robot-*` services are stable and rarely change.
 
+Only `robot-camera.service` should own the Orbbec ROS nodes. Legacy units such
+as `camera.service` or `orbbec-camera.service` must stay stopped or masked; if
+they run together with `robot-camera.service`, ROS will show duplicate
+`/camera/camera` and `/camera/camera_container` node names.
+
 ---
 
 ## Service inventory (current)

@@ -314,7 +314,7 @@ class CameraBridgeModule(Module, layer=1):
                     self.alive.publish(False)
             elif level == 2:
                 logger.warning(
-                    "CameraBridge: L2 recovery — restart camera.service (%d/%d)",
+                    "CameraBridge: L2 recovery — restart robot-camera.service (%d/%d)",
                     self._reconnect_count, self._max_reconnects)
                 self._restart_camera_service()
                 self._shutdown_event.wait(timeout=8.0)
@@ -342,7 +342,7 @@ class CameraBridgeModule(Module, layer=1):
             logger.warning(
                 "CameraBridge: service/USB recovery suppressed; set "
                 "LINGTU_CAMERA_ALLOW_SERVICE_RECOVERY=1 to enable "
-                "camera.service restarts")
+                "robot-camera.service restarts")
             self._service_recovery_suppressed = True
         self.alive.publish(False)
         self._reconnect_count = self._max_reconnects + 1
@@ -359,26 +359,55 @@ class CameraBridgeModule(Module, layer=1):
 
     @staticmethod
     def _restart_camera_service() -> None:
-        """Restart the camera systemd service (kill stale children first)."""
+        """Restart the canonical camera systemd service.
+
+        The robot used to have a legacy ``camera.service`` unit. Starting it
+        alongside ``robot-camera.service`` creates duplicate ROS node names
+        (/camera/camera and /camera/camera_container), so recovery always stops
+        legacy units before bringing the canonical unit back.
+        """
         import subprocess
+
+        canonical_unit = os.environ.get("LINGTU_CAMERA_SERVICE", "robot-camera.service")
+        legacy_units = tuple(
+            unit.strip()
+            for unit in os.environ.get(
+                "LINGTU_CAMERA_LEGACY_SERVICES",
+                "camera.service orbbec-camera.service",
+            ).replace(",", " ").split()
+            if unit.strip()
+        )
+
+        def run_systemctl(action: str, unit: str, timeout: float = 10.0) -> None:
+            subprocess.run(
+                ["sudo", "systemctl", action, unit],
+                capture_output=True,
+                timeout=timeout,
+            )
+
         try:
-            # Stop + kill stale component_container to prevent device lock fights
-            subprocess.run(
-                ["sudo", "systemctl", "stop", "camera"],
-                capture_output=True, timeout=10,
-            )
-            subprocess.run(
-                ["sudo", "killall", "-9", "component_container"],
-                capture_output=True, timeout=5,
-            )
+            for unit in legacy_units:
+                if unit != canonical_unit:
+                    run_systemctl("stop", unit)
+            run_systemctl("stop", canonical_unit)
+
+            # Clean only stale Orbbec camera launch/container processes. Avoid a
+            # broad component_container kill because other ROS components may
+            # share that binary name.
+            for pattern in (
+                r"component_container.*__ns:=/camera",
+                r"ros2 launch orbbec_camera",
+            ):
+                subprocess.run(
+                    ["sudo", "pkill", "-TERM", "-f", pattern],
+                    capture_output=True,
+                    timeout=5,
+                )
             time.sleep(1)
-            subprocess.run(
-                ["sudo", "systemctl", "start", "camera"],
-                capture_output=True, timeout=10,
-            )
-            logger.info("CameraBridge: camera.service restarted (clean)")
+            run_systemctl("start", canonical_unit)
+            logger.info("CameraBridge: %s restarted (legacy units stopped)", canonical_unit)
         except Exception as e:
-            logger.warning("CameraBridge: failed to restart camera.service: %s", e)
+            logger.warning("CameraBridge: failed to restart %s: %s", canonical_unit, e)
 
     @staticmethod
     def _usb_reset_camera() -> None:

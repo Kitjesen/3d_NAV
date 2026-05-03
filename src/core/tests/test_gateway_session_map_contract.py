@@ -383,11 +383,16 @@ def test_map_save_falls_back_to_super_lio_live_cloud_snapshot(monkeypatch, tmp_p
     assert payload["slam_profile"] == "super_lio"
     assert payload["source"] == "live_map_cloud_snapshot"
     assert payload["relocalization_supported"] is False
+    assert payload["saved_map_relocalization_supported"] is False
+    assert payload["restart_recovery_supported"] is True
+    assert payload["recovery_method"] == "restart_super_lio"
     assert pcd_path.is_file()
     data = pcd_path.read_bytes()
     assert b"FIELDS x y z" in data
     assert b"DATA binary\n" in data
-    assert len(data.split(b"DATA binary\n", 1)[1]) == 2 * 3 * 4
+    body = data.split(b"DATA binary\n", 1)[1]
+    assert len(body) == 2 * 3 * 4
+    assert struct.unpack("<ffffff", body) == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
 
 
 def test_maps_route_accepts_legacy_and_canonical_actions():

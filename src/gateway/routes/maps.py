@@ -19,6 +19,7 @@ from gateway.services.map_safety import (
     apply_dynamic_filter_step1half,
     safe_map_name,
 )
+from gateway.services.runtime_status import backend_capability_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -472,6 +473,7 @@ def register_map_routes(app, gw) -> None:
         has_pcd = os.path.isfile(pcd_path)
         if has_pcd:
             size = os.path.getsize(pcd_path)
+            capability_defaults = backend_capability_defaults(slam_profile)
             resp = {
                 "success": True,
                 "name": name,
@@ -480,7 +482,16 @@ def register_map_routes(app, gw) -> None:
                 "slam_profile": slam_profile,
                 "source": save_source,
                 "map_save_source": save_source,
-                "relocalization_supported": slam_profile != "super_lio",
+                "relocalization_supported": capability_defaults[
+                    "relocalization_supported"
+                ],
+                "saved_map_relocalization_supported": capability_defaults[
+                    "saved_map_relocalization_supported"
+                ],
+                "restart_recovery_supported": capability_defaults[
+                    "restart_recovery_supported"
+                ],
+                "recovery_method": capability_defaults["recovery_method"],
             }
             if dufo_result is not None:
                 resp["dynamic_filter"] = dufo_result

@@ -348,6 +348,9 @@ class LocalizationStatusResponse(GatewayResponseModel):
     map_save_supported: bool | None = None
     map_save_source: str | None = None
     relocalization_supported: bool = True
+    saved_map_relocalization_supported: bool | None = None
+    restart_recovery_supported: bool | None = None
+    recovery_method: str | None = None
     relocalization_state: str | None = None
     recovery_signal: str | None = None
     recovery_action: str | None = None
@@ -479,6 +482,9 @@ class SessionResponse(GatewayResponseModel):
     map_save_supported: bool = False
     map_save_source: str | None = None
     relocalization_supported: bool = True
+    saved_map_relocalization_supported: bool | None = None
+    restart_recovery_supported: bool | None = None
+    recovery_method: str | None = None
     relocalization_state: str | None = None
     recovery_signal: str | None = None
     recovery_action: str | None = None
@@ -526,6 +532,13 @@ class MapLifecycleResponse(GatewayResponseModel):
     replaced_backups_pruned: int | None = None
     note: str | None = None
     errors: list[Any] | None = None
+    slam_profile: str | None = None
+    source: str | None = None
+    map_save_source: str | None = None
+    relocalization_supported: bool | None = None
+    saved_map_relocalization_supported: bool | None = None
+    restart_recovery_supported: bool | None = None
+    recovery_method: str | None = None
     dynamic_filter: Any = None
     maps: list[Any] | None = None
 

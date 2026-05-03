@@ -63,8 +63,9 @@ $2
 # ── Subcommand: status (one-shot status board) ──
 cmd_status() {
     echo -e "${B}=== Lingtu @ $(date '+%H:%M:%S') ===${N}"
-    local SESS HEALTH STATE PATHJ
+    local SESS HEALTH STATE PATHJ LOCJ
     SESS=$(curl -s --max-time 2 "$GW/api/v1/session" 2>/dev/null || echo '{}')
+    LOCJ=$(curl -s --max-time 2 "$GW/api/v1/localization/status" 2>/dev/null || echo '{}')
     HEALTH=$(curl -s --max-time 2 "$GW/api/v1/health" 2>/dev/null || echo '{}')
     STATE=$(curl -s --max-time 2 "$GW/api/v1/state" 2>/dev/null || echo '{}')
     PATHJ=$(curl -s --max-time 2 "$GW/api/v1/path" 2>/dev/null || echo '{}')
@@ -81,11 +82,34 @@ cmd_status() {
     esac
     printf "${B}[1] Session${N}   mode=%b  map=${C}%s${N}  can_map=%s\n" "$MC" "$MAP" "$CAN_M"
 
-    local HZ LIVE LOC LOC_CAUSE HZC LOCC
+    local HZ LIVE LOC LOC_CAUSE HZC LOCC SLAM_BACKEND HEALTH_SOURCE RELOC_STATE
+    local RECOVERY_SIGNAL SAVED_RELOC RESTART_RECOVERY RECOVERY_METHOD SLAM_EXTRA
     HZ=$(pjson "$HEALTH" 'print(d["sensors"]["slam"].get("hz","?"))')
     LIVE=$(pjson "$HEALTH" 'print(d.get("map_points",0))')
     LOC=$(pjson "$STATE" 'print(d.get("dialogue",{}).get("localization","-"))')
     LOC_CAUSE=$(pjson "$STATE" 'print(d.get("dialogue",{}).get("loc_root_cause","") or "")')
+    SLAM_BACKEND=$(pjson "$LOCJ" 'print(d.get("backend") or d.get("localization_backend") or "-")')
+    [ "$SLAM_BACKEND" = "-" ] && SLAM_BACKEND=$(pjson "$SESS" 'print(d.get("localization_backend") or "-")')
+    HEALTH_SOURCE=$(pjson "$LOCJ" 'print(d.get("health_source") or d.get("localizer_health_source") or "-")')
+    [ "$HEALTH_SOURCE" = "-" ] && HEALTH_SOURCE=$(pjson "$SESS" 'print(d.get("health_source") or "-")')
+    RELOC_STATE=$(pjson "$LOCJ" 'print(d.get("relocalization_state") or "-")')
+    [ "$RELOC_STATE" = "-" ] && RELOC_STATE=$(pjson "$SESS" 'print(d.get("relocalization_state") or "-")')
+    RECOVERY_SIGNAL=$(pjson "$LOCJ" 'print(d.get("recovery_signal") or "-")')
+    [ "$RECOVERY_SIGNAL" = "-" ] && RECOVERY_SIGNAL=$(pjson "$SESS" 'print(d.get("recovery_signal") or "-")')
+    SAVED_RELOC=$(pjson "$LOCJ" 'v=d.get("saved_map_relocalization_supported", d.get("relocalization_supported")); print(v if v is not None else "-")')
+    [ "$SAVED_RELOC" = "-" ] && SAVED_RELOC=$(pjson "$SESS" 'v=d.get("saved_map_relocalization_supported", d.get("relocalization_supported")); print(v if v is not None else "-")')
+    RESTART_RECOVERY=$(pjson "$LOCJ" 'v=d.get("restart_recovery_supported"); print(v if v is not None else "-")')
+    [ "$RESTART_RECOVERY" = "-" ] && RESTART_RECOVERY=$(pjson "$SESS" 'v=d.get("restart_recovery_supported"); print(v if v is not None else "-")')
+    RECOVERY_METHOD=$(pjson "$LOCJ" 'print(d.get("recovery_method") or "-")')
+    [ "$RECOVERY_METHOD" = "-" ] && RECOVERY_METHOD=$(pjson "$SESS" 'print(d.get("recovery_method") or "-")')
+    SLAM_EXTRA=""
+    case "$SLAM_BACKEND" in ""|-|None|null) ;; *) SLAM_EXTRA="${SLAM_EXTRA}  backend=${SLAM_BACKEND}" ;; esac
+    case "$HEALTH_SOURCE" in ""|-|None|null) ;; *) SLAM_EXTRA="${SLAM_EXTRA}  health_src=${HEALTH_SOURCE}" ;; esac
+    case "$RELOC_STATE" in ""|-|None|null) ;; *) SLAM_EXTRA="${SLAM_EXTRA}  relocal=${RELOC_STATE}" ;; esac
+    case "$RECOVERY_SIGNAL" in ""|-|None|null) ;; *) SLAM_EXTRA="${SLAM_EXTRA}  recover=${RECOVERY_SIGNAL}" ;; esac
+    case "$SAVED_RELOC" in ""|-|None|null) ;; *) SLAM_EXTRA="${SLAM_EXTRA}  saved_reloc=${SAVED_RELOC}" ;; esac
+    case "$RESTART_RECOVERY" in ""|-|None|null) ;; *) SLAM_EXTRA="${SLAM_EXTRA}  restart_rec=${RESTART_RECOVERY}" ;; esac
+    case "$RECOVERY_METHOD" in ""|-|None|null) ;; *) SLAM_EXTRA="${SLAM_EXTRA}  recovery_method=${RECOVERY_METHOD}" ;; esac
     if awk "BEGIN{exit !($HZ < 5)}" 2>/dev/null; then HZC="${R}${HZ}${N}"
     elif awk "BEGIN{exit !($HZ < 20)}" 2>/dev/null; then HZC="${Y}${HZ}${N}"
     else HZC="${G}${HZ}${N}"; fi
@@ -95,7 +119,7 @@ cmd_status() {
         LOST)     LOCC="${R}${LOC}${N}${D} (${LOC_CAUSE})${N}" ;;
         *)        LOCC="$LOC" ;;
     esac
-    printf "${B}[2] SLAM${N}      hz=${HZC}Hz  live_pts=%s  loc=%b\n" "$LIVE" "$LOCC"
+    printf "${B}[2] SLAM${N}      hz=${HZC}Hz  live_pts=%s  loc=%b%s\n" "$LIVE" "$LOCC" "$SLAM_EXTRA"
 
     local RX RY RZ YAW VX WZ ABSURD
     RX=$(pjson "$STATE" 'print(round(float(d["odometry"].get("x",0)),2))')
@@ -164,7 +188,11 @@ except Exception: print('- - -')
     esac
     printf "${B}[6] Ctrl${N}      teleop=%s(%s)  safety=%b\n" "$TELE" "$TELE_N" "$SC"
 
-    local LATEST NAME MTIME PCD BAK PAT DUFO CLEAN DIRTY DROP PCT
+    local LATEST NAME MTIME PCD BAK PAT DUFO CLEAN DIRTY DROP PCT MAP_SAVE_SOURCE MAP_EXTRA
+    MAP_SAVE_SOURCE=$(pjson "$LOCJ" 'print(d.get("map_save_source") or "-")')
+    [ "$MAP_SAVE_SOURCE" = "-" ] && MAP_SAVE_SOURCE=$(pjson "$SESS" 'print(d.get("map_save_source") or "-")')
+    MAP_EXTRA=""
+    case "$MAP_SAVE_SOURCE" in ""|-|None|null) ;; *) MAP_EXTRA="  save_src=${MAP_SAVE_SOURCE}" ;; esac
     LATEST=$(ls -dt "$MAP_DIR"/*/ 2>/dev/null | head -1)
     if [ -n "$LATEST" ]; then
         NAME=$(basename "$LATEST")
@@ -180,9 +208,9 @@ except Exception: print('- - -')
             [ "$DIRTY" -gt 0 ] && PCT=$(awk -v d=$DROP -v t=$DIRTY 'BEGIN{printf "%.1f",100*d/t}') || PCT=0
             DUFO="${G}dufo -${DROP}pts (${PCT}%)${N}"
         fi
-        printf "${B}[7] Map${N}       %s ${D}@%s${N}  map=%s  bak=%s  patches=%s  %b\n" "$NAME" "$MTIME" "$PCD" "$BAK" "$PAT" "$DUFO"
+        printf "${B}[7] Map${N}       %s ${D}@%s${N}  map=%s  bak=%s  patches=%s%s  %b\n" "$NAME" "$MTIME" "$PCD" "$BAK" "$PAT" "$MAP_EXTRA" "$DUFO"
     else
-        printf "${B}[7] Map${N}       ${D}(no maps)${N}\n"
+        printf "${B}[7] Map${N}       ${D}(no maps)${N}%s\n" "$MAP_EXTRA"
     fi
 
     local LOG
@@ -283,7 +311,7 @@ print_service_row() {
 
 warn_legacy_services() {
     local legacy active=()
-    for legacy in lidar.service slam.service localizer.service slam_pgo.service super_lio.service super-lio.service; do
+    for legacy in lidar.service camera.service orbbec-camera.service slam.service localizer.service slam_pgo.service super_lio.service super-lio.service; do
         if [ "$(systemctl is-active "$legacy" 2>/dev/null || true)" = "active" ]; then
             active+=("$legacy")
         fi
@@ -345,12 +373,12 @@ cmd_doctor() {
     echo -e "${B}[2] ROS duplicate nodes${N}"
     if command -v ros2 >/dev/null 2>&1; then
         local dup
-        dup=$(ros2 node list 2>/dev/null | sort | uniq -d | grep -e livox_driver_node -e lio_node -e super_lio_node -e localizer_node || true)
+        dup=$(ros2 node list 2>/dev/null | sort | uniq -d | grep -e livox_driver_node -e lio_node -e super_lio_node -e localizer_node -e '^/camera/camera$' -e '^/camera/camera_container$' || true)
         if [ -n "$dup" ]; then
             printf "${Y}WARN${N}: duplicate ROS node names detected:\n"
             echo "$dup" | sed 's/^/  /'
         else
-            echo "  ok: no duplicate Livox/Fast-LIO/Super-LIO/localizer nodes"
+            echo "  ok: no duplicate Livox/Fast-LIO/Super-LIO/localizer/camera nodes"
         fi
     else
         echo "  ros2 not found"

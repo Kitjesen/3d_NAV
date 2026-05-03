@@ -85,6 +85,24 @@ def test_logical_status_keeps_legacy_service_fallback(monkeypatch):
     }
 
 
+def test_canonical_robot_unit_wins_over_active_legacy_alias(monkeypatch):
+    from core.service_manager import ServiceManager
+
+    fake = _FakeSystemctl(
+        active={"camera.service"},
+        loaded={"robot-camera.service", "camera.service"},
+    )
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    svc = ServiceManager()
+
+    assert svc.status("camera") == {"camera": "stopped"}
+    assert svc.start("camera") == ["camera"]
+    assert "robot-camera.service" in fake.active
+    assert ["sudo", "systemctl", "start", "robot-camera.service"] in fake.commands
+    assert ["sudo", "systemctl", "start", "camera.service"] not in fake.commands
+
+
 def test_start_prefers_robot_unit_when_installed(monkeypatch):
     from core.service_manager import ServiceManager
 

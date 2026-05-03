@@ -55,3 +55,16 @@ def test_lingtu_doctor_reports_standard_quality_topic_with_legacy_hint():
     assert "/nav/localization_quality" in text
     assert "/localization_quality" in text
     assert "legacy; remap to /nav/localization_quality" in text
+
+
+def test_camera_deployment_retires_legacy_units():
+    install = _read("docs/04-deployment/services/install.sh")
+    readme = _read("docs/04-deployment/README.md")
+    camera_service = _read("docs/04-deployment/services/robot-camera.service")
+
+    assert "robot-camera.service" in install
+    assert "camera.service orbbec-camera.service" in install
+    assert 'systemctl mask "$legacy"' in install
+    assert "duplicate /camera ROS node names" in install
+    assert "Only `robot-camera.service` should own the Orbbec ROS nodes" in readme
+    assert "KillMode=control-group" in camera_service

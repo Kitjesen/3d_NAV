@@ -81,8 +81,19 @@ class ServiceManager:
                 self._started.remove(unit)
 
     def is_running(self, service: str) -> bool:
-        """Check if a logical service or any of its concrete units is active."""
-        return any(self._is_active_unit(unit) for unit in self._candidate_units(service))
+        """Check whether a logical service is active.
+
+        When the canonical robot-* unit exists, it is the source of truth. A
+        stale legacy alias such as camera.service should not make the manager
+        believe the camera stack is healthy or skip starting robot-camera.
+        """
+        candidates = self._candidate_units(service)
+        if not candidates:
+            return False
+        canonical = candidates[0]
+        if self._unit_exists(canonical):
+            return self._is_active_unit(canonical)
+        return any(self._is_active_unit(unit) for unit in candidates)
 
     def start(self, *services: str) -> list[str]:
         """Start services. Returns list of actually started logical services."""

@@ -100,6 +100,37 @@ def _as_optional_bool(value: Any) -> bool | None:
     return None
 
 
+def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
+    backend = str(backend_name or "").strip().lower()
+    if backend == "super_lio":
+        return {
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_super_lio",
+        }
+    if backend == "localizer":
+        return {
+            "relocalization_supported": True,
+            "saved_map_relocalization_supported": True,
+            "restart_recovery_supported": True,
+            "recovery_method": "relocalize_service",
+        }
+    if backend in {"fastlio2", "slam"}:
+        return {
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_slam",
+        }
+    return {
+        "relocalization_supported": True,
+        "saved_map_relocalization_supported": True,
+        "restart_recovery_supported": False,
+        "recovery_method": "relocalize_service",
+    }
+
+
 def _reason_code_from_text(prefix: str, text: str) -> str:
     words: list[str] = []
     current: list[str] = []
@@ -317,15 +348,29 @@ def build_localization_status_from_parts(
         or session.get("slam_profile")
     )
     backend_name = str(backend or "").strip().lower()
+    capability_defaults = backend_capability_defaults(backend_name)
     relocalization_supported = _as_optional_bool(
         diagnostics.get("relocalization_supported")
     )
     if relocalization_supported is None:
-        relocalization_supported = backend_name not in {
-            "super_lio",
-            "fastlio2",
-            "slam",
-        }
+        relocalization_supported = bool(
+            capability_defaults["relocalization_supported"]
+        )
+    saved_map_relocalization_supported = _as_optional_bool(
+        diagnostics.get("saved_map_relocalization_supported")
+    )
+    if saved_map_relocalization_supported is None:
+        saved_map_relocalization_supported = relocalization_supported
+    restart_recovery_supported = _as_optional_bool(
+        diagnostics.get("restart_recovery_supported")
+    )
+    if restart_recovery_supported is None:
+        restart_recovery_supported = bool(
+            capability_defaults["restart_recovery_supported"]
+        )
+    recovery_method = diagnostics.get("recovery_method")
+    if not recovery_method:
+        recovery_method = capability_defaults["recovery_method"]
     map_save_supported = _as_optional_bool(diagnostics.get("map_save_supported"))
     return {
         "schema_version": LOCALIZATION_STATUS_SCHEMA_VERSION,
@@ -360,6 +405,9 @@ def build_localization_status_from_parts(
         "map_save_supported": map_save_supported,
         "map_save_source": diagnostics.get("map_save_source"),
         "relocalization_supported": relocalization_supported,
+        "saved_map_relocalization_supported": saved_map_relocalization_supported,
+        "restart_recovery_supported": restart_recovery_supported,
+        "recovery_method": recovery_method,
         "relocalization_state": diagnostics.get("relocalization_state"),
         "recovery_signal": diagnostics.get("recovery_signal"),
         "recovery_action": diagnostics.get("recovery_action"),
@@ -382,7 +430,7 @@ def build_localization_status_from_parts(
         "diag_received_ts": _as_float(diagnostics.get("_gateway_received_ts")),
         "diag_age_ms": diag_age_ms,
         "can_relocalize": (
-            relocalization_supported
+            saved_map_relocalization_supported
             and state in {"degraded", "lost"}
             and odometry is not None
         ),
