@@ -158,6 +158,7 @@ export interface PlanPreviewResponse {
 export interface ClientLinks {
   bootstrap?: string
   capabilities?: string
+  traffic?: string
   state?: string
   scene_graph?: string
   locations?: string
@@ -274,8 +275,58 @@ export interface AppRealtimeCapabilities {
   cloud: RealtimeCloudCapability
 }
 
+export interface TrafficSSEStats {
+  clients: number
+  queue_maxsize?: number | null
+  queue_depths: number[]
+  max_depth_seen: number
+  latest_event_id: number
+  published_events: number
+  dropped_events: number
+  suppressed_events: Record<string, number>
+  raster_min_interval_s?: number | null
+  slope_grid_inline: boolean
+  drop_policy?: string | null
+  [key: string]: unknown
+}
+
+export interface TrafficCloudStats {
+  clients: number
+  queue_maxsize?: number | null
+  queue_depths: number[]
+  max_depth_seen: number
+  published_frames: number
+  dropped_frames: number
+  drop_policy?: string | null
+  latest_seq: number
+  [key: string]: unknown
+}
+
+export interface AppTrafficResponse {
+  schema_version: number
+  ts: number
+  server: ServerInfo
+  status: 'ok' | 'degraded'
+  sse: TrafficSSEStats
+  cloud: TrafficCloudStats
+  recommended_client_rates_hz: Record<string, number>
+  client_policy: {
+    usage: string
+    poll_rates_hz: Record<string, number>
+    events_endpoint: string
+    traffic_endpoint: string
+    cloud_endpoint: string
+    large_event_policy: Record<string, unknown>
+    backpressure: Record<string, unknown>
+    [key: string]: unknown
+  }
+  warnings: string[]
+  links: ClientLinks
+}
+
 export interface AppBootstrapResponse {
   schema_version: number
+  ts: number
   server: ServerInfo
   robot: Record<string, unknown>
   session: SessionEvent['data'] | Record<string, unknown>
@@ -293,6 +344,10 @@ export interface AppBootstrapResponse {
       usage: string
       poll_rates_hz: Record<string, number>
       events_endpoint: string
+      traffic_endpoint?: string
+      cloud_endpoint?: string
+      large_event_policy?: Record<string, unknown>
+      backpressure?: Record<string, unknown>
     }
   }
   capabilities: Record<string, boolean>
@@ -302,6 +357,7 @@ export interface AppBootstrapResponse {
 
 export interface AppCapabilitiesResponse {
   schema_version: number
+  ts: number
   server: ServerInfo
   auth: Record<string, unknown>
   features: Record<string, boolean>

@@ -723,6 +723,7 @@ class WebRTCControlResponse(GatewayResponseModel):
 class ClientLinks(GatewayResponseModel):
     bootstrap: str | None = None
     capabilities: str | None = None
+    traffic: str | None = None
     state: str | None = None
     scene_graph: str | None = None
     locations: str | None = None
@@ -744,6 +745,7 @@ class ClientLinks(GatewayResponseModel):
     session: str | None = None
     session_start: str | None = None
     session_end: str | None = None
+    navigation_plan: str | None = None
     goal: str | None = None
     navigate_click: str | None = None
     stop: str | None = None
@@ -834,6 +836,44 @@ class AppRealtimeCapabilities(GatewayResponseModel):
     teleop: RealtimeTeleopCapability
     camera: RealtimeCameraCapability
     cloud: RealtimeCloudCapability
+
+
+class TrafficSSEStats(GatewayResponseModel):
+    clients: int = 0
+    queue_maxsize: int | None = None
+    queue_depths: list[int] = Field(default_factory=list)
+    max_depth_seen: int = 0
+    latest_event_id: int = 0
+    published_events: int = 0
+    dropped_events: int = 0
+    suppressed_events: dict[str, int] = Field(default_factory=dict)
+    raster_min_interval_s: float | None = None
+    slope_grid_inline: bool = False
+    drop_policy: str | None = None
+
+
+class TrafficCloudStats(GatewayResponseModel):
+    clients: int = 0
+    queue_maxsize: int | None = None
+    queue_depths: list[int] = Field(default_factory=list)
+    max_depth_seen: int = 0
+    published_frames: int = 0
+    dropped_frames: int = 0
+    drop_policy: str | None = None
+    latest_seq: int = 0
+
+
+class AppTrafficResponse(GatewayResponseModel):
+    schema_version: int
+    ts: float
+    server: ServerInfo
+    status: Literal["ok", "degraded"]
+    sse: TrafficSSEStats
+    cloud: TrafficCloudStats
+    recommended_client_rates_hz: dict[str, float] = Field(default_factory=dict)
+    client_policy: dict[str, Any]
+    warnings: list[str] = Field(default_factory=list)
+    links: ClientLinks
 
 
 class StateResponse(GatewayResponseModel):

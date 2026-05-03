@@ -11,7 +11,11 @@ pytest.importorskip("fastapi")
 
 def test_app_bootstrap_service_returns_client_contract():
     from gateway.gateway_module import GatewayModule
-    from gateway.services.app_bootstrap import build_app_bootstrap, build_app_capabilities
+    from gateway.services.app_bootstrap import (
+        build_app_bootstrap,
+        build_app_capabilities,
+        build_app_traffic,
+    )
 
     gateway = GatewayModule()
     with gateway._state_lock:
@@ -58,12 +62,17 @@ def test_app_bootstrap_service_returns_client_contract():
     assert "scene_graph" not in payload["scene"]
     assert payload["traffic"]["client_policy"]["usage"] == "cold_start_only"
     assert payload["traffic"]["client_policy"]["events_endpoint"] == "/api/v1/events"
+    assert (
+        payload["traffic"]["client_policy"]["traffic_endpoint"]
+        == "/api/v1/app/traffic"
+    )
     assert payload["traffic"]["client_policy"]["large_event_policy"]["slope_grid_payload"] == "metadata_sse"
     assert payload["capabilities"]["exploration"] is True
     assert payload["media"]["webrtc_available"] is True
     assert payload["media"]["camera_ws"] == "/ws/camera"
     assert payload["capabilities_endpoint"] == "/api/v1/app/capabilities"
     assert payload["links"]["state"] == "/api/v1/state"
+    assert payload["links"]["traffic"] == "/api/v1/app/traffic"
     assert payload["links"]["localization_status"] == "/api/v1/localization/status"
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
     assert payload["links"]["navigation_plan"] == "/api/v1/navigation/plan"
@@ -81,6 +90,7 @@ def test_app_bootstrap_service_returns_client_contract():
     assert capabilities["features"]["localization"] is True
     assert capabilities["features"]["webrtc"] is True
     assert capabilities["endpoints"]["app"]["bootstrap"]["path"] == "/api/v1/app/bootstrap"
+    assert capabilities["endpoints"]["app"]["traffic"]["path"] == "/api/v1/app/traffic"
     assert (
         capabilities["endpoints"]["state"]["localization_status"]["path"]
         == "/api/v1/localization/status"
@@ -124,6 +134,18 @@ def test_app_bootstrap_service_returns_client_contract():
     assert capabilities["endpoints"]["realtime"]["camera"]["method"] == "WS"
     assert capabilities["client_policy"]["retry_safe_when_request_id_present"] is True
     assert capabilities["client_policy"]["commands"]["idempotency_supported"] is True
+
+    traffic = build_app_traffic(gateway)
+
+    assert traffic["schema_version"] == 1
+    assert traffic["status"] == "ok"
+    assert traffic["server"]["time"] == traffic["ts"]
+    assert traffic["sse"]["queue_maxsize"] == gateway._sse_queue_maxsize
+    assert traffic["cloud"]["queue_maxsize"] == gateway._cloud_queue_maxsize
+    assert traffic["client_policy"]["usage"] == "low_frequency_monitoring"
+    assert traffic["client_policy"]["events_endpoint"] == "/api/v1/events"
+    assert traffic["client_policy"]["cloud_endpoint"] == "/ws/cloud"
+    assert traffic["links"]["traffic"] == "/api/v1/app/traffic"
 
 
 def test_app_bootstrap_falls_back_when_session_snapshot_fails():
@@ -171,6 +193,15 @@ def test_app_bootstrap_route_endpoint_returns_payload():
         == "/api/v1/navigation/status"
     )
 
+    traffic_route = next(
+        route for route in app.routes if route.path == "/api/v1/app/traffic"
+    )
+    traffic = asyncio.run(traffic_route.endpoint())
+
+    assert traffic["schema_version"] == 1
+    assert traffic["status"] == "ok"
+    assert traffic["links"]["events"] == "/api/v1/events"
+
 
 def test_app_capabilities_enriches_specs_from_openapi():
     from gateway.gateway_module import GatewayModule
@@ -185,6 +216,7 @@ def test_app_capabilities_enriches_specs_from_openapi():
     )
     capabilities = asyncio.run(route.endpoint())
 
+    app_traffic = capabilities["endpoints"]["app"]["traffic"]
     state = capabilities["endpoints"]["state"]["snapshot"]
     scene_graph = capabilities["endpoints"]["state"]["scene_graph"]
     locations = capabilities["endpoints"]["state"]["locations"]
@@ -207,6 +239,7 @@ def test_app_capabilities_enriches_specs_from_openapi():
     events = capabilities["endpoints"]["realtime"]["events"]
     camera = capabilities["endpoints"]["media"]["camera_snapshot"]
 
+    assert app_traffic["response_schema"] == "AppTrafficResponse"
     assert state["response_schema"] == "StateResponse"
     assert scene_graph["response_schema"] == "SceneGraphResponse"
     assert locations["response_schema"] == "LocationsResponse"
@@ -282,6 +315,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     client = TestClient(gateway._app)
 
     bootstrap = client.get("/api/v1/app/bootstrap")
+    traffic = client.get("/api/v1/app/traffic")
     state = client.get("/api/v1/state")
     scene_graph = client.get("/api/v1/scene_graph")
     locations = client.get("/api/v1/locations")
@@ -290,6 +324,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
 
     for response in (
         bootstrap,
+        traffic,
         state,
         scene_graph,
         locations,
@@ -299,6 +334,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
         assert response.status_code == 200
 
     bootstrap_payload = bootstrap.json()
+    traffic_payload = traffic.json()
     state_payload = state.json()
     scene_graph_payload = scene_graph.json()
     locations_payload = locations.json()
@@ -311,10 +347,25 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert bootstrap_payload["traffic"]["client_policy"]["usage"] == "cold_start_only"
     assert bootstrap_payload["links"]["state"] == "/api/v1/state"
     assert bootstrap_payload["links"]["events"] == "/api/v1/events"
+    assert bootstrap_payload["links"]["traffic"] == "/api/v1/app/traffic"
     assert "scene_graph" not in bootstrap_payload["scene"]
     assert "path" not in bootstrap_payload["path"]
     assert "can_send_goal" in bootstrap_payload["control"]
     assert isinstance(bootstrap_payload["control"]["goal_blockers"], list)
+
+    assert traffic_payload["schema_version"] == 1
+    assert traffic_payload["ts"] > 0
+    assert traffic_payload["server"]["time"] == traffic_payload["ts"]
+    assert traffic_payload["status"] == "ok"
+    assert traffic_payload["sse"]["clients"] == 0
+    assert traffic_payload["cloud"]["clients"] == 0
+    assert traffic_payload["client_policy"]["usage"] == "low_frequency_monitoring"
+    assert traffic_payload["client_policy"]["events_endpoint"] == "/api/v1/events"
+    assert (
+        traffic_payload["client_policy"]["traffic_endpoint"]
+        == "/api/v1/app/traffic"
+    )
+    assert traffic_payload["warnings"] == []
 
     assert state_payload["schema_version"] == 1
     assert state_payload["ts"] > 0
@@ -352,6 +403,10 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert (
         capabilities_payload["endpoints"]["app"]["bootstrap"]["response_schema"]
         == "AppBootstrapResponse"
+    )
+    assert (
+        capabilities_payload["endpoints"]["app"]["traffic"]["response_schema"]
+        == "AppTrafficResponse"
     )
     assert (
         capabilities_payload["endpoints"]["state"]["snapshot"]["response_schema"]

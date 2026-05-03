@@ -25,10 +25,12 @@ from gateway.services.traffic import (
 
 APP_BOOTSTRAP_SCHEMA_VERSION = 1
 APP_CAPABILITIES_SCHEMA_VERSION = 1
+APP_TRAFFIC_SCHEMA_VERSION = 1
 
 CLIENT_LINKS: dict[str, str] = {
     "bootstrap": "/api/v1/app/bootstrap",
     "capabilities": "/api/v1/app/capabilities",
+    "traffic": "/api/v1/app/traffic",
     "state": "/api/v1/state",
     "scene_graph": "/api/v1/scene_graph",
     "locations": "/api/v1/locations",
@@ -85,6 +87,7 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
     "app": {
         "bootstrap": {"method": "GET", "path": CLIENT_LINKS["bootstrap"]},
         "capabilities": {"method": "GET", "path": CLIENT_LINKS["capabilities"]},
+        "traffic": {"method": "GET", "path": CLIENT_LINKS["traffic"]},
     },
     "state": {
         "snapshot": {"method": "GET", "path": CLIENT_LINKS["state"]},
@@ -233,6 +236,43 @@ def _traffic_summary(gw: Any) -> dict[str, Any]:
     }
 
 
+def _int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _max_depth(stats: Mapping[str, Any]) -> int:
+    depths = stats.get("queue_depths", [])
+    if isinstance(depths, list):
+        candidates = [_int_value(item) for item in depths]
+    else:
+        candidates = []
+    candidates.append(_int_value(stats.get("max_depth_seen")))
+    return max(candidates, default=0)
+
+
+def _traffic_warnings(traffic: Mapping[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    sse = _mapping(traffic.get("sse"))
+    cloud = _mapping(traffic.get("cloud"))
+
+    if _int_value(sse.get("dropped_events")) > 0:
+        warnings.append("sse_events_dropped")
+    sse_maxsize = _int_value(sse.get("queue_maxsize"))
+    if sse_maxsize > 0 and _max_depth(sse) >= max(1, int(sse_maxsize * 0.75)):
+        warnings.append("sse_queue_pressure")
+
+    if _int_value(cloud.get("dropped_frames")) > 0:
+        warnings.append("cloud_frames_dropped_latest_only")
+    cloud_maxsize = _int_value(cloud.get("queue_maxsize"))
+    if cloud_maxsize > 0 and _max_depth(cloud) >= cloud_maxsize:
+        warnings.append("cloud_queue_pressure")
+
+    return warnings
+
+
 def _large_event_policy(gw: Any) -> dict[str, Any]:
     slope_inline = bool(
         getattr(gw, "_sse_slope_payload_enabled", DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED)
@@ -245,6 +285,26 @@ def _large_event_policy(gw: Any) -> dict[str, Any]:
         "slope_grid_payload": "inline_sse" if slope_inline else "metadata_sse",
         "point_cloud_payload": "binary_websocket",
         "binary_cloud_endpoint": CLIENT_LINKS["cloud_ws"],
+    }
+
+
+def _client_traffic_policy(
+    gw: Any,
+    traffic: Mapping[str, Any],
+    *,
+    usage: str,
+) -> dict[str, Any]:
+    return {
+        "usage": usage,
+        "poll_rates_hz": traffic.get("recommended_client_rates_hz", {}),
+        "events_endpoint": CLIENT_LINKS["events"],
+        "traffic_endpoint": CLIENT_LINKS["traffic"],
+        "cloud_endpoint": CLIENT_LINKS["cloud_ws"],
+        "large_event_policy": _large_event_policy(gw),
+        "backpressure": {
+            "sse": _mapping(traffic.get("sse")).get("drop_policy"),
+            "cloud": _mapping(traffic.get("cloud")).get("drop_policy"),
+        },
     }
 
 
@@ -454,6 +514,32 @@ def build_app_capabilities(gw: Any) -> dict[str, Any]:
     }
 
 
+def build_app_traffic(gw: Any) -> dict[str, Any]:
+    """Return low-frequency App/Web traffic and realtime backpressure status."""
+    now = time.time()
+    traffic = _traffic_summary(gw)
+    warnings = _traffic_warnings(traffic)
+    return {
+        "schema_version": APP_TRAFFIC_SCHEMA_VERSION,
+        "ts": now,
+        "server": {
+            "api_version": "v1",
+            "time": now,
+        },
+        "status": "degraded" if warnings else "ok",
+        "sse": _mapping(traffic.get("sse")),
+        "cloud": _mapping(traffic.get("cloud")),
+        "recommended_client_rates_hz": traffic.get("recommended_client_rates_hz", {}),
+        "client_policy": _client_traffic_policy(
+            gw,
+            traffic,
+            usage="low_frequency_monitoring",
+        ),
+        "warnings": warnings,
+        "links": dict(CLIENT_LINKS),
+    }
+
+
 def build_app_bootstrap(gw: Any) -> dict[str, Any]:
     """Return the first payload a mobile app or web client needs after login."""
     now = time.time()
@@ -532,12 +618,11 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
         },
         "traffic": {
             **traffic,
-            "client_policy": {
-                "usage": "cold_start_only",
-                "poll_rates_hz": traffic.get("recommended_client_rates_hz", {}),
-                "events_endpoint": CLIENT_LINKS["events"],
-                "large_event_policy": _large_event_policy(gw),
-            },
+            "client_policy": _client_traffic_policy(
+                gw,
+                traffic,
+                usage="cold_start_only",
+            ),
         },
         "capabilities": _feature_flags(gw),
         "capabilities_endpoint": CLIENT_LINKS["capabilities"],

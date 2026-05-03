@@ -356,6 +356,9 @@ def test_openapi_exposes_client_response_models():
     assert "ReadinessResponse" in schemas
     assert "AppBootstrapResponse" in schemas
     assert "AppCapabilitiesResponse" in schemas
+    assert "AppTrafficResponse" in schemas
+    assert "TrafficSSEStats" in schemas
+    assert "TrafficCloudStats" in schemas
     assert "HealthResponse" in schemas
     assert "DevicesResponse" in schemas
     assert "LivenessResponse" in schemas
@@ -589,6 +592,9 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(openapi, "/api/v1/app/capabilities").endswith(
         "/AppCapabilitiesResponse"
     )
+    assert _schema_ref_for(openapi, "/api/v1/app/traffic").endswith(
+        "/AppTrafficResponse"
+    )
 
     assert schemas["SceneGraphResponse"]["properties"]["objects"]["items"][
         "$ref"
@@ -620,6 +626,12 @@ def test_openapi_exposes_client_response_models():
     assert schemas["NavigationStatusResponse"]["properties"]["progress"][
         "$ref"
     ].endswith("/NavigationProgressSummary")
+    assert schemas["AppTrafficResponse"]["properties"]["sse"]["$ref"].endswith(
+        "/TrafficSSEStats"
+    )
+    assert schemas["AppTrafficResponse"]["properties"]["cloud"]["$ref"].endswith(
+        "/TrafficCloudStats"
+    )
     assert "schema_version" in schemas["ControlCommandResponse"]["properties"]
     assert "ok" in schemas["ControlCommandResponse"]["properties"]
     assert schemas["ControlCommandResponse"]["properties"]["command"]["$ref"].endswith(
@@ -684,6 +696,7 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["state"]["health"],
         capabilities["endpoints"]["app"]["bootstrap"],
         capabilities["endpoints"]["app"]["capabilities"],
+        capabilities["endpoints"]["app"]["traffic"],
         capabilities["endpoints"]["control"]["navigation_plan"],
     ]
     for spec in key_specs:

@@ -131,7 +131,7 @@ def test_cloud_slow_client_keeps_latest_frames_and_drops_oldest():
 
 def test_gateway_health_and_bootstrap_expose_traffic_policy():
     from gateway.gateway_module import GatewayModule
-    from gateway.services.app_bootstrap import build_app_bootstrap
+    from gateway.services.app_bootstrap import build_app_bootstrap, build_app_traffic
 
     gateway = GatewayModule()
     gateway._sse_subscribe()
@@ -139,6 +139,7 @@ def test_gateway_health_and_bootstrap_expose_traffic_policy():
 
     health = gateway.health()
     bootstrap = build_app_bootstrap(gateway)
+    traffic = build_app_traffic(gateway)
 
     assert health["gateway"]["traffic"]["sse"]["clients"] == 1
     assert health["gateway"]["traffic"]["cloud"]["clients"] == 1
@@ -146,6 +147,37 @@ def test_gateway_health_and_bootstrap_expose_traffic_policy():
     assert bootstrap["traffic"]["cloud"]["queue_maxsize"] == gateway._cloud_queue_maxsize
     assert bootstrap["traffic"]["recommended_client_rates_hz"]["state"] == 1.0
     assert bootstrap["traffic"]["client_policy"]["large_event_policy"]["slope_grid_payload"] == "metadata_sse"
+    assert traffic["schema_version"] == 1
+    assert traffic["status"] == "ok"
+    assert traffic["sse"]["clients"] == 1
+    assert traffic["cloud"]["clients"] == 1
+    assert traffic["client_policy"]["usage"] == "low_frequency_monitoring"
+    assert traffic["client_policy"]["traffic_endpoint"] == "/api/v1/app/traffic"
+
+
+def test_app_traffic_reports_backpressure_warnings():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.app_bootstrap import build_app_traffic
+
+    gateway = GatewayModule()
+    gateway._sse_queue_maxsize = 2
+    gateway._cloud_queue_maxsize = 2
+    gateway._sse_subscribe()
+    gateway._cloud_subscribe()
+
+    for seq in range(5):
+        gateway.push_event({"type": "tick", "seq": seq})
+        gateway._publish_cloud_frame(bytes([seq]))
+
+    traffic = build_app_traffic(gateway)
+
+    assert traffic["status"] == "degraded"
+    assert traffic["sse"]["dropped_events"] == 3
+    assert traffic["cloud"]["dropped_frames"] == 3
+    assert "sse_events_dropped" in traffic["warnings"]
+    assert "sse_queue_pressure" in traffic["warnings"]
+    assert "cloud_frames_dropped_latest_only" in traffic["warnings"]
+    assert "cloud_queue_pressure" in traffic["warnings"]
 
 
 def test_sse_message_format_keeps_eventsource_onmessage_contract():
