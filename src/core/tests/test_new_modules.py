@@ -249,6 +249,16 @@ class TestLocalPlannerModule(unittest.TestCase):
         m = LocalPlannerModule(backend="simple")
         self.assertEqual(m.layer, 2)
 
+    def test_storage_inputs_keep_latest_only(self):
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule
+        m = LocalPlannerModule(backend="simple")
+        m.setup()
+
+        self.assertEqual(m.terrain_map._policy, "latest")
+        self.assertEqual(m.boundary._policy, "latest")
+        self.assertEqual(m.added_obstacles._policy, "latest")
+        self.assertEqual(m.esdf._policy, "latest")
+
 
 class TestPathFollowerModule(unittest.TestCase):
 

@@ -390,10 +390,14 @@ class LocalPlannerModule(Module, layer=2):
     def setup(self):
         self.odometry.subscribe(self._on_odom)
         self.terrain_map.subscribe(self._on_terrain)
+        self.terrain_map.set_policy("latest")
         self.waypoint.subscribe(self._on_waypoint)
         self.boundary.subscribe(self._on_boundary)
+        self.boundary.set_policy("latest")
         self.added_obstacles.subscribe(self._on_added_obstacles)
+        self.added_obstacles.set_policy("latest")
         self.esdf.subscribe(self._on_esdf)
+        self.esdf.set_policy("latest")
 
         if self._backend == "nanobind":
             self._setup_nanobind()

@@ -403,6 +403,13 @@ class GatewayModule(Module, layer=6):
         # Cached SLAM profile (fastlio2 / localizer / super_lio / stopped)
         self._cached_slam_profile: str = "—"
         self._slam_profile_ts: float = 0.0
+        self._brainstem_health_lock = threading.Lock()
+        self._brainstem_health_cache: dict[str, Any] | None = None
+        self._brainstem_health_cache_ts: float = 0.0
+        self._brainstem_health_cache_ttl_s: float = max(
+            0.0,
+            _env_float("LINGTU_BRAINSTEM_HEALTH_CACHE_S", 2.0),
+        )
 
         # SLAM drift watchdog — 兜底 Fast-LIO2 静置 IEKF 溢出 (xy 飞到万亿米级).
         # 每 interval 秒查 odom, 超阈值自动 stop+ensure slam.service 重置 IEKF.
@@ -472,7 +479,9 @@ class GatewayModule(Module, layer=6):
         self.global_path.subscribe(self._on_global_path)
         self.local_path.subscribe(self._on_local_path)
         self.costmap.subscribe(self._on_costmap)
+        self.costmap.set_policy("latest")
         self.slope_grid.subscribe(self._on_slope_grid)
+        self.slope_grid.set_policy("latest")
         self.agent_message.subscribe(self._on_agent_message)
         self.gnss_fusion_health.subscribe(self._on_gnss_fusion_health)
         self.localization_status.subscribe(self._on_localization_status)

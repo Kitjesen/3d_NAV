@@ -169,8 +169,11 @@ class TraversabilityCostModule(Module, layer=2):
             )
         self.costmap.subscribe(self._on_costmap)
         self.elevation_map.subscribe(self._on_elevation)
+        self.elevation_map.set_policy("latest")
         self.esdf.subscribe(self._on_esdf)
+        self.esdf.set_policy("latest")
         self.traversability.subscribe(self._on_traversability)
+        self.traversability.set_policy("latest")
 
     def _on_costmap(self, data: dict) -> None:
         self._costmap_data = data

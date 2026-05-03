@@ -129,7 +129,12 @@ def _runtime_readiness_reasons(gw: Any) -> tuple[list[str], dict[str, Any]]:
     return list(dict.fromkeys(reasons)), runtime
 
 
-def build_readiness_snapshot(gw: Any, now: float | None = None) -> tuple[dict[str, Any], int]:
+def build_readiness_snapshot(
+    gw: Any,
+    now: float | None = None,
+    *,
+    include_details: bool = True,
+) -> tuple[dict[str, Any], int]:
     """Return a stable /ready payload plus the HTTP status code."""
     ts = time.time() if now is None else now
     modules = getattr(gw, "_all_modules", None) or {}
@@ -153,8 +158,10 @@ def build_readiness_snapshot(gw: Any, now: float | None = None) -> tuple[dict[st
 
     for name, mod in modules.items():
         try:
-            detail = mod.health() if hasattr(mod, "health") else {}
-            module_health[name] = {"ok": True, "detail": _json_safe(detail)}
+            module_health[name] = {"ok": True}
+            if include_details:
+                detail = mod.health() if hasattr(mod, "health") else {}
+                module_health[name]["detail"] = _json_safe(detail)
         except Exception as exc:
             failed_modules.append(str(name))
             module_health[name] = {"ok": False, "error": str(exc)}

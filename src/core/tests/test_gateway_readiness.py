@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +30,11 @@ class _NonFiniteModule:
             "nested": {"neg_inf": -math.inf},
             "values": [1.0, math.nan],
         }
+
+
+class _SlowHealthModule:
+    def health(self):
+        raise AssertionError("summary readiness must not call module health")
 
 
 def test_readiness_snapshot_reports_not_started_without_modules():
@@ -65,6 +71,41 @@ def test_readiness_snapshot_reports_ready_when_all_modules_are_healthy():
     assert payload["failed_modules"] == []
     assert payload["modules"]["A"]["detail"] == {"state": "ok"}
     assert payload["modules"]["B"]["detail"] == {}
+
+
+def test_readiness_snapshot_can_omit_module_details_for_probe_payload():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.readiness import build_readiness_snapshot
+
+    gateway = GatewayModule()
+    gateway._all_modules = {"A": _SlowHealthModule()}
+
+    payload, status_code = build_readiness_snapshot(
+        gateway,
+        now=124.5,
+        include_details=False,
+    )
+
+    assert status_code == 200
+    assert payload["ready"] is True
+    assert payload["modules"]["A"] == {"ok": True}
+
+
+def test_ready_route_defaults_to_summary_and_supports_details_query():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._all_modules = {"A": _HealthyModule()}
+    endpoint = next(route.endpoint for route in gateway._app.routes if route.path == "/ready")
+
+    summary_response = asyncio.run(endpoint())
+    summary_payload = json.loads(summary_response.body)
+    detail_response = asyncio.run(endpoint(details=True))
+    detail_payload = json.loads(detail_response.body)
+
+    assert summary_payload["modules"]["A"] == {"ok": True}
+    assert detail_payload["modules"]["A"]["detail"] == {"state": "ok"}
 
 
 def test_readiness_snapshot_reports_failed_modules_and_keeps_legacy_fields():

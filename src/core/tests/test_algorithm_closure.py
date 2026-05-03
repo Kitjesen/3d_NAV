@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from core.msgs.geometry import Pose, PoseStamped, Twist, Vector3
 from nav.cmd_vel_mux_module import CmdVelMux
@@ -104,6 +105,21 @@ def test_traversability_fusion_preserves_hard_costs_and_relays_esdf():
     assert relayed_esdf == [esdf]
     assert len(fused) == 1
     assert np.allclose(fused[0]["grid"], [[50.0, 100.0], [99.0, 0.0]])
+
+
+def test_traversability_storage_inputs_keep_latest_without_changing_costmap_clock():
+    import nav.traversability_cost_module as trav_module
+
+    if not trav_module._SCIPY_AVAILABLE:
+        pytest.skip("scipy unavailable")
+
+    module = TraversabilityCostModule()
+    module.setup()
+
+    assert module.costmap._policy == "all"
+    assert module.elevation_map._policy == "latest"
+    assert module.esdf._policy == "latest"
+    assert module.traversability._policy == "latest"
 
 
 def test_localization_degeneracy_scales_navigation_speed():

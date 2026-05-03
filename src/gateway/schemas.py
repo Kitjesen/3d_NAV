@@ -223,6 +223,7 @@ class ReadinessResponse(GatewayResponseModel):
     module_count: int
     failed_modules: list[str]
     reasons: list[str]
+    runtime: dict[str, Any] = Field(default_factory=dict)
     ts: float
 
 

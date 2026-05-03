@@ -95,6 +95,16 @@ def test_slope_grid_defaults_to_metadata_and_can_enable_inline_payload():
     assert event["grid_b64"]
 
 
+def test_gateway_visual_raster_inputs_keep_latest_only():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    assert gateway.costmap._policy == "latest"
+    assert gateway.slope_grid._policy == "latest"
+
+
 def test_cloud_slow_client_keeps_latest_frames_and_drops_oldest():
     from gateway.gateway_module import GatewayModule
     from gateway.services.traffic import DROP_OLDEST_POLICY
