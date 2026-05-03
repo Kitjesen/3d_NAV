@@ -4,6 +4,7 @@
 import type {
   AppBootstrapResponse,
   AppCapabilitiesResponse,
+  AppTrafficResponse,
   CommandReceipt,
   ControlCommandResponse,
   GatewayErrorResponse,
@@ -144,6 +145,10 @@ export async function fetchAppBootstrap(): Promise<AppBootstrapResponse> {
 
 export async function fetchAppCapabilities(): Promise<AppCapabilitiesResponse> {
   return fetchJson<AppCapabilitiesResponse>('/api/v1/app/capabilities')
+}
+
+export async function fetchAppTraffic(): Promise<AppTrafficResponse> {
+  return fetchJson<AppTrafficResponse>('/api/v1/app/traffic')
 }
 
 export async function fetchState(): Promise<StateResponse> {

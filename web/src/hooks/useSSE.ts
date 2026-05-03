@@ -56,6 +56,7 @@ const INITIAL_STATE: SSEState = {
   session: null,
   locations: null,
   stateSnapshot: null,
+  traffic: null,
   costmap: null,
   slopeGrid: null,
   agentMessage: null,
@@ -78,6 +79,8 @@ const INITIAL_STATE: SSEState = {
   connected: false,
   events: [],
 }
+
+const TRAFFIC_REFRESH_MS = 5000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -146,7 +149,9 @@ export function useSSE(url: string = '/api/v1/events') {
   const esRef = useRef<EventSource | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const trafficTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const refreshInFlight = useRef(false)
+  const trafficInFlight = useRef(false)
   const mountedRef = useRef(true)
   const everConnectedRef = useRef(false)
   const lastEventIdRef = useRef<number | null>(null)
@@ -211,6 +216,20 @@ export function useSSE(url: string = '/api/v1/events') {
       refreshTimer.current = null
       refreshRef.current(reason)
     }, 250)
+  }, [])
+
+  const refreshTraffic = useCallback(async () => {
+    if (trafficInFlight.current) return
+    trafficInFlight.current = true
+    try {
+      const traffic = await api.fetchAppTraffic()
+      if (!mountedRef.current) return
+      setState(prev => ({ ...prev, traffic }))
+    } catch {
+      // Traffic is diagnostic; keep the main realtime path alive if it is unavailable.
+    } finally {
+      trafficInFlight.current = false
+    }
   }, [])
 
   const connect = useCallback(() => {
@@ -388,6 +407,17 @@ export function useSSE(url: string = '/api/v1/events') {
       }
     }
   }, [connect])
+
+  useEffect(() => {
+    refreshTraffic()
+    trafficTimer.current = setInterval(refreshTraffic, TRAFFIC_REFRESH_MS)
+    return () => {
+      if (trafficTimer.current) {
+        clearInterval(trafficTimer.current)
+        trafficTimer.current = null
+      }
+    }
+  }, [refreshTraffic])
 
   return state
 }

@@ -686,6 +686,7 @@ export interface SSEState {
   session: SessionEvent['data'] | null
   locations: LocationsResponse | null
   stateSnapshot: StateResponse | null
+  traffic: AppTrafficResponse | null
   costmap: CostmapEvent | null
   slopeGrid: SlopeGridEvent | null
   agentMessage: AgentMessageEvent | null  // latest agent chat message (ts dedups)

@@ -92,6 +92,16 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
   const hasCloud = !!sseState.mapCloud
   const slamPipClass = slamHz > 3 ? styles.pipGood : slamHz > 0 ? styles.pipWarn : styles.pipBad
   const cloudPipClass = hasCloud ? styles.pipGood : styles.pipBad
+  const traffic = sseState.traffic
+  const trafficWarn = traffic?.status === 'degraded' || (traffic?.warnings?.length ?? 0) > 0
+  const trafficPipClass = !traffic ? styles.pipWarn : trafficWarn ? styles.pipWarn : styles.pipGood
+  const trafficTitle = traffic
+    ? [
+        `Traffic ${traffic.status}`,
+        `SSE clients ${traffic.sse.clients}, drops ${traffic.sse.dropped_events}, depth ${traffic.sse.max_depth_seen}`,
+        `Cloud clients ${traffic.cloud.clients}, drops ${traffic.cloud.dropped_frames}, depth ${traffic.cloud.max_depth_seen}`,
+      ].join(' | ')
+    : 'Traffic stats pending'
 
   const handleKeyDown = (e: React.KeyboardEvent, idx: number) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
@@ -144,6 +154,12 @@ export function Topbar({ sseState, activeTab, onTabChange }: TopbarProps) {
           title={`点云 ${hasCloud ? '活跃' : '无数据'}`}
         >
           点云
+        </span>
+        <span
+          className={`${styles.miniPip} ${trafficPipClass}`}
+          title={trafficTitle}
+        >
+          Traffic
         </span>
 
         <span className={styles.sep} aria-hidden="true" />
