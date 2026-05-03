@@ -665,6 +665,44 @@ class TestSafetyRingModule(unittest.TestCase):
             self.assertEqual(stop_cmds[-1], 0,
                              f"Expected stop_cmd=0, got {stop_cmds[-1]}")
 
+    def test_idle_without_cmd_vel_remains_safe(self):
+        """Idle robot should not warn only because no command stream is active."""
+        m = self._make_module(odom_timeout_ms=500.0, cmd_vel_timeout_ms=50.0)
+
+        safety_states = []
+        stop_cmds = []
+        m.safety_state._add_callback(lambda s: safety_states.append(s))
+        m.stop_cmd._add_callback(lambda v: stop_cmds.append(v))
+
+        time.sleep(0.08)
+        m.odometry._deliver(self._make_odom())
+
+        self.assertGreater(len(safety_states), 0)
+        self.assertEqual(safety_states[-1].level, 0)
+        self.assertNotIn(1, stop_cmds)
+
+    def test_active_path_without_cmd_vel_warns(self):
+        """A stale command stream still warns while a path is active."""
+        m = self._make_module(odom_timeout_ms=500.0, cmd_vel_timeout_ms=50.0)
+
+        poses = [
+            PoseStamped(pose=Pose(position=Vector3(0, 0, 0))),
+            PoseStamped(pose=Pose(position=Vector3(1, 0, 0))),
+        ]
+        m.path._deliver(Path(poses=poses, frame_id="map"))
+
+        safety_states = []
+        stop_cmds = []
+        m.safety_state._add_callback(lambda s: safety_states.append(s))
+        m.stop_cmd._add_callback(lambda v: stop_cmds.append(v))
+
+        time.sleep(0.08)
+        m.odometry._deliver(self._make_odom())
+
+        self.assertGreater(len(safety_states), 0)
+        self.assertEqual(safety_states[-1].level, 1)
+        self.assertIn(1, stop_cmds)
+
 
 if __name__ == "__main__":
     unittest.main()
