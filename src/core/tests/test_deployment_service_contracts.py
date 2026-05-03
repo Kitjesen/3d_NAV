@@ -60,6 +60,10 @@ def test_lingtu_doctor_reports_standard_quality_topic_with_legacy_hint():
 def test_lingtu_doctor_json_gates_runtime_readiness_freshness():
     text = _read("scripts/lingtu")
 
+    assert "livox.sdk_init" in text
+    assert "latest_livox_sdk_event" in text
+    assert "Init lds lidar success" in text
+    assert "bind failed" in text
     assert "gateway.slam_stream" in text
     assert "gateway.localization_status" in text
     assert "add_dataflow_pressure_check" in text
@@ -199,6 +203,11 @@ def test_robot_lidar_uses_installed_ros2_env_helper():
 
     assert 'ros2-env.sh" "$LINGTU_CONFIG/ros2-env.sh"' in install
     assert "source /opt/lingtu/config/ros2-env.sh" in lidar_service
+    assert "ExecStartPost=/bin/bash -c" in lidar_service
+    assert "robot-lidar readiness failed" in lidar_service
+    assert "TimeoutStopSec=10s" in lidar_service
+    assert "KillMode=control-group" in lidar_service
+    assert "sed -n \"s/^Publisher count: //p\"" in lidar_service
     assert "ros2-env.conf" not in lidar_service
 
 

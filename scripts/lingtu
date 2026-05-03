@@ -326,6 +326,108 @@ warn_legacy_services() {
     fi
 }
 
+svc_force_stop_unit() {
+    local unit="$1" pid active
+    active=$(systemctl is-active "$unit" 2>/dev/null || true)
+    case "$active" in
+        inactive|failed|unknown|"")
+            sudo systemctl reset-failed "$unit" 2>/dev/null || true
+            return 0 ;;
+    esac
+    if timeout 20 sudo systemctl stop "$unit"; then
+        sudo systemctl reset-failed "$unit" 2>/dev/null || true
+        return 0
+    fi
+    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null || echo 0)
+    if [ "${pid:-0}" != "0" ]; then
+        printf "${Y}WARN${N}: %s did not stop cleanly; killing pid %s\n" "$unit" "$pid"
+        sudo kill -KILL "$pid" 2>/dev/null || true
+        sleep 2
+    fi
+    sudo systemctl reset-failed "$unit" 2>/dev/null || true
+}
+
+svc_start_unit() {
+    local unit="$1"
+    sudo systemctl start "$unit"
+}
+
+svc_wait_topic_publishers() {
+    local topic="$1" min_pubs="${2:-1}" timeout_s="${3:-15}" pubs i
+    source_robot_env
+    for i in $(seq 1 "$timeout_s"); do
+        pubs=$(ros2 topic info "$topic" 2>/dev/null | awk '/Publisher count:/ {print $3}' | tail -1)
+        pubs="${pubs:-0}"
+        if [ "$pubs" -ge "$min_pubs" ] 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+svc_wait_gateway_ready() {
+    local timeout_s="${1:-30}" i
+    for i in $(seq 1 "$timeout_s"); do
+        if curl -fsS --max-time 2 "$GW/ready" 2>/dev/null \
+            | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ready") else 1)' 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+svc_restart_lidar_chain() {
+    svc_force_stop_unit robot-lidar.service
+    svc_start_unit robot-lidar.service
+    if svc_wait_topic_publishers /nav/lidar_scan 1 20 && svc_wait_topic_publishers /nav/imu 1 10; then
+        echo "robot-lidar.service restarted; LiDAR and IMU publishers are present"
+        return 0
+    fi
+    echo "robot-lidar.service started but LiDAR/IMU publishers did not become ready" >&2
+    journalctl -u robot-lidar.service -n 30 --no-pager >&2 || true
+    return 1
+}
+
+svc_restart_robot_stack() {
+    echo "Stopping LingTu localization stack top-down..."
+    svc_force_stop_unit lingtu.service
+    svc_force_stop_unit robot-super-lio-relocation.service
+    svc_force_stop_unit robot-super-lio.service
+    svc_force_stop_unit robot-localizer.service
+    svc_force_stop_unit robot-fastlio2.service
+
+    echo "Starting LiDAR..."
+    svc_restart_lidar_chain || return 1
+
+    echo "Starting Fast-LIO2..."
+    svc_start_unit robot-fastlio2.service
+    if ! svc_wait_topic_publishers /nav/odometry 1 30; then
+        echo "robot-fastlio2.service did not publish /nav/odometry in time" >&2
+        journalctl -u robot-fastlio2.service -n 40 --no-pager >&2 || true
+        return 1
+    fi
+
+    echo "Starting localizer..."
+    svc_start_unit robot-localizer.service
+    if ! svc_wait_topic_publishers /nav/localization_health 1 30; then
+        echo "robot-localizer.service did not publish /nav/localization_health in time" >&2
+        journalctl -u robot-localizer.service -n 40 --no-pager >&2 || true
+        return 1
+    fi
+
+    echo "Starting LingTu Gateway/runtime..."
+    svc_start_unit lingtu.service
+    if svc_wait_gateway_ready 45; then
+        echo "robot LiDAR + SLAM + localizer + lingtu restarted; /ready is true"
+        return 0
+    fi
+    echo "LingTu started but /ready did not become true in time" >&2
+    journalctl -u lingtu.service -n 60 --no-pager >&2 || true
+    return 1
+}
+
 cmd_svc() {
     local action="${1:-status}"
     case "$action" in
@@ -342,9 +444,8 @@ cmd_svc() {
         restart)
             local target="${2:-}"
             case "$target" in
-                all)    sudo systemctl stop robot-super-lio-relocation.service robot-super-lio.service
-                        sudo systemctl restart robot-lidar.service robot-fastlio2.service robot-localizer.service lingtu.service
-                        echo "robot LiDAR + SLAM + localizer + lingtu restarted; Super-LIO services stopped" ;;
+                all)    svc_restart_robot_stack ;;
+                lidar)  svc_restart_lidar_chain ;;
                 *)
                         local unit
                         unit=$(svc_unit "$target") || { echo "Usage: lingtu svc restart [lidar|slam|localizer|super_lio|super_lio_relocation|lingtu|camera|brainstem|all]"; exit 1; }
@@ -635,6 +736,29 @@ def topic_counts(topic):
     return pubs, subs, None
 
 
+def latest_livox_sdk_event():
+    rc, out, err = run(["journalctl", "-u", "robot-lidar.service", "-b", "-n", "200", "--no-pager"], timeout=5)
+    if rc == 127:
+        return "unknown", {"error": "journalctl not found"}
+    if rc != 0 and not out:
+        return "unknown", {"returncode": rc, "stderr": err}
+    latest = None
+    for line in out.splitlines():
+        lower = line.lower()
+        if "init lds lidar success" in lower:
+            latest = ("success", line[-500:])
+        elif (
+            "init lds lidar fail" in lower
+            or "failed to init livox lidar sdk" in lower
+            or "bind failed" in lower
+        ):
+            latest = ("fail", line[-500:])
+    if latest is None:
+        return "unknown", {"returncode": rc, "stderr": err, "searched_lines": len(out.splitlines())}
+    status, line = latest
+    return status, {"returncode": rc, "latest_event": line}
+
+
 def add(check_id, status, level, message, evidence=None):
     checks.append(
         {
@@ -691,6 +815,14 @@ if active_legacy:
     )
 else:
     add("service.legacy_conflicts", "pass", "p0", "no active legacy localization services")
+
+livox_event, livox_evidence = latest_livox_sdk_event()
+if livox_event == "success":
+    add("livox.sdk_init", "pass", "p0", "latest Livox SDK init event succeeded", livox_evidence)
+elif livox_event == "fail":
+    add("livox.sdk_init", "fail", "p0", "latest Livox SDK init event failed", livox_evidence)
+else:
+    add("livox.sdk_init", "warn", "p1", "could not find a recent Livox SDK init event", livox_evidence)
 
 rc, nodes_out, nodes_err = run(["ros2", "node", "list"], timeout=5)
 if rc == 127:
@@ -1071,7 +1203,21 @@ cmd_doctor() {
     echo -e "${B}[1] Services${N}"
     cmd_svc status
 
-    echo -e "${B}[2] ROS duplicate nodes${N}"
+    echo -e "${B}[2] Livox SDK init${N}"
+    local livox_last
+    livox_last=$(journalctl -u robot-lidar.service -b -n 200 --no-pager 2>/dev/null \
+        | grep -E 'Init lds lidar success|Init lds lidar fail|Failed to init livox lidar sdk|bind failed' \
+        | tail -1 || true)
+    if echo "$livox_last" | grep -q 'Init lds lidar success'; then
+        printf "  ${G}ok: latest Livox SDK init succeeded${N}\n"
+    elif [ -n "$livox_last" ]; then
+        printf "  ${R}FAIL${N}: latest Livox SDK init event indicates failure\n"
+        echo "$livox_last" | sed 's/^/  /'
+    else
+        printf "  ${Y}WARN${N}: no recent Livox SDK init event found\n"
+    fi
+
+    echo -e "${B}[3] ROS duplicate nodes${N}"
     if command -v ros2 >/dev/null 2>&1; then
         local dup
         dup=$(ros2 node list 2>/dev/null | sort | uniq -d | grep -e livox_driver_node -e lio_node -e super_lio_node -e relocation_node -e localizer_node -e '^/camera/camera$' -e '^/camera/camera_container$' || true)
@@ -1085,7 +1231,7 @@ cmd_doctor() {
         echo "  ros2 not found"
     fi
 
-    echo -e "${B}[3] Localization topics${N}"
+    echo -e "${B}[4] Localization topics${N}"
     if command -v ros2 >/dev/null 2>&1; then
         local topic pubs subs
         for topic in /nav/lidar_scan /nav/imu /nav/odometry /nav/map_cloud /nav/saved_map_cloud /nav/localization_health; do
@@ -1119,7 +1265,7 @@ cmd_doctor() {
         fi
     fi
 
-    echo -e "${B}[4] Gateway${N}"
+    echo -e "${B}[5] Gateway${N}"
     curl -s --max-time 2 "$GW/api/v1/health" 2>/dev/null | python3 -c '
 import json, sys
 try:
@@ -1132,7 +1278,7 @@ print("  gateway={} modules_ok={} modules_fail={}".format(d.get("status","?"), d
 print("  slam_status={} slam_hz={} map_points={} has_odom={}".format(slam.get("status","?"), slam.get("hz", d.get("slam_hz","?")), d.get("map_points","?"), d.get("has_odom","?")))
 ' || true
 
-    echo -e "${B}[5] Navigation readiness${N}"
+    echo -e "${B}[6] Navigation readiness${N}"
     local NAVJ NST CAN_GO BLOCKERS CMD_SRC
     NAVJ=$(curl -s --max-time 2 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
     NST=$(pjson "$NAVJ" 'print(d.get("state") or d.get("mission",{}).get("state") or "-")')
@@ -1147,7 +1293,7 @@ print("  slam_status={} slam_hz={} map_points={} has_odom={}".format(slam.get("s
         esac
     fi
 
-    echo -e "${B}[6] Camera readiness${N}"
+    echo -e "${B}[7] Camera readiness${N}"
     if command -v lsusb >/dev/null 2>&1 && lsusb | grep -Eiq 'orbbec|gemini|astra|2bc5'; then
         echo "  ok: camera USB device is enumerated"
     else
