@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import numpy as np
 import pytest
@@ -27,6 +28,17 @@ class _FakePlanner:
 
     def update_map(self, *args, **kwargs) -> None:
         pass
+
+
+class _ExplodingPlanner(_FakePlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray):
+        raise AssertionError("planner should not run for an already-at-goal preview")
+
+
+class _SlowPlanner(_FakePlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray):
+        time.sleep(0.05)
+        return super().plan(start, goal)
 
 
 class _BrokenPlannerStatus:
@@ -104,6 +116,40 @@ def test_navigation_plan_preview_does_not_mutate_mission_or_publish_ports():
     assert preview["distance_m"] == 5.0
     assert nav._state == initial_state
     assert nav._goal is None
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
+    assert nav.recovery_cmd_vel.msg_count == 0
+
+
+def test_navigation_plan_preview_short_circuits_when_already_at_goal():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _ExplodingPlanner()
+    nav._robot_pos = np.array([1.0, 2.0, 0.0])
+
+    preview = nav.preview_plan(1.0, 2.0, 0.0)
+
+    assert preview["ok"] is True
+    assert preview["feasible"] is True
+    assert preview["count"] == 1
+    assert preview["distance_m"] == 0.0
+    assert preview["plan_ms"] == 0.0
+    assert preview["reasons"] == ["already_at_goal"]
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
+    assert nav.recovery_cmd_vel.msg_count == 0
+
+
+def test_navigation_plan_preview_times_out_without_publishing_ports():
+    nav = NavigationModule(enable_ros2_bridge=False, preview_timeout=0.001)
+    nav._planner_svc = _SlowPlanner()
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+
+    preview = nav.preview_plan(1.0, 0.0, 0.0)
+
+    assert preview["ok"] is True
+    assert preview["feasible"] is False
+    assert preview["reasons"] == ["planning_timeout"]
+    assert "planner preview exceeded" in preview["error"]
     assert nav.global_path.msg_count == 0
     assert nav.waypoint.msg_count == 0
     assert nav.recovery_cmd_vel.msg_count == 0

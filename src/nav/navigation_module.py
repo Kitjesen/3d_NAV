@@ -16,9 +16,12 @@ Usage::
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import math
+import os
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -149,6 +152,14 @@ class NavigationModule(Module, layer=5):
         self._pre_pause_state: str | None = None
         self._planning_timeout = kw.get("planning_timeout", 30.0)
         self._speed_scale: float = 1.0  # degeneracy-based speed multiplier
+        self._preview_timeout_s = float(
+            kw.get("preview_timeout", os.environ.get("LINGTU_PLAN_PREVIEW_TIMEOUT", 3.0))
+        )
+        self._preview_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="lingtu-plan-preview",
+        )
+        self._preview_planner_lock = threading.Lock()
 
         # Teleop pause/resume
         self._paused_for_teleop: bool = False
@@ -702,8 +713,34 @@ class NavigationModule(Module, layer=5):
             result["reasons"] = reasons
             return result
 
+        with np.errstate(over="ignore", invalid="ignore"):
+            start_goal_delta = float(np.linalg.norm(goal[:2] - start[:2]))
+        if not math.isfinite(start_goal_delta):
+            result["reasons"] = ["goal_invalid"]
+            result["error"] = "goal distance from current position is not finite"
+            return result
+        if start_goal_delta <= 0.05:
+            result.update({
+                "feasible": True,
+                "path": [self._preview_path_point(start, ts=ts, index=0)],
+                "count": 1,
+                "distance_m": 0.0,
+                "plan_ms": 0.0,
+                "reasons": ["already_at_goal"],
+            })
+            return result
+
         try:
-            path, plan_ms = planner.plan(start, goal)
+            path, plan_ms = self._preview_plan_with_timeout(planner, start, goal)
+        except TimeoutError as exc:
+            logger.warning("NavigationModule: plan preview timed out: %s", exc)
+            result["reasons"] = ["planning_timeout"]
+            result["error"] = str(exc)
+            return result
+        except RuntimeError as exc:
+            result["reasons"] = ["planning_preview_busy"]
+            result["error"] = str(exc)
+            return result
         except Exception as exc:
             logger.warning("NavigationModule: plan preview failed: %s", exc)
             result["reasons"] = ["planning_failed"]
@@ -772,6 +809,31 @@ class NavigationModule(Module, layer=5):
             "reasons": ["goal_adjusted"] if adjusted_goal is not None else [],
         })
         return result
+
+    def _preview_plan_with_timeout(
+        self,
+        planner: Any,
+        start: np.ndarray,
+        goal: np.ndarray,
+    ) -> tuple[Any, Any]:
+        if not self._preview_planner_lock.acquire(blocking=False):
+            raise RuntimeError("another plan preview is already running")
+
+        def _run() -> tuple[Any, Any]:
+            try:
+                return planner.plan(start, goal)
+            finally:
+                self._preview_planner_lock.release()
+
+        future = self._preview_executor.submit(_run)
+        try:
+            return future.result(timeout=max(0.001, self._preview_timeout_s))
+        except concurrent.futures.TimeoutError as exc:
+            if future.cancel():
+                self._preview_planner_lock.release()
+            raise TimeoutError(
+                f"planner preview exceeded {self._preview_timeout_s:.1f}s"
+            ) from exc
 
     def _plan(self) -> None:
         if self._goal is None:
