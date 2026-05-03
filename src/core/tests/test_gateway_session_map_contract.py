@@ -471,10 +471,35 @@ def test_map_routes_validate_json_contracts(monkeypatch):
         assert saved_points.count == 2
         assert saved_points.layout == "flat_xyz"
         assert saved_points.points == [1, 2, 3, 4, 5, 6]
+        assert reset.schema_version == 1
+        assert reset.ok is True
         assert reset.success is True
+        assert reset.ts > 0
         assert missing_manager.error == "MapManagerModule not running"
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_map_lifecycle_error_responses_use_stable_envelope(monkeypatch, tmp_path):
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import MapLifecycleResponse, MapNameRequest
+
+    monkeypatch.setenv("NAV_MAP_DIR", str(tmp_path))
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/map/activate")(MapNameRequest(name="../bad"))
+    )
+    model = MapLifecycleResponse.model_validate(_payload(response))
+
+    assert response.status_code == 400
+    assert model.schema_version == 1
+    assert model.ok is False
+    assert model.success is False
+    assert model.ts > 0
+    assert model.message
 
 
 def test_map_save_falls_back_to_super_lio_live_cloud_snapshot(monkeypatch, tmp_path):
@@ -510,7 +535,10 @@ def test_map_save_falls_back_to_super_lio_live_cloud_snapshot(monkeypatch, tmp_p
     model = MapLifecycleResponse.model_validate(payload)
     pcd_path = tmp_path / "super_lio_demo" / "map.pcd"
 
+    assert model.schema_version == 1
+    assert model.ok is True
     assert model.success is True
+    assert model.ts > 0
     assert payload["slam_profile"] == "super_lio"
     assert payload["source"] == "live_map_cloud_snapshot"
     assert payload["relocalization_supported"] is False
@@ -544,9 +572,12 @@ def test_maps_route_accepts_legacy_and_canonical_actions():
         post_maps(MapRequest(action="build_tomogram", name="demo"))
     )
 
-    assert MapLifecycleResponse.model_validate(use_payload).success is True
-    assert MapLifecycleResponse.model_validate(build_payload).success is True
-    assert MapLifecycleResponse.model_validate(canonical_payload).success is True
+    for payload in (use_payload, build_payload, canonical_payload):
+        model = MapLifecycleResponse.model_validate(payload)
+        assert model.schema_version == 1
+        assert model.ok is True
+        assert model.success is True
+        assert model.ts > 0
     assert manager.map_command.delivered == [
         {"action": "set_active", "name": "demo"},
         {"action": "build_tomogram", "name": "demo"},

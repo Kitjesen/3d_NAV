@@ -618,6 +618,8 @@ class MapListResponse(GatewayResponseModel):
 
 
 class MapLifecycleResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
     success: bool | None = None
     message: str | None = None
     name: str | None = None
@@ -641,6 +643,7 @@ class MapLifecycleResponse(GatewayResponseModel):
     recovery_method: str | None = None
     dynamic_filter: Any = None
     maps: list[Any] | None = None
+    ts: float = Field(default_factory=time.time)
 
 
 class MapPointsResponse(GatewayResponseModel):

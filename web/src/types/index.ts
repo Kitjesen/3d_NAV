@@ -614,6 +614,42 @@ export interface SessionTransitionResponse {
   [key: string]: unknown
 }
 
+export interface DynamicFilterResult {
+  success: boolean
+  orig_count?: number
+  clean_count?: number
+  dropped?: number
+  elapsed_s?: number
+  error?: string
+  skipped?: boolean
+  [key: string]: unknown
+}
+
+export interface MapLifecycleResponse {
+  schema_version: number
+  ok: boolean
+  success?: boolean | null
+  message?: string | null
+  name?: string | null
+  active?: string | null
+  old_name?: string | null
+  new_name?: string | null
+  path?: string | null
+  size?: string | null
+  slam_profile?: string | null
+  source?: string | null
+  map_save_source?: string | null
+  relocalization_supported?: boolean | null
+  saved_map_relocalization_supported?: boolean | null
+  restart_recovery_supported?: boolean | null
+  recovery_method?: string | null
+  warnings?: unknown[] | null
+  errors?: unknown[] | null
+  dynamic_filter?: DynamicFilterResult | null
+  ts: number
+  [key: string]: unknown
+}
+
 export interface CostmapEvent {
   type: 'costmap'
   grid_b64: string   // base64-encoded uint8 flat array (0=free, 100=occupied)

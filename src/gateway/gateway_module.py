@@ -1858,6 +1858,7 @@ class GatewayModule(Module, layer=6):
             register_camera_routes,
             register_command_routes,
             register_diagnostic_routes,
+            map_lifecycle_payload,
             register_map_routes,
             register_operation_routes,
             register_realtime_routes,
@@ -1925,7 +1926,9 @@ class GatewayModule(Module, layer=6):
                     status_code=400,
                     content={"error": resp.get("message", "failed"), "detail": resp},
                 )
-            return resp
+            legacy = dict(resp)
+            legacy.pop("success", None)
+            return map_lifecycle_payload(True, **legacy)
 
         register_auth_routes(app)
         register_app_routes(app, gw)

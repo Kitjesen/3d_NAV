@@ -392,6 +392,9 @@ def test_openapi_exposes_client_response_models():
     assert "MapRenameRequest" in schemas
     assert "MapSaveRequest" in schemas
     assert "MapLifecycleResponse" in schemas
+    assert "schema_version" in schemas["MapLifecycleResponse"]["properties"]
+    assert "ok" in schemas["MapLifecycleResponse"]["properties"]
+    assert "ts" in schemas["MapLifecycleResponse"]["properties"]
     assert "warnings" in schemas["MapLifecycleResponse"]["properties"]
     assert "MapListResponse" in schemas
     assert "MapPointsResponse" in schemas

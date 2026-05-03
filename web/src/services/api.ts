@@ -7,11 +7,13 @@ import type {
   AppTrafficResponse,
   CommandReceipt,
   ControlCommandResponse,
+  DynamicFilterResult,
   GatewayErrorResponse,
   LeaseAction,
   LeaseResponse,
   LocationsResponse,
   MapInfo,
+  MapLifecycleResponse,
   PathResponse,
   PlanPreviewRequest,
   PlanPreviewResponse,
@@ -138,6 +140,25 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
   return data as T
 }
 
+async function readMapLifecycle(res: Response): Promise<MapLifecycleResponse> {
+  const text = await res.text()
+  let data: Record<string, unknown> = {}
+  try {
+    data = text ? JSON.parse(text) as Record<string, unknown> : {}
+  } catch {
+    data = {}
+  }
+  if (!res.ok || data.ok === false || data.success === false) {
+    const message = typeof data.message === 'string'
+      ? data.message
+      : typeof data.error === 'string'
+        ? data.error
+        : `HTTP ${res.status}`
+    throw new Error(message)
+  }
+  return data as MapLifecycleResponse
+}
+
 // --- App bootstrap / read APIs ---
 
 export async function fetchAppBootstrap(): Promise<AppBootstrapResponse> {
@@ -243,7 +264,7 @@ export async function activateMap(name: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await readMapLifecycle(res)
 }
 
 export async function deleteMap(name: string): Promise<void> {
@@ -252,7 +273,7 @@ export async function deleteMap(name: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'delete', name }),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await readMapLifecycle(res)
 }
 
 export async function renameMap(oldName: string, newName: string): Promise<void> {
@@ -261,30 +282,23 @@ export async function renameMap(oldName: string, newName: string): Promise<void>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ old_name: oldName, new_name: newName }),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await readMapLifecycle(res)
 }
 
-export interface SaveMapResult {
+export interface SaveMapResult extends MapLifecycleResponse {
   success: boolean
   name: string
-  path?: string
-  size?: string
-  slam_profile?: string
-  source?: string
-  map_save_source?: string
-  relocalization_supported?: boolean
-  saved_map_relocalization_supported?: boolean
-  restart_recovery_supported?: boolean
-  recovery_method?: string
-  warnings?: string[]
-  dynamic_filter?: {
-    success: boolean
-    orig_count?: number
-    clean_count?: number
-    dropped?: number
-    elapsed_s?: number
-    error?: string
-  }
+  path?: string | null
+  size?: string | null
+  slam_profile?: string | null
+  source?: string | null
+  map_save_source?: string | null
+  relocalization_supported?: boolean | null
+  saved_map_relocalization_supported?: boolean | null
+  restart_recovery_supported?: boolean | null
+  recovery_method?: string | null
+  warnings?: unknown[] | null
+  dynamic_filter?: DynamicFilterResult | null
 }
 
 export async function saveMap(name: string): Promise<SaveMapResult> {
@@ -295,8 +309,7 @@ export async function saveMap(name: string): Promise<SaveMapResult> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json() as Promise<SaveMapResult>
+  return readMapLifecycle(res) as Promise<SaveMapResult>
 }
 
 // --- Session state machine ---

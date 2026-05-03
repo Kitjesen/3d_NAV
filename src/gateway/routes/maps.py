@@ -7,6 +7,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import time
 from datetime import datetime
 from typing import Any
 
@@ -43,6 +44,29 @@ def _body_mapping(body: Any) -> dict[str, Any]:
     if isinstance(body, dict):
         return body
     return {}
+
+
+def map_lifecycle_payload(success: bool, **fields: Any) -> dict[str, Any]:
+    payload = {
+        "schema_version": 1,
+        "ok": bool(success),
+        "success": bool(success),
+        "ts": time.time(),
+    }
+    payload.update({key: value for key, value in fields.items() if value is not None})
+    return payload
+
+
+def _map_lifecycle_response(
+    success: bool,
+    *,
+    status_code: int,
+    **fields: Any,
+) -> JSONResponse:
+    return JSONResponse(
+        map_lifecycle_payload(success, **fields),
+        status_code=status_code,
+    )
 
 
 def _safe_map_file(name: str, filename: str) -> pathlib.Path:
@@ -220,7 +244,10 @@ def register_map_routes(app, gw) -> None:
             gw._map_cloud_count = 0
             gw._voxel_hits.clear()
         gw.push_event({"type": "map_cloud", "points": [], "count": 0})
-        return {"success": True, "message": "Accumulated map cloud cleared"}
+        return map_lifecycle_payload(
+            True,
+            message="Accumulated map cloud cleared",
+        )
 
     @app.get("/map/viewer", summary="Interactive 3D map viewer")
     async def map_viewer(map: str = ""):
@@ -270,20 +297,18 @@ def register_map_routes(app, gw) -> None:
         name = payload.get("name", "")
         err = safe_map_name(name)
         if err is not None:
-            return JSONResponse({"success": False, "message": err}, status_code=400)
+            return _map_lifecycle_response(False, message=err, status_code=400)
         map_dir = _map_dir()
         target = pathlib.Path(map_dir) / name
         pcd = target / "map.pcd"
         backup = target / "map.pcd.predufo"
         if not backup.is_file():
-            return JSONResponse(
-                {
-                    "success": False,
-                    "message": (
-                        f"No predufo backup for {name}. "
-                        "DUFOMap may not have run on this map."
-                    ),
-                },
+            return _map_lifecycle_response(
+                False,
+                message=(
+                    f"No predufo backup for {name}. "
+                    "DUFOMap may not have run on this map."
+                ),
                 status_code=404,
             )
         try:
@@ -308,20 +333,17 @@ def register_map_routes(app, gw) -> None:
                 except Exception as e:
                     logger.warning("cleanup old backup failed: %s", e)
 
-            return {
-                "success": True,
-                "name": name,
-                "restored_size": pcd.stat().st_size,
-                "replaced_backups_kept": min(len(replaced), 3),
-                "replaced_backups_pruned": pruned,
-                "note": "tomogram/occupancy must be rebuilt before planner use",
-            }
+            return map_lifecycle_payload(
+                True,
+                name=name,
+                restored_size=pcd.stat().st_size,
+                replaced_backups_kept=min(len(replaced), 3),
+                replaced_backups_pruned=pruned,
+                note="tomogram/occupancy must be rebuilt before planner use",
+            )
         except Exception as e:
             logger.exception("restore_predufo failed")
-            return JSONResponse(
-                {"success": False, "message": str(e)},
-                status_code=500,
-            )
+            return _map_lifecycle_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/map/activate",
@@ -338,12 +360,13 @@ def register_map_routes(app, gw) -> None:
         name = payload.get("name", "")
         err = safe_map_name(name)
         if err is not None:
-            return JSONResponse({"success": False, "message": err}, status_code=400)
+            return _map_lifecycle_response(False, message=err, status_code=400)
         map_dir = _map_dir()
         target = os.path.join(map_dir, name)
         if not os.path.isdir(target):
-            return JSONResponse(
-                {"success": False, "message": f"Map does not exist: {name}"},
+            return _map_lifecycle_response(
+                False,
+                message=f"Map does not exist: {name}",
                 status_code=404,
             )
         active_link = pathlib.Path(map_dir) / "active"
@@ -351,9 +374,9 @@ def register_map_routes(app, gw) -> None:
             if active_link.is_symlink() or active_link.exists():
                 active_link.unlink()
             active_link.symlink_to(name)
-            return {"success": True, "active": name}
+            return map_lifecycle_payload(True, active=name)
         except Exception as e:
-            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            return _map_lifecycle_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/map/rename",
@@ -373,21 +396,24 @@ def register_map_routes(app, gw) -> None:
         err_old = safe_map_name(old)
         err_new = safe_map_name(new)
         if err_old or err_new:
-            return JSONResponse(
-                {"success": False, "message": err_old or err_new},
+            return _map_lifecycle_response(
+                False,
+                message=err_old or err_new,
                 status_code=400,
             )
         map_dir = _map_dir()
         old_path = os.path.join(map_dir, old)
         new_path = os.path.join(map_dir, new)
         if not os.path.isdir(old_path):
-            return JSONResponse(
-                {"success": False, "message": f"Map does not exist: {old}"},
+            return _map_lifecycle_response(
+                False,
+                message=f"Map does not exist: {old}",
                 status_code=404,
             )
         if os.path.exists(new_path):
-            return JSONResponse(
-                {"success": False, "message": f"Name already exists: {new}"},
+            return _map_lifecycle_response(
+                False,
+                message=f"Name already exists: {new}",
                 status_code=409,
             )
         try:
@@ -396,9 +422,9 @@ def register_map_routes(app, gw) -> None:
             if active_link.is_symlink() and active_link.resolve().name == old:
                 active_link.unlink()
                 active_link.symlink_to(new)
-            return {"success": True, "old_name": old, "new_name": new}
+            return map_lifecycle_payload(True, old_name=old, new_name=new)
         except Exception as e:
-            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            return _map_lifecycle_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/map/save",
@@ -416,7 +442,7 @@ def register_map_routes(app, gw) -> None:
             name = "map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         err = safe_map_name(name)
         if err is not None:
-            return JSONResponse({"success": False, "message": err}, status_code=400)
+            return _map_lifecycle_response(False, message=err, status_code=400)
         map_dir = _map_dir()
         save_dir = os.path.join(map_dir, name)
         os.makedirs(save_dir, exist_ok=True)
@@ -493,31 +519,34 @@ def register_map_routes(app, gw) -> None:
         if has_pcd:
             size = os.path.getsize(pcd_path)
             capability_defaults = backend_capability_defaults(slam_profile)
-            resp = {
-                "success": True,
-                "name": name,
-                "path": save_dir,
-                "size": f"{size / 1024 / 1024:.1f}MB",
-                "slam_profile": slam_profile,
-                "source": save_source,
-                "map_save_source": save_source,
-                "relocalization_supported": capability_defaults[
+            resp = map_lifecycle_payload(
+                True,
+                name=name,
+                path=save_dir,
+                size=f"{size / 1024 / 1024:.1f}MB",
+                slam_profile=slam_profile,
+                source=save_source,
+                map_save_source=save_source,
+                relocalization_supported=capability_defaults[
                     "relocalization_supported"
                 ],
-                "saved_map_relocalization_supported": capability_defaults[
+                saved_map_relocalization_supported=capability_defaults[
                     "saved_map_relocalization_supported"
                 ],
-                "restart_recovery_supported": capability_defaults[
+                restart_recovery_supported=capability_defaults[
                     "restart_recovery_supported"
                 ],
-                "recovery_method": capability_defaults["recovery_method"],
-            }
+                recovery_method=capability_defaults["recovery_method"],
+            )
             if dufo_result is not None:
                 resp["dynamic_filter"] = dufo_result
             if errors:
                 resp["warnings"] = errors
             return resp
-        return JSONResponse(
-            {"success": False, "name": name, "errors": errors},
+        return _map_lifecycle_response(
+            False,
+            name=name,
+            message="Map save failed",
+            errors=errors,
             status_code=500,
         )
