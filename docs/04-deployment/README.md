@@ -225,6 +225,7 @@ ros2 topic hz /nav/lidar_scan            # not /livox/lidar in production
 ```bash
 ros2 topic hz /nav/odometry              # expect live odometry
 ros2 topic hz /nav/map_cloud             # expect live map cloud in mapping/localization
+lingtu soak --duration 120 --interval 2 --json --strict
 ros2 topic echo /localization_quality
 sudo systemctl restart robot-fastlio2 robot-localizer
 ```
@@ -232,6 +233,11 @@ sudo systemctl restart robot-fastlio2 robot-localizer
 The Gateway has a SLAM drift watchdog (`src/gateway/gateway_module.py`
 `_drift_watchdog_loop`) that auto-restarts SLAM services when xy or velocity diverge.
 See `docs/archive/05-specialized/slam_drift_watchdog.md`.
+
+`lingtu soak` is the preferred non-motion evidence command after boot or sensor
+reconnects. It does not send goals or velocity commands; it samples Gateway
+readiness, localization freshness, map-cloud stability, command-source idleness,
+and stationary odometry displacement over the requested window.
 
 ### `robot-brainstem` (port 13145) unresponsive
 

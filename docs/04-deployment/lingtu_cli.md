@@ -145,6 +145,27 @@ This is read-only. It checks:
   `/nav/map_cloud`, and `/localization_quality`
 - Gateway `/api/v1/health` SLAM summary
 
+### `soak` - non-motion readiness soak
+
+```bash
+lingtu soak --duration 120 --interval 2 --json --strict
+```
+
+This is read-only. It samples `/ready`, `/api/v1/health`,
+`/api/v1/localization/status`, `/api/v1/navigation/status`, `/api/v1/state`, and
+`/api/v1/path`. It does not start sessions, send goals, publish velocity
+commands, or restart services.
+
+Use it after boot, sensor reconnects, or localization changes to produce a
+repeatable evidence window. The report records localization state/confidence,
+odometry and map-cloud freshness, Gateway latency, live map-point stability,
+navigation command source, and stationary pose drift inferred from odometry
+samples. That drift is windowed no-motion displacement, not absolute drift
+against a survey-grade map.
+
+In `--strict` mode, stale localization, non-idle command sources, readiness
+failures, or excessive stationary drift return a non-zero exit code.
+
 ### `log` — journalctl filters
 
 ```bash

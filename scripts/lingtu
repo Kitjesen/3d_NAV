@@ -40,6 +40,7 @@
 #   lingtu svc restart all     # restart robot-lidar + SLAM + localizer + lingtu
 #   lingtu doctor              # read-only service/topic/Gateway diagnostics
 #   lingtu doctor --non-motion --json --strict
+#   lingtu soak --duration 120 --json --strict # non-motion readiness soak
 #   lingtu slamcheck super_lio # switch, verify Super-LIO Gateway contract, rollback
 set -u
 GW="${GW:-http://localhost:5050}"
@@ -1200,6 +1201,37 @@ print("  slam_status={} slam_hz={} map_points={} has_odom={}".format(slam.get("s
     fi
 }
 
+# -- Subcommand: soak --
+soak_usage() {
+    echo "Usage: lingtu soak [--duration SEC] [--interval SEC] [--json] [--strict]"
+}
+
+cmd_soak() {
+    local duration=60 interval=2 json=0 strict=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --duration)
+                shift
+                [ "$#" -gt 0 ] || { soak_usage; return 1; }
+                duration="$1" ;;
+            --interval)
+                shift
+                [ "$#" -gt 0 ] || { soak_usage; return 1; }
+                interval="$1" ;;
+            --json) json=1 ;;
+            --strict) strict=1 ;;
+            -h|--help) soak_usage; return 0 ;;
+            *) soak_usage; return 1 ;;
+        esac
+        shift
+    done
+
+    local args=(--gateway "$GW" --duration "$duration" --interval "$interval")
+    [ "$json" = "1" ] && args+=(--json)
+    [ "$strict" = "1" ] && args+=(--strict)
+    python3 "$SCRIPT_DIR/soak.py" "${args[@]}"
+}
+
 # -- Subcommand: slamcheck --
 slamcheck_usage() {
     echo "Usage: lingtu slamcheck super_lio|super_lio_relocation [--duration SEC] [--rollback previous|localizer|fastlio2|super_lio|super_lio_relocation|stop|none] [--save-map NAME] [--map NAME] [--initial-pose X Y YAW]"
@@ -1486,6 +1518,7 @@ case "${1:-status}" in
     nav|n)          shift; cmd_nav   "$@" ;;
     svc|service)    shift; cmd_svc   "$@" ;;
     doctor|diag)    shift; cmd_doctor "$@" ;;
+    soak|field-soak|readiness-soak) shift; cmd_soak "$@" ;;
     slamcheck|slam-check) shift; cmd_slamcheck "$@" ;;
     super-lio-smoke|super_lio_smoke|superlio-smoke) shift; cmd_slamcheck super_lio "$@" ;;
     super-lio-relocation-smoke|super_lio_relocation_smoke|super-lio-reloc-smoke|super_lio_reloc_smoke) shift; cmd_slamcheck super_lio_relocation "$@" ;;

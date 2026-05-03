@@ -181,6 +181,17 @@ To reset manually:
 lingtu svc restart slam
 ```
 
+For non-motion evidence before restarting anything, run:
+
+```bash
+lingtu soak --duration 120 --interval 2 --json --strict
+```
+
+This reports Gateway readiness, localization freshness, live map-cloud stability,
+command-source idleness, and odometry displacement during the sample window. The
+drift value is stationary odometry displacement over that window; it is not a
+ground-truth map error measurement.
+
 Tunables (env vars on `lingtu.service`):
 `LINGTU_DRIFT_WATCHDOG=0` disables. `_INTERVAL` / `_XY_LIMIT` / `_V_LIMIT` / `_COOLDOWN`
 override defaults.

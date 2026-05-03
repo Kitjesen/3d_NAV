@@ -97,6 +97,50 @@ def test_lingtu_doctor_normalizes_structured_active_command_source():
     assert 'isinstance(s,dict)' in text
 
 
+def test_lingtu_soak_is_read_only_non_motion_field_verification():
+    text = _read("scripts/lingtu")
+    impl = _read("scripts/soak.py")
+    start = text.index("cmd_soak()")
+    end = text.index("# -- Subcommand: slamcheck --")
+    soak = text[start:end]
+
+    assert "Usage: lingtu soak [--duration SEC] [--interval SEC] [--json] [--strict]" in text
+    assert "soak|field-soak|readiness-soak) shift; cmd_soak" in text
+    assert 'python3 "$SCRIPT_DIR/soak.py"' in soak
+    assert "--duration)" in soak
+    assert "--interval)" in soak
+    for endpoint in (
+        '"/ready"',
+        '"/api/v1/localization/status"',
+        '"/api/v1/navigation/status"',
+        '"/api/v1/health"',
+        '"/api/v1/state"',
+        '"/api/v1/path"',
+    ):
+        assert endpoint in impl
+    for forbidden in (
+        "-X POST",
+        "/api/v1/goal",
+        "/api/v1/cmd_vel",
+        "/api/v1/session/start",
+        "/api/v1/session/end",
+        "systemctl restart",
+        "systemctl stop",
+        "cmd_nav",
+        "cmd_map",
+    ):
+        assert forbidden not in soak
+        assert forbidden not in impl
+    assert "LINGTU_SOAK_MAX_XY_DRIFT_M" in impl
+    assert "LINGTU_SOAK_MAX_ODOM_AGE_MS" in impl
+    assert "LINGTU_SOAK_MAX_CLOUD_AGE_MS" in impl
+    assert "LINGTU_SOAK_MAX_MAP_POINTS_DROP_RATIO" in impl
+    assert '"mode": "non_motion_soak"' in impl
+    assert '"max_xy_drift_m": max_xy_drift_m' in impl
+    assert '"active_cmd_source_values":' in impl
+    assert 'return 1 if args.strict and report["violations"] else 0' in impl
+
+
 def test_lingtu_slamcheck_writes_float_relocation_initial_pose():
     text = _read("scripts/lingtu")
 
