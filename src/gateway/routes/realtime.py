@@ -10,10 +10,52 @@ from core.msgs.geometry import Twist
 
 logger = logging.getLogger(__name__)
 
+REALTIME_SEND_TIMEOUT_S = 2.0
+
+
+def _camera_stream_requested(query_params) -> bool:
+    """Return True when a legacy teleop client explicitly asks for JPEG frames."""
+    stream = str(query_params.get("stream", "")).lower()
+    if stream in {"camera", "video", "jpeg"}:
+        return True
+    for key in ("video", "camera", "frames"):
+        value = str(query_params.get(key, "")).lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
 
 def register_realtime_routes(app, gw) -> None:
     from starlette.websockets import WebSocket as StarletteWebSocket
     from starlette.websockets import WebSocketDisconnect as StarletteWebSocketDisconnect
+
+    async def send_bytes_or_disconnect(
+        ws: StarletteWebSocket,
+        payload: bytes,
+        *,
+        label: str,
+    ) -> bool:
+        try:
+            await asyncio.wait_for(
+                ws.send_bytes(payload),
+                timeout=REALTIME_SEND_TIMEOUT_S,
+            )
+            return True
+        except Exception as e:
+            logger.debug("%s send failed: %s", label, e)
+            return False
+
+    async def send_camera_frames(ws: StarletteWebSocket, *, label: str) -> None:
+        last_seq: int | None = None
+        while True:
+            with gw._jpeg_lock:
+                frame = gw._latest_jpeg
+                seq = getattr(gw, "_latest_jpeg_seq", 0)
+            if frame and seq != last_seq:
+                if not await send_bytes_or_disconnect(ws, frame, label=label):
+                    break
+                last_seq = seq
+            await asyncio.sleep(0.1)
 
     async def ws_teleop_endpoint(ws: StarletteWebSocket):
         await ws.accept()
@@ -21,40 +63,49 @@ def register_realtime_routes(app, gw) -> None:
         tm = gw._teleop_module
         if tm is not None:
             tm.on_client_connect()
-        logger.info("Teleop WS connected (%d clients)", gw._teleop_clients)
+        stream_camera = _camera_stream_requested(ws.query_params)
+        logger.info(
+            "Teleop WS connected (%d clients, camera_stream=%s)",
+            gw._teleop_clients,
+            stream_camera,
+        )
 
-        async def send_frames():
-            while True:
-                with gw._jpeg_lock:
-                    frame = gw._latest_jpeg
-                if frame:
-                    try:
-                        await ws.send_bytes(frame)
-                    except Exception as e:
-                        logger.debug("teleop frame send failed: %s", e)
-                        break
-                await asyncio.sleep(0.1)
-
-        frame_task = asyncio.create_task(send_frames())
+        frame_task = (
+            asyncio.create_task(send_camera_frames(ws, label="teleop camera"))
+            if stream_camera
+            else None
+        )
         try:
             while True:
                 msg = await ws.receive()
                 if msg["type"] == "websocket.disconnect":
                     break
-                raw = msg.get("text") or msg.get("bytes", b"").decode()
+                raw = msg.get("text")
+                if raw is None:
+                    raw_bytes = msg.get("bytes")
+                    if not raw_bytes:
+                        continue
+                    try:
+                        raw = raw_bytes.decode()
+                    except (AttributeError, UnicodeDecodeError):
+                        continue
                 if not raw:
                     continue
                 try:
                     data = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(data, dict):
+                    continue
                 msg_type = data.get("type", "")
                 if msg_type == "joy":
-                    gw._teleop_on_joy(
-                        float(data.get("lx", 0)),
-                        float(data.get("ly", 0)),
-                        float(data.get("az", 0)),
-                    )
+                    try:
+                        lx = float(data.get("lx", 0))
+                        ly = float(data.get("ly", 0))
+                        az = float(data.get("az", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    gw._teleop_on_joy(lx, ly, az)
                 elif msg_type == "stop":
                     gw.stop_cmd.publish(2)
                     if tm is not None:
@@ -64,7 +115,8 @@ def register_realtime_routes(app, gw) -> None:
         except StarletteWebSocketDisconnect:
             pass
         finally:
-            frame_task.cancel()
+            if frame_task is not None:
+                frame_task.cancel()
             gw._teleop_clients = max(0, gw._teleop_clients - 1)
             if tm is not None:
                 tm.on_client_disconnect()
@@ -72,15 +124,30 @@ def register_realtime_routes(app, gw) -> None:
                 gw._teleop_release()
             logger.info("Teleop WS disconnected (%d clients)", gw._teleop_clients)
 
+    async def ws_camera_endpoint(ws: StarletteWebSocket):
+        await ws.accept()
+        tm = gw._teleop_module
+        if tm is not None and hasattr(tm, "on_camera_client_connect"):
+            tm.on_camera_client_connect()
+        try:
+            await send_camera_frames(ws, label="camera ws")
+        except StarletteWebSocketDisconnect:
+            pass
+        finally:
+            if tm is not None and hasattr(tm, "on_camera_client_disconnect"):
+                tm.on_camera_client_disconnect()
+
     async def ws_cloud_endpoint(ws: StarletteWebSocket):
         await ws.accept()
         q, latest = gw._cloud_subscribe()
         try:
             if latest is not None:
-                await ws.send_bytes(latest)
+                if not await send_bytes_or_disconnect(ws, latest, label="cloud ws"):
+                    return
             while True:
                 buf = await q.get()
-                await ws.send_bytes(buf)
+                if not await send_bytes_or_disconnect(ws, buf, label="cloud ws"):
+                    break
         except StarletteWebSocketDisconnect:
             pass
         except Exception as e:
@@ -89,4 +156,5 @@ def register_realtime_routes(app, gw) -> None:
             gw._cloud_unsubscribe(q)
 
     app.add_websocket_route("/ws/teleop", ws_teleop_endpoint)
+    app.add_websocket_route("/ws/camera", ws_camera_endpoint)
     app.add_websocket_route("/ws/cloud", ws_cloud_endpoint)

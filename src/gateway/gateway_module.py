@@ -33,6 +33,7 @@ SSE
   GET  /api/v1/events        event stream  (application/x-ndjson, chunked)
 WebSocket
   WS   /ws/teleop            {type:joy, lx,ly,az} | {type:stop}
+  WS   /ws/camera            binary JPEG frames
                              ← binary JPEG camera frames
   WS   /ws/cloud             ← binary point-cloud frames (quantized int16,
                                 see core.utils.binary_codec)
@@ -88,9 +89,12 @@ from gateway.services.runtime_status import (
 )
 from gateway.services.traffic import (
     DEFAULT_CLOUD_QUEUE_MAXSIZE,
+    DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
     DEFAULT_SSE_QUEUE_MAXSIZE,
+    DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
     DROP_OLDEST_POLICY,
     RECOMMENDED_CLIENT_RATES_HZ,
+    normalize_sse_event,
     put_latest,
 )
 
@@ -100,6 +104,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _safe_map_name(name: str) -> str | None:
     """Validate a map name from user input. Return error message or None.
@@ -284,15 +302,28 @@ class GatewayModule(Module, layer=6):
         # Written from Module threads via push_event() (thread-safe).
         self._sse_lock:   threading.Lock = threading.Lock()
         self._sse_queues: list[asyncio.Queue] = []
+        self._sse_queue_loops: dict[asyncio.Queue, asyncio.AbstractEventLoop | None] = {}
         self._sse_queue_maxsize: int = DEFAULT_SSE_QUEUE_MAXSIZE
+        self._sse_event_seq: int = 0
         self._sse_published_events: int = 0
         self._sse_dropped_events: int = 0
         self._sse_max_depth_seen: int = 0
+        self._sse_raster_min_interval_s: float = max(
+            0.0,
+            _env_float("LINGTU_SSE_RASTER_MIN_INTERVAL_S", DEFAULT_SSE_RASTER_MIN_INTERVAL_S),
+        )
+        self._sse_slope_payload_enabled: bool = _env_bool(
+            "LINGTU_SSE_SLOPE_PAYLOAD",
+            DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
+        )
+        self._sse_raster_last_emit: dict[str, float] = {}
+        self._sse_suppressed_events: dict[str, int] = {}
 
         # Teleop: delegate to TeleopModule (set by on_system_modules)
         self._teleop_module = None
         self._teleop_clients:   int  = 0
         self._latest_jpeg:  bytes | None = None
+        self._latest_jpeg_seq: int = 0
         self._jpeg_lock: threading.Lock = threading.Lock()
 
         # Reference to MapManagerModule (set by on_system_modules)
@@ -344,6 +375,7 @@ class GatewayModule(Module, layer=6):
         self._latest_cloud_buf: bytes | None = None
         self._cloud_seq: int = 0
         self._cloud_subs: list[asyncio.Queue] = []
+        self._cloud_sub_loops: dict[asyncio.Queue, asyncio.AbstractEventLoop | None] = {}
         self._cloud_queue_maxsize: int = DEFAULT_CLOUD_QUEUE_MAXSIZE
         self._cloud_published_frames: int = 0
         self._cloud_dropped_frames: int = 0
@@ -541,7 +573,13 @@ class GatewayModule(Module, layer=6):
         # SLAM/localizer alive even while the mission session is idle so App/Web
         # readiness and map state remain fresh.
         mode = self._session_mode
-        service_names = ("slam", "slam_pgo", "localizer", "super_lio")
+        service_names = (
+            "slam",
+            "slam_pgo",
+            "localizer",
+            "super_lio",
+            "super_lio_relocation",
+        )
         running_before = {name: False for name in service_names}
         for name in service_names:
             try:
@@ -575,7 +613,13 @@ class GatewayModule(Module, layer=6):
             logger.warning("drift_watchdog: blackbox dump failed (continuing): %s", e)
 
         try:
-            svc.stop("slam", "slam_pgo", "localizer", "super_lio")
+            svc.stop(
+                "slam",
+                "slam_pgo",
+                "localizer",
+                "super_lio",
+                "super_lio_relocation",
+            )
         except Exception as e:
             logger.warning("drift_watchdog: svc.stop failed (continuing): %s", e)
 
@@ -602,7 +646,9 @@ class GatewayModule(Module, layer=6):
         time.sleep(2.0)
         try:
             restart_services: list[str] = []
-            if running_before.get("super_lio"):
+            if running_before.get("super_lio_relocation"):
+                restart_services = ["lidar", "super_lio_relocation"]
+            elif running_before.get("super_lio"):
                 restart_services = ["lidar", "super_lio"]
             elif mode in ("mapping", "exploring"):
                 restart_services = ["slam", "slam_pgo"]
@@ -772,6 +818,7 @@ class GatewayModule(Module, layer=6):
         """Called by TeleopModule when a new camera frame is ready."""
         with self._jpeg_lock:
             self._latest_jpeg = jpeg_bytes
+            self._latest_jpeg_seq += 1
 
     # -- Module subscription callbacks -------------------------------------
 
@@ -961,11 +1008,22 @@ class GatewayModule(Module, layer=6):
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
-            status = svc.status("slam", "slam_pgo", "localizer", "super_lio")
+            status = svc.status(
+                "slam",
+                "slam_pgo",
+                "localizer",
+                "super_lio",
+                "super_lio_relocation",
+            )
             slam_active = status.get("slam") in ("running", "active")
             pgo_active = status.get("slam_pgo") in ("running", "active")
             loc_active = status.get("localizer") in ("running", "active")
             super_lio_active = status.get("super_lio") in ("running", "active")
+            super_lio_relocation_active = status.get(
+                "super_lio_relocation"
+            ) in ("running", "active")
+            if super_lio_relocation_active:
+                return "navigating", self._session_active_map_name()
             if super_lio_active:
                 if self._exploring:
                     return "exploring", None
@@ -1051,6 +1109,8 @@ class GatewayModule(Module, layer=6):
         map_save_source = localization_status.get("map_save_source")
         if map_save_source is None and backend == "super_lio":
             map_save_source = "live_map_cloud_snapshot"
+        if map_save_source is None and backend == "super_lio_relocation":
+            map_save_source = "active_map"
         # Gate which transitions are allowed from current state.
         idle = self._session_mode == "idle" and not self._session_pending
         can_start_mapping = idle
@@ -1245,8 +1305,16 @@ class GatewayModule(Module, layer=6):
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
-            services = svc.status("super_lio", "slam_pgo", "localizer", "slam")
-            if services.get("super_lio") in ("running", "active"):
+            services = svc.status(
+                "super_lio_relocation",
+                "super_lio",
+                "slam_pgo",
+                "localizer",
+                "slam",
+            )
+            if services.get("super_lio_relocation") in ("running", "active"):
+                profile = "super_lio_relocation"
+            elif services.get("super_lio") in ("running", "active"):
                 profile = "super_lio"
             elif services.get("slam_pgo") in ("running", "active"):
                 profile = "fastlio2"
@@ -1346,16 +1414,27 @@ class GatewayModule(Module, layer=6):
         if profile and profile != "—":
             d["backend"] = profile
         capability_defaults = backend_capability_defaults(profile)
-        if profile == "super_lio":
+        if profile in {"super_lio", "super_lio_relocation"}:
             d.setdefault("health_source", "odom_map_cloud")
             d["relocalization_supported"] = False
             d["saved_map_relocalization_supported"] = False
             d.setdefault("relocalization_state", "unsupported")
-            d["map_save_supported"] = True
-            d.setdefault("map_save_source", "live_map_cloud_snapshot")
+            d["map_save_supported"] = profile == "super_lio"
+            d.setdefault(
+                "map_save_source",
+                (
+                    "live_map_cloud_snapshot"
+                    if profile == "super_lio"
+                    else "active_map"
+                ),
+            )
             if "map_state" not in d:
                 d["map_state"] = (
-                    "live_map_cloud"
+                    (
+                        "live_map_cloud"
+                        if profile == "super_lio"
+                        else "relocation_map_cloud"
+                    )
                     if d.get("map_cloud_fresh")
                     else "map_cloud_stale"
                 )
@@ -1444,6 +1523,8 @@ class GatewayModule(Module, layer=6):
         grid = cm.get("grid")
         if grid is None:
             return
+        if not self._should_emit_sse_raster("costmap"):
+            return
         try:
             import base64 as _b64
 
@@ -1480,27 +1561,43 @@ class GatewayModule(Module, layer=6):
         grid = data.get("grid")
         if grid is None:
             return
+        if not self._should_emit_sse_raster("slope_grid"):
+            return
         try:
             import base64 as _b64
 
             import numpy as _np
-            # Encode slope degrees as uint8 (0-90° → 0-255)
-            g = _np.clip(grid * (255.0 / 90.0), 0, 255).astype(_np.uint8)
-            rows = int(g.shape[0])
-            cols = int(g.shape[1]) if g.ndim >= 2 else rows
+            # Shape metadata is cheap; inline raster payload is optional.
+            arr = _np.asarray(grid)
+            rows = int(arr.shape[0])
+            cols = int(arr.shape[1]) if arr.ndim >= 2 else rows
             origin = [float(v) for v in data.get("origin", [0.0, 0.0])]
             # Same reasoning as _on_costmap — slope grid origin is already in
             # map frame since SlamBridge upstream.
             yaw = 0.0
-            self.push_event({
+            event: dict[str, Any] = {
                 "type":       "slope_grid",
-                "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
+                "available":  True,
                 "rows":       rows,
                 "cols":       cols,
                 "resolution": float(data.get("resolution", 0.2)),
                 "origin":     origin,
                 "yaw":        float(yaw),
-            })
+            }
+            if self._sse_slope_payload_enabled:
+                g = _np.clip(arr * (255.0 / 90.0), 0, 255).astype(_np.uint8)
+                event.update({
+                    "payload": "inline",
+                    "encoding": "uint8_slope_degrees_0_90",
+                    "grid_b64": _b64.b64encode(g.tobytes()).decode(),
+                })
+            else:
+                event.update({
+                    "payload": "omitted",
+                    "reason": "inline_payload_disabled",
+                    "encoding": "uint8_slope_degrees_0_90",
+                })
+            self.push_event(event)
         except Exception as exc:
             logger.debug("_on_slope_grid serialize failed: %s", exc)
 
@@ -1517,27 +1614,87 @@ class GatewayModule(Module, layer=6):
         except Exception as exc:
             logger.debug("_on_agent_message serialize failed: %s", exc)
 
+    def _should_emit_sse_raster(self, event_type: str) -> bool:
+        """Gate expensive raster SSE payloads before serialization."""
+        with self._sse_lock:
+            if not self._sse_queues:
+                return False
+            interval = max(0.0, float(self._sse_raster_min_interval_s))
+            now = time.monotonic()
+            last = self._sse_raster_last_emit.get(event_type)
+            if interval > 0 and last is not None and now - last < interval:
+                self._sse_suppressed_events[event_type] = (
+                    self._sse_suppressed_events.get(event_type, 0) + 1
+                )
+                return False
+            self._sse_raster_last_emit[event_type] = now
+            return True
+
     # -- SSE fan-out --------------------------------------------------------
+
+    @staticmethod
+    def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+
+    @staticmethod
+    def _call_queue_put_latest(
+        q: asyncio.Queue,
+        item: Any,
+        loop: asyncio.AbstractEventLoop | None,
+        record: Callable[[bool, int], None],
+    ) -> None:
+        def _put_and_record() -> None:
+            dropped = put_latest(q, item)
+            record(dropped, q.qsize())
+
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(_put_and_record)
+                return
+            except RuntimeError:
+                pass
+        _put_and_record()
+
+    def _record_sse_delivery(self, dropped: bool, depth: int) -> None:
+        with self._sse_lock:
+            if dropped:
+                self._sse_dropped_events += 1
+            self._sse_max_depth_seen = max(self._sse_max_depth_seen, depth)
+
+    def _record_cloud_delivery(self, dropped: bool, depth: int) -> None:
+        with self._cloud_lock:
+            if dropped:
+                self._cloud_dropped_frames += 1
+            self._cloud_max_depth_seen = max(self._cloud_max_depth_seen, depth)
 
     def push_event(self, event: dict) -> None:
         """Thread-safe: push an event to all connected SSE clients."""
         with self._sse_lock:
-            queues = list(self._sse_queues)
-        dropped = 0
-        max_depth = 0
-        for q in queues:
-            if put_latest(q, event):
-                dropped += 1
-            max_depth = max(max_depth, q.qsize())
-        with self._sse_lock:
+            self._sse_event_seq += 1
+            event_id = self._sse_event_seq
+            subscribers = [
+                (q, self._sse_queue_loops.get(q))
+                for q in self._sse_queues
+            ]
             self._sse_published_events += 1
-            self._sse_dropped_events += dropped
-            self._sse_max_depth_seen = max(self._sse_max_depth_seen, max_depth)
+        payload = normalize_sse_event(event, event_id=event_id)
+        for q, loop in subscribers:
+            self._call_queue_put_latest(q, payload, loop, self._record_sse_delivery)
+
+    def _next_sse_event_id(self) -> int:
+        with self._sse_lock:
+            self._sse_event_seq += 1
+            return self._sse_event_seq
 
     def _sse_subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_maxsize)
+        loop = self._running_loop_or_none()
         with self._sse_lock:
             self._sse_queues.append(q)
+            self._sse_queue_loops[q] = loop
         return q
 
     def _sse_unsubscribe(self, q: asyncio.Queue) -> None:
@@ -1546,6 +1703,7 @@ class GatewayModule(Module, layer=6):
                 self._sse_queues.remove(q)
             except ValueError:
                 pass
+            self._sse_queue_loops.pop(q, None)
 
     # -- Binary cloud fan-out ----------------------------------------------
 
@@ -1554,24 +1712,22 @@ class GatewayModule(Module, layer=6):
         with self._cloud_lock:
             self._latest_cloud_buf = buf
             self._cloud_seq += 1
-            subs = list(self._cloud_subs)
-        dropped = 0
-        max_depth = 0
-        for q in subs:
-            if put_latest(q, buf):
-                dropped += 1
-            max_depth = max(max_depth, q.qsize())
-        with self._cloud_lock:
+            subscribers = [
+                (q, self._cloud_sub_loops.get(q))
+                for q in self._cloud_subs
+            ]
             self._cloud_published_frames += 1
-            self._cloud_dropped_frames += dropped
-            self._cloud_max_depth_seen = max(self._cloud_max_depth_seen, max_depth)
+        for q, loop in subscribers:
+            self._call_queue_put_latest(q, buf, loop, self._record_cloud_delivery)
 
     def _cloud_subscribe(self) -> tuple[asyncio.Queue, bytes | None]:
         # maxsize=2 keeps memory bounded; cloud frames supersede each other,
         # so a backlog longer than that is wasted bandwidth.
         q: asyncio.Queue = asyncio.Queue(maxsize=self._cloud_queue_maxsize)
+        loop = self._running_loop_or_none()
         with self._cloud_lock:
             self._cloud_subs.append(q)
+            self._cloud_sub_loops[q] = loop
             latest = self._latest_cloud_buf
         return q, latest
 
@@ -1581,6 +1737,7 @@ class GatewayModule(Module, layer=6):
                 self._cloud_subs.remove(q)
             except ValueError:
                 pass
+            self._cloud_sub_loops.pop(q, None)
 
     def _traffic_stats_snapshot(self) -> dict[str, Any]:
         with self._sse_lock:
@@ -1590,8 +1747,12 @@ class GatewayModule(Module, layer=6):
                 "queue_maxsize": self._sse_queue_maxsize,
                 "queue_depths": sse_depths,
                 "max_depth_seen": self._sse_max_depth_seen,
+                "latest_event_id": self._sse_event_seq,
                 "published_events": self._sse_published_events,
                 "dropped_events": self._sse_dropped_events,
+                "suppressed_events": dict(self._sse_suppressed_events),
+                "raster_min_interval_s": self._sse_raster_min_interval_s,
+                "slope_grid_inline": self._sse_slope_payload_enabled,
                 "drop_policy": DROP_OLDEST_POLICY,
             }
         with self._cloud_lock:

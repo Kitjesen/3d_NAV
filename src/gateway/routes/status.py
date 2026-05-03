@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from typing import Any
 
@@ -27,6 +26,11 @@ from gateway.services.runtime_status import (
     build_navigation_status,
 )
 from gateway.services.state_snapshot import build_state_snapshot
+from gateway.services.traffic import (
+    SSE_RETRY_MS,
+    format_sse_message,
+    normalize_sse_event,
+)
 from gateway.services.telemetry_normalizers import (
     build_locations_response,
     build_path_response,
@@ -61,19 +65,25 @@ def register_status_routes(app, gw) -> None:
                             "session": gw._session_snapshot(),
                         },
                     }
-                yield f"data: {json.dumps(snapshot)}\n\n"
+                event_id = gw._next_sse_event_id()
+                yield format_sse_message(
+                    normalize_sse_event(snapshot, event_id=event_id),
+                    retry_ms=SSE_RETRY_MS,
+                )
 
                 while True:
                     try:
                         event = q.get_nowait()
                     except asyncio.QueueEmpty:
-                        yield (
-                            f"data: "
-                            f"{json.dumps({'type': 'ping', 'ts': time.time()})}\n\n"
+                        yield format_sse_message(
+                            normalize_sse_event(
+                                {"type": "ping"},
+                                now=time.time(),
+                            )
                         )
                         await asyncio.sleep(1.0)
                         continue
-                    yield f"data: {json.dumps(event)}\n\n"
+                    yield format_sse_message(event)
                     await asyncio.sleep(0)
             finally:
                 gw._sse_unsubscribe(q)
@@ -173,8 +183,8 @@ def register_status_routes(app, gw) -> None:
         traffic = gw._traffic_stats_snapshot()
         commands = gw._command_stats_snapshot()
         n_sse = traffic["sse"]["clients"]
-        map_pts = gw._map_cloud_count
-        slam_hz = gw._get_slam_hz_cached()
+        with gw._map_cloud_lock:
+            map_pts = len(gw._map_points) if gw._map_points is not None else 0
 
         sensors: dict[str, Any] = {}
         modules_ok = 0
@@ -213,22 +223,35 @@ def register_status_routes(app, gw) -> None:
                         }
                     elif "SlamBridge" in name or "SLAMModule" in name:
                         odom_out = h.get("ports_out", {}).get("odometry", {})
+                        slam_rate = round(odom_out.get("rate_hz", 0), 1)
                         sensors["slam"] = {
                             "status": (
                                 "active"
-                                if odom_out.get("msg_count", 0) > 0
+                                if slam_rate > 0.0
                                 else "inactive"
                             ),
-                            "hz": round(odom_out.get("rate_hz", 0), 1),
+                            "hz": slam_rate,
+                            "messages": odom_out.get("msg_count", 0),
                         }
                     elif "Navigation" in name:
+                        nav = h.get("navigation", h)
                         sensors["navigation"] = {
-                            "state": h.get("mission_state", "idle"),
-                            "replan_count": h.get("replan_count", 0),
+                            "state": nav.get(
+                                "state",
+                                h.get("mission_state", "idle"),
+                            ),
+                            "replan_count": nav.get(
+                                "replan_count",
+                                h.get("replan_count", 0),
+                            ),
                         }
                 except Exception:
                     module_summary[name] = "error"
                     modules_fail += 1
+
+        slam_hz = float(sensors.get("slam", {}).get("hz") or 0.0)
+        if slam_hz <= 0.0:
+            slam_hz = gw._get_slam_hz_cached()
 
         def _brainstem_probe():
             import brainstem_api as bapi

@@ -5,11 +5,20 @@ from __future__ import annotations
 import time
 import math
 from dataclasses import asdict, is_dataclass
+from collections.abc import Mapping
 from numbers import Real
 from typing import Any
 
 
 READINESS_SCHEMA_VERSION = 1
+
+_LOCALIZATION_BLOCKING_STATES = {
+    "no_odometry",
+    "initializing",
+    "degraded",
+    "lost",
+    "relocalizing",
+}
 
 
 def _json_safe(value: Any) -> Any:
@@ -35,6 +44,89 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(item) for item in value]
     return str(value)
+
+
+def _requires_runtime_readiness(gw: Any, modules: Mapping[str, Any]) -> bool:
+    """Return True when /ready should include robot runtime readiness.
+
+    Stub/dev stacks may intentionally have no SLAM or odometry. Real robot
+    stacks load SLAM/localizer/navigation modules or expose localization
+    evidence, so module liveness alone is too optimistic there.
+    """
+    names = " ".join(str(name).lower() for name in modules)
+    if any(
+        token in names
+        for token in (
+            "slam",
+            "localizer",
+            "navigation",
+            "cmdvelmux",
+            "cmd_vel_mux",
+        )
+    ):
+        return True
+
+    session_mode = str(getattr(gw, "_session_mode", "") or "").lower()
+    if session_mode in {"mapping", "navigating", "exploring"}:
+        return True
+
+    lock = getattr(gw, "_state_lock", None)
+    if lock is None:
+        return False
+    try:
+        with lock:
+            return (
+                getattr(gw, "_odom", None) is not None
+                or getattr(gw, "_localization_status", None) is not None
+                or getattr(gw, "_mission", None) is not None
+            )
+    except Exception:
+        return False
+
+
+def _runtime_readiness_reasons(gw: Any) -> tuple[list[str], dict[str, Any]]:
+    from gateway.services.runtime_status import (
+        build_localization_status,
+        build_navigation_status,
+    )
+
+    runtime: dict[str, Any] = {}
+    reasons: list[str] = []
+    try:
+        localization = build_localization_status(gw)
+        runtime["localization"] = {
+            "state": localization.get("state"),
+            "ready": localization.get("ready"),
+            "pose_fresh": localization.get("pose_fresh"),
+            "pose_freshness": localization.get("pose_freshness"),
+            "algorithm_healthy": localization.get("algorithm_healthy"),
+            "reasons": localization.get("reasons", []),
+        }
+        state = str(localization.get("state") or "unknown").lower()
+        if state in _LOCALIZATION_BLOCKING_STATES:
+            reasons.append(f"localization:{state}")
+        if localization.get("pose_fresh") is False:
+            reasons.append("localization:pose_stale")
+    except Exception as exc:
+        runtime["localization"] = {"error": str(exc)}
+        reasons.append("localization:status_error")
+
+    try:
+        navigation = build_navigation_status(gw)
+        readiness = navigation.get("readiness", {})
+        blockers = list(readiness.get("blockers") or [])
+        runtime["navigation"] = {
+            "state": navigation.get("state"),
+            "can_accept_goal": navigation.get("can_accept_goal"),
+            "blockers": blockers,
+            "advisories": list(readiness.get("advisories") or []),
+        }
+        reasons.extend(f"navigation_blocked:{blocker}" for blocker in blockers)
+    except Exception as exc:
+        runtime["navigation"] = {"error": str(exc)}
+        reasons.append("navigation:status_error")
+
+    return list(dict.fromkeys(reasons)), runtime
 
 
 def build_readiness_snapshot(gw: Any, now: float | None = None) -> tuple[dict[str, Any], int]:
@@ -67,7 +159,16 @@ def build_readiness_snapshot(gw: Any, now: float | None = None) -> tuple[dict[st
             failed_modules.append(str(name))
             module_health[name] = {"ok": False, "error": str(exc)}
 
-    ready = not failed_modules
+    reasons = [
+        f"module_failed:{name}"
+        for name in failed_modules
+    ]
+    runtime: dict[str, Any] = {}
+    if _requires_runtime_readiness(gw, modules):
+        runtime_reasons, runtime = _runtime_readiness_reasons(gw)
+        reasons.extend(runtime_reasons)
+
+    ready = not failed_modules and not reasons
     payload = {
         "schema_version": READINESS_SCHEMA_VERSION,
         "status": "ready" if ready else "degraded",
@@ -75,10 +176,8 @@ def build_readiness_snapshot(gw: Any, now: float | None = None) -> tuple[dict[st
         "modules": module_health,
         "module_count": len(modules),
         "failed_modules": failed_modules,
-        "reasons": [
-            f"module_failed:{name}"
-            for name in failed_modules
-        ],
+        "reasons": reasons,
+        "runtime": runtime,
         "ts": ts,
     }
     return payload, 200 if ready else 503
