@@ -4,6 +4,7 @@
 import type {
   AppBootstrapResponse,
   AppCapabilitiesResponse,
+  CommandReceipt,
   ControlCommandResponse,
   GatewayErrorResponse,
   LeaseAction,
@@ -12,10 +13,82 @@ import type {
   MapInfo,
   PathResponse,
   SceneGraphResponse,
+  SessionEvent,
   SlamProfile,
+  StateResponse,
 } from '../types'
 
 const WEB_CLIENT_ID = 'web-dashboard'
+
+type CommandResponse = ControlCommandResponse | LeaseResponse
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function shortRequestId(id?: string | null): string {
+  return id ? id.slice(0, 8) : ''
+}
+
+function detailStrings(detail: unknown, key: string): string[] {
+  if (!isRecord(detail)) return []
+  const value = detail[key]
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+}
+
+function commandSuffix(command?: CommandReceipt): string {
+  const parts: string[] = []
+  if (command?.replay) parts.push('重复请求已确认')
+  const requestId = shortRequestId(command?.request_id)
+  if (requestId) parts.push(`#${requestId}`)
+  return parts.length ? `（${parts.join(' ')}）` : ''
+}
+
+export class GatewayApiError extends Error {
+  readonly statusCode: number
+  readonly body?: GatewayErrorResponse
+  readonly command?: CommandReceipt
+  readonly errorCode?: string
+  readonly detail?: unknown
+
+  constructor(statusCode: number, body?: GatewayErrorResponse) {
+    super(body?.message || body?.error || `HTTP ${statusCode}`)
+    this.name = 'GatewayApiError'
+    this.statusCode = statusCode
+    this.body = body
+    this.command = body?.command
+    this.errorCode = body?.error
+    this.detail = body?.detail
+  }
+}
+
+export function isGatewayApiError(error: unknown): error is GatewayApiError {
+  return error instanceof GatewayApiError
+}
+
+export function formatCommandAck(response: CommandResponse, label = '命令'): string {
+  if (!response.ok) {
+    return `${label}未接受${commandSuffix(response.command)}`
+  }
+  return `${label}已提交${commandSuffix(response.command)}`
+}
+
+export function formatCommandError(error: unknown, label = '命令失败'): string {
+  if (isGatewayApiError(error)) {
+    const message = error.body?.message || error.body?.error || error.message || `HTTP ${error.statusCode}`
+    const blockers = detailStrings(error.detail, 'blockers')
+    const advisories = detailStrings(error.detail, 'advisories')
+    const reasonParts = [...blockers, ...advisories].slice(0, 3)
+    const reason = reasonParts.length ? `；原因：${reasonParts.join('，')}` : ''
+    const rejected = error.command?.accepted === false ? '（未接受）' : ''
+    return `${label}${rejected}: ${message}${reason}${commandSuffix(error.command)}`
+  }
+  if (error instanceof Error) {
+    return `${label}: ${error.message}`
+  }
+  return `${label}: ${String(error)}`
+}
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url)
@@ -48,10 +121,15 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const text = await res.text()
-  const data = text ? JSON.parse(text) : undefined
+  let data: unknown
+  try {
+    data = text ? JSON.parse(text) : undefined
+  } catch {
+    data = undefined
+  }
   if (!res.ok) {
     const error = data as GatewayErrorResponse | undefined
-    throw new Error(error?.message || error?.error || `HTTP ${res.status}`)
+    throw new GatewayApiError(res.status, error)
   }
   return data as T
 }
@@ -64,6 +142,10 @@ export async function fetchAppBootstrap(): Promise<AppBootstrapResponse> {
 
 export async function fetchAppCapabilities(): Promise<AppCapabilitiesResponse> {
   return fetchJson<AppCapabilitiesResponse>('/api/v1/app/capabilities')
+}
+
+export async function fetchState(): Promise<StateResponse> {
+  return fetchJson<StateResponse>('/api/v1/state')
 }
 
 export async function fetchSceneGraph(): Promise<SceneGraphResponse> {
@@ -165,6 +247,14 @@ export interface SaveMapResult {
   name: string
   path?: string
   size?: string
+  slam_profile?: string
+  source?: string
+  map_save_source?: string
+  relocalization_supported?: boolean
+  saved_map_relocalization_supported?: boolean
+  restart_recovery_supported?: boolean
+  recovery_method?: string
+  warnings?: string[]
   dynamic_filter?: {
     success: boolean
     orig_count?: number
@@ -189,21 +279,11 @@ export async function saveMap(name: string): Promise<SaveMapResult> {
 
 // --- Session state machine ---
 
-export interface SessionState {
-  mode: 'idle' | 'mapping' | 'navigating' | 'exploring'
-  active_map: string | null
-  map_has_pcd: boolean
-  map_has_tomogram: boolean
-  since: number
-  pending: boolean
-  error: string
-  icp_quality: number
-  localizer_ready: boolean
-  can_start_mapping: boolean
-  can_start_navigating: boolean
-  can_start_exploring: boolean
-  can_end: boolean
-  explorer_available: boolean
+export type SessionState = SessionEvent['data']
+export type SessionMode = 'mapping' | 'navigating' | 'exploring'
+export interface StartSessionOptions {
+  mapName?: string
+  slamProfile?: Exclude<SlamProfile, 'stop'>
 }
 
 export async function fetchSession(): Promise<SessionState> {
@@ -212,11 +292,21 @@ export async function fetchSession(): Promise<SessionState> {
   return res.json()
 }
 
-export async function startSession(mode: 'mapping' | 'navigating' | 'exploring', mapName?: string): Promise<SessionState> {
+export async function startSession(mode: SessionMode, mapNameOrOptions?: string | StartSessionOptions): Promise<SessionState> {
+  const options: StartSessionOptions = typeof mapNameOrOptions === 'string'
+    ? { mapName: mapNameOrOptions }
+    : (mapNameOrOptions ?? {})
+  const body: Record<string, string> = {
+    mode,
+    map_name: options.mapName ?? '',
+  }
+  if (options.slamProfile) {
+    body.slam_profile = options.slamProfile
+  }
   const res = await fetch('/api/v1/session/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode, map_name: mapName ?? '' }),
+    body: JSON.stringify(body),
   })
   const data = await res.json()
   if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`)

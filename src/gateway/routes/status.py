@@ -17,6 +17,7 @@ from gateway.schemas import (
     NavigationStatusResponse,
     PathResponse,
     ReadinessResponse,
+    SSEEventEnvelope,
     SceneGraphResponse,
     StateResponse,
 )
@@ -45,12 +46,14 @@ def register_status_routes(app, gw) -> None:
         response_class=StreamingResponse,
         responses={
             200: {
-                "content": {"text/event-stream": {"schema": {"type": "string"}}}
+                "content": {
+                    "text/event-stream": {"schema": SSEEventEnvelope.model_json_schema()}
+                }
             }
         },
     )
     async def sse_events():
-        q = gw._sse_subscribe()
+        q, snapshot_event_id = gw._sse_subscribe_with_event_id()
 
         async def _stream():
             try:
@@ -65,9 +68,8 @@ def register_status_routes(app, gw) -> None:
                             "session": gw._session_snapshot(),
                         },
                     }
-                event_id = gw._next_sse_event_id()
                 yield format_sse_message(
-                    normalize_sse_event(snapshot, event_id=event_id),
+                    normalize_sse_event(snapshot, event_id=snapshot_event_id),
                     retry_ms=SSE_RETRY_MS,
                 )
 

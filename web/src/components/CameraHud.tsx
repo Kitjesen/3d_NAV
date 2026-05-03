@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { SSEState } from '../types'
 import styles from './CameraHud.module.css'
 
@@ -13,10 +14,16 @@ export function CameraHud({ sseState }: CameraHudProps) {
   const slam = sseState.slamStatus
   const robot = sseState.robotStatus
   const odom = sseState.odometry
+  const [now, setNow] = useState(0)
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
 
   // Latency from last heartbeat
-  const latencyMs = sseState.lastHeartbeat
-    ? Math.max(0, Date.now() - sseState.lastHeartbeat)
+  const latencyMs = sseState.lastHeartbeat && now > 0
+    ? Math.max(0, now - sseState.lastHeartbeat)
     : null
 
   const slamHz = typeof slam?.slam_hz === 'number' ? `${slam.slam_hz.toFixed(0)} Hz` : '--'

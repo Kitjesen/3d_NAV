@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Settings, Radio, RotateCcw } from 'lucide-react'
-import { resetAllLayouts } from './FloatingWidget'
+import { resetAllLayouts } from './floatingWidgetLayout'
 import type { SSEState, Tab } from '../types'
 import { BagRecorder } from './BagRecorder'
 import { SettingsMenu } from './SettingsMenu'

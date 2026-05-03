@@ -9,7 +9,6 @@ import styles from './MapView.module.css'
 interface MapViewProps {
   showToast: (msg: string, kind?: ToastKind) => void
 }
-
 // ── Map type classification ────────────────────────────────────
 // 语义地图  — has PCD + Tomogram (PCT planner ready)
 // 三维点云  — has PCD, no tomogram (raw LiDAR map)
@@ -38,6 +37,22 @@ function groupMaps(maps: MapInfo[]): Group[] {
 }
 
 // ── Map card ───────────────────────────────────────────────────
+function formatSaveMapSummary(r: api.SaveMapResult): string {
+  const source = r.map_save_source ?? r.source ?? 'unknown'
+  const savedMapReloc = r.saved_map_relocalization_supported ?? r.relocalization_supported
+  const relocText = savedMapReloc === undefined ? 'unknown' : savedMapReloc ? 'yes' : 'no'
+  const recovery = r.restart_recovery_supported === undefined
+    ? (r.recovery_method ?? 'unknown')
+    : `${r.restart_recovery_supported ? 'restart' : 'no-restart'}${r.recovery_method ? `/${r.recovery_method}` : ''}`
+  const warnings = r.warnings?.filter(Boolean) ?? []
+  return [
+    `source=${source}`,
+    `saved-map relocalize=${relocText}`,
+    `recovery=${recovery}`,
+    warnings.length > 0 ? `warnings=${warnings.join('; ')}` : null,
+  ].filter((v): v is string => Boolean(v)).join(' | ')
+}
+
 interface CardProps {
   m: MapInfo
   selected: boolean
@@ -101,6 +116,7 @@ export function MapView({ showToast }: MapViewProps) {
   const [saveOpen,   setSaveOpen  ] = useState(false)
   const [renameFrom, setRenameFrom] = useState<string | null>(null)
   const [deleteFrom, setDeleteFrom] = useState<string | null>(null)
+  const [lastSaveSummary, setLastSaveSummary] = useState<string | null>(null)
 
   // Resizable divider
   const containerRef    = useRef<HTMLDivElement>(null)
@@ -175,8 +191,17 @@ export function MapView({ showToast }: MapViewProps) {
   }
   const confirmSave = async (name: string) => {
     setSaveOpen(false)
-    try { await api.saveMap(name); showToast(`保存成功: ${name}`, 'success'); loadMaps() }
-    catch { showToast('保存失败', 'error') }
+    try {
+      const r = await api.saveMap(name)
+      const summary = formatSaveMapSummary(r)
+      setLastSaveSummary(summary)
+      showToast(`Saved ${name}. ${summary}`, r.warnings?.length ? 'info' : 'success')
+      loadMaps()
+    }
+    catch {
+      setLastSaveSummary(null)
+      showToast('Save failed', 'error')
+    }
   }
 
   const nameValidator = (v: string) => {
@@ -217,6 +242,12 @@ export function MapView({ showToast }: MapViewProps) {
             </button>
           </div>
         </div>
+
+        {lastSaveSummary && (
+          <div className={styles.stateMsg} title={lastSaveSummary}>
+            Last save: {lastSaveSummary}
+          </div>
+        )}
 
         <div className={styles.listScroll}>
           {loading && <div className={styles.stateMsg}>加载中...</div>}

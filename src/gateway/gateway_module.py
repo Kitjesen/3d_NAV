@@ -1689,6 +1689,17 @@ class GatewayModule(Module, layer=6):
             self._sse_event_seq += 1
             return self._sse_event_seq
 
+    def _sse_subscribe_with_event_id(self) -> tuple[asyncio.Queue, int]:
+        """Subscribe and reserve the first snapshot event id atomically."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_maxsize)
+        loop = self._running_loop_or_none()
+        with self._sse_lock:
+            self._sse_event_seq += 1
+            event_id = self._sse_event_seq
+            self._sse_queues.append(q)
+            self._sse_queue_loops[q] = loop
+        return q, event_id
+
     def _sse_subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_maxsize)
         loop = self._running_loop_or_none()

@@ -3,15 +3,22 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 export interface CameraState {
   imgSrc: string | null
   connected: boolean
+  lastFrameAt: number | null
+  frameCount: number
+  error: string | null
   reconnect: () => void
 }
 
-export function useCamera(url: string = '/ws/teleop'): CameraState {
+export function useCamera(url: string = '/ws/camera'): CameraState {
   const [imgSrc, setImgSrc] = useState<string | null>(null)
   const [connected, setConnected] = useState(false)
+  const [lastFrameAt, setLastFrameAt] = useState<number | null>(null)
+  const [frameCount, setFrameCount] = useState(0)
+  const [error, setError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
+  const connectRef = useRef<() => void>(() => {})
   const prevBlobRef = useRef<string | null>(null)
 
   const connect = useCallback(() => {
@@ -22,7 +29,7 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
     }
 
     // Empty url signals "stay idle" — used by CameraFeed when the WebRTC
-    // path is in charge.  Avoids opening a phantom /ws/teleop connection.
+    // path is in charge.  Avoids opening a phantom camera WebSocket.
     if (!url) return
 
     // Build absolute ws URL from current location + path
@@ -36,6 +43,7 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
     ws.onopen = () => {
       if (!mountedRef.current) return
       setConnected(true)
+      setError(null)
     }
 
     ws.onmessage = (e: MessageEvent) => {
@@ -48,6 +56,8 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
         const objectUrl = URL.createObjectURL(e.data)
         prevBlobRef.current = objectUrl
         setImgSrc(objectUrl)
+        setLastFrameAt(Date.now())
+        setFrameCount(n => n + 1)
       }
       // JSON frames (e.g. ping/control echo) — ignore
     }
@@ -56,14 +66,19 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
       if (!mountedRef.current) return
       setConnected(false)
       reconnectTimer.current = setTimeout(() => {
-        if (mountedRef.current) connect()
+        if (mountedRef.current) connectRef.current()
       }, 3000)
     }
 
     ws.onerror = () => {
+      if (mountedRef.current) setError('socket')
       ws.close()
     }
   }, [url])
+
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
 
   const reconnect = useCallback(() => {
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
@@ -86,5 +101,5 @@ export function useCamera(url: string = '/ws/teleop'): CameraState {
     }
   }, [connect])
 
-  return { imgSrc, connected, reconnect }
+  return { imgSrc, connected, lastFrameAt, frameCount, error, reconnect }
 }

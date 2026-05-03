@@ -51,3 +51,14 @@ def test_nav_profile_uses_slam_bridge_localization_health_edges():
     assert "SlamBridgeModule.localization_status->SafetyRingModule.localization_status" in wires
     assert "SlamBridgeModule.localization_status->NavigationModule.localization_status" in wires
     assert "SlamBridgeModule.localization_status->DepthVisualOdomModule.localization_status" in wires
+    assert "SlamBridgeModule.localization_status->GatewayModule.localization_status" in wires
+
+
+def test_super_lio_profiles_wire_bridge_localization_status_to_gateway():
+    for profile in ("super_lio", "super_lio_relocation"):
+        graph = graph_for_profile(profile)
+        wires = _wire_set(graph)
+
+        assert "SlamBridgeModule" in graph.modules
+        assert "SlamBridgeModule.localization_status->GatewayModule.localization_status" in wires
+        assert not graph.dangling_wires(), profile

@@ -94,9 +94,6 @@ function Dashboard() {
 }
 
 function App() {
-  const [authChecked, setAuthChecked] = useState(false)
-  const [loggedIn, setLoggedIn] = useState(false)
-
   // Landing page: ?landing bypasses auth and shows the marketing page
   const isLanding = typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).has('landing')
@@ -104,6 +101,10 @@ function App() {
   // Dev preview: ?login forces the login page to render
   const forceLogin = typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).has('login')
+  const bypassAuth = isLanding || forceLogin
+
+  const [authChecked, setAuthChecked] = useState(bypassAuth)
+  const [loggedIn, setLoggedIn] = useState(false)
 
   useEffect(() => {
     // Landing page needs scroll — remove dashboard overflow:hidden from html/body
@@ -128,11 +129,7 @@ function App() {
   }, [isLanding])
 
   useEffect(() => {
-    if (isLanding || forceLogin) {
-      setLoggedIn(false)
-      setAuthChecked(true)
-      return
-    }
+    if (bypassAuth) return
     api.checkAuth()
       .then(data => {
         setLoggedIn(!data.auth_required)
@@ -143,7 +140,7 @@ function App() {
         setLoggedIn(true)
         setAuthChecked(true)
       })
-  }, [isLanding, forceLogin])
+  }, [bypassAuth])
 
   if (isLanding) return <Landing />
   if (!authChecked) return null

@@ -272,6 +272,65 @@ def test_localization_status_accepts_super_lio_odom_map_health():
     assert model.recovery_action == "none"
 
 
+def test_localization_status_accepts_super_lio_relocation_contract():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocalizationStatusResponse
+    from gateway.services.runtime_status import build_localization_status
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._localization_status = {
+            "backend": "super_lio_relocation",
+            "state": "TRACKING",
+            "confidence": 0.88,
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "map_cloud_fresh": True,
+            "map_state": "relocation_map_cloud",
+            "map_save_supported": False,
+            "map_save_source": "active_map",
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_super_lio_relocation",
+            "relocalization_state": "unsupported",
+            "recovery_signal": "NONE",
+            "recovery_action": "none",
+            "localizer_health": "LIO_TRACKING",
+            "odom_age_ms": 120.0,
+            "cloud_age_ms": 80.0,
+        }
+
+    payload = build_localization_status(gateway)
+    model = LocalizationStatusResponse.model_validate(payload)
+
+    assert model.state == "ready"
+    assert model.ready is True
+    assert model.backend == "super_lio_relocation"
+    assert model.health_source == "odom_map_cloud"
+    assert model.map_cloud_fresh is True
+    assert model.map_save_supported is False
+    assert model.map_save_source == "active_map"
+    assert model.relocalization_supported is False
+    assert model.saved_map_relocalization_supported is False
+    assert model.restart_recovery_supported is True
+    assert model.recovery_method == "restart_super_lio_relocation"
+    assert model.can_relocalize is False
+
+
+def test_super_lio_relocation_alias_keeps_conservative_capabilities():
+    from gateway.services.runtime_status import backend_capability_defaults
+
+    defaults = backend_capability_defaults("relocation")
+
+    assert defaults["relocalization_supported"] is False
+    assert defaults["saved_map_relocalization_supported"] is False
+    assert defaults["restart_recovery_supported"] is True
+    assert defaults["recovery_method"] == "restart_super_lio_relocation"
+
+
 def test_super_lio_degraded_state_does_not_offer_relocalize():
     from gateway.gateway_module import GatewayModule
     from gateway.services.runtime_status import build_localization_status
@@ -343,6 +402,53 @@ def test_session_snapshot_exposes_super_lio_backend_capabilities():
     assert model.recovery_method == "restart_super_lio"
     assert model.relocalization_state == "unsupported"
     assert model.recovery_action == "restart_super_lio"
+
+
+def test_session_snapshot_exposes_super_lio_relocation_capabilities():
+    import time
+
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionResponse
+
+    gateway = GatewayModule()
+    gateway._cached_slam_profile = "super_lio_relocation"
+    gateway._slam_profile_ts = time.time()
+    gateway._session_mode = "navigating"
+    gateway._session_map = "demo"
+    with gateway._state_lock:
+        gateway._localization_status = {
+            "backend": "super_lio_relocation",
+            "state": "TRACKING",
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "map_state": "relocation_map_cloud",
+            "map_save_supported": False,
+            "map_save_source": "active_map",
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_super_lio_relocation",
+            "relocalization_state": "unsupported",
+            "recovery_signal": "NONE",
+            "recovery_action": "restart_super_lio_relocation",
+            "localizer_health": "LIO_TRACKING",
+        }
+
+    session = gateway._session_snapshot()
+    model = SessionResponse.model_validate(session)
+
+    assert model.slam_profile == "super_lio_relocation"
+    assert model.localization_backend == "super_lio_relocation"
+    assert model.health_source == "odom_map_cloud"
+    assert model.localizer_ready is True
+    assert model.map_save_supported is False
+    assert model.map_save_source == "active_map"
+    assert model.relocalization_supported is False
+    assert model.saved_map_relocalization_supported is False
+    assert model.restart_recovery_supported is True
+    assert model.recovery_method == "restart_super_lio_relocation"
+    assert model.relocalization_state == "unsupported"
+    assert model.recovery_action == "restart_super_lio_relocation"
 
 
 def test_navigation_status_reports_mission_path_and_control_source():
@@ -813,7 +919,10 @@ def test_drift_watchdog_restores_idle_running_localization_services(monkeypatch)
 
     gateway._drift_restart_do_restart(xy=999.0, y_abs=0.0, v=0.0)
 
-    assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio")) in fake.calls
+    assert (
+        "stop",
+        ("slam", "slam_pgo", "localizer", "super_lio", "super_lio_relocation"),
+    ) in fake.calls
     assert ("ensure", ("slam", "localizer")) in fake.calls
     assert ("wait_ready", ("slam", "localizer")) in fake.calls
     assert gateway._odom == {}
@@ -854,6 +963,53 @@ def test_drift_watchdog_restores_idle_running_super_lio_services(monkeypatch):
 
     gateway._drift_restart_do_restart(xy=999.0, y_abs=0.0, v=0.0)
 
-    assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio")) in fake.calls
+    assert (
+        "stop",
+        ("slam", "slam_pgo", "localizer", "super_lio", "super_lio_relocation"),
+    ) in fake.calls
     assert ("ensure", ("lidar", "super_lio")) in fake.calls
     assert ("wait_ready", ("lidar", "super_lio")) in fake.calls
+
+
+def test_drift_watchdog_restores_idle_running_super_lio_relocation_services(
+    monkeypatch,
+):
+    import core.service_manager as service_manager
+    import gateway.gateway_module as gateway_module
+    from gateway.gateway_module import GatewayModule
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.running = {"super_lio_relocation"}
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def is_running(self, service: str) -> bool:
+            return service in self.running
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+            self.running.difference_update(services)
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+            self.running.update(services)
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+    fake = FakeServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+    monkeypatch.setattr(gateway_module.time, "sleep", lambda _: None)
+
+    gateway = GatewayModule()
+    gateway._session_mode = "idle"
+
+    gateway._drift_restart_do_restart(xy=999.0, y_abs=0.0, v=0.0)
+
+    assert (
+        "stop",
+        ("slam", "slam_pgo", "localizer", "super_lio", "super_lio_relocation"),
+    ) in fake.calls
+    assert ("ensure", ("lidar", "super_lio_relocation")) in fake.calls
+    assert ("wait_ready", ("lidar", "super_lio_relocation")) in fake.calls

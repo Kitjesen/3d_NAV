@@ -28,7 +28,11 @@ export function ThinkingBubble({ hint, startedAt }: Props) {
   const [frame, setFrame] = useState(0)
   const [verbIdx, setVerbIdx] = useState(() => Math.floor(Math.random() * VERBS.length))
   const [elapsed, setElapsed] = useState(0)
-  const startRef = useRef(startedAt ?? Date.now())
+  const startRef = useRef(startedAt ?? 0)
+
+  useEffect(() => {
+    if (startRef.current <= 0) startRef.current = Date.now()
+  }, [])
 
   // Fast spinner (80ms) — matches Claude Code cadence
   useEffect(() => {

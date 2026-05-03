@@ -1,4 +1,5 @@
 import { Activity } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { SSEState } from '../types'
 import styles from './StatusBar.module.css'
 
@@ -38,6 +39,12 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
   const odom = sseState.odometry
   const mission = sseState.missionStatus
   const safety = sseState.safetyState
+  const [now, setNow] = useState(0)
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
 
   const x = num(odom?.x)
   const y = num(odom?.y)
@@ -133,7 +140,7 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
       )}
 
       <span className={styles.right}>
-        <span className={sseState.lastHeartbeat && Date.now() - sseState.lastHeartbeat < 5000 ? styles.hbDotAlive : styles.hbDot} title="Heartbeat" />
+        <span className={sseState.lastHeartbeat && now > 0 && now - sseState.lastHeartbeat < 5000 ? styles.hbDotAlive : styles.hbDot} title="Heartbeat" />
       </span>
     </div>
   )

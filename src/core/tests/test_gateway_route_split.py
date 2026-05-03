@@ -42,7 +42,18 @@ def test_realtime_routes_register_expected_websockets():
 
     paths = {getattr(route, "path", "") for route in app.routes}
     assert "/ws/teleop" in paths
+    assert "/ws/camera" in paths
     assert "/ws/cloud" in paths
+
+
+def test_realtime_teleop_camera_stream_is_legacy_opt_in():
+    from gateway.routes.realtime import _camera_stream_requested
+
+    assert _camera_stream_requested({}) is False
+    assert _camera_stream_requested({"stream": "camera"}) is True
+    assert _camera_stream_requested({"stream": "video"}) is True
+    assert _camera_stream_requested({"camera": "true"}) is True
+    assert _camera_stream_requested({"frames": "1"}) is True
 
 
 def test_map_routes_register_expected_paths():
@@ -226,6 +237,7 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/mode"] == 1
     assert counts["/api/v1/lease"] == 1
     assert counts["/ws/teleop"] == 1
+    assert counts["/ws/camera"] == 1
     assert counts["/ws/cloud"] == 1
 
 
@@ -266,6 +278,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/lease",
         "/api/v1/camera/snapshot",
         "/ws/teleop",
+        "/ws/camera",
         "/ws/cloud",
     }
     assert expected <= paths
@@ -293,6 +306,8 @@ def test_capabilities_manifest_paths_exist_in_gateway_routes():
         manifest_paths.add(spec["path"])
 
     assert manifest_paths <= route_paths
+    assert capabilities["endpoints"]["realtime"]["camera"]["path"] == "/ws/camera"
+    assert capabilities["endpoints"]["realtime"]["camera"]["method"] == "WS"
 
 
 def _schema_ref_for(
@@ -542,7 +557,9 @@ def test_openapi_exposes_client_response_models():
     assert "application/sdp" in _content_for(
         openapi, "/api/v1/webrtc/whep", method="post"
     )
-    assert "text/event-stream" in _content_for(openapi, "/api/v1/events")
+    event_stream = _content_for(openapi, "/api/v1/events")["text/event-stream"]
+    assert event_stream["schema"]["properties"]["type"]["type"] == "string"
+    assert "event_id" in event_stream["schema"]["properties"]
     assert "application/gzip" in _content_for(openapi, "/api/v1/diagnostic_pack")
     assert "application/octet-stream" in _content_for(
         openapi, "/api/v1/maps/{name}/pcd"

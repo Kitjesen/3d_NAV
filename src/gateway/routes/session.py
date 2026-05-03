@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from pathlib import Path
 
 from fastapi.responses import JSONResponse
 
@@ -13,6 +14,27 @@ from gateway.services.map_safety import safe_map_name
 
 
 logger = logging.getLogger(__name__)
+
+
+def _nav_map_root() -> Path:
+    return Path(os.environ.get("NAV_MAP_DIR", "~/data/nova/maps")).expanduser().resolve()
+
+_SLAM_PROFILE_ALIASES = {
+    "super-lio": "super_lio",
+    "superlio": "super_lio",
+    "super_lio_reloc": "super_lio_relocation",
+    "super-lio-reloc": "super_lio_relocation",
+    "superlio-reloc": "super_lio_relocation",
+    "super_lio_relocation": "super_lio_relocation",
+    "super-lio-relocation": "super_lio_relocation",
+    "superlio-relocation": "super_lio_relocation",
+    "relocation": "super_lio_relocation",
+}
+
+
+def _normalize_slam_profile(profile: str) -> str:
+    raw = str(profile or "").strip().lower()
+    return _SLAM_PROFILE_ALIASES.get(raw, raw)
 
 
 def register_session_routes(app, gw) -> None:
@@ -46,6 +68,7 @@ def register_session_routes(app, gw) -> None:
         slam_profile = (
             body.get("slam_profile") or body.get("slam_backend") or ""
         ).strip().lower()
+        slam_profile = _normalize_slam_profile(slam_profile)
         if mode not in ("mapping", "navigating", "exploring"):
             return JSONResponse(
                 {
@@ -57,13 +80,19 @@ def register_session_routes(app, gw) -> None:
                 },
                 status_code=400,
             )
-        if slam_profile and slam_profile not in ("fastlio2", "localizer", "super_lio"):
+        if slam_profile and slam_profile not in (
+            "fastlio2",
+            "localizer",
+            "super_lio",
+            "super_lio_relocation",
+        ):
             return JSONResponse(
                 {
                     "success": False,
                     "message": (
                         f"Unknown slam_profile: {slam_profile!r}. "
-                        "Use 'fastlio2' | 'localizer' | 'super_lio'."
+                        "Use 'fastlio2' | 'localizer' | 'super_lio' | "
+                        "'super_lio_relocation'."
                     ),
                 },
                 status_code=400,
@@ -75,6 +104,14 @@ def register_session_routes(app, gw) -> None:
                     {"success": False, "message": err},
                     status_code=400,
                 )
+        if slam_profile == "super_lio_relocation" and mode != "navigating":
+            return JSONResponse(
+                {
+                    "success": False,
+                    "message": "super_lio_relocation requires navigating with map_name",
+                },
+                status_code=400,
+            )
         if mode == "exploring" and gw._frontier_explorer is None:
             return JSONResponse(
                 {
@@ -113,8 +150,19 @@ def register_session_routes(app, gw) -> None:
                     status_code=400,
                 )
 
-            base = os.path.expanduser(f"~/data/nova/maps/{map_name}")
-            if not os.path.isfile(os.path.join(base, "map.pcd")):
+            map_root = _nav_map_root()
+            base = (map_root / map_name).resolve()
+            try:
+                base.relative_to(map_root)
+            except ValueError:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "message": "map_name escapes NAV_MAP_DIR",
+                    },
+                    status_code=400,
+                )
+            if not (base / "map.pcd").is_file():
                 return JSONResponse(
                     {
                         "success": False,
@@ -122,7 +170,7 @@ def register_session_routes(app, gw) -> None:
                     },
                     status_code=400,
                 )
-            if not os.path.isfile(os.path.join(base, "tomogram.pickle")):
+            if not (base / "tomogram.pickle").is_file():
                 return JSONResponse(
                     {
                         "success": False,
@@ -133,11 +181,11 @@ def register_session_routes(app, gw) -> None:
                     },
                     status_code=400,
                 )
-            active = os.path.expanduser("~/data/nova/maps/active")
+            active = map_root / "active"
             try:
-                if os.path.islink(active) or os.path.exists(active):
-                    os.remove(active)
-                os.symlink(map_name, active)
+                if active.is_symlink() or active.exists():
+                    active.unlink()
+                os.symlink(map_name, str(active))
             except OSError as e:
                 return JSONResponse(
                     {
@@ -157,22 +205,26 @@ def register_session_routes(app, gw) -> None:
                 "localizer" if mode == "navigating" else "fastlio2"
             )
             if backend == "super_lio":
-                svc.stop("slam", "slam_pgo", "localizer")
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio_relocation")
                 svc.ensure("lidar", "super_lio")
                 ok = svc.wait_ready("lidar", "super_lio", timeout=10.0)
                 if mode == "mapping" or mode == "exploring":
                     with gw._map_cloud_lock:
                         gw._map_points = None
                         gw._voxel_hits.clear()
+            elif backend == "super_lio_relocation":
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio")
+                svc.ensure("lidar", "super_lio_relocation")
+                ok = svc.wait_ready("lidar", "super_lio_relocation", timeout=10.0)
             elif mode == "mapping" or mode == "exploring":
-                svc.stop("localizer", "super_lio")
+                svc.stop("localizer", "super_lio", "super_lio_relocation")
                 svc.ensure("slam", "slam_pgo")
                 ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
                 with gw._map_cloud_lock:
                     gw._map_points = None
                     gw._voxel_hits.clear()
             else:
-                svc.stop("slam_pgo", "super_lio")
+                svc.stop("slam_pgo", "super_lio", "super_lio_relocation")
                 svc.ensure("slam", "localizer")
                 ok = svc.wait_ready("slam", "localizer", timeout=10.0)
             if not ok:
@@ -182,7 +234,11 @@ def register_session_routes(app, gw) -> None:
                     status_code=500,
                 )
 
-            if mode == "navigating" and map_name and backend != "super_lio":
+            if (
+                mode == "navigating"
+                and map_name
+                and backend not in {"super_lio", "super_lio_relocation"}
+            ):
                 gw._spawn_auto_relocalize(map_name)
 
             if mode == "exploring":
@@ -242,7 +298,13 @@ def register_session_routes(app, gw) -> None:
             from core.service_manager import get_service_manager
 
             svc = get_service_manager()
-            svc.stop("super_lio", "slam_pgo", "localizer", "slam")
+            svc.stop(
+                "super_lio_relocation",
+                "super_lio",
+                "slam_pgo",
+                "localizer",
+                "slam",
+            )
             gw._session_mode = "idle"
             gw._session_map = None
             gw._session_slam_profile = "stopped"

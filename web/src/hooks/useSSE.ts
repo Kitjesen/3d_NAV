@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import type { SSEState, SSEEvent } from '../types'
+import * as api from '../services/api'
+import type {
+  LocationsResponse,
+  MissionStatusEvent,
+  OdometryEvent,
+  SafetyStateEvent,
+  SceneGraphEvent,
+  SSEState,
+  SSEEvent,
+  StateResponse,
+} from '../types'
 
 // Re-export types for backward compatibility
 export type {
@@ -8,6 +18,8 @@ export type {
   SafetyStateEvent,
   SceneGraphEvent,
   HeartbeatEvent,
+  PingEvent,
+  SnapshotEvent,
   SlamStatusEvent,
   RobotStatusEvent,
   GlobalPathEvent,
@@ -32,19 +44,156 @@ const INITIAL_STATE: SSEState = {
   mapCloud: null,
   savedMap: null,
   session: null,
+  locations: null,
+  stateSnapshot: null,
   costmap: null,
   slopeGrid: null,
   agentMessage: null,
   lastHeartbeat: null,
+  lastEventId: null,
+  missedEvents: 0,
+  reconnects: 0,
+  lastError: null,
+  lastRefreshAt: null,
+  lastRefreshReason: null,
+  refreshError: null,
   connected: false,
   events: [],
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function finiteNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function snapshotOdometry(snapshot: StateResponse): OdometryEvent | null {
+  const raw = snapshot.odometry
+  if (!isRecord(raw)) return null
+  if (typeof raw.x !== 'number' || typeof raw.y !== 'number') return null
+  return {
+    type: 'odometry',
+    x: raw.x,
+    y: raw.y,
+    yaw: finiteNumber(raw.yaw),
+    vx: finiteNumber(raw.vx),
+  }
+}
+
+function snapshotMission(snapshot: StateResponse): MissionStatusEvent | null {
+  const raw = snapshot.mission
+  if (!isRecord(raw)) return null
+  return {
+    type: 'mission_status',
+    state: optionalString(raw.state) ?? 'IDLE',
+    goal: optionalString(raw.goal),
+    progress: finiteNumber(raw.progress),
+  }
+}
+
+function snapshotSafety(snapshot: StateResponse): SafetyStateEvent | null {
+  const raw = snapshot.safety
+  if (!isRecord(raw)) return null
+  const level = raw.level
+  return {
+    type: 'safety_state',
+    estop: Boolean(raw.estop),
+    level: typeof level === 'string' ? level : String(level ?? 'unknown'),
+  }
+}
+
+function snapshotSceneGraph(scene: Awaited<ReturnType<typeof api.fetchSceneGraph>>): SceneGraphEvent {
+  return {
+    type: 'scene_graph',
+    objects: scene.objects
+      .filter(obj => typeof obj.x === 'number' && typeof obj.y === 'number')
+      .map(obj => ({
+        id: obj.id ?? obj.label,
+        label: obj.label,
+        x: obj.x as number,
+        y: obj.y as number,
+        confidence: typeof obj.confidence === 'number' ? obj.confidence : 0.5,
+      })),
+  }
 }
 
 export function useSSE(url: string = '/api/v1/events') {
   const [state, setState] = useState<SSEState>(INITIAL_STATE)
   const esRef = useRef<EventSource | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const refreshInFlight = useRef(false)
   const mountedRef = useRef(true)
+  const everConnectedRef = useRef(false)
+  const lastEventIdRef = useRef<number | null>(null)
+  const connectRef = useRef<() => void>(() => {})
+  const refreshRef = useRef<(reason: string) => void>(() => {})
+
+  const refreshSnapshot = useCallback(async (reason: string) => {
+    if (refreshInFlight.current) return
+    refreshInFlight.current = true
+    try {
+      const [stateResult, pathResult, sceneResult, locationsResult] = await Promise.allSettled([
+        api.fetchState(),
+        api.fetchPath(),
+        api.fetchSceneGraph(),
+        api.fetchLocations(),
+      ])
+      if (!mountedRef.current) return
+
+      const statePayload = stateResult.status === 'fulfilled' ? stateResult.value : null
+      const pathPayload = pathResult.status === 'fulfilled' ? pathResult.value : null
+      const scenePayload = sceneResult.status === 'fulfilled' ? sceneResult.value : null
+      const locationsPayload: LocationsResponse | null =
+        locationsResult.status === 'fulfilled' ? locationsResult.value : null
+
+      const failures = [stateResult, pathResult, sceneResult, locationsResult]
+        .filter(result => result.status === 'rejected').length
+      const odometry = statePayload ? snapshotOdometry(statePayload) : null
+      const mission = statePayload ? snapshotMission(statePayload) : null
+      const safety = statePayload ? snapshotSafety(statePayload) : null
+
+      setState(prev => ({
+        ...prev,
+        odometry: odometry ?? prev.odometry,
+        missionStatus: mission ?? prev.missionStatus,
+        safetyState: safety ?? prev.safetyState,
+        session: (statePayload?.session as SSEState['session'] | undefined) ?? prev.session,
+        stateSnapshot: statePayload ?? prev.stateSnapshot,
+        globalPath: pathPayload
+          ? { type: 'global_path', points: pathPayload.path }
+          : prev.globalPath,
+        sceneGraph: scenePayload ? snapshotSceneGraph(scenePayload) : prev.sceneGraph,
+        locations: locationsPayload ?? prev.locations,
+        lastRefreshAt: Date.now(),
+        lastRefreshReason: reason,
+        refreshError: failures > 0 ? `${failures}_snapshot_fetch_failed` : null,
+      }))
+    } catch (err) {
+      if (!mountedRef.current) return
+      setState(prev => ({
+        ...prev,
+        refreshError: err instanceof Error ? err.message : String(err),
+        lastRefreshReason: reason,
+      }))
+    } finally {
+      refreshInFlight.current = false
+    }
+  }, [])
+
+  const queueRefresh = useCallback((reason: string) => {
+    if (refreshTimer.current) return
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null
+      refreshRef.current(reason)
+    }, 250)
+  }, [])
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
@@ -58,7 +207,9 @@ export function useSSE(url: string = '/api/v1/events') {
 
     es.onopen = () => {
       if (!mountedRef.current) return
-      setState(prev => ({ ...prev, connected: true }))
+      setState(prev => ({ ...prev, connected: true, lastError: null }))
+      queueRefresh(everConnectedRef.current ? 'event_stream_reconnected' : 'event_stream_connected')
+      everConnectedRef.current = true
     }
 
     es.onmessage = (e: MessageEvent) => {
@@ -68,8 +219,23 @@ export function useSSE(url: string = '/api/v1/events') {
       for (const line of lines) {
         try {
           const event = JSON.parse(line) as SSEEvent
+          const eventId = typeof event.event_id === 'number' && Number.isFinite(event.event_id)
+            ? event.event_id
+            : null
+          const prevEventId = lastEventIdRef.current
+          const missedByEvent = eventId !== null && prevEventId !== null && eventId > prevEventId + 1
+            ? eventId - prevEventId - 1
+            : 0
+          if (eventId !== null) lastEventIdRef.current = eventId
+          if (missedByEvent > 0) queueRefresh('event_id_gap')
           setState(prev => {
-            const next = { ...prev, events: [...prev.events.slice(-99), event] }
+            const missedEvents = prev.missedEvents + missedByEvent
+            const next = {
+              ...prev,
+              events: [...prev.events.slice(-99), event],
+              lastEventId: eventId ?? prev.lastEventId,
+              missedEvents,
+            }
             const evt = event as { type: string; data?: Record<string, unknown>; [k: string]: unknown }
             switch (evt.type) {
               case 'snapshot': {
@@ -119,9 +285,13 @@ export function useSSE(url: string = '/api/v1/events') {
               case 'costmap':
                 next.costmap = event as never
                 break
-              case 'slope_grid':
-                next.slopeGrid = event as never
+              case 'slope_grid': {
+                const slope = event as { grid_b64?: unknown }
+                next.slopeGrid = typeof slope.grid_b64 === 'string' && slope.grid_b64.length > 0
+                  ? event as never
+                  : null
                 break
+              }
               case 'agent_message':
                 next.agentMessage = event as never
                 break
@@ -142,18 +312,33 @@ export function useSSE(url: string = '/api/v1/events') {
       if (!mountedRef.current) return
       es.close()
       esRef.current = null
-      setState(prev => ({ ...prev, connected: false }))
+      setState(prev => ({
+        ...prev,
+        connected: false,
+        reconnects: prev.reconnects + 1,
+        lastError: 'event_stream_disconnected',
+      }))
+      queueRefresh('event_stream_disconnected')
       reconnectTimer.current = setTimeout(() => {
-        if (mountedRef.current) connect()
+        if (mountedRef.current) connectRef.current()
       }, 3000)
     }
-  }, [url])
+  }, [queueRefresh, url])
+
+  useEffect(() => {
+    connectRef.current = connect
+  }, [connect])
+
+  useEffect(() => {
+    refreshRef.current = refreshSnapshot
+  }, [refreshSnapshot])
 
   useEffect(() => {
     mountedRef.current = true
     connect()
     return () => {
       mountedRef.current = false
+      if (refreshTimer.current) clearTimeout(refreshTimer.current)
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       if (esRef.current) {
         esRef.current.close()

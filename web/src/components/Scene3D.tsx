@@ -63,7 +63,8 @@ function removeFrom(scene: THREE.Scene, obj: THREE.Object3D | undefined | null) 
   scene.remove(obj)
   if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose()
   const mat = (obj as THREE.Mesh).material
-  if (mat) Array.isArray(mat) ? mat.forEach(m => m.dispose()) : mat.dispose()
+  if (Array.isArray(mat)) mat.forEach(m => m.dispose())
+  else if (mat) mat.dispose()
 }
 
 export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
@@ -551,7 +552,7 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
       slopeMeshRef.current = null
     }
 
-    if (!slopeGrid || !layers.slope) return
+    if (!slopeGrid || !layers.slope || !slopeGrid.grid_b64) return
 
     const { grid_b64, cols, resolution, origin } = slopeGrid
     const bytes = Uint8Array.from(atob(grid_b64), c => c.charCodeAt(0))
@@ -664,7 +665,8 @@ export const Scene3D = forwardRef<Scene3DHandle, Scene3DProps>(function Scene3D(
       sgGroupRef.current.traverse(obj => {
         if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose()
         const mat = (obj as THREE.Mesh | THREE.Sprite).material as THREE.Material | THREE.Material[]
-        if (mat) Array.isArray(mat) ? mat.forEach(m => m.dispose()) : mat.dispose()
+        if (Array.isArray(mat)) mat.forEach(m => m.dispose())
+        else if (mat) mat.dispose()
       })
       scene.remove(sgGroupRef.current)
       sgGroupRef.current = null

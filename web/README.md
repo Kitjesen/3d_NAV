@@ -39,7 +39,7 @@ src/
 │   └── Toast            # 通知 Toast (success/error/info)
 ├── hooks/
 │   ├── useSSE.ts        # SSE 实时数据流 (/api/v1/events)
-│   ├── useCamera.ts     # WebSocket MJPEG 帧 (/ws/teleop)
+│   ├── useCamera.ts     # WebSocket MJPEG 帧 (/ws/camera)
 │   └── useToast.ts      # Toast 状态管理
 ├── services/
 │   └── api.ts           # 集中式 API 层 (fetch 封装)
@@ -102,7 +102,8 @@ Dashboard 连接 GatewayModule 的 REST + SSE + WebSocket：
 | 协议 | 端点 | 用途 |
 |------|------|------|
 | SSE | `/api/v1/events` | 实时推送 odometry/mission/safety/slam/scene_graph |
-| WS | `/ws/teleop` | MJPEG 相机帧 + 摇杆控制 |
+| WS | `/ws/camera` | MJPEG 相机帧 |
+| WS | `/ws/teleop` | 摇杆控制；兼容 `?video=1` 时输出旧 MJPEG |
 | REST | `/api/v1/health` | 系统健康 (32 modules + brainstem gRPC) |
 | REST | `/api/v1/goal` | 发送导航目标 |
 | REST | `/api/v1/stop` | 紧急停止 |

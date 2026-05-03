@@ -39,6 +39,12 @@ from core.stream import Out
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CAMERA_INFO_TOPICS = (
+    "/camera/color/camera_info",
+    "/camera/depth/camera_info",
+    "/camera/camera_info",
+)
+
 
 @register("camera_bridge", "default", description="ROS2 camera → Python Module bridge")
 class CameraBridgeModule(Module, layer=1):
@@ -59,6 +65,8 @@ class CameraBridgeModule(Module, layer=1):
         color_topic: str = "/camera/color/image_raw",
         depth_topic: str = "/camera/depth/image_raw",
         info_topic: str = "/camera/camera_info",
+        info_topics: tuple[str, ...] | list[str] | str | None = None,
+        preferred_info_topic: str | None = None,
         spin_rate: float = 30.0,
         qos_depth: int = 5,
         rotate: int = 0,
@@ -69,6 +77,20 @@ class CameraBridgeModule(Module, layer=1):
         self._color_topic = color_topic
         self._depth_topic = depth_topic
         self._info_topic = info_topic
+        self._info_topics = self._normalize_info_topics(info_topic, info_topics)
+        env_preferred = os.environ.get("LINGTU_CAMERA_INFO_PREFERRED_TOPIC", "").strip()
+        preferred = preferred_info_topic or env_preferred
+        self._preferred_info_topic = (
+            preferred
+            if preferred in self._info_topics
+            else (
+                "/camera/color/camera_info"
+                if "/camera/color/camera_info" in self._info_topics
+                else self._info_topics[0]
+            )
+        )
+        self._active_info_topic: str | None = None
+        self._info_topic_cache: Dict[str, CameraIntrinsics] = {}
         self._spin_rate = spin_rate
         self._qos_depth = qos_depth
         # Rotation: 0=none, 90=CW, 180=flip, 270=CCW
@@ -106,6 +128,37 @@ class CameraBridgeModule(Module, layer=1):
         self._watchdog_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
 
+    @staticmethod
+    def _split_topic_list(raw: str) -> tuple[str, ...]:
+        return tuple(topic.strip() for topic in raw.replace(",", " ").split() if topic.strip())
+
+    @classmethod
+    def _normalize_info_topics(
+        cls,
+        info_topic: str,
+        info_topics: tuple[str, ...] | list[str] | str | None,
+    ) -> tuple[str, ...]:
+        env_topics = os.environ.get("LINGTU_CAMERA_INFO_TOPICS", "").strip()
+        if info_topics is None and env_topics:
+            raw_topics: tuple[str, ...] | list[str] = cls._split_topic_list(env_topics)
+        elif info_topics is None:
+            raw_topics = (
+                DEFAULT_CAMERA_INFO_TOPICS
+                if info_topic == "/camera/camera_info"
+                else (info_topic,)
+            )
+        elif isinstance(info_topics, str):
+            raw_topics = cls._split_topic_list(info_topics)
+        else:
+            raw_topics = info_topics
+
+        topics: list[str] = []
+        for topic in raw_topics:
+            clean = str(topic).strip()
+            if clean and clean not in topics:
+                topics.append(clean)
+        return tuple(topics or (info_topic,))
+
     def setup(self) -> None:
         # Prefer DDS — works without `source /opt/ros/humble/setup.bash`
         # and survives the rclpy + uvicorn + aiortc thread conflict that
@@ -129,14 +182,21 @@ class CameraBridgeModule(Module, layer=1):
         reader = ROS2TopicReader()
         reader.on_image(self._color_topic, self._on_ros2_color)
         reader.on_image(self._depth_topic, self._on_ros2_depth)
-        reader.on_camera_info(self._info_topic, self._on_ros2_info)
+        for topic in self._info_topics:
+            reader.on_camera_info(
+                topic,
+                lambda msg, topic=topic: self._on_ros2_info(msg, topic),
+            )
         if not reader.start():
             return False
         reader.spin_background()
         self._dds_reader = reader
         logger.info(
-            "CameraBridgeModule (DDS): color=%s depth=%s info=%s",
-            self._color_topic, self._depth_topic, self._info_topic,
+            "CameraBridgeModule (DDS): color=%s depth=%s info_topics=%s preferred=%s",
+            self._color_topic,
+            self._depth_topic,
+            ",".join(self._info_topics),
+            self._preferred_info_topic,
         )
         return True
 
@@ -171,14 +231,19 @@ class CameraBridgeModule(Module, layer=1):
                 ROS2Image, self._color_topic, self._on_ros2_color, qos)
             node.create_subscription(
                 ROS2Image, self._depth_topic, self._on_ros2_depth, qos)
-            node.create_subscription(
-                CameraInfo, self._info_topic, self._on_ros2_info, qos)
+            for topic in self._info_topics:
+                node.create_subscription(
+                    CameraInfo,
+                    topic,
+                    lambda msg, topic=topic: self._on_ros2_info(msg, topic),
+                    qos,
+                )
             self._node = node
             self._executor = executor
 
             logger.info(
                 "CameraBridgeModule: node '%s' — color=%s depth=%s info=%s",
-                self._node_name, self._color_topic, self._depth_topic, self._info_topic,
+                self._node_name, self._color_topic, self._depth_topic, ",".join(self._info_topics),
             )
             return True
         except ImportError:
@@ -252,6 +317,9 @@ class CameraBridgeModule(Module, layer=1):
         info["reconnect_count"] = self._reconnect_count
         info["service_recovery_allowed"] = self._allow_service_recovery
         info["service_recovery_suppressed"] = self._service_recovery_suppressed
+        info["camera_info_topics"] = list(self._info_topics)
+        info["camera_info_preferred_topic"] = self._preferred_info_topic
+        info["camera_info_active_topic"] = self._active_info_topic
         return info
 
     # ── Auto-recovery watchdog ────────────────────────────────────────────────
@@ -463,7 +531,7 @@ class CameraBridgeModule(Module, layer=1):
                 fmt = ImageFormat.GRAY
 
             # Apply undistortion at source (linear interpolation for color)
-            if self._undistort_maps is not None:
+            if self._undistortion_maps_match(arr):
                 import cv2
                 arr = cv2.remap(arr, *self._undistort_maps, cv2.INTER_LINEAR)
 
@@ -503,7 +571,7 @@ class CameraBridgeModule(Module, layer=1):
                 fmt = ImageFormat.DEPTH_U16
 
             # Apply undistortion at source (nearest-neighbor for depth to avoid blending)
-            if self._undistort_maps is not None:
+            if self._undistortion_maps_match(arr):
                 import cv2
                 arr = cv2.remap(arr, *self._undistort_maps, cv2.INTER_NEAREST)
 
@@ -514,8 +582,31 @@ class CameraBridgeModule(Module, layer=1):
         except Exception as e:
             logger.debug("CameraBridge: depth parse error: %s", e)
 
-    def _on_ros2_info(self, msg) -> None:
+    def _topic_priority(self, topic: str) -> int:
         try:
+            return self._info_topics.index(topic)
+        except ValueError:
+            return len(self._info_topics)
+
+    def _should_accept_info_topic(self, topic: str) -> bool:
+        active = self._active_info_topic
+        if active is None or active == topic:
+            return True
+        if topic == self._preferred_info_topic:
+            return True
+        if active == self._preferred_info_topic:
+            return False
+        return self._topic_priority(topic) < self._topic_priority(active)
+
+    def _undistortion_maps_match(self, arr: np.ndarray) -> bool:
+        if self._undistort_maps is None:
+            return False
+        map1 = self._undistort_maps[0]
+        return tuple(map1.shape[:2]) == tuple(arr.shape[:2])
+
+    def _on_ros2_info(self, msg, topic: str | None = None) -> None:
+        try:
+            topic = topic or self._info_topic
             k = msg.k  # 3x3 intrinsic matrix, row-major
             fx, fy = float(k[0]), float(k[4])
             cx, cy = float(k[2]), float(k[5])
@@ -529,6 +620,23 @@ class CameraBridgeModule(Module, layer=1):
             dp2 = float(d[3]) if len(d) > 3 else 0.0
             dk3 = float(d[4]) if len(d) > 4 else 0.0
 
+            intrinsics = CameraIntrinsics(
+                fx=fx, fy=fy, cx=cx, cy=cy,
+                width=w, height=h,
+                dist_k1=dk1, dist_k2=dk2,
+                dist_p1=dp1, dist_p2=dp2, dist_k3=dk3,
+            )
+            self._info_topic_cache[topic] = intrinsics
+            if not self._should_accept_info_topic(topic):
+                return
+
+            if self._active_info_topic != topic:
+                self._active_info_topic = topic
+                self._undistort_maps = None
+                self._undistorted_intrinsics = None
+                self._K = None
+                logger.info("CameraBridge: using camera_info topic %s", topic)
+
             # Build undistortion maps once (idempotent)
             if self._undistort_maps is None and any(
                 abs(v) > 1e-12 for v in (dk1, dk2, dp1, dp2, dk3)
@@ -540,12 +648,7 @@ class CameraBridgeModule(Module, layer=1):
             if self._undistorted_intrinsics is not None:
                 self.camera_info.publish(self._undistorted_intrinsics)
             else:
-                self.camera_info.publish(CameraIntrinsics(
-                    fx=fx, fy=fy, cx=cx, cy=cy,
-                    width=w, height=h,
-                    dist_k1=dk1, dist_k2=dk2,
-                    dist_p1=dp1, dist_p2=dp2, dist_k3=dk3,
-                ))
+                self.camera_info.publish(intrinsics)
         except Exception as e:
             logger.debug("CameraBridge: info parse error: %s", e)
 

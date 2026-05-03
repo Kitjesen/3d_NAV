@@ -2,7 +2,7 @@
 
 Professional robotics control UI with:
 - Collapsible sidebar sections (map library, robot status, telemetry)
-- Camera picture-in-picture (top-right, from /ws/teleop JPEG stream)
+- Camera picture-in-picture (top-right, from /ws/camera JPEG stream)
 - Clean dark theme, SVG icons only, Inter + JetBrains Mono
 """
 

@@ -30,11 +30,30 @@ from gateway.schemas import (
 logger = logging.getLogger(__name__)
 
 _ACTIVE_SERVICE_STATES = {"running", "active"}
-_SLAM_STATUS_SERVICES = ("lidar", "slam", "slam_pgo", "localizer", "super_lio")
+_SLAM_STATUS_SERVICES = (
+    "lidar",
+    "slam",
+    "slam_pgo",
+    "localizer",
+    "super_lio",
+    "super_lio_relocation",
+)
 _EXPLORER_UNAVAILABLE_DETAIL = {
     "reason": "frontier_explorer_not_running",
     "required_profile": "explore",
     "action": "restart LingTu with the explore profile before starting exploration",
+}
+
+_SLAM_PROFILE_ALIASES = {
+    "super-lio": "super_lio",
+    "superlio": "super_lio",
+    "super_lio_reloc": "super_lio_relocation",
+    "super-lio-reloc": "super_lio_relocation",
+    "superlio-reloc": "super_lio_relocation",
+    "super_lio_relocation": "super_lio_relocation",
+    "super-lio-relocation": "super_lio_relocation",
+    "superlio-relocation": "super_lio_relocation",
+    "relocation": "super_lio_relocation",
 }
 
 try:
@@ -66,6 +85,55 @@ def _parse_since(since: str) -> float:
         return now - float(since)
     except ValueError:
         return now - 3600
+
+
+def _normalize_slam_profile(profile: Any) -> str:
+    raw = str(profile or "").strip().lower()
+    return _SLAM_PROFILE_ALIASES.get(raw, raw)
+
+
+def _unsupported_saved_map_relocalization_response(gw) -> Any | None:
+    from fastapi.responses import JSONResponse
+
+    from gateway.services.runtime_status import build_localization_status
+
+    try:
+        status = build_localization_status(gw)
+    except Exception:
+        status = {}
+
+    raw = status.get("raw") if isinstance(status.get("raw"), dict) else {}
+    backend = (
+        raw.get("localization_backend")
+        or raw.get("backend")
+        or status.get("localization_backend")
+        or status.get("backend")
+    )
+    backend_name = str(backend or "").strip().lower()
+    saved_map_supported = raw.get(
+        "saved_map_relocalization_supported",
+        status.get("saved_map_relocalization_supported"),
+    )
+    if (
+        backend_name not in {"super_lio", "super_lio_relocation"}
+        or saved_map_supported is not False
+    ):
+        return None
+
+    recovery_method = status.get("recovery_method") or raw.get("recovery_method")
+    recovery_hint = (
+        f"; recovery_method={recovery_method}" if recovery_method else ""
+    )
+    return JSONResponse(
+        {
+            "success": False,
+            "message": (
+                "unsupported: saved map relocalization is not supported by "
+                f"{backend_name}{recovery_hint}"
+            ),
+        },
+        status_code=409,
+    )
 
 
 def register_operation_routes(app, gw) -> None:
@@ -371,9 +439,12 @@ def register_operation_routes(app, gw) -> None:
                 "slam_pgo": "unknown",
                 "localizer": "unknown",
                 "super_lio": "unknown",
+                "super_lio_relocation": "unknown",
             }
 
-        if services.get("super_lio") in _ACTIVE_SERVICE_STATES:
+        if services.get("super_lio_relocation") in _ACTIVE_SERVICE_STATES:
+            mode = "super_lio_relocation"
+        elif services.get("super_lio") in _ACTIVE_SERVICE_STATES:
             mode = "super_lio"
         elif services.get("slam_pgo") in _ACTIVE_SERVICE_STATES:
             mode = "fastlio2"
@@ -395,10 +466,17 @@ def register_operation_routes(app, gw) -> None:
         },
     )
     async def slam_switch(body: dict):
-        profile = body.get("profile", "")
-        if profile not in ("fastlio2", "localizer", "super_lio", "stop"):
+        requested_profile = body.get("profile", "")
+        profile = _normalize_slam_profile(requested_profile)
+        if profile not in (
+            "fastlio2",
+            "localizer",
+            "super_lio",
+            "super_lio_relocation",
+            "stop",
+        ):
             return JSONResponse(
-                {"success": False, "message": f"Unknown profile: {profile}"},
+                {"success": False, "message": f"Unknown profile: {requested_profile}"},
                 status_code=400,
             )
         try:
@@ -406,19 +484,33 @@ def register_operation_routes(app, gw) -> None:
 
             svc = get_service_manager()
             if profile == "fastlio2":
-                svc.stop("localizer", "super_lio")
+                svc.stop("localizer", "super_lio", "super_lio_relocation")
                 svc.ensure("slam", "slam_pgo")
                 ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
             elif profile == "localizer":
-                svc.stop("slam_pgo", "super_lio")
+                svc.stop("slam_pgo", "super_lio", "super_lio_relocation")
                 svc.ensure("slam", "localizer")
                 ok = svc.wait_ready("slam", "localizer", timeout=10.0)
             elif profile == "super_lio":
-                svc.stop("slam", "slam_pgo", "localizer")
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio_relocation")
                 svc.ensure("lidar", "super_lio")
                 ok = svc.wait_ready("lidar", "super_lio", timeout=10.0)
+            elif profile == "super_lio_relocation":
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio")
+                svc.ensure("lidar", "super_lio_relocation")
+                ok = svc.wait_ready(
+                    "lidar",
+                    "super_lio_relocation",
+                    timeout=10.0,
+                )
             else:
-                svc.stop("super_lio", "slam_pgo", "localizer", "slam")
+                svc.stop(
+                    "super_lio_relocation",
+                    "super_lio",
+                    "slam_pgo",
+                    "localizer",
+                    "slam",
+                )
                 ok = True
             if ok:
                 gw._cached_slam_profile = "stopped" if profile == "stop" else profile
@@ -438,12 +530,17 @@ def register_operation_routes(app, gw) -> None:
         summary="Global relocalize via 3D-BBS (no guess required)",
         response_model=SlamOperationResponse,
         responses={
+            409: {"model": SlamOperationResponse},
             500: {"model": SlamOperationResponse},
             504: {"model": SlamOperationResponse},
         },
     )
     async def slam_auto_relocalize():
         import subprocess
+
+        unsupported_response = _unsupported_saved_map_relocalization_response(gw)
+        if unsupported_response is not None:
+            return unsupported_response
 
         ros_env = (
             "source /opt/ros/humble/setup.bash && "
@@ -481,12 +578,17 @@ def register_operation_routes(app, gw) -> None:
         responses={
             400: {"model": SlamOperationResponse},
             404: {"model": SlamOperationResponse},
+            409: {"model": SlamOperationResponse},
             500: {"model": SlamOperationResponse},
         },
     )
     async def slam_relocalize(body: dict):
         import os
         import subprocess
+
+        unsupported_response = _unsupported_saved_map_relocalization_response(gw)
+        if unsupported_response is not None:
+            return unsupported_response
 
         map_name = body.get("map_name", "")
         x = float(body.get("x", 0.0))

@@ -25,9 +25,25 @@ def test_super_lio_profile_starts_experimental_service(monkeypatch):
 
     slam("super_lio", enable_visual_backup=False)
 
-    assert ("stop", ("slam", "slam_pgo", "localizer")) in fake.calls
+    assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio_relocation")) in (
+        fake.calls
+    )
     assert ("ensure", ("lidar", "super_lio")) in fake.calls
     assert ("wait_ready", ("lidar", "super_lio")) in fake.calls
+
+
+def test_super_lio_relocation_profile_starts_experimental_service(monkeypatch):
+    import core.service_manager as service_manager
+    from core.blueprints.stacks.slam import slam
+
+    fake = _FakeServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+
+    slam("super_lio_reloc", enable_visual_backup=False)
+
+    assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio")) in fake.calls
+    assert ("ensure", ("lidar", "super_lio_relocation")) in fake.calls
+    assert ("wait_ready", ("lidar", "super_lio_relocation")) in fake.calls
 
 
 def test_fastlio2_profile_stops_super_lio_before_mapping(monkeypatch):
@@ -39,5 +55,23 @@ def test_fastlio2_profile_stops_super_lio_before_mapping(monkeypatch):
 
     slam("fastlio2", enable_visual_backup=False)
 
-    assert ("stop", ("localizer", "super_lio")) in fake.calls
+    assert ("stop", ("localizer", "super_lio", "super_lio_relocation")) in fake.calls
     assert ("ensure", ("slam", "slam_pgo")) in fake.calls
+
+
+def test_full_stack_treats_super_lio_relocation_as_external_lidar_owner():
+    from core.blueprints.full_stack import full_stack_blueprint
+
+    bp = full_stack_blueprint(
+        robot="stub",
+        slam_profile="super-lio-reloc",
+        enable_semantic=False,
+        enable_gateway=False,
+        enable_map_modules=False,
+        manage_external_services=False,
+        run_startup_checks=False,
+    )
+
+    modules = repr(bp)
+    assert "SlamBridgeModule" in modules
+    assert "LidarModule" not in modules

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
+from collections.abc import Mapping
 from typing import Any
 
 
 DEFAULT_SSE_QUEUE_MAXSIZE = 128
 DEFAULT_CLOUD_QUEUE_MAXSIZE = 2
+SSE_EVENT_SCHEMA_VERSION = 1
+SSE_RETRY_MS = 3000
+DEFAULT_SSE_RASTER_MIN_INTERVAL_S = 1.0
+DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED = False
 
 DROP_OLDEST_POLICY = "drop_oldest"
 
@@ -40,3 +47,47 @@ def put_latest(queue: asyncio.Queue, item: Any) -> bool:
     except asyncio.QueueFull:
         return True
     return True
+
+
+def normalize_sse_event(
+    event: Any,
+    *,
+    event_id: int | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Return the stable SSE event envelope used by App/Web clients."""
+    payload = dict(event) if isinstance(event, Mapping) else {"data": event}
+    if not isinstance(payload.get("type"), str) or not payload.get("type"):
+        payload["type"] = "event"
+    payload.setdefault("schema_version", SSE_EVENT_SCHEMA_VERSION)
+    payload.setdefault("ts", time.time() if now is None else now)
+    if event_id is not None:
+        payload["event_id"] = int(event_id)
+    return payload
+
+
+def format_sse_message(
+    event: Mapping[str, Any],
+    *,
+    event_id: int | None = None,
+    retry_ms: int | None = None,
+) -> str:
+    """Format a Server-Sent Event without a named event type.
+
+    Browser EventSource delivers unnamed events through ``onmessage``. Keeping
+    the event type inside JSON preserves the existing web hook behavior while
+    still giving clients ``Last-Event-ID`` support.
+    """
+    parts: list[str] = []
+    if retry_ms is not None:
+        parts.append(f"retry: {int(retry_ms)}")
+    resolved_id = event_id
+    if resolved_id is None and event.get("event_id") is not None:
+        try:
+            resolved_id = int(event["event_id"])
+        except (TypeError, ValueError):
+            resolved_id = None
+    if resolved_id is not None:
+        parts.append(f"id: {resolved_id}")
+    parts.append(f"data: {json.dumps(dict(event), separators=(',', ':'))}")
+    return "\n".join(parts) + "\n\n"

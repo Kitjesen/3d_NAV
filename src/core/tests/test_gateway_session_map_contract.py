@@ -213,7 +213,9 @@ def test_session_start_accepts_legacy_map_field(monkeypatch):
     try:
         monkeypatch.setenv("HOME", str(root))
         monkeypatch.setenv("USERPROFILE", str(root))
-        map_dir = root / "data" / "nova" / "maps" / "demo"
+        map_root = root / "custom_maps"
+        monkeypatch.setenv("NAV_MAP_DIR", str(map_root))
+        map_dir = map_root / "demo"
         map_dir.mkdir(parents=True)
         (map_dir / "map.pcd").write_bytes(b"pcd")
         (map_dir / "tomogram.pickle").write_bytes(b"tomogram")
@@ -252,6 +254,7 @@ def test_session_start_can_select_super_lio_backend(monkeypatch):
                 "slam_pgo": "stopped",
                 "localizer": "stopped",
                 "super_lio": "running",
+                "super_lio_relocation": "stopped",
             }
 
         def stop(self, *services: str) -> None:
@@ -287,9 +290,98 @@ def test_session_start_can_select_super_lio_backend(monkeypatch):
     assert transition.session.mode == "mapping"
     assert transition.session.slam_profile == "super_lio"
     assert gateway._session_slam_profile == "super_lio"
-    assert ("stop", ("slam", "slam_pgo", "localizer")) in fake_service_manager.calls
+    assert (
+        "stop",
+        ("slam", "slam_pgo", "localizer", "super_lio_relocation"),
+    ) in fake_service_manager.calls
     assert ("ensure", ("lidar", "super_lio")) in fake_service_manager.calls
     assert ("wait_ready", ("lidar", "super_lio")) in fake_service_manager.calls
+
+
+def test_session_start_can_select_super_lio_relocation_backend(monkeypatch):
+    import core.service_manager as service_manager
+    import gateway.routes.session as session_routes
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionTransitionResponse
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+            self.services = {
+                "lidar": "running",
+                "slam": "stopped",
+                "slam_pgo": "stopped",
+                "localizer": "stopped",
+                "super_lio": "stopped",
+                "super_lio_relocation": "running",
+            }
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+        def status(self, *names):
+            return {name: self.services.get(name, "stopped") for name in names}
+
+    fake_service_manager = FakeServiceManager()
+    monkeypatch.setattr(
+        service_manager, "get_service_manager", lambda: fake_service_manager
+    )
+    monkeypatch.setattr(session_routes.os, "symlink", lambda src, dst: None)
+
+    root = Path.cwd() / ".tmp_gateway_tests" / uuid.uuid4().hex
+    try:
+        monkeypatch.setenv("HOME", str(root))
+        monkeypatch.setenv("USERPROFILE", str(root))
+        map_root = root / "custom_maps"
+        monkeypatch.setenv("NAV_MAP_DIR", str(map_root))
+        map_dir = map_root / "demo"
+        map_dir.mkdir(parents=True)
+        (map_dir / "map.pcd").write_bytes(b"pcd")
+        (map_dir / "tomogram.pickle").write_bytes(b"tomogram")
+
+        gateway = GatewayModule()
+        gateway.setup()
+        auto_relocalize_calls: list[str] = []
+        monkeypatch.setattr(
+            gateway, "_spawn_auto_relocalize", auto_relocalize_calls.append
+        )
+
+        payload = asyncio.run(
+            _endpoint(gateway, "/api/v1/session/start")(
+                {
+                    "mode": "navigating",
+                    "map_name": "demo",
+                    "slam_profile": "super_lio_relocation",
+                }
+            )
+        )
+
+        transition = SessionTransitionResponse.model_validate(payload)
+        assert transition.success is True
+        assert transition.session is not None
+        assert transition.session.mode == "navigating"
+        assert transition.session.slam_profile == "super_lio_relocation"
+        assert gateway._session_map == "demo"
+        assert gateway._session_slam_profile == "super_lio_relocation"
+        assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio")) in (
+            fake_service_manager.calls
+        )
+        assert ("ensure", ("lidar", "super_lio_relocation")) in (
+            fake_service_manager.calls
+        )
+        assert ("wait_ready", ("lidar", "super_lio_relocation")) in (
+            fake_service_manager.calls
+        )
+        assert auto_relocalize_calls == []
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_map_routes_validate_json_contracts(monkeypatch):
@@ -498,6 +590,7 @@ def test_operational_routes_validate_idle_json_contracts():
         "slam_only",
         "stopped",
         "super_lio",
+        "super_lio_relocation",
     }
     assert slam_switch.success is False
     assert bag_status.recording is False
@@ -515,7 +608,14 @@ def test_slam_status_uses_logical_service_states(monkeypatch):
             self._services = services
 
         def status(self, *names):
-            assert names == ("lidar", "slam", "slam_pgo", "localizer", "super_lio")
+            assert names == (
+                "lidar",
+                "slam",
+                "slam_pgo",
+                "localizer",
+                "super_lio",
+                "super_lio_relocation",
+            )
             return dict(self._services)
 
     gateway = GatewayModule()
@@ -532,6 +632,7 @@ def test_slam_status_uses_logical_service_states(monkeypatch):
                 "slam_pgo": "stopped",
                 "localizer": "running",
                 "super_lio": "stopped",
+                "super_lio_relocation": "stopped",
             }
         ),
     )
@@ -549,6 +650,7 @@ def test_slam_status_uses_logical_service_states(monkeypatch):
                 "slam_pgo": "stopped",
                 "localizer": "stopped",
                 "super_lio": "stopped",
+                "super_lio_relocation": "stopped",
             }
         ),
     )
@@ -565,12 +667,31 @@ def test_slam_status_uses_logical_service_states(monkeypatch):
                 "slam_pgo": "stopped",
                 "localizer": "stopped",
                 "super_lio": "running",
+                "super_lio_relocation": "stopped",
             }
         ),
     )
     super_lio_payload = asyncio.run(endpoint())
     assert super_lio_payload["mode"] == "super_lio"
     assert super_lio_payload["services"]["super_lio"] == "running"
+
+    monkeypatch.setattr(
+        service_manager,
+        "get_service_manager",
+        lambda: _FakeServiceManager(
+            {
+                "lidar": "running",
+                "slam": "stopped",
+                "slam_pgo": "stopped",
+                "localizer": "stopped",
+                "super_lio": "stopped",
+                "super_lio_relocation": "running",
+            }
+        ),
+    )
+    relocation_payload = asyncio.run(endpoint())
+    assert relocation_payload["mode"] == "super_lio_relocation"
+    assert relocation_payload["services"]["super_lio_relocation"] == "running"
 
 
 def test_slam_switch_can_select_super_lio(monkeypatch):
@@ -602,9 +723,159 @@ def test_slam_switch_can_select_super_lio(monkeypatch):
 
     assert payload["success"] is True
     assert payload["profile"] == "super_lio"
-    assert ("stop", ("slam", "slam_pgo", "localizer")) in fake.calls
+    assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio_relocation")) in (
+        fake.calls
+    )
     assert ("ensure", ("lidar", "super_lio")) in fake.calls
     assert ("wait_ready", ("lidar", "super_lio")) in fake.calls
+
+
+def test_slam_switch_can_select_super_lio_relocation(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+
+    class _FakeServiceManager:
+        def __init__(self):
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def stop(self, *names):
+            self.calls.append(("stop", names))
+
+        def ensure(self, *names):
+            self.calls.append(("ensure", names))
+
+        def wait_ready(self, *names, timeout: float = 15.0):
+            self.calls.append(("wait_ready", names))
+            return True
+
+    fake = _FakeServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    endpoint = _endpoint(gateway, "/api/v1/slam/switch")
+
+    payload = asyncio.run(endpoint({"profile": "super_lio_reloc"}))
+
+    assert payload["success"] is True
+    assert payload["profile"] == "super_lio_relocation"
+    assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio")) in fake.calls
+    assert ("ensure", ("lidar", "super_lio_relocation")) in fake.calls
+    assert ("wait_ready", ("lidar", "super_lio_relocation")) in fake.calls
+
+
+def test_super_lio_relocalize_endpoints_fail_fast_without_ros_call(monkeypatch):
+    import subprocess
+
+    from gateway.gateway_module import GatewayModule
+
+    def fail_run(*_args, **_kwargs):
+        raise AssertionError("ROS relocalization service should not be called")
+
+    monkeypatch.setattr(subprocess, "run", fail_run)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._localization_status = {
+        "localization_backend": "super_lio",
+        "saved_map_relocalization_supported": False,
+        "recovery_method": "restart_super_lio",
+    }
+
+    auto_response = asyncio.run(
+        _endpoint(gateway, "/api/v1/slam/auto_relocalize")()
+    )
+    relocalize_response = asyncio.run(
+        _endpoint(gateway, "/api/v1/slam/relocalize")(
+            {"map_name": "demo", "x": 1.0, "y": 2.0, "yaw": 0.3}
+        )
+    )
+
+    auto_payload = _payload(auto_response)
+    relocalize_payload = _payload(relocalize_response)
+    assert auto_response.status_code == 409
+    assert relocalize_response.status_code == 409
+    assert auto_payload["success"] is False
+    assert relocalize_payload["success"] is False
+    assert "unsupported" in auto_payload["message"]
+    assert "unsupported" in relocalize_payload["message"]
+
+
+def test_super_lio_relocation_relocalize_endpoints_fail_fast_without_ros_call(
+    monkeypatch,
+):
+    import subprocess
+
+    from gateway.gateway_module import GatewayModule
+
+    def fail_run(*_args, **_kwargs):
+        raise AssertionError("ROS relocalization service should not be called")
+
+    monkeypatch.setattr(subprocess, "run", fail_run)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._localization_status = {
+        "localization_backend": "super_lio_relocation",
+        "saved_map_relocalization_supported": False,
+        "recovery_method": "restart_super_lio_relocation",
+    }
+
+    auto_response = asyncio.run(
+        _endpoint(gateway, "/api/v1/slam/auto_relocalize")()
+    )
+    relocalize_response = asyncio.run(
+        _endpoint(gateway, "/api/v1/slam/relocalize")(
+            {"map_name": "demo", "x": 1.0, "y": 2.0, "yaw": 0.3}
+        )
+    )
+
+    auto_payload = _payload(auto_response)
+    relocalize_payload = _payload(relocalize_response)
+    assert auto_response.status_code == 409
+    assert relocalize_response.status_code == 409
+    assert auto_payload["success"] is False
+    assert relocalize_payload["success"] is False
+    assert "unsupported" in auto_payload["message"]
+    assert "unsupported" in relocalize_payload["message"]
+
+
+def test_localizer_relocalize_keeps_ros_service_path(monkeypatch, tmp_path):
+    import subprocess
+
+    from gateway.gateway_module import GatewayModule
+
+    calls = []
+    map_dir = tmp_path / "maps"
+    (map_dir / "demo").mkdir(parents=True)
+    (map_dir / "demo" / "map.pcd").write_text("pcd", encoding="utf-8")
+    monkeypatch.setenv("NAV_MAP_DIR", str(map_dir))
+
+    def fake_run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, stdout="success=True\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    calls.clear()
+    gateway._localization_status = {
+        "backend": "localizer",
+        "saved_map_relocalization_supported": True,
+    }
+    gateway._persist_last_nav_pose = lambda *_args, **_kwargs: None
+
+    payload = asyncio.run(
+        _endpoint(gateway, "/api/v1/slam/relocalize")(
+            {"map_name": "demo", "x": 1.0, "y": 2.0, "yaw": 0.3}
+        )
+    )
+
+    assert payload["success"] is True
+    assert payload["message"] == "Relocalized to demo"
+    assert calls
+    assert any("/nav/relocalize" in " ".join(args) for args, _kwargs in calls)
 
 
 def test_temporal_memory_response_accepts_observation_rows():

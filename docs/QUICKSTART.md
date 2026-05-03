@@ -142,7 +142,7 @@ lingtu nav --no-semantic           # geometric only
 
 | Port | Service | Module |
 |------|---------|--------|
-| 5050 | REST + SSE + `/ws/teleop` | `GatewayModule` (and `TeleopModule` shares it) |
+| 5050 | REST + SSE + `/ws/teleop` + `/ws/camera` | `GatewayModule` (and `TeleopModule` shares it) |
 | 8090 | MCP JSON-RPC | `MCPServerModule` |
 | 9090 | Rerun web UI (when `--rerun`) | `RerunBridgeModule` |
 

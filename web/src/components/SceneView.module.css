@@ -801,6 +801,15 @@
   flex-shrink: 0;
 }
 
+.camDotWait {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 5px rgba(245, 158, 11, 0.4);
+  flex-shrink: 0;
+}
+
 .cameraPipImg {
   display: block;
   width: 100%;

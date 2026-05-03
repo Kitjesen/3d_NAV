@@ -20,7 +20,7 @@ import {
   ListChecks, AlertTriangle, Gauge, ArrowRight,
   GitBranch, LogOut,
 } from 'lucide-react'
-import { resetAllLayouts } from './FloatingWidget'
+import { resetAllLayouts } from './floatingWidgetLayout'
 import styles from './SettingsMenu.module.css'
 
 type Section = 'home' | 'system' | 'modules' | 'calib' | 'diag' | 'about'
@@ -50,7 +50,12 @@ export function SettingsMenu({ open, onClose }: SettingsMenuProps) {
   }, [open, onClose, section, modal])
 
   useEffect(() => {
-    if (!open) { setSection('home'); setModal(null) }
+    if (open) return
+    const t = setTimeout(() => {
+      setSection('home')
+      setModal(null)
+    }, 0)
+    return () => clearTimeout(t)
   }, [open])
 
   if (!open) return null
@@ -384,8 +389,13 @@ function OtaField({ label, value }: { label: string; value: string }) {
 
 /* ─── Diagnostics Modal ────────────────────────────────────────── */
 
+type HealthSummary = {
+  modules?: Record<string, unknown>
+  error?: string
+}
+
 function DiagModal({ onClose }: { onClose: () => void }) {
-  const [health, setHealth] = useState<any>(null)
+  const [health, setHealth] = useState<HealthSummary | null>(null)
 
   useEffect(() => {
     fetch('/api/v1/health')
@@ -424,7 +434,7 @@ function DiagModal({ onClose }: { onClose: () => void }) {
           <div key={n} className={styles.diagRow}>
             <span className={styles.diagName}>{n}</span>
             <span className={modules[n] === 'ok' ? styles.diagOk : styles.diagFail}>
-              {modules[n]}
+              {String(modules[n])}
             </span>
           </div>
         ))}

@@ -144,10 +144,24 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
   const canStartExploring = (session?.can_start_exploring ?? false) && !busy && !pendingTx
   const explorerAvailable = session?.explorer_available ?? false
   const canEnd = (session?.can_end ?? false) && !busy && !pendingTx
+  const slamStatus = sseState.slamStatus
+  const localizationBackend = session?.localization_backend ?? session?.slam_profile ?? slamStatus?.mode ?? 'unknown'
+  const savedMapRelocalizeSupported =
+    session?.saved_map_relocalization_supported ??
+    session?.relocalization_supported ??
+    localizationBackend === 'localizer'
+  const recoveryMethod = session?.recovery_method ?? '--'
+  const relocalizeTitle = savedMapRelocalizeSupported
+    ? `Backend ${localizationBackend} supports saved-map relocalize`
+    : `Backend ${localizationBackend} does not support saved-map relocalize; recovery=${recoveryMethod}`
+  const mapSaveSource = session?.map_save_source ?? (session?.map_save_supported ? 'available' : '--')
+  const recoverySignal = session?.recovery_signal && session.recovery_signal !== 'none'
+    ? session.recovery_signal
+    : recoveryMethod
 
-  // 3D-BBS auto-relocalize: only valid while navigating (localizer alive).
+  // 3D-BBS auto-relocalize requires a saved-map localizer backend.
   const [autoRelocBusy, setAutoRelocBusy] = useState(false)
-  const canAutoReloc = mode === 'navigating' && !autoRelocBusy && !pendingTx
+  const canAutoReloc = mode === 'navigating' && savedMapRelocalizeSupported && !autoRelocBusy && !pendingTx
   const handleAutoReloc = useCallback(async () => {
     setAutoRelocBusy(true)
     // BBS3D 有随机性 + 个别帧 ICP refine 可能偏离,自动重试 3 次直到
@@ -197,7 +211,6 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
     }
   }, [showToast])
 
-  const slamStatus = sseState.slamStatus
   const quality = session?.icp_quality ?? 0
   const qualityClass = quality <= 0 ? '' : quality < 0.15 ? styles.qualityGood : quality < 0.3 ? styles.qualityWarn : styles.qualityBad
 
@@ -295,7 +308,7 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
           className={canAutoReloc ? styles.primaryBtn : styles.primaryBtnDisabled}
           onClick={canAutoReloc ? handleAutoReloc : undefined}
           disabled={!canAutoReloc}
-          title="3D-BBS 全图分支定界搜索，无需手动给初始位姿"
+          title={relocalizeTitle}
         >
           <LocateFixed size={14} />
           <span>自动重定位 (3D-BBS)</span>
@@ -303,6 +316,9 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
         </button>
         {mode !== 'navigating' && (
           <p className={styles.hint}>仅巡航模式可用（localizer 需运行）</p>
+        )}
+        {mode === 'navigating' && !savedMapRelocalizeSupported && (
+          <p className={styles.hint}>saved-map relocalize unavailable; recovery={recoveryMethod}</p>
         )}
       </div>
 
@@ -332,6 +348,29 @@ export function SlamPanel({ sseState, showToast }: SlamPanelProps) {
             <span className={styles.statLabel}>Localizer</span>
             <span className={`${styles.statValue} ${session?.localizer_ready ? styles.statOk : styles.statDim}`}>
               {mode !== 'navigating' ? '停止' : session?.localizer_ready ? '就绪' : '对齐中…'}
+            </span>
+          </div>
+          <div className={styles.statCard}>
+            <span className={styles.statLabel}>Backend</span>
+            <span className={`${styles.statValue} ${styles.statValueCompact}`} title={localizationBackend}>
+              {localizationBackend}
+            </span>
+          </div>
+          <div className={styles.statCard}>
+            <span className={styles.statLabel}>Map Save</span>
+            <span className={`${styles.statValue} ${styles.statValueCompact}`} title={mapSaveSource}>
+              {mapSaveSource}
+            </span>
+          </div>
+          <div className={styles.statCard}>
+            <span className={styles.statLabel}>Recovery</span>
+            <span
+              className={`${styles.statValue} ${styles.statValueCompact} ${
+                session?.restart_recovery_supported ? styles.statOk : styles.statDim
+              }`}
+              title={recoverySignal}
+            >
+              {recoverySignal}
             </span>
           </div>
         </div>

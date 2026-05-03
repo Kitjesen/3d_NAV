@@ -12,6 +12,12 @@ from gateway.services.runtime_status import (
     safe_lease as _safe_lease,
     safe_session as _safe_session,
 )
+from gateway.services.traffic import (
+    DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
+    DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
+    SSE_EVENT_SCHEMA_VERSION,
+    SSE_RETRY_MS,
+)
 
 
 APP_BOOTSTRAP_SCHEMA_VERSION = 1
@@ -31,6 +37,7 @@ CLIENT_LINKS: dict[str, str] = {
     "session": "/api/v1/session",
     "events": "/api/v1/events",
     "teleop_ws": "/ws/teleop",
+    "camera_ws": "/ws/camera",
     "cloud_ws": "/ws/cloud",
     "camera_snapshot": "/api/v1/camera/snapshot",
     "webrtc_stats": "/api/v1/webrtc/stats",
@@ -87,6 +94,7 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
     "realtime": {
         "events": {"method": "SSE", "path": CLIENT_LINKS["events"]},
         "teleop": {"method": "WS", "path": CLIENT_LINKS["teleop_ws"]},
+        "camera": {"method": "WS", "path": CLIENT_LINKS["camera_ws"]},
         "cloud": {"method": "WS", "path": CLIENT_LINKS["cloud_ws"]},
     },
     "control": {
@@ -200,6 +208,21 @@ def _traffic_summary(gw: Any) -> dict[str, Any]:
             "drop_policy": "drop_oldest",
         },
         "recommended_client_rates_hz": {},
+    }
+
+
+def _large_event_policy(gw: Any) -> dict[str, Any]:
+    slope_inline = bool(
+        getattr(gw, "_sse_slope_payload_enabled", DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED)
+    )
+    return {
+        "raster_min_interval_s": float(
+            getattr(gw, "_sse_raster_min_interval_s", DEFAULT_SSE_RASTER_MIN_INTERVAL_S)
+        ),
+        "costmap_payload": "inline_sse",
+        "slope_grid_payload": "inline_sse" if slope_inline else "metadata_sse",
+        "point_cloud_payload": "binary_websocket",
+        "binary_cloud_endpoint": CLIENT_LINKS["cloud_ws"],
     }
 
 
@@ -355,12 +378,30 @@ def build_app_capabilities(gw: Any) -> dict[str, Any]:
                 "transport": "sse",
                 "initial_snapshot": True,
                 "heartbeat_s": 1.0,
+                "schema_version": SSE_EVENT_SCHEMA_VERSION,
+                "event_schema": "SSEEventEnvelope",
+                "event_id_field": "event_id",
+                "timestamp_field": "ts",
+                "heartbeat_type": "ping",
+                "snapshot_type": "snapshot",
+                "retry_ms": SSE_RETRY_MS,
+                "replay_supported": False,
+                "last_event_id_header": "Last-Event-ID",
                 "drop_policy": traffic.get("sse", {}).get("drop_policy"),
+                "large_event_policy": _large_event_policy(gw),
             },
             "teleop": {
                 "path": CLIENT_LINKS["teleop_ws"],
                 "transport": "websocket",
+                "control_messages": ["joy", "stop"],
+                "binary_camera_frames": False,
+                "legacy_camera_query": "?video=1",
+            },
+            "camera": {
+                "path": CLIENT_LINKS["camera_ws"],
+                "transport": "websocket",
                 "binary_camera_frames": True,
+                "explicit_subscription": True,
             },
             "cloud": {
                 "path": CLIENT_LINKS["cloud_ws"],
@@ -448,6 +489,7 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
         "media": {
             "events": CLIENT_LINKS["events"],
             "teleop_ws": CLIENT_LINKS["teleop_ws"],
+            "camera_ws": CLIENT_LINKS["camera_ws"],
             "cloud_ws": CLIENT_LINKS["cloud_ws"],
             "camera_snapshot": CLIENT_LINKS["camera_snapshot"],
             "webrtc_available": webrtc_available,
@@ -459,6 +501,7 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
                 "usage": "cold_start_only",
                 "poll_rates_hz": traffic.get("recommended_client_rates_hz", {}),
                 "events_endpoint": CLIENT_LINKS["events"],
+                "large_event_policy": _large_event_policy(gw),
             },
         },
         "capabilities": _feature_flags(gw),

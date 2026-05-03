@@ -37,6 +37,22 @@ const MAP_GROUPS: Array<{ label: string; filter: (m: MapInfo) => boolean }> = [
   { label: '空地图',   filter: m => !m.has_pcd },
 ]
 
+function formatSaveMapSummary(r: api.SaveMapResult): string {
+  const source = r.map_save_source ?? r.source ?? 'unknown'
+  const savedMapReloc = r.saved_map_relocalization_supported ?? r.relocalization_supported
+  const relocText = savedMapReloc === undefined ? 'unknown' : savedMapReloc ? 'yes' : 'no'
+  const recovery = r.restart_recovery_supported === undefined
+    ? (r.recovery_method ?? 'unknown')
+    : `${r.restart_recovery_supported ? 'restart' : 'no-restart'}${r.recovery_method ? `/${r.recovery_method}` : ''}`
+  const warnings = r.warnings?.filter(Boolean) ?? []
+  return [
+    `source=${source}`,
+    `saved-map relocalize=${relocText}`,
+    `recovery=${recovery}`,
+    warnings.length > 0 ? `warnings=${warnings.join('; ')}` : null,
+  ].filter((v): v is string => Boolean(v)).join(' | ')
+}
+
 function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const scene3DRef = useRef<Scene3DHandle>(null)
 
@@ -74,6 +90,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const [relocY, setRelocY] = useState('0')
   const [relocYaw, setRelocYaw] = useState('0')
   const [relocPending, setRelocPending] = useState(false)
+  const [lastSaveSummary, setLastSaveSummary] = useState<string | null>(null)
   // Track whether the user has manually edited reloc inputs; until then we
   // mirror live odometry so the defaults reflect the robot's current pose
   // instead of the unhelpful (0, 0, 0).
@@ -88,7 +105,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   // SLAM switch confirmation
   const [slamSwitchTarget, setSlamSwitchTarget] = useState<SlamProfile | null>(null)
 
-  const { imgSrc: cameraImgSrc, connected: cameraConnected } = useCamera()
+  const { imgSrc: cameraImgSrc, connected: cameraConnected, lastFrameAt: cameraLastFrameAt } = useCamera()
+  const cameraPipRecovered = cameraImgSrc != null && cameraLastFrameAt != null
+  const cameraPipLabel = cameraPipRecovered ? '相机已恢复' : cameraConnected ? '等待画面' : '无信号'
+  const cameraPipDotClass = cameraPipRecovered ? styles.camDotLive : cameraConnected ? styles.camDotWait : styles.camDotOff
   // Binary point-cloud channel (replaces SSE JSON map_cloud).  The hook
   // owns the WebSocket + decoder worker; we just consume the latest frame.
   const cloud = useBinaryCloud()
@@ -124,6 +144,15 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const hasGoal      = missionState === 'EXECUTING' || missionState === 'PLANNING'
   const slamMode     = sseState.slamStatus?.mode ?? '—'
   const slamHz       = sseState.slamStatus?.slam_hz ?? 0
+  const session = sseState.session
+  const localizationBackend = session?.localization_backend ?? session?.slam_profile ?? sseState.slamStatus?.mode ?? 'unknown'
+  const savedMapRelocalizeSupported =
+    session?.saved_map_relocalization_supported ??
+    session?.relocalization_supported ??
+    localizationBackend === 'localizer'
+  const recoveryMethod = session?.recovery_method ?? '--'
+  const relocalizeUnavailableMessage =
+    `Backend ${localizationBackend} does not support saved-map relocalize; recovery=${recoveryMethod}`
   // Legacy SSE map_cloud now carries only metadata (count/seq) — points
   // are streamed over /ws/cloud and live in `cloud.positions`.
 
@@ -223,6 +252,10 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   }, [])
 
   const handleSceneRelocalize = useCallback(async (x: number, y: number) => {
+    if (!savedMapRelocalizeSupported) {
+      showToast(relocalizeUnavailableMessage, 'error')
+      return
+    }
     const mapName = sseState.session?.active_map
     if (!mapName) {
       showToast('请先加载一张地图后再重定位', 'error')
@@ -238,17 +271,17 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     } catch (e: unknown) {
       showToast(`重定位失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
     }
-  }, [sseState.session, odom, showToast])
+  }, [savedMapRelocalizeSupported, relocalizeUnavailableMessage, sseState.session, odom, showToast])
 
   const handleConfirmGoal = useCallback(async () => {
     if (!pendingGoal) return
     const { x, y } = pendingGoal
     setPendingGoal(null)
     try {
-      await api.sendGoal(x, y)
-      showToast(`目标已发送: (${x.toFixed(2)}, ${y.toFixed(2)})`, 'success')
-    } catch {
-      showToast('发送目标失败', 'error')
+      const res = await api.sendGoal(x, y)
+      showToast(api.formatCommandAck(res, `目标 (${x.toFixed(2)}, ${y.toFixed(2)})`), 'success')
+    } catch (e: unknown) {
+      showToast(api.formatCommandError(e, '发送目标失败'), 'error')
     }
   }, [pendingGoal, showToast])
 
@@ -277,6 +310,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     showToast(`正在保存并清洗动态障碍: ${name}…`, 'info')
     try {
       const r = await api.saveMap(name)
+      const summary = formatSaveMapSummary(r)
+      setLastSaveSummary(summary)
       const df = r.dynamic_filter
       if (df && df.success && df.dropped !== undefined && df.orig_count) {
         const pct = (100 * df.dropped / df.orig_count).toFixed(1)
@@ -284,6 +319,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
       } else {
         showToast(`已保存: ${name}`, 'success')
       }
+      showToast(`Map save details: ${summary}`, r.warnings?.length ? 'info' : 'success')
       loadMaps()
     } catch { showToast('保存失败', 'error') }
   }
@@ -304,6 +340,15 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     setSavedMapFlat(undefined)
     try {
       await api.activateMap(name)
+      if (!savedMapRelocalizeSupported) {
+        showToast(`Loaded ${name}. ${relocalizeUnavailableMessage}`, 'info')
+        loadMaps()
+        try {
+          const pts = await api.fetchSavedMapPoints(name)
+          setSavedMapFlat(pts)
+        } catch { /* PCD not available */ }
+        return
+      }
       await api.relocalize(name, 0, 0, 0)
       showToast(`已加载: ${name}，重定位到原点`, 'success')
       loadMaps()
@@ -365,12 +410,18 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
 
   const handleStop = async () => {
     try {
-      await api.sendStop()
-      showToast('已停止', 'info')
-    } catch { /* noop */ }
+      const res = await api.sendStop()
+      showToast(api.formatCommandAck(res, '停止指令'), 'info')
+    } catch (e: unknown) {
+      showToast(api.formatCommandError(e, '停止失败'), 'error')
+    }
   }
 
   const handleRelocalize = async () => {
+    if (!savedMapRelocalizeSupported) {
+      showToast(relocalizeUnavailableMessage, 'error')
+      return
+    }
     if (!relocMap) { showToast('请先选择地图', 'error'); return }
     setRelocPending(true)
     try {
@@ -481,6 +532,11 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
             </div>
           </div>
           <div className={styles.drawerBody}>
+            {lastSaveSummary && (
+              <div className={styles.hintBadge} title={lastSaveSummary}>
+                Last save: {lastSaveSummary}
+              </div>
+            )}
             {maps.length === 0 && (
               <div className={styles.emptyState}>
                 <MapPinned size={32} className={styles.emptyIcon} strokeWidth={1.4} />
@@ -612,8 +668,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
               }}
             >
               <div className={styles.cameraPipHeader}>
-                <span className={cameraConnected ? styles.camDotLive : styles.camDotOff} />
-                {cameraConnected ? '摄像头' : '无信号'}
+                <span className={cameraPipDotClass} />
+                {cameraPipLabel}
               </div>
               {cameraImgSrc
                 ? <img src={cameraImgSrc} className={styles.cameraPipImg} alt="camera" draggable={false} />
@@ -708,6 +764,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
             <button
               className={styles.relocBtn}
               onClick={() => setRelocOpen(v => !v)}
+              disabled={!savedMapRelocalizeSupported}
+              title={savedMapRelocalizeSupported ? 'Saved-map relocalize is available' : relocalizeUnavailableMessage}
             >
               <LocateFixed size={11} />
               重定位
@@ -715,6 +773,9 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
 
             {relocOpen && (
               <div className={styles.relocPanel}>
+                {!savedMapRelocalizeSupported && (
+                  <div className={styles.hintBadge}>{relocalizeUnavailableMessage}</div>
+                )}
                 {/* Custom dropdown */}
                 <div className={styles.customSelect} ref={relocDropRef}>
                   <button
@@ -764,7 +825,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 <button
                   className={styles.relocConfirmBtn}
                   onClick={handleRelocalize}
-                  disabled={relocPending || !relocMap}
+                  disabled={relocPending || !relocMap || !savedMapRelocalizeSupported}
                 >
                   {relocPending ? '定位中…' : '确认重定位'}
                 </button>
@@ -787,9 +848,11 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
       {/* Load map confirm */}
       <ConfirmModal
         open={loadTarget !== null}
-        title="加载地图"
-        message={`加载「${loadTarget ?? ''}」并重定位到此地图？\n当前实时点云将对齐到此地图的坐标系。`}
-        confirmLabel="加载并重定位"
+        title="Load map"
+        message={savedMapRelocalizeSupported
+          ? `Load "${loadTarget ?? ''}" and relocalize into this saved map frame?`
+          : `Load "${loadTarget ?? ''}" without relocalize. ${relocalizeUnavailableMessage}`}
+        confirmLabel={savedMapRelocalizeSupported ? 'Load and relocalize' : 'Load map only'}
         onConfirm={confirmLoadMap}
         onCancel={() => setLoadTarget(null)}
       />

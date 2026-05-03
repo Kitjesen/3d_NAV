@@ -86,6 +86,27 @@ export interface LocationsResponse {
   source: string
 }
 
+export interface StateResponse {
+  schema_version: number
+  ts: number
+  server?: ServerInfo
+  odometry?: Record<string, unknown> | null
+  safety?: Record<string, unknown> | null
+  mission?: Record<string, unknown> | null
+  eval?: Record<string, unknown> | null
+  dialogue?: Record<string, unknown> | null
+  mode?: string | null
+  lease?: Record<string, unknown> | null
+  teleop?: Record<string, unknown> | null
+  session?: SessionEvent['data'] | Record<string, unknown> | null
+  localization?: Record<string, unknown> | null
+  navigation?: Record<string, unknown> | null
+  map?: Record<string, unknown> | null
+  scene?: Record<string, unknown> | null
+  path?: Record<string, unknown> | null
+  links?: Record<string, string>
+}
+
 export interface RobotPoseSummary {
   x: number
   y: number
@@ -108,6 +129,82 @@ export interface PathResponse {
   source: string
 }
 
+export interface ClientLinks {
+  bootstrap?: string
+  capabilities?: string
+  state?: string
+  scene_graph?: string
+  locations?: string
+  path?: string
+  events?: string
+  teleop_ws?: string
+  camera_ws?: string
+  cloud_ws?: string
+  camera_snapshot?: string
+  health?: string
+  goal?: string
+  stop?: string
+  [key: string]: string | undefined
+}
+
+export interface AppMediaLinks {
+  events: string
+  teleop_ws: string
+  camera_ws: string
+  cloud_ws: string
+  camera_snapshot: string
+  webrtc_available: boolean
+  webrtc_offer?: string
+  [key: string]: unknown
+}
+
+export interface RealtimeEventsCapability {
+  path: string
+  transport: 'sse'
+  initial_snapshot: boolean
+  heartbeat_s: number
+  schema_version?: number
+  event_schema?: string
+  event_id_field?: string
+  timestamp_field?: string
+  heartbeat_type?: string
+  snapshot_type?: string
+  retry_ms?: number
+  replay_supported?: boolean
+  last_event_id_header?: string
+  drop_policy?: string | null
+  large_event_policy?: Record<string, unknown>
+}
+
+export interface RealtimeTeleopCapability {
+  path: string
+  transport: 'websocket'
+  control_messages: string[]
+  binary_camera_frames: boolean
+  legacy_camera_query?: string
+}
+
+export interface RealtimeCameraCapability {
+  path: string
+  transport: 'websocket'
+  binary_camera_frames: boolean
+  explicit_subscription: boolean
+}
+
+export interface RealtimeCloudCapability {
+  path: string
+  transport: 'websocket'
+  binary_point_cloud_frames: boolean
+  drop_policy?: string | null
+}
+
+export interface AppRealtimeCapabilities {
+  events: RealtimeEventsCapability
+  teleop: RealtimeTeleopCapability
+  camera: RealtimeCameraCapability
+  cloud: RealtimeCloudCapability
+}
+
 export interface AppBootstrapResponse {
   schema_version: number
   server: ServerInfo
@@ -121,7 +218,7 @@ export interface AppBootstrapResponse {
   map: Record<string, unknown>
   scene: { available: boolean; endpoint: string }
   path: { points: number; endpoint: string }
-  media: Record<string, unknown>
+  media: AppMediaLinks
   traffic: Record<string, unknown> & {
     client_policy?: {
       usage: string
@@ -131,7 +228,7 @@ export interface AppBootstrapResponse {
   }
   capabilities: Record<string, boolean>
   capabilities_endpoint: string
-  links: Record<string, string>
+  links: ClientLinks
 }
 
 export interface AppCapabilitiesResponse {
@@ -141,9 +238,9 @@ export interface AppCapabilitiesResponse {
   features: Record<string, boolean>
   endpoints: Record<string, Record<string, EndpointSpec>>
   probes: Record<string, EndpointSpec>
-  realtime: Record<string, unknown>
+  realtime: AppRealtimeCapabilities
   client_policy: Record<string, unknown>
-  links: Record<string, string>
+  links: ClientLinks
 }
 
 export interface CommandReceipt {
@@ -223,6 +320,15 @@ export interface HeartbeatEvent {
   type: 'heartbeat'
 }
 
+export interface PingEvent {
+  type: 'ping'
+}
+
+export interface SnapshotEvent {
+  type: 'snapshot'
+  data?: Record<string, unknown>
+}
+
 export interface SlamStatusEvent {
   type: 'slam_status'
   slam_hz: number
@@ -273,6 +379,9 @@ export interface SessionEvent {
   type: 'session'
   data: {
     mode: 'idle' | 'mapping' | 'navigating' | 'exploring'
+    slam_profile?: string | null
+    localization_backend?: string | null
+    health_source?: string | null
     active_map: string | null
     map_has_pcd: boolean
     map_has_tomogram: boolean
@@ -281,11 +390,26 @@ export interface SessionEvent {
     error: string
     icp_quality: number
     localizer_ready: boolean
+    localizer_algorithm_healthy?: boolean
+    pose_fresh?: boolean | null
+    pose_freshness?: string | null
+    map_state?: string | null
+    map_save_supported?: boolean
+    map_save_source?: string | null
+    relocalization_supported?: boolean
+    saved_map_relocalization_supported?: boolean
+    restart_recovery_supported?: boolean
+    recovery_method?: string | null
+    relocalization_state?: string | null
+    recovery_signal?: string | null
+    recovery_action?: string | null
     can_start_mapping: boolean
     can_start_navigating: boolean
     can_start_exploring: boolean
     can_end: boolean
     explorer_available: boolean
+    explorer_unavailable_reason?: string | null
+    explorer_required_profile?: string | null
   }
 }
 
@@ -301,7 +425,11 @@ export interface CostmapEvent {
 
 export interface SlopeGridEvent {
   type: 'slope_grid'
-  grid_b64: string   // base64-encoded uint8 (0-90° mapped to 0-255)
+  grid_b64?: string  // optional base64-encoded uint8 (0-90 deg mapped to 0-255)
+  payload?: 'inline' | 'omitted'
+  available?: boolean
+  reason?: string
+  encoding?: string
   cols: number
   rows?: number
   resolution: number
@@ -317,12 +445,20 @@ export interface AgentMessageEvent {
   ts: number
 }
 
-export type SSEEvent =
+export interface SSEEnvelopeFields {
+  schema_version?: number
+  event_id?: number
+  ts?: number
+}
+
+export type SSEEvent = SSEEnvelopeFields & (
   | OdometryEvent
   | MissionStatusEvent
   | SafetyStateEvent
   | SceneGraphEvent
   | HeartbeatEvent
+  | PingEvent
+  | SnapshotEvent
   | SlamStatusEvent
   | RobotStatusEvent
   | GlobalPathEvent
@@ -333,6 +469,7 @@ export type SSEEvent =
   | SlopeGridEvent
   | AgentMessageEvent
   | LocalPathEvent
+)
 
 export interface SSEState {
   odometry: OdometryEvent | null
@@ -346,10 +483,19 @@ export interface SSEState {
   mapCloud: MapCloudEvent | null
   savedMap: SavedMapEvent | null
   session: SessionEvent['data'] | null
+  locations: LocationsResponse | null
+  stateSnapshot: StateResponse | null
   costmap: CostmapEvent | null
   slopeGrid: SlopeGridEvent | null
   agentMessage: AgentMessageEvent | null  // latest agent chat message (ts dedups)
   lastHeartbeat: number | null
+  lastEventId: number | null
+  missedEvents: number
+  reconnects: number
+  lastError: string | null
+  lastRefreshAt: number | null
+  lastRefreshReason: string | null
+  refreshError: string | null
   connected: boolean
   events: SSEEvent[]
 }
@@ -364,4 +510,4 @@ export interface Toast {
 
 export type Tab = 'console' | 'scene' | 'map' | 'slam'
 
-export type SlamProfile = 'fastlio2' | 'localizer' | 'stop'
+export type SlamProfile = 'fastlio2' | 'localizer' | 'super_lio' | 'super_lio_relocation' | 'stop'

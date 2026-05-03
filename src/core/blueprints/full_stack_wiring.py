@@ -110,6 +110,7 @@ def apply_full_stack_wires(
             WireSpec("SlamBridgeModule", "localization_status", "SafetyRingModule", "localization_status"),
             WireSpec("SlamBridgeModule", "localization_status", "NavigationModule", "localization_status"),
             WireSpec("SlamBridgeModule", "localization_status", "DepthVisualOdomModule", "localization_status"),
+            WireSpec("SlamBridgeModule", "localization_status", "GatewayModule", "localization_status"),
             WireSpec("DepthVisualOdomModule", "visual_odometry", "SlamBridgeModule", "visual_odom"),
             WireSpec(camera_src, color_out, "DepthVisualOdomModule", "color_image"),
             WireSpec(camera_src, "depth_image", "DepthVisualOdomModule", "depth_image"),

@@ -119,9 +119,9 @@ export async function executeSlashCommand(raw: string, sseState: SSEState): Prom
   if (cmd === '/stop') {
     try {
       const res = await api.sendStop()
-      return res.ok ? '急停指令已发送。' : `急停失败：HTTP ${res.status}`
-    } catch (e) {
-      return `急停网络错误：${String(e)}`
+      return api.formatCommandAck(res, '急停指令')
+    } catch (e: unknown) {
+      return api.formatCommandError(e, '急停失败')
     }
   }
 
@@ -133,9 +133,9 @@ export async function executeSlashCommand(raw: string, sseState: SSEState): Prom
     }
     try {
       const res = await api.sendGoal(x, y)
-      return res.ok ? `目标已提交：(${x}, ${y})` : `导航失败：HTTP ${res.status}`
-    } catch (e) {
-      return `导航网络错误：${String(e)}`
+      return api.formatCommandAck(res, `目标 (${x}, ${y})`)
+    } catch (e: unknown) {
+      return api.formatCommandError(e, '导航失败')
     }
   }
 

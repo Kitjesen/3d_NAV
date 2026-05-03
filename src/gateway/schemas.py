@@ -145,6 +145,14 @@ class EndpointSpec(GatewayResponseModel):
     status_codes: list[str] = Field(default_factory=list)
 
 
+class SSEEventEnvelope(GatewayResponseModel):
+    schema_version: int = 1
+    event_id: int | None = None
+    type: str
+    ts: float
+    data: Any = None
+
+
 class TeleopSummary(GatewayResponseModel):
     active: bool
     clients: int
@@ -624,6 +632,80 @@ class WebRTCControlResponse(GatewayResponseModel):
     bps: int | None = None
 
 
+class ClientLinks(GatewayResponseModel):
+    bootstrap: str | None = None
+    capabilities: str | None = None
+    state: str | None = None
+    scene_graph: str | None = None
+    locations: str | None = None
+    path: str | None = None
+    events: str | None = None
+    teleop_ws: str | None = None
+    camera_ws: str | None = None
+    cloud_ws: str | None = None
+    camera_snapshot: str | None = None
+    health: str | None = None
+    goal: str | None = None
+    stop: str | None = None
+
+
+class AppMediaLinks(GatewayResponseModel):
+    events: str
+    teleop_ws: str
+    camera_ws: str
+    cloud_ws: str
+    camera_snapshot: str
+    webrtc_available: bool
+    webrtc_offer: str | None = None
+
+
+class RealtimeEventsCapability(GatewayResponseModel):
+    path: str
+    transport: Literal["sse"]
+    initial_snapshot: bool
+    heartbeat_s: float
+    schema_version: int | None = None
+    event_schema: str | None = None
+    event_id_field: str | None = None
+    timestamp_field: str | None = None
+    heartbeat_type: str | None = None
+    snapshot_type: str | None = None
+    retry_ms: int | None = None
+    replay_supported: bool | None = None
+    last_event_id_header: str | None = None
+    drop_policy: str | None = None
+    large_event_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class RealtimeTeleopCapability(GatewayResponseModel):
+    path: str
+    transport: Literal["websocket"]
+    control_messages: list[str] = Field(default_factory=list)
+    binary_camera_frames: bool
+    legacy_camera_query: str | None = None
+
+
+class RealtimeCameraCapability(GatewayResponseModel):
+    path: str
+    transport: Literal["websocket"]
+    binary_camera_frames: bool
+    explicit_subscription: bool
+
+
+class RealtimeCloudCapability(GatewayResponseModel):
+    path: str
+    transport: Literal["websocket"]
+    binary_point_cloud_frames: bool
+    drop_policy: str | None = None
+
+
+class AppRealtimeCapabilities(GatewayResponseModel):
+    events: RealtimeEventsCapability
+    teleop: RealtimeTeleopCapability
+    camera: RealtimeCameraCapability
+    cloud: RealtimeCloudCapability
+
+
 class StateResponse(GatewayResponseModel):
     schema_version: int
     ts: float
@@ -642,7 +724,7 @@ class StateResponse(GatewayResponseModel):
     map: dict[str, Any]
     scene: dict[str, Any]
     path: dict[str, Any]
-    links: dict[str, str]
+    links: ClientLinks
 
 
 class AppBootstrapResponse(GatewayResponseModel):
@@ -659,11 +741,11 @@ class AppBootstrapResponse(GatewayResponseModel):
     map: dict[str, Any]
     scene: dict[str, Any]
     path: dict[str, Any]
-    media: dict[str, Any]
+    media: AppMediaLinks
     traffic: dict[str, Any]
     capabilities: dict[str, bool]
     capabilities_endpoint: str
-    links: dict[str, str]
+    links: ClientLinks
 
 
 class AppCapabilitiesResponse(GatewayResponseModel):
@@ -674,6 +756,6 @@ class AppCapabilitiesResponse(GatewayResponseModel):
     features: dict[str, bool]
     endpoints: dict[str, dict[str, EndpointSpec]]
     probes: dict[str, EndpointSpec]
-    realtime: dict[str, Any]
+    realtime: AppRealtimeCapabilities
     client_policy: dict[str, Any]
-    links: dict[str, str]
+    links: ClientLinks

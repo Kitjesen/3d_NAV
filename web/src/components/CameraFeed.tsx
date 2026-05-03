@@ -14,6 +14,7 @@ interface CameraFeedProps {
 }
 
 type Source = 'whep' | 'rtc' | 'jpeg'
+type CameraHealth = 'live' | 'degraded' | 'connecting' | 'offline'
 const STREAM_TIMEOUT_MS = 8_000
 
 export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
@@ -25,29 +26,25 @@ export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
   // so we avoid opening every transport at once while still escaping ICE stalls.
   const whep = useWHEP()
   const [whepTimedOut, setWhepTimedOut] = useState(false)
+  const whepDone = whep.connected || whep.stream || whep.error
   useEffect(() => {
-    if (whep.connected || whep.stream || whep.error) {
-      setWhepTimedOut(false)
-      return
-    }
+    if (whepDone) return
     const t = setTimeout(() => setWhepTimedOut(true), STREAM_TIMEOUT_MS)
     return () => clearTimeout(t)
-  }, [whep.connected, whep.stream, whep.error])
+  }, [whepDone])
 
-  const whepFailed = whep.error != null || whepTimedOut
+  const whepFailed = whep.error != null || (!whepDone && whepTimedOut)
   const rtc = useWebRTC(whepFailed ? '/api/v1/webrtc/offer' : '')
   const [rtcTimedOut, setRtcTimedOut] = useState(false)
+  const rtcDone = rtc.connected || rtc.stream || rtc.error
   useEffect(() => {
-    if (!whepFailed || rtc.connected || rtc.stream || rtc.error) {
-      setRtcTimedOut(false)
-      return
-    }
+    if (!whepFailed || rtcDone) return
     const t = setTimeout(() => setRtcTimedOut(true), STREAM_TIMEOUT_MS)
     return () => clearTimeout(t)
-  }, [whepFailed, rtc.connected, rtc.stream, rtc.error])
+  }, [whepFailed, rtcDone])
 
-  const rtcFailed = rtc.error != null || rtcTimedOut
-  const jpeg = useCamera(whepFailed && rtcFailed ? '/ws/teleop' : '')
+  const rtcFailed = rtc.error != null || (!rtcDone && rtcTimedOut)
+  const jpeg = useCamera(whepFailed && rtcFailed ? '/ws/camera' : '')
 
   // Pick the tier that is actually producing video. WHEP/RTC connection stalls
   // are treated as soft failures after STREAM_TIMEOUT_MS, then the next tier
@@ -80,9 +77,23 @@ export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
     source === 'rtc'  ? rtc.reconnect  :
     jpeg.reconnect
 
+  const cameraHealth: CameraHealth = hasVideo
+    ? (source === 'whep' ? 'live' : 'degraded')
+    : (isConnected ? 'connecting' : 'offline')
+  const cameraHealthClass =
+    cameraHealth === 'live' ? styles.camBadgeLive :
+    cameraHealth === 'degraded' ? styles.camBadgeDegraded :
+    cameraHealth === 'connecting' ? styles.camBadgeConnecting :
+    styles.camBadgeOff
+  const cameraHealthLabel =
+    cameraHealth === 'live' ? '直播' :
+    cameraHealth === 'degraded' ? (source === 'rtc' ? '降级 RTC' : '降级 MJPEG') :
+    cameraHealth === 'connecting' ? '恢复中' :
+    '离线'
+
   let sourceLabel: string
   if (source === 'jpeg') {
-    sourceLabel = '640 × 480 · MJPEG'
+    sourceLabel = jpeg.lastFrameAt ? 'MJPEG 降级流 · 已恢复' : 'MJPEG 降级流 · 等待帧'
   } else if (source === 'whep') {
     sourceLabel = whep.connected ? '图传 · Go2RTC · H.264' : '图传 · Go2RTC (建立中…)'
   } else if (rtc.stats && rtc.stats.active_peers > 0) {
@@ -90,9 +101,9 @@ export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
     const fps  = rtc.stats.fps.toFixed(0)
     const enc  = rtc.stats.encode_avg_ms
     const encStr = typeof enc === 'number' ? ` · ${enc.toFixed(0)}ms enc` : ''
-    sourceLabel = `aiortc · H.264 · ${fps}fps · ${mbps} Mbit/s${encStr}`
+    sourceLabel = `aiortc 降级流 · H.264 · ${fps}fps · ${mbps} Mbit/s${encStr}`
   } else {
-    sourceLabel = 'aiortc · WebRTC (建立中…)'
+    sourceLabel = 'aiortc 降级流 · WebRTC (建立中…)'
   }
 
   return (
@@ -125,9 +136,9 @@ export function CameraFeed({ onStop, estop, sseState }: CameraFeedProps) {
           </div>
         )}
 
-        <div className={isConnected ? styles.camBadgeLive : styles.camBadgeOff}>
+        <div className={cameraHealthClass}>
           <span className={styles.camBadgeDot} />
-          {isConnected ? '直播' : '离线'}
+          {cameraHealthLabel}
         </div>
 
         <CameraHud sseState={sseState} />

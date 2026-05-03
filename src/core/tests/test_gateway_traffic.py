@@ -156,6 +156,21 @@ def test_sse_message_format_keeps_eventsource_onmessage_contract():
     assert event["schema_version"] == SSE_EVENT_SCHEMA_VERSION
 
 
+def test_sse_subscribe_with_event_id_reserves_snapshot_before_push():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    queue, snapshot_id = gateway._sse_subscribe_with_event_id()
+
+    gateway.push_event({"type": "later"})
+
+    event = queue.get_nowait()
+    assert snapshot_id == 1
+    assert event["type"] == "later"
+    assert event["event_id"] == 2
+    assert gateway._traffic_stats_snapshot()["sse"]["latest_event_id"] == 2
+
+
 def test_sse_subscriber_receives_threaded_publish_on_endpoint_loop():
     from gateway.gateway_module import GatewayModule
 

@@ -95,6 +95,20 @@
   border: 1px solid rgba(239, 68, 68, 0.22);
 }
 
+.camBadgeDegraded {
+  composes: camBadge;
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.26);
+}
+
+.camBadgeConnecting {
+  composes: camBadge;
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-dim);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+}
+
 .camBadgeDot {
   width: 6px;
   height: 6px;
@@ -109,6 +123,15 @@
 
 .camBadgeOff .camBadgeDot {
   background: var(--red);
+}
+
+.camBadgeDegraded .camBadgeDot {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
+}
+
+.camBadgeConnecting .camBadgeDot {
+  background: var(--text-dim);
 }
 
 .estopOverlay {

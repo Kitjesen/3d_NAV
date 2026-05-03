@@ -58,13 +58,16 @@ def test_app_bootstrap_service_returns_client_contract():
     assert "scene_graph" not in payload["scene"]
     assert payload["traffic"]["client_policy"]["usage"] == "cold_start_only"
     assert payload["traffic"]["client_policy"]["events_endpoint"] == "/api/v1/events"
+    assert payload["traffic"]["client_policy"]["large_event_policy"]["slope_grid_payload"] == "metadata_sse"
     assert payload["capabilities"]["exploration"] is True
     assert payload["media"]["webrtc_available"] is True
+    assert payload["media"]["camera_ws"] == "/ws/camera"
     assert payload["capabilities_endpoint"] == "/api/v1/app/capabilities"
     assert payload["links"]["state"] == "/api/v1/state"
     assert payload["links"]["localization_status"] == "/api/v1/localization/status"
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
+    assert payload["links"]["camera_ws"] == "/ws/camera"
 
     capabilities = build_app_capabilities(gateway)
 
@@ -88,6 +91,17 @@ def test_app_bootstrap_service_returns_client_contract():
     assert capabilities["endpoints"]["map"]["map_lifecycle"]["method"] == "POST"
     assert capabilities["probes"]["readiness"]["path"] == "/ready"
     assert capabilities["realtime"]["events"]["transport"] == "sse"
+    assert capabilities["realtime"]["events"]["event_schema"] == "SSEEventEnvelope"
+    assert capabilities["realtime"]["events"]["event_id_field"] == "event_id"
+    assert capabilities["realtime"]["events"]["retry_ms"] == 3000
+    assert capabilities["realtime"]["events"]["replay_supported"] is False
+    assert capabilities["realtime"]["events"]["last_event_id_header"] == "Last-Event-ID"
+    assert capabilities["realtime"]["events"]["large_event_policy"]["point_cloud_payload"] == "binary_websocket"
+    assert capabilities["realtime"]["teleop"]["binary_camera_frames"] is False
+    assert capabilities["realtime"]["teleop"]["legacy_camera_query"] == "?video=1"
+    assert capabilities["realtime"]["camera"]["path"] == "/ws/camera"
+    assert capabilities["realtime"]["camera"]["binary_camera_frames"] is True
+    assert capabilities["endpoints"]["realtime"]["camera"]["method"] == "WS"
     assert capabilities["client_policy"]["retry_safe_when_request_id_present"] is True
     assert capabilities["client_policy"]["commands"]["idempotency_supported"] is True
 
@@ -314,12 +328,95 @@ def test_app_web_events_stream_starts_with_snapshot_contract():
 
     response, chunk = asyncio.run(read_first_event(gateway))
     line = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
-    payload = json.loads(line.strip().removeprefix("data: "))
+    data_line = next(item for item in line.splitlines() if item.startswith("data: "))
+    payload = json.loads(data_line.removeprefix("data: "))
 
     assert response.media_type == "text/event-stream"
     assert payload["type"] == "snapshot"
     assert payload["data"]["odometry"]["x"] == 1.0
+    assert payload["schema_version"] == 1
+    assert payload["event_id"] == 1
+    assert payload["ts"] > 0
     assert payload["data"]["mission"]["state"] == "idle"
     assert payload["data"]["mode"] == "manual"
     assert payload["data"]["session"]["mode"] in {"idle", "navigating", "mapping"}
+    assert gateway._traffic_stats_snapshot()["sse"]["clients"] == 0
+
+
+def test_app_web_events_stream_uses_sse_ids_without_named_event_type():
+    from gateway.gateway_module import GatewayModule
+
+    async def read_first_event(gateway):
+        route = next(
+            route
+            for route in gateway._app.routes
+            if route.path == "/api/v1/events"
+        )
+        response = await route.endpoint()
+        iterator = response.body_iterator
+        try:
+            chunk = await iterator.__anext__()
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
+        return chunk
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    chunk = asyncio.run(read_first_event(gateway))
+    text = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+
+    assert text.startswith("retry: 3000\nid: 1\ndata: ")
+    assert "\nevent:" not in text
+    data_line = next(line for line in text.splitlines() if line.startswith("data: "))
+    payload = json.loads(data_line.removeprefix("data: "))
+
+    assert payload["type"] == "snapshot"
+    assert payload["schema_version"] == 1
+    assert payload["event_id"] == 1
+
+
+def test_app_web_events_reconnect_snapshot_uses_latest_state_and_monotonic_id():
+    from gateway.gateway_module import GatewayModule
+
+    async def read_first_payload(gateway):
+        route = next(
+            route
+            for route in gateway._app.routes
+            if route.path == "/api/v1/events"
+        )
+        response = await route.endpoint()
+        iterator = response.body_iterator
+        try:
+            chunk = await iterator.__anext__()
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
+        text = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        data_line = next(line for line in text.splitlines() if line.startswith("data: "))
+        return json.loads(data_line.removeprefix("data: "))
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0, "yaw": 0.25}
+        gateway._mission = {"state": "idle"}
+
+    first = asyncio.run(read_first_payload(gateway))
+
+    with gateway._state_lock:
+        gateway._odom = {"x": 3.0, "y": 4.0, "yaw": 0.5}
+        gateway._mission = {"state": "running", "goal": "dock"}
+
+    second = asyncio.run(read_first_payload(gateway))
+
+    assert first["type"] == "snapshot"
+    assert second["type"] == "snapshot"
+    assert second["event_id"] > first["event_id"]
+    assert second["data"]["odometry"]["x"] == 3.0
+    assert second["data"]["mission"]["state"] == "running"
+    assert second["data"]["mission"]["goal"] == "dock"
     assert gateway._traffic_stats_snapshot()["sse"]["clients"] == 0

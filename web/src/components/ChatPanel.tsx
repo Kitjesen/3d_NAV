@@ -159,12 +159,12 @@ export function ChatPanel({ sseState }: ChatPanelProps) {
     try {
       const res = await api.sendInstruction(text)
       if (!res.ok) {
-        addSystem(`错误：${res.status}`)
+        addSystem(api.formatCommandAck(res, '指令'))
         setThinking(null)
       }
       // else: thinking bubble stays visible until agent_message arrives
-    } catch (e) {
-      addSystem(`网络错误：${String(e)}`)
+    } catch (e: unknown) {
+      addSystem(api.formatCommandError(e, '指令发送失败'))
       setThinking(null)
     } finally {
       setSending(false)

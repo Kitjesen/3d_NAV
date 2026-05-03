@@ -571,9 +571,25 @@ class SlamBridgeModule(Module, layer=1):
 
             svc = get_service_manager()
             if backend == "super_lio":
-                svc.stop("slam", "slam_pgo", "localizer", "super_lio")
+                svc.stop(
+                    "slam",
+                    "slam_pgo",
+                    "localizer",
+                    "super_lio",
+                    "super_lio_relocation",
+                )
                 svc.ensure("lidar", "super_lio")
                 svc.wait_ready("lidar", "super_lio", timeout=15.0)
+            elif backend == "super_lio_relocation":
+                svc.stop(
+                    "slam",
+                    "slam_pgo",
+                    "localizer",
+                    "super_lio",
+                    "super_lio_relocation",
+                )
+                svc.ensure("lidar", "super_lio_relocation")
+                svc.wait_ready("lidar", "super_lio_relocation", timeout=15.0)
             elif backend == "localizer":
                 svc.stop("localizer")
                 svc.ensure("slam", "localizer")
@@ -590,7 +606,11 @@ class SlamBridgeModule(Module, layer=1):
         except Exception as e:
             logger.warning("Drift guard: service_manager restart failed: %s", e)
 
-        service = "super_lio" if backend == "super_lio" else "slam"
+        service = (
+            "robot-super-lio-relocation.service"
+            if backend == "super_lio_relocation"
+            else "super_lio" if backend == "super_lio" else "slam"
+        )
         try:
             subprocess.run(
                 ["sudo", "systemctl", "restart", service],
@@ -741,6 +761,18 @@ class SlamBridgeModule(Module, layer=1):
                 "recovery_method": "restart_super_lio",
                 "recovery_action": "restart_super_lio",
             }
+        if backend == "super_lio_relocation":
+            return {
+                "backend": "super_lio_relocation",
+                "health_source": "odom_map_cloud",
+                "map_save_supported": False,
+                "map_save_source": "active_map",
+                "relocalization_supported": False,
+                "saved_map_relocalization_supported": False,
+                "restart_recovery_supported": True,
+                "recovery_method": "restart_super_lio_relocation",
+                "recovery_action": "restart_super_lio_relocation",
+            }
         if backend == "localizer":
             return {
                 "backend": "localizer",
@@ -813,8 +845,15 @@ class SlamBridgeModule(Module, layer=1):
             from core.service_manager import get_service_manager
 
             services = get_service_manager().status(
-                "super_lio", "slam_pgo", "localizer", "slam"
+                "super_lio_relocation",
+                "super_lio",
+                "slam_pgo",
+                "localizer",
+                "slam",
             )
+            if services.get("super_lio_relocation") in ("running", "active"):
+                self._backend_detect_cache = "super_lio_relocation"
+                return "super_lio_relocation"
             if services.get("super_lio") in ("running", "active"):
                 self._backend_detect_cache = "super_lio"
                 return "super_lio"

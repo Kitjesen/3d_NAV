@@ -102,12 +102,29 @@ def _as_optional_bool(value: Any) -> bool | None:
 
 def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
     backend = str(backend_name or "").strip().lower()
+    backend = {
+        "super-lio": "super_lio",
+        "superlio": "super_lio",
+        "super_lio_reloc": "super_lio_relocation",
+        "super-lio-reloc": "super_lio_relocation",
+        "superlio-reloc": "super_lio_relocation",
+        "super-lio-relocation": "super_lio_relocation",
+        "superlio-relocation": "super_lio_relocation",
+        "relocation": "super_lio_relocation",
+    }.get(backend, backend)
     if backend == "super_lio":
         return {
             "relocalization_supported": False,
             "saved_map_relocalization_supported": False,
             "restart_recovery_supported": True,
             "recovery_method": "restart_super_lio",
+        }
+    if backend == "super_lio_relocation":
+        return {
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_super_lio_relocation",
         }
     if backend == "localizer":
         return {
