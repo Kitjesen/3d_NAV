@@ -436,6 +436,21 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/mode", method="post"
     ).endswith("/ControlCommandResponse")
+    for path in (
+        "/api/v1/goal",
+        "/api/v1/navigate/click",
+        "/api/v1/cmd_vel",
+        "/api/v1/stop",
+        "/api/v1/instruction",
+        "/api/v1/mode",
+        "/api/v1/lease",
+    ):
+        assert _schema_ref_for(
+            openapi, path, status="409", method="post"
+        ).endswith("/GatewayErrorResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/lease", status="403", method="post"
+    ).endswith("/GatewayErrorResponse")
     assert _schema_ref_for(
         openapi, "/api/v1/auth/login", method="post"
     ).endswith("/AuthLoginResponse")

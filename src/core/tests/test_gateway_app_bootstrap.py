@@ -189,6 +189,7 @@ def test_app_capabilities_enriches_specs_from_openapi():
     path = capabilities["endpoints"]["state"]["path"]
     localization = capabilities["endpoints"]["state"]["localization_status"]
     navigation = capabilities["endpoints"]["state"]["navigation_status"]
+    control = capabilities["endpoints"]["control"]
     goal = capabilities["endpoints"]["control"]["goal"]
     map_list = capabilities["endpoints"]["map"]["maps"]
     session_start = capabilities["endpoints"]["map"]["session_start"]
@@ -211,6 +212,9 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert navigation["response_schema"] == "NavigationStatusResponse"
     assert goal["request_schema"] == "GoalRequest"
     assert goal["response_schema"] == "ControlCommandResponse"
+    for name in ("goal", "navigate_click", "stop", "instruction", "mode", "lease"):
+        assert "409" in control[name]["status_codes"]
+    assert "403" in control["lease"]["status_codes"]
     assert map_list["path"] == "/api/v1/slam/maps"
     assert map_list["response_schema"] == "MapListResponse"
     assert session_start["request_schema"] == "SessionStartRequest"

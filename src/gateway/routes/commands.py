@@ -22,6 +22,16 @@ from gateway.schemas import (
 )
 
 
+CONTROL_COMMAND_ERROR_RESPONSES = {
+    409: {"model": GatewayErrorResponse},
+}
+
+LEASE_ERROR_RESPONSES = {
+    403: {"model": GatewayErrorResponse},
+    409: {"model": GatewayErrorResponse},
+}
+
+
 def _command_rejected_response(
     command: str,
     body: Any,
@@ -81,6 +91,7 @@ def register_command_routes(app, gw) -> None:
         "/api/v1/goal",
         summary="Send navigation goal",
         response_model=ControlCommandResponse,
+        responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_goal(body: GoalRequest):
         rejection = _goal_readiness_rejection(gw, "goal", body)
@@ -108,6 +119,7 @@ def register_command_routes(app, gw) -> None:
         "/api/v1/navigate/click",
         summary="Navigate to map-viewer click point",
         response_model=ControlCommandResponse,
+        responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_navigate_click(body: ClickNavRequest):
         rejection = _goal_readiness_rejection(gw, "navigate_click", body)
@@ -133,6 +145,7 @@ def register_command_routes(app, gw) -> None:
         "/api/v1/cmd_vel",
         summary="Direct velocity command",
         response_model=ControlCommandResponse,
+        responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_cmd_vel(body: CmdVelRequest):
         def _publish() -> dict[str, Any]:
@@ -150,6 +163,7 @@ def register_command_routes(app, gw) -> None:
         "/api/v1/stop",
         summary="Emergency stop",
         response_model=ControlCommandResponse,
+        responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_stop(body: StopRequest | None = None):
         def _publish() -> dict[str, Any]:
@@ -163,6 +177,7 @@ def register_command_routes(app, gw) -> None:
         "/api/v1/instruction",
         summary="Natural language navigation instruction",
         response_model=ControlCommandResponse,
+        responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_instruction(body: InstructionRequest):
         def _publish() -> dict[str, Any]:
@@ -175,6 +190,7 @@ def register_command_routes(app, gw) -> None:
         "/api/v1/mode",
         summary="Switch operating mode",
         response_model=ControlCommandResponse,
+        responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_mode(body: ModeRequest):
         def _publish() -> dict[str, Any]:
@@ -192,10 +208,7 @@ def register_command_routes(app, gw) -> None:
         "/api/v1/lease",
         summary="Acquire/release/renew control lease",
         response_model=LeaseResponse,
-        responses={
-            403: {"model": GatewayErrorResponse},
-            409: {"model": GatewayErrorResponse},
-        },
+        responses=LEASE_ERROR_RESPONSES,
     )
     async def post_lease(body: LeaseRequest):
         def _apply() -> dict[str, Any]:
