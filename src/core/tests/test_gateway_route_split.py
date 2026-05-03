@@ -136,6 +136,7 @@ def test_command_routes_register_expected_paths():
     register_command_routes(app, SimpleNamespace())
 
     routes = {getattr(route, "path", ""): route for route in app.routes}
+    assert "/api/v1/navigation/plan" in routes
     assert "/api/v1/goal" in routes
     assert "/api/v1/navigate/click" in routes
     assert "/api/v1/cmd_vel" in routes
@@ -229,6 +230,7 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/slam/maps"] == 1
     assert counts["/api/v1/map/points"] == 1
     assert counts["/api/v1/map_cloud/reset"] == 1
+    assert counts["/api/v1/navigation/plan"] == 1
     assert counts["/api/v1/goal"] == 1
     assert counts["/api/v1/navigate/click"] == 1
     assert counts["/api/v1/cmd_vel"] == 1
@@ -269,6 +271,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/map/points",
         "/api/v1/maps/{name}/points",
         "/api/v1/map_cloud/reset",
+        "/api/v1/navigation/plan",
         "/api/v1/goal",
         "/api/v1/navigate/click",
         "/api/v1/cmd_vel",
@@ -359,6 +362,8 @@ def test_openapi_exposes_client_response_models():
     assert "ControlCommandResponse" in schemas
     assert "GatewayErrorResponse" in schemas
     assert "CommandReceipt" in schemas
+    assert "PlanPreviewRequest" in schemas
+    assert "PlanPreviewResponse" in schemas
     assert "SceneGraphResponse" in schemas
     assert "SceneGraphObject" in schemas
     assert "SceneGraphRelation" in schemas
@@ -424,6 +429,12 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/goal", method="post"
     ).endswith("/ControlCommandResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/navigation/plan", method="post"
+    ).endswith("/PlanPreviewResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/navigation/plan"
+    ).endswith("/PlanPreviewRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/cmd_vel", method="post"
     ).endswith("/ControlCommandResponse")
@@ -594,6 +605,12 @@ def test_openapi_exposes_client_response_models():
     assert schemas["PathResponse"]["properties"]["path"]["items"]["$ref"].endswith(
         "/PathPoint"
     )
+    assert schemas["PlanPreviewResponse"]["properties"]["goal"]["$ref"].endswith(
+        "/PathPoint"
+    )
+    assert schemas["PlanPreviewResponse"]["properties"]["path"]["items"][
+        "$ref"
+    ].endswith("/PathPoint")
     assert schemas["NavigationStatusResponse"]["properties"]["control"]["$ref"].endswith(
         "/NavigationControlSummary"
     )
@@ -667,6 +684,7 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["state"]["health"],
         capabilities["endpoints"]["app"]["bootstrap"],
         capabilities["endpoints"]["app"]["capabilities"],
+        capabilities["endpoints"]["control"]["navigation_plan"],
     ]
     for spec in key_specs:
         assert spec["response_schema"]

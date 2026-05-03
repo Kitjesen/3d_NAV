@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -12,15 +13,10 @@ def _endpoint(gateway, path: str):
     return next(route.endpoint for route in gateway._app.routes if route.path == path)
 
 
-def test_command_journal_replays_duplicate_request_id_without_republish():
-    from gateway.gateway_module import GatewayModule, GoalRequest
-    from gateway.schemas import ControlCommandResponse
-
-    gateway = GatewayModule()
-    gateway.setup()
+def _mark_navigation_ready(gateway) -> None:
     gateway._icp_quality = 0.03
     with gateway._state_lock:
-        gateway._odom = {"x": 0.0}
+        gateway._odom = {"x": 0.0, "y": 0.0, "z": 0.0, "ts": time.time()}
         gateway._mission = {"state": "IDLE"}
         gateway._localization_status = {
             "state": "TRACKING",
@@ -29,6 +25,123 @@ def test_command_journal_replays_duplicate_request_id_without_republish():
             "odom_age_ms": 100.0,
             "localizer_health": "RECOVERED",
         }
+
+
+class _FakePlanPreviewNav:
+    def __init__(self) -> None:
+        self.calls: list[tuple[float, float, float]] = []
+
+    def preview_plan(self, x: float, y: float, z: float) -> dict:
+        self.calls.append((x, y, z))
+        ts = time.time()
+        return {
+            "schema_version": 1,
+            "ok": True,
+            "feasible": True,
+            "frame_id": "map",
+            "start": {"x": 0.0, "y": 0.0, "z": 0.0, "frame_id": "map", "ts": ts},
+            "goal": {"x": x, "y": y, "z": z, "frame_id": "map", "ts": ts},
+            "adjusted_goal": None,
+            "path": [
+                {"x": 0.0, "y": 0.0, "z": 0.0, "frame_id": "map", "ts": ts},
+                {"x": x, "y": y, "z": z, "frame_id": "map", "ts": ts},
+            ],
+            "count": 2,
+            "distance_m": 1.0,
+            "plan_ms": 0.5,
+            "planner": "fake",
+            "source": "navigation_preview",
+            "reasons": [],
+            "error": None,
+            "ts": ts,
+        }
+
+
+def test_navigation_plan_preview_is_non_motion_and_typed():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import PlanPreviewRequest, PlanPreviewResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    post_plan = _endpoint(gateway, "/api/v1/navigation/plan")
+
+    result = asyncio.run(
+        post_plan(
+            PlanPreviewRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                client_id="web",
+            )
+        )
+    )
+    model = PlanPreviewResponse.model_validate(result)
+
+    assert nav.calls == [(1.0, 2.0, 0.0)]
+    assert model.schema_version == 1
+    assert model.ok is True
+    assert model.feasible is True
+    assert model.path[-1].x == 1.0
+    assert gateway.goal_pose.msg_count == 0
+    assert gateway.cmd_vel.msg_count == 0
+
+
+def test_navigation_plan_preview_degrades_without_odometry_and_does_not_plan():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import PlanPreviewRequest, PlanPreviewResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    post_plan = _endpoint(gateway, "/api/v1/navigation/plan")
+
+    result = asyncio.run(post_plan(PlanPreviewRequest(x=1.0, y=2.0)))
+    model = PlanPreviewResponse.model_validate(result)
+
+    assert nav.calls == []
+    assert model.ok is True
+    assert model.feasible is False
+    assert "odometry_missing" in model.reasons
+    assert model.goal.x == 1.0
+    assert model.path == []
+    assert gateway.goal_pose.msg_count == 0
+
+
+def test_navigation_plan_preview_omits_invalid_start_when_unavailable():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import PlanPreviewRequest, PlanPreviewResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    gateway._mode = "estop"
+    with gateway._state_lock:
+        gateway._odom = {"x": "bad", "y": 0.0, "z": 0.0, "ts": time.time()}
+    post_plan = _endpoint(gateway, "/api/v1/navigation/plan")
+
+    result = asyncio.run(post_plan(PlanPreviewRequest(x=1.0, y=2.0)))
+    model = PlanPreviewResponse.model_validate(result)
+
+    assert nav.calls == []
+    assert model.feasible is False
+    assert model.start is None
+    assert "estop_active" in model.reasons
+    assert gateway.goal_pose.msg_count == 0
+
+
+def test_command_journal_replays_duplicate_request_id_without_republish():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import ControlCommandResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    _mark_navigation_ready(gateway)
     post_goal = _endpoint(gateway, "/api/v1/goal")
 
     body = GoalRequest(

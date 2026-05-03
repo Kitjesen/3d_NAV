@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -25,6 +27,34 @@ class _FakePlanner:
 
     def update_map(self, *args, **kwargs) -> None:
         pass
+
+
+class _BrokenPlannerStatus:
+    @property
+    def is_ready(self) -> bool:
+        raise RuntimeError("planner status unavailable")
+
+    @property
+    def has_map(self) -> bool:
+        return True
+
+    def plan(self, start: np.ndarray, goal: np.ndarray):
+        raise AssertionError("planner should not run when status is unavailable")
+
+
+class _NonfinitePathPlanner(_FakePlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray):
+        return [start.copy(), np.array([np.nan, 1.0, 0.0])], 1.0
+
+
+class _NonfiniteTimingPlanner(_FakePlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray):
+        return [start.copy(), goal.copy()], float("nan")
+
+
+class _OverflowDistancePlanner(_FakePlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray):
+        return [start.copy(), np.array([1e308, 0.0, 0.0])], 1.0
 
 
 class _GridBackend:
@@ -56,6 +86,68 @@ def test_navigation_goal_publishes_global_path_and_first_waypoint():
     assert len(waypoints) == 1
     assert waypoints[0].pose.position.x == 2.5
     assert states[-1]["state"] == "EXECUTING"
+
+
+def test_navigation_plan_preview_does_not_mutate_mission_or_publish_ports():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _FakePlanner()
+
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+    initial_state = nav._state
+
+    preview = nav.preview_plan(5.0, 0.0, 0.0)
+
+    assert preview["ok"] is True
+    assert preview["feasible"] is True
+    assert preview["count"] == 3
+    assert preview["path"][-1]["x"] == 5.0
+    assert preview["distance_m"] == 5.0
+    assert nav._state == initial_state
+    assert nav._goal is None
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
+    assert nav.recovery_cmd_vel.msg_count == 0
+
+
+def test_navigation_plan_preview_degrades_when_planner_status_fails():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _BrokenPlannerStatus()
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+
+    preview = nav.preview_plan(1.0, 0.0, 0.0)
+
+    assert preview["ok"] is True
+    assert preview["feasible"] is False
+    assert preview["reasons"] == ["planner_status_unavailable"]
+    assert "planner status unavailable" in preview["error"]
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
+
+
+@pytest.mark.parametrize(
+    ("planner", "reason"),
+    [
+        (_NonfinitePathPlanner(), "planner_returned_nonfinite_path"),
+        (_NonfiniteTimingPlanner(), "planner_returned_invalid_timing"),
+        (_OverflowDistancePlanner(), "planner_returned_invalid_distance"),
+    ],
+)
+def test_navigation_plan_preview_rejects_invalid_planner_output(planner, reason):
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = planner
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+
+    preview = nav.preview_plan(1.0, 0.0, 0.0)
+
+    json.dumps(preview, allow_nan=False)
+    assert preview["ok"] is True
+    assert preview["feasible"] is False
+    assert preview["reasons"] == [reason]
+    assert preview["path"] == []
+    assert preview["distance_m"] is None
+    assert preview["plan_ms"] is None
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
 
 
 def test_global_planner_safe_goal_bfs_adjusts_obstacle_goal():

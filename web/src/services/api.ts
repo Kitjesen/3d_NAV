@@ -12,6 +12,8 @@ import type {
   LocationsResponse,
   MapInfo,
   PathResponse,
+  PlanPreviewRequest,
+  PlanPreviewResponse,
   SceneGraphResponse,
   SessionEvent,
   SlamProfile,
@@ -174,6 +176,20 @@ export async function sendGoal(x: number, y: number): Promise<ControlCommandResp
     '/api/v1/goal',
     commandBody('goal', { x, y }),
   )
+}
+
+export async function previewNavigationPlan(
+  x: number,
+  y: number,
+  z = 0,
+): Promise<PlanPreviewResponse> {
+  const body: PlanPreviewRequest = {
+    x,
+    y,
+    z,
+    client_id: WEB_CLIENT_ID,
+  }
+  return postJson<PlanPreviewResponse>('/api/v1/navigation/plan', body)
 }
 
 export async function sendStop(): Promise<ControlCommandResponse> {

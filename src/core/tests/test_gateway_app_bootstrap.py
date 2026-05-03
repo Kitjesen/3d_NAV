@@ -66,6 +66,7 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["links"]["state"] == "/api/v1/state"
     assert payload["links"]["localization_status"] == "/api/v1/localization/status"
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
+    assert payload["links"]["navigation_plan"] == "/api/v1/navigation/plan"
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
     assert payload["links"]["camera_ws"] == "/ws/camera"
     assert payload["links"]["session_start"] == "/api/v1/session/start"
@@ -89,6 +90,7 @@ def test_app_bootstrap_service_returns_client_contract():
         == "/api/v1/navigation/status"
     )
     assert capabilities["endpoints"]["control"]["goal"]["method"] == "POST"
+    assert capabilities["endpoints"]["control"]["navigation_plan"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["maps"]["path"] == "/api/v1/slam/maps"
     assert capabilities["endpoints"]["map"]["map_lifecycle"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["map_activate"]["path"] == "/api/v1/map/activate"
@@ -190,6 +192,7 @@ def test_app_capabilities_enriches_specs_from_openapi():
     localization = capabilities["endpoints"]["state"]["localization_status"]
     navigation = capabilities["endpoints"]["state"]["navigation_status"]
     control = capabilities["endpoints"]["control"]
+    navigation_plan = capabilities["endpoints"]["control"]["navigation_plan"]
     goal = capabilities["endpoints"]["control"]["goal"]
     map_list = capabilities["endpoints"]["map"]["maps"]
     session_start = capabilities["endpoints"]["map"]["session_start"]
@@ -210,6 +213,8 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert path["response_schema"] == "PathResponse"
     assert localization["response_schema"] == "LocalizationStatusResponse"
     assert navigation["response_schema"] == "NavigationStatusResponse"
+    assert navigation_plan["request_schema"] == "PlanPreviewRequest"
+    assert navigation_plan["response_schema"] == "PlanPreviewResponse"
     assert goal["request_schema"] == "GoalRequest"
     assert goal["response_schema"] == "ControlCommandResponse"
     for name in ("goal", "navigate_click", "stop", "instruction", "mode", "lease"):

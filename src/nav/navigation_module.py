@@ -601,6 +601,178 @@ class NavigationModule(Module, layer=5):
 
     # ── Planning ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _preview_path_point(
+        point: Any,
+        *,
+        frame_id: str = "map",
+        ts: float | None = None,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        arr = np.asarray(point, dtype=float).reshape(-1)
+        metadata: dict[str, Any] = {}
+        if index is not None:
+            metadata["index"] = index
+        return {
+            "x": float(arr[0]) if arr.size >= 1 and np.isfinite(arr[0]) else 0.0,
+            "y": float(arr[1]) if arr.size >= 2 and np.isfinite(arr[1]) else 0.0,
+            "z": float(arr[2]) if arr.size >= 3 and np.isfinite(arr[2]) else 0.0,
+            "frame_id": frame_id,
+            "ts": ts,
+            "metadata": metadata,
+        }
+
+    @staticmethod
+    def _preview_path_array(point: Any) -> np.ndarray | None:
+        try:
+            arr = np.asarray(point, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if arr.size < 2 or not np.all(np.isfinite(arr)):
+            return None
+        if arr.size < 3:
+            return np.pad(arr[:2], (0, 1), constant_values=0.0)
+        return arr[:3].copy()
+
+    @staticmethod
+    def _preview_path_distance(path: list[np.ndarray]) -> float:
+        if len(path) < 2:
+            return 0.0
+        total = 0.0
+        for prev, curr in zip(path, path[1:]):
+            a = np.asarray(prev, dtype=float).reshape(-1)
+            b = np.asarray(curr, dtype=float).reshape(-1)
+            if a.size >= 2 and b.size >= 2:
+                with np.errstate(over="ignore", invalid="ignore"):
+                    total += float(np.linalg.norm(b[:2] - a[:2]))
+        return total
+
+    def preview_plan(self, x: float, y: float, z: float = 0.0) -> dict[str, Any]:
+        """Return a client-facing path preview without changing mission state.
+
+        This intentionally avoids _set_state(), tracker updates, and all output
+        ports so App/Web clients can validate a candidate goal before sending a
+        real navigation command.
+        """
+        ts = time.time()
+        planner = self._planner_svc
+        start = np.asarray(self._robot_pos, dtype=float).reshape(-1)[:3].copy()
+        if start.size < 3:
+            start = np.pad(start, (0, 3 - start.size), constant_values=0.0)
+        goal = np.array([x, y, z], dtype=float)
+        result: dict[str, Any] = {
+            "schema_version": 1,
+            "ok": True,
+            "feasible": False,
+            "frame_id": "map",
+            "start": self._preview_path_point(start, ts=ts),
+            "goal": self._preview_path_point(goal, ts=ts),
+            "adjusted_goal": None,
+            "path": [],
+            "count": 0,
+            "distance_m": None,
+            "plan_ms": None,
+            "planner": getattr(planner, "_planner_name", None),
+            "source": "navigation_preview",
+            "reasons": [],
+            "error": None,
+            "ts": ts,
+        }
+
+        if not np.all(np.isfinite(start)):
+            result["reasons"] = ["odometry_invalid"]
+            result["error"] = "current robot position is not finite"
+            return result
+        if not np.all(np.isfinite(goal)):
+            result["ok"] = False
+            result["reasons"] = ["goal_invalid"]
+            result["error"] = "goal position is not finite"
+            return result
+        try:
+            planner_ready = bool(getattr(planner, "is_ready", False))
+            planner_has_map = bool(getattr(planner, "has_map", False))
+        except Exception as exc:
+            result["reasons"] = ["planner_status_unavailable"]
+            result["error"] = str(exc)
+            return result
+        if not planner_ready:
+            reasons = ["planner_not_ready"]
+            if not planner_has_map:
+                reasons.append("map_unavailable")
+            result["reasons"] = reasons
+            return result
+
+        try:
+            path, plan_ms = planner.plan(start, goal)
+        except Exception as exc:
+            logger.warning("NavigationModule: plan preview failed: %s", exc)
+            result["reasons"] = ["planning_failed"]
+            result["error"] = str(exc)
+            return result
+
+        try:
+            path_points = list(path) if path is not None else []
+        except TypeError:
+            result["reasons"] = ["planner_returned_invalid_path"]
+            result["error"] = "planner returned a non-iterable path"
+            return result
+        if not path_points:
+            result["reasons"] = ["empty_path"]
+            result["error"] = "planner returned empty path"
+            return result
+
+        path_arrays: list[np.ndarray] = []
+        for point in path_points:
+            arr = self._preview_path_array(point)
+            if arr is None:
+                result["reasons"] = ["planner_returned_nonfinite_path"]
+                result["error"] = "planner returned a non-finite path point"
+                return result
+            path_arrays.append(arr)
+
+        try:
+            plan_ms_value = float(plan_ms)
+        except (TypeError, ValueError):
+            result["reasons"] = ["planner_returned_invalid_timing"]
+            result["error"] = "planner returned an invalid plan_ms value"
+            return result
+        if not math.isfinite(plan_ms_value):
+            result["reasons"] = ["planner_returned_invalid_timing"]
+            result["error"] = "planner returned a non-finite plan_ms value"
+            return result
+
+        distance_m = self._preview_path_distance(path_arrays)
+        if not math.isfinite(distance_m):
+            result["reasons"] = ["planner_returned_invalid_distance"]
+            result["error"] = "planner returned a path with non-finite distance"
+            return result
+
+        serialized = [
+            self._preview_path_point(point, ts=ts, index=index)
+            for index, point in enumerate(path_arrays)
+        ]
+        final = path_arrays[-1]
+        adjusted_goal = None
+        with np.errstate(over="ignore", invalid="ignore"):
+            goal_delta = float(np.linalg.norm(final[:2] - goal[:2]))
+        if not math.isfinite(goal_delta):
+            result["reasons"] = ["planner_returned_invalid_distance"]
+            result["error"] = "planner returned a path with non-finite goal distance"
+            return result
+        if goal_delta > 0.05:
+            adjusted_goal = self._preview_path_point(final, ts=ts)
+
+        result.update({
+            "feasible": True,
+            "path": serialized,
+            "count": len(serialized),
+            "distance_m": distance_m,
+            "plan_ms": plan_ms_value,
+            "adjusted_goal": adjusted_goal,
+            "reasons": ["goal_adjusted"] if adjusted_goal is not None else [],
+        })
+        return result
+
     def _plan(self) -> None:
         if self._goal is None:
             self._set_state(MissionState.FAILED)

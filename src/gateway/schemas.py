@@ -52,6 +52,22 @@ class ClickNavRequest(BaseModel):
     client_id: str = Field(default="unknown", max_length=128)
 
 
+class PlanPreviewRequest(BaseModel):
+    x: float
+    y: float
+    z: float = 0.0
+    client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z")
+    @classmethod
+    def finite(cls, v: float) -> float:
+        import math
+
+        if not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
+
+
 class CmdVelRequest(BaseModel):
     vx: float
     vy: float = 0.0
@@ -375,6 +391,25 @@ class PathResponse(GatewayResponseModel):
     frame_id: str = "map"
     ts: float | None = None
     source: str = "gateway_cache"
+
+
+class PlanPreviewResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool = True
+    feasible: bool = False
+    frame_id: str = "map"
+    start: PathPoint | None = None
+    goal: PathPoint
+    adjusted_goal: PathPoint | None = None
+    path: list[PathPoint] = Field(default_factory=list)
+    count: int = 0
+    distance_m: float | None = None
+    plan_ms: float | None = None
+    planner: str | None = None
+    source: str = "navigation_preview"
+    reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+    ts: float
 
 
 class LocalizationStatusResponse(GatewayResponseModel):

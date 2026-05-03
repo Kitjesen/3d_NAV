@@ -129,6 +129,32 @@ export interface PathResponse {
   source: string
 }
 
+export interface PlanPreviewRequest {
+  x: number
+  y: number
+  z?: number
+  client_id?: string
+}
+
+export interface PlanPreviewResponse {
+  schema_version: number
+  ok: boolean
+  feasible: boolean
+  frame_id: string
+  start: PathPoint | null
+  goal: PathPoint
+  adjusted_goal?: PathPoint | null
+  path: PathPoint[]
+  count: number
+  distance_m?: number | null
+  plan_ms?: number | null
+  planner?: string | null
+  source: string
+  reasons: string[]
+  error?: string | null
+  ts: number
+}
+
 export interface ClientLinks {
   bootstrap?: string
   capabilities?: string
@@ -153,6 +179,7 @@ export interface ClientLinks {
   session?: string
   session_start?: string
   session_end?: string
+  navigation_plan?: string
   goal?: string
   navigate_click?: string
   stop?: string

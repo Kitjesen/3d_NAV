@@ -52,6 +52,7 @@ CLIENT_LINKS: dict[str, str] = {
     "go2rtc_status": "/api/v1/webrtc/go2rtc/status",
     "goal": "/api/v1/goal",
     "navigate_click": "/api/v1/navigate/click",
+    "navigation_plan": "/api/v1/navigation/plan",
     "stop": "/api/v1/stop",
     "instruction": "/api/v1/instruction",
     "mode": "/api/v1/mode",
@@ -108,6 +109,7 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         "cloud": {"method": "WS", "path": CLIENT_LINKS["cloud_ws"]},
     },
     "control": {
+        "navigation_plan": {"method": "POST", "path": CLIENT_LINKS["navigation_plan"]},
         "goal": {"method": "POST", "path": CLIENT_LINKS["goal"]},
         "navigate_click": {"method": "POST", "path": CLIENT_LINKS["navigate_click"]},
         "stop": {"method": "POST", "path": CLIENT_LINKS["stop"]},

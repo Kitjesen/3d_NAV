@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -18,6 +19,8 @@ from gateway.schemas import (
     LeaseRequest,
     LeaseResponse,
     ModeRequest,
+    PlanPreviewRequest,
+    PlanPreviewResponse,
     StopRequest,
 )
 
@@ -86,7 +89,110 @@ def _goal_readiness_rejection(gw, command: str, body: Any) -> JSONResponse | Non
     )
 
 
+def _point_payload(x: float, y: float, z: float, *, ts: float) -> dict[str, Any]:
+    return {
+        "x": float(x),
+        "y": float(y),
+        "z": float(z),
+        "frame_id": "map",
+        "ts": ts,
+        "metadata": {},
+    }
+
+
+def _current_start_payload(gw, *, ts: float) -> dict[str, Any] | None:
+    with gw._state_lock:
+        odom = dict(gw._odom) if gw._odom else None
+    if not odom:
+        return None
+    try:
+        x = float(odom.get("x", 0.0))
+        y = float(odom.get("y", 0.0))
+        z = float(odom.get("z", 0.0))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (x, y, z)):
+        return None
+    return _point_payload(
+        x,
+        y,
+        z,
+        ts=ts,
+    )
+
+
+def _plan_preview_unavailable(
+    gw,
+    body: PlanPreviewRequest,
+    *,
+    reasons: list[str],
+    source: str,
+    error: str | None = None,
+) -> dict[str, Any]:
+    ts = time.time()
+    return {
+        "schema_version": 1,
+        "ok": error is None,
+        "feasible": False,
+        "frame_id": "map",
+        "start": _current_start_payload(gw, ts=ts),
+        "goal": _point_payload(body.x, body.y, body.z, ts=ts),
+        "adjusted_goal": None,
+        "path": [],
+        "count": 0,
+        "distance_m": None,
+        "plan_ms": None,
+        "planner": None,
+        "source": source,
+        "reasons": list(dict.fromkeys(reasons)),
+        "error": error,
+        "ts": ts,
+    }
+
+
 def register_command_routes(app, gw) -> None:
+    @app.post(
+        "/api/v1/navigation/plan",
+        summary="Preview navigation plan without publishing a goal",
+        response_model=PlanPreviewResponse,
+    )
+    async def post_navigation_plan(body: PlanPreviewRequest):
+        from gateway.services.runtime_status import build_navigation_status
+
+        status = build_navigation_status(gw)
+        readiness = status.get("readiness", {})
+        blockers = list(readiness.get("blockers") or [])
+        if blockers or not bool(status.get("has_odometry", False)):
+            reasons = ["navigation_not_ready", *blockers]
+            if not bool(status.get("has_odometry", False)):
+                reasons.append("odometry_missing")
+            return _plan_preview_unavailable(
+                gw,
+                body,
+                reasons=reasons,
+                source="gateway_readiness",
+            )
+
+        nav = (getattr(gw, "_all_modules", {}) or {}).get("NavigationModule")
+        if nav is None or not hasattr(nav, "preview_plan"):
+            return _plan_preview_unavailable(
+                gw,
+                body,
+                reasons=["navigation_module_unavailable"],
+                source="gateway_modules",
+            )
+
+        try:
+            return nav.preview_plan(body.x, body.y, body.z)
+        except Exception as exc:
+            return _plan_preview_unavailable(
+                gw,
+                body,
+                reasons=["planning_preview_failed"],
+                source="gateway_exception",
+                error=str(exc),
+            )
+
     @app.post(
         "/api/v1/goal",
         summary="Send navigation goal",
