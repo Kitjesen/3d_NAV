@@ -316,7 +316,95 @@ class TestOccupancyGridModule(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 4. ElevationMapModule
+# 4. VoxelGridModule
+# ---------------------------------------------------------------------------
+
+from nav.voxel_grid_module import VoxelGridModule
+
+
+class TestVoxelGridModule(unittest.TestCase):
+
+    def _make_module(self, **kw):
+        defaults = dict(
+            voxel_size=1.0,
+            max_range=10.0,
+            min_z=-1.0,
+            max_z=2.0,
+            decay_rate=0.0,
+            publish_interval=999.0,
+        )
+        defaults.update(kw)
+        m = VoxelGridModule(**defaults)
+        m.setup()
+        return m
+
+    def test_cloud_update_accumulates_unique_voxel_counts_and_filters(self):
+        m = self._make_module()
+        m.odometry._deliver(
+            Odometry(
+                pose=Pose(
+                    position=Vector3(0, 0, 0),
+                    orientation=Quaternion(0, 0, 0, 1),
+                )
+            )
+        )
+        pts = np.array(
+            [
+                [0.1, 0.1, 0.1],
+                [0.2, 0.2, 0.2],
+                [1.2, 0.1, 0.1],
+                [20.0, 0.0, 0.0],
+                [0.0, 0.0, 3.0],
+            ],
+            dtype=np.float32,
+        )
+
+        m.map_cloud._deliver(PointCloud2.from_numpy(pts, frame_id="map"))
+
+        self.assertEqual(m.query_voxel(0.1, 0.1, 0.1)["count"], 2.0)
+        self.assertEqual(m.query_voxel(1.2, 0.1, 0.1)["count"], 1.0)
+        self.assertFalse(m.query_voxel(20.0, 0.0, 0.0)["occupied"])
+        self.assertFalse(m.query_voxel(0.0, 0.0, 3.0)["occupied"])
+
+    def test_duplicate_heavy_cloud_updates_one_voxel_without_python_point_loop(self):
+        m = self._make_module()
+        pts = np.repeat(
+            np.array([[0.25, 0.25, 0.25]], dtype=np.float32),
+            repeats=1000,
+            axis=0,
+        )
+
+        m.map_cloud._deliver(PointCloud2.from_numpy(pts, frame_id="map"))
+
+        stats = m.get_voxel_stats()
+        self.assertEqual(stats["total_voxels"], 1)
+        self.assertEqual(m.query_voxel(0.25, 0.25, 0.25)["count"], 1000.0)
+
+    def test_decay_publish_prunes_and_reports_columns(self):
+        m = self._make_module(decay_rate=0.5)
+        with m._lock:
+            m._voxels = {
+                (0, 0, 0): 4.0,
+                (0, 0, 1): 2.0,
+                (1, 1, 0): 1.0,
+            }
+        stats_payloads = []
+        cloud_payloads = []
+        m.voxel_map._add_callback(stats_payloads.append)
+        m.voxel_cloud._add_callback(cloud_payloads.append)
+
+        m._decay_and_publish()
+
+        self.assertEqual(len(stats_payloads), 1)
+        self.assertEqual(len(cloud_payloads), 1)
+        self.assertEqual(stats_payloads[0]["total_voxels"], 2)
+        self.assertEqual(stats_payloads[0]["column_count"], 1)
+        self.assertEqual(cloud_payloads[0].points.shape, (2, 3))
+        self.assertEqual(m.query_voxel(1.1, 1.1, 0.1)["count"], 0.0)
+
+
+# ---------------------------------------------------------------------------
+# 5. ElevationMapModule
 # ---------------------------------------------------------------------------
 
 from nav.elevation_map_module import ElevationMapModule
@@ -391,7 +479,7 @@ class TestElevationMapModule(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 5. ESDFModule
+# 6. ESDFModule
 # ---------------------------------------------------------------------------
 
 from nav.esdf_module import ESDFModule
@@ -454,7 +542,7 @@ class TestESDFModule(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 6. SafetyRingModule
+# 7. SafetyRingModule
 # ---------------------------------------------------------------------------
 
 from nav.safety_ring_module import SafetyRingModule

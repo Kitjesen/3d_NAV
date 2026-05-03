@@ -8,13 +8,22 @@ import pathlib
 import shutil
 import subprocess
 from datetime import datetime
+from typing import Any
 
 import numpy as np
 from fastapi import HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.responses import HTMLResponse
 
-from gateway.schemas import MapLifecycleResponse, MapListResponse, MapPointsResponse
+from gateway.schemas import (
+    MapLifecycleResponse,
+    MapListResponse,
+    MapNameRequest,
+    MapPointsResponse,
+    MapRenameRequest,
+    MapSaveRequest,
+)
+from gateway.services.map_paths import nav_map_root_str
 from gateway.services.map_safety import (
     apply_dynamic_filter_step1half,
     safe_map_name,
@@ -25,7 +34,15 @@ logger = logging.getLogger(__name__)
 
 
 def _map_dir() -> str:
-    return os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
+    return nav_map_root_str()
+
+
+def _body_mapping(body: Any) -> dict[str, Any]:
+    if hasattr(body, "model_dump"):
+        return body.model_dump(exclude_none=True)
+    if isinstance(body, dict):
+        return body
+    return {}
 
 
 def _safe_map_file(name: str, filename: str) -> pathlib.Path:
@@ -248,8 +265,9 @@ def register_map_routes(app, gw) -> None:
             500: {"model": MapLifecycleResponse},
         },
     )
-    async def restore_predufo(body: dict):
-        name = body.get("name", "")
+    async def restore_predufo(body: MapNameRequest):
+        payload = _body_mapping(body)
+        name = payload.get("name", "")
         err = safe_map_name(name)
         if err is not None:
             return JSONResponse({"success": False, "message": err}, status_code=400)
@@ -315,8 +333,9 @@ def register_map_routes(app, gw) -> None:
             500: {"model": MapLifecycleResponse},
         },
     )
-    async def activate_map(body: dict):
-        name = body.get("name", "")
+    async def activate_map(body: MapNameRequest):
+        payload = _body_mapping(body)
+        name = payload.get("name", "")
         err = safe_map_name(name)
         if err is not None:
             return JSONResponse({"success": False, "message": err}, status_code=400)
@@ -347,9 +366,10 @@ def register_map_routes(app, gw) -> None:
             500: {"model": MapLifecycleResponse},
         },
     )
-    async def rename_map(body: dict):
-        old = body.get("old_name", "")
-        new = body.get("new_name", "")
+    async def rename_map(body: MapRenameRequest):
+        payload = _body_mapping(body)
+        old = payload.get("old_name", "")
+        new = payload.get("new_name", "")
         err_old = safe_map_name(old)
         err_new = safe_map_name(new)
         if err_old or err_new:
@@ -375,7 +395,7 @@ def register_map_routes(app, gw) -> None:
             active_link = pathlib.Path(map_dir) / "active"
             if active_link.is_symlink() and active_link.resolve().name == old:
                 active_link.unlink()
-                active_link.symlink_to(new_path)
+                active_link.symlink_to(new)
             return {"success": True, "old_name": old, "new_name": new}
         except Exception as e:
             return JSONResponse({"success": False, "message": str(e)}, status_code=500)
@@ -389,10 +409,9 @@ def register_map_routes(app, gw) -> None:
             500: {"model": MapLifecycleResponse},
         },
     )
-    async def save_map_now(body: dict | None = None):
-        if body is None:
-            body = {}
-        name = body.get("name", "")
+    async def save_map_now(body: MapSaveRequest = MapSaveRequest()):
+        payload = _body_mapping(body)
+        name = payload.get("name", "")
         if not name:
             name = "map_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         err = safe_map_name(name)

@@ -5,19 +5,20 @@ from __future__ import annotations
 import logging
 import os
 import time
-from pathlib import Path
+from typing import Any
 
 from fastapi.responses import JSONResponse
 
-from gateway.schemas import SessionResponse, SessionTransitionResponse
+from gateway.schemas import (
+    SessionResponse,
+    SessionStartRequest,
+    SessionTransitionResponse,
+)
+from gateway.services.map_paths import nav_map_root
 from gateway.services.map_safety import safe_map_name
 
 
 logger = logging.getLogger(__name__)
-
-
-def _nav_map_root() -> Path:
-    return Path(os.environ.get("NAV_MAP_DIR", "~/data/nova/maps")).expanduser().resolve()
 
 _SLAM_PROFILE_ALIASES = {
     "super-lio": "super_lio",
@@ -30,6 +31,14 @@ _SLAM_PROFILE_ALIASES = {
     "superlio-relocation": "super_lio_relocation",
     "relocation": "super_lio_relocation",
 }
+
+
+def _body_mapping(body: Any) -> dict[str, Any]:
+    if hasattr(body, "model_dump"):
+        return body.model_dump(exclude_none=True)
+    if isinstance(body, dict):
+        return body
+    return {}
 
 
 def _normalize_slam_profile(profile: str) -> str:
@@ -62,11 +71,12 @@ def register_session_routes(app, gw) -> None:
             503: {"model": SessionTransitionResponse},
         },
     )
-    async def session_start(body: dict):
-        mode = (body.get("mode") or "").strip().lower()
-        map_name = body.get("map_name") or body.get("map") or ""
+    async def session_start(body: SessionStartRequest):
+        payload = _body_mapping(body)
+        mode = (payload.get("mode") or "").strip().lower()
+        map_name = payload.get("map_name") or payload.get("map") or ""
         slam_profile = (
-            body.get("slam_profile") or body.get("slam_backend") or ""
+            payload.get("slam_profile") or payload.get("slam_backend") or ""
         ).strip().lower()
         slam_profile = _normalize_slam_profile(slam_profile)
         if mode not in ("mapping", "navigating", "exploring"):
@@ -150,7 +160,7 @@ def register_session_routes(app, gw) -> None:
                     status_code=400,
                 )
 
-            map_root = _nav_map_root()
+            map_root = nav_map_root()
             base = (map_root / map_name).resolve()
             try:
                 base.relative_to(map_root)

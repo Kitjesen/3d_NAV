@@ -68,6 +68,8 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
     assert payload["links"]["camera_ws"] == "/ws/camera"
+    assert payload["links"]["session_start"] == "/api/v1/session/start"
+    assert payload["links"]["session_end"] == "/api/v1/session/end"
 
     capabilities = build_app_capabilities(gateway)
 
@@ -89,6 +91,13 @@ def test_app_bootstrap_service_returns_client_contract():
     assert capabilities["endpoints"]["control"]["goal"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["maps"]["path"] == "/api/v1/slam/maps"
     assert capabilities["endpoints"]["map"]["map_lifecycle"]["method"] == "POST"
+    assert capabilities["endpoints"]["map"]["map_activate"]["path"] == "/api/v1/map/activate"
+    assert capabilities["endpoints"]["map"]["map_rename"]["path"] == "/api/v1/map/rename"
+    assert capabilities["endpoints"]["map"]["map_save"]["path"] == "/api/v1/map/save"
+    assert (
+        capabilities["endpoints"]["map"]["map_restore_predufo"]["path"]
+        == "/api/v1/map/restore_predufo"
+    )
     assert capabilities["probes"]["readiness"]["path"] == "/ready"
     assert capabilities["realtime"]["events"]["transport"] == "sse"
     assert capabilities["realtime"]["events"]["event_schema"] == "SSEEventEnvelope"
@@ -173,6 +182,15 @@ def test_app_capabilities_enriches_specs_from_openapi():
     navigation = capabilities["endpoints"]["state"]["navigation_status"]
     goal = capabilities["endpoints"]["control"]["goal"]
     map_list = capabilities["endpoints"]["map"]["maps"]
+    session_start = capabilities["endpoints"]["map"]["session_start"]
+    map_activate = capabilities["endpoints"]["map"]["map_activate"]
+    map_rename = capabilities["endpoints"]["map"]["map_rename"]
+    map_save = capabilities["endpoints"]["map"]["map_save"]
+    slam_switch = capabilities["endpoints"]["ops"]["slam_switch"]
+    slam_relocalize = capabilities["endpoints"]["ops"]["slam_relocalize"]
+    bag_start = capabilities["endpoints"]["ops"]["bag_start"]
+    memory_semantic = capabilities["endpoints"]["ops"]["memory_temporal_semantic"]
+    webrtc_offer = capabilities["endpoints"]["media"]["webrtc_offer"]
     camera = capabilities["endpoints"]["media"]["camera_snapshot"]
 
     assert state["response_schema"] == "StateResponse"
@@ -185,6 +203,19 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert goal["response_schema"] == "ControlCommandResponse"
     assert map_list["path"] == "/api/v1/slam/maps"
     assert map_list["response_schema"] == "MapListResponse"
+    assert session_start["request_schema"] == "SessionStartRequest"
+    assert session_start["response_schema"] == "SessionTransitionResponse"
+    assert map_activate["request_schema"] == "MapNameRequest"
+    assert map_activate["response_schema"] == "MapLifecycleResponse"
+    assert map_rename["request_schema"] == "MapRenameRequest"
+    assert map_rename["response_schema"] == "MapLifecycleResponse"
+    assert map_save["request_schema"] == "MapSaveRequest"
+    assert map_save["response_schema"] == "MapLifecycleResponse"
+    assert slam_switch["request_schema"] == "SlamSwitchRequest"
+    assert slam_relocalize["request_schema"] == "SlamRelocalizeRequest"
+    assert bag_start["request_schema"] == "BagStartRequest"
+    assert memory_semantic["request_schema"] == "TemporalSemanticRequest"
+    assert webrtc_offer["request_schema"] == "WebRTCOfferRequest"
     assert "image/jpeg" in camera["response_content_types"]
 
 
@@ -267,7 +298,16 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert state_payload["schema_version"] == 1
     assert state_payload["ts"] > 0
     assert state_payload["server"]["time"] == state_payload["ts"]
+    assert state_payload["links"]["state"] == "/api/v1/state"
     assert state_payload["links"]["events"] == "/api/v1/events"
+    assert state_payload["links"]["scene_graph"] == "/api/v1/scene_graph"
+    assert state_payload["links"]["locations"] == "/api/v1/locations"
+    assert state_payload["links"]["path"] == "/api/v1/path"
+    assert state_payload["links"]["camera_ws"] == "/ws/camera"
+    assert state_payload["links"]["cloud_ws"] == "/ws/cloud"
+    assert state_payload["links"]["health"] == "/api/v1/health"
+    assert state_payload["links"]["goal"] == "/api/v1/goal"
+    assert state_payload["links"]["stop"] == "/api/v1/stop"
     assert state_payload["path"]["points"] == 2
 
     assert scene_graph_payload["schema_version"] == 1
@@ -297,6 +337,9 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
         == "StateResponse"
     )
     assert capabilities_payload["links"]["events"] == "/api/v1/events"
+    assert capabilities_payload["links"]["map_activate"] == "/api/v1/map/activate"
+    assert capabilities_payload["links"]["map_rename"] == "/api/v1/map/rename"
+    assert capabilities_payload["links"]["map_save"] == "/api/v1/map/save"
 
 
 def test_app_web_events_stream_starts_with_snapshot_contract():

@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 from gateway.schemas import (
+    BagStartRequest,
     BagOperationResponse,
     BagStatusResponse,
     BitrateRequest,
@@ -21,8 +22,12 @@ from gateway.schemas import (
     GatewayErrorResponse,
     Go2RTCStatusResponse,
     SlamOperationResponse,
+    SlamRelocalizeRequest,
     SlamStatusResponse,
+    SlamSwitchRequest,
+    TemporalSemanticRequest,
     TemporalMemoryResponse,
+    WebRTCOfferRequest,
     WebRTCControlResponse,
     WebRTCStatsResponse,
 )
@@ -90,6 +95,14 @@ def _parse_since(since: str) -> float:
 def _normalize_slam_profile(profile: Any) -> str:
     raw = str(profile or "").strip().lower()
     return _SLAM_PROFILE_ALIASES.get(raw, raw)
+
+
+def _body_mapping(body: Any) -> dict[str, Any]:
+    if hasattr(body, "model_dump"):
+        return body.model_dump(exclude_none=True)
+    if isinstance(body, dict):
+        return body
+    return {}
 
 
 def _unsupported_saved_map_relocalization_response(gw) -> Any | None:
@@ -223,11 +236,11 @@ def register_operation_routes(app, gw) -> None:
             503: {"model": GatewayErrorResponse},
         },
     )
-    async def post_webrtc_offer(body: dict = Body(...)):
+    async def post_webrtc_offer(body: WebRTCOfferRequest = Body(...)):
         if gw._webrtc is None:
             return JSONResponse({"error": "webrtc_unavailable"}, status_code=503)
         try:
-            return await gw._webrtc.handle_offer(body)
+            return await gw._webrtc.handle_offer(_body_mapping(body))
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -313,10 +326,11 @@ def register_operation_routes(app, gw) -> None:
             503: {"model": GatewayErrorResponse},
         },
     )
-    async def post_temporal_semantic(body: dict):
+    async def post_temporal_semantic(body: TemporalSemanticRequest):
         import numpy as np
 
-        raw_emb = body.get("embedding")
+        payload = _body_mapping(body)
+        raw_emb = payload.get("embedding")
         if not raw_emb:
             return JSONResponse(
                 status_code=422,
@@ -330,7 +344,7 @@ def register_operation_routes(app, gw) -> None:
                 content={"error": f"invalid embedding: {exc}"},
             )
 
-        since_ts = _parse_since(body["since"]) if body.get("since") else None
+        since_ts = _parse_since(payload["since"]) if payload.get("since") else None
         store = _temporal_store()
         if store is None:
             return JSONResponse(
@@ -343,9 +357,9 @@ def register_operation_routes(app, gw) -> None:
             None,
             lambda: store.query_semantic(
                 query_vec,
-                top_k=int(body.get("top_k", 10)),
+                top_k=int(payload.get("top_k", 10)),
                 since_ts=since_ts,
-                label=body.get("label") or None,
+                label=payload.get("label") or None,
             ),
         )
         return {"observations": rows, "count": len(rows)}
@@ -465,8 +479,9 @@ def register_operation_routes(app, gw) -> None:
             500: {"model": SlamOperationResponse},
         },
     )
-    async def slam_switch(body: dict):
-        requested_profile = body.get("profile", "")
+    async def slam_switch(body: SlamSwitchRequest):
+        payload = _body_mapping(body)
+        requested_profile = payload.get("profile", "")
         profile = _normalize_slam_profile(requested_profile)
         if profile not in (
             "fastlio2",
@@ -582,7 +597,7 @@ def register_operation_routes(app, gw) -> None:
             500: {"model": SlamOperationResponse},
         },
     )
-    async def slam_relocalize(body: dict):
+    async def slam_relocalize(body: SlamRelocalizeRequest):
         import os
         import subprocess
 
@@ -590,10 +605,11 @@ def register_operation_routes(app, gw) -> None:
         if unsupported_response is not None:
             return unsupported_response
 
-        map_name = body.get("map_name", "")
-        x = float(body.get("x", 0.0))
-        y = float(body.get("y", 0.0))
-        yaw = float(body.get("yaw", 0.0))
+        payload = _body_mapping(body)
+        map_name = payload.get("map_name", "")
+        x = float(payload.get("x", 0.0))
+        y = float(payload.get("y", 0.0))
+        yaw = float(payload.get("yaw", 0.0))
         if not map_name:
             return JSONResponse(
                 {"success": False, "message": "map_name required"},
@@ -657,14 +673,14 @@ def register_operation_routes(app, gw) -> None:
             500: {"model": BagOperationResponse},
         },
     )
-    async def bag_start(body: dict | None = None):
+    async def bag_start(body: BagStartRequest = BagStartRequest()):
         import os
         import pathlib
         import subprocess
 
-        body = body or {}
-        duration = int(body.get("duration", 600))
-        prefix = str(body.get("prefix", "web"))[:40]
+        payload = _body_mapping(body)
+        duration = int(payload.get("duration", 600))
+        prefix = str(payload.get("prefix", "web"))[:40]
         prefix = "".join(c for c in prefix if c.isalnum() or c in "-_") or "web"
 
         with gw._bag_lock:

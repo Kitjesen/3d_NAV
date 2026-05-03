@@ -130,6 +130,57 @@ class MapRequest(BaseModel):
         return v
 
 
+class SessionStartRequest(BaseModel):
+    mode: str | None = Field(default=None, max_length=32)
+    map_name: str | None = Field(default=None, max_length=128)
+    map: str | None = Field(default=None, max_length=128)
+    slam_profile: str | None = Field(default=None, max_length=64)
+    slam_backend: str | None = Field(default=None, max_length=64)
+
+
+class MapNameRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+
+
+class MapRenameRequest(BaseModel):
+    old_name: str | None = Field(default=None, max_length=128)
+    new_name: str | None = Field(default=None, max_length=128)
+
+
+class MapSaveRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+
+
+class WebRTCOfferRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    sdp: str | None = None
+    type: str | None = None
+
+
+class TemporalSemanticRequest(BaseModel):
+    embedding: list[float] | None = None
+    since: str | None = Field(default=None, max_length=64)
+    top_k: int = Field(default=10, ge=1, le=1000)
+    label: str | None = Field(default=None, max_length=128)
+
+
+class SlamSwitchRequest(BaseModel):
+    profile: str | None = Field(default=None, max_length=64)
+
+
+class SlamRelocalizeRequest(BaseModel):
+    map_name: str | None = Field(default=None, max_length=128)
+    x: float = 0.0
+    y: float = 0.0
+    yaw: float = 0.0
+
+
+class BagStartRequest(BaseModel):
+    duration: int = Field(default=600, ge=1, le=86400)
+    prefix: str = Field(default="web", max_length=40)
+
+
 class ServerInfo(GatewayResponseModel):
     api_version: str
     time: float
@@ -540,6 +591,7 @@ class MapLifecycleResponse(GatewayResponseModel):
     replaced_backups_pruned: int | None = None
     note: str | None = None
     errors: list[Any] | None = None
+    warnings: list[Any] | None = None
     slam_profile: str | None = None
     source: str | None = None
     map_save_source: str | None = None
@@ -639,14 +691,51 @@ class ClientLinks(GatewayResponseModel):
     scene_graph: str | None = None
     locations: str | None = None
     path: str | None = None
+    localization_status: str | None = None
+    navigation_status: str | None = None
+    devices: str | None = None
     events: str | None = None
     teleop_ws: str | None = None
     camera_ws: str | None = None
     cloud_ws: str | None = None
     camera_snapshot: str | None = None
+    webrtc_stats: str | None = None
+    webrtc_offer: str | None = None
+    webrtc_bitrate: str | None = None
+    webrtc_whep: str | None = None
+    go2rtc_status: str | None = None
     health: str | None = None
+    session: str | None = None
+    session_start: str | None = None
+    session_end: str | None = None
     goal: str | None = None
+    navigate_click: str | None = None
     stop: str | None = None
+    instruction: str | None = None
+    mode: str | None = None
+    lease: str | None = None
+    maps: str | None = None
+    map_lifecycle: str | None = None
+    map_activate: str | None = None
+    map_rename: str | None = None
+    map_save: str | None = None
+    map_restore_predufo: str | None = None
+    map_cloud_reset: str | None = None
+    map_points: str | None = None
+    saved_map_points: str | None = None
+    explore_status: str | None = None
+    explore_start: str | None = None
+    explore_stop: str | None = None
+    slam_status: str | None = None
+    slam_switch: str | None = None
+    slam_auto_relocalize: str | None = None
+    slam_relocalize: str | None = None
+    bag_start: str | None = None
+    bag_stop: str | None = None
+    bag_status: str | None = None
+    memory_temporal: str | None = None
+    memory_temporal_semantic: str | None = None
+    diagnostic_pack: str | None = None
 
 
 class AppMediaLinks(GatewayResponseModel):

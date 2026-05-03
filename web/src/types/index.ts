@@ -136,14 +136,51 @@ export interface ClientLinks {
   scene_graph?: string
   locations?: string
   path?: string
+  localization_status?: string
+  navigation_status?: string
+  devices?: string
   events?: string
   teleop_ws?: string
   camera_ws?: string
   cloud_ws?: string
   camera_snapshot?: string
+  webrtc_stats?: string
+  webrtc_offer?: string
+  webrtc_bitrate?: string
+  webrtc_whep?: string
+  go2rtc_status?: string
   health?: string
+  session?: string
+  session_start?: string
+  session_end?: string
   goal?: string
+  navigate_click?: string
   stop?: string
+  instruction?: string
+  mode?: string
+  lease?: string
+  maps?: string
+  map_lifecycle?: string
+  map_activate?: string
+  map_rename?: string
+  map_save?: string
+  map_restore_predufo?: string
+  map_cloud_reset?: string
+  map_points?: string
+  saved_map_points?: string
+  explore_status?: string
+  explore_start?: string
+  explore_stop?: string
+  slam_status?: string
+  slam_switch?: string
+  slam_auto_relocalize?: string
+  slam_relocalize?: string
+  bag_start?: string
+  bag_stop?: string
+  bag_status?: string
+  memory_temporal?: string
+  memory_temporal_semantic?: string
+  diagnostic_pack?: string
   [key: string]: string | undefined
 }
 
@@ -324,9 +361,17 @@ export interface PingEvent {
   type: 'ping'
 }
 
+export interface SnapshotEventData {
+  odometry?: Record<string, unknown>
+  safety?: Record<string, unknown>
+  mission?: Record<string, unknown>
+  mode?: string
+  session?: Record<string, unknown>
+}
+
 export interface SnapshotEvent {
   type: 'snapshot'
-  data?: Record<string, unknown>
+  data?: SnapshotEventData
 }
 
 export interface SlamStatusEvent {

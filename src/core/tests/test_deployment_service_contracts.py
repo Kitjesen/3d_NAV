@@ -62,6 +62,11 @@ def test_lingtu_doctor_json_gates_runtime_readiness_freshness():
 
     assert "gateway.slam_stream" in text
     assert "gateway.localization_status" in text
+    assert "add_dataflow_pressure_check" in text
+    assert '"VoxelGridModule", "map_cloud", "p1"' in text
+    assert "LINGTU_DOCTOR_MAX_DATAFLOW_P95_MS" in text
+    assert "LINGTU_DOCTOR_MAX_DATAFLOW_DROP_RATIO" in text
+    assert "callback pressure detected" in text
     assert "LINGTU_DOCTOR_MIN_SLAM_HZ" in text
     assert "LINGTU_DOCTOR_MAX_ODOM_AGE_MS" in text
     assert "LINGTU_DOCTOR_MAX_LOC_DIAG_AGE_MS" in text

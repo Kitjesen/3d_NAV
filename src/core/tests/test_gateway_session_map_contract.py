@@ -185,6 +185,7 @@ def test_session_routes_validate_idle_contracts():
 
 def test_session_start_accepts_legacy_map_field(monkeypatch):
     import core.service_manager as service_manager
+    import gateway.gateway_module as gateway_module
     import gateway.routes.session as session_routes
     from gateway.gateway_module import GatewayModule
     from gateway.schemas import SessionTransitionResponse
@@ -222,6 +223,7 @@ def test_session_start_accepts_legacy_map_field(monkeypatch):
 
         gateway = GatewayModule()
         gateway.setup()
+        monkeypatch.setattr(gateway_module, "active_map_name", lambda: "demo")
         monkeypatch.setattr(gateway, "_spawn_auto_relocalize", lambda _: None)
 
         payload = asyncio.run(
@@ -234,6 +236,9 @@ def test_session_start_accepts_legacy_map_field(monkeypatch):
         assert transition.success is True
         assert transition.session is not None
         assert transition.session.mode == "navigating"
+        assert transition.session.active_map == "demo"
+        assert transition.session.map_has_pcd is True
+        assert transition.session.map_has_tomogram is True
         assert gateway._session_map == "demo"
         assert ("ensure", ("slam", "localizer")) in fake_service_manager.calls
     finally:
@@ -478,6 +483,8 @@ def test_map_save_falls_back_to_super_lio_live_cloud_snapshot(monkeypatch, tmp_p
     assert payload["saved_map_relocalization_supported"] is False
     assert payload["restart_recovery_supported"] is True
     assert payload["recovery_method"] == "restart_super_lio"
+    assert model.warnings is not None
+    assert any("Super-LIO: saved live map_cloud snapshot" in item for item in model.warnings)
     assert pcd_path.is_file()
     data = pcd_path.read_bytes()
     assert b"FIELDS x y z" in data

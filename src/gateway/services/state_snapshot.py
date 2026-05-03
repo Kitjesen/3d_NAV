@@ -77,11 +77,5 @@ def build_state_snapshot(gw: Any) -> dict[str, Any]:
             "points": path_len,
             "endpoint": CLIENT_LINKS["path"],
         },
-        "links": {
-            "bootstrap": CLIENT_LINKS["bootstrap"],
-            "capabilities": CLIENT_LINKS["capabilities"],
-            "events": CLIENT_LINKS["events"],
-            "localization_status": CLIENT_LINKS["localization_status"],
-            "navigation_status": CLIENT_LINKS["navigation_status"],
-        },
+        "links": dict(CLIENT_LINKS),
     }

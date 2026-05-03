@@ -82,6 +82,10 @@ from gateway.services.map_safety import (
     apply_dynamic_filter_step1half as _map_apply_dynamic_filter_step1half,
     safe_map_name as _map_safe_map_name,
 )
+from gateway.services.map_paths import (
+    active_map_name,
+    map_dir_for,
+)
 from gateway.services.runtime_status import (
     backend_capability_defaults,
     classify_pose_freshness,
@@ -683,18 +687,17 @@ class GatewayModule(Module, layer=6):
         when the active map actually changes, and cache `_last_saved_map`
         so new SSE connections get it once from the snapshot.
         """
-        import os, time as _t
+        import time as _t
         MAX_SEND = 80_000
         last_target = None
         while True:
             try:
-                active = os.path.expanduser("~/data/nova/maps/active")
-                target = os.readlink(active) if os.path.islink(active) else None
+                target = active_map_name()
                 if target != last_target:
                     last_target = target
-                    pcd_path = os.path.expanduser(f"~/data/nova/maps/{target}/map.pcd") if target else None
-                    if pcd_path and os.path.isfile(pcd_path):
-                        pts = self._load_pcd_xyz(pcd_path)
+                    pcd_path = map_dir_for(target) / "map.pcd" if target else None
+                    if pcd_path and pcd_path.is_file():
+                        pts = self._load_pcd_xyz(str(pcd_path))
                         if pts is not None and len(pts) > 0:
                             if len(pts) > MAX_SEND:
                                 idx = np.random.choice(len(pts), MAX_SEND, replace=False)
@@ -941,9 +944,7 @@ class GatewayModule(Module, layer=6):
             import subprocess as _sp
             time.sleep(2.5)  # give localizer time to finish loading static map
             try:
-                map_dir = os.environ.get(
-                    "NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-                pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+                pcd_path = str(map_dir_for(map_name) / "map.pcd")
                 if not os.path.isfile(pcd_path):
                     logger.warning("auto-relocalize: map pcd missing: %s", pcd_path)
                     return
@@ -1048,15 +1049,7 @@ class GatewayModule(Module, layer=6):
 
     def _session_active_map_name(self) -> str | None:
         """Read active map symlink target."""
-        import os
-        maps_dir = os.path.expanduser("~/data/nova/maps")
-        active = os.path.join(maps_dir, "active")
-        if not os.path.islink(active):
-            return None
-        try:
-            return os.readlink(active)
-        except OSError:
-            return None
+        return active_map_name()
 
     def _session_snapshot(self) -> dict:
         """Full session state for GET /session + SSE."""
@@ -1064,10 +1057,9 @@ class GatewayModule(Module, layer=6):
         has_tomogram = False
         has_pcd = False
         if active_map:
-            import os
-            base = os.path.expanduser(f"~/data/nova/maps/{active_map}")
-            has_pcd = os.path.isfile(os.path.join(base, "map.pcd"))
-            has_tomogram = os.path.isfile(os.path.join(base, "tomogram.pickle"))
+            base = map_dir_for(active_map)
+            has_pcd = (base / "map.pcd").is_file()
+            has_tomogram = (base / "tomogram.pickle").is_file()
         icp = self._icp_quality
         localization_status = self._localization_status or {}
         slam_profile = self._get_slam_profile()
@@ -2074,9 +2066,7 @@ class GatewayModule(Module, layer=6):
 
     def _generate_viewer_from_pcd(self, map_name: str) -> str:
         """Load a saved PCD file and generate viewer HTML (does NOT touch live data)."""
-        import os
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-        pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+        pcd_path = str(map_dir_for(map_name) / "map.pcd")
         if not os.path.isfile(pcd_path):
             return f"<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>地图不存在: {map_name}</h2><p>找不到 {pcd_path}</p></body></html>"
 

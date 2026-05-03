@@ -62,6 +62,7 @@ class VoxelGridModule(Module, layer=2):
         super().__init__(**kw)
         self._res = float(voxel_size)
         self._max_range = float(max_range)
+        self._max_range_sq = self._max_range * self._max_range
         self._min_z = float(min_z)
         self._max_z = float(max_z)
         self._decay = float(decay_rate)
@@ -71,7 +72,7 @@ class VoxelGridModule(Module, layer=2):
         self._voxels: dict[_VoxelKey, float] = {}
         self._lock = threading.Lock()
 
-        self._robot_xyz = np.zeros(3, dtype=np.float64)
+        self._robot_xyz = np.zeros(3, dtype=np.float32)
         self._last_publish: float = 0.0
 
     # ------------------------------------------------------------------
@@ -104,13 +105,13 @@ class VoxelGridModule(Module, layer=2):
         if cloud.is_empty:
             return
 
-        pts = cloud.points[:, :3].astype(np.float64)
+        pts = cloud.points[:, :3]
 
         # Range filter relative to robot position
         diff = pts - self._robot_xyz
-        dist = np.linalg.norm(diff, axis=1)
+        dist_sq = np.einsum("ij,ij->i", diff, diff)
         mask = (
-            (dist <= self._max_range)
+            (dist_sq <= self._max_range_sq)
             & (pts[:, 2] >= self._min_z)
             & (pts[:, 2] <= self._max_z)
         )
@@ -118,15 +119,21 @@ class VoxelGridModule(Module, layer=2):
         if pts.shape[0] == 0:
             return
 
-        # Convert to integer voxel indices
-        ix = np.floor(pts[:, 0] / self._res).astype(np.int64)
-        iy = np.floor(pts[:, 1] / self._res).astype(np.int64)
-        iz = np.floor(pts[:, 2] / self._res).astype(np.int64)
-        keys = zip(ix.tolist(), iy.tolist(), iz.tolist())
+        voxel_keys = np.floor(pts / self._res).astype(np.int64, copy=False)
+        unique_keys, hit_counts = np.unique(
+            voxel_keys,
+            axis=0,
+            return_counts=True,
+        )
 
         with self._lock:
-            for key in keys:
-                self._voxels[key] = self._voxels.get(key, 0.0) + 1.0
+            for raw_key, hit_count in zip(unique_keys, hit_counts):
+                key: _VoxelKey = (
+                    int(raw_key[0]),
+                    int(raw_key[1]),
+                    int(raw_key[2]),
+                )
+                self._voxels[key] = self._voxels.get(key, 0.0) + float(hit_count)
 
         now = time.time()
         if now - self._last_publish >= self._interval:
@@ -154,22 +161,13 @@ class VoxelGridModule(Module, layer=2):
             if not self._voxels:
                 return
 
-            keys_arr = np.array(list(self._voxels.keys()), dtype=np.float32)
+            keys_arr = np.array(list(self._voxels.keys()), dtype=np.int64)
 
         # Voxel centres = (index + 0.5) * resolution
-        centres = (keys_arr + 0.5) * self._res  # (N, 3) float32
+        centres = (keys_arr.astype(np.float32) + 0.5) * self._res
 
         # Column carving: per (ix, iy) find min/max iz
-        col_map: dict[tuple, list] = {}
-        for _i, (ix, iy, iz) in enumerate(keys_arr.astype(np.int64).tolist()):
-            col = (int(ix), int(iy))
-            if col not in col_map:
-                col_map[col] = [iz, iz]
-            else:
-                if iz < col_map[col][0]:
-                    col_map[col][0] = iz
-                if iz > col_map[col][1]:
-                    col_map[col][1] = iz
+        column_count = int(np.unique(keys_arr[:, :2], axis=0).shape[0])
 
         total = len(self._voxels)
         mem_kb = (total * 64) / 1024  # rough: 3×int64 key + float value
@@ -180,7 +178,7 @@ class VoxelGridModule(Module, layer=2):
             "memory_kb": round(mem_kb, 1),
             "voxel_size": self._res,
             "ts": time.time(),
-            "column_count": len(col_map),
+            "column_count": column_count,
         }
 
         cloud = PointCloud2(points=centres, frame_id="map")

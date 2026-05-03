@@ -330,6 +330,16 @@ def _content_for(
     return openapi["paths"][path][method]["responses"][status]["content"]
 
 
+def _request_schema_ref_for(
+    openapi: dict,
+    path: str,
+    method: str = "post",
+) -> str:
+    return openapi["paths"][path][method]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]["$ref"]
+
+
 def test_openapi_exposes_client_response_models():
     from gateway.gateway_module import GatewayModule
 
@@ -368,19 +378,29 @@ def test_openapi_exposes_client_response_models():
     assert "AuthCheckResponse" in schemas
     assert "LeaseResponse" in schemas
     assert "SessionResponse" in schemas
+    assert "SessionStartRequest" in schemas
     assert "SessionTransitionResponse" in schemas
+    assert "MapNameRequest" in schemas
+    assert "MapRenameRequest" in schemas
+    assert "MapSaveRequest" in schemas
     assert "MapLifecycleResponse" in schemas
+    assert "warnings" in schemas["MapLifecycleResponse"]["properties"]
     assert "MapListResponse" in schemas
     assert "MapPointsResponse" in schemas
     assert "TemporalMemoryResponse" in schemas
     assert "ExplorationCommandResponse" in schemas
     assert "ExplorationStatusResponse" in schemas
     assert "SlamStatusResponse" in schemas
+    assert "SlamSwitchRequest" in schemas
+    assert "SlamRelocalizeRequest" in schemas
     assert "SlamOperationResponse" in schemas
+    assert "BagStartRequest" in schemas
     assert "BagOperationResponse" in schemas
     assert "BagStatusResponse" in schemas
     assert "WebRTCStatsResponse" in schemas
     assert "Go2RTCStatusResponse" in schemas
+    assert "TemporalSemanticRequest" in schemas
+    assert "WebRTCOfferRequest" in schemas
     assert "WebRTCControlResponse" in schemas
     assert _schema_ref_for(openapi, "/api/v1/state").endswith("/StateResponse")
     assert _schema_ref_for(openapi, "/ready").endswith("/ReadinessResponse")
@@ -429,6 +449,9 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/session/start", method="post"
     ).endswith("/SessionTransitionResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/session/start"
+    ).endswith("/SessionStartRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/session/end", method="post"
     ).endswith("/SessionTransitionResponse")
@@ -450,6 +473,9 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/memory/temporal/semantic", method="post"
     ).endswith("/TemporalMemoryResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/memory/temporal/semantic"
+    ).endswith("/TemporalSemanticRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/explore/start", method="post"
     ).endswith("/ExplorationCommandResponse")
@@ -465,15 +491,24 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/slam/switch", method="post"
     ).endswith("/SlamOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/slam/switch"
+    ).endswith("/SlamSwitchRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/slam/auto_relocalize", method="post"
     ).endswith("/SlamOperationResponse")
     assert _schema_ref_for(
         openapi, "/api/v1/slam/relocalize", method="post"
     ).endswith("/SlamOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/slam/relocalize"
+    ).endswith("/SlamRelocalizeRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/bag/start", method="post"
     ).endswith("/BagOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/bag/start"
+    ).endswith("/BagStartRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/bag/stop", method="post"
     ).endswith("/BagOperationResponse")
@@ -489,6 +524,9 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/webrtc/offer", method="post"
     ).endswith("/WebRTCControlResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/webrtc/offer"
+    ).endswith("/WebRTCOfferRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/webrtc/bitrate", method="post"
     ).endswith("/WebRTCControlResponse")
@@ -498,15 +536,27 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/map/activate", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/map/activate"
+    ).endswith("/MapNameRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/map/rename", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/map/rename"
+    ).endswith("/MapRenameRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/map/save", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/map/save"
+    ).endswith("/MapSaveRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/map/restore_predufo", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/map/restore_predufo"
+    ).endswith("/MapNameRequest")
     assert _schema_ref_for(openapi, "/api/v1/app/bootstrap").endswith(
         "/AppBootstrapResponse"
     )

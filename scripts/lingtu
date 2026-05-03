@@ -416,6 +416,10 @@ MAX_LOCALIZER_HEALTH_AGE_MS = env_float("LINGTU_DOCTOR_MAX_LOCALIZER_HEALTH_AGE_
 MAX_CLOUD_AGE_MS = env_float("LINGTU_DOCTOR_MAX_CLOUD_AGE_MS", 5000.0)
 MIN_LOCALIZATION_CONFIDENCE = env_float("LINGTU_DOCTOR_MIN_LOCALIZATION_CONFIDENCE", 0.5)
 REALTIME_TIMEOUT_S = env_float("LINGTU_DOCTOR_REALTIME_TIMEOUT_S", 6.0)
+MAX_DATAFLOW_AVG_MS = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_AVG_MS", 150.0)
+MAX_DATAFLOW_P95_MS = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_P95_MS", 250.0)
+MAX_DATAFLOW_MAX_MS = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_MAX_MS", 1000.0)
+MAX_DATAFLOW_DROP_RATIO = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_DROP_RATIO", 0.75)
 
 
 def run(args, timeout=3):
@@ -488,6 +492,81 @@ def check_age(payload, key, max_age_ms, blockers):
     if value > max_age_ms:
         blockers.append(f"{key}>{max_age_ms:g}ms")
     return value
+
+
+def module_detail(ready_payload, module_name):
+    modules = ready_payload.get("modules") or {}
+    module = modules.get(module_name) or {}
+    if not isinstance(module, dict):
+        return {}
+    detail = module.get("detail")
+    return detail if isinstance(detail, dict) else {}
+
+
+def port_in_stats(ready_payload, module_name, port_name):
+    detail = module_detail(ready_payload, module_name)
+    ports_in = detail.get("ports_in") or {}
+    port = ports_in.get(port_name) or {}
+    return port if isinstance(port, dict) else {}
+
+
+def add_dataflow_pressure_check(ready_payload, module_name, port_name, level="p1"):
+    if not module_detail(ready_payload, module_name):
+        return
+    port = port_in_stats(ready_payload, module_name, port_name)
+    if not port:
+        add(
+            f"dataflow.{module_name}.{port_name}",
+            "warn",
+            level,
+            f"{module_name}.{port_name} stats are unavailable",
+            {},
+        )
+        return
+    latency = port.get("latency") if isinstance(port.get("latency"), dict) else {}
+    avg_ms = as_float(port.get("avg_callback_ms"))
+    max_ms = as_float(port.get("max_callback_ms"))
+    p95_ms = as_float(latency.get("p95_ms"))
+    p99_ms = as_float(latency.get("p99_ms"))
+    rate_hz = as_float(port.get("rate_hz"))
+    deliver_count = as_float(port.get("deliver_count")) or 0.0
+    drop_count = as_float(port.get("drop_count")) or 0.0
+    total_count = deliver_count + drop_count
+    drop_ratio = (drop_count / total_count) if total_count > 0 else 0.0
+    pressure = []
+    if avg_ms is not None and avg_ms > MAX_DATAFLOW_AVG_MS:
+        pressure.append(f"avg_callback_ms>{MAX_DATAFLOW_AVG_MS:g}")
+    if p95_ms is not None and p95_ms > MAX_DATAFLOW_P95_MS:
+        pressure.append(f"p95_ms>{MAX_DATAFLOW_P95_MS:g}")
+    if max_ms is not None and max_ms > MAX_DATAFLOW_MAX_MS:
+        pressure.append(f"max_callback_ms>{MAX_DATAFLOW_MAX_MS:g}")
+    if total_count >= 100 and drop_ratio > MAX_DATAFLOW_DROP_RATIO:
+        pressure.append(f"drop_ratio>{MAX_DATAFLOW_DROP_RATIO:g}")
+    add(
+        f"dataflow.{module_name}.{port_name}",
+        "warn" if pressure else "pass",
+        level,
+        f"{module_name}.{port_name} callback pressure detected"
+        if pressure
+        else f"{module_name}.{port_name} callback pressure within thresholds",
+        {
+            "rate_hz": rate_hz,
+            "avg_callback_ms": avg_ms,
+            "p95_ms": p95_ms,
+            "p99_ms": p99_ms,
+            "max_callback_ms": max_ms,
+            "deliver_count": deliver_count,
+            "drop_count": drop_count,
+            "drop_ratio": round(drop_ratio, 4),
+            "thresholds": {
+                "max_avg_ms": MAX_DATAFLOW_AVG_MS,
+                "max_p95_ms": MAX_DATAFLOW_P95_MS,
+                "max_max_ms": MAX_DATAFLOW_MAX_MS,
+                "max_drop_ratio": MAX_DATAFLOW_DROP_RATIO,
+            },
+            "pressure": pressure,
+        },
+    )
 
 
 def sse_smoke(timeout_s):
@@ -699,6 +778,16 @@ else:
         "/ready reports ready" if is_ready else "/ready reports not ready",
         {"http_status": ready_code, "reasons": ready.get("reasons", []), "failed_modules": ready.get("failed_modules", [])},
     )
+    for module_name, port_name, level in [
+        ("VoxelGridModule", "map_cloud", "p1"),
+        ("OccupancyGridModule", "map_cloud", "p1"),
+        ("ESDFModule", "occupancy_grid", "p1"),
+        ("TraversabilityCostModule", "costmap", "p1"),
+        ("GatewayModule", "map_cloud", "p1"),
+        ("GatewayModule", "localization_status", "p2"),
+        ("PerceptionModule", "color_image", "p2"),
+    ]:
+        add_dataflow_pressure_check(ready, module_name, port_name, level)
 
 health_code, health, health_err = http_json("/api/v1/health", timeout=3)
 if health_err or not isinstance(health, dict):
