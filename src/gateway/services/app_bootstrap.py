@@ -15,7 +15,10 @@ from gateway.services.runtime_status import (
 from gateway.services.traffic import (
     DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
     DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
+    SSE_DIAGNOSTIC_EVENT_TYPES,
     SSE_EVENT_SCHEMA_VERSION,
+    SSE_EVENT_TYPES,
+    SSE_LEGACY_EVENT_TYPES,
     SSE_RETRY_MS,
 )
 
@@ -313,6 +316,10 @@ def _schema_name(schema: Any) -> str | None:
             joined = "|".join(name for name in names if name)
             if joined:
                 return joined
+    if raw.get("type") == "object":
+        title = raw.get("title")
+        if isinstance(title, str) and title:
+            return title
     typ = raw.get("type")
     return str(typ) if typ else None
 
@@ -345,10 +352,14 @@ def _operation_contracts(gw: Any) -> dict[tuple[str, str], dict[str, Any]]:
             response_200 = _mapping(responses.get("200"))
             response_content = _mapping(response_200.get("content"))
             response_json = _mapping(response_content.get("application/json"))
+            response_schema = _schema_name(response_json.get("schema"))
+            if response_schema is None:
+                response_media = _mapping(response_content.get("text/event-stream"))
+                response_schema = _schema_name(response_media.get("schema"))
             contracts[(http_method, str(path))] = {
                 "operation_id": op.get("operationId"),
                 "request_schema": _schema_name(request_json.get("schema")),
-                "response_schema": _schema_name(response_json.get("schema")),
+                "response_schema": response_schema,
                 "response_content_types": sorted(response_content.keys()),
                 "status_codes": sorted(str(code) for code in responses.keys()),
             }
@@ -401,6 +412,11 @@ def build_app_capabilities(gw: Any) -> dict[str, Any]:
                 "timestamp_field": "ts",
                 "heartbeat_type": "ping",
                 "snapshot_type": "snapshot",
+                "event_types": list(SSE_EVENT_TYPES),
+                "diagnostic_event_types": list(SSE_DIAGNOSTIC_EVENT_TYPES),
+                "legacy_event_types": list(SSE_LEGACY_EVENT_TYPES),
+                "named_events": False,
+                "browser_handler": "onmessage",
                 "retry_ms": SSE_RETRY_MS,
                 "replay_supported": False,
                 "last_event_id_header": "Last-Event-ID",

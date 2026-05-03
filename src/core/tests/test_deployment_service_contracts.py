@@ -125,3 +125,43 @@ def test_camera_deployment_retires_legacy_units():
     assert "duplicate /camera ROS node names" in install
     assert "Only `robot-camera.service` should own the Orbbec ROS nodes" in readme
     assert "KillMode=control-group" in camera_service
+
+
+def test_lingtu_target_is_installed_enabled_and_starts_full_stack():
+    install = _read("docs/04-deployment/services/install.sh")
+    target = _read("docs/04-deployment/services/lingtu.target")
+
+    assert 'sudo cp "$SERVICES_DIR/lingtu.target" "$SYSTEMD_DIR/lingtu.target"' in install
+    assert (
+        "sudo systemctl enable robot-lidar robot-camera robot-brainstem "
+        "robot-fastlio2 robot-localizer lingtu lingtu.target"
+    ) in install
+    assert "sudo systemctl start lingtu.target" in install
+
+    for unit in (
+        "robot-brainstem.service",
+        "robot-camera.service",
+        "robot-lidar.service",
+        "robot-fastlio2.service",
+        "robot-localizer.service",
+        "lingtu.service",
+    ):
+        assert unit in target
+
+
+def test_robot_lidar_uses_installed_ros2_env_helper():
+    install = _read("docs/04-deployment/services/install.sh")
+    lidar_service = _read("docs/04-deployment/services/robot-lidar.service")
+
+    assert 'ros2-env.sh" "$LINGTU_CONFIG/ros2-env.sh"' in install
+    assert "source /opt/lingtu/config/ros2-env.sh" in lidar_service
+    assert "ros2-env.conf" not in lidar_service
+
+
+def test_gateway_service_contract_is_in_process_lingtu_service():
+    readme = _read("docs/04-deployment/README.md")
+    lingtu_service = _read("docs/04-deployment/services/lingtu.service")
+
+    assert "no standalone `lingtu-gateway.service`" in readme
+    assert "Gateway runs inside" in readme
+    assert "lingtu-gateway.service" not in lingtu_service

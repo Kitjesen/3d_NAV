@@ -15,6 +15,39 @@ SSE_EVENT_SCHEMA_VERSION = 1
 SSE_RETRY_MS = 3000
 DEFAULT_SSE_RASTER_MIN_INTERVAL_S = 1.0
 DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED = False
+SSE_EVENT_TYPES = (
+    "snapshot",
+    "ping",
+    "odometry",
+    "slam_status",
+    "map_cloud",
+    "saved_map",
+    "scene_graph",
+    "safety",
+    "mission",
+    "eval",
+    "dialogue",
+    "gnss_fusion",
+    "slam_diag",
+    "slam_drift",
+    "session",
+    "exploring",
+    "tare_stats",
+    "exploration_supervisor",
+    "global_path",
+    "local_path",
+    "costmap",
+    "slope_grid",
+    "agent_message",
+)
+SSE_DIAGNOSTIC_EVENT_TYPES = (
+    "gnss_fusion",
+    "slam_diag",
+    "slam_drift",
+    "tare_stats",
+    "exploration_supervisor",
+)
+SSE_LEGACY_EVENT_TYPES = ("heartbeat",)
 
 DROP_OLDEST_POLICY = "drop_oldest"
 

@@ -20,6 +20,16 @@ export type {
   HeartbeatEvent,
   PingEvent,
   SnapshotEvent,
+  MissionEvent,
+  SafetyEvent,
+  EvalEvent,
+  DialogueEvent,
+  GnssFusionEvent,
+  SlamDiagnosticEvent,
+  SlamDriftEvent,
+  TareStatsEvent,
+  ExplorationSupervisorEvent,
+  ExploringEvent,
   SlamStatusEvent,
   RobotStatusEvent,
   GlobalPathEvent,
@@ -49,6 +59,14 @@ const INITIAL_STATE: SSEState = {
   costmap: null,
   slopeGrid: null,
   agentMessage: null,
+  gnssFusion: null,
+  slamDiag: null,
+  slamDrift: null,
+  tareStats: null,
+  explorationSupervisor: null,
+  exploring: null,
+  evalEvent: null,
+  dialogue: null,
   lastHeartbeat: null,
   lastEventId: null,
   missedEvents: 0,
@@ -263,6 +281,30 @@ export function useSSE(url: string = '/api/v1/events') {
                 break
               case 'slam_status':
                 next.slamStatus = event as never
+                break
+              case 'gnss_fusion':
+                next.gnssFusion = event as never
+                break
+              case 'slam_diag':
+                next.slamDiag = event as never
+                break
+              case 'slam_drift':
+                next.slamDrift = event as never
+                break
+              case 'tare_stats':
+                next.tareStats = event as never
+                break
+              case 'exploration_supervisor':
+                next.explorationSupervisor = event as never
+                break
+              case 'exploring':
+                next.exploring = event as never
+                break
+              case 'eval':
+                next.evalEvent = event as never
+                break
+              case 'dialogue':
+                next.dialogue = event as never
                 break
               case 'robot_status':
                 next.robotStatus = event as never

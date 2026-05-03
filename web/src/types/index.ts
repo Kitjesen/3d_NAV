@@ -206,6 +206,11 @@ export interface RealtimeEventsCapability {
   timestamp_field?: string
   heartbeat_type?: string
   snapshot_type?: string
+  event_types?: string[]
+  diagnostic_event_types?: string[]
+  legacy_event_types?: string[]
+  named_events?: boolean
+  browser_handler?: string
   retry_ms?: number
   replay_supported?: boolean
   last_event_id_header?: string
@@ -374,6 +379,62 @@ export interface SnapshotEvent {
   data?: SnapshotEventData
 }
 
+export interface MissionEvent {
+  type: 'mission'
+  data?: Record<string, unknown>
+}
+
+export interface SafetyEvent {
+  type: 'safety'
+  data?: Record<string, unknown>
+}
+
+export interface EvalEvent {
+  type: 'eval'
+  data?: Record<string, unknown>
+}
+
+export interface DialogueEvent {
+  type: 'dialogue'
+  data?: Record<string, unknown>
+}
+
+export interface GnssFusionEvent {
+  type: 'gnss_fusion'
+  data?: Record<string, unknown>
+}
+
+export interface SlamDiagnosticEvent {
+  type: 'slam_diag'
+  data?: Record<string, unknown>
+}
+
+export interface SlamDriftEvent {
+  type: 'slam_drift'
+  level?: string
+  xy?: number
+  v?: number
+  action?: string
+  count?: number
+  dump_path?: string
+  data?: Record<string, unknown>
+}
+
+export interface TareStatsEvent {
+  type: 'tare_stats'
+  data?: Record<string, unknown>
+}
+
+export interface ExplorationSupervisorEvent {
+  type: 'exploration_supervisor'
+  data?: Record<string, unknown>
+}
+
+export interface ExploringEvent {
+  type: 'exploring'
+  active?: boolean
+}
+
 export interface SlamStatusEvent {
   type: 'slam_status'
   slam_hz: number
@@ -410,8 +471,10 @@ export interface LocalPathEvent {
 
 export interface MapCloudEvent {
   type: 'map_cloud'
-  points: number[]   // flat [x,y,z, x,y,z, …]
+  points?: number[]  // flat [x,y,z, x,y,z, ...] when streamed inline
   count: number
+  seq?: number
+  bytes?: number
 }
 
 export interface SavedMapEvent {
@@ -504,6 +567,16 @@ export type SSEEvent = SSEEnvelopeFields & (
   | HeartbeatEvent
   | PingEvent
   | SnapshotEvent
+  | MissionEvent
+  | SafetyEvent
+  | EvalEvent
+  | DialogueEvent
+  | GnssFusionEvent
+  | SlamDiagnosticEvent
+  | SlamDriftEvent
+  | TareStatsEvent
+  | ExplorationSupervisorEvent
+  | ExploringEvent
   | SlamStatusEvent
   | RobotStatusEvent
   | GlobalPathEvent
@@ -533,6 +606,14 @@ export interface SSEState {
   costmap: CostmapEvent | null
   slopeGrid: SlopeGridEvent | null
   agentMessage: AgentMessageEvent | null  // latest agent chat message (ts dedups)
+  gnssFusion: GnssFusionEvent | null
+  slamDiag: SlamDiagnosticEvent | null
+  slamDrift: SlamDriftEvent | null
+  tareStats: TareStatsEvent | null
+  explorationSupervisor: ExplorationSupervisorEvent | null
+  exploring: ExploringEvent | null
+  evalEvent: EvalEvent | null
+  dialogue: DialogueEvent | null
   lastHeartbeat: number | null
   lastEventId: number | null
   missedEvents: number

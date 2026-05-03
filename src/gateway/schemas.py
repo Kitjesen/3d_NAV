@@ -759,6 +759,11 @@ class RealtimeEventsCapability(GatewayResponseModel):
     timestamp_field: str | None = None
     heartbeat_type: str | None = None
     snapshot_type: str | None = None
+    event_types: list[str] = Field(default_factory=list)
+    diagnostic_event_types: list[str] = Field(default_factory=list)
+    legacy_event_types: list[str] = Field(default_factory=list)
+    named_events: bool | None = None
+    browser_handler: str | None = None
     retry_ms: int | None = None
     replay_supported: bool | None = None
     last_event_id_header: str | None = None

@@ -56,6 +56,9 @@ they run together with `robot-camera.service`, ROS will show duplicate
 | `lingtu`            | Algorithm stack (gateway + nav + sem) | `python3 lingtu.py nav`                   | yes     |
 | `ota-agent`         | OTA poller / installer                | `python3 -m ota_agent.main`               | yes     |
 
+There is intentionally no standalone `lingtu-gateway.service`: Gateway runs inside
+`lingtu.service` and exposes HTTP `:5050` plus MCP `:8090` from the same process.
+
 Service unit files live in `docs/04-deployment/services/`:
 
 ```
@@ -132,9 +135,10 @@ ssh sunrise@<robot> 'cd ~/data/SLAM/navigation && bash docs/04-deployment/servic
 ssh sunrise@<robot> 'sudo systemctl start lingtu.target'
 ```
 
-`install.sh` copies the six service files to `/etc/systemd/system/`, copies
-`ros2-env.sh` to `/opt/lingtu/config/`, runs `daemon-reload`, and `enable`s all of
-them. It is idempotent.
+`install.sh` copies the six service files plus `lingtu.target` to
+`/etc/systemd/system/`, copies `ros2-env.sh` to `/opt/lingtu/config/`, runs
+`daemon-reload`, and `enable`s the services plus the umbrella target. It is
+idempotent.
 
 ---
 

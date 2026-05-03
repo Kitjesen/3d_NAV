@@ -314,6 +314,24 @@ class TestOccupancyGridModule(unittest.TestCase):
         self.assertEqual(len(results), 0,
                          "Expected no costmap when all points are within robot clear radius")
 
+    def test_robot_clear_radius_keeps_points_outside_clear_disk(self):
+        """Points outside robot_clear_radius remain available for occupancy."""
+        m = self._make_module(robot_clear_radius=2.0, inflation_radius=0.0)
+        odom = Odometry(pose=Pose(position=Vector3(0, 0, 0),
+                                   orientation=Quaternion(0, 0, 0, 1)))
+        m.odometry._deliver(odom)
+
+        pts = np.array([[2.2, 0.0, 0.5]], dtype=np.float32)
+        cloud = PointCloud2.from_numpy(pts, frame_id="map")
+
+        results = []
+        m.costmap._add_callback(lambda msg: results.append(msg))
+        m.map_cloud._deliver(cloud)
+
+        self.assertEqual(len(results), 1)
+        self.assertTrue(np.any(results[0]["grid"] == 100),
+                        "Expected outside-clear-radius point to stay occupied")
+
 
 # ---------------------------------------------------------------------------
 # 4. VoxelGridModule

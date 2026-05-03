@@ -73,6 +73,9 @@ class OccupancyGridModule(Module, layer=2):
         self._robot_xy = np.zeros(2, dtype=np.float64)
         self._gs = int(2 * map_radius / resolution)  # grid side (cells)
         self._kernel: np.ndarray | None = None    # circular dilation kernel
+        self._robot_clear_radius_sq = robot_clear_radius * robot_clear_radius
+        self._clear_mask_cache_key: tuple[int, int, int, int] | None = None
+        self._clear_mask_cache: np.ndarray | None = None
 
     def setup(self) -> None:
         try:
@@ -107,8 +110,12 @@ class OccupancyGridModule(Module, layer=2):
 
         # LiDAR often sees the robot's own legs/body in sim; filter near-body
         # returns and clear a local free-space disk around the robot center.
-        d_robot = np.linalg.norm(pts2d - self._robot_xy[None, :], axis=1)
-        pts2d = pts2d[d_robot >= self._robot_clear_radius]
+        dist_sq = pts2d[:, 0] - self._robot_xy[0]
+        dist_sq_y = pts2d[:, 1] - self._robot_xy[1]
+        np.square(dist_sq, out=dist_sq)
+        np.square(dist_sq_y, out=dist_sq_y)
+        dist_sq += dist_sq_y
+        pts2d = pts2d[dist_sq >= self._robot_clear_radius_sq]
         if pts2d.shape[0] == 0:
             return
 
@@ -167,8 +174,14 @@ class OccupancyGridModule(Module, layer=2):
         rx = int(np.floor((self._robot_xy[0] - origin_xy[0]) / self._res))
         ry = int(np.floor((self._robot_xy[1] - origin_xy[1]) / self._res))
         r = max(1, int(np.ceil(self._robot_clear_radius / self._res)))
+        key = (gs, rx, ry, r)
+        if self._clear_mask_cache_key == key and self._clear_mask_cache is not None:
+            return self._clear_mask_cache
+
         yy, xx = np.ogrid[:gs, :gs]
-        return (xx - rx) ** 2 + (yy - ry) ** 2 <= r ** 2
+        self._clear_mask_cache = (xx - rx) ** 2 + (yy - ry) ** 2 <= r ** 2
+        self._clear_mask_cache_key = key
+        return self._clear_mask_cache
 
     @staticmethod
     def _make_circle_kernel(radius_m: float, res: float) -> np.ndarray:

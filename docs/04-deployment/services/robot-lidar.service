@@ -7,11 +7,9 @@ After=network.target
 Type=simple
 User=sunrise
 WorkingDirectory=/opt/lingtu/current
-EnvironmentFile=/opt/lingtu/config/ros2-env.conf
-ExecStartPre=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /opt/lingtu/current/install/setup.bash && ros2 daemon stop 2>/dev/null; true'
+ExecStartPre=/bin/bash -c 'source /opt/lingtu/config/ros2-env.sh && ros2 daemon stop 2>/dev/null; true'
 ExecStart=/bin/bash -c '\
-  source /opt/ros/humble/setup.bash && \
-  source /opt/lingtu/current/install/setup.bash && \
+  source /opt/lingtu/config/ros2-env.sh && \
   exec /opt/lingtu/current/install/livox_ros_driver2/lib/livox_ros_driver2/livox_ros_driver2_node \
     --ros-args \
     -p xfer_format:=1 \

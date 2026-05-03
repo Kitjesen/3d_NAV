@@ -105,6 +105,15 @@ def test_app_bootstrap_service_returns_client_contract():
     assert capabilities["realtime"]["events"]["retry_ms"] == 3000
     assert capabilities["realtime"]["events"]["replay_supported"] is False
     assert capabilities["realtime"]["events"]["last_event_id_header"] == "Last-Event-ID"
+    assert capabilities["realtime"]["events"]["named_events"] is False
+    assert capabilities["realtime"]["events"]["browser_handler"] == "onmessage"
+    assert {"snapshot", "ping", "slam_diag", "gnss_fusion", "slam_drift"} <= set(
+        capabilities["realtime"]["events"]["event_types"]
+    )
+    assert {"slam_diag", "gnss_fusion", "slam_drift"} <= set(
+        capabilities["realtime"]["events"]["diagnostic_event_types"]
+    )
+    assert "heartbeat" in capabilities["realtime"]["events"]["legacy_event_types"]
     assert capabilities["realtime"]["events"]["large_event_policy"]["point_cloud_payload"] == "binary_websocket"
     assert capabilities["realtime"]["teleop"]["binary_camera_frames"] is False
     assert capabilities["realtime"]["teleop"]["legacy_camera_query"] == "?video=1"
@@ -191,6 +200,7 @@ def test_app_capabilities_enriches_specs_from_openapi():
     bag_start = capabilities["endpoints"]["ops"]["bag_start"]
     memory_semantic = capabilities["endpoints"]["ops"]["memory_temporal_semantic"]
     webrtc_offer = capabilities["endpoints"]["media"]["webrtc_offer"]
+    events = capabilities["endpoints"]["realtime"]["events"]
     camera = capabilities["endpoints"]["media"]["camera_snapshot"]
 
     assert state["response_schema"] == "StateResponse"
@@ -216,6 +226,8 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert bag_start["request_schema"] == "BagStartRequest"
     assert memory_semantic["request_schema"] == "TemporalSemanticRequest"
     assert webrtc_offer["request_schema"] == "WebRTCOfferRequest"
+    assert events["response_schema"] == "SSEEventEnvelope"
+    assert events["response_content_types"] == ["text/event-stream"]
     assert "image/jpeg" in camera["response_content_types"]
 
 
