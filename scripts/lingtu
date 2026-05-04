@@ -1175,6 +1175,28 @@ for topic in ["/camera/color/image_raw", "/camera/depth/image_raw"]:
     else:
         add(f"camera.topic.{topic}", "pass", "p1", f"{topic} has publishers", {"publishers": pubs, "subscribers": subs})
 camera_topics_ready = all((camera_topic_counts.get(topic, {}).get("publishers") or 0) > 0 for topic in ["/camera/color/image_raw", "/camera/depth/image_raw"])
+camera_info_topics = [
+    "/camera/color/camera_info",
+    "/camera/depth/camera_info",
+    "/camera/camera_info",
+]
+camera_info_counts = {}
+for topic in camera_info_topics:
+    pubs, subs, err = topic_counts(topic)
+    camera_info_counts[topic] = {"publishers": pubs, "subscribers": subs, "error": err}
+camera_info_ready = any(
+    (counts.get("publishers") or 0) > 0
+    for counts in camera_info_counts.values()
+)
+add(
+    "camera.camera_info",
+    "pass" if camera_info_ready else "warn",
+    "p1",
+    "camera intrinsics topic has publishers"
+    if camera_info_ready
+    else "camera intrinsics topic has no publishers",
+    {"topics": camera_info_counts},
+)
 video_nodes = sorted(glob.glob("/dev/video*") + glob.glob("/dev/v4l/by-id/*"))
 if video_nodes:
     add("camera.video_nodes", "pass", "p1", "video devices exist", {"nodes": video_nodes[:8]})

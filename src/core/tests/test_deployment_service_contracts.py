@@ -71,6 +71,40 @@ def test_record_bag_captures_canonical_localization_topics():
     assert "/localization_quality" not in topic_lines
 
 
+def test_record_bag_captures_published_camera_intrinsics_topics():
+    text = _read("scripts/record_bag.sh")
+    topic_lines = {
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith("/")
+    }
+
+    assert "/camera/color/camera_info" in topic_lines
+    assert "/camera/depth/camera_info" in topic_lines
+    assert "/camera/camera_info" not in topic_lines
+
+
+def test_localizer_health_topic_has_steady_heartbeat():
+    text = _read("src/slam/localizer/src/localizer_node.cpp")
+
+    assert "m_health_heartbeat_interval" in text
+    assert "heartbeat_due" in text
+    assert "publishable && (state_changed || heartbeat_due)" in text
+    assert "Localization health heartbeat" in text
+    assert "RCLCPP_DEBUG" in text
+    assert 'state_changed && desired == "LOST"' in text
+
+
+def test_lingtu_doctor_checks_camera_intrinsics_topic_family():
+    text = _read("scripts/lingtu")
+
+    assert "camera.camera_info" in text
+    assert '"/camera/color/camera_info"' in text
+    assert '"/camera/depth/camera_info"' in text
+    assert '"/camera/camera_info"' in text
+    assert "camera intrinsics topic has publishers" in text
+
+
 def test_lingtu_doctor_reports_standard_quality_topic_with_legacy_hint():
     text = _read("scripts/lingtu")
 

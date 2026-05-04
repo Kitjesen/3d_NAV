@@ -54,7 +54,8 @@ TOPICS=(
   /exploration/runtime
   /exploration/finish
   # --- camera meta (for time alignment, cheap) ---
-  /camera/camera_info
+  /camera/color/camera_info
+  /camera/depth/camera_info
 )
 
 timeout "$DURATION" ros2 bag record \
