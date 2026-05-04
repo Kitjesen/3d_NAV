@@ -504,8 +504,16 @@ def _operation_contracts(gw: Any) -> dict[tuple[str, str], dict[str, Any]]:
 
 
 def prewarm_app_capability_contracts(gw: Any) -> bool:
-    """Precompute the OpenAPI-derived App/Web endpoint contract cache."""
-    return bool(_operation_contracts(gw))
+    """Precompute App/Web capabilities metadata and response-model caches."""
+    contracts_ready = bool(_operation_contracts(gw))
+    try:
+        from gateway.schemas import AppCapabilitiesResponse
+
+        payload = build_app_capabilities(gw)
+        AppCapabilitiesResponse.model_validate(payload).model_dump(mode="json")
+    except Exception:
+        pass
+    return contracts_ready
 
 
 def _enrich_endpoint_specs(
