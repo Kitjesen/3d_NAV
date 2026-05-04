@@ -682,8 +682,10 @@ def test_camera_deployment_retires_legacy_units():
     assert "robot-camera.service" in install
     assert "camera.service orbbec-camera.service" in install
     assert 'systemctl mask "$legacy"' in install
-    assert "duplicate /camera ROS node names" in install
-    assert "Only `robot-camera.service` should own the Orbbec ROS nodes" in readme
+    assert "duplicate Orbbec node instances or image" in install
+    assert "One /camera/camera plus one /camera/camera_container is normal" in install
+    assert "Only `robot-camera.service` should own the Orbbec ROS driver" in readme
+    assert "Seeing one `/camera/camera` node" in readme
     assert "KillMode=control-group" in camera_service
 
 

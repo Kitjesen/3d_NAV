@@ -924,7 +924,13 @@ else:
     if dup:
         add("ros.duplicate_nodes", "fail", "p0", "duplicate critical ROS nodes detected", {"duplicates": dup})
     else:
-        add("ros.duplicate_nodes", "pass", "p0", "no duplicate critical ROS nodes", {"count": len(nodes)})
+        add(
+            "ros.duplicate_nodes",
+            "pass",
+            "p0",
+            "no duplicate critical ROS node names; camera component/container pair is expected",
+            {"count": len(nodes)},
+        )
 
 required_topics = ["/nav/lidar_scan", "/nav/imu", "/nav/odometry", "/nav/localization_health"]
 for topic in required_topics:
@@ -1387,7 +1393,7 @@ cmd_doctor() {
             printf "${Y}WARN${N}: duplicate ROS node names detected:\n"
             echo "$dup" | sed 's/^/  /'
         else
-            echo "  ok: no duplicate Livox/Fast-LIO/Super-LIO/localizer/camera nodes"
+            echo "  ok: no duplicate critical ROS node names; camera component/container pair is expected"
         fi
     else
         echo "  ros2 not found"

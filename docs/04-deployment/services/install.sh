@@ -30,7 +30,8 @@ sudo systemctl daemon-reload
 echo "[ok] systemd daemon-reload"
 
 # 5. Retire legacy camera units. Running both a legacy Orbbec unit and
-# robot-camera.service creates duplicate /camera ROS node names.
+# robot-camera.service can create duplicate Orbbec node instances or image
+# publishers. One /camera/camera plus one /camera/camera_container is normal.
 for legacy in camera.service orbbec-camera.service; do
   sudo systemctl stop "$legacy" 2>/dev/null || true
   sudo systemctl disable "$legacy" 2>/dev/null || true

@@ -430,9 +430,10 @@ class CameraBridgeModule(Module, layer=1):
         """Restart the canonical camera systemd service.
 
         The robot used to have a legacy ``camera.service`` unit. Starting it
-        alongside ``robot-camera.service`` creates duplicate ROS node names
-        (/camera/camera and /camera/camera_container), so recovery always stops
-        legacy units before bringing the canonical unit back.
+        alongside ``robot-camera.service`` can duplicate Orbbec publishers or
+        node instances. A single ``/camera/camera`` component plus a single
+        ``/camera/camera_container`` is normal, so recovery stops only legacy
+        units before bringing the canonical unit back.
         """
         import subprocess
 
