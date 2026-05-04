@@ -463,13 +463,25 @@ def test_map_routes_validate_json_contracts(monkeypatch):
         )
 
         assert [item.name for item in maps.maps] == ["demo"]
+        assert maps.schema_version == 1
+        assert maps.count == 1
+        assert maps.ts > 0
         assert maps.maps[0].has_pcd is True
         assert maps.maps[0].has_tomogram is True
+        assert live_points.schema_version == 1
         assert live_points.count == 0
         assert live_points.layout == "xyz_rows"
+        assert live_points.frame_id == "map"
+        assert live_points.source == "live_map_cloud"
+        assert live_points.ts > 0
         assert live_points.points == []
+        assert saved_points.schema_version == 1
         assert saved_points.count == 2
         assert saved_points.layout == "flat_xyz"
+        assert saved_points.frame_id == "map"
+        assert saved_points.source == "saved_map_pcd"
+        assert saved_points.name == "demo"
+        assert saved_points.ts > 0
         assert saved_points.points == [1, 2, 3, 4, 5, 6]
         assert reset.schema_version == 1
         assert reset.ok is True

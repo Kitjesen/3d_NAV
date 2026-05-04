@@ -9,6 +9,27 @@ export interface MapInfo {
   patch_count?: number
 }
 
+export interface MapListResponse {
+  schema_version: number
+  maps: MapInfo[]
+  count: number
+  active: string
+  map_dir: string
+  ts: number
+}
+
+export interface MapPointsResponse {
+  schema_version: number
+  count: number
+  layout: 'flat_xyz' | 'xyz_rows'
+  frame_id: string
+  source: string
+  name?: string | null
+  points: number[] | Array<[number, number, number]>
+  bounds?: Record<string, number[]> | null
+  ts: number
+}
+
 export interface ServerInfo {
   api_version: string
   time: number

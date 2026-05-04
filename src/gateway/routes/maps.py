@@ -148,7 +148,14 @@ def register_map_routes(app, gw) -> None:
                         "patch_count": patch_count,
                     }
                 )
-        return {"maps": maps, "active": active_target, "map_dir": map_dir}
+        return {
+            "schema_version": 1,
+            "maps": maps,
+            "count": len(maps),
+            "active": active_target,
+            "map_dir": map_dir,
+            "ts": time.time(),
+        }
 
     @app.get(
         "/api/v1/maps/{name}/pcd",
@@ -207,7 +214,16 @@ def register_map_routes(app, gw) -> None:
             idx = np.random.choice(len(pts), max_points, replace=False)
             pts = pts[idx]
         flat = pts[:, :3].astype(np.float32).flatten().tolist()
-        return {"count": len(pts), "layout": "flat_xyz", "points": flat}
+        return {
+            "schema_version": 1,
+            "count": len(pts),
+            "layout": "flat_xyz",
+            "frame_id": "map",
+            "source": "saved_map_pcd",
+            "name": name,
+            "points": flat,
+            "ts": time.time(),
+        }
 
     @app.get(
         "/api/v1/map/points",
@@ -218,19 +234,30 @@ def register_map_routes(app, gw) -> None:
         with gw._map_cloud_lock:
             pts = gw._map_points
         if pts is None or len(pts) == 0:
-            return {"count": 0, "layout": "xyz_rows", "points": []}
+            return {
+                "schema_version": 1,
+                "count": 0,
+                "layout": "xyz_rows",
+                "frame_id": "map",
+                "source": "live_map_cloud",
+                "points": [],
+                "ts": time.time(),
+            }
         if len(pts) > max_points:
             idx = np.random.choice(len(pts), max_points, replace=False)
             pts = pts[idx]
         return {
             "count": len(pts),
             "layout": "xyz_rows",
+            "frame_id": "map",
+            "source": "live_map_cloud",
             "bounds": {
                 "x": [float(pts[:, 0].min()), float(pts[:, 0].max())],
                 "y": [float(pts[:, 1].min()), float(pts[:, 1].max())],
                 "z": [float(pts[:, 2].min()), float(pts[:, 2].max())],
             },
             "points": pts[:, :3].tolist(),
+            "ts": time.time(),
         }
 
     @app.post(

@@ -612,9 +612,12 @@ class MapInfo(GatewayResponseModel):
 
 
 class MapListResponse(GatewayResponseModel):
+    schema_version: int = 1
     maps: list[MapInfo] = Field(default_factory=list)
+    count: int = 0
     active: str = ""
     map_dir: str = ""
+    ts: float = Field(default_factory=time.time)
 
 
 class MapLifecycleResponse(GatewayResponseModel):
@@ -647,12 +650,17 @@ class MapLifecycleResponse(GatewayResponseModel):
 
 
 class MapPointsResponse(GatewayResponseModel):
+    schema_version: int = 1
     count: int
     layout: Literal["flat_xyz", "xyz_rows"] = "xyz_rows"
+    frame_id: str = "map"
+    source: str = "unknown"
+    name: str | None = None
     points: list[float] | list[tuple[float, float, float]] = Field(
         default_factory=list
     )
     bounds: dict[str, list[float]] | None = None
+    ts: float = Field(default_factory=time.time)
 
 
 class TemporalMemoryResponse(GatewayResponseModel):

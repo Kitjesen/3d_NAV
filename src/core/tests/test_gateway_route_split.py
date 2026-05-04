@@ -397,7 +397,14 @@ def test_openapi_exposes_client_response_models():
     assert "ts" in schemas["MapLifecycleResponse"]["properties"]
     assert "warnings" in schemas["MapLifecycleResponse"]["properties"]
     assert "MapListResponse" in schemas
+    assert "schema_version" in schemas["MapListResponse"]["properties"]
+    assert "count" in schemas["MapListResponse"]["properties"]
+    assert "ts" in schemas["MapListResponse"]["properties"]
     assert "MapPointsResponse" in schemas
+    assert "schema_version" in schemas["MapPointsResponse"]["properties"]
+    assert "frame_id" in schemas["MapPointsResponse"]["properties"]
+    assert "source" in schemas["MapPointsResponse"]["properties"]
+    assert "ts" in schemas["MapPointsResponse"]["properties"]
     assert "TemporalMemoryResponse" in schemas
     assert "ExplorationCommandResponse" in schemas
     assert "ExplorationStatusResponse" in schemas

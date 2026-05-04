@@ -14,6 +14,8 @@ import type {
   LocationsResponse,
   MapInfo,
   MapLifecycleResponse,
+  MapListResponse,
+  MapPointsResponse,
   PathResponse,
   PlanPreviewRequest,
   PlanPreviewResponse,
@@ -119,6 +121,14 @@ function commandBody<T extends Record<string, unknown>>(
     client_id: WEB_CLIENT_ID,
     request_id: makeRequestId(prefix),
   }
+}
+
+function flattenPointArray(points: MapPointsResponse['points']): number[] {
+  const first = points[0]
+  if (Array.isArray(first)) {
+    return (points as Array<[number, number, number]>).flatMap(([x, y, z]) => [x, y, z])
+  }
+  return points as number[]
 }
 
 async function postJson<T>(url: string, body?: unknown): Promise<T> {
@@ -262,47 +272,51 @@ export async function updateLease(action: LeaseAction, ttl = 30): Promise<LeaseR
 
 // --- SLAM ---
 
-export async function switchSlamMode(profile: SlamProfile): Promise<void> {
+export async function switchSlamMode(profile: SlamProfile): Promise<SlamOperationResponse> {
   const res = await fetch('/api/v1/slam/switch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ profile }),
   })
-  await readSlamOperation(res)
+  return readSlamOperation(res)
 }
 
 // --- Maps ---
 
-export async function fetchMaps(): Promise<MapInfo[]> {
-  const data = await fetchJson<{ maps?: MapInfo[] }>('/api/v1/slam/maps')
-  return data.maps || []
+export async function fetchMapList(): Promise<MapListResponse> {
+  return fetchJson<MapListResponse>('/api/v1/slam/maps')
 }
 
-export async function activateMap(name: string): Promise<void> {
+export async function fetchMaps(): Promise<MapInfo[]> {
+  const data = await fetchMapList()
+  return data.maps
+}
+
+export async function activateMap(name: string): Promise<MapLifecycleResponse> {
   const res = await fetch('/api/v1/map/activate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
-  await readMapLifecycle(res)
+  return readMapLifecycle(res)
 }
 
-export async function deleteMap(name: string): Promise<void> {
+export async function deleteMap(name: string): Promise<MapLifecycleResponse> {
   const res = await fetch('/api/v1/maps', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'delete', name }),
   })
-  await readMapLifecycle(res)
+  return readMapLifecycle(res)
 }
 
-export async function renameMap(oldName: string, newName: string): Promise<void> {
+export async function renameMap(oldName: string, newName: string): Promise<MapLifecycleResponse> {
   const res = await fetch('/api/v1/map/rename', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ old_name: oldName, new_name: newName }),
   })
-  await readMapLifecycle(res)
+  return readMapLifecycle(res)
 }
 
 export interface SaveMapResult extends MapLifecycleResponse {
@@ -375,25 +389,34 @@ export async function endSession(): Promise<SessionState> {
   return data.session as SessionState
 }
 
-export async function resetMapCloud(): Promise<void> {
+export async function resetMapCloud(): Promise<MapLifecycleResponse> {
   const res = await fetch('/api/v1/map_cloud/reset', { method: 'POST' })
-  await readMapLifecycle(res)
+  return readMapLifecycle(res)
+}
+
+export async function fetchSavedMapPointsResponse(name: string): Promise<MapPointsResponse> {
+  const res = await fetch(`/api/v1/maps/${encodeURIComponent(name)}/points?max_points=30000`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<MapPointsResponse>
 }
 
 export async function fetchSavedMapPoints(name: string): Promise<number[]> {
-  const res = await fetch(`/api/v1/maps/${encodeURIComponent(name)}/points?max_points=30000`)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const data = await res.json()
-  return data.points as number[]
+  const data = await fetchSavedMapPointsResponse(name)
+  return flattenPointArray(data.points)
 }
 
-export async function relocalize(mapName: string, x: number, y: number, yaw: number): Promise<void> {
+export async function relocalize(
+  mapName: string,
+  x: number,
+  y: number,
+  yaw: number,
+): Promise<SlamOperationResponse> {
   const res = await fetch('/api/v1/slam/relocalize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ map_name: mapName, x, y, yaw }),
   })
-  await readSlamOperation(res)
+  return readSlamOperation(res)
 }
 
 // Global (no-guess) relocalize via 3D-BBS. Fires the worker in localizer;
