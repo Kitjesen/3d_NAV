@@ -18,6 +18,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -62,11 +63,22 @@ def _resolve_sim_path(path: str) -> str:
     candidate = Path(path).expanduser()
     if candidate.is_absolute():
         return str(candidate)
-    for base in (_SIM_ROOT, _SIM_ROOT.parent, Path.cwd()):
-        resolved = (base / candidate).resolve()
+
+    candidate_paths: list[Path] = []
+    parts = candidate.parts
+    if parts and parts[0].lower() == "sim":
+        candidate_paths.append(_SIM_ROOT.parent / candidate)
+        if len(parts) > 1:
+            candidate_paths.append(_SIM_ROOT / Path(*parts[1:]))
+    else:
+        candidate_paths.append(_SIM_ROOT / candidate)
+        candidate_paths.append(_SIM_ROOT.parent / candidate)
+    candidate_paths.append(Path.cwd() / candidate)
+
+    for resolved in [p.resolve() for p in candidate_paths]:
         if resolved.exists():
             return str(resolved)
-    return str((_SIM_ROOT / candidate).resolve())
+    return str(candidate_paths[0].resolve())
 
 
 def _is_default_start_pos(start_pos: tuple) -> bool:
@@ -133,6 +145,7 @@ class MujocoDriverModule(Module, layer=1):
         sim_rate: float = 50.0,
         policy_path: str = "",
         robot_xml: str = "",
+        drive_mode: str = "",
         start_pos: tuple = _DEFAULT_START_POS,
         obstacles: list | None = None,
         **kw,
@@ -142,8 +155,17 @@ class MujocoDriverModule(Module, layer=1):
         self._render = render
         self._enable_camera = bool(enable_camera or render)
         self._sim_rate = sim_rate
+        self._drive_mode = (
+            drive_mode or os.environ.get("LINGTU_SIM_DRIVE_MODE", "policy")
+        ).strip().lower()
+        if self._drive_mode not in {"policy", "kinematic"}:
+            raise ValueError(f"Unsupported MuJoCo drive_mode: {self._drive_mode}")
         default_policy = _first_existing_path(_POLICY_CANDIDATES)
-        self._policy_path = _resolve_sim_path(policy_path) if policy_path else default_policy
+        self._policy_path = (
+            _resolve_sim_path(policy_path) if policy_path else default_policy
+        )
+        if self._drive_mode == "kinematic":
+            self._policy_path = ""
         self._robot_xml = _resolve_sim_path(robot_xml) if robot_xml else str(_ROBOT_XML)
         self._start_pos = start_pos
         self._obstacles = obstacles or []
@@ -189,7 +211,7 @@ class MujocoDriverModule(Module, layer=1):
             scene_start = _scene_placeholder_start(world_path)
             start_pos = scene_start if scene_start is not None and _is_default_start_pos(self._start_pos) else list(self._start_pos)
             robot_cfg.init_position = [float(v) for v in start_pos[:3]]
-            if self._policy_path:
+            if self._drive_mode == "policy" and self._policy_path:
                 robot_cfg.policy_onnx = self._policy_path
 
             from sim.engine.core.world import ObstacleConfig
@@ -219,13 +241,18 @@ class MujocoDriverModule(Module, layer=1):
                 ),
                 camera_configs=camera_cfgs,
                 headless=not self._render,
+                drive_mode=self._drive_mode,
             )
             # Let MuJoCoEngine decide whether to use the scene directly or merge
             # the selected world geometry into the robot model.
             self._engine.load(str(world_path))
             self._engine.reset()  # stabilize + warm up policy history
-            logger.info("MujocoDriverModule: loaded world '%s', robot at %s",
-                        self._world_name, tuple(robot_cfg.init_position))
+            logger.info(
+                "MujocoDriverModule: loaded world '%s', robot at %s, drive_mode=%s",
+                self._world_name,
+                tuple(robot_cfg.init_position),
+                self._drive_mode,
+            )
 
         except ImportError as e:
             self._engine = None
@@ -275,6 +302,8 @@ class MujocoDriverModule(Module, layer=1):
                 self._cmd_vy = 0.0
                 self._cmd_wz = 0.0
             self._stopped = True
+            return
+        self._stopped = False
 
     def _sim_loop(self):
         """Main simulation loop — steps physics and publishes sensor data."""
@@ -390,5 +419,6 @@ class MujocoDriverModule(Module, layer=1):
             "has_engine": self._engine is not None,
             "sim_rate": self._sim_rate,
             "render": self._render,
+            "drive_mode": self._drive_mode,
         }
         return info

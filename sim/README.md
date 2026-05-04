@@ -131,6 +131,27 @@ python sim/scripts/go1_indoor_nav.py    # Go1 indoor navigation demo
 python lingtu.py sim                     # Full LingTu stack in simulation
 ```
 
+### 6.2.1 Headless Navigation Smoke Mode
+
+`MujocoDriverModule` supports two drive modes:
+
+| Mode | Purpose |
+|------|---------|
+| `policy` | Default. Uses the ONNX gait policy and MuJoCo contacts. |
+| `kinematic` | Applies `cmd_vel` directly to the floating base for deterministic headless navigation tests. |
+
+Use kinematic mode when validating that LingTu planning, path following,
+`CmdVelMux`, odometry, and exploration are wired correctly without requiring a
+working gait checkpoint:
+
+```bash
+LINGTU_SIM_DRIVE_MODE=kinematic python lingtu.py sim
+```
+
+Kinematic mode proves the navigation stack can command route-level motion in
+simulation. It is not evidence that the Thunder v3 RL gait policy is healthy;
+policy-mode smoke tests should still be run before claiming gait-level fidelity.
+
 ### 6.3 Full Stack with ROS2
 
 ```bash

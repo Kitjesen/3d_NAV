@@ -20,10 +20,28 @@ def navigation(
     enable_ros2_bridge = bool(config.get("enable_ros2_bridge", False))
 
     from nav.navigation_module import NavigationModule
+    nav_config = {
+        key: config[key]
+        for key in (
+            "obstacle_thr",
+            "waypoint_threshold",
+            "stuck_timeout",
+            "stuck_dist_thre",
+            "max_replan_count",
+            "downsample_dist",
+            "allow_direct_goal_fallback",
+            "goal_update_epsilon",
+            "mission_timeout",
+            "planning_timeout",
+            "preview_timeout",
+        )
+        if key in config
+    }
     bp.add(NavigationModule,
            planner=planner_backend,
            tomogram=tomogram,
-           enable_ros2_bridge=enable_ros2_bridge)
+           enable_ros2_bridge=enable_ros2_bridge,
+           **nav_config)
 
     if config.get("enable_frontier", False):
         try:

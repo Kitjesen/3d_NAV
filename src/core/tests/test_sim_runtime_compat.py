@@ -126,12 +126,14 @@ class _FakeEngine:
         lidar_config,
         camera_configs,
         headless,
+        drive_mode="policy",
     ):
         self.robot_config = robot_config
         self.world_config = world_config
         self.lidar_config = lidar_config
         self.camera_configs = camera_configs
         self.headless = headless
+        self.drive_mode = drive_mode
         self.loaded_xml_path = ""
         self.reset_called = False
 
@@ -164,6 +166,7 @@ def test_mujoco_driver_setup_uses_selected_scene_and_real_robot(monkeypatch):
     assert Path(driver._engine.robot_config.robot_xml).exists()
     assert driver._engine.robot_config.base_body_name == "base_link"
     assert driver._engine.lidar_config.body_name == "lidar_link"
+    assert driver._engine.drive_mode == "policy"
     assert driver._engine.reset_called is True
     assert len(driver._engine.camera_configs) == 1
 
@@ -204,6 +207,49 @@ def test_mujoco_driver_prefers_thunder_policy_and_resolves_repo_relative_paths(m
 
     explicit = MujocoDriverModule(policy_path="sim/robots/nova_dog/thunder_policy.onnx")
     assert Path(explicit._policy_path) == thunder_policy.resolve()
+
+    missing_explicit = driver_mod._resolve_sim_path("sim/robots/nova_dog/missing.onnx")
+    assert Path(missing_explicit) == (sim_root / "robots" / "nova_dog" / "missing.onnx").resolve()
+
+    missing_sim_relative = driver_mod._resolve_sim_path("robots/nova_dog/missing.onnx")
+    assert Path(missing_sim_relative) == (
+        sim_root / "robots" / "nova_dog" / "missing.onnx"
+    ).resolve()
+
+
+def test_mujoco_driver_kinematic_mode_disables_policy(monkeypatch):
+    import sim.engine.mujoco.engine as mujoco_engine
+
+    monkeypatch.setitem(sys.modules, "mujoco", types.SimpleNamespace(__version__="test"))
+    monkeypatch.setattr(mujoco_engine, "MuJoCoEngine", _FakeEngine)
+
+    driver = MujocoDriverModule(
+        world="open_field",
+        render=False,
+        enable_camera=False,
+        drive_mode="kinematic",
+    )
+    driver.setup()
+
+    assert driver._engine is not None
+    assert driver._engine.drive_mode == "kinematic"
+    assert driver._engine.robot_config.policy_onnx == ""
+
+
+def test_mujoco_driver_stop_signal_zero_clears_soft_stop_latch():
+    driver = MujocoDriverModule(world="open_field", render=False, enable_camera=False)
+    driver.cmd_vel.subscribe(driver._on_cmd_vel)
+    driver.stop_signal.subscribe(driver._on_stop)
+
+    driver.stop_signal._deliver(1)
+    driver.cmd_vel._deliver(Twist(linear=Vector3(0.4, 0.0, 0.0)))
+    assert driver._stopped is True
+    assert driver._cmd_vx == 0.0
+
+    driver.stop_signal._deliver(0)
+    driver.cmd_vel._deliver(Twist(linear=Vector3(0.4, 0.0, 0.0)))
+    assert driver._stopped is False
+    assert driver._cmd_vx == pytest.approx(0.4)
 
 
 def test_mujoco_policy_runner_pads_legacy_obs_for_single_frame_policy():
@@ -247,6 +293,34 @@ def test_mujoco_driver_default_robot_emits_lidar_points():
             driver._engine = None
 
 
+def test_mujoco_driver_kinematic_cmd_vel_moves_free_base():
+    pytest.importorskip("mujoco")
+    from sim.engine.core.engine import VelocityCommand
+
+    driver = MujocoDriverModule(
+        world="open_field",
+        render=False,
+        enable_camera=False,
+        drive_mode="kinematic",
+    )
+    driver.setup()
+    try:
+        assert driver._engine is not None
+        assert driver._engine.drive_mode == "kinematic"
+        assert driver._engine.has_policy is False
+
+        start = driver._engine.get_robot_state().position.copy()
+        for _ in range(100):
+            state = driver._engine.step(VelocityCommand(linear_x=0.5))
+
+        moved = math.hypot(state.position[0] - start[0], state.position[1] - start[1])
+        assert moved > 0.75
+    finally:
+        if driver._engine is not None:
+            driver._engine.close()
+            driver._engine = None
+
+
 def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
     pytest.importorskip("mujoco")
 
@@ -262,6 +336,9 @@ def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
         render=False,
         python_autonomy_backend="simple",
         python_path_follower_backend="pid",
+        drive_mode="kinematic",
+        waypoint_threshold=0.35,
+        downsample_dist=0.5,
         run_startup_checks=False,
     ).build()
     driver = system.get_module("MujocoDriverModule")
@@ -310,10 +387,12 @@ def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
 
         start = odom[-1]
         x, y, _ = start
+        goal_x = x + 2.5
+        goal_y = y
         nav.goal_pose._deliver(
             PoseStamped(
                 pose=Pose(
-                    position=Vector3(x + 0.8, y, 0.0),
+                    position=Vector3(goal_x, goal_y, 0.0),
                     orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
                 ),
                 frame_id="map",
@@ -321,18 +400,21 @@ def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
             )
         )
 
-        plan_deadline = time.time() + 4.0
+        plan_deadline = time.time() + 10.0
         moved = 0.0
+        dist_to_goal = math.hypot(goal_x - start[0], goal_y - start[1])
         while time.time() < plan_deadline:
             time.sleep(0.1)
             if odom:
                 moved = math.hypot(odom[-1][0] - start[0], odom[-1][1] - start[1])
+                dist_to_goal = math.hypot(goal_x - odom[-1][0], goal_y - odom[-1][1])
             if (
                 seen["waypoints"] > 0
                 and seen["local_path"] > 0
                 and seen["path_follower_cmd"] > 0
                 and seen["mux_cmd"] > 0
-                and moved > 0.02
+                and moved > 0.75
+                and dist_to_goal < 1.75
             ):
                 break
 
@@ -341,7 +423,8 @@ def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
         assert seen["path_follower_cmd"] > 0
         assert seen["mux_cmd"] > 0
         assert seen["direct_fallback"] == 0
-        assert moved > 0.02
+        assert moved > 0.75
+        assert dist_to_goal < 1.75
         assert nav._state in ("EXECUTING", "SUCCESS")
     finally:
         system.stop()

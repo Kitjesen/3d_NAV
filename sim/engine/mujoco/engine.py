@@ -51,7 +51,8 @@ class MuJoCoEngine(SimEngine):
                  lidar_config: Optional[LidarConfig] = None,
                  camera_configs: Optional[List[CameraConfig]] = None,
                  imu_config: Optional[IMUConfig] = None,
-                 headless: bool = True) -> None:
+                 headless: bool = True,
+                 drive_mode: str = "policy") -> None:
         """Initialize MuJoCo engine (model not loaded; call load() before use).
 
         Args:
@@ -61,6 +62,9 @@ class MuJoCoEngine(SimEngine):
             camera_configs: list of camera configurations
             imu_config: IMU configuration
             headless: True=headless mode, False=launch MuJoCo viewer
+            drive_mode: "policy" for ONNX gait control, "kinematic" for
+                headless navigation validation that applies cmd_vel directly
+                to the floating base.
         """
         super().__init__()
 
@@ -70,6 +74,9 @@ class MuJoCoEngine(SimEngine):
         self._camera_cfgs = camera_configs or []
         self._imu_cfg = imu_config or IMUConfig()
         self._headless = headless
+        self._drive_mode = (drive_mode or "policy").strip().lower()
+        if self._drive_mode not in {"policy", "kinematic"}:
+            raise ValueError(f"Unsupported MuJoCo drive_mode: {drive_mode}")
 
         # MuJoCo core objects (initialized after load())
         self._model = None
@@ -88,6 +95,8 @@ class MuJoCoEngine(SimEngine):
         self._base_body_id: int = 0
         self._lidar_body_id: int = 0
         self._leg_actuator_offset: int = 0
+        self._root_qposadr: int = 0
+        self._root_dofadr: int = 0
 
         # cmd_vel (thread-safe)
         self._cmd_vel = np.zeros(3, dtype=np.float64)  # [vx, vy, wz]
@@ -250,9 +259,13 @@ class MuJoCoEngine(SimEngine):
             except Exception as e:
                 print(f'[MuJoCoEngine] Warning: {e}')
 
-        # Initialize policy
+        # Initialize policy. Kinematic mode intentionally bypasses the gait
+        # policy so route-level navigation tests are not gated by RL checkpoints.
         policy_path = self._robot_cfg.policy_onnx
-        if policy_path:
+        if self._drive_mode == "kinematic":
+            print('[MuJoCoEngine] Kinematic drive mode enabled, policy disabled')
+            self._policy = None
+        elif policy_path:
             if Path(policy_path).exists():
                 self._policy = PolicyRunner(policy_path)
             else:
@@ -267,6 +280,7 @@ class MuJoCoEngine(SimEngine):
         print(f'[MuJoCoEngine] Loaded. dt={self._physics_dt:.4f}s, '
               f'joints={valid_leg_joints}, '
               f'ctrl_offset={self._leg_actuator_offset}, '
+              f'drive_mode={self._drive_mode}, '
               f'cameras={list(self._cameras.keys())}')
 
     def _resolve_ids(self) -> None:
@@ -286,6 +300,7 @@ class MuJoCoEngine(SimEngine):
             aliases=[self._robot_cfg.base_body_name, "trunk", "lidar_link"],
         )
         self._lidar_cfg.body_name = resolved_lidar
+        self._resolve_root_joint_adrs()
         leg_joint_names = self._robot_cfg.leg_joint_names or DEFAULT_LEG_JOINT_NAMES
         self._leg_joint_ids = [
             self._resolve_joint_id(name)
@@ -301,6 +316,21 @@ class MuJoCoEngine(SimEngine):
         ]
         if missing_actuators:
             print(f'[MuJoCoEngine] Warning: actuators not found: {missing_actuators}')
+
+    def _resolve_root_joint_adrs(self) -> None:
+        """Resolve floating-base qpos/qvel addresses for kinematic drive."""
+        import mujoco
+
+        self._root_qposadr = 0
+        self._root_dofadr = 0
+        if self._model is None:
+            return
+
+        for jid in range(int(self._model.njnt)):
+            if int(self._model.jnt_type[jid]) == int(mujoco.mjtJoint.mjJNT_FREE):
+                self._root_qposadr = int(self._model.jnt_qposadr[jid])
+                self._root_dofadr = int(self._model.jnt_dofadr[jid])
+                return
 
     def _resolve_body_id(self, preferred_name: str, aliases: List[str]) -> tuple[int, str]:
         """Resolve a MuJoCo body name with a few safe fallbacks."""
@@ -492,6 +522,8 @@ class MuJoCoEngine(SimEngine):
         # Physics stepping (policy_dt / physics_dt steps)
         n_sub = max(1, round(self._control_dt / self._physics_dt))
         for _ in range(n_sub):
+            if self._drive_mode == "kinematic":
+                self._apply_kinematic_cmd()
             mujoco.mj_step(self._model, self._data)
         self._sim_time += self._control_dt
 
@@ -536,6 +568,48 @@ class MuJoCoEngine(SimEngine):
             standing_dart = self._robot_cfg.standing_pose_array
             action_mj = standing_dart[DART_TO_MJ]
             self._write_leg_ctrl(action_mj)
+
+    def _apply_kinematic_cmd(self) -> None:
+        """Apply cmd_vel directly to the free joint for deterministic nav smoke tests."""
+        if self._model is None or self._data is None:
+            return
+
+        with self._lock:
+            vx_body, vy_body, wz = self._cmd_vel.copy()
+
+        qadr = self._root_qposadr
+        dadr = self._root_dofadr
+        if qadr + 7 > len(self._data.qpos) or dadr + 6 > len(self._data.qvel):
+            return
+
+        quat = self._data.qpos[qadr + 3:qadr + 7]
+        yaw = self._yaw_from_wxyz(quat)
+        c, s = np.cos(yaw), np.sin(yaw)
+        vx_world = vx_body * c - vy_body * s
+        vy_world = vx_body * s + vy_body * c
+
+        self._data.qvel[dadr + 0] = vx_world
+        self._data.qvel[dadr + 1] = vy_world
+        self._data.qvel[dadr + 2] = 0.0
+        self._data.qvel[dadr + 3] = 0.0
+        self._data.qvel[dadr + 4] = 0.0
+        self._data.qvel[dadr + 5] = wz
+
+        # Keep the simplified simulator upright and at nominal body height.
+        self._data.qpos[qadr + 2] = float(self._robot_cfg.init_position[2])
+        cy, sy = np.cos(yaw / 2.0), np.sin(yaw / 2.0)
+        self._data.qpos[qadr + 3] = cy
+        self._data.qpos[qadr + 4] = 0.0
+        self._data.qpos[qadr + 5] = 0.0
+        self._data.qpos[qadr + 6] = sy
+
+    @staticmethod
+    def _yaw_from_wxyz(quat_wxyz: np.ndarray) -> float:
+        w, x, y, z = [float(v) for v in quat_wxyz[:4]]
+        return float(np.arctan2(
+            2.0 * (w * z + x * y),
+            1.0 - 2.0 * (y * y + z * z),
+        ))
 
     def _write_leg_ctrl(self, targets_mj: np.ndarray) -> None:
         """Write joint targets in MuJoCo joint order, independent of XML actuator order."""
@@ -723,6 +797,10 @@ class MuJoCoEngine(SimEngine):
     def has_policy(self) -> bool:
         return self._policy is not None
 
+    @property
+    def drive_mode(self) -> str:
+        return self._drive_mode
+
     # ──────────────────────────────────────────────────────────────
     # Background physics thread (optional, for async stepping)
     # ──────────────────────────────────────────────────────────────
@@ -763,6 +841,8 @@ class MuJoCoEngine(SimEngine):
             with self._lock:
                 pass  # acquire lock pattern
 
+            if self._drive_mode == "kinematic":
+                self._apply_kinematic_cmd()
             mujoco.mj_step(self._model, self._data)
             self._sim_time += self._physics_dt
 
