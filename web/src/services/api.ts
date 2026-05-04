@@ -104,10 +104,23 @@ export function formatCommandError(error: unknown, label = '命令失败'): stri
   return `${label}: ${String(error)}`
 }
 
+async function readJsonResponse<T>(res: Response): Promise<T> {
+  const text = await res.text()
+  let data: unknown
+  try {
+    data = text ? JSON.parse(text) : undefined
+  } catch {
+    data = undefined
+  }
+  if (!res.ok) {
+    const error = isRecord(data) ? data as unknown as GatewayErrorResponse : undefined
+    throw new GatewayApiError(res.status, error)
+  }
+  return data as T
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json() as Promise<T>
+  return readJsonResponse<T>(await fetch(url))
 }
 
 function makeRequestId(prefix: string): string {
@@ -142,18 +155,7 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  const text = await res.text()
-  let data: unknown
-  try {
-    data = text ? JSON.parse(text) : undefined
-  } catch {
-    data = undefined
-  }
-  if (!res.ok) {
-    const error = data as GatewayErrorResponse | undefined
-    throw new GatewayApiError(res.status, error)
-  }
-  return data as T
+  return readJsonResponse<T>(res)
 }
 
 async function readMapLifecycle(res: Response): Promise<MapLifecycleResponse> {
