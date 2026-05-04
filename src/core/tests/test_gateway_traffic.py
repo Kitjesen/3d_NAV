@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 
 import pytest
 
@@ -603,6 +604,45 @@ def test_gateway_stop_signals_background_threads_without_server_start():
     assert gateway._drift_watchdog_thread is None
     assert not saved_thread.is_alive()
     assert not drift_thread.is_alive()
+
+
+def test_gateway_start_runs_client_http_prewarm_in_background(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway._drift_watchdog_enabled = False
+    gateway.setup()
+
+    server_started = threading.Event()
+    prewarm_started = threading.Event()
+
+    def fake_run_server(stop_event=None):
+        server_started.set()
+        (stop_event or gateway._stop_event).wait(1.0)
+        return True
+
+    def fake_prewarm(stop_event=None, *, timeout_s=15.0):
+        assert timeout_s == 15.0
+        prewarm_started.set()
+        (stop_event or gateway._stop_event).wait(1.0)
+        return False
+
+    monkeypatch.setattr(gateway, "_run_server", fake_run_server)
+    monkeypatch.setattr(gateway, "_prewarm_client_http_routes", fake_prewarm)
+
+    started_at = time.perf_counter()
+    gateway.start()
+    elapsed_s = time.perf_counter() - started_at
+
+    assert elapsed_s < 0.5
+    assert server_started.wait(timeout=0.5)
+    assert prewarm_started.wait(timeout=0.5)
+    assert gateway._client_http_prewarm_thread is not None
+    assert gateway._client_http_prewarm_thread.is_alive()
+
+    gateway.stop()
+
+    assert gateway._client_http_prewarm_thread is None
 
 
 def test_gateway_stop_retains_background_thread_when_join_times_out():

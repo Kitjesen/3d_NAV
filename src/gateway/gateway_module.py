@@ -469,6 +469,7 @@ class GatewayModule(Module, layer=6):
         self._app   = None
         self._server: Any = None
         self._server_thread: threading.Thread | None = None
+        self._client_http_prewarm_thread: threading.Thread | None = None
         self._saved_map_loader_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._defer_server: bool = False  # True → main thread runs uvicorn
@@ -523,7 +524,18 @@ class GatewayModule(Module, layer=6):
                 name="gateway",
             )
             self._server_thread.start()
-            self._prewarm_client_http_routes(stop_event)
+            if (
+                self._client_http_prewarm_thread is None
+                or not self._client_http_prewarm_thread.is_alive()
+            ):
+                self._client_http_prewarm_thread = threading.Thread(
+                    target=self._prewarm_client_http_routes,
+                    args=(stop_event,),
+                    kwargs={"timeout_s": 15.0},
+                    daemon=True,
+                    name="gateway_client_prewarm",
+                )
+                self._client_http_prewarm_thread.start()
         # Background: load active map.pcd from disk and push as saved_map
         # event so the frontend底图 always has the stored map regardless of
         # whether localizer has converged. Re-pushes periodically so late-
@@ -594,7 +606,7 @@ class GatewayModule(Module, layer=6):
                     timeout=request_timeout,
                 ) as response:
                     response.read()
-                logger.debug("GatewayModule: prewarmed App/Web capabilities route")
+                logger.info("GatewayModule: prewarmed App/Web capabilities route")
                 return True
             except (OSError, URLError):
                 stop_event.wait(0.1)
@@ -911,6 +923,7 @@ class GatewayModule(Module, layer=6):
         current = threading.current_thread()
         for attr_name in (
             "_server_thread",
+            "_client_http_prewarm_thread",
             "_saved_map_loader_thread",
             "_drift_watchdog_thread",
         ):
