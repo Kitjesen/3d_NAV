@@ -48,6 +48,10 @@ LOCALIZATION_MOTION_HOLD_SIGNALS = {"ODOM_MISSING"}
 LOCALIZATION_MOTION_HOLD_ACTIONS = {"restart_localization_chain"}
 
 
+class _PlanPreviewBusy(RuntimeError):
+    """Raised when a non-motion plan preview is already running."""
+
+
 class MissionState:
     IDLE       = "IDLE"
     PLANNING   = "PLANNING"
@@ -830,7 +834,7 @@ class NavigationModule(Module, layer=5):
             result["reasons"] = ["planning_timeout"]
             result["error"] = str(exc)
             return result
-        except RuntimeError as exc:
+        except _PlanPreviewBusy as exc:
             result["reasons"] = ["planning_preview_busy"]
             result["error"] = str(exc)
             return result
@@ -910,7 +914,7 @@ class NavigationModule(Module, layer=5):
         goal: np.ndarray,
     ) -> tuple[Any, Any]:
         if not self._preview_planner_lock.acquire(blocking=False):
-            raise RuntimeError("another plan preview is already running")
+            raise _PlanPreviewBusy("another plan preview is already running")
 
         def _run() -> tuple[Any, Any]:
             try:

@@ -870,6 +870,7 @@ def test_tare_explorer_is_available_through_exploration_contracts():
     assert snapshot["explorer_unavailable_reason"] is None
     assert snapshot["explorer_required_profile"] is None
     assert snapshot["can_start_exploring"] is True
+    assert snapshot["exploration_blockers"] == []
 
 
 def test_wavefront_explorer_is_available_through_exploration_contracts():
@@ -964,6 +965,9 @@ def test_explore_start_rejects_localization_recovery_blocker():
     assert "localization_recovery_active" in error.detail["blockers"]
     assert explorer.started is False
     assert gateway._exploring is False
+    snapshot = gateway._session_snapshot()
+    assert snapshot["can_start_exploring"] is False
+    assert snapshot["exploration_blockers"] == ["localization_recovery_active"]
 
 
 def test_exploring_session_start_rejects_localization_recovery_blocker(monkeypatch):

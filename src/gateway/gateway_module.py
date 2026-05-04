@@ -1313,7 +1313,31 @@ class GatewayModule(Module, layer=6):
         explorer_required_profile = (
             None if explorer_available else explorer_detail.get("required_profile")
         )
-        can_start_exploring = idle and explorer_available
+        exploration_blockers: list[str] = []
+        if not explorer_available:
+            exploration_blockers.append("explorer_backend_not_running")
+        if self._session_pending:
+            exploration_blockers.append("session_transition_pending")
+        if self._exploring:
+            exploration_blockers.append("exploration_already_active")
+        if str(self._session_mode or "idle").lower() != "idle":
+            exploration_blockers.append("session_not_idle")
+        if self._mode == "estop":
+            exploration_blockers.append("estop_active")
+        if self._odom is None:
+            exploration_blockers.append("odometry_missing")
+        localization_state = str(localization_status.get("state") or "").strip().lower()
+        if localization_state in {"degraded", "lost", "relocalizing", "initializing"}:
+            exploration_blockers.append(f"localization_{localization_state}")
+        recovery_signal = str(
+            localization_status.get("recovery_signal") or ""
+        ).strip().upper()
+        if recovery_signal not in {"", "NONE", "RECOVERED"}:
+            exploration_blockers.append("localization_recovery_active")
+        if pose_fresh is False and algorithm_healthy:
+            exploration_blockers.append("pose_stale")
+        exploration_blockers = list(dict.fromkeys(exploration_blockers))
+        can_start_exploring = not exploration_blockers
         can_end = self._session_mode != "idle" and not self._session_pending
         return {
             "mode": self._session_mode,
@@ -1346,6 +1370,7 @@ class GatewayModule(Module, layer=6):
             "can_start_mapping": can_start_mapping,
             "can_start_navigating": can_start_navigating,
             "can_start_exploring": can_start_exploring,
+            "exploration_blockers": exploration_blockers,
             "can_end": can_end,
             "explorer_backend": explorer_backend,
             "explorer_available": explorer_available,

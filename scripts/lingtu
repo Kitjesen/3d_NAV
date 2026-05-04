@@ -100,6 +100,51 @@ print(f"[{x:.6f},{y:.6f},0.0,0.0,0.0,{yaw:.6f}]")
 PY
 }
 
+format_nav_goal_payload() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import json
+import math
+import sys
+
+try:
+    x, y, yaw = (float(v) for v in sys.argv[1:4])
+except Exception:
+    sys.exit(1)
+if not all(math.isfinite(v) for v in (x, y, yaw)):
+    sys.exit(1)
+print(json.dumps({"x": x, "y": y, "z": 0.0, "yaw": yaw}, separators=(",", ":")))
+PY
+}
+
+nav_goal_precheck() {
+    local payload="$1"
+    local NAVJ CAN BLOCKERS ADVISORIES STATE PLANJ FEASIBLE COUNT PLANNER REASONS
+    NAVJ=$(curl -s --max-time 3 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
+    CAN=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; print(str(r.get("can_accept_goal", d.get("can_accept_goal", False))).lower())')
+    BLOCKERS=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; b=r.get("blockers") or []; print(",".join(map(str,b)) if isinstance(b,list) else str(b or ""))')
+    ADVISORIES=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; a=r.get("advisories") or []; print(",".join(map(str,a)) if isinstance(a,list) else str(a or ""))')
+    STATE=$(pjson "$NAVJ" 'print(d.get("state","unknown"))')
+    if [ "$CAN" != "true" ]; then
+        printf "${R}FAIL${N}: navigation is not ready for goals (state=%s blockers=%s advisories=%s)\n" \
+            "$STATE" "${BLOCKERS:-unknown}" "${ADVISORIES:-unknown}"
+        return 1
+    fi
+
+    PLANJ=$(curl -s --max-time 8 -X POST -H "Content-Type: application/json" \
+        -d "$payload" "$GW/api/v1/navigation/plan" 2>/dev/null || echo '{}')
+    FEASIBLE=$(pjson "$PLANJ" 'print(str(bool(d.get("feasible"))).lower())')
+    COUNT=$(pjson "$PLANJ" 'print(d.get("count","-"))')
+    PLANNER=$(pjson "$PLANJ" 'print(d.get("planner") or "-")')
+    REASONS=$(pjson "$PLANJ" 'r=d.get("reasons") or []; print(",".join(map(str,r)) if isinstance(r,list) else str(r or ""))')
+    if [ "$FEASIBLE" != "true" ]; then
+        printf "${R}FAIL${N}: navigation plan preview is not feasible (points=%s planner=%s reasons=%s)\n" \
+            "$COUNT" "$PLANNER" "${REASONS:-unknown}"
+        return 1
+    fi
+    printf "${D}plan preview feasible: points=%s planner=%s${N}\n" "$COUNT" "$PLANNER"
+    return 0
+}
+
 # ── Subcommand: status (one-shot status board) ──
 cmd_status() {
     echo -e "${B}=== Lingtu @ $(date '+%H:%M:%S') ===${N}"
@@ -308,9 +353,12 @@ cmd_nav() {
             curl -s -X POST "$GW/api/v1/session/end" | python3 -m json.tool ;;
         goal)
             local x="${2:-}"; local y="${3:-}"; local yaw="${4:-0}"
+            local payload
             [ -z "$x" ] || [ -z "$y" ] && { echo "Usage: lingtu nav goal X Y [YAW]"; exit 1; }
+            payload=$(format_nav_goal_payload "$x" "$y" "$yaw") || { echo "goal must be numeric X Y [YAW]"; exit 1; }
+            nav_goal_precheck "$payload" || exit 1
             curl -s -X POST -H "Content-Type: application/json" \
-                -d "{\"x\":$x,\"y\":$y,\"yaw\":$yaw}" \
+                -d "$payload" \
                 "$GW/api/v1/goal" | python3 -m json.tool ;;
         *) echo "Usage: lingtu nav [start <map>|stop|goal X Y [YAW]]"; exit 1 ;;
     esac
@@ -590,6 +638,7 @@ MAX_LOC_DIAG_AGE_MS = env_float("LINGTU_DOCTOR_MAX_LOC_DIAG_AGE_MS", 3000.0)
 MAX_LOCALIZER_HEALTH_AGE_MS = env_float("LINGTU_DOCTOR_MAX_LOCALIZER_HEALTH_AGE_MS", 3000.0)
 MAX_CLOUD_AGE_MS = env_float("LINGTU_DOCTOR_MAX_CLOUD_AGE_MS", 5000.0)
 MIN_LOCALIZATION_CONFIDENCE = env_float("LINGTU_DOCTOR_MIN_LOCALIZATION_CONFIDENCE", 0.5)
+PLAN_PREVIEW_OFFSET_M = env_float("LINGTU_DOCTOR_PLAN_PREVIEW_OFFSET_M", 0.2)
 REALTIME_TIMEOUT_S = env_float("LINGTU_DOCTOR_REALTIME_TIMEOUT_S", 6.0)
 MAX_DATAFLOW_AVG_MS = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_AVG_MS", 150.0)
 MAX_DATAFLOW_P95_MS = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_P95_MS", 250.0)
@@ -622,10 +671,15 @@ def run(args, timeout=3):
         return 124, (exc.stdout or "").strip(), "timeout"
 
 
-def http_json(path, timeout=3):
+def http_json(path, timeout=3, method="GET", payload=None):
     url = path if path.startswith("http") else f"{gw}{path}"
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        headers = {"Accept": "application/json"}
+        data = None
+        if payload is not None:
+            data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read(2_000_000).decode("utf-8", "replace")
             code = resp.getcode()
@@ -1233,6 +1287,89 @@ else:
         },
     )
 
+if non_motion:
+    odom = state_payload.get("odometry") if isinstance(state_payload, dict) else None
+    x = as_float((odom or {}).get("x"))
+    y = as_float((odom or {}).get("y"))
+    z = as_float((odom or {}).get("z"))
+    if z is None:
+        z = 0.0
+    attempts = []
+    preview_ok = False
+    preview_feasible = False
+    if x is None or y is None:
+        add(
+            "gateway.navigation_plan_preview",
+            "warn",
+            "p1",
+            "navigation plan preview skipped because odometry is unavailable",
+            {"http_status": state_code, "state_error": state_err},
+        )
+    else:
+        offsets = [
+            ("west", -PLAN_PREVIEW_OFFSET_M, 0.0),
+            ("south", 0.0, -PLAN_PREVIEW_OFFSET_M),
+            ("east", PLAN_PREVIEW_OFFSET_M, 0.0),
+            ("north", 0.0, PLAN_PREVIEW_OFFSET_M),
+            ("same", 0.0, 0.0),
+        ]
+        for label, dx, dy in offsets:
+            body = {"x": x + dx, "y": y + dy, "z": z}
+            code, preview, err = http_json(
+                "/api/v1/navigation/plan",
+                timeout=8,
+                method="POST",
+                payload=body,
+            )
+            attempt = {
+                "label": label,
+                "http_status": code,
+                "feasible": bool(preview.get("feasible")) if isinstance(preview, dict) else False,
+                "count": preview.get("count") if isinstance(preview, dict) else None,
+                "planner": preview.get("planner") if isinstance(preview, dict) else None,
+                "reasons": preview.get("reasons") if isinstance(preview, dict) else [],
+                "error": err or (preview.get("error") if isinstance(preview, dict) else None),
+            }
+            attempts.append(attempt)
+            preview_ok = preview_ok or (
+                code == 200 and isinstance(preview, dict) and preview.get("schema_version") == 1
+            )
+            if attempt["feasible"] and int(attempt["count"] or 0) > 1:
+                preview_feasible = True
+                break
+        nav_after_code, nav_after, nav_after_err = http_json("/api/v1/navigation/status", timeout=3)
+        nav_after_ok = nav_after_code == 200 and isinstance(nav_after, dict)
+        active_after = command_source_name((nav_after or {}).get("control") or {}) if nav_after_ok else "unavailable"
+        source_idle_after = str(active_after).lower() in {"", "none", "null"}
+        if not preview_ok:
+            status = "fail"
+            message = "navigation plan preview endpoint is unavailable or unversioned"
+        elif not nav_after_ok:
+            status = "fail"
+            message = "navigation plan preview could not verify command source afterwards"
+        elif not source_idle_after:
+            status = "fail"
+            message = "navigation plan preview changed the active command source"
+        elif preview_feasible:
+            status = "pass"
+            message = "navigation plan preview produced a path without taking control"
+        else:
+            status = "warn"
+            message = "navigation plan preview endpoint works but nearby moving candidates were not feasible"
+        add(
+            "gateway.navigation_plan_preview",
+            status,
+            "p0" if status == "fail" else "p1",
+            message,
+            {
+                "offset_m": PLAN_PREVIEW_OFFSET_M,
+                "attempts": attempts,
+                "active_cmd_source_after": active_after,
+                "nav_after_http_status": nav_after_code,
+                "nav_after_error": nav_after_err,
+            },
+        )
+
 rc, lsusb_out, _ = run(["lsusb"], timeout=3)
 usb_text = lsusb_out.lower()
 camera_usb = any(token in usb_text for token in ["orbbec", "gemini", "astra", "2bc5"])
@@ -1472,6 +1609,97 @@ if blockers:
             ""|none|unknown|null) echo "  ok: non-motion guard sees no active command source" ;;
             *) printf "  ${R}FAIL${N}: non-motion guard sees active command source: %s\n" "$CMD_SRC" ;;
         esac
+
+        echo -e "${B}[6b] Navigation plan preview (non-motion)${N}"
+        python3 - "$GW" "${LINGTU_DOCTOR_PLAN_PREVIEW_OFFSET_M:-0.2}" <<'PY' || true
+import json
+import sys
+import urllib.error
+import urllib.request
+
+gw = sys.argv[1].rstrip("/")
+try:
+    offset = float(sys.argv[2])
+except Exception:
+    offset = 0.2
+
+
+def get_json(path, timeout=3):
+    req = urllib.request.Request(f"{gw}{path}", headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.getcode(), json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
+
+
+def post_json(path, payload, timeout=8):
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    req = urllib.request.Request(
+        f"{gw}{path}",
+        data=data,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.getcode(), json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
+
+
+def active_cmd_source(nav):
+    control = nav.get("control") or {}
+    source = control.get("active_cmd_source") or control.get("active_source") or "none"
+    if isinstance(source, dict):
+        return source.get("name") or source.get("source") or source.get("owner") or "none"
+    return source
+
+
+try:
+    _, state = get_json("/api/v1/state")
+    odom = state.get("odometry") or {}
+    x = float(odom["x"])
+    y = float(odom["y"])
+    z = float(odom.get("z") or 0.0)
+except Exception as exc:
+    print(f"  WARN: skipped; odometry unavailable ({exc})")
+    raise SystemExit(0)
+
+offsets = [
+    ("west", -offset, 0.0),
+    ("south", 0.0, -offset),
+    ("east", offset, 0.0),
+    ("north", 0.0, offset),
+    ("same", 0.0, 0.0),
+]
+endpoint_ok = False
+path_ok = False
+for label, dx, dy in offsets:
+    try:
+        code, preview = post_json("/api/v1/navigation/plan", {"x": x + dx, "y": y + dy, "z": z})
+        endpoint_ok = endpoint_ok or (code == 200 and preview.get("schema_version") == 1)
+        feasible = bool(preview.get("feasible"))
+        count = int(preview.get("count") or 0)
+        reasons = preview.get("reasons") or []
+        planner = preview.get("planner") or "-"
+        print(f"  {label:<5} feasible={feasible} count={count} planner={planner} reasons={','.join(map(str, reasons)) or '-'}")
+        if feasible and count > 1:
+            path_ok = True
+            break
+    except urllib.error.HTTPError as exc:
+        print(f"  {label:<5} http={exc.code} error={exc.reason}")
+    except Exception as exc:
+        print(f"  {label:<5} error={exc}")
+
+try:
+    _, nav = get_json("/api/v1/navigation/status")
+    source = str(active_cmd_source(nav)).lower()
+except Exception as exc:
+    print(f"  FAIL: cannot verify command source after preview ({exc})")
+    raise SystemExit(0)
+
+if source in {"", "none", "null"}:
+    print("  ok: preview did not take control; active_cmd_source_after=none")
+else:
+    print(f"  FAIL: preview changed active_cmd_source_after={source}")
+if endpoint_ok and not path_ok:
+    print("  WARN: preview endpoint works, but nearby moving candidates were not feasible")
+PY
     fi
 
     echo -e "${B}[7] Camera readiness${N}"

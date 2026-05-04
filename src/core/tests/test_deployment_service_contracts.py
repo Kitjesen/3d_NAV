@@ -167,6 +167,26 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
                     printf '{"backend":"localizer","health_source":"localizer_health_topic","map_save_source":"active_map","saved_map_relocalization_supported":true,"restart_recovery_supported":true,"recovery_method":"relocalize_service","relocalization_state":"idle","recovery_signal":"RECOVERED","recovery_action":"none"}\n'
                 fi
                 ;;
+            */api/v1/navigation/status)
+                blocker="${FAKE_NAV_BLOCKER:-}"
+                if [ -n "$blocker" ]; then
+                    printf '{"schema_version":1,"state":"IDLE","can_accept_goal":false,"readiness":{"can_accept_goal":false,"can_execute_autonomy":false,"blockers":["%s"],"advisories":[]},"control":{"active_cmd_source":"none"}}\n' "$blocker"
+                else
+                    printf '{"schema_version":1,"state":"IDLE","can_accept_goal":true,"readiness":{"can_accept_goal":true,"can_execute_autonomy":true,"blockers":[],"advisories":[]},"control":{"active_cmd_source":"none"}}\n'
+                fi
+                ;;
+            */api/v1/navigation/plan)
+                echo "plan:$data" >> "${FAKE_ROOT}/calls.log"
+                if [ "${FAKE_PLAN_FEASIBLE:-1}" = "0" ]; then
+                    printf '{"schema_version":1,"ok":true,"feasible":false,"count":0,"planner":"pct","reasons":["blocked_by_costmap"]}\n'
+                else
+                    printf '{"schema_version":1,"ok":true,"feasible":true,"count":3,"planner":"pct","reasons":[]}\n'
+                fi
+                ;;
+            */api/v1/goal)
+                echo "goal:$data" >> "${FAKE_ROOT}/calls.log"
+                printf '{"schema_version":1,"ok":true,"accepted":true,"command":{"accepted":true}}\n'
+                ;;
             */api/v1/session)
                 echo '{}'
                 ;;
@@ -215,9 +235,9 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
     }
 
 
-def _run_slamcheck(
+def _run_lingtu_command(
     tmp_path: Path,
-    args: str,
+    command_args: str,
     extra_env: dict[str, str] | None = None,
     active_target: str | None = None,
     seed_relocation_env: str | None = None,
@@ -261,7 +281,7 @@ def _run_slamcheck(
     command = (
         f"{export_cmd}; "
         f"export PATH={shlex.quote(str(harness['bin_posix']))}:\"$PATH\"; "
-        f"bash scripts/lingtu slamcheck {args}"
+        f"bash scripts/lingtu {command_args}"
     )
     result = subprocess.run(
         ["bash", "-lc", command],
@@ -273,6 +293,22 @@ def _run_slamcheck(
         errors="ignore",
     )
     return result, harness
+
+
+def _run_slamcheck(
+    tmp_path: Path,
+    args: str,
+    extra_env: dict[str, str] | None = None,
+    active_target: str | None = None,
+    seed_relocation_env: str | None = None,
+):
+    return _run_lingtu_command(
+        tmp_path,
+        f"slamcheck {args}",
+        extra_env=extra_env,
+        active_target=active_target,
+        seed_relocation_env=seed_relocation_env,
+    )
 
 
 def test_robot_localizer_service_matches_slam_bridge_topics():
@@ -403,6 +439,13 @@ def test_lingtu_doctor_json_gates_runtime_readiness_freshness():
     assert "diag_age_ms" in text
     assert "localizer_health_topic_age_ms" in text
     assert "map_cloud_fresh=false" in text
+    assert "gateway.navigation_plan_preview" in text
+    assert "/api/v1/navigation/plan" in text
+    assert "LINGTU_DOCTOR_PLAN_PREVIEW_OFFSET_M" in text
+    assert "navigation plan preview produced a path without taking control" in text
+    assert "active_cmd_source_after" in text
+    assert "Navigation plan preview (non-motion)" in text
+    assert "preview did not take control" in text
 
 
 def test_lingtu_doctor_realtime_smoke_is_explicit_non_motion_gate():
@@ -517,6 +560,61 @@ def test_lingtu_slamcheck_validates_recovery_signal_and_action_contract():
     assert '[ "$recovery_signal_ok" = "1" ]' in text
     assert '[ "$recovery_action_ok" = "1" ]' in text
     assert "LOC_DIVERGED" in _read("src/slam/slam_bridge_module.py")
+
+
+def test_lingtu_nav_goal_prechecks_readiness_and_plan_preview(tmp_path):
+    result, harness = _run_lingtu_command(tmp_path, "nav goal 1 2")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "plan preview feasible: points=3 planner=pct" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert 'plan:{"x":1.0,"y":2.0,"z":0.0,"yaw":0.0}' in calls
+    assert 'goal:{"x":1.0,"y":2.0,"z":0.0,"yaw":0.0}' in calls
+    assert calls.index("plan:") < calls.index("goal:")
+
+
+def test_lingtu_nav_goal_rejects_non_numeric_payload_before_curl(tmp_path):
+    result, harness = _run_lingtu_command(tmp_path, "nav goal bad 2")
+
+    assert result.returncode != 0
+    assert "goal must be numeric X Y [YAW]" in result.stdout
+    calls = harness["root"] / "calls.log"
+    if calls.exists():
+        text = calls.read_text(encoding="utf-8")
+        assert "plan:" not in text
+        assert "goal:" not in text
+
+
+def test_lingtu_nav_goal_rejects_readiness_blocker_before_plan(tmp_path):
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        "nav goal 1 2",
+        extra_env={"FAKE_NAV_BLOCKER": "localization_recovery_active"},
+    )
+
+    assert result.returncode != 0
+    assert "navigation is not ready for goals" in result.stdout
+    assert "localization_recovery_active" in result.stdout
+    calls = harness["root"] / "calls.log"
+    if calls.exists():
+        text = calls.read_text(encoding="utf-8")
+        assert "plan:" not in text
+        assert "goal:" not in text
+
+
+def test_lingtu_nav_goal_rejects_infeasible_plan_preview_before_goal(tmp_path):
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        "nav goal 1 2",
+        extra_env={"FAKE_PLAN_FEASIBLE": "0"},
+    )
+
+    assert result.returncode != 0
+    assert "navigation plan preview is not feasible" in result.stdout
+    assert "blocked_by_costmap" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "plan:" in calls
+    assert "goal:" not in calls
 
 
 def test_lingtu_slamcheck_executes_super_lio_snapshot_contract(tmp_path):

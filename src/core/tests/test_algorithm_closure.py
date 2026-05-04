@@ -69,6 +69,11 @@ class _OverflowDistancePlanner(_FakePlanner):
         return [start.copy(), np.array([1e308, 0.0, 0.0])], 1.0
 
 
+class _RuntimeErrorPlanner(_FakePlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray):
+        raise RuntimeError("planner returned empty path")
+
+
 class _GridBackend:
     def __init__(self, grid: np.ndarray, resolution: float = 1.0):
         self._grid = grid
@@ -150,6 +155,41 @@ def test_navigation_plan_preview_times_out_without_publishing_ports():
     assert preview["feasible"] is False
     assert preview["reasons"] == ["planning_timeout"]
     assert "planner preview exceeded" in preview["error"]
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
+    assert nav.recovery_cmd_vel.msg_count == 0
+
+
+def test_navigation_plan_preview_reports_busy_only_for_concurrent_preview():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _FakePlanner()
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+    assert nav._preview_planner_lock.acquire(blocking=False)
+    try:
+        preview = nav.preview_plan(1.0, 0.0, 0.0)
+    finally:
+        nav._preview_planner_lock.release()
+
+    assert preview["ok"] is True
+    assert preview["feasible"] is False
+    assert preview["reasons"] == ["planning_preview_busy"]
+    assert "another plan preview" in preview["error"]
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
+    assert nav.recovery_cmd_vel.msg_count == 0
+
+
+def test_navigation_plan_preview_reports_planner_runtime_error_as_failure():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _RuntimeErrorPlanner()
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+
+    preview = nav.preview_plan(1.0, 0.0, 0.0)
+
+    assert preview["ok"] is True
+    assert preview["feasible"] is False
+    assert preview["reasons"] == ["planning_failed"]
+    assert "planner returned empty path" in preview["error"]
     assert nav.global_path.msg_count == 0
     assert nav.waypoint.msg_count == 0
     assert nav.recovery_cmd_vel.msg_count == 0

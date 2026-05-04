@@ -597,6 +597,7 @@ class SessionResponse(GatewayResponseModel):
     can_start_mapping: bool = False
     can_start_navigating: bool = False
     can_start_exploring: bool = False
+    exploration_blockers: list[str] = Field(default_factory=list)
     can_end: bool = False
     explorer_backend: Literal["none", "frontier", "tare"] | str = "none"
     explorer_available: bool = False
