@@ -475,12 +475,17 @@ def test_lingtu_doctor_checks_camera_device_online_status():
     text = _read("scripts/lingtu")
 
     assert "camera.device_status" in text
+    assert "--require-camera" in text
+    assert "require_camera = sys.argv[5] == \"1\"" in text
+    assert "camera_check_status" in text
+    assert "Mode: camera required for full App/Web visual readiness" in text
     assert '"/camera/device_status"' in text
     assert "parse_camera_device_status" in text
     assert "device_online" in text
     assert "connection_type" in text
     assert "color_frame_rate_cur" in text
     assert "depth_frame_rate_cur" in text
+    assert '"required": require_camera' in text
     assert "camera driver is alive but /camera/device_status reports device_online=false" in text
     assert "check USB/power/cable before restarting software" in text
 
@@ -527,7 +532,7 @@ def test_lingtu_doctor_json_gates_runtime_readiness_freshness():
 def test_lingtu_doctor_realtime_smoke_is_explicit_non_motion_gate():
     text = _read("scripts/lingtu")
 
-    assert "Usage: lingtu doctor [--non-motion] [--json] [--strict] [--realtime]" in text
+    assert "Usage: lingtu doctor [--non-motion] [--json] [--strict] [--realtime] [--require-camera]" in text
     assert "--realtime) realtime=1" in text
     assert "gateway.realtime_sse" in text
     assert "gateway.websocket_camera" in text

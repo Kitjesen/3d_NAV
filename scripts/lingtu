@@ -649,7 +649,7 @@ cmd_svc() {
 
 # ── Subcommand: log ──
 doctor_usage() {
-    echo "Usage: lingtu doctor [--non-motion] [--json] [--strict] [--realtime]"
+    echo "Usage: lingtu doctor [--non-motion] [--json] [--strict] [--realtime] [--require-camera]"
 }
 
 source_robot_env() {
@@ -660,8 +660,8 @@ source_robot_env() {
 }
 
 cmd_doctor_json() {
-    local strict="${1:-0}" non_motion="${2:-0}" realtime="${3:-0}"
-    python3 - "$GW" "$strict" "$non_motion" "$realtime" <<'PY'
+    local strict="${1:-0}" non_motion="${2:-0}" realtime="${3:-0}" require_camera="${4:-0}"
+    python3 - "$GW" "$strict" "$non_motion" "$realtime" "$require_camera" <<'PY'
 import asyncio
 import glob
 import json
@@ -678,6 +678,7 @@ gw = sys.argv[1].rstrip("/")
 strict = sys.argv[2] == "1"
 non_motion = sys.argv[3] == "1"
 realtime = sys.argv[4] == "1"
+require_camera = sys.argv[5] == "1"
 checks = []
 
 
@@ -689,6 +690,16 @@ def env_float(name, default):
         return float(raw)
     except (TypeError, ValueError):
         return float(default)
+
+
+def camera_check_status(ok):
+    if ok:
+        return "pass"
+    return "fail" if require_camera else "warn"
+
+
+def camera_check_level():
+    return "p0" if require_camera else "p1"
 
 
 MIN_SLAM_HZ = env_float("LINGTU_DOCTOR_MIN_SLAM_HZ", 1.0)
@@ -1483,21 +1494,21 @@ usb_text = lsusb_out.lower()
 camera_usb = any(token in usb_text for token in ["orbbec", "gemini", "astra", "2bc5"])
 add(
     "camera.usb",
-    "pass" if camera_usb else "warn",
-    "p1",
+    camera_check_status(camera_usb),
+    camera_check_level(),
     "camera USB device is enumerated" if camera_usb else "camera USB device is not enumerated",
-    {"matched": camera_usb},
+    {"matched": camera_usb, "required": require_camera},
 )
 camera_topic_counts = {}
 for topic in ["/camera/color/image_raw", "/camera/depth/image_raw"]:
     pubs, subs, err = topic_counts(topic)
     camera_topic_counts[topic] = {"publishers": pubs, "subscribers": subs, "error": err}
     if pubs is None:
-        add(f"camera.topic.{topic}", "warn", "p1", f"could not inspect {topic}", {"error": err})
+        add(f"camera.topic.{topic}", camera_check_status(False), camera_check_level(), f"could not inspect {topic}", {"error": err, "required": require_camera})
     elif pubs == 0:
-        add(f"camera.topic.{topic}", "warn", "p1", f"{topic} has no publishers", {"publishers": pubs, "subscribers": subs})
+        add(f"camera.topic.{topic}", camera_check_status(False), camera_check_level(), f"{topic} has no publishers", {"publishers": pubs, "subscribers": subs, "required": require_camera})
     else:
-        add(f"camera.topic.{topic}", "pass", "p1", f"{topic} has publishers", {"publishers": pubs, "subscribers": subs})
+        add(f"camera.topic.{topic}", "pass", camera_check_level(), f"{topic} has publishers", {"publishers": pubs, "subscribers": subs, "required": require_camera})
 camera_topics_ready = all((camera_topic_counts.get(topic, {}).get("publishers") or 0) > 0 for topic in ["/camera/color/image_raw", "/camera/depth/image_raw"])
 camera_info_topics = [
     "/camera/color/camera_info",
@@ -1514,82 +1525,82 @@ camera_info_ready = any(
 )
 add(
     "camera.camera_info",
-    "pass" if camera_info_ready else "warn",
-    "p1",
+    camera_check_status(camera_info_ready),
+    camera_check_level(),
     "camera intrinsics topic has publishers"
     if camera_info_ready
     else "camera intrinsics topic has no publishers",
-    {"topics": camera_info_counts},
+    {"topics": camera_info_counts, "required": require_camera},
 )
 device_status_pubs, device_status_subs, device_status_err = topic_counts("/camera/device_status")
 if device_status_pubs is None:
     add(
         "camera.device_status",
-        "warn",
-        "p1",
+        camera_check_status(False),
+        camera_check_level(),
         "could not inspect /camera/device_status",
-        {"error": device_status_err},
+        {"error": device_status_err, "required": require_camera},
     )
 elif device_status_pubs == 0:
     add(
         "camera.device_status",
-        "warn",
-        "p1",
+        camera_check_status(False),
+        camera_check_level(),
         "/camera/device_status has no publishers",
-        {"publishers": device_status_pubs, "subscribers": device_status_subs, "error": device_status_err},
+        {"publishers": device_status_pubs, "subscribers": device_status_subs, "error": device_status_err, "required": require_camera},
     )
 else:
     device_status, device_status_err = camera_device_status_once()
     if device_status is None:
         add(
             "camera.device_status",
-            "warn",
-            "p1",
+            camera_check_status(False),
+            camera_check_level(),
             "could not read /camera/device_status sample",
-            {"publishers": device_status_pubs, "subscribers": device_status_subs, "error": device_status_err},
+            {"publishers": device_status_pubs, "subscribers": device_status_subs, "error": device_status_err, "required": require_camera},
         )
     elif device_status.get("device_online") is True:
         add(
             "camera.device_status",
             "pass",
-            "p1",
+            camera_check_level(),
             "camera device_status reports online",
-            {"publishers": device_status_pubs, "subscribers": device_status_subs, **device_status},
+            {"publishers": device_status_pubs, "subscribers": device_status_subs, "required": require_camera, **device_status},
         )
     elif device_status.get("device_online") is False:
         add(
             "camera.device_status",
-            "warn",
-            "p1",
+            camera_check_status(False),
+            camera_check_level(),
             "camera driver is alive but /camera/device_status reports device_online=false",
-            {"publishers": device_status_pubs, "subscribers": device_status_subs, **device_status},
+            {"publishers": device_status_pubs, "subscribers": device_status_subs, "required": require_camera, **device_status},
         )
     else:
         add(
             "camera.device_status",
-            "warn",
-            "p1",
+            camera_check_status(False),
+            camera_check_level(),
             "camera device_status sample did not include device_online",
-            {"publishers": device_status_pubs, "subscribers": device_status_subs, **device_status},
+            {"publishers": device_status_pubs, "subscribers": device_status_subs, "required": require_camera, **device_status},
         )
 video_nodes = sorted(glob.glob("/dev/video*") + glob.glob("/dev/v4l/by-id/*"))
 if video_nodes:
-    add("camera.video_nodes", "pass", "p1", "video devices exist", {"nodes": video_nodes[:8]})
+    add("camera.video_nodes", "pass", camera_check_level(), "video devices exist", {"nodes": video_nodes[:8], "required": require_camera})
 elif camera_usb and camera_topics_ready:
     add(
         "camera.video_nodes",
         "pass",
-        "p1",
+        camera_check_level(),
         "SDK camera is publishing ROS topics without V4L nodes",
-        {"nodes": [], "camera_topics_ready": True},
+        {"nodes": [], "camera_topics_ready": True, "required": require_camera},
     )
 else:
     add(
         "camera.video_nodes",
-        "warn",
-        "p1",
+        camera_check_status(False),
+        camera_check_level(),
         "no /dev/video or /dev/v4l/by-id devices found",
-        {"nodes": [], "camera_topics_ready": camera_topics_ready},
+        {"nodes": [], "camera_topics_ready": camera_topics_ready, "required": require_camera},
     )
 
 if realtime:
@@ -1642,13 +1653,14 @@ PY
 
 # -- Subcommand: doctor --
 cmd_doctor() {
-    local json=0 strict=0 non_motion=0 realtime=0
+    local json=0 strict=0 non_motion=0 realtime=0 require_camera=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --json) json=1 ;;
             --strict) strict=1 ;;
             --non-motion|--no-motion) non_motion=1 ;;
             --realtime) realtime=1 ;;
+            --require-camera) require_camera=1 ;;
             -h|--help) doctor_usage; return 0 ;;
             *) doctor_usage; return 1 ;;
         esac
@@ -1658,12 +1670,13 @@ cmd_doctor() {
     source_robot_env
 
     if [ "$json" = "1" ]; then
-        cmd_doctor_json "$strict" "$non_motion" "$realtime"
+        cmd_doctor_json "$strict" "$non_motion" "$realtime" "$require_camera"
         return $?
     fi
 
     echo -e "${B}=== Lingtu Doctor @ $(date '+%H:%M:%S') ===${N}"
     [ "$non_motion" = "1" ] && echo "Mode: non-motion read-only verification"
+    [ "$require_camera" = "1" ] && echo "Mode: camera required for full App/Web visual readiness"
     echo -e "${B}[1] Services${N}"
     cmd_svc status
 
@@ -1862,10 +1875,15 @@ PY
     fi
 
     echo -e "${B}[7] Camera readiness${N}"
+    local cam_missing_label="WARN" cam_missing_color="$Y"
+    if [ "$require_camera" = "1" ]; then
+        cam_missing_label="FAIL"
+        cam_missing_color="$R"
+    fi
     if command -v lsusb >/dev/null 2>&1 && lsusb | grep -Eiq 'orbbec|gemini|astra|2bc5'; then
         echo "  ok: camera USB device is enumerated"
     else
-        printf "  ${Y}WARN${N}: camera USB device is not enumerated\n"
+        printf "  ${cam_missing_color}%s${N}: camera USB device is not enumerated\n" "$cam_missing_label"
     fi
     local cam_color_pubs=0 cam_color_subs=0 cam_depth_pubs=0 cam_depth_subs=0
     if command -v ros2 >/dev/null 2>&1; then
@@ -1883,7 +1901,7 @@ PY
     elif [ "$cam_color_pubs" != "0" ] && [ "$cam_depth_pubs" != "0" ]; then
         echo "  ok: SDK camera is publishing ROS image topics without V4L nodes"
     else
-        printf "  ${Y}WARN${N}: no /dev/video or /dev/v4l/by-id device nodes found\n"
+        printf "  ${cam_missing_color}%s${N}: no /dev/video or /dev/v4l/by-id device nodes found\n" "$cam_missing_label"
     fi
     if command -v ros2 >/dev/null 2>&1; then
         local cam_topic cam_pubs cam_subs
@@ -1902,7 +1920,7 @@ PY
             cam_pubs="${cam_pubs:-0}"
             cam_subs="${cam_subs:-0}"
             if [ "$cam_pubs" = "0" ]; then
-                printf "  ${Y}%-30s publishers=%s subscribers=%s${N}\n" "$cam_topic" "$cam_pubs" "$cam_subs"
+                printf "  ${cam_missing_color}%-30s publishers=%s subscribers=%s${N}\n" "$cam_topic" "$cam_pubs" "$cam_subs"
             else
                 printf "  ${G}%-30s publishers=%s subscribers=%s${N}\n" "$cam_topic" "$cam_pubs" "$cam_subs"
             fi
@@ -1921,14 +1939,14 @@ PY
             if [ "$cam_online" = "true" ]; then
                 printf "  ${G}/camera/device_status         device_online=%s connection=%s color_fps=%s depth_fps=%s${N}\n" "$cam_online" "$cam_connection" "$cam_color_fps" "$cam_depth_fps"
             else
-                printf "  ${Y}/camera/device_status         device_online=%s connection=%s color_fps=%s depth_fps=%s${N}\n" "$cam_online" "$cam_connection" "$cam_color_fps" "$cam_depth_fps"
-                printf "  ${Y}WARN${N}: camera driver is alive but device_online=false; check USB/power/cable before restarting software\n"
+                printf "  ${cam_missing_color}/camera/device_status         device_online=%s connection=%s color_fps=%s depth_fps=%s${N}\n" "$cam_online" "$cam_connection" "$cam_color_fps" "$cam_depth_fps"
+                printf "  ${cam_missing_color}%s${N}: camera driver is alive but device_online=false; check USB/power/cable before restarting software\n" "$cam_missing_label"
             fi
         fi
     fi
 
     if [ "$strict" = "1" ]; then
-        cmd_doctor_json "$strict" "$non_motion" "$realtime" >/dev/null
+        cmd_doctor_json "$strict" "$non_motion" "$realtime" "$require_camera" >/dev/null
         return $?
     fi
 }
