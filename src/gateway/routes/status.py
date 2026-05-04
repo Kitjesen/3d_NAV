@@ -22,6 +22,7 @@ from gateway.schemas import (
     SceneGraphResponse,
     StateResponse,
 )
+from gateway.services.media_status import build_camera_status
 from gateway.services.readiness import build_readiness_snapshot
 from gateway.services.runtime_status import (
     build_localization_status,
@@ -306,16 +307,7 @@ def register_status_routes(app, gw) -> None:
                             ),
                         }
                     elif "CameraBridge" in name:
-                        color_out = h.get("ports_out", {}).get("color_image", {})
-                        sensors["camera"] = {
-                            "status": (
-                                "streaming"
-                                if color_out.get("msg_count", 0) > 0
-                                else "idle"
-                            ),
-                            "fps": round(color_out.get("rate_hz", 0), 1),
-                            "frames": color_out.get("msg_count", 0),
-                        }
+                        sensors["camera"] = build_camera_status(gw)
                     elif "SlamBridge" in name or "SLAMModule" in name:
                         odom_out = h.get("ports_out", {}).get("odometry", {})
                         slam_rate = round(odom_out.get("rate_hz", 0), 1)

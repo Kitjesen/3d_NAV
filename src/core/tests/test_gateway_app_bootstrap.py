@@ -190,6 +190,74 @@ def test_app_bootstrap_disables_motion_controls_when_safety_stop_active():
     assert "safety_stop" in payload["navigation"]["readiness"]["blockers"]
 
 
+def test_app_bootstrap_includes_camera_media_runtime_status():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.app_bootstrap import build_app_bootstrap
+
+    class CameraBridge:
+        def health(self):
+            return {
+                "backend": "dds",
+                "ports_out": {
+                    "color_image": {
+                        "msg_count": 3,
+                        "rate_hz": 12.25,
+                        "stale_ms": 42.0,
+                    },
+                    "depth_image": {
+                        "msg_count": 2,
+                        "rate_hz": 10.0,
+                        "stale_ms": 50.0,
+                    },
+                    "camera_info": {
+                        "msg_count": 1,
+                    },
+                },
+                "camera_info_active_topic": "/camera/color/camera_info",
+                "camera_info_preferred_topic": "/camera/color/camera_info",
+                "camera_info_topics": [
+                    "/camera/color/camera_info",
+                    "/camera/depth/camera_info",
+                ],
+                "reconnect_count": 1,
+                "service_recovery_allowed": False,
+                "service_recovery_suppressed": True,
+            }
+
+    class Teleop:
+        def health(self):
+            return {"stream_clients": 2}
+
+    gateway = GatewayModule()
+    gateway._all_modules = {
+        "CameraBridgeModule": CameraBridge(),
+        "TeleopModule": Teleop(),
+    }
+    gateway._webrtc = object()
+    gateway.push_jpeg(b"jpeg-frame")
+
+    payload = build_app_bootstrap(gateway)
+    camera = payload["media"]["camera"]
+
+    assert payload["media"]["webrtc_available"] is True
+    assert payload["media"]["webrtc"]["available"] is True
+    assert payload["media"]["webrtc"]["stats"] == "/api/v1/webrtc/stats"
+    assert camera["available"] is True
+    assert camera["status"] == "streaming"
+    assert camera["reason"] is None
+    assert camera["backend"] == "dds"
+    assert camera["fps"] == 12.2
+    assert camera["frames"] == 3
+    assert camera["depth"]["frames"] == 2
+    assert camera["camera_info"]["frames"] == 1
+    assert camera["camera_info"]["active_topic"] == "/camera/color/camera_info"
+    assert camera["jpeg"]["cached"] is True
+    assert camera["jpeg"]["seq"] == 1
+    assert camera["jpeg"]["bytes"] == len(b"jpeg-frame")
+    assert camera["teleop_stream_clients"] == 2
+    assert camera["service_recovery_suppressed"] is True
+
+
 def test_app_capabilities_treat_tare_as_exploration_backend():
     from gateway.gateway_module import GatewayModule
     from gateway.services.app_bootstrap import build_app_capabilities

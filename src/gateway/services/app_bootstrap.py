@@ -6,6 +6,7 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from gateway.services.media_status import build_media_status
 from gateway.services.runtime_status import (
     build_localization_status_from_parts,
     build_navigation_status,
@@ -374,6 +375,37 @@ def _feature_flags(gw: Any) -> dict[str, bool]:
     }
 
 
+def _webrtc_summary(gw: Any) -> dict[str, Any]:
+    return {
+        "available": getattr(gw, "_webrtc", None) is not None,
+        "stats": CLIENT_LINKS["webrtc_stats"],
+        "offer": CLIENT_LINKS["webrtc_offer"],
+        "bitrate": CLIENT_LINKS["webrtc_bitrate"],
+        "whep": CLIENT_LINKS["webrtc_whep"],
+        "go2rtc_status": CLIENT_LINKS["go2rtc_status"],
+    }
+
+
+def _media_summary(gw: Any) -> dict[str, Any]:
+    media = build_media_status(gw)
+    webrtc = _webrtc_summary(gw)
+    return {
+        "events": CLIENT_LINKS["events"],
+        "teleop_ws": CLIENT_LINKS["teleop_ws"],
+        "camera_ws": CLIENT_LINKS["camera_ws"],
+        "cloud_ws": CLIENT_LINKS["cloud_ws"],
+        "camera_snapshot": CLIENT_LINKS["camera_snapshot"],
+        "webrtc_available": bool(webrtc["available"]),
+        "webrtc_stats": CLIENT_LINKS["webrtc_stats"],
+        "webrtc_offer": CLIENT_LINKS["webrtc_offer"],
+        "webrtc_bitrate": CLIENT_LINKS["webrtc_bitrate"],
+        "webrtc_whep": CLIENT_LINKS["webrtc_whep"],
+        "go2rtc_status": CLIENT_LINKS["go2rtc_status"],
+        "camera": media["camera"],
+        "webrtc": webrtc,
+    }
+
+
 def _schema_name(schema: Any) -> str | None:
     raw = _mapping(schema)
     ref = raw.get("$ref")
@@ -571,7 +603,6 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
         localization_status,
     )
     navigation = build_navigation_status(gw)
-    webrtc_available = getattr(gw, "_webrtc", None) is not None
     traffic = _traffic_summary(gw)
     control = dict(navigation.get("control", {}))
     nav_readiness = navigation.get("readiness", {})
@@ -626,19 +657,7 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
             "points": path_len,
             "endpoint": CLIENT_LINKS["path"],
         },
-        "media": {
-            "events": CLIENT_LINKS["events"],
-            "teleop_ws": CLIENT_LINKS["teleop_ws"],
-            "camera_ws": CLIENT_LINKS["camera_ws"],
-            "cloud_ws": CLIENT_LINKS["cloud_ws"],
-            "camera_snapshot": CLIENT_LINKS["camera_snapshot"],
-            "webrtc_available": webrtc_available,
-            "webrtc_stats": CLIENT_LINKS["webrtc_stats"],
-            "webrtc_offer": CLIENT_LINKS["webrtc_offer"],
-            "webrtc_bitrate": CLIENT_LINKS["webrtc_bitrate"],
-            "webrtc_whep": CLIENT_LINKS["webrtc_whep"],
-            "go2rtc_status": CLIENT_LINKS["go2rtc_status"],
-        },
+        "media": _media_summary(gw),
         "traffic": {
             **traffic,
             "client_policy": _client_traffic_policy(

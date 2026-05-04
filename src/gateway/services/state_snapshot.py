@@ -8,6 +8,7 @@ from typing import Any
 from gateway.services.app_bootstrap import (
     CLIENT_LINKS,
     _map_summary,
+    _media_summary,
 )
 from gateway.services.runtime_status import (
     build_localization_status_from_parts,
@@ -77,5 +78,6 @@ def build_state_snapshot(gw: Any) -> dict[str, Any]:
             "points": path_len,
             "endpoint": CLIENT_LINKS["path"],
         },
+        "media": _media_summary(gw),
         "links": dict(CLIENT_LINKS),
     }

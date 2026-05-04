@@ -125,6 +125,7 @@ export interface StateResponse {
   map?: Record<string, unknown> | null
   scene?: Record<string, unknown> | null
   path?: Record<string, unknown> | null
+  media?: AppMediaLinks | null
   links?: Record<string, string>
 }
 
@@ -277,6 +278,58 @@ export interface ClientLinks {
   [key: string]: string | undefined
 }
 
+export type CameraMediaRuntimeStatus = 'streaming' | 'idle' | 'stale' | 'error' | 'not_loaded'
+
+export interface CameraPortStatus {
+  frames: number
+  fps: number
+  stale_ms?: number | null
+}
+
+export interface CameraInfoStatus {
+  frames: number
+  active_topic?: string | null
+  preferred_topic?: string | null
+  topics: string[]
+}
+
+export interface CameraJpegStatus {
+  cached: boolean
+  seq: number
+  bytes: number
+}
+
+export interface CameraMediaStatus {
+  schema_version: number
+  available: boolean
+  status: CameraMediaRuntimeStatus
+  reason?: string | null
+  backend?: string | null
+  fps: number
+  frames: number
+  color: CameraPortStatus
+  depth: CameraPortStatus
+  camera_info: CameraInfoStatus
+  reconnect_count: number
+  service_recovery_allowed: boolean
+  service_recovery_suppressed: boolean
+  jpeg: CameraJpegStatus
+  teleop_stream_clients: number
+  ts: number
+  error?: string | null
+  [key: string]: unknown
+}
+
+export interface WebRTCMediaStatus {
+  available: boolean
+  stats: string
+  offer: string
+  bitrate: string
+  whep: string
+  go2rtc_status: string
+  [key: string]: unknown
+}
+
 export interface AppMediaLinks {
   events: string
   teleop_ws: string
@@ -289,6 +342,8 @@ export interface AppMediaLinks {
   webrtc_bitrate?: string
   webrtc_whep?: string
   go2rtc_status?: string
+  camera: CameraMediaStatus
+  webrtc: WebRTCMediaStatus
   [key: string]: unknown
 }
 

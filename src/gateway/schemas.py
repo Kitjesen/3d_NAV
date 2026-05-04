@@ -819,6 +819,54 @@ class ClientLinks(GatewayResponseModel):
     diagnostic_pack: str | None = None
 
 
+class CameraPortStatus(GatewayResponseModel):
+    frames: int = 0
+    fps: float = 0.0
+    stale_ms: float | None = None
+
+
+class CameraInfoStatus(GatewayResponseModel):
+    frames: int = 0
+    active_topic: str | None = None
+    preferred_topic: str | None = None
+    topics: list[str] = Field(default_factory=list)
+
+
+class CameraJpegStatus(GatewayResponseModel):
+    cached: bool = False
+    seq: int = 0
+    bytes: int = 0
+
+
+class CameraMediaStatus(GatewayResponseModel):
+    schema_version: int
+    available: bool
+    status: Literal["streaming", "idle", "stale", "error", "not_loaded"]
+    reason: str | None = None
+    backend: str | None = None
+    fps: float = 0.0
+    frames: int = 0
+    color: CameraPortStatus
+    depth: CameraPortStatus
+    camera_info: CameraInfoStatus
+    reconnect_count: int = 0
+    service_recovery_allowed: bool = False
+    service_recovery_suppressed: bool = False
+    jpeg: CameraJpegStatus
+    teleop_stream_clients: int = 0
+    ts: float
+    error: str | None = None
+
+
+class WebRTCMediaStatus(GatewayResponseModel):
+    available: bool
+    stats: str
+    offer: str
+    bitrate: str
+    whep: str
+    go2rtc_status: str
+
+
 class AppMediaLinks(GatewayResponseModel):
     events: str
     teleop_ws: str
@@ -831,6 +879,8 @@ class AppMediaLinks(GatewayResponseModel):
     webrtc_bitrate: str | None = None
     webrtc_whep: str | None = None
     go2rtc_status: str | None = None
+    camera: CameraMediaStatus
+    webrtc: WebRTCMediaStatus
 
 
 class RealtimeEventsCapability(GatewayResponseModel):
@@ -941,6 +991,7 @@ class StateResponse(GatewayResponseModel):
     map: dict[str, Any]
     scene: dict[str, Any]
     path: dict[str, Any]
+    media: AppMediaLinks
     links: ClientLinks
 
 

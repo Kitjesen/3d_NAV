@@ -359,6 +359,12 @@ def test_openapi_exposes_client_response_models():
     assert "AppBootstrapResponse" in schemas
     assert "AppCapabilitiesResponse" in schemas
     assert "AppTrafficResponse" in schemas
+    assert "AppMediaLinks" in schemas
+    assert "CameraMediaStatus" in schemas
+    assert "CameraPortStatus" in schemas
+    assert "CameraInfoStatus" in schemas
+    assert "CameraJpegStatus" in schemas
+    assert "WebRTCMediaStatus" in schemas
     assert "TrafficSSEStats" in schemas
     assert "TrafficCloudStats" in schemas
     assert "HealthResponse" in schemas
@@ -426,6 +432,19 @@ def test_openapi_exposes_client_response_models():
     assert "TemporalSemanticRequest" in schemas
     assert "WebRTCOfferRequest" in schemas
     assert "WebRTCControlResponse" in schemas
+    assert schemas["AppMediaLinks"]["properties"]["camera"]["$ref"].endswith(
+        "/CameraMediaStatus"
+    )
+    assert schemas["AppMediaLinks"]["properties"]["webrtc"]["$ref"].endswith(
+        "/WebRTCMediaStatus"
+    )
+    assert set(schemas["CameraMediaStatus"]["properties"]["status"]["enum"]) == {
+        "streaming",
+        "idle",
+        "stale",
+        "error",
+        "not_loaded",
+    }
     assert _schema_ref_for(openapi, "/api/v1/state").endswith("/StateResponse")
     assert _schema_ref_for(openapi, "/ready").endswith("/ReadinessResponse")
     assert _schema_ref_for(openapi, "/ready", "503").endswith("/ReadinessResponse")

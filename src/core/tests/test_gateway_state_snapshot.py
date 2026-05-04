@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -66,3 +67,102 @@ def test_state_route_returns_stable_snapshot():
     assert "teleop" in payload
     assert "navigation" in payload
     assert payload["links"]["events"] == "/api/v1/events"
+
+
+def test_state_snapshot_includes_camera_media_status():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.state_snapshot import build_state_snapshot
+
+    class CameraBridge:
+        def health(self):
+            return {
+                "backend": "dds",
+                "ports_out": {
+                    "color_image": {
+                        "msg_count": 0,
+                        "rate_hz": 0.0,
+                        "stale_ms": -1.0,
+                    },
+                    "depth_image": {
+                        "msg_count": 0,
+                        "rate_hz": 0.0,
+                        "stale_ms": -1.0,
+                    },
+                    "camera_info": {
+                        "msg_count": 0,
+                    },
+                },
+            }
+
+    gateway = GatewayModule()
+    gateway._all_modules = {"CameraBridgeModule": CameraBridge()}
+
+    payload = build_state_snapshot(gateway)
+    camera = payload["media"]["camera"]
+
+    assert payload["media"]["camera_ws"] == "/ws/camera"
+    assert payload["media"]["camera_snapshot"] == "/api/v1/camera/snapshot"
+    assert camera["available"] is False
+    assert camera["status"] == "idle"
+    assert camera["reason"] == "no_color_frames"
+    assert camera["jpeg"]["cached"] is False
+    assert camera["jpeg"]["seq"] == 0
+
+
+def test_camera_media_status_reports_not_loaded_without_bridge():
+    from gateway.services.media_status import build_camera_status
+
+    payload = build_camera_status(SimpleNamespace(_all_modules={}))
+
+    assert payload["available"] is False
+    assert payload["status"] == "not_loaded"
+    assert payload["reason"] == "camera_bridge_not_loaded"
+    assert payload["frames"] == 0
+    assert payload["jpeg"]["cached"] is False
+
+
+def test_camera_media_status_marks_old_or_legacy_frames_stale():
+    from gateway.services.media_status import build_camera_status
+
+    class CameraBridge:
+        def health(self):
+            return {
+                "backend": "dds",
+                "ports_out": {
+                    "color_image": {"msg_count": 12, "rate_hz": 7.2},
+                    "depth_image": {
+                        "msg_count": 10,
+                        "rate_hz": 6.8,
+                        "stale_ms": 6200.0,
+                    },
+                    "camera_info": {"msg_count": 1},
+                },
+            }
+
+    payload = build_camera_status(
+        SimpleNamespace(_all_modules={"CameraBridgeModule": CameraBridge()})
+    )
+
+    assert payload["available"] is False
+    assert payload["status"] == "stale"
+    assert payload["reason"] == "camera_frames_stale"
+    assert payload["frames"] == 12
+    assert payload["color"]["stale_ms"] is None
+    assert payload["depth"]["stale_ms"] == 6200.0
+
+
+def test_camera_media_status_reports_health_errors_without_crashing():
+    from gateway.services.media_status import build_camera_status
+
+    class CameraBridge:
+        def health(self):
+            raise RuntimeError("camera bridge unavailable")
+
+    payload = build_camera_status(
+        SimpleNamespace(_all_modules={"CameraBridgeModule": CameraBridge()})
+    )
+
+    assert payload["available"] is False
+    assert payload["status"] == "error"
+    assert payload["reason"] == "camera_health_error"
+    assert "camera bridge unavailable" in payload["error"]

@@ -108,6 +108,43 @@ def test_health_falls_back_to_cached_slam_rate_when_module_rate_missing(monkeypa
     assert health["slam_hz"] == 3.7
 
 
+def test_health_reports_camera_idle_reason_from_bridge_health(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+
+    class _CameraBridge:
+        def health(self):
+            return {
+                "backend": "dds",
+                "ports_out": {
+                    "color_image": {
+                        "msg_count": 0,
+                        "rate_hz": 0.0,
+                        "stale_ms": -1.0,
+                    },
+                    "depth_image": {
+                        "msg_count": 0,
+                        "rate_hz": 0.0,
+                        "stale_ms": -1.0,
+                    },
+                    "camera_info": {"msg_count": 0},
+                },
+            }
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._all_modules = {"CameraBridgeModule": _CameraBridge()}
+    monkeypatch.setattr(gateway, "_get_slam_hz_cached", lambda: 0.0)
+
+    health = asyncio.run(_endpoint(gateway, "/api/v1/health")())
+    camera = health["sensors"]["camera"]
+
+    assert camera["status"] == "idle"
+    assert camera["available"] is False
+    assert camera["reason"] == "no_color_frames"
+    assert camera["frames"] == 0
+    assert camera["jpeg"]["cached"] is False
+
+
 def test_health_default_skips_unrelated_module_diagnostics(monkeypatch):
     from gateway.gateway_module import GatewayModule
 
