@@ -115,6 +115,8 @@ def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
     }.get(backend, backend)
     if backend == "super_lio":
         return {
+            "map_save_supported": True,
+            "map_save_source": "live_map_cloud_snapshot",
             "relocalization_supported": False,
             "saved_map_relocalization_supported": False,
             "restart_recovery_supported": True,
@@ -122,6 +124,8 @@ def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
         }
     if backend == "super_lio_relocation":
         return {
+            "map_save_supported": False,
+            "map_save_source": "active_map",
             "relocalization_supported": False,
             "saved_map_relocalization_supported": False,
             "restart_recovery_supported": True,
@@ -129,6 +133,8 @@ def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
         }
     if backend == "localizer":
         return {
+            "map_save_supported": False,
+            "map_save_source": "active_map",
             "relocalization_supported": True,
             "saved_map_relocalization_supported": True,
             "restart_recovery_supported": True,
@@ -136,12 +142,16 @@ def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
         }
     if backend in {"fastlio2", "slam"}:
         return {
+            "map_save_supported": True,
+            "map_save_source": "slam_save_maps",
             "relocalization_supported": False,
             "saved_map_relocalization_supported": False,
             "restart_recovery_supported": True,
             "recovery_method": "restart_slam",
         }
     return {
+        "map_save_supported": False,
+        "map_save_source": None,
         "relocalization_supported": True,
         "saved_map_relocalization_supported": True,
         "restart_recovery_supported": False,
@@ -201,6 +211,13 @@ def _reported_state(raw: Any) -> str:
     return state.upper() if state else ""
 
 
+def _active_recovery_signal(raw: Any) -> str:
+    signal = _reported_state(raw)
+    if signal in {"", "NONE", "RECOVERED"}:
+        return ""
+    return signal
+
+
 def localizer_algorithm_healthy(
     diagnostics: Mapping[str, Any],
     icp_quality: float,
@@ -208,6 +225,7 @@ def localizer_algorithm_healthy(
     reported = _reported_state(diagnostics.get("state"))
     degeneracy = _reported_state(diagnostics.get("degeneracy"))
     localizer_health = _reported_state(diagnostics.get("localizer_health"))
+    recovery_signal = _active_recovery_signal(diagnostics.get("recovery_signal"))
     health_source = str(
         diagnostics.get("health_source")
         or diagnostics.get("localizer_health_source")
@@ -232,6 +250,7 @@ def localizer_algorithm_healthy(
         reported in {"", *TRACKING_STATES}
         and degeneracy not in BAD_DEGENERACY
         and localizer_health in GOOD_LOCALIZER_HEALTH
+        and not recovery_signal
         and cloud_fresh
         and (icp_ok or odom_cloud_ok)
     )
@@ -289,6 +308,7 @@ def _localization_state(
     reported = _reported_state(diagnostics.get("state"))
     degeneracy = _reported_state(diagnostics.get("degeneracy"))
     localizer_health = _reported_state(diagnostics.get("localizer_health"))
+    recovery_signal = _active_recovery_signal(diagnostics.get("recovery_signal"))
     confidence = diagnostics.get("confidence")
     algorithm_healthy = _localizer_algorithm_healthy(diagnostics, icp_quality)
     pose_fresh, _ = _pose_freshness(diagnostics)
@@ -308,6 +328,10 @@ def _localization_state(
     if localizer_health == "LOST":
         reasons.append("localizer_health:lost")
         return "lost", reasons
+
+    if recovery_signal:
+        reasons.append(f"recovery_signal:{recovery_signal.lower()}")
+        return "degraded", reasons
 
     if (
         reported in DEGRADED_STATES
@@ -390,6 +414,11 @@ def build_localization_status_from_parts(
     if not recovery_method:
         recovery_method = capability_defaults["recovery_method"]
     map_save_supported = _as_optional_bool(diagnostics.get("map_save_supported"))
+    if map_save_supported is None:
+        map_save_supported = bool(capability_defaults["map_save_supported"])
+    map_save_source = diagnostics.get("map_save_source")
+    if map_save_source is None:
+        map_save_source = capability_defaults["map_save_source"]
     return {
         "schema_version": LOCALIZATION_STATUS_SCHEMA_VERSION,
         "state": state,
@@ -421,7 +450,7 @@ def build_localization_status_from_parts(
         "map_cloud_fresh": _as_optional_bool(diagnostics.get("map_cloud_fresh")),
         "map_state": diagnostics.get("map_state"),
         "map_save_supported": map_save_supported,
-        "map_save_source": diagnostics.get("map_save_source"),
+        "map_save_source": map_save_source,
         "relocalization_supported": relocalization_supported,
         "saved_map_relocalization_supported": saved_map_relocalization_supported,
         "restart_recovery_supported": restart_recovery_supported,
@@ -609,6 +638,8 @@ def _navigation_reason_codes(
     localization_state = str(localization.get("state") or "unknown")
     if localization_state in {"degraded", "lost", "relocalizing", "initializing"}:
         codes.append(f"localization_{localization_state}")
+    if _active_recovery_signal(localization.get("recovery_signal")):
+        codes.append("localization_recovery_active")
     localization_degeneracy = _reported_state(localization.get("degeneracy"))
     if localization_degeneracy in ADVISORY_DEGENERACY:
         codes.append(f"localization_{localization_degeneracy.lower()}_degeneracy")
@@ -643,6 +674,7 @@ _NAVIGATION_BLOCKER_CODES = {
     "localization_lost",
     "localization_relocalizing",
     "localization_initializing",
+    "localization_recovery_active",
     "pose_stale",
 }
 
