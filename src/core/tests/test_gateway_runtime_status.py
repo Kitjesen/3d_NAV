@@ -945,6 +945,14 @@ def test_goal_route_accepts_ready_navigation_goal():
     from gateway.gateway_module import GatewayModule, GoalRequest
     from gateway.schemas import ControlCommandResponse
 
+    class FakeNavigation:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def preview_plan(self, x, y, z):
+            self.calls.append((x, y, z))
+            return {"feasible": True}
+
     gateway = GatewayModule()
     gateway._session_mode = "navigating"
     gateway._icp_quality = 0.03
@@ -959,6 +967,8 @@ def test_goal_route_accepts_ready_navigation_goal():
             "odom_age_ms": 250.0,
             "localizer_health": "RECOVERED",
         }
+    nav = FakeNavigation()
+    gateway.on_system_modules({"NavigationModule": nav})
     sent_goals = []
     gateway.goal_pose._add_callback(sent_goals.append)
 
@@ -977,6 +987,7 @@ def test_goal_route_accepts_ready_navigation_goal():
     assert model.ok is True
     assert model.command.accepted is True
     assert model.goal == [1.0, 2.0, 0.0]
+    assert nav.calls == [(1.0, 2.0, 0.0)]
     assert len(sent_goals) == 1
 
 

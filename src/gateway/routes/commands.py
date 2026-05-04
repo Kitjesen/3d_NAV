@@ -150,6 +150,98 @@ def _plan_preview_unavailable(
     }
 
 
+def _preview_navigation_plan(gw, body: PlanPreviewRequest) -> dict[str, Any]:
+    from gateway.services.runtime_status import build_navigation_status
+
+    status = build_navigation_status(gw)
+    readiness = status.get("readiness", {})
+    blockers = list(readiness.get("blockers") or [])
+    if blockers or not bool(status.get("has_odometry", False)):
+        reasons = ["navigation_not_ready", *blockers]
+        if not bool(status.get("has_odometry", False)):
+            reasons.append("odometry_missing")
+        return _plan_preview_unavailable(
+            gw,
+            body,
+            reasons=reasons,
+            source="gateway_readiness",
+        )
+
+    nav = (getattr(gw, "_all_modules", {}) or {}).get("NavigationModule")
+    if nav is None or not hasattr(nav, "preview_plan"):
+        return _plan_preview_unavailable(
+            gw,
+            body,
+            reasons=["navigation_module_unavailable"],
+            source="gateway_modules",
+        )
+
+    try:
+        return nav.preview_plan(body.x, body.y, body.z)
+    except Exception as exc:
+        return _plan_preview_unavailable(
+            gw,
+            body,
+            reasons=["planning_preview_failed"],
+            source="gateway_exception",
+            error=str(exc),
+        )
+
+
+def _goal_plan_preview_rejection(gw, command: str, body: Any) -> JSONResponse | None:
+    try:
+        preview_body = PlanPreviewRequest(
+            x=body.x,
+            y=body.y,
+            z=body.z,
+            client_id=getattr(body, "client_id", "unknown"),
+        )
+    except Exception as exc:
+        return _command_rejected_response(
+            command,
+            body,
+            error="navigation_plan_invalid",
+            message="Navigation goal cannot be previewed.",
+            detail={"error": str(exc)},
+        )
+
+    preview = _preview_navigation_plan(gw, preview_body)
+    if bool(preview.get("feasible", False)):
+        return None
+    return _command_rejected_response(
+        command,
+        body,
+        error="navigation_plan_infeasible",
+        message="Navigation plan preview is not feasible.",
+        detail={
+            "preview": preview,
+            "path": "/api/v1/navigation/plan",
+        },
+    )
+
+
+def _run_planned_goal_command(
+    gw,
+    command: str,
+    body: Any,
+    action,
+) -> dict[str, Any] | JSONResponse:
+    request_id = getattr(body, "request_id", None) if body is not None else None
+    client_id = getattr(body, "client_id", None) if body is not None else None
+    replay = gw._command_journal.replay(command, request_id)
+    if replay is not None:
+        return replay
+
+    rejection = _goal_readiness_rejection(gw, command, body)
+    if rejection is not None:
+        return rejection
+    rejection = _goal_plan_preview_rejection(gw, command, body)
+    if rejection is not None:
+        return rejection
+
+    return gw._command_journal.accept(command, request_id, client_id, action())
+
+
 def register_command_routes(app, gw) -> None:
     @app.post(
         "/api/v1/navigation/plan",
@@ -157,41 +249,7 @@ def register_command_routes(app, gw) -> None:
         response_model=PlanPreviewResponse,
     )
     async def post_navigation_plan(body: PlanPreviewRequest):
-        from gateway.services.runtime_status import build_navigation_status
-
-        status = build_navigation_status(gw)
-        readiness = status.get("readiness", {})
-        blockers = list(readiness.get("blockers") or [])
-        if blockers or not bool(status.get("has_odometry", False)):
-            reasons = ["navigation_not_ready", *blockers]
-            if not bool(status.get("has_odometry", False)):
-                reasons.append("odometry_missing")
-            return _plan_preview_unavailable(
-                gw,
-                body,
-                reasons=reasons,
-                source="gateway_readiness",
-            )
-
-        nav = (getattr(gw, "_all_modules", {}) or {}).get("NavigationModule")
-        if nav is None or not hasattr(nav, "preview_plan"):
-            return _plan_preview_unavailable(
-                gw,
-                body,
-                reasons=["navigation_module_unavailable"],
-                source="gateway_modules",
-            )
-
-        try:
-            return nav.preview_plan(body.x, body.y, body.z)
-        except Exception as exc:
-            return _plan_preview_unavailable(
-                gw,
-                body,
-                reasons=["planning_preview_failed"],
-                source="gateway_exception",
-                error=str(exc),
-            )
+        return _preview_navigation_plan(gw, body)
 
     @app.post(
         "/api/v1/goal",
@@ -200,10 +258,6 @@ def register_command_routes(app, gw) -> None:
         responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_goal(body: GoalRequest):
-        rejection = _goal_readiness_rejection(gw, "goal", body)
-        if rejection is not None:
-            return rejection
-
         def _publish() -> dict[str, Any]:
             gw.goal_pose.publish(
                 PoseStamped(
@@ -219,7 +273,7 @@ def register_command_routes(app, gw) -> None:
                 gw.instruction.publish(body.instruction)
             return {"status": "ok", "goal": [body.x, body.y, body.z], "yaw": body.yaw}
 
-        return gw._run_control_command("goal", body, _publish)
+        return _run_planned_goal_command(gw, "goal", body, _publish)
 
     @app.post(
         "/api/v1/navigate/click",
@@ -228,10 +282,6 @@ def register_command_routes(app, gw) -> None:
         responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_navigate_click(body: ClickNavRequest):
-        rejection = _goal_readiness_rejection(gw, "navigate_click", body)
-        if rejection is not None:
-            return rejection
-
         def _publish() -> dict[str, Any]:
             gw.goal_pose.publish(
                 PoseStamped(
@@ -245,7 +295,7 @@ def register_command_routes(app, gw) -> None:
             )
             return {"status": "ok", "goal": [body.x, body.y, body.z]}
 
-        return gw._run_control_command("navigate_click", body, _publish)
+        return _run_planned_goal_command(gw, "navigate_click", body, _publish)
 
     @app.post(
         "/api/v1/cmd_vel",

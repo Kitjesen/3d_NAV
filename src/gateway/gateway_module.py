@@ -952,6 +952,8 @@ class GatewayModule(Module, layer=6):
         advisories: list[str] = []
         navigation: dict[str, Any] = {}
 
+        if not self._explorer_available():
+            blockers.append("explorer_backend_not_running")
         if self._session_pending:
             blockers.append("session_transition_pending")
         if self._exploring:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import time
 
@@ -12,6 +13,12 @@ pytest.importorskip("fastapi")
 
 def _endpoint(gateway, path: str):
     return next(route.endpoint for route in gateway._app.routes if route.path == path)
+
+
+def _payload(response_or_payload):
+    if hasattr(response_or_payload, "body"):
+        return json.loads(response_or_payload.body)
+    return response_or_payload
 
 
 def _mark_navigation_ready(gateway) -> None:
@@ -29,12 +36,38 @@ def _mark_navigation_ready(gateway) -> None:
 
 
 class _FakePlanPreviewNav:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        feasible: bool = True,
+        reasons: list[str] | None = None,
+    ) -> None:
         self.calls: list[tuple[float, float, float]] = []
+        self.feasible = feasible
+        self.reasons = list(reasons or [])
 
     def preview_plan(self, x: float, y: float, z: float) -> dict:
         self.calls.append((x, y, z))
         ts = time.time()
+        if not self.feasible:
+            return {
+                "schema_version": 1,
+                "ok": True,
+                "feasible": False,
+                "frame_id": "map",
+                "start": {"x": 0.0, "y": 0.0, "z": 0.0, "frame_id": "map", "ts": ts},
+                "goal": {"x": x, "y": y, "z": z, "frame_id": "map", "ts": ts},
+                "adjusted_goal": None,
+                "path": [],
+                "count": 0,
+                "distance_m": None,
+                "plan_ms": 0.5,
+                "planner": "fake",
+                "source": "navigation_preview",
+                "reasons": self.reasons or ["blocked_by_costmap"],
+                "error": None,
+                "ts": ts,
+            }
         return {
             "schema_version": 1,
             "ok": True,
@@ -142,6 +175,8 @@ def test_command_journal_replays_duplicate_request_id_without_republish():
 
     gateway = GatewayModule()
     gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
     _mark_navigation_ready(gateway)
     post_goal = _endpoint(gateway, "/api/v1/goal")
 
@@ -160,6 +195,7 @@ def test_command_journal_replays_duplicate_request_id_without_republish():
 
     assert gateway.goal_pose.msg_count == 1
     assert gateway.instruction.msg_count == 1
+    assert nav.calls == [(1.0, 2.0, 0.0)]
     assert model.schema_version == 1
     assert model.ok is True
     assert model.status == "ok"
@@ -180,6 +216,8 @@ def test_goal_request_yaw_is_published_as_pose_orientation():
 
     gateway = GatewayModule()
     gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
     _mark_navigation_ready(gateway)
     sent_goals = []
     gateway.goal_pose._add_callback(sent_goals.append)
@@ -199,11 +237,164 @@ def test_goal_request_yaw_is_published_as_pose_orientation():
     model = ControlCommandResponse.model_validate(result)
 
     assert gateway.goal_pose.msg_count == 1
+    assert nav.calls == [(1.0, 2.0, 0.0)]
     assert len(sent_goals) == 1
     assert sent_goals[0].pose.orientation.yaw == pytest.approx(math.pi / 2)
     assert model.goal == [1.0, 2.0, 0.0]
     assert model.yaw == pytest.approx(math.pi / 2)
     assert result["yaw"] == pytest.approx(math.pi / 2)
+
+
+def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav(feasible=False, reasons=["blocked_by_costmap"])
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    sent_goals = []
+    gateway.goal_pose._add_callback(sent_goals.append)
+    post_goal = _endpoint(gateway, "/api/v1/goal")
+
+    response = asyncio.run(
+        post_goal(
+            GoalRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                request_id="blocked-goal",
+                client_id="web",
+            )
+        )
+    )
+    model = GatewayErrorResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert model.ok is False
+    assert model.error == "navigation_plan_infeasible"
+    assert model.command is not None
+    assert model.command.name == "goal"
+    assert model.command.request_id == "blocked-goal"
+    assert model.command.accepted is False
+    assert model.detail["path"] == "/api/v1/navigation/plan"
+    assert model.detail["preview"]["reasons"] == ["blocked_by_costmap"]
+    assert nav.calls == [(1.0, 2.0, 0.0)]
+    assert sent_goals == []
+    assert gateway.goal_pose.msg_count == 0
+
+
+def test_click_navigation_rejects_infeasible_plan_preview_without_publishing():
+    from gateway.gateway_module import ClickNavRequest, GatewayModule
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav(feasible=False, reasons=["blocked_by_costmap"])
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    sent_goals = []
+    gateway.goal_pose._add_callback(sent_goals.append)
+    post_click = _endpoint(gateway, "/api/v1/navigate/click")
+
+    response = asyncio.run(
+        post_click(
+            ClickNavRequest(
+                x=3.0,
+                y=4.0,
+                z=0.0,
+                request_id="blocked-click",
+                client_id="web",
+            )
+        )
+    )
+    model = GatewayErrorResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert model.error == "navigation_plan_infeasible"
+    assert model.command is not None
+    assert model.command.name == "navigate_click"
+    assert model.command.request_id == "blocked-click"
+    assert model.command.accepted is False
+    assert model.detail["preview"]["reasons"] == ["blocked_by_costmap"]
+    assert nav.calls == [(3.0, 4.0, 0.0)]
+    assert sent_goals == []
+    assert gateway.goal_pose.msg_count == 0
+
+
+def test_click_navigation_previews_publishes_and_replays_request_id_once():
+    from gateway.gateway_module import ClickNavRequest, GatewayModule
+    from gateway.schemas import ControlCommandResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    sent_goals = []
+    gateway.goal_pose._add_callback(sent_goals.append)
+    post_click = _endpoint(gateway, "/api/v1/navigate/click")
+    body = ClickNavRequest(
+        x=3.0,
+        y=4.0,
+        z=0.0,
+        request_id="click-001",
+        client_id="web",
+    )
+
+    first = asyncio.run(post_click(body))
+    second = asyncio.run(post_click(body))
+    model = ControlCommandResponse.model_validate(first)
+
+    assert model.ok is True
+    assert model.command.name == "navigate_click"
+    assert model.command.accepted is True
+    assert model.command.replay is False
+    assert model.goal == [3.0, 4.0, 0.0]
+    assert first["command"]["replay"] is False
+    assert second["command"]["replay"] is True
+    assert second["goal"] == [3.0, 4.0, 0.0]
+    assert nav.calls == [(3.0, 4.0, 0.0)]
+    assert gateway.goal_pose.msg_count == 1
+    assert len(sent_goals) == 1
+    assert sent_goals[0].pose.position.x == pytest.approx(3.0)
+    assert sent_goals[0].pose.position.y == pytest.approx(4.0)
+
+
+def test_goal_route_rejects_missing_plan_preview_without_publishing():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    _mark_navigation_ready(gateway)
+    sent_goals = []
+    gateway.goal_pose._add_callback(sent_goals.append)
+    post_goal = _endpoint(gateway, "/api/v1/goal")
+
+    response = asyncio.run(
+        post_goal(
+            GoalRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                request_id="missing-preview",
+                client_id="web",
+            )
+        )
+    )
+    model = GatewayErrorResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert model.error == "navigation_plan_infeasible"
+    assert model.command is not None
+    assert model.command.name == "goal"
+    assert model.command.accepted is False
+    assert model.detail["preview"]["source"] == "gateway_modules"
+    assert model.detail["preview"]["reasons"] == ["navigation_module_unavailable"]
+    assert sent_goals == []
+    assert gateway.goal_pose.msg_count == 0
 
 
 def test_commands_without_request_id_preserve_existing_execute_every_time_behavior():

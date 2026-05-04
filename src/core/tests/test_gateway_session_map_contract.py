@@ -777,6 +777,8 @@ def test_operational_routes_validate_idle_json_contracts():
     assert semantic_ok.count == 1
     assert semantic.error == "embedding required"
     assert explore_status.available is False
+    assert explore_status.can_start is False
+    assert "explorer_backend_not_running" in explore_status.blockers
     assert explore_status.reason == "explorer_backend_not_running"
     assert explore_status.required_profile == "explore_or_tare_explore"
     assert explore_status.supported_profiles == ["explore", "tare_explore"]
