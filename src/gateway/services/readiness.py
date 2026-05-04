@@ -20,6 +20,27 @@ _LOCALIZATION_BLOCKING_STATES = {
     "relocalizing",
 }
 
+_DATA_RELEVANT_REASON_PREFIXES = (
+    "localization:",
+    "navigation_blocked:odometry_missing",
+    "navigation_blocked:localization_lost",
+    "navigation_blocked:localization_relocalizing",
+    "navigation_blocked:localization_initializing",
+    "navigation_blocked:pose_stale",
+    "localization:status_error",
+    "navigation:status_error",
+)
+
+_MISSION_ACTIVE_STATES = {
+    "EXECUTING",
+    "NAVIGATING",
+    "PLANNING",
+    "EXPLORING",
+    "RECOVERY",
+    "RECOVERING",
+    "REPLANNING",
+}
+
 
 def _json_safe(value: Any) -> Any:
     """Return a JSON-compliant value for readiness diagnostics."""
@@ -84,6 +105,47 @@ def _requires_runtime_readiness(gw: Any, modules: Mapping[str, Any]) -> bool:
         return False
 
 
+def _source_name(control: Mapping[str, Any]) -> str:
+    source = control.get("active_cmd_source")
+    if source in (None, "", "unknown"):
+        source = control.get("active_source")
+    if isinstance(source, Mapping):
+        source = source.get("name") or source.get("source") or source.get("owner")
+    if source in (None, ""):
+        return "none"
+    return str(source)
+
+
+def _runtime_readiness_modes(
+    *,
+    failed_modules: list[str],
+    reasons: list[str],
+    runtime: Mapping[str, Any],
+) -> dict[str, Any]:
+    navigation = runtime.get("navigation")
+    navigation = navigation if isinstance(navigation, Mapping) else {}
+    data_reasons = [
+        reason
+        for reason in reasons
+        if str(reason).startswith(_DATA_RELEVANT_REASON_PREFIXES)
+    ]
+    active_cmd_source = str(navigation.get("active_cmd_source") or "unknown")
+    mission_state = str(navigation.get("state") or "unknown").upper()
+    motion_active = mission_state in _MISSION_ACTIVE_STATES
+    command_source_idle = active_cmd_source.lower() in {"", "none", "unknown", "null"}
+    data_ready = not failed_modules and not data_reasons
+    non_motion_safe = command_source_idle and not motion_active
+    motion_ready = not failed_modules and not reasons
+    return {
+        "data_ready": data_ready,
+        "motion_ready": motion_ready,
+        "non_motion_safe": non_motion_safe,
+        "active_cmd_source": active_cmd_source,
+        "mission_state": mission_state,
+        "data_blockers": data_reasons,
+    }
+
+
 def _runtime_readiness_reasons(gw: Any) -> tuple[list[str], dict[str, Any]]:
     from gateway.services.runtime_status import (
         build_localization_status,
@@ -115,11 +177,13 @@ def _runtime_readiness_reasons(gw: Any) -> tuple[list[str], dict[str, Any]]:
         navigation = build_navigation_status(gw)
         readiness = navigation.get("readiness", {})
         blockers = list(readiness.get("blockers") or [])
+        control = navigation.get("control") or {}
         runtime["navigation"] = {
             "state": navigation.get("state"),
             "can_accept_goal": navigation.get("can_accept_goal"),
             "blockers": blockers,
             "advisories": list(readiness.get("advisories") or []),
+            "active_cmd_source": _source_name(control),
         }
         reasons.extend(f"navigation_blocked:{blocker}" for blocker in blockers)
     except Exception as exc:
@@ -144,6 +208,9 @@ def build_readiness_snapshot(
                 "schema_version": READINESS_SCHEMA_VERSION,
                 "status": "not_started",
                 "ready": False,
+                "data_ready": False,
+                "motion_ready": False,
+                "non_motion_safe": True,
                 "modules": {},
                 "module_count": 0,
                 "failed_modules": [],
@@ -176,10 +243,20 @@ def build_readiness_snapshot(
         reasons.extend(runtime_reasons)
 
     ready = not failed_modules and not reasons
+    modes = _runtime_readiness_modes(
+        failed_modules=failed_modules,
+        reasons=reasons,
+        runtime=runtime,
+    )
+    if runtime:
+        runtime["summary"] = modes
     payload = {
         "schema_version": READINESS_SCHEMA_VERSION,
         "status": "ready" if ready else "degraded",
         "ready": ready,
+        "data_ready": modes["data_ready"],
+        "motion_ready": modes["motion_ready"],
+        "non_motion_safe": modes["non_motion_safe"],
         "modules": module_health,
         "module_count": len(modules),
         "failed_modules": failed_modules,

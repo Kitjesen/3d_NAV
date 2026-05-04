@@ -522,6 +522,14 @@ MAX_DATAFLOW_AVG_MS = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_AVG_MS", 150.0)
 MAX_DATAFLOW_P95_MS = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_P95_MS", 250.0)
 MAX_DATAFLOW_MAX_MS = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_MAX_MS", 1000.0)
 MAX_DATAFLOW_DROP_RATIO = env_float("LINGTU_DOCTOR_MAX_DATAFLOW_DROP_RATIO", 0.75)
+DATA_NAV_BLOCKERS = {
+    "odometry_missing",
+    "localization_degraded",
+    "localization_lost",
+    "localization_relocalizing",
+    "localization_initializing",
+    "pose_stale",
+}
 
 
 def run(args, timeout=3):
@@ -904,12 +912,43 @@ if ready_err or not isinstance(ready, dict):
     add("gateway.ready", "fail", "p0", "/ready unavailable", {"http_status": ready_code, "error": ready_err})
 else:
     is_ready = bool(ready.get("ready"))
+    data_ready = ready.get("data_ready")
+    if data_ready is None:
+        data_ready = is_ready
+    motion_ready = ready.get("motion_ready")
+    if motion_ready is None:
+        motion_ready = is_ready
+    non_motion_safe = ready.get("non_motion_safe")
+    if non_motion_safe is None:
+        non_motion_safe = True
+    if non_motion:
+        if not as_bool(data_ready):
+            ready_status = "fail"
+            ready_message = "/ready data path is not ready"
+        elif not is_ready:
+            ready_status = "warn"
+            ready_message = "/ready data path is ready but motion readiness is blocked"
+        else:
+            ready_status = "pass"
+            ready_message = "/ready data path reports ready"
+    else:
+        ready_status = "pass" if is_ready else "fail"
+        ready_message = "/ready reports ready" if is_ready else "/ready reports not ready"
     add(
         "gateway.ready",
-        "pass" if is_ready else "fail",
+        ready_status,
         "p0",
-        "/ready reports ready" if is_ready else "/ready reports not ready",
-        {"http_status": ready_code, "reasons": ready.get("reasons", []), "failed_modules": ready.get("failed_modules", [])},
+        ready_message,
+        {
+            "http_status": ready_code,
+            "ready": is_ready,
+            "data_ready": as_bool(data_ready),
+            "motion_ready": as_bool(motion_ready),
+            "non_motion_safe": as_bool(non_motion_safe),
+            "reasons": ready.get("reasons", []),
+            "failed_modules": ready.get("failed_modules", []),
+            "data_blockers": (ready.get("runtime") or {}).get("summary", {}).get("data_blockers", []),
+        },
     )
     for module_name, port_name, level in [
         ("VoxelGridModule", "map_cloud", "p1"),
@@ -1042,17 +1081,45 @@ if nav_err or not isinstance(nav, dict):
 else:
     readiness = nav.get("readiness") or {}
     blockers = readiness.get("blockers") or []
+    reason_codes = nav.get("reason_codes") or []
     can_accept = bool(nav.get("can_accept_goal", readiness.get("can_execute_autonomy", False)))
     state = str(nav.get("state") or nav.get("mission", {}).get("state") or "unknown")
     control = nav.get("control") or {}
     active_source = command_source_name(control)
+    data_blockers = list(
+        dict.fromkeys(
+            blocker
+            for blocker in list(blockers) + list(reason_codes)
+            if blocker in DATA_NAV_BLOCKERS
+        )
+    )
     nav_ok = can_accept and not blockers
+    if non_motion:
+        nav_status = "fail" if data_blockers else ("warn" if blockers or not can_accept else "pass")
+        nav_message = (
+            "navigation data path is ready for non-motion verification"
+            if nav_status == "pass"
+            else "navigation has data blockers"
+            if nav_status == "fail"
+            else "navigation is not goal-ready but data path has no hard blockers"
+        )
+    else:
+        nav_status = "pass" if nav_ok else "fail"
+        nav_message = "navigation can accept goals" if nav_ok else "navigation readiness has blockers"
     add(
         "gateway.navigation_status",
-        "pass" if nav_ok else "fail",
+        nav_status,
         "p0",
-        "navigation can accept goals" if nav_ok else "navigation readiness has blockers",
-        {"http_status": nav_code, "state": state, "can_accept_goal": can_accept, "blockers": blockers, "active_cmd_source": active_source},
+        nav_message,
+        {
+            "http_status": nav_code,
+            "state": state,
+            "can_accept_goal": can_accept,
+            "blockers": blockers,
+            "reason_codes": reason_codes,
+            "data_blockers": data_blockers,
+            "active_cmd_source": active_source,
+        },
     )
     if non_motion:
         moving_states = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY"}
@@ -1276,6 +1343,19 @@ except Exception:
 slam=d.get("sensors",{}).get("slam",{})
 print("  gateway={} modules_ok={} modules_fail={}".format(d.get("status","?"), d.get("modules_ok","?"), d.get("modules_fail","?")))
 print("  slam_status={} slam_hz={} map_points={} has_odom={}".format(slam.get("status","?"), slam.get("hz", d.get("slam_hz","?")), d.get("map_points","?"), d.get("has_odom","?")))
+' || true
+    curl -s --max-time 2 "$GW/ready" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("  ready: unavailable")
+    raise SystemExit(0)
+summary=(d.get("runtime") or {}).get("summary") or {}
+blockers=summary.get("data_blockers") or d.get("reasons") or []
+print("  ready={} data_ready={} motion_ready={} non_motion_safe={}".format(d.get("ready","?"), d.get("data_ready","?"), d.get("motion_ready","?"), d.get("non_motion_safe","?")))
+if blockers:
+    print("  data_blockers={}".format(",".join(map(str, blockers))))
 ' || true
 
     echo -e "${B}[6] Navigation readiness${N}"

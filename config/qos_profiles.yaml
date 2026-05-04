@@ -45,7 +45,7 @@ profiles:
     topics:
       - /nav/odometry
       - /nav/imu
-      - /localization_quality
+      - /nav/localization_quality
     qos:
       reliability: BEST_EFFORT
       durability: VOLATILE
@@ -55,6 +55,18 @@ profiles:
       lifespan: 50ms
     rationale: >
       状态数据只关心最新值。deadline 帮助检测发布者掉线。
+
+  localization_health:
+    topics:
+      - /nav/localization_health
+    qos:
+      reliability: RELIABLE
+      durability: VOLATILE
+      history: KEEP_LAST
+      depth: 10
+    rationale: >
+      Localizer health is a low-rate diagnostic signal. RELIABLE keeps state
+      transitions visible while VOLATILE avoids replaying stale lock/lost state.
 
   # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   # 控制指令: cmd_vel, stop, way_point

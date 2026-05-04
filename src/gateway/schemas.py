@@ -236,6 +236,9 @@ class ReadinessResponse(GatewayResponseModel):
     schema_version: int
     status: str
     ready: bool
+    data_ready: bool
+    motion_ready: bool
+    non_motion_safe: bool
     modules: dict[str, ReadinessModuleStatus]
     module_count: int
     failed_modules: list[str]

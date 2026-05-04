@@ -46,7 +46,16 @@ def test_topic_contract_names_static_map_and_global_relocalize():
 
     assert "saved_map_cloud: /nav/saved_map_cloud" in text
     assert "quality: /nav/localization_quality" in text
+    assert "health: /nav/localization_health" in text
     assert "global_relocalize_service: /nav/global_relocalize" in text
+
+
+def test_qos_profiles_use_canonical_localization_topics():
+    text = _read("config/qos_profiles.yaml")
+
+    assert "- /nav/localization_quality" in text
+    assert "- /nav/localization_health" in text
+    assert "- /localization_quality" not in text
 
 
 def test_lingtu_doctor_reports_standard_quality_topic_with_legacy_hint():

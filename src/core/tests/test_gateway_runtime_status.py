@@ -504,6 +504,33 @@ def test_navigation_status_reports_mission_path_and_control_source():
     assert payload["localization"]["degraded"] is False
 
 
+def test_navigation_status_finds_cmd_vel_mux_by_module_class_or_name():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeCmdVelMuxModule:
+        def health(self):
+            return {
+                "active_source": "path_follower",
+                "sources": {
+                    "path_follower": {"active": True, "priority": 40},
+                },
+            }
+
+    gateway = GatewayModule()
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+    gateway._all_modules = {"navigation.CmdVelMuxModule": FakeCmdVelMuxModule()}
+
+    payload = build_navigation_status(gateway)
+
+    assert payload["control"]["cmd_vel_mux"]["available"] is True
+    assert payload["control"]["active_cmd_source"] == "path_follower"
+    assert payload["control"]["source_category"] == "autonomy"
+
+
 def test_navigation_status_handles_failed_mission_and_missing_mux():
     from gateway.gateway_module import GatewayModule
     from gateway.services.runtime_status import build_navigation_status

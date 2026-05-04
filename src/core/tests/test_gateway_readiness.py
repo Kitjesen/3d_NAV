@@ -49,6 +49,9 @@ def test_readiness_snapshot_reports_not_started_without_modules():
     assert payload["schema_version"] == 1
     assert payload["status"] == "not_started"
     assert payload["ready"] is False
+    assert payload["data_ready"] is False
+    assert payload["motion_ready"] is False
+    assert payload["non_motion_safe"] is True
     assert payload["modules"] == {}
     assert payload["module_count"] == 0
     assert payload["reasons"] == ["no_modules_loaded"]
@@ -67,6 +70,9 @@ def test_readiness_snapshot_reports_ready_when_all_modules_are_healthy():
     assert status_code == 200
     assert payload["status"] == "ready"
     assert payload["ready"] is True
+    assert payload["data_ready"] is True
+    assert payload["motion_ready"] is True
+    assert payload["non_motion_safe"] is True
     assert payload["module_count"] == 2
     assert payload["failed_modules"] == []
     assert payload["modules"]["A"]["detail"] == {"state": "ok"}
@@ -120,6 +126,9 @@ def test_readiness_snapshot_reports_failed_modules_and_keeps_legacy_fields():
     assert status_code == 503
     assert payload["status"] == "degraded"
     assert payload["ready"] is False
+    assert payload["data_ready"] is False
+    assert payload["motion_ready"] is False
+    assert payload["non_motion_safe"] is True
     assert payload["failed_modules"] == ["Bad"]
     assert payload["reasons"] == ["module_failed:Bad"]
     assert payload["modules"]["Bad"]["ok"] is False
@@ -162,6 +171,9 @@ def test_readiness_snapshot_blocks_lost_robot_localization():
     assert status_code == 503
     assert payload["status"] == "degraded"
     assert payload["ready"] is False
+    assert payload["data_ready"] is False
+    assert payload["motion_ready"] is False
+    assert payload["non_motion_safe"] is True
     assert payload["failed_modules"] == []
     assert "localization:lost" in payload["reasons"]
     assert payload["runtime"]["localization"]["state"] == "lost"
@@ -192,4 +204,55 @@ def test_readiness_snapshot_includes_navigation_blockers():
     assert status_code == 503
     assert "localization:degraded" in payload["reasons"]
     assert "navigation_blocked:pose_stale" in payload["reasons"]
+    assert payload["data_ready"] is False
+    assert payload["motion_ready"] is False
+    assert payload["non_motion_safe"] is True
     assert payload["runtime"]["navigation"]["blockers"] == ["pose_stale"]
+    assert payload["runtime"]["summary"]["data_blockers"] == [
+        "localization:degraded",
+        "localization:pose_stale",
+        "navigation_blocked:pose_stale",
+    ]
+
+
+def test_readiness_snapshot_flags_active_command_source_as_not_non_motion_safe():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.readiness import build_readiness_snapshot
+
+    class FakeMux:
+        def health(self):
+            return {
+                "active_source": "teleop",
+                "sources": {
+                    "teleop": {"active": True, "priority": 100},
+                },
+            }
+
+    gateway = GatewayModule()
+    gateway._all_modules = {
+        "NavigationModule": _HealthyModule(),
+        "CmdVelMux": FakeMux(),
+    }
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "EXECUTING"}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.03,
+            "localizer_health": "RECOVERED",
+            "odom_age_ms": 100.0,
+        }
+        gateway._icp_quality = 0.03
+
+    payload, status_code = build_readiness_snapshot(gateway, now=129.0)
+
+    assert status_code == 200
+    assert payload["ready"] is True
+    assert payload["data_ready"] is True
+    assert payload["motion_ready"] is True
+    assert payload["non_motion_safe"] is False
+    assert payload["runtime"]["navigation"]["active_cmd_source"] == "teleop"
+    assert payload["runtime"]["summary"]["mission_state"] == "EXECUTING"

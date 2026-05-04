@@ -28,6 +28,7 @@ slam:
 # ── 定位层 ──
 localization:
   quality: /nav/localization_quality      # std_msgs/Float32 (ICP 匹配质量)
+  health: /nav/localization_health        # std_msgs/String (LOCKED/LOST/RECOVERED health)
   relocalize_service: /nav/relocalize     # interface/srv/Relocalize
   global_relocalize_service: /nav/global_relocalize # std_srvs/Trigger
   relocalize_check_service: /nav/relocalize_check  # interface/srv/IsValid (检查重定位是否完成)

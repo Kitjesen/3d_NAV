@@ -474,6 +474,18 @@ def _cmd_vel_health(gw: Any) -> dict[str, Any]:
     modules = getattr(gw, "_all_modules", None) or {}
     mux = modules.get("CmdVelMux")
     if mux is None:
+        for name, module in modules.items():
+            token = str(name).lower()
+            class_token = module.__class__.__name__.lower()
+            if (
+                "cmdvelmux" in token
+                or "cmd_vel_mux" in token
+                or "cmdvelmux" in class_token
+                or "cmd_vel_mux" in class_token
+            ):
+                mux = module
+                break
+    if mux is None:
         return {"active_source": "unknown", "sources": {}, "available": False}
     try:
         health = mux.health() if hasattr(mux, "health") else {}
