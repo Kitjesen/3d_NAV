@@ -625,6 +625,44 @@ def test_map_save_falls_back_to_super_lio_live_cloud_snapshot(monkeypatch, tmp_p
     assert not active_link.exists()
 
 
+def test_map_save_rejects_super_lio_relocation_profile(monkeypatch, tmp_path):
+    import gateway.routes.maps as map_routes
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import MapLifecycleResponse
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("relocation map save should fail before ROS calls")
+
+    monkeypatch.setenv("NAV_MAP_DIR", str(tmp_path))
+    monkeypatch.setattr(map_routes.subprocess, "run", fake_run)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    monkeypatch.setattr(gateway, "_get_slam_profile", lambda: "super_lio_relocation")
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/map/save")({"name": "relocation_demo"})
+    )
+    payload = _payload(response)
+    model = MapLifecycleResponse.model_validate(payload)
+
+    assert response.status_code == 409
+    assert model.ok is False
+    assert model.success is False
+    assert model.name == "relocation_demo"
+    assert model.slam_profile == "super_lio_relocation"
+    assert model.source == "active_map"
+    assert model.map_save_source == "active_map"
+    assert model.relocalization_supported is False
+    assert model.saved_map_relocalization_supported is False
+    assert model.restart_recovery_supported is True
+    assert model.recovery_method == "restart_super_lio_relocation"
+    assert calls == []
+
+
 def test_maps_route_accepts_legacy_and_canonical_actions():
     from gateway.gateway_module import GatewayModule, MapRequest
     from gateway.schemas import MapLifecycleResponse

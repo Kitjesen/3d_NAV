@@ -293,6 +293,39 @@ def test_localization_status_accepts_super_lio_odom_map_health():
     assert model.recovery_action == "none"
 
 
+def test_localization_status_fills_super_lio_map_save_defaults():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocalizationStatusResponse
+    from gateway.services.runtime_status import build_localization_status
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._localization_status = {
+            "backend": "super_lio",
+            "state": "TRACKING",
+            "confidence": 0.92,
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "map_cloud_fresh": True,
+            "localizer_health": "LIO_TRACKING",
+            "odom_age_ms": 120.0,
+            "cloud_age_ms": 80.0,
+        }
+
+    payload = build_localization_status(gateway)
+    model = LocalizationStatusResponse.model_validate(payload)
+
+    assert model.ready is True
+    assert model.map_save_supported is True
+    assert model.map_save_source == "live_map_cloud_snapshot"
+    assert model.relocalization_supported is False
+    assert model.saved_map_relocalization_supported is False
+    assert model.restart_recovery_supported is True
+    assert model.recovery_method == "restart_super_lio"
+
+
 def test_localization_status_accepts_super_lio_relocation_contract():
     from gateway.gateway_module import GatewayModule
     from gateway.schemas import LocalizationStatusResponse
@@ -821,6 +854,48 @@ def test_navigation_status_blocks_ready_when_map_cloud_is_stale():
     assert navigation["can_accept_goal"] is False
     assert "localization_initializing" in navigation["reason_codes"]
     assert session["localizer_ready"] is False
+
+
+def test_navigation_status_blocks_goal_when_super_lio_recovery_signal_is_active():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_localization_status, build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.0
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {
+            "backend": "super_lio",
+            "state": "TRACKING",
+            "confidence": 0.92,
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "map_cloud_fresh": True,
+            "recovery_signal": "LOC_DIVERGED",
+            "recovery_action": "restart_super_lio",
+            "localizer_health": "LIO_TRACKING",
+            "odom_age_ms": 120.0,
+            "cloud_age_ms": 80.0,
+        }
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    localization = build_localization_status(gateway)
+    navigation = build_navigation_status(gateway)
+
+    assert localization["state"] == "degraded"
+    assert localization["ready"] is False
+    assert localization["algorithm_healthy"] is False
+    assert localization["reasons"] == ["recovery_signal:loc_diverged"]
+    assert localization["map_save_source"] == "live_map_cloud_snapshot"
+    assert navigation["can_accept_goal"] is False
+    assert "localization_recovery_active" in navigation["reason_codes"]
+    assert "localization_recovery_active" in navigation["readiness"]["blockers"]
 
 
 def test_goal_route_rejects_stale_localization_without_publishing():

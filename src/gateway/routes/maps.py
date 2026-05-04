@@ -479,6 +479,35 @@ def register_map_routes(app, gw) -> None:
         except Exception:
             slam_profile = getattr(gw, "_session_slam_profile", "unknown")
 
+        if slam_profile == "super_lio_relocation":
+            capability_defaults = backend_capability_defaults(slam_profile)
+            return _map_lifecycle_response(
+                False,
+                status_code=409,
+                name=name,
+                message=(
+                    "Map save is disabled for Super-LIO relocation; "
+                    "use the active saved map instead"
+                ),
+                errors=[
+                    "super_lio_relocation uses active_map as its map source "
+                    "and must not overwrite saved-map evidence during evaluation"
+                ],
+                slam_profile=slam_profile,
+                source=capability_defaults["map_save_source"],
+                map_save_source=capability_defaults["map_save_source"],
+                relocalization_supported=capability_defaults[
+                    "relocalization_supported"
+                ],
+                saved_map_relocalization_supported=capability_defaults[
+                    "saved_map_relocalization_supported"
+                ],
+                restart_recovery_supported=capability_defaults[
+                    "restart_recovery_supported"
+                ],
+                recovery_method=capability_defaults["recovery_method"],
+            )
+
         ros_env = (
             "source /opt/ros/humble/setup.bash && "
             "source ~/data/SLAM/navigation/install/setup.bash 2>/dev/null; "
