@@ -58,6 +58,19 @@ def test_qos_profiles_use_canonical_localization_topics():
     assert "- /localization_quality" not in text
 
 
+def test_record_bag_captures_canonical_localization_topics():
+    text = _read("scripts/record_bag.sh")
+    topic_lines = {
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith("/")
+    }
+
+    assert "/nav/localization_quality" in topic_lines
+    assert "/nav/localization_health" in topic_lines
+    assert "/localization_quality" not in topic_lines
+
+
 def test_lingtu_doctor_reports_standard_quality_topic_with_legacy_hint():
     text = _read("scripts/lingtu")
 

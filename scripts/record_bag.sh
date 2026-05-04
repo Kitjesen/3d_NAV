@@ -43,7 +43,8 @@ TOPICS=(
   /nav/odometry
   /nav/map_cloud
   /nav/registered_cloud
-  /localization_quality
+  /nav/localization_quality
+  /nav/localization_health
   # --- planning & control ---
   /nav/goal_pose
   /nav/cmd_vel
