@@ -661,6 +661,7 @@ def test_map_save_rejects_super_lio_relocation_profile(monkeypatch, tmp_path):
     assert model.restart_recovery_supported is True
     assert model.recovery_method == "restart_super_lio_relocation"
     assert calls == []
+    assert not (tmp_path / "relocation_demo").exists()
 
 
 def test_maps_route_accepts_legacy_and_canonical_actions():

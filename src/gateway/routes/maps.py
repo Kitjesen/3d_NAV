@@ -456,6 +456,7 @@ def register_map_routes(app, gw) -> None:
         response_model=MapLifecycleResponse,
         responses={
             400: {"model": MapLifecycleResponse},
+            409: {"model": MapLifecycleResponse},
             500: {"model": MapLifecycleResponse},
         },
     )
@@ -467,10 +468,6 @@ def register_map_routes(app, gw) -> None:
         err = safe_map_name(name)
         if err is not None:
             return _map_lifecycle_response(False, message=err, status_code=400)
-        map_dir = _map_dir()
-        save_dir = os.path.join(map_dir, name)
-        os.makedirs(save_dir, exist_ok=True)
-        pcd_path = os.path.join(save_dir, "map.pcd")
         errors = []
         save_source = "slam_service"
         slam_profile = "unknown"
@@ -507,6 +504,11 @@ def register_map_routes(app, gw) -> None:
                 ],
                 recovery_method=capability_defaults["recovery_method"],
             )
+
+        map_dir = _map_dir()
+        save_dir = os.path.join(map_dir, name)
+        os.makedirs(save_dir, exist_ok=True)
+        pcd_path = os.path.join(save_dir, "map.pcd")
 
         ros_env = (
             "source /opt/ros/humble/setup.bash && "
