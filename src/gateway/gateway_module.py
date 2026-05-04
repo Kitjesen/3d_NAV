@@ -523,6 +523,7 @@ class GatewayModule(Module, layer=6):
                 name="gateway",
             )
             self._server_thread.start()
+            self._prewarm_client_http_routes(stop_event)
         # Background: load active map.pcd from disk and push as saved_map
         # event so the frontend底图 always has the stored map regardless of
         # whether localizer has converged. Re-pushes periodically so late-
@@ -556,6 +557,54 @@ class GatewayModule(Module, layer=6):
             self._drift_watchdog_thread.start()
 
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
+
+    def _prewarm_client_http_routes(
+        self,
+        stop_event: threading.Event | None = None,
+        *,
+        timeout_s: float = 4.0,
+    ) -> bool:
+        """Consume first-use FastAPI/Pydantic cost before App/Web clients arrive."""
+        stop_event = stop_event or self._stop_event
+        if self._defer_server or stop_event.is_set():
+            return False
+        try:
+            from urllib.error import URLError
+            from urllib.request import Request, urlopen
+        except Exception:
+            return False
+
+        headers: dict[str, str] = {}
+        try:
+            from gateway.auth import _get_configured_key
+
+            api_key = _get_configured_key()
+            if api_key:
+                headers["X-API-Key"] = api_key
+        except Exception:
+            pass
+
+        url = f"http://127.0.0.1:{self._port}/api/v1/app/capabilities"
+        deadline = time.time() + max(0.0, float(timeout_s))
+        while time.time() < deadline and not stop_event.is_set():
+            try:
+                request_timeout = min(2.5, max(0.1, deadline - time.time()))
+                with urlopen(
+                    Request(url, headers=headers),
+                    timeout=request_timeout,
+                ) as response:
+                    response.read()
+                logger.debug("GatewayModule: prewarmed App/Web capabilities route")
+                return True
+            except (OSError, URLError):
+                stop_event.wait(0.1)
+            except Exception:
+                logger.debug(
+                    "GatewayModule: App/Web HTTP prewarm failed",
+                    exc_info=True,
+                )
+                return False
+        return False
 
     def _drift_watchdog_loop(
         self, stop_event: threading.Event | None = None
