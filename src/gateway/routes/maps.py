@@ -24,7 +24,7 @@ from gateway.schemas import (
     MapRenameRequest,
     MapSaveRequest,
 )
-from gateway.services.map_paths import nav_map_root_str
+from gateway.services.map_paths import active_map_name, nav_map_root_str
 from gateway.services.map_safety import (
     apply_dynamic_filter_step1half,
     safe_map_name,
@@ -117,10 +117,7 @@ def register_map_routes(app, gw) -> None:
     async def slam_maps():
         map_dir = _map_dir()
         maps = []
-        active_target = ""
-        active_link = pathlib.Path(map_dir) / "active"
-        if active_link.is_symlink():
-            active_target = active_link.resolve().name
+        active_target = active_map_name() or ""
 
         if os.path.isdir(map_dir):
             for d in sorted(os.listdir(map_dir)):

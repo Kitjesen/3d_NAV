@@ -448,9 +448,12 @@ class GatewayModule(Module, layer=6):
         self._icp_quality: float = 0.0           # from localization_quality
         self._localization_status: dict | None = None
 
-        # Autonomous exploration state + frontier explorer module ref
+        # Autonomous exploration state + explorer module refs
         self._exploring: bool = False
         self._frontier_explorer: Any = None
+        self._tare_explorer: Any = None
+        self._last_tare_stats: dict[str, Any] | None = None
+        self._exploration_supervisor_state: dict[str, Any] | None = None
 
         # TaggedLocationsModule ref (set by on_system_modules)
         self._tagged_loc_module: Any = None
@@ -801,11 +804,143 @@ class GatewayModule(Module, layer=6):
              if m.__class__.__name__ == "WavefrontFrontierExplorer"),
             None,
         )
+        self._tare_explorer = next(
+            (m for m in modules.values()
+             if m.__class__.__name__ == "TAREExplorerModule"),
+            None,
+        )
         self._tagged_loc_module = next(
             (m for m in modules.values()
              if m.__class__.__name__ == "TaggedLocationsModule"),
             None,
         )
+
+    def _explorer_backend(self) -> str:
+        if self._frontier_explorer is not None:
+            return "frontier"
+        if self._tare_explorer is not None:
+            return "tare"
+        return "none"
+
+    def _explorer_available(self) -> bool:
+        return self._explorer_backend() != "none"
+
+    def _explorer_unavailable_detail(self) -> dict[str, str]:
+        return {
+            "reason": "frontier_explorer_not_running",
+            "required_profile": "explore",
+            "action": (
+                "restart LingTu with the explore profile before starting "
+                "exploration"
+            ),
+        }
+
+    def _coerce_explorer_result(self, result: Any) -> Any:
+        if isinstance(result, str):
+            try:
+                return json.loads(result)
+            except Exception:
+                return result
+        return result
+
+    def _begin_exploration(self) -> Any:
+        if self._frontier_explorer is not None:
+            return self._coerce_explorer_result(
+                self._frontier_explorer.begin_exploration()
+            )
+        if self._tare_explorer is not None:
+            starter = getattr(
+                self._tare_explorer,
+                "start_tare_exploration",
+                None,
+            )
+            if starter is None:
+                starter = getattr(self._tare_explorer, "begin_exploration", None)
+            if starter is None:
+                raise RuntimeError("TARE explorer has no start method")
+            return self._coerce_explorer_result(starter())
+        raise RuntimeError("explorer_not_running")
+
+    def _end_exploration(self) -> Any:
+        if self._frontier_explorer is not None:
+            return self._coerce_explorer_result(
+                self._frontier_explorer.end_exploration()
+            )
+        if self._tare_explorer is not None:
+            stopper = getattr(
+                self._tare_explorer,
+                "stop_tare_exploration",
+                None,
+            )
+            if stopper is None:
+                stopper = getattr(self._tare_explorer, "end_exploration", None)
+            if stopper is None:
+                raise RuntimeError("TARE explorer has no stop method")
+            return self._coerce_explorer_result(stopper())
+        raise RuntimeError("explorer_not_running")
+
+    def _tare_status_payload(self) -> dict[str, Any]:
+        if self._tare_explorer is None:
+            return {}
+        raw_status: Any = {}
+        status_fn = getattr(self._tare_explorer, "get_tare_status", None)
+        if status_fn is not None:
+            try:
+                raw_status = self._coerce_explorer_result(status_fn())
+            except Exception as exc:
+                raw_status = {"error": str(exc)}
+        if not isinstance(raw_status, dict):
+            raw_status = {"raw": raw_status}
+        return {
+            "status": raw_status,
+            "stats": self._last_tare_stats or {},
+        }
+
+    def _exploration_status_payload(self) -> dict[str, Any]:
+        backend = self._explorer_backend()
+        if backend == "none":
+            return {
+                "available": False,
+                "backend": "none",
+                "exploring": False,
+                "frontier_count": 0,
+                **self._explorer_unavailable_detail(),
+            }
+        if backend == "frontier":
+            health = {}
+            if hasattr(self._frontier_explorer, "health"):
+                try:
+                    health = self._frontier_explorer.health() or {}
+                except Exception as exc:
+                    health = {"error": str(exc)}
+            frontier_count = 0
+            if isinstance(health, dict):
+                try:
+                    frontier_count = int(health.get("frontier_count", 0) or 0)
+                except (TypeError, ValueError):
+                    frontier_count = 0
+            return {
+                "available": True,
+                "backend": "frontier",
+                "exploring": self._exploring,
+                "frontier_count": frontier_count,
+            }
+
+        tare = self._tare_status_payload()
+        tare_status = tare.get("status") if isinstance(tare, dict) else {}
+        tare_started = (
+            bool(tare_status.get("started"))
+            if isinstance(tare_status, dict)
+            else False
+        )
+        return {
+            "available": True,
+            "backend": "tare",
+            "exploring": bool(self._exploring or tare_started),
+            "frontier_count": 0,
+            "tare": tare,
+            "supervisor": self._exploration_supervisor_state or {},
+        }
 
     # -- teleop helpers (delegate to TeleopModule) ---------------------------
 
@@ -1121,11 +1256,17 @@ class GatewayModule(Module, layer=6):
             and has_pcd
             and has_tomogram
         )
-        explorer_available = self._frontier_explorer is not None
-        explorer_unavailable_reason = (
-            None if explorer_available else "frontier_explorer_not_running"
+        explorer_backend = self._explorer_backend()
+        explorer_available = explorer_backend != "none"
+        explorer_detail = (
+            {} if explorer_available else self._explorer_unavailable_detail()
         )
-        explorer_required_profile = None if explorer_available else "explore"
+        explorer_unavailable_reason = (
+            None if explorer_available else explorer_detail.get("reason")
+        )
+        explorer_required_profile = (
+            None if explorer_available else explorer_detail.get("required_profile")
+        )
         can_start_exploring = idle and explorer_available
         can_end = self._session_mode != "idle" and not self._session_pending
         return {
@@ -1160,6 +1301,7 @@ class GatewayModule(Module, layer=6):
             "can_start_navigating": can_start_navigating,
             "can_start_exploring": can_start_exploring,
             "can_end": can_end,
+            "explorer_backend": explorer_backend,
             "explorer_available": explorer_available,
             "explorer_unavailable_reason": explorer_unavailable_reason,
             "explorer_required_profile": explorer_required_profile,
@@ -1477,12 +1619,16 @@ class GatewayModule(Module, layer=6):
     def _on_tare_stats(self, stats: dict) -> None:
         """Forward TAREExplorerModule tare_stats to SSE (type=tare_stats)."""
         d = stats if isinstance(stats, dict) else {"raw": str(stats)}
+        with self._state_lock:
+            self._last_tare_stats = dict(d)
         self.push_event({"type": "tare_stats", "data": d})
 
     def _on_exploration_supervisor(self, state: dict) -> None:
         """Forward ExplorationSupervisorModule supervisor_state to SSE
         (type=exploration_supervisor). Dashboards show mode + reason."""
         d = state if isinstance(state, dict) else {"raw": str(state)}
+        with self._state_lock:
+            self._exploration_supervisor_state = dict(d)
         self.push_event({"type": "exploration_supervisor", "data": d})
 
     def _on_global_path(self, path: list) -> None:

@@ -145,7 +145,7 @@ def register_session_routes(app, gw) -> None:
                 status_code=400,
                 message="super_lio_relocation requires navigating with map_name",
             )
-        if mode == "exploring" and gw._frontier_explorer is None:
+        if mode == "exploring" and not gw._explorer_available():
             return _transition_response(
                 False,
                 status_code=503,
@@ -264,7 +264,7 @@ def register_session_routes(app, gw) -> None:
 
             if mode == "exploring":
                 try:
-                    gw._frontier_explorer.begin_exploration()
+                    gw._begin_exploration()
                     gw._exploring = True
                 except Exception as e:
                     gw._session_error = f"Explorer start failed: {e}"
@@ -312,9 +312,9 @@ def register_session_routes(app, gw) -> None:
             )
         gw._session_pending = True
         try:
-            if gw._exploring and gw._frontier_explorer is not None:
+            if gw._exploring and gw._explorer_available():
                 try:
-                    gw._frontier_explorer.end_exploration()
+                    gw._end_exploration()
                 except Exception as e:
                     logger.warning("session/end: end_exploration failed: %s", e)
                 gw._exploring = False

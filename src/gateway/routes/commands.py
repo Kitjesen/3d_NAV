@@ -209,7 +209,7 @@ def register_command_routes(app, gw) -> None:
                 PoseStamped(
                     pose=Pose(
                         position=Vector3(body.x, body.y, body.z),
-                        orientation=Quaternion(0, 0, 0, 1),
+                        orientation=Quaternion.from_yaw(body.yaw),
                     ),
                     frame_id="map",
                     ts=time.time(),
@@ -217,7 +217,7 @@ def register_command_routes(app, gw) -> None:
             )
             if body.instruction:
                 gw.instruction.publish(body.instruction)
-            return {"status": "ok", "goal": [body.x, body.y, body.z]}
+            return {"status": "ok", "goal": [body.x, body.y, body.z], "yaw": body.yaw}
 
         return gw._run_control_command("goal", body, _publish)
 

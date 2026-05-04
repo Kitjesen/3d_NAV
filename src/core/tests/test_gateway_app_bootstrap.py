@@ -157,6 +157,21 @@ def test_app_bootstrap_service_returns_client_contract():
     assert traffic["links"]["traffic"] == "/api/v1/app/traffic"
 
 
+def test_app_capabilities_treat_tare_as_exploration_backend():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.app_bootstrap import build_app_capabilities
+
+    class TAREExplorerModule:
+        pass
+
+    gateway = GatewayModule()
+    gateway.on_system_modules({"TAREExplorerModule": TAREExplorerModule()})
+
+    payload = build_app_capabilities(gateway)
+
+    assert payload["features"]["exploration"] is True
+
+
 def test_app_bootstrap_falls_back_when_session_snapshot_fails():
     from gateway.gateway_module import GatewayModule
     from gateway.services.app_bootstrap import build_app_bootstrap

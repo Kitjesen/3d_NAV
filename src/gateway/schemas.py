@@ -40,6 +40,7 @@ class GoalRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
+    yaw: float = 0.0
     instruction: str | None = None
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
@@ -596,6 +597,7 @@ class SessionResponse(GatewayResponseModel):
     can_start_navigating: bool = False
     can_start_exploring: bool = False
     can_end: bool = False
+    explorer_backend: Literal["none", "frontier", "tare"] | str = "none"
     explorer_available: bool = False
     explorer_unavailable_reason: str | None = None
     explorer_required_profile: str | None = None
@@ -682,11 +684,14 @@ class ExplorationCommandResponse(GatewayResponseModel):
 
 class ExplorationStatusResponse(GatewayResponseModel):
     available: bool
+    backend: Literal["none", "frontier", "tare"] | str = "none"
     exploring: bool = False
     frontier_count: int = 0
     reason: str | None = None
     required_profile: str | None = None
     action: str | None = None
+    tare: dict[str, Any] | None = None
+    supervisor: dict[str, Any] | None = None
 
 
 class SlamStatusResponse(GatewayResponseModel):

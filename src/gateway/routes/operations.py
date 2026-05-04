@@ -394,8 +394,7 @@ def register_operation_routes(app, gw) -> None:
         responses={503: {"model": GatewayErrorResponse}},
     )
     async def explore_start():
-        fe = gw._frontier_explorer
-        if fe is None:
+        if not gw._explorer_available():
             return JSONResponse(
                 status_code=503,
                 content={
@@ -407,7 +406,7 @@ def register_operation_routes(app, gw) -> None:
                 },
             )
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, fe.begin_exploration)
+        result = await loop.run_in_executor(None, gw._begin_exploration)
         gw._exploring = True
         gw.push_event({"type": "exploring", "active": True})
         return {"status": result}
@@ -419,8 +418,7 @@ def register_operation_routes(app, gw) -> None:
         responses={503: {"model": GatewayErrorResponse}},
     )
     async def explore_stop():
-        fe = gw._frontier_explorer
-        if fe is None:
+        if not gw._explorer_available():
             return JSONResponse(
                 status_code=503,
                 content={
@@ -432,7 +430,7 @@ def register_operation_routes(app, gw) -> None:
                 },
             )
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, fe.end_exploration)
+        result = await loop.run_in_executor(None, gw._end_exploration)
         gw._exploring = False
         gw.push_event({"type": "exploring", "active": False})
         return {"status": result}
@@ -443,20 +441,7 @@ def register_operation_routes(app, gw) -> None:
         response_model=ExplorationStatusResponse,
     )
     async def explore_status():
-        fe = gw._frontier_explorer
-        if fe is None:
-            return {
-                "available": False,
-                "exploring": False,
-                "frontier_count": 0,
-                **_EXPLORER_UNAVAILABLE_DETAIL,
-            }
-        h = fe.health() if hasattr(fe, "health") else {}
-        return {
-            "available": True,
-            "exploring": gw._exploring,
-            "frontier_count": h.get("frontier_count", 0),
-        }
+        return gw._exploration_status_payload()
 
     @app.get(
         "/api/v1/slam/status",

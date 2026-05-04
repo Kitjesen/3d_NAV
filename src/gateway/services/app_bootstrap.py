@@ -355,6 +355,9 @@ def _auth_summary() -> dict[str, Any]:
 
 
 def _feature_flags(gw: Any) -> dict[str, bool]:
+    explorer_available = getattr(gw, "_frontier_explorer", None) is not None
+    if hasattr(gw, "_explorer_available"):
+        explorer_available = bool(gw._explorer_available())
     return {
         "state": True,
         "health": True,
@@ -362,7 +365,7 @@ def _feature_flags(gw: Any) -> dict[str, bool]:
         "mapping": True,
         "localization": True,
         "navigation": True,
-        "exploration": getattr(gw, "_frontier_explorer", None) is not None,
+        "exploration": explorer_available,
         "teleop": True,
         "camera_snapshot": True,
         "webrtc": getattr(gw, "_webrtc", None) is not None,

@@ -492,6 +492,41 @@ def test_map_routes_validate_json_contracts(monkeypatch):
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_slam_maps_uses_guarded_active_map_resolution(monkeypatch, tmp_path):
+    import gateway.routes.maps as map_routes
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import MapListResponse
+
+    demo = tmp_path / "demo"
+    other = tmp_path / "other"
+    demo.mkdir()
+    other.mkdir()
+    (demo / "map.pcd").write_bytes(b"pcd")
+    (other / "map.pcd").write_bytes(b"pcd")
+    monkeypatch.setenv("NAV_MAP_DIR", str(tmp_path))
+
+    gateway = GatewayModule()
+    gateway.setup()
+    monkeypatch.setattr(map_routes, "active_map_name", lambda: "demo")
+
+    payload = asyncio.run(_endpoint(gateway, "/api/v1/slam/maps")())
+    maps = MapListResponse.model_validate(payload)
+
+    assert maps.active == "demo"
+    assert {item.name: item.is_active for item in maps.maps} == {
+        "demo": True,
+        "other": False,
+    }
+
+    monkeypatch.setattr(map_routes, "active_map_name", lambda: None)
+
+    payload = asyncio.run(_endpoint(gateway, "/api/v1/slam/maps")())
+    maps = MapListResponse.model_validate(payload)
+
+    assert maps.active == ""
+    assert all(item.is_active is False for item in maps.maps)
+
+
 def test_map_lifecycle_error_responses_use_stable_envelope(monkeypatch, tmp_path):
     from gateway.gateway_module import GatewayModule
     from gateway.schemas import MapLifecycleResponse, MapNameRequest
@@ -546,6 +581,7 @@ def test_map_save_falls_back_to_super_lio_live_cloud_snapshot(monkeypatch, tmp_p
     )
     model = MapLifecycleResponse.model_validate(payload)
     pcd_path = tmp_path / "super_lio_demo" / "map.pcd"
+    active_link = tmp_path / "active"
 
     assert model.schema_version == 1
     assert model.ok is True
@@ -566,6 +602,7 @@ def test_map_save_falls_back_to_super_lio_live_cloud_snapshot(monkeypatch, tmp_p
     body = data.split(b"DATA binary\n", 1)[1]
     assert len(body) == 2 * 3 * 4
     assert struct.unpack("<ffffff", body) == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    assert not active_link.exists()
 
 
 def test_maps_route_accepts_legacy_and_canonical_actions():
@@ -684,6 +721,73 @@ def test_operational_routes_validate_idle_json_contracts():
     assert bag_stop.error == "not_recording"
     assert webrtc_stats.enabled is False
     assert webrtc_bitrate.error == "webrtc_unavailable"
+
+
+def test_tare_explorer_is_available_through_exploration_contracts():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import (
+        ExplorationCommandResponse,
+        ExplorationStatusResponse,
+    )
+
+    class TAREExplorerModule:
+        def __init__(self):
+            self.started = False
+
+        def start_tare_exploration(self):
+            self.started = True
+            return json.dumps({"status": "started"})
+
+        def stop_tare_exploration(self):
+            self.started = False
+            return json.dumps({"status": "stopped"})
+
+        def get_tare_status(self):
+            return json.dumps(
+                {
+                    "alive": True,
+                    "started": self.started,
+                    "waypoint_count": 3,
+                    "finished": False,
+                }
+            )
+
+    gateway = GatewayModule()
+    gateway.setup()
+    tare = TAREExplorerModule()
+    gateway.on_system_modules({"TAREExplorerModule": tare})
+    gateway._on_tare_stats({"runtime_ms": 12.5})
+    gateway._on_exploration_supervisor({"mode": "idle", "reason": "ready"})
+
+    status_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    start_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/start")())
+    running_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    stop_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/stop")())
+    stopped_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    snapshot = gateway._session_snapshot()
+
+    status = ExplorationStatusResponse.model_validate(status_payload)
+    started = ExplorationCommandResponse.model_validate(start_payload)
+    running = ExplorationStatusResponse.model_validate(running_payload)
+    stopped = ExplorationCommandResponse.model_validate(stop_payload)
+    final_status = ExplorationStatusResponse.model_validate(stopped_payload)
+
+    assert status.available is True
+    assert status.backend == "tare"
+    assert status.exploring is False
+    assert status.tare["status"]["alive"] is True
+    assert status.tare["status"]["waypoint_count"] == 3
+    assert status.tare["stats"]["runtime_ms"] == 12.5
+    assert status.supervisor["mode"] == "idle"
+    assert started.status["status"] == "started"
+    assert running.exploring is True
+    assert stopped.status["status"] == "stopped"
+    assert final_status.exploring is False
+    assert snapshot["explorer_backend"] == "tare"
+    assert snapshot["explorer_available"] is True
+    assert snapshot["explorer_unavailable_reason"] is None
+    assert snapshot["explorer_required_profile"] is None
+    assert snapshot["can_start_exploring"] is True
 
 
 def test_slam_status_uses_logical_service_states(monkeypatch):

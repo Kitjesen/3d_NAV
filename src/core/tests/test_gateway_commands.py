@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 
 import pytest
@@ -171,6 +172,37 @@ def test_command_journal_replays_duplicate_request_id_without_republish():
     assert second["command"]["replay"] is True
     assert second["goal"] == [1.0, 2.0, 0.0]
     assert second["command"]["request_id"] == "goal-001"
+
+
+def test_goal_request_yaw_is_published_as_pose_orientation():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import ControlCommandResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    _mark_navigation_ready(gateway)
+    sent_goals = []
+    gateway.goal_pose._add_callback(sent_goals.append)
+    post_goal = _endpoint(gateway, "/api/v1/goal")
+
+    result = asyncio.run(
+        post_goal(
+            GoalRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                yaw=math.pi / 2,
+                client_id="script",
+            )
+        )
+    )
+    model = ControlCommandResponse.model_validate(result)
+
+    assert gateway.goal_pose.msg_count == 1
+    assert len(sent_goals) == 1
+    assert sent_goals[0].pose.orientation.yaw == pytest.approx(math.pi / 2)
+    assert model.goal == [1.0, 2.0, 0.0]
+    assert result["yaw"] == pytest.approx(math.pi / 2)
 
 
 def test_commands_without_request_id_preserve_existing_execute_every_time_behavior():
