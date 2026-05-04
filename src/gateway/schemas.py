@@ -281,6 +281,7 @@ class ControlCommandResponse(GatewayResponseModel):
     status: str
     command: CommandReceipt
     goal: list[float] | None = None
+    yaw: float | None = None
     instruction: str | None = None
     mode: str | None = None
 
@@ -689,6 +690,7 @@ class ExplorationStatusResponse(GatewayResponseModel):
     frontier_count: int = 0
     reason: str | None = None
     required_profile: str | None = None
+    supported_profiles: list[str] | None = None
     action: str | None = None
     tare: dict[str, Any] | None = None
     supervisor: dict[str, Any] | None = None

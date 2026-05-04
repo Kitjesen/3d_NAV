@@ -176,8 +176,8 @@ def test_session_routes_validate_idle_contracts():
 
     assert session.mode == "idle"
     assert session.explorer_available is False
-    assert session.explorer_unavailable_reason == "frontier_explorer_not_running"
-    assert session.explorer_required_profile == "explore"
+    assert session.explorer_unavailable_reason == "explorer_backend_not_running"
+    assert session.explorer_required_profile == "explore_or_tare_explore"
     assert ended.schema_version == 1
     assert ended.ok is True
     assert ended.success is True
@@ -493,7 +493,6 @@ def test_map_routes_validate_json_contracts(monkeypatch):
 
 
 def test_slam_maps_uses_guarded_active_map_resolution(monkeypatch, tmp_path):
-    import gateway.routes.maps as map_routes
     from gateway.gateway_module import GatewayModule
     from gateway.schemas import MapListResponse
 
@@ -507,7 +506,11 @@ def test_slam_maps_uses_guarded_active_map_resolution(monkeypatch, tmp_path):
 
     gateway = GatewayModule()
     gateway.setup()
-    monkeypatch.setattr(map_routes, "active_map_name", lambda: "demo")
+    active = tmp_path / "active"
+    try:
+        active.symlink_to(demo, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"filesystem symlinks unavailable: {exc}")
 
     payload = asyncio.run(_endpoint(gateway, "/api/v1/slam/maps")())
     maps = MapListResponse.model_validate(payload)
@@ -518,13 +521,30 @@ def test_slam_maps_uses_guarded_active_map_resolution(monkeypatch, tmp_path):
         "other": False,
     }
 
-    monkeypatch.setattr(map_routes, "active_map_name", lambda: None)
+    active.unlink()
+    nested = tmp_path / "nested" / "child"
+    nested.mkdir(parents=True)
+    active.symlink_to(nested, target_is_directory=True)
 
     payload = asyncio.run(_endpoint(gateway, "/api/v1/slam/maps")())
     maps = MapListResponse.model_validate(payload)
 
     assert maps.active == ""
     assert all(item.is_active is False for item in maps.maps)
+
+    active.unlink()
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    try:
+        outside.mkdir()
+        active.symlink_to(outside, target_is_directory=True)
+
+        payload = asyncio.run(_endpoint(gateway, "/api/v1/slam/maps")())
+        maps = MapListResponse.model_validate(payload)
+
+        assert maps.active == ""
+        assert all(item.is_active is False for item in maps.maps)
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
 
 
 def test_map_lifecycle_error_responses_use_stable_envelope(monkeypatch, tmp_path):
@@ -701,10 +721,11 @@ def test_operational_routes_validate_idle_json_contracts():
     assert semantic_ok.count == 1
     assert semantic.error == "embedding required"
     assert explore_status.available is False
-    assert explore_status.reason == "frontier_explorer_not_running"
-    assert explore_status.required_profile == "explore"
-    assert explore_start.error == "WavefrontFrontierExplorer not running"
-    assert explore_start.detail["reason"] == "frontier_explorer_not_running"
+    assert explore_status.reason == "explorer_backend_not_running"
+    assert explore_status.required_profile == "explore_or_tare_explore"
+    assert explore_status.supported_profiles == ["explore", "tare_explore"]
+    assert explore_start.error == "Exploration backend not running"
+    assert explore_start.detail["reason"] == "explorer_backend_not_running"
     assert slam_status.mode in {
         "fastlio2",
         "localizer",

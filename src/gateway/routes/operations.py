@@ -44,9 +44,13 @@ _SLAM_STATUS_SERVICES = (
     "super_lio_relocation",
 )
 _EXPLORER_UNAVAILABLE_DETAIL = {
-    "reason": "frontier_explorer_not_running",
-    "required_profile": "explore",
-    "action": "restart LingTu with the explore profile before starting exploration",
+    "reason": "explorer_backend_not_running",
+    "required_profile": "explore_or_tare_explore",
+    "supported_profiles": ["explore", "tare_explore"],
+    "action": (
+        "restart LingTu with the explore or tare_explore profile before "
+        "starting exploration"
+    ),
 }
 
 _SLAM_PROFILE_ALIASES = {
@@ -400,7 +404,7 @@ def register_operation_routes(app, gw) -> None:
                 content={
                     "schema_version": 1,
                     "ok": False,
-                    "error": "WavefrontFrontierExplorer not running",
+                    "error": "Exploration backend not running",
                     "message": "Exploration is unavailable in the current runtime profile.",
                     "detail": dict(_EXPLORER_UNAVAILABLE_DETAIL),
                 },
@@ -424,7 +428,7 @@ def register_operation_routes(app, gw) -> None:
                 content={
                     "schema_version": 1,
                     "ok": False,
-                    "error": "WavefrontFrontierExplorer not running",
+                    "error": "Exploration backend not running",
                     "message": "Exploration is unavailable in the current runtime profile.",
                     "detail": dict(_EXPLORER_UNAVAILABLE_DETAIL),
                 },

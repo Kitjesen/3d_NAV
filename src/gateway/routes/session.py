@@ -150,8 +150,8 @@ def register_session_routes(app, gw) -> None:
                 False,
                 status_code=503,
                 message=(
-                    "FrontierExplorer module not running - start lingtu "
-                    "with 'explore' profile."
+                    "Exploration backend not running - start lingtu with "
+                    "'explore' or 'tare_explore' profile."
                 ),
             )
         if gw._session_mode != "idle":

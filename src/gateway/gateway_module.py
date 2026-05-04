@@ -825,13 +825,14 @@ class GatewayModule(Module, layer=6):
     def _explorer_available(self) -> bool:
         return self._explorer_backend() != "none"
 
-    def _explorer_unavailable_detail(self) -> dict[str, str]:
+    def _explorer_unavailable_detail(self) -> dict[str, Any]:
         return {
-            "reason": "frontier_explorer_not_running",
-            "required_profile": "explore",
+            "reason": "explorer_backend_not_running",
+            "required_profile": "explore_or_tare_explore",
+            "supported_profiles": ["explore", "tare_explore"],
             "action": (
-                "restart LingTu with the explore profile before starting "
-                "exploration"
+                "restart LingTu with the explore or tare_explore profile before "
+                "starting exploration"
             ),
         }
 
