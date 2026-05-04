@@ -124,13 +124,28 @@ def test_lingtu_soak_is_read_only_non_motion_field_verification():
     assert "--interval)" in soak
     for endpoint in (
         '"/ready"',
+        '"/api/v1/app/bootstrap"',
+        '"/api/v1/app/capabilities"',
         '"/api/v1/localization/status"',
         '"/api/v1/navigation/status"',
         '"/api/v1/health"',
         '"/api/v1/state"',
         '"/api/v1/path"',
+        '"/api/v1/scene_graph"',
+        '"/api/v1/locations"',
+        '"/api/v1/devices"',
     ):
         assert endpoint in impl
+    assert '"/api/v1/app/traffic"' in impl
+    assert "READ_ONLY_ENDPOINT_NAMES" in impl
+    assert "SCHEMA_VERSIONED_ENDPOINTS" in impl
+    assert "advertised_read_only_endpoints" in impl
+    assert "client_contract_violations" in impl
+    assert '("state", "events", "scene_graph", "locations", "path")' in impl
+    assert "capabilities.endpoints" in impl
+    assert "data_ready:false" in impl
+    assert '"non_motion_safe": as_bool' in impl
+    assert '"app_web": {' in impl
     for forbidden in (
         "-X POST",
         "/api/v1/goal",

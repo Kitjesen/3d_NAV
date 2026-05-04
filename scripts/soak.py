@@ -11,17 +11,34 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from typing import Any
 
 
-READ_ONLY_ENDPOINTS = (
-    "/ready",
-    "/api/v1/localization/status",
-    "/api/v1/navigation/status",
-    "/api/v1/health",
-    "/api/v1/state",
-    "/api/v1/path",
-)
+READ_ONLY_ENDPOINT_NAMES = {
+    "/ready": "ready",
+    "/api/v1/app/bootstrap": "bootstrap",
+    "/api/v1/app/capabilities": "capabilities",
+    "/api/v1/localization/status": "localization",
+    "/api/v1/navigation/status": "navigation",
+    "/api/v1/health": "health",
+    "/api/v1/state": "state",
+    "/api/v1/path": "path",
+    "/api/v1/scene_graph": "scene_graph",
+    "/api/v1/locations": "locations",
+    "/api/v1/devices": "devices",
+}
+READ_ONLY_ENDPOINTS = tuple(READ_ONLY_ENDPOINT_NAMES)
+SCHEMA_VERSIONED_ENDPOINTS = {
+    "bootstrap",
+    "capabilities",
+    "localization",
+    "navigation",
+    "state",
+    "path",
+    "scene_graph",
+    "locations",
+}
 
 IDLE_SOURCES = {"", "none", "unknown", "null"}
 MOVING_STATES = {
@@ -131,6 +148,55 @@ def first_value(*values: Any) -> Any:
     return None
 
 
+def endpoint_label(path: Any) -> str | None:
+    if not isinstance(path, str) or not path:
+        return None
+    parsed = urlparse(path)
+    clean_path = parsed.path if parsed.scheme else path
+    if clean_path == "/api/v1/app/traffic":
+        return "traffic"
+    return None
+
+
+def advertised_read_only_endpoints(payloads: dict[str, dict[str, Any]]) -> dict[str, str]:
+    endpoints: dict[str, str] = {}
+    bootstrap_links = mapping(payloads.get("bootstrap", {}).get("links"))
+    traffic_path = bootstrap_links.get("traffic")
+    label = endpoint_label(traffic_path)
+    if label:
+        endpoints[str(traffic_path)] = label
+
+    app_endpoints = mapping(nested(payloads.get("capabilities", {}), "endpoints", "app"))
+    traffic_spec = mapping(app_endpoints.get("traffic"))
+    traffic_path = traffic_spec.get("path")
+    label = endpoint_label(traffic_path)
+    if label:
+        endpoints[str(traffic_path)] = label
+    return endpoints
+
+
+def client_contract_violations(payloads: dict[str, dict[str, Any]]) -> list[str]:
+    violations: list[str] = []
+    checked = set(SCHEMA_VERSIONED_ENDPOINTS)
+    if "traffic" in payloads:
+        checked.add("traffic")
+    for name in sorted(checked):
+        payload = payloads.get(name) or {}
+        if payload.get("schema_version") != 1:
+            violations.append(f"{name}.schema_version")
+
+    bootstrap = payloads.get("bootstrap") or {}
+    links = mapping(bootstrap.get("links"))
+    for key in ("state", "events", "scene_graph", "locations", "path"):
+        if not links.get(key):
+            violations.append(f"bootstrap.links.{key}")
+
+    capabilities = payloads.get("capabilities") or {}
+    if not mapping(capabilities.get("endpoints")):
+        violations.append("capabilities.endpoints")
+    return violations
+
+
 def http_json(gateway: str, path: str, timeout: float = 3.0) -> tuple[int | None, dict[str, Any], str | None, float]:
     url = path if path.startswith("http") else f"{gateway}{path}"
     started = time.monotonic()
@@ -214,6 +280,7 @@ def sample_violations(sample: dict[str, Any], limits: dict[str, float | int]) ->
     warnings: list[str] = []
     if sample["endpoint_errors"]:
         violations.extend(sample["endpoint_errors"])
+    violations.extend(sample.get("client_contract_violations") or [])
     if sample["has_odometry"] is False:
         violations.append("has_odometry=false")
     if str(sample.get("localization_state") or "").lower() in BAD_LOCALIZATION_STATES:
@@ -254,22 +321,20 @@ def sample_once(gateway: str, index: int, started_mono: float, limits: dict[str,
     statuses: dict[str, int | None] = {}
     latencies: dict[str, float] = {}
     endpoint_errors: list[str] = []
-    names = {
-        "/ready": "ready",
-        "/api/v1/localization/status": "localization",
-        "/api/v1/navigation/status": "navigation",
-        "/api/v1/health": "health",
-        "/api/v1/state": "state",
-        "/api/v1/path": "path",
-    }
-    for path in READ_ONLY_ENDPOINTS:
+
+    def fetch_endpoint(path: str, name: str) -> None:
         code, payload, error, latency = http_json(gateway, path)
-        name = names[path]
         payloads[name] = payload
         statuses[name] = code
         latencies[name] = latency
         if error or code is None or int(code) >= 400:
             endpoint_errors.append(f"{name}:{error or code}")
+
+    for path in READ_ONLY_ENDPOINTS:
+        fetch_endpoint(path, READ_ONLY_ENDPOINT_NAMES[path])
+    for path, name in advertised_read_only_endpoints(payloads).items():
+        if name not in payloads:
+            fetch_endpoint(path, name)
 
     ready = payloads["ready"]
     loc = payloads["localization"]
@@ -277,9 +342,15 @@ def sample_once(gateway: str, index: int, started_mono: float, limits: dict[str,
     health = payloads["health"]
     state_payload = payloads["state"]
     path_payload = payloads["path"]
+    scene_payload = payloads["scene_graph"]
+    locations_payload = payloads["locations"]
+    capabilities_payload = payloads["capabilities"]
 
     failed_modules = list(ready.get("failed_modules") or [])
-    if as_bool(ready.get("ready")) is False:
+    data_ready = as_bool(ready.get("data_ready"))
+    if data_ready is False:
+        endpoint_errors.append("data_ready:false")
+    elif data_ready is None and as_bool(ready.get("ready")) is False:
         endpoint_errors.append("ready:false")
     if failed_modules:
         endpoint_errors.append("ready_failed_modules=" + ",".join(map(str, failed_modules)))
@@ -297,8 +368,20 @@ def sample_once(gateway: str, index: int, started_mono: float, limits: dict[str,
         "http_latency_ms": latencies,
         "endpoint_errors": endpoint_errors,
         "gateway_ready": as_bool(ready.get("ready")),
+        "data_ready": data_ready,
+        "motion_ready": as_bool(ready.get("motion_ready")),
+        "non_motion_safe": as_bool(ready.get("non_motion_safe")),
         "gateway_ready_reasons": list(ready.get("reasons") or []),
         "gateway_failed_modules": failed_modules,
+        "client_contract_violations": client_contract_violations(payloads),
+        "app_web": {
+            "checked_endpoints": sorted(payloads.keys()),
+            "scene_graph_count": as_float(scene_payload.get("count")),
+            "locations_count": as_float(locations_payload.get("count")),
+            "path_count": as_float(path_payload.get("count")),
+            "capability_groups": sorted(mapping(capabilities_payload.get("endpoints")).keys()),
+            "traffic_status": mapping(payloads.get("traffic")).get("status"),
+        },
         "backend": first_value(
             loc.get("backend"),
             loc.get("localization_backend"),
@@ -411,7 +494,38 @@ def summarize(samples: list[dict[str, Any]], elapsed_s: float, limits: dict[str,
         ),
         "http_latency_ms": {
             name: stat([mapping(sample.get("http_latency_ms")).get(name) for sample in samples])
-            for name in ["ready", "localization", "navigation", "health", "state", "path"]
+            for name in sorted(
+                {
+                    name
+                    for sample in samples
+                    for name in mapping(sample.get("http_latency_ms")).keys()
+                }
+            )
+        },
+        "app_web": {
+            "checked_endpoints": sorted(
+                {
+                    name
+                    for sample in samples
+                    for name in mapping(sample.get("app_web")).get("checked_endpoints", [])
+                }
+            ),
+            "scene_graph_count": stat(
+                [nested(sample, "app_web", "scene_graph_count") for sample in samples]
+            ),
+            "locations_count": stat(
+                [nested(sample, "app_web", "locations_count") for sample in samples]
+            ),
+            "path_count": stat(
+                [nested(sample, "app_web", "path_count") for sample in samples]
+            ),
+            "capability_groups": sorted(
+                {
+                    group
+                    for sample in samples
+                    for group in mapping(sample.get("app_web")).get("capability_groups", [])
+                }
+            ),
         },
         "map_points": stat([sample.get("map_points") for sample in samples]),
         "map_points_drop_ratio": map_points_drop_ratio,
@@ -489,6 +603,15 @@ def print_text(report: dict[str, Any]) -> None:
         "  navigation states={} active_cmd_source_values={}".format(
             ",".join(summary["navigation_states"]) or "-",
             ",".join(summary["active_cmd_source_values"]) or "-",
+        )
+    )
+    app_web = summary["app_web"]
+    print(
+        "  app/web endpoints={} scene_graph={} locations={} path={}".format(
+            ",".join(app_web["checked_endpoints"]) or "-",
+            app_web["scene_graph_count"],
+            app_web["locations_count"],
+            app_web["path_count"],
         )
     )
     if report["violations"]:
