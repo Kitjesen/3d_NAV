@@ -38,6 +38,7 @@ def _transition_payload(
     *,
     session: dict[str, Any] | None = None,
     message: str | None = None,
+    detail: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": 1,
@@ -49,6 +50,8 @@ def _transition_payload(
         payload["session"] = session
     if message is not None:
         payload["message"] = message
+    if detail is not None:
+        payload["detail"] = detail
     return payload
 
 
@@ -58,9 +61,15 @@ def _transition_response(
     status_code: int,
     session: dict[str, Any] | None = None,
     message: str | None = None,
+    detail: dict[str, Any] | None = None,
 ) -> JSONResponse:
     return JSONResponse(
-        _transition_payload(success, session=session, message=message),
+        _transition_payload(
+            success,
+            session=session,
+            message=message,
+            detail=detail,
+        ),
         status_code=status_code,
     )
 
@@ -169,6 +178,19 @@ def register_session_routes(app, gw) -> None:
                 status_code=409,
                 message="Another transition in progress",
             )
+        if mode == "exploring":
+            readiness = gw._exploration_start_readiness()
+            if not readiness.get("can_start", False):
+                blockers = readiness.get("blockers") or ["navigation_not_ready"]
+                return _transition_response(
+                    False,
+                    status_code=409,
+                    message=(
+                        "Exploration cannot start until navigation readiness "
+                        f"blockers clear: {', '.join(map(str, blockers))}"
+                    ),
+                    detail=readiness,
+                )
 
         if mode == "navigating":
             if not map_name:

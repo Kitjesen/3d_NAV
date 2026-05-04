@@ -899,12 +899,14 @@ class GatewayModule(Module, layer=6):
 
     def _exploration_status_payload(self) -> dict[str, Any]:
         backend = self._explorer_backend()
+        readiness = self._exploration_start_readiness()
         if backend == "none":
             return {
                 "available": False,
                 "backend": "none",
                 "exploring": False,
                 "frontier_count": 0,
+                **readiness,
                 **self._explorer_unavailable_detail(),
             }
         if backend == "frontier":
@@ -925,6 +927,7 @@ class GatewayModule(Module, layer=6):
                 "backend": "frontier",
                 "exploring": self._exploring,
                 "frontier_count": frontier_count,
+                **readiness,
             }
 
         tare = self._tare_status_payload()
@@ -941,6 +944,48 @@ class GatewayModule(Module, layer=6):
             "frontier_count": 0,
             "tare": tare,
             "supervisor": self._exploration_supervisor_state or {},
+            **readiness,
+        }
+
+    def _exploration_start_readiness(self) -> dict[str, Any]:
+        blockers: list[str] = []
+        advisories: list[str] = []
+        navigation: dict[str, Any] = {}
+
+        if self._session_pending:
+            blockers.append("session_transition_pending")
+        if self._exploring:
+            blockers.append("exploration_already_active")
+        if str(self._session_mode or "idle").lower() != "idle":
+            blockers.append("session_not_idle")
+
+        try:
+            from gateway.services.runtime_status import build_navigation_status
+
+            navigation = build_navigation_status(self)
+            readiness = navigation.get("readiness") or {}
+            nav_blockers = readiness.get("blockers") or []
+            nav_advisories = readiness.get("advisories") or []
+            if isinstance(nav_blockers, list):
+                blockers.extend(str(code) for code in nav_blockers)
+            if isinstance(nav_advisories, list):
+                advisories.extend(str(code) for code in nav_advisories)
+            if not blockers and not bool(readiness.get("can_execute_autonomy", False)):
+                blockers.append("navigation_not_ready")
+        except Exception:
+            blockers.append("navigation_status_unavailable")
+
+        blockers = list(dict.fromkeys(blockers))
+        advisories = list(dict.fromkeys(advisories))
+        return {
+            "can_start": bool(self._explorer_available()) and not blockers,
+            "blockers": blockers,
+            "advisories": advisories,
+            "navigation": {
+                "state": navigation.get("state"),
+                "can_accept_goal": navigation.get("can_accept_goal"),
+                "readiness": navigation.get("readiness") or {},
+            },
         }
 
     # -- teleop helpers (delegate to TeleopModule) ---------------------------

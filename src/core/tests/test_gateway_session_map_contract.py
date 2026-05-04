@@ -23,6 +23,23 @@ def _payload(response_or_payload):
     return response_or_payload
 
 
+def _seed_ready_navigation(gateway):
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "y": 0.0, "z": 0.0}
+        gateway._localization_status = {
+            "backend": "super_lio",
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "odom_age_ms": 100.0,
+            "cloud_age_ms": 100.0,
+            "map_cloud_fresh": True,
+            "localizer_health": "RECOVERED",
+            "recovery_signal": "NONE",
+        }
+
+
 class _JsonRequest:
     def __init__(self, payload: dict):
         self._payload = payload
@@ -816,6 +833,7 @@ def test_tare_explorer_is_available_through_exploration_contracts():
     gateway.setup()
     tare = TAREExplorerModule()
     gateway.on_system_modules({"TAREExplorerModule": tare})
+    _seed_ready_navigation(gateway)
     gateway._on_tare_stats({"runtime_ms": 12.5})
     gateway._on_exploration_supervisor({"mode": "idle", "reason": "ready"})
 
@@ -834,6 +852,8 @@ def test_tare_explorer_is_available_through_exploration_contracts():
 
     assert status.available is True
     assert status.backend == "tare"
+    assert status.can_start is True
+    assert status.blockers == []
     assert status.exploring is False
     assert status.tare["status"]["alive"] is True
     assert status.tare["status"]["waypoint_count"] == 3
@@ -841,6 +861,8 @@ def test_tare_explorer_is_available_through_exploration_contracts():
     assert status.supervisor["mode"] == "idle"
     assert started.status["status"] == "started"
     assert running.exploring is True
+    assert running.can_start is False
+    assert "exploration_already_active" in running.blockers
     assert stopped.status["status"] == "stopped"
     assert final_status.exploring is False
     assert snapshot["explorer_backend"] == "tare"
@@ -876,6 +898,7 @@ def test_wavefront_explorer_is_available_through_exploration_contracts():
     gateway.setup()
     explorer = WavefrontFrontierExplorer()
     gateway.on_system_modules({"WavefrontFrontierExplorer": explorer})
+    _seed_ready_navigation(gateway)
 
     status_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
     start_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/start")())
@@ -891,13 +914,114 @@ def test_wavefront_explorer_is_available_through_exploration_contracts():
 
     assert status.available is True
     assert status.backend == "frontier"
+    assert status.can_start is True
+    assert status.blockers == []
     assert status.frontier_count == 7
     assert status.exploring is False
     assert started.status == {"status": "started", "backend": "frontier"}
     assert running.exploring is True
+    assert running.can_start is False
+    assert "exploration_already_active" in running.blockers
     assert stopped.status == {"status": "stopped", "backend": "frontier"}
     assert final_status.exploring is False
     assert gateway._session_snapshot()["explorer_backend"] == "frontier"
+
+
+def test_explore_start_rejects_localization_recovery_blocker():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import ExplorationStatusResponse, GatewayErrorResponse
+
+    class WavefrontFrontierExplorer:
+        def __init__(self):
+            self.started = False
+
+        def begin_exploration(self):
+            self.started = True
+            return {"status": "started"}
+
+        def health(self):
+            return {"frontier_count": 2}
+
+    gateway = GatewayModule()
+    gateway.setup()
+    explorer = WavefrontFrontierExplorer()
+    gateway.on_system_modules({"WavefrontFrontierExplorer": explorer})
+    _seed_ready_navigation(gateway)
+    with gateway._state_lock:
+        gateway._localization_status["recovery_signal"] = "LOC_DIVERGED"
+
+    status_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    start_response = asyncio.run(_endpoint(gateway, "/api/v1/explore/start")())
+
+    status = ExplorationStatusResponse.model_validate(status_payload)
+    error = GatewayErrorResponse.model_validate(_payload(start_response))
+
+    assert status.available is True
+    assert status.can_start is False
+    assert "localization_recovery_active" in status.blockers
+    assert start_response.status_code == 409
+    assert error.error == "exploration_not_ready"
+    assert "localization_recovery_active" in error.detail["blockers"]
+    assert explorer.started is False
+    assert gateway._exploring is False
+
+
+def test_exploring_session_start_rejects_localization_recovery_blocker(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionTransitionResponse
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+    class TAREExplorerModule:
+        def __init__(self):
+            self.started = False
+
+        def start_tare_exploration(self):
+            self.started = True
+            return {"status": "started"}
+
+        def get_tare_status(self):
+            return {"started": self.started}
+
+    fake_service_manager = FakeServiceManager()
+    monkeypatch.setattr(
+        service_manager, "get_service_manager", lambda: fake_service_manager
+    )
+
+    gateway = GatewayModule()
+    gateway.setup()
+    tare = TAREExplorerModule()
+    gateway.on_system_modules({"TAREExplorerModule": tare})
+    _seed_ready_navigation(gateway)
+    with gateway._state_lock:
+        gateway._localization_status["recovery_signal"] = "LOC_DIVERGED"
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/session/start")({"mode": "exploring"})
+    )
+    started = SessionTransitionResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert started.ok is False
+    assert started.success is False
+    assert "localization_recovery_active" in (started.message or "")
+    assert started.detail["blockers"] == ["localization_recovery_active"]
+    assert fake_service_manager.calls == []
+    assert tare.started is False
+    assert gateway._session_mode == "idle"
 
 
 def test_tare_explorer_session_start_end_uses_exploration_backend(monkeypatch):
@@ -947,6 +1071,7 @@ def test_tare_explorer_session_start_end_uses_exploration_backend(monkeypatch):
     gateway.setup()
     tare = TAREExplorerModule()
     gateway.on_system_modules({"TAREExplorerModule": tare})
+    _seed_ready_navigation(gateway)
 
     start_payload = asyncio.run(
         _endpoint(gateway, "/api/v1/session/start")({"mode": "exploring"})

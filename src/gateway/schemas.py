@@ -610,6 +610,7 @@ class SessionTransitionResponse(GatewayResponseModel):
     success: bool
     session: SessionResponse | None = None
     message: str | None = None
+    detail: Any = None
     ts: float = Field(default_factory=time.time)
 
 
@@ -688,6 +689,10 @@ class ExplorationStatusResponse(GatewayResponseModel):
     backend: Literal["none", "frontier", "tare"] | str = "none"
     exploring: bool = False
     frontier_count: int = 0
+    can_start: bool = False
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    navigation: dict[str, Any] = Field(default_factory=dict)
     reason: str | None = None
     required_profile: str | None = None
     supported_profiles: list[str] | None = None

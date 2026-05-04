@@ -395,7 +395,10 @@ def register_operation_routes(app, gw) -> None:
         "/api/v1/explore/start",
         summary="Start autonomous frontier exploration",
         response_model=ExplorationCommandResponse,
-        responses={503: {"model": GatewayErrorResponse}},
+        responses={
+            409: {"model": GatewayErrorResponse},
+            503: {"model": GatewayErrorResponse},
+        },
     )
     async def explore_start():
         if not gw._explorer_available():
@@ -407,6 +410,22 @@ def register_operation_routes(app, gw) -> None:
                     "error": "Exploration backend not running",
                     "message": "Exploration is unavailable in the current runtime profile.",
                     "detail": dict(_EXPLORER_UNAVAILABLE_DETAIL),
+                },
+            )
+        readiness = gw._exploration_start_readiness()
+        if not readiness.get("can_start", False):
+            blockers = readiness.get("blockers") or ["navigation_not_ready"]
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": "exploration_not_ready",
+                    "message": (
+                        "Exploration cannot start until navigation readiness "
+                        f"blockers clear: {', '.join(map(str, blockers))}"
+                    ),
+                    "detail": readiness,
                 },
             )
         loop = asyncio.get_event_loop()
