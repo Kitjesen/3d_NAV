@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import * as api from '../services/api'
 import type {
+  AppBootstrapResponse,
+  AppCapabilitiesResponse,
   LocationsResponse,
   MissionStatusEvent,
   OdometryEvent,
@@ -94,6 +96,40 @@ function optionalString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+function sameOriginHttpPath(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null
+  const origin = typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : 'http://localhost'
+  try {
+    const parsed = new URL(value, origin)
+    if (parsed.origin !== origin) return null
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return null
+  }
+}
+
+function endpointPath(
+  capabilities: AppCapabilitiesResponse | null,
+  group: string,
+  name: string,
+): string | null {
+  return sameOriginHttpPath(capabilities?.endpoints?.[group]?.[name]?.path)
+}
+
+function trafficEndpointFrom(
+  bootstrap: AppBootstrapResponse | null,
+  capabilities: AppCapabilitiesResponse | null,
+): string | null {
+  return (
+    sameOriginHttpPath(bootstrap?.links?.traffic)
+    ?? sameOriginHttpPath(bootstrap?.traffic?.client_policy?.traffic_endpoint)
+    ?? sameOriginHttpPath(capabilities?.links?.traffic)
+    ?? endpointPath(capabilities, 'app', 'traffic')
+  )
+}
+
 function snapshotOdometry(snapshot: StateResponse): OdometryEvent | null {
   const raw = snapshot.odometry
   if (!isRecord(raw)) return null
@@ -152,6 +188,8 @@ export function useSSE(url: string = '/api/v1/events') {
   const trafficTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const refreshInFlight = useRef(false)
   const trafficInFlight = useRef(false)
+  const trafficDiscoveryInFlight = useRef(false)
+  const trafficEndpointRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
   const everConnectedRef = useRef(false)
   const lastEventIdRef = useRef<number | null>(null)
@@ -218,14 +256,48 @@ export function useSSE(url: string = '/api/v1/events') {
     }, 250)
   }, [])
 
+  const discoverTrafficEndpoint = useCallback(async (): Promise<string | null> => {
+    if (trafficDiscoveryInFlight.current) return trafficEndpointRef.current
+    trafficDiscoveryInFlight.current = true
+    try {
+      const [bootstrapResult, capabilitiesResult] = await Promise.allSettled([
+        api.fetchAppBootstrap(),
+        api.fetchAppCapabilities(),
+      ])
+      const bootstrap = bootstrapResult.status === 'fulfilled' ? bootstrapResult.value : null
+      const capabilities = capabilitiesResult.status === 'fulfilled' ? capabilitiesResult.value : null
+      const endpoint = trafficEndpointFrom(bootstrap, capabilities)
+      trafficEndpointRef.current = endpoint
+      if (!endpoint && mountedRef.current) {
+        setState(prev => ({ ...prev, traffic: null }))
+      }
+      return endpoint
+    } finally {
+      trafficDiscoveryInFlight.current = false
+    }
+  }, [])
+
   const refreshTraffic = useCallback(async () => {
+    const endpoint = trafficEndpointRef.current
+    if (!endpoint) return
     if (trafficInFlight.current) return
     trafficInFlight.current = true
     try {
-      const traffic = await api.fetchAppTraffic()
+      const traffic = await api.fetchAppTraffic(endpoint)
       if (!mountedRef.current) return
       setState(prev => ({ ...prev, traffic }))
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.includes('HTTP 404') || message.includes('HTTP 405')) {
+        trafficEndpointRef.current = null
+        if (trafficTimer.current) {
+          clearInterval(trafficTimer.current)
+          trafficTimer.current = null
+        }
+        if (mountedRef.current) {
+          setState(prev => ({ ...prev, traffic: null }))
+        }
+      }
       // Traffic is diagnostic; keep the main realtime path alive if it is unavailable.
     } finally {
       trafficInFlight.current = false
@@ -409,15 +481,23 @@ export function useSSE(url: string = '/api/v1/events') {
   }, [connect])
 
   useEffect(() => {
-    refreshTraffic()
-    trafficTimer.current = setInterval(refreshTraffic, TRAFFIC_REFRESH_MS)
+    let cancelled = false
+    const startTrafficPolling = async () => {
+      const endpoint = await discoverTrafficEndpoint()
+      if (cancelled || !mountedRef.current || !endpoint) return
+      await refreshTraffic()
+      if (cancelled || !mountedRef.current || !trafficEndpointRef.current) return
+      trafficTimer.current = setInterval(refreshTraffic, TRAFFIC_REFRESH_MS)
+    }
+    startTrafficPolling()
     return () => {
+      cancelled = true
       if (trafficTimer.current) {
         clearInterval(trafficTimer.current)
         trafficTimer.current = null
       }
     }
-  }, [refreshTraffic])
+  }, [discoverTrafficEndpoint, refreshTraffic])
 
   return state
 }
