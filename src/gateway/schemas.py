@@ -505,6 +505,7 @@ class NavigationLocalizationSummary(GatewayResponseModel):
     algorithm_healthy: bool | None = None
     pose_fresh: bool | None = None
     pose_freshness: str | None = None
+    degeneracy: str | None = None
     speed_scale: float | None = None
     reasons: list[str] = Field(default_factory=list)
 

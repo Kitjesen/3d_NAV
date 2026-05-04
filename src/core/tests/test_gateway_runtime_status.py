@@ -69,6 +69,27 @@ def test_localization_status_covers_product_states():
     assert payload["ready"] is True
     assert payload["algorithm_healthy"] is True
 
+    gateway._icp_quality = 0.0
+    with gateway._state_lock:
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.7,
+            "degeneracy": "MILD",
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "map_cloud_fresh": True,
+            "icp_fitness": 0.0,
+            "odom_age_ms": 150.0,
+            "cloud_age_ms": 120.0,
+            "localizer_health": "LIO_TRACKING",
+        }
+    payload = build_localization_status(gateway)
+    assert payload["state"] == "ready"
+    assert payload["ready"] is True
+    assert payload["algorithm_healthy"] is True
+    assert payload["degeneracy"] == "MILD"
+    assert payload["reasons"] == []
+
     gateway._session_mode = "navigating"
     gateway._icp_quality = 0.2
     with gateway._state_lock:
@@ -636,6 +657,45 @@ def test_navigation_status_allows_fresh_pose_with_low_confidence_snapshot():
     assert session["localizer_ready"] is True
     assert session["pose_fresh"] is True
     assert session["pose_freshness"] == "fresh"
+
+
+def test_navigation_status_treats_mild_degeneracy_as_advisory():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.0
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0}
+        gateway._mission = {"state": "IDLE", "speed_scale": 0.7}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.7,
+            "degeneracy": "MILD",
+            "health_source": "odom_map_cloud",
+            "pose_fresh": True,
+            "map_cloud_fresh": True,
+            "icp_fitness": 0.0,
+            "odom_age_ms": 150.0,
+            "cloud_age_ms": 120.0,
+            "localizer_health": "LIO_TRACKING",
+        }
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    payload = build_navigation_status(gateway)
+
+    assert payload["can_accept_goal"] is True
+    assert payload["localization"]["ready"] is True
+    assert payload["localization"]["degraded"] is False
+    assert payload["localization"]["degeneracy"] == "MILD"
+    assert payload["readiness"]["blockers"] == []
+    assert payload["readiness"]["advisories"] == ["localization_mild_degeneracy"]
+    assert payload["reason_codes"] == ["localization_mild_degeneracy"]
 
 
 def test_navigation_status_uses_localizer_health_fitness_when_icp_quality_is_zero():

@@ -45,7 +45,8 @@ CONTROL_SOURCE_META: dict[str, dict[str, Any]] = {
 TRACKING_STATES = {"TRACKING", "OK", "READY"}
 LOST_STATES = {"LOST", "UNINIT", "UNINITIALIZED"}
 DEGRADED_STATES = {"DEGRADED", "FALLBACK_GNSS_ONLY"}
-BAD_DEGENERACY = {"MILD", "MODERATE", "SEVERE", "CRITICAL"}
+ADVISORY_DEGENERACY = {"MILD"}
+BAD_DEGENERACY = {"MODERATE", "SEVERE", "CRITICAL"}
 GOOD_LOCALIZER_HEALTH = {
     "",
     "UNKNOWN",
@@ -608,6 +609,9 @@ def _navigation_reason_codes(
     localization_state = str(localization.get("state") or "unknown")
     if localization_state in {"degraded", "lost", "relocalizing", "initializing"}:
         codes.append(f"localization_{localization_state}")
+    localization_degeneracy = _reported_state(localization.get("degeneracy"))
+    if localization_degeneracy in ADVISORY_DEGENERACY:
+        codes.append(f"localization_{localization_degeneracy.lower()}_degeneracy")
     if (
         localization.get("pose_fresh") is False
         and bool(localization.get("algorithm_healthy", False))
@@ -750,6 +754,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "algorithm_healthy": localization.get("algorithm_healthy"),
             "pose_fresh": localization.get("pose_fresh"),
             "pose_freshness": localization.get("pose_freshness"),
+            "degeneracy": localization.get("degeneracy"),
             "speed_scale": speed_scale,
             "reasons": localization.get("reasons", []),
         },
