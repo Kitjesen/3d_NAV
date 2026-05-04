@@ -128,6 +128,24 @@ export interface StateResponse {
   links?: Record<string, string>
 }
 
+export interface HealthResponse {
+  status: string
+  modules_ok: number
+  modules_fail: number
+  gateway: Record<string, unknown>
+  teleop: {
+    active: boolean
+    clients: number
+  }
+  sensors: Record<string, unknown>
+  slam_hz: number
+  map_points: number
+  has_odom: boolean
+  modules: Record<string, string>
+  brainstem: Record<string, unknown>
+  [key: string]: unknown
+}
+
 export interface RobotPoseSummary {
   x: number
   y: number

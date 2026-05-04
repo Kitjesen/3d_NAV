@@ -11,6 +11,7 @@ import type {
   ControlCommandResponse,
   DynamicFilterResult,
   GatewayErrorResponse,
+  HealthResponse,
   LeaseAction,
   LeaseResponse,
   LocationsResponse,
@@ -207,6 +208,10 @@ export async function fetchAppTraffic(url = '/api/v1/app/traffic'): Promise<AppT
 
 export async function fetchState(): Promise<StateResponse> {
   return fetchJson<StateResponse>('/api/v1/state')
+}
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  return fetchJson<HealthResponse>('/api/v1/health')
 }
 
 export async function fetchSceneGraph(): Promise<SceneGraphResponse> {

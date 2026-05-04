@@ -20,6 +20,8 @@ import {
   ListChecks, AlertTriangle, Gauge, ArrowRight,
   GitBranch, LogOut,
 } from 'lucide-react'
+import * as api from '../services/api'
+import type { HealthResponse } from '../types'
 import { resetAllLayouts } from './floatingWidgetLayout'
 import styles from './SettingsMenu.module.css'
 
@@ -390,7 +392,7 @@ function OtaField({ label, value }: { label: string; value: string }) {
 /* ─── Diagnostics Modal ────────────────────────────────────────── */
 
 type HealthSummary = {
-  modules?: Record<string, unknown>
+  modules?: HealthResponse['modules']
   error?: string
 }
 
@@ -398,10 +400,14 @@ function DiagModal({ onClose }: { onClose: () => void }) {
   const [health, setHealth] = useState<HealthSummary | null>(null)
 
   useEffect(() => {
-    fetch('/api/v1/health')
-      .then(r => r.json())
+    api.fetchHealth()
       .then(setHealth)
-      .catch(() => setHealth({ error: 'failed to fetch' }))
+      .catch((error: unknown) => {
+        const message = api.isGatewayApiError(error)
+          ? (error.body?.message || error.body?.error || error.message)
+          : (error instanceof Error ? error.message : String(error))
+        setHealth({ error: message || 'failed to fetch' })
+      })
   }, [])
 
   const modules = health?.modules ?? {}
