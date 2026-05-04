@@ -271,12 +271,32 @@ class MCPServerModule(Module, layer=6):
         if vm and hasattr(vm, "query_location"):
             try:
                 r = vm.query_location(query)
-                for hit in r.get("results", [])[:3]:
+                vector_navigable = (
+                    r.get("navigable") is True
+                    and r.get("semantic_encoder_ready") is True
+                    and r.get("degraded") is False
+                )
+                if vector_navigable:
+                    for hit in r.get("results", [])[:3]:
+                        if hit.get("navigable") is not True:
+                            continue
+                        results.append({
+                            "source":   "vector",
+                            "position": [hit.get("x", 0), hit.get("y", 0)],
+                            "score":    hit.get("score", 0),
+                            "labels":   hit.get("labels", ""),
+                            "navigable": True,
+                        })
+                elif r.get("found"):
+                    best = r.get("best") or {}
                     results.append({
-                        "source":   "vector",
-                        "position": [hit.get("x", 0), hit.get("y", 0)],
-                        "score":    hit.get("score", 0),
-                        "labels":   hit.get("labels", ""),
+                        "source": "vector",
+                        "query_only": True,
+                        "navigable": False,
+                        "reason": "vector_memory_not_safe_for_navigation",
+                        "encoder_type": r.get("encoder_type", "unknown"),
+                        "labels": best.get("labels", ""),
+                        "score": best.get("score", 0),
                     })
             except Exception as e:
                 logger.debug("vector memory query failed: %s", e)

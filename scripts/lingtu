@@ -36,6 +36,7 @@
 # Current production service aliases:
 #   lingtu svc status          # robot-* service state + legacy conflict warning
 #   lingtu svc restart slam    # restart robot-fastlio2.service
+#   lingtu svc restart localization # restart Fast-LIO2 + localizer in order
 #   lingtu svc restart super_lio # restart robot-super-lio.service
 #   lingtu svc restart all     # restart robot-lidar + SLAM + localizer + lingtu
 #   lingtu doctor              # read-only service/topic/Gateway diagnostics
@@ -390,6 +391,40 @@ svc_restart_lidar_chain() {
     return 1
 }
 
+svc_restart_localization_chain() {
+    echo "Restarting localization algorithms top-down..."
+    svc_force_stop_unit robot-localizer.service
+    svc_force_stop_unit robot-fastlio2.service
+
+    echo "Starting Fast-LIO2..."
+    svc_start_unit robot-fastlio2.service
+    if ! svc_wait_topic_publishers /nav/odometry 1 30; then
+        echo "robot-fastlio2.service did not publish /nav/odometry in time" >&2
+        journalctl -u robot-fastlio2.service -n 40 --no-pager >&2 || true
+        return 1
+    fi
+
+    echo "Starting localizer..."
+    svc_start_unit robot-localizer.service
+    if ! svc_wait_topic_publishers /nav/localization_health 1 30; then
+        echo "robot-localizer.service did not publish /nav/localization_health in time" >&2
+        journalctl -u robot-localizer.service -n 40 --no-pager >&2 || true
+        return 1
+    fi
+
+    if systemctl is-active --quiet lingtu.service; then
+        if svc_wait_gateway_ready 35; then
+            echo "localization stack restarted; /ready is true"
+            return 0
+        fi
+        echo "localization stack restarted but /ready did not become true in time" >&2
+        journalctl -u lingtu.service -n 60 --no-pager >&2 || true
+        return 1
+    fi
+
+    echo "localization stack restarted; lingtu.service is not active"
+}
+
 svc_restart_robot_stack() {
     echo "Stopping LingTu localization stack top-down..."
     svc_force_stop_unit lingtu.service
@@ -446,9 +481,11 @@ cmd_svc() {
             case "$target" in
                 all)    svc_restart_robot_stack ;;
                 lidar)  svc_restart_lidar_chain ;;
+                localization|localization_chain|slam_chain|loc)
+                        svc_restart_localization_chain ;;
                 *)
                         local unit
-                        unit=$(svc_unit "$target") || { echo "Usage: lingtu svc restart [lidar|slam|localizer|super_lio|super_lio_relocation|lingtu|camera|brainstem|all]"; exit 1; }
+                        unit=$(svc_unit "$target") || { echo "Usage: lingtu svc restart [lidar|localization|slam|localizer|super_lio|super_lio_relocation|lingtu|camera|brainstem|all]"; exit 1; }
                         sudo systemctl restart "$unit"
                         echo "$unit restarted" ;;
             esac ;;
@@ -1611,7 +1648,8 @@ cmd_slamcheck() {
 
     local deadline now ok=0 ok_samples=0 bad_after_ready=0 contract_ok=0 LOCJ SESS SLAMJ HEALTH
     local backend health_source map_save_source saved_reloc restart_recovery recovery_method
-    local relocal_state recovery_signal recovery_action mode target_service slam_hz map_points
+    local relocal_state recovery_signal recovery_action recovery_signal_ok recovery_action_ok
+    local mode target_service slam_hz map_points
     local expected_save_source expected_recovery
     expected_save_source="live_map_cloud_snapshot"
     expected_recovery="restart_super_lio"
@@ -1644,6 +1682,14 @@ cmd_slamcheck() {
         [ "$recovery_signal" = "-" ] && recovery_signal=$(pjson "$SESS" 'print(d.get("recovery_signal") or "-")')
         recovery_action=$(pjson "$LOCJ" 'print(d.get("recovery_action") or "-")')
         [ "$recovery_action" = "-" ] && recovery_action=$(pjson "$SESS" 'print(d.get("recovery_action") or "-")')
+        recovery_signal_ok=0
+        if [ "$recovery_signal" = "NONE" ] || [ "$recovery_signal" = "RECOVERED" ]; then
+            recovery_signal_ok=1
+        fi
+        recovery_action_ok=0
+        if [ "$recovery_action" = "none" ] || [ "$recovery_action" = "-" ] || [ "$recovery_action" = "$expected_recovery" ]; then
+            recovery_action_ok=1
+        fi
         mode=$(pjson "$SLAMJ" 'print(d.get("mode") or "-")')
         target_service=$(pjson "$SLAMJ" "print((d.get('services') or {}).get('$target', '-'))")
         slam_hz=$(pjson "$HEALTH" 'print(d.get("sensors",{}).get("slam",{}).get("hz", d.get("slam_hz", "-")))')
@@ -1661,7 +1707,9 @@ cmd_slamcheck() {
             && [ "$map_save_source" = "$expected_save_source" ] \
             && [ "$saved_reloc" = "false" ] \
             && [ "$restart_recovery" = "true" ] \
-            && [ "$recovery_method" = "$expected_recovery" ]; then
+            && [ "$recovery_method" = "$expected_recovery" ] \
+            && [ "$recovery_signal_ok" = "1" ] \
+            && [ "$recovery_action_ok" = "1" ]; then
             contract_ok=1
             ok_samples=$((ok_samples + 1))
         elif [ "$ok_samples" -gt 0 ]; then

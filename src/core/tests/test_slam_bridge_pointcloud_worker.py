@@ -276,7 +276,8 @@ def test_rclpy_subscriptions_use_separate_callback_groups(monkeypatch):
     assert groups[bridge._cloud_topic] is not None
     assert groups[bridge._odom_topic] is not groups[bridge._cloud_topic]
     assert groups["/tf"] is not groups[bridge._odom_topic]
-    assert qos_by_topic[bridge._odom_topic].kwargs["reliability"] is ReliabilityPolicy.RELIABLE
+    assert qos_by_topic[bridge._odom_topic].kwargs["reliability"] is ReliabilityPolicy.BEST_EFFORT
+    assert qos_by_topic[bridge._odom_topic].kwargs["depth"] == 5
     assert qos_by_topic[bridge._cloud_topic].kwargs["reliability"] is ReliabilityPolicy.BEST_EFFORT
     assert qos_by_topic[bridge._cloud_topic].kwargs["depth"] == 1
     assert qos_by_topic[bridge._saved_map_topic].kwargs["reliability"] is ReliabilityPolicy.RELIABLE

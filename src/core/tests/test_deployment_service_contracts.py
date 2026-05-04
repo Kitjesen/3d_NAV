@@ -1,4 +1,11 @@
+import os
+import shlex
+import shutil
+import subprocess
+import textwrap
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -6,6 +13,235 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8")
+
+
+def _wsl_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    result = subprocess.run(
+        ["bash", "-lc", f"wslpath -a {shlex.quote(str(path))}"],
+        check=True,
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+    return result.stdout.strip()
+
+
+def _write_executable(path: Path, text: str) -> None:
+    path.write_text(textwrap.dedent(text).lstrip(), encoding="utf-8", newline="\n")
+    path.chmod(0o755)
+
+
+def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
+    fake_root = tmp_path / "fake"
+    fake_bin = fake_root / "bin"
+    fake_run = fake_root / "run"
+    fake_home = fake_root / "home"
+    fake_bin.mkdir(parents=True)
+    fake_run.mkdir(parents=True)
+    maps = fake_home / "data" / "nova" / "maps"
+    (maps / "demo").mkdir(parents=True)
+    (maps / "demo" / "map.pcd").write_text("pcd\n", encoding="utf-8")
+
+    _write_executable(
+        fake_bin / "systemctl",
+        r"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        echo "systemctl:$*" >> "${FAKE_ROOT}/calls.log"
+        if [ "${1:-}" = "show" ]; then
+            prop=""
+            while [ "$#" -gt 0 ]; do
+                if [ "${1:-}" = "-p" ]; then
+                    prop="${2:-}"
+                    shift 2
+                    continue
+                fi
+                shift
+            done
+            case "$prop" in
+                ActiveState) echo active ;;
+                NRestarts) echo "${FAKE_NRESTARTS:-0}" ;;
+                *) echo "" ;;
+            esac
+        fi
+        exit 0
+        """,
+    )
+    _write_executable(
+        fake_bin / "sudo",
+        r"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        echo "sudo:$*" >> "${FAKE_ROOT}/calls.log"
+        cmd="${1:-}"
+        shift || true
+        case "$cmd" in
+            mkdir)
+                args=()
+                for arg in "$@"; do
+                    [ "$arg" = "/run/lingtu" ] && arg="${FAKE_RUN}/lingtu"
+                    args+=("$arg")
+                done
+                exec mkdir "${args[@]}"
+                ;;
+            tee)
+                path="${1:-}"
+                shift || true
+                case "$path" in
+                    /run/lingtu/*) path="${FAKE_RUN}/lingtu/${path#/run/lingtu/}" ;;
+                esac
+                mkdir -p "$(dirname "$path")"
+                exec tee "$path" "$@"
+                ;;
+            systemctl)
+                exec systemctl "$@"
+                ;;
+            *)
+                exec "$cmd" "$@"
+                ;;
+        esac
+        """,
+    )
+    _write_executable(
+        fake_bin / "curl",
+        r"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        url=""
+        data=""
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                -d|--data|--data-raw|--data-binary)
+                    data="${2:-}"
+                    shift 2
+                    ;;
+                http://*|https://*)
+                    url="$1"
+                    shift
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        state_file="${FAKE_ROOT}/current_profile"
+        current="$(cat "$state_file" 2>/dev/null || echo localizer)"
+        case "$url" in
+            */api/v1/slam/switch)
+                profile="$(printf '%s' "$data" | sed -n 's/.*"profile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+                [ -n "$profile" ] || profile=unknown
+                echo "$profile" > "$state_file"
+                echo "switch:$profile" >> "${FAKE_ROOT}/calls.log"
+                printf '{"schema_version":1,"ok":true,"success":true,"profile":"%s"}\n' "$profile"
+                ;;
+            */api/v1/slam/status)
+                lidar=running
+                slam=stopped
+                localizer=stopped
+                super_lio=stopped
+                super_lio_relocation=stopped
+                case "$current" in
+                    localizer) slam=running; localizer=running ;;
+                    super_lio) super_lio=running ;;
+                    super_lio_relocation) super_lio_relocation=running ;;
+                esac
+                printf '{"mode":"%s","services":{"lidar":"%s","slam":"%s","localizer":"%s","super_lio":"%s","super_lio_relocation":"%s"}}\n' \
+                    "$current" "$lidar" "$slam" "$localizer" "$super_lio" "$super_lio_relocation"
+                ;;
+            */api/v1/localization/status)
+                signal="${FAKE_RECOVERY_SIGNAL:-RECOVERED}"
+                action="${FAKE_RECOVERY_ACTION:-none}"
+                if [ "$current" = "super_lio_relocation" ]; then
+                    printf '{"backend":"super_lio_relocation","health_source":"odom_map_cloud","map_save_source":"active_map","saved_map_relocalization_supported":false,"restart_recovery_supported":true,"recovery_method":"restart_super_lio_relocation","relocalization_state":"unsupported","recovery_signal":"%s","recovery_action":"%s"}\n' "$signal" "$action"
+                elif [ "$current" = "super_lio" ]; then
+                    printf '{"backend":"super_lio","health_source":"odom_map_cloud","map_save_source":"live_map_cloud_snapshot","saved_map_relocalization_supported":false,"restart_recovery_supported":true,"recovery_method":"restart_super_lio","relocalization_state":"unsupported","recovery_signal":"%s","recovery_action":"%s"}\n' "$signal" "$action"
+                else
+                    printf '{"backend":"localizer","health_source":"localizer_health_topic","map_save_source":"active_map","saved_map_relocalization_supported":true,"restart_recovery_supported":true,"recovery_method":"relocalize_service","relocalization_state":"idle","recovery_signal":"RECOVERED","recovery_action":"none"}\n'
+                fi
+                ;;
+            */api/v1/session)
+                echo '{}'
+                ;;
+            */api/v1/health)
+                echo '{"sensors":{"slam":{"hz":10.0}},"map_points":5000}'
+                ;;
+            */api/v1/map/save)
+                echo "save:$data" >> "${FAKE_ROOT}/calls.log"
+                echo '{"success":true,"map_save_source":"live_map_cloud_snapshot","saved_map_relocalization_supported":false}'
+                ;;
+            *)
+                echo '{}'
+                ;;
+        esac
+        """,
+    )
+
+    fake_root_posix = _wsl_path(fake_root)
+    fake_home_posix = _wsl_path(fake_home)
+    fake_bin_posix = _wsl_path(fake_bin)
+    fake_run_posix = _wsl_path(fake_run)
+    subprocess.run(
+        [
+            "bash",
+            "-lc",
+            (
+                f"ln -sfn demo "
+                f"{shlex.quote(fake_home_posix + '/data/nova/maps/active')}"
+            ),
+        ],
+        check=True,
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+    return {
+        "root": fake_root,
+        "run": fake_run,
+        "home_posix": fake_home_posix,
+        "bin_posix": fake_bin_posix,
+        "root_posix": fake_root_posix,
+        "run_posix": fake_run_posix,
+    }
+
+
+def _run_slamcheck(tmp_path: Path, args: str, extra_env: dict[str, str] | None = None):
+    if shutil.which("bash") is None:
+        pytest.skip("bash is required for scripts/lingtu shell behavior tests")
+    harness = _make_slamcheck_harness(tmp_path)
+    exports = {
+        "HOME": harness["home_posix"],
+        "FAKE_ROOT": harness["root_posix"],
+        "FAKE_RUN": harness["run_posix"],
+        "GW": "http://fake-gateway:5050",
+    }
+    if extra_env:
+        exports.update(extra_env)
+    export_cmd = "; ".join(
+        f"export {name}={shlex.quote(str(value))}" for name, value in exports.items()
+    )
+    command = (
+        f"{export_cmd}; "
+        f"export PATH={shlex.quote(str(harness['bin_posix']))}:\"$PATH\"; "
+        f"bash scripts/lingtu slamcheck {args}"
+    )
+    result = subprocess.run(
+        ["bash", "-lc", command],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+    return result, harness
 
 
 def test_robot_localizer_service_matches_slam_bridge_topics():
@@ -225,6 +461,79 @@ def test_lingtu_slamcheck_writes_float_relocation_initial_pose():
     assert "SUPER_LIO_RELOCATION_INIT_POSE=[0,0,0.0,0.0,0.0,0]" not in text
 
 
+def test_lingtu_slamcheck_sets_active_map_symlink_and_runtime_env():
+    text = _read("scripts/lingtu")
+
+    assert 'map_name=$(readlink "$HOME/data/nova/maps/active" 2>/dev/null || true)' in text
+    assert 'maps_root="$HOME/data/nova/maps"' in text
+    assert '[ ! -f "$map_dir/map.pcd" ]' in text
+    assert 'ln -sfn "$map_name" "$maps_root/active"' in text
+    assert "SUPER_LIO_RELOCATION_MAP_DIR=$maps_root/active" in text
+    assert "SUPER_LIO_RELOCATION_MAP_NAME=map.pcd" in text
+    assert "SUPER_LIO_RELOCATION_UPDATE_MAP=false" in text
+
+
+def test_lingtu_slamcheck_validates_recovery_signal_and_action_contract():
+    text = _read("scripts/lingtu")
+
+    assert 'recovery_signal=$(pjson "$LOCJ"' in text
+    assert 'recovery_action=$(pjson "$LOCJ"' in text
+    assert '[ "$recovery_signal" = "NONE" ] || [ "$recovery_signal" = "RECOVERED" ]' in text
+    assert '[ "$recovery_action" = "none" ] || [ "$recovery_action" = "-" ] || [ "$recovery_action" = "$expected_recovery" ]' in text
+    assert '[ "$recovery_signal_ok" = "1" ]' in text
+    assert '[ "$recovery_action_ok" = "1" ]' in text
+    assert "LOC_DIVERGED" in _read("src/slam/slam_bridge_module.py")
+
+
+def test_lingtu_slamcheck_executes_super_lio_snapshot_contract(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio --duration 0 --save-map smoke_shell --rollback previous",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS: super_lio Gateway contract stayed ready" in result.stdout
+    assert "PASS: map-save response uses live_map_cloud_snapshot" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "switch:super_lio" in calls
+    assert 'save:{"name":"smoke_shell"}' in calls
+    assert "switch:localizer" in calls
+
+
+def test_lingtu_slamcheck_executes_relocation_active_map_env_and_rollback(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio_relocation --duration 0 --initial-pose 1 2 3 --rollback previous",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Relocation map: demo" in result.stdout
+    assert "PASS: super_lio_relocation Gateway contract stayed ready" in result.stdout
+    env_file = harness["run"] / "lingtu" / "super_lio_relocation.env"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "SUPER_LIO_RELOCATION_MAP_NAME=map.pcd" in env_text
+    assert "SUPER_LIO_RELOCATION_UPDATE_MAP=false" in env_text
+    assert "SUPER_LIO_RELOCATION_INIT_POSE=[1.000000,2.000000,0.0,0.0,0.0,3.000000]" in env_text
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "switch:super_lio_relocation" in calls
+    assert "switch:localizer" in calls
+
+
+def test_lingtu_slamcheck_fails_on_diverged_recovery_signal_and_rolls_back(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio --duration 0 --rollback previous",
+        extra_env={"FAKE_RECOVERY_SIGNAL": "LOC_DIVERGED"},
+    )
+
+    assert result.returncode != 0
+    assert "signal=LOC_DIVERGED" in result.stdout
+    assert "FAIL: super_lio Gateway contract did not stay ready" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "switch:super_lio" in calls
+    assert "switch:localizer" in calls
+
+
 def test_super_lio_relocation_service_uses_active_map_and_float_pose():
     text = _read("scripts/deploy/s100p/super_lio_relocation.service")
 
@@ -232,6 +541,9 @@ def test_super_lio_relocation_service_uses_active_map_and_float_pose():
     assert "Environment=SUPER_LIO_RELOCATION_INIT_POSE=[0.0,0.0,0.0,0.0,0.0,0.0]" in text
     assert '-p "lio.relocation.init_pose:=$${SUPER_LIO_RELOCATION_INIT_POSE}"' in text
     assert '-p "lio.map.save_map_dir:=$${EFFECTIVE_MAP_DIR}"' in text
+    assert 'ln -sfn "$${SOURCE_MAP_DIR}" "$${SUPER_LIO_ROOT}/map/lingtu_active"' in text
+    assert 'EFFECTIVE_MAP_DIR="map/lingtu_active"' in text
+    assert 'Super-LIO relocation map: $${MAP_CHECK_DIR}/$${SUPER_LIO_RELOCATION_MAP_NAME} bytes=$${MAP_BYTES}' in text
 
 
 def test_camera_deployment_retires_legacy_units():
@@ -290,3 +602,17 @@ def test_gateway_service_contract_is_in_process_lingtu_service():
     assert "no standalone `lingtu-gateway.service`" in readme
     assert "Gateway runs inside" in readme
     assert "lingtu-gateway.service" not in lingtu_service
+
+
+def test_lingtu_cli_has_lightweight_localization_recovery():
+    script = _read("scripts/lingtu")
+    docs = _read("docs/04-deployment/lingtu_cli.md")
+
+    assert "svc_restart_localization_chain()" in script
+    assert "svc_force_stop_unit robot-localizer.service" in script
+    assert "svc_force_stop_unit robot-fastlio2.service" in script
+    assert "svc_wait_topic_publishers /nav/odometry 1 30" in script
+    assert "svc_wait_topic_publishers /nav/localization_health 1 30" in script
+    assert "svc_wait_gateway_ready 35" in script
+    assert "localization|localization_chain|slam_chain|loc)" in script
+    assert "lingtu svc restart localization" in docs

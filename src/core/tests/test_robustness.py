@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -72,8 +71,8 @@ class TestRetry(unittest.TestCase):
             # Don't actually sleep in test
 
         import core.utils.robustness as mod
-        old_sleep = time.sleep
-        mod.time.sleep = mock_sleep
+        old_sleep = mod._sleep
+        mod._sleep = mock_sleep
         try:
             @retry(max_attempts=4, backoff=1.0, jitter=True)
             def f():
@@ -82,7 +81,7 @@ class TestRetry(unittest.TestCase):
             with self.assertRaises(ValueError):
                 f()
         finally:
-            mod.time.sleep = old_sleep
+            mod._sleep = old_sleep
 
         # 3 waits (4 attempts - 1)
         self.assertEqual(len(waits), 3)
@@ -97,8 +96,8 @@ class TestRetry(unittest.TestCase):
         waits = []
 
         import core.utils.robustness as mod
-        old_sleep = time.sleep
-        mod.time.sleep = lambda t: waits.append(t)
+        old_sleep = mod._sleep
+        mod._sleep = lambda t: waits.append(t)
         try:
             @retry(max_attempts=3, backoff=1.0, jitter=False)
             def f():
@@ -107,7 +106,7 @@ class TestRetry(unittest.TestCase):
             with self.assertRaises(ValueError):
                 f()
         finally:
-            mod.time.sleep = old_sleep
+            mod._sleep = old_sleep
 
         self.assertEqual(waits, [1.0, 2.0])
 

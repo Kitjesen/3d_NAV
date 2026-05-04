@@ -7,6 +7,7 @@ Follows the patterns established in test_semantic_modules.py and test_cmd_vel_mu
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import threading
@@ -215,13 +216,143 @@ class TestVectorMemoryOperations(unittest.TestCase):
         norm = float(np.linalg.norm(v))
         self.assertAlmostEqual(norm, 1.0, places=5)
 
+    def test_hash_embedding_uses_stable_word_hash(self):
+        from memory.modules.vector_memory_module import VectorMemoryModule
+
+        v = VectorMemoryModule._hash_embedding("backpack")
+        expected = int.from_bytes(
+            hashlib.blake2b(b"backpack", digest_size=8).digest(),
+            byteorder="big",
+            signed=False,
+        ) % 512
+
+        self.assertGreater(v[expected], 0.0)
+        self.assertEqual(int(np.count_nonzero(v)), 1)
+
+    def test_runtime_lexical_fallback_remains_queryable(self):
+        m = self._make()
+        m._encoder_type = "lexical_hash"
+        m._robot_xy = (2.0, 3.0)
+        m._store_snapshot(["backpack", "bench"])
+
+        results = m._query("find backpack")
+        response = m.query_location("find backpack")
+
+        self.assertGreater(len(results), 0)
+        self.assertAlmostEqual(results[0]["x"], 2.0)
+        self.assertTrue(response["found"])
+        self.assertFalse(response["semantic_encoder_ready"])
+        self.assertTrue(response["degraded"])
+        self.assertFalse(response["navigable"])
+
+    def test_runtime_lexical_fallback_reports_degraded_health(self):
+        m = self._make()
+        m._encoder_type = "lexical_hash"
+
+        health = m.health()
+        stats = m.get_memory_stats()
+
+        self.assertTrue(health["encoder_ready"])
+        self.assertFalse(health["semantic_encoder_ready"])
+        self.assertTrue(health["degraded"])
+        self.assertEqual(health["encoder_type"], "lexical_hash")
+        self.assertEqual(stats["encoder_type"], "lexical_hash")
+        self.assertFalse(stats["semantic_encoder_ready"])
+        self.assertTrue(stats["degraded"])
+
     def test_store_snapshot_uses_numpy_fallback(self):
         m = self._make()
         m._robot_xy = (1.0, 2.0)
         m._store_snapshot(["chair", "table"])
         self.assertEqual(len(m._np_embeddings), 1)
         self.assertEqual(m._np_metadata[0]["x"], 1.0)
+        self.assertEqual(m._np_metadata[0]["encoder_type"], "none")
+        self.assertFalse(m._np_metadata[0]["navigable"])
         self.assertEqual(m._store_count, 1)
+
+    def test_chromadb_upsert_failure_falls_back_to_numpy(self):
+        class _BrokenCollection:
+            def upsert(self, **kwargs):
+                raise ValueError("embedding dimension mismatch")
+
+        m = self._make()
+        m._encoder_type = "lexical_hash"
+        m._use_chromadb = True
+        m._collection = _BrokenCollection()
+        m._robot_xy = (4.0, 5.0)
+
+        m._store_snapshot(["backpack"])
+
+        self.assertFalse(m._use_chromadb)
+        self.assertEqual(len(m._np_embeddings), 1)
+        self.assertEqual(m._np_metadata[0]["labels"], "backpack")
+
+    def test_chromadb_legacy_encoder_hits_are_filtered(self):
+        class _Collection:
+            def count(self):
+                return 1
+
+            def query(self, **kwargs):
+                return {
+                    "ids": [["snap_legacy"]],
+                    "metadatas": [[{
+                        "x": 1.0,
+                        "y": 2.0,
+                        "labels": "backpack",
+                        "ts": 1.0,
+                        "encoder_type": "lexical_hash",
+                        "semantic_encoder_ready": False,
+                        "degraded": True,
+                        "navigable": False,
+                        "embedding_dim": 512,
+                    }]],
+                    "distances": [[0.0]],
+                }
+
+        m = self._make()
+        m._encoder_type = "clip"
+        m._embedding_dim = 512
+        m._use_chromadb = True
+        m._collection = _Collection()
+        m._encode_text = lambda text: np.ones(512, dtype=np.float32)
+
+        self.assertEqual(m._query("find backpack"), [])
+
+    def test_chromadb_count_failure_does_not_break_health_or_stats(self):
+        class _BrokenCollection:
+            def count(self):
+                raise RuntimeError("locked")
+
+        m = self._make()
+        m._use_chromadb = True
+        m._collection = _BrokenCollection()
+
+        health = m.health()
+        stats = m.get_memory_stats()
+
+        self.assertFalse(m._use_chromadb)
+        self.assertEqual(health["backend"], "numpy")
+        self.assertEqual(health["entry_count"], 0)
+        self.assertEqual(stats["backend"], "numpy")
+        self.assertEqual(stats["entries"], 0)
+
+    def test_numpy_query_skips_mismatched_embedding_dimensions(self):
+        m = self._make()
+        m._encoder_type = "lexical_hash"
+        m._embedding_dim = 512
+        m._np_embeddings.append(np.ones(4, dtype=np.float32))
+        m._np_metadata.append({
+            "x": 1.0,
+            "y": 2.0,
+            "labels": "bad-dim",
+            "encoder_type": "lexical_hash",
+            "embedding_dim": 4,
+            "semantic_encoder_ready": False,
+            "degraded": True,
+            "navigable": False,
+        })
+
+        self.assertEqual(m._query("bad-dim"), [])
 
     def test_numpy_query_returns_results(self):
         m = self._make()

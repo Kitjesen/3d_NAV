@@ -253,6 +253,8 @@ def test_gateway_module_keeps_client_route_inventory():
     expected = {
         "/api/v1/app/bootstrap",
         "/api/v1/app/capabilities",
+        "/api/v1/auth/login",
+        "/api/v1/auth/check",
         "/api/v1/state",
         "/api/v1/scene_graph",
         "/api/v1/locations",
@@ -382,6 +384,7 @@ def test_openapi_exposes_client_response_models():
     assert "NavigationReadinessSummary" in schemas
     assert "NavigationProgressSummary" in schemas
     assert "NavigationDiagnosticsSummary" in schemas
+    assert "AuthLoginRequest" in schemas
     assert "AuthLoginResponse" in schemas
     assert "AuthCheckResponse" in schemas
     assert "LeaseResponse" in schemas
@@ -481,6 +484,9 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/auth/login", method="post"
     ).endswith("/AuthLoginResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/auth/login"
+    ).endswith("/AuthLoginRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/auth/check"
     ).endswith("/AuthCheckResponse")
@@ -710,6 +716,8 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["app"]["bootstrap"],
         capabilities["endpoints"]["app"]["capabilities"],
         capabilities["endpoints"]["app"]["traffic"],
+        capabilities["endpoints"]["auth"]["login"],
+        capabilities["endpoints"]["auth"]["check"],
         capabilities["endpoints"]["control"]["navigation_plan"],
     ]
     for spec in key_specs:

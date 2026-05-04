@@ -46,8 +46,17 @@ logger = logging.getLogger(__name__)
 # Minimum seconds between consecutive LERa triggers (prevents storm on repeated STUCK).
 _LERA_COOLDOWN = 15.0
 _AGENT_SKILL_BLOCKLIST = {
+    "navigate_to",       # keep motion through the planner-owned handler
+    "navigate_to_object",
+    "query_memory",      # keep memory filtering through the planner-owned handler
+    "query_location",    # VectorMemory skill may expose query-only coordinates
     "send_instruction",  # avoid recursive self-triggering from inside the agent loop
     "emergency_stop",    # keep safety-state transitions outside the LLM control path
+    "stop",
+    "set_mode",
+    "stop_navigation",
+    "cancel_mission",
+    "start_patrol",
 }
 
 
@@ -137,6 +146,7 @@ class SemanticPlannerModule(Module, layer=4):
         self._tagged_locations = None
         self._agent_tool_registry: dict[str, Any] = {}
         self._agent_tool_list: list[dict[str, Any]] = []
+        self._last_vector_memory_query_only: bool = False
 
         # Latest camera frame for VLM tools in the agent loop
         self._latest_rgb: np.ndarray | None = None
@@ -480,9 +490,12 @@ class SemanticPlannerModule(Module, layer=4):
     # ── Goal Resolution ───────────────────────────────────────────────────────
 
     def _try_resolve(self, instruction: str, sg_json: str) -> None:
+        self._last_vector_memory_query_only = False
         if self._goal_resolver is None:
             # No GoalResolver — skip Fast Path, try remaining fallbacks
             if self._try_vector_memory(instruction):
+                return
+            if self._last_vector_memory_query_only:
                 return
             self._explore_frontier(instruction)
             return
@@ -521,6 +534,8 @@ class SemanticPlannerModule(Module, layer=4):
         self._chat("thinking", "Fast Path 未命中，查询向量记忆…", phase="vector")
         if self._try_vector_memory(instruction):
             return
+        if self._last_vector_memory_query_only:
+            return
 
         # Level 4: Frontier exploration → Level 5: Visual servo
         self._chat("thinking", "无已知目标，转向前沿探索…", phase="frontier")
@@ -551,13 +566,51 @@ class SemanticPlannerModule(Module, layer=4):
         tz = getattr(result, "target_z", 0.0)
         return [float(tx), float(ty), float(tz or 0.0)]
 
+    def _vector_memory_allows_navigation(self, result: dict[str, Any]) -> bool:
+        if result.get("navigable") is not True:
+            return False
+        if result.get("degraded") is not False:
+            return False
+        if result.get("semantic_encoder_ready") is not True:
+            return False
+
+        stats_fn = getattr(self._vector_memory, "get_memory_stats", None)
+        if not callable(stats_fn):
+            return False
+
+        try:
+            stats = stats_fn()
+        except Exception as exc:
+            logger.debug("Vector memory stats unavailable: %s", exc)
+            return False
+
+        if stats.get("degraded") is not False:
+            return False
+        if stats.get("semantic_encoder_ready") is not True:
+            return False
+        return True
+
     def _try_vector_memory(self, instruction: str) -> bool:
         """Query VectorMemoryModule for fuzzy location match. Returns True if navigating."""
+        self._last_vector_memory_query_only = False
         if self._vector_memory is None:
             return False
         try:
             result = self._vector_memory.query_location(instruction)
             if not result.get("found"):
+                return False
+            if not self._vector_memory_allows_navigation(result):
+                logger.info(
+                    "Vector memory hit ignored for navigation because encoder is degraded: %s",
+                    result.get("encoder_type", "unknown"),
+                )
+                self._last_vector_memory_query_only = True
+                self.planner_status.publish("VECTOR_MEMORY_QUERY_ONLY")
+                self._chat(
+                    "thinking",
+                    "Vector memory query is degraded; not using it for navigation.",
+                    phase="vector",
+                )
                 return False
             best = result["best"]
             if best.get("score", 0) < 0.3:
@@ -743,6 +796,12 @@ class SemanticPlannerModule(Module, layer=4):
         result = self._vector_memory.query_location(text)
         if not result.get("found"):
             return f"No memory match for '{text}'"
+        if not self._vector_memory_allows_navigation(result):
+            return (
+                "Memory match is query-only; navigation coordinates are withheld "
+                f"(encoder={result.get('encoder_type', 'unknown')}, "
+                f"degraded={bool(result.get('degraded', False))})."
+            )
         best = result["best"]
         return f"Found: ({best['x']:.1f}, {best['y']:.1f}) score={best['score']:.2f} labels={best.get('labels', '')}"
 

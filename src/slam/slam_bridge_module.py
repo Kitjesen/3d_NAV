@@ -52,6 +52,8 @@ DEGEN_MILD = "MILD"              # Feature count low but usable
 DEGEN_SEVERE = "SEVERE"          # Severe feature loss, high covariance
 DEGEN_CRITICAL = "CRITICAL"      # Complete degeneracy (corridor/void)
 
+LOCALIZER_ODOM_GRACE_HEALTH = {"LOCKED", "RECOVERED"}
+
 
 @register("slam_bridge", "default", description="DDS SLAM → Python Module bridge")
 class SlamBridgeModule(Module, layer=1):
@@ -188,6 +190,9 @@ class SlamBridgeModule(Module, layer=1):
         self._localizer_health_ts: float = 0.0
         self._localizer_health_timeout: float = float(
             kw.get("localizer_health_timeout", 2.0)
+        )
+        self._localizer_health_odom_grace_s: float = float(
+            kw.get("localizer_health_odom_grace_s", 5.0)
         )
 
         # P4: TF jump thresholds. Translation gate (m) is the dominant trigger
@@ -333,7 +338,13 @@ class SlamBridgeModule(Module, layer=1):
             from core.ros2_context import ensure_rclpy, get_shared_executor
 
             ensure_rclpy()
-            odom_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+            # Odometry is a latest-state stream for readiness/control gating.
+            # Prefer dropping stale samples over letting a reliable queue stall
+            # the Python bridge behind old poses.
+            odom_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                depth=5,
+            )
             cloud_qos = QoSProfile(
                 reliability=ReliabilityPolicy.BEST_EFFORT,
                 depth=1,
@@ -822,6 +833,22 @@ class SlamBridgeModule(Module, layer=1):
             self._localizer_health_ts > 0.0
             and (now - self._localizer_health_ts) <= self._localizer_health_timeout
         )
+
+    def _localizer_health_allows_odom_grace(
+        self,
+        backend: str,
+        localizer_topic_fresh: bool,
+    ) -> bool:
+        return (
+            backend == "localizer"
+            and localizer_topic_fresh
+            and self._localizer_health in LOCALIZER_ODOM_GRACE_HEALTH
+        )
+
+    def _effective_odom_timeout(self, *, localizer_health_grace: bool) -> float:
+        if not localizer_health_grace:
+            return self._odom_timeout
+        return max(self._odom_timeout, self._localizer_health_odom_grace_s)
 
     @staticmethod
     def _synthesized_localizer_health(state: str) -> str:
@@ -1824,6 +1851,14 @@ class SlamBridgeModule(Module, layer=1):
             now_mono = _time.monotonic()
             odom_age = self._odom_age_s(mono_now=now_mono)
             cloud_age = self._cloud_age_s(mono_now=now_mono)
+            contract = self._backend_contract(self._current_backend_profile())
+            localizer_topic_fresh = self._localizer_health_topic_fresh(now)
+            localizer_health_grace = self._localizer_health_allows_odom_grace(
+                str(contract["backend"]), localizer_topic_fresh
+            )
+            effective_odom_timeout = self._effective_odom_timeout(
+                localizer_health_grace=localizer_health_grace
+            )
 
             if self._loc_state == LOC_DIVERGED:
                 # Drift guard set this — keep it until drift clears
@@ -1832,7 +1867,7 @@ class SlamBridgeModule(Module, layer=1):
             elif self._last_odom_time == 0.0:
                 new_state = LOC_UNINIT
                 confidence = 0.0
-            elif odom_age > self._odom_timeout:
+            elif odom_age > effective_odom_timeout:
                 new_state = LOC_LOST
                 confidence = 0.0
             elif cloud_age > self._cloud_timeout:
@@ -1843,7 +1878,7 @@ class SlamBridgeModule(Module, layer=1):
                 confidence = 0.1
             else:
                 new_state = LOC_TRACKING
-                confidence = max(0.0, 1.0 - odom_age / self._odom_timeout)
+                confidence = max(0.0, 1.0 - odom_age / effective_odom_timeout)
 
             # Promote sustained DEGRADED to FALLBACK_GNSS_ONLY when GNSS is
             # healthy. Today this only changes the published state so
@@ -1872,8 +1907,6 @@ class SlamBridgeModule(Module, layer=1):
                     # Visual fusion compensates for CRITICAL — upgrade to DEGRADED not LOST
                     confidence = max(confidence, 0.3)
 
-            contract = self._backend_contract(self._current_backend_profile())
-            localizer_topic_fresh = self._localizer_health_topic_fresh(now)
             health_source = (
                 "localizer_health_topic"
                 if localizer_topic_fresh
@@ -1886,7 +1919,7 @@ class SlamBridgeModule(Module, layer=1):
             )
             pose_fresh = (
                 new_state not in {LOC_UNINIT, LOC_LOST, LOC_DIVERGED}
-                and odom_age <= self._odom_timeout
+                and odom_age <= effective_odom_timeout
             )
             map_cloud_fresh = (
                 self._last_cloud_time > 0.0
@@ -1952,6 +1985,8 @@ class SlamBridgeModule(Module, layer=1):
             self.localization_status.publish({
                 "state": self._loc_state,
                 "odom_age_ms": round(odom_age * 1000, 1),
+                "odom_timeout_ms": round(effective_odom_timeout * 1000, 1),
+                "localizer_health_grace": localizer_health_grace,
                 "cloud_age_ms": round(cloud_age * 1000, 1),
                 "confidence": round(confidence, 2),
                 "ts": now,

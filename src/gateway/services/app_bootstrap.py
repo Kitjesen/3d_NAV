@@ -39,6 +39,8 @@ CLIENT_LINKS: dict[str, str] = {
     "navigation_status": "/api/v1/navigation/status",
     "devices": "/api/v1/devices",
     "health": "/api/v1/health",
+    "auth_login": "/api/v1/auth/login",
+    "auth_check": "/api/v1/auth/check",
     "session": "/api/v1/session",
     "session_start": "/api/v1/session/start",
     "session_end": "/api/v1/session/end",
@@ -88,6 +90,10 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         "bootstrap": {"method": "GET", "path": CLIENT_LINKS["bootstrap"]},
         "capabilities": {"method": "GET", "path": CLIENT_LINKS["capabilities"]},
         "traffic": {"method": "GET", "path": CLIENT_LINKS["traffic"]},
+    },
+    "auth": {
+        "login": {"method": "POST", "path": CLIENT_LINKS["auth_login"]},
+        "check": {"method": "GET", "path": CLIENT_LINKS["auth_check"]},
     },
     "state": {
         "snapshot": {"method": "GET", "path": CLIENT_LINKS["state"]},
@@ -614,7 +620,11 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
             "cloud_ws": CLIENT_LINKS["cloud_ws"],
             "camera_snapshot": CLIENT_LINKS["camera_snapshot"],
             "webrtc_available": webrtc_available,
+            "webrtc_stats": CLIENT_LINKS["webrtc_stats"],
             "webrtc_offer": CLIENT_LINKS["webrtc_offer"],
+            "webrtc_bitrate": CLIENT_LINKS["webrtc_bitrate"],
+            "webrtc_whep": CLIENT_LINKS["webrtc_whep"],
+            "go2rtc_status": CLIENT_LINKS["go2rtc_status"],
         },
         "traffic": {
             **traffic,

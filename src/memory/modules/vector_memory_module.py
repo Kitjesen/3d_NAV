@@ -17,6 +17,7 @@ Ports:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -68,7 +69,8 @@ class VectorMemoryModule(Module, layer=3):
         self._collection = None      # ChromaDB collection
         self._encoder = None         # CLIP text/image encoder (set in _init_encoder)
         self._st_model = None        # sentence-transformers model (fallback to CLIP)
-        self._encoder_type = "none"  # "clip" | "sentence_transformers" | "none"
+        self._encoder_type = "none"  # "mobileclip" | "clip" | "sentence_transformers" | "lexical_hash" | "none"
+        self._embedding_dim: int | None = None
         self._use_chromadb = False
 
         self._max_np_entries: int = kw.get("max_np_entries", 10000)
@@ -94,16 +96,39 @@ class VectorMemoryModule(Module, layer=3):
         self._init_store()
 
     def _init_encoder(self) -> None:
+        # Attempt 1: MobileCLIP text encoder (preferred for robot text queries).
+        # Encoder constructors do not load weights; load_model() is required
+        # before encode_text() can produce embeddings.
+        try:
+            from semantic.perception.semantic_perception.mobileclip_encoder import MobileCLIPEncoder
+
+            candidate = MobileCLIPEncoder(device="auto")
+            candidate.load_model()
+            test_result = candidate.encode_text(["test"])
+            if test_result is not None and len(test_result) > 0:
+                self._encoder = candidate
+                self._encoder_type = "mobileclip"
+                self._embedding_dim = int(np.array(test_result[0]).size)
+                logger.info("VectorMemoryModule: MobileCLIP text encoder ready")
+                return
+            logger.info("VectorMemoryModule: MobileCLIP smoke-test returned empty; trying CLIP")
+        except ImportError:
+            logger.info("VectorMemoryModule: MobileCLIP encoder not available, trying CLIP")
+        except Exception as exc:
+            logger.warning("VectorMemoryModule: MobileCLIP init failed (%s), trying CLIP", exc)
+
         # Attempt 1: CLIP encoder (preferred — full image+text support).
         # A smoke-test encode call verifies the model weights are actually usable,
         # not just that the class imports.
         try:
             from semantic.perception.semantic_perception.clip_encoder import CLIPEncoder
-            candidate = CLIPEncoder(model_name="mobileclip")
+            candidate = CLIPEncoder(model_name="ViT-B/32", device="auto")
+            candidate.load_model()
             test_result = candidate.encode_text(["test"])
             if test_result is not None and len(test_result) > 0:
                 self._encoder = candidate
                 self._encoder_type = "clip"
+                self._embedding_dim = int(np.array(test_result[0]).size)
                 logger.info("VectorMemoryModule: CLIP encoder ready")
                 return
             logger.info("VectorMemoryModule: CLIP encoder smoke-test returned empty — trying sentence-transformers")
@@ -117,6 +142,7 @@ class VectorMemoryModule(Module, layer=3):
             from sentence_transformers import SentenceTransformer
             self._st_model = SentenceTransformer("all-MiniLM-L6-v2")
             self._encoder_type = "sentence_transformers"
+            self._embedding_dim = 384
             logger.info("VectorMemoryModule: sentence-transformers encoder ready (all-MiniLM-L6-v2, 384-dim)")
             return
         except ImportError:
@@ -124,13 +150,14 @@ class VectorMemoryModule(Module, layer=3):
         except Exception as exc:
             logger.warning("VectorMemoryModule: sentence-transformers model load failed: %s", exc)
 
-        # No encoder available — soft-fail instead of crashing the whole stack.
-        # Industrial reliability: a single optional memory module must not take down
-        # nav/safety. Vector queries return empty until an encoder is installed.
-        self._encoder_type = "disabled"
-        logger.error(
-            "VectorMemoryModule: no text encoder available — module DISABLED. "
-            "Vector queries will return empty until you run: pip install sentence-transformers"
+        # No semantic encoder available: keep the module usable with a stable
+        # lexical fallback, while reporting that semantic embeddings are degraded.
+        self._encoder_type = "lexical_hash"
+        self._embedding_dim = 512
+        logger.warning(
+            "VectorMemoryModule: no semantic text encoder available; using "
+            "deterministic lexical fallback. Install sentence-transformers for "
+            "semantic vector search."
         )
 
     def _init_store(self) -> None:
@@ -140,7 +167,11 @@ class VectorMemoryModule(Module, layer=3):
             client = chromadb.PersistentClient(path=self._persist_dir)
             self._collection = client.get_or_create_collection(
                 name=self._collection_name,
-                metadata={"hnsw:space": "cosine"},
+                metadata={
+                    "hnsw:space": "cosine",
+                    "lingtu_encoder_type": self._encoder_type,
+                    "lingtu_embedding_dim": str(self._embedding_dim or ""),
+                },
             )
             self._use_chromadb = True
             count = self._collection.count()
@@ -173,43 +204,61 @@ class VectorMemoryModule(Module, layer=3):
 
     # ── Store ─────────────────────────────────────────────────────────────────
 
+    def _snapshot_metadata(self, text: str, embedding: np.ndarray) -> dict[str, Any]:
+        semantic_encoder_ready = self._semantic_encoder_ready()
+        degraded = self._encoder_type == "lexical_hash"
+        embedding_dim = int(np.array(embedding).size)
+        return {
+            "x": float(self._robot_xy[0]),
+            "y": float(self._robot_xy[1]),
+            "labels": text,
+            "ts": time.time(),
+            "encoder_type": self._encoder_type,
+            "semantic_encoder_ready": semantic_encoder_ready,
+            "degraded": degraded,
+            "navigable": semantic_encoder_ready and not degraded,
+            "embedding_dim": embedding_dim,
+        }
+
     def _store_snapshot(self, labels: list[str]) -> None:
         text = ", ".join(sorted(set(labels)))
         embedding = self._encode_text(text)
         if embedding is None:
             return
 
-        meta = {
-            "x": float(self._robot_xy[0]),
-            "y": float(self._robot_xy[1]),
-            "labels": text,
-            "ts": time.time(),
-        }
+        meta = self._snapshot_metadata(text, embedding)
         doc_id = f"snap_{self._store_count}"
         self._store_count += 1
 
         if self._use_chromadb and self._collection is not None:
-            self._collection.upsert(
-                ids=[doc_id],
-                embeddings=[embedding.tolist()],
-                metadatas=[meta],
-                documents=[text],
-            )
-        else:
-            self._np_embeddings.append(embedding)
-            self._np_metadata.append(meta)
-            # deque(maxlen) auto-evicts oldest entry — no manual pop needed
+            try:
+                self._collection.upsert(
+                    ids=[doc_id],
+                    embeddings=[embedding.tolist()],
+                    metadatas=[meta],
+                    documents=[text],
+                )
+                return
+            except Exception as exc:
+                logger.warning(
+                    "VectorMemory: ChromaDB upsert failed (%s), using numpy fallback",
+                    exc,
+                )
+                self._use_chromadb = False
+
+        self._np_embeddings.append(embedding)
+        self._np_metadata.append(meta)
+        # deque(maxlen) auto-evicts oldest entry automatically.
 
     def _encode_text(self, text: str) -> np.ndarray | None:
         """Encode text to a unit-L2-normalized embedding vector.
 
-        Priority: CLIP → sentence-transformers → _hash_embedding (only when
-        setup() was bypassed, i.e. _encoder_type == "none").  In production
-        setup() always calls _init_encoder() which hard-fails before leaving
-        _encoder_type at "none", so the hash path is only hit in unit tests
-        that instantiate the module without calling setup().
+        Priority: MobileCLIP -> CLIP -> sentence-transformers -> deterministic lexical hash.
+        The lexical path is intentionally exposed as a degraded runtime fallback
+        so fuzzy location queries still work for exact labels without optional
+        model dependencies.
         """
-        if self._encoder_type == "clip" and self._encoder is not None:
+        if self._encoder_type in ("mobileclip", "clip") and self._encoder is not None:
             try:
                 results = self._encoder.encode_text([text])
                 if results is not None and len(results) > 0:
@@ -219,7 +268,11 @@ class VectorMemoryModule(Module, layer=3):
                         vec /= norm
                         return vec
             except Exception as exc:
-                logger.debug("VectorMemory: CLIP encode_text failed: %s", exc)
+                logger.debug(
+                    "VectorMemory: %s encode_text failed: %s",
+                    self._encoder_type,
+                    exc,
+                )
             return None
 
         if self._encoder_type == "sentence_transformers" and self._st_model is not None:
@@ -233,8 +286,8 @@ class VectorMemoryModule(Module, layer=3):
                 logger.debug("VectorMemory: sentence-transformers encode failed: %s", exc)
             return None
 
-        # _encoder_type == "none": setup() was not called (unit-test bypass path).
-        # Use hash embedding so existing tests that skip setup() still function.
+        # _encoder_type == "lexical_hash": runtime degraded fallback.
+        # _encoder_type == "none": setup() was bypassed in lightweight tests.
         return self._hash_embedding(text)
 
     @staticmethod
@@ -250,7 +303,8 @@ class VectorMemoryModule(Module, layer=3):
         words = [w for w in words if w and w not in _STOP]
         vec = np.zeros(dim, dtype=np.float32)
         for word in words:
-            h = hash(word) % dim
+            digest = hashlib.blake2b(word.encode("utf-8"), digest_size=8).digest()
+            h = int.from_bytes(digest, byteorder="big", signed=False) % dim
             vec[h] += 1.0
         norm = np.linalg.norm(vec)
         if norm > 0:
@@ -258,6 +312,35 @@ class VectorMemoryModule(Module, layer=3):
         return vec
 
     # ── Query ─────────────────────────────────────────────────────────────────
+
+    def _entry_count(self) -> int:
+        if self._use_chromadb and self._collection is not None:
+            try:
+                return int(self._collection.count())
+            except Exception as exc:
+                logger.warning(
+                    "VectorMemory: ChromaDB count failed (%s), using numpy fallback",
+                    exc,
+                )
+                self._use_chromadb = False
+        return len(self._np_embeddings)
+
+    def _hit_matches_active_encoder(self, meta: dict[str, Any] | None) -> bool:
+        if not isinstance(meta, dict):
+            return False
+
+        meta_encoder = str(meta.get("encoder_type") or "")
+        if meta_encoder != self._encoder_type:
+            return False
+
+        meta_dim = meta.get("embedding_dim")
+        if meta_dim is not None and self._embedding_dim is not None:
+            try:
+                if int(meta_dim) != int(self._embedding_dim):
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
 
     def _query(self, text: str, n: int = 0) -> list[dict]:
         n = n or self._max_results
@@ -267,35 +350,64 @@ class VectorMemoryModule(Module, layer=3):
 
         if self._use_chromadb and self._collection is not None:
             try:
+                count = int(self._collection.count())
                 results = self._collection.query(
                     query_embeddings=[embedding.tolist()],
-                    n_results=min(n, max(self._collection.count(), 1)),
+                    n_results=min(n, max(count, 1)),
                 )
                 hits = []
                 for i in range(len(results["ids"][0])):
                     meta = results["metadatas"][0][i]
+                    if not self._hit_matches_active_encoder(meta):
+                        continue
                     hits.append({
                         "x": meta["x"],
                         "y": meta["y"],
                         "labels": meta.get("labels", ""),
                         "score": 1.0 - results["distances"][0][i],  # cosine → similarity
                         "ts": meta.get("ts", 0),
+                        "encoder_type": meta.get("encoder_type", "unknown"),
+                        "semantic_encoder_ready": bool(meta.get("semantic_encoder_ready", False)),
+                        "degraded": bool(meta.get("degraded", True)),
+                        "navigable": bool(meta.get("navigable", False)),
+                        "embedding_dim": meta.get("embedding_dim"),
                     })
                 return hits
             except Exception as e:
                 logger.warning("VectorMemory: ChromaDB query failed: %s", e)
-                return []
+                return self._numpy_query(embedding, n)
         else:
             return self._numpy_query(embedding, n)
 
     def _numpy_query(self, query_vec: np.ndarray, n: int) -> list[dict]:
         if not self._np_embeddings:
             return []
-        mat = np.stack(self._np_embeddings)
-        sims = mat @ query_vec
+
+        rows = []
+        metas = []
+        query_vec = np.asarray(query_vec, dtype=np.float32).flatten()
+        for vec, meta in zip(list(self._np_embeddings), list(self._np_metadata)):
+            arr = np.asarray(vec, dtype=np.float32).flatten()
+            if arr.shape != query_vec.shape:
+                continue
+            if not self._hit_matches_active_encoder(meta):
+                continue
+            rows.append(arr)
+            metas.append(meta)
+
+        if not rows:
+            return []
+
+        try:
+            mat = np.stack(rows)
+            sims = mat @ query_vec
+        except Exception as exc:
+            logger.warning("VectorMemory: numpy query failed: %s", exc)
+            return []
+
         top_idx = np.argsort(sims)[::-1][:n]
         return [
-            {**self._np_metadata[i], "score": float(sims[i])}
+            {**metas[i], "score": float(sims[i])}
             for i in top_idx if sims[i] > 0.1
         ]
 
@@ -308,42 +420,64 @@ class VectorMemoryModule(Module, layer=3):
         Example: "去上次放背包的地方" → returns closest matching position.
         """
         results = self._query(text)
+        semantic_encoder_ready = self._semantic_encoder_ready()
+        degraded = self._encoder_type == "lexical_hash"
+        navigable = semantic_encoder_ready and not degraded
         if not results:
-            return {"query": text, "found": False, "results": []}
+            return {
+                "query": text,
+                "found": False,
+                "results": [],
+                "encoder_type": self._encoder_type,
+                "semantic_encoder_ready": semantic_encoder_ready,
+                "degraded": degraded,
+                "navigable": navigable,
+            }
         return {
             "query": text,
             "found": True,
             "best": {"x": results[0]["x"], "y": results[0]["y"],
                      "labels": results[0]["labels"], "score": results[0]["score"]},
             "results": results[:3],
+            "encoder_type": self._encoder_type,
+            "semantic_encoder_ready": semantic_encoder_ready,
+            "degraded": degraded,
+            "navigable": navigable,
         }
+
+    def _semantic_encoder_ready(self) -> bool:
+        return self._encoder_type in (
+            "mobileclip",
+            "clip",
+            "sentence_transformers",
+        )
 
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
-        if self._use_chromadb and self._collection is not None:
-            entry_count = self._collection.count()
-        else:
-            entry_count = len(self._np_embeddings)
+        entry_count = self._entry_count()
         info["entry_count"] = entry_count
         info["backend"] = "chromadb" if self._use_chromadb else "numpy"
         info["store_count"] = self._store_count
         info["encoder_ready"] = self._encoder_type != "none"
+        info["semantic_encoder_ready"] = self._semantic_encoder_ready()
+        info["degraded"] = self._encoder_type == "lexical_hash"
         info["encoder_type"] = self._encoder_type
+        info["embedding_dim"] = self._embedding_dim
         info["persist_dir"] = self._persist_dir
         return info
 
     @skill
     def get_memory_stats(self) -> dict:
         """Return vector memory statistics."""
-        count = 0
-        if self._use_chromadb and self._collection is not None:
-            count = self._collection.count()
-        else:
-            count = len(self._np_embeddings)
+        count = self._entry_count()
         return {
             "backend": "chromadb" if self._use_chromadb else "numpy",
             "entries": count,
             "store_count": self._store_count,
             "persist_dir": self._persist_dir,
             "max_np_entries": self._max_np_entries,
+            "encoder_type": self._encoder_type,
+            "semantic_encoder_ready": self._semantic_encoder_ready(),
+            "degraded": self._encoder_type == "lexical_hash",
+            "embedding_dim": self._embedding_dim,
         }

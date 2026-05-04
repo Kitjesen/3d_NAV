@@ -70,9 +70,16 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["capabilities"]["exploration"] is True
     assert payload["media"]["webrtc_available"] is True
     assert payload["media"]["camera_ws"] == "/ws/camera"
+    assert payload["media"]["webrtc_stats"] == "/api/v1/webrtc/stats"
+    assert payload["media"]["webrtc_offer"] == "/api/v1/webrtc/offer"
+    assert payload["media"]["webrtc_bitrate"] == "/api/v1/webrtc/bitrate"
+    assert payload["media"]["webrtc_whep"] == "/api/v1/webrtc/whep"
+    assert payload["media"]["go2rtc_status"] == "/api/v1/webrtc/go2rtc/status"
     assert payload["capabilities_endpoint"] == "/api/v1/app/capabilities"
     assert payload["links"]["state"] == "/api/v1/state"
     assert payload["links"]["traffic"] == "/api/v1/app/traffic"
+    assert payload["links"]["auth_login"] == "/api/v1/auth/login"
+    assert payload["links"]["auth_check"] == "/api/v1/auth/check"
     assert payload["links"]["localization_status"] == "/api/v1/localization/status"
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
     assert payload["links"]["navigation_plan"] == "/api/v1/navigation/plan"
@@ -91,6 +98,8 @@ def test_app_bootstrap_service_returns_client_contract():
     assert capabilities["features"]["webrtc"] is True
     assert capabilities["endpoints"]["app"]["bootstrap"]["path"] == "/api/v1/app/bootstrap"
     assert capabilities["endpoints"]["app"]["traffic"]["path"] == "/api/v1/app/traffic"
+    assert capabilities["endpoints"]["auth"]["login"]["path"] == "/api/v1/auth/login"
+    assert capabilities["endpoints"]["auth"]["check"]["path"] == "/api/v1/auth/check"
     assert (
         capabilities["endpoints"]["state"]["localization_status"]["path"]
         == "/api/v1/localization/status"
@@ -221,6 +230,8 @@ def test_app_capabilities_enriches_specs_from_openapi():
     scene_graph = capabilities["endpoints"]["state"]["scene_graph"]
     locations = capabilities["endpoints"]["state"]["locations"]
     path = capabilities["endpoints"]["state"]["path"]
+    auth_login = capabilities["endpoints"]["auth"]["login"]
+    auth_check = capabilities["endpoints"]["auth"]["check"]
     localization = capabilities["endpoints"]["state"]["localization_status"]
     navigation = capabilities["endpoints"]["state"]["navigation_status"]
     control = capabilities["endpoints"]["control"]
@@ -244,6 +255,9 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert scene_graph["response_schema"] == "SceneGraphResponse"
     assert locations["response_schema"] == "LocationsResponse"
     assert path["response_schema"] == "PathResponse"
+    assert auth_login["request_schema"] == "AuthLoginRequest"
+    assert auth_login["response_schema"] == "AuthLoginResponse"
+    assert auth_check["response_schema"] == "AuthCheckResponse"
     assert localization["response_schema"] == "LocalizationStatusResponse"
     assert navigation["response_schema"] == "NavigationStatusResponse"
     assert navigation_plan["request_schema"] == "PlanPreviewRequest"
@@ -348,6 +362,11 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert bootstrap_payload["links"]["state"] == "/api/v1/state"
     assert bootstrap_payload["links"]["events"] == "/api/v1/events"
     assert bootstrap_payload["links"]["traffic"] == "/api/v1/app/traffic"
+    assert bootstrap_payload["links"]["auth_login"] == "/api/v1/auth/login"
+    assert bootstrap_payload["links"]["auth_check"] == "/api/v1/auth/check"
+    assert bootstrap_payload["media"]["webrtc_stats"] == "/api/v1/webrtc/stats"
+    assert bootstrap_payload["media"]["webrtc_whep"] == "/api/v1/webrtc/whep"
+    assert bootstrap_payload["media"]["go2rtc_status"] == "/api/v1/webrtc/go2rtc/status"
     assert "scene_graph" not in bootstrap_payload["scene"]
     assert "path" not in bootstrap_payload["path"]
     assert "can_send_goal" in bootstrap_payload["control"]
@@ -411,6 +430,18 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert (
         capabilities_payload["endpoints"]["state"]["snapshot"]["response_schema"]
         == "StateResponse"
+    )
+    assert (
+        capabilities_payload["endpoints"]["auth"]["login"]["request_schema"]
+        == "AuthLoginRequest"
+    )
+    assert (
+        capabilities_payload["endpoints"]["auth"]["login"]["response_schema"]
+        == "AuthLoginResponse"
+    )
+    assert (
+        capabilities_payload["endpoints"]["auth"]["check"]["response_schema"]
+        == "AuthCheckResponse"
     )
     assert capabilities_payload["links"]["events"] == "/api/v1/events"
     assert capabilities_payload["links"]["map_activate"] == "/api/v1/map/activate"

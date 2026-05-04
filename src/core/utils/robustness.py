@@ -30,6 +30,7 @@ from typing import Any, Optional, Type, TypeVar
 logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
+_sleep = time.sleep
 
 
 # ──────────────────────────────────────────────
@@ -181,7 +182,7 @@ def retry(
                             e,
                             wait,
                         )
-                        time.sleep(wait)
+                        _sleep(wait)
             raise last_exc  # type: ignore[misc]
 
         return wrapper  # type: ignore[return-value]

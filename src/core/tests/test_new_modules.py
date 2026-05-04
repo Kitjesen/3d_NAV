@@ -455,6 +455,41 @@ class TestMCPServerModule(unittest.TestCase):
         result = json.loads(m.set_mode("unknown"))
         self.assertIn("error", result)
 
+    def test_query_memory_degraded_vector_hit_is_query_only(self):
+        import json
+
+        class _VectorMemory:
+            def query_location(self, text):
+                return {
+                    "found": True,
+                    "best": {
+                        "x": 1.0,
+                        "y": 2.0,
+                        "labels": "backpack",
+                        "score": 0.95,
+                    },
+                    "results": [{
+                        "x": 1.0,
+                        "y": 2.0,
+                        "labels": "backpack",
+                        "score": 0.95,
+                        "navigable": False,
+                    }],
+                    "encoder_type": "lexical_hash",
+                    "semantic_encoder_ready": False,
+                    "degraded": True,
+                    "navigable": False,
+                }
+
+        m = self._make()
+        m._vector_memory_mod = _VectorMemory()
+
+        result = json.loads(m.query_memory("find backpack"))
+
+        self.assertEqual(result["count"], 1)
+        self.assertTrue(result["results"][0]["query_only"])
+        self.assertNotIn("position", result["results"][0])
+
     def test_get_health_no_handle(self):
         import json
         m = self._make()
@@ -687,6 +722,212 @@ class TestSemanticPlannerModule(unittest.TestCase):
         self.assertAlmostEqual(goals[0].pose.position.x, 16.25)
         self.assertAlmostEqual(goals[0].pose.position.y, 2.9)
         self.assertAlmostEqual(goals[0].pose.position.z, 0.937)
+
+    def test_degraded_vector_memory_cannot_publish_goal_pose(self):
+        class _VectorMemory:
+            def query_location(self, text):
+                return {
+                    "found": True,
+                    "best": {
+                        "x": 1.0,
+                        "y": 2.0,
+                        "labels": "backpack",
+                        "score": 0.95,
+                    },
+                    "encoder_type": "lexical_hash",
+                    "semantic_encoder_ready": False,
+                    "degraded": True,
+                    "navigable": False,
+                }
+
+            def get_memory_stats(self):
+                return {
+                    "encoder_type": "lexical_hash",
+                    "semantic_encoder_ready": False,
+                    "degraded": True,
+                }
+
+        m = self._make()
+        m._vector_memory = _VectorMemory()
+        goals = []
+        statuses = []
+        m.goal_pose._add_callback(goals.append)
+        m.planner_status._add_callback(statuses.append)
+
+        self.assertFalse(m._try_vector_memory("find backpack"))
+        self.assertEqual(goals, [])
+        self.assertIn("VECTOR_MEMORY_QUERY_ONLY", statuses)
+
+    def test_degraded_vector_memory_blocks_frontier_fallback(self):
+        class _VectorMemory:
+            def query_location(self, text):
+                return {
+                    "found": True,
+                    "best": {
+                        "x": 1.0,
+                        "y": 2.0,
+                        "labels": "backpack",
+                        "score": 0.95,
+                    },
+                    "encoder_type": "lexical_hash",
+                    "semantic_encoder_ready": False,
+                    "degraded": True,
+                    "navigable": False,
+                }
+
+            def get_memory_stats(self):
+                return {
+                    "encoder_type": "lexical_hash",
+                    "semantic_encoder_ready": False,
+                    "degraded": True,
+                }
+
+        class _Frontier:
+            position = [9.0, 9.0, 0.0]
+
+        class _FrontierScorer:
+            def get_best_frontier(self):
+                return _Frontier()
+
+        m = self._make()
+        m._goal_resolver = None
+        m._frontier_scorer = _FrontierScorer()
+        m._vector_memory = _VectorMemory()
+        goals = []
+        statuses = []
+        m.goal_pose._add_callback(goals.append)
+        m.planner_status._add_callback(statuses.append)
+
+        m._try_resolve("find backpack", '{"objects": []}')
+
+        self.assertEqual(goals, [])
+        self.assertIn("VECTOR_MEMORY_QUERY_ONLY", statuses)
+        self.assertNotIn("EXPLORING", statuses)
+
+    def test_vector_memory_missing_contract_fields_fails_closed(self):
+        class _VectorMemory:
+            def query_location(self, text):
+                return {
+                    "found": True,
+                    "best": {
+                        "x": 1.0,
+                        "y": 2.0,
+                        "labels": "legacy",
+                        "score": 0.99,
+                    },
+                }
+
+            def get_memory_stats(self):
+                return {
+                    "encoder_type": "mobileclip",
+                    "semantic_encoder_ready": True,
+                    "degraded": False,
+                }
+
+        m = self._make()
+        m._vector_memory = _VectorMemory()
+        goals = []
+        m.goal_pose._add_callback(goals.append)
+
+        self.assertFalse(m._try_vector_memory("find legacy target"))
+        self.assertEqual(goals, [])
+
+    def test_vector_memory_stats_failure_fails_closed(self):
+        class _VectorMemory:
+            def query_location(self, text):
+                return {
+                    "found": True,
+                    "best": {
+                        "x": 1.0,
+                        "y": 2.0,
+                        "labels": "charger",
+                        "score": 0.99,
+                    },
+                    "encoder_type": "mobileclip",
+                    "semantic_encoder_ready": True,
+                    "degraded": False,
+                    "navigable": True,
+                }
+
+            def get_memory_stats(self):
+                raise RuntimeError("stats unavailable")
+
+        m = self._make()
+        m._vector_memory = _VectorMemory()
+        goals = []
+        m.goal_pose._add_callback(goals.append)
+
+        self.assertFalse(m._try_vector_memory("find charger"))
+        self.assertEqual(goals, [])
+
+    def test_degraded_agent_memory_tool_withholds_coordinates(self):
+        class _VectorMemory:
+            def query_location(self, text):
+                return {
+                    "found": True,
+                    "best": {
+                        "x": 1.0,
+                        "y": 2.0,
+                        "labels": "backpack",
+                        "score": 0.95,
+                    },
+                    "encoder_type": "lexical_hash",
+                    "semantic_encoder_ready": False,
+                    "degraded": True,
+                    "navigable": False,
+                }
+
+            def get_memory_stats(self):
+                return {
+                    "encoder_type": "lexical_hash",
+                    "semantic_encoder_ready": False,
+                    "degraded": True,
+                }
+
+        m = self._make()
+        m._vector_memory = _VectorMemory()
+
+        response = m._tool_query_memory("find backpack")
+
+        self.assertIn("coordinates are withheld", response)
+        self.assertNotIn("(1.0, 2.0)", response)
+
+    def test_semantic_vector_memory_can_publish_goal_pose(self):
+        class _VectorMemory:
+            def query_location(self, text):
+                return {
+                    "found": True,
+                    "best": {
+                        "x": 6.0,
+                        "y": 7.0,
+                        "labels": "charger",
+                        "score": 0.95,
+                    },
+                    "encoder_type": "mobileclip",
+                    "semantic_encoder_ready": True,
+                    "degraded": False,
+                    "navigable": True,
+                }
+
+            def get_memory_stats(self):
+                return {
+                    "encoder_type": "mobileclip",
+                    "semantic_encoder_ready": True,
+                    "degraded": False,
+                }
+
+        m = self._make()
+        m._vector_memory = _VectorMemory()
+        goals = []
+        statuses = []
+        m.goal_pose._add_callback(goals.append)
+        m.planner_status._add_callback(statuses.append)
+
+        self.assertTrue(m._try_vector_memory("find charger"))
+        self.assertEqual(len(goals), 1)
+        self.assertAlmostEqual(goals[0].pose.position.x, 6.0)
+        self.assertAlmostEqual(goals[0].pose.position.y, 7.0)
+        self.assertIn("VECTOR_MEMORY", statuses)
 
     def test_scene_graph_stored_as_object(self):
         """_on_scene_graph must persist the SceneGraph object, not just JSON."""

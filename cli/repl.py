@@ -745,6 +745,15 @@ class LingTuREPL(cmd.Cmd):
                 try:
                     r = vmem.query_location(text)
                     if r.get("found"):
+                        if not (
+                            r.get("navigable") is True
+                            and r.get("semantic_encoder_ready") is True
+                            and r.get("degraded") is False
+                        ):
+                            return (
+                                "Memory match is query-only; navigation "
+                                f"coordinates withheld (encoder={r.get('encoder_type', 'unknown')})"
+                            )
                         results = r.get("results", [])[:3]
                         return "; ".join(
                             f"({x['x']:.1f},{x['y']:.1f}) score={x['score']:.2f}"
@@ -1074,6 +1083,9 @@ class LingTuREPL(cmd.Cmd):
         elif subcmd == "stats":
             s = mod.get_memory_stats()
             print(f"  Backend:  {s['backend']}")
+            print(f"  Encoder:  {s.get('encoder_type', 'unknown')}")
+            print(f"  Semantic: {bool(s.get('semantic_encoder_ready', False))}")
+            print(f"  Degraded: {bool(s.get('degraded', False))}")
             print(f"  Entries:  {s['entries']}")
             print(f"  Stored:   {s['store_count']} snapshots")
             print(f"  Dir:      {s['persist_dir']}")

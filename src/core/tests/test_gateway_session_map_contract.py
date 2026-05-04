@@ -82,7 +82,7 @@ def _write_binary_xyz_pcd(path: Path) -> None:
 def test_auth_routes_validate_response_contracts(monkeypatch):
     from gateway import auth
     from gateway.gateway_module import GatewayModule
-    from gateway.schemas import AuthCheckResponse, AuthLoginResponse
+    from gateway.schemas import AuthCheckResponse, AuthLoginRequest, AuthLoginResponse
 
     monkeypatch.setattr(auth, "_get_configured_key", lambda: None)
 
@@ -91,7 +91,7 @@ def test_auth_routes_validate_response_contracts(monkeypatch):
 
     check_payload = asyncio.run(_endpoint(gateway, "/api/v1/auth/check")())
     login_response = asyncio.run(
-        _endpoint(gateway, "/api/v1/auth/login")(_JsonRequest({"key": ""}))
+        _endpoint(gateway, "/api/v1/auth/login")(AuthLoginRequest(key=""))
     )
 
     check = AuthCheckResponse.model_validate(check_payload)
@@ -105,7 +105,7 @@ def test_auth_routes_validate_response_contracts(monkeypatch):
 def test_auth_login_invalid_key_preserves_legacy_message(monkeypatch):
     from gateway import auth
     from gateway.gateway_module import GatewayModule
-    from gateway.schemas import AuthLoginResponse
+    from gateway.schemas import AuthLoginRequest, AuthLoginResponse
 
     monkeypatch.setattr(auth, "_get_configured_key", lambda: "secret")
 
@@ -113,7 +113,7 @@ def test_auth_login_invalid_key_preserves_legacy_message(monkeypatch):
     gateway.setup()
 
     login_response = asyncio.run(
-        _endpoint(gateway, "/api/v1/auth/login")(_JsonRequest({"key": "bad"}))
+        _endpoint(gateway, "/api/v1/auth/login")(AuthLoginRequest(key="bad"))
     )
     login = AuthLoginResponse.model_validate(_payload(login_response))
 

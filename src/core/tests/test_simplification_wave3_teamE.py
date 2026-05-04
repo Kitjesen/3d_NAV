@@ -1,6 +1,6 @@
 """Wave 3 Team E — simplification remediation tests.
 
-W3-1: VectorMemoryModule encoder fallback → sentence-transformers (hard-fail on missing).
+W3-1: VectorMemoryModule encoder fallback → sentence-transformers or lexical hash.
 W3-6: SemanticMapperModule Bayesian Dirichlet-Multinomial observation gate.
 
 All tests are self-contained: heavy dependencies (sentence-transformers, CLIP,
@@ -68,6 +68,102 @@ def _block_all_encoders_import(name, *args, **kwargs):
     return _REAL_IMPORT(name, *args, **kwargs)
 
 
+def _make_mobileclip_module(fail_load: bool = False):
+    mod = types.ModuleType("semantic.perception.semantic_perception.mobileclip_encoder")
+    mod.instances = []
+
+    class FakeMobileCLIPEncoder:
+        def __init__(self, device="auto"):
+            self.device = device
+            self.loaded = False
+            mod.instances.append(self)
+
+        def load_model(self):
+            if fail_load:
+                raise RuntimeError("mobileclip unavailable")
+            self.loaded = True
+
+        def encode_text(self, texts):
+            if not self.loaded:
+                return np.array([])
+            vec = np.ones((len(texts), 512), dtype=np.float32)
+            vec /= np.linalg.norm(vec, axis=1, keepdims=True)
+            return vec
+
+    mod.MobileCLIPEncoder = FakeMobileCLIPEncoder
+    return mod
+
+
+def _make_clip_module():
+    mod = types.ModuleType("semantic.perception.semantic_perception.clip_encoder")
+    mod.instances = []
+
+    class FakeCLIPEncoder:
+        def __init__(self, model_name="ViT-B/32", device="auto", **_kw):
+            self.model_name = model_name
+            self.device = device
+            self.loaded = False
+            mod.instances.append(self)
+
+        def load_model(self):
+            self.loaded = True
+
+        def encode_text(self, texts):
+            if not self.loaded:
+                return np.array([])
+            vec = np.ones((len(texts), 512), dtype=np.float32)
+            vec /= np.linalg.norm(vec, axis=1, keepdims=True)
+            return vec
+
+    mod.CLIPEncoder = FakeCLIPEncoder
+    return mod
+
+
+class TestVectorMemorySemanticEncoderSelection(unittest.TestCase):
+    """VectorMemory should load real encoder weights before smoke testing."""
+
+    def _fresh_vmm_class(self):
+        sys.modules.pop("memory.modules.vector_memory_module", None)
+        from memory.modules.vector_memory_module import VectorMemoryModule
+        return VectorMemoryModule
+
+    def test_mobileclip_selected_after_load_model(self):
+        VectorMemoryModule = self._fresh_vmm_class()
+        mod = VectorMemoryModule()
+        fake_mobileclip = _make_mobileclip_module()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "semantic.perception.semantic_perception.mobileclip_encoder": fake_mobileclip,
+            },
+        ):
+            mod._init_encoder()
+
+        self.assertEqual(mod._encoder_type, "mobileclip")
+        self.assertTrue(fake_mobileclip.instances[-1].loaded)
+        self.assertIs(mod._encoder, fake_mobileclip.instances[-1])
+
+    def test_clip_fallback_loads_model_when_mobileclip_fails(self):
+        VectorMemoryModule = self._fresh_vmm_class()
+        mod = VectorMemoryModule()
+        fake_mobileclip = _make_mobileclip_module(fail_load=True)
+        fake_clip = _make_clip_module()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "semantic.perception.semantic_perception.mobileclip_encoder": fake_mobileclip,
+                "semantic.perception.semantic_perception.clip_encoder": fake_clip,
+            },
+        ):
+            mod._init_encoder()
+
+        self.assertEqual(mod._encoder_type, "clip")
+        self.assertTrue(fake_clip.instances[-1].loaded)
+        self.assertEqual(fake_clip.instances[-1].model_name, "ViT-B/32")
+
+
 # ---------------------------------------------------------------------------
 # W3-1 tests
 # ---------------------------------------------------------------------------
@@ -122,9 +218,9 @@ class TestVectorMemoryEncoderType(unittest.TestCase):
 
     def test_graceful_disable_when_both_encoders_missing(self):
         """When neither CLIP nor sentence-transformers is importable,
-        _init_encoder marks the module as 'disabled' (no hard exception)
-        so the rest of the system can still start; queries then return
-        empty + log a clear instruction to install the package."""
+        _init_encoder marks the module as 'lexical_hash' (no hard exception)
+        so the rest of the system can still start and exact-label queries
+        remain available while semantic search is reported as degraded."""
         VectorMemoryModule = self._fresh_vmm_class()
         mod = VectorMemoryModule.__new__(VectorMemoryModule)
         VectorMemoryModule.__init__(mod)
@@ -137,7 +233,7 @@ class TestVectorMemoryEncoderType(unittest.TestCase):
             with patch("builtins.__import__", side_effect=_block_all_encoders_import):
                 # Should NOT raise — graceful disable instead.
                 mod._init_encoder()
-            self.assertEqual(mod._encoder_type, "disabled")
+            self.assertEqual(mod._encoder_type, "lexical_hash")
         finally:
             if saved_st is not None:
                 sys.modules["sentence_transformers"] = saved_st
@@ -147,8 +243,8 @@ class TestVectorMemoryEncoderType(unittest.TestCase):
 
         The live _encode_text path (CLIP or sentence-transformers) returns a
         semantically meaningful vector without touching _hash_embedding.
-        _hash_embedding is only reached when _encoder_type == 'none', which
-        only happens when setup() is bypassed in unit tests.
+        _hash_embedding is reached only by the explicit degraded fallback or
+        when setup() is bypassed in unit tests.
         """
         mod = self._make_mod_with_st()
         # _encoder_type must be 'sentence_transformers', not 'none'

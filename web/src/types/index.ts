@@ -146,6 +146,19 @@ export interface HealthResponse {
   [key: string]: unknown
 }
 
+export interface DeviceEntry {
+  [key: string]: unknown
+}
+
+export interface DevicesResponse {
+  devices: DeviceEntry[]
+  manager: string
+  spec_count: number
+  opened_count: number
+  error?: string | null
+  [key: string]: unknown
+}
+
 export interface AuthLoginResponse {
   ok: boolean
   message?: string | null
@@ -216,6 +229,8 @@ export interface ClientLinks {
   localization_status?: string
   navigation_status?: string
   devices?: string
+  auth_login?: string
+  auth_check?: string
   events?: string
   teleop_ws?: string
   camera_ws?: string
@@ -269,7 +284,11 @@ export interface AppMediaLinks {
   cloud_ws: string
   camera_snapshot: string
   webrtc_available: boolean
+  webrtc_stats?: string
   webrtc_offer?: string
+  webrtc_bitrate?: string
+  webrtc_whep?: string
+  go2rtc_status?: string
   [key: string]: unknown
 }
 

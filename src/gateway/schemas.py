@@ -284,6 +284,10 @@ class ControlCommandResponse(GatewayResponseModel):
     mode: str | None = None
 
 
+class AuthLoginRequest(BaseModel):
+    key: str = Field(default="", max_length=4096)
+
+
 class AuthLoginResponse(GatewayResponseModel):
     ok: bool
     message: str
@@ -753,6 +757,8 @@ class ClientLinks(GatewayResponseModel):
     localization_status: str | None = None
     navigation_status: str | None = None
     devices: str | None = None
+    auth_login: str | None = None
+    auth_check: str | None = None
     events: str | None = None
     teleop_ws: str | None = None
     camera_ws: str | None = None
@@ -805,7 +811,11 @@ class AppMediaLinks(GatewayResponseModel):
     cloud_ws: str
     camera_snapshot: str
     webrtc_available: bool
+    webrtc_stats: str | None = None
     webrtc_offer: str | None = None
+    webrtc_bitrate: str | None = None
+    webrtc_whep: str | None = None
+    go2rtc_status: str | None = None
 
 
 class RealtimeEventsCapability(GatewayResponseModel):

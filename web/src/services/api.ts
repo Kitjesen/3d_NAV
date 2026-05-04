@@ -11,6 +11,7 @@ import type {
   BagStatusResponse,
   CommandReceipt,
   ControlCommandResponse,
+  DevicesResponse,
   DynamicFilterResult,
   GatewayErrorResponse,
   HealthResponse,
@@ -216,6 +217,10 @@ export async function fetchState(): Promise<StateResponse> {
 
 export async function fetchHealth(): Promise<HealthResponse> {
   return fetchJson<HealthResponse>('/api/v1/health')
+}
+
+export async function fetchDevices(): Promise<DevicesResponse> {
+  return fetchJson<DevicesResponse>('/api/v1/devices')
 }
 
 export async function fetchSceneGraph(): Promise<SceneGraphResponse> {

@@ -117,18 +117,60 @@ lingtu nav stop                               # same as map end
 lingtu svc status               # 6 core services: enabled / active
 lingtu doctor                   # read-only service/topic/Gateway diagnostics
 lingtu svc restart slam         # restart Fast-LIO2 (i.e. robot-fastlio2.service)
+lingtu svc restart localization # restart Fast-LIO2 + localizer, then wait for /ready
 lingtu svc restart lidar        # restart Livox driver (i.e. robot-lidar.service)
 lingtu svc restart localizer    # restart ICP localizer
+lingtu svc restart super_lio    # restart experimental Super-LIO backend
+lingtu svc restart super_lio_relocation
 lingtu svc restart lingtu       # restart algorithm layer (clears odom cache)
 lingtu svc restart all          # restart LiDAR + SLAM + localizer + lingtu
 lingtu svc stop slam            # stop a single service
 ```
 
-The aliases `lidar` / `slam` / `localizer` / `lingtu` / `camera` / `brainstem` map
+The aliases `lidar` / `slam` / `localization` / `localizer` / `lingtu` / `camera` / `brainstem` map
 to the corresponding production systemd unit. There is no `slam.service` anymore;
 `slam` aliases to `robot-fastlio2.service`. `svc status` warns if legacy
 `lidar.service`, `slam.service`, or `localizer.service` is still active because those
 services can duplicate ROS nodes and starve `/nav/lidar_scan` / `/nav/imu`.
+Use `svc restart localization` when systemd still shows Fast-LIO2 active but
+`/nav/odometry` has no publisher; it restarts only Fast-LIO2 and the ICP
+localizer, preserving the LiDAR driver and LingTu process.
+
+The Super-LIO aliases are experimental. They map to `robot-super-lio.service`
+and `robot-super-lio-relocation.service` when those field-evaluation units are
+installed. They must not replace the default `nav`/`localizer` path until the
+route-level gate in `super_lio_backend.md` passes.
+
+### `slamcheck` - Super-LIO non-motion smoke
+
+```bash
+lingtu slamcheck super_lio --duration 60 --rollback previous
+lingtu slamcheck super_lio_relocation \
+  --map corrected_20260406_224020 \
+  --initial-pose 0 0 0 \
+  --duration 60 \
+  --rollback previous
+```
+
+This command switches the SLAM backend through Gateway, samples the localization
+contract, and rolls back. It is intended for non-motion field checks. The smoke
+requires:
+
+- `backend=super_lio` or `backend=super_lio_relocation`
+- `health_source=odom_map_cloud`
+- `map_save_source=live_map_cloud_snapshot` for normal Super-LIO
+- `map_save_source=active_map` for relocation
+- `saved_map_relocalization_supported=false`
+- `restart_recovery_supported=true`
+- `recovery_method=restart_super_lio*`
+- `recovery_signal=NONE` or `RECOVERED`
+- `recovery_action=none` or the matching restart action
+- no unit restart-count increase during the window
+
+For relocation, `--initial-pose X Y YAW` writes a fixed-decimal
+`SUPER_LIO_RELOCATION_INIT_POSE=[x,y,0.0,0.0,0.0,yaw]` into
+`/run/lingtu/super_lio_relocation.env`, and `--map NAME` points the active map
+symlink at `$HOME/data/nova/maps/NAME`.
 
 ### `doctor` - localization chain diagnostics
 
@@ -172,6 +214,8 @@ failures, or excessive stationary drift return a non-zero exit code.
 lingtu log drift      # drift_watchdog firings
 lingtu log dufomap    # DUFOMap save stats (last hour)
 lingtu log error      # last 30 min ERROR-level (filters VectorMemory / WebRTC noise)
+lingtu log super_lio  # Super-LIO normal backend journals
+lingtu log relocation # Super-LIO relocation backend journals
 lingtu log tail       # live tail (Ctrl+C to exit)
 lingtu log all        # last 10 min, everything
 ```
@@ -243,6 +287,9 @@ lingtu map end && sleep 2 && lingtu map start
 ---
 
 ## Related
+
+- `docs/04-deployment/super_lio_backend.md` - experimental Super-LIO build,
+  smoke, rollback, failure table, and route-validation gate
 
 - `docs/04-deployment/README.md` — deployment overview, service inventory
 - `docs/archive/05-specialized/dynamic_obstacle_removal.md` — DUFOMap Phase 1 + 2

@@ -28,6 +28,9 @@ Control        robot-brainstem      Dart gRPC :13145             [systemd]
 
 SLAM           robot-fastlio2       Fast-LIO2 odometry           [systemd]
                robot-localizer      ICP localizer (needs map)    [systemd]
+               robot-super-lio      experimental Super-LIO       [systemd]
+               robot-super-lio-relocation
+                                    experimental saved-map eval   [systemd]
 
 Algorithm      lingtu               python lingtu.py nav          [systemd]
                                     HTTP :5050  MCP :8090
@@ -53,11 +56,15 @@ they run together with `robot-camera.service`, ROS will show duplicate
 | `robot-brainstem`   | Quadruped leg control gRPC :13145     | `dart han_dog/bin/server.dart`            | yes     |
 | `robot-fastlio2`    | LiDAR-IMU SLAM                        | `fastlio2 lio_node`                       | yes     |
 | `robot-localizer`   | ICP localizer (uses prebuilt map)     | `localizer_node`                          | yes     |
+| `robot-super-lio`   | Experimental Super-LIO LIO            | `super_lio_node`                          | field eval |
+| `robot-super-lio-relocation` | Experimental Super-LIO saved-map startup | `relocation_node`               | field eval |
 | `lingtu`            | Algorithm stack (gateway + nav + sem) | `python3 lingtu.py nav`                   | yes     |
 | `ota-agent`         | OTA poller / installer                | `python3 -m ota_agent.main`               | yes     |
 
 There is intentionally no standalone `lingtu-gateway.service`: Gateway runs inside
 `lingtu.service` and exposes HTTP `:5050` plus MCP `:8090` from the same process.
+The Super-LIO units are not part of the default production target yet; install
+them only through the field-evaluation path in `super_lio_backend.md`.
 
 Service unit files live in `docs/04-deployment/services/`:
 
@@ -71,6 +78,14 @@ lingtu.service
 lingtu.target            # umbrella unit pulling in robot-* + lingtu
 ros2-env.sh              # shared ROS2 environment (sourced by service ExecStart)
 install.sh               # idempotent installer
+```
+
+Experimental Super-LIO service templates live under `scripts/deploy/s100p/`:
+
+```
+super_lio.service
+super_lio_relocation.service
+install_services.sh      # field-evaluation installer and robot-super-lio aliases
 ```
 
 > The previous `slam.service` was removed and replaced with `robot-fastlio2.service` +
@@ -259,6 +274,9 @@ sudo systemctl restart lingtu
 ---
 
 ## Pinned references
+
+- `super_lio_backend.md` - experimental Super-LIO build, smoke, rollback, and
+  route-validation gate
 
 - `GOVERNANCE.md` — six principles for deployment hygiene (historical 2026-04 cleanup)
 - `S100P_STACK_INVENTORY.md` — what was on the robot before consolidation, and why

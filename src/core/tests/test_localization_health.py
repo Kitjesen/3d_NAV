@@ -133,6 +133,67 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         self.assertEqual(tracking["localizer_health_source"], "localizer_health_topic")
         self.assertIsNotNone(tracking["localizer_health_topic_age_ms"])
 
+    def test_fresh_locked_localizer_health_graces_short_odom_gap(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="localizer",
+            odom_timeout=0.2,
+            cloud_timeout=0.5,
+            localizer_health_timeout=0.5,
+            localizer_health_odom_grace_s=2.0,
+            watchdog_hz=50,
+        )
+        received = []
+        m.localization_status._add_callback(received.append)
+        m._on_rclpy_localization_health(Msg())
+        m._mark_odom_received(
+            wall_now=time.time() - 0.8,
+            mono_now=time.monotonic() - 0.8,
+        )
+        m._mark_cloud_received()
+        m.start()
+        time.sleep(0.08)
+        m.stop()
+
+        tracking = next(r for r in received if r["state"] == "TRACKING")
+        self.assertTrue(tracking["localizer_health_grace"])
+        self.assertEqual(tracking["health_source"], "localizer_health_topic")
+        self.assertEqual(tracking["localizer_health"], "LOCKED")
+        self.assertEqual(tracking["odom_timeout_ms"], 2000.0)
+        self.assertTrue(tracking["pose_fresh"])
+
+    def test_stale_localizer_health_does_not_grace_odom_gap(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="localizer",
+            odom_timeout=0.2,
+            cloud_timeout=0.5,
+            localizer_health_timeout=0.2,
+            localizer_health_odom_grace_s=2.0,
+            watchdog_hz=50,
+        )
+        received = []
+        m.localization_status._add_callback(received.append)
+        m._on_rclpy_localization_health(Msg())
+        m._localizer_health_ts = time.time() - 1.0
+        m._mark_odom_received(
+            wall_now=time.time() - 0.8,
+            mono_now=time.monotonic() - 0.8,
+        )
+        m._mark_cloud_received()
+        m.start()
+        time.sleep(0.08)
+        m.stop()
+
+        lost = next(r for r in received if r["state"] == "LOST")
+        self.assertFalse(lost["localizer_health_grace"])
+        self.assertEqual(lost["health_source"], "odom_map_cloud")
+        self.assertFalse(lost["pose_fresh"])
+
     def test_odom_timeout_sets_lost(self):
         m = self._make()
         received = []

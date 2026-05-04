@@ -321,6 +321,11 @@ sudo systemctl start lingtu
 
 Services: `lingtu.service` (navigation), `camera.service` (Orbbec), `slam.service` (Fast-LIO2), `localizer.service` (ICP).
 
+Super-LIO remains an experimental field-evaluation backend and is not the
+default `nav` localization path. See
+`docs/04-deployment/super_lio_backend.md` for its build, smoke, rollback, and
+route-validation gate.
+
 ### Update
 
 ```bash
