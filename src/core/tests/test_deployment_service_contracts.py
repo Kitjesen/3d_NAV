@@ -647,6 +647,21 @@ def test_lingtu_slamcheck_fails_on_diverged_recovery_signal_and_rolls_back(tmp_p
     assert "switch:localizer" in calls
 
 
+def test_lingtu_slamcheck_fails_on_unexpected_recovery_action_and_rolls_back(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio_relocation --duration 0 --rollback previous",
+        extra_env={"FAKE_RECOVERY_ACTION": "restart_wrong_backend"},
+    )
+
+    assert result.returncode != 0
+    assert "action=restart_wrong_backend" in result.stdout
+    assert "FAIL: super_lio_relocation Gateway contract did not stay ready" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "switch:super_lio_relocation" in calls
+    assert "switch:localizer" in calls
+
+
 def test_super_lio_relocation_service_uses_active_map_and_float_pose():
     text = _read("scripts/deploy/s100p/super_lio_relocation.service")
 
