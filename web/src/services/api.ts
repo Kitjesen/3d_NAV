@@ -5,6 +5,8 @@ import type {
   AppBootstrapResponse,
   AppCapabilitiesResponse,
   AppTrafficResponse,
+  AuthCheckResponse,
+  AuthLoginResponse,
   BagOperationResponse,
   BagStatusResponse,
   CommandReceipt,
@@ -363,9 +365,7 @@ export interface StartSessionOptions {
 }
 
 export async function fetchSession(): Promise<SessionState> {
-  const res = await fetch('/api/v1/session')
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
+  return fetchJson<SessionState>('/api/v1/session')
 }
 
 export async function startSession(mode: SessionMode, mapNameOrOptions?: string | StartSessionOptions): Promise<SessionState> {
@@ -379,20 +379,14 @@ export async function startSession(mode: SessionMode, mapNameOrOptions?: string 
   if (options.slamProfile) {
     body.slam_profile = options.slamProfile
   }
-  const res = await fetch('/api/v1/session/start', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  const data = await res.json() as SessionTransitionResponse
-  if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`)
+  const data = await postJson<SessionTransitionResponse>('/api/v1/session/start', body)
+  if (!data.success) throw new Error(data.message || 'Session start failed')
   return data.session as SessionState
 }
 
 export async function endSession(): Promise<SessionState> {
-  const res = await fetch('/api/v1/session/end', { method: 'POST' })
-  const data = await res.json() as SessionTransitionResponse
-  if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`)
+  const data = await postJson<SessionTransitionResponse>('/api/v1/session/end')
+  if (!data.success) throw new Error(data.message || 'Session end failed')
   return data.session as SessionState
 }
 
@@ -402,9 +396,9 @@ export async function resetMapCloud(): Promise<MapLifecycleResponse> {
 }
 
 export async function fetchSavedMapPointsResponse(name: string): Promise<MapPointsResponse> {
-  const res = await fetch(`/api/v1/maps/${encodeURIComponent(name)}/points?max_points=30000`)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json() as Promise<MapPointsResponse>
+  return fetchJson<MapPointsResponse>(
+    `/api/v1/maps/${encodeURIComponent(name)}/points?max_points=30000`,
+  )
 }
 
 export async function fetchSavedMapPoints(name: string): Promise<number[]> {
@@ -453,16 +447,10 @@ export async function stopBagRecording(): Promise<BagOperationResponse> {
 
 // --- Auth ---
 
-export async function login(key: string): Promise<{ ok: boolean; message?: string }> {
-  const res = await fetch('/api/v1/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key }),
-  })
-  return res.json()
+export async function login(key: string): Promise<AuthLoginResponse> {
+  return postJson<AuthLoginResponse>('/api/v1/auth/login', { key })
 }
 
-export async function checkAuth(): Promise<{ auth_required: boolean }> {
-  const res = await fetch('/api/v1/auth/check')
-  return res.json()
+export async function checkAuth(): Promise<AuthCheckResponse> {
+  return fetchJson<AuthCheckResponse>('/api/v1/auth/check')
 }

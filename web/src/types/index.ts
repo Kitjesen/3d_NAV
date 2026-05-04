@@ -146,6 +146,17 @@ export interface HealthResponse {
   [key: string]: unknown
 }
 
+export interface AuthLoginResponse {
+  ok: boolean
+  message?: string | null
+  [key: string]: unknown
+}
+
+export interface AuthCheckResponse {
+  auth_required: boolean
+  [key: string]: unknown
+}
+
 export interface RobotPoseSummary {
   x: number
   y: number
