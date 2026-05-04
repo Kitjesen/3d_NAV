@@ -128,6 +128,24 @@ def _camera_status_from_health(health: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _jpeg_status(gw: Any) -> dict[str, Any]:
+    jpeg_lock = getattr(gw, "_jpeg_lock", None) or _NullLock()
+    with jpeg_lock:
+        frame = getattr(gw, "_latest_jpeg", None)
+        seq = _int(getattr(gw, "_latest_jpeg_seq", 0))
+    return {
+        "cached": bool(frame),
+        "seq": seq,
+        "bytes": len(frame) if isinstance(frame, (bytes, bytearray)) else 0,
+    }
+
+
+def _teleop_stream_clients(gw: Any) -> int:
+    teleop = _find_module(gw, "Teleop")
+    teleop_health, _ = _safe_health(teleop)
+    return _int(teleop_health.get("stream_clients"))
+
+
 def build_camera_status(gw: Any) -> dict[str, Any]:
     """Return a stable camera status without probing systemd, ROS, or hardware."""
     camera = _find_module(gw, "CameraBridge")
@@ -150,8 +168,8 @@ def build_camera_status(gw: Any) -> dict[str, Any]:
             "reconnect_count": 0,
             "service_recovery_allowed": False,
             "service_recovery_suppressed": False,
-            "jpeg": {"cached": False, "seq": 0, "bytes": 0},
-            "teleop_stream_clients": 0,
+            "jpeg": _jpeg_status(gw),
+            "teleop_stream_clients": _teleop_stream_clients(gw),
             "ts": time.time(),
         }
 
@@ -180,19 +198,8 @@ def build_camera_status(gw: Any) -> dict[str, Any]:
     else:
         status = _camera_status_from_health(health)
 
-    jpeg_lock = getattr(gw, "_jpeg_lock", None) or _NullLock()
-    with jpeg_lock:
-        frame = getattr(gw, "_latest_jpeg", None)
-        seq = _int(getattr(gw, "_latest_jpeg_seq", 0))
-    status["jpeg"] = {
-        "cached": bool(frame),
-        "seq": seq,
-        "bytes": len(frame) if isinstance(frame, (bytes, bytearray)) else 0,
-    }
-
-    teleop = _find_module(gw, "Teleop")
-    teleop_health, _ = _safe_health(teleop)
-    status["teleop_stream_clients"] = _int(teleop_health.get("stream_clients"))
+    status["jpeg"] = _jpeg_status(gw)
+    status["teleop_stream_clients"] = _teleop_stream_clients(gw)
     status["ts"] = time.time()
     return status
 

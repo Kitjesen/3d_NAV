@@ -48,7 +48,7 @@
 #   lingtu routecompare --map <name> --goal X Y YAW --allow-motion # route A/B motion run
 set -u
 GW="${GW:-http://localhost:5050}"
-MAP_DIR="${MAP_DIR:-$HOME/data/nova/maps}"
+MAP_DIR="${MAP_DIR:-${NAV_MAP_DIR:-$HOME/data/nova/maps}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors (stripped when piping / non-tty)
@@ -91,6 +91,26 @@ print(name)
 PY
 }
 
+lingtu_maps_root() {
+    if [ -n "${NAV_MAP_DIR:-}" ]; then
+        printf "%s\n" "$NAV_MAP_DIR"
+        return 0
+    fi
+    if [ -n "${MAP_DIR:-}" ] && [ "$MAP_DIR" != "$HOME/data/nova/maps" ]; then
+        printf "%s\n" "$MAP_DIR"
+        return 0
+    fi
+    if [ -d "$HOME/data/nova/maps" ]; then
+        printf "%s\n" "$HOME/data/nova/maps"
+        return 0
+    fi
+    if [ -d "$HOME/data/lingtu/maps" ]; then
+        printf "%s\n" "$HOME/data/lingtu/maps"
+        return 0
+    fi
+    printf "%s\n" "${MAP_DIR:-$HOME/data/nova/maps}"
+}
+
 format_relocation_initial_pose() {
     python3 - "$1" "$2" "$3" <<'PY'
 import sys
@@ -101,6 +121,29 @@ except Exception:
     sys.exit(1)
 print(f"[{x:.6f},{y:.6f},0.0,0.0,0.0,{yaw:.6f}]")
 PY
+}
+
+navigation_active_cmd_source() {
+    pjson "$1" 'c=d.get("control") or {}; s=c.get("active_cmd_source") or c.get("active_source") or "none"; print((s.get("name") or s.get("source") or s.get("owner") or "none") if isinstance(s,dict) else (s or "none"))'
+}
+
+routecheck_require_no_active_command_source() {
+    local phase="${1:-route preflight}" navj nav_ok source source_l
+    navj=$(curl -s --max-time 4 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
+    nav_ok=$(pjson "$navj" 'print(str(isinstance(d, dict) and (d.get("state") is not None or bool(d.get("readiness")) or bool(d.get("control")))).lower())')
+    if [ "$nav_ok" != "true" ]; then
+        printf "${R}FAIL${N}: %s cannot verify command source from /api/v1/navigation/status\n" "$phase"
+        return 1
+    fi
+    source=$(navigation_active_cmd_source "$navj")
+    source_l=$(printf "%s" "$source" | tr '[:upper:]' '[:lower:]')
+    case "$source_l" in
+        ""|none|null|-)
+            return 0 ;;
+        *)
+            printf "${R}FAIL${N}: %s refused while active_cmd_source=%s\n" "$phase" "$source"
+            return 1 ;;
+    esac
 }
 
 format_nav_goal_payload() {
@@ -890,6 +933,52 @@ def topic_counts(topic):
     return pubs, subs, None
 
 
+def parse_camera_device_status(text):
+    fields = {}
+    parsers = {
+        "device_online": "bool",
+        "connection_type": "str",
+        "color_frame_rate_cur": "float",
+        "depth_frame_rate_cur": "float",
+        "color_frame_rate_target": "float",
+        "depth_frame_rate_target": "float",
+    }
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, raw = line.split(":", 1)
+        key = key.strip()
+        if key not in parsers:
+            continue
+        value = raw.strip().strip("'\"")
+        if parsers[key] == "bool":
+            lowered = value.lower()
+            if lowered in {"true", "false"}:
+                fields[key] = lowered == "true"
+            else:
+                fields[key] = value
+        elif parsers[key] == "float":
+            try:
+                fields[key] = float(value)
+            except ValueError:
+                fields[key] = value
+        else:
+            fields[key] = value
+    return fields
+
+
+def camera_device_status_once():
+    rc, out, err = run(["ros2", "topic", "echo", "/camera/device_status", "--once"], timeout=6)
+    if rc == 127:
+        return None, "ros2 not found"
+    if rc != 0 and not out:
+        return None, err or f"ros2 topic echo failed rc={rc}"
+    status = parse_camera_device_status(out)
+    if not status:
+        return None, err or "device_status sample did not contain expected fields"
+    return status, None
+
+
 def latest_livox_sdk_event():
     rc, out, err = run(["journalctl", "-u", "robot-lidar.service", "-b", "-n", "200", "--no-pager"], timeout=5)
     if rc == 127:
@@ -1432,6 +1521,57 @@ add(
     else "camera intrinsics topic has no publishers",
     {"topics": camera_info_counts},
 )
+device_status_pubs, device_status_subs, device_status_err = topic_counts("/camera/device_status")
+if device_status_pubs is None:
+    add(
+        "camera.device_status",
+        "warn",
+        "p1",
+        "could not inspect /camera/device_status",
+        {"error": device_status_err},
+    )
+elif device_status_pubs == 0:
+    add(
+        "camera.device_status",
+        "warn",
+        "p1",
+        "/camera/device_status has no publishers",
+        {"publishers": device_status_pubs, "subscribers": device_status_subs, "error": device_status_err},
+    )
+else:
+    device_status, device_status_err = camera_device_status_once()
+    if device_status is None:
+        add(
+            "camera.device_status",
+            "warn",
+            "p1",
+            "could not read /camera/device_status sample",
+            {"publishers": device_status_pubs, "subscribers": device_status_subs, "error": device_status_err},
+        )
+    elif device_status.get("device_online") is True:
+        add(
+            "camera.device_status",
+            "pass",
+            "p1",
+            "camera device_status reports online",
+            {"publishers": device_status_pubs, "subscribers": device_status_subs, **device_status},
+        )
+    elif device_status.get("device_online") is False:
+        add(
+            "camera.device_status",
+            "warn",
+            "p1",
+            "camera driver is alive but /camera/device_status reports device_online=false",
+            {"publishers": device_status_pubs, "subscribers": device_status_subs, **device_status},
+        )
+    else:
+        add(
+            "camera.device_status",
+            "warn",
+            "p1",
+            "camera device_status sample did not include device_online",
+            {"publishers": device_status_pubs, "subscribers": device_status_subs, **device_status},
+        )
 video_nodes = sorted(glob.glob("/dev/video*") + glob.glob("/dev/v4l/by-id/*"))
 if video_nodes:
     add("camera.video_nodes", "pass", "p1", "video devices exist", {"nodes": video_nodes[:8]})
@@ -1767,6 +1907,24 @@ PY
                 printf "  ${G}%-30s publishers=%s subscribers=%s${N}\n" "$cam_topic" "$cam_pubs" "$cam_subs"
             fi
         done
+        if [ "$(ros2 topic info /camera/device_status 2>/dev/null | awk '/Publisher count:/ {print $3}' | tail -1)" != "0" ]; then
+            local cam_status cam_online cam_connection cam_color_fps cam_depth_fps
+            cam_status=$(timeout 6 ros2 topic echo /camera/device_status --once 2>/dev/null || true)
+            cam_online=$(printf "%s\n" "$cam_status" | awk -F': ' '/device_online:/ {print $2; exit}')
+            cam_connection=$(printf "%s\n" "$cam_status" | awk -F': ' '/connection_type:/ {print $2; exit}' | tr -d "'\"")
+            cam_color_fps=$(printf "%s\n" "$cam_status" | awk -F': ' '/color_frame_rate_cur:/ {print $2; exit}')
+            cam_depth_fps=$(printf "%s\n" "$cam_status" | awk -F': ' '/depth_frame_rate_cur:/ {print $2; exit}')
+            cam_online="${cam_online:-unknown}"
+            cam_connection="${cam_connection:-unknown}"
+            cam_color_fps="${cam_color_fps:-unknown}"
+            cam_depth_fps="${cam_depth_fps:-unknown}"
+            if [ "$cam_online" = "true" ]; then
+                printf "  ${G}/camera/device_status         device_online=%s connection=%s color_fps=%s depth_fps=%s${N}\n" "$cam_online" "$cam_connection" "$cam_color_fps" "$cam_depth_fps"
+            else
+                printf "  ${Y}/camera/device_status         device_online=%s connection=%s color_fps=%s depth_fps=%s${N}\n" "$cam_online" "$cam_connection" "$cam_color_fps" "$cam_depth_fps"
+                printf "  ${Y}WARN${N}: camera driver is alive but device_online=false; check USB/power/cable before restarting software\n"
+            fi
+        fi
     fi
 
     if [ "$strict" = "1" ]; then
@@ -1871,7 +2029,8 @@ cmd_slamcheck() {
         previous|localizer|fastlio2|stop|none|super_lio|super-lio|superlio|super_lio_relocation|super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation) ;;
         *) echo "rollback must be previous|localizer|fastlio2|super_lio|super_lio_relocation|stop|none"; exit 1 ;;
     esac
-    local maps_root="$HOME/data/nova/maps"
+    local maps_root
+    maps_root="$(lingtu_maps_root)"
     if [ "$target" = "super_lio_relocation" ] && [ -z "$map_name" ]; then
         map_name=$(readlink "$maps_root/active" 2>/dev/null || true)
     fi
@@ -2271,7 +2430,8 @@ PY
         return 1
     fi
 
-    local maps_root="$HOME/data/nova/maps"
+    local maps_root
+    maps_root="$(lingtu_maps_root)"
     if [ -z "$map_name" ]; then
         map_name=$(readlink "$maps_root/active" 2>/dev/null || true)
     fi
@@ -2526,10 +2686,18 @@ routecheck_capture_phase() {
 
 routecheck_plan_preview() {
     local phase="$1" payload="$2" dir="$3"
-    local NAVJ PLANJ CAN BLOCKERS ADVISORIES STATE FEASIBLE COUNT PLANNER REASONS
+    local NAVJ PLANJ CAN BLOCKERS ADVISORIES STATE FEASIBLE COUNT PLANNER REASONS SOURCE SOURCE_L
     mkdir -p "$dir"
     NAVJ=$(curl -s --max-time 4 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
     printf '%s\n' "$NAVJ" > "$dir/navigation.pre_plan.json"
+    SOURCE=$(navigation_active_cmd_source "$NAVJ")
+    SOURCE_L=$(printf "%s" "$SOURCE" | tr '[:upper:]' '[:lower:]')
+    case "$SOURCE_L" in
+        ""|none|null|-) ;;
+        *)
+            printf "${R}FAIL${N}: %s route preflight refused while active_cmd_source=%s\n" "$phase" "$SOURCE"
+            return 1 ;;
+    esac
     CAN=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; print(str(r.get("can_accept_goal", d.get("can_accept_goal", False))).lower())')
     BLOCKERS=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; b=r.get("blockers") or []; print(",".join(map(str,b)) if isinstance(b,list) else str(b or ""))')
     ADVISORIES=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; a=r.get("advisories") or []; print(",".join(map(str,a)) if isinstance(a,list) else str(a or ""))')
@@ -2636,7 +2804,8 @@ cmd_routecheck() {
         return 1
     }
 
-    local maps_root="$HOME/data/nova/maps"
+    local maps_root
+    maps_root="$(lingtu_maps_root)"
     local raw_map_name="$map_name"
     map_name=$(resolve_relocation_map_name "$maps_root" "$raw_map_name") || {
         echo -e "${R}FAIL${N}: unsafe relocation map name or active map target: $raw_map_name"
@@ -2662,6 +2831,7 @@ cmd_routecheck() {
     LINGTU_ROUTECHECK_ARTIFACT_DIR="$artifact_dir"
     trap lingtu_routecheck_cleanup EXIT
     routecheck_capture_phase "before" "$artifact_dir/before"
+    routecheck_require_no_active_command_source "routecheck before SLAM switching" || return 1
 
     if [ "$with_slamcompare" = "1" ]; then
         cmd_slamcompare \
@@ -3055,6 +3225,7 @@ routecompare_run_backend() {
     local session_payload raw ok accepted
     mkdir -p "$dir"/{before,session,after_stop}
     routecheck_capture_phase "${phase}_before_motion" "$dir/before"
+    routecheck_require_no_active_command_source "$phase before motion session" || return 1
     routecheck_plan_preview "$phase" "$payload" "$dir" || return 1
 
     session_payload=$(format_nav_session_payload "$map_name" "$backend")
@@ -3167,7 +3338,8 @@ cmd_routecompare() {
         return 1
     fi
 
-    local maps_root="$HOME/data/nova/maps"
+    local maps_root
+    maps_root="$(lingtu_maps_root)"
     local raw_map_name="$map_name"
     map_name=$(resolve_relocation_map_name "$maps_root" "$raw_map_name") || {
         echo -e "${R}FAIL${N}: unsafe relocation map name or active map target: $raw_map_name"

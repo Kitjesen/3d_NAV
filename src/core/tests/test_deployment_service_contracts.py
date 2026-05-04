@@ -471,6 +471,20 @@ def test_lingtu_doctor_checks_camera_intrinsics_topic_family():
     assert "camera intrinsics topic has publishers" in text
 
 
+def test_lingtu_doctor_checks_camera_device_online_status():
+    text = _read("scripts/lingtu")
+
+    assert "camera.device_status" in text
+    assert '"/camera/device_status"' in text
+    assert "parse_camera_device_status" in text
+    assert "device_online" in text
+    assert "connection_type" in text
+    assert "color_frame_rate_cur" in text
+    assert "depth_frame_rate_cur" in text
+    assert "camera driver is alive but /camera/device_status reports device_online=false" in text
+    assert "check USB/power/cable before restarting software" in text
+
+
 def test_lingtu_doctor_reports_standard_quality_topic_with_legacy_hint():
     text = _read("scripts/lingtu")
 
@@ -604,7 +618,10 @@ def test_lingtu_slamcheck_sets_active_map_symlink_and_runtime_env():
 
     assert 'map_name=$(readlink "$maps_root/active" 2>/dev/null || true)' in text
     assert "resolve_relocation_map_name()" in text
-    assert 'maps_root="$HOME/data/nova/maps"' in text
+    assert "lingtu_maps_root()" in text
+    assert 'MAP_DIR="${MAP_DIR:-${NAV_MAP_DIR:-$HOME/data/nova/maps}}"' in text
+    assert '$HOME/data/lingtu/maps' in text
+    assert 'maps_root="$(lingtu_maps_root)"' in text
     assert '[ ! -f "$map_dir/map.pcd" ]' in text
     assert 'ln -sfn "$map_name" "$maps_root/active"' in text
     assert "SUPER_LIO_RELOCATION_MAP_DIR=$maps_root/active" in text
@@ -657,6 +674,8 @@ def test_lingtu_routecheck_is_non_motion_route_preflight():
     assert 'slamcompare_wait_ready "super_lio_relocation"' in impl
     assert "Rollback SLAM mode: localizer" in impl
     assert "No motion commands are sent" in impl
+    assert "routecheck_require_no_active_command_source" in impl
+    assert "active_cmd_source" in impl
     assert "/api/v1/goal" not in impl
     assert "/api/v1/cmd_vel" not in impl
     assert "cmd_nav" not in impl
@@ -672,6 +691,7 @@ def test_lingtu_routecompare_is_allow_motion_gated():
     assert "routecompare|route-compare" in text
     assert "--allow-motion" in impl
     assert "routecompare requires --allow-motion" in impl
+    assert "routecheck_require_no_active_command_source" in impl
     assert "/api/v1/session/start" in impl
     assert "/api/v1/goal" in impl
     assert "/api/v1/cmd_vel" not in impl

@@ -121,6 +121,26 @@ def test_camera_media_status_reports_not_loaded_without_bridge():
     assert payload["jpeg"]["cached"] is False
 
 
+def test_camera_media_status_reports_cached_jpeg_without_bridge():
+    from gateway.services.media_status import build_camera_status
+
+    payload = build_camera_status(
+        SimpleNamespace(
+            _all_modules={},
+            _latest_jpeg=b"\xff\xd8\xffcamera",
+            _latest_jpeg_seq=7,
+            _jpeg_lock=None,
+        )
+    )
+
+    assert payload["available"] is False
+    assert payload["status"] == "not_loaded"
+    assert payload["reason"] == "camera_bridge_not_loaded"
+    assert payload["jpeg"]["cached"] is True
+    assert payload["jpeg"]["seq"] == 7
+    assert payload["jpeg"]["bytes"] == len(b"\xff\xd8\xffcamera")
+
+
 def test_camera_media_status_marks_old_or_legacy_frames_stale():
     from gateway.services.media_status import build_camera_status
 
