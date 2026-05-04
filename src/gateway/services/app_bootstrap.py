@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -32,6 +33,8 @@ from gateway.services.traffic import (
 APP_BOOTSTRAP_SCHEMA_VERSION = 1
 APP_CAPABILITIES_SCHEMA_VERSION = 1
 APP_TRAFFIC_SCHEMA_VERSION = 1
+_OPERATION_CONTRACT_CACHE_ATTR = "_app_capabilities_operation_contract_cache"
+_OPERATION_CONTRACT_CACHE_LOCK = threading.RLock()
 
 CLIENT_LINKS: dict[str, str] = {
     "bootstrap": "/api/v1/app/bootstrap",
@@ -426,46 +429,83 @@ def _schema_name(schema: Any) -> str | None:
     return str(typ) if typ else None
 
 
+def _openapi_route_signature(app: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    routes = getattr(app, "routes", [])
+    signature: list[tuple[str, tuple[str, ...]]] = []
+    for route in routes:
+        path = getattr(route, "path", None)
+        if not path:
+            continue
+        methods = getattr(route, "methods", None) or []
+        signature.append(
+            (
+                str(path),
+                tuple(sorted(str(method).upper() for method in methods)),
+            )
+        )
+    return tuple(signature)
+
+
 def _operation_contracts(gw: Any) -> dict[tuple[str, str], dict[str, Any]]:
     app = getattr(gw, "_app", None)
     if app is None or not hasattr(app, "openapi"):
         return {}
-    try:
-        openapi = app.openapi()
-    except Exception:
-        return {}
+    route_signature = _openapi_route_signature(app)
+    with _OPERATION_CONTRACT_CACHE_LOCK:
+        cached = getattr(gw, _OPERATION_CONTRACT_CACHE_ATTR, None)
+        if (
+            isinstance(cached, tuple)
+            and len(cached) == 2
+            and cached[0] == route_signature
+            and isinstance(cached[1], dict)
+        ):
+            return cached[1]
+        try:
+            openapi = app.openapi()
+        except Exception:
+            return {}
 
-    contracts: dict[tuple[str, str], dict[str, Any]] = {}
-    for path, methods in _mapping(openapi.get("paths")).items():
-        if not isinstance(methods, Mapping):
-            continue
-        for method, operation in methods.items():
-            http_method = str(method).upper()
-            if http_method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        contracts: dict[tuple[str, str], dict[str, Any]] = {}
+        for path, methods in _mapping(openapi.get("paths")).items():
+            if not isinstance(methods, Mapping):
                 continue
-            op = _mapping(operation)
-            request_content = (
-                _mapping(op.get("requestBody")).get("content", {})
-                if isinstance(op.get("requestBody"), Mapping)
-                else {}
-            )
-            request_json = _mapping(_mapping(request_content).get("application/json"))
-            responses = _mapping(op.get("responses"))
-            response_200 = _mapping(responses.get("200"))
-            response_content = _mapping(response_200.get("content"))
-            response_json = _mapping(response_content.get("application/json"))
-            response_schema = _schema_name(response_json.get("schema"))
-            if response_schema is None:
-                response_media = _mapping(response_content.get("text/event-stream"))
-                response_schema = _schema_name(response_media.get("schema"))
-            contracts[(http_method, str(path))] = {
-                "operation_id": op.get("operationId"),
-                "request_schema": _schema_name(request_json.get("schema")),
-                "response_schema": response_schema,
-                "response_content_types": sorted(response_content.keys()),
-                "status_codes": sorted(str(code) for code in responses.keys()),
-            }
-    return contracts
+            for method, operation in methods.items():
+                http_method = str(method).upper()
+                if http_method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                    continue
+                op = _mapping(operation)
+                request_content = (
+                    _mapping(op.get("requestBody")).get("content", {})
+                    if isinstance(op.get("requestBody"), Mapping)
+                    else {}
+                )
+                request_json = _mapping(
+                    _mapping(request_content).get("application/json")
+                )
+                responses = _mapping(op.get("responses"))
+                response_200 = _mapping(responses.get("200"))
+                response_content = _mapping(response_200.get("content"))
+                response_json = _mapping(response_content.get("application/json"))
+                response_schema = _schema_name(response_json.get("schema"))
+                if response_schema is None:
+                    response_media = _mapping(
+                        response_content.get("text/event-stream")
+                    )
+                    response_schema = _schema_name(response_media.get("schema"))
+                contracts[(http_method, str(path))] = {
+                    "operation_id": op.get("operationId"),
+                    "request_schema": _schema_name(request_json.get("schema")),
+                    "response_schema": response_schema,
+                    "response_content_types": sorted(response_content.keys()),
+                    "status_codes": sorted(str(code) for code in responses.keys()),
+                }
+        setattr(gw, _OPERATION_CONTRACT_CACHE_ATTR, (route_signature, contracts))
+        return contracts
+
+
+def prewarm_app_capability_contracts(gw: Any) -> bool:
+    """Precompute the OpenAPI-derived App/Web endpoint contract cache."""
+    return bool(_operation_contracts(gw))
 
 
 def _enrich_endpoint_specs(
@@ -482,7 +522,10 @@ def _enrich_endpoint_specs(
             lookup_method = "GET" if method == "SSE" else method
             contract = contracts.get((lookup_method, str(item.get("path", ""))))
             if contract:
-                item.update({k: v for k, v in contract.items() if v not in (None, [])})
+                for key, value in contract.items():
+                    if value in (None, []):
+                        continue
+                    item[key] = list(value) if isinstance(value, list) else value
             enriched[group][name] = item
     return enriched
 

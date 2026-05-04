@@ -2279,6 +2279,15 @@ class GatewayModule(Module, layer=6):
         register_camera_routes(app)
         register_realtime_routes(app, gw)
         mount_dashboard_assets(app)
+        try:
+            from gateway.services.app_bootstrap import prewarm_app_capability_contracts
+
+            prewarm_app_capability_contracts(gw)
+        except Exception:
+            logger.debug(
+                "GatewayModule: App/Web capability contract prewarm failed",
+                exc_info=True,
+            )
 
         return app
 

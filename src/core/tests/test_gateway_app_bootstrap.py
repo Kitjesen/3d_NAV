@@ -403,6 +403,51 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert "image/jpeg" in camera["response_content_types"]
 
 
+def test_app_capabilities_reuses_openapi_contract_cache_without_freezing_runtime(
+    monkeypatch,
+):
+    import gateway.services.app_bootstrap as app_bootstrap
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway.setup()
+    if hasattr(gateway, app_bootstrap._OPERATION_CONTRACT_CACHE_ATTR):
+        delattr(gateway, app_bootstrap._OPERATION_CONTRACT_CACHE_ATTR)
+
+    calls = 0
+    original_openapi = gateway._app.openapi
+
+    def counted_openapi():
+        nonlocal calls
+        calls += 1
+        return original_openapi()
+
+    clock = {"value": 100.0}
+
+    def next_time():
+        clock["value"] += 1.0
+        return clock["value"]
+
+    monkeypatch.setattr(gateway._app, "openapi", counted_openapi)
+    monkeypatch.setattr(app_bootstrap.time, "time", next_time)
+
+    gateway._webrtc = None
+    first = app_bootstrap.build_app_capabilities(gateway)
+    gateway._webrtc = object()
+    second = app_bootstrap.build_app_capabilities(gateway)
+
+    assert calls == 1
+    assert second["ts"] > first["ts"]
+    assert first["server"]["time"] == first["ts"]
+    assert second["server"]["time"] == second["ts"]
+    assert first["features"]["webrtc"] is False
+    assert second["features"]["webrtc"] is True
+    assert (
+        second["endpoints"]["app"]["bootstrap"]["response_schema"]
+        == "AppBootstrapResponse"
+    )
+
+
 def test_app_web_cold_start_routes_return_stable_client_shapes():
     from fastapi.testclient import TestClient
 
