@@ -664,7 +664,10 @@ def test_operational_routes_validate_idle_json_contracts():
         "super_lio",
         "super_lio_relocation",
     }
+    assert slam_switch.schema_version == 1
+    assert slam_switch.ok is False
     assert slam_switch.success is False
+    assert slam_switch.ts > 0
     assert bag_status.recording is False
     assert bag_stop.error == "not_recording"
     assert webrtc_stats.enabled is False
@@ -793,7 +796,10 @@ def test_slam_switch_can_select_super_lio(monkeypatch):
 
     payload = asyncio.run(endpoint({"profile": "super_lio"}))
 
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is True
     assert payload["success"] is True
+    assert payload["ts"] > 0
     assert payload["profile"] == "super_lio"
     assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio_relocation")) in (
         fake.calls
@@ -829,7 +835,10 @@ def test_slam_switch_can_select_super_lio_relocation(monkeypatch):
 
     payload = asyncio.run(endpoint({"profile": "super_lio_reloc"}))
 
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is True
     assert payload["success"] is True
+    assert payload["ts"] > 0
     assert payload["profile"] == "super_lio_relocation"
     assert ("stop", ("slam", "slam_pgo", "localizer", "super_lio")) in fake.calls
     assert ("ensure", ("lidar", "super_lio_relocation")) in fake.calls
@@ -867,8 +876,14 @@ def test_super_lio_relocalize_endpoints_fail_fast_without_ros_call(monkeypatch):
     relocalize_payload = _payload(relocalize_response)
     assert auto_response.status_code == 409
     assert relocalize_response.status_code == 409
+    assert auto_payload["schema_version"] == 1
+    assert relocalize_payload["schema_version"] == 1
+    assert auto_payload["ok"] is False
+    assert relocalize_payload["ok"] is False
     assert auto_payload["success"] is False
     assert relocalize_payload["success"] is False
+    assert auto_payload["ts"] > 0
+    assert relocalize_payload["ts"] > 0
     assert "unsupported" in auto_payload["message"]
     assert "unsupported" in relocalize_payload["message"]
 
@@ -906,8 +921,14 @@ def test_super_lio_relocation_relocalize_endpoints_fail_fast_without_ros_call(
     relocalize_payload = _payload(relocalize_response)
     assert auto_response.status_code == 409
     assert relocalize_response.status_code == 409
+    assert auto_payload["schema_version"] == 1
+    assert relocalize_payload["schema_version"] == 1
+    assert auto_payload["ok"] is False
+    assert relocalize_payload["ok"] is False
     assert auto_payload["success"] is False
     assert relocalize_payload["success"] is False
+    assert auto_payload["ts"] > 0
+    assert relocalize_payload["ts"] > 0
     assert "unsupported" in auto_payload["message"]
     assert "unsupported" in relocalize_payload["message"]
 
@@ -944,7 +965,10 @@ def test_localizer_relocalize_keeps_ros_service_path(monkeypatch, tmp_path):
         )
     )
 
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is True
     assert payload["success"] is True
+    assert payload["ts"] > 0
     assert payload["message"] == "Relocalized to demo"
     assert calls
     assert any("/nav/relocalize" in " ".join(args) for args, _kwargs in calls)

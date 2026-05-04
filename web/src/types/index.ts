@@ -767,3 +767,14 @@ export interface Toast {
 export type Tab = 'console' | 'scene' | 'map' | 'slam'
 
 export type SlamProfile = 'fastlio2' | 'localizer' | 'super_lio' | 'super_lio_relocation' | 'stop'
+
+export interface SlamOperationResponse {
+  schema_version: number
+  ok: boolean
+  success: boolean
+  profile?: string | null
+  message?: string | null
+  quality?: number | null
+  ts: number
+  [key: string]: unknown
+}

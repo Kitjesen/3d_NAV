@@ -405,6 +405,9 @@ def test_openapi_exposes_client_response_models():
     assert "SlamSwitchRequest" in schemas
     assert "SlamRelocalizeRequest" in schemas
     assert "SlamOperationResponse" in schemas
+    assert "schema_version" in schemas["SlamOperationResponse"]["properties"]
+    assert "ok" in schemas["SlamOperationResponse"]["properties"]
+    assert "ts" in schemas["SlamOperationResponse"]["properties"]
     assert "BagStartRequest" in schemas
     assert "BagOperationResponse" in schemas
     assert "BagStatusResponse" in schemas

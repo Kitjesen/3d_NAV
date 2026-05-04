@@ -20,6 +20,7 @@ import type {
   SceneGraphResponse,
   SessionEvent,
   SessionTransitionResponse,
+  SlamOperationResponse,
   SlamProfile,
   StateResponse,
 } from '../types'
@@ -159,6 +160,25 @@ async function readMapLifecycle(res: Response): Promise<MapLifecycleResponse> {
   return data as MapLifecycleResponse
 }
 
+async function readSlamOperation(res: Response): Promise<SlamOperationResponse> {
+  const text = await res.text()
+  let data: Record<string, unknown> = {}
+  try {
+    data = text ? JSON.parse(text) as Record<string, unknown> : {}
+  } catch {
+    data = {}
+  }
+  if (!res.ok || data.ok === false || data.success === false) {
+    const message = typeof data.message === 'string'
+      ? data.message
+      : typeof data.error === 'string'
+        ? data.error
+        : `HTTP ${res.status}`
+    throw new Error(message)
+  }
+  return data as SlamOperationResponse
+}
+
 // --- App bootstrap / read APIs ---
 
 export async function fetchAppBootstrap(): Promise<AppBootstrapResponse> {
@@ -248,7 +268,7 @@ export async function switchSlamMode(profile: SlamProfile): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ profile }),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await readSlamOperation(res)
 }
 
 // --- Maps ---
@@ -357,7 +377,7 @@ export async function endSession(): Promise<SessionState> {
 
 export async function resetMapCloud(): Promise<void> {
   const res = await fetch('/api/v1/map_cloud/reset', { method: 'POST' })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await readMapLifecycle(res)
 }
 
 export async function fetchSavedMapPoints(name: string): Promise<number[]> {
@@ -373,17 +393,15 @@ export async function relocalize(mapName: string, x: number, y: number, yaw: num
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ map_name: mapName, x, y, yaw }),
   })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  await readSlamOperation(res)
 }
 
 // Global (no-guess) relocalize via 3D-BBS. Fires the worker in localizer;
 // the 2-4 s scan runs async, so the response is immediate. Fitness appears
 // on /localization_quality after the worker finishes.
-export async function autoRelocalize(): Promise<{ success: boolean; message: string }> {
+export async function autoRelocalize(): Promise<SlamOperationResponse> {
   const res = await fetch('/api/v1/slam/auto_relocalize', { method: 'POST' })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`)
-  return data
+  return readSlamOperation(res)
 }
 
 // --- Auth ---

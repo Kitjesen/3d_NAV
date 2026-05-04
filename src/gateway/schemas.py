@@ -679,10 +679,13 @@ class SlamStatusResponse(GatewayResponseModel):
 
 
 class SlamOperationResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
     success: bool
     profile: str | None = None
     message: str | None = None
     quality: float | None = None
+    ts: float = Field(default_factory=time.time)
 
 
 class BagOperationResponse(GatewayResponseModel):

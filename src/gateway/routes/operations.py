@@ -105,6 +105,31 @@ def _body_mapping(body: Any) -> dict[str, Any]:
     return {}
 
 
+def slam_operation_payload(success: bool, **fields: Any) -> dict[str, Any]:
+    payload = {
+        "schema_version": 1,
+        "ok": bool(success),
+        "success": bool(success),
+        "ts": time.time(),
+    }
+    payload.update({key: value for key, value in fields.items() if value is not None})
+    return payload
+
+
+def _slam_operation_response(
+    success: bool,
+    *,
+    status_code: int,
+    **fields: Any,
+) -> Any:
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        slam_operation_payload(success, **fields),
+        status_code=status_code,
+    )
+
+
 def _unsupported_saved_map_relocalization_response(gw) -> Any | None:
     from fastapi.responses import JSONResponse
 
@@ -137,14 +162,12 @@ def _unsupported_saved_map_relocalization_response(gw) -> Any | None:
     recovery_hint = (
         f"; recovery_method={recovery_method}" if recovery_method else ""
     )
-    return JSONResponse(
-        {
-            "success": False,
-            "message": (
-                "unsupported: saved map relocalization is not supported by "
-                f"{backend_name}{recovery_hint}"
-            ),
-        },
+    return _slam_operation_response(
+        False,
+        message=(
+            "unsupported: saved map relocalization is not supported by "
+            f"{backend_name}{recovery_hint}"
+        ),
         status_code=409,
     )
 
@@ -490,8 +513,9 @@ def register_operation_routes(app, gw) -> None:
             "super_lio_relocation",
             "stop",
         ):
-            return JSONResponse(
-                {"success": False, "message": f"Unknown profile: {requested_profile}"},
+            return _slam_operation_response(
+                False,
+                message=f"Unknown profile: {requested_profile}",
                 status_code=400,
             )
         try:
@@ -530,15 +554,15 @@ def register_operation_routes(app, gw) -> None:
             if ok:
                 gw._cached_slam_profile = "stopped" if profile == "stop" else profile
                 gw._slam_profile_ts = time.time()
-            return {
-                "success": ok,
-                "profile": profile,
-                "message": (
+            return slam_operation_payload(
+                ok,
+                profile=profile,
+                message=(
                     f"Switched to {profile}" if ok else "Services not ready after 10s"
                 ),
-            }
+            )
         except Exception as e:
-            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            return _slam_operation_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/slam/auto_relocalize",
@@ -577,14 +601,15 @@ def register_operation_routes(app, gw) -> None:
             )
             ok = "success=True" in r.stdout
             msg = r.stdout[-300:] if r.stdout else (r.stderr[-300:] or "no output")
-            return {"success": ok, "message": msg}
+            return slam_operation_payload(ok, message=msg)
         except subprocess.TimeoutExpired:
-            return JSONResponse(
-                {"success": False, "message": "call timeout > 10s"},
+            return _slam_operation_response(
+                False,
+                message="call timeout > 10s",
                 status_code=504,
             )
         except Exception as e:
-            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            return _slam_operation_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/slam/relocalize",
@@ -611,8 +636,9 @@ def register_operation_routes(app, gw) -> None:
         y = float(payload.get("y", 0.0))
         yaw = float(payload.get("yaw", 0.0))
         if not map_name:
-            return JSONResponse(
-                {"success": False, "message": "map_name required"},
+            return _slam_operation_response(
+                False,
+                message="map_name required",
                 status_code=400,
             )
         map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
@@ -622,8 +648,9 @@ def register_operation_routes(app, gw) -> None:
             if os.path.isfile(alt):
                 pcd_path = alt
         if not os.path.isfile(pcd_path):
-            return JSONResponse(
-                {"success": False, "message": f"Map not found: {pcd_path}"},
+            return _slam_operation_response(
+                False,
+                message=f"Map not found: {pcd_path}",
                 status_code=404,
             )
         ros_env = (
@@ -660,9 +687,9 @@ def register_operation_routes(app, gw) -> None:
             if ok:
                 gw._persist_last_nav_pose(map_name, x, y, yaw, quality)
             msg = r.stdout[-300:] if not ok else f"Relocalized to {map_name}"
-            return {"success": ok, "message": msg, "quality": quality}
+            return slam_operation_payload(ok, message=msg, quality=quality)
         except Exception as e:
-            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            return _slam_operation_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/bag/start",
