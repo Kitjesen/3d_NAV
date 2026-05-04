@@ -53,6 +53,22 @@ DEGEN_SEVERE = "SEVERE"          # Severe feature loss, high covariance
 DEGEN_CRITICAL = "CRITICAL"      # Complete degeneracy (corridor/void)
 
 LOCALIZER_ODOM_GRACE_HEALTH = {"LOCKED", "RECOVERED"}
+LOCALIZER_ODOM_LOSS_RECOVERY_SIGNAL = "ODOM_MISSING"
+LOCALIZER_ODOM_LOSS_RECOVERY_ACTION = "restart_localization_chain"
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
 
 
 @register("slam_bridge", "default", description="DDS SLAM → Python Module bridge")
@@ -143,6 +159,25 @@ class SlamBridgeModule(Module, layer=1):
         self._last_recovery_signal: str = "NONE"
         self._last_recovery_action: str = "none"
         self._last_recovery_ts: float = 0.0
+        self._watchdog_start_mono: float = _time.monotonic()
+        self._localizer_odom_loss_recovery_enabled: bool = bool(kw.get(
+            "localizer_odom_loss_recovery",
+            _env_bool("LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY", True),
+        ))
+        self._localizer_odom_loss_recovery_s: float = float(kw.get(
+            "localizer_odom_loss_recovery_s",
+            _env_float("LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY_S", 20.0),
+        ))
+        self._localizer_odom_loss_recovery_cooldown_s: float = float(kw.get(
+            "localizer_odom_loss_recovery_cooldown_s",
+            _env_float("LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY_COOLDOWN_S", 300.0),
+        ))
+        self._last_localizer_odom_loss_recovery_ts: float = 0.0
+        self._localizer_odom_loss_recovery_inflight: bool = False
+        self._restart_recovery_lock = threading.Lock()
+        self._localizer_odom_loss_recovery_start_mono: float = 0.0
+        self._localizer_odom_loss_recovery_start_wall: float = 0.0
+        self._localizer_odom_loss_recovery_waiting_new_odom: bool = False
 
         # Drift guard — detect odometry divergence and auto-relocalize
         self._drift_max_speed: float = kw.get("drift_max_speed", 5.0)       # m/s, quad max ~3
@@ -474,6 +509,7 @@ class SlamBridgeModule(Module, layer=1):
             self.alive.publish(False)
         # Start localization health watchdog
         self._shutdown_event.clear()
+        self._watchdog_start_mono = _time.monotonic()
         self._watchdog_thread = threading.Thread(
             target=self._watchdog_loop, daemon=True,
             name="slam-bridge-watchdog")
@@ -610,9 +646,7 @@ class SlamBridgeModule(Module, layer=1):
                 svc.ensure("lidar", "super_lio_relocation")
                 svc.wait_ready("lidar", "super_lio_relocation", timeout=15.0)
             elif backend == "localizer":
-                svc.stop("localizer")
-                svc.ensure("slam", "localizer")
-                svc.wait_ready("slam", "localizer", timeout=15.0)
+                return self._restart_localization_chain_for_recovery()
             elif backend in {"fastlio2", "slam"}:
                 svc.stop("slam", "slam_pgo")
                 svc.ensure("slam", "slam_pgo")
@@ -624,6 +658,9 @@ class SlamBridgeModule(Module, layer=1):
             return True
         except Exception as e:
             logger.warning("Drift guard: service_manager restart failed: %s", e)
+
+        if backend == "localizer":
+            return self._restart_localization_chain_for_recovery()
 
         service = (
             "robot-super-lio-relocation.service"
@@ -641,6 +678,322 @@ class SlamBridgeModule(Module, layer=1):
         except Exception as e:
             logger.error("Drift guard: %s restart failed: %s", service, e)
             return False
+
+    def _wait_ros_topic_publishers(
+        self,
+        topic: str,
+        *,
+        min_publishers: int = 1,
+        timeout: float = 30.0,
+    ) -> bool:
+        import shlex
+        import subprocess
+
+        deadline = _time.monotonic() + timeout
+        quoted_topic = shlex.quote(topic)
+        cmd = (
+            "set +u; "
+            "[ -f /opt/ros/humble/setup.bash ] && "
+            "source /opt/ros/humble/setup.bash >/dev/null 2>&1; "
+            "[ -f /opt/lingtu/current/install/setup.bash ] && "
+            "source /opt/lingtu/current/install/setup.bash >/dev/null 2>&1; "
+            f"ros2 topic info {quoted_topic} 2>/dev/null | "
+            "awk '/Publisher count:/ {print $3}' | tail -1"
+        )
+        while _time.monotonic() < deadline and not self._shutdown_event.is_set():
+            try:
+                result = subprocess.run(
+                    ["bash", "-lc", cmd],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                publishers = int((result.stdout or "0").strip() or "0")
+                if publishers >= min_publishers:
+                    return True
+            except Exception as e:
+                logger.debug(
+                    "Localization recovery: topic readiness check failed for %s: %s",
+                    topic,
+                    e,
+                )
+            self._shutdown_event.wait(timeout=1.0)
+        return False
+
+    def _wait_for_odom_sample_since(
+        self,
+        since_mono: float,
+        *,
+        timeout: float = 10.0,
+    ) -> bool:
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline and not self._shutdown_event.is_set():
+            if self._last_odom_mono >= since_mono:
+                return True
+            self._shutdown_event.wait(timeout=0.1)
+        return False
+
+    def _wait_for_localizer_health_since(
+        self,
+        since_wall: float,
+        *,
+        timeout: float = 10.0,
+    ) -> bool:
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline and not self._shutdown_event.is_set():
+            if self._localizer_health_ts >= since_wall:
+                return True
+            self._shutdown_event.wait(timeout=0.1)
+        return False
+
+    def _ensure_localizer_service_best_effort(self, svc: Any | None = None) -> None:
+        """Avoid leaving the saved-map localizer stopped after failed recovery."""
+        try:
+            if svc is None:
+                from core.service_manager import get_service_manager
+                svc = get_service_manager()
+            svc.ensure("localizer")
+            return
+        except Exception as e:
+            logger.warning(
+                "Localization recovery: service_manager could not restart "
+                "localizer after failed recovery: %s",
+                e,
+            )
+
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["sudo", "systemctl", "start", "robot-localizer.service"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "Localization recovery: best-effort localizer restart "
+                    "failed: %s",
+                    (result.stderr or result.stdout or "").strip(),
+                )
+        except Exception as e:
+            logger.error(
+                "Localization recovery: best-effort localizer restart failed: %s",
+                e,
+            )
+
+    def _restart_localization_chain_for_recovery(self) -> bool:
+        """Restart Fast-LIO2 and localizer when the odometry publisher vanishes."""
+        if not self._restart_recovery_lock.acquire(blocking=False):
+            logger.warning(
+                "Localization recovery: restart already in progress; "
+                "skipping duplicate chain restart"
+            )
+            return False
+        try:
+            return self._restart_localization_chain_for_recovery_locked()
+        finally:
+            self._restart_recovery_lock.release()
+
+    def _restart_localization_chain_for_recovery_locked(self) -> bool:
+        """Restart Fast-LIO2/localizer after caller acquired recovery lock."""
+        try:
+            restart_start_mono = _time.monotonic()
+            restart_start_wall = _time.time()
+            from core.service_manager import get_service_manager
+
+            svc = get_service_manager()
+            svc.stop("localizer")
+            svc.stop("slam")
+            svc.ensure("slam")
+            if not self._wait_ros_topic_publishers("/nav/odometry", timeout=30.0):
+                logger.error(
+                    "Localization recovery: /nav/odometry did not regain a publisher"
+                )
+                self._ensure_localizer_service_best_effort(svc)
+                return False
+            if not self._wait_for_odom_sample_since(
+                restart_start_mono, timeout=10.0
+            ):
+                logger.error(
+                    "Localization recovery: /nav/odometry publisher returned "
+                    "but no fresh odometry sample reached SlamBridge"
+                )
+                self._ensure_localizer_service_best_effort(svc)
+                return False
+            svc.ensure("localizer")
+            if not self._wait_ros_topic_publishers(
+                "/nav/localization_health", timeout=30.0
+            ):
+                logger.error(
+                    "Localization recovery: /nav/localization_health did not "
+                    "regain a publisher"
+                )
+                self._ensure_localizer_service_best_effort(svc)
+                return False
+            if not self._wait_for_localizer_health_since(
+                restart_start_wall, timeout=10.0
+            ):
+                logger.error(
+                    "Localization recovery: /nav/localization_health publisher "
+                    "returned but no fresh health sample reached SlamBridge"
+                )
+                self._ensure_localizer_service_best_effort(svc)
+                return False
+            logger.warning(
+                "Localization recovery: Fast-LIO2 + localizer chain restarted"
+            )
+            return True
+        except Exception as e:
+            logger.warning(
+                "Localization recovery: service_manager chain restart failed: %s",
+                e,
+            )
+            return self._restart_localization_chain_systemctl_fallback()
+
+    def _restart_localization_chain_systemctl_fallback(self) -> bool:
+        import subprocess
+
+        commands = (
+            ["sudo", "systemctl", "stop", "robot-localizer.service"],
+            ["sudo", "systemctl", "stop", "robot-fastlio2.service"],
+            ["sudo", "systemctl", "start", "robot-fastlio2.service"],
+        )
+        try:
+            restart_start_mono = _time.monotonic()
+            restart_start_wall = _time.time()
+            for cmd in commands:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    logger.error(
+                        "Localization recovery fallback command failed (%s): %s",
+                        " ".join(cmd),
+                        (result.stderr or result.stdout or "").strip(),
+                    )
+                    self._ensure_localizer_service_best_effort()
+                    return False
+            if not self._wait_ros_topic_publishers("/nav/odometry", timeout=30.0):
+                logger.error(
+                    "Localization recovery fallback: /nav/odometry did not "
+                    "regain a publisher"
+                )
+                self._ensure_localizer_service_best_effort()
+                return False
+            if not self._wait_for_odom_sample_since(
+                restart_start_mono, timeout=10.0
+            ):
+                logger.error(
+                    "Localization recovery fallback: /nav/odometry publisher "
+                    "returned but no fresh odometry sample reached SlamBridge"
+                )
+                self._ensure_localizer_service_best_effort()
+                return False
+            result = subprocess.run(
+                ["sudo", "systemctl", "start", "robot-localizer.service"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "Localization recovery fallback command failed "
+                    "(start robot-localizer.service): %s",
+                    (result.stderr or result.stdout or "").strip(),
+                )
+                return False
+            if not self._wait_ros_topic_publishers(
+                "/nav/localization_health", timeout=30.0
+            ):
+                logger.error(
+                    "Localization recovery fallback: /nav/localization_health "
+                    "did not regain a publisher"
+                )
+                self._ensure_localizer_service_best_effort()
+                return False
+            if not self._wait_for_localizer_health_since(
+                restart_start_wall, timeout=10.0
+            ):
+                logger.error(
+                    "Localization recovery fallback: /nav/localization_health "
+                    "publisher returned but no fresh health sample reached "
+                    "SlamBridge"
+                )
+                self._ensure_localizer_service_best_effort()
+                return False
+            logger.warning(
+                "Localization recovery fallback: Fast-LIO2 + localizer chain "
+                "restarted"
+            )
+            return True
+        except Exception as e:
+            logger.error("Localization recovery fallback failed: %s", e)
+            return False
+
+    def _localizer_odom_loss_recovery_due(
+        self,
+        *,
+        backend: str,
+        localizer_topic_fresh: bool,
+        odom_age: float,
+        now: float,
+        now_mono: float,
+    ) -> bool:
+        if not self._localizer_odom_loss_recovery_enabled:
+            return False
+        if backend != "localizer":
+            return False
+        if self._localizer_odom_loss_recovery_inflight:
+            return False
+        if not localizer_topic_fresh:
+            return False
+        if self._localizer_health not in LOCALIZER_ODOM_GRACE_HEALTH:
+            return False
+        if self._last_odom_time <= 0.0:
+            return False
+        startup_age = max(0.0, now_mono - self._watchdog_start_mono)
+        if startup_age < self._localizer_odom_loss_recovery_s:
+            return False
+        if self._last_localizer_odom_loss_recovery_ts > 0.0:
+            elapsed = now - self._last_localizer_odom_loss_recovery_ts
+            if elapsed < self._localizer_odom_loss_recovery_cooldown_s:
+                return False
+        if self._last_odom_time > 0.0:
+            loss_age = odom_age
+        else:
+            loss_age = max(0.0, now_mono - self._watchdog_start_mono)
+        return loss_age >= self._localizer_odom_loss_recovery_s
+
+    def _start_localizer_odom_loss_recovery(self, *, now: float) -> None:
+        now_mono = _time.monotonic()
+        self._last_localizer_odom_loss_recovery_ts = now
+        self._localizer_odom_loss_recovery_inflight = True
+        self._localizer_odom_loss_recovery_start_mono = now_mono
+        self._localizer_odom_loss_recovery_start_wall = now
+        self._localizer_odom_loss_recovery_waiting_new_odom = True
+        self._last_recovery_signal = LOCALIZER_ODOM_LOSS_RECOVERY_SIGNAL
+        self._last_recovery_action = LOCALIZER_ODOM_LOSS_RECOVERY_ACTION
+        self._last_recovery_ts = now
+        self._relocalization_state = "restarting"
+        threading.Thread(
+            target=self._run_localizer_odom_loss_recovery,
+            daemon=True,
+            name="localizer-odom-loss-recovery",
+        ).start()
+
+    def _run_localizer_odom_loss_recovery(self) -> None:
+        try:
+            ok = self._restart_localization_chain_for_recovery()
+            self._relocalization_state = "restarted" if ok else "failed"
+        finally:
+            self._localizer_odom_loss_recovery_inflight = False
 
     def _auto_relocalize(self) -> None:
         """Trigger relocalize via ROS2 service using last known good position.
@@ -736,6 +1089,12 @@ class SlamBridgeModule(Module, layer=1):
         mono = _time.monotonic() if mono_now is None else mono_now
         self._last_odom_time = wall
         self._last_odom_mono = mono
+        if (
+            self._localizer_odom_loss_recovery_waiting_new_odom
+            and self._localizer_odom_loss_recovery_start_mono > 0.0
+            and mono >= self._localizer_odom_loss_recovery_start_mono
+        ):
+            self._localizer_odom_loss_recovery_waiting_new_odom = False
         self._odom_recv_ts.append(wall)
         if len(self._odom_recv_ts) > 30:
             self._odom_recv_ts.pop(0)
@@ -1962,8 +2321,18 @@ class SlamBridgeModule(Module, layer=1):
                         "Localization FALLBACK_GNSS_ONLY: DEGRADED for %.1fs with "
                         "healthy GNSS — Navigation should run cautiously",
                         now - self._degraded_since)
-                elif new_state == LOC_TRACKING and self._loc_state in (
-                        LOC_LOST, LOC_DEGRADED, LOC_DIVERGED, LOC_FALLBACK_GNSS_ONLY):
+                elif new_state == LOC_TRACKING and (
+                        self._loc_state in (
+                            LOC_LOST,
+                            LOC_DEGRADED,
+                            LOC_DIVERGED,
+                            LOC_FALLBACK_GNSS_ONLY,
+                        )
+                        or (
+                            self._last_recovery_signal
+                            == LOCALIZER_ODOM_LOSS_RECOVERY_SIGNAL
+                        )
+                ):
                     logger.info("Localization recovered -> TRACKING from %s",
                                 self._loc_state)
                     self._reconnect_count = 0
@@ -1976,11 +2345,64 @@ class SlamBridgeModule(Module, layer=1):
                     )
                 self._loc_state = new_state
 
+            if (
+                self._last_recovery_signal
+                == LOCALIZER_ODOM_LOSS_RECOVERY_SIGNAL
+                and not self._localizer_odom_loss_recovery_inflight
+                and not self._localizer_odom_loss_recovery_waiting_new_odom
+                and new_state == LOC_TRACKING
+                and odom_age <= effective_odom_timeout
+            ):
+                logger.info(
+                    "Localization recovery completed with fresh odometry -> "
+                    "TRACKING"
+                )
+                self._last_recovery_signal = "RECOVERED"
+                self._last_recovery_action = "none"
+                self._last_recovery_ts = now
+                self._relocalization_state = (
+                    "unsupported" if not relocalization_supported else "idle"
+                )
+
+            if self._localizer_odom_loss_recovery_due(
+                backend=str(contract["backend"]),
+                localizer_topic_fresh=localizer_topic_fresh,
+                odom_age=odom_age,
+                now=now,
+                now_mono=now_mono,
+            ):
+                logger.warning(
+                    "Localization recovery: localizer health is %s but odometry "
+                    "has been absent for %.1fs; restarting localization chain",
+                    self._localizer_health,
+                    odom_age if self._last_odom_time > 0.0
+                    else now_mono - self._watchdog_start_mono,
+                )
+                self._start_localizer_odom_loss_recovery(now=now)
+
             # Auto-recovery: reconnect DDS/rclpy if LOST for too long
             if (new_state == LOC_LOST
                     and odom_age > self._reconnect_timeout
+                    and not self._localizer_odom_loss_recovery_inflight
                     and self._reconnect_count < self._max_reconnects):
                 self._attempt_reconnect()
+
+            odom_loss_recovery_waiting_new_odom = (
+                self._localizer_odom_loss_recovery_waiting_new_odom
+            )
+            auto_resume_blocked = (
+                self._localizer_odom_loss_recovery_inflight
+                or odom_loss_recovery_waiting_new_odom
+                or (
+                    self._last_recovery_signal
+                    == LOCALIZER_ODOM_LOSS_RECOVERY_SIGNAL
+                )
+            )
+            pose_fresh = (
+                pose_fresh
+                and not self._localizer_odom_loss_recovery_inflight
+                and not odom_loss_recovery_waiting_new_odom
+            )
 
             self.localization_status.publish({
                 "state": self._loc_state,
@@ -2010,6 +2432,22 @@ class SlamBridgeModule(Module, layer=1):
                 "recovery_signal": self._last_recovery_signal,
                 "recovery_action": self._last_recovery_action,
                 "recovery_ts": self._last_recovery_ts,
+                "odom_loss_recovery_supported": (
+                    str(contract["backend"]) == "localizer"
+                    and self._localizer_odom_loss_recovery_enabled
+                ),
+                "odom_loss_recovery_inflight": (
+                    self._localizer_odom_loss_recovery_inflight
+                ),
+                "odom_loss_recovery_waiting_new_odom": (
+                    odom_loss_recovery_waiting_new_odom
+                ),
+                "odom_loss_recovery_s": self._localizer_odom_loss_recovery_s,
+                "odom_loss_recovery_cooldown_s": (
+                    self._localizer_odom_loss_recovery_cooldown_s
+                ),
+                "motion_hold_required": auto_resume_blocked,
+                "auto_resume_blocked": auto_resume_blocked,
                 "degeneracy": self._degen_level,
                 "icp_fitness": round(self._icp_fitness, 4),
                 "effective_ratio": round(self._effective_ratio, 3),
@@ -2042,6 +2480,12 @@ class SlamBridgeModule(Module, layer=1):
 
     def _attempt_reconnect(self) -> None:
         """Try to reconnect DDS/rclpy backend after data loss."""
+        if self._localizer_odom_loss_recovery_inflight:
+            logger.info(
+                "SlamBridge: skipping backend reconnect while localization "
+                "chain recovery is in progress"
+            )
+            return
         self._reconnect_count += 1
         backoff = min(2.0 ** self._reconnect_count, 30.0)
         logger.warning(

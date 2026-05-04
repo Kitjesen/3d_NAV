@@ -44,6 +44,10 @@ from nav.waypoint_tracker import (
 logger = logging.getLogger(__name__)
 
 
+LOCALIZATION_MOTION_HOLD_SIGNALS = {"ODOM_MISSING"}
+LOCALIZATION_MOTION_HOLD_ACTIONS = {"restart_localization_chain"}
+
+
 class MissionState:
     IDLE       = "IDLE"
     PLANNING   = "PLANNING"
@@ -150,6 +154,7 @@ class NavigationModule(Module, layer=5):
         self._degen_level: str = "NONE"
         self._paused_for_localization: bool = False
         self._pre_pause_state: str | None = None
+        self._localization_recovery_motion_hold: bool = False
         self._planning_timeout = kw.get("planning_timeout", 30.0)
         self._speed_scale: float = 1.0  # degeneracy-based speed multiplier
         self._preview_timeout_s = float(
@@ -240,6 +245,11 @@ class NavigationModule(Module, layer=5):
             "wp_total": self._tracker.path_length,
             "speed_scale": self._speed_scale,
             "degeneracy": self._degen_level,
+            "failure_reason": self._failure_reason,
+            "localization_paused": self._paused_for_localization,
+            "localization_recovery_motion_hold": (
+                self._localization_recovery_motion_hold
+            ),
             "ts": time.time(),
         })
 
@@ -253,6 +263,10 @@ class NavigationModule(Module, layer=5):
         ])
         if self._should_ignore_goal_update(new_goal):
             return
+        self._clear_localization_pause_for_explicit_action(
+            reason="new_goal",
+            clear_goal=False,
+        )
         self._goal = new_goal
         self._replan_count = 0
         self._plan()
@@ -325,12 +339,25 @@ class NavigationModule(Module, layer=5):
             self._plan()
 
     def _on_cancel(self, msg: str) -> None:
-        if self._state in (MissionState.IDLE, MissionState.CANCELLED):
+        had_localization_pause = (
+            self._paused_for_localization
+            or self._pre_pause_state is not None
+            or self._localization_recovery_motion_hold
+        )
+        if self._state in (MissionState.IDLE, MissionState.CANCELLED) \
+                and not had_localization_pause:
             return
         self._tracker.clear()
         self._patrol_goals.clear()
         self._patrol_index = 0
         self._failure_reason = f"cancelled: {msg}" if msg else "cancelled"
+        self._clear_localization_pause_for_explicit_action(
+            reason="cancel",
+            clear_goal=True,
+        )
+        if self._state in (MissionState.IDLE, MissionState.CANCELLED):
+            logger.info("Mission cancelled while idle/paused: %s", msg)
+            return
         self._set_state(MissionState.CANCELLED)
         logger.info("Mission cancelled: %s", msg)
 
@@ -361,24 +388,90 @@ class NavigationModule(Module, layer=5):
         self._loc_state = msg.get("state", "UNINIT")
         self._loc_confidence = msg.get("confidence", 0.0)
         self._degen_level = msg.get("degeneracy", "NONE")
+        motion_hold_required = self._localization_status_requires_motion_hold(msg)
+
+        if motion_hold_required:
+            self._localization_recovery_motion_hold = True
+            if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
+                self._pause_for_localization(
+                    reason="localization recovery requires explicit new goal"
+                )
+                logger.warning(
+                    "Navigation PAUSED: localization recovery requires "
+                    "operator-confirmed motion"
+                )
+            elif self._paused_for_localization:
+                self._failure_reason = (
+                    "localization recovered; explicit goal required"
+                )
 
         if self._loc_state == "LOST" and prev != "LOST":
             if self._state in (MissionState.EXECUTING, MissionState.PATROLLING):
-                self._pre_pause_state = self._state
-                self._paused_for_localization = True
-                self._tracker.pause()
-                self._set_state(MissionState.IDLE)
+                self._pause_for_localization(reason="localization lost")
                 logger.warning("Navigation PAUSED: localization lost")
 
         elif self._loc_state == "TRACKING" and self._paused_for_localization:
-            self._paused_for_localization = False
-            if self._pre_pause_state and self._goal is not None:
-                self._set_state(self._pre_pause_state)
-                self._pre_pause_state = None
-                logger.info("Navigation RESUMED: localization recovered")
+            if self._localization_recovery_motion_hold:
+                self._failure_reason = (
+                    "localization recovered; explicit goal required"
+                )
+                if self._state != MissionState.IDLE:
+                    self._set_state(MissionState.IDLE)
+                logger.warning(
+                    "Navigation HOLD: localization recovered after automatic "
+                    "chain restart; waiting for explicit goal"
+                )
+            else:
+                self._paused_for_localization = False
+                if self._pre_pause_state and self._goal is not None:
+                    self._set_state(self._pre_pause_state)
+                    self._pre_pause_state = None
+                    logger.info("Navigation RESUMED: localization recovered")
 
         # Degeneracy-aware speed scaling
         self._apply_degeneracy_speed_limit()
+
+    def _pause_for_localization(self, *, reason: str) -> None:
+        if not self._paused_for_localization:
+            self._pre_pause_state = self._state
+        self._paused_for_localization = True
+        self._tracker.pause()
+        self._failure_reason = reason
+        if self._state != MissionState.IDLE:
+            self._set_state(MissionState.IDLE)
+
+    def _clear_localization_pause_for_explicit_action(
+        self,
+        *,
+        reason: str,
+        clear_goal: bool,
+    ) -> None:
+        if clear_goal:
+            self._goal = None
+        if not (
+            self._paused_for_localization
+            or self._pre_pause_state is not None
+            or self._localization_recovery_motion_hold
+        ):
+            return
+        self._paused_for_localization = False
+        self._pre_pause_state = None
+        self._localization_recovery_motion_hold = False
+        self._tracker.clear()
+        logger.info("Navigation localization hold cleared by %s", reason)
+
+    @staticmethod
+    def _localization_status_requires_motion_hold(msg: dict) -> bool:
+        if bool(msg.get("motion_hold_required")):
+            return True
+        if bool(msg.get("auto_resume_blocked")):
+            return True
+        if str(msg.get("recovery_signal") or "") in LOCALIZATION_MOTION_HOLD_SIGNALS:
+            return True
+        return (
+            str(msg.get("recovery_action") or "")
+            in LOCALIZATION_MOTION_HOLD_ACTIONS
+        )
 
     def _apply_degeneracy_speed_limit(self) -> None:
         """Scale navigation speed based on SLAM health.

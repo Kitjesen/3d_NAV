@@ -8,6 +8,7 @@ Tests cover:
 
 import os
 import sys
+import threading
 import time
 import unittest
 
@@ -163,6 +164,228 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         self.assertEqual(tracking["localizer_health"], "LOCKED")
         self.assertEqual(tracking["odom_timeout_ms"], 2000.0)
         self.assertTrue(tracking["pose_fresh"])
+
+    def test_locked_localizer_health_restarts_chain_after_long_odom_gap(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="localizer",
+            odom_timeout=0.05,
+            cloud_timeout=0.5,
+            localizer_health_timeout=1.0,
+            localizer_health_odom_grace_s=2.0,
+            localizer_odom_loss_recovery_s=0.08,
+            localizer_odom_loss_recovery_cooldown_s=60.0,
+            reconnect_timeout=999.0,
+            max_reconnects=0,
+            watchdog_hz=100,
+        )
+        called = []
+        restarted = threading.Event()
+
+        def fake_restart():
+            called.append(time.time())
+            restarted.set()
+            return True
+
+        m._restart_localization_chain_for_recovery = fake_restart
+        m._on_rclpy_localization_health(Msg())
+        m._mark_odom_received(
+            wall_now=time.time() - 0.2,
+            mono_now=time.monotonic() - 0.2,
+        )
+        m._mark_cloud_received()
+
+        m.start()
+        self.assertTrue(restarted.wait(timeout=0.6))
+        time.sleep(0.05)
+        m.stop()
+
+        self.assertEqual(len(called), 1)
+        self.assertEqual(m._last_recovery_signal, "ODOM_MISSING")
+        self.assertEqual(m._last_recovery_action, "restart_localization_chain")
+
+    def test_locked_localizer_health_short_odom_gap_does_not_restart_chain(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="localizer",
+            odom_timeout=0.05,
+            cloud_timeout=0.5,
+            localizer_health_timeout=1.0,
+            localizer_health_odom_grace_s=2.0,
+            localizer_odom_loss_recovery_s=1.0,
+            reconnect_timeout=999.0,
+            max_reconnects=0,
+            watchdog_hz=100,
+        )
+        called = []
+        restarted = threading.Event()
+        m._restart_localization_chain_for_recovery = (
+            lambda: called.append(time.time()) or restarted.set() or True
+        )
+        m._on_rclpy_localization_health(Msg())
+        m._mark_odom_received(
+            wall_now=time.time() - 0.1,
+            mono_now=time.monotonic() - 0.1,
+        )
+        m._mark_cloud_received()
+
+        m.start()
+        self.assertFalse(restarted.wait(timeout=0.2))
+        m.stop()
+
+        self.assertEqual(called, [])
+        self.assertEqual(m._last_recovery_signal, "NONE")
+
+    def test_localizer_odom_loss_recovery_waits_for_startup_grace(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="localizer",
+            odom_timeout=0.05,
+            cloud_timeout=0.5,
+            localizer_health_timeout=1.0,
+            localizer_health_odom_grace_s=2.0,
+            localizer_odom_loss_recovery_s=1.0,
+            reconnect_timeout=999.0,
+            max_reconnects=0,
+            watchdog_hz=100,
+        )
+        called = []
+        restarted = threading.Event()
+        m._restart_localization_chain_for_recovery = (
+            lambda: called.append(time.time()) or restarted.set() or True
+        )
+        m._on_rclpy_localization_health(Msg())
+        m._mark_odom_received(
+            wall_now=time.time() - 10.0,
+            mono_now=time.monotonic() - 10.0,
+        )
+        m._mark_cloud_received()
+
+        m.start()
+        self.assertFalse(restarted.wait(timeout=0.2))
+        m.stop()
+
+        self.assertEqual(called, [])
+        self.assertEqual(m._last_recovery_signal, "NONE")
+
+    def test_localizer_odom_loss_recovery_requires_prior_odom(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="localizer",
+            odom_timeout=0.05,
+            cloud_timeout=0.5,
+            localizer_health_timeout=1.0,
+            localizer_health_odom_grace_s=2.0,
+            localizer_odom_loss_recovery_s=0.05,
+            reconnect_timeout=999.0,
+            max_reconnects=0,
+            watchdog_hz=100,
+        )
+        called = []
+        restarted = threading.Event()
+        m._restart_localization_chain_for_recovery = (
+            lambda: called.append(time.time()) or restarted.set() or True
+        )
+        m._watchdog_start_mono = time.monotonic() - 10.0
+        m._on_rclpy_localization_health(Msg())
+        m._mark_cloud_received()
+
+        m.start()
+        self.assertFalse(restarted.wait(timeout=0.2))
+        m.stop()
+
+        self.assertEqual(called, [])
+        self.assertEqual(m._last_recovery_signal, "NONE")
+
+    def test_localizer_odom_loss_recovery_cooldown_prevents_repeat_restart(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="localizer",
+            odom_timeout=0.05,
+            cloud_timeout=0.5,
+            localizer_health_timeout=1.0,
+            localizer_health_odom_grace_s=2.0,
+            localizer_odom_loss_recovery_s=0.05,
+            localizer_odom_loss_recovery_cooldown_s=60.0,
+            reconnect_timeout=999.0,
+            max_reconnects=0,
+            watchdog_hz=100,
+        )
+        called = []
+        restarted = threading.Event()
+
+        def fake_restart():
+            called.append(time.time())
+            restarted.set()
+            return True
+
+        m._restart_localization_chain_for_recovery = fake_restart
+        m._on_rclpy_localization_health(Msg())
+        m._mark_odom_received(
+            wall_now=time.time() - 0.2,
+            mono_now=time.monotonic() - 0.2,
+        )
+        m._mark_cloud_received()
+
+        m.start()
+        self.assertTrue(restarted.wait(timeout=0.6))
+        time.sleep(0.15)
+        m.stop()
+
+        self.assertEqual(len(called), 1)
+
+    def test_non_localizer_backend_does_not_run_localizer_odom_loss_recovery(self):
+        class Msg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="super_lio",
+            odom_timeout=0.05,
+            cloud_timeout=0.5,
+            localizer_health_timeout=1.0,
+            localizer_health_odom_grace_s=2.0,
+            localizer_odom_loss_recovery_s=0.05,
+            reconnect_timeout=999.0,
+            max_reconnects=0,
+            watchdog_hz=100,
+        )
+        called = []
+        restarted = threading.Event()
+        m._restart_localization_chain_for_recovery = (
+            lambda: called.append(time.time()) or restarted.set() or True
+        )
+        m._on_rclpy_localization_health(Msg())
+        m._mark_odom_received(
+            wall_now=time.time() - 0.2,
+            mono_now=time.monotonic() - 0.2,
+        )
+        m._mark_cloud_received()
+
+        m.start()
+        self.assertFalse(restarted.wait(timeout=0.2))
+        m.stop()
+
+        self.assertEqual(called, [])
+
+    def test_localizer_drift_recovery_uses_full_localization_chain_restart(self):
+        m = self._make(backend_profile="localizer")
+        called = []
+        m._restart_localization_chain_for_recovery = (
+            lambda: called.append("chain") or True
+        )
+
+        self.assertTrue(m._restart_backend_for_recovery("localizer"))
+        self.assertEqual(called, ["chain"])
 
     def test_stale_localizer_health_does_not_grace_odom_gap(self):
         class Msg:
@@ -781,11 +1004,37 @@ class TestSafetyRingLocalization(unittest.TestCase):
 
 class TestNavigationPauseResume(unittest.TestCase):
 
-    def _make(self):
+    def _make(self, **kw):
         from nav.navigation_module import MissionState, NavigationModule
-        m = NavigationModule(planner="astar")
+        m = NavigationModule(planner="astar", **kw)
         m.setup()
         return m, MissionState
+
+    def _pose_goal(self, x=1.0, y=2.0, z=0.0):
+        from core.msgs.geometry import PoseStamped
+        return PoseStamped(pose=Pose(position=Vector3(x, y, z)), ts=time.time())
+
+    def _start_executing_mission(self, m, MS):
+        import numpy as np
+        m._state = MS.EXECUTING
+        m._goal = np.array([10.0, 0.0, 0.0])
+        m._tracker.reset([np.array([10.0, 0.0, 0.0])], np.zeros(3))
+
+    def _localizer_restart_lost(self):
+        return {
+            "state": "LOST",
+            "confidence": 0.0,
+            "recovery_signal": "ODOM_MISSING",
+            "recovery_action": "restart_localization_chain",
+        }
+
+    def _tracking_recovered_from_restart(self):
+        return {
+            "state": "TRACKING",
+            "confidence": 1.0,
+            "recovery_signal": "RECOVERED",
+            "recovery_action": "none",
+        }
 
     def test_localization_status_port_exists(self):
         from nav.navigation_module import NavigationModule
@@ -814,6 +1063,66 @@ class TestNavigationPauseResume(unittest.TestCase):
         m._on_localization_status({"state": "TRACKING", "confidence": 1.0})
         self.assertFalse(m._paused_for_localization)
         self.assertEqual(m._state, MS.EXECUTING)
+
+    def test_restarted_localizer_recovery_does_not_auto_resume_old_mission(self):
+        m, MS = self._make(stuck_timeout=0.01)
+        self._start_executing_mission(m, MS)
+        waypoints = []
+        m.waypoint._add_callback(waypoints.append)
+        recovery_cmds = []
+        m.recovery_cmd_vel._add_callback(recovery_cmds.append)
+        recovery_attempts = []
+        m._execute_recovery_motion = lambda: recovery_attempts.append("called")
+
+        m._on_localization_status(self._localizer_restart_lost())
+        self.assertEqual(m._state, MS.IDLE)
+
+        m._on_localization_status(self._tracking_recovered_from_restart())
+        m._tracker._last_progress_time = time.time() - 1.0
+        m._tracker._stuck_warn_sent = True
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0)), ts=time.time()))
+
+        self.assertEqual(m._state, MS.IDLE)
+        self.assertEqual(waypoints, [])
+        self.assertEqual(recovery_attempts, [])
+        self.assertEqual(recovery_cmds, [])
+
+    def test_new_goal_clears_restarted_localizer_hold(self):
+        m, MS = self._make(allow_direct_goal_fallback=True)
+        self._start_executing_mission(m, MS)
+        waypoints = []
+        m.waypoint._add_callback(waypoints.append)
+
+        m._on_localization_status(self._localizer_restart_lost())
+        m._on_localization_status(self._tracking_recovered_from_restart())
+        self.assertEqual(m._state, MS.IDLE)
+
+        m._on_goal(self._pose_goal(3.0, 4.0, 0.0))
+
+        self.assertFalse(m._paused_for_localization)
+        self.assertIsNone(m._pre_pause_state)
+        self.assertEqual(m._state, MS.EXECUTING)
+        self.assertEqual(len(waypoints), 1)
+
+    def test_cancel_clears_restarted_localizer_hold(self):
+        m, MS = self._make(stuck_timeout=0.01)
+        self._start_executing_mission(m, MS)
+        recovery_attempts = []
+        m._execute_recovery_motion = lambda: recovery_attempts.append("called")
+
+        m._on_localization_status(self._localizer_restart_lost())
+        self.assertTrue(m._paused_for_localization)
+
+        m._on_cancel("operator_cancel")
+        m._on_localization_status(self._tracking_recovered_from_restart())
+        m._tracker._last_progress_time = time.time() - 1.0
+        m._tracker._stuck_warn_sent = True
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0)), ts=time.time()))
+
+        self.assertFalse(m._paused_for_localization)
+        self.assertIsNone(m._pre_pause_state)
+        self.assertNotEqual(m._state, MS.EXECUTING)
+        self.assertEqual(recovery_attempts, [])
 
     def test_idle_not_affected_by_lost(self):
         m, MS = self._make()

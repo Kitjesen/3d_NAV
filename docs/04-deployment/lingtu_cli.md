@@ -111,6 +111,20 @@ lingtu nav goal 3.5 2.1 0.0                   # send map-frame goal (x, y, yaw)
 lingtu nav stop                               # same as map end
 ```
 
+The optional `yaw` is in radians. It is forwarded to Gateway `/api/v1/goal` and
+published as the map-frame pose orientation; when omitted, the heading defaults
+to `0.0`.
+
+### Exploration profiles and Gateway contract
+
+`python lingtu.py explore` runs the Wavefront frontier backend, while
+`python lingtu.py tare_explore` runs the TARE backend when its binary and module
+are available. Gateway `/api/v1/explore/status` reports
+`backend=frontier|tare|none`; `/api/v1/explore/start` and `/api/v1/explore/stop`
+dispatch to the active backend. In the normal `nav` profile, `backend=none` and
+start returns `503`; this is expected because exploration is not part of the
+default saved-map navigation path.
+
 ### `svc` — systemd service control
 
 ```bash
@@ -135,6 +149,12 @@ services can duplicate ROS nodes and starve `/nav/lidar_scan` / `/nav/imu`.
 Use `svc restart localization` when systemd still shows Fast-LIO2 active but
 `/nav/odometry` has no publisher; it restarts only Fast-LIO2 and the ICP
 localizer, preserving the LiDAR driver and LingTu process.
+The LingTu localization watchdog now performs the same ordered restart
+automatically for the `localizer` backend when fresh `LOCKED`/`RECOVERED`
+localizer health contradicts a sustained `/nav/odometry` publisher loss. Tune it
+with `LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY`,
+`LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY_S`, and
+`LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY_COOLDOWN_S` on `lingtu.service`.
 
 The Super-LIO aliases are experimental. They map to `robot-super-lio.service`
 and `robot-super-lio-relocation.service` when those field-evaluation units are

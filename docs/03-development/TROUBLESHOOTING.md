@@ -196,6 +196,41 @@ Tunables (env vars on `lingtu.service`):
 `LINGTU_DRIFT_WATCHDOG=0` disables. `_INTERVAL` / `_XY_LIMIT` / `_V_LIMIT` / `_COOLDOWN`
 override defaults.
 
+### Localizer is locked but odometry vanished
+
+On the S100P navigation profile, Fast-LIO2 publishes `/nav/odometry` and the ICP
+localizer publishes `/nav/localization_health`. A field failure can leave
+`robot-fastlio2.service` active while `/nav/odometry` has no publisher; in that
+case the localizer may keep reporting `LOCKED` briefly because its own health
+heartbeat is still alive.
+
+`SlamBridgeModule` treats this contradiction as an odometry-publisher loss. If
+the active backend is `localizer`, localizer health is fresh `LOCKED` or
+`RECOVERED`, and odometry stays absent/stale for the configured threshold, it
+restarts the localization chain in the same order as the field CLI:
+
+1. Stop `robot-localizer.service`.
+2. Stop `robot-fastlio2.service`.
+3. Start Fast-LIO2 and wait for `/nav/odometry` publishers.
+4. Start the localizer and wait for `/nav/localization_health` publishers.
+
+This recovery path does not send navigation goals, teleop commands, or
+`cmd_vel`. It only restarts localization services.
+
+Tunables (env vars on `lingtu.service`):
+
+```bash
+LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY=1          # set 0 to disable
+LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY_S=20       # stale/absent odom duration
+LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY_COOLDOWN_S=300
+```
+
+Manual equivalent:
+
+```bash
+lingtu svc restart localization
+```
+
 ### Relocalization fails
 
 ```bash
@@ -245,6 +280,21 @@ curl http://<robot>:5050/api/v1/cmd_vel_mux
        -d '{"action":"build_tomogram","name":"<map_name>"}' \
        http://<robot>:5050/api/v1/maps
    ```
+
+### Exploration start returns 503
+
+Check the active backend first:
+
+```bash
+curl http://<robot>:5050/api/v1/explore/status
+```
+
+`available=false` with `backend=none` usually means LingTu is running a normal
+navigation or mapping profile. Start `python lingtu.py explore` for Wavefront
+frontiers, or `python lingtu.py tare_explore` after building the TARE binary for
+hierarchical exploration. If `backend=tare` is available but progress stalls,
+inspect the latest `tare_stats` and `exploration_supervisor` events in Gateway
+SSE before changing navigation or SLAM services.
 
 ---
 
