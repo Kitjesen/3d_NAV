@@ -215,6 +215,40 @@ def test_readiness_snapshot_includes_navigation_blockers():
     ]
 
 
+def test_readiness_snapshot_blocks_motion_but_not_data_when_safety_stop_active():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.readiness import build_readiness_snapshot
+
+    gateway = GatewayModule()
+    gateway._all_modules = {"NavigationModule": _HealthyModule()}
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "y": 0.0, "z": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._safety = {"level": 2}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "icp_fitness": 0.028,
+            "odom_age_ms": 100.0,
+            "localizer_health": "RECOVERED",
+        }
+
+    payload, status_code = build_readiness_snapshot(gateway, now=128.5)
+
+    assert status_code == 503
+    assert payload["ready"] is False
+    assert payload["data_ready"] is True
+    assert payload["motion_ready"] is False
+    assert payload["non_motion_safe"] is True
+    assert "navigation_blocked:safety_stop" in payload["reasons"]
+    assert "safety:stop" in payload["reasons"]
+    assert payload["runtime"]["safety"]["stop_active"] is True
+    assert payload["runtime"]["summary"]["data_blockers"] == []
+
+
 def test_readiness_snapshot_flags_active_command_source_as_not_non_motion_safe():
     from gateway.gateway_module import GatewayModule
     from gateway.services.readiness import build_readiness_snapshot

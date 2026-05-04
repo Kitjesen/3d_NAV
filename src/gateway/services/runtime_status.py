@@ -6,6 +6,12 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from gateway.services.safety_status import (
+    SAFETY_STOP_BLOCKER,
+    safety_stop_active,
+    safety_summary,
+)
+
 
 LOCALIZATION_STATUS_SCHEMA_VERSION = 1
 NAVIGATION_STATUS_SCHEMA_VERSION = 1
@@ -623,6 +629,7 @@ def _navigation_reason_codes(
     failure_reason: str,
     has_odometry: bool,
     mode: str,
+    safety: Any,
     session: Mapping[str, Any],
     localization: Mapping[str, Any],
     control: Mapping[str, Any],
@@ -632,6 +639,8 @@ def _navigation_reason_codes(
         codes.append("odometry_missing")
     if mode == "estop":
         codes.append("estop_active")
+    if safety_stop_active(safety):
+        codes.append(SAFETY_STOP_BLOCKER)
     if bool(session.get("pending", False)):
         codes.append("session_transition_pending")
 
@@ -670,6 +679,7 @@ def _navigation_reason_codes(
 _NAVIGATION_BLOCKER_CODES = {
     "odometry_missing",
     "estop_active",
+    SAFETY_STOP_BLOCKER,
     "session_transition_pending",
     "localization_lost",
     "localization_relocalizing",
@@ -708,6 +718,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         odometry = gw._odom
         path_len = len(gw._last_path)
         mode = gw._mode
+        safety = gw._safety
 
     session = safe_session(gw)
     lease = safe_lease(gw)
@@ -737,6 +748,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         mission_state=state,
         cmd_vel=cmd_vel,
     )
+    control["safety_clear"] = not safety_stop_active(safety)
     progress = _progress_summary(
         state=state,
         wp_index=wp_index,
@@ -749,6 +761,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         failure_reason=failure_reason,
         has_odometry=odometry is not None,
         mode=mode,
+        safety=safety,
         session=session,
         localization=localization,
         control=control,
@@ -795,6 +808,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "failure_reason": failure_reason,
             "localization_reasons": localization.get("reasons", []),
             "cmd_vel_mux_available": control.get("mux_available", False),
+            "safety": safety_summary(safety),
         },
         "mission": {
             "state": state,

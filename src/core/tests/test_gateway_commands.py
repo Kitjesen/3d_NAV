@@ -285,6 +285,42 @@ def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
     assert gateway.goal_pose.msg_count == 0
 
 
+def test_goal_route_rejects_safety_stop_without_planning_or_publishing():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    with gateway._state_lock:
+        gateway._safety = {"level": 2}
+    post_goal = _endpoint(gateway, "/api/v1/goal")
+
+    response = asyncio.run(
+        post_goal(
+            GoalRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                request_id="safety-stop-goal",
+                client_id="web",
+            )
+        )
+    )
+    model = GatewayErrorResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert model.error == "safety_stop"
+    assert model.command is not None
+    assert model.command.name == "goal"
+    assert model.command.accepted is False
+    assert model.detail["safety"]["stop_active"] is True
+    assert nav.calls == []
+    assert gateway.goal_pose.msg_count == 0
+
+
 def test_click_navigation_rejects_infeasible_plan_preview_without_publishing():
     from gateway.gateway_module import ClickNavRequest, GatewayModule
     from gateway.schemas import GatewayErrorResponse
@@ -320,6 +356,40 @@ def test_click_navigation_rejects_infeasible_plan_preview_without_publishing():
     assert model.detail["preview"]["reasons"] == ["blocked_by_costmap"]
     assert nav.calls == [(3.0, 4.0, 0.0)]
     assert sent_goals == []
+    assert gateway.goal_pose.msg_count == 0
+
+
+def test_click_navigation_rejects_safety_stop_without_planning_or_publishing():
+    from gateway.gateway_module import ClickNavRequest, GatewayModule
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    with gateway._state_lock:
+        gateway._safety = {"level": 2}
+    post_click = _endpoint(gateway, "/api/v1/navigate/click")
+
+    response = asyncio.run(
+        post_click(
+            ClickNavRequest(
+                x=3.0,
+                y=4.0,
+                z=0.0,
+                request_id="safety-stop-click",
+                client_id="web",
+            )
+        )
+    )
+    model = GatewayErrorResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert model.error == "safety_stop"
+    assert model.command is not None
+    assert model.command.name == "navigate_click"
+    assert nav.calls == []
     assert gateway.goal_pose.msg_count == 0
 
 
@@ -395,6 +465,72 @@ def test_goal_route_rejects_missing_plan_preview_without_publishing():
     assert model.detail["preview"]["reasons"] == ["navigation_module_unavailable"]
     assert sent_goals == []
     assert gateway.goal_pose.msg_count == 0
+
+
+def test_direct_motion_commands_reject_safety_stop_without_publishing():
+    from gateway.gateway_module import CmdVelRequest, GatewayModule, InstructionRequest
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._safety = {"level": 2}
+    post_cmd_vel = _endpoint(gateway, "/api/v1/cmd_vel")
+    post_instruction = _endpoint(gateway, "/api/v1/instruction")
+
+    cmd_response = asyncio.run(
+        post_cmd_vel(
+            CmdVelRequest(
+                vx=0.2,
+                wz=0.1,
+                request_id="safety-stop-cmd",
+                client_id="web",
+            )
+        )
+    )
+    instruction_response = asyncio.run(
+        post_instruction(
+            InstructionRequest(
+                text="go to dock",
+                request_id="safety-stop-instruction",
+                client_id="web",
+            )
+        )
+    )
+    cmd_model = GatewayErrorResponse.model_validate(_payload(cmd_response))
+    instruction_model = GatewayErrorResponse.model_validate(
+        _payload(instruction_response)
+    )
+
+    assert cmd_response.status_code == 409
+    assert cmd_model.error == "safety_stop"
+    assert cmd_model.command is not None
+    assert cmd_model.command.name == "cmd_vel"
+    assert instruction_response.status_code == 409
+    assert instruction_model.error == "safety_stop"
+    assert instruction_model.command is not None
+    assert instruction_model.command.name == "instruction"
+    assert gateway.cmd_vel.msg_count == 0
+    assert gateway.instruction.msg_count == 0
+
+
+def test_stop_command_remains_available_when_safety_stop_is_active():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import ControlCommandResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._safety = {"level": 2}
+    post_stop = _endpoint(gateway, "/api/v1/stop")
+
+    result = asyncio.run(post_stop())
+    model = ControlCommandResponse.model_validate(result)
+
+    assert model.ok is True
+    assert model.status == "stopped"
+    assert gateway.stop_cmd.msg_count == 1
+    assert gateway.cmd_vel.msg_count == 1
 
 
 def test_commands_without_request_id_preserve_existing_execute_every_time_behavior():

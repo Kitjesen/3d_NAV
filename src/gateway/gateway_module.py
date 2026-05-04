@@ -91,6 +91,11 @@ from gateway.services.runtime_status import (
     classify_pose_freshness,
     localizer_algorithm_healthy,
 )
+from gateway.services.safety_status import (
+    SAFETY_STOP_BLOCKER,
+    safety_clear_for_motion,
+    safety_summary,
+)
 from gateway.services.traffic import (
     DEFAULT_CLOUD_QUEUE_MAXSIZE,
     DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
@@ -1406,6 +1411,8 @@ class GatewayModule(Module, layer=6):
         explorer_required_profile = (
             None if explorer_available else explorer_detail.get("required_profile")
         )
+        safety = safety_summary(self._safety)
+        safety_clear = safety_clear_for_motion(self._safety)
         exploration_blockers: list[str] = []
         if not explorer_available:
             exploration_blockers.append("explorer_backend_not_running")
@@ -1417,6 +1424,8 @@ class GatewayModule(Module, layer=6):
             exploration_blockers.append("session_not_idle")
         if self._mode == "estop":
             exploration_blockers.append("estop_active")
+        if not safety_clear:
+            exploration_blockers.append(SAFETY_STOP_BLOCKER)
         if self._odom is None:
             exploration_blockers.append("odometry_missing")
         localization_state = str(localization_status.get("state") or "").strip().lower()
@@ -1464,6 +1473,8 @@ class GatewayModule(Module, layer=6):
             "can_start_navigating": can_start_navigating,
             "can_start_exploring": can_start_exploring,
             "exploration_blockers": exploration_blockers,
+            "safety_clear": safety_clear,
+            "safety": safety,
             "can_end": can_end,
             "explorer_backend": explorer_backend,
             "explorer_available": explorer_available,

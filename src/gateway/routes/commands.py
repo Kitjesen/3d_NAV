@@ -23,6 +23,7 @@ from gateway.schemas import (
     PlanPreviewResponse,
     StopRequest,
 )
+from gateway.services.safety_status import safety_stop_active, safety_summary
 
 
 CONTROL_COMMAND_ERROR_RESPONSES = {
@@ -85,6 +86,27 @@ def _goal_readiness_rejection(gw, command: str, body: Any) -> JSONResponse | Non
             "advisories": list(readiness.get("advisories") or []),
             "localization": status.get("localization", {}),
             "path": "/api/v1/navigation/status",
+        },
+    )
+
+
+def _motion_safety_rejection(gw, command: str, body: Any) -> JSONResponse | None:
+    try:
+        with gw._state_lock:
+            safety = getattr(gw, "_safety", None)
+    except Exception:
+        safety = None
+
+    if not safety_stop_active(safety):
+        return None
+    return _command_rejected_response(
+        command,
+        body,
+        error="safety_stop",
+        message="Safety STOP is active; motion commands are not accepted.",
+        detail={
+            "safety": safety_summary(safety),
+            "path": "/api/v1/state",
         },
     )
 
@@ -228,6 +250,9 @@ def _run_planned_goal_command(
 ) -> dict[str, Any] | JSONResponse:
     request_id = getattr(body, "request_id", None) if body is not None else None
     client_id = getattr(body, "client_id", None) if body is not None else None
+    rejection = _motion_safety_rejection(gw, command, body)
+    if rejection is not None:
+        return rejection
     replay = gw._command_journal.replay(command, request_id)
     if replay is not None:
         return replay
@@ -304,6 +329,10 @@ def register_command_routes(app, gw) -> None:
         responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_cmd_vel(body: CmdVelRequest):
+        rejection = _motion_safety_rejection(gw, "cmd_vel", body)
+        if rejection is not None:
+            return rejection
+
         def _publish() -> dict[str, Any]:
             gw.cmd_vel.publish(
                 Twist(
@@ -336,6 +365,10 @@ def register_command_routes(app, gw) -> None:
         responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_instruction(body: InstructionRequest):
+        rejection = _motion_safety_rejection(gw, "instruction", body)
+        if rejection is not None:
+            return rejection
+
         def _publish() -> dict[str, Any]:
             gw.instruction.publish(body.text)
             return {"status": "ok", "instruction": body.text}

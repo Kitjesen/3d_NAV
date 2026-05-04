@@ -7,6 +7,7 @@ import json
 import logging
 
 from core.msgs.geometry import Twist
+from gateway.services.safety_status import safety_stop_active
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,19 @@ def register_realtime_routes(app, gw) -> None:
                         ly = float(data.get("ly", 0))
                         az = float(data.get("az", 0))
                     except (TypeError, ValueError):
+                        continue
+                    with gw._state_lock:
+                        safety = getattr(gw, "_safety", None)
+                    if safety_stop_active(safety):
+                        await ws.send_text(
+                            json.dumps(
+                                {
+                                    "type": "control_rejected",
+                                    "error": "safety_stop",
+                                    "message": "Safety STOP is active.",
+                                }
+                            )
+                        )
                         continue
                     gw._teleop_on_joy(lx, ly, az)
                 elif msg_type == "stop":

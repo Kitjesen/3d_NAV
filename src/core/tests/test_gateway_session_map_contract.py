@@ -1013,6 +1013,50 @@ def test_explore_start_rejects_localization_recovery_blocker():
     assert snapshot["exploration_blockers"] == ["localization_recovery_active"]
 
 
+def test_explore_start_rejects_safety_stop_before_backend_start():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import ExplorationStatusResponse, GatewayErrorResponse
+
+    class WavefrontFrontierExplorer:
+        def __init__(self):
+            self.started = False
+
+        def begin_exploration(self):
+            self.started = True
+            return {"status": "started"}
+
+        def health(self):
+            return {"frontier_count": 2}
+
+    gateway = GatewayModule()
+    gateway.setup()
+    explorer = WavefrontFrontierExplorer()
+    gateway.on_system_modules({"WavefrontFrontierExplorer": explorer})
+    _seed_ready_navigation(gateway)
+    with gateway._state_lock:
+        gateway._safety = {"level": 2}
+
+    status_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    start_response = asyncio.run(_endpoint(gateway, "/api/v1/explore/start")())
+
+    status = ExplorationStatusResponse.model_validate(status_payload)
+    error = GatewayErrorResponse.model_validate(_payload(start_response))
+
+    assert status.available is True
+    assert status.can_start is False
+    assert "safety_stop" in status.blockers
+    assert start_response.status_code == 409
+    assert error.error == "exploration_not_ready"
+    assert "safety_stop" in error.detail["blockers"]
+    assert explorer.started is False
+    assert gateway._exploring is False
+    snapshot = gateway._session_snapshot()
+    assert snapshot["can_start_exploring"] is False
+    assert "safety_stop" in snapshot["exploration_blockers"]
+    assert snapshot["safety_clear"] is False
+    assert snapshot["safety"]["stop_active"] is True
+
+
 def test_exploring_session_start_rejects_localization_recovery_blocker(monkeypatch):
     import core.service_manager as service_manager
     from gateway.gateway_module import GatewayModule
@@ -1067,6 +1111,43 @@ def test_exploring_session_start_rejects_localization_recovery_blocker(monkeypat
     assert "localization_recovery_active" in (started.message or "")
     assert started.detail["blockers"] == ["localization_recovery_active"]
     assert fake_service_manager.calls == []
+    assert tare.started is False
+    assert gateway._session_mode == "idle"
+
+
+def test_exploring_session_start_rejects_safety_stop_before_backend_start():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionTransitionResponse
+
+    class TAREExplorerModule:
+        def __init__(self):
+            self.started = False
+
+        def start_tare_exploration(self):
+            self.started = True
+            return {"status": "started"}
+
+        def get_tare_status(self):
+            return {"started": self.started}
+
+    gateway = GatewayModule()
+    gateway.setup()
+    tare = TAREExplorerModule()
+    gateway.on_system_modules({"TAREExplorerModule": tare})
+    _seed_ready_navigation(gateway)
+    with gateway._state_lock:
+        gateway._safety = {"level": 2}
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/session/start")({"mode": "exploring"})
+    )
+    started = SessionTransitionResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert started.ok is False
+    assert started.success is False
+    assert "safety_stop" in (started.message or "")
+    assert started.detail["blockers"] == ["safety_stop"]
     assert tare.started is False
     assert gateway._session_mode == "idle"
 

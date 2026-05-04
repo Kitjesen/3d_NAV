@@ -54,6 +54,22 @@ def test_nav_profile_uses_slam_bridge_localization_health_edges():
     assert "SlamBridgeModule.localization_status->GatewayModule.localization_status" in wires
 
 
+def test_navigation_profiles_use_localization_odometry_for_runtime_consumers():
+    expected_sources = {
+        "nav": "SlamBridgeModule",
+        "map": "SlamBridgeModule",
+        "explore": "SlamBridgeModule",
+    }
+
+    for profile, source in expected_sources.items():
+        wires = _wire_set(graph_for_profile(profile))
+
+        assert f"{source}.odometry->GatewayModule.odometry" in wires
+        assert f"{source}.odometry->SafetyRingModule.odometry" in wires
+        assert f"{source}.odometry->PathFollowerModule.odometry" in wires
+        assert f"{source}.odometry->LocalPlannerModule.odometry" in wires
+
+
 def test_super_lio_profiles_wire_bridge_localization_status_to_gateway():
     for profile in ("super_lio", "super_lio_relocation"):
         graph = graph_for_profile(profile)

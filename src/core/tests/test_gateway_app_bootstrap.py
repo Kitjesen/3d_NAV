@@ -157,6 +157,39 @@ def test_app_bootstrap_service_returns_client_contract():
     assert traffic["links"]["traffic"] == "/api/v1/app/traffic"
 
 
+def test_app_bootstrap_disables_motion_controls_when_safety_stop_active():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.app_bootstrap import build_app_bootstrap
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "y": 0.0, "z": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._safety = {"level": 2}
+        gateway._mode = "autonomous"
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "odom_age_ms": 100.0,
+            "localizer_health": "RECOVERED",
+        }
+
+    payload = build_app_bootstrap(gateway)
+
+    assert payload["safety"]["ok"] is False
+    assert payload["safety"]["stop_active"] is True
+    assert payload["control"]["estop_clear"] is True
+    assert payload["control"]["safety_clear"] is False
+    assert payload["control"]["can_send_goal"] is False
+    assert payload["control"]["can_send_commands"] is False
+    assert "safety_stop" in payload["control"]["goal_blockers"]
+    assert payload["navigation"]["can_accept_goal"] is False
+    assert "safety_stop" in payload["navigation"]["readiness"]["blockers"]
+
+
 def test_app_capabilities_treat_tare_as_exploration_backend():
     from gateway.gateway_module import GatewayModule
     from gateway.services.app_bootstrap import build_app_capabilities

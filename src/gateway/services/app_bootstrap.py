@@ -12,6 +12,11 @@ from gateway.services.runtime_status import (
     safe_lease as _safe_lease,
     safe_session as _safe_session,
 )
+from gateway.services.safety_status import (
+    SAFETY_STOP_BLOCKER,
+    safety_clear_for_motion,
+    safety_summary,
+)
 from gateway.services.traffic import (
     DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
     DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
@@ -189,13 +194,7 @@ def _mission_summary(mission: Any) -> dict[str, Any]:
 
 
 def _safety_summary(safety: Any) -> dict[str, Any]:
-    raw = _mapping(safety)
-    level = raw.get("level")
-    return {
-        "level": level,
-        "ok": level in (None, 0, "ok", "safe"),
-        "raw": raw,
-    }
+    return safety_summary(safety)
 
 
 def _map_summary(gw: Any, session: Mapping[str, Any]) -> dict[str, Any]:
@@ -576,6 +575,10 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
     traffic = _traffic_summary(gw)
     control = dict(navigation.get("control", {}))
     nav_readiness = navigation.get("readiness", {})
+    safety_clear = safety_clear_for_motion(safety)
+    goal_blockers = list(nav_readiness.get("blockers") or [])
+    if not safety_clear and SAFETY_STOP_BLOCKER not in goal_blockers:
+        goal_blockers.append(SAFETY_STOP_BLOCKER)
     control.update(
         {
             "teleop": {
@@ -583,9 +586,16 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
                 "clients": int(teleop_clients),
             },
             "estop_clear": mode != "estop",
-            "can_send_commands": mode != "estop" and not bool(session.get("pending")),
-            "can_send_goal": bool(navigation.get("can_accept_goal", False)),
-            "goal_blockers": list(nav_readiness.get("blockers") or []),
+            "safety_clear": safety_clear,
+            "can_send_commands": (
+                mode != "estop"
+                and safety_clear
+                and not bool(session.get("pending"))
+            ),
+            "can_send_goal": (
+                safety_clear and bool(navigation.get("can_accept_goal", False))
+            ),
+            "goal_blockers": goal_blockers,
             "command_policy": _command_policy(gw),
         }
     )

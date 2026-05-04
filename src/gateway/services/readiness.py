@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from numbers import Real
 from typing import Any
 
+from gateway.services.safety_status import safety_stop_active, safety_summary
+
 
 READINESS_SCHEMA_VERSION = 1
 
@@ -189,6 +191,16 @@ def _runtime_readiness_reasons(gw: Any) -> tuple[list[str], dict[str, Any]]:
     except Exception as exc:
         runtime["navigation"] = {"error": str(exc)}
         reasons.append("navigation:status_error")
+
+    try:
+        with gw._state_lock:
+            safety = getattr(gw, "_safety", None)
+        runtime["safety"] = safety_summary(safety)
+        if safety_stop_active(safety):
+            reasons.append("safety:stop")
+    except Exception as exc:
+        runtime["safety"] = {"error": str(exc)}
+        reasons.append("safety:status_error")
 
     return list(dict.fromkeys(reasons)), runtime
 

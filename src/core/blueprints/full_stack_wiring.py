@@ -135,6 +135,10 @@ def apply_full_stack_wires(
             WireSpec(nav_odom_src, "odometry", "PerceptionModule", "odometry"),
         ],
     )
+    # Navigation-state consumers must use the same odometry frame as
+    # NavigationModule/Gateway. On real profiles this is the SLAM bridge or
+    # managed SLAM output; falling back to driver odometry only applies when no
+    # localization module exists.
     for consumer in [
         "OccupancyGridModule",
         "ElevationMapModule",
@@ -157,7 +161,11 @@ def apply_full_stack_wires(
         "GeofenceManagerModule",
         "MCPServerModule",
     ]:
-        _wire_if_present(bp, names, WireSpec(drv, "odometry", consumer, "odometry"))
+        _wire_if_present(
+            bp,
+            names,
+            WireSpec(nav_odom_src, "odometry", consumer, "odometry"),
+        )
     _wire_if_present(bp, names, WireSpec(nav_odom_src, "odometry", "GatewayModule", "odometry"))
 
     _apply_if_present(
@@ -193,7 +201,7 @@ def apply_full_stack_wires(
                 WireSpec(camera_src, color_out, recorder, "color_image"),
                 WireSpec(camera_src, "depth_image", recorder, "depth_image"),
                 WireSpec(camera_src, "camera_info", recorder, "camera_info"),
-                WireSpec(drv, "odometry", recorder, "odometry"),
+                WireSpec(nav_odom_src, "odometry", recorder, "odometry"),
             ],
         )
 

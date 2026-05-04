@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 
 import pytest
@@ -357,6 +358,52 @@ def test_teleop_websocket_ignores_malformed_frames_without_motion():
 
     assert gateway._teleop_clients == 0
     assert tracker.clients == 0
+    assert sent_cmds == []
+
+
+def test_teleop_websocket_rejects_joy_when_safety_stop_active():
+    from fastapi.testclient import TestClient
+
+    from gateway.gateway_module import GatewayModule
+
+    class TeleopTracker:
+        def __init__(self):
+            self.clients = 0
+            self.joy_calls = 0
+
+        def on_client_connect(self):
+            self.clients += 1
+
+        def on_client_disconnect(self):
+            self.clients -= 1
+
+        def force_release(self):
+            pass
+
+    gateway = GatewayModule()
+    gateway.setup()
+    tracker = TeleopTracker()
+    gateway._teleop_module = tracker
+    with gateway._state_lock:
+        gateway._safety = {"level": 2}
+    sent_cmds = []
+    gateway.cmd_vel._add_callback(sent_cmds.append)
+
+    client = TestClient(gateway._app)
+    with client.websocket_connect("/ws/teleop") as ws:
+        ws.send_text('{"type":"joy","lx":0.2,"ly":0,"az":0.1}')
+        payload = json.loads(ws.receive_text())
+
+        assert payload["type"] == "control_rejected"
+        assert payload["error"] == "safety_stop"
+        assert gateway._teleop_clients == 1
+        assert tracker.clients == 1
+        assert tracker.joy_calls == 0
+        assert sent_cmds == []
+
+    assert gateway._teleop_clients == 0
+    assert tracker.clients == 0
+    assert tracker.joy_calls == 0
     assert sent_cmds == []
 
 
