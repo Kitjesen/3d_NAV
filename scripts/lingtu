@@ -64,6 +64,42 @@ except Exception:
 $2
 " 2>/dev/null || echo '-'; }
 
+resolve_relocation_map_name() {
+    python3 - "$1" "$2" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).expanduser().resolve()
+raw = sys.argv[2]
+if not raw:
+    sys.exit(1)
+raw_path = Path(raw).expanduser()
+candidate = raw_path if raw_path.is_absolute() else root / raw_path
+try:
+    rel = candidate.resolve(strict=False).relative_to(root)
+except Exception:
+    sys.exit(1)
+if len(rel.parts) != 1:
+    sys.exit(1)
+name = rel.parts[0]
+if not name or name in (".", "..") or "/" in name or "\\" in name:
+    sys.exit(1)
+print(name)
+PY
+}
+
+format_relocation_initial_pose() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import sys
+
+try:
+    x, y, yaw = (float(v) for v in sys.argv[1:4])
+except Exception:
+    sys.exit(1)
+print(f"[{x:.6f},{y:.6f},0.0,0.0,0.0,{yaw:.6f}]")
+PY
+}
+
 # ── Subcommand: status (one-shot status board) ──
 cmd_status() {
     echo -e "${B}=== Lingtu @ $(date '+%H:%M:%S') ===${N}"
@@ -1565,7 +1601,10 @@ cmd_slamcheck() {
                 shift ;;
             --initial-pose)
                 [ "$#" -ge 4 ] || { slamcheck_usage; exit 1; }
-                initial_pose=$(printf '[%.6f,%.6f,0.0,0.0,0.0,%.6f]' "$2" "$3" "$4")
+                initial_pose=$(format_relocation_initial_pose "$2" "$3" "$4") || {
+                    echo "initial pose must be numeric X Y YAW"
+                    exit 1
+                }
                 shift 4 ;;
             *)
                 slamcheck_usage
@@ -1579,8 +1618,9 @@ cmd_slamcheck() {
         previous|localizer|fastlio2|stop|none|super_lio|super-lio|superlio|super_lio_relocation|super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation) ;;
         *) echo "rollback must be previous|localizer|fastlio2|super_lio|super_lio_relocation|stop|none"; exit 1 ;;
     esac
+    local maps_root="$HOME/data/nova/maps"
     if [ "$target" = "super_lio_relocation" ] && [ -z "$map_name" ]; then
-        map_name=$(readlink "$HOME/data/nova/maps/active" 2>/dev/null || true)
+        map_name=$(readlink "$maps_root/active" 2>/dev/null || true)
     fi
 
     local prev_status prev_mode rollback_profile switch_json switch_ok result=0
@@ -1610,7 +1650,12 @@ cmd_slamcheck() {
 
     if [ "$target" = "super_lio_relocation" ]; then
         [ -n "$map_name" ] || { echo -e "${R}FAIL${N}: --map NAME is required when no active map symlink exists"; return 1; }
-        local maps_root="$HOME/data/nova/maps" map_dir="$HOME/data/nova/maps/$map_name"
+        local raw_map_name="$map_name"
+        map_name=$(resolve_relocation_map_name "$maps_root" "$raw_map_name") || {
+            echo -e "${R}FAIL${N}: unsafe relocation map name or active map target: $raw_map_name"
+            return 1
+        }
+        local map_dir="$maps_root/$map_name"
         if [ ! -f "$map_dir/map.pcd" ]; then
             echo -e "${R}FAIL${N}: map.pcd not found: $map_dir/map.pcd"
             return 1

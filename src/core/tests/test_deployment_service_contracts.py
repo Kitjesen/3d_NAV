@@ -46,6 +46,9 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
     maps = fake_home / "data" / "nova" / "maps"
     (maps / "demo").mkdir(parents=True)
     (maps / "demo" / "map.pcd").write_text("pcd\n", encoding="utf-8")
+    outside = fake_home / "data" / "nova" / "outside"
+    outside.mkdir(parents=True)
+    (outside / "map.pcd").write_text("outside\n", encoding="utf-8")
 
     _write_executable(
         fake_bin / "systemctl",
@@ -212,10 +215,38 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
     }
 
 
-def _run_slamcheck(tmp_path: Path, args: str, extra_env: dict[str, str] | None = None):
+def _run_slamcheck(
+    tmp_path: Path,
+    args: str,
+    extra_env: dict[str, str] | None = None,
+    active_target: str | None = None,
+    seed_relocation_env: str | None = None,
+):
     if shutil.which("bash") is None:
         pytest.skip("bash is required for scripts/lingtu shell behavior tests")
     harness = _make_slamcheck_harness(tmp_path)
+    if seed_relocation_env is not None:
+        env_file = harness["run"] / "lingtu" / "super_lio_relocation.env"
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        env_file.write_text(seed_relocation_env, encoding="utf-8")
+    if active_target is not None:
+        subprocess.run(
+            [
+                "bash",
+                "-lc",
+                (
+                    f"ln -sfn {shlex.quote(active_target)} "
+                    f"{shlex.quote(str(harness['home_posix']) + '/data/nova/maps/active')}"
+                ),
+            ],
+            check=True,
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
     exports = {
         "HOME": harness["home_posix"],
         "FAKE_ROOT": harness["root_posix"],
@@ -456,15 +487,18 @@ def test_lingtu_soak_is_read_only_non_motion_field_verification():
 def test_lingtu_slamcheck_writes_float_relocation_initial_pose():
     text = _read("scripts/lingtu")
 
-    assert "initial_pose=$(printf '[%.6f,%.6f,0.0,0.0,0.0,%.6f]'" in text
+    assert "format_relocation_initial_pose()" in text
+    assert "initial_pose=$(format_relocation_initial_pose" in text
     assert "SUPER_LIO_RELOCATION_INIT_POSE=${initial_pose:-[0.0,0.0,0.0,0.0,0.0,0.0]}" in text
     assert "SUPER_LIO_RELOCATION_INIT_POSE=[0,0,0.0,0.0,0.0,0]" not in text
+    assert "initial pose must be numeric X Y YAW" in text
 
 
 def test_lingtu_slamcheck_sets_active_map_symlink_and_runtime_env():
     text = _read("scripts/lingtu")
 
-    assert 'map_name=$(readlink "$HOME/data/nova/maps/active" 2>/dev/null || true)' in text
+    assert 'map_name=$(readlink "$maps_root/active" 2>/dev/null || true)' in text
+    assert "resolve_relocation_map_name()" in text
     assert 'maps_root="$HOME/data/nova/maps"' in text
     assert '[ ! -f "$map_dir/map.pcd" ]' in text
     assert 'ln -sfn "$map_name" "$maps_root/active"' in text
@@ -517,6 +551,85 @@ def test_lingtu_slamcheck_executes_relocation_active_map_env_and_rollback(tmp_pa
     calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
     assert "switch:super_lio_relocation" in calls
     assert "switch:localizer" in calls
+
+
+def test_lingtu_slamcheck_overwrites_stale_relocation_runtime_env(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio_relocation --duration 0 --initial-pose 4 5 6 --rollback none",
+        seed_relocation_env=(
+            "SUPER_LIO_RELOCATION_MAP_DIR=/stale\n"
+            "SUPER_LIO_RELOCATION_INIT_POSE=[9,9,9]\n"
+            "STALE_KEY=must_disappear\n"
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    env_file = harness["run"] / "lingtu" / "super_lio_relocation.env"
+    env_text = env_file.read_text(encoding="utf-8")
+    assert "STALE_KEY" not in env_text
+    assert "/stale" not in env_text
+    assert "SUPER_LIO_RELOCATION_MAP_NAME=map.pcd" in env_text
+    assert "SUPER_LIO_RELOCATION_UPDATE_MAP=false" in env_text
+    assert "SUPER_LIO_RELOCATION_INIT_POSE=[4.000000,5.000000,0.0,0.0,0.0,6.000000]" in env_text
+
+
+def test_lingtu_slamcheck_rejects_unsafe_explicit_relocation_map(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio_relocation --duration 0 --map ../outside --rollback none",
+    )
+
+    assert result.returncode != 0
+    assert "unsafe relocation map name or active map target: ../outside" in result.stdout
+    env_file = harness["run"] / "lingtu" / "super_lio_relocation.env"
+    assert not env_file.exists()
+    calls = harness["root"] / "calls.log"
+    if calls.exists():
+        assert "switch:super_lio_relocation" not in calls.read_text(encoding="utf-8")
+
+
+def test_lingtu_slamcheck_rejects_unsafe_active_map_symlink(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio_relocation --duration 0 --rollback none",
+        active_target="../outside",
+    )
+
+    assert result.returncode != 0
+    assert "unsafe relocation map name or active map target: ../outside" in result.stdout
+    env_file = harness["run"] / "lingtu" / "super_lio_relocation.env"
+    assert not env_file.exists()
+    calls = harness["root"] / "calls.log"
+    if calls.exists():
+        assert "switch:super_lio_relocation" not in calls.read_text(encoding="utf-8")
+
+
+def test_lingtu_slamcheck_rejects_non_numeric_initial_pose(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio_relocation --duration 0 --initial-pose bad 2 3 --rollback none",
+    )
+
+    assert result.returncode != 0
+    assert "initial pose must be numeric X Y YAW" in result.stdout
+    env_file = harness["run"] / "lingtu" / "super_lio_relocation.env"
+    assert not env_file.exists()
+    calls = harness["root"] / "calls.log"
+    if calls.exists():
+        assert "switch:super_lio_relocation" not in calls.read_text(encoding="utf-8")
+
+
+def test_lingtu_slamcheck_rejects_missing_initial_pose_values(tmp_path):
+    result, harness = _run_slamcheck(
+        tmp_path,
+        "super_lio_relocation --duration 0 --initial-pose 1 2",
+    )
+
+    assert result.returncode != 0
+    assert "Usage: lingtu slamcheck" in result.stdout
+    env_file = harness["run"] / "lingtu" / "super_lio_relocation.env"
+    assert not env_file.exists()
 
 
 def test_lingtu_slamcheck_fails_on_diverged_recovery_signal_and_rolls_back(tmp_path):
