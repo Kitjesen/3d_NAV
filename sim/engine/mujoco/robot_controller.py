@@ -60,12 +60,24 @@ class PolicyRunner:
         self.input_name = inp.name
         self.output_name = out.name
 
-        # Auto-detect history length: policy input dim / OBS_DIM
-        policy_input_dim = inp.shape[1] if len(inp.shape) > 1 else inp.shape[0]
-        self._history_len = max(1, policy_input_dim // OBS_DIM)
+        policy_input_dim = self._extract_input_dim(inp.shape)
+        self._policy_input_dim = policy_input_dim or (OBS_DIM * HISTORY_LEN)
+        if self._policy_input_dim % OBS_DIM == 0:
+            self._history_len = max(1, self._policy_input_dim // OBS_DIM)
+        else:
+            self._history_len = 1
         self.history: deque = deque(maxlen=self._history_len)
         self.last_action = STANDING_POSE.copy()
         # Will be filled with real sensor data in warm_up()
+
+    @staticmethod
+    def _extract_input_dim(shape: list | tuple) -> Optional[int]:
+        if not shape:
+            return None
+        dim = shape[1] if len(shape) > 1 else shape[0]
+        if isinstance(dim, int) and dim > 0:
+            return dim
+        return None
 
     def warm_up(self, gyroscope: np.ndarray, projected_gravity: np.ndarray,
                 joint_pos_16: np.ndarray, joint_vel_16: np.ndarray) -> None:
@@ -74,6 +86,7 @@ class PolicyRunner:
             gyroscope, projected_gravity,
             np.zeros(3),  # direction = 0 (idle)
             joint_pos_16, joint_vel_16)
+        init_obs = self._adapt_obs_to_policy_input(init_obs)
         self.history.clear()
         for _ in range(self._history_len):
             self.history.append(init_obs.copy())
@@ -129,9 +142,25 @@ class PolicyRunner:
         obs = np.concatenate([gyro, pg, direction, jp, jv, act]).astype(np.float32)
         return obs
 
+    def _adapt_obs_to_policy_input(self, obs: np.ndarray) -> np.ndarray:
+        """Adapt legacy 57-dim observations to the loaded ONNX input contract."""
+        obs = np.asarray(obs, dtype=np.float32).reshape(-1)
+        if self._history_len > 1:
+            return obs
+        if obs.size == self._policy_input_dim:
+            return obs
+        if obs.size > self._policy_input_dim:
+            return obs[:self._policy_input_dim].copy()
+        padded = np.zeros(self._policy_input_dim, dtype=np.float32)
+        padded[: obs.size] = obs
+        return padded
+
     def infer(self, obs: np.ndarray) -> np.ndarray:
-        """Inference: obs(57) -> append to history -> concat(285) -> ONNX -> action(16)."""
+        """Inference: obs -> append to history -> ONNX -> action(16)."""
+        obs = self._adapt_obs_to_policy_input(obs)
         self.history.append(obs)
+        while len(self.history) < self._history_len:
+            self.history.appendleft(obs.copy())
         obs_history = np.concatenate(list(self.history)).reshape(1, -1).astype(np.float32)
         result = self.session.run([self.output_name],
                                   {self.input_name: obs_history})[0]

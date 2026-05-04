@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from sim.engine.core.engine import CameraData, RobotState, SimEngine, VelocityCommand
-from sim.engine.core.robot import RobotConfig
+from sim.engine.core.robot import RobotConfig, THUNDER_V3_JOINT_NAMES
 from sim.engine.core.sensor import CameraConfig, IMUConfig, LidarConfig
 from sim.engine.core.world import WorldConfig, SimWorld
 from sim.engine.mujoco.camera import MuJoCoCamera
@@ -31,14 +31,7 @@ from sim.engine.mujoco.robot_controller import (
 )
 
 
-# Actuator offset (first 8 actuators are arm; legs start at index 8)
-# Extracted from sim/bridge/nova_nav_bridge.py
-LEG_JOINT_NAMES = [
-    'fr_hip_joint', 'fr_thigh_joint', 'fr_calf_joint', 'fr_foot_joint',
-    'fl_hip_joint', 'fl_thigh_joint', 'fl_calf_joint', 'fl_foot_joint',
-    'rr_hip_joint', 'rr_thigh_joint', 'rr_calf_joint', 'rr_foot_joint',
-    'rl_hip_joint', 'rl_thigh_joint', 'rl_calf_joint', 'rl_foot_joint',
-]
+DEFAULT_LEG_JOINT_NAMES = THUNDER_V3_JOINT_NAMES
 
 
 class MuJoCoEngine(SimEngine):
@@ -62,7 +55,7 @@ class MuJoCoEngine(SimEngine):
         """Initialize MuJoCo engine (model not loaded; call load() before use).
 
         Args:
-            robot_config: robot configuration, defaults to NOVA Dog
+            robot_config: robot configuration, defaults to Thunder v3
             world_config: scene configuration, defaults to flat ground
             lidar_config: LiDAR configuration, defaults to MID-360
             camera_configs: list of camera configurations
@@ -91,6 +84,7 @@ class MuJoCoEngine(SimEngine):
 
         # Joint ID lists (populated after load())
         self._leg_joint_ids: List[int] = []
+        self._leg_actuator_ids: List[int] = []
         self._base_body_id: int = 0
         self._lidar_body_id: int = 0
         self._leg_actuator_offset: int = 0
@@ -240,7 +234,8 @@ class MuJoCoEngine(SimEngine):
         # Resolve body/joint IDs
         self._resolve_ids()
         valid_leg_joints = len([jid for jid in self._leg_joint_ids if jid >= 0])
-        if valid_leg_joints > 0 and self._model is not None:
+        valid_leg_actuators = len([aid for aid in self._leg_actuator_ids if aid >= 0])
+        if valid_leg_joints > 0 and valid_leg_actuators == 0 and self._model is not None:
             self._leg_actuator_offset = max(0, int(self._model.nu) - valid_leg_joints)
         else:
             self._leg_actuator_offset = self._robot_cfg.leg_act_offset
@@ -270,7 +265,7 @@ class MuJoCoEngine(SimEngine):
 
         self._running = True
         print(f'[MuJoCoEngine] Loaded. dt={self._physics_dt:.4f}s, '
-              f'joints={len(self._leg_joint_ids)}, '
+              f'joints={valid_leg_joints}, '
               f'ctrl_offset={self._leg_actuator_offset}, '
               f'cameras={list(self._cameras.keys())}')
 
@@ -291,13 +286,21 @@ class MuJoCoEngine(SimEngine):
             aliases=[self._robot_cfg.base_body_name, "trunk", "lidar_link"],
         )
         self._lidar_cfg.body_name = resolved_lidar
+        leg_joint_names = self._robot_cfg.leg_joint_names or DEFAULT_LEG_JOINT_NAMES
         self._leg_joint_ids = [
-            mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, n)
-            for n in LEG_JOINT_NAMES
+            self._resolve_joint_id(name)
+            for name in leg_joint_names
         ]
-        missing = [n for n, jid in zip(LEG_JOINT_NAMES, self._leg_joint_ids) if jid < 0]
+        self._leg_actuator_ids = self._resolve_leg_actuator_ids(self._leg_joint_ids)
+        missing = [n for n, jid in zip(leg_joint_names, self._leg_joint_ids) if jid < 0]
         if missing:
             print(f'[MuJoCoEngine] Warning: joints not found: {missing}')
+        missing_actuators = [
+            n for n, jid, aid in zip(leg_joint_names, self._leg_joint_ids, self._leg_actuator_ids)
+            if jid >= 0 and aid < 0
+        ]
+        if missing_actuators:
+            print(f'[MuJoCoEngine] Warning: actuators not found: {missing_actuators}')
 
     def _resolve_body_id(self, preferred_name: str, aliases: List[str]) -> tuple[int, str]:
         """Resolve a MuJoCo body name with a few safe fallbacks."""
@@ -323,6 +326,64 @@ class MuJoCoEngine(SimEngine):
             'falling back to world body'
         )
         return 0, preferred_name or "world"
+
+    def _resolve_joint_id(self, preferred_name: str) -> int:
+        """Resolve a joint name, accepting legacy lower-case Thunder aliases."""
+        import mujoco
+
+        for name in self._joint_name_candidates(preferred_name):
+            joint_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            if joint_id >= 0:
+                return joint_id
+        return -1
+
+    @staticmethod
+    def _joint_name_candidates(name: str) -> List[str]:
+        candidates = []
+        for candidate in (
+            name,
+            MuJoCoEngine._legacy_joint_name(name),
+            MuJoCoEngine._thunder_joint_name(name),
+        ):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+        return candidates
+
+    @staticmethod
+    def _legacy_joint_name(name: str) -> str:
+        parts = name.split("_", 1)
+        if len(parts) != 2:
+            return name.lower()
+        return f"{parts[0].lower()}_{parts[1]}"
+
+    @staticmethod
+    def _thunder_joint_name(name: str) -> str:
+        parts = name.split("_", 1)
+        if len(parts) != 2:
+            return name
+        prefix = parts[0].upper()
+        if prefix in {"FR", "FL", "RR", "RL"}:
+            return f"{prefix}_{parts[1]}"
+        return name
+
+    def _resolve_leg_actuator_ids(self, joint_ids: List[int]) -> List[int]:
+        """Resolve control slots by joint ID so actuator XML order can vary."""
+        actuator_ids: List[int] = []
+        if self._model is None:
+            return [-1 for _ in joint_ids]
+
+        for joint_id in joint_ids:
+            actuator_id = -1
+            if joint_id >= 0:
+                for idx in range(int(self._model.nu)):
+                    try:
+                        if int(self._model.actuator_trnid[idx, 0]) == joint_id:
+                            actuator_id = idx
+                            break
+                    except Exception:
+                        break
+            actuator_ids.append(actuator_id)
+        return actuator_ids
 
     def reset(self) -> RobotState:
         """Reset simulation to initial state."""
@@ -385,15 +446,13 @@ class MuJoCoEngine(SimEngine):
 
         standing_dart = self._robot_cfg.standing_pose_array
         standing_mj = standing_dart[self._robot_cfg.dart_to_mj_array]
-        offset = self._leg_actuator_offset
 
         for i, jid in enumerate(self._leg_joint_ids):
             if jid < 0:
                 continue
             qadr = self._model.jnt_qposadr[jid]
             self._data.qpos[qadr] = standing_mj[i]
-            if offset + i < len(self._data.ctrl):
-                self._data.ctrl[offset + i] = standing_mj[i]
+        self._write_leg_ctrl(standing_mj)
 
     def close(self) -> None:
         """Release all resources."""
@@ -471,16 +530,29 @@ class MuJoCoEngine(SimEngine):
             action_dart = self._policy.infer(obs)     # (16,) Dart order
             # Dart -> MuJoCo order
             action_mj = action_dart[DART_TO_MJ]
-            offset = self._leg_actuator_offset
-            ctrl_span = min(len(action_mj), max(0, len(self._data.ctrl) - offset))
-            self._data.ctrl[offset:offset + ctrl_span] = action_mj[:ctrl_span]
+            self._write_leg_ctrl(action_mj)
         else:
             # No policy: hold standing pose
             standing_dart = self._robot_cfg.standing_pose_array
             action_mj = standing_dart[DART_TO_MJ]
-            offset = self._leg_actuator_offset
-            ctrl_span = min(len(action_mj), max(0, len(self._data.ctrl) - offset))
-            self._data.ctrl[offset:offset + ctrl_span] = action_mj[:ctrl_span]
+            self._write_leg_ctrl(action_mj)
+
+    def _write_leg_ctrl(self, targets_mj: np.ndarray) -> None:
+        """Write joint targets in MuJoCo joint order, independent of XML actuator order."""
+        wrote_by_actuator = False
+        for i, actuator_id in enumerate(self._leg_actuator_ids):
+            if actuator_id < 0 or i >= len(targets_mj):
+                continue
+            if actuator_id < len(self._data.ctrl):
+                self._data.ctrl[actuator_id] = targets_mj[i]
+                wrote_by_actuator = True
+
+        if wrote_by_actuator:
+            return
+
+        offset = self._leg_actuator_offset
+        ctrl_span = min(len(targets_mj), max(0, len(self._data.ctrl) - offset))
+        self._data.ctrl[offset:offset + ctrl_span] = targets_mj[:ctrl_span]
 
     # ──────────────────────────────────────────────────────────────
     # State reading
@@ -531,12 +603,14 @@ class MuJoCoEngine(SimEngine):
         if not valid_ids:
             return np.zeros(16), np.zeros(16)
 
-        pos = np.array([self._data.qpos[self._model.jnt_qposadr[j]]
-                        for j in self._leg_joint_ids
-                        if j >= 0], dtype=np.float64)
-        vel = np.array([self._data.qvel[self._model.jnt_dofadr[j]]
-                        for j in self._leg_joint_ids
-                        if j >= 0], dtype=np.float64)
+        pos = np.array([
+            self._data.qpos[self._model.jnt_qposadr[j]] if j >= 0 else 0.0
+            for j in self._leg_joint_ids
+        ], dtype=np.float64)
+        vel = np.array([
+            self._data.qvel[self._model.jnt_dofadr[j]] if j >= 0 else 0.0
+            for j in self._leg_joint_ids
+        ], dtype=np.float64)
 
         # Pad to 16 if some joints are missing
         if len(pos) < 16:
@@ -582,9 +656,7 @@ class MuJoCoEngine(SimEngine):
         """Directly set joint target positions (bypasses ONNX policy)."""
         if len(positions) < 16:
             raise ValueError(f"Expected 16 joint positions, got {len(positions)}")
-        offset = self._leg_actuator_offset
-        ctrl_span = min(16, max(0, len(self._data.ctrl) - offset))
-        self._data.ctrl[offset:offset + ctrl_span] = positions[:ctrl_span]
+        self._write_leg_ctrl(np.asarray(positions[:16], dtype=np.float64))
 
     # ──────────────────────────────────────────────────────────────
     # Scene manipulation

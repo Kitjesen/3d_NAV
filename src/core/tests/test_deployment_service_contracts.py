@@ -1,3 +1,4 @@
+import json
 import os
 import shlex
 import shutil
@@ -199,10 +200,11 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
                 ;;
             */api/v1/navigation/status)
                 blocker="${FAKE_NAV_BLOCKER:-}"
+                mission_state="$(cat "${FAKE_ROOT}/mission_state" 2>/dev/null || echo IDLE)"
                 if [ -n "$blocker" ]; then
                     printf '{"schema_version":1,"state":"IDLE","can_accept_goal":false,"readiness":{"can_accept_goal":false,"can_execute_autonomy":false,"blockers":["%s"],"advisories":[]},"control":{"active_cmd_source":"none"}}\n' "$blocker"
                 else
-                    printf '{"schema_version":1,"state":"IDLE","can_accept_goal":true,"readiness":{"can_accept_goal":true,"can_execute_autonomy":true,"blockers":[],"advisories":[]},"control":{"active_cmd_source":"none"}}\n'
+                    printf '{"schema_version":1,"state":"%s","can_accept_goal":true,"readiness":{"can_accept_goal":true,"can_execute_autonomy":true,"blockers":[],"advisories":[]},"control":{"active_cmd_source":"none"},"failure_reason":""}\n' "$mission_state"
                 fi
                 ;;
             */api/v1/navigation/plan)
@@ -215,7 +217,37 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
                 ;;
             */api/v1/goal)
                 echo "goal:$data" >> "${FAKE_ROOT}/calls.log"
-                printf '{"schema_version":1,"ok":true,"accepted":true,"command":{"accepted":true}}\n'
+                fail_profile="${FAKE_GOAL_FAIL_PROFILE:-}"
+                if [ -n "$fail_profile" ] && [ "$fail_profile" = "$current" ]; then
+                    echo FAILED > "${FAKE_ROOT}/mission_state"
+                    printf '{"schema_version":1,"ok":false,"accepted":false,"error":"fake_goal_rejected"}\n'
+                elif [ -n "${FAKE_GOAL_NONTERMINAL_PROFILE:-}" ] && [ "$FAKE_GOAL_NONTERMINAL_PROFILE" = "$current" ]; then
+                    echo RUNNING > "${FAKE_ROOT}/mission_state"
+                    printf '{"schema_version":1,"ok":true,"accepted":true,"command":{"accepted":true}}\n'
+                else
+                    echo SUCCESS > "${FAKE_ROOT}/mission_state"
+                    printf '{"schema_version":1,"ok":true,"accepted":true,"command":{"accepted":true}}\n'
+                fi
+                ;;
+            */api/v1/stop)
+                echo "stop" >> "${FAKE_ROOT}/calls.log"
+                echo CANCELLED > "${FAKE_ROOT}/mission_state"
+                printf '{"schema_version":1,"ok":true,"accepted":true,"status":"stopped"}\n'
+                ;;
+            */api/v1/session/start)
+                echo "session_start:$data" >> "${FAKE_ROOT}/calls.log"
+                echo IDLE > "${FAKE_ROOT}/mission_state"
+                fail_profile="${FAKE_SESSION_START_FAIL_PROFILE:-}"
+                if [ -n "$fail_profile" ] && [ "$fail_profile" = "$current" ]; then
+                    printf '{"schema_version":1,"ok":false,"success":false,"error":"fake_session_start_failed"}\n'
+                else
+                    printf '{"schema_version":1,"ok":true,"success":true,"session":{"mode":"navigating"}}\n'
+                fi
+                ;;
+            */api/v1/session/end)
+                echo "session_end" >> "${FAKE_ROOT}/calls.log"
+                echo IDLE > "${FAKE_ROOT}/mission_state"
+                printf '{"schema_version":1,"ok":true,"success":true,"session":{"mode":"idle"}}\n'
                 ;;
             */api/v1/session)
                 echo '{}'
@@ -595,7 +627,7 @@ def test_lingtu_slamcheck_validates_recovery_signal_and_action_contract():
 def test_lingtu_slamcompare_is_non_motion_static_gate():
     text = _read("scripts/lingtu")
     start = text.index("slamcompare_usage()")
-    end = text.index("# -- Subcommand: log --")
+    end = text.index("# -- Subcommand: routecheck --")
     impl = text[start:end]
 
     assert "Usage: lingtu slamcompare" in text
@@ -609,6 +641,44 @@ def test_lingtu_slamcompare_is_non_motion_static_gate():
     assert "/api/v1/goal" not in impl
     assert "/api/v1/cmd_vel" not in impl
     assert "cmd_nav" not in impl
+
+
+def test_lingtu_routecheck_is_non_motion_route_preflight():
+    text = _read("scripts/lingtu")
+    start = text.index("routecheck_usage()")
+    end = text.index("# -- Subcommand: routecompare --", start)
+    impl = text[start:end]
+
+    assert "Usage: lingtu routecheck" in text
+    assert "routecheck|route-check|route-preflight" in text
+    assert "/api/v1/navigation/plan" in impl
+    assert "cmd_slamcheck super_lio_relocation" in impl
+    assert 'slamcompare_wait_ready "localizer"' in impl
+    assert 'slamcompare_wait_ready "super_lio_relocation"' in impl
+    assert "Rollback SLAM mode: localizer" in impl
+    assert "No motion commands are sent" in impl
+    assert "/api/v1/goal" not in impl
+    assert "/api/v1/cmd_vel" not in impl
+    assert "cmd_nav" not in impl
+
+
+def test_lingtu_routecompare_is_allow_motion_gated():
+    text = _read("scripts/lingtu")
+    start = text.index("routecompare_usage()")
+    end = text.index("# -- Subcommand: log --", start)
+    impl = text[start:end]
+
+    assert "Usage: lingtu routecompare" in text
+    assert "routecompare|route-compare" in text
+    assert "--allow-motion" in impl
+    assert "routecompare requires --allow-motion" in impl
+    assert "/api/v1/session/start" in impl
+    assert "/api/v1/goal" in impl
+    assert "/api/v1/cmd_vel" not in impl
+    cmd_impl = impl[impl.index("cmd_routecompare()") :]
+    assert cmd_impl.index('if [ "$allow_motion" != "1" ]') < cmd_impl.index(
+        "routecompare_run_backend"
+    )
 
 
 def test_lingtu_nav_goal_prechecks_readiness_and_plan_preview(tmp_path):
@@ -844,6 +914,218 @@ def test_lingtu_slamcompare_passes_static_baseline_and_candidate(tmp_path):
     assert "switch:super_lio_relocation" in calls
     assert calls.rstrip().endswith("switch:localizer")
     assert "goal:" not in calls
+
+
+def test_lingtu_routecheck_previews_baseline_candidate_and_rolls_back(tmp_path):
+    artifact = tmp_path / "route-artifacts"
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        (
+            "routecheck --map demo --goal 1 2 0 --candidate-warmup 0 "
+            f"--artifact-dir {shlex.quote(_wsl_path(artifact))}"
+        ),
+        extra_env={
+            "LINGTU_SLAMCOMPARE_READY_POLL": "0",
+            "LINGTU_SLAMCOMPARE_READY_TIMEOUT": "2",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS: route validation preflight completed without motion" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "switch:localizer" in calls
+    assert "switch:super_lio_relocation" in calls
+    switch_calls = [line for line in calls.splitlines() if line.startswith("switch:")]
+    assert switch_calls[-1] == "switch:localizer"
+    assert calls.count("plan:") == 2
+    assert "goal:" not in calls
+    assert (artifact / "baseline" / "plan.json").exists()
+    assert (artifact / "candidate" / "plan.json").exists()
+    assert (artifact / "after_rollback" / "localization.json").exists()
+
+
+def test_lingtu_routecheck_blocks_plan_and_captures_failed_rollback(tmp_path):
+    artifact = tmp_path / "route-artifacts"
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        (
+            "routecheck --map demo --goal 1 2 0 --candidate-warmup 0 "
+            f"--artifact-dir {shlex.quote(_wsl_path(artifact))}"
+        ),
+        extra_env={
+            "FAKE_NAV_BLOCKER": "safety_stop",
+            "LINGTU_SLAMCOMPARE_READY_POLL": "0",
+            "LINGTU_SLAMCOMPARE_READY_TIMEOUT": "2",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "baseline route preflight blocked before plan" in result.stdout
+    assert "safety_stop" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    switch_calls = [line for line in calls.splitlines() if line.startswith("switch:")]
+    assert switch_calls[-1] == "switch:localizer"
+    assert "plan:" not in calls
+    assert "goal:" not in calls
+    assert (artifact / "failed_rollback" / "localization.json").exists()
+
+
+def test_lingtu_routecompare_requires_allow_motion_before_gateway_calls(tmp_path):
+    artifact = tmp_path / "route-compare"
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        (
+            "routecompare --map demo --goal 1 2 0 --candidate-warmup 0 "
+            f"--artifact-dir {shlex.quote(_wsl_path(artifact))}"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "routecompare requires --allow-motion" in result.stdout
+    calls = harness["root"] / "calls.log"
+    if calls.exists():
+        text = calls.read_text(encoding="utf-8")
+        assert "session_start:" not in text
+        assert "session_end" not in text
+        assert "goal:" not in text
+        assert "switch:" not in text
+    assert not (artifact / "baseline" / "goal.json").exists()
+
+
+def test_lingtu_routecompare_allow_motion_runs_baseline_candidate_and_rolls_back(tmp_path):
+    artifact = tmp_path / "route-compare"
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        (
+            "routecompare --map demo --goal 1 2 0 --candidate-warmup 0 "
+            "--timeout 2 --poll 0 --allow-motion "
+            f"--artifact-dir {shlex.quote(_wsl_path(artifact))}"
+        ),
+        extra_env={
+            "LINGTU_SLAMCOMPARE_READY_POLL": "0",
+            "LINGTU_SLAMCOMPARE_READY_TIMEOUT": "2",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MOTION ENABLED" in result.stdout
+    assert "PASS: route A/B motion compare completed" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("goal:") == 2
+    assert calls.count("session_start:") == 2
+    assert calls.count("session_end") == 2
+    assert "switch:localizer" in calls
+    assert "switch:super_lio_relocation" in calls
+    assert calls.index("session_start:") < calls.index("goal:")
+    switch_calls = [line for line in calls.splitlines() if line.startswith("switch:")]
+    assert switch_calls[-1] == "switch:localizer"
+    assert (artifact / "before" / "localization.json").exists()
+    assert (artifact / "baseline" / "goal.json").exists()
+    assert (artifact / "baseline" / "result.txt").exists()
+    assert (artifact / "candidate" / "goal.json").exists()
+    assert (artifact / "candidate" / "result.txt").exists()
+    assert (artifact / "after_rollback" / "localization.json").exists()
+    summary = json.loads((artifact / "routecompare_summary.json").read_text())
+    assert summary["outcome"] == "pass"
+    assert summary["experimental_profile_required"] is True
+    assert summary["baseline"]["terminal_state"] == "SUCCESS"
+    assert summary["candidate"]["terminal_state"] == "SUCCESS"
+    assert "route_delta" in summary["baseline"]
+    assert summary["rollback"]["localization"]["backend"] == "localizer"
+
+
+def test_lingtu_routecompare_failure_stops_session_rolls_back_and_captures(tmp_path):
+    artifact = tmp_path / "route-compare"
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        (
+            "routecompare --map demo --goal 1 2 0 --candidate-warmup 0 "
+            "--timeout 2 --poll 0 --allow-motion "
+            f"--artifact-dir {shlex.quote(_wsl_path(artifact))}"
+        ),
+        extra_env={
+            "FAKE_GOAL_FAIL_PROFILE": "super_lio_relocation",
+            "LINGTU_SLAMCOMPARE_READY_POLL": "0",
+            "LINGTU_SLAMCOMPARE_READY_TIMEOUT": "2",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "candidate route goal was rejected" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert calls.count("goal:") == 2
+    assert "stop" in calls
+    assert "session_end" in calls
+    switch_calls = [line for line in calls.splitlines() if line.startswith("switch:")]
+    assert switch_calls[-1] == "switch:localizer"
+    assert (artifact / "failed_rollback" / "localization.json").exists()
+    assert (artifact / "failed_rollback" / "navigation.json").exists()
+    assert (artifact / "failed_rollback" / "services.txt").exists()
+    summary = json.loads((artifact / "routecompare_summary.json").read_text())
+    assert summary["outcome"] == "failed"
+    assert summary["rollback"]["failed_rollback_present"] is True
+    assert summary["rollback"]["localization"]["backend"] == "localizer"
+
+
+def test_lingtu_routecompare_start_failure_stops_session_rolls_back_and_captures(tmp_path):
+    artifact = tmp_path / "route-compare"
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        (
+            "routecompare --map demo --goal 1 2 0 --candidate-warmup 0 "
+            "--timeout 2 --poll 0 --allow-motion "
+            f"--artifact-dir {shlex.quote(_wsl_path(artifact))}"
+        ),
+        extra_env={
+            "FAKE_SESSION_START_FAIL_PROFILE": "localizer",
+            "LINGTU_SLAMCOMPARE_READY_POLL": "0",
+            "LINGTU_SLAMCOMPARE_READY_TIMEOUT": "2",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "baseline navigation session did not start" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "session_start:" in calls
+    assert "goal:" not in calls
+    assert "stop" in calls
+    assert "session_end" in calls
+    switch_calls = [line for line in calls.splitlines() if line.startswith("switch:")]
+    assert switch_calls[-1] == "switch:localizer"
+    assert (artifact / "failed_rollback" / "localization.json").exists()
+    summary = json.loads((artifact / "routecompare_summary.json").read_text())
+    assert summary["outcome"] == "failed"
+    assert summary["rollback"]["localization"]["backend"] == "localizer"
+
+
+def test_lingtu_routecompare_timeout_stops_session_rolls_back_and_captures(tmp_path):
+    artifact = tmp_path / "route-compare"
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        (
+            "routecompare --map demo --goal 1 2 0 --candidate-warmup 0 "
+            "--timeout 0 --poll 0 --allow-motion "
+            f"--artifact-dir {shlex.quote(_wsl_path(artifact))}"
+        ),
+        extra_env={
+            "FAKE_GOAL_NONTERMINAL_PROFILE": "localizer",
+            "LINGTU_SLAMCOMPARE_READY_POLL": "0",
+            "LINGTU_SLAMCOMPARE_READY_TIMEOUT": "2",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "baseline route did not reach a terminal state" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "goal:" in calls
+    assert "stop" in calls
+    assert "session_end" in calls
+    switch_calls = [line for line in calls.splitlines() if line.startswith("switch:")]
+    assert switch_calls[-1] == "switch:localizer"
+    assert (artifact / "failed_rollback" / "navigation.json").exists()
+    summary = json.loads((artifact / "routecompare_summary.json").read_text())
+    assert summary["outcome"] == "failed"
+    assert summary["rollback"]["failed_rollback_present"] is True
 
 
 def test_lingtu_slamcompare_fails_pose_jump_and_rolls_back(tmp_path):

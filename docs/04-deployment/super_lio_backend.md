@@ -425,11 +425,35 @@ Additional stationary A/B evidence on 2026-05-04 used the repeatable
   reported `ready=true`, `reported_state=TRACKING`, `health_source=localizer_health_topic`,
   `recovery_signal=RECOVERED`, and all relevant SLAM/LingTu units had
   `NRestarts=0`
+- Route plan preflight was added and deployed to both robot script entrypoints
+  (`/opt/lingtu/current/scripts/lingtu` and
+  `~/data/SLAM/navigation/scripts/lingtu`). A first non-motion routecheck with
+  goal `(0, 0, 0)` correctly blocked promotion at plan preview:
+  `feasible=false`, `planner=pct`, `reasons=["planning_failed"]`; artifact:
+  `~/data/SLAM/navigation/artifacts/super_lio_route_preflight_20260504_223205`.
+- A second non-motion routecheck used the same saved map with a nearby feasible
+  short goal `(-1.071, -1.619, 1.050)` and passed for both backends; artifact:
+  `~/data/SLAM/navigation/artifacts/super_lio_route_preflight_20260504_223333`.
+  Baseline `localizer` plan: `count=2`, distance `0.548 m`,
+  `plan_ms=5.49`; candidate `super_lio_relocation` plan: `count=2`, distance
+  `0.548 m`, `plan_ms=4.98`.
+- During the successful routecheck candidate phase,
+  `/api/v1/localization/status` reported `backend=super_lio_relocation`,
+  `ready=true`, `health_source=odom_map_cloud`, `map_save_source=active_map`,
+  `confidence=0.96`, `recovery_signal=RECOVERED`, `recovery_action=none`.
+  Rollback returned to `localizer`, mission stayed `IDLE`, active command source
+  stayed `none`, safety stayed OK, and all relevant SLAM/LingTu units had
+  `NRestarts=0`.
+- `routecompare` was deployed with a machine-readable
+  `routecompare_summary.json` writer and re-checked on sunrise without
+  `--allow-motion`; it exited before backend switch, session start, goal post,
+  or artifact creation. The robot remained `localizer`, mission `IDLE`, no
+  active plan, and safety `OK`.
 
 This satisfies the stationary non-motion and static pre-motion comparison gates
-for this saved map. The route-level saved-map motion comparison has not been
-executed in this evidence set, so Super-LIO remains experimental and must not
-become the default `nav` backend.
+for this saved map, plus the non-motion route planning preflight. The route-level
+saved-map motion comparison has not been executed in this evidence set, so
+Super-LIO remains experimental and must not become the default `nav` backend.
 
 ## Rollback
 
@@ -518,12 +542,90 @@ recovery, or command-source checks, do not send a navigation goal. Capture the
 output, keep `super_lio_relocation` experimental, and investigate frame/initial
 pose alignment before route testing.
 
-Record the same route twice:
+Then run the route plan preflight. This still sends no motion command: it
+captures evidence, switches `localizer` and `super_lio_relocation` in sequence,
+previews `/api/v1/navigation/plan` for each backend, and rolls back to
+`localizer`.
+
+```bash
+bash scripts/lingtu routecheck \
+  --map corrected_20260406_224020 \
+  --goal <x> <y> <yaw> \
+  --candidate-warmup 20
+```
+
+`routecheck` must pass before the first real route goal. It writes a timestamped
+artifact directory under `~/data/SLAM/navigation/artifacts/` by default:
+
+| Path | Purpose |
+| --- | --- |
+| `before/` | starting status, localization, navigation, health, services, resources, and journals |
+| `baseline/` | `localizer` switch response, readiness snapshots, and baseline `plan.json` |
+| `candidate/` | initial pose, Super-LIO relocation smoke output, readiness snapshots, and candidate `plan.json` |
+| `after_rollback/` | final `localizer` rollback snapshots after a successful preflight |
+| `failed_rollback/` | rollback snapshots when readiness or plan preview blocks the preflight |
+| `slamcompare.txt` | optional static A/B output when `--with-slamcompare` is used |
+
+If `routecheck` reports blockers such as `odometry_missing`, `safety_stop`, or
+an infeasible plan, keep the robot still, keep Super-LIO experimental, and fix
+the underlying readiness issue before any route motion.
+
+Only after `slamcompare` and `routecheck` both pass should you run a motion
+comparison. The first motion-level harness is `routecompare`. It is locked
+behind an explicit motion gate: without `--allow-motion`, it must fail before
+starting a navigation session or posting `/api/v1/goal`.
+
+Safe dry-run shape:
+
+```bash
+bash scripts/lingtu routecompare \
+  --map corrected_20260406_224020 \
+  --goal <x> <y> <yaw>
+```
+
+This dry run must not move the robot and must not call
+`/api/v1/session/start`, `/api/v1/goal`, or `/api/v1/session/end`.
+
+Motion-enabled A/B shape:
+
+```bash
+bash scripts/lingtu routecompare \
+  --map corrected_20260406_224020 \
+  --goal <x> <y> <yaw> \
+  --candidate-warmup 20 \
+  --timeout 120 \
+  --allow-motion
+```
+
+With `--allow-motion`, the harness records the same route twice:
 
 1. Baseline: `localizer`
 2. Candidate: `super_lio_relocation`
 
-Create one artifact directory per route pair:
+Each run starts a navigation session, sends exactly one route goal, waits for a
+mission terminal state, captures route evidence, and stops the session before
+switching backend or returning. The harness must rollback to `localizer` at the
+end of both success and failure paths.
+
+`routecompare` writes one artifact directory per route pair under
+`~/data/SLAM/navigation/artifacts/` by default:
+
+| Path | Purpose |
+| --- | --- |
+| `before/` | starting localization, navigation, health, service, resource, and journal snapshots |
+| `baseline/` | localizer switch, plan preview, session, goal, terminal result, and after-stop snapshots |
+| `candidate/` | Super-LIO relocation initial pose, warmup output, plan preview, session, goal, terminal result, and after-stop snapshots |
+| `after_rollback/` | final localizer state after a successful A/B pair |
+| `failed_rollback/` | stop/session-end/rollback snapshots after any blocked or failed motion run |
+| `routecompare_summary.json` | machine-readable baseline/candidate route result, drift, recovery, restart, resource, and rollback summary |
+
+If baseline or candidate motion fails, the harness must stop the active
+navigation session, rollback to `localizer`, capture `failed_rollback/`, and
+exit non-zero. A failed candidate must never promote Super-LIO, leave an active
+session running, or continue sending additional goals.
+
+Manual fallback shape, if the harness itself needs diagnosis, is still to create
+one artifact directory per route pair:
 
 ```bash
 cd ~/data/SLAM/navigation

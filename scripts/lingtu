@@ -44,6 +44,8 @@
 #   lingtu soak --duration 120 --json --strict # non-motion readiness soak
 #   lingtu slamcheck super_lio # switch, verify Super-LIO Gateway contract, rollback
 #   lingtu slamcompare --map <name> # localizer vs Super-LIO relocation non-motion gate
+#   lingtu routecheck --map <name> --goal X Y YAW # route A/B preflight, no motion
+#   lingtu routecompare --map <name> --goal X Y YAW --allow-motion # route A/B motion run
 set -u
 GW="${GW:-http://localhost:5050}"
 MAP_DIR="${MAP_DIR:-$HOME/data/nova/maps}"
@@ -114,6 +116,20 @@ except Exception:
 if not all(math.isfinite(v) for v in (x, y, yaw)):
     sys.exit(1)
 print(json.dumps({"x": x, "y": y, "z": 0.0, "yaw": yaw}, separators=(",", ":")))
+PY
+}
+
+format_nav_session_payload() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+payload = {
+    "mode": "navigating",
+    "map_name": sys.argv[1],
+    "slam_profile": sys.argv[2],
+}
+print(json.dumps(payload, separators=(",", ":")))
 PY
 }
 
@@ -2458,6 +2474,766 @@ sys.exit(1 if violations else 0)
 PY
 }
 
+# -- Subcommand: routecheck --
+routecheck_usage() {
+    echo "Usage: lingtu routecheck --map NAME --goal X Y [YAW] [--artifact-dir DIR] [--candidate-warmup SEC] [--with-slamcompare] [--slamcompare-duration SEC] [--slamcompare-warmup SEC]"
+}
+
+LINGTU_ROUTECHECK_ROLLBACK=0
+LINGTU_ROUTECHECK_ARTIFACT_DIR=""
+lingtu_routecheck_cleanup() {
+    local status=$?
+    trap - EXIT
+    if [ "${LINGTU_ROUTECHECK_ROLLBACK:-0}" = "1" ]; then
+        echo "Rollback SLAM mode: localizer"
+        curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+            -d '{"profile":"localizer"}' "$GW/api/v1/slam/switch" \
+            | python3 -m json.tool 2>/dev/null || true
+        if [ "$status" -ne 0 ] && [ -n "${LINGTU_ROUTECHECK_ARTIFACT_DIR:-}" ]; then
+            routecheck_capture_phase "failed_rollback" "$LINGTU_ROUTECHECK_ARTIFACT_DIR/failed_rollback" || true
+        fi
+    fi
+    return "$status"
+}
+
+routecheck_capture_json() {
+    local path="$1" endpoint="$2" raw
+    raw=$(curl -s --max-time 5 "$GW$endpoint" 2>/dev/null || echo '{}')
+    printf '%s\n' "$raw" > "$path"
+    printf '%s\n' "$raw" | python3 -m json.tool > "${path%.json}.pretty.json" 2>/dev/null || true
+}
+
+routecheck_capture_phase() {
+    local phase="$1" dir="$2"
+    mkdir -p "$dir"
+    cmd_status > "$dir/status.txt" 2>&1 || true
+    routecheck_capture_json "$dir/state.json" "/api/v1/state"
+    routecheck_capture_json "$dir/localization.json" "/api/v1/localization/status"
+    routecheck_capture_json "$dir/navigation.json" "/api/v1/navigation/status"
+    routecheck_capture_json "$dir/health.json" "/api/v1/health"
+    systemctl show -p Id -p ActiveState -p SubState -p NRestarts \
+        robot-fastlio2.service robot-localizer.service \
+        robot-super-lio.service robot-super-lio-relocation.service lingtu.service \
+        > "$dir/services.txt" 2>&1 || true
+    ps -o pid,comm,%cpu,%mem,rss,vsz,args \
+        -C super_lio_node -C relocation_node -C localizer_node -C python3 \
+        > "$dir/resources.txt" 2>&1 || true
+    journalctl -u robot-super-lio.service -u robot-super-lio-relocation.service \
+        -u robot-localizer.service -u robot-fastlio2.service -u lingtu.service \
+        --since '30 min ago' --no-pager > "$dir/journal.txt" 2>&1 || true
+    echo "Captured $phase evidence: $dir"
+}
+
+routecheck_plan_preview() {
+    local phase="$1" payload="$2" dir="$3"
+    local NAVJ PLANJ CAN BLOCKERS ADVISORIES STATE FEASIBLE COUNT PLANNER REASONS
+    mkdir -p "$dir"
+    NAVJ=$(curl -s --max-time 4 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
+    printf '%s\n' "$NAVJ" > "$dir/navigation.pre_plan.json"
+    CAN=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; print(str(r.get("can_accept_goal", d.get("can_accept_goal", False))).lower())')
+    BLOCKERS=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; b=r.get("blockers") or []; print(",".join(map(str,b)) if isinstance(b,list) else str(b or ""))')
+    ADVISORIES=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; a=r.get("advisories") or []; print(",".join(map(str,a)) if isinstance(a,list) else str(a or ""))')
+    STATE=$(pjson "$NAVJ" 'print(d.get("state","unknown"))')
+    if [ "$CAN" != "true" ]; then
+        printf "${R}FAIL${N}: %s route preflight blocked before plan (state=%s blockers=%s advisories=%s)\n" \
+            "$phase" "$STATE" "${BLOCKERS:-unknown}" "${ADVISORIES:-unknown}"
+        return 1
+    fi
+
+    PLANJ=$(curl -s --max-time 8 -X POST -H "Content-Type: application/json" \
+        -d "$payload" "$GW/api/v1/navigation/plan" 2>/dev/null || echo '{}')
+    printf '%s\n' "$PLANJ" > "$dir/plan.json"
+    printf '%s\n' "$PLANJ" | python3 -m json.tool > "$dir/plan.pretty.json" 2>/dev/null || true
+    FEASIBLE=$(pjson "$PLANJ" 'print(str(bool(d.get("feasible"))).lower())')
+    COUNT=$(pjson "$PLANJ" 'print(d.get("count","-"))')
+    PLANNER=$(pjson "$PLANJ" 'print(d.get("planner") or "-")')
+    REASONS=$(pjson "$PLANJ" 'r=d.get("reasons") or []; print(",".join(map(str,r)) if isinstance(r,list) else str(r or ""))')
+    if [ "$FEASIBLE" != "true" ]; then
+        printf "${R}FAIL${N}: %s route plan preview is not feasible (points=%s planner=%s reasons=%s)\n" \
+            "$phase" "$COUNT" "$PLANNER" "${REASONS:-unknown}"
+        return 1
+    fi
+    printf "${G}PASS${N}: %s route plan preview feasible (points=%s planner=%s)\n" \
+        "$phase" "$COUNT" "$PLANNER"
+    return 0
+}
+
+cmd_routecheck() {
+    local map_name="" goal_x="" goal_y="" goal_yaw="0" artifact_dir=""
+    local candidate_warmup=20 with_slamcompare=0 slamcompare_duration=60 slamcompare_warmup=20
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --map)
+                map_name="${2:-}"
+                [ -n "$map_name" ] || { routecheck_usage; return 1; }
+                shift 2 ;;
+            --map=*)
+                map_name="${1#*=}"
+                shift ;;
+            --goal)
+                [ "$#" -ge 3 ] || { routecheck_usage; return 1; }
+                goal_x="$2"
+                goal_y="$3"
+                if [ "$#" -ge 4 ] && [[ "${4:-}" != --* ]]; then
+                    goal_yaw="$4"
+                    shift 4
+                else
+                    goal_yaw="0"
+                    shift 3
+                fi ;;
+            --artifact-dir)
+                artifact_dir="${2:-}"
+                [ -n "$artifact_dir" ] || { routecheck_usage; return 1; }
+                shift 2 ;;
+            --artifact-dir=*)
+                artifact_dir="${1#*=}"
+                shift ;;
+            --candidate-warmup)
+                candidate_warmup="${2:-}"
+                shift 2 ;;
+            --candidate-warmup=*)
+                candidate_warmup="${1#*=}"
+                shift ;;
+            --with-slamcompare)
+                with_slamcompare=1
+                shift ;;
+            --slamcompare-duration)
+                slamcompare_duration="${2:-}"
+                shift 2 ;;
+            --slamcompare-duration=*)
+                slamcompare_duration="${1#*=}"
+                shift ;;
+            --slamcompare-warmup)
+                slamcompare_warmup="${2:-}"
+                shift 2 ;;
+            --slamcompare-warmup=*)
+                slamcompare_warmup="${1#*=}"
+                shift ;;
+            -h|--help)
+                routecheck_usage
+                return 0 ;;
+            *)
+                routecheck_usage
+                return 1 ;;
+        esac
+    done
+
+    [ -n "$map_name" ] || { echo -e "${R}FAIL${N}: --map NAME is required"; return 1; }
+    [ -n "$goal_x" ] && [ -n "$goal_y" ] || { echo -e "${R}FAIL${N}: --goal X Y [YAW] is required"; return 1; }
+    for pair in \
+        "candidate-warmup:$candidate_warmup" \
+        "slamcompare-duration:$slamcompare_duration" \
+        "slamcompare-warmup:$slamcompare_warmup"; do
+        local name="${pair%%:*}" value="${pair#*:}"
+        case "$value" in
+            ''|*[!0-9]*) echo "$name must be an integer number of seconds"; return 1 ;;
+        esac
+    done
+
+    local payload
+    payload=$(format_nav_goal_payload "$goal_x" "$goal_y" "$goal_yaw") || {
+        echo "goal must be numeric X Y [YAW]"
+        return 1
+    }
+
+    local maps_root="$HOME/data/nova/maps"
+    local raw_map_name="$map_name"
+    map_name=$(resolve_relocation_map_name "$maps_root" "$raw_map_name") || {
+        echo -e "${R}FAIL${N}: unsafe relocation map name or active map target: $raw_map_name"
+        return 1
+    }
+    [ -f "$maps_root/$map_name/map.pcd" ] || {
+        echo -e "${R}FAIL${N}: map.pcd not found: $maps_root/$map_name/map.pcd"
+        return 1
+    }
+    if [ -z "$artifact_dir" ]; then
+        artifact_dir="$HOME/data/SLAM/navigation/artifacts/super_lio_route_preflight_$(date +%Y%m%d_%H%M%S)"
+    fi
+    mkdir -p "$artifact_dir"/{before,baseline,candidate,after_rollback}
+
+    echo -e "${B}=== Lingtu route validation preflight @ $(date '+%H:%M:%S') ===${N}"
+    echo "Gateway: $GW"
+    echo "Map: $map_name"
+    echo "Goal: x=$goal_x y=$goal_y yaw=$goal_yaw"
+    echo "Artifact dir: $artifact_dir"
+    echo "No motion commands are sent. This command only previews plans and captures evidence."
+
+    LINGTU_ROUTECHECK_ROLLBACK=1
+    LINGTU_ROUTECHECK_ARTIFACT_DIR="$artifact_dir"
+    trap lingtu_routecheck_cleanup EXIT
+    routecheck_capture_phase "before" "$artifact_dir/before"
+
+    if [ "$with_slamcompare" = "1" ]; then
+        cmd_slamcompare \
+            --map "$map_name" \
+            --duration "$slamcompare_duration" \
+            --warmup "$slamcompare_warmup" \
+            --initial-pose current \
+            > "$artifact_dir/slamcompare.txt" || return 1
+    fi
+
+    echo "Switch baseline: localizer"
+    local switch_json switch_ok pose_line initial_x initial_y initial_yaw
+    switch_json=$(curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+        -d '{"profile":"localizer"}' "$GW/api/v1/slam/switch" 2>/dev/null || echo '{}')
+    printf '%s\n' "$switch_json" > "$artifact_dir/baseline/switch.json"
+    switch_ok=$(pjson "$switch_json" 'print(str(d.get("success", d.get("ok", False))).lower())')
+    if [ "$switch_ok" != "true" ]; then
+        echo -e "${R}FAIL${N}: could not switch to localizer baseline"
+        return 1
+    fi
+    slamcompare_wait_ready "localizer" || return 1
+    routecheck_capture_phase "baseline" "$artifact_dir/baseline"
+    routecheck_plan_preview "baseline" "$payload" "$artifact_dir/baseline" || return 1
+
+    pose_line=$(slamcompare_current_pose) || {
+        echo -e "${R}FAIL${N}: could not read current localizer pose from /api/v1/state"
+        return 1
+    }
+    read -r initial_x initial_y initial_yaw <<< "$pose_line"
+    printf '{"x":%s,"y":%s,"yaw":%s}\n' "$initial_x" "$initial_y" "$initial_yaw" \
+        > "$artifact_dir/candidate/initial_pose.json"
+
+    echo "Warm up candidate: super_lio_relocation"
+    cmd_slamcheck super_lio_relocation \
+        --map "$map_name" \
+        --initial-pose "$initial_x" "$initial_y" "$initial_yaw" \
+        --duration "$candidate_warmup" \
+        --rollback none \
+        > "$artifact_dir/candidate/slamcheck.txt" || return 1
+    slamcompare_wait_ready "super_lio_relocation" || return 1
+    routecheck_capture_phase "candidate" "$artifact_dir/candidate"
+    routecheck_plan_preview "candidate" "$payload" "$artifact_dir/candidate" || return 1
+
+    echo "Rollback SLAM mode: localizer"
+    curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+        -d '{"profile":"localizer"}' "$GW/api/v1/slam/switch" \
+        | python3 -m json.tool > "$artifact_dir/after_rollback/switch.json" 2>/dev/null || true
+    LINGTU_ROUTECHECK_ROLLBACK=0
+    slamcompare_wait_ready "localizer" || return 1
+    routecheck_capture_phase "after_rollback" "$artifact_dir/after_rollback"
+    trap - EXIT
+
+    echo -e "${G}PASS${N}: route validation preflight completed without motion"
+    echo "Artifact dir: $artifact_dir"
+    LINGTU_ROUTECHECK_ARTIFACT_DIR=""
+}
+
+# -- Subcommand: routecompare --
+routecompare_usage() {
+    echo "Usage: lingtu routecompare --map NAME --goal X Y [YAW] --allow-motion [--artifact-dir DIR] [--candidate-warmup SEC] [--timeout SEC] [--poll SEC]"
+}
+
+LINGTU_ROUTECOMPARE_ROLLBACK=0
+LINGTU_ROUTECOMPARE_SESSION_ACTIVE=0
+LINGTU_ROUTECOMPARE_ARTIFACT_DIR=""
+
+routecompare_write_summary() {
+    local artifact_dir="$1" outcome="${2:-unknown}"
+    [ -n "$artifact_dir" ] || return 0
+    [ -d "$artifact_dir" ] || return 0
+    python3 - "$artifact_dir" "$outcome" <<'PY'
+import json
+import math
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+
+root = pathlib.Path(sys.argv[1])
+outcome = sys.argv[2]
+
+
+def load_json(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def pose_from_state(path):
+    data = load_json(path)
+    odom = data.get("odometry") or data.get("pose") or {}
+    x = number(odom.get("x"))
+    y = number(odom.get("y"))
+    yaw = number(odom.get("yaw"))
+    if x is None or y is None:
+        return None
+    pose = {"x": x, "y": y}
+    if yaw is not None:
+        pose["yaw"] = yaw
+    return pose
+
+
+def yaw_delta(a, b):
+    if a is None or b is None:
+        return None
+    return math.atan2(math.sin(b - a), math.cos(b - a))
+
+
+def route_delta(start, end):
+    if not start or not end:
+        return {}
+    dx = end["x"] - start["x"]
+    dy = end["y"] - start["y"]
+    result = {"xy_delta_m": math.hypot(dx, dy)}
+    if "yaw" in start and "yaw" in end:
+        result["yaw_delta_rad"] = yaw_delta(start.get("yaw"), end.get("yaw"))
+    return result
+
+
+def flatten_localization(data):
+    loc = data.get("localization") or data
+    keys = (
+        "backend",
+        "health_source",
+        "map_save_source",
+        "state",
+        "ready",
+        "confidence",
+        "icp_quality",
+        "recovery_signal",
+        "recovery_action",
+        "recovery_method",
+        "restart_recovery_supported",
+        "saved_map_relocalization_supported",
+    )
+    return {key: loc.get(key) for key in keys if key in loc}
+
+
+def parse_services(path):
+    services = {}
+    current = None
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return services
+    for line in lines:
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key == "Id":
+            current = value or "_unknown"
+            services.setdefault(current, {})
+            continue
+        if current is None:
+            current = "_summary"
+            services.setdefault(current, {})
+        if key == "NRestarts":
+            try:
+                services[current][key] = int(value)
+            except ValueError:
+                services[current][key] = value
+        elif key in {"ActiveState", "SubState"}:
+            services[current][key] = value
+    return services
+
+
+def restart_counts(services):
+    counts = {}
+    for name, fields in services.items():
+        value = fields.get("NRestarts")
+        if isinstance(value, int):
+            counts[name] = value
+    return counts
+
+
+def restart_delta(before, after):
+    before_counts = restart_counts(before)
+    after_counts = restart_counts(after)
+    names = sorted(set(before_counts) | set(after_counts))
+    return {
+        name: after_counts.get(name, 0) - before_counts.get(name, 0)
+        for name in names
+    }
+
+
+def parse_resources(path):
+    rows = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return rows
+    for line in lines[1:]:
+        parts = line.split(None, 6)
+        if len(parts) < 6 or not parts[0].isdigit():
+            continue
+        rows.append(
+            {
+                "pid": int(parts[0]),
+                "comm": parts[1],
+                "cpu_pct": number(parts[2]),
+                "mem_pct": number(parts[3]),
+                "rss_kb": int(float(parts[4])),
+                "vsz_kb": int(float(parts[5])),
+                "args": parts[6] if len(parts) > 6 else "",
+            }
+        )
+    return rows
+
+
+def terminal_state(phase_dir):
+    latest = load_json(phase_dir / "navigation.latest.json")
+    state = latest.get("state")
+    if state:
+        return state
+    result = phase_dir / "result.txt"
+    try:
+        text = result.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+    for marker in ("SUCCESS", "FAILED", "STUCK", "CANCELLED"):
+        if marker in text:
+            return marker
+    return None
+
+
+def sample_summary(phase_dir):
+    path = phase_dir / "navigation.samples.jsonl"
+    states = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return {"count": 0, "states": []}
+    for line in lines:
+        try:
+            state = json.loads(line).get("state")
+        except Exception:
+            state = None
+        if state and state not in states:
+            states.append(state)
+    return {"count": len(lines), "states": states}
+
+
+def phase_summary(name):
+    phase = root / name
+    start_pose = pose_from_state(phase / "before" / "state.json")
+    end_pose = pose_from_state(phase / "after_stop" / "state.json")
+    before_services = parse_services(phase / "before" / "services.txt")
+    after_services = parse_services(phase / "after_stop" / "services.txt")
+    return {
+        "terminal_state": terminal_state(phase),
+        "plan": load_json(phase / "plan.json"),
+        "start_pose": start_pose,
+        "end_pose": end_pose,
+        "route_delta": route_delta(start_pose, end_pose),
+        "localization": flatten_localization(load_json(phase / "after_stop" / "localization.json")),
+        "restarts_before": restart_counts(before_services),
+        "restarts_after": restart_counts(after_services),
+        "restart_delta": restart_delta(before_services, after_services),
+        "resources_before": parse_resources(phase / "before" / "resources.txt"),
+        "resources_after": parse_resources(phase / "after_stop" / "resources.txt"),
+        "navigation_samples": sample_summary(phase),
+    }
+
+
+baseline = phase_summary("baseline")
+candidate = phase_summary("candidate")
+rollback_loc = flatten_localization(load_json(root / "after_rollback" / "localization.json"))
+failed_rollback_loc = flatten_localization(load_json(root / "failed_rollback" / "localization.json"))
+baseline_end = baseline.get("end_pose")
+candidate_end = candidate.get("end_pose")
+
+summary = {
+    "schema_version": 1,
+    "generated_at": datetime.now(timezone.utc).isoformat(),
+    "artifact_dir": str(root),
+    "outcome": outcome,
+    "experimental_profile_required": True,
+    "baseline": baseline,
+    "candidate": candidate,
+    "comparison": {
+        "candidate_vs_baseline_end_delta": route_delta(baseline_end, candidate_end),
+    },
+    "rollback": {
+        "localization": rollback_loc or failed_rollback_loc,
+        "failed_rollback_present": (root / "failed_rollback").exists(),
+    },
+}
+
+tmp = root / "routecompare_summary.json.tmp"
+tmp.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+tmp.replace(root / "routecompare_summary.json")
+PY
+}
+
+routecompare_cleanup() {
+    local status=$?
+    trap - EXIT
+    if [ "${LINGTU_ROUTECOMPARE_SESSION_ACTIVE:-0}" = "1" ]; then
+        echo "Stop active navigation session"
+        if [ -n "${LINGTU_ROUTECOMPARE_ARTIFACT_DIR:-}" ]; then
+            mkdir -p "$LINGTU_ROUTECOMPARE_ARTIFACT_DIR/failed_rollback"
+            curl -s --max-time 5 -X POST -H "Content-Type: application/json" \
+                -d '{}' "$GW/api/v1/stop" \
+                > "$LINGTU_ROUTECOMPARE_ARTIFACT_DIR/failed_rollback/stop.json" 2>/dev/null || true
+            curl -s --max-time 20 -X POST "$GW/api/v1/session/end" \
+                > "$LINGTU_ROUTECOMPARE_ARTIFACT_DIR/failed_rollback/session_end.json" 2>/dev/null || true
+        else
+            curl -s --max-time 5 -X POST -H "Content-Type: application/json" \
+                -d '{}' "$GW/api/v1/stop" >/dev/null 2>&1 || true
+            curl -s --max-time 20 -X POST "$GW/api/v1/session/end" >/dev/null 2>&1 || true
+        fi
+        LINGTU_ROUTECOMPARE_SESSION_ACTIVE=0
+    fi
+    if [ "${LINGTU_ROUTECOMPARE_ROLLBACK:-0}" = "1" ]; then
+        echo "Rollback SLAM mode: localizer"
+        curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+            -d '{"profile":"localizer"}' "$GW/api/v1/slam/switch" \
+            | python3 -m json.tool 2>/dev/null || true
+        if [ "$status" -ne 0 ] && [ -n "${LINGTU_ROUTECOMPARE_ARTIFACT_DIR:-}" ]; then
+            routecheck_capture_phase "failed_rollback" "$LINGTU_ROUTECOMPARE_ARTIFACT_DIR/failed_rollback" || true
+            routecompare_write_summary "$LINGTU_ROUTECOMPARE_ARTIFACT_DIR" "failed" || true
+        fi
+    fi
+    return "$status"
+}
+
+routecompare_post_json() {
+    local endpoint="$1" payload="$2" path="$3" timeout="${4:-20}" raw
+    raw=$(curl -s --max-time "$timeout" -X POST -H "Content-Type: application/json" \
+        -d "$payload" "$GW$endpoint" 2>/dev/null || echo '{}')
+    printf '%s\n' "$raw" > "$path"
+    printf '%s\n' "$raw" | python3 -m json.tool > "${path%.json}.pretty.json" 2>/dev/null || true
+    printf '%s\n' "$raw"
+}
+
+routecompare_switch_backend() {
+    local backend="$1" dir="$2" payload raw ok
+    mkdir -p "$dir"
+    payload="{\"profile\":\"$backend\"}"
+    raw=$(routecompare_post_json "/api/v1/slam/switch" "$payload" "$dir/switch.json" 20)
+    ok=$(pjson "$raw" 'print(str(bool(d.get("success", d.get("ok", False)))).lower())')
+    if [ "$ok" != "true" ]; then
+        echo -e "${R}FAIL${N}: could not switch SLAM backend to $backend"
+        return 1
+    fi
+    slamcompare_wait_ready "$backend" || return 1
+}
+
+routecompare_wait_terminal() {
+    local phase="$1" dir="$2" timeout="$3" poll="$4"
+    local deadline now navj state failure_reason
+    mkdir -p "$dir"
+    : > "$dir/navigation.samples.jsonl"
+    deadline=$(( $(date +%s) + timeout ))
+    while :; do
+        navj=$(curl -s --max-time 4 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
+        printf '%s\n' "$navj" >> "$dir/navigation.samples.jsonl"
+        printf '%s\n' "$navj" > "$dir/navigation.latest.json"
+        printf '%s\n' "$navj" | python3 -m json.tool > "$dir/navigation.latest.pretty.json" 2>/dev/null || true
+        state=$(pjson "$navj" 'print(d.get("state","unknown"))')
+        failure_reason=$(pjson "$navj" 'print(d.get("failure_reason","") or "")')
+        case "$state" in
+            SUCCESS)
+                echo "PASS: $phase route reached SUCCESS" | tee "$dir/result.txt"
+                return 0
+                ;;
+            FAILED|STUCK|CANCELLED)
+                echo "FAIL: $phase route ended in $state ${failure_reason}" | tee "$dir/result.txt"
+                return 1
+                ;;
+        esac
+        now=$(date +%s)
+        if [ "$now" -ge "$deadline" ]; then
+            echo "FAIL: $phase route did not reach a terminal state before ${timeout}s (last_state=$state)" | tee "$dir/result.txt"
+            return 1
+        fi
+        sleep "$poll"
+    done
+}
+
+routecompare_run_backend() {
+    local phase="$1" backend="$2" map_name="$3" payload="$4" timeout="$5" poll="$6" dir="$7"
+    local session_payload raw ok accepted
+    mkdir -p "$dir"/{before,session,after_stop}
+    routecheck_capture_phase "${phase}_before_motion" "$dir/before"
+    routecheck_plan_preview "$phase" "$payload" "$dir" || return 1
+
+    session_payload=$(format_nav_session_payload "$map_name" "$backend")
+    LINGTU_ROUTECOMPARE_SESSION_ACTIVE=1
+    raw=$(routecompare_post_json "/api/v1/session/start" "$session_payload" "$dir/session_start.json" 30)
+    ok=$(pjson "$raw" 'print(str(bool(d.get("success", d.get("ok", False)))).lower())')
+    if [ "$ok" != "true" ]; then
+        echo -e "${R}FAIL${N}: $phase navigation session did not start"
+        return 1
+    fi
+    routecheck_capture_phase "${phase}_session_started" "$dir/session"
+
+    raw=$(routecompare_post_json "/api/v1/goal" "$payload" "$dir/goal.json" 15)
+    accepted=$(pjson "$raw" 'cmd=d.get("command") or {}; print(str(bool(d.get("accepted") or d.get("ok") or cmd.get("accepted") or d.get("status") == "ok")).lower())')
+    if [ "$accepted" != "true" ]; then
+        echo -e "${R}FAIL${N}: $phase route goal was rejected"
+        return 1
+    fi
+
+    routecompare_wait_terminal "$phase" "$dir" "$timeout" "$poll" || return 1
+
+    curl -s --max-time 20 -X POST "$GW/api/v1/session/end" \
+        > "$dir/session_end.json" 2>/dev/null || true
+    LINGTU_ROUTECOMPARE_SESSION_ACTIVE=0
+    routecheck_capture_phase "${phase}_after_stop" "$dir/after_stop"
+    return 0
+}
+
+cmd_routecompare() {
+    local map_name="" goal_x="" goal_y="" goal_yaw="0" artifact_dir=""
+    local candidate_warmup=20 timeout=120 poll=1 allow_motion=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --map)
+                map_name="${2:-}"
+                [ -n "$map_name" ] || { routecompare_usage; return 1; }
+                shift 2 ;;
+            --map=*)
+                map_name="${1#*=}"
+                shift ;;
+            --goal)
+                [ "$#" -ge 3 ] || { routecompare_usage; return 1; }
+                goal_x="$2"
+                goal_y="$3"
+                if [ "$#" -ge 4 ] && [[ "${4:-}" != --* ]]; then
+                    goal_yaw="$4"
+                    shift 4
+                else
+                    goal_yaw="0"
+                    shift 3
+                fi ;;
+            --artifact-dir)
+                artifact_dir="${2:-}"
+                [ -n "$artifact_dir" ] || { routecompare_usage; return 1; }
+                shift 2 ;;
+            --artifact-dir=*)
+                artifact_dir="${1#*=}"
+                shift ;;
+            --candidate-warmup)
+                candidate_warmup="${2:-}"
+                shift 2 ;;
+            --candidate-warmup=*)
+                candidate_warmup="${1#*=}"
+                shift ;;
+            --timeout)
+                timeout="${2:-}"
+                shift 2 ;;
+            --timeout=*)
+                timeout="${1#*=}"
+                shift ;;
+            --poll)
+                poll="${2:-}"
+                shift 2 ;;
+            --poll=*)
+                poll="${1#*=}"
+                shift ;;
+            --allow-motion)
+                allow_motion=1
+                shift ;;
+            -h|--help)
+                routecompare_usage
+                return 0 ;;
+            *)
+                routecompare_usage
+                return 1 ;;
+        esac
+    done
+
+    [ -n "$map_name" ] || { echo -e "${R}FAIL${N}: --map NAME is required"; return 1; }
+    [ -n "$goal_x" ] && [ -n "$goal_y" ] || { echo -e "${R}FAIL${N}: --goal X Y [YAW] is required"; return 1; }
+    for pair in \
+        "candidate-warmup:$candidate_warmup" \
+        "timeout:$timeout" \
+        "poll:$poll"; do
+        local name="${pair%%:*}" value="${pair#*:}"
+        case "$value" in
+            ''|*[!0-9]*) echo "$name must be an integer number of seconds"; return 1 ;;
+        esac
+    done
+
+    local payload
+    payload=$(format_nav_goal_payload "$goal_x" "$goal_y" "$goal_yaw") || {
+        echo "goal must be numeric X Y [YAW]"
+        return 1
+    }
+
+    if [ "$allow_motion" != "1" ]; then
+        echo -e "${R}FAIL${N}: routecompare requires --allow-motion before starting a navigation session or sending /api/v1/goal"
+        echo "Run routecheck first for the non-motion preflight."
+        return 1
+    fi
+
+    local maps_root="$HOME/data/nova/maps"
+    local raw_map_name="$map_name"
+    map_name=$(resolve_relocation_map_name "$maps_root" "$raw_map_name") || {
+        echo -e "${R}FAIL${N}: unsafe relocation map name or active map target: $raw_map_name"
+        return 1
+    }
+    [ -f "$maps_root/$map_name/map.pcd" ] || {
+        echo -e "${R}FAIL${N}: map.pcd not found: $maps_root/$map_name/map.pcd"
+        return 1
+    }
+    if [ -z "$artifact_dir" ]; then
+        artifact_dir="$HOME/data/SLAM/navigation/artifacts/super_lio_route_compare_$(date +%Y%m%d_%H%M%S)"
+    fi
+    mkdir -p "$artifact_dir"/{before,baseline,candidate,after_rollback}
+
+    echo -e "${B}=== Lingtu route A/B motion compare @ $(date '+%H:%M:%S') ===${N}"
+    echo "Gateway: $GW"
+    echo "Map: $map_name"
+    echo "Goal: x=$goal_x y=$goal_y yaw=$goal_yaw"
+    echo "Artifact dir: $artifact_dir"
+    echo -e "${Y}MOTION ENABLED${N}: this command starts navigation sessions and sends /api/v1/goal."
+
+    LINGTU_ROUTECOMPARE_ROLLBACK=1
+    LINGTU_ROUTECOMPARE_ARTIFACT_DIR="$artifact_dir"
+    LINGTU_ROUTECOMPARE_SESSION_ACTIVE=0
+    trap routecompare_cleanup EXIT
+    routecheck_capture_phase "before" "$artifact_dir/before"
+
+    echo "Switch baseline: localizer"
+    routecompare_switch_backend "localizer" "$artifact_dir/baseline" || return 1
+    routecompare_run_backend "baseline" "localizer" "$map_name" "$payload" "$timeout" "$poll" "$artifact_dir/baseline" || return 1
+
+    local pose_line initial_x initial_y initial_yaw
+    pose_line=$(slamcompare_current_pose) || {
+        echo -e "${R}FAIL${N}: could not read current localizer pose from /api/v1/state"
+        return 1
+    }
+    read -r initial_x initial_y initial_yaw <<< "$pose_line"
+    printf '{"x":%s,"y":%s,"yaw":%s}\n' "$initial_x" "$initial_y" "$initial_yaw" \
+        > "$artifact_dir/candidate/initial_pose.json"
+
+    echo "Warm up candidate: super_lio_relocation"
+    cmd_slamcheck super_lio_relocation \
+        --map "$map_name" \
+        --initial-pose "$initial_x" "$initial_y" "$initial_yaw" \
+        --duration "$candidate_warmup" \
+        --rollback none \
+        > "$artifact_dir/candidate/slamcheck.txt" || return 1
+    slamcompare_wait_ready "super_lio_relocation" || return 1
+    routecompare_run_backend "candidate" "super_lio_relocation" "$map_name" "$payload" "$timeout" "$poll" "$artifact_dir/candidate" || return 1
+
+    echo "Rollback SLAM mode: localizer"
+    curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+        -d '{"profile":"localizer"}' "$GW/api/v1/slam/switch" \
+        | python3 -m json.tool > "$artifact_dir/after_rollback/switch.json" 2>/dev/null || true
+    LINGTU_ROUTECOMPARE_ROLLBACK=0
+    slamcompare_wait_ready "localizer" || return 1
+    routecheck_capture_phase "after_rollback" "$artifact_dir/after_rollback"
+    routecompare_write_summary "$artifact_dir" "pass" || true
+    trap - EXIT
+
+    echo -e "${G}PASS${N}: route A/B motion compare completed"
+    echo "Artifact dir: $artifact_dir"
+    echo "Summary: $artifact_dir/routecompare_summary.json"
+    LINGTU_ROUTECOMPARE_ARTIFACT_DIR=""
+}
+
 # -- Subcommand: log --
 cmd_log() {
     local filter="${1:-all}"
@@ -2503,6 +3279,8 @@ case "${1:-status}" in
     soak|field-soak|readiness-soak) shift; cmd_soak "$@" ;;
     slamcheck|slam-check) shift; cmd_slamcheck "$@" ;;
     slamcompare|slam-compare|super-lio-compare|super_lio_compare|superlio-compare) shift; cmd_slamcompare "$@" ;;
+    routecheck|route-check|route-preflight|super-lio-routecheck|super_lio_routecheck) shift; cmd_routecheck "$@" ;;
+    routecompare|route-compare|super-lio-routecompare|super_lio_routecompare) shift; cmd_routecompare "$@" ;;
     super-lio-smoke|super_lio_smoke|superlio-smoke) shift; cmd_slamcheck super_lio "$@" ;;
     super-lio-relocation-smoke|super_lio_relocation_smoke|super-lio-reloc-smoke|super_lio_reloc_smoke) shift; cmd_slamcheck super_lio_relocation "$@" ;;
     log|l)          shift; cmd_log   "$@" ;;

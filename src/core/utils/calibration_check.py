@@ -103,7 +103,14 @@ def run_calibration_check(
 
 def _check_camera_intrinsics(config, report: CalibrationReport, required: bool) -> None:
     """Validate camera focal length and principal point."""
-    cam = config.camera
+    cam = getattr(config, "camera", None)
+    if cam is None:
+        msg = "Camera calibration config missing"
+        if required:
+            report.errors.append(msg)
+        else:
+            report.warnings.append(msg)
+        return
     fx, fy = cam.fx, cam.fy
 
     if fx <= 0 or fy <= 0:
@@ -145,7 +152,9 @@ def _check_camera_intrinsics(config, report: CalibrationReport, required: bool) 
 
 def _check_camera_extrinsics(config, report: CalibrationReport, required: bool) -> None:
     """Validate camera mounting position in body frame."""
-    cam = config.camera
+    cam = getattr(config, "camera", None)
+    if cam is None:
+        return
     pos = (cam.position_x, cam.position_y, cam.position_z)
 
     if all(v == 0.0 for v in pos):
@@ -184,7 +193,10 @@ def _check_camera_extrinsics(config, report: CalibrationReport, required: bool) 
 
 def _check_lidar_extrinsics(config, report: CalibrationReport) -> None:
     """Validate LiDAR mounting offset."""
-    lidar = config.lidar
+    lidar = getattr(config, "lidar", None)
+    if lidar is None:
+        report.warnings.append("LiDAR calibration config missing")
+        return
     ox, oy, oz = lidar.offset_x, lidar.offset_y, lidar.offset_z
     mag = math.sqrt(ox**2 + oy**2 + oz**2)
 
@@ -204,7 +216,10 @@ def _check_lidar_extrinsics(config, report: CalibrationReport) -> None:
 
 def _check_depth_scale(config, report: CalibrationReport) -> None:
     """Validate depth_scale is set correctly."""
-    ds = config.camera.depth_scale
+    cam = getattr(config, "camera", None)
+    if cam is None:
+        return
+    ds = cam.depth_scale
     if ds <= 0:
         report.errors.append(f"depth_scale is non-positive: {ds}")
     elif ds > 1.0:
@@ -237,7 +252,14 @@ def _check_lidar_imu_consistency(
     if not t_il:
         return
 
-    lidar = config.lidar
+    lidar = getattr(config, "lidar", None)
+    if lidar is None:
+        msg = "LiDAR calibration config missing; cannot compare against lio.yaml"
+        if required:
+            report.errors.append(msg)
+        else:
+            report.warnings.append(msg)
+        return
     t_cfg = [lidar.offset_x, lidar.offset_y, lidar.offset_z]
 
     if np.allclose(t_il, t_cfg, atol=0.002):

@@ -6,9 +6,17 @@ from typing import Dict, List, Optional
 import numpy as np
 
 
+THUNDER_V3_JOINT_NAMES = [
+    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint", "FR_foot_joint",
+    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint", "FL_foot_joint",
+    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint", "RR_foot_joint",
+    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint", "RL_foot_joint",
+]
+
+
 @dataclass
 class RobotConfig:
-    """NOVA Dog robot simulation configuration.
+    """Thunder v3 robot simulation configuration.
 
     Single source of truth: physical parameters, initial pose, policy path,
     and joint mapping are all defined here.
@@ -20,7 +28,7 @@ class RobotConfig:
     policy_onnx: str = ""         # policy.onnx path
 
     # Initial pose
-    init_position: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.35])
+    init_position: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.55])
     init_orientation_wxyz: List[float] = field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0])
 
     # Physical parameters (from global CLAUDE.md memory)
@@ -52,21 +60,16 @@ class RobotConfig:
     ])
 
     # Joint names (MuJoCo order)
-    leg_joint_names: List[str] = field(default_factory=lambda: [
-        'fr_hip_joint', 'fr_thigh_joint', 'fr_calf_joint', 'fr_foot_joint',
-        'fl_hip_joint', 'fl_thigh_joint', 'fl_calf_joint', 'fl_foot_joint',
-        'rr_hip_joint', 'rr_thigh_joint', 'rr_calf_joint', 'rr_foot_joint',
-        'rl_hip_joint', 'rl_thigh_joint', 'rl_calf_joint', 'rl_foot_joint',
-    ])
+    leg_joint_names: List[str] = field(default_factory=lambda: THUNDER_V3_JOINT_NAMES.copy())
 
     # Body names
-    # The real NOVA Dog MuJoCo model uses "trunk" as the root body and does
-    # not define a separate lidar_link body.
-    base_body_name: str = "trunk"
-    lidar_body_name: str = "trunk"
+    # Thunder v3 uses base_link as the root body. The LingTu runtime MJCF adds
+    # a lidar_link body for the MID-360 sensor pose.
+    base_body_name: str = "base_link"
+    lidar_body_name: str = "lidar_link"
 
-    # Actuator offset (first 8 actuators are arm; legs start at index 8)
-    leg_act_offset: int = 8
+    # Current Thunder v3 runtime MJCF has one actuator per leg/wheel joint.
+    leg_act_offset: int = 0
 
     # Joint order mapping (from nova_nav_bridge.py original constants)
     # MuJoCo (4+4+4+4): FR(h,t,c,f), FL(...), RR(...), RL(...)
@@ -90,7 +93,7 @@ class RobotConfig:
             base_dir: base directory; defaults to sim/ directory
         """
         if base_dir is None:
-            base_dir = str(Path(__file__).resolve().parent.parent.parent / "sim")
+            base_dir = str(Path(__file__).resolve().parents[2])
 
         base = Path(base_dir)
         if self.robot_xml and not Path(self.robot_xml).is_absolute():
@@ -116,11 +119,16 @@ class RobotConfig:
         return np.array(self.dart_to_mj, dtype=np.int32)
 
     @classmethod
-    def default_nova_dog(cls) -> "RobotConfig":
-        """Return default NOVA Dog config (paths must be resolved at runtime)."""
+    def default_thunder_v3(cls) -> "RobotConfig":
+        """Return default Thunder v3 config (paths must be resolved at runtime)."""
         cfg = cls()
-        cfg.robot_xml = "robots/nova_dog/robot_with_camera.xml"
+        cfg.robot_xml = "assets/mjcf/thunder_v3_lingtu.xml"
         # Policy is optional; callers can inject a concrete checkpoint when one
         # is available in the target environment.
         cfg.policy_onnx = ""
         return cfg
+
+    @classmethod
+    def default_nova_dog(cls) -> "RobotConfig":
+        """Compatibility alias for callers that still use the old method name."""
+        return cls.default_thunder_v3()

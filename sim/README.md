@@ -163,8 +163,9 @@ python sim/scripts/benchmark_following.py
 | Robot | Directory | Control | Notes |
 |-------|-----------|---------|-------|
 | Unitree Go2 | `robots/go2/` | RL policy (48D obs, action_scale=0.5) | MuJoCo Playground compatible |
-| NOVA Dog (Thunder) | `robots/nova_dog/` | Brainstem gRPC | Production robot model |
-| Legacy Thunder | `robot/thunder.urdf` | Direct MJCF | Older model, kept for compatibility |
+| Thunder v3 | `assets/{urdf,xml,mjcf}/` | LingTu MuJoCo adapter | Current upstream CAD asset baseline |
+| Thunder v3 compatibility | `robots/nova_dog/robot_with_camera.xml` | LingTu MuJoCo adapter | Legacy path now mirrors the current Thunder v3 runtime XML |
+| Thunder v3 URDF compatibility | `robot/thunder.urdf` | URDF | Legacy path with mesh references adjusted to `assets/meshes/` |
 
 ## 8. Datasets
 

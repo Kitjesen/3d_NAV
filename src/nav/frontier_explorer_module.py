@@ -649,13 +649,11 @@ class WavefrontFrontierExplorer(Module, layer=2):
 
     def _make_pose_stamped(self, x: float, y: float) -> PoseStamped:
         """Create a PoseStamped in the map frame at (x, y, 0)."""
-        ps = PoseStamped()
-        ps.x = x
-        ps.y = y
-        ps.z = 0.0
-        ps.frame_id = "map"
-        ps.ts = time.time()
-        return ps
+        return PoseStamped(
+            pose=Pose(float(x), float(y), 0.0),
+            frame_id="map",
+            ts=time.time(),
+        )
 
 
 # ---------------------------------------------------------------------------

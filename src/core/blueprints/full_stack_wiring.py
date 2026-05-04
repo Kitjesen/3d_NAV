@@ -33,13 +33,33 @@ class WireSpec:
 
 
 def _wire_if_present(bp: Blueprint, names: set[str], spec: WireSpec) -> None:
-    if spec.out_module in names and spec.in_module in names:
+    if (
+        spec.out_module in names
+        and spec.in_module in names
+        and _declares_port(bp, spec.out_module, spec.out_port)
+        and _declares_port(bp, spec.in_module, spec.in_port)
+    ):
         spec.apply(bp)
 
 
 def _apply_if_present(bp: Blueprint, names: set[str], specs: list[WireSpec]) -> None:
     for spec in specs:
         _wire_if_present(bp, names, spec)
+
+
+def _declares_port(bp: Blueprint, module_name: str, port_name: str) -> bool:
+    for entry in bp._entries:
+        if entry.name != module_name:
+            continue
+        if entry.instance is not None:
+            ports = getattr(entry.instance, "all_ports", {})
+            if port_name in ports:
+                return True
+        for cls in entry.module_cls.__mro__:
+            if port_name in getattr(cls, "__annotations__", {}):
+                return True
+        return hasattr(entry.module_cls, port_name)
+    return False
 
 
 def apply_full_stack_wires(
@@ -122,6 +142,7 @@ def apply_full_stack_wires(
             WireSpec("GatewayModule", "goal_pose", "NavigationModule", "goal_pose"),
             WireSpec("MCPServerModule", "goal_pose", "NavigationModule", "goal_pose"),
             WireSpec("SemanticPlannerModule", "goal_pose", "NavigationModule", "goal_pose"),
+            WireSpec("TAREExplorerModule", "exploration_goal", "NavigationModule", "goal_pose"),
             WireSpec("PerceptionModule", "detections_3d", "SemanticPlannerModule", "detections"),
         ],
     )
@@ -250,7 +271,7 @@ def apply_full_stack_wires(
             WireSpec("PathFollowerModule", "cmd_vel", "CmdVelMux", "path_follower_cmd_vel"),
         ],
     )
-    WireSpec("CmdVelMux", "driver_cmd_vel", drv, "cmd_vel").apply(bp)
+    _wire_if_present(bp, names, WireSpec("CmdVelMux", "driver_cmd_vel", drv, "cmd_vel"))
     _wire_if_present(bp, names, WireSpec("CmdVelMux", "driver_cmd_vel", "SafetyRingModule", "cmd_vel"))
 
     return bp

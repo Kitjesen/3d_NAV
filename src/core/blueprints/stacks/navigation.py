@@ -36,6 +36,12 @@ def navigation(
                    info_gain_threshold=config.get("frontier_info_gain", 0.03),
                    goal_timeout=config.get("frontier_goal_timeout", 30.0),
                    explore_rate=config.get("frontier_rate", 2.0))
+            bp.wire(
+                "WavefrontFrontierExplorer",
+                "exploration_goal",
+                "NavigationModule",
+                "goal_pose",
+            )
         except ImportError as e:
             logger.warning("FrontierExplorer not available: %s", e)
 

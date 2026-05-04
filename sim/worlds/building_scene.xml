@@ -174,18 +174,18 @@
 
     <!-- Start: (2, 3) 1F 大厅 -->
     <geom name="start_disk" type="cylinder" pos="2.0 3.0 0.01" size="0.65 0.01"
-          material="start_mat" conaffinity="0" contype="0"/>
+          material="start_mat" conaffinity="0" contype="0" group="2"/>
     <!-- "S" 文字代替：用小圆柱组成 -->
     <geom name="start_pole" type="cylinder" pos="2.0 3.0 0.80" size="0.025 0.80"
-          rgba=".15 .78 .28 0.7" conaffinity="0" contype="0"/>
+          rgba=".15 .78 .28 0.7" conaffinity="0" contype="0" group="2"/>
 
     <!-- Goal: (18, 11) 2F Room B -->
     <geom name="goal_disk"   type="cylinder" pos="18.0 11.0 3.51" size="0.65 0.01"
-          material="goal_mat" conaffinity="0" contype="0"/>
+          material="goal_mat" conaffinity="0" contype="0" group="2"/>
     <geom name="goal_pole"   type="cylinder" pos="18.0 11.0 4.25" size="0.025 0.75"
-          rgba=".90 .12 .12 0.9" conaffinity="0" contype="0"/>
+          rgba=".90 .12 .12 0.9" conaffinity="0" contype="0" group="2"/>
     <geom name="goal_flag"   type="box"      pos="18.10 11.0 4.95" size="0.30 0.02 0.20"
-          rgba=".90 .12 .12 1" conaffinity="0" contype="0"/>
+          rgba=".90 .12 .12 1" conaffinity="0" contype="0" group="2"/>
     <geom name="goal_ball"   type="sphere"   pos="18.0 11.0 5.05" size="0.18"
           rgba=".90 .12 .12 0.85" conaffinity="0" contype="0"/>
 

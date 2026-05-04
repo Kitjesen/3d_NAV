@@ -38,10 +38,35 @@ logger = logging.getLogger(__name__)
 # Resolve sim/ directory relative to this file
 _SIM_ROOT = Path(__file__).resolve().parents[3] / "sim"
 _WORLDS_DIR = _SIM_ROOT / "worlds"
-_ROBOTS_DIR = _SIM_ROOT / "robots" / "nova_dog"
-_ROBOT_XML = _ROBOTS_DIR / "robot_with_camera.xml"
-_POLICY_ONNX = _ROBOTS_DIR / "policy.onnx"
-_DEFAULT_START_POS = (0.0, 0.0, 0.35)
+_THUNDER_MJCF = _SIM_ROOT / "assets" / "mjcf" / "thunder_v3_lingtu.xml"
+_LEGACY_ROBOTS_DIR = _SIM_ROOT / "robots" / "nova_dog"
+_ROBOT_XML = _THUNDER_MJCF
+_POLICY_CANDIDATES = (
+    _LEGACY_ROBOTS_DIR / "thunder_policy.onnx",
+    _LEGACY_ROBOTS_DIR / "policy.onnx",
+)
+_POLICY_ONNX = _POLICY_CANDIDATES[-1]
+_DEFAULT_START_POS = (0.0, 0.0, 0.55)
+
+
+def _first_existing_path(paths: tuple[Path, ...]) -> str:
+    for path in paths:
+        if path.exists():
+            return str(path)
+    return ""
+
+
+def _resolve_sim_path(path: str) -> str:
+    if not path:
+        return ""
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    for base in (_SIM_ROOT, _SIM_ROOT.parent, Path.cwd()):
+        resolved = (base / candidate).resolve()
+        if resolved.exists():
+            return str(resolved)
+    return str((_SIM_ROOT / candidate).resolve())
 
 
 def _is_default_start_pos(start_pos: tuple) -> bool:
@@ -108,7 +133,7 @@ class MujocoDriverModule(Module, layer=1):
         sim_rate: float = 50.0,
         policy_path: str = "",
         robot_xml: str = "",
-        start_pos: tuple = (0.0, 0.0, 0.35),
+        start_pos: tuple = _DEFAULT_START_POS,
         obstacles: list | None = None,
         **kw,
     ):
@@ -117,9 +142,9 @@ class MujocoDriverModule(Module, layer=1):
         self._render = render
         self._enable_camera = bool(enable_camera or render)
         self._sim_rate = sim_rate
-        default_policy = str(_POLICY_ONNX) if _POLICY_ONNX.exists() else ""
-        self._policy_path = policy_path or default_policy
-        self._robot_xml = robot_xml or str(_ROBOT_XML)
+        default_policy = _first_existing_path(_POLICY_CANDIDATES)
+        self._policy_path = _resolve_sim_path(policy_path) if policy_path else default_policy
+        self._robot_xml = _resolve_sim_path(robot_xml) if robot_xml else str(_ROBOT_XML)
         self._start_pos = start_pos
         self._obstacles = obstacles or []
 
@@ -158,7 +183,7 @@ class MujocoDriverModule(Module, layer=1):
                 logger.error("Robot XML not found: %s", self._robot_xml)
                 return
 
-            robot_cfg = RobotConfig.default_nova_dog()
+            robot_cfg = RobotConfig.default_thunder_v3()
             robot_cfg.resolve_paths(base_dir=str(_SIM_ROOT))
             robot_cfg.robot_xml = self._robot_xml
             scene_start = _scene_placeholder_start(world_path)

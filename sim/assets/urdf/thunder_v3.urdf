@@ -1,4 +1,4 @@
-﻿<?xml version='1.0' encoding='utf-8'?>
+<?xml version='1.0' encoding='utf-8'?>
 <robot name="thunder_v3">
   <link name="base_link">
     <inertial>
@@ -9,7 +9,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/base_link.STL" />
+        <mesh filename="../meshes/base_link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
@@ -55,7 +55,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/fr_hip_Link.STL" />
+        <mesh filename="../meshes/fr_hip_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -84,7 +84,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/fr_thigh_Link.STL" />
+        <mesh filename="../meshes/fr_thigh_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -125,7 +125,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/fr_calf_Link.STL" />
+        <mesh filename="../meshes/fr_calf_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -166,7 +166,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/fr_foot_Link.STL" />
+        <mesh filename="../meshes/fr_foot_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -194,7 +194,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/fl_hip_Link.STL" />
+        <mesh filename="../meshes/fl_hip_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -223,7 +223,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/fl_thigh_Link.STL" />
+        <mesh filename="../meshes/fl_thigh_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -264,7 +264,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/fl_calf_Link.STL" />
+        <mesh filename="../meshes/fl_calf_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -305,7 +305,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/fl_foot_Link.STL" />
+        <mesh filename="../meshes/fl_foot_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -333,7 +333,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/rr_hip_Link.STL" />
+        <mesh filename="../meshes/rr_hip_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -362,7 +362,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/rr_thigh_Link.STL" />
+        <mesh filename="../meshes/rr_thigh_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -403,7 +403,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/rr_calf_Link.STL" />
+        <mesh filename="../meshes/rr_calf_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -444,7 +444,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/rr_foot_Link.STL" />
+        <mesh filename="../meshes/rr_foot_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -472,7 +472,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/rl_hip_Link.STL" />
+        <mesh filename="../meshes/rl_hip_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -501,7 +501,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/rl_thigh_Link.STL" />
+        <mesh filename="../meshes/rl_thigh_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -542,7 +542,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/rl_calf_Link.STL" />
+        <mesh filename="../meshes/rl_calf_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -583,7 +583,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/rl_foot_Link.STL" />
+        <mesh filename="../meshes/rl_foot_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -611,7 +611,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/lidar1_Link.STL" />
+        <mesh filename="../meshes/lidar1_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -633,7 +633,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/camera1_Link.STL" />
+        <mesh filename="../meshes/camera1_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -655,7 +655,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/lidar2_Link.STL" />
+        <mesh filename="../meshes/lidar2_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -683,7 +683,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="../assets/meshes/camera2_Link.STL" />
+        <mesh filename="../meshes/camera2_Link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
