@@ -2354,7 +2354,7 @@ class GatewayModule(Module, layer=6):
 
         register_auth_routes(app)
         register_app_routes(app, gw)
-        register_camera_routes(app)
+        register_camera_routes(app, gw)
         register_realtime_routes(app, gw)
         mount_dashboard_assets(app)
         try:

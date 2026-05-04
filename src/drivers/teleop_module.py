@@ -285,6 +285,42 @@ class TeleopModule(Module, layer=6):
         if self._clients + self._camera_clients > 0:
             self._new_frame.set()
 
+    def snapshot_jpeg(self) -> bytes | None:
+        """Encode the latest raw camera frame for one-shot HTTP snapshots."""
+        with self._raw_lock:
+            raw = None if self._latest_raw is None else self._latest_raw.copy()
+        if raw is None:
+            return None
+
+        try:
+            import cv2
+        except ImportError:
+            return None
+
+        try:
+            frame = self._draw_detections(raw, cv2)
+            _rot_map = {
+                90: cv2.ROTATE_90_CLOCKWISE,
+                180: cv2.ROTATE_180,
+                270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+            }
+            if self._cam_rotate in _rot_map:
+                frame = cv2.rotate(frame, _rot_map[self._cam_rotate])
+            ok, buf = cv2.imencode(
+                ".jpg",
+                frame,
+                [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality],
+            )
+            if not ok:
+                return None
+            data = buf.tobytes()
+            if self._gateway is not None:
+                self._gateway.push_jpeg(data)
+            return data
+        except Exception:
+            logger.debug("TeleopModule: snapshot JPEG encode failed", exc_info=True)
+            return None
+
     def _encode_loop(self) -> None:
         """Dedicated thread: encode raw frames to JPEG at stream_fps."""
         try:

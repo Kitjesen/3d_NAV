@@ -5,6 +5,7 @@ import io
 import json
 import shutil
 import tarfile
+import threading
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -125,6 +126,88 @@ def test_camera_routes_register_expected_snapshot_path():
 
     route = next(route for route in app.routes if route.path == "/api/v1/camera/snapshot")
     assert route.endpoint.__module__ == "gateway.routes.camera"
+
+
+def test_camera_snapshot_returns_cached_gateway_jpeg(monkeypatch):
+    from fastapi import FastAPI
+
+    from gateway.routes.camera import register_camera_routes
+
+    def fail_subprocess(*args, **kwargs):
+        raise AssertionError("snapshot route should not probe ROS when JPEG is cached")
+
+    monkeypatch.setattr("gateway.routes.camera.subprocess.run", fail_subprocess)
+
+    app = FastAPI()
+    gw = SimpleNamespace(_latest_jpeg=b"\xff\xd8\xffcamera", _jpeg_lock=threading.Lock())
+    register_camera_routes(app, gw)
+
+    route = next(route for route in app.routes if route.path == "/api/v1/camera/snapshot")
+    response = asyncio.run(route.endpoint())
+
+    assert response.status_code == 200
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"\xff\xd8\xffcamera"
+
+
+def test_camera_snapshot_uses_teleop_one_shot_encoder(monkeypatch):
+    from fastapi import FastAPI
+
+    from gateway.routes.camera import register_camera_routes
+
+    def fail_subprocess(*args, **kwargs):
+        raise AssertionError("snapshot route should use Teleop snapshot before ROS fallback")
+
+    class Teleop:
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot_jpeg(self):
+            self.calls += 1
+            return b"\xff\xd8\xffteleop"
+
+    monkeypatch.setattr("gateway.routes.camera.subprocess.run", fail_subprocess)
+
+    teleop = Teleop()
+    app = FastAPI()
+    gw = SimpleNamespace(
+        _latest_jpeg=None,
+        _jpeg_lock=threading.Lock(),
+        _teleop_module=teleop,
+    )
+    register_camera_routes(app, gw)
+
+    route = next(route for route in app.routes if route.path == "/api/v1/camera/snapshot")
+    response = asyncio.run(route.endpoint())
+
+    assert response.status_code == 200
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"\xff\xd8\xffteleop"
+    assert teleop.calls == 1
+
+
+def test_camera_snapshot_fast_fails_when_gateway_reports_no_camera(monkeypatch):
+    from fastapi import FastAPI
+
+    from gateway.routes.camera import register_camera_routes
+
+    def fail_subprocess(*args, **kwargs):
+        raise AssertionError("snapshot route should not probe ROS when camera is unavailable")
+
+    monkeypatch.setattr("gateway.routes.camera.subprocess.run", fail_subprocess)
+
+    app = FastAPI()
+    gw = SimpleNamespace(_all_modules={})
+    register_camera_routes(app, gw)
+
+    route = next(route for route in app.routes if route.path == "/api/v1/camera/snapshot")
+    response = asyncio.run(route.endpoint())
+    payload = json.loads(response.body)
+
+    assert response.status_code == 503
+    assert payload["error"] == "camera_unavailable"
+    assert payload["ok"] is False
+    assert payload["detail"]["camera"]["reason"] == "camera_bridge_not_loaded"
 
 
 def test_command_routes_register_expected_paths():
