@@ -653,6 +653,7 @@ def test_openapi_exposes_client_response_models():
     )
     assert "schema_version" in schemas["ControlCommandResponse"]["properties"]
     assert "ok" in schemas["ControlCommandResponse"]["properties"]
+    assert "yaw" in schemas["ControlCommandResponse"]["properties"]
     assert schemas["ControlCommandResponse"]["properties"]["command"]["$ref"].endswith(
         "/CommandReceipt"
     )

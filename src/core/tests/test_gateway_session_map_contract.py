@@ -811,6 +811,139 @@ def test_tare_explorer_is_available_through_exploration_contracts():
     assert snapshot["can_start_exploring"] is True
 
 
+def test_wavefront_explorer_is_available_through_exploration_contracts():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import (
+        ExplorationCommandResponse,
+        ExplorationStatusResponse,
+    )
+
+    class WavefrontFrontierExplorer:
+        def __init__(self):
+            self.started = False
+
+        def begin_exploration(self):
+            self.started = True
+            return {"status": "started", "backend": "frontier"}
+
+        def end_exploration(self):
+            self.started = False
+            return {"status": "stopped", "backend": "frontier"}
+
+        def health(self):
+            return {"frontier_count": 7}
+
+    gateway = GatewayModule()
+    gateway.setup()
+    explorer = WavefrontFrontierExplorer()
+    gateway.on_system_modules({"WavefrontFrontierExplorer": explorer})
+
+    status_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    start_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/start")())
+    running_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    stop_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/stop")())
+    stopped_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+
+    status = ExplorationStatusResponse.model_validate(status_payload)
+    started = ExplorationCommandResponse.model_validate(start_payload)
+    running = ExplorationStatusResponse.model_validate(running_payload)
+    stopped = ExplorationCommandResponse.model_validate(stop_payload)
+    final_status = ExplorationStatusResponse.model_validate(stopped_payload)
+
+    assert status.available is True
+    assert status.backend == "frontier"
+    assert status.frontier_count == 7
+    assert status.exploring is False
+    assert started.status == {"status": "started", "backend": "frontier"}
+    assert running.exploring is True
+    assert stopped.status == {"status": "stopped", "backend": "frontier"}
+    assert final_status.exploring is False
+    assert gateway._session_snapshot()["explorer_backend"] == "frontier"
+
+
+def test_tare_explorer_session_start_end_uses_exploration_backend(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import SessionTransitionResponse
+
+    class FakeServiceManager:
+        def __init__(self):
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def stop(self, *services: str) -> None:
+            self.calls.append(("stop", services))
+
+        def ensure(self, *services: str) -> None:
+            self.calls.append(("ensure", services))
+
+        def wait_ready(self, *services: str, timeout: float = 15.0) -> bool:
+            self.calls.append(("wait_ready", services))
+            return True
+
+    class TAREExplorerModule:
+        def __init__(self):
+            self.started = False
+            self.start_count = 0
+            self.stop_count = 0
+
+        def start_tare_exploration(self):
+            self.started = True
+            self.start_count += 1
+            return {"status": "started"}
+
+        def stop_tare_exploration(self):
+            self.started = False
+            self.stop_count += 1
+            return {"status": "stopped"}
+
+        def get_tare_status(self):
+            return {"started": self.started}
+
+    fake_service_manager = FakeServiceManager()
+    monkeypatch.setattr(
+        service_manager, "get_service_manager", lambda: fake_service_manager
+    )
+
+    gateway = GatewayModule()
+    gateway.setup()
+    tare = TAREExplorerModule()
+    gateway.on_system_modules({"TAREExplorerModule": tare})
+
+    start_payload = asyncio.run(
+        _endpoint(gateway, "/api/v1/session/start")({"mode": "exploring"})
+    )
+    started = SessionTransitionResponse.model_validate(start_payload)
+
+    assert started.ok is True
+    assert started.success is True
+    assert started.session is not None
+    assert started.session.mode == "exploring"
+    assert started.session.slam_profile == "fastlio2"
+    assert started.session.explorer_backend == "tare"
+    assert tare.started is True
+    assert tare.start_count == 1
+    assert ("stop", ("localizer", "super_lio", "super_lio_relocation")) in (
+        fake_service_manager.calls
+    )
+    assert ("ensure", ("slam", "slam_pgo")) in fake_service_manager.calls
+    assert ("wait_ready", ("slam", "slam_pgo")) in fake_service_manager.calls
+
+    end_payload = asyncio.run(_endpoint(gateway, "/api/v1/session/end")())
+    ended = SessionTransitionResponse.model_validate(end_payload)
+
+    assert ended.ok is True
+    assert ended.success is True
+    assert ended.session is not None
+    assert ended.session.mode == "idle"
+    assert ended.session.explorer_backend == "tare"
+    assert tare.started is False
+    assert tare.stop_count == 1
+    assert (
+        "stop",
+        ("super_lio_relocation", "super_lio", "slam_pgo", "localizer", "slam"),
+    ) in fake_service_manager.calls
+
+
 def test_slam_status_uses_logical_service_states(monkeypatch):
     import core.service_manager as service_manager
     from gateway.gateway_module import GatewayModule

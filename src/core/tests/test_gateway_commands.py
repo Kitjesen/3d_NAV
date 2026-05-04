@@ -202,6 +202,7 @@ def test_goal_request_yaw_is_published_as_pose_orientation():
     assert len(sent_goals) == 1
     assert sent_goals[0].pose.orientation.yaw == pytest.approx(math.pi / 2)
     assert model.goal == [1.0, 2.0, 0.0]
+    assert model.yaw == pytest.approx(math.pi / 2)
     assert result["yaw"] == pytest.approx(math.pi / 2)
 
 
