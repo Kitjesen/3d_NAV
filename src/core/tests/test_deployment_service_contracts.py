@@ -88,6 +88,7 @@ def test_localizer_health_topic_has_steady_heartbeat():
     text = _read("src/slam/localizer/src/localizer_node.cpp")
 
     assert "m_health_heartbeat_interval" in text
+    assert "std::chrono::milliseconds(500)" in text
     assert "heartbeat_due" in text
     assert "publishable && (state_changed || heartbeat_due)" in text
     assert "Localization health heartbeat" in text

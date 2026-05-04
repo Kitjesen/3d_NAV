@@ -117,6 +117,9 @@ class SlamBridgeModule(Module, layer=1):
         self._saved_map_worker_lock = threading.Lock()
         self._saved_map_worker_thread: threading.Thread | None = None
         self._saved_map_worker_drops: int = 0
+        self._odom_worker_lock = threading.Lock()
+        self._odom_worker_thread: threading.Thread | None = None
+        self._odom_worker_drops: int = 0
 
         # Localization health watchdog
         self._last_odom_time: float = 0.0
@@ -470,11 +473,16 @@ class SlamBridgeModule(Module, layer=1):
         if self._watchdog_thread and self._watchdog_thread.is_alive():
             self._watchdog_thread.join(timeout=2.0)
         self._watchdog_thread = None
-        for worker in (self._pointcloud_worker_thread, self._saved_map_worker_thread):
+        for worker in (
+            self._pointcloud_worker_thread,
+            self._saved_map_worker_thread,
+            self._odom_worker_thread,
+        ):
             if worker and worker.is_alive():
                 worker.join(timeout=1.0)
         self._pointcloud_worker_thread = None
         self._saved_map_worker_thread = None
+        self._odom_worker_thread = None
         if self._reader:
             self._reader.stop()
         self._cleanup_rclpy_node()
@@ -901,10 +909,10 @@ class SlamBridgeModule(Module, layer=1):
             # sees map-frame positions. Without this, planner uses odom
             # frame (robot boot origin) and PCT lookups hit wrong cells.
             fused = self._apply_map_odom_to_odometry(fused)
-            # Mark receive freshness before synchronous downstream callbacks;
-            # slow Gateway/SSE/map consumers must not look like an odom outage.
+            # Mark receive freshness before downstream fan-out; slow
+            # Gateway/SSE/App consumers must not look like an odom outage.
             self._mark_odom_received(wall_now=now)
-            self.odometry.publish(fused)
+            self._submit_odometry_worker(fused)
         except Exception as e:
             logger.debug("SlamBridge dds odom error: %s", e)
 
@@ -1004,6 +1012,35 @@ class SlamBridgeModule(Module, layer=1):
             name="slam_bridge_saved_map",
         )
         self._saved_map_worker_thread.start()
+        return True
+
+    def _submit_odometry_worker(self, odom: Odometry) -> bool:
+        """Publish odometry outside the ROS executor.
+
+        Odometry freshness is marked before this method is called. Downstream
+        consumers such as Gateway SSE or perception bookkeeping may be slower
+        than the ROS receive cadence; in that case we keep the latest receive
+        timestamp accurate and drop the downstream fan-out frame.
+        """
+        if self._shutdown_event.is_set():
+            return False
+        if not self._odom_worker_lock.acquire(blocking=False):
+            self._odom_worker_drops += 1
+            return False
+
+        def run() -> None:
+            try:
+                if not self._shutdown_event.is_set():
+                    self.odometry.publish(odom)
+            finally:
+                self._odom_worker_lock.release()
+
+        self._odom_worker_thread = threading.Thread(
+            target=run,
+            daemon=True,
+            name="slam_bridge_odometry",
+        )
+        self._odom_worker_thread.start()
         return True
 
     def _process_rclpy_cloud(self, msg) -> None:
@@ -1276,7 +1313,7 @@ class SlamBridgeModule(Module, layer=1):
             # frame (robot boot origin) and PCT lookups hit wrong cells.
             fused = self._apply_map_odom_to_odometry(fused)
             self._mark_odom_received(wall_now=now)
-            self.odometry.publish(fused)
+            self._submit_odometry_worker(fused)
         except Exception as e:
             logger.warning("SlamBridge rclpy odom error: %s", e)
 
@@ -2016,6 +2053,7 @@ class SlamBridgeModule(Module, layer=1):
             "dof_mask": self._dof_mask.tolist() if self._dof_mask is not None else None,
             "visual_fusion_active": self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL) and self._last_visual_odom is not None,
             "visual_fused_count": self._visual_fused_count,
+            "odom_worker_drops": self._odom_worker_drops,
             "pointcloud_worker_drops": self._pointcloud_worker_drops,
             "saved_map_worker_drops": self._saved_map_worker_drops,
         }

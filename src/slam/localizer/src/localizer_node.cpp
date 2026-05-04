@@ -757,7 +757,7 @@ private:
     std::chrono::steady_clock::time_point m_last_health_publish =
         std::chrono::steady_clock::now() - std::chrono::seconds(60);
     std::chrono::steady_clock::duration m_health_heartbeat_interval =
-        std::chrono::seconds(1);
+        std::chrono::milliseconds(500);
     static constexpr int LOST_CONFIRM_FRAMES = 5;
     static constexpr int RECOVER_CONFIRM_FRAMES = 3;
 

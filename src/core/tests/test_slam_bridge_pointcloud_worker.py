@@ -142,57 +142,51 @@ def test_dds_pointcloud_callback_does_not_block_reader_loop():
     assert bridge._last_cloud_time > 0.0
 
 
-def test_dds_odom_marks_freshness_before_downstream_publish_finishes():
+def _assert_odom_callback_does_not_block_receiver(callback_name: str):
     from slam.slam_bridge_module import SlamBridgeModule
 
     bridge = SlamBridgeModule()
+    callback = getattr(bridge, callback_name)
     callback_entered = threading.Event()
     release_callback = threading.Event()
+    callback_done = threading.Event()
 
     def slow_consumer(_odom):
         callback_entered.set()
         assert release_callback.wait(timeout=1.0)
+        callback_done.set()
 
     bridge.odometry._add_callback(slow_consumer)
 
-    worker = threading.Thread(target=bridge._on_dds_odom, args=(_odom_msg(),))
-    worker.start()
+    t0 = time.perf_counter()
+    callback(_odom_msg())
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+    assert elapsed_ms < 50.0
     assert callback_entered.wait(timeout=1.0)
 
-    assert worker.is_alive()
-    assert bridge._last_odom_time > 0.0
-    assert len(bridge._odom_recv_ts) == 1
-
-    release_callback.set()
-    worker.join(timeout=1.0)
-    assert not worker.is_alive()
-
-
-def test_rclpy_odom_marks_freshness_before_downstream_publish_finishes():
-    from slam.slam_bridge_module import SlamBridgeModule
-
-    bridge = SlamBridgeModule()
-    callback_entered = threading.Event()
-    release_callback = threading.Event()
-
-    def slow_consumer(_odom):
-        callback_entered.set()
-        assert release_callback.wait(timeout=1.0)
-
-    bridge.odometry._add_callback(slow_consumer)
-
-    worker = threading.Thread(target=bridge._on_rclpy_odom, args=(_odom_msg(),))
-    worker.start()
-    assert callback_entered.wait(timeout=1.0)
-
-    assert worker.is_alive()
     assert bridge._last_odom_time > 0.0
     assert bridge._last_odom_mono > 0.0
     assert len(bridge._odom_recv_ts) == 1
+    assert bridge._odom_worker_thread is not None
+    assert bridge._odom_worker_thread.is_alive()
+
+    callback(_odom_msg())
+    assert bridge._odom_worker_drops == 1
+    assert len(bridge._odom_recv_ts) == 2
 
     release_callback.set()
-    worker.join(timeout=1.0)
-    assert not worker.is_alive()
+    assert callback_done.wait(timeout=1.0)
+    if bridge._odom_worker_thread is not None:
+        bridge._odom_worker_thread.join(timeout=1.0)
+
+
+def test_dds_odom_callback_does_not_block_reader_loop():
+    _assert_odom_callback_does_not_block_receiver("_on_dds_odom")
+
+
+def test_rclpy_odom_callback_does_not_block_executor():
+    _assert_odom_callback_does_not_block_receiver("_on_rclpy_odom")
 
 
 def test_slam_bridge_freshness_age_uses_monotonic_clock():
