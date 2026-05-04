@@ -184,6 +184,7 @@ def test_session_routes_validate_idle_contracts():
 
     gateway = GatewayModule()
     gateway.setup()
+    gateway._session_detect_current_mode = lambda: ("idle", None)
 
     session_payload = asyncio.run(_endpoint(gateway, "/api/v1/session")())
     end_payload = asyncio.run(_endpoint(gateway, "/api/v1/session/end")())
