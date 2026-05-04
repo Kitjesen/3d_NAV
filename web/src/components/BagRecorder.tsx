@@ -1,48 +1,21 @@
-/**
- * BagRecorder — Topbar 上的 rosbag 快捷录制按钮.
- *
- * 点击一次 → 立即开始录制(默认 10 分钟上限,中途可手动停)
- * 录制中 → 按钮变红 + 显示 ● REC + 秒数 + MB,再点一次停止
- * 停止后 → 短暂显示"已保存 path size"
- *
- * 后端 3 个 route 见 gateway_module.py:
- *   POST /api/v1/bag/start  {duration, prefix}
- *   POST /api/v1/bag/stop
- *   GET  /api/v1/bag/status
- *
- * 录制内容:见 scripts/record_bag.sh TOPICS[]
- *   /nav/{lidar_scan,imu,odometry,map_cloud,registered_cloud,cmd_vel,goal_pose}
- *   /localization_quality
- *   /exploration/{way_point,path,runtime,finish}
- *   /camera/camera_info
- *   (不含相机 raw, 避免数据爆炸)
- */
 import { useEffect, useRef, useState } from 'react'
 import { Circle, Square } from 'lucide-react'
+import * as api from '../services/api'
+import type { BagStatusResponse } from '../types'
 import styles from './BagRecorder.module.css'
 
-interface BagStatus {
-  recording: boolean
-  path: string
-  duration_s: number
-  size_bytes: number
-  pid: number | null
-  exit_code: number | null
-  disk_free: number
-  disk_total: number
-}
-
 export function BagRecorder() {
-  const [status, setStatus] = useState<BagStatus | null>(null)
+  const [status, setStatus] = useState<BagStatusResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const poll = async () => {
     try {
-      const r = await fetch('/api/v1/bag/status')
-      if (r.ok) setStatus(await r.json())
-    } catch { /* gateway offline — ignore */ }
+      setStatus(await api.fetchBagStatus())
+    } catch {
+      // Bag status is diagnostic; the dashboard can keep running offline.
+    }
   }
 
   useEffect(() => {
@@ -56,19 +29,10 @@ export function BagRecorder() {
   const start = async () => {
     setBusy(true)
     try {
-      const r = await fetch('/api/v1/bag/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ duration: 600, prefix: 'web' }),
-      })
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
-        setFlash(`启动失败: ${err.error || err.detail || r.status}`)
-      } else {
-        setFlash('录制开始')
-      }
+      await api.startBagRecording(600, 'web')
+      setFlash('录制开始')
     } catch (e) {
-      setFlash(`启动失败: ${e instanceof Error ? e.message : e}`)
+      setFlash(`启动失败: ${apiErrorMessage(e)}`)
     } finally {
       setBusy(false)
       poll()
@@ -79,18 +43,17 @@ export function BagRecorder() {
   const stop = async () => {
     setBusy(true)
     try {
-      const r = await fetch('/api/v1/bag/stop', { method: 'POST' })
-      if (!r.ok) {
-        setFlash('停止失败')
-      } else {
-        const sz = status ? fmtMB(status.size_bytes) : '?'
-        setFlash(`已保存 ${sz}`)
-      }
+      await api.stopBagRecording()
+      const sz = status ? fmtMB(status.size_bytes) : '?'
+      setFlash(`已保存 ${sz}`)
     } catch (e) {
-      setFlash(`停止失败: ${e instanceof Error ? e.message : e}`)
+      setFlash(`停止失败: ${apiErrorMessage(e)}`)
     } finally {
       setBusy(false)
-      setTimeout(() => { poll(); setFlash(null) }, 2500)
+      setTimeout(() => {
+        poll()
+        setFlash(null)
+      }, 2500)
     }
   }
 
@@ -109,7 +72,7 @@ export function BagRecorder() {
           <Square size={10} fill="currentColor" />
           <span className={styles.recDot} />
           <span className={styles.meta}>
-            {fmtDuration(status?.duration_s ?? 0)}  ·  {fmtMB(status?.size_bytes ?? 0)}
+            {fmtDuration(status?.duration_s ?? 0)}  /  {fmtMB(status?.size_bytes ?? 0)}
           </span>
         </button>
       ) : (
@@ -118,11 +81,12 @@ export function BagRecorder() {
           onClick={start}
           disabled={busy}
           title={
-            '录制 rosbag — 默认 10 分钟上限,可手动停\n' +
+            '录制 rosbag，默认 10 分钟上限，可手动停止\n' +
             '录制话题:\n' +
             '  /nav/lidar_scan  MID-360 Livox\n' +
             '  /nav/imu  /nav/odometry  /nav/map_cloud\n' +
-            '  /nav/registered_cloud  /localization_quality\n' +
+            '  /nav/registered_cloud  /nav/localization_quality\n' +
+            '  /nav/localization_health\n' +
             '  /nav/goal_pose  /nav/cmd_vel\n' +
             '  /exploration/way_point  /path  /runtime  /finish\n' +
             '  /camera/camera_info  (不含相机 raw)'
@@ -134,6 +98,13 @@ export function BagRecorder() {
       )}
     </div>
   )
+}
+
+function apiErrorMessage(error: unknown): string {
+  if (api.isGatewayApiError(error)) {
+    return error.body?.error || error.body?.message || error.message
+  }
+  return error instanceof Error ? error.message : String(error)
 }
 
 function fmtDuration(s: number): string {

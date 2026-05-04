@@ -5,6 +5,8 @@ import type {
   AppBootstrapResponse,
   AppCapabilitiesResponse,
   AppTrafficResponse,
+  BagOperationResponse,
+  BagStatusResponse,
   CommandReceipt,
   ControlCommandResponse,
   DynamicFilterResult,
@@ -425,6 +427,23 @@ export async function relocalize(
 export async function autoRelocalize(): Promise<SlamOperationResponse> {
   const res = await fetch('/api/v1/slam/auto_relocalize', { method: 'POST' })
   return readSlamOperation(res)
+}
+
+// --- Diagnostics / bag recording ---
+
+export async function fetchBagStatus(): Promise<BagStatusResponse> {
+  return fetchJson<BagStatusResponse>('/api/v1/bag/status')
+}
+
+export async function startBagRecording(
+  duration = 600,
+  prefix = 'web',
+): Promise<BagOperationResponse> {
+  return postJson<BagOperationResponse>('/api/v1/bag/start', { duration, prefix })
+}
+
+export async function stopBagRecording(): Promise<BagOperationResponse> {
+  return postJson<BagOperationResponse>('/api/v1/bag/stop')
 }
 
 // --- Auth ---

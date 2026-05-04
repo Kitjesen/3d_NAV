@@ -799,3 +799,24 @@ export interface SlamOperationResponse {
   ts: number
   [key: string]: unknown
 }
+
+export interface BagStatusResponse {
+  recording: boolean
+  path?: string | null
+  duration_s: number
+  size_bytes: number
+  pid?: number | null
+  exit_code?: number | null
+  disk_free: number
+  disk_total: number
+}
+
+export interface BagOperationResponse {
+  status?: string | null
+  path?: string | null
+  pid?: number | null
+  duration?: number | null
+  prefix?: string | null
+  error?: string | null
+  detail?: unknown
+}
