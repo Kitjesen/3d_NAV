@@ -412,6 +412,8 @@ class GatewayModule(Module, layer=6):
         self._brainstem_health_lock = threading.Lock()
         self._brainstem_health_cache: dict[str, Any] | None = None
         self._brainstem_health_cache_ts: float = 0.0
+        self._brainstem_health_refreshing: bool = False
+        self._brainstem_health_refresh_thread: threading.Thread | None = None
         self._brainstem_health_cache_ttl_s: float = max(
             0.0,
             _env_float("LINGTU_BRAINSTEM_HEALTH_CACHE_S", 2.0),
@@ -524,18 +526,7 @@ class GatewayModule(Module, layer=6):
                 name="gateway",
             )
             self._server_thread.start()
-            if (
-                self._client_http_prewarm_thread is None
-                or not self._client_http_prewarm_thread.is_alive()
-            ):
-                self._client_http_prewarm_thread = threading.Thread(
-                    target=self._prewarm_client_http_routes,
-                    args=(stop_event,),
-                    kwargs={"timeout_s": 15.0},
-                    daemon=True,
-                    name="gateway_client_prewarm",
-                )
-                self._client_http_prewarm_thread.start()
+            self._start_client_http_prewarm(stop_event, timeout_s=15.0)
         # Background: load active map.pcd from disk and push as saved_map
         # event so the frontend底图 always has the stored map regardless of
         # whether localizer has converged. Re-pushes periodically so late-
@@ -570,6 +561,30 @@ class GatewayModule(Module, layer=6):
 
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
 
+    def _start_client_http_prewarm(
+        self,
+        stop_event: threading.Event | None = None,
+        *,
+        timeout_s: float = 15.0,
+    ) -> bool:
+        stop_event = stop_event or self._stop_event
+        if stop_event.is_set():
+            return False
+        if (
+            self._client_http_prewarm_thread is not None
+            and self._client_http_prewarm_thread.is_alive()
+        ):
+            return False
+        self._client_http_prewarm_thread = threading.Thread(
+            target=self._prewarm_client_http_routes,
+            args=(stop_event,),
+            kwargs={"timeout_s": timeout_s},
+            daemon=True,
+            name="gateway_client_prewarm",
+        )
+        self._client_http_prewarm_thread.start()
+        return True
+
     def _prewarm_client_http_routes(
         self,
         stop_event: threading.Event | None = None,
@@ -578,7 +593,7 @@ class GatewayModule(Module, layer=6):
     ) -> bool:
         """Consume first-use FastAPI/Pydantic cost before App/Web clients arrive."""
         stop_event = stop_event or self._stop_event
-        if self._defer_server or stop_event.is_set():
+        if stop_event.is_set():
             return False
         try:
             from urllib.error import URLError
@@ -926,6 +941,7 @@ class GatewayModule(Module, layer=6):
             "_client_http_prewarm_thread",
             "_saved_map_loader_thread",
             "_drift_watchdog_thread",
+            "_brainstem_health_refresh_thread",
         ):
             thread = getattr(self, attr_name, None)
             if thread is None:

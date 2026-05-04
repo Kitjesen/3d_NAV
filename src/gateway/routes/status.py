@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from typing import Annotated, Any
 
@@ -72,42 +73,126 @@ def _probe_brainstem() -> dict[str, Any]:
         ch.close()
 
 
-async def _brainstem_health(gw) -> dict[str, Any]:
-    now = time.monotonic()
-    ttl = float(getattr(gw, "_brainstem_health_cache_ttl_s", 0.0) or 0.0)
-    lock = getattr(gw, "_brainstem_health_lock", None)
-    if ttl > 0.0 and lock is not None:
-        with lock:
-            cached = getattr(gw, "_brainstem_health_cache", None)
-            cache_ts = float(getattr(gw, "_brainstem_health_cache_ts", 0.0) or 0.0)
-            age = now - cache_ts
-            if cached is not None and age <= ttl:
-                info = dict(cached)
-                info["cached"] = True
-                info["cache_age_s"] = round(max(0.0, age), 3)
-                return info
+_BRAINSTEM_TRANSIENT_FIELDS = {
+    "cached",
+    "cache_age_s",
+    "stale",
+    "refreshing",
+}
 
+
+def _cacheable_brainstem_info(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in dict(info).items()
+        if key not in _BRAINSTEM_TRANSIENT_FIELDS
+    }
+
+
+def _probe_brainstem_safely() -> dict[str, Any]:
     try:
-        loop = asyncio.get_running_loop()
-        info = await loop.run_in_executor(None, _probe_brainstem)
+        return _probe_brainstem()
     except ImportError:
-        info = {
+        return {
             "status": "unavailable",
             "reason": "brainstem_api not installed",
         }
     except Exception as e:
-        info = {
+        return {
             "status": "unreachable",
             "host": "127.0.0.1:13145",
             "error": str(e)[:120],
         }
 
+
+def _store_brainstem_health(gw, info: dict[str, Any]) -> None:
+    lock = getattr(gw, "_brainstem_health_lock", None)
+    if lock is None:
+        return
+    with lock:
+        gw._brainstem_health_cache = _cacheable_brainstem_info(info)
+        gw._brainstem_health_cache_ts = time.monotonic()
+
+
+def _start_brainstem_refresh(gw) -> bool:
+    lock = getattr(gw, "_brainstem_health_lock", None)
+    if lock is None:
+        return False
+    with lock:
+        if getattr(gw, "_brainstem_health_refreshing", False):
+            return False
+        gw._brainstem_health_refreshing = True
+
+    def _refresh() -> None:
+        try:
+            _store_brainstem_health(gw, _probe_brainstem_safely())
+        finally:
+            with lock:
+                gw._brainstem_health_refreshing = False
+
+    try:
+        thread = threading.Thread(
+            target=_refresh,
+            daemon=True,
+            name="brainstem_health_refresh",
+        )
+        with lock:
+            gw._brainstem_health_refresh_thread = thread
+        thread.start()
+        return True
+    except Exception:
+        with lock:
+            gw._brainstem_health_refreshing = False
+            gw._brainstem_health_refresh_thread = None
+        return False
+
+
+async def _brainstem_health(gw, *, force_live: bool = False) -> dict[str, Any]:
+    now = time.monotonic()
+    ttl = float(getattr(gw, "_brainstem_health_cache_ttl_s", 0.0) or 0.0)
+    lock = getattr(gw, "_brainstem_health_lock", None)
+    if ttl > 0.0 and lock is not None:
+        cached = None
+        age = 0.0
+        refreshing = False
+        with lock:
+            cached = getattr(gw, "_brainstem_health_cache", None)
+            cache_ts = float(getattr(gw, "_brainstem_health_cache_ts", 0.0) or 0.0)
+            age = now - cache_ts
+            refreshing = bool(getattr(gw, "_brainstem_health_refreshing", False))
+        if cached is not None and age <= ttl and not force_live:
+            info = dict(cached)
+            info["cached"] = True
+            info["cache_age_s"] = round(max(0.0, age), 3)
+            return info
+        if not force_live:
+            scheduled = _start_brainstem_refresh(gw)
+            if cached is not None:
+                info = dict(cached)
+                info["cached"] = True
+                info["cache_age_s"] = round(max(0.0, age), 3)
+                info["stale"] = True
+                info["refreshing"] = bool(scheduled or refreshing)
+                return info
+            return {
+                "status": "unknown",
+                "host": "127.0.0.1:13145",
+                "reason": "probe_pending",
+                "cached": False,
+                "stale": True,
+                "refreshing": bool(scheduled or refreshing),
+            }
+
+    try:
+        loop = asyncio.get_running_loop()
+        info = await loop.run_in_executor(None, _probe_brainstem_safely)
+    except Exception as e:
+        info = {"status": "unreachable", "error": str(e)[:120]}
+
     info = dict(info)
     info["cached"] = False
     if ttl > 0.0 and lock is not None:
-        with lock:
-            gw._brainstem_health_cache = dict(info)
-            gw._brainstem_health_cache_ts = time.monotonic()
+        _store_brainstem_health(gw, info)
     return info
 
 
@@ -340,7 +425,7 @@ def register_status_routes(app, gw) -> None:
         if slam_hz <= 0.0:
             slam_hz = gw._get_slam_hz_cached()
 
-        brainstem_info = await _brainstem_health(gw)
+        brainstem_info = await _brainstem_health(gw, force_live=details)
 
         return {
             "status": "ok" if modules_fail == 0 else "degraded",

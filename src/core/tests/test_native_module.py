@@ -113,8 +113,13 @@ class TestNativeModuleLifecycle(unittest.TestCase):
         mod = NativeModule(cfg)
         mod.start()
 
-        mock_popen.assert_called_once()
-        cmd = mock_popen.call_args[0][0]
+        native_launches = [
+            args[0]
+            for args, _kwargs in mock_popen.call_args_list
+            if args and args[0] and args[0][0] == PYTHON_EXE
+        ]
+        self.assertEqual(len(native_launches), 1)
+        cmd = native_launches[0]
         self.assertEqual(cmd[0], PYTHON_EXE)
         self.assertTrue(mod.running)
 

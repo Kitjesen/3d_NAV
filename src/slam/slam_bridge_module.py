@@ -634,7 +634,7 @@ class SlamBridgeModule(Module, layer=1):
                     "super_lio",
                     "super_lio_relocation",
                 )
-                svc.ensure("lidar", "super_lio")
+                self._ensure_recovery_services(svc, "lidar", "super_lio")
                 svc.wait_ready("lidar", "super_lio", timeout=15.0)
             elif backend == "super_lio_relocation":
                 svc.stop(
@@ -644,17 +644,17 @@ class SlamBridgeModule(Module, layer=1):
                     "super_lio",
                     "super_lio_relocation",
                 )
-                svc.ensure("lidar", "super_lio_relocation")
+                self._ensure_recovery_services(svc, "lidar", "super_lio_relocation")
                 svc.wait_ready("lidar", "super_lio_relocation", timeout=15.0)
             elif backend == "localizer":
                 return self._restart_localization_chain_for_recovery()
             elif backend in {"fastlio2", "slam"}:
                 svc.stop("slam", "slam_pgo")
-                svc.ensure("slam", "slam_pgo")
+                self._ensure_recovery_services(svc, "slam", "slam_pgo")
                 svc.wait_ready("slam", timeout=15.0)
             else:
                 svc.stop("slam")
-                svc.ensure("slam")
+                self._ensure_recovery_services(svc, "slam")
                 svc.wait_ready("slam", timeout=15.0)
             return True
         except Exception as e:
@@ -757,7 +757,7 @@ class SlamBridgeModule(Module, layer=1):
             if svc is None:
                 from core.service_manager import get_service_manager
                 svc = get_service_manager()
-            svc.ensure("localizer")
+            self._ensure_recovery_services(svc, "localizer")
             return
         except Exception as e:
             logger.warning(
@@ -789,6 +789,17 @@ class SlamBridgeModule(Module, layer=1):
                 e,
             )
 
+    def _track_recovery_service_ownership(self) -> bool:
+        configured = str(getattr(self, "_backend_profile", "bridge") or "bridge")
+        return configured.strip().lower() != "bridge"
+
+    def _ensure_recovery_services(self, svc: Any, *services: str) -> None:
+        track_started = self._track_recovery_service_ownership()
+        try:
+            svc.ensure(*services, track_started=track_started)
+        except TypeError:
+            svc.ensure(*services)
+
     def _restart_localization_chain_for_recovery(self) -> bool:
         """Restart Fast-LIO2 and localizer when the odometry publisher vanishes."""
         if not self._restart_recovery_lock.acquire(blocking=False):
@@ -812,7 +823,7 @@ class SlamBridgeModule(Module, layer=1):
             svc = get_service_manager()
             svc.stop("localizer")
             svc.stop("slam")
-            svc.ensure("slam")
+            self._ensure_recovery_services(svc, "slam")
             if not self._wait_ros_topic_publishers("/nav/odometry", timeout=30.0):
                 logger.error(
                     "Localization recovery: /nav/odometry did not regain a publisher"
@@ -828,7 +839,7 @@ class SlamBridgeModule(Module, layer=1):
                 )
                 self._ensure_localizer_service_best_effort(svc)
                 return False
-            svc.ensure("localizer")
+            self._ensure_recovery_services(svc, "localizer")
             if not self._wait_ros_topic_publishers(
                 "/nav/localization_health", timeout=30.0
             ):

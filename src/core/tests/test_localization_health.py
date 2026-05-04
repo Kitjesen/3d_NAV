@@ -1299,6 +1299,59 @@ class TestSlamDegeneracyDetection(unittest.TestCase):
 # Navigation degeneracy speed limiting tests
 # ──────────────────────────────────────────────────────────────────────────────
 
+class _RecoveryServiceManager:
+    def __init__(self):
+        self.stops = []
+        self.ensures = []
+
+    def stop(self, *services):
+        self.stops.append(tuple(services))
+
+    def ensure(self, *services, track_started=True):
+        self.ensures.append((tuple(services), track_started))
+
+
+def _make_successful_recovery_bridge(*, backend_profile):
+    from slam.slam_bridge_module import SlamBridgeModule
+
+    m = SlamBridgeModule(
+        backend_profile=backend_profile,
+        odom_timeout=0.1,
+        cloud_timeout=0.2,
+        watchdog_hz=20,
+    )
+    m._wait_ros_topic_publishers = lambda *args, **kwargs: True
+    m._wait_for_odom_sample_since = lambda *args, **kwargs: True
+    m._wait_for_localizer_health_since = lambda *args, **kwargs: True
+    return m
+
+
+def test_bridge_recovery_does_not_claim_external_localization_services(monkeypatch):
+    import core.service_manager as service_manager
+
+    fake = _RecoveryServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+
+    m = _make_successful_recovery_bridge(backend_profile="bridge")
+
+    assert m._restart_localization_chain_for_recovery_locked() is True
+    assert fake.stops == [("localizer",), ("slam",)]
+    assert fake.ensures == [(("slam",), False), (("localizer",), False)]
+
+
+def test_managed_localizer_recovery_keeps_service_ownership(monkeypatch):
+    import core.service_manager as service_manager
+
+    fake = _RecoveryServiceManager()
+    monkeypatch.setattr(service_manager, "get_service_manager", lambda: fake)
+
+    m = _make_successful_recovery_bridge(backend_profile="localizer")
+
+    assert m._restart_localization_chain_for_recovery_locked() is True
+    assert fake.stops == [("localizer",), ("slam",)]
+    assert fake.ensures == [(("slam",), True), (("localizer",), True)]
+
+
 class TestNavigationDegeneracyResponse(unittest.TestCase):
 
     def _make(self):

@@ -128,6 +128,24 @@ def test_start_prefers_robot_unit_when_installed(monkeypatch):
     assert svc._started == ["robot-fastlio2.service"]
 
 
+def test_untracked_start_does_not_release_external_service(monkeypatch):
+    from core.service_manager import ServiceManager
+
+    fake = _FakeSystemctl(loaded={"robot-fastlio2.service", "slam.service"})
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    svc = ServiceManager()
+
+    assert svc.start("slam", track_started=False) == ["slam"]
+    assert "robot-fastlio2.service" in fake.active
+    assert svc._started == []
+
+    svc.stop_all_started()
+
+    assert "robot-fastlio2.service" in fake.active
+    assert ["sudo", "systemctl", "stop", "robot-fastlio2.service"] not in fake.commands
+
+
 def test_start_super_lio_prefers_robot_unit_when_installed(monkeypatch):
     from core.service_manager import ServiceManager
 

@@ -185,7 +185,110 @@ def test_health_details_query_runs_full_module_diagnostics(monkeypatch):
     assert health["gateway"]["diagnostic_details"] is True
 
 
-def test_health_caches_brainstem_probe_for_short_app_polling_window(monkeypatch):
+def test_health_uses_cached_brainstem_probe_for_short_app_polling_window(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    import gateway.routes.status as status_routes
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._all_modules = {}
+    gateway._brainstem_health_cache_ttl_s = 10.0
+    gateway._brainstem_health_cache = {"status": "connected", "fsm": "GROUNDED"}
+    gateway._brainstem_health_cache_ts = time.monotonic()
+    monkeypatch.setattr(gateway, "_get_slam_hz_cached", lambda: 0.0)
+
+    calls = {"count": 0}
+
+    def _probe():
+        calls["count"] += 1
+        return {"status": "connected", "fsm": "GROUNDED"}
+
+    monkeypatch.setattr(status_routes, "_probe_brainstem", _probe)
+
+    endpoint = _endpoint(gateway, "/api/v1/health")
+    first = asyncio.run(endpoint())
+    second = asyncio.run(endpoint())
+
+    assert calls["count"] == 0
+    assert first["brainstem"]["status"] == "connected"
+    assert first["brainstem"]["cached"] is True
+    assert second["brainstem"]["status"] == "connected"
+    assert second["brainstem"]["cached"] is True
+    assert second["brainstem"]["cache_age_s"] >= 0.0
+
+
+def test_health_returns_stale_brainstem_cache_and_refreshes_in_background(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    import gateway.routes.status as status_routes
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._all_modules = {}
+    gateway._brainstem_health_cache_ttl_s = 10.0
+    gateway._brainstem_health_cache = {"status": "connected", "fsm": "OLD"}
+    gateway._brainstem_health_cache_ts = time.monotonic() - 30.0
+    monkeypatch.setattr(gateway, "_get_slam_hz_cached", lambda: 0.0)
+
+    calls = {"count": 0}
+
+    def _probe():
+        calls["count"] += 1
+        return {"status": "connected", "fsm": f"STATE_{calls['count']}"}
+
+    monkeypatch.setattr(status_routes, "_probe_brainstem", _probe)
+
+    endpoint = _endpoint(gateway, "/api/v1/health")
+    first = asyncio.run(endpoint())
+
+    deadline = time.time() + 1.0
+    while time.time() < deadline and calls["count"] < 1:
+        time.sleep(0.01)
+    assert calls["count"] == 1
+
+    second = asyncio.run(endpoint())
+
+    assert first["brainstem"]["fsm"] == "OLD"
+    assert first["brainstem"]["cached"] is True
+    assert first["brainstem"]["stale"] is True
+    assert first["brainstem"]["refreshing"] is True
+    assert second["brainstem"]["fsm"] == "STATE_1"
+    assert second["brainstem"]["cached"] is True
+    assert "stale" not in second["brainstem"]
+
+
+def test_health_default_brainstem_probe_does_not_block_without_cache(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+    import gateway.routes.status as status_routes
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._all_modules = {}
+    gateway._brainstem_health_cache_ttl_s = 10.0
+    monkeypatch.setattr(gateway, "_get_slam_hz_cached", lambda: 0.0)
+
+    calls = {"count": 0}
+
+    def _probe():
+        calls["count"] += 1
+        time.sleep(0.2)
+        return {"status": "connected", "fsm": "GROUNDED"}
+
+    monkeypatch.setattr(status_routes, "_probe_brainstem", _probe)
+
+    endpoint = _endpoint(gateway, "/api/v1/health")
+    started = time.perf_counter()
+    health = asyncio.run(endpoint())
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.1
+    assert health["brainstem"]["status"] == "unknown"
+    assert health["brainstem"]["reason"] == "probe_pending"
+    assert health["brainstem"]["refreshing"] is True
+    if gateway._brainstem_health_refresh_thread is not None:
+        gateway._brainstem_health_refresh_thread.join(timeout=1.0)
+
+
+def test_health_details_query_waits_for_live_brainstem_probe(monkeypatch):
     from gateway.gateway_module import GatewayModule
     import gateway.routes.status as status_routes
 
@@ -204,41 +307,8 @@ def test_health_caches_brainstem_probe_for_short_app_polling_window(monkeypatch)
     monkeypatch.setattr(status_routes, "_probe_brainstem", _probe)
 
     endpoint = _endpoint(gateway, "/api/v1/health")
-    first = asyncio.run(endpoint())
-    second = asyncio.run(endpoint())
+    health = asyncio.run(endpoint(details=True))
 
     assert calls["count"] == 1
-    assert first["brainstem"]["status"] == "connected"
-    assert first["brainstem"]["cached"] is False
-    assert second["brainstem"]["status"] == "connected"
-    assert second["brainstem"]["cached"] is True
-    assert second["brainstem"]["cache_age_s"] >= 0.0
-
-
-def test_health_refreshes_brainstem_probe_after_cache_ttl(monkeypatch):
-    from gateway.gateway_module import GatewayModule
-    import gateway.routes.status as status_routes
-
-    gateway = GatewayModule()
-    gateway.setup()
-    gateway._all_modules = {}
-    gateway._brainstem_health_cache_ttl_s = 0.01
-    monkeypatch.setattr(gateway, "_get_slam_hz_cached", lambda: 0.0)
-
-    calls = {"count": 0}
-
-    def _probe():
-        calls["count"] += 1
-        return {"status": "connected", "fsm": f"STATE_{calls['count']}"}
-
-    monkeypatch.setattr(status_routes, "_probe_brainstem", _probe)
-
-    endpoint = _endpoint(gateway, "/api/v1/health")
-    first = asyncio.run(endpoint())
-    time.sleep(0.02)
-    second = asyncio.run(endpoint())
-
-    assert calls["count"] == 2
-    assert first["brainstem"]["fsm"] == "STATE_1"
-    assert second["brainstem"]["fsm"] == "STATE_2"
-    assert second["brainstem"]["cached"] is False
+    assert health["brainstem"]["status"] == "connected"
+    assert health["brainstem"]["cached"] is False

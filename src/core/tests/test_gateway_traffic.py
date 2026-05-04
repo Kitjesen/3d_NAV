@@ -645,6 +645,66 @@ def test_gateway_start_runs_client_http_prewarm_in_background(monkeypatch):
     assert gateway._client_http_prewarm_thread is None
 
 
+def test_gateway_deferred_mode_can_start_client_http_prewarm(monkeypatch):
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway._defer_server = True
+    gateway._drift_watchdog_enabled = False
+    gateway.setup()
+
+    prewarm_started = threading.Event()
+
+    def fake_prewarm(stop_event=None, *, timeout_s=30.0):
+        assert timeout_s == 30.0
+        prewarm_started.set()
+        (stop_event or gateway._stop_event).wait(1.0)
+        return False
+
+    monkeypatch.setattr(gateway, "_prewarm_client_http_routes", fake_prewarm)
+
+    assert gateway._start_client_http_prewarm(timeout_s=30.0) is True
+    assert prewarm_started.wait(timeout=0.5)
+    assert gateway._client_http_prewarm_thread is not None
+    assert gateway._client_http_prewarm_thread.is_alive()
+
+    gateway.stop()
+
+    assert gateway._client_http_prewarm_thread is None
+
+
+def test_gateway_http_prewarm_does_not_skip_deferred_server(monkeypatch):
+    import urllib.request
+
+    from gateway.gateway_module import GatewayModule
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append((request.full_url, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    gateway = GatewayModule()
+    gateway._defer_server = True
+    gateway.setup()
+
+    assert gateway._prewarm_client_http_routes(threading.Event(), timeout_s=1.0) is True
+    assert calls
+    assert calls[0][0].endswith("/api/v1/app/capabilities")
+
+
 def test_gateway_stop_retains_background_thread_when_join_times_out():
     from gateway.gateway_module import GatewayModule
 

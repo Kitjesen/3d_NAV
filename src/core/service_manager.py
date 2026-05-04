@@ -112,7 +112,7 @@ class ServiceManager:
             return self._is_active_unit(canonical)
         return any(self._is_active_unit(unit) for unit in candidates)
 
-    def start(self, *services: str) -> list[str]:
+    def start(self, *services: str, track_started: bool = True) -> list[str]:
         """Start services. Returns list of actually started logical services."""
         started = []
         for service in services:
@@ -127,7 +127,8 @@ class ServiceManager:
                     check=True,
                     capture_output=True,
                 )
-                self._started.append(unit)
+                if track_started:
+                    self._started.append(unit)
                 started.append(service)
                 logger.info("Started service %s via unit %s", service, unit)
             except subprocess.CalledProcessError as e:
@@ -157,9 +158,9 @@ class ServiceManager:
                 except Exception as e:
                     logger.warning("Failed to stop %s (%s): %s", service, unit, e)
 
-    def ensure(self, *services: str) -> None:
+    def ensure(self, *services: str, track_started: bool = True) -> None:
         """Ensure services are running (start if not)."""
-        self.start(*services)
+        self.start(*services, track_started=track_started)
 
     def stop_all_started(self) -> None:
         """Stop all services that this manager started."""

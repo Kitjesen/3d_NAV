@@ -342,6 +342,8 @@ def main() -> None:
         except (KeyError, AttributeError):
             pass
         if gw is not None and hasattr(gw, "_run_server"):
+            if hasattr(gw, "_start_client_http_prewarm"):
+                gw._start_client_http_prewarm(timeout_s=30.0)
             server_stopped_cleanly = bool(gw._run_server())  # blocks until shutdown
             if not server_stopped_cleanly and not shutdown.is_set():
                 logger.error("Gateway server exited unexpectedly; returning failure for systemd")
