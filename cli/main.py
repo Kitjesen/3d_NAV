@@ -267,6 +267,7 @@ def main() -> None:
 
     # In --no-repl mode, defer uvicorn startup so main thread can run it
     # (avoids GIL starvation from DDS callbacks in daemon threads).
+    exit_code = 0
     if args.no_repl:
         try:
             gw = system.get_module("GatewayModule")
@@ -341,7 +342,10 @@ def main() -> None:
         except (KeyError, AttributeError):
             pass
         if gw is not None and hasattr(gw, "_run_server"):
-            gw._run_server()          # blocks until SIGTERM
+            server_stopped_cleanly = bool(gw._run_server())  # blocks until shutdown
+            if not server_stopped_cleanly and not shutdown.is_set():
+                logger.error("Gateway server exited unexpectedly; returning failure for systemd")
+                exit_code = 1
         else:
             shutdown.wait()
     else:
@@ -375,3 +379,5 @@ def main() -> None:
         pass
     clear_run_state()
     print(f"  {T.green('Done.')}\n")
+    if exit_code:
+        sys.exit(exit_code)

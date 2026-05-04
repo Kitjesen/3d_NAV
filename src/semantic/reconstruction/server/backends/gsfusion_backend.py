@@ -152,7 +152,14 @@ class GSFusionBackend(ReconBackendBase):
         logger.info("GSFusion: running %s", " ".join(cmd))
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=3600,
+            )
             if result.returncode != 0:
                 logger.warning("GSFusion stderr: %s", result.stderr[-1000:])
                 return ReconResult(

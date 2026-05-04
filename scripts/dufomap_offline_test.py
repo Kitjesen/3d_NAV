@@ -164,7 +164,11 @@ def main() -> int:
         t0 = time.time()
         result = subprocess.run(
             [DUFOMAP_BIN, str(tmp), DUFOMAP_CONFIG],
-            capture_output=True, text=True, timeout=600,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=600,
         )
         elapsed = time.time() - t0
         if result.returncode != 0:

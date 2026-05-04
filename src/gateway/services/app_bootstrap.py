@@ -560,8 +560,8 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
         scene_graph_json = gw._sg_json
         path_len = len(gw._last_path)
         teleop_active = gw._teleop_active
-        teleop_clients = gw._teleop_clients
         localization_status = getattr(gw, "_localization_status", None)
+    teleop_clients = gw._teleop_client_count()
 
     session = _safe_session(gw)
     icp_quality = float(getattr(gw, "_icp_quality", 0.0))

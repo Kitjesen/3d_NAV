@@ -204,6 +204,13 @@ LingTu now has a guarded scaffold for that separate relocation path:
 - Output remaps: `/lio/odom -> /nav/odometry`,
   `/lio/cloud_world -> /nav/map_cloud`
 
+Super-LIO's `/lio/odom` is already the relocation node's optimized
+world/map-frame pose after ICP. LingTu's `SlamBridgeModule` must therefore
+consume Super-LIO odometry and cloud output directly. The bridge applies the
+cached `map->odom` TF only for the `localizer` backend; applying a stale
+localizer TF to Super-LIO output double-transforms the pose and creates a
+stationary jump even when the upstream ICP result is correct.
+
 The upstream ROS wrapper prepends Super-LIO's compile-time `ROOT` directory to
 `lio.map.save_map_dir`. The S100P systemd unit therefore converts an absolute
 LingTu active-map path into a stable source-tree symlink before starting
@@ -396,9 +403,33 @@ Post-rollback state:
 - `/run/lingtu/super_lio_relocation.env` used the active map symlink and wrote
   `SUPER_LIO_RELOCATION_INIT_POSE=[0.000000,0.000000,0.0,0.0,0.0,0.000000]`
 
-This satisfies the non-motion smoke requirement only. The route-level saved-map
-comparison has not been executed in this evidence set, so Super-LIO remains
-experimental and must not become the default `nav` backend.
+Additional stationary A/B evidence on 2026-05-04 used the repeatable
+`slamcompare` gate and the same saved map with no robot-motion command:
+
+- `localizer` baseline over about 60 s: XY drift `0.008 m`, yaw drift
+  `0.00078 rad`, confidence average `0.962`, map-cloud age about `234 ms`
+- A pre-bridge-fix `slamcompare --map corrected_20260406_224020 --duration 60
+  --warmup 20` run showed localizer baseline XY drift `0.0209 m`, yaw drift
+  `0.00443 rad`, confidence average `0.974`; Super-LIO relocation candidate
+  internal XY drift `0.0011 m`, yaw drift `0.00009 rad`, confidence average
+  `0.986`, but the candidate first pose jumped by `1.7074 m` and
+  `1.03527 rad`
+- Root cause: the bridge was applying cached localizer `map->odom` TF to
+  Super-LIO relocation odom that was already in the optimized world/map frame
+- After redeploying the bridge TF fix and the `slamcompare` ready/pose wait,
+  the same command passed: localizer baseline XY drift `0.0442 m`, yaw drift
+  `0.00065 rad`, confidence average `0.9669`; Super-LIO relocation candidate
+  XY drift `0.0051 m`, yaw drift `0.00008 rad`, pose jump `0.0168 m`, yaw jump
+  `0.00363 rad`, confidence average `0.9585`
+- Post-run rollback returned to `localizer`; `/api/v1/localization/status`
+  reported `ready=true`, `reported_state=TRACKING`, `health_source=localizer_health_topic`,
+  `recovery_signal=RECOVERED`, and all relevant SLAM/LingTu units had
+  `NRestarts=0`
+
+This satisfies the stationary non-motion and static pre-motion comparison gates
+for this saved map. The route-level saved-map motion comparison has not been
+executed in this evidence set, so Super-LIO remains experimental and must not
+become the default `nav` backend.
 
 ## Rollback
 
@@ -464,11 +495,28 @@ Post-rollback evidence must show:
 | CPU or memory starves Gateway/nav | Super-LIO resource envelope too high for S100P | `ps -o pid,comm,%cpu,%mem,rss,vsz,args -C super_lio_node -C relocation_node -C python3`, Gateway latency | keep experimental, capture resource trace, reduce load before route tests |
 | duplicate Super-LIO or localizer nodes publish to `/nav/odometry` | old ROS nodes or legacy services still running | `ros2 node list`, `ros2 topic info /nav/odometry -v`, `scripts/lingtu svc status` | stop duplicate units and rerun smoke from a clean service state |
 | stale odom or map cloud while service is active | upstream node stuck or subscriptions broken | `/api/v1/localization/status` odom/map-cloud age and rates | rollback, restart the service, and require a clean non-motion smoke before route validation |
+| `slamcompare` shows a large pose/yaw jump but raw `/nav/odometry` matches the Super-LIO ICP final transform | bridge is applying a stale localizer `map->odom` TF to Super-LIO world/map odom, or the conditional TF fix regressed | compare `ros2 topic echo --once --field pose.pose /nav/odometry` with `/api/v1/state` while `super_lio_relocation` is active | verify `SlamBridgeModule` only applies `map->odom` for `localizer`, redeploy LingTu, rerun `slamcompare` |
 
 ## Route-Level Validation Gate
 
-Run this only after the non-motion smoke is stable and `scripts/lingtu status`
-does not show safety `STOP`. Keep teleop ready and start with a short known route.
+Run this only after the non-motion smoke is stable, `scripts/lingtu status`
+does not show safety `STOP`, and the static A/B gate passes. Keep teleop ready
+and start with a short known route.
+
+Required pre-motion gate:
+
+```bash
+bash scripts/lingtu slamcompare \
+  --map corrected_20260406_224020 \
+  --duration 60 \
+  --warmup 20 \
+  --initial-pose current
+```
+
+If this fails on stationary drift, localizer-to-candidate pose jump, readiness,
+recovery, or command-source checks, do not send a navigation goal. Capture the
+output, keep `super_lio_relocation` experimental, and investigate frame/initial
+pose alignment before route testing.
 
 Record the same route twice:
 

@@ -35,6 +35,9 @@ import drivers.teleop_module as _tp_mod
 import gateway.gateway_module as _gw_mod
 import gateway.mcp_server as _mcp_mod
 
+_orig_gw_start = _gw_mod.GatewayModule.start
+_orig_tp_start = _tp_mod.TeleopModule.start
+_orig_mcp_start = _mcp_mod.MCPServerModule.start
 _gw_mod.GatewayModule.start = lambda self: None
 _tp_mod.TeleopModule.start = lambda self: None
 _mcp_mod.MCPServerModule.start = lambda self: None
@@ -48,6 +51,9 @@ bp = full_stack_blueprint(
 system = bp.build()
 system.start()
 time.sleep(0.3)
+_gw_mod.GatewayModule.start = _orig_gw_start
+_tp_mod.TeleopModule.start = _orig_tp_start
+_mcp_mod.MCPServerModule.start = _orig_mcp_start
 logging.Logger.warning = _orig_warn
 
 results = {}

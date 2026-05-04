@@ -43,6 +43,7 @@
 #   lingtu doctor --non-motion --json --strict
 #   lingtu soak --duration 120 --json --strict # non-motion readiness soak
 #   lingtu slamcheck super_lio # switch, verify Super-LIO Gateway contract, rollback
+#   lingtu slamcompare --map <name> # localizer vs Super-LIO relocation non-motion gate
 set -u
 GW="${GW:-http://localhost:5050}"
 MAP_DIR="${MAP_DIR:-$HOME/data/nova/maps}"
@@ -661,6 +662,8 @@ def run(args, timeout=3):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -2051,6 +2054,410 @@ cmd_slamcheck() {
     return "$result"
 }
 
+# -- Subcommand: slamcompare --
+slamcompare_usage() {
+    echo "Usage: lingtu slamcompare [--map NAME] [--duration SEC] [--interval SEC] [--warmup SEC] [--initial-pose current|X Y YAW] [--max-localizer-drift M] [--max-candidate-drift M] [--max-pose-jump M] [--max-yaw-drift RAD] [--max-yaw-jump RAD] [--json]"
+}
+
+LINGTU_SLAMCOMPARE_TMP=""
+LINGTU_SLAMCOMPARE_ROLLBACK=0
+lingtu_slamcompare_cleanup() {
+    local status=$?
+    trap - EXIT
+    if [ "${LINGTU_SLAMCOMPARE_ROLLBACK:-0}" = "1" ]; then
+        echo "Rollback SLAM mode: localizer"
+        curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+            -d '{"profile":"localizer"}' "$GW/api/v1/slam/switch" \
+            | python3 -m json.tool 2>/dev/null || true
+    fi
+    if [ -n "${LINGTU_SLAMCOMPARE_TMP:-}" ]; then
+        rm -rf "$LINGTU_SLAMCOMPARE_TMP"
+    fi
+    return "$status"
+}
+
+slamcompare_current_pose() {
+    curl -s --max-time 4 "$GW/api/v1/state" 2>/dev/null | python3 -c '
+import json, math, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+odom = d.get("odometry") if isinstance(d.get("odometry"), dict) else {}
+try:
+    x = float(odom["x"])
+    y = float(odom["y"])
+    yaw = float(odom["yaw"])
+except Exception:
+    sys.exit(1)
+if not all(math.isfinite(v) for v in (x, y, yaw)):
+    sys.exit(1)
+print(f"{x:.6f} {y:.6f} {yaw:.6f}")
+'
+}
+
+slamcompare_wait_ready() {
+    local expected_backend="$1"
+    local timeout="${LINGTU_SLAMCOMPARE_READY_TIMEOUT:-15}"
+    local poll="${LINGTU_SLAMCOMPARE_READY_POLL:-1}"
+    local deadline=$((SECONDS + timeout))
+    local STATEJ BACKEND READY POSE_READY REASONS ODOM_AGE CLOUD_AGE
+
+    while :; do
+        STATEJ=$(curl -s --max-time 4 "$GW/api/v1/state" 2>/dev/null || echo '{}')
+        BACKEND=$(pjson "$STATEJ" 'loc=d.get("localization") or {}; sess=d.get("session") or {}; print(str(loc.get("backend") or sess.get("localization_backend") or ""))')
+        READY=$(pjson "$STATEJ" 'loc=d.get("localization") or {}; print(str(loc.get("ready", False)).lower())')
+        POSE_READY=$(pjson "$STATEJ" 'odom=d.get("odometry") if isinstance(d.get("odometry"), dict) else {}; vals=[]
+try:
+    vals=[float(odom[k]) for k in ("x", "y", "yaw")]
+except Exception:
+    vals=[]
+print(str(len(vals) == 3 and all(math.isfinite(v) for v in vals)).lower())')
+        if [ "$BACKEND" = "$expected_backend" ] && [ "$READY" = "true" ] && [ "$POSE_READY" = "true" ]; then
+            return 0
+        fi
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            REASONS=$(pjson "$STATEJ" 'loc=d.get("localization") or {}; r=loc.get("reasons") or []; print(",".join(map(str,r)) if isinstance(r,list) else str(r or ""))')
+            ODOM_AGE=$(pjson "$STATEJ" 'loc=d.get("localization") or {}; print(loc.get("odom_age_ms", "-"))')
+            CLOUD_AGE=$(pjson "$STATEJ" 'loc=d.get("localization") or {}; print(loc.get("cloud_age_ms", "-"))')
+            echo -e "${R}FAIL${N}: $expected_backend did not become ready before static compare sampling"
+            echo "  backend=$BACKEND ready=$READY pose=$POSE_READY reasons=$REASONS odom_age_ms=$ODOM_AGE cloud_age_ms=$CLOUD_AGE"
+            return 1
+        fi
+        sleep "$poll"
+    done
+}
+
+cmd_slamcompare() {
+    local map_name="" duration=60 interval=5 warmup=20 json=0
+    local initial_pose_mode="current" initial_x="" initial_y="" initial_yaw=""
+    local max_localizer_drift=0.20 max_candidate_drift=0.30 max_pose_jump=0.50
+    local max_yaw_drift=0.25 max_yaw_jump=0.35
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --map)
+                map_name="${2:-}"
+                [ -n "$map_name" ] || { slamcompare_usage; return 1; }
+                shift 2 ;;
+            --map=*)
+                map_name="${1#*=}"
+                shift ;;
+            --duration)
+                duration="${2:-}"
+                shift 2 ;;
+            --duration=*)
+                duration="${1#*=}"
+                shift ;;
+            --interval)
+                interval="${2:-}"
+                shift 2 ;;
+            --interval=*)
+                interval="${1#*=}"
+                shift ;;
+            --warmup)
+                warmup="${2:-}"
+                shift 2 ;;
+            --warmup=*)
+                warmup="${1#*=}"
+                shift ;;
+            --initial-pose)
+                shift
+                [ "$#" -gt 0 ] || { slamcompare_usage; return 1; }
+                if [ "${1:-}" = "current" ]; then
+                    initial_pose_mode="current"
+                    shift
+                else
+                    [ "$#" -ge 3 ] || { slamcompare_usage; return 1; }
+                    format_relocation_initial_pose "$1" "$2" "$3" >/dev/null || {
+                        echo "initial pose must be current or numeric X Y YAW"
+                        return 1
+                    }
+                    initial_pose_mode="explicit"
+                    initial_x="$1"
+                    initial_y="$2"
+                    initial_yaw="$3"
+                    shift 3
+                fi ;;
+            --initial-pose=*)
+                local pose_value="${1#*=}"
+                if [ "$pose_value" != "current" ]; then
+                    echo "Usage: --initial-pose current or --initial-pose X Y YAW"
+                    return 1
+                fi
+                initial_pose_mode="current"
+                shift ;;
+            --max-localizer-drift)
+                max_localizer_drift="${2:-}"
+                shift 2 ;;
+            --max-localizer-drift=*)
+                max_localizer_drift="${1#*=}"
+                shift ;;
+            --max-candidate-drift)
+                max_candidate_drift="${2:-}"
+                shift 2 ;;
+            --max-candidate-drift=*)
+                max_candidate_drift="${1#*=}"
+                shift ;;
+            --max-pose-jump)
+                max_pose_jump="${2:-}"
+                shift 2 ;;
+            --max-pose-jump=*)
+                max_pose_jump="${1#*=}"
+                shift ;;
+            --max-yaw-drift)
+                max_yaw_drift="${2:-}"
+                shift 2 ;;
+            --max-yaw-drift=*)
+                max_yaw_drift="${1#*=}"
+                shift ;;
+            --max-yaw-jump)
+                max_yaw_jump="${2:-}"
+                shift 2 ;;
+            --max-yaw-jump=*)
+                max_yaw_jump="${1#*=}"
+                shift ;;
+            --json)
+                json=1
+                shift ;;
+            -h|--help)
+                slamcompare_usage
+                return 0 ;;
+            *)
+                slamcompare_usage
+                return 1 ;;
+        esac
+    done
+
+    for pair in \
+        "duration:$duration" \
+        "interval:$interval" \
+        "warmup:$warmup"; do
+        local name="${pair%%:*}" value="${pair#*:}"
+        case "$value" in
+            ''|*[!0-9]*) echo "$name must be an integer number of seconds"; return 1 ;;
+        esac
+    done
+    python3 - "$max_localizer_drift" "$max_candidate_drift" "$max_pose_jump" "$max_yaw_drift" "$max_yaw_jump" <<'PY' || return 1
+import math
+import sys
+for value in sys.argv[1:]:
+    try:
+        number = float(value)
+    except Exception:
+        print("thresholds must be numeric")
+        sys.exit(1)
+    if not math.isfinite(number) or number < 0:
+        print("thresholds must be finite non-negative numbers")
+        sys.exit(1)
+PY
+    if [ "$interval" = "0" ]; then
+        echo "interval must be > 0"
+        return 1
+    fi
+
+    local maps_root="$HOME/data/nova/maps"
+    if [ -z "$map_name" ]; then
+        map_name=$(readlink "$maps_root/active" 2>/dev/null || true)
+    fi
+    [ -n "$map_name" ] || { echo -e "${R}FAIL${N}: --map NAME is required when no active map symlink exists"; return 1; }
+    local raw_map_name="$map_name"
+    map_name=$(resolve_relocation_map_name "$maps_root" "$raw_map_name") || {
+        echo -e "${R}FAIL${N}: unsafe relocation map name or active map target: $raw_map_name"
+        return 1
+    }
+    [ -f "$maps_root/$map_name/map.pcd" ] || {
+        echo -e "${R}FAIL${N}: map.pcd not found: $maps_root/$map_name/map.pcd"
+        return 1
+    }
+
+    LINGTU_SLAMCOMPARE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/lingtu-slamcompare.XXXXXX") || return 1
+    LINGTU_SLAMCOMPARE_ROLLBACK=0
+    trap lingtu_slamcompare_cleanup EXIT
+    local baseline_json="$LINGTU_SLAMCOMPARE_TMP/localizer.json"
+    local candidate_json="$LINGTU_SLAMCOMPARE_TMP/super_lio_relocation.json"
+
+    echo -e "${B}=== Lingtu static localization compare @ $(date '+%H:%M:%S') ===${N}"
+    echo "Gateway: $GW"
+    echo "Map: $map_name"
+    echo "No motion commands are sent."
+
+    echo "Switch baseline: localizer"
+    local switch_json switch_ok
+    switch_json=$(curl -s --max-time 20 -X POST -H "Content-Type: application/json" \
+        -d '{"profile":"localizer"}' "$GW/api/v1/slam/switch" 2>/dev/null || echo '{}')
+    switch_ok=$(pjson "$switch_json" 'print(str(d.get("success", d.get("ok", False))).lower())')
+    if [ "$switch_ok" != "true" ]; then
+        echo -e "${R}FAIL${N}: could not switch to localizer baseline"
+        echo "$switch_json" | python3 -m json.tool 2>/dev/null || echo "$switch_json"
+        return 1
+    fi
+    LINGTU_SLAMCOMPARE_ROLLBACK=1
+
+    slamcompare_wait_ready "localizer" || return 1
+
+    python3 "$SCRIPT_DIR/static_localization_probe.py" \
+        --gateway "$GW" --phase localizer --duration "$duration" --interval "$interval" \
+        > "$baseline_json" || return 1
+
+    if [ "$initial_pose_mode" = "current" ]; then
+        local pose_line
+        pose_line=$(slamcompare_current_pose) || {
+            echo -e "${R}FAIL${N}: could not read current localizer pose from /api/v1/state"
+            return 1
+        }
+        read -r initial_x initial_y initial_yaw <<< "$pose_line"
+        echo "Initial pose from localizer: x=$initial_x y=$initial_y yaw=$initial_yaw"
+    fi
+
+    echo "Warm up candidate: super_lio_relocation"
+    cmd_slamcheck super_lio_relocation \
+        --map "$map_name" \
+        --initial-pose "$initial_x" "$initial_y" "$initial_yaw" \
+        --duration "$warmup" \
+        --rollback none || return 1
+    slamcompare_wait_ready "super_lio_relocation" || return 1
+
+    python3 "$SCRIPT_DIR/static_localization_probe.py" \
+        --gateway "$GW" --phase super_lio_relocation --duration "$duration" --interval "$interval" \
+        > "$candidate_json" || return 1
+
+    python3 - "$baseline_json" "$candidate_json" \
+        "$max_localizer_drift" "$max_candidate_drift" "$max_pose_jump" "$max_yaw_drift" "$max_yaw_jump" "$json" <<'PY'
+import json
+import math
+import sys
+
+baseline_path, candidate_path = sys.argv[1], sys.argv[2]
+max_localizer_drift = float(sys.argv[3])
+max_candidate_drift = float(sys.argv[4])
+max_pose_jump = float(sys.argv[5])
+max_yaw_drift = float(sys.argv[6])
+max_yaw_jump = float(sys.argv[7])
+json_mode = sys.argv[8] == "1"
+
+with open(baseline_path, encoding="utf-8") as fh:
+    baseline = json.load(fh)
+with open(candidate_path, encoding="utf-8") as fh:
+    candidate = json.load(fh)
+
+def number(value):
+    return value if isinstance(value, (int, float)) and math.isfinite(float(value)) else None
+
+def angle_delta(a, b):
+    return abs((float(a) - float(b) + math.pi) % (2 * math.pi) - math.pi)
+
+def pose_jump(a, b):
+    ax, ay = number(a.get("x")), number(a.get("y"))
+    bx, by = number(b.get("x")), number(b.get("y"))
+    if None in (ax, ay, bx, by):
+        return None
+    return math.hypot(float(bx) - float(ax), float(by) - float(ay))
+
+def yaw_jump(a, b):
+    ayaw, byaw = number(a.get("yaw")), number(b.get("yaw"))
+    if ayaw is None or byaw is None:
+        return None
+    return angle_delta(ayaw, byaw)
+
+violations = []
+baseline_backends = set(baseline.get("backend_set") or [])
+candidate_backends = set(candidate.get("backend_set") or [])
+baseline_cmd = set(baseline.get("cmd_source_set") or [])
+candidate_cmd = set(candidate.get("cmd_source_set") or [])
+candidate_signals = set(candidate.get("recovery_signal_set") or [])
+candidate_actions = set(candidate.get("recovery_action_set") or [])
+
+if "localizer" not in baseline_backends:
+    violations.append(f"baseline backend_set={sorted(baseline_backends)}")
+if "super_lio_relocation" not in candidate_backends:
+    violations.append(f"candidate backend_set={sorted(candidate_backends)}")
+if not baseline.get("ready_all"):
+    violations.append("baseline ready_all=false")
+if not candidate.get("ready_all"):
+    violations.append("candidate ready_all=false")
+if baseline_cmd - {"none", "", "null"}:
+    violations.append(f"baseline active command source changed: {sorted(baseline_cmd)}")
+if candidate_cmd - {"none", "", "null"}:
+    violations.append(f"candidate active command source changed: {sorted(candidate_cmd)}")
+if "odom_map_cloud" not in set(candidate.get("health_source_set") or []):
+    violations.append(f"candidate health_source_set={candidate.get('health_source_set')}")
+if "active_map" not in set(candidate.get("map_save_source_set") or []):
+    violations.append(f"candidate map_save_source_set={candidate.get('map_save_source_set')}")
+if candidate_signals - {"NONE", "RECOVERED"}:
+    violations.append(f"candidate recovery_signal_set={sorted(candidate_signals)}")
+if candidate_actions - {"none", "restart_super_lio_relocation"}:
+    violations.append(f"candidate recovery_action_set={sorted(candidate_actions)}")
+
+localizer_drift = number(baseline.get("xy_drift_m"))
+candidate_drift = number(candidate.get("xy_drift_m"))
+localizer_yaw = number(baseline.get("yaw_drift_rad"))
+candidate_yaw = number(candidate.get("yaw_drift_rad"))
+cross_pose_jump = pose_jump(baseline.get("last_pose") or {}, candidate.get("first_pose") or {})
+cross_yaw_jump = yaw_jump(baseline.get("last_pose") or {}, candidate.get("first_pose") or {})
+
+if localizer_drift is None or localizer_drift > max_localizer_drift:
+    violations.append(f"baseline xy drift {localizer_drift}m > {max_localizer_drift}m")
+if candidate_drift is None or candidate_drift > max_candidate_drift:
+    violations.append(f"candidate xy drift {candidate_drift}m > {max_candidate_drift}m")
+if candidate_yaw is None or candidate_yaw > max_yaw_drift:
+    violations.append(f"candidate yaw drift {candidate_yaw}rad > {max_yaw_drift}rad")
+if cross_pose_jump is None or cross_pose_jump > max_pose_jump:
+    violations.append(f"localizer->candidate pose jump {cross_pose_jump}m > {max_pose_jump}m")
+if cross_yaw_jump is None or cross_yaw_jump > max_yaw_jump:
+    violations.append(f"localizer->candidate yaw jump {cross_yaw_jump}rad > {max_yaw_jump}rad")
+
+summary = {
+    "schema_version": 1,
+    "mode": "static_localization_compare",
+    "ok": not violations,
+    "violations": violations,
+    "thresholds": {
+        "max_localizer_drift_m": max_localizer_drift,
+        "max_candidate_drift_m": max_candidate_drift,
+        "max_pose_jump_m": max_pose_jump,
+        "max_yaw_drift_rad": max_yaw_drift,
+        "max_yaw_jump_rad": max_yaw_jump,
+    },
+    "metrics": {
+        "localizer_xy_drift_m": localizer_drift,
+        "localizer_yaw_drift_rad": localizer_yaw,
+        "candidate_xy_drift_m": candidate_drift,
+        "candidate_yaw_drift_rad": candidate_yaw,
+        "pose_jump_m": round(cross_pose_jump, 4) if cross_pose_jump is not None else None,
+        "yaw_jump_rad": round(cross_yaw_jump, 5) if cross_yaw_jump is not None else None,
+        "localizer_confidence_avg": baseline.get("confidence_avg"),
+        "candidate_confidence_avg": candidate.get("confidence_avg"),
+        "localizer_processes": baseline.get("processes"),
+        "candidate_processes": candidate.get("processes"),
+    },
+}
+
+if json_mode:
+    print(json.dumps(summary, indent=2, sort_keys=True))
+else:
+    print(
+        "Baseline localizer: "
+        f"xy_drift={localizer_drift}m yaw_drift={localizer_yaw}rad "
+        f"conf_avg={baseline.get('confidence_avg')} samples={baseline.get('samples')}"
+    )
+    print(
+        "Candidate Super-LIO relocation: "
+        f"xy_drift={candidate_drift}m yaw_drift={candidate_yaw}rad "
+        f"pose_jump={summary['metrics']['pose_jump_m']}m "
+        f"yaw_jump={summary['metrics']['yaw_jump_rad']}rad "
+        f"conf_avg={candidate.get('confidence_avg')} samples={candidate.get('samples')}"
+    )
+    if violations:
+        print("FAIL: static localization compare blocked motion promotion")
+        for violation in violations:
+            print(f"  - {violation}")
+    else:
+        print("PASS: static localization compare met non-motion thresholds")
+
+sys.exit(1 if violations else 0)
+PY
+}
+
 # -- Subcommand: log --
 cmd_log() {
     local filter="${1:-all}"
@@ -2095,6 +2502,7 @@ case "${1:-status}" in
     doctor|diag)    shift; cmd_doctor "$@" ;;
     soak|field-soak|readiness-soak) shift; cmd_soak "$@" ;;
     slamcheck|slam-check) shift; cmd_slamcheck "$@" ;;
+    slamcompare|slam-compare|super-lio-compare|super_lio_compare|superlio-compare) shift; cmd_slamcompare "$@" ;;
     super-lio-smoke|super_lio_smoke|superlio-smoke) shift; cmd_slamcheck super_lio "$@" ;;
     super-lio-relocation-smoke|super_lio_relocation_smoke|super-lio-reloc-smoke|super_lio_reloc_smoke) shift; cmd_slamcheck super_lio_relocation "$@" ;;
     log|l)          shift; cmd_log   "$@" ;;

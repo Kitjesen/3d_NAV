@@ -527,6 +527,8 @@ def register_map_routes(app, gw) -> None:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
             if "success=True" not in r.stdout:
@@ -547,6 +549,8 @@ def register_map_routes(app, gw) -> None:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
         except Exception:

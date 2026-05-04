@@ -59,14 +59,14 @@ def register_realtime_routes(app, gw) -> None:
 
     async def ws_teleop_endpoint(ws: StarletteWebSocket):
         await ws.accept()
-        gw._teleop_clients += 1
+        client_count = gw._teleop_client_connected()
         tm = gw._teleop_module
         if tm is not None:
             tm.on_client_connect()
         stream_camera = _camera_stream_requested(ws.query_params)
         logger.info(
             "Teleop WS connected (%d clients, camera_stream=%s)",
-            gw._teleop_clients,
+            client_count,
             stream_camera,
         )
 
@@ -117,12 +117,18 @@ def register_realtime_routes(app, gw) -> None:
         finally:
             if frame_task is not None:
                 frame_task.cancel()
-            gw._teleop_clients = max(0, gw._teleop_clients - 1)
+                try:
+                    await frame_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.debug("teleop camera frame task ended with error: %s", e)
+            client_count = gw._teleop_client_disconnected()
             if tm is not None:
                 tm.on_client_disconnect()
-            elif gw._teleop_clients == 0:
+            elif client_count == 0:
                 gw._teleop_release()
-            logger.info("Teleop WS disconnected (%d clients)", gw._teleop_clients)
+            logger.info("Teleop WS disconnected (%d clients)", client_count)
 
     async def ws_camera_endpoint(ws: StarletteWebSocket):
         await ws.accept()

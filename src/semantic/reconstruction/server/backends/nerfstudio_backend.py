@@ -141,7 +141,12 @@ class NerfstudioBackend(ReconBackendBase):
         logger.info("nerfstudio: running %s", " ".join(cmd))
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=7200
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=7200,
             )
             if result.returncode != 0:
                 return ReconResult(
@@ -167,7 +172,14 @@ class NerfstudioBackend(ReconBackendBase):
                 "--num-points", "1000000",
             ]
             try:
-                subprocess.run(export_cmd, capture_output=True, text=True, timeout=300)
+                subprocess.run(
+                    export_cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=300,
+                )
                 if ply_path.exists():
                     output_path   = ply_path
                     output_format = "ply"

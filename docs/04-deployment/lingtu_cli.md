@@ -202,6 +202,39 @@ output and then run the route-level validation gate in
 `docs/04-deployment/super_lio_backend.md` before considering
 `super_lio_relocation` for navigation defaults.
 
+### `slamcompare` - localizer vs Super-LIO static gate
+
+```bash
+lingtu slamcompare \
+  --map corrected_20260406_224020 \
+  --duration 60 \
+  --warmup 20 \
+  --initial-pose current
+```
+
+This command is the repeatable version of the pre-motion A/B check. It switches
+to `localizer`, samples a stationary baseline, uses the current localizer pose as
+the Super-LIO relocation initial pose, runs a `slamcheck` warm-up for
+`super_lio_relocation`, samples the candidate, and always rolls back to
+`localizer`. It does not send goals or velocity commands.
+
+Default gates are intentionally conservative:
+
+- localizer stationary XY drift <= 0.20 m
+- Super-LIO relocation stationary XY drift <= 0.30 m
+- localizer-to-candidate first-pose jump <= 0.50 m
+- Super-LIO relocation stationary yaw drift <= 0.25 rad
+- localizer-to-candidate yaw jump <= 0.35 rad
+- candidate stays ready with `health_source=odom_map_cloud`
+- candidate reports `map_save_source=active_map`
+- recovery signal stays `NONE` or `RECOVERED`
+- active command source stays `none`
+
+Tune the thresholds with `--max-localizer-drift`, `--max-candidate-drift`,
+`--max-pose-jump`, `--max-yaw-drift`, and `--max-yaw-jump` only when the route
+artifact explains the reason. A failed `slamcompare` blocks robot-motion
+validation for Super-LIO and keeps the default navigation path on `localizer`.
+
 ### `doctor` - localization chain diagnostics
 
 ```bash

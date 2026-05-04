@@ -195,6 +195,8 @@ def _run_graphviz(dot_code: str, output_path: str, fmt: str) -> None:
         ["dot", f"-T{fmt}", "-o", output_path],
         input=dot_code,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
     )
     if result.returncode != 0:

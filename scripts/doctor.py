@@ -26,7 +26,14 @@ def port_open(host, port):
 
 def run(cmd, timeout=5):
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
         return r.stdout.strip()
     except:
         return ""

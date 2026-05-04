@@ -157,7 +157,8 @@ def refilter_map(map_dir: str | Path, *, timeout_s: float = 300.0) -> dict:
         # dufomap_run overwrites output.pcd (or dufomap_output.pcd — depends on config)
         proc = subprocess.run(
             [DUFOMAP_BIN, str(tmp), DUFOMAP_CONFIG],
-            capture_output=True, text=True, timeout=timeout_s,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout_s,
         )
         if proc.returncode != 0:
             return {"success": False,

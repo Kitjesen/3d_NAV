@@ -31,10 +31,10 @@ def build_state_snapshot(gw: Any) -> dict[str, Any]:
         dialogue = gw._dialogue
         mode = gw._mode
         teleop_active = gw._teleop_active
-        teleop_clients = gw._teleop_clients
         scene_graph_json = gw._sg_json
         path_len = len(gw._last_path)
         localization_status = getattr(gw, "_localization_status", None)
+    teleop_clients = gw._teleop_client_count()
 
     session = safe_session(gw)
     localization = build_localization_status_from_parts(

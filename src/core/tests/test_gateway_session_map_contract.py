@@ -471,14 +471,13 @@ def test_map_routes_validate_json_contracts(monkeypatch):
         missing_manager_response = asyncio.run(
             _endpoint(gateway, "/api/v1/maps")(MapRequest(action="list"))
         )
+        missing_manager_payload = _payload(missing_manager_response)
 
         maps = MapListResponse.model_validate(maps_payload)
         live_points = MapPointsResponse.model_validate(live_points_payload)
         saved_points = MapPointsResponse.model_validate(saved_points_payload)
         reset = MapLifecycleResponse.model_validate(reset_payload)
-        missing_manager = GatewayErrorResponse.model_validate(
-            _payload(missing_manager_response)
-        )
+        missing_manager = GatewayErrorResponse.model_validate(missing_manager_payload)
 
         assert [item.name for item in maps.maps] == ["demo"]
         assert maps.schema_version == 1
@@ -505,6 +504,9 @@ def test_map_routes_validate_json_contracts(monkeypatch):
         assert reset.ok is True
         assert reset.success is True
         assert reset.ts > 0
+        assert missing_manager_response.status_code == 503
+        assert missing_manager_payload["schema_version"] == 1
+        assert missing_manager_payload["ok"] is False
         assert missing_manager.error == "MapManagerModule not running"
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -709,6 +711,44 @@ def test_maps_route_accepts_legacy_and_canonical_actions():
         {"action": "build_tomogram", "name": "demo"},
         {"action": "build_tomogram", "name": "demo"},
     ]
+
+
+def test_maps_route_error_response_matches_openapi_contract():
+    from gateway.gateway_module import GatewayModule, MapRequest
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    manager = _FakeMapManager()
+    gateway._map_mgr = manager
+
+    def fail(raw: str):
+        command = json.loads(raw)
+        manager.map_command.delivered.append(command)
+        for callback in list(manager.map_response._callbacks):
+            callback(
+                {
+                    "action": command["action"],
+                    "success": False,
+                    "message": "map save failed",
+                }
+            )
+
+    manager.map_command._deliver = fail
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/maps")(MapRequest(action="save", name="demo"))
+    )
+    payload = _payload(response)
+    model = GatewayErrorResponse.model_validate(payload)
+
+    assert response.status_code == 400
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is False
+    assert model.error == "map save failed"
+    assert model.message == "map save failed"
+    assert model.detail["action"] == "save"
+    assert model.detail["success"] is False
 
 
 def test_operational_routes_validate_idle_json_contracts():

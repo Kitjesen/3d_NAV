@@ -16,10 +16,12 @@ class _FakeSystemctl:
         self.active = set(active or set())
         self.loaded = set(loaded or set())
         self.commands: list[list[str]] = []
+        self.kwargs: list[dict] = []
 
     def __call__(self, cmd, **kwargs):
         command = list(cmd)
         self.commands.append(command)
+        self.kwargs.append(dict(kwargs))
 
         if command[:3] == ["systemctl", "is-active", "--quiet"]:
             return _RunResult(returncode=0 if command[3] in self.active else 3)
@@ -220,3 +222,45 @@ def test_stop_clears_new_and_legacy_aliases(monkeypatch):
         "super_lio_reloc.service",
     ] in fake.commands
     assert svc._started == []
+
+
+def test_text_systemctl_calls_use_stable_utf8_decode(monkeypatch):
+    from core.service_manager import ServiceManager
+
+    fake = _FakeSystemctl(loaded={"robot-camera.service"})
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    svc = ServiceManager()
+
+    assert svc._unit_exists("robot-camera.service") is True
+    show_index = fake.commands.index(
+        ["systemctl", "show", "-p", "LoadState", "--value", "robot-camera.service"]
+    )
+    assert fake.kwargs[show_index]["encoding"] == "utf-8"
+    assert fake.kwargs[show_index]["errors"] == "replace"
+
+
+def test_start_failure_logs_invalid_utf8_stderr_without_crashing(monkeypatch, caplog):
+    from core.service_manager import ServiceManager
+
+    class FakeSystemctl(_FakeSystemctl):
+        def __call__(self, cmd, **kwargs):
+            command = list(cmd)
+            if command[:3] == ["sudo", "systemctl", "start"]:
+                self.commands.append(command)
+                self.kwargs.append(dict(kwargs))
+                raise subprocess.CalledProcessError(
+                    5,
+                    command,
+                    stderr=b"\xff\xfeunit start failed",
+                )
+            return super().__call__(cmd, **kwargs)
+
+    fake = FakeSystemctl(loaded={"robot-camera.service"})
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    svc = ServiceManager()
+
+    with caplog.at_level("ERROR"):
+        assert svc.start("camera") == []
+    assert "Failed to start camera" in caplog.text

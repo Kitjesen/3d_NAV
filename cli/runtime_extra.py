@@ -189,7 +189,11 @@ def preflight(profile_name: str, cfg: dict) -> None:
             try:
                 result = subprocess.run(
                     ["iptables", "-L", "INPUT", "-n", "--line-numbers"],
-                    capture_output=True, text=True, timeout=2
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=2,
                 )
                 rules = result.stdout
                 # If there's a DROP/REJECT default policy and no ACCEPT for our port, warn

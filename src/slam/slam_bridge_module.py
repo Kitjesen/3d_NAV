@@ -55,6 +55,7 @@ DEGEN_CRITICAL = "CRITICAL"      # Complete degeneracy (corridor/void)
 LOCALIZER_ODOM_GRACE_HEALTH = {"LOCKED", "RECOVERED"}
 LOCALIZER_ODOM_LOSS_RECOVERY_SIGNAL = "ODOM_MISSING"
 LOCALIZER_ODOM_LOSS_RECOVERY_ACTION = "restart_localization_chain"
+MAP_ODOM_TF_BACKENDS = {"localizer"}
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -670,7 +671,8 @@ class SlamBridgeModule(Module, layer=1):
         try:
             subprocess.run(
                 ["sudo", "systemctl", "restart", service],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=15,
                 check=False,
             )
             logger.warning("Drift guard: %s service restarted", service)
@@ -706,6 +708,8 @@ class SlamBridgeModule(Module, layer=1):
                     ["bash", "-lc", cmd],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=5,
                     check=False,
                 )
@@ -768,6 +772,8 @@ class SlamBridgeModule(Module, layer=1):
                 ["sudo", "systemctl", "start", "robot-localizer.service"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=15,
                 check=False,
             )
@@ -868,6 +874,8 @@ class SlamBridgeModule(Module, layer=1):
                     cmd,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=15,
                     check=False,
                 )
@@ -899,6 +907,8 @@ class SlamBridgeModule(Module, layer=1):
                 ["sudo", "systemctl", "start", "robot-localizer.service"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=15,
                 check=False,
             )
@@ -1043,7 +1053,8 @@ class SlamBridgeModule(Module, layer=1):
             try:
                 subprocess.run(
                     ["sudo", "systemctl", "restart", "slam"],
-                    capture_output=True, text=True, timeout=15,
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=15,
                     check=False,
                 )
                 logger.warning("Drift guard: slam service restarted")
@@ -1071,7 +1082,8 @@ class SlamBridgeModule(Module, layer=1):
                  f"ros2 service call /nav/relocalize interface/srv/Relocalize "
                  f"\"{{pcd_path: '{pcd_path}', x: {pos[0]}, y: {pos[1]}, z: 0.0, "
                  f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=30)
             logger.info("Drift guard: relocalize call completed")
             self._drift_bad_count = 0
             self._relocalization_state = "completed"
@@ -1291,10 +1303,9 @@ class SlamBridgeModule(Module, layer=1):
             if self._check_drift(fused):
                 return  # don't publish garbage to downstream modules
 
-            # Apply map→odom TF so downstream (NavigationModule, Gateway)
-            # sees map-frame positions. Without this, planner uses odom
-            # frame (robot boot origin) and PCT lookups hit wrong cells.
-            fused = self._apply_map_odom_to_odometry(fused)
+            # Localizer publishes odom-frame poses plus map->odom TF; Super-LIO
+            # relocation already publishes its optimized world/map pose.
+            fused = self._maybe_apply_map_odom_to_odometry(fused)
             # Mark receive freshness before downstream fan-out; slow
             # Gateway/SSE/App consumers must not look like an odom outage.
             self._mark_odom_received(wall_now=now)
@@ -1321,7 +1332,7 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                xyz_map = self._apply_map_odom_to_points(xyz)
+                xyz_map = self._maybe_apply_map_odom_to_points(xyz)
                 self._mark_cloud_received()
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
         except Exception as e:
@@ -1447,9 +1458,8 @@ class SlamBridgeModule(Module, layer=1):
             valid = np.isfinite(xyz).all(axis=1)
             xyz = xyz[valid]
             if xyz.shape[0] > 0:
-                # Transform odom-frame points to map frame so downstream
-                # consumers see points in the same frame as odometry.
-                xyz_map = self._apply_map_odom_to_points(xyz)
+                # Keep points in the same frame semantics as odometry.
+                xyz_map = self._maybe_apply_map_odom_to_points(xyz)
                 self._mark_cloud_received()
                 self.map_cloud.publish(PointCloud2.from_numpy(xyz_map, frame_id="map"))
         except Exception as e:
@@ -1488,6 +1498,30 @@ class SlamBridgeModule(Module, layer=1):
         R = T[:3, :3].astype(np.float32)
         t = T[:3, 3].astype(np.float32)
         return (xyz @ R.T) + t
+
+    def _should_apply_map_odom_tf(self) -> bool:
+        """Return whether incoming SLAM data needs localizer map->odom lift.
+
+        The localizer publishes odometry in odom frame plus a map->odom TF. In
+        contrast, Super-LIO relocation publishes its optimized world/map pose
+        directly after ICP. Applying a cached localizer TF to Super-LIO outputs
+        double-transforms the pose and shows up as a stationary jump.
+        """
+        try:
+            backend = str(self._current_backend_profile()).strip().lower()
+        except Exception:
+            backend = str(getattr(self, "_backend_profile", "bridge") or "bridge").strip().lower()
+        return backend in MAP_ODOM_TF_BACKENDS
+
+    def _maybe_apply_map_odom_to_points(self, xyz: np.ndarray) -> np.ndarray:
+        if not self._should_apply_map_odom_tf():
+            return xyz
+        return self._apply_map_odom_to_points(xyz)
+
+    def _maybe_apply_map_odom_to_odometry(self, odom: Odometry) -> Odometry:
+        if not self._should_apply_map_odom_tf():
+            return odom
+        return self._apply_map_odom_to_odometry(odom)
 
     def _apply_map_odom_to_odometry(self, odom: Odometry) -> Odometry:
         """Transform odom from Fast-LIO2 odom frame into map frame using the
@@ -1694,10 +1728,9 @@ class SlamBridgeModule(Module, layer=1):
                 self._max_pos_cov = max(float(cov[0]), float(cov[7]), float(cov[14]))
 
             fused = self._fuse_odometry(slam_odom)
-            # Apply map→odom TF so downstream (NavigationModule, Gateway)
-            # sees map-frame positions. Without this, planner uses odom
-            # frame (robot boot origin) and PCT lookups hit wrong cells.
-            fused = self._apply_map_odom_to_odometry(fused)
+            # Localizer publishes odom-frame poses plus map->odom TF; Super-LIO
+            # relocation already publishes its optimized world/map pose.
+            fused = self._maybe_apply_map_odom_to_odometry(fused)
             self._mark_odom_received(wall_now=now)
             self._submit_odometry_worker(fused)
         except Exception as e:

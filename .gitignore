@@ -28,6 +28,9 @@ venv/
 env/
 .venv/
 .pytest_cache/
+.pytest-tmp-map/
+.tmp_pytest/
+.tmp_pytest_clean/
 
 # ── C/C++ build artifacts ──
 *.o

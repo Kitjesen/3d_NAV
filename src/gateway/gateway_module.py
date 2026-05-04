@@ -326,6 +326,7 @@ class GatewayModule(Module, layer=6):
         # Teleop: delegate to TeleopModule (set by on_system_modules)
         self._teleop_module = None
         self._teleop_clients:   int  = 0
+        self._teleop_clients_lock = threading.Lock()
         self._latest_jpeg:  bytes | None = None
         self._latest_jpeg_seq: int = 0
         self._jpeg_lock: threading.Lock = threading.Lock()
@@ -424,6 +425,8 @@ class GatewayModule(Module, layer=6):
             os.environ.get("LINGTU_DRIFT_WATCHDOG_V_LIMIT", "10"))
         self._drift_watchdog_cooldown: float = float(
             os.environ.get("LINGTU_DRIFT_WATCHDOG_COOLDOWN", "300"))
+        self._drift_restart_delay_s: float = float(
+            os.environ.get("LINGTU_DRIFT_RESTART_DELAY_S", "2.0"))
         self._drift_last_restart_ts: float = 0.0
         self._drift_restart_count: int = 0
         self._drift_watchdog_thread: threading.Thread | None = None
@@ -459,7 +462,10 @@ class GatewayModule(Module, layer=6):
         self._tagged_loc_module: Any = None
 
         self._app   = None
+        self._server: Any = None
         self._server_thread: threading.Thread | None = None
+        self._saved_map_loader_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
         self._defer_server: bool = False  # True → main thread runs uvicorn
 
     # -- lifecycle ----------------------------------------------------------
@@ -495,30 +501,60 @@ class GatewayModule(Module, layer=6):
 
     def start(self) -> None:
         super().start()
-        if not self._defer_server:
+        if self._stop_event.is_set():
+            self._stop_event = threading.Event()
+        stop_event = self._stop_event
+        if (
+            not self._defer_server
+            and (
+                self._server_thread is None
+                or not self._server_thread.is_alive()
+            )
+        ):
             self._server_thread = threading.Thread(
-                target=self._run_server, daemon=True, name="gateway"
+                target=self._run_server,
+                args=(stop_event,),
+                daemon=True,
+                name="gateway",
             )
             self._server_thread.start()
         # Background: load active map.pcd from disk and push as saved_map
         # event so the frontend底图 always has the stored map regardless of
         # whether localizer has converged. Re-pushes periodically so late-
         # connecting SSE clients also get it.
-        self._saved_map_loader_thread = threading.Thread(
-            target=self._saved_map_loader_loop, daemon=True, name="saved_map_loader"
-        )
-        self._saved_map_loader_thread.start()
+        if (
+            self._saved_map_loader_thread is None
+            or not self._saved_map_loader_thread.is_alive()
+        ):
+            self._saved_map_loader_thread = threading.Thread(
+                target=self._saved_map_loader_loop,
+                args=(stop_event,),
+                daemon=True,
+                name="saved_map_loader",
+            )
+            self._saved_map_loader_thread.start()
 
         # Drift watchdog — 兜底 Fast-LIO2 静置 IEKF 溢出.
-        if self._drift_watchdog_enabled:
+        if (
+            self._drift_watchdog_enabled
+            and (
+                self._drift_watchdog_thread is None
+                or not self._drift_watchdog_thread.is_alive()
+            )
+        ):
             self._drift_watchdog_thread = threading.Thread(
-                target=self._drift_watchdog_loop, daemon=True, name="drift_watchdog",
+                target=self._drift_watchdog_loop,
+                args=(stop_event,),
+                daemon=True,
+                name="drift_watchdog",
             )
             self._drift_watchdog_thread.start()
 
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
 
-    def _drift_watchdog_loop(self) -> None:
+    def _drift_watchdog_loop(
+        self, stop_event: threading.Event | None = None
+    ) -> None:
         """Periodic sanity check on odom; restart SLAM services if IEKF diverged.
 
         Fast-LIO2 IEKF co-variance grows unbounded under static poses (no new
@@ -538,9 +574,9 @@ class GatewayModule(Module, layer=6):
             "drift_watchdog: enabled, interval=%.0fs, |xy|<%.0fm, |v|<%.1fm/s",
             interval, xy_lim, v_lim,
         )
-        while True:
+        stop_event = stop_event or self._stop_event
+        while not stop_event.wait(interval):
             try:
-                time.sleep(interval)
                 with self._state_lock:
                     odom = dict(self._odom) if self._odom else {}
                 if not odom:
@@ -568,16 +604,30 @@ class GatewayModule(Module, layer=6):
                     "restarting SLAM services + session companions",
                     x, y, z, v,
                 )
-                self._drift_restart_do_restart(xy=x, y_abs=y, v=v)
+                if stop_event.is_set():
+                    return
+                self._drift_restart_do_restart(
+                    xy=x, y_abs=y, v=v, stop_event=stop_event
+                )
                 self._drift_last_restart_ts = time.time()
                 self._drift_restart_count += 1
             except Exception as e:
                 logger.exception("drift_watchdog tick failed: %s", e)
 
-    def _drift_restart_do_restart(self, *, xy: float, y_abs: float, v: float) -> None:
+    def _drift_restart_do_restart(
+        self,
+        *,
+        xy: float,
+        y_abs: float,
+        v: float,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         """Stop SLAM services, clear odom cache, ensure session-appropriate
         services back up. Pushes SSE event so Web shows a banner.
         """
+        stop_event = stop_event or self._stop_event
+        if stop_event.is_set():
+            return
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
@@ -659,7 +709,8 @@ class GatewayModule(Module, layer=6):
 
         # Re-ensure based on session mode. Idle restores any localization
         # services that were already running before this watchdog reset.
-        time.sleep(2.0)
+        if stop_event.wait(self._drift_restart_delay_s):
+            return
         try:
             restart_services: list[str] = []
             if running_before.get("super_lio_relocation"):
@@ -679,7 +730,7 @@ class GatewayModule(Module, layer=6):
                 ) and "slam" not in restart_services:
                     restart_services.insert(0, "slam")
 
-            if restart_services:
+            if restart_services and not stop_event.is_set():
                 svc.ensure(*restart_services)
                 svc.wait_ready(*restart_services, timeout=10.0)
             logger.info(
@@ -690,7 +741,9 @@ class GatewayModule(Module, layer=6):
         except Exception as e:
             logger.error("drift_watchdog: ensure failed: %s", e)
 
-    def _saved_map_loader_loop(self) -> None:
+    def _saved_map_loader_loop(
+        self, stop_event: threading.Event | None = None
+    ) -> None:
         """Watch active/map.pcd symlink; push saved_map ONCE per change.
 
         Previous behaviour: push every 10 s for "new clients". But the
@@ -699,10 +752,10 @@ class GatewayModule(Module, layer=6):
         when the active map actually changes, and cache `_last_saved_map`
         so new SSE connections get it once from the snapshot.
         """
-        import time as _t
         MAX_SEND = 80_000
         last_target = None
-        while True:
+        stop_event = stop_event or self._stop_event
+        while not stop_event.is_set():
             try:
                 target = active_map_name()
                 if target != last_target:
@@ -725,7 +778,7 @@ class GatewayModule(Module, layer=6):
                                 target, count)
             except Exception as e:
                 logger.debug("saved_map loader error: %s", e)
-            _t.sleep(5.0)
+            stop_event.wait(5.0)
 
     @staticmethod
     def _load_pcd_xyz(path: str) -> np.ndarray | None:
@@ -790,7 +843,38 @@ class GatewayModule(Module, layer=6):
         return None
 
     def stop(self) -> None:
-        self._server_thread = None
+        self._stop_event.set()
+        server = self._server
+        if server is not None:
+            try:
+                server.should_exit = True
+            except Exception:
+                logger.debug(
+                    "GatewayModule: failed to signal uvicorn shutdown",
+                    exc_info=True,
+                )
+
+        current = threading.current_thread()
+        for attr_name in (
+            "_server_thread",
+            "_saved_map_loader_thread",
+            "_drift_watchdog_thread",
+        ):
+            thread = getattr(self, attr_name, None)
+            if thread is None:
+                continue
+            if thread is current:
+                setattr(self, attr_name, None)
+                continue
+            if thread.is_alive():
+                thread.join(timeout=2.0)
+                if thread.is_alive():
+                    logger.warning(
+                        "GatewayModule: %s did not stop within timeout",
+                        thread.name,
+                    )
+                    continue
+            setattr(self, attr_name, None)
         super().stop()
 
     def on_system_modules(self, modules: dict[str, Any]) -> None:
@@ -1151,7 +1235,14 @@ class GatewayModule(Module, layer=6):
                       f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
                       f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""
                 )
-                r = _sp.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=20)
+                r = _sp.run(
+                    ["bash", "-c", cmd],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=20,
+                )
                 ok = "success=True" in r.stdout
                 logger.info("auto-relocalize: map=%s pose=(%.2f,%.2f,yaw=%.2f) ok=%s",
                             map_name, x, y, yaw, ok)
@@ -2022,6 +2113,20 @@ class GatewayModule(Module, layer=6):
 
     # -- teleop internals (forwarded to TeleopModule) -------------------------
 
+    def _teleop_client_connected(self) -> int:
+        with self._teleop_clients_lock:
+            self._teleop_clients += 1
+            return self._teleop_clients
+
+    def _teleop_client_disconnected(self) -> int:
+        with self._teleop_clients_lock:
+            self._teleop_clients = max(0, self._teleop_clients - 1)
+            return self._teleop_clients
+
+    def _teleop_client_count(self) -> int:
+        with self._teleop_clients_lock:
+            return self._teleop_clients
+
     def _teleop_on_joy(self, lx: float, ly: float, az: float) -> None:
         """Forward raw joystick input to TeleopModule via joy_input port."""
         tm = self._teleop_module
@@ -2111,9 +2216,13 @@ class GatewayModule(Module, layer=6):
         async def post_maps(body: MapRequest):
             mgr = gw._map_mgr
             if mgr is None:
+                message = "MapManagerModule not running"
                 return JSONResponse(
                     status_code=503,
-                    content={"error": "MapManagerModule not running"},
+                    content=GatewayErrorResponse(
+                        error=message,
+                        message=message,
+                    ).model_dump(),
                 )
             # Deliver command via Module port (synchronous one-shot)
             result: list[dict] = []
@@ -2141,9 +2250,14 @@ class GatewayModule(Module, layer=6):
 
             resp = result[0] if result else {"success": False, "message": "no response"}
             if not resp.get("success"):
+                message = str(resp.get("message") or "failed")
                 return JSONResponse(
                     status_code=400,
-                    content={"error": resp.get("message", "failed"), "detail": resp},
+                    content=GatewayErrorResponse(
+                        error=message,
+                        message=message,
+                        detail=resp,
+                    ).model_dump(),
                 )
             legacy = dict(resp)
             legacy.pop("success", None)
@@ -2157,9 +2271,11 @@ class GatewayModule(Module, layer=6):
 
         return app
 
-    def _run_server(self) -> None:
+    def _run_server(self, stop_event: threading.Event | None = None) -> bool:
         if self._app is None:
-            return
+            logger.error("uvicorn server cannot start: FastAPI app is not configured")
+            return False
+        stop_event = stop_event or self._stop_event
         # Reduce GIL switch interval so uvicorn's event loop gets CPU time
         # even when LiDAR/DDS callbacks are active in other threads.
         # Default is 5ms; 1ms gives the event loop ~10x more scheduling chances.
@@ -2172,7 +2288,8 @@ class GatewayModule(Module, layer=6):
             uvicorn = _uv
         except ImportError:
             logger.error("uvicorn not installed — run: pip install 'uvicorn[standard]'")
-            return
+            return False
+        server = None
         try:
             # uvloop only ships for Linux/macOS; "auto" picks uvloop where
             # available and falls back to asyncio on Windows.
@@ -2188,12 +2305,24 @@ class GatewayModule(Module, layer=6):
                 ws_max_size=2 * 1024 * 1024,  # 2 MB — enough for 1080p JPEG
             )
             server = uvicorn.Server(config)
+            self._server = server
+            if stop_event.is_set():
+                server.should_exit = True
             logger.info("uvicorn server.run() starting on %s:%d", self._host, self._port)
             server.run()
-            logger.error("uvicorn server.run() returned unexpectedly")
+            if bool(getattr(server, "should_exit", False)) or bool(
+                getattr(server, "force_exit", False)
+            ):
+                logger.info("uvicorn server stopped cleanly")
+                return True
+            logger.error("uvicorn server.run() returned without a shutdown signal")
+            return False
         except Exception:
             logger.exception("uvicorn crashed")
+            return False
         finally:
+            if server is not None and self._server is server:
+                self._server = None
             sys.setswitchinterval(old_interval)
 
     # -- health -------------------------------------------------------------
@@ -2208,7 +2337,7 @@ class GatewayModule(Module, layer=6):
         info["gateway"] = {
             "port":        self._port,
             "sse_clients": n_sse,
-            "teleop_clients": self._teleop_clients,
+            "teleop_clients": self._teleop_client_count(),
             "teleop_active": self._teleop_active,
             "has_odom":    self._odom is not None,
             "has_sg":      self._sg_json != "{}",
@@ -2245,7 +2374,8 @@ class GatewayModule(Module, layer=6):
                  "source /opt/ros/humble/setup.bash && "
                  "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
                  "timeout 3 ros2 topic hz /nav/odometry 2>&1 | tail -5"],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=5)
             m = re.search(r"average rate: ([\d.]+)", r.stdout)
             if m:
                 self._slam_hz_value = float(m.group(1))
@@ -2268,7 +2398,8 @@ class GatewayModule(Module, layer=6):
                  "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
                  f"ros2 service call /nav/save_map interface/srv/SaveMaps "
                  f"\"{{file_path: '{tmp}'}}\""],
-                capture_output=True, text=True, timeout=15)
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=15)
         except Exception:
             pass
 

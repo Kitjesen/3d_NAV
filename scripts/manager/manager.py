@@ -68,7 +68,12 @@ def _systemctl(action: str, service: str, timeout: int = 15) -> bool:
     try:
         result = subprocess.run(
             ["sudo", "systemctl", action, service],
-            capture_output=True, text=True, timeout=timeout)
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
         return result.returncode == 0
     except Exception as e:
         logger.error("systemctl %s %s: %s", action, service, e)
@@ -79,7 +84,12 @@ def _is_active(service: str) -> bool:
     try:
         result = subprocess.run(
             ["systemctl", "is-active", service],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
         return result.stdout.strip() == "active"
     except Exception:
         return False
@@ -237,7 +247,12 @@ def _save_map(name: str) -> dict:
     try:
         result = subprocess.run(
             ["bash", "-c", cmd],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
         if result.returncode != 0:
             return {"success": False, "error": result.stderr[:200]}
         return {"success": True, "pcd": pcd_path}

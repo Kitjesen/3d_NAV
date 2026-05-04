@@ -61,6 +61,8 @@ def grpcurl(host, port, method, data=None, timeout=5):
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         return result.returncode, result.stdout, result.stderr
@@ -80,6 +82,8 @@ def grpcurl_stream(host, port, method, data=None, timeout=4):
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         return result.returncode, result.stdout, result.stderr
@@ -98,6 +102,8 @@ def ros2_topic_echo_once(topic, timeout=5):
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         return result.returncode == 0, result.stdout
@@ -114,6 +120,8 @@ def ros2_topic_echo_background(topic, output_list, stop_event, timeout=10):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         start = time.time()
         while not stop_event.is_set() and (time.time() - start) < timeout:

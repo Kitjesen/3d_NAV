@@ -506,6 +506,12 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/maps", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/maps", status="400", method="post"
+    ).endswith("/GatewayErrorResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/maps", status="503", method="post"
+    ).endswith("/GatewayErrorResponse")
     assert _schema_ref_for(openapi, "/api/v1/slam/maps").endswith(
         "/MapListResponse"
     )

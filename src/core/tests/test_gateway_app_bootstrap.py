@@ -543,6 +543,51 @@ def test_app_web_events_stream_uses_sse_ids_without_named_event_type():
     assert payload["event_id"] == 1
 
 
+def test_app_web_events_stream_flushes_live_event_before_heartbeat_delay():
+    from gateway.gateway_module import GatewayModule
+
+    def decode_payload(chunk):
+        text = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        data_line = next(line for line in text.splitlines() if line.startswith("data: "))
+        return json.loads(data_line.removeprefix("data: "))
+
+    async def read_next_payload_after_delayed_push(gateway):
+        route = next(
+            route
+            for route in gateway._app.routes
+            if route.path == "/api/v1/events"
+        )
+        response = await route.endpoint()
+        iterator = response.body_iterator
+        next_chunk_task = None
+        try:
+            first_payload = decode_payload(await iterator.__anext__())
+            next_chunk_task = asyncio.create_task(iterator.__anext__())
+            await asyncio.sleep(0.01)
+            gateway.push_event({"type": "mission_status", "data": {"state": "IDLE"}})
+            second_payload = decode_payload(
+                await asyncio.wait_for(next_chunk_task, timeout=0.5)
+            )
+            return first_payload, second_payload
+        finally:
+            if next_chunk_task is not None and not next_chunk_task.done():
+                next_chunk_task.cancel()
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    first, second = asyncio.run(read_next_payload_after_delayed_push(gateway))
+
+    assert first["type"] == "snapshot"
+    assert second["type"] == "mission_status"
+    assert second["data"]["state"] == "IDLE"
+    assert second["event_id"] > first["event_id"]
+    assert gateway._traffic_stats_snapshot()["sse"]["clients"] == 0
+
+
 def test_app_web_events_reconnect_snapshot_uses_latest_state_and_monotonic_id():
     from gateway.gateway_module import GatewayModule
 

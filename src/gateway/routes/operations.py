@@ -605,6 +605,8 @@ def register_operation_routes(app, gw) -> None:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             ok = "success=True" in r.stdout
@@ -678,6 +680,8 @@ def register_operation_routes(app, gw) -> None:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
             ok = "success=True" in r.stdout

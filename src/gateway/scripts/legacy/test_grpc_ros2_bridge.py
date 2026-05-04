@@ -47,7 +47,14 @@ def grpcurl(host, port, method, data=None, timeout=10):
         cmd += ["-d", json.dumps(data) if isinstance(data, dict) else data]
     cmd += [f"{host}:{port}", method]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
         if result.stdout.strip():
             return json.loads(result.stdout)
         return {}
@@ -62,7 +69,14 @@ def grpcurl_stream(host, port, method, data=None, timeout=4):
         cmd += ["-d", json.dumps(data) if isinstance(data, dict) else data]
     cmd += [f"{host}:{port}", method]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
         return result.stdout
     except subprocess.TimeoutExpired as e:
         stdout = e.stdout.decode("utf-8", errors="replace") if e.stdout else ""
@@ -149,7 +163,14 @@ def test_01_grpc_connection(t: BridgeTestRunner):
     """gRPC 服务可连接且所有服务已注册"""
     cmd = ["grpcurl", "-plaintext", f"{t.host}:{t.port}", "list"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
         services = result.stdout.strip().split("\n")
         expected = ["robot.v1.ControlService", "robot.v1.DataService",
                     "robot.v1.SystemService", "robot.v1.TelemetryService"]
@@ -355,7 +376,14 @@ def main():
     print(_c(Colors.BOLD, "\n=== 预检查 ===\n"))
     cmd = ["grpcurl", "-plaintext", f"{args.host}:{args.port}", "list"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+        )
         if result.returncode != 0:
             raise RuntimeError(result.stderr)
         print(_c(Colors.GREEN, f"  已连接 gRPC 服务: {args.host}:{args.port}"))

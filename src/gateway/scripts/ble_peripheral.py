@@ -174,6 +174,8 @@ class RobotState:
                 timeout=30,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             log.info("WiFi configured via nmcli")
         except Exception as e:
@@ -346,7 +348,11 @@ def get_adapter_address() -> str:
     try:
         result = subprocess.run(
             ["hciconfig", "hci0"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
         )
         for line in result.stdout.split("\n"):
             if "BD Address:" in line:

@@ -32,11 +32,19 @@ def _make_holder() -> _TFHolder:
     """Return an object that responds to the three TF methods."""
     import types as _t
     h = _TFHolder()
+    h._backend_profile = "localizer"
+    h._current_backend_profile = lambda: h._backend_profile
     h._cache_map_odom_tf = _t.MethodType(SlamBridgeModule._cache_map_odom_tf, h)
     h._apply_map_odom_to_points = _t.MethodType(
         SlamBridgeModule._apply_map_odom_to_points, h)
     h._apply_map_odom_to_odometry = _t.MethodType(
         SlamBridgeModule._apply_map_odom_to_odometry, h)
+    h._should_apply_map_odom_tf = _t.MethodType(
+        SlamBridgeModule._should_apply_map_odom_tf, h)
+    h._maybe_apply_map_odom_to_points = _t.MethodType(
+        SlamBridgeModule._maybe_apply_map_odom_to_points, h)
+    h._maybe_apply_map_odom_to_odometry = _t.MethodType(
+        SlamBridgeModule._maybe_apply_map_odom_to_odometry, h)
     return h
 
 
@@ -117,6 +125,33 @@ def test_points_vectorized_large_cloud():
     assert out.dtype == np.float32
     # First point should differ from input (not accidentally passthrough)
     assert not np.allclose(out[0], pts[0])
+
+
+def test_maybe_points_applies_tf_for_localizer_only():
+    h = _make_holder()
+    h._cache_map_odom_tf(10.0, -5.0, 2.0, 0, 0, 0, 1)
+    pts = np.array([[1, 1, 1]], dtype=np.float32)
+
+    h._backend_profile = "localizer"
+    out = h._maybe_apply_map_odom_to_points(pts)
+    np.testing.assert_allclose(out, [[11, -4, 3]], atol=1e-5)
+
+    h._backend_profile = "super_lio_relocation"
+    out = h._maybe_apply_map_odom_to_points(pts)
+    assert out is pts
+    np.testing.assert_allclose(out, [[1, 1, 1]], atol=1e-5)
+
+
+def test_maybe_points_applies_tf_when_bridge_detects_localizer_backend():
+    h = _make_holder()
+    h._cache_map_odom_tf(10.0, -5.0, 2.0, 0, 0, 0, 1)
+    h._backend_profile = "bridge"
+    h._current_backend_profile = lambda: "localizer"
+    pts = np.array([[1, 1, 1]], dtype=np.float32)
+
+    out = h._maybe_apply_map_odom_to_points(pts)
+
+    np.testing.assert_allclose(out, [[11, -4, 3]], atol=1e-5)
 
 
 # ── Odometry transform: position + quaternion ────────────────────────────
@@ -202,6 +237,25 @@ def test_odom_identity_tf_is_noop_on_values():
     assert orig.pose.orientation.y == pytest.approx(qy, abs=1e-10)
     assert orig.pose.orientation.z == pytest.approx(qz, abs=1e-10)
     assert orig.pose.orientation.w == pytest.approx(qw, abs=1e-10)
+
+
+def test_maybe_odom_applies_tf_for_localizer_only():
+    h = _make_holder()
+    h._cache_map_odom_tf(100, 200, 300, 0, 0, 0, 1)
+
+    h._backend_profile = "localizer"
+    odom = _make_odom(1, 2, 3)
+    h._maybe_apply_map_odom_to_odometry(odom)
+    assert odom.pose.position.x == pytest.approx(101)
+    assert odom.pose.position.y == pytest.approx(202)
+    assert odom.pose.position.z == pytest.approx(303)
+
+    h._backend_profile = "super_lio_relocation"
+    odom = _make_odom(1, 2, 3)
+    h._maybe_apply_map_odom_to_odometry(odom)
+    assert odom.pose.position.x == pytest.approx(1)
+    assert odom.pose.position.y == pytest.approx(2)
+    assert odom.pose.position.z == pytest.approx(3)
 
 
 # ── Round-trip: transform and inverse-transform gives back original ──────

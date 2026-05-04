@@ -160,15 +160,14 @@ def register_status_routes(app, gw) -> None:
 
                 while True:
                     try:
-                        event = q.get_nowait()
-                    except asyncio.QueueEmpty:
+                        event = await asyncio.wait_for(q.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
                         yield format_sse_message(
                             normalize_sse_event(
                                 {"type": "ping"},
                                 now=time.time(),
                             )
                         )
-                        await asyncio.sleep(1.0)
                         continue
                     yield format_sse_message(event)
                     await asyncio.sleep(0)
@@ -365,7 +364,7 @@ def register_status_routes(app, gw) -> None:
             },
             "teleop": {
                 "active": gw._teleop_active,
-                "clients": gw._teleop_clients,
+                "clients": gw._teleop_client_count(),
             },
             "sensors": sensors,
             "slam_hz": round(slam_hz, 1),

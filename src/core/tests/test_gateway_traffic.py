@@ -358,3 +358,294 @@ def test_teleop_websocket_ignores_malformed_frames_without_motion():
     assert gateway._teleop_clients == 0
     assert tracker.clients == 0
     assert sent_cmds == []
+
+
+def test_teleop_camera_frame_task_is_awaited_on_disconnect(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import gateway.routes.realtime as realtime
+    from gateway.gateway_module import GatewayModule
+
+    class FakeTask:
+        def __init__(self):
+            self.cancelled = False
+            self.awaited = False
+
+        def cancel(self):
+            self.cancelled = True
+
+        def __await__(self):
+            async def _complete():
+                self.awaited = True
+                raise asyncio.CancelledError()
+
+            return _complete().__await__()
+
+    fake_task = FakeTask()
+
+    def fake_create_task(coro):
+        coro.close()
+        return fake_task
+
+    monkeypatch.setattr(realtime.asyncio, "create_task", fake_create_task)
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    client = TestClient(gateway._app)
+    with client.websocket_connect("/ws/teleop?camera=1"):
+        assert gateway._teleop_clients == 1
+
+    assert fake_task.cancelled is True
+    assert fake_task.awaited is True
+    assert gateway._teleop_clients == 0
+
+
+def test_teleop_camera_frame_task_error_still_releases_client(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import gateway.routes.realtime as realtime
+    from gateway.gateway_module import GatewayModule
+
+    class FakeTask:
+        def __init__(self):
+            self.cancelled = False
+            self.awaited = False
+
+        def cancel(self):
+            self.cancelled = True
+
+        def __await__(self):
+            async def _complete():
+                self.awaited = True
+                raise RuntimeError("camera stream failed during cleanup")
+
+            return _complete().__await__()
+
+    fake_task = FakeTask()
+
+    def fake_create_task(coro):
+        coro.close()
+        return fake_task
+
+    monkeypatch.setattr(realtime.asyncio, "create_task", fake_create_task)
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    client = TestClient(gateway._app)
+    with client.websocket_connect("/ws/teleop?camera=1"):
+        assert gateway._teleop_clients == 1
+
+    assert fake_task.cancelled is True
+    assert fake_task.awaited is True
+    assert gateway._teleop_clients == 0
+
+
+def test_teleop_client_counter_helpers_are_thread_safe():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+
+    def connect_and_disconnect_many():
+        for _ in range(1000):
+            gateway._teleop_client_connected()
+            gateway._teleop_client_disconnected()
+
+    threads = [
+        threading.Thread(target=connect_and_disconnect_many)
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert gateway._teleop_client_count() == 0
+    assert gateway._teleop_client_disconnected() == 0
+
+
+def test_gateway_run_server_reports_failure_without_configured_app():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+
+    assert gateway._run_server() is False
+
+
+def test_gateway_run_server_reports_clean_uvicorn_shutdown(monkeypatch):
+    import sys
+    import types
+
+    from gateway.gateway_module import GatewayModule
+
+    class FakeConfig:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class FakeServer:
+        def __init__(self, config):
+            self.should_exit = False
+            self.force_exit = False
+
+        def run(self):
+            self.should_exit = True
+
+    fake_uvicorn = types.ModuleType("uvicorn")
+    fake_uvicorn.Config = FakeConfig
+    fake_uvicorn.Server = FakeServer
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    assert gateway._run_server() is True
+    assert gateway._server is None
+
+
+def test_gateway_run_server_reports_unexpected_uvicorn_return(monkeypatch):
+    import sys
+    import types
+
+    from gateway.gateway_module import GatewayModule
+
+    class FakeConfig:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class FakeServer:
+        def __init__(self, config):
+            self.should_exit = False
+            self.force_exit = False
+
+        def run(self):
+            pass
+
+    fake_uvicorn = types.ModuleType("uvicorn")
+    fake_uvicorn.Config = FakeConfig
+    fake_uvicorn.Server = FakeServer
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    assert gateway._run_server() is False
+    assert gateway._server is None
+
+
+def test_gateway_stop_signals_background_threads_without_server_start():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway._defer_server = True
+    gateway._drift_watchdog_enabled = True
+    gateway._drift_watchdog_interval = 60.0
+    gateway.setup()
+    gateway.start()
+
+    saved_thread = gateway._saved_map_loader_thread
+    drift_thread = gateway._drift_watchdog_thread
+    assert saved_thread is not None
+    assert drift_thread is not None
+    assert saved_thread.is_alive()
+    assert drift_thread.is_alive()
+
+    gateway.stop()
+
+    assert gateway._saved_map_loader_thread is None
+    assert gateway._drift_watchdog_thread is None
+    assert not saved_thread.is_alive()
+    assert not drift_thread.is_alive()
+
+
+def test_gateway_stop_retains_background_thread_when_join_times_out():
+    from gateway.gateway_module import GatewayModule
+
+    class StuckThread:
+        name = "saved_map_loader"
+
+        def __init__(self):
+            self.join_timeouts = []
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            self.join_timeouts.append(timeout)
+
+    gateway = GatewayModule()
+    old_event = gateway._stop_event
+    stuck = StuckThread()
+    gateway._saved_map_loader_thread = stuck
+
+    gateway.stop()
+
+    assert old_event.is_set()
+    assert stuck.join_timeouts == [2.0]
+    assert gateway._saved_map_loader_thread is stuck
+
+
+def test_gateway_start_replaces_stopped_event_without_duplicate_stuck_loader():
+    from gateway.gateway_module import GatewayModule
+
+    class StuckThread:
+        name = "saved_map_loader"
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            pass
+
+    gateway = GatewayModule()
+    gateway._defer_server = True
+    gateway._drift_watchdog_enabled = False
+    gateway.setup()
+    old_event = gateway._stop_event
+    old_event.set()
+    stuck = StuckThread()
+    gateway._saved_map_loader_thread = stuck
+
+    gateway.start()
+
+    assert gateway._stop_event is not old_event
+    assert old_event.is_set()
+    assert gateway._saved_map_loader_thread is stuck
+
+    gateway.stop()
+
+
+def test_gateway_start_does_not_duplicate_background_threads():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway._defer_server = True
+    gateway._drift_watchdog_enabled = True
+    gateway._drift_watchdog_interval = 60.0
+    gateway.setup()
+    gateway.start()
+
+    saved_thread = gateway._saved_map_loader_thread
+    drift_thread = gateway._drift_watchdog_thread
+
+    gateway.start()
+
+    assert gateway._saved_map_loader_thread is saved_thread
+    assert gateway._drift_watchdog_thread is drift_thread
+
+    gateway.stop()
+
+
+def test_gateway_stop_signals_uvicorn_server():
+    from gateway.gateway_module import GatewayModule
+
+    class FakeServer:
+        should_exit = False
+
+    gateway = GatewayModule()
+    fake_server = FakeServer()
+    gateway._server = fake_server
+
+    gateway.stop()
+
+    assert fake_server.should_exit is True

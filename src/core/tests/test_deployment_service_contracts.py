@@ -167,6 +167,36 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
                     printf '{"backend":"localizer","health_source":"localizer_health_topic","map_save_source":"active_map","saved_map_relocalization_supported":true,"restart_recovery_supported":true,"recovery_method":"relocalize_service","relocalization_state":"idle","recovery_signal":"RECOVERED","recovery_action":"none"}\n'
                 fi
                 ;;
+            */api/v1/state)
+                signal="${FAKE_RECOVERY_SIGNAL:-RECOVERED}"
+                action="${FAKE_RECOVERY_ACTION:-none}"
+                if [ "$current" = "super_lio_relocation" ]; then
+                    x="${FAKE_CANDIDATE_X:-1.0}"
+                    y="${FAKE_CANDIDATE_Y:-2.0}"
+                    yaw="${FAKE_CANDIDATE_YAW:-0.3}"
+                    ready="${FAKE_CANDIDATE_READY:-true}"
+                    if [ -n "${FAKE_CANDIDATE_READY_ON_STATE_CALL:-}" ]; then
+                        counter="${FAKE_ROOT}/candidate_state_calls"
+                        count="$(cat "$counter" 2>/dev/null || echo 0)"
+                        count="$((count + 1))"
+                        echo "$count" > "$counter"
+                        if [ "$count" -lt "$FAKE_CANDIDATE_READY_ON_STATE_CALL" ]; then
+                            ready=false
+                        else
+                            ready=true
+                        fi
+                    fi
+                    printf '{"schema_version":1,"odometry":{"x":%s,"y":%s,"z":0.0,"yaw":%s},"localization":{"backend":"super_lio_relocation","health_source":"odom_map_cloud","state":"TRACKING","ready":%s,"confidence":0.91,"icp_quality":0.02,"odom_age_ms":100.0,"cloud_age_ms":120.0,"map_save_source":"active_map","recovery_signal":"%s","recovery_action":"%s"},"session":{"localization_backend":"super_lio_relocation","health_source":"odom_map_cloud","map_save_source":"active_map","icp_quality":0.02,"recovery_signal":"%s","recovery_action":"%s"},"navigation":{"control":{"active_cmd_source":"none"}},"map":{"live_points":5000,"live_cloud_frames":1}}\n' \
+                        "$x" "$y" "$yaw" "$ready" "$signal" "$action" "$signal" "$action"
+                else
+                    x="${FAKE_LOCALIZER_X:-1.0}"
+                    y="${FAKE_LOCALIZER_Y:-2.0}"
+                    yaw="${FAKE_LOCALIZER_YAW:-0.3}"
+                    ready="${FAKE_LOCALIZER_READY:-true}"
+                    printf '{"schema_version":1,"odometry":{"x":%s,"y":%s,"z":0.0,"yaw":%s},"localization":{"backend":"localizer","health_source":"localizer_health_topic","state":"TRACKING","ready":%s,"confidence":0.96,"icp_quality":0.02,"odom_age_ms":80.0,"cloud_age_ms":90.0,"map_save_source":"active_map","recovery_signal":"RECOVERED","recovery_action":"none"},"session":{"localization_backend":"localizer","health_source":"localizer_health_topic","map_save_source":"active_map","icp_quality":0.02,"recovery_signal":"RECOVERED","recovery_action":"none"},"navigation":{"control":{"active_cmd_source":"none"}},"map":{"live_points":5000,"live_cloud_frames":1}}\n' \
+                        "$x" "$y" "$yaw" "$ready"
+                fi
+                ;;
             */api/v1/navigation/status)
                 blocker="${FAKE_NAV_BLOCKER:-}"
                 if [ -n "$blocker" ]; then
@@ -562,6 +592,25 @@ def test_lingtu_slamcheck_validates_recovery_signal_and_action_contract():
     assert "LOC_DIVERGED" in _read("src/slam/slam_bridge_module.py")
 
 
+def test_lingtu_slamcompare_is_non_motion_static_gate():
+    text = _read("scripts/lingtu")
+    start = text.index("slamcompare_usage()")
+    end = text.index("# -- Subcommand: log --")
+    impl = text[start:end]
+
+    assert "Usage: lingtu slamcompare" in text
+    assert "slamcompare|slam-compare|super-lio-compare" in text
+    assert 'python3 "$SCRIPT_DIR/static_localization_probe.py"' in impl
+    assert "cmd_slamcheck super_lio_relocation" in impl
+    assert 'slamcompare_wait_ready "localizer"' in impl
+    assert 'slamcompare_wait_ready "super_lio_relocation"' in impl
+    assert "Rollback SLAM mode: localizer" in impl
+    assert "No motion commands are sent." in impl
+    assert "/api/v1/goal" not in impl
+    assert "/api/v1/cmd_vel" not in impl
+    assert "cmd_nav" not in impl
+
+
 def test_lingtu_nav_goal_prechecks_readiness_and_plan_preview(tmp_path):
     result, harness = _run_lingtu_command(tmp_path, "nav goal 1 2")
 
@@ -615,6 +664,27 @@ def test_lingtu_nav_goal_rejects_infeasible_plan_preview_before_goal(tmp_path):
     calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
     assert "plan:" in calls
     assert "goal:" not in calls
+
+
+def test_lingtu_slamcompare_waits_for_candidate_ready_before_probe(tmp_path):
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        "slamcompare --map demo --duration 0 --warmup 0",
+        extra_env={
+            "FAKE_CANDIDATE_READY_ON_STATE_CALL": "2",
+            "LINGTU_SLAMCOMPARE_READY_POLL": "0",
+            "LINGTU_SLAMCOMPARE_READY_TIMEOUT": "2",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS: static localization compare met non-motion thresholds" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "switch:super_lio_relocation" in calls
+    assert "switch:localizer" in calls
+    assert (harness["root"] / "candidate_state_calls").read_text(
+        encoding="utf-8"
+    ).strip() == "3"
 
 
 def test_lingtu_slamcheck_executes_super_lio_snapshot_contract(tmp_path):
@@ -758,6 +828,52 @@ def test_lingtu_slamcheck_fails_on_unexpected_recovery_action_and_rolls_back(tmp
     calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
     assert "switch:super_lio_relocation" in calls
     assert "switch:localizer" in calls
+
+
+def test_lingtu_slamcompare_passes_static_baseline_and_candidate(tmp_path):
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        "slamcompare --map demo --duration 0 --warmup 0",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS: static localization compare met non-motion thresholds" in result.stdout
+    assert "No motion commands are sent." in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "switch:localizer" in calls
+    assert "switch:super_lio_relocation" in calls
+    assert calls.rstrip().endswith("switch:localizer")
+    assert "goal:" not in calls
+
+
+def test_lingtu_slamcompare_fails_pose_jump_and_rolls_back(tmp_path):
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        "slamcompare --map demo --duration 0 --warmup 0",
+        extra_env={"FAKE_CANDIDATE_X": "2.2"},
+    )
+
+    assert result.returncode != 0
+    assert "FAIL: static localization compare blocked motion promotion" in result.stdout
+    assert "pose jump" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert "switch:super_lio_relocation" in calls
+    assert calls.rstrip().endswith("switch:localizer")
+    assert "goal:" not in calls
+
+
+def test_lingtu_slamcompare_fails_candidate_not_ready_and_rolls_back(tmp_path):
+    result, harness = _run_lingtu_command(
+        tmp_path,
+        "slamcompare --map demo --duration 0 --warmup 0",
+        extra_env={"FAKE_CANDIDATE_READY": "false"},
+    )
+
+    assert result.returncode != 0
+    assert "did not become ready before static compare sampling" in result.stdout
+    assert "ready=false" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert calls.rstrip().endswith("switch:localizer")
 
 
 def test_super_lio_relocation_service_uses_active_map_and_float_pose():

@@ -96,7 +96,8 @@ class SLAM:
             result = subprocess.run(
                 ["ros2", "service", "call", "/pgo/save_maps",
                  "interface/srv/SaveMaps", "{file_path: '%s'}" % pcd_path],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=30,
             )
             if result.returncode == 0:
                 logger.info("Map saved: %s", pcd_path)

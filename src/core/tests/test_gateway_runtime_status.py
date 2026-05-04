@@ -1085,6 +1085,7 @@ def test_drift_watchdog_restores_idle_running_localization_services(monkeypatch)
     monkeypatch.setattr(gateway_module.time, "sleep", lambda _: None)
 
     gateway = GatewayModule()
+    gateway._drift_restart_delay_s = 0.0
     gateway._session_mode = "idle"
     with gateway._state_lock:
         gateway._odom = {"x": 999.0}
@@ -1100,6 +1101,27 @@ def test_drift_watchdog_restores_idle_running_localization_services(monkeypatch)
     assert ("wait_ready", ("slam", "localizer")) in fake.calls
     assert gateway._odom == {}
     assert gateway._odom_timestamps == []
+
+
+def test_drift_watchdog_restart_noops_after_shutdown(monkeypatch):
+    import core.service_manager as service_manager
+    from gateway.gateway_module import GatewayModule
+
+    called = False
+
+    def fail_if_called():
+        nonlocal called
+        called = True
+        raise AssertionError("service manager should not be touched during shutdown")
+
+    monkeypatch.setattr(service_manager, "get_service_manager", fail_if_called)
+
+    gateway = GatewayModule()
+    gateway._stop_event.set()
+
+    gateway._drift_restart_do_restart(xy=999.0, y_abs=0.0, v=0.0)
+
+    assert called is False
 
 
 def test_drift_watchdog_restores_idle_running_super_lio_services(monkeypatch):
@@ -1132,6 +1154,7 @@ def test_drift_watchdog_restores_idle_running_super_lio_services(monkeypatch):
     monkeypatch.setattr(gateway_module.time, "sleep", lambda _: None)
 
     gateway = GatewayModule()
+    gateway._drift_restart_delay_s = 0.0
     gateway._session_mode = "idle"
 
     gateway._drift_restart_do_restart(xy=999.0, y_abs=0.0, v=0.0)
@@ -1176,6 +1199,7 @@ def test_drift_watchdog_restores_idle_running_super_lio_relocation_services(
     monkeypatch.setattr(gateway_module.time, "sleep", lambda _: None)
 
     gateway = GatewayModule()
+    gateway._drift_restart_delay_s = 0.0
     gateway._session_mode = "idle"
 
     gateway._drift_restart_do_restart(xy=999.0, y_abs=0.0, v=0.0)

@@ -18,6 +18,12 @@ import time
 logger = logging.getLogger(__name__)
 
 
+def _subprocess_text(value: bytes | str | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
 SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "lidar": ("robot-lidar.service", "lidar.service", "lidar"),
     "camera": ("robot-camera.service", "camera.service", "camera"),
@@ -69,6 +75,8 @@ class ServiceManager:
                 timeout=3,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except Exception:
             return False
@@ -123,7 +131,7 @@ class ServiceManager:
                 started.append(service)
                 logger.info("Started service %s via unit %s", service, unit)
             except subprocess.CalledProcessError as e:
-                stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr
+                stderr = _subprocess_text(e.stderr)
                 logger.error("Failed to start %s: %s", service, str(stderr)[:100])
             except Exception as e:
                 logger.error("Failed to start %s: %s", service, e)
