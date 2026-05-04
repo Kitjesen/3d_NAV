@@ -192,6 +192,16 @@ For relocation, `--initial-pose X Y YAW` writes a fixed-decimal
 `/run/lingtu/super_lio_relocation.env`, and `--map NAME` points the active map
 symlink at `$HOME/data/nova/maps/NAME`.
 
+The relocation map must be a direct child of `$HOME/data/nova/maps`. `slamcheck`
+rejects nested paths, path traversal, absolute paths outside the map root, and
+unsafe active-map symlink targets before it writes the runtime env file or
+switches services.
+
+Passing `slamcheck` is not promotion evidence by itself. Save the command
+output and then run the route-level validation gate in
+`docs/04-deployment/super_lio_backend.md` before considering
+`super_lio_relocation` for navigation defaults.
+
 ### `doctor` - localization chain diagnostics
 
 ```bash

@@ -36,11 +36,26 @@ Build or refresh Super-LIO on the robot:
 
 ```bash
 ssh sunrise@192.168.66.190
+mkdir -p /home/sunrise/data/inovxio
 cd /home/sunrise/data/inovxio/super-lio
+git fetch --all --tags
+git checkout a9220861e59194e3f10019192c6e5d61427a5b58
 source /opt/ros/humble/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/local_setup.bash
 ros2 pkg prefix super_lio
+```
+
+If `/home/sunrise/data/inovxio/super-lio` does not exist, clone the upstream
+repository first and keep the checked commit recorded in this document before
+field testing:
+
+```bash
+cd /home/sunrise/data/inovxio
+git clone https://github.com/Liansheng-Wang/Super-LIO.git super-lio
+cd super-lio
+git checkout a9220861e59194e3f10019192c6e5d61427a5b58
 ```
 
 Install the experimental service templates from the LingTu checkout:
@@ -64,11 +79,41 @@ There are two installer lanes:
 Do not move Super-LIO into the production installer or `lingtu.target` until the
 route-level gate below passes.
 
+Post-install checks:
+
+```bash
+systemctl status robot-super-lio.service robot-super-lio-relocation.service --no-pager
+systemctl show -p FragmentPath -p EnvironmentFiles -p NRestarts robot-super-lio.service robot-super-lio-relocation.service
+bash /home/sunrise/data/SLAM/navigation/scripts/lingtu svc status
+bash /home/sunrise/data/SLAM/navigation/scripts/lingtu slamcheck super_lio --duration 10 --rollback previous
+```
+
+These checks should prove that the service files were installed from the
+developer lane, the environment files are readable, aliases resolve to the
+`robot-super-lio*` units, and rollback returns to the previous profile.
+
 ## Environment Overrides
 
 Persistent overrides belong in `/etc/lingtu/super_lio.env`. Per-smoke
 relocation overrides are written to `/run/lingtu/super_lio_relocation.env` by
 `scripts/lingtu slamcheck`.
+
+Override precedence:
+
+1. Systemd unit defaults in `scripts/deploy/s100p/super_lio*.service`.
+2. Persistent field overrides in `/etc/lingtu/super_lio.env`.
+3. Runtime relocation overrides in `/run/lingtu/super_lio_relocation.env`.
+
+Use `/etc/lingtu/super_lio.env` for robot-specific paths and topic names that
+should survive reboot. Use `/run/lingtu/super_lio_relocation.env` only for a
+single relocation smoke or route validation run. `slamcheck` overwrites the
+runtime relocation file, so stale map or pose values should not survive the next
+run.
+
+Keep `ROS_DOMAIN_ID` in the normal ROS 2 service environment shared by LingTu
+and the robot drivers. Do not set a different domain only in
+`super_lio.env`; a mismatched domain can make Super-LIO look healthy at the
+process level while subscribing to no Livox or IMU data.
 
 | Variable | Default | Used by | Purpose |
 | --- | --- | --- | --- |
@@ -81,6 +126,18 @@ relocation overrides are written to `/run/lingtu/super_lio_relocation.env` by
 | `SUPER_LIO_RELOCATION_MAP_NAME` | `map.pcd` | relocation service | PCD filename loaded by upstream |
 | `SUPER_LIO_RELOCATION_UPDATE_MAP` | `false` | relocation service | keep evaluation runs read-only against saved maps |
 | `SUPER_LIO_RELOCATION_INIT_POSE` | `[0.0,0.0,0.0,0.0,0.0,0.0]` | relocation service | initial pose `[x,y,z,roll,pitch,yaw]` |
+
+Example persistent override file:
+
+```bash
+sudo install -d -m 0755 /etc/lingtu
+sudo tee /etc/lingtu/super_lio.env >/dev/null <<'EOF'
+SUPER_LIO_WS=/home/sunrise/data/inovxio/super-lio
+SUPER_LIO_LIDAR_TOPIC=/nav/lidar_scan
+SUPER_LIO_IMU_TOPIC=/nav/imu
+EOF
+sudo systemctl daemon-reload
+```
 
 ## Current Role
 
@@ -356,6 +413,16 @@ bash scripts/lingtu slamcheck super_lio_relocation \
   --rollback previous
 ```
 
+Rollback decision tree:
+
+| Failure stage | Immediate action | Evidence to capture |
+| --- | --- | --- |
+| switch rejected before service start | keep the previous profile; do not retry with motion | Gateway switch response, `scripts/lingtu status`, `systemctl show -p NRestarts robot-super-lio*` |
+| relocation env or active-map validation fails | fix the map name or active symlink; rerun `slamcheck` only | `/run/lingtu/super_lio_relocation.env`, `readlink -f ~/data/nova/maps/active`, relocation unit journal |
+| smoke contract fails | rollback to `previous` or `localizer`, then run `lingtu doctor --non-motion --strict` | failed `slamcheck` JSON/text, `/api/v1/localization/status`, `/api/v1/slam/status`, unit restart counts |
+| route candidate fails before motion | stop the mission, rollback to `localizer`, keep the map unchanged | `/api/v1/navigation/status`, `/api/v1/localization/status`, route artifact directory |
+| route candidate fails during motion | teleop/stop through the normal safety channel, rollback after the robot is still | safety state, mission state, driver command source, active service journals |
+
 Manual fallback commands:
 
 ```bash
@@ -373,17 +440,30 @@ Post-rollback evidence must show:
 - `/api/v1/localization/status`: `backend=localizer`, `ready=true`
 - `/api/v1/navigation/status`: `state=IDLE`, no blockers before any motion test
 - `scripts/lingtu status`: `loc=TRACKING` or equivalent ready state
+- `systemctl show -p NRestarts robot-fastlio2.service robot-localizer.service
+  robot-super-lio.service robot-super-lio-relocation.service`: no unexpected
+  restart-count increase from the failed candidate run
 
 ## Failure Modes
 
 | Symptom | Likely cause | Check | Action |
 | --- | --- | --- | --- |
 | `Super-LIO install setup not found` | workspace path mismatch | `ros2 pkg prefix super_lio` after sourcing the workspace | set `SUPER_LIO_WS` or rebuild |
+| service starts but no Livox/IMU data | topic name mismatch or driver bridge inactive | `ros2 topic hz /nav/lidar_scan`, `ros2 topic hz /nav/imu`, service journal subscriptions | fix topic overrides or restart `robot-lidar` before re-running smoke |
+| service active but topics stay silent | `ROS_DOMAIN_ID` mismatch | compare `systemctl show -p Environment robot-lidar robot-super-lio robot-lingtu` and shell `env` | align ROS domain in the shared service environment, then restart the affected services |
+| launch exits with config error | config path not present in the installed workspace | `journalctl -u robot-super-lio*` for missing YAML/config path | rebuild Super-LIO or set `SUPER_LIO_CONFIG` / `SUPER_LIO_RELOCATION_CONFIG` |
 | relocation exits with missing `map.pcd` | active map symlink or map name wrong | service journal line `Super-LIO relocation map not found` | run `lingtu map list`, pass `--map NAME`, verify `<map>/map.pcd` |
+| `slamcheck` rejects map before switch | unsafe explicit map name or active symlink target | stderr line `unsafe relocation map name or active map target` | use a direct child under `$HOME/data/nova/maps`; do not use nested, absolute outside, or path-traversal names |
+| relocation starts with empty ICP target | saved map file is empty or invalid | `stat <map>/map.pcd`, relocation journal `Map size` and `target size` | rebuild or restore the saved map before testing relocation |
 | ROS 2 rejects `init_pose` | integer sequence mixed with doubles | `/run/lingtu/super_lio_relocation.env` | use `scripts/lingtu slamcheck --initial-pose`, which writes fixed decimal floats |
+| `slamcheck` rejects initial pose | non-numeric or incomplete `--initial-pose X Y YAW` | command stderr | rerun with numeric X, Y, and YAW values |
 | Gateway ready but no real relocation | node published odom/map without loading saved map | relocation journal map and ICP lines | require `Load map success`, nonzero `Map size`, and ICP target evidence |
+| ICP never converges | bad initial pose, stale map, or insufficient overlap | relocation journal `Global ICP`, drift in `/api/v1/localization/status` | retry from a surveyed initial pose; fail the candidate if convergence is not repeatable |
 | `recovery_signal=LOC_DIVERGED` during smoke | bridge still sees diverged odom or stale cloud | `scripts/lingtu status`, `/api/v1/localization/status` | fail the smoke, rollback, inspect drift logs |
 | restart count increased during smoke | service crashed and recovered | `systemctl show -p NRestarts robot-super-lio*` | fail the smoke and inspect journal |
+| CPU or memory starves Gateway/nav | Super-LIO resource envelope too high for S100P | `ps -o pid,comm,%cpu,%mem,rss,vsz,args -C super_lio_node -C relocation_node -C python3`, Gateway latency | keep experimental, capture resource trace, reduce load before route tests |
+| duplicate Super-LIO or localizer nodes publish to `/nav/odometry` | old ROS nodes or legacy services still running | `ros2 node list`, `ros2 topic info /nav/odometry -v`, `scripts/lingtu svc status` | stop duplicate units and rerun smoke from a clean service state |
+| stale odom or map cloud while service is active | upstream node stuck or subscriptions broken | `/api/v1/localization/status` odom/map-cloud age and rates | rollback, restart the service, and require a clean non-motion smoke before route validation |
 
 ## Route-Level Validation Gate
 
@@ -395,6 +475,49 @@ Record the same route twice:
 1. Baseline: `localizer`
 2. Candidate: `super_lio_relocation`
 
+Create one artifact directory per route pair:
+
+```bash
+cd ~/data/SLAM/navigation
+ART_ROOT=~/data/SLAM/navigation/artifacts/super_lio_route_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$ART_ROOT"/{baseline,candidate,journals}
+
+bash scripts/lingtu status | tee "$ART_ROOT/status.before.txt"
+curl -s http://localhost:5050/api/v1/localization/status \
+  | tee "$ART_ROOT/localization.before.json" | python3 -m json.tool >/dev/null
+curl -s http://localhost:5050/api/v1/navigation/status \
+  | tee "$ART_ROOT/navigation.before.json" | python3 -m json.tool >/dev/null
+```
+
+Baseline run shape:
+
+```bash
+MAP=corrected_20260406_224020
+GOAL_X=0
+GOAL_Y=0
+GOAL_YAW=0
+
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"profile":"localizer"}' \
+  http://localhost:5050/api/v1/slam/switch | tee "$ART_ROOT/baseline/switch.json"
+bash scripts/lingtu nav start "$MAP" | tee "$ART_ROOT/baseline/nav_start.txt"
+bash scripts/lingtu nav goal "$GOAL_X" "$GOAL_Y" "$GOAL_YAW" \
+  | tee "$ART_ROOT/baseline/nav_goal.txt"
+```
+
+Candidate run shape:
+
+```bash
+bash scripts/lingtu slamcheck super_lio_relocation \
+  --map "$MAP" \
+  --initial-pose 0 0 0 \
+  --duration 60 \
+  --rollback none | tee "$ART_ROOT/candidate/slamcheck.txt"
+bash scripts/lingtu nav start "$MAP" | tee "$ART_ROOT/candidate/nav_start.txt"
+bash scripts/lingtu nav goal "$GOAL_X" "$GOAL_Y" "$GOAL_YAW" \
+  | tee "$ART_ROOT/candidate/nav_goal.txt"
+```
+
 For each run, capture:
 
 - map name and initial pose
@@ -404,6 +527,46 @@ For each run, capture:
 - restart count for active SLAM services
 - CPU and memory for Super-LIO/localizer and `lingtu`
 - Gateway `/api/v1/navigation/status` blockers and mission result
+
+Capture the same API and service snapshots after each run:
+
+```bash
+PHASE=baseline  # or candidate
+curl -s http://localhost:5050/api/v1/localization/status \
+  | tee "$ART_ROOT/$PHASE/localization.after.json" | python3 -m json.tool >/dev/null
+curl -s http://localhost:5050/api/v1/navigation/status \
+  | tee "$ART_ROOT/$PHASE/navigation.after.json" | python3 -m json.tool >/dev/null
+curl -s http://localhost:5050/api/v1/health \
+  | tee "$ART_ROOT/$PHASE/health.after.json" | python3 -m json.tool >/dev/null
+systemctl show -p ActiveState -p SubState -p NRestarts \
+  robot-fastlio2.service robot-localizer.service \
+  robot-super-lio.service robot-super-lio-relocation.service \
+  | tee "$ART_ROOT/$PHASE/services.after.txt"
+ps -o pid,comm,%cpu,%mem,rss,vsz,args -C super_lio_node -C relocation_node -C python3 \
+  | tee "$ART_ROOT/$PHASE/resources.after.txt"
+journalctl -u robot-super-lio.service -u robot-super-lio-relocation.service \
+  -u robot-localizer.service -u robot-fastlio2.service -u lingtu.service \
+  --since '30 min ago' --no-pager > "$ART_ROOT/journals/$PHASE.txt"
+```
+
+Abort the candidate run and rollback before continuing if any of these occur:
+
+- safety state enters `STOP` unexpectedly
+- `/api/v1/navigation/status` reports `can_accept_goal=false` for a non-transient
+  reason before sending the route goal
+- `recovery_signal=LOC_DIVERGED` remains unresolved or maps to the wrong
+  `recovery_action`
+- odometry or map-cloud age exceeds the configured readiness window
+- `NRestarts` increases for the candidate service during the route
+- relocation journal lacks non-empty map-load and ICP-target evidence
+- CPU or memory use starves Gateway, navigation, or safety update rates
+
+Route result template:
+
+| Run | Backend | Map | Initial pose | Route result | Max drift | Recovery signal/action | Restarts | CPU/mem note | Decision |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | `localizer` |  |  |  |  |  |  |  |  |
+| candidate | `super_lio_relocation` |  |  |  |  |  |  |  |  |
 
 Promotion threshold:
 
