@@ -32,6 +32,7 @@ def test_profile_graph_snapshot_locks_safety_gateway_and_mux_edges():
         assert "SafetyRingModule.stop_cmd->NavigationModule.stop_signal" in wires
         assert "NavigationModule.mission_status->GatewayModule.mission_status" in wires
         assert "NavigationModule.mission_status->MCPServerModule.mission_status" in wires
+        assert "GatewayModule.cancel->NavigationModule.cancel" in wires
         assert f"CmdVelMux.driver_cmd_vel->{driver}.cmd_vel" in wires
 
 

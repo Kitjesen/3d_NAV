@@ -140,6 +140,7 @@ def apply_full_stack_wires(
             WireSpec("GatewayModule", "instruction", "NavigationModule", "instruction"),
             WireSpec("MCPServerModule", "instruction", "NavigationModule", "instruction"),
             WireSpec("GatewayModule", "goal_pose", "NavigationModule", "goal_pose"),
+            WireSpec("GatewayModule", "cancel", "NavigationModule", "cancel"),
             WireSpec("MCPServerModule", "goal_pose", "NavigationModule", "goal_pose"),
             WireSpec("SemanticPlannerModule", "goal_pose", "NavigationModule", "goal_pose"),
             WireSpec("TAREExplorerModule", "exploration_goal", "NavigationModule", "goal_pose"),

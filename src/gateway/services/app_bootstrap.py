@@ -66,6 +66,7 @@ CLIENT_LINKS: dict[str, str] = {
     "goal": "/api/v1/goal",
     "navigate_click": "/api/v1/navigate/click",
     "navigation_plan": "/api/v1/navigation/plan",
+    "navigation_cancel": "/api/v1/navigation/cancel",
     "stop": "/api/v1/stop",
     "instruction": "/api/v1/instruction",
     "mode": "/api/v1/mode",
@@ -128,6 +129,7 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
     },
     "control": {
         "navigation_plan": {"method": "POST", "path": CLIENT_LINKS["navigation_plan"]},
+        "navigation_cancel": {"method": "POST", "path": CLIENT_LINKS["navigation_cancel"]},
         "goal": {"method": "POST", "path": CLIENT_LINKS["goal"]},
         "navigate_click": {"method": "POST", "path": CLIENT_LINKS["navigate_click"]},
         "stop": {"method": "POST", "path": CLIENT_LINKS["stop"]},

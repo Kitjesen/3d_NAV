@@ -22,6 +22,7 @@ import type {
   MapLifecycleResponse,
   MapListResponse,
   MapPointsResponse,
+  NavigationStatusResponse,
   PathResponse,
   PlanPreviewRequest,
   PlanPreviewResponse,
@@ -231,6 +232,10 @@ export async function fetchPath(): Promise<PathResponse> {
   return fetchJson<PathResponse>('/api/v1/path')
 }
 
+export async function fetchNavigationStatus(): Promise<NavigationStatusResponse> {
+  return fetchJson<NavigationStatusResponse>('/api/v1/navigation/status')
+}
+
 export async function fetchLocations(): Promise<LocationsResponse> {
   return fetchJson<LocationsResponse>('/api/v1/locations')
 }
@@ -269,6 +274,13 @@ export async function sendStop(): Promise<ControlCommandResponse> {
   return postJson<ControlCommandResponse>(
     '/api/v1/stop',
     commandBody('stop', {}),
+  )
+}
+
+export async function cancelNavigation(reason = 'client_cancel'): Promise<ControlCommandResponse> {
+  return postJson<ControlCommandResponse>(
+    '/api/v1/navigation/cancel',
+    commandBody('navigation_cancel', { reason }),
   )
 }
 

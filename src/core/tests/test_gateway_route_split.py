@@ -224,6 +224,7 @@ def test_command_routes_register_expected_paths():
     assert "/api/v1/navigate/click" in routes
     assert "/api/v1/cmd_vel" in routes
     assert "/api/v1/stop" in routes
+    assert "/api/v1/navigation/cancel" in routes
     assert "/api/v1/instruction" in routes
     assert "/api/v1/mode" in routes
     assert "/api/v1/lease" in routes
@@ -318,6 +319,7 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/navigate/click"] == 1
     assert counts["/api/v1/cmd_vel"] == 1
     assert counts["/api/v1/stop"] == 1
+    assert counts["/api/v1/navigation/cancel"] == 1
     assert counts["/api/v1/instruction"] == 1
     assert counts["/api/v1/mode"] == 1
     assert counts["/api/v1/lease"] == 1
@@ -361,6 +363,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/navigate/click",
         "/api/v1/cmd_vel",
         "/api/v1/stop",
+        "/api/v1/navigation/cancel",
         "/api/v1/instruction",
         "/api/v1/mode",
         "/api/v1/lease",
@@ -456,6 +459,7 @@ def test_openapi_exposes_client_response_models():
     assert "ControlCommandResponse" in schemas
     assert "GatewayErrorResponse" in schemas
     assert "CommandReceipt" in schemas
+    assert "CancelRequest" in schemas
     assert "PlanPreviewRequest" in schemas
     assert "PlanPreviewResponse" in schemas
     assert "SceneGraphResponse" in schemas
@@ -472,6 +476,10 @@ def test_openapi_exposes_client_response_models():
     assert "NavigationControlSummary" in schemas
     assert "NavigationReadinessSummary" in schemas
     assert "NavigationProgressSummary" in schemas
+    assert "NavigationTargetSummary" in schemas
+    assert "NavigationSpeedPolicy" in schemas
+    assert "NavigationMotionSummary" in schemas
+    assert "NavigationFeedbackSummary" in schemas
     assert "NavigationDiagnosticsSummary" in schemas
     assert "AuthLoginRequest" in schemas
     assert "AuthLoginResponse" in schemas
@@ -563,6 +571,12 @@ def test_openapi_exposes_client_response_models():
         openapi, "/api/v1/stop", method="post"
     ).endswith("/ControlCommandResponse")
     assert _schema_ref_for(
+        openapi, "/api/v1/navigation/cancel", method="post"
+    ).endswith("/ControlCommandResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/navigation/cancel"
+    ).endswith("/CancelRequest")
+    assert _schema_ref_for(
         openapi, "/api/v1/instruction", method="post"
     ).endswith("/ControlCommandResponse")
     assert _schema_ref_for(
@@ -573,6 +587,7 @@ def test_openapi_exposes_client_response_models():
         "/api/v1/navigate/click",
         "/api/v1/cmd_vel",
         "/api/v1/stop",
+        "/api/v1/navigation/cancel",
         "/api/v1/instruction",
         "/api/v1/mode",
         "/api/v1/lease",
@@ -753,6 +768,15 @@ def test_openapi_exposes_client_response_models():
     assert schemas["NavigationStatusResponse"]["properties"]["progress"][
         "$ref"
     ].endswith("/NavigationProgressSummary")
+    assert schemas["NavigationStatusResponse"]["properties"]["target"]["$ref"].endswith(
+        "/NavigationTargetSummary"
+    )
+    assert schemas["NavigationStatusResponse"]["properties"]["motion"]["$ref"].endswith(
+        "/NavigationMotionSummary"
+    )
+    assert schemas["NavigationStatusResponse"]["properties"]["feedback"][
+        "$ref"
+    ].endswith("/NavigationFeedbackSummary")
     assert schemas["AppTrafficResponse"]["properties"]["sse"]["$ref"].endswith(
         "/TrafficSSEStats"
     )
@@ -762,6 +786,7 @@ def test_openapi_exposes_client_response_models():
     assert "schema_version" in schemas["ControlCommandResponse"]["properties"]
     assert "ok" in schemas["ControlCommandResponse"]["properties"]
     assert "yaw" in schemas["ControlCommandResponse"]["properties"]
+    assert "reason" in schemas["ControlCommandResponse"]["properties"]
     assert schemas["ControlCommandResponse"]["properties"]["command"]["$ref"].endswith(
         "/CommandReceipt"
     )

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
 from gateway.schemas import (
+    CancelRequest,
     ClickNavRequest,
     CmdVelRequest,
     ControlCommandResponse,
@@ -357,6 +358,19 @@ def register_command_routes(app, gw) -> None:
             return {"status": "stopped"}
 
         return gw._run_control_command("stop", body, _publish)
+
+    @app.post(
+        "/api/v1/navigation/cancel",
+        summary="Gracefully cancel current navigation mission",
+        response_model=ControlCommandResponse,
+        responses=CONTROL_COMMAND_ERROR_RESPONSES,
+    )
+    async def post_navigation_cancel(body: CancelRequest):
+        def _publish() -> dict[str, Any]:
+            gw.cancel.publish(body.reason)
+            return {"status": "cancelled", "reason": body.reason}
+
+        return gw._run_control_command("navigation_cancel", body, _publish)
 
     @app.post(
         "/api/v1/instruction",

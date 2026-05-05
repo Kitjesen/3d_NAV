@@ -77,7 +77,7 @@ class CmdVelRequest(BaseModel):
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
 
-    @field_validator("vx", "wz")
+    @field_validator("vx", "vy", "wz")
     @classmethod
     def finite(cls, v: float) -> float:
         import math
@@ -94,6 +94,12 @@ class InstructionRequest(BaseModel):
 
 
 class StopRequest(BaseModel):
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+
+class CancelRequest(BaseModel):
+    reason: str = Field(default="client_cancel", max_length=256)
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
 
@@ -284,6 +290,7 @@ class ControlCommandResponse(GatewayResponseModel):
     yaw: float | None = None
     instruction: str | None = None
     mode: str | None = None
+    reason: str | None = None
 
 
 class AuthLoginRequest(BaseModel):
@@ -523,6 +530,7 @@ class NavigationReadinessSummary(GatewayResponseModel):
     advisories: list[str] = Field(default_factory=list)
     localization_ready: bool
     control_owner: str
+    session_mode: str | None = None
 
 
 class NavigationProgressSummary(GatewayResponseModel):
@@ -547,6 +555,38 @@ class NavigationMissionSummary(GatewayResponseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class NavigationTargetSummary(GatewayResponseModel):
+    goal: PathPoint | None = None
+    current_waypoint: PathPoint | None = None
+    distance_to_goal_m: float | None = None
+    active_waypoint_distance_m: float | None = None
+    remaining_waypoints: int | None = None
+
+
+class NavigationSpeedPolicy(GatewayResponseModel):
+    scale: float | None = None
+    mode: Literal["normal", "cautious", "restricted", "hold", "unknown"] = "unknown"
+    reason: str | None = None
+    source: str = "mission_status"
+    applied: bool | None = None
+
+
+class NavigationMotionSummary(GatewayResponseModel):
+    current_speed_mps: float | None = None
+    speed_scale: float | None = None
+    speed_policy: NavigationSpeedPolicy
+    active_cmd_source: str
+    command_owner: str
+
+
+class NavigationFeedbackSummary(GatewayResponseModel):
+    next_action: str
+    primary: str
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
 class NavigationStatusResponse(GatewayResponseModel):
     schema_version: int
     state: str
@@ -563,6 +603,9 @@ class NavigationStatusResponse(GatewayResponseModel):
     path: NavigationPathSummary
     control: NavigationControlSummary
     localization: NavigationLocalizationSummary
+    target: NavigationTargetSummary
+    motion: NavigationMotionSummary
+    feedback: NavigationFeedbackSummary
     diagnostics: NavigationDiagnosticsSummary
     mission: NavigationMissionSummary
     ts: float
@@ -789,6 +832,7 @@ class ClientLinks(GatewayResponseModel):
     session_start: str | None = None
     session_end: str | None = None
     navigation_plan: str | None = None
+    navigation_cancel: str | None = None
     goal: str | None = None
     navigate_click: str | None = None
     stop: str | None = None
@@ -987,7 +1031,7 @@ class StateResponse(GatewayResponseModel):
     teleop: TeleopSummary
     session: dict[str, Any]
     localization: dict[str, Any]
-    navigation: dict[str, Any] = Field(default_factory=dict)
+    navigation: NavigationStatusResponse
     map: dict[str, Any]
     scene: dict[str, Any]
     path: dict[str, Any]
@@ -1004,7 +1048,7 @@ class AppBootstrapResponse(GatewayResponseModel):
     mission: dict[str, Any]
     safety: dict[str, Any]
     localization: dict[str, Any]
-    navigation: dict[str, Any]
+    navigation: NavigationStatusResponse
     control: dict[str, Any]
     map: dict[str, Any]
     scene: dict[str, Any]

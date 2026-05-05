@@ -121,7 +121,7 @@ export interface StateResponse {
   teleop?: Record<string, unknown> | null
   session?: SessionEvent['data'] | Record<string, unknown> | null
   localization?: Record<string, unknown> | null
-  navigation?: Record<string, unknown> | null
+  navigation?: NavigationStatusResponse | null
   map?: Record<string, unknown> | null
   scene?: Record<string, unknown> | null
   path?: Record<string, unknown> | null
@@ -219,6 +219,139 @@ export interface PlanPreviewResponse {
   ts: number
 }
 
+export interface NavigationPathSummary {
+  points: number
+  endpoint: string
+}
+
+export interface NavigationControlActiveSource {
+  name: string
+  label: string
+  category: string
+  owner: string
+  priority?: number | null
+  active?: boolean | null
+  age_ms?: number | null
+}
+
+export interface NavigationControlSummary {
+  mode: string
+  lease: Record<string, unknown>
+  active_cmd_source: string
+  command_owner: string
+  source_category: string
+  manual_override: boolean
+  autonomy_requested: boolean
+  preempting_autonomy: boolean
+  mux_available: boolean
+  active_source: NavigationControlActiveSource
+  sources: Record<string, unknown>
+  cmd_vel_mux: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface NavigationLocalizationSummary {
+  state?: string | null
+  ready?: boolean | null
+  degraded: boolean
+  algorithm_healthy?: boolean | null
+  pose_fresh?: boolean | null
+  pose_freshness?: string | null
+  degeneracy?: string | null
+  speed_scale?: number | null
+  reasons: string[]
+}
+
+export interface NavigationReadinessSummary {
+  can_accept_goal: boolean
+  can_execute_autonomy: boolean
+  blockers: string[]
+  advisories: string[]
+  localization_ready: boolean
+  control_owner: string
+  session_mode?: string | null
+}
+
+export interface NavigationProgressSummary {
+  wp_index: number
+  wp_total: number
+  fraction: number
+  path_points: number
+  replan_count: number
+  active: boolean
+  terminal: boolean
+}
+
+export interface NavigationDiagnosticsSummary {
+  reason_codes: string[]
+  failure_reason: string
+  localization_reasons: string[]
+  cmd_vel_mux_available: boolean
+}
+
+export interface NavigationMissionSummary {
+  state: string
+  raw: Record<string, unknown>
+}
+
+export interface NavigationTargetSummary {
+  goal?: PathPoint | null
+  current_waypoint?: PathPoint | null
+  distance_to_goal_m?: number | null
+  active_waypoint_distance_m?: number | null
+  remaining_waypoints?: number | null
+}
+
+export type NavigationSpeedPolicyMode = 'normal' | 'cautious' | 'restricted' | 'hold' | 'unknown'
+
+export interface NavigationSpeedPolicy {
+  scale?: number | null
+  mode: NavigationSpeedPolicyMode
+  reason?: string | null
+  source: string
+  applied?: boolean | null
+}
+
+export interface NavigationMotionSummary {
+  current_speed_mps?: number | null
+  speed_scale?: number | null
+  speed_policy: NavigationSpeedPolicy
+  active_cmd_source: string
+  command_owner: string
+}
+
+export interface NavigationFeedbackSummary {
+  next_action: string
+  primary: string
+  blockers: string[]
+  advisories: string[]
+  reason_codes: string[]
+}
+
+export interface NavigationStatusResponse {
+  schema_version: number
+  state: string
+  has_odometry: boolean
+  can_accept_goal: boolean
+  wp_index: number
+  wp_total: number
+  replan_count: number
+  speed_scale?: number | null
+  failure_reason: string
+  reason_codes: string[]
+  readiness: NavigationReadinessSummary
+  progress: NavigationProgressSummary
+  path: NavigationPathSummary
+  control: NavigationControlSummary
+  localization: NavigationLocalizationSummary
+  target: NavigationTargetSummary
+  motion: NavigationMotionSummary
+  feedback: NavigationFeedbackSummary
+  diagnostics: NavigationDiagnosticsSummary
+  mission: NavigationMissionSummary
+  ts: number
+}
+
 export interface ClientLinks {
   bootstrap?: string
   capabilities?: string
@@ -247,6 +380,7 @@ export interface ClientLinks {
   session_start?: string
   session_end?: string
   navigation_plan?: string
+  navigation_cancel?: string
   goal?: string
   navigate_click?: string
   stop?: string
@@ -457,7 +591,7 @@ export interface AppBootstrapResponse {
   mission: Record<string, unknown>
   safety: Record<string, unknown>
   localization: Record<string, unknown>
-  navigation: Record<string, unknown>
+  navigation: NavigationStatusResponse
   control: Record<string, unknown>
   map: Record<string, unknown>
   scene: { available: boolean; endpoint: string }
@@ -516,8 +650,11 @@ export interface ControlCommandResponse {
   status: string
   command: CommandReceipt
   goal?: number[] | null
+  yaw?: number | null
   instruction?: string | null
   mode?: string | null
+  reason?: string | null
+  [key: string]: unknown
 }
 
 export type LeaseAction = 'acquire' | 'release' | 'renew'

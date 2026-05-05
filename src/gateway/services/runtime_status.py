@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -84,6 +85,84 @@ def _as_float(value: Any, default: float | None = None) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _finite_float(value: Any) -> float | None:
+    parsed = _as_float(value, None)
+    if parsed is None or not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _session_mode(session: Mapping[str, Any]) -> str:
+    mode = str(session.get("mode") or "unknown").strip().lower()
+    return mode or "unknown"
+
+
+def _point_payload(
+    value: Any,
+    *,
+    frame_id: str = "map",
+    ts: float | None = None,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    metadata: dict[str, Any] = {}
+    yaw: float | None = None
+    point_frame = frame_id
+    point_ts = ts
+
+    if isinstance(value, Mapping):
+        x = _finite_float(value.get("x"))
+        y = _finite_float(value.get("y"))
+        z = _finite_float(value.get("z", 0.0))
+        yaw = _finite_float(value.get("yaw"))
+        point_frame = str(value.get("frame_id") or frame_id)
+        point_ts = _finite_float(value.get("ts")) or ts
+        if isinstance(value.get("metadata"), Mapping):
+            metadata = dict(value["metadata"])
+    else:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        try:
+            seq = list(value)
+        except TypeError:
+            return None
+        if len(seq) < 2:
+            return None
+        x = _finite_float(seq[0])
+        y = _finite_float(seq[1])
+        z = _finite_float(seq[2]) if len(seq) > 2 else 0.0
+        yaw = _finite_float(seq[3]) if len(seq) > 3 else None
+
+    if x is None or y is None:
+        return None
+    if z is None:
+        z = 0.0
+    return {
+        "x": x,
+        "y": y,
+        "z": z,
+        "yaw": yaw,
+        "frame_id": point_frame,
+        "ts": point_ts,
+        "metadata": metadata,
+    }
+
+
+def _distance_xy(
+    point_a: Mapping[str, Any] | None,
+    point_b: Mapping[str, Any] | None,
+) -> float | None:
+    if not point_a or not point_b:
+        return None
+    ax = _finite_float(point_a.get("x"))
+    ay = _finite_float(point_a.get("y"))
+    bx = _finite_float(point_b.get("x"))
+    by = _finite_float(point_b.get("y"))
+    if ax is None or ay is None or bx is None or by is None:
+        return None
+    return round(math.hypot(ax - bx, ay - by), 3)
 
 
 def _as_optional_int(value: Any) -> int | None:
@@ -623,6 +702,149 @@ def _progress_summary(
     }
 
 
+def _target_summary(
+    mission: Mapping[str, Any],
+    odometry: Mapping[str, Any] | None,
+    *,
+    wp_index: int,
+    wp_total: int,
+    ts: float,
+) -> dict[str, Any]:
+    robot = _point_payload(odometry, ts=ts) if odometry else None
+    goal = _point_payload(mission.get("goal"), ts=ts)
+    current_waypoint = _point_payload(
+        mission.get("current_waypoint") or mission.get("waypoint"),
+        ts=ts,
+    )
+    distance_to_goal = _finite_float(mission.get("distance_to_goal_m"))
+    if distance_to_goal is None:
+        distance_to_goal = _distance_xy(robot, goal)
+    waypoint_distance = _finite_float(mission.get("active_waypoint_distance_m"))
+    if waypoint_distance is None:
+        waypoint_distance = _distance_xy(robot, current_waypoint)
+    remaining_waypoints = _as_optional_int(mission.get("remaining_waypoints"))
+    if remaining_waypoints is None and wp_total:
+        remaining_waypoints = max(0, wp_total - wp_index)
+
+    return {
+        "goal": goal,
+        "current_waypoint": current_waypoint,
+        "distance_to_goal_m": distance_to_goal,
+        "active_waypoint_distance_m": waypoint_distance,
+        "remaining_waypoints": remaining_waypoints,
+    }
+
+
+def _speed_policy_summary(
+    mission: Mapping[str, Any],
+    localization: Mapping[str, Any],
+    speed_scale: float | None,
+) -> dict[str, Any]:
+    raw_policy = _mapping(mission.get("speed_policy"))
+    scale = _finite_float(raw_policy.get("scale"))
+    if scale is None:
+        scale = speed_scale
+    reason = (
+        raw_policy.get("reason")
+        or mission.get("speed_policy_reason")
+        or mission.get("degeneracy")
+        or localization.get("state")
+    )
+    if reason is not None:
+        reason = str(reason)
+
+    mode = str(raw_policy.get("mode") or "").strip().lower()
+    if mode not in {"normal", "cautious", "restricted", "hold"}:
+        if scale is None:
+            mode = "unknown"
+        elif scale <= 0.0:
+            mode = "hold"
+        elif scale < 0.5:
+            mode = "restricted"
+        elif scale < 1.0:
+            mode = "cautious"
+        else:
+            mode = "normal"
+
+    applied = raw_policy.get("applied")
+    if not isinstance(applied, bool):
+        applied = bool(scale is not None and scale < 1.0)
+
+    return {
+        "scale": scale,
+        "mode": mode,
+        "reason": reason,
+        "source": str(raw_policy.get("source") or "mission_status"),
+        "applied": applied,
+    }
+
+
+def _current_speed_mps(odometry: Mapping[str, Any] | None) -> float | None:
+    if not odometry:
+        return None
+    vx = _finite_float(odometry.get("vx")) or 0.0
+    vy = _finite_float(odometry.get("vy")) or 0.0
+    return round(math.hypot(vx, vy), 3)
+
+
+def _motion_summary(
+    *,
+    odometry: Mapping[str, Any] | None,
+    speed_scale: float | None,
+    speed_policy: Mapping[str, Any],
+    control: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "current_speed_mps": _current_speed_mps(odometry),
+        "speed_scale": speed_scale,
+        "speed_policy": dict(speed_policy),
+        "active_cmd_source": str(control.get("active_cmd_source") or "none"),
+        "command_owner": str(control.get("command_owner") or "unknown"),
+    }
+
+
+def _feedback_summary(
+    *,
+    state: str,
+    can_accept_goal: bool,
+    readiness: Mapping[str, Any],
+    reason_codes: list[str],
+) -> dict[str, Any]:
+    blockers = list(readiness.get("blockers") or [])
+    advisories = list(readiness.get("advisories") or [])
+    if blockers:
+        next_action = "resolve_blockers"
+        primary = "Navigation is blocked."
+    elif state in {"EXECUTING", "PATROLLING"}:
+        next_action = "monitor_progress"
+        primary = "Navigation is following the planned path."
+    elif state == "PLANNING":
+        next_action = "wait_for_plan"
+        primary = "Navigation is planning."
+    elif state == "SUCCESS":
+        next_action = "choose_goal"
+        primary = "Destination reached."
+    elif state == "CANCELLED":
+        next_action = "choose_goal" if can_accept_goal else "resolve_blockers"
+        primary = "Navigation mission was cancelled."
+    elif state in {"FAILED", "STUCK"}:
+        next_action = "inspect_failure"
+        primary = "Navigation needs attention before retrying."
+    elif can_accept_goal:
+        next_action = "choose_goal"
+        primary = "Ready for a navigation goal."
+    else:
+        next_action = "monitor_readiness"
+        primary = "Navigation is not ready for a goal yet."
+    return {
+        "next_action": next_action,
+        "primary": primary,
+        "blockers": blockers,
+        "advisories": advisories,
+        "reason_codes": reason_codes,
+    }
+
+
 def _navigation_reason_codes(
     *,
     state: str,
@@ -643,6 +865,8 @@ def _navigation_reason_codes(
         codes.append(SAFETY_STOP_BLOCKER)
     if bool(session.get("pending", False)):
         codes.append("session_transition_pending")
+    if _session_mode(session) != "navigating":
+        codes.append("navigation_session_inactive")
 
     localization_state = str(localization.get("state") or "unknown")
     if localization_state in {"degraded", "lost", "relocalizing", "initializing"}:
@@ -681,6 +905,7 @@ _NAVIGATION_BLOCKER_CODES = {
     "estop_active",
     SAFETY_STOP_BLOCKER,
     "session_transition_pending",
+    "navigation_session_inactive",
     "localization_lost",
     "localization_relocalizing",
     "localization_initializing",
@@ -697,6 +922,7 @@ def _readiness_summary(
     *,
     can_accept_goal: bool,
     reason_codes: list[str],
+    session: Mapping[str, Any],
     localization: Mapping[str, Any],
     control: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -709,6 +935,7 @@ def _readiness_summary(
         "advisories": advisories,
         "localization_ready": bool(localization.get("ready", False)),
         "control_owner": control.get("command_owner", "unknown"),
+        "session_mode": _session_mode(session),
     }
 
 
@@ -730,6 +957,8 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
     replan_count = _as_int(mission.get("replan_count"), 0)
     speed_scale = _as_float(mission.get("speed_scale"), None)
     failure_reason = str(mission.get("failure_reason", "") or "")
+    mission_ts = float(mission.get("ts", time.time()) or time.time())
+    session_mode = _session_mode(session)
     degraded = localization.get("state") in {
         "no_odometry",
         "initializing",
@@ -741,6 +970,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         mode != "estop"
         and odometry is not None
         and not bool(session.get("pending", False))
+        and session_mode == "navigating"
     )
     control = _control_summary(
         mode=mode,
@@ -770,8 +1000,29 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
     readiness = _readiness_summary(
         can_accept_goal=can_accept_goal,
         reason_codes=reason_codes,
+        session=session,
         localization=localization,
         control=control,
+    )
+    target = _target_summary(
+        mission,
+        odometry,
+        wp_index=wp_index,
+        wp_total=wp_total,
+        ts=mission_ts,
+    )
+    speed_policy = _speed_policy_summary(mission, localization, speed_scale)
+    motion = _motion_summary(
+        odometry=odometry,
+        speed_scale=speed_scale,
+        speed_policy=speed_policy,
+        control=control,
+    )
+    feedback = _feedback_summary(
+        state=state,
+        can_accept_goal=can_accept_goal,
+        readiness=readiness,
+        reason_codes=reason_codes,
     )
 
     return {
@@ -803,6 +1054,9 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "speed_scale": speed_scale,
             "reasons": localization.get("reasons", []),
         },
+        "target": target,
+        "motion": motion,
+        "feedback": feedback,
         "diagnostics": {
             "reason_codes": reason_codes,
             "failure_reason": failure_reason,
@@ -814,5 +1068,5 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "state": state,
             "raw": mission,
         },
-        "ts": float(mission.get("ts", time.time()) or time.time()),
+        "ts": mission_ts,
     }

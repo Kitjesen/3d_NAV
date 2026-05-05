@@ -19,6 +19,7 @@ REST
   POST /api/v1/goal          {x,y,z?,instruction?}
   POST /api/v1/cmd_vel       {vx,vy?,wz}
   POST /api/v1/stop
+  POST /api/v1/navigation/cancel {reason?, request_id?, client_id?}
   POST /api/v1/instruction   {text}
   POST /api/v1/mode          {mode: manual|autonomous|estop}
   POST /api/v1/lease         {action: acquire|release|renew, client_id, request_id?, ttl?}
@@ -66,6 +67,7 @@ from core.registry import register
 from core.stream import In, Out
 from gateway.schemas import (
     BitrateRequest,
+    CancelRequest,
     ClickNavRequest,
     CmdVelRequest,
     GatewayErrorResponse,
@@ -254,7 +256,7 @@ class GatewayModule(Module, layer=6):
 
     In:  odometry, scene_graph, safety_state, mission_status,
          execution_eval, dialogue_state
-    Out: goal_pose, cmd_vel, stop_cmd, instruction, mode_cmd
+    Out: goal_pose, cmd_vel, stop_cmd, cancel, instruction, mode_cmd
     """
 
     _run_in_main: bool = True
@@ -284,6 +286,7 @@ class GatewayModule(Module, layer=6):
     goal_pose:   Out[PoseStamped]
     cmd_vel:     Out[Twist]
     stop_cmd:    Out[int]    # 0=clear, 1=soft, 2=hard
+    cancel:      Out[str]
     instruction: Out[str]
     mode_cmd:    Out[str]
 
@@ -1118,6 +1121,7 @@ class GatewayModule(Module, layer=6):
         blockers: list[str] = []
         advisories: list[str] = []
         navigation: dict[str, Any] = {}
+        exploration_ignored_nav_blockers = {"navigation_session_inactive"}
 
         if not self._explorer_available():
             blockers.append("explorer_backend_not_running")
@@ -1136,10 +1140,18 @@ class GatewayModule(Module, layer=6):
             nav_blockers = readiness.get("blockers") or []
             nav_advisories = readiness.get("advisories") or []
             if isinstance(nav_blockers, list):
-                blockers.extend(str(code) for code in nav_blockers)
+                blockers.extend(
+                    str(code)
+                    for code in nav_blockers
+                    if str(code) not in exploration_ignored_nav_blockers
+                )
             if isinstance(nav_advisories, list):
                 advisories.extend(str(code) for code in nav_advisories)
-            if not blockers and not bool(readiness.get("can_execute_autonomy", False)):
+            if (
+                not blockers
+                and not bool(readiness.get("can_execute_autonomy", False))
+                and not nav_blockers
+            ):
                 blockers.append("navigation_not_ready")
         except Exception:
             blockers.append("navigation_status_unavailable")

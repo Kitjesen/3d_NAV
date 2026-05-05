@@ -32,6 +32,7 @@ class TestNavigationModule(unittest.TestCase):
         self.assertIn("odometry", m.ports_in)
         self.assertIn("instruction", m.ports_in)
         self.assertIn("stop_signal", m.ports_in)
+        self.assertIn("cancel", m.ports_in)
 
     def test_ports_out(self):
         m = self._make()
@@ -54,6 +55,26 @@ class TestNavigationModule(unittest.TestCase):
         m._on_stop(2)
         self.assertEqual(m._tracker.path_length, 0)
         self.assertEqual(m._state, "IDLE")
+
+    def test_on_cancel_clears_active_mission(self):
+        m = self._make()
+        statuses = []
+        m.mission_status._add_callback(statuses.append)
+        m._state = "EXECUTING"
+        m._goal = np.array([5.0, 6.0, 0.0])
+        m._tracker.reset(
+            [np.array([2.0, 3.0, 0.0]), np.array([5.0, 6.0, 0.0])],
+            np.array([0.0, 0.0, 0.0]),
+        )
+
+        m._on_cancel("operator_cancel")
+
+        self.assertEqual(m._state, "CANCELLED")
+        self.assertEqual(m._tracker.path_length, 0)
+        self.assertEqual(m._failure_reason, "cancelled: operator_cancel")
+        self.assertEqual(statuses[-1]["state"], "CANCELLED")
+        self.assertEqual(statuses[-1]["remaining_waypoints"], 0)
+        self.assertIsNone(statuses[-1]["goal"])
 
     def test_downsample(self):
         m = self._make(downsample_dist=2.0)
@@ -304,10 +325,11 @@ class TestGatewayModule(unittest.TestCase):
 
     def test_ports_out(self):
         m = self._make()
-        self.assertEqual(len(m.ports_out), 5)
+        self.assertGreaterEqual(len(m.ports_out), 6)
         self.assertIn("goal_pose", m.ports_out)
         self.assertIn("cmd_vel", m.ports_out)
         self.assertIn("stop_cmd", m.ports_out)
+        self.assertIn("cancel", m.ports_out)
 
     def test_on_odometry_caches(self):
         m = self._make()

@@ -83,6 +83,7 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["links"]["localization_status"] == "/api/v1/localization/status"
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
     assert payload["links"]["navigation_plan"] == "/api/v1/navigation/plan"
+    assert payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
     assert payload["links"]["camera_ws"] == "/ws/camera"
     assert payload["links"]["session_start"] == "/api/v1/session/start"
@@ -110,6 +111,7 @@ def test_app_bootstrap_service_returns_client_contract():
     )
     assert capabilities["endpoints"]["control"]["goal"]["method"] == "POST"
     assert capabilities["endpoints"]["control"]["navigation_plan"]["method"] == "POST"
+    assert capabilities["endpoints"]["control"]["navigation_cancel"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["maps"]["path"] == "/api/v1/slam/maps"
     assert capabilities["endpoints"]["map"]["map_lifecycle"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["map_activate"]["path"] == "/api/v1/map/activate"
@@ -188,6 +190,37 @@ def test_app_bootstrap_disables_motion_controls_when_safety_stop_active():
     assert "safety_stop" in payload["control"]["goal_blockers"]
     assert payload["navigation"]["can_accept_goal"] is False
     assert "safety_stop" in payload["navigation"]["readiness"]["blockers"]
+
+
+def test_app_bootstrap_blocks_goal_when_navigation_session_inactive():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.app_bootstrap import build_app_bootstrap
+
+    gateway = GatewayModule()
+    gateway._session_mode = "idle"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "y": 0.0, "z": 0.0}
+        gateway._mission = {"state": "IDLE"}
+        gateway._safety = {"level": 0}
+        gateway._mode = "autonomous"
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "degeneracy": "NONE",
+            "odom_age_ms": 100.0,
+            "localizer_health": "RECOVERED",
+        }
+
+    payload = build_app_bootstrap(gateway)
+
+    assert payload["control"]["can_send_goal"] is False
+    assert "navigation_session_inactive" in payload["control"]["goal_blockers"]
+    assert payload["navigation"]["can_accept_goal"] is False
+    assert "navigation_session_inactive" in payload["navigation"]["readiness"]["blockers"]
+    assert payload["navigation"]["readiness"]["session_mode"] == "idle"
+    assert payload["navigation"]["feedback"]["next_action"] == "resolve_blockers"
+    assert payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
 
 
 def test_app_bootstrap_includes_camera_media_runtime_status():
@@ -352,6 +385,7 @@ def test_app_capabilities_enriches_specs_from_openapi():
     navigation = capabilities["endpoints"]["state"]["navigation_status"]
     control = capabilities["endpoints"]["control"]
     navigation_plan = capabilities["endpoints"]["control"]["navigation_plan"]
+    navigation_cancel = capabilities["endpoints"]["control"]["navigation_cancel"]
     goal = capabilities["endpoints"]["control"]["goal"]
     map_list = capabilities["endpoints"]["map"]["maps"]
     session_start = capabilities["endpoints"]["map"]["session_start"]
@@ -378,9 +412,19 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert navigation["response_schema"] == "NavigationStatusResponse"
     assert navigation_plan["request_schema"] == "PlanPreviewRequest"
     assert navigation_plan["response_schema"] == "PlanPreviewResponse"
+    assert navigation_cancel["request_schema"] == "CancelRequest"
+    assert navigation_cancel["response_schema"] == "ControlCommandResponse"
     assert goal["request_schema"] == "GoalRequest"
     assert goal["response_schema"] == "ControlCommandResponse"
-    for name in ("goal", "navigate_click", "stop", "instruction", "mode", "lease"):
+    for name in (
+        "goal",
+        "navigate_click",
+        "navigation_cancel",
+        "stop",
+        "instruction",
+        "mode",
+        "lease",
+    ):
         assert "409" in control[name]["status_codes"]
     assert "403" in control["lease"]["status_codes"]
     assert map_list["path"] == "/api/v1/slam/maps"
@@ -525,6 +569,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert bootstrap_payload["links"]["traffic"] == "/api/v1/app/traffic"
     assert bootstrap_payload["links"]["auth_login"] == "/api/v1/auth/login"
     assert bootstrap_payload["links"]["auth_check"] == "/api/v1/auth/check"
+    assert bootstrap_payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
     assert bootstrap_payload["media"]["webrtc_stats"] == "/api/v1/webrtc/stats"
     assert bootstrap_payload["media"]["webrtc_whep"] == "/api/v1/webrtc/whep"
     assert bootstrap_payload["media"]["go2rtc_status"] == "/api/v1/webrtc/go2rtc/status"
@@ -560,6 +605,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert state_payload["links"]["health"] == "/api/v1/health"
     assert state_payload["links"]["goal"] == "/api/v1/goal"
     assert state_payload["links"]["stop"] == "/api/v1/stop"
+    assert state_payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
     assert state_payload["path"]["points"] == 2
 
     assert scene_graph_payload["schema_version"] == 1
@@ -608,6 +654,7 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert capabilities_payload["links"]["map_activate"] == "/api/v1/map/activate"
     assert capabilities_payload["links"]["map_rename"] == "/api/v1/map/rename"
     assert capabilities_payload["links"]["map_save"] == "/api/v1/map/save"
+    assert capabilities_payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
 
 
 def test_app_web_events_stream_starts_with_snapshot_contract():

@@ -971,6 +971,47 @@ def test_wavefront_explorer_is_available_through_exploration_contracts():
     assert gateway._session_snapshot()["explorer_backend"] == "frontier"
 
 
+def test_exploration_readiness_ignores_inactive_navigation_session_only():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import ExplorationStatusResponse
+
+    class WavefrontFrontierExplorer:
+        def __init__(self):
+            self.started = False
+
+        def begin_exploration(self):
+            self.started = True
+            return {"status": "started", "backend": "frontier"}
+
+        def health(self):
+            return {"frontier_count": 2}
+
+    gateway = GatewayModule()
+    gateway.setup()
+    explorer = WavefrontFrontierExplorer()
+    gateway.on_system_modules({"WavefrontFrontierExplorer": explorer})
+    _seed_ready_navigation(gateway)
+
+    ready_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    ready = ExplorationStatusResponse.model_validate(ready_payload)
+
+    assert gateway._session_mode == "idle"
+    assert ready.can_start is True
+    assert "navigation_session_inactive" not in ready.blockers
+    assert ready.blockers == []
+
+    with gateway._state_lock:
+        gateway._localization_status["recovery_signal"] = "LOC_DIVERGED"
+
+    blocked_payload = asyncio.run(_endpoint(gateway, "/api/v1/explore/status")())
+    blocked = ExplorationStatusResponse.model_validate(blocked_payload)
+
+    assert blocked.can_start is False
+    assert "navigation_session_inactive" not in blocked.blockers
+    assert blocked.blockers == ["localization_recovery_active"]
+    assert explorer.started is False
+
+
 def test_explore_start_rejects_localization_recovery_blocker():
     from gateway.gateway_module import GatewayModule
     from gateway.schemas import ExplorationStatusResponse, GatewayErrorResponse

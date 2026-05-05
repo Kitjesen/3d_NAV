@@ -249,6 +249,7 @@ def test_localization_status_accepts_super_lio_odom_map_health():
 
     gateway = GatewayModule()
     gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
     with gateway._state_lock:
         gateway._odom = {"x": 0.0}
         gateway._localization_status = {
@@ -519,20 +520,37 @@ def test_navigation_status_reports_mission_path_and_control_source():
             }
 
     gateway = GatewayModule()
+    gateway._session_mode = "navigating"
     with gateway._state_lock:
-        gateway._odom = {"x": 1.0, "y": 2.0}
+        gateway._odom = {"x": 1.0, "y": 2.0, "vx": 0.3, "vy": 0.4}
         gateway._mode = "autonomous"
         gateway._mission = {
             "state": "EXECUTING",
             "wp_index": 2,
             "wp_total": 5,
+            "remaining_waypoints": 3,
+            "goal": [4.0, 6.0, 0.0],
+            "current_waypoint": [2.0, 3.0, 0.0],
+            "distance_to_goal_m": 5.0,
+            "active_waypoint_distance_m": 1.25,
             "replan_count": 1,
             "speed_scale": 0.5,
+            "speed_policy": {
+                "scale": 0.5,
+                "mode": "cautious",
+                "reason": "degeneracy=MILD",
+                "source": "localization_degeneracy",
+                "applied": True,
+            },
             "failure_reason": "",
             "ts": 123.0,
         }
         gateway._last_path = [{"x": 0.0}, {"x": 1.0}, {"x": 2.0}]
-        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+        gateway._localization_status = {
+            "state": "TRACKING",
+            "confidence": 0.9,
+            "icp_fitness": 0.03,
+        }
     gateway._all_modules = {"CmdVelMux": FakeMux()}
 
     payload = build_navigation_status(gateway)
@@ -554,8 +572,45 @@ def test_navigation_status_reports_mission_path_and_control_source():
     assert payload["progress"]["fraction"] == 0.4
     assert payload["progress"]["active"] is True
     assert payload["readiness"]["can_execute_autonomy"] is True
+    assert payload["readiness"]["session_mode"] == "navigating"
+    assert payload["target"]["goal"]["x"] == 4.0
+    assert payload["target"]["current_waypoint"]["y"] == 3.0
+    assert payload["target"]["distance_to_goal_m"] == 5.0
+    assert payload["target"]["active_waypoint_distance_m"] == 1.25
+    assert payload["target"]["remaining_waypoints"] == 3
+    assert payload["motion"]["current_speed_mps"] == 0.5
+    assert payload["motion"]["speed_policy"]["mode"] == "cautious"
+    assert payload["motion"]["speed_policy"]["reason"] == "degeneracy=MILD"
+    assert payload["feedback"]["next_action"] == "monitor_progress"
     assert payload["reason_codes"] == []
     assert payload["localization"]["degraded"] is False
+
+
+def test_navigation_status_blocks_goal_when_session_is_not_navigating():
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "idle"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0}
+        gateway._mode = "autonomous"
+        gateway._mission = {"state": "IDLE"}
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    payload = build_navigation_status(gateway)
+
+    assert payload["can_accept_goal"] is False
+    assert "navigation_session_inactive" in payload["reason_codes"]
+    assert "navigation_session_inactive" in payload["readiness"]["blockers"]
+    assert payload["readiness"]["session_mode"] == "idle"
+    assert payload["feedback"]["next_action"] == "resolve_blockers"
 
 
 def test_navigation_status_finds_cmd_vel_mux_by_module_class_or_name():
@@ -1052,7 +1107,10 @@ def test_navigation_status_route_returns_stable_schema():
     assert payload["path"]["endpoint"] == "/api/v1/path"
     assert payload["control"]["active_cmd_source"] == "unknown"
     assert "odometry_missing" in payload["reason_codes"]
-    assert payload["readiness"]["blockers"] == ["odometry_missing"]
+    assert payload["readiness"]["blockers"] == [
+        "odometry_missing",
+        "navigation_session_inactive",
+    ]
 
 
 def test_drift_watchdog_restores_idle_running_localization_services(monkeypatch):

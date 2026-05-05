@@ -161,6 +161,7 @@ class NavigationModule(Module, layer=5):
         self._localization_recovery_motion_hold: bool = False
         self._planning_timeout = kw.get("planning_timeout", 30.0)
         self._speed_scale: float = 1.0  # degeneracy-based speed multiplier
+        self._speed_policy_reason: str = "normal"
         self._preview_timeout_s = float(
             kw.get("preview_timeout", os.environ.get("LINGTU_PLAN_PREVIEW_TIMEOUT", 3.0))
         )
@@ -233,6 +234,34 @@ class NavigationModule(Module, layer=5):
 
     # ── Mission FSM ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def _point_summary(point: np.ndarray | None) -> list[float] | None:
+        if point is None:
+            return None
+        if len(point) < 2:
+            return None
+        return [
+            float(point[0]),
+            float(point[1]),
+            float(point[2]) if len(point) > 2 else 0.0,
+        ]
+
+    @staticmethod
+    def _safe_nonnegative_int(value: object, default: int = 0) -> int:
+        try:
+            parsed = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return default
+        return max(0, parsed)
+
+    @staticmethod
+    def _distance_xy(a: np.ndarray | None, b: np.ndarray | None) -> float | None:
+        if a is None or b is None or len(a) < 2 or len(b) < 2:
+            return None
+        av = np.asarray(a[:2], dtype=float)
+        bv = np.asarray(b[:2], dtype=float)
+        return round(float(np.linalg.norm(av - bv)), 3)
+
     def _set_state(self, state: str) -> None:
         allowed = MissionState.TRANSITIONS.get(self._state, frozenset())
         if state != self._state and state not in allowed:
@@ -242,12 +271,35 @@ class NavigationModule(Module, layer=5):
             )
         self._state = state
         self.planner_status.publish(state)
+        current_waypoint = self._tracker.current_waypoint
+        wp_index = self._safe_nonnegative_int(self._tracker.wp_index)
+        wp_total = self._safe_nonnegative_int(self._tracker.path_length)
+        remaining_waypoints = max(0, wp_total - wp_index)
         self.mission_status.publish({
             "state": state,
             "replan_count": self._replan_count,
-            "wp_index": self._tracker.wp_index,
-            "wp_total": self._tracker.path_length,
+            "wp_index": wp_index,
+            "wp_total": wp_total,
+            "remaining_waypoints": remaining_waypoints,
+            "goal": self._point_summary(self._goal),
+            "current_waypoint": self._point_summary(current_waypoint),
+            "distance_to_goal_m": self._distance_xy(self._robot_pos, self._goal),
+            "active_waypoint_distance_m": self._distance_xy(
+                self._robot_pos,
+                current_waypoint,
+            ),
             "speed_scale": self._speed_scale,
+            "speed_policy": {
+                "scale": self._speed_scale,
+                "mode": (
+                    "restricted" if self._speed_scale < 0.5
+                    else "cautious" if self._speed_scale < 1.0
+                    else "normal"
+                ),
+                "reason": self._speed_policy_reason,
+                "source": "localization_degeneracy",
+                "applied": self._speed_scale < 1.0,
+            },
             "degeneracy": self._degen_level,
             "failure_reason": self._failure_reason,
             "localization_paused": self._paused_for_localization,
@@ -502,6 +554,8 @@ class NavigationModule(Module, layer=5):
             reason = "degeneracy=MILD"
         else:
             self._speed_scale = 1.0
+            reason = "normal"
+        self._speed_policy_reason = reason
 
         if self._speed_scale != prev_scale and self._state == MissionState.EXECUTING:
             if self._speed_scale < 1.0:
