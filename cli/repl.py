@@ -313,7 +313,7 @@ class LingTuREPL(cmd.Cmd):
     # ── SLAM hot-switch ─────────────────────────────────────────────────
 
     def do_slam(self, arg):
-        """SLAM control: slam status | fastlio2 | localizer | stop"""
+        """SLAM control: slam status | fastlio2 | localizer | super_lio | super_lio_relocation | stop"""
         parts = arg.split()
         subcmd = parts[0] if parts else "status"
 
@@ -323,25 +323,62 @@ class LingTuREPL(cmd.Cmd):
             self._slam_switch("fastlio2")
         elif subcmd in ("localizer", "nav"):
             self._slam_switch("localizer")
+        elif subcmd in ("super_lio", "super-lio", "superlio"):
+            self._slam_switch("super_lio")
+        elif subcmd in (
+            "super_lio_relocation",
+            "super_lio_reloc",
+            "super-lio-relocation",
+            "super-lio-reloc",
+            "relocation",
+        ):
+            self._slam_switch("super_lio_relocation")
         elif subcmd == "stop":
             self._slam_stop()
         else:
-            print("  Usage: slam status | fastlio2 | localizer | stop")
+            print("  Usage: slam status | fastlio2 | localizer | super_lio | super_lio_relocation | stop")
 
     def complete_slam(self, text, line, begidx, endidx):
-        options = ["status", "fastlio2", "localizer", "stop", "mapping", "nav"]
+        options = [
+            "status",
+            "fastlio2",
+            "localizer",
+            "super_lio",
+            "super_lio_relocation",
+            "stop",
+            "mapping",
+            "nav",
+        ]
         return [o for o in options if o.startswith(text)]
 
     def _slam_status(self):
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
-            st = svc.status("lidar", "slam", "slam_pgo", "localizer")
+            st = svc.status(
+                "lidar",
+                "slam",
+                "slam_pgo",
+                "localizer",
+                "super_lio",
+                "super_lio_relocation",
+            )
         except Exception:
-            st = {"lidar": "?", "slam": "?", "slam_pgo": "?", "localizer": "?"}
+            st = {
+                "lidar": "?",
+                "slam": "?",
+                "slam_pgo": "?",
+                "localizer": "?",
+                "super_lio": "?",
+                "super_lio_relocation": "?",
+            }
 
         # Determine current mode
-        if st.get("slam_pgo") == "running":
+        if st.get("super_lio_relocation") == "running":
+            mode = "super_lio_relocation (experimental saved-map)"
+        elif st.get("super_lio") == "running":
+            mode = "super_lio (experimental mapping/LIO)"
+        elif st.get("slam_pgo") == "running":
             mode = "fastlio2 (mapping)"
         elif st.get("localizer") == "running":
             mode = "localizer (navigation)"
@@ -375,6 +412,8 @@ class LingTuREPL(cmd.Cmd):
         # Check current state
         pgo_running = svc.is_running("slam_pgo")
         loc_running = svc.is_running("localizer")
+        super_lio_running = svc.is_running("super_lio")
+        super_lio_reloc_running = svc.is_running("super_lio_relocation")
 
         if profile == "fastlio2" and pgo_running:
             print("  Already in fastlio2 (mapping) mode")
@@ -382,23 +421,41 @@ class LingTuREPL(cmd.Cmd):
         if profile == "localizer" and loc_running:
             print("  Already in localizer (navigation) mode")
             return
+        if profile == "super_lio" and super_lio_running:
+            print("  Already in super_lio mode")
+            return
+        if profile == "super_lio_relocation" and super_lio_reloc_running:
+            print("  Already in super_lio_relocation mode")
+            return
 
         print(f"  Switching to {profile}...")
 
         # Stop conflicting services
         if profile == "fastlio2":
-            svc.stop("localizer")
+            svc.stop("localizer", "super_lio", "super_lio_relocation")
             svc.ensure("slam", "slam_pgo")
+            wait_services = ("slam", "slam_pgo")
         elif profile == "localizer":
-            svc.stop("slam_pgo")
+            svc.stop("slam_pgo", "super_lio", "super_lio_relocation")
             svc.ensure("slam", "localizer")
+            wait_services = ("slam", "localizer")
+        elif profile == "super_lio":
+            svc.stop("slam", "slam_pgo", "localizer", "super_lio_relocation")
+            svc.ensure("lidar", "super_lio")
+            wait_services = ("lidar", "super_lio")
+        elif profile == "super_lio_relocation":
+            svc.stop("slam", "slam_pgo", "localizer", "super_lio")
+            svc.ensure("lidar", "super_lio_relocation")
+            wait_services = ("lidar", "super_lio_relocation")
+        else:
+            print(f"  Unknown SLAM profile: {profile}")
+            return
 
         # Wait for readiness
-        target = "slam_pgo" if profile == "fastlio2" else "localizer"
-        if svc.wait_ready("slam", target, timeout=10.0):
+        if svc.wait_ready(*wait_services, timeout=10.0):
             print(f"  Switched to {profile} — bridge reconnects in ~3s")
         else:
-            print("  Warning: services not ready after 10s, check: journalctl -u slam -f")
+            print(f"  Warning: services not ready after 10s: {', '.join(wait_services)}")
 
         # Update config
         if hasattr(self, '_cfg') and self._cfg:
@@ -408,7 +465,7 @@ class LingTuREPL(cmd.Cmd):
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
-            svc.stop("slam_pgo", "localizer", "slam")
+            svc.stop("super_lio_relocation", "super_lio", "slam_pgo", "localizer", "slam")
             print("  All SLAM services stopped")
         except Exception as e:
             print(f"  Failed: {e}")
@@ -688,6 +745,15 @@ class LingTuREPL(cmd.Cmd):
                 try:
                     r = vmem.query_location(text)
                     if r.get("found"):
+                        if not (
+                            r.get("navigable") is True
+                            and r.get("semantic_encoder_ready") is True
+                            and r.get("degraded") is False
+                        ):
+                            return (
+                                "Memory match is query-only; navigation "
+                                f"coordinates withheld (encoder={r.get('encoder_type', 'unknown')})"
+                            )
                         results = r.get("results", [])[:3]
                         return "; ".join(
                             f"({x['x']:.1f},{x['y']:.1f}) score={x['score']:.2f}"
@@ -1017,6 +1083,9 @@ class LingTuREPL(cmd.Cmd):
         elif subcmd == "stats":
             s = mod.get_memory_stats()
             print(f"  Backend:  {s['backend']}")
+            print(f"  Encoder:  {s.get('encoder_type', 'unknown')}")
+            print(f"  Semantic: {bool(s.get('semantic_encoder_ready', False))}")
+            print(f"  Degraded: {bool(s.get('degraded', False))}")
             print(f"  Entries:  {s['entries']}")
             print(f"  Stored:   {s['store_count']} snapshots")
             print(f"  Dir:      {s['persist_dir']}")

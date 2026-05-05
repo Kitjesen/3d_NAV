@@ -6,7 +6,7 @@ from .auth import register_auth_routes
 from .camera import register_camera_routes
 from .commands import register_command_routes
 from .diagnostics import register_diagnostic_routes
-from .maps import register_map_routes
+from .maps import map_lifecycle_payload, register_map_routes
 from .operations import register_operation_routes
 from .realtime import register_realtime_routes
 from .session import register_session_routes
@@ -19,6 +19,7 @@ __all__ = [
     "register_camera_routes",
     "register_command_routes",
     "register_diagnostic_routes",
+    "map_lifecycle_payload",
     "register_map_routes",
     "register_operation_routes",
     "register_realtime_routes",

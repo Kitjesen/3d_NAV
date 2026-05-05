@@ -10,12 +10,13 @@ Responsibilities:
   - Encode camera frames → JPEG → push to GatewayModule
   - Provide @skill methods for REPL / MCP
 
-Protocol (ws://<robot>:5050/ws/teleop, handled by GatewayModule):
+Protocol (handled by GatewayModule):
   Client → server  JSON text:
     {"type": "joy",  "lx": 0.5, "ly": 0.0, "az": -0.3}
     {"type": "stop"}
-  Server → client  binary:
-    raw JPEG bytes  (camera frame, ~10 fps)
+
+Camera viewers use /ws/camera. Legacy teleop clients can still request
+JPEG frames with /ws/teleop?video=1, but normal /ws/teleop is control-only.
 
 Ports:
   In:  color_image (Image)  — camera frames to encode + forward
@@ -81,6 +82,7 @@ class TeleopModule(Module, layer=6):
         self._active: bool = False
         self._last_joy_time: float = 0.0
         self._clients: int = 0
+        self._camera_clients: int = 0
 
         # Gateway reference (for camera push + client count)
         self._gateway = None
@@ -190,17 +192,28 @@ class TeleopModule(Module, layer=6):
     def on_client_connect(self) -> None:
         """Called by GatewayModule when a teleop WS client connects."""
         self._clients += 1
-        # Kick the encoder immediately so the new client gets the most recent
-        # cached raw frame encoded + pushed on the first send-loop iteration,
-        # instead of waiting up to ~33ms for the next camera tick.
-        if self._latest_raw is not None:
-            self._new_frame.set()
+        self._wake_encoder_if_ready()
 
     def on_client_disconnect(self) -> None:
         """Called by GatewayModule when a teleop WS client disconnects."""
         self._clients = max(0, self._clients - 1)
         if self._clients == 0:
             self._release()
+
+    def on_camera_client_connect(self) -> None:
+        """Register a camera-only viewer without acquiring teleop control."""
+        self._camera_clients += 1
+        self._wake_encoder_if_ready()
+
+    def on_camera_client_disconnect(self) -> None:
+        """Release a camera-only viewer without touching teleop state."""
+        self._camera_clients = max(0, self._camera_clients - 1)
+
+    def _wake_encoder_if_ready(self) -> None:
+        # Kick the encoder immediately so the new client gets the most recent
+        # cached raw frame encoded + pushed on the first send-loop iteration.
+        if self._latest_raw is not None:
+            self._new_frame.set()
 
     # -- idle timeout -------------------------------------------------------
 
@@ -269,8 +282,44 @@ class TeleopModule(Module, layer=6):
             self._latest_raw = img.data
         # Only wake the encoder thread when a client is connected — skipping
         # the JPEG encode step keeps CPU usage low in idle state.
-        if self._clients > 0:
+        if self._clients + self._camera_clients > 0:
             self._new_frame.set()
+
+    def snapshot_jpeg(self) -> bytes | None:
+        """Encode the latest raw camera frame for one-shot HTTP snapshots."""
+        with self._raw_lock:
+            raw = None if self._latest_raw is None else self._latest_raw.copy()
+        if raw is None:
+            return None
+
+        try:
+            import cv2
+        except ImportError:
+            return None
+
+        try:
+            frame = self._draw_detections(raw, cv2)
+            _rot_map = {
+                90: cv2.ROTATE_90_CLOCKWISE,
+                180: cv2.ROTATE_180,
+                270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+            }
+            if self._cam_rotate in _rot_map:
+                frame = cv2.rotate(frame, _rot_map[self._cam_rotate])
+            ok, buf = cv2.imencode(
+                ".jpg",
+                frame,
+                [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality],
+            )
+            if not ok:
+                return None
+            data = buf.tobytes()
+            if self._gateway is not None:
+                self._gateway.push_jpeg(data)
+            return data
+        except Exception:
+            logger.debug("TeleopModule: snapshot JPEG encode failed", exc_info=True)
+            return None
 
     def _encode_loop(self) -> None:
         """Dedicated thread: encode raw frames to JPEG at stream_fps."""
@@ -316,6 +365,8 @@ class TeleopModule(Module, layer=6):
         info = super().port_summary()
         info["active"] = self._active
         info["clients"] = self._clients
+        info["camera_clients"] = self._camera_clients
+        info["stream_clients"] = self._clients + self._camera_clients
         info["last_joy_age_ms"] = round(
             (time.monotonic() - self._last_joy_time) * 1000
         ) if self._last_joy_time > 0 else None
@@ -329,6 +380,8 @@ class TeleopModule(Module, layer=6):
         return {
             "active": self._active,
             "clients": self._clients,
+            "camera_clients": self._camera_clients,
+            "stream_clients": self._clients + self._camera_clients,
             "port": self._port,
             "last_joy_age_ms": round(
                 (time.monotonic() - self._last_joy_time) * 1000

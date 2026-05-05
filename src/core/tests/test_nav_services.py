@@ -30,7 +30,7 @@ import numpy as np
 
 from core.msgs.geometry import Pose, Twist, Vector3
 from core.msgs.nav import Odometry
-from core.msgs.sensor import Image, ImageFormat
+from core.msgs.sensor import Image, ImageFormat, PointCloud2
 
 # ---------------------------------------------------------------------------
 # 1. MapManagerModule
@@ -151,6 +151,229 @@ class TestMapManagerModule(unittest.TestCase):
     def test_map_save_missing_name(self):
         resp = self.mod._map_save("")
         self.assertFalse(resp["success"])
+
+    @patch("subprocess.run")
+    @patch(
+        "gateway.gateway_module._apply_dynamic_filter_step1half",
+        return_value=None,
+    )
+    def test_map_save_super_lio_reports_gateway_capability_contract(
+        self,
+        _filter,
+        run,
+    ):
+        map_dir = Path(self._map_dir) / "super_lio_map"
+        pcd_path = map_dir / "map.pcd"
+        self.mod._on_map_cloud(
+            PointCloud2.from_numpy(
+                np.array(
+                    [
+                        [1.0, 2.0, 0.1],
+                        [3.0, 4.0, 0.2],
+                        [np.inf, 5.0, 0.3],
+                    ],
+                    dtype=np.float32,
+                )
+            )
+        )
+
+        def _build_tomogram(name):
+            return {
+                "action": "build_tomogram",
+                "success": False,
+                "message": "Super-LIO PGO output unavailable",
+            }
+
+        with patch.object(self.mod, "_build_tomogram", side_effect=_build_tomogram):
+            with patch.object(
+                self.mod,
+                "_build_occupancy_snapshot",
+                return_value={"success": False, "message": "no PGO patches"},
+            ):
+                resp = self.mod._map_save(
+                    "super_lio_map",
+                    slam_profile="super_lio",
+                )
+
+        self.assertTrue(resp["success"], resp)
+        run.assert_not_called()
+        self.assertTrue(pcd_path.exists())
+        raw = pcd_path.read_bytes()
+        self.assertIn(b"FIELDS x y z", raw)
+        self.assertIn(b"DATA binary", raw)
+        self.assertIn(b"POINTS 2", raw)
+        self.assertEqual(resp["slam_profile"], "super_lio")
+        self.assertTrue(resp["map_save_supported"])
+        self.assertEqual(resp["source"], "live_map_cloud_snapshot")
+        self.assertEqual(resp["map_save_source"], "live_map_cloud_snapshot")
+        self.assertFalse(resp["relocalization_supported"])
+        self.assertFalse(resp["saved_map_relocalization_supported"])
+        self.assertTrue(resp["restart_recovery_supported"])
+        self.assertEqual(resp["recovery_method"], "restart_super_lio")
+        self.assertFalse(resp["tomogram_ok"])
+        self.assertIn("Super-LIO", resp["warnings"][0])
+
+    @patch("subprocess.run")
+    def test_map_save_super_lio_fails_without_live_map_cloud(self, run):
+        resp = self.mod._map_save("super_lio_empty", slam_profile="super_lio")
+
+        self.assertFalse(resp["success"])
+        self.assertEqual(resp["slam_profile"], "super_lio")
+        self.assertTrue(resp["map_save_supported"])
+        self.assertEqual(resp["map_save_source"], "live_map_cloud_snapshot")
+        self.assertIn("No live map_cloud", resp["message"])
+        run.assert_not_called()
+
+    def test_super_lio_relocation_alias_reports_conservative_capability_contract(
+        self,
+    ):
+        fields = self.mod._map_save_capability_fields("relocation")
+
+        self.assertEqual(fields["map_save_source"], "active_map")
+        self.assertFalse(fields["map_save_supported"])
+        self.assertFalse(fields["relocalization_supported"])
+        self.assertFalse(fields["saved_map_relocalization_supported"])
+        self.assertTrue(fields["restart_recovery_supported"])
+        self.assertEqual(
+            fields["recovery_method"],
+            "restart_super_lio_relocation",
+        )
+
+    @patch("subprocess.run")
+    def test_map_save_super_lio_relocation_is_explicitly_unsupported(self, run):
+        resp = self.mod._map_save(
+            "relocation_map",
+            slam_profile="super_lio_relocation",
+        )
+
+        self.assertFalse(resp["success"])
+        self.assertEqual(resp["slam_profile"], "super_lio_relocation")
+        self.assertFalse(resp["map_save_supported"])
+        self.assertEqual(resp["map_save_source"], "active_map")
+        self.assertIn("not supported", resp["message"])
+        run.assert_not_called()
+
+    @patch("subprocess.run")
+    @patch(
+        "gateway.gateway_module._apply_dynamic_filter_step1half",
+        return_value=None,
+    )
+    def test_map_save_localizer_keeps_relocalization_contract(
+        self,
+        _filter,
+        run,
+    ):
+        run.return_value = MagicMock(returncode=0, stderr="")
+
+        with patch.object(
+            self.mod,
+            "_build_tomogram",
+            return_value={"success": True, "tomogram": "tomogram.pickle"},
+        ):
+            with patch.object(
+                self.mod,
+                "_build_occupancy_snapshot",
+                return_value={"success": True, "occupancy": "occupancy.npz"},
+            ):
+                resp = self.mod._map_save(
+                    "localizer_map",
+                    slam_profile="localizer",
+                )
+
+        self.assertTrue(resp["success"], resp)
+        self.assertEqual(resp["slam_profile"], "localizer")
+        self.assertTrue(resp["map_save_supported"])
+        self.assertEqual(resp["map_save_source"], "slam_service")
+        self.assertTrue(resp["relocalization_supported"])
+        self.assertTrue(resp["saved_map_relocalization_supported"])
+        self.assertTrue(resp["restart_recovery_supported"])
+        self.assertEqual(resp["recovery_method"], "relocalize_service")
+
+    @patch("subprocess.run")
+    @patch(
+        "gateway.gateway_module._apply_dynamic_filter_step1half",
+        return_value=None,
+    )
+    def test_simulation_only_map_save_closes_active_artifact_loop(
+        self,
+        _filter,
+        run,
+    ):
+        """Map save produces active map artifacts without ROS2 or hardware."""
+        map_name = "sim_saved"
+        map_dir = Path(self._map_dir) / map_name
+
+        def _fake_save_maps(*_args, **_kw):
+            map_dir.mkdir(parents=True, exist_ok=True)
+            (map_dir / "map.pcd").write_text(
+                "VERSION 0.7\n"
+                "FIELDS x y z\n"
+                "SIZE 4 4 4\n"
+                "TYPE F F F\n"
+                "COUNT 1 1 1\n"
+                "WIDTH 8\n"
+                "HEIGHT 1\n"
+                "VIEWPOINT 0 0 0 1 0 0 0\n"
+                "POINTS 8\n"
+                "DATA ascii\n"
+                "0.0 0.0 0.0\n"
+                "1.0 0.0 0.0\n"
+                "0.0 1.0 0.0\n"
+                "1.0 1.0 0.0\n"
+                "0.0 0.0 0.5\n"
+                "1.0 0.0 0.5\n"
+                "0.0 1.0 0.5\n"
+                "1.0 1.0 0.5\n",
+                encoding="utf-8",
+            )
+            return MagicMock(returncode=0, stderr="")
+
+        def _fake_build_tomogram(name):
+            tomogram_path = Path(self._map_dir) / name / "tomogram.pickle"
+            tomogram_path.write_bytes(b"sim-tomogram")
+            return {
+                "action": "build_tomogram",
+                "success": True,
+                "tomogram": str(tomogram_path),
+            }
+
+        run.side_effect = _fake_save_maps
+        with patch.object(self.mod, "_build_tomogram", side_effect=_fake_build_tomogram):
+            resp = self.mod._map_save(map_name, slam_profile="localizer")
+
+        self.assertTrue(resp["success"], resp)
+        self.assertEqual(resp["slam_profile"], "localizer")
+        self.assertEqual(resp["map_save_source"], "slam_service")
+        self.assertTrue(resp["tomogram_ok"])
+        self.assertTrue(resp["occupancy_ok"])
+        self.assertTrue(Path(resp["pcd"]).exists())
+        self.assertTrue(Path(resp["tomogram"]).exists())
+        self.assertTrue(Path(resp["occupancy"]).exists())
+        self.assertTrue(resp["saved_map_relocalization_supported"])
+        run.assert_called_once()
+        self.assertIn("/pgo/save_maps", run.call_args.args[0])
+
+        active = self._cmd({"action": "set_active", "name": map_name})
+        self.assertTrue(active["success"], active)
+        self.assertEqual(self.mod._active_map, map_name)
+        self.assertEqual(
+            Path(self.mod.get_active_tomogram()).resolve(),
+            (map_dir / "tomogram.pickle").resolve(),
+        )
+        self.assertEqual(
+            Path(self.mod.get_active_occupancy()).resolve(),
+            (map_dir / "occupancy.npz").resolve(),
+        )
+
+        listed = self._cmd({"action": "list"})
+        entry = next(m for m in listed["maps"] if m["name"] == map_name)
+        self.assertTrue(entry["has_pcd"])
+        self.assertTrue(entry["has_tomogram"])
+        self.assertTrue(entry["has_occupancy"])
+
+        occupancy = np.load(resp["occupancy"])
+        self.assertIn("grid", occupancy)
+        self.assertTrue(np.any(occupancy["grid"] == 100))
 
     # -- occupancy snapshot tests --
 
@@ -752,31 +975,80 @@ class TestCameraBridgeModule(unittest.TestCase):
         from drivers.thunder.camera_bridge_module import CameraBridgeModule
         return CameraBridgeModule(**kw)
 
+    def _make_stub_bridge(self, **kw):
+        mod = self._make_bridge(**kw)
+        mod._create_dds_reader = MagicMock(return_value=False)
+        mod._create_ros2_node = MagicMock(return_value=False)
+        return mod
+
     def test_instantiation_defaults(self):
         mod = self._make_bridge()
         self.assertEqual(mod._color_topic, "/camera/color/image_raw")
         self.assertEqual(mod._depth_topic, "/camera/depth/image_raw")
+        self.assertIn("/camera/color/camera_info", mod._info_topics)
+        self.assertIn("/camera/depth/camera_info", mod._info_topics)
+        self.assertIn("/camera/camera_info", mod._info_topics)
+        self.assertEqual(mod._preferred_info_topic, "/camera/color/camera_info")
         self.assertEqual(mod._spin_rate, 30.0)
 
     def test_instantiation_custom_topics(self):
-        mod = self._make_bridge(color_topic="/rgb", depth_topic="/depth")
+        mod = self._make_bridge(
+            color_topic="/rgb",
+            depth_topic="/depth",
+            info_topics=("/rgb/info", "/depth/info"),
+        )
         self.assertEqual(mod._color_topic, "/rgb")
         self.assertEqual(mod._depth_topic, "/depth")
+        self.assertEqual(mod._info_topics, ("/rgb/info", "/depth/info"))
+
+    def test_camera_info_topic_precedence_prefers_color(self):
+        mod = self._make_bridge()
+
+        class Info:
+            width = 848
+            height = 480
+            k = [411.0, 0.0, 424.0, 0.0, 411.0, 240.0, 0.0, 0.0, 1.0]
+            d = []
+
+        mod._on_ros2_info(Info(), "/camera/depth/camera_info")
+        self.assertEqual(mod._active_info_topic, "/camera/depth/camera_info")
+
+        Info.width = 1280
+        Info.height = 720
+        Info.k = [693.0, 0.0, 642.0, 0.0, 693.0, 361.0, 0.0, 0.0, 1.0]
+        mod._on_ros2_info(Info(), "/camera/color/camera_info")
+        self.assertEqual(mod._active_info_topic, "/camera/color/camera_info")
+
+        Info.width = 848
+        Info.height = 480
+        Info.k = [411.0, 0.0, 424.0, 0.0, 411.0, 240.0, 0.0, 0.0, 1.0]
+        mod._on_ros2_info(Info(), "/camera/depth/camera_info")
+        self.assertEqual(mod._active_info_topic, "/camera/color/camera_info")
+
+    def test_undistortion_maps_require_matching_image_shape(self):
+        mod = self._make_bridge()
+        map1 = np.zeros((720, 1280, 2), dtype=np.int16)
+        map2 = np.zeros((720, 1280), dtype=np.uint16)
+        mod._undistort_maps = (map1, map2)
+
+        self.assertTrue(mod._undistortion_maps_match(np.zeros((720, 1280, 3))))
+        self.assertFalse(mod._undistortion_maps_match(np.zeros((480, 848))))
 
     def test_setup_no_rclpy(self):
         """setup() should not crash when rclpy is not available."""
-        mod = self._make_bridge()
+        mod = self._make_stub_bridge()
         mod.setup()  # Should gracefully handle ImportError
+        self.assertEqual(mod._backend, "stub")
         self.assertFalse(mod._rclpy_available)
 
     def test_health_no_frames(self):
-        mod = self._make_bridge()
+        mod = self._make_stub_bridge()
         mod.setup()
         h = mod.health()
         self.assertAlmostEqual(h["fps"], 0.0)
 
     def test_health_with_timestamp(self):
-        mod = self._make_bridge()
+        mod = self._make_stub_bridge()
         mod.setup()
         mod._last_color_ts = time.time()
         h = mod.health()
@@ -784,8 +1056,8 @@ class TestCameraBridgeModule(unittest.TestCase):
         self.assertIn("fps", h)
 
     def test_start_without_node(self):
-        """start() without rclpy node publishes alive=False."""
-        mod = self._make_bridge()
+        """start() in stub mode publishes alive=False."""
+        mod = self._make_stub_bridge()
         mod.setup()
         published = []
         mod.alive.subscribe(lambda v: published.append(v))
@@ -793,7 +1065,7 @@ class TestCameraBridgeModule(unittest.TestCase):
         self.assertIn(False, published)
 
     def test_stop_idempotent(self):
-        mod = self._make_bridge()
+        mod = self._make_stub_bridge()
         mod.setup()
         mod.start()
         mod.stop()
@@ -927,6 +1199,22 @@ class TestTeleopModule(unittest.TestCase):
         img = Image(data=img_data, format=ImageFormat.BGR)
         mod._on_image(img)
         self.assertIsNotNone(mod._latest_raw)
+
+    def test_camera_client_wakes_encoder_without_teleop_control(self):
+        mod = self._make_teleop()
+        mod._gateway = MagicMock()
+        img_data = np.zeros((10, 10, 3), dtype=np.uint8)
+        img = Image(data=img_data, format=ImageFormat.BGR)
+
+        mod.on_camera_client_connect()
+        self.assertEqual(mod._clients, 0)
+        self.assertEqual(mod._camera_clients, 1)
+        mod._on_image(img)
+        self.assertTrue(mod._new_frame.is_set())
+
+        mod.on_camera_client_disconnect()
+        self.assertEqual(mod._camera_clients, 0)
+        self.assertFalse(mod._active)
 
 
 if __name__ == "__main__":

@@ -1,25 +1,23 @@
-"""
-算法 Profile: ICP 定位器 (Localizer)
+"""ICP localizer launch profile.
 
-将 localizer 原生话题 remap 到标准接口契约 (/nav/*):
-  /localization_quality → /nav/localization_quality
-  relocalize           → /nav/relocalize
+Remaps native localizer topics/services into the LingTu /nav/* contract.
 """
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PythonExpression, PathJoinSubstitution
-from launch.substitutions import EnvironmentVariable
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
+from launch.substitutions import PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # ---- 参数 ----
     map_path_arg = DeclareLaunchArgument(
         "map_path",
-        default_value=EnvironmentVariable("NAV_MAP_PATH", default_value=""),
-        description="地图路径 (不含扩展名)",
+        default_value=EnvironmentVariable(
+            "NAV_MAP_PATH", default_value="/home/sunrise/data/nova/maps/active/map"
+        ),
+        description="Map path without file extension",
     )
     x_arg = DeclareLaunchArgument("x", default_value="0.0")
     y_arg = DeclareLaunchArgument("y", default_value="0.0")
@@ -33,7 +31,6 @@ def generate_launch_description():
         [FindPackageShare("localizer"), "config", "localizer.yaml"]
     )
 
-    # ---- Localizer 节点 ----
     localizer_node = Node(
         package="localizer",
         namespace="localizer",
@@ -49,21 +46,25 @@ def generate_launch_description():
             {"initial_yaw": LaunchConfiguration("yaw")},
         ],
         remappings=[
-            # 输入: 从标准接口读取
+            # Inputs from Fast-LIO2 and the standard LingTu topic contract.
             ("/cloud_registered", "/nav/registered_cloud"),
-            ("/Odometry",         "/nav/odometry"),
-            # 输出: remap 到标准接口
-            # 注意: map_cloud 用相对名发布，加 namespace 后变为 /localizer/map_cloud，
-            #       必须显式 remap 到 /nav/map_cloud 才能被 terrain_analysis 等节点使用
-            ("map_cloud",             "/nav/map_cloud"),
+            ("/Odometry", "/nav/odometry"),
+            # The localizer map_cloud is the static saved map. Live SLAM clouds
+            # stay on /nav/map_cloud for mapping/traversability consumers.
+            ("map_cloud", "/nav/saved_map_cloud"),
             ("/localization_quality", "/nav/localization_quality"),
-            # 服务: remap 到标准名
-            ("relocalize",         "/nav/relocalize"),
-            ("relocalize_check",   "/nav/relocalize_check"),
+            # Services exposed through the standard LingTu topic contract.
+            ("relocalize", "/nav/relocalize"),
+            ("relocalize_check", "/nav/relocalize_check"),
+            ("global_relocalize", "/nav/global_relocalize"),
         ],
     )
 
     return LaunchDescription([
-        map_path_arg, x_arg, y_arg, z_arg, yaw_arg,
+        map_path_arg,
+        x_arg,
+        y_arg,
+        z_arg,
+        yaw_arg,
         localizer_node,
     ])

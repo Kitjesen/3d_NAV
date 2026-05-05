@@ -46,6 +46,7 @@ from .stacks import (
 from .stacks import planner as planner_stack
 from .stacks.driver import driver_name
 from .stacks.memory import DEFAULT_SEMANTIC_DIR
+from .stacks.slam import normalize_slam_profile
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ def full_stack_blueprint(
     autoconnect() merges them and auto-wires by (port_name, msg_type).
     """
     planner_backend = planner or planner_backend
+    slam_profile = normalize_slam_profile(slam_profile)
     semantic_save_dir = config.get("semantic_save_dir", DEFAULT_SEMANTIC_DIR)
     drv = driver_name(robot)
 
@@ -102,7 +104,13 @@ def full_stack_blueprint(
     perception_config = dict(config)
     perception_config["_driver_cls_name"] = drv
 
-    needs_lidar = slam_profile not in ("", "none", "bridge")
+    needs_lidar = slam_profile not in (
+        "",
+        "none",
+        "bridge",
+        "super_lio",
+        "super_lio_relocation",
+    )
     lidar_ip = config.get("lidar_ip")
 
     device_bp = Blueprint()

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import threading
 import time
-from typing import Any
+from typing import Annotated, Any
 
+from fastapi import Query
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from gateway.schemas import (
@@ -18,20 +19,195 @@ from gateway.schemas import (
     NavigationStatusResponse,
     PathResponse,
     ReadinessResponse,
+    SSEEventEnvelope,
     SceneGraphResponse,
     StateResponse,
 )
+from gateway.services.media_status import build_camera_status
 from gateway.services.readiness import build_readiness_snapshot
 from gateway.services.runtime_status import (
     build_localization_status,
     build_navigation_status,
 )
 from gateway.services.state_snapshot import build_state_snapshot
+from gateway.services.traffic import (
+    SSE_RETRY_MS,
+    format_sse_message,
+    normalize_sse_event,
+)
 from gateway.services.telemetry_normalizers import (
     build_locations_response,
     build_path_response,
     build_scene_graph_response,
 )
+
+
+def _probe_brainstem() -> dict[str, Any]:
+    import brainstem_api as bapi
+    import grpc
+
+    ch = grpc.insecure_channel("127.0.0.1:13145")
+    try:
+        stub = bapi.RobotControlStub(ch)
+        state = stub.GetCmsState(bapi.Empty(), timeout=1.0)
+        fsm_map = {
+            0: "ZERO",
+            1: "GROUNDED",
+            2: "STANDING",
+            3: "WALKING",
+            4: "TRANSITIONING",
+        }
+        info: dict[str, Any] = {
+            "status": "connected",
+            "host": "127.0.0.1:13145",
+            "fsm": fsm_map.get(state.kind, str(state.kind)),
+        }
+        try:
+            v = stub.GetVoltage(bapi.Empty(), timeout=1.0)
+            if v.values:
+                info["voltage_avg"] = round(sum(v.values) / len(v.values), 1)
+        except Exception:
+            pass
+        return info
+    finally:
+        ch.close()
+
+
+_BRAINSTEM_TRANSIENT_FIELDS = {
+    "cached",
+    "cache_age_s",
+    "stale",
+    "refreshing",
+}
+
+
+def _cacheable_brainstem_info(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in dict(info).items()
+        if key not in _BRAINSTEM_TRANSIENT_FIELDS
+    }
+
+
+def _probe_brainstem_safely() -> dict[str, Any]:
+    try:
+        return _probe_brainstem()
+    except ImportError:
+        return {
+            "status": "unavailable",
+            "reason": "brainstem_api not installed",
+        }
+    except Exception as e:
+        return {
+            "status": "unreachable",
+            "host": "127.0.0.1:13145",
+            "error": str(e)[:120],
+        }
+
+
+def _store_brainstem_health(gw, info: dict[str, Any]) -> None:
+    lock = getattr(gw, "_brainstem_health_lock", None)
+    if lock is None:
+        return
+    with lock:
+        gw._brainstem_health_cache = _cacheable_brainstem_info(info)
+        gw._brainstem_health_cache_ts = time.monotonic()
+
+
+def _start_brainstem_refresh(gw) -> bool:
+    lock = getattr(gw, "_brainstem_health_lock", None)
+    if lock is None:
+        return False
+    with lock:
+        if getattr(gw, "_brainstem_health_refreshing", False):
+            return False
+        gw._brainstem_health_refreshing = True
+
+    def _refresh() -> None:
+        try:
+            _store_brainstem_health(gw, _probe_brainstem_safely())
+        finally:
+            with lock:
+                gw._brainstem_health_refreshing = False
+
+    try:
+        thread = threading.Thread(
+            target=_refresh,
+            daemon=True,
+            name="brainstem_health_refresh",
+        )
+        with lock:
+            gw._brainstem_health_refresh_thread = thread
+        thread.start()
+        return True
+    except Exception:
+        with lock:
+            gw._brainstem_health_refreshing = False
+            gw._brainstem_health_refresh_thread = None
+        return False
+
+
+async def _brainstem_health(gw, *, force_live: bool = False) -> dict[str, Any]:
+    now = time.monotonic()
+    ttl = float(getattr(gw, "_brainstem_health_cache_ttl_s", 0.0) or 0.0)
+    lock = getattr(gw, "_brainstem_health_lock", None)
+    if ttl > 0.0 and lock is not None:
+        cached = None
+        age = 0.0
+        refreshing = False
+        with lock:
+            cached = getattr(gw, "_brainstem_health_cache", None)
+            cache_ts = float(getattr(gw, "_brainstem_health_cache_ts", 0.0) or 0.0)
+            age = now - cache_ts
+            refreshing = bool(getattr(gw, "_brainstem_health_refreshing", False))
+        if cached is not None and age <= ttl and not force_live:
+            info = dict(cached)
+            info["cached"] = True
+            info["cache_age_s"] = round(max(0.0, age), 3)
+            return info
+        if not force_live:
+            scheduled = _start_brainstem_refresh(gw)
+            if cached is not None:
+                info = dict(cached)
+                info["cached"] = True
+                info["cache_age_s"] = round(max(0.0, age), 3)
+                info["stale"] = True
+                info["refreshing"] = bool(scheduled or refreshing)
+                return info
+            return {
+                "status": "unknown",
+                "host": "127.0.0.1:13145",
+                "reason": "probe_pending",
+                "cached": False,
+                "stale": True,
+                "refreshing": bool(scheduled or refreshing),
+            }
+
+    try:
+        loop = asyncio.get_running_loop()
+        info = await loop.run_in_executor(None, _probe_brainstem_safely)
+    except Exception as e:
+        info = {"status": "unreachable", "error": str(e)[:120]}
+
+    info = dict(info)
+    info["cached"] = False
+    if ttl > 0.0 and lock is not None:
+        _store_brainstem_health(gw, info)
+    return info
+
+
+def _health_module_needs_detail(name: str) -> bool:
+    lowered = name.lower()
+    return any(
+        token in lowered
+        for token in (
+            "lidarmodule",
+            "camera",
+            "slambridge",
+            "slammodule",
+            "navigation",
+        )
+    )
 
 
 def register_status_routes(app, gw) -> None:
@@ -41,39 +217,38 @@ def register_status_routes(app, gw) -> None:
         response_class=StreamingResponse,
         responses={
             200: {
-                "content": {"text/event-stream": {"schema": {"type": "string"}}}
+                "content": {
+                    "text/event-stream": {"schema": SSEEventEnvelope.model_json_schema()}
+                }
             }
         },
     )
     async def sse_events():
-        q = gw._sse_subscribe()
+        q, snapshot_event_id = gw._sse_subscribe_with_event_id()
 
         async def _stream():
             try:
-                with gw._state_lock:
-                    snapshot = {
-                        "type": "snapshot",
-                        "data": {
-                            "odometry": gw._odom,
-                            "safety": gw._safety,
-                            "mission": gw._mission,
-                            "mode": gw._mode,
-                            "session": gw._session_snapshot(),
-                        },
-                    }
-                yield f"data: {json.dumps(snapshot)}\n\n"
+                snapshot = {
+                    "type": "snapshot",
+                    "data": build_state_snapshot(gw),
+                }
+                yield format_sse_message(
+                    normalize_sse_event(snapshot, event_id=snapshot_event_id),
+                    retry_ms=SSE_RETRY_MS,
+                )
 
                 while True:
                     try:
-                        event = q.get_nowait()
-                    except asyncio.QueueEmpty:
-                        yield (
-                            f"data: "
-                            f"{json.dumps({'type': 'ping', 'ts': time.time()})}\n\n"
+                        event = await asyncio.wait_for(q.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        yield format_sse_message(
+                            normalize_sse_event(
+                                {"type": "ping"},
+                                now=time.time(),
+                            )
                         )
-                        await asyncio.sleep(1.0)
                         continue
-                    yield f"data: {json.dumps(event)}\n\n"
+                    yield format_sse_message(event)
                     await asyncio.sleep(0)
             finally:
                 gw._sse_unsubscribe(q)
@@ -169,12 +344,16 @@ def register_status_routes(app, gw) -> None:
         summary="System health overview",
         response_model=HealthResponse,
     )
-    async def get_health():
+    async def get_health(
+        details: Annotated[bool, Query(
+            description="Probe every module health detail; default app polling path only probes displayed sensors.",
+        )] = False
+    ):
         traffic = gw._traffic_stats_snapshot()
         commands = gw._command_stats_snapshot()
         n_sse = traffic["sse"]["clients"]
-        map_pts = gw._map_cloud_count
-        slam_hz = gw._get_slam_hz_cached()
+        with gw._map_cloud_lock:
+            map_pts = len(gw._map_points) if gw._map_points is not None else 0
 
         sensors: dict[str, Any] = {}
         modules_ok = 0
@@ -183,6 +362,11 @@ def register_status_routes(app, gw) -> None:
 
         if gw._all_modules:
             for name, mod in gw._all_modules.items():
+                probe_module = details or _health_module_needs_detail(str(name))
+                if not probe_module:
+                    module_summary[name] = "ok"
+                    modules_ok += 1
+                    continue
                 try:
                     h = mod.health() if hasattr(mod, "health") else {}
                     module_summary[name] = "ok"
@@ -201,78 +385,40 @@ def register_status_routes(app, gw) -> None:
                             ),
                         }
                     elif "CameraBridge" in name:
-                        color_out = h.get("ports_out", {}).get("color_image", {})
-                        sensors["camera"] = {
-                            "status": (
-                                "streaming"
-                                if color_out.get("msg_count", 0) > 0
-                                else "idle"
-                            ),
-                            "fps": round(color_out.get("rate_hz", 0), 1),
-                            "frames": color_out.get("msg_count", 0),
-                        }
+                        sensors["camera"] = build_camera_status(gw)
                     elif "SlamBridge" in name or "SLAMModule" in name:
                         odom_out = h.get("ports_out", {}).get("odometry", {})
+                        slam_rate = round(odom_out.get("rate_hz", 0), 1)
                         sensors["slam"] = {
                             "status": (
                                 "active"
-                                if odom_out.get("msg_count", 0) > 0
+                                if slam_rate > 0.0
                                 else "inactive"
                             ),
-                            "hz": round(odom_out.get("rate_hz", 0), 1),
+                            "hz": slam_rate,
+                            "messages": odom_out.get("msg_count", 0),
                         }
                     elif "Navigation" in name:
+                        nav = h.get("navigation", h)
                         sensors["navigation"] = {
-                            "state": h.get("mission_state", "idle"),
-                            "replan_count": h.get("replan_count", 0),
+                            "state": nav.get(
+                                "state",
+                                h.get("mission_state", "idle"),
+                            ),
+                            "replan_count": nav.get(
+                                "replan_count",
+                                h.get("replan_count", 0),
+                            ),
                         }
                 except Exception:
                     module_summary[name] = "error"
                     modules_fail += 1
 
-        def _brainstem_probe():
-            import brainstem_api as bapi
-            import grpc
+        slam_hz = float(sensors.get("slam", {}).get("hz") or 0.0)
+        if slam_hz <= 0.0:
+            slam_hz = gw._get_slam_hz_cached()
 
-            ch = grpc.insecure_channel("127.0.0.1:13145")
-            stub = bapi.RobotControlStub(ch)
-            state = stub.GetCmsState(bapi.Empty(), timeout=1.0)
-            fsm_map = {
-                0: "ZERO",
-                1: "GROUNDED",
-                2: "STANDING",
-                3: "WALKING",
-                4: "TRANSITIONING",
-            }
-            info: dict[str, Any] = {
-                "status": "connected",
-                "host": "127.0.0.1:13145",
-                "fsm": fsm_map.get(state.kind, str(state.kind)),
-            }
-            try:
-                v = stub.GetVoltage(bapi.Empty(), timeout=1.0)
-                if v.values:
-                    info["voltage_avg"] = round(sum(v.values) / len(v.values), 1)
-            except Exception:
-                pass
-            ch.close()
-            return info
-
-        brainstem_info: dict[str, Any] = {"status": "not_probed"}
-        try:
-            loop = asyncio.get_event_loop()
-            brainstem_info = await loop.run_in_executor(None, _brainstem_probe)
-        except ImportError:
-            brainstem_info = {
-                "status": "unavailable",
-                "reason": "brainstem_api not installed",
-            }
-        except Exception as e:
-            brainstem_info = {
-                "status": "unreachable",
-                "host": "127.0.0.1:13145",
-                "error": str(e)[:120],
-            }
+        brainstem_info = await _brainstem_health(gw, force_live=details)
 
         return {
             "status": "ok" if modules_fail == 0 else "degraded",
@@ -284,10 +430,11 @@ def register_status_routes(app, gw) -> None:
                 "sse_clients": n_sse,
                 "traffic": traffic,
                 "commands": commands,
+                "diagnostic_details": details,
             },
             "teleop": {
                 "active": gw._teleop_active,
-                "clients": gw._teleop_clients,
+                "clients": gw._teleop_client_count(),
             },
             "sensors": sensors,
             "slam_hz": round(slam_hz, 1),
@@ -311,6 +458,10 @@ def register_status_routes(app, gw) -> None:
         response_model=ReadinessResponse,
         responses={503: {"model": ReadinessResponse}},
     )
-    async def readiness_ready():
-        payload, status_code = build_readiness_snapshot(gw)
+    async def readiness_ready(
+        details: Annotated[bool, Query(
+            description="Include per-module health details; default probe payload is summary-only.",
+        )] = False
+    ):
+        payload, status_code = build_readiness_snapshot(gw, include_details=details)
         return JSONResponse(payload, status_code=status_code)

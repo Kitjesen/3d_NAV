@@ -18,6 +18,12 @@ import time
 logger = logging.getLogger(__name__)
 
 
+def _subprocess_text(value: bytes | str | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
 SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "lidar": ("robot-lidar.service", "lidar.service", "lidar"),
     "camera": ("robot-camera.service", "camera.service", "camera"),
@@ -25,6 +31,21 @@ SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     "slam": ("robot-fastlio2.service", "slam.service", "slam"),
     "slam_pgo": ("robot-pgo.service", "slam_pgo.service", "slam_pgo"),
     "localizer": ("robot-localizer.service", "localizer.service", "localizer"),
+    "super_lio": (
+        "robot-super-lio.service",
+        "super_lio.service",
+        "super-lio.service",
+        "super_lio",
+    ),
+    "super_lio_relocation": (
+        "robot-super-lio-relocation.service",
+        "robot-super-lio-reloc.service",
+        "super_lio_relocation.service",
+        "super_lio_reloc.service",
+        "super-lio-relocation.service",
+        "super_lio_relocation",
+        "super_lio_reloc",
+    ),
 }
 
 
@@ -54,6 +75,8 @@ class ServiceManager:
                 timeout=3,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except Exception:
             return False
@@ -75,10 +98,21 @@ class ServiceManager:
                 self._started.remove(unit)
 
     def is_running(self, service: str) -> bool:
-        """Check if a logical service or any of its concrete units is active."""
-        return any(self._is_active_unit(unit) for unit in self._candidate_units(service))
+        """Check whether a logical service is active.
 
-    def start(self, *services: str) -> list[str]:
+        When the canonical robot-* unit exists, it is the source of truth. A
+        stale legacy alias such as camera.service should not make the manager
+        believe the camera stack is healthy or skip starting robot-camera.
+        """
+        candidates = self._candidate_units(service)
+        if not candidates:
+            return False
+        canonical = candidates[0]
+        if self._unit_exists(canonical):
+            return self._is_active_unit(canonical)
+        return any(self._is_active_unit(unit) for unit in candidates)
+
+    def start(self, *services: str, track_started: bool = True) -> list[str]:
         """Start services. Returns list of actually started logical services."""
         started = []
         for service in services:
@@ -93,11 +127,12 @@ class ServiceManager:
                     check=True,
                     capture_output=True,
                 )
-                self._started.append(unit)
+                if track_started:
+                    self._started.append(unit)
                 started.append(service)
                 logger.info("Started service %s via unit %s", service, unit)
             except subprocess.CalledProcessError as e:
-                stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else e.stderr
+                stderr = _subprocess_text(e.stderr)
                 logger.error("Failed to start %s: %s", service, str(stderr)[:100])
             except Exception as e:
                 logger.error("Failed to start %s: %s", service, e)
@@ -123,9 +158,9 @@ class ServiceManager:
                 except Exception as e:
                     logger.warning("Failed to stop %s (%s): %s", service, unit, e)
 
-    def ensure(self, *services: str) -> None:
+    def ensure(self, *services: str, track_started: bool = True) -> None:
         """Ensure services are running (start if not)."""
-        self.start(*services)
+        self.start(*services, track_started=track_started)
 
     def stop_all_started(self) -> None:
         """Stop all services that this manager started."""
@@ -166,5 +201,7 @@ SERVICES_LIDAR = ["lidar"]
 SERVICES_SLAM = ["slam"]
 SERVICES_SLAM_MAPPING = ["slam", "slam_pgo"]
 SERVICES_SLAM_NAV = ["slam", "localizer"]
+SERVICES_SUPER_LIO = ["lidar", "super_lio"]
+SERVICES_SUPER_LIO_RELOCATION = ["lidar", "super_lio_relocation"]
 SERVICES_CAMERA = ["camera"]
 SERVICES_HARDWARE = SERVICES_LIDAR + SERVICES_CAMERA

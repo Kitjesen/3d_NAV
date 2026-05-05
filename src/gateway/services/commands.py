@@ -13,6 +13,7 @@ COMMAND_JOURNAL_MAX_ENTRIES = 512
 COMMAND_RATE_POLICY_HZ: dict[str, float] = {
     "goal": 2.0,
     "navigate_click": 2.0,
+    "navigation_cancel": 2.0,
     "cmd_vel": 20.0,
     "stop": 5.0,
     "instruction": 1.0,

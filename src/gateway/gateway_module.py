@@ -19,6 +19,7 @@ REST
   POST /api/v1/goal          {x,y,z?,instruction?}
   POST /api/v1/cmd_vel       {vx,vy?,wz}
   POST /api/v1/stop
+  POST /api/v1/navigation/cancel {reason?, request_id?, client_id?}
   POST /api/v1/instruction   {text}
   POST /api/v1/mode          {mode: manual|autonomous|estop}
   POST /api/v1/lease         {action: acquire|release|renew, client_id, request_id?, ttl?}
@@ -33,6 +34,7 @@ SSE
   GET  /api/v1/events        event stream  (application/x-ndjson, chunked)
 WebSocket
   WS   /ws/teleop            {type:joy, lx,ly,az} | {type:stop}
+  WS   /ws/camera            binary JPEG frames
                              ← binary JPEG camera frames
   WS   /ws/cloud             ← binary point-cloud frames (quantized int16,
                                 see core.utils.binary_codec)
@@ -65,6 +67,7 @@ from core.registry import register
 from core.stream import In, Out
 from gateway.schemas import (
     BitrateRequest,
+    CancelRequest,
     ClickNavRequest,
     CmdVelRequest,
     GatewayErrorResponse,
@@ -81,11 +84,28 @@ from gateway.services.map_safety import (
     apply_dynamic_filter_step1half as _map_apply_dynamic_filter_step1half,
     safe_map_name as _map_safe_map_name,
 )
+from gateway.services.map_paths import (
+    active_map_name,
+    map_dir_for,
+)
+from gateway.services.runtime_status import (
+    backend_capability_defaults,
+    classify_pose_freshness,
+    localizer_algorithm_healthy,
+)
+from gateway.services.safety_status import (
+    SAFETY_STOP_BLOCKER,
+    safety_clear_for_motion,
+    safety_summary,
+)
 from gateway.services.traffic import (
     DEFAULT_CLOUD_QUEUE_MAXSIZE,
+    DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
     DEFAULT_SSE_QUEUE_MAXSIZE,
+    DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
     DROP_OLDEST_POLICY,
     RECOMMENDED_CLIENT_RATES_HZ,
+    normalize_sse_event,
     put_latest,
 )
 
@@ -95,6 +115,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _safe_map_name(name: str) -> str | None:
     """Validate a map name from user input. Return error message or None.
@@ -222,7 +256,7 @@ class GatewayModule(Module, layer=6):
 
     In:  odometry, scene_graph, safety_state, mission_status,
          execution_eval, dialogue_state
-    Out: goal_pose, cmd_vel, stop_cmd, instruction, mode_cmd
+    Out: goal_pose, cmd_vel, stop_cmd, cancel, instruction, mode_cmd
     """
 
     _run_in_main: bool = True
@@ -252,6 +286,7 @@ class GatewayModule(Module, layer=6):
     goal_pose:   Out[PoseStamped]
     cmd_vel:     Out[Twist]
     stop_cmd:    Out[int]    # 0=clear, 1=soft, 2=hard
+    cancel:      Out[str]
     instruction: Out[str]
     mode_cmd:    Out[str]
 
@@ -279,15 +314,29 @@ class GatewayModule(Module, layer=6):
         # Written from Module threads via push_event() (thread-safe).
         self._sse_lock:   threading.Lock = threading.Lock()
         self._sse_queues: list[asyncio.Queue] = []
+        self._sse_queue_loops: dict[asyncio.Queue, asyncio.AbstractEventLoop | None] = {}
         self._sse_queue_maxsize: int = DEFAULT_SSE_QUEUE_MAXSIZE
+        self._sse_event_seq: int = 0
         self._sse_published_events: int = 0
         self._sse_dropped_events: int = 0
         self._sse_max_depth_seen: int = 0
+        self._sse_raster_min_interval_s: float = max(
+            0.0,
+            _env_float("LINGTU_SSE_RASTER_MIN_INTERVAL_S", DEFAULT_SSE_RASTER_MIN_INTERVAL_S),
+        )
+        self._sse_slope_payload_enabled: bool = _env_bool(
+            "LINGTU_SSE_SLOPE_PAYLOAD",
+            DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
+        )
+        self._sse_raster_last_emit: dict[str, float] = {}
+        self._sse_suppressed_events: dict[str, int] = {}
 
         # Teleop: delegate to TeleopModule (set by on_system_modules)
         self._teleop_module = None
         self._teleop_clients:   int  = 0
+        self._teleop_clients_lock = threading.Lock()
         self._latest_jpeg:  bytes | None = None
+        self._latest_jpeg_seq: int = 0
         self._jpeg_lock: threading.Lock = threading.Lock()
 
         # Reference to MapManagerModule (set by on_system_modules)
@@ -339,6 +388,7 @@ class GatewayModule(Module, layer=6):
         self._latest_cloud_buf: bytes | None = None
         self._cloud_seq: int = 0
         self._cloud_subs: list[asyncio.Queue] = []
+        self._cloud_sub_loops: dict[asyncio.Queue, asyncio.AbstractEventLoop | None] = {}
         self._cloud_queue_maxsize: int = DEFAULT_CLOUD_QUEUE_MAXSIZE
         self._cloud_published_frames: int = 0
         self._cloud_dropped_frames: int = 0
@@ -359,9 +409,18 @@ class GatewayModule(Module, layer=6):
         # SLAM status SSE throttle (~1Hz at 10Hz odom)
         self._slam_status_throttle: int = 0
 
-        # Cached SLAM profile (fastlio2 / localizer / stopped) — refreshed every 5s
+        # Cached SLAM profile (fastlio2 / localizer / super_lio / stopped)
         self._cached_slam_profile: str = "—"
         self._slam_profile_ts: float = 0.0
+        self._brainstem_health_lock = threading.Lock()
+        self._brainstem_health_cache: dict[str, Any] | None = None
+        self._brainstem_health_cache_ts: float = 0.0
+        self._brainstem_health_refreshing: bool = False
+        self._brainstem_health_refresh_thread: threading.Thread | None = None
+        self._brainstem_health_cache_ttl_s: float = max(
+            0.0,
+            _env_float("LINGTU_BRAINSTEM_HEALTH_CACHE_S", 2.0),
+        )
 
         # SLAM drift watchdog — 兜底 Fast-LIO2 静置 IEKF 溢出 (xy 飞到万亿米级).
         # 每 interval 秒查 odom, 超阈值自动 stop+ensure slam.service 重置 IEKF.
@@ -376,6 +435,8 @@ class GatewayModule(Module, layer=6):
             os.environ.get("LINGTU_DRIFT_WATCHDOG_V_LIMIT", "10"))
         self._drift_watchdog_cooldown: float = float(
             os.environ.get("LINGTU_DRIFT_WATCHDOG_COOLDOWN", "300"))
+        self._drift_restart_delay_s: float = float(
+            os.environ.get("LINGTU_DRIFT_RESTART_DELAY_S", "2.0"))
         self._drift_last_restart_ts: float = 0.0
         self._drift_restart_count: int = 0
         self._drift_watchdog_thread: threading.Thread | None = None
@@ -393,21 +454,29 @@ class GatewayModule(Module, layer=6):
         # forwards here).
         self._session_mode: str = "idle"        # idle | mapping | navigating
         self._session_map: str | None = None    # active map name for navigating
+        self._session_slam_profile: str = "stopped"
         self._session_since: float = time.time()
         self._session_error: str = ""            # last error from start/end
         self._session_pending: bool = False      # True while transitioning
         self._icp_quality: float = 0.0           # from localization_quality
         self._localization_status: dict | None = None
 
-        # Autonomous exploration state + frontier explorer module ref
+        # Autonomous exploration state + explorer module refs
         self._exploring: bool = False
         self._frontier_explorer: Any = None
+        self._tare_explorer: Any = None
+        self._last_tare_stats: dict[str, Any] | None = None
+        self._exploration_supervisor_state: dict[str, Any] | None = None
 
         # TaggedLocationsModule ref (set by on_system_modules)
         self._tagged_loc_module: Any = None
 
         self._app   = None
+        self._server: Any = None
         self._server_thread: threading.Thread | None = None
+        self._client_http_prewarm_thread: threading.Thread | None = None
+        self._saved_map_loader_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
         self._defer_server: bool = False  # True → main thread runs uvicorn
 
     # -- lifecycle ----------------------------------------------------------
@@ -430,7 +499,9 @@ class GatewayModule(Module, layer=6):
         self.global_path.subscribe(self._on_global_path)
         self.local_path.subscribe(self._on_local_path)
         self.costmap.subscribe(self._on_costmap)
+        self.costmap.set_policy("latest")
         self.slope_grid.subscribe(self._on_slope_grid)
+        self.slope_grid.set_policy("latest")
         self.agent_message.subscribe(self._on_agent_message)
         self.gnss_fusion_health.subscribe(self._on_gnss_fusion_health)
         self.localization_status.subscribe(self._on_localization_status)
@@ -441,36 +512,139 @@ class GatewayModule(Module, layer=6):
 
     def start(self) -> None:
         super().start()
-        if not self._defer_server:
+        if self._stop_event.is_set():
+            self._stop_event = threading.Event()
+        stop_event = self._stop_event
+        if (
+            not self._defer_server
+            and (
+                self._server_thread is None
+                or not self._server_thread.is_alive()
+            )
+        ):
             self._server_thread = threading.Thread(
-                target=self._run_server, daemon=True, name="gateway"
+                target=self._run_server,
+                args=(stop_event,),
+                daemon=True,
+                name="gateway",
             )
             self._server_thread.start()
+            self._start_client_http_prewarm(stop_event, timeout_s=15.0)
         # Background: load active map.pcd from disk and push as saved_map
         # event so the frontend底图 always has the stored map regardless of
         # whether localizer has converged. Re-pushes periodically so late-
         # connecting SSE clients also get it.
-        self._saved_map_loader_thread = threading.Thread(
-            target=self._saved_map_loader_loop, daemon=True, name="saved_map_loader"
-        )
-        self._saved_map_loader_thread.start()
+        if (
+            self._saved_map_loader_thread is None
+            or not self._saved_map_loader_thread.is_alive()
+        ):
+            self._saved_map_loader_thread = threading.Thread(
+                target=self._saved_map_loader_loop,
+                args=(stop_event,),
+                daemon=True,
+                name="saved_map_loader",
+            )
+            self._saved_map_loader_thread.start()
 
         # Drift watchdog — 兜底 Fast-LIO2 静置 IEKF 溢出.
-        if self._drift_watchdog_enabled:
+        if (
+            self._drift_watchdog_enabled
+            and (
+                self._drift_watchdog_thread is None
+                or not self._drift_watchdog_thread.is_alive()
+            )
+        ):
             self._drift_watchdog_thread = threading.Thread(
-                target=self._drift_watchdog_loop, daemon=True, name="drift_watchdog",
+                target=self._drift_watchdog_loop,
+                args=(stop_event,),
+                daemon=True,
+                name="drift_watchdog",
             )
             self._drift_watchdog_thread.start()
 
         logger.info("GatewayModule started on %s:%d", self._host, self._port)
 
-    def _drift_watchdog_loop(self) -> None:
-        """Periodic sanity check on odom; restart slam.service if IEKF diverged.
+    def _start_client_http_prewarm(
+        self,
+        stop_event: threading.Event | None = None,
+        *,
+        timeout_s: float = 15.0,
+    ) -> bool:
+        stop_event = stop_event or self._stop_event
+        if stop_event.is_set():
+            return False
+        if (
+            self._client_http_prewarm_thread is not None
+            and self._client_http_prewarm_thread.is_alive()
+        ):
+            return False
+        self._client_http_prewarm_thread = threading.Thread(
+            target=self._prewarm_client_http_routes,
+            args=(stop_event,),
+            kwargs={"timeout_s": timeout_s},
+            daemon=True,
+            name="gateway_client_prewarm",
+        )
+        self._client_http_prewarm_thread.start()
+        return True
+
+    def _prewarm_client_http_routes(
+        self,
+        stop_event: threading.Event | None = None,
+        *,
+        timeout_s: float = 4.0,
+    ) -> bool:
+        """Consume first-use FastAPI/Pydantic cost before App/Web clients arrive."""
+        stop_event = stop_event or self._stop_event
+        if stop_event.is_set():
+            return False
+        try:
+            from urllib.error import URLError
+            from urllib.request import Request, urlopen
+        except Exception:
+            return False
+
+        headers: dict[str, str] = {}
+        try:
+            from gateway.auth import _get_configured_key
+
+            api_key = _get_configured_key()
+            if api_key:
+                headers["X-API-Key"] = api_key
+        except Exception:
+            pass
+
+        url = f"http://127.0.0.1:{self._port}/api/v1/app/capabilities"
+        deadline = time.time() + max(0.0, float(timeout_s))
+        while time.time() < deadline and not stop_event.is_set():
+            try:
+                request_timeout = min(2.5, max(0.1, deadline - time.time()))
+                with urlopen(
+                    Request(url, headers=headers),
+                    timeout=request_timeout,
+                ) as response:
+                    response.read()
+                logger.info("GatewayModule: prewarmed App/Web capabilities route")
+                return True
+            except (OSError, URLError):
+                stop_event.wait(0.1)
+            except Exception:
+                logger.debug(
+                    "GatewayModule: App/Web HTTP prewarm failed",
+                    exc_info=True,
+                )
+                return False
+        return False
+
+    def _drift_watchdog_loop(
+        self, stop_event: threading.Event | None = None
+    ) -> None:
+        """Periodic sanity check on odom; restart SLAM services if IEKF diverged.
 
         Fast-LIO2 IEKF co-variance grows unbounded under static poses (no new
         LiDAR observations to suppress it). After hours of idle, xy can blow
         out to trillions of metres. We detect via absolute bounds and restart
-        slam.service (+ the current session's companion services) to reset
+        the SLAM services (+ the current session's companion services) to reset
         the IEKF to zero.
 
         Cooldown: at most one restart per LINGTU_DRIFT_WATCHDOG_COOLDOWN
@@ -484,9 +658,9 @@ class GatewayModule(Module, layer=6):
             "drift_watchdog: enabled, interval=%.0fs, |xy|<%.0fm, |v|<%.1fm/s",
             interval, xy_lim, v_lim,
         )
-        while True:
+        stop_event = stop_event or self._stop_event
+        while not stop_event.wait(interval):
             try:
-                time.sleep(interval)
                 with self._state_lock:
                     odom = dict(self._odom) if self._odom else {}
                 if not odom:
@@ -511,19 +685,33 @@ class GatewayModule(Module, layer=6):
                     continue
                 logger.error(
                     "drift_watchdog: IEKF DIVERGED xy=(%.0f,%.0f) z=%.0f v=%.1f — "
-                    "restarting slam.service + session companions",
+                    "restarting SLAM services + session companions",
                     x, y, z, v,
                 )
-                self._drift_restart_do_restart(xy=x, y_abs=y, v=v)
+                if stop_event.is_set():
+                    return
+                self._drift_restart_do_restart(
+                    xy=x, y_abs=y, v=v, stop_event=stop_event
+                )
                 self._drift_last_restart_ts = time.time()
                 self._drift_restart_count += 1
             except Exception as e:
                 logger.exception("drift_watchdog tick failed: %s", e)
 
-    def _drift_restart_do_restart(self, *, xy: float, y_abs: float, v: float) -> None:
+    def _drift_restart_do_restart(
+        self,
+        *,
+        xy: float,
+        y_abs: float,
+        v: float,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         """Stop SLAM services, clear odom cache, ensure session-appropriate
         services back up. Pushes SSE event so Web shows a banner.
         """
+        stop_event = stop_event or self._stop_event
+        if stop_event.is_set():
+            return
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
@@ -531,8 +719,27 @@ class GatewayModule(Module, layer=6):
             logger.error("drift_watchdog: service_manager unavailable: %s", e)
             return
 
-        # Snapshot session mode BEFORE stopping services
+        # Snapshot runtime state BEFORE stopping services. The nav profile keeps
+        # SLAM/localizer alive even while the mission session is idle so App/Web
+        # readiness and map state remain fresh.
         mode = self._session_mode
+        service_names = (
+            "slam",
+            "slam_pgo",
+            "localizer",
+            "super_lio",
+            "super_lio_relocation",
+        )
+        running_before = {name: False for name in service_names}
+        for name in service_names:
+            try:
+                running_before[name] = bool(svc.is_running(name))
+            except Exception as e:
+                logger.warning(
+                    "drift_watchdog: failed to read service state for %s: %s",
+                    name,
+                    e,
+                )
 
         # Black-box dump must happen BEFORE svc.stop, otherwise the
         # localization_status / gnss / odom feeds dry up the moment slam exits
@@ -556,7 +763,13 @@ class GatewayModule(Module, layer=6):
             logger.warning("drift_watchdog: blackbox dump failed (continuing): %s", e)
 
         try:
-            svc.stop("slam", "slam_pgo", "localizer")
+            svc.stop(
+                "slam",
+                "slam_pgo",
+                "localizer",
+                "super_lio",
+                "super_lio_relocation",
+            )
         except Exception as e:
             logger.warning("drift_watchdog: svc.stop failed (continuing): %s", e)
 
@@ -578,21 +791,43 @@ class GatewayModule(Module, layer=6):
             evt["dump_path"] = str(dump_path)
         self.push_event(evt)
 
-        # Re-ensure based on session mode. idle → don't restart anything.
-        time.sleep(2.0)
+        # Re-ensure based on session mode. Idle restores any localization
+        # services that were already running before this watchdog reset.
+        if stop_event.wait(self._drift_restart_delay_s):
+            return
         try:
-            if mode in ("mapping", "exploring"):
-                svc.ensure("slam", "slam_pgo")
-                svc.wait_ready("slam", "slam_pgo", timeout=10.0)
+            restart_services: list[str] = []
+            if running_before.get("super_lio_relocation"):
+                restart_services = ["lidar", "super_lio_relocation"]
+            elif running_before.get("super_lio"):
+                restart_services = ["lidar", "super_lio"]
+            elif mode in ("mapping", "exploring"):
+                restart_services = ["slam", "slam_pgo"]
             elif mode == "navigating":
-                svc.ensure("slam", "localizer")
-                svc.wait_ready("slam", "localizer", timeout=10.0)
-            # idle: leave stopped; will be started when user picks a mode
-            logger.info("drift_watchdog: restart complete (mode=%s)", mode)
+                restart_services = ["slam", "localizer"]
+            else:
+                restart_services = [
+                    name for name in service_names if running_before.get(name)
+                ]
+                if (
+                    "localizer" in restart_services or "slam_pgo" in restart_services
+                ) and "slam" not in restart_services:
+                    restart_services.insert(0, "slam")
+
+            if restart_services and not stop_event.is_set():
+                svc.ensure(*restart_services)
+                svc.wait_ready(*restart_services, timeout=10.0)
+            logger.info(
+                "drift_watchdog: restart complete (mode=%s, restored=%s)",
+                mode,
+                ",".join(restart_services) if restart_services else "none",
+            )
         except Exception as e:
             logger.error("drift_watchdog: ensure failed: %s", e)
 
-    def _saved_map_loader_loop(self) -> None:
+    def _saved_map_loader_loop(
+        self, stop_event: threading.Event | None = None
+    ) -> None:
         """Watch active/map.pcd symlink; push saved_map ONCE per change.
 
         Previous behaviour: push every 10 s for "new clients". But the
@@ -601,18 +836,17 @@ class GatewayModule(Module, layer=6):
         when the active map actually changes, and cache `_last_saved_map`
         so new SSE connections get it once from the snapshot.
         """
-        import os, time as _t
         MAX_SEND = 80_000
         last_target = None
-        while True:
+        stop_event = stop_event or self._stop_event
+        while not stop_event.is_set():
             try:
-                active = os.path.expanduser("~/data/nova/maps/active")
-                target = os.readlink(active) if os.path.islink(active) else None
+                target = active_map_name()
                 if target != last_target:
                     last_target = target
-                    pcd_path = os.path.expanduser(f"~/data/nova/maps/{target}/map.pcd") if target else None
-                    if pcd_path and os.path.isfile(pcd_path):
-                        pts = self._load_pcd_xyz(pcd_path)
+                    pcd_path = map_dir_for(target) / "map.pcd" if target else None
+                    if pcd_path and pcd_path.is_file():
+                        pts = self._load_pcd_xyz(str(pcd_path))
                         if pts is not None and len(pts) > 0:
                             if len(pts) > MAX_SEND:
                                 idx = np.random.choice(len(pts), MAX_SEND, replace=False)
@@ -628,7 +862,7 @@ class GatewayModule(Module, layer=6):
                                 target, count)
             except Exception as e:
                 logger.debug("saved_map loader error: %s", e)
-            _t.sleep(5.0)
+            stop_event.wait(5.0)
 
     @staticmethod
     def _load_pcd_xyz(path: str) -> np.ndarray | None:
@@ -693,7 +927,40 @@ class GatewayModule(Module, layer=6):
         return None
 
     def stop(self) -> None:
-        self._server_thread = None
+        self._stop_event.set()
+        server = self._server
+        if server is not None:
+            try:
+                server.should_exit = True
+            except Exception:
+                logger.debug(
+                    "GatewayModule: failed to signal uvicorn shutdown",
+                    exc_info=True,
+                )
+
+        current = threading.current_thread()
+        for attr_name in (
+            "_server_thread",
+            "_client_http_prewarm_thread",
+            "_saved_map_loader_thread",
+            "_drift_watchdog_thread",
+            "_brainstem_health_refresh_thread",
+        ):
+            thread = getattr(self, attr_name, None)
+            if thread is None:
+                continue
+            if thread is current:
+                setattr(self, attr_name, None)
+                continue
+            if thread.is_alive():
+                thread.join(timeout=2.0)
+                if thread.is_alive():
+                    logger.warning(
+                        "GatewayModule: %s did not stop within timeout",
+                        thread.name,
+                    )
+                    continue
+            setattr(self, attr_name, None)
         super().stop()
 
     def on_system_modules(self, modules: dict[str, Any]) -> None:
@@ -707,11 +974,200 @@ class GatewayModule(Module, layer=6):
              if m.__class__.__name__ == "WavefrontFrontierExplorer"),
             None,
         )
+        self._tare_explorer = next(
+            (m for m in modules.values()
+             if m.__class__.__name__ == "TAREExplorerModule"),
+            None,
+        )
         self._tagged_loc_module = next(
             (m for m in modules.values()
              if m.__class__.__name__ == "TaggedLocationsModule"),
             None,
         )
+
+    def _explorer_backend(self) -> str:
+        if self._frontier_explorer is not None:
+            return "frontier"
+        if self._tare_explorer is not None:
+            return "tare"
+        return "none"
+
+    def _explorer_available(self) -> bool:
+        return self._explorer_backend() != "none"
+
+    def _explorer_unavailable_detail(self) -> dict[str, Any]:
+        return {
+            "reason": "explorer_backend_not_running",
+            "required_profile": "explore_or_tare_explore",
+            "supported_profiles": ["explore", "tare_explore"],
+            "action": (
+                "restart LingTu with the explore or tare_explore profile before "
+                "starting exploration"
+            ),
+        }
+
+    def _coerce_explorer_result(self, result: Any) -> Any:
+        if isinstance(result, str):
+            try:
+                return json.loads(result)
+            except Exception:
+                return result
+        return result
+
+    def _begin_exploration(self) -> Any:
+        if self._frontier_explorer is not None:
+            return self._coerce_explorer_result(
+                self._frontier_explorer.begin_exploration()
+            )
+        if self._tare_explorer is not None:
+            starter = getattr(
+                self._tare_explorer,
+                "start_tare_exploration",
+                None,
+            )
+            if starter is None:
+                starter = getattr(self._tare_explorer, "begin_exploration", None)
+            if starter is None:
+                raise RuntimeError("TARE explorer has no start method")
+            return self._coerce_explorer_result(starter())
+        raise RuntimeError("explorer_not_running")
+
+    def _end_exploration(self) -> Any:
+        if self._frontier_explorer is not None:
+            return self._coerce_explorer_result(
+                self._frontier_explorer.end_exploration()
+            )
+        if self._tare_explorer is not None:
+            stopper = getattr(
+                self._tare_explorer,
+                "stop_tare_exploration",
+                None,
+            )
+            if stopper is None:
+                stopper = getattr(self._tare_explorer, "end_exploration", None)
+            if stopper is None:
+                raise RuntimeError("TARE explorer has no stop method")
+            return self._coerce_explorer_result(stopper())
+        raise RuntimeError("explorer_not_running")
+
+    def _tare_status_payload(self) -> dict[str, Any]:
+        if self._tare_explorer is None:
+            return {}
+        raw_status: Any = {}
+        status_fn = getattr(self._tare_explorer, "get_tare_status", None)
+        if status_fn is not None:
+            try:
+                raw_status = self._coerce_explorer_result(status_fn())
+            except Exception as exc:
+                raw_status = {"error": str(exc)}
+        if not isinstance(raw_status, dict):
+            raw_status = {"raw": raw_status}
+        return {
+            "status": raw_status,
+            "stats": self._last_tare_stats or {},
+        }
+
+    def _exploration_status_payload(self) -> dict[str, Any]:
+        backend = self._explorer_backend()
+        readiness = self._exploration_start_readiness()
+        if backend == "none":
+            return {
+                "available": False,
+                "backend": "none",
+                "exploring": False,
+                "frontier_count": 0,
+                **readiness,
+                **self._explorer_unavailable_detail(),
+            }
+        if backend == "frontier":
+            health = {}
+            if hasattr(self._frontier_explorer, "health"):
+                try:
+                    health = self._frontier_explorer.health() or {}
+                except Exception as exc:
+                    health = {"error": str(exc)}
+            frontier_count = 0
+            if isinstance(health, dict):
+                try:
+                    frontier_count = int(health.get("frontier_count", 0) or 0)
+                except (TypeError, ValueError):
+                    frontier_count = 0
+            return {
+                "available": True,
+                "backend": "frontier",
+                "exploring": self._exploring,
+                "frontier_count": frontier_count,
+                **readiness,
+            }
+
+        tare = self._tare_status_payload()
+        tare_status = tare.get("status") if isinstance(tare, dict) else {}
+        tare_started = (
+            bool(tare_status.get("started"))
+            if isinstance(tare_status, dict)
+            else False
+        )
+        return {
+            "available": True,
+            "backend": "tare",
+            "exploring": bool(self._exploring or tare_started),
+            "frontier_count": 0,
+            "tare": tare,
+            "supervisor": self._exploration_supervisor_state or {},
+            **readiness,
+        }
+
+    def _exploration_start_readiness(self) -> dict[str, Any]:
+        blockers: list[str] = []
+        advisories: list[str] = []
+        navigation: dict[str, Any] = {}
+        exploration_ignored_nav_blockers = {"navigation_session_inactive"}
+
+        if not self._explorer_available():
+            blockers.append("explorer_backend_not_running")
+        if self._session_pending:
+            blockers.append("session_transition_pending")
+        if self._exploring:
+            blockers.append("exploration_already_active")
+        if str(self._session_mode or "idle").lower() != "idle":
+            blockers.append("session_not_idle")
+
+        try:
+            from gateway.services.runtime_status import build_navigation_status
+
+            navigation = build_navigation_status(self)
+            readiness = navigation.get("readiness") or {}
+            nav_blockers = readiness.get("blockers") or []
+            nav_advisories = readiness.get("advisories") or []
+            if isinstance(nav_blockers, list):
+                blockers.extend(
+                    str(code)
+                    for code in nav_blockers
+                    if str(code) not in exploration_ignored_nav_blockers
+                )
+            if isinstance(nav_advisories, list):
+                advisories.extend(str(code) for code in nav_advisories)
+            if (
+                not blockers
+                and not bool(readiness.get("can_execute_autonomy", False))
+                and not nav_blockers
+            ):
+                blockers.append("navigation_not_ready")
+        except Exception:
+            blockers.append("navigation_status_unavailable")
+
+        blockers = list(dict.fromkeys(blockers))
+        advisories = list(dict.fromkeys(advisories))
+        return {
+            "can_start": bool(self._explorer_available()) and not blockers,
+            "blockers": blockers,
+            "advisories": advisories,
+            "navigation": {
+                "state": navigation.get("state"),
+                "can_accept_goal": navigation.get("can_accept_goal"),
+                "readiness": navigation.get("readiness") or {},
+            },
+        }
 
     # -- teleop helpers (delegate to TeleopModule) ---------------------------
 
@@ -736,6 +1192,7 @@ class GatewayModule(Module, layer=6):
         """Called by TeleopModule when a new camera frame is ready."""
         with self._jpeg_lock:
             self._latest_jpeg = jpeg_bytes
+            self._latest_jpeg_seq += 1
 
     # -- Module subscription callbacks -------------------------------------
 
@@ -858,9 +1315,7 @@ class GatewayModule(Module, layer=6):
             import subprocess as _sp
             time.sleep(2.5)  # give localizer time to finish loading static map
             try:
-                map_dir = os.environ.get(
-                    "NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-                pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+                pcd_path = str(map_dir_for(map_name) / "map.pcd")
                 if not os.path.isfile(pcd_path):
                     logger.warning("auto-relocalize: map pcd missing: %s", pcd_path)
                     return
@@ -875,7 +1330,14 @@ class GatewayModule(Module, layer=6):
                       f"\"{{pcd_path: '{pcd_path}', x: {x}, y: {y}, z: 0.0, "
                       f"yaw: {yaw}, pitch: 0.0, roll: 0.0}}\""
                 )
-                r = _sp.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=20)
+                r = _sp.run(
+                    ["bash", "-c", cmd],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=20,
+                )
                 ok = "success=True" in r.stdout
                 logger.info("auto-relocalize: map=%s pose=(%.2f,%.2f,yaw=%.2f) ok=%s",
                             map_name, x, y, yaw, ok)
@@ -925,10 +1387,32 @@ class GatewayModule(Module, layer=6):
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
-            status = svc.status("slam", "slam_pgo", "localizer")
+            status = svc.status(
+                "slam",
+                "slam_pgo",
+                "localizer",
+                "super_lio",
+                "super_lio_relocation",
+            )
             slam_active = status.get("slam") in ("running", "active")
             pgo_active = status.get("slam_pgo") in ("running", "active")
             loc_active = status.get("localizer") in ("running", "active")
+            super_lio_active = status.get("super_lio") in ("running", "active")
+            super_lio_relocation_active = status.get(
+                "super_lio_relocation"
+            ) in ("running", "active")
+            if super_lio_relocation_active:
+                return "navigating", self._session_active_map_name()
+            if super_lio_active:
+                if self._exploring:
+                    return "exploring", None
+                if self._session_mode in ("mapping", "navigating"):
+                    return self._session_mode, (
+                        self._session_active_map_name()
+                        if self._session_mode == "navigating"
+                        else None
+                    )
+                return "mapping", None
             if loc_active and slam_active:
                 return "navigating", self._session_active_map_name()
             if pgo_active and slam_active:
@@ -943,15 +1427,7 @@ class GatewayModule(Module, layer=6):
 
     def _session_active_map_name(self) -> str | None:
         """Read active map symlink target."""
-        import os
-        maps_dir = os.path.expanduser("~/data/nova/maps")
-        active = os.path.join(maps_dir, "active")
-        if not os.path.islink(active):
-            return None
-        try:
-            return os.readlink(active)
-        except OSError:
-            return None
+        return active_map_name()
 
     def _session_snapshot(self) -> dict:
         """Full session state for GET /session + SSE."""
@@ -959,27 +1435,52 @@ class GatewayModule(Module, layer=6):
         has_tomogram = False
         has_pcd = False
         if active_map:
-            import os
-            base = os.path.expanduser(f"~/data/nova/maps/{active_map}")
-            has_pcd = os.path.isfile(os.path.join(base, "map.pcd"))
-            has_tomogram = os.path.isfile(os.path.join(base, "tomogram.pickle"))
+            base = map_dir_for(active_map)
+            has_pcd = (base / "map.pcd").is_file()
+            has_tomogram = (base / "tomogram.pickle").is_file()
         icp = self._icp_quality
         localization_status = self._localization_status or {}
-        reported_state = str(localization_status.get("state", "") or "").upper()
-        degeneracy = str(localization_status.get("degeneracy", "") or "").upper()
-        localizer_health = str(
-            localization_status.get("localizer_health", "") or ""
-        ).upper()
-        confidence = localization_status.get("confidence")
-        confidence_ok = not isinstance(confidence, (int, float)) or confidence >= 0.5
+        slam_profile = self._get_slam_profile()
+        backend = str(
+            localization_status.get("backend")
+            or slam_profile
+            or self._session_slam_profile
+            or "stopped"
+        ).lower()
+        pose_fresh, pose_freshness = classify_pose_freshness(localization_status)
+        algorithm_healthy = localizer_algorithm_healthy(localization_status, icp)
+        confidence_ok = pose_fresh is not False
         loc_ready = (
-            icp > 0.0
-            and icp < 0.5
-            and reported_state in {"", "TRACKING", "OK", "READY"}
-            and degeneracy not in {"MILD", "MODERATE", "SEVERE", "CRITICAL"}
-            and localizer_health in {"", "UNKNOWN", "LOCKED", "RECOVERED", "OK", "READY"}
+            algorithm_healthy
             and confidence_ok
         )
+        capability_defaults = backend_capability_defaults(backend)
+        relocalization_supported = localization_status.get("relocalization_supported")
+        if relocalization_supported is None:
+            relocalization_supported = capability_defaults["relocalization_supported"]
+        saved_map_relocalization_supported = localization_status.get(
+            "saved_map_relocalization_supported"
+        )
+        if saved_map_relocalization_supported is None:
+            saved_map_relocalization_supported = relocalization_supported
+        restart_recovery_supported = localization_status.get(
+            "restart_recovery_supported"
+        )
+        if restart_recovery_supported is None:
+            restart_recovery_supported = capability_defaults[
+                "restart_recovery_supported"
+            ]
+        recovery_method = localization_status.get("recovery_method")
+        if not recovery_method:
+            recovery_method = capability_defaults["recovery_method"]
+        map_save_supported = localization_status.get("map_save_supported")
+        if map_save_supported is None:
+            map_save_supported = backend in {"super_lio", "fastlio2", "slam"}
+        map_save_source = localization_status.get("map_save_source")
+        if map_save_source is None and backend == "super_lio":
+            map_save_source = "live_map_cloud_snapshot"
+        if map_save_source is None and backend == "super_lio_relocation":
+            map_save_source = "active_map"
         # Gate which transitions are allowed from current state.
         idle = self._session_mode == "idle" and not self._session_pending
         can_start_mapping = idle
@@ -989,10 +1490,52 @@ class GatewayModule(Module, layer=6):
             and has_pcd
             and has_tomogram
         )
-        can_start_exploring = idle and self._frontier_explorer is not None
+        explorer_backend = self._explorer_backend()
+        explorer_available = explorer_backend != "none"
+        explorer_detail = (
+            {} if explorer_available else self._explorer_unavailable_detail()
+        )
+        explorer_unavailable_reason = (
+            None if explorer_available else explorer_detail.get("reason")
+        )
+        explorer_required_profile = (
+            None if explorer_available else explorer_detail.get("required_profile")
+        )
+        safety = safety_summary(self._safety)
+        safety_clear = safety_clear_for_motion(self._safety)
+        exploration_blockers: list[str] = []
+        if not explorer_available:
+            exploration_blockers.append("explorer_backend_not_running")
+        if self._session_pending:
+            exploration_blockers.append("session_transition_pending")
+        if self._exploring:
+            exploration_blockers.append("exploration_already_active")
+        if str(self._session_mode or "idle").lower() != "idle":
+            exploration_blockers.append("session_not_idle")
+        if self._mode == "estop":
+            exploration_blockers.append("estop_active")
+        if not safety_clear:
+            exploration_blockers.append(SAFETY_STOP_BLOCKER)
+        if self._odom is None:
+            exploration_blockers.append("odometry_missing")
+        localization_state = str(localization_status.get("state") or "").strip().lower()
+        if localization_state in {"degraded", "lost", "relocalizing", "initializing"}:
+            exploration_blockers.append(f"localization_{localization_state}")
+        recovery_signal = str(
+            localization_status.get("recovery_signal") or ""
+        ).strip().upper()
+        if recovery_signal not in {"", "NONE", "RECOVERED"}:
+            exploration_blockers.append("localization_recovery_active")
+        if pose_fresh is False and algorithm_healthy:
+            exploration_blockers.append("pose_stale")
+        exploration_blockers = list(dict.fromkeys(exploration_blockers))
+        can_start_exploring = not exploration_blockers
         can_end = self._session_mode != "idle" and not self._session_pending
         return {
             "mode": self._session_mode,
+            "slam_profile": slam_profile,
+            "localization_backend": backend,
+            "health_source": localization_status.get("health_source"),
             "active_map": active_map,
             "map_has_pcd": has_pcd,
             "map_has_tomogram": has_tomogram,
@@ -1001,11 +1544,32 @@ class GatewayModule(Module, layer=6):
             "error": self._session_error,
             "icp_quality": icp,
             "localizer_ready": loc_ready,
+            "localizer_algorithm_healthy": algorithm_healthy,
+            "pose_fresh": pose_fresh,
+            "pose_freshness": pose_freshness,
+            "map_state": localization_status.get("map_state"),
+            "map_save_supported": bool(map_save_supported),
+            "map_save_source": map_save_source,
+            "relocalization_supported": bool(relocalization_supported),
+            "saved_map_relocalization_supported": bool(
+                saved_map_relocalization_supported
+            ),
+            "restart_recovery_supported": bool(restart_recovery_supported),
+            "recovery_method": recovery_method,
+            "relocalization_state": localization_status.get("relocalization_state"),
+            "recovery_signal": localization_status.get("recovery_signal"),
+            "recovery_action": localization_status.get("recovery_action"),
             "can_start_mapping": can_start_mapping,
             "can_start_navigating": can_start_navigating,
             "can_start_exploring": can_start_exploring,
+            "exploration_blockers": exploration_blockers,
+            "safety_clear": safety_clear,
+            "safety": safety,
             "can_end": can_end,
-            "explorer_available": self._frontier_explorer is not None,
+            "explorer_backend": explorer_backend,
+            "explorer_available": explorer_available,
+            "explorer_unavailable_reason": explorer_unavailable_reason,
+            "explorer_required_profile": explorer_required_profile,
         }
 
     def _on_saved_map(self, cloud: PointCloud2) -> None:
@@ -1141,7 +1705,7 @@ class GatewayModule(Module, layer=6):
         })
 
     def _get_slam_profile(self) -> str:
-        """Return current SLAM profile (cached 5s): fastlio2 / localizer / stopped."""
+        """Return current SLAM profile (cached 5s)."""
         now = time.time()
         if now - self._slam_profile_ts < 5.0:
             return self._cached_slam_profile
@@ -1149,8 +1713,18 @@ class GatewayModule(Module, layer=6):
         try:
             from core.service_manager import get_service_manager
             svc = get_service_manager()
-            services = svc.status("slam_pgo", "localizer", "slam")
-            if services.get("slam_pgo") in ("running", "active"):
+            services = svc.status(
+                "super_lio_relocation",
+                "super_lio",
+                "slam_pgo",
+                "localizer",
+                "slam",
+            )
+            if services.get("super_lio_relocation") in ("running", "active"):
+                profile = "super_lio_relocation"
+            elif services.get("super_lio") in ("running", "active"):
+                profile = "super_lio"
+            elif services.get("slam_pgo") in ("running", "active"):
                 profile = "fastlio2"
             elif services.get("localizer") in ("running", "active"):
                 profile = "localizer"
@@ -1244,6 +1818,64 @@ class GatewayModule(Module, layer=6):
         if not isinstance(state, dict):
             return
         d = dict(state)
+        profile = self._get_slam_profile()
+        if profile and profile != "—":
+            d["backend"] = profile
+        capability_defaults = backend_capability_defaults(profile)
+        if profile in {"super_lio", "super_lio_relocation"}:
+            d.setdefault("health_source", "odom_map_cloud")
+            d["relocalization_supported"] = False
+            d["saved_map_relocalization_supported"] = False
+            d.setdefault("relocalization_state", "unsupported")
+            d["map_save_supported"] = profile == "super_lio"
+            d.setdefault(
+                "map_save_source",
+                (
+                    "live_map_cloud_snapshot"
+                    if profile == "super_lio"
+                    else "active_map"
+                ),
+            )
+            if "map_state" not in d:
+                d["map_state"] = (
+                    (
+                        "live_map_cloud"
+                        if profile == "super_lio"
+                        else "relocation_map_cloud"
+                    )
+                    if d.get("map_cloud_fresh")
+                    else "map_cloud_stale"
+                )
+            if "localizer_health" not in d:
+                state_name = str(d.get("state", "") or "").upper()
+                if state_name in {"LOST", "UNINIT", "UNINITIALIZED"}:
+                    d["localizer_health"] = "LIO_LOST"
+                elif state_name in {"DIVERGED"}:
+                    d["localizer_health"] = "LIO_DIVERGED"
+                elif state_name in {"DEGRADED", "FALLBACK_GNSS_ONLY"}:
+                    d["localizer_health"] = "LIO_DEGRADED"
+                else:
+                    d["localizer_health"] = "LIO_TRACKING"
+        elif profile == "localizer":
+            d.setdefault("relocalization_supported", True)
+            d.setdefault("saved_map_relocalization_supported", True)
+        elif profile in {"fastlio2", "slam"}:
+            d.setdefault("relocalization_supported", False)
+            d.setdefault("saved_map_relocalization_supported", False)
+        d.setdefault(
+            "saved_map_relocalization_supported",
+            d.get(
+                "relocalization_supported",
+                capability_defaults["saved_map_relocalization_supported"],
+            ),
+        )
+        d.setdefault(
+            "restart_recovery_supported",
+            capability_defaults["restart_recovery_supported"],
+        )
+        d.setdefault("recovery_method", capability_defaults["recovery_method"])
+        d["_gateway_received_ts"] = time.time()
+        d["_gateway_received_mono"] = time.monotonic()
         with self._state_lock:
             self._localization_status = d
         self._blackbox.record("slam_diag", d)
@@ -1252,12 +1884,16 @@ class GatewayModule(Module, layer=6):
     def _on_tare_stats(self, stats: dict) -> None:
         """Forward TAREExplorerModule tare_stats to SSE (type=tare_stats)."""
         d = stats if isinstance(stats, dict) else {"raw": str(stats)}
+        with self._state_lock:
+            self._last_tare_stats = dict(d)
         self.push_event({"type": "tare_stats", "data": d})
 
     def _on_exploration_supervisor(self, state: dict) -> None:
         """Forward ExplorationSupervisorModule supervisor_state to SSE
         (type=exploration_supervisor). Dashboards show mode + reason."""
         d = state if isinstance(state, dict) else {"raw": str(state)}
+        with self._state_lock:
+            self._exploration_supervisor_state = dict(d)
         self.push_event({"type": "exploration_supervisor", "data": d})
 
     def _on_global_path(self, path: list) -> None:
@@ -1299,6 +1935,8 @@ class GatewayModule(Module, layer=6):
         grid = cm.get("grid")
         if grid is None:
             return
+        if not self._should_emit_sse_raster("costmap"):
+            return
         try:
             import base64 as _b64
 
@@ -1335,27 +1973,43 @@ class GatewayModule(Module, layer=6):
         grid = data.get("grid")
         if grid is None:
             return
+        if not self._should_emit_sse_raster("slope_grid"):
+            return
         try:
             import base64 as _b64
 
             import numpy as _np
-            # Encode slope degrees as uint8 (0-90° → 0-255)
-            g = _np.clip(grid * (255.0 / 90.0), 0, 255).astype(_np.uint8)
-            rows = int(g.shape[0])
-            cols = int(g.shape[1]) if g.ndim >= 2 else rows
+            # Shape metadata is cheap; inline raster payload is optional.
+            arr = _np.asarray(grid)
+            rows = int(arr.shape[0])
+            cols = int(arr.shape[1]) if arr.ndim >= 2 else rows
             origin = [float(v) for v in data.get("origin", [0.0, 0.0])]
             # Same reasoning as _on_costmap — slope grid origin is already in
             # map frame since SlamBridge upstream.
             yaw = 0.0
-            self.push_event({
+            event: dict[str, Any] = {
                 "type":       "slope_grid",
-                "grid_b64":   _b64.b64encode(g.tobytes()).decode(),
+                "available":  True,
                 "rows":       rows,
                 "cols":       cols,
                 "resolution": float(data.get("resolution", 0.2)),
                 "origin":     origin,
                 "yaw":        float(yaw),
-            })
+            }
+            if self._sse_slope_payload_enabled:
+                g = _np.clip(arr * (255.0 / 90.0), 0, 255).astype(_np.uint8)
+                event.update({
+                    "payload": "inline",
+                    "encoding": "uint8_slope_degrees_0_90",
+                    "grid_b64": _b64.b64encode(g.tobytes()).decode(),
+                })
+            else:
+                event.update({
+                    "payload": "omitted",
+                    "reason": "inline_payload_disabled",
+                    "encoding": "uint8_slope_degrees_0_90",
+                })
+            self.push_event(event)
         except Exception as exc:
             logger.debug("_on_slope_grid serialize failed: %s", exc)
 
@@ -1372,27 +2026,98 @@ class GatewayModule(Module, layer=6):
         except Exception as exc:
             logger.debug("_on_agent_message serialize failed: %s", exc)
 
+    def _should_emit_sse_raster(self, event_type: str) -> bool:
+        """Gate expensive raster SSE payloads before serialization."""
+        with self._sse_lock:
+            if not self._sse_queues:
+                return False
+            interval = max(0.0, float(self._sse_raster_min_interval_s))
+            now = time.monotonic()
+            last = self._sse_raster_last_emit.get(event_type)
+            if interval > 0 and last is not None and now - last < interval:
+                self._sse_suppressed_events[event_type] = (
+                    self._sse_suppressed_events.get(event_type, 0) + 1
+                )
+                return False
+            self._sse_raster_last_emit[event_type] = now
+            return True
+
     # -- SSE fan-out --------------------------------------------------------
+
+    @staticmethod
+    def _running_loop_or_none() -> asyncio.AbstractEventLoop | None:
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+
+    @staticmethod
+    def _call_queue_put_latest(
+        q: asyncio.Queue,
+        item: Any,
+        loop: asyncio.AbstractEventLoop | None,
+        record: Callable[[bool, int], None],
+    ) -> None:
+        def _put_and_record() -> None:
+            dropped = put_latest(q, item)
+            record(dropped, q.qsize())
+
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(_put_and_record)
+                return
+            except RuntimeError:
+                pass
+        _put_and_record()
+
+    def _record_sse_delivery(self, dropped: bool, depth: int) -> None:
+        with self._sse_lock:
+            if dropped:
+                self._sse_dropped_events += 1
+            self._sse_max_depth_seen = max(self._sse_max_depth_seen, depth)
+
+    def _record_cloud_delivery(self, dropped: bool, depth: int) -> None:
+        with self._cloud_lock:
+            if dropped:
+                self._cloud_dropped_frames += 1
+            self._cloud_max_depth_seen = max(self._cloud_max_depth_seen, depth)
 
     def push_event(self, event: dict) -> None:
         """Thread-safe: push an event to all connected SSE clients."""
         with self._sse_lock:
-            queues = list(self._sse_queues)
-        dropped = 0
-        max_depth = 0
-        for q in queues:
-            if put_latest(q, event):
-                dropped += 1
-            max_depth = max(max_depth, q.qsize())
-        with self._sse_lock:
+            self._sse_event_seq += 1
+            event_id = self._sse_event_seq
+            subscribers = [
+                (q, self._sse_queue_loops.get(q))
+                for q in self._sse_queues
+            ]
             self._sse_published_events += 1
-            self._sse_dropped_events += dropped
-            self._sse_max_depth_seen = max(self._sse_max_depth_seen, max_depth)
+        payload = normalize_sse_event(event, event_id=event_id)
+        for q, loop in subscribers:
+            self._call_queue_put_latest(q, payload, loop, self._record_sse_delivery)
+
+    def _next_sse_event_id(self) -> int:
+        with self._sse_lock:
+            self._sse_event_seq += 1
+            return self._sse_event_seq
+
+    def _sse_subscribe_with_event_id(self) -> tuple[asyncio.Queue, int]:
+        """Subscribe and reserve the first snapshot event id atomically."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_maxsize)
+        loop = self._running_loop_or_none()
+        with self._sse_lock:
+            self._sse_event_seq += 1
+            event_id = self._sse_event_seq
+            self._sse_queues.append(q)
+            self._sse_queue_loops[q] = loop
+        return q, event_id
 
     def _sse_subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=self._sse_queue_maxsize)
+        loop = self._running_loop_or_none()
         with self._sse_lock:
             self._sse_queues.append(q)
+            self._sse_queue_loops[q] = loop
         return q
 
     def _sse_unsubscribe(self, q: asyncio.Queue) -> None:
@@ -1401,6 +2126,7 @@ class GatewayModule(Module, layer=6):
                 self._sse_queues.remove(q)
             except ValueError:
                 pass
+            self._sse_queue_loops.pop(q, None)
 
     # -- Binary cloud fan-out ----------------------------------------------
 
@@ -1409,24 +2135,22 @@ class GatewayModule(Module, layer=6):
         with self._cloud_lock:
             self._latest_cloud_buf = buf
             self._cloud_seq += 1
-            subs = list(self._cloud_subs)
-        dropped = 0
-        max_depth = 0
-        for q in subs:
-            if put_latest(q, buf):
-                dropped += 1
-            max_depth = max(max_depth, q.qsize())
-        with self._cloud_lock:
+            subscribers = [
+                (q, self._cloud_sub_loops.get(q))
+                for q in self._cloud_subs
+            ]
             self._cloud_published_frames += 1
-            self._cloud_dropped_frames += dropped
-            self._cloud_max_depth_seen = max(self._cloud_max_depth_seen, max_depth)
+        for q, loop in subscribers:
+            self._call_queue_put_latest(q, buf, loop, self._record_cloud_delivery)
 
     def _cloud_subscribe(self) -> tuple[asyncio.Queue, bytes | None]:
         # maxsize=2 keeps memory bounded; cloud frames supersede each other,
         # so a backlog longer than that is wasted bandwidth.
         q: asyncio.Queue = asyncio.Queue(maxsize=self._cloud_queue_maxsize)
+        loop = self._running_loop_or_none()
         with self._cloud_lock:
             self._cloud_subs.append(q)
+            self._cloud_sub_loops[q] = loop
             latest = self._latest_cloud_buf
         return q, latest
 
@@ -1436,6 +2160,7 @@ class GatewayModule(Module, layer=6):
                 self._cloud_subs.remove(q)
             except ValueError:
                 pass
+            self._cloud_sub_loops.pop(q, None)
 
     def _traffic_stats_snapshot(self) -> dict[str, Any]:
         with self._sse_lock:
@@ -1445,8 +2170,12 @@ class GatewayModule(Module, layer=6):
                 "queue_maxsize": self._sse_queue_maxsize,
                 "queue_depths": sse_depths,
                 "max_depth_seen": self._sse_max_depth_seen,
+                "latest_event_id": self._sse_event_seq,
                 "published_events": self._sse_published_events,
                 "dropped_events": self._sse_dropped_events,
+                "suppressed_events": dict(self._sse_suppressed_events),
+                "raster_min_interval_s": self._sse_raster_min_interval_s,
+                "slope_grid_inline": self._sse_slope_payload_enabled,
                 "drop_policy": DROP_OLDEST_POLICY,
             }
         with self._cloud_lock:
@@ -1470,6 +2199,31 @@ class GatewayModule(Module, layer=6):
     def _command_stats_snapshot(self) -> dict[str, Any]:
         return self._command_journal.snapshot()
 
+    def _publish_command_ack(
+        self,
+        payload: dict[str, Any],
+        *,
+        status_code: int | None = None,
+    ) -> None:
+        """Publish a lightweight command acknowledgement for App/Web clients."""
+        if not isinstance(payload, dict):
+            return
+        command = payload.get("command")
+        if not isinstance(command, dict):
+            return
+        data = {
+            "schema_version": 1,
+            "ok": bool(payload.get("ok", False)),
+            "status": payload.get("status"),
+            "error": payload.get("error"),
+            "message": payload.get("message"),
+            "command": command,
+            "detail": payload.get("detail"),
+            "status_code": status_code,
+            "ts": time.time(),
+        }
+        self.push_event({"type": "command_ack", "data": data})
+
     def _run_control_command(
         self,
         command: str,
@@ -1480,10 +2234,32 @@ class GatewayModule(Module, layer=6):
         client_id = getattr(body, "client_id", None) if body is not None else None
         replay = self._command_journal.replay(command, request_id)
         if replay is not None:
+            self._publish_command_ack(replay, status_code=200)
             return replay
-        return self._command_journal.accept(command, request_id, client_id, action())
+        response = self._command_journal.accept(
+            command,
+            request_id,
+            client_id,
+            action(),
+        )
+        self._publish_command_ack(response, status_code=200)
+        return response
 
     # -- teleop internals (forwarded to TeleopModule) -------------------------
+
+    def _teleop_client_connected(self) -> int:
+        with self._teleop_clients_lock:
+            self._teleop_clients += 1
+            return self._teleop_clients
+
+    def _teleop_client_disconnected(self) -> int:
+        with self._teleop_clients_lock:
+            self._teleop_clients = max(0, self._teleop_clients - 1)
+            return self._teleop_clients
+
+    def _teleop_client_count(self) -> int:
+        with self._teleop_clients_lock:
+            return self._teleop_clients
 
     def _teleop_on_joy(self, lx: float, ly: float, az: float) -> None:
         """Forward raw joystick input to TeleopModule via joy_input port."""
@@ -1540,6 +2316,7 @@ class GatewayModule(Module, layer=6):
             register_camera_routes,
             register_command_routes,
             register_diagnostic_routes,
+            map_lifecycle_payload,
             register_map_routes,
             register_operation_routes,
             register_realtime_routes,
@@ -1573,9 +2350,13 @@ class GatewayModule(Module, layer=6):
         async def post_maps(body: MapRequest):
             mgr = gw._map_mgr
             if mgr is None:
+                message = "MapManagerModule not running"
                 return JSONResponse(
                     status_code=503,
-                    content={"error": "MapManagerModule not running"},
+                    content=GatewayErrorResponse(
+                        error=message,
+                        message=message,
+                    ).model_dump(),
                 )
             # Deliver command via Module port (synchronous one-shot)
             result: list[dict] = []
@@ -1603,23 +2384,41 @@ class GatewayModule(Module, layer=6):
 
             resp = result[0] if result else {"success": False, "message": "no response"}
             if not resp.get("success"):
+                message = str(resp.get("message") or "failed")
                 return JSONResponse(
                     status_code=400,
-                    content={"error": resp.get("message", "failed"), "detail": resp},
+                    content=GatewayErrorResponse(
+                        error=message,
+                        message=message,
+                        detail=resp,
+                    ).model_dump(),
                 )
-            return resp
+            legacy = dict(resp)
+            legacy.pop("success", None)
+            return map_lifecycle_payload(True, **legacy)
 
         register_auth_routes(app)
         register_app_routes(app, gw)
-        register_camera_routes(app)
+        register_camera_routes(app, gw)
         register_realtime_routes(app, gw)
         mount_dashboard_assets(app)
+        try:
+            from gateway.services.app_bootstrap import prewarm_app_capability_contracts
+
+            prewarm_app_capability_contracts(gw)
+        except Exception:
+            logger.debug(
+                "GatewayModule: App/Web capability contract prewarm failed",
+                exc_info=True,
+            )
 
         return app
 
-    def _run_server(self) -> None:
+    def _run_server(self, stop_event: threading.Event | None = None) -> bool:
         if self._app is None:
-            return
+            logger.error("uvicorn server cannot start: FastAPI app is not configured")
+            return False
+        stop_event = stop_event or self._stop_event
         # Reduce GIL switch interval so uvicorn's event loop gets CPU time
         # even when LiDAR/DDS callbacks are active in other threads.
         # Default is 5ms; 1ms gives the event loop ~10x more scheduling chances.
@@ -1632,7 +2431,8 @@ class GatewayModule(Module, layer=6):
             uvicorn = _uv
         except ImportError:
             logger.error("uvicorn not installed — run: pip install 'uvicorn[standard]'")
-            return
+            return False
+        server = None
         try:
             # uvloop only ships for Linux/macOS; "auto" picks uvloop where
             # available and falls back to asyncio on Windows.
@@ -1648,12 +2448,24 @@ class GatewayModule(Module, layer=6):
                 ws_max_size=2 * 1024 * 1024,  # 2 MB — enough for 1080p JPEG
             )
             server = uvicorn.Server(config)
+            self._server = server
+            if stop_event.is_set():
+                server.should_exit = True
             logger.info("uvicorn server.run() starting on %s:%d", self._host, self._port)
             server.run()
-            logger.error("uvicorn server.run() returned unexpectedly")
+            if bool(getattr(server, "should_exit", False)) or bool(
+                getattr(server, "force_exit", False)
+            ):
+                logger.info("uvicorn server stopped cleanly")
+                return True
+            logger.error("uvicorn server.run() returned without a shutdown signal")
+            return False
         except Exception:
             logger.exception("uvicorn crashed")
+            return False
         finally:
+            if server is not None and self._server is server:
+                self._server = None
             sys.setswitchinterval(old_interval)
 
     # -- health -------------------------------------------------------------
@@ -1668,7 +2480,7 @@ class GatewayModule(Module, layer=6):
         info["gateway"] = {
             "port":        self._port,
             "sse_clients": n_sse,
-            "teleop_clients": self._teleop_clients,
+            "teleop_clients": self._teleop_client_count(),
             "teleop_active": self._teleop_active,
             "has_odom":    self._odom is not None,
             "has_sg":      self._sg_json != "{}",
@@ -1705,7 +2517,8 @@ class GatewayModule(Module, layer=6):
                  "source /opt/ros/humble/setup.bash && "
                  "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
                  "timeout 3 ros2 topic hz /nav/odometry 2>&1 | tail -5"],
-                capture_output=True, text=True, timeout=5)
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=5)
             m = re.search(r"average rate: ([\d.]+)", r.stdout)
             if m:
                 self._slam_hz_value = float(m.group(1))
@@ -1728,7 +2541,8 @@ class GatewayModule(Module, layer=6):
                  "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
                  f"ros2 service call /nav/save_map interface/srv/SaveMaps "
                  f"\"{{file_path: '{tmp}'}}\""],
-                capture_output=True, text=True, timeout=15)
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=15)
         except Exception:
             pass
 
@@ -1757,9 +2571,7 @@ class GatewayModule(Module, layer=6):
 
     def _generate_viewer_from_pcd(self, map_name: str) -> str:
         """Load a saved PCD file and generate viewer HTML (does NOT touch live data)."""
-        import os
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-        pcd_path = os.path.join(map_dir, map_name, "map.pcd")
+        pcd_path = str(map_dir_for(map_name) / "map.pcd")
         if not os.path.isfile(pcd_path):
             return f"<html><body style='background:#0a0a0f;color:#fff;font-family:monospace;padding:40px'><h2>地图不存在: {map_name}</h2><p>找不到 {pcd_path}</p></body></html>"
 

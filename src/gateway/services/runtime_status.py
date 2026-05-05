@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping
 from typing import Any
+
+from gateway.services.safety_status import (
+    SAFETY_STOP_BLOCKER,
+    safety_stop_active,
+    safety_summary,
+)
 
 
 LOCALIZATION_STATUS_SCHEMA_VERSION = 1
@@ -42,6 +49,23 @@ CONTROL_SOURCE_META: dict[str, dict[str, Any]] = {
     },
 }
 
+TRACKING_STATES = {"TRACKING", "OK", "READY"}
+LOST_STATES = {"LOST", "UNINIT", "UNINITIALIZED"}
+DEGRADED_STATES = {"DEGRADED", "FALLBACK_GNSS_ONLY"}
+ADVISORY_DEGENERACY = {"MILD"}
+BAD_DEGENERACY = {"MODERATE", "SEVERE", "CRITICAL"}
+GOOD_LOCALIZER_HEALTH = {
+    "",
+    "UNKNOWN",
+    "LOCKED",
+    "RECOVERED",
+    "OK",
+    "READY",
+    "LIO_TRACKING",
+    "LIO_RECOVERED",
+}
+POSE_FRESH_MAX_ODOM_AGE_MS = 2000.0
+
 
 def _mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
@@ -63,6 +87,84 @@ def _as_float(value: Any, default: float | None = None) -> float | None:
         return default
 
 
+def _finite_float(value: Any) -> float | None:
+    parsed = _as_float(value, None)
+    if parsed is None or not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _session_mode(session: Mapping[str, Any]) -> str:
+    mode = str(session.get("mode") or "unknown").strip().lower()
+    return mode or "unknown"
+
+
+def _point_payload(
+    value: Any,
+    *,
+    frame_id: str = "map",
+    ts: float | None = None,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    metadata: dict[str, Any] = {}
+    yaw: float | None = None
+    point_frame = frame_id
+    point_ts = ts
+
+    if isinstance(value, Mapping):
+        x = _finite_float(value.get("x"))
+        y = _finite_float(value.get("y"))
+        z = _finite_float(value.get("z", 0.0))
+        yaw = _finite_float(value.get("yaw"))
+        point_frame = str(value.get("frame_id") or frame_id)
+        point_ts = _finite_float(value.get("ts")) or ts
+        if isinstance(value.get("metadata"), Mapping):
+            metadata = dict(value["metadata"])
+    else:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        try:
+            seq = list(value)
+        except TypeError:
+            return None
+        if len(seq) < 2:
+            return None
+        x = _finite_float(seq[0])
+        y = _finite_float(seq[1])
+        z = _finite_float(seq[2]) if len(seq) > 2 else 0.0
+        yaw = _finite_float(seq[3]) if len(seq) > 3 else None
+
+    if x is None or y is None:
+        return None
+    if z is None:
+        z = 0.0
+    return {
+        "x": x,
+        "y": y,
+        "z": z,
+        "yaw": yaw,
+        "frame_id": point_frame,
+        "ts": point_ts,
+        "metadata": metadata,
+    }
+
+
+def _distance_xy(
+    point_a: Mapping[str, Any] | None,
+    point_b: Mapping[str, Any] | None,
+) -> float | None:
+    if not point_a or not point_b:
+        return None
+    ax = _finite_float(point_a.get("x"))
+    ay = _finite_float(point_a.get("y"))
+    bx = _finite_float(point_b.get("x"))
+    by = _finite_float(point_b.get("y"))
+    if ax is None or ay is None or bx is None or by is None:
+        return None
+    return round(math.hypot(ax - bx, ay - by), 3)
+
+
 def _as_optional_int(value: Any) -> int | None:
     try:
         return int(value)
@@ -82,6 +184,64 @@ def _as_optional_bool(value: Any) -> bool | None:
         if lowered in {"false", "0", "no", "n"}:
             return False
     return None
+
+
+def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
+    backend = str(backend_name or "").strip().lower()
+    backend = {
+        "super-lio": "super_lio",
+        "superlio": "super_lio",
+        "super_lio_reloc": "super_lio_relocation",
+        "super-lio-reloc": "super_lio_relocation",
+        "superlio-reloc": "super_lio_relocation",
+        "super-lio-relocation": "super_lio_relocation",
+        "superlio-relocation": "super_lio_relocation",
+        "relocation": "super_lio_relocation",
+    }.get(backend, backend)
+    if backend == "super_lio":
+        return {
+            "map_save_supported": True,
+            "map_save_source": "live_map_cloud_snapshot",
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_super_lio",
+        }
+    if backend == "super_lio_relocation":
+        return {
+            "map_save_supported": False,
+            "map_save_source": "active_map",
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_super_lio_relocation",
+        }
+    if backend == "localizer":
+        return {
+            "map_save_supported": False,
+            "map_save_source": "active_map",
+            "relocalization_supported": True,
+            "saved_map_relocalization_supported": True,
+            "restart_recovery_supported": True,
+            "recovery_method": "relocalize_service",
+        }
+    if backend in {"fastlio2", "slam"}:
+        return {
+            "map_save_supported": True,
+            "map_save_source": "slam_save_maps",
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": True,
+            "recovery_method": "restart_slam",
+        }
+    return {
+        "map_save_supported": False,
+        "map_save_source": None,
+        "relocalization_supported": True,
+        "saved_map_relocalization_supported": True,
+        "restart_recovery_supported": False,
+        "recovery_method": "relocalize_service",
+    }
 
 
 def _reason_code_from_text(prefix: str, text: str) -> str:
@@ -136,6 +296,90 @@ def _reported_state(raw: Any) -> str:
     return state.upper() if state else ""
 
 
+def _active_recovery_signal(raw: Any) -> str:
+    signal = _reported_state(raw)
+    if signal in {"", "NONE", "RECOVERED"}:
+        return ""
+    return signal
+
+
+def localizer_algorithm_healthy(
+    diagnostics: Mapping[str, Any],
+    icp_quality: float,
+) -> bool:
+    reported = _reported_state(diagnostics.get("state"))
+    degeneracy = _reported_state(diagnostics.get("degeneracy"))
+    localizer_health = _reported_state(diagnostics.get("localizer_health"))
+    recovery_signal = _active_recovery_signal(diagnostics.get("recovery_signal"))
+    health_source = str(
+        diagnostics.get("health_source")
+        or diagnostics.get("localizer_health_source")
+        or ""
+    ).strip().lower()
+    icp_fitness = _as_float(diagnostics.get("icp_fitness"), icp_quality)
+    health_fitness = _as_float(diagnostics.get("localizer_health_fitness"), None)
+    icp_ok = any(
+        value is not None and 0.0 < value < 0.5
+        for value in (icp_fitness, health_fitness)
+    )
+    pose_fresh, _ = _pose_freshness(diagnostics)
+    cloud_fresh = _cloud_fresh(diagnostics)
+    odom_cloud_ok = (
+        health_source == "odom_map_cloud"
+        and pose_fresh is not False
+        and cloud_fresh
+        and reported in {"", *TRACKING_STATES}
+    )
+
+    return (
+        reported in {"", *TRACKING_STATES}
+        and degeneracy not in BAD_DEGENERACY
+        and localizer_health in GOOD_LOCALIZER_HEALTH
+        and not recovery_signal
+        and cloud_fresh
+        and (icp_ok or odom_cloud_ok)
+    )
+
+
+def _localizer_algorithm_healthy(
+    diagnostics: Mapping[str, Any],
+    icp_quality: float,
+) -> bool:
+    return localizer_algorithm_healthy(diagnostics, icp_quality)
+
+
+def classify_pose_freshness(diagnostics: Mapping[str, Any]) -> tuple[bool | None, str]:
+    reported = _reported_state(diagnostics.get("state"))
+    explicit = _as_optional_bool(diagnostics.get("pose_fresh"))
+    odom_age_ms = _as_float(diagnostics.get("odom_age_ms"), None)
+    confidence = diagnostics.get("confidence")
+
+    if reported in LOST_STATES:
+        return False, "lost"
+    if explicit is not None:
+        return explicit, "fresh" if explicit else "stale"
+    if odom_age_ms is not None and odom_age_ms >= 0.0:
+        fresh = odom_age_ms <= POSE_FRESH_MAX_ODOM_AGE_MS
+        return fresh, "fresh" if fresh else "stale"
+    if isinstance(confidence, (int, float)):
+        return confidence >= 0.5, "fresh" if confidence >= 0.5 else "stale"
+    return None, "unknown"
+
+
+def _pose_freshness(diagnostics: Mapping[str, Any]) -> tuple[bool | None, str]:
+    return classify_pose_freshness(diagnostics)
+
+
+def _cloud_fresh(diagnostics: Mapping[str, Any]) -> bool:
+    explicit = _as_optional_bool(diagnostics.get("map_cloud_fresh"))
+    if explicit is not None:
+        return explicit
+    cloud_age_ms = _as_float(diagnostics.get("cloud_age_ms"), None)
+    if cloud_age_ms is not None and cloud_age_ms >= 0.0:
+        return cloud_age_ms <= POSE_FRESH_MAX_ODOM_AGE_MS
+    return True
+
+
 def _localization_state(
     odometry: Any,
     session: Mapping[str, Any],
@@ -149,7 +393,10 @@ def _localization_state(
     reported = _reported_state(diagnostics.get("state"))
     degeneracy = _reported_state(diagnostics.get("degeneracy"))
     localizer_health = _reported_state(diagnostics.get("localizer_health"))
+    recovery_signal = _active_recovery_signal(diagnostics.get("recovery_signal"))
     confidence = diagnostics.get("confidence")
+    algorithm_healthy = _localizer_algorithm_healthy(diagnostics, icp_quality)
+    pose_fresh, _ = _pose_freshness(diagnostics)
 
     if odometry is None:
         reasons.append("odometry_missing")
@@ -159,7 +406,7 @@ def _localization_state(
         reasons.append("relocalization_pending")
         return "relocalizing", reasons
 
-    if reported in {"LOST", "UNINIT", "UNINITIALIZED"}:
+    if reported in LOST_STATES:
         reasons.append(f"reported_state:{reported.lower()}")
         return "lost", reasons
 
@@ -167,11 +414,15 @@ def _localization_state(
         reasons.append("localizer_health:lost")
         return "lost", reasons
 
+    if recovery_signal:
+        reasons.append(f"recovery_signal:{recovery_signal.lower()}")
+        return "degraded", reasons
+
     if (
-        reported in {"DEGRADED", "FALLBACK_GNSS_ONLY"}
-        or degeneracy in {"MILD", "MODERATE", "SEVERE", "CRITICAL"}
+        reported in DEGRADED_STATES
+        or degeneracy in BAD_DEGENERACY
         or localizer_health == "DEGRADED"
-        or isinstance(confidence, (int, float)) and confidence < 0.5
+        or pose_fresh is False
     ):
         if reported:
             reasons.append(f"reported_state:{reported.lower()}")
@@ -179,8 +430,8 @@ def _localization_state(
             reasons.append(f"degeneracy:{degeneracy.lower()}")
         if localizer_health == "DEGRADED":
             reasons.append("localizer_health:degraded")
-        if isinstance(confidence, (int, float)) and confidence < 0.5:
-            reasons.append("low_confidence")
+        if pose_fresh is False:
+            reasons.append("stale_odometry" if algorithm_healthy else "low_confidence")
         return "degraded", reasons
 
     if ready:
@@ -190,7 +441,7 @@ def _localization_state(
         reasons.append("localizer_not_ready")
         return "initializing" if icp_quality <= 0.0 else "degraded", reasons
 
-    if reported in {"TRACKING", "OK", "READY"}:
+    if reported in TRACKING_STATES:
         return "tracking", reasons
 
     return "tracking", reasons
@@ -203,6 +454,14 @@ def build_localization_status_from_parts(
     status: Any,
 ) -> dict[str, Any]:
     diagnostics = _mapping(status)
+    diag_received_mono = _as_float(diagnostics.get("_gateway_received_mono"))
+    diag_age_ms = (
+        round(max(0.0, time.monotonic() - diag_received_mono) * 1000.0, 1)
+        if diag_received_mono is not None
+        else None
+    )
+    algorithm_healthy = _localizer_algorithm_healthy(diagnostics, float(icp_quality))
+    pose_fresh, pose_freshness = _pose_freshness(diagnostics)
     state, reasons = _localization_state(
         odometry,
         session,
@@ -210,6 +469,41 @@ def build_localization_status_from_parts(
         diagnostics,
     )
     ready = state == "ready"
+    backend = (
+        diagnostics.get("backend")
+        or diagnostics.get("slam_profile")
+        or session.get("slam_profile")
+    )
+    backend_name = str(backend or "").strip().lower()
+    capability_defaults = backend_capability_defaults(backend_name)
+    relocalization_supported = _as_optional_bool(
+        diagnostics.get("relocalization_supported")
+    )
+    if relocalization_supported is None:
+        relocalization_supported = bool(
+            capability_defaults["relocalization_supported"]
+        )
+    saved_map_relocalization_supported = _as_optional_bool(
+        diagnostics.get("saved_map_relocalization_supported")
+    )
+    if saved_map_relocalization_supported is None:
+        saved_map_relocalization_supported = relocalization_supported
+    restart_recovery_supported = _as_optional_bool(
+        diagnostics.get("restart_recovery_supported")
+    )
+    if restart_recovery_supported is None:
+        restart_recovery_supported = bool(
+            capability_defaults["restart_recovery_supported"]
+        )
+    recovery_method = diagnostics.get("recovery_method")
+    if not recovery_method:
+        recovery_method = capability_defaults["recovery_method"]
+    map_save_supported = _as_optional_bool(diagnostics.get("map_save_supported"))
+    if map_save_supported is None:
+        map_save_supported = bool(capability_defaults["map_save_supported"])
+    map_save_source = diagnostics.get("map_save_source")
+    if map_save_source is None:
+        map_save_source = capability_defaults["map_save_source"]
     return {
         "schema_version": LOCALIZATION_STATUS_SCHEMA_VERSION,
         "state": state,
@@ -220,6 +514,14 @@ def build_localization_status_from_parts(
         "icp_quality": float(icp_quality),
         "reported_state": diagnostics.get("state"),
         "confidence": diagnostics.get("confidence"),
+        "algorithm_healthy": algorithm_healthy,
+        "backend": backend,
+        "health_source": diagnostics.get("health_source"),
+        "pose_fresh": pose_fresh,
+        "pose_freshness": pose_freshness,
+        "stale_odometry": pose_fresh is False and algorithm_healthy,
+        "odom_age_ms": _as_float(diagnostics.get("odom_age_ms")),
+        "cloud_age_ms": _as_float(diagnostics.get("cloud_age_ms")),
         "degeneracy": diagnostics.get("degeneracy"),
         "icp_fitness": _as_float(diagnostics.get("icp_fitness")),
         "effective_ratio": _as_float(diagnostics.get("effective_ratio")),
@@ -230,7 +532,23 @@ def build_localization_status_from_parts(
         "pos_cov_trace": _as_float(diagnostics.get("pos_cov_trace")),
         "ieskf_iter_num": _as_optional_int(diagnostics.get("ieskf_iter_num")),
         "ieskf_converged": _as_optional_bool(diagnostics.get("ieskf_converged")),
+        "map_cloud_fresh": _as_optional_bool(diagnostics.get("map_cloud_fresh")),
+        "map_state": diagnostics.get("map_state"),
+        "map_save_supported": map_save_supported,
+        "map_save_source": map_save_source,
+        "relocalization_supported": relocalization_supported,
+        "saved_map_relocalization_supported": saved_map_relocalization_supported,
+        "restart_recovery_supported": restart_recovery_supported,
+        "recovery_method": recovery_method,
+        "relocalization_state": diagnostics.get("relocalization_state"),
+        "recovery_signal": diagnostics.get("recovery_signal"),
+        "recovery_action": diagnostics.get("recovery_action"),
         "localizer_health": diagnostics.get("localizer_health"),
+        "localizer_health_raw": diagnostics.get("localizer_health_raw"),
+        "localizer_health_source": diagnostics.get("localizer_health_source"),
+        "localizer_health_topic_age_ms": _as_float(
+            diagnostics.get("localizer_health_topic_age_ms")
+        ),
         "localizer_health_fitness": _as_float(
             diagnostics.get("localizer_health_fitness")
         ),
@@ -241,7 +559,13 @@ def build_localization_status_from_parts(
             diagnostics.get("localizer_health_cov_trace")
         ),
         "ts": diagnostics.get("ts"),
-        "can_relocalize": state in {"degraded", "lost"} and odometry is not None,
+        "diag_received_ts": _as_float(diagnostics.get("_gateway_received_ts")),
+        "diag_age_ms": diag_age_ms,
+        "can_relocalize": (
+            saved_map_relocalization_supported
+            and state in {"degraded", "lost"}
+            and odometry is not None
+        ),
         "reasons": reasons,
         "raw": diagnostics,
     }
@@ -264,6 +588,18 @@ def build_localization_status(gw: Any) -> dict[str, Any]:
 def _cmd_vel_health(gw: Any) -> dict[str, Any]:
     modules = getattr(gw, "_all_modules", None) or {}
     mux = modules.get("CmdVelMux")
+    if mux is None:
+        for name, module in modules.items():
+            token = str(name).lower()
+            class_token = module.__class__.__name__.lower()
+            if (
+                "cmdvelmux" in token
+                or "cmd_vel_mux" in token
+                or "cmdvelmux" in class_token
+                or "cmd_vel_mux" in class_token
+            ):
+                mux = module
+                break
     if mux is None:
         return {"active_source": "unknown", "sources": {}, "available": False}
     try:
@@ -366,27 +702,191 @@ def _progress_summary(
     }
 
 
+def _target_summary(
+    mission: Mapping[str, Any],
+    odometry: Mapping[str, Any] | None,
+    *,
+    wp_index: int,
+    wp_total: int,
+    ts: float,
+) -> dict[str, Any]:
+    robot = _point_payload(odometry, ts=ts) if odometry else None
+    goal = _point_payload(mission.get("goal"), ts=ts)
+    current_waypoint = _point_payload(
+        mission.get("current_waypoint") or mission.get("waypoint"),
+        ts=ts,
+    )
+    distance_to_goal = _finite_float(mission.get("distance_to_goal_m"))
+    if distance_to_goal is None:
+        distance_to_goal = _distance_xy(robot, goal)
+    waypoint_distance = _finite_float(mission.get("active_waypoint_distance_m"))
+    if waypoint_distance is None:
+        waypoint_distance = _distance_xy(robot, current_waypoint)
+    remaining_waypoints = _as_optional_int(mission.get("remaining_waypoints"))
+    if remaining_waypoints is None and wp_total:
+        remaining_waypoints = max(0, wp_total - wp_index)
+
+    return {
+        "goal": goal,
+        "current_waypoint": current_waypoint,
+        "distance_to_goal_m": distance_to_goal,
+        "active_waypoint_distance_m": waypoint_distance,
+        "remaining_waypoints": remaining_waypoints,
+    }
+
+
+def _speed_policy_summary(
+    mission: Mapping[str, Any],
+    localization: Mapping[str, Any],
+    speed_scale: float | None,
+) -> dict[str, Any]:
+    raw_policy = _mapping(mission.get("speed_policy"))
+    scale = _finite_float(raw_policy.get("scale"))
+    if scale is None:
+        scale = speed_scale
+    reason = (
+        raw_policy.get("reason")
+        or mission.get("speed_policy_reason")
+        or mission.get("degeneracy")
+        or localization.get("state")
+    )
+    if reason is not None:
+        reason = str(reason)
+
+    mode = str(raw_policy.get("mode") or "").strip().lower()
+    if mode not in {"normal", "cautious", "restricted", "hold"}:
+        if scale is None:
+            mode = "unknown"
+        elif scale <= 0.0:
+            mode = "hold"
+        elif scale < 0.5:
+            mode = "restricted"
+        elif scale < 1.0:
+            mode = "cautious"
+        else:
+            mode = "normal"
+
+    applied = raw_policy.get("applied")
+    if not isinstance(applied, bool):
+        applied = bool(scale is not None and scale < 1.0)
+
+    return {
+        "scale": scale,
+        "mode": mode,
+        "reason": reason,
+        "source": str(raw_policy.get("source") or "mission_status"),
+        "applied": applied,
+    }
+
+
+def _current_speed_mps(odometry: Mapping[str, Any] | None) -> float | None:
+    if not odometry:
+        return None
+    vx = _finite_float(odometry.get("vx")) or 0.0
+    vy = _finite_float(odometry.get("vy")) or 0.0
+    return round(math.hypot(vx, vy), 3)
+
+
+def _motion_summary(
+    *,
+    odometry: Mapping[str, Any] | None,
+    speed_scale: float | None,
+    speed_policy: Mapping[str, Any],
+    control: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "current_speed_mps": _current_speed_mps(odometry),
+        "speed_scale": speed_scale,
+        "speed_policy": dict(speed_policy),
+        "active_cmd_source": str(control.get("active_cmd_source") or "none"),
+        "command_owner": str(control.get("command_owner") or "unknown"),
+    }
+
+
+def _feedback_summary(
+    *,
+    state: str,
+    can_accept_goal: bool,
+    readiness: Mapping[str, Any],
+    reason_codes: list[str],
+) -> dict[str, Any]:
+    blockers = list(readiness.get("blockers") or [])
+    advisories = list(readiness.get("advisories") or [])
+    if blockers:
+        next_action = "resolve_blockers"
+        primary = "Navigation is blocked."
+    elif state in {"EXECUTING", "PATROLLING"}:
+        next_action = "monitor_progress"
+        primary = "Navigation is following the planned path."
+    elif state == "PLANNING":
+        next_action = "wait_for_plan"
+        primary = "Navigation is planning."
+    elif state == "SUCCESS":
+        next_action = "choose_goal"
+        primary = "Destination reached."
+    elif state == "CANCELLED":
+        next_action = "choose_goal" if can_accept_goal else "resolve_blockers"
+        primary = "Navigation mission was cancelled."
+    elif state in {"FAILED", "STUCK"}:
+        next_action = "inspect_failure"
+        primary = "Navigation needs attention before retrying."
+    elif can_accept_goal:
+        next_action = "choose_goal"
+        primary = "Ready for a navigation goal."
+    else:
+        next_action = "monitor_readiness"
+        primary = "Navigation is not ready for a goal yet."
+    return {
+        "next_action": next_action,
+        "primary": primary,
+        "blockers": blockers,
+        "advisories": advisories,
+        "reason_codes": reason_codes,
+    }
+
+
 def _navigation_reason_codes(
     *,
     state: str,
     failure_reason: str,
     has_odometry: bool,
     mode: str,
+    safety: Any,
     session: Mapping[str, Any],
     localization: Mapping[str, Any],
     control: Mapping[str, Any],
+    frames: Mapping[str, Any],
 ) -> list[str]:
     codes: list[str] = []
     if not has_odometry:
         codes.append("odometry_missing")
+    for mismatch in frames.get("mismatches", []):
+        if isinstance(mismatch, Mapping):
+            source = str(mismatch.get("source") or "").strip()
+            if source:
+                codes.append(f"frame_mismatch_{source}")
     if mode == "estop":
         codes.append("estop_active")
+    if safety_stop_active(safety):
+        codes.append(SAFETY_STOP_BLOCKER)
     if bool(session.get("pending", False)):
         codes.append("session_transition_pending")
+    if _session_mode(session) != "navigating":
+        codes.append("navigation_session_inactive")
 
     localization_state = str(localization.get("state") or "unknown")
     if localization_state in {"degraded", "lost", "relocalizing", "initializing"}:
         codes.append(f"localization_{localization_state}")
+    if _active_recovery_signal(localization.get("recovery_signal")):
+        codes.append("localization_recovery_active")
+    localization_degeneracy = _reported_state(localization.get("degeneracy"))
+    if localization_degeneracy in ADVISORY_DEGENERACY:
+        codes.append(f"localization_{localization_degeneracy.lower()}_degeneracy")
+    if (
+        localization.get("pose_fresh") is False
+        and bool(localization.get("algorithm_healthy", False))
+    ):
+        codes.append("pose_stale")
 
     if state == "STUCK":
         codes.append("mission_stuck")
@@ -406,26 +906,97 @@ def _navigation_reason_codes(
     return list(dict.fromkeys(codes))
 
 
+_NAVIGATION_BLOCKER_CODES = {
+    "odometry_missing",
+    "frame_mismatch_odometry",
+    "frame_mismatch_costmap",
+    "frame_mismatch_goal",
+    "estop_active",
+    SAFETY_STOP_BLOCKER,
+    "session_transition_pending",
+    "navigation_session_inactive",
+    "localization_lost",
+    "localization_relocalizing",
+    "localization_initializing",
+    "localization_recovery_active",
+    "pose_stale",
+}
+
+
+def _frame_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    frame = str(value).strip()
+    return frame or None
+
+
+def _frame_from_payload(value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    frame = _frame_id(value.get("frame_id") or value.get("frame"))
+    if frame:
+        return frame
+    header = value.get("header")
+    if isinstance(header, Mapping):
+        return _frame_id(header.get("frame_id") or header.get("frame"))
+    return None
+
+
+def _navigation_frame_summary(
+    mission: Mapping[str, Any],
+    odometry: Any,
+) -> dict[str, Any]:
+    planning_frame_id = (
+        _frame_id(mission.get("planning_frame_id") or mission.get("frame_id"))
+        or "map"
+    )
+    odom_frame_id = (
+        _frame_id(mission.get("odom_frame_id"))
+        or _frame_from_payload(odometry)
+        or "unknown"
+    )
+    costmap_frame_id = _frame_id(mission.get("costmap_frame_id")) or "unknown"
+    goal_frame_id = (
+        _frame_id(mission.get("goal_frame_id"))
+        or _frame_from_payload(mission.get("goal"))
+    )
+    mismatches: list[dict[str, str]] = []
+    for source, frame in (
+        ("odometry", odom_frame_id),
+        ("costmap", costmap_frame_id),
+        ("goal", goal_frame_id),
+    ):
+        if frame and frame != "unknown" and frame != planning_frame_id:
+            mismatches.append(
+                {
+                    "source": source,
+                    "expected_frame": planning_frame_id,
+                    "received_frame": frame,
+                }
+            )
+    return {
+        "planning_frame_id": planning_frame_id,
+        "odom_frame_id": odom_frame_id,
+        "costmap_frame_id": costmap_frame_id,
+        "goal_frame_id": goal_frame_id,
+        "ok": not mismatches,
+        "mismatches": mismatches,
+    }
+
+
+def _navigation_blockers(reason_codes: list[str]) -> list[str]:
+    return [code for code in reason_codes if code in _NAVIGATION_BLOCKER_CODES]
+
+
 def _readiness_summary(
     *,
     can_accept_goal: bool,
     reason_codes: list[str],
+    session: Mapping[str, Any],
     localization: Mapping[str, Any],
     control: Mapping[str, Any],
 ) -> dict[str, Any]:
-    blockers = [
-        code
-        for code in reason_codes
-        if code
-        in {
-            "odometry_missing",
-            "estop_active",
-            "session_transition_pending",
-            "localization_lost",
-            "localization_relocalizing",
-            "localization_initializing",
-        }
-    ]
+    blockers = _navigation_blockers(reason_codes)
     advisories = [code for code in reason_codes if code not in blockers]
     return {
         "can_accept_goal": can_accept_goal,
@@ -434,6 +1005,7 @@ def _readiness_summary(
         "advisories": advisories,
         "localization_ready": bool(localization.get("ready", False)),
         "control_owner": control.get("command_owner", "unknown"),
+        "session_mode": _session_mode(session),
     }
 
 
@@ -443,6 +1015,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         odometry = gw._odom
         path_len = len(gw._last_path)
         mode = gw._mode
+        safety = gw._safety
 
     session = safe_session(gw)
     lease = safe_lease(gw)
@@ -454,6 +1027,8 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
     replan_count = _as_int(mission.get("replan_count"), 0)
     speed_scale = _as_float(mission.get("speed_scale"), None)
     failure_reason = str(mission.get("failure_reason", "") or "")
+    mission_ts = float(mission.get("ts", time.time()) or time.time())
+    session_mode = _session_mode(session)
     degraded = localization.get("state") in {
         "no_odometry",
         "initializing",
@@ -461,10 +1036,11 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         "lost",
         "relocalizing",
     }
-    can_accept_goal = (
+    base_can_accept_goal = (
         mode != "estop"
         and odometry is not None
         and not bool(session.get("pending", False))
+        and session_mode == "navigating"
     )
     control = _control_summary(
         mode=mode,
@@ -472,6 +1048,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         mission_state=state,
         cmd_vel=cmd_vel,
     )
+    control["safety_clear"] = not safety_stop_active(safety)
     progress = _progress_summary(
         state=state,
         wp_index=wp_index,
@@ -479,20 +1056,45 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         path_points=path_len,
         replan_count=replan_count,
     )
+    frames = _navigation_frame_summary(mission, odometry)
     reason_codes = _navigation_reason_codes(
         state=state,
         failure_reason=failure_reason,
         has_odometry=odometry is not None,
         mode=mode,
+        safety=safety,
+        session=session,
+        localization=localization,
+        control=control,
+        frames=frames,
+    )
+    can_accept_goal = base_can_accept_goal and not _navigation_blockers(reason_codes)
+    readiness = _readiness_summary(
+        can_accept_goal=can_accept_goal,
+        reason_codes=reason_codes,
         session=session,
         localization=localization,
         control=control,
     )
-    readiness = _readiness_summary(
-        can_accept_goal=can_accept_goal,
-        reason_codes=reason_codes,
-        localization=localization,
+    target = _target_summary(
+        mission,
+        odometry,
+        wp_index=wp_index,
+        wp_total=wp_total,
+        ts=mission_ts,
+    )
+    speed_policy = _speed_policy_summary(mission, localization, speed_scale)
+    motion = _motion_summary(
+        odometry=odometry,
+        speed_scale=speed_scale,
+        speed_policy=speed_policy,
         control=control,
+    )
+    feedback = _feedback_summary(
+        state=state,
+        can_accept_goal=can_accept_goal,
+        readiness=readiness,
+        reason_codes=reason_codes,
     )
 
     return {
@@ -512,23 +1114,33 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "points": path_len,
             "endpoint": PATH_ENDPOINT,
         },
+        "frames": frames,
         "control": control,
         "localization": {
             "state": localization.get("state"),
             "ready": localization.get("ready"),
             "degraded": degraded,
+            "algorithm_healthy": localization.get("algorithm_healthy"),
+            "pose_fresh": localization.get("pose_fresh"),
+            "pose_freshness": localization.get("pose_freshness"),
+            "degeneracy": localization.get("degeneracy"),
             "speed_scale": speed_scale,
             "reasons": localization.get("reasons", []),
         },
+        "target": target,
+        "motion": motion,
+        "feedback": feedback,
         "diagnostics": {
             "reason_codes": reason_codes,
             "failure_reason": failure_reason,
             "localization_reasons": localization.get("reasons", []),
             "cmd_vel_mux_available": control.get("mux_available", False),
+            "frame_mismatches": frames.get("mismatches", []),
+            "safety": safety_summary(safety),
         },
         "mission": {
             "state": state,
             "raw": mission,
         },
-        "ts": float(mission.get("ts", time.time()) or time.time()),
+        "ts": mission_ts,
     }

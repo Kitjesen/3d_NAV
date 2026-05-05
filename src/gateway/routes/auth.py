@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from gateway.schemas import AuthCheckResponse, AuthLoginResponse
+from gateway.schemas import AuthCheckResponse, AuthLoginRequest, AuthLoginResponse
 
 
 try:
@@ -32,9 +32,8 @@ def register_auth_routes(app) -> None:
         response_model=AuthLoginResponse,
         responses={403: {"model": AuthLoginResponse}},
     )
-    async def auth_login(request: FastAPIRequest):
-        body = await request.json()
-        key = body.get("key", "")
+    async def auth_login(payload: AuthLoginRequest):
+        key = payload.key
         from gateway.auth import _get_configured_key
 
         configured = _get_configured_key()

@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 from gateway.schemas import (
+    BagStartRequest,
     BagOperationResponse,
     BagStatusResponse,
     BitrateRequest,
@@ -21,13 +22,48 @@ from gateway.schemas import (
     GatewayErrorResponse,
     Go2RTCStatusResponse,
     SlamOperationResponse,
+    SlamRelocalizeRequest,
     SlamStatusResponse,
+    SlamSwitchRequest,
+    TemporalSemanticRequest,
     TemporalMemoryResponse,
+    WebRTCOfferRequest,
     WebRTCControlResponse,
     WebRTCStatsResponse,
 )
 
 logger = logging.getLogger(__name__)
+
+_ACTIVE_SERVICE_STATES = {"running", "active"}
+_SLAM_STATUS_SERVICES = (
+    "lidar",
+    "slam",
+    "slam_pgo",
+    "localizer",
+    "super_lio",
+    "super_lio_relocation",
+)
+_EXPLORER_UNAVAILABLE_DETAIL = {
+    "reason": "explorer_backend_not_running",
+    "required_profile": "explore_or_tare_explore",
+    "supported_profiles": ["explore", "tare_explore"],
+    "action": (
+        "restart LingTu with the explore or tare_explore profile before "
+        "starting exploration"
+    ),
+}
+
+_SLAM_PROFILE_ALIASES = {
+    "super-lio": "super_lio",
+    "superlio": "super_lio",
+    "super_lio_reloc": "super_lio_relocation",
+    "super-lio-reloc": "super_lio_relocation",
+    "superlio-reloc": "super_lio_relocation",
+    "super_lio_relocation": "super_lio_relocation",
+    "super-lio-relocation": "super_lio_relocation",
+    "superlio-relocation": "super_lio_relocation",
+    "relocation": "super_lio_relocation",
+}
 
 try:
     from fastapi import Request as FastAPIRequest
@@ -58,6 +94,86 @@ def _parse_since(since: str) -> float:
         return now - float(since)
     except ValueError:
         return now - 3600
+
+
+def _normalize_slam_profile(profile: Any) -> str:
+    raw = str(profile or "").strip().lower()
+    return _SLAM_PROFILE_ALIASES.get(raw, raw)
+
+
+def _body_mapping(body: Any) -> dict[str, Any]:
+    if hasattr(body, "model_dump"):
+        return body.model_dump(exclude_none=True)
+    if isinstance(body, dict):
+        return body
+    return {}
+
+
+def slam_operation_payload(success: bool, **fields: Any) -> dict[str, Any]:
+    payload = {
+        "schema_version": 1,
+        "ok": bool(success),
+        "success": bool(success),
+        "ts": time.time(),
+    }
+    payload.update({key: value for key, value in fields.items() if value is not None})
+    return payload
+
+
+def _slam_operation_response(
+    success: bool,
+    *,
+    status_code: int,
+    **fields: Any,
+) -> Any:
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        slam_operation_payload(success, **fields),
+        status_code=status_code,
+    )
+
+
+def _unsupported_saved_map_relocalization_response(gw) -> Any | None:
+    from fastapi.responses import JSONResponse
+
+    from gateway.services.runtime_status import build_localization_status
+
+    try:
+        status = build_localization_status(gw)
+    except Exception:
+        status = {}
+
+    raw = status.get("raw") if isinstance(status.get("raw"), dict) else {}
+    backend = (
+        raw.get("localization_backend")
+        or raw.get("backend")
+        or status.get("localization_backend")
+        or status.get("backend")
+    )
+    backend_name = str(backend or "").strip().lower()
+    saved_map_supported = raw.get(
+        "saved_map_relocalization_supported",
+        status.get("saved_map_relocalization_supported"),
+    )
+    if (
+        backend_name not in {"super_lio", "super_lio_relocation"}
+        or saved_map_supported is not False
+    ):
+        return None
+
+    recovery_method = status.get("recovery_method") or raw.get("recovery_method")
+    recovery_hint = (
+        f"; recovery_method={recovery_method}" if recovery_method else ""
+    )
+    return _slam_operation_response(
+        False,
+        message=(
+            "unsupported: saved map relocalization is not supported by "
+            f"{backend_name}{recovery_hint}"
+        ),
+        status_code=409,
+    )
 
 
 def register_operation_routes(app, gw) -> None:
@@ -147,11 +263,11 @@ def register_operation_routes(app, gw) -> None:
             503: {"model": GatewayErrorResponse},
         },
     )
-    async def post_webrtc_offer(body: dict = Body(...)):
+    async def post_webrtc_offer(body: WebRTCOfferRequest = Body(...)):
         if gw._webrtc is None:
             return JSONResponse({"error": "webrtc_unavailable"}, status_code=503)
         try:
-            return await gw._webrtc.handle_offer(body)
+            return await gw._webrtc.handle_offer(_body_mapping(body))
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -237,10 +353,11 @@ def register_operation_routes(app, gw) -> None:
             503: {"model": GatewayErrorResponse},
         },
     )
-    async def post_temporal_semantic(body: dict):
+    async def post_temporal_semantic(body: TemporalSemanticRequest):
         import numpy as np
 
-        raw_emb = body.get("embedding")
+        payload = _body_mapping(body)
+        raw_emb = payload.get("embedding")
         if not raw_emb:
             return JSONResponse(
                 status_code=422,
@@ -254,7 +371,7 @@ def register_operation_routes(app, gw) -> None:
                 content={"error": f"invalid embedding: {exc}"},
             )
 
-        since_ts = _parse_since(body["since"]) if body.get("since") else None
+        since_ts = _parse_since(payload["since"]) if payload.get("since") else None
         store = _temporal_store()
         if store is None:
             return JSONResponse(
@@ -267,9 +384,9 @@ def register_operation_routes(app, gw) -> None:
             None,
             lambda: store.query_semantic(
                 query_vec,
-                top_k=int(body.get("top_k", 10)),
+                top_k=int(payload.get("top_k", 10)),
                 since_ts=since_ts,
-                label=body.get("label") or None,
+                label=payload.get("label") or None,
             ),
         )
         return {"observations": rows, "count": len(rows)}
@@ -278,17 +395,41 @@ def register_operation_routes(app, gw) -> None:
         "/api/v1/explore/start",
         summary="Start autonomous frontier exploration",
         response_model=ExplorationCommandResponse,
-        responses={503: {"model": GatewayErrorResponse}},
+        responses={
+            409: {"model": GatewayErrorResponse},
+            503: {"model": GatewayErrorResponse},
+        },
     )
     async def explore_start():
-        fe = gw._frontier_explorer
-        if fe is None:
+        if not gw._explorer_available():
             return JSONResponse(
                 status_code=503,
-                content={"error": "WavefrontFrontierExplorer not running"},
+                content={
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": "Exploration backend not running",
+                    "message": "Exploration is unavailable in the current runtime profile.",
+                    "detail": dict(_EXPLORER_UNAVAILABLE_DETAIL),
+                },
+            )
+        readiness = gw._exploration_start_readiness()
+        if not readiness.get("can_start", False):
+            blockers = readiness.get("blockers") or ["navigation_not_ready"]
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": "exploration_not_ready",
+                    "message": (
+                        "Exploration cannot start until navigation readiness "
+                        f"blockers clear: {', '.join(map(str, blockers))}"
+                    ),
+                    "detail": readiness,
+                },
             )
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, fe.begin_exploration)
+        result = await loop.run_in_executor(None, gw._begin_exploration)
         gw._exploring = True
         gw.push_event({"type": "exploring", "active": True})
         return {"status": result}
@@ -300,14 +441,19 @@ def register_operation_routes(app, gw) -> None:
         responses={503: {"model": GatewayErrorResponse}},
     )
     async def explore_stop():
-        fe = gw._frontier_explorer
-        if fe is None:
+        if not gw._explorer_available():
             return JSONResponse(
                 status_code=503,
-                content={"error": "WavefrontFrontierExplorer not running"},
+                content={
+                    "schema_version": 1,
+                    "ok": False,
+                    "error": "Exploration backend not running",
+                    "message": "Exploration is unavailable in the current runtime profile.",
+                    "detail": dict(_EXPLORER_UNAVAILABLE_DETAIL),
+                },
             )
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, fe.end_exploration)
+        result = await loop.run_in_executor(None, gw._end_exploration)
         gw._exploring = False
         gw.push_event({"type": "exploring", "active": False})
         return {"status": result}
@@ -318,15 +464,7 @@ def register_operation_routes(app, gw) -> None:
         response_model=ExplorationStatusResponse,
     )
     async def explore_status():
-        fe = gw._frontier_explorer
-        if fe is None:
-            return {"available": False, "exploring": False}
-        h = fe.health() if hasattr(fe, "health") else {}
-        return {
-            "available": True,
-            "exploring": gw._exploring,
-            "frontier_count": h.get("frontier_count", 0),
-        }
+        return gw._exploration_status_payload()
 
     @app.get(
         "/api/v1/slam/status",
@@ -338,20 +476,26 @@ def register_operation_routes(app, gw) -> None:
             from core.service_manager import get_service_manager
 
             svc = get_service_manager()
-            services = svc.status("lidar", "slam", "slam_pgo", "localizer")
+            services = svc.status(*_SLAM_STATUS_SERVICES)
         except Exception:
             services = {
                 "lidar": "unknown",
                 "slam": "unknown",
                 "slam_pgo": "unknown",
                 "localizer": "unknown",
+                "super_lio": "unknown",
+                "super_lio_relocation": "unknown",
             }
 
-        if services.get("slam_pgo") in ("running", "active"):
+        if services.get("super_lio_relocation") in _ACTIVE_SERVICE_STATES:
+            mode = "super_lio_relocation"
+        elif services.get("super_lio") in _ACTIVE_SERVICE_STATES:
+            mode = "super_lio"
+        elif services.get("slam_pgo") in _ACTIVE_SERVICE_STATES:
             mode = "fastlio2"
-        elif services.get("localizer") in ("running", "active"):
+        elif services.get("localizer") in _ACTIVE_SERVICE_STATES:
             mode = "localizer"
-        elif services.get("slam") in ("running", "active"):
+        elif services.get("slam") in _ACTIVE_SERVICE_STATES:
             mode = "fastlio2"
         else:
             mode = "stopped"
@@ -366,11 +510,20 @@ def register_operation_routes(app, gw) -> None:
             500: {"model": SlamOperationResponse},
         },
     )
-    async def slam_switch(body: dict):
-        profile = body.get("profile", "")
-        if profile not in ("fastlio2", "localizer", "stop"):
-            return JSONResponse(
-                {"success": False, "message": f"Unknown profile: {profile}"},
+    async def slam_switch(body: SlamSwitchRequest):
+        payload = _body_mapping(body)
+        requested_profile = payload.get("profile", "")
+        profile = _normalize_slam_profile(requested_profile)
+        if profile not in (
+            "fastlio2",
+            "localizer",
+            "super_lio",
+            "super_lio_relocation",
+            "stop",
+        ):
+            return _slam_operation_response(
+                False,
+                message=f"Unknown profile: {requested_profile}",
                 status_code=400,
             )
         try:
@@ -378,37 +531,63 @@ def register_operation_routes(app, gw) -> None:
 
             svc = get_service_manager()
             if profile == "fastlio2":
-                svc.stop("localizer")
+                svc.stop("localizer", "super_lio", "super_lio_relocation")
                 svc.ensure("slam", "slam_pgo")
                 ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
             elif profile == "localizer":
-                svc.stop("slam_pgo")
+                svc.stop("slam_pgo", "super_lio", "super_lio_relocation")
                 svc.ensure("slam", "localizer")
                 ok = svc.wait_ready("slam", "localizer", timeout=10.0)
+            elif profile == "super_lio":
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio_relocation")
+                svc.ensure("lidar", "super_lio")
+                ok = svc.wait_ready("lidar", "super_lio", timeout=10.0)
+            elif profile == "super_lio_relocation":
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio")
+                svc.ensure("lidar", "super_lio_relocation")
+                ok = svc.wait_ready(
+                    "lidar",
+                    "super_lio_relocation",
+                    timeout=10.0,
+                )
             else:
-                svc.stop("slam_pgo", "localizer", "slam")
+                svc.stop(
+                    "super_lio_relocation",
+                    "super_lio",
+                    "slam_pgo",
+                    "localizer",
+                    "slam",
+                )
                 ok = True
-            return {
-                "success": ok,
-                "profile": profile,
-                "message": (
+            if ok:
+                gw._cached_slam_profile = "stopped" if profile == "stop" else profile
+                gw._slam_profile_ts = time.time()
+            return slam_operation_payload(
+                ok,
+                profile=profile,
+                message=(
                     f"Switched to {profile}" if ok else "Services not ready after 10s"
                 ),
-            }
+            )
         except Exception as e:
-            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            return _slam_operation_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/slam/auto_relocalize",
         summary="Global relocalize via 3D-BBS (no guess required)",
         response_model=SlamOperationResponse,
         responses={
+            409: {"model": SlamOperationResponse},
             500: {"model": SlamOperationResponse},
             504: {"model": SlamOperationResponse},
         },
     )
     async def slam_auto_relocalize():
         import subprocess
+
+        unsupported_response = _unsupported_saved_map_relocalization_response(gw)
+        if unsupported_response is not None:
+            return unsupported_response
 
         ros_env = (
             "source /opt/ros/humble/setup.bash && "
@@ -426,18 +605,21 @@ def register_operation_routes(app, gw) -> None:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             ok = "success=True" in r.stdout
             msg = r.stdout[-300:] if r.stdout else (r.stderr[-300:] or "no output")
-            return {"success": ok, "message": msg}
+            return slam_operation_payload(ok, message=msg)
         except subprocess.TimeoutExpired:
-            return JSONResponse(
-                {"success": False, "message": "call timeout > 10s"},
+            return _slam_operation_response(
+                False,
+                message="call timeout > 10s",
                 status_code=504,
             )
         except Exception as e:
-            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            return _slam_operation_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/slam/relocalize",
@@ -446,20 +628,27 @@ def register_operation_routes(app, gw) -> None:
         responses={
             400: {"model": SlamOperationResponse},
             404: {"model": SlamOperationResponse},
+            409: {"model": SlamOperationResponse},
             500: {"model": SlamOperationResponse},
         },
     )
-    async def slam_relocalize(body: dict):
+    async def slam_relocalize(body: SlamRelocalizeRequest):
         import os
         import subprocess
 
-        map_name = body.get("map_name", "")
-        x = float(body.get("x", 0.0))
-        y = float(body.get("y", 0.0))
-        yaw = float(body.get("yaw", 0.0))
+        unsupported_response = _unsupported_saved_map_relocalization_response(gw)
+        if unsupported_response is not None:
+            return unsupported_response
+
+        payload = _body_mapping(body)
+        map_name = payload.get("map_name", "")
+        x = float(payload.get("x", 0.0))
+        y = float(payload.get("y", 0.0))
+        yaw = float(payload.get("yaw", 0.0))
         if not map_name:
-            return JSONResponse(
-                {"success": False, "message": "map_name required"},
+            return _slam_operation_response(
+                False,
+                message="map_name required",
                 status_code=400,
             )
         map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
@@ -469,8 +658,9 @@ def register_operation_routes(app, gw) -> None:
             if os.path.isfile(alt):
                 pcd_path = alt
         if not os.path.isfile(pcd_path):
-            return JSONResponse(
-                {"success": False, "message": f"Map not found: {pcd_path}"},
+            return _slam_operation_response(
+                False,
+                message=f"Map not found: {pcd_path}",
                 status_code=404,
             )
         ros_env = (
@@ -490,6 +680,8 @@ def register_operation_routes(app, gw) -> None:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
             ok = "success=True" in r.stdout
@@ -507,9 +699,9 @@ def register_operation_routes(app, gw) -> None:
             if ok:
                 gw._persist_last_nav_pose(map_name, x, y, yaw, quality)
             msg = r.stdout[-300:] if not ok else f"Relocalized to {map_name}"
-            return {"success": ok, "message": msg, "quality": quality}
+            return slam_operation_payload(ok, message=msg, quality=quality)
         except Exception as e:
-            return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+            return _slam_operation_response(False, message=str(e), status_code=500)
 
     @app.post(
         "/api/v1/bag/start",
@@ -520,14 +712,14 @@ def register_operation_routes(app, gw) -> None:
             500: {"model": BagOperationResponse},
         },
     )
-    async def bag_start(body: dict | None = None):
+    async def bag_start(body: BagStartRequest = BagStartRequest()):
         import os
         import pathlib
         import subprocess
 
-        body = body or {}
-        duration = int(body.get("duration", 600))
-        prefix = str(body.get("prefix", "web"))[:40]
+        payload = _body_mapping(body)
+        duration = int(payload.get("duration", 600))
+        prefix = str(payload.get("prefix", "web"))[:40]
         prefix = "".join(c for c in prefix if c.isalnum() or c in "-_") or "web"
 
         with gw._bag_lock:

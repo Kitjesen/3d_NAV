@@ -5,6 +5,7 @@ import io
 import json
 import shutil
 import tarfile
+import threading
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -42,7 +43,18 @@ def test_realtime_routes_register_expected_websockets():
 
     paths = {getattr(route, "path", "") for route in app.routes}
     assert "/ws/teleop" in paths
+    assert "/ws/camera" in paths
     assert "/ws/cloud" in paths
+
+
+def test_realtime_teleop_camera_stream_is_legacy_opt_in():
+    from gateway.routes.realtime import _camera_stream_requested
+
+    assert _camera_stream_requested({}) is False
+    assert _camera_stream_requested({"stream": "camera"}) is True
+    assert _camera_stream_requested({"stream": "video"}) is True
+    assert _camera_stream_requested({"camera": "true"}) is True
+    assert _camera_stream_requested({"frames": "1"}) is True
 
 
 def test_map_routes_register_expected_paths():
@@ -116,6 +128,88 @@ def test_camera_routes_register_expected_snapshot_path():
     assert route.endpoint.__module__ == "gateway.routes.camera"
 
 
+def test_camera_snapshot_returns_cached_gateway_jpeg(monkeypatch):
+    from fastapi import FastAPI
+
+    from gateway.routes.camera import register_camera_routes
+
+    def fail_subprocess(*args, **kwargs):
+        raise AssertionError("snapshot route should not probe ROS when JPEG is cached")
+
+    monkeypatch.setattr("gateway.routes.camera.subprocess.run", fail_subprocess)
+
+    app = FastAPI()
+    gw = SimpleNamespace(_latest_jpeg=b"\xff\xd8\xffcamera", _jpeg_lock=threading.Lock())
+    register_camera_routes(app, gw)
+
+    route = next(route for route in app.routes if route.path == "/api/v1/camera/snapshot")
+    response = asyncio.run(route.endpoint())
+
+    assert response.status_code == 200
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"\xff\xd8\xffcamera"
+
+
+def test_camera_snapshot_uses_teleop_one_shot_encoder(monkeypatch):
+    from fastapi import FastAPI
+
+    from gateway.routes.camera import register_camera_routes
+
+    def fail_subprocess(*args, **kwargs):
+        raise AssertionError("snapshot route should use Teleop snapshot before ROS fallback")
+
+    class Teleop:
+        def __init__(self):
+            self.calls = 0
+
+        def snapshot_jpeg(self):
+            self.calls += 1
+            return b"\xff\xd8\xffteleop"
+
+    monkeypatch.setattr("gateway.routes.camera.subprocess.run", fail_subprocess)
+
+    teleop = Teleop()
+    app = FastAPI()
+    gw = SimpleNamespace(
+        _latest_jpeg=None,
+        _jpeg_lock=threading.Lock(),
+        _teleop_module=teleop,
+    )
+    register_camera_routes(app, gw)
+
+    route = next(route for route in app.routes if route.path == "/api/v1/camera/snapshot")
+    response = asyncio.run(route.endpoint())
+
+    assert response.status_code == 200
+    assert response.media_type == "image/jpeg"
+    assert response.body == b"\xff\xd8\xffteleop"
+    assert teleop.calls == 1
+
+
+def test_camera_snapshot_fast_fails_when_gateway_reports_no_camera(monkeypatch):
+    from fastapi import FastAPI
+
+    from gateway.routes.camera import register_camera_routes
+
+    def fail_subprocess(*args, **kwargs):
+        raise AssertionError("snapshot route should not probe ROS when camera is unavailable")
+
+    monkeypatch.setattr("gateway.routes.camera.subprocess.run", fail_subprocess)
+
+    app = FastAPI()
+    gw = SimpleNamespace(_all_modules={})
+    register_camera_routes(app, gw)
+
+    route = next(route for route in app.routes if route.path == "/api/v1/camera/snapshot")
+    response = asyncio.run(route.endpoint())
+    payload = json.loads(response.body)
+
+    assert response.status_code == 503
+    assert payload["error"] == "camera_unavailable"
+    assert payload["ok"] is False
+    assert payload["detail"]["camera"]["reason"] == "camera_bridge_not_loaded"
+
+
 def test_command_routes_register_expected_paths():
     from fastapi import FastAPI
 
@@ -125,10 +219,12 @@ def test_command_routes_register_expected_paths():
     register_command_routes(app, SimpleNamespace())
 
     routes = {getattr(route, "path", ""): route for route in app.routes}
+    assert "/api/v1/navigation/plan" in routes
     assert "/api/v1/goal" in routes
     assert "/api/v1/navigate/click" in routes
     assert "/api/v1/cmd_vel" in routes
     assert "/api/v1/stop" in routes
+    assert "/api/v1/navigation/cancel" in routes
     assert "/api/v1/instruction" in routes
     assert "/api/v1/mode" in routes
     assert "/api/v1/lease" in routes
@@ -218,14 +314,17 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/slam/maps"] == 1
     assert counts["/api/v1/map/points"] == 1
     assert counts["/api/v1/map_cloud/reset"] == 1
+    assert counts["/api/v1/navigation/plan"] == 1
     assert counts["/api/v1/goal"] == 1
     assert counts["/api/v1/navigate/click"] == 1
     assert counts["/api/v1/cmd_vel"] == 1
     assert counts["/api/v1/stop"] == 1
+    assert counts["/api/v1/navigation/cancel"] == 1
     assert counts["/api/v1/instruction"] == 1
     assert counts["/api/v1/mode"] == 1
     assert counts["/api/v1/lease"] == 1
     assert counts["/ws/teleop"] == 1
+    assert counts["/ws/camera"] == 1
     assert counts["/ws/cloud"] == 1
 
 
@@ -239,6 +338,8 @@ def test_gateway_module_keeps_client_route_inventory():
     expected = {
         "/api/v1/app/bootstrap",
         "/api/v1/app/capabilities",
+        "/api/v1/auth/login",
+        "/api/v1/auth/check",
         "/api/v1/state",
         "/api/v1/scene_graph",
         "/api/v1/locations",
@@ -257,15 +358,18 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/map/points",
         "/api/v1/maps/{name}/points",
         "/api/v1/map_cloud/reset",
+        "/api/v1/navigation/plan",
         "/api/v1/goal",
         "/api/v1/navigate/click",
         "/api/v1/cmd_vel",
         "/api/v1/stop",
+        "/api/v1/navigation/cancel",
         "/api/v1/instruction",
         "/api/v1/mode",
         "/api/v1/lease",
         "/api/v1/camera/snapshot",
         "/ws/teleop",
+        "/ws/camera",
         "/ws/cloud",
     }
     assert expected <= paths
@@ -293,6 +397,8 @@ def test_capabilities_manifest_paths_exist_in_gateway_routes():
         manifest_paths.add(spec["path"])
 
     assert manifest_paths <= route_paths
+    assert capabilities["endpoints"]["realtime"]["camera"]["path"] == "/ws/camera"
+    assert capabilities["endpoints"]["realtime"]["camera"]["method"] == "WS"
 
 
 def _schema_ref_for(
@@ -315,6 +421,16 @@ def _content_for(
     return openapi["paths"][path][method]["responses"][status]["content"]
 
 
+def _request_schema_ref_for(
+    openapi: dict,
+    path: str,
+    method: str = "post",
+) -> str:
+    return openapi["paths"][path][method]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]["$ref"]
+
+
 def test_openapi_exposes_client_response_models():
     from gateway.gateway_module import GatewayModule
 
@@ -328,12 +444,24 @@ def test_openapi_exposes_client_response_models():
     assert "ReadinessResponse" in schemas
     assert "AppBootstrapResponse" in schemas
     assert "AppCapabilitiesResponse" in schemas
+    assert "AppTrafficResponse" in schemas
+    assert "AppMediaLinks" in schemas
+    assert "CameraMediaStatus" in schemas
+    assert "CameraPortStatus" in schemas
+    assert "CameraInfoStatus" in schemas
+    assert "CameraJpegStatus" in schemas
+    assert "WebRTCMediaStatus" in schemas
+    assert "TrafficSSEStats" in schemas
+    assert "TrafficCloudStats" in schemas
     assert "HealthResponse" in schemas
     assert "DevicesResponse" in schemas
     assert "LivenessResponse" in schemas
     assert "ControlCommandResponse" in schemas
     assert "GatewayErrorResponse" in schemas
     assert "CommandReceipt" in schemas
+    assert "CancelRequest" in schemas
+    assert "PlanPreviewRequest" in schemas
+    assert "PlanPreviewResponse" in schemas
     assert "SceneGraphResponse" in schemas
     assert "SceneGraphObject" in schemas
     assert "SceneGraphRelation" in schemas
@@ -348,25 +476,66 @@ def test_openapi_exposes_client_response_models():
     assert "NavigationControlSummary" in schemas
     assert "NavigationReadinessSummary" in schemas
     assert "NavigationProgressSummary" in schemas
+    assert "NavigationTargetSummary" in schemas
+    assert "NavigationSpeedPolicy" in schemas
+    assert "NavigationMotionSummary" in schemas
+    assert "NavigationFeedbackSummary" in schemas
     assert "NavigationDiagnosticsSummary" in schemas
+    assert "AuthLoginRequest" in schemas
     assert "AuthLoginResponse" in schemas
     assert "AuthCheckResponse" in schemas
     assert "LeaseResponse" in schemas
     assert "SessionResponse" in schemas
+    assert "SessionStartRequest" in schemas
     assert "SessionTransitionResponse" in schemas
+    assert "MapNameRequest" in schemas
+    assert "MapRenameRequest" in schemas
+    assert "MapSaveRequest" in schemas
     assert "MapLifecycleResponse" in schemas
+    assert "schema_version" in schemas["MapLifecycleResponse"]["properties"]
+    assert "ok" in schemas["MapLifecycleResponse"]["properties"]
+    assert "ts" in schemas["MapLifecycleResponse"]["properties"]
+    assert "warnings" in schemas["MapLifecycleResponse"]["properties"]
     assert "MapListResponse" in schemas
+    assert "schema_version" in schemas["MapListResponse"]["properties"]
+    assert "count" in schemas["MapListResponse"]["properties"]
+    assert "ts" in schemas["MapListResponse"]["properties"]
     assert "MapPointsResponse" in schemas
+    assert "schema_version" in schemas["MapPointsResponse"]["properties"]
+    assert "frame_id" in schemas["MapPointsResponse"]["properties"]
+    assert "source" in schemas["MapPointsResponse"]["properties"]
+    assert "ts" in schemas["MapPointsResponse"]["properties"]
     assert "TemporalMemoryResponse" in schemas
     assert "ExplorationCommandResponse" in schemas
     assert "ExplorationStatusResponse" in schemas
     assert "SlamStatusResponse" in schemas
+    assert "SlamSwitchRequest" in schemas
+    assert "SlamRelocalizeRequest" in schemas
     assert "SlamOperationResponse" in schemas
+    assert "schema_version" in schemas["SlamOperationResponse"]["properties"]
+    assert "ok" in schemas["SlamOperationResponse"]["properties"]
+    assert "ts" in schemas["SlamOperationResponse"]["properties"]
+    assert "BagStartRequest" in schemas
     assert "BagOperationResponse" in schemas
     assert "BagStatusResponse" in schemas
     assert "WebRTCStatsResponse" in schemas
     assert "Go2RTCStatusResponse" in schemas
+    assert "TemporalSemanticRequest" in schemas
+    assert "WebRTCOfferRequest" in schemas
     assert "WebRTCControlResponse" in schemas
+    assert schemas["AppMediaLinks"]["properties"]["camera"]["$ref"].endswith(
+        "/CameraMediaStatus"
+    )
+    assert schemas["AppMediaLinks"]["properties"]["webrtc"]["$ref"].endswith(
+        "/WebRTCMediaStatus"
+    )
+    assert set(schemas["CameraMediaStatus"]["properties"]["status"]["enum"]) == {
+        "streaming",
+        "idle",
+        "stale",
+        "error",
+        "not_loaded",
+    }
     assert _schema_ref_for(openapi, "/api/v1/state").endswith("/StateResponse")
     assert _schema_ref_for(openapi, "/ready").endswith("/ReadinessResponse")
     assert _schema_ref_for(openapi, "/ready", "503").endswith("/ReadinessResponse")
@@ -390,20 +559,51 @@ def test_openapi_exposes_client_response_models():
         openapi, "/api/v1/goal", method="post"
     ).endswith("/ControlCommandResponse")
     assert _schema_ref_for(
+        openapi, "/api/v1/navigation/plan", method="post"
+    ).endswith("/PlanPreviewResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/navigation/plan"
+    ).endswith("/PlanPreviewRequest")
+    assert _schema_ref_for(
         openapi, "/api/v1/cmd_vel", method="post"
     ).endswith("/ControlCommandResponse")
     assert _schema_ref_for(
         openapi, "/api/v1/stop", method="post"
     ).endswith("/ControlCommandResponse")
     assert _schema_ref_for(
+        openapi, "/api/v1/navigation/cancel", method="post"
+    ).endswith("/ControlCommandResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/navigation/cancel"
+    ).endswith("/CancelRequest")
+    assert _schema_ref_for(
         openapi, "/api/v1/instruction", method="post"
     ).endswith("/ControlCommandResponse")
     assert _schema_ref_for(
         openapi, "/api/v1/mode", method="post"
     ).endswith("/ControlCommandResponse")
+    for path in (
+        "/api/v1/goal",
+        "/api/v1/navigate/click",
+        "/api/v1/cmd_vel",
+        "/api/v1/stop",
+        "/api/v1/navigation/cancel",
+        "/api/v1/instruction",
+        "/api/v1/mode",
+        "/api/v1/lease",
+    ):
+        assert _schema_ref_for(
+            openapi, path, status="409", method="post"
+        ).endswith("/GatewayErrorResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/lease", status="403", method="post"
+    ).endswith("/GatewayErrorResponse")
     assert _schema_ref_for(
         openapi, "/api/v1/auth/login", method="post"
     ).endswith("/AuthLoginResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/auth/login"
+    ).endswith("/AuthLoginRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/auth/check"
     ).endswith("/AuthCheckResponse")
@@ -414,12 +614,21 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/session/start", method="post"
     ).endswith("/SessionTransitionResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/session/start"
+    ).endswith("/SessionStartRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/session/end", method="post"
     ).endswith("/SessionTransitionResponse")
     assert _schema_ref_for(
         openapi, "/api/v1/maps", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/maps", status="400", method="post"
+    ).endswith("/GatewayErrorResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/maps", status="503", method="post"
+    ).endswith("/GatewayErrorResponse")
     assert _schema_ref_for(openapi, "/api/v1/slam/maps").endswith(
         "/MapListResponse"
     )
@@ -435,6 +644,9 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/memory/temporal/semantic", method="post"
     ).endswith("/TemporalMemoryResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/memory/temporal/semantic"
+    ).endswith("/TemporalSemanticRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/explore/start", method="post"
     ).endswith("/ExplorationCommandResponse")
@@ -450,15 +662,24 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/slam/switch", method="post"
     ).endswith("/SlamOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/slam/switch"
+    ).endswith("/SlamSwitchRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/slam/auto_relocalize", method="post"
     ).endswith("/SlamOperationResponse")
     assert _schema_ref_for(
         openapi, "/api/v1/slam/relocalize", method="post"
     ).endswith("/SlamOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/slam/relocalize"
+    ).endswith("/SlamRelocalizeRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/bag/start", method="post"
     ).endswith("/BagOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/bag/start"
+    ).endswith("/BagStartRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/bag/stop", method="post"
     ).endswith("/BagOperationResponse")
@@ -474,6 +695,9 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/webrtc/offer", method="post"
     ).endswith("/WebRTCControlResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/webrtc/offer"
+    ).endswith("/WebRTCOfferRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/webrtc/bitrate", method="post"
     ).endswith("/WebRTCControlResponse")
@@ -483,20 +707,35 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/map/activate", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/map/activate"
+    ).endswith("/MapNameRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/map/rename", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/map/rename"
+    ).endswith("/MapRenameRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/map/save", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/map/save"
+    ).endswith("/MapSaveRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/map/restore_predufo", method="post"
     ).endswith("/MapLifecycleResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/map/restore_predufo"
+    ).endswith("/MapNameRequest")
     assert _schema_ref_for(openapi, "/api/v1/app/bootstrap").endswith(
         "/AppBootstrapResponse"
     )
     assert _schema_ref_for(openapi, "/api/v1/app/capabilities").endswith(
         "/AppCapabilitiesResponse"
+    )
+    assert _schema_ref_for(openapi, "/api/v1/app/traffic").endswith(
+        "/AppTrafficResponse"
     )
 
     assert schemas["SceneGraphResponse"]["properties"]["objects"]["items"][
@@ -514,6 +753,12 @@ def test_openapi_exposes_client_response_models():
     assert schemas["PathResponse"]["properties"]["path"]["items"]["$ref"].endswith(
         "/PathPoint"
     )
+    assert schemas["PlanPreviewResponse"]["properties"]["goal"]["$ref"].endswith(
+        "/PathPoint"
+    )
+    assert schemas["PlanPreviewResponse"]["properties"]["path"]["items"][
+        "$ref"
+    ].endswith("/PathPoint")
     assert schemas["NavigationStatusResponse"]["properties"]["control"]["$ref"].endswith(
         "/NavigationControlSummary"
     )
@@ -523,8 +768,25 @@ def test_openapi_exposes_client_response_models():
     assert schemas["NavigationStatusResponse"]["properties"]["progress"][
         "$ref"
     ].endswith("/NavigationProgressSummary")
+    assert schemas["NavigationStatusResponse"]["properties"]["target"]["$ref"].endswith(
+        "/NavigationTargetSummary"
+    )
+    assert schemas["NavigationStatusResponse"]["properties"]["motion"]["$ref"].endswith(
+        "/NavigationMotionSummary"
+    )
+    assert schemas["NavigationStatusResponse"]["properties"]["feedback"][
+        "$ref"
+    ].endswith("/NavigationFeedbackSummary")
+    assert schemas["AppTrafficResponse"]["properties"]["sse"]["$ref"].endswith(
+        "/TrafficSSEStats"
+    )
+    assert schemas["AppTrafficResponse"]["properties"]["cloud"]["$ref"].endswith(
+        "/TrafficCloudStats"
+    )
     assert "schema_version" in schemas["ControlCommandResponse"]["properties"]
     assert "ok" in schemas["ControlCommandResponse"]["properties"]
+    assert "yaw" in schemas["ControlCommandResponse"]["properties"]
+    assert "reason" in schemas["ControlCommandResponse"]["properties"]
     assert schemas["ControlCommandResponse"]["properties"]["command"]["$ref"].endswith(
         "/CommandReceipt"
     )
@@ -542,7 +804,9 @@ def test_openapi_exposes_client_response_models():
     assert "application/sdp" in _content_for(
         openapi, "/api/v1/webrtc/whep", method="post"
     )
-    assert "text/event-stream" in _content_for(openapi, "/api/v1/events")
+    event_stream = _content_for(openapi, "/api/v1/events")["text/event-stream"]
+    assert event_stream["schema"]["properties"]["type"]["type"] == "string"
+    assert "event_id" in event_stream["schema"]["properties"]
     assert "application/gzip" in _content_for(openapi, "/api/v1/diagnostic_pack")
     assert "application/octet-stream" in _content_for(
         openapi, "/api/v1/maps/{name}/pcd"
@@ -585,6 +849,10 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["state"]["health"],
         capabilities["endpoints"]["app"]["bootstrap"],
         capabilities["endpoints"]["app"]["capabilities"],
+        capabilities["endpoints"]["app"]["traffic"],
+        capabilities["endpoints"]["auth"]["login"],
+        capabilities["endpoints"]["auth"]["check"],
+        capabilities["endpoints"]["control"]["navigation_plan"],
     ]
     for spec in key_specs:
         assert spec["response_schema"]

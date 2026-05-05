@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -39,6 +40,8 @@ class GoalRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
+    yaw: float = 0.0
+    frame_id: Literal["map"] = "map"
     instruction: str | None = None
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
@@ -48,8 +51,26 @@ class ClickNavRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
+    frame_id: Literal["map"] = "map"
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
+
+
+class PlanPreviewRequest(BaseModel):
+    x: float
+    y: float
+    z: float = 0.0
+    frame_id: Literal["map"] = "map"
+    client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z")
+    @classmethod
+    def finite(cls, v: float) -> float:
+        import math
+
+        if not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
 
 
 class CmdVelRequest(BaseModel):
@@ -59,7 +80,7 @@ class CmdVelRequest(BaseModel):
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
 
-    @field_validator("vx", "wz")
+    @field_validator("vx", "vy", "wz")
     @classmethod
     def finite(cls, v: float) -> float:
         import math
@@ -76,6 +97,12 @@ class InstructionRequest(BaseModel):
 
 
 class StopRequest(BaseModel):
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+
+class CancelRequest(BaseModel):
+    reason: str = Field(default="client_cancel", max_length=256)
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
 
@@ -130,6 +157,57 @@ class MapRequest(BaseModel):
         return v
 
 
+class SessionStartRequest(BaseModel):
+    mode: str | None = Field(default=None, max_length=32)
+    map_name: str | None = Field(default=None, max_length=128)
+    map: str | None = Field(default=None, max_length=128)
+    slam_profile: str | None = Field(default=None, max_length=64)
+    slam_backend: str | None = Field(default=None, max_length=64)
+
+
+class MapNameRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+
+
+class MapRenameRequest(BaseModel):
+    old_name: str | None = Field(default=None, max_length=128)
+    new_name: str | None = Field(default=None, max_length=128)
+
+
+class MapSaveRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+
+
+class WebRTCOfferRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    sdp: str | None = None
+    type: str | None = None
+
+
+class TemporalSemanticRequest(BaseModel):
+    embedding: list[float] | None = None
+    since: str | None = Field(default=None, max_length=64)
+    top_k: int = Field(default=10, ge=1, le=1000)
+    label: str | None = Field(default=None, max_length=128)
+
+
+class SlamSwitchRequest(BaseModel):
+    profile: str | None = Field(default=None, max_length=64)
+
+
+class SlamRelocalizeRequest(BaseModel):
+    map_name: str | None = Field(default=None, max_length=128)
+    x: float = 0.0
+    y: float = 0.0
+    yaw: float = 0.0
+
+
+class BagStartRequest(BaseModel):
+    duration: int = Field(default=600, ge=1, le=86400)
+    prefix: str = Field(default="web", max_length=40)
+
+
 class ServerInfo(GatewayResponseModel):
     api_version: str
     time: float
@@ -143,6 +221,14 @@ class EndpointSpec(GatewayResponseModel):
     response_schema: str | None = None
     response_content_types: list[str] = Field(default_factory=list)
     status_codes: list[str] = Field(default_factory=list)
+
+
+class SSEEventEnvelope(GatewayResponseModel):
+    schema_version: int = 1
+    event_id: int | None = None
+    type: str
+    ts: float
+    data: Any = None
 
 
 class TeleopSummary(GatewayResponseModel):
@@ -160,10 +246,14 @@ class ReadinessResponse(GatewayResponseModel):
     schema_version: int
     status: str
     ready: bool
+    data_ready: bool
+    motion_ready: bool
+    non_motion_safe: bool
     modules: dict[str, ReadinessModuleStatus]
     module_count: int
     failed_modules: list[str]
     reasons: list[str]
+    runtime: dict[str, Any] = Field(default_factory=dict)
     ts: float
 
 
@@ -200,8 +290,15 @@ class ControlCommandResponse(GatewayResponseModel):
     status: str
     command: CommandReceipt
     goal: list[float] | None = None
+    yaw: float | None = None
+    frame_id: str | None = None
     instruction: str | None = None
     mode: str | None = None
+    reason: str | None = None
+
+
+class AuthLoginRequest(BaseModel):
+    key: str = Field(default="", max_length=4096)
 
 
 class AuthLoginResponse(GatewayResponseModel):
@@ -317,6 +414,25 @@ class PathResponse(GatewayResponseModel):
     source: str = "gateway_cache"
 
 
+class PlanPreviewResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool = True
+    feasible: bool = False
+    frame_id: str = "map"
+    start: PathPoint | None = None
+    goal: PathPoint
+    adjusted_goal: PathPoint | None = None
+    path: list[PathPoint] = Field(default_factory=list)
+    count: int = 0
+    distance_m: float | None = None
+    plan_ms: float | None = None
+    planner: str | None = None
+    source: str = "navigation_preview"
+    reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+    ts: float
+
+
 class LocalizationStatusResponse(GatewayResponseModel):
     schema_version: int
     state: str
@@ -327,6 +443,14 @@ class LocalizationStatusResponse(GatewayResponseModel):
     icp_quality: float = 0.0
     reported_state: Any = None
     confidence: float | None = None
+    algorithm_healthy: bool = False
+    backend: str | None = None
+    health_source: str | None = None
+    pose_fresh: bool | None = None
+    pose_freshness: str = "unknown"
+    stale_odometry: bool = False
+    odom_age_ms: float | None = None
+    cloud_age_ms: float | None = None
     degeneracy: str | None = None
     icp_fitness: float | None = None
     effective_ratio: float | None = None
@@ -335,11 +459,27 @@ class LocalizationStatusResponse(GatewayResponseModel):
     pos_cov_trace: float | None = None
     ieskf_iter_num: int | None = None
     ieskf_converged: bool | None = None
+    map_cloud_fresh: bool | None = None
+    map_state: str | None = None
+    map_save_supported: bool | None = None
+    map_save_source: str | None = None
+    relocalization_supported: bool = True
+    saved_map_relocalization_supported: bool | None = None
+    restart_recovery_supported: bool | None = None
+    recovery_method: str | None = None
+    relocalization_state: str | None = None
+    recovery_signal: str | None = None
+    recovery_action: str | None = None
     localizer_health: str | None = None
+    localizer_health_raw: str | None = None
+    localizer_health_source: str | None = None
+    localizer_health_topic_age_ms: float | None = None
     localizer_health_fitness: float | None = None
     localizer_health_iter: int | None = None
     localizer_health_cov_trace: float | None = None
     ts: float | None = None
+    diag_received_ts: float | None = None
+    diag_age_ms: float | None = None
     can_relocalize: bool = False
     reasons: list[str] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -379,6 +519,10 @@ class NavigationLocalizationSummary(GatewayResponseModel):
     state: str | None = None
     ready: bool | None = None
     degraded: bool = False
+    algorithm_healthy: bool | None = None
+    pose_fresh: bool | None = None
+    pose_freshness: str | None = None
+    degeneracy: str | None = None
     speed_scale: float | None = None
     reasons: list[str] = Field(default_factory=list)
 
@@ -390,6 +534,7 @@ class NavigationReadinessSummary(GatewayResponseModel):
     advisories: list[str] = Field(default_factory=list)
     localization_ready: bool
     control_owner: str
+    session_mode: str | None = None
 
 
 class NavigationProgressSummary(GatewayResponseModel):
@@ -414,6 +559,53 @@ class NavigationMissionSummary(GatewayResponseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class NavigationTargetSummary(GatewayResponseModel):
+    goal: PathPoint | None = None
+    current_waypoint: PathPoint | None = None
+    distance_to_goal_m: float | None = None
+    active_waypoint_distance_m: float | None = None
+    remaining_waypoints: int | None = None
+
+
+class NavigationSpeedPolicy(GatewayResponseModel):
+    scale: float | None = None
+    mode: Literal["normal", "cautious", "restricted", "hold", "unknown"] = "unknown"
+    reason: str | None = None
+    source: str = "mission_status"
+    applied: bool | None = None
+
+
+class NavigationMotionSummary(GatewayResponseModel):
+    current_speed_mps: float | None = None
+    speed_scale: float | None = None
+    speed_policy: NavigationSpeedPolicy
+    active_cmd_source: str
+    command_owner: str
+
+
+class NavigationFeedbackSummary(GatewayResponseModel):
+    next_action: str
+    primary: str
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class NavigationFrameMismatch(GatewayResponseModel):
+    source: str
+    expected_frame: str
+    received_frame: str
+
+
+class NavigationFrameSummary(GatewayResponseModel):
+    planning_frame_id: str = "map"
+    odom_frame_id: str = "unknown"
+    costmap_frame_id: str = "unknown"
+    goal_frame_id: str | None = None
+    ok: bool = True
+    mismatches: list[NavigationFrameMismatch] = Field(default_factory=list)
+
+
 class NavigationStatusResponse(GatewayResponseModel):
     schema_version: int
     state: str
@@ -428,8 +620,12 @@ class NavigationStatusResponse(GatewayResponseModel):
     readiness: NavigationReadinessSummary
     progress: NavigationProgressSummary
     path: NavigationPathSummary
+    frames: NavigationFrameSummary
     control: NavigationControlSummary
     localization: NavigationLocalizationSummary
+    target: NavigationTargetSummary
+    motion: NavigationMotionSummary
+    feedback: NavigationFeedbackSummary
     diagnostics: NavigationDiagnosticsSummary
     mission: NavigationMissionSummary
     ts: float
@@ -437,6 +633,9 @@ class NavigationStatusResponse(GatewayResponseModel):
 
 class SessionResponse(GatewayResponseModel):
     mode: str
+    slam_profile: str = "stopped"
+    localization_backend: str | None = None
+    health_source: str | None = None
     active_map: str | None = None
     map_has_pcd: bool = False
     map_has_tomogram: bool = False
@@ -445,17 +644,40 @@ class SessionResponse(GatewayResponseModel):
     error: str = ""
     icp_quality: float | None = None
     localizer_ready: bool = False
+    localizer_algorithm_healthy: bool = False
+    pose_fresh: bool | None = None
+    pose_freshness: str = "unknown"
+    map_state: str | None = None
+    map_save_supported: bool = False
+    map_save_source: str | None = None
+    relocalization_supported: bool = True
+    saved_map_relocalization_supported: bool | None = None
+    restart_recovery_supported: bool | None = None
+    recovery_method: str | None = None
+    relocalization_state: str | None = None
+    recovery_signal: str | None = None
+    recovery_action: str | None = None
     can_start_mapping: bool = False
     can_start_navigating: bool = False
     can_start_exploring: bool = False
+    exploration_blockers: list[str] = Field(default_factory=list)
+    safety_clear: bool = True
+    safety: dict[str, Any] | None = None
     can_end: bool = False
+    explorer_backend: Literal["none", "frontier", "tare"] | str = "none"
     explorer_available: bool = False
+    explorer_unavailable_reason: str | None = None
+    explorer_required_profile: str | None = None
 
 
 class SessionTransitionResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
     success: bool
     session: SessionResponse | None = None
     message: str | None = None
+    detail: Any = None
+    ts: float = Field(default_factory=time.time)
 
 
 class MapInfo(GatewayResponseModel):
@@ -468,12 +690,17 @@ class MapInfo(GatewayResponseModel):
 
 
 class MapListResponse(GatewayResponseModel):
+    schema_version: int = 1
     maps: list[MapInfo] = Field(default_factory=list)
+    count: int = 0
     active: str = ""
     map_dir: str = ""
+    ts: float = Field(default_factory=time.time)
 
 
 class MapLifecycleResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
     success: bool | None = None
     message: str | None = None
     name: str | None = None
@@ -487,17 +714,31 @@ class MapLifecycleResponse(GatewayResponseModel):
     replaced_backups_pruned: int | None = None
     note: str | None = None
     errors: list[Any] | None = None
+    warnings: list[Any] | None = None
+    slam_profile: str | None = None
+    source: str | None = None
+    map_save_source: str | None = None
+    relocalization_supported: bool | None = None
+    saved_map_relocalization_supported: bool | None = None
+    restart_recovery_supported: bool | None = None
+    recovery_method: str | None = None
     dynamic_filter: Any = None
     maps: list[Any] | None = None
+    ts: float = Field(default_factory=time.time)
 
 
 class MapPointsResponse(GatewayResponseModel):
+    schema_version: int = 1
     count: int
     layout: Literal["flat_xyz", "xyz_rows"] = "xyz_rows"
+    frame_id: str = "map"
+    source: str = "unknown"
+    name: str | None = None
     points: list[float] | list[tuple[float, float, float]] = Field(
         default_factory=list
     )
     bounds: dict[str, list[float]] | None = None
+    ts: float = Field(default_factory=time.time)
 
 
 class TemporalMemoryResponse(GatewayResponseModel):
@@ -511,8 +752,19 @@ class ExplorationCommandResponse(GatewayResponseModel):
 
 class ExplorationStatusResponse(GatewayResponseModel):
     available: bool
+    backend: Literal["none", "frontier", "tare"] | str = "none"
     exploring: bool = False
     frontier_count: int = 0
+    can_start: bool = False
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    navigation: dict[str, Any] = Field(default_factory=dict)
+    reason: str | None = None
+    required_profile: str | None = None
+    supported_profiles: list[str] | None = None
+    action: str | None = None
+    tare: dict[str, Any] | None = None
+    supervisor: dict[str, Any] | None = None
 
 
 class SlamStatusResponse(GatewayResponseModel):
@@ -521,10 +773,13 @@ class SlamStatusResponse(GatewayResponseModel):
 
 
 class SlamOperationResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
     success: bool
     profile: str | None = None
     message: str | None = None
     quality: float | None = None
+    ts: float = Field(default_factory=time.time)
 
 
 class BagOperationResponse(GatewayResponseModel):
@@ -569,6 +824,219 @@ class WebRTCControlResponse(GatewayResponseModel):
     bps: int | None = None
 
 
+class ClientLinks(GatewayResponseModel):
+    bootstrap: str | None = None
+    capabilities: str | None = None
+    traffic: str | None = None
+    state: str | None = None
+    scene_graph: str | None = None
+    locations: str | None = None
+    path: str | None = None
+    localization_status: str | None = None
+    navigation_status: str | None = None
+    devices: str | None = None
+    auth_login: str | None = None
+    auth_check: str | None = None
+    events: str | None = None
+    teleop_ws: str | None = None
+    camera_ws: str | None = None
+    cloud_ws: str | None = None
+    camera_snapshot: str | None = None
+    webrtc_stats: str | None = None
+    webrtc_offer: str | None = None
+    webrtc_bitrate: str | None = None
+    webrtc_whep: str | None = None
+    go2rtc_status: str | None = None
+    health: str | None = None
+    session: str | None = None
+    session_start: str | None = None
+    session_end: str | None = None
+    navigation_plan: str | None = None
+    navigation_cancel: str | None = None
+    goal: str | None = None
+    navigate_click: str | None = None
+    stop: str | None = None
+    instruction: str | None = None
+    mode: str | None = None
+    lease: str | None = None
+    maps: str | None = None
+    map_lifecycle: str | None = None
+    map_activate: str | None = None
+    map_rename: str | None = None
+    map_save: str | None = None
+    map_restore_predufo: str | None = None
+    map_cloud_reset: str | None = None
+    map_points: str | None = None
+    saved_map_points: str | None = None
+    explore_status: str | None = None
+    explore_start: str | None = None
+    explore_stop: str | None = None
+    slam_status: str | None = None
+    slam_switch: str | None = None
+    slam_auto_relocalize: str | None = None
+    slam_relocalize: str | None = None
+    bag_start: str | None = None
+    bag_stop: str | None = None
+    bag_status: str | None = None
+    memory_temporal: str | None = None
+    memory_temporal_semantic: str | None = None
+    diagnostic_pack: str | None = None
+
+
+class CameraPortStatus(GatewayResponseModel):
+    frames: int = 0
+    fps: float = 0.0
+    stale_ms: float | None = None
+
+
+class CameraInfoStatus(GatewayResponseModel):
+    frames: int = 0
+    active_topic: str | None = None
+    preferred_topic: str | None = None
+    topics: list[str] = Field(default_factory=list)
+
+
+class CameraJpegStatus(GatewayResponseModel):
+    cached: bool = False
+    seq: int = 0
+    bytes: int = 0
+
+
+class CameraMediaStatus(GatewayResponseModel):
+    schema_version: int
+    available: bool
+    status: Literal["streaming", "idle", "stale", "error", "not_loaded"]
+    reason: str | None = None
+    backend: str | None = None
+    fps: float = 0.0
+    frames: int = 0
+    color: CameraPortStatus
+    depth: CameraPortStatus
+    camera_info: CameraInfoStatus
+    reconnect_count: int = 0
+    service_recovery_allowed: bool = False
+    service_recovery_suppressed: bool = False
+    jpeg: CameraJpegStatus
+    teleop_stream_clients: int = 0
+    ts: float
+    error: str | None = None
+
+
+class WebRTCMediaStatus(GatewayResponseModel):
+    available: bool
+    stats: str
+    offer: str
+    bitrate: str
+    whep: str
+    go2rtc_status: str
+
+
+class AppMediaLinks(GatewayResponseModel):
+    events: str
+    teleop_ws: str
+    camera_ws: str
+    cloud_ws: str
+    camera_snapshot: str
+    webrtc_available: bool
+    webrtc_stats: str | None = None
+    webrtc_offer: str | None = None
+    webrtc_bitrate: str | None = None
+    webrtc_whep: str | None = None
+    go2rtc_status: str | None = None
+    camera: CameraMediaStatus
+    webrtc: WebRTCMediaStatus
+
+
+class RealtimeEventsCapability(GatewayResponseModel):
+    path: str
+    transport: Literal["sse"]
+    initial_snapshot: bool
+    heartbeat_s: float
+    schema_version: int | None = None
+    event_schema: str | None = None
+    event_id_field: str | None = None
+    timestamp_field: str | None = None
+    heartbeat_type: str | None = None
+    snapshot_type: str | None = None
+    event_types: list[str] = Field(default_factory=list)
+    diagnostic_event_types: list[str] = Field(default_factory=list)
+    legacy_event_types: list[str] = Field(default_factory=list)
+    named_events: bool | None = None
+    browser_handler: str | None = None
+    retry_ms: int | None = None
+    replay_supported: bool | None = None
+    last_event_id_header: str | None = None
+    drop_policy: str | None = None
+    large_event_policy: dict[str, Any] = Field(default_factory=dict)
+
+
+class RealtimeTeleopCapability(GatewayResponseModel):
+    path: str
+    transport: Literal["websocket"]
+    control_messages: list[str] = Field(default_factory=list)
+    binary_camera_frames: bool
+    legacy_camera_query: str | None = None
+
+
+class RealtimeCameraCapability(GatewayResponseModel):
+    path: str
+    transport: Literal["websocket"]
+    binary_camera_frames: bool
+    explicit_subscription: bool
+
+
+class RealtimeCloudCapability(GatewayResponseModel):
+    path: str
+    transport: Literal["websocket"]
+    binary_point_cloud_frames: bool
+    drop_policy: str | None = None
+
+
+class AppRealtimeCapabilities(GatewayResponseModel):
+    events: RealtimeEventsCapability
+    teleop: RealtimeTeleopCapability
+    camera: RealtimeCameraCapability
+    cloud: RealtimeCloudCapability
+
+
+class TrafficSSEStats(GatewayResponseModel):
+    clients: int = 0
+    queue_maxsize: int | None = None
+    queue_depths: list[int] = Field(default_factory=list)
+    max_depth_seen: int = 0
+    latest_event_id: int = 0
+    published_events: int = 0
+    dropped_events: int = 0
+    suppressed_events: dict[str, int] = Field(default_factory=dict)
+    raster_min_interval_s: float | None = None
+    slope_grid_inline: bool = False
+    drop_policy: str | None = None
+
+
+class TrafficCloudStats(GatewayResponseModel):
+    clients: int = 0
+    queue_maxsize: int | None = None
+    queue_depths: list[int] = Field(default_factory=list)
+    max_depth_seen: int = 0
+    published_frames: int = 0
+    dropped_frames: int = 0
+    drop_policy: str | None = None
+    latest_seq: int = 0
+
+
+class AppTrafficResponse(GatewayResponseModel):
+    schema_version: int
+    ts: float
+    server: ServerInfo
+    status: Literal["ok", "degraded"]
+    sse: TrafficSSEStats
+    cloud: TrafficCloudStats
+    recommended_client_rates_hz: dict[str, float] = Field(default_factory=dict)
+    client_policy: dict[str, Any]
+    warnings: list[str] = Field(default_factory=list)
+    links: ClientLinks
+
+
 class StateResponse(GatewayResponseModel):
     schema_version: int
     ts: float
@@ -583,11 +1051,12 @@ class StateResponse(GatewayResponseModel):
     teleop: TeleopSummary
     session: dict[str, Any]
     localization: dict[str, Any]
-    navigation: dict[str, Any] = Field(default_factory=dict)
+    navigation: NavigationStatusResponse
     map: dict[str, Any]
     scene: dict[str, Any]
     path: dict[str, Any]
-    links: dict[str, str]
+    media: AppMediaLinks
+    links: ClientLinks
 
 
 class AppBootstrapResponse(GatewayResponseModel):
@@ -599,16 +1068,16 @@ class AppBootstrapResponse(GatewayResponseModel):
     mission: dict[str, Any]
     safety: dict[str, Any]
     localization: dict[str, Any]
-    navigation: dict[str, Any]
+    navigation: NavigationStatusResponse
     control: dict[str, Any]
     map: dict[str, Any]
     scene: dict[str, Any]
     path: dict[str, Any]
-    media: dict[str, Any]
+    media: AppMediaLinks
     traffic: dict[str, Any]
     capabilities: dict[str, bool]
     capabilities_endpoint: str
-    links: dict[str, str]
+    links: ClientLinks
 
 
 class AppCapabilitiesResponse(GatewayResponseModel):
@@ -619,6 +1088,6 @@ class AppCapabilitiesResponse(GatewayResponseModel):
     features: dict[str, bool]
     endpoints: dict[str, dict[str, EndpointSpec]]
     probes: dict[str, EndpointSpec]
-    realtime: dict[str, Any]
+    realtime: AppRealtimeCapabilities
     client_policy: dict[str, Any]
-    links: dict[str, str]
+    links: ClientLinks

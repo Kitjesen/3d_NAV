@@ -2,24 +2,44 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Mapping
 from typing import Any
 
+from gateway.services.media_status import build_media_status
 from gateway.services.runtime_status import (
     build_localization_status_from_parts,
     build_navigation_status,
     safe_lease as _safe_lease,
     safe_session as _safe_session,
 )
+from gateway.services.safety_status import (
+    SAFETY_STOP_BLOCKER,
+    safety_clear_for_motion,
+    safety_summary,
+)
+from gateway.services.traffic import (
+    DEFAULT_SSE_RASTER_MIN_INTERVAL_S,
+    DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED,
+    SSE_DIAGNOSTIC_EVENT_TYPES,
+    SSE_EVENT_SCHEMA_VERSION,
+    SSE_EVENT_TYPES,
+    SSE_LEGACY_EVENT_TYPES,
+    SSE_RETRY_MS,
+)
 
 
 APP_BOOTSTRAP_SCHEMA_VERSION = 1
 APP_CAPABILITIES_SCHEMA_VERSION = 1
+APP_TRAFFIC_SCHEMA_VERSION = 1
+_OPERATION_CONTRACT_CACHE_ATTR = "_app_capabilities_operation_contract_cache"
+_OPERATION_CONTRACT_CACHE_LOCK = threading.RLock()
 
 CLIENT_LINKS: dict[str, str] = {
     "bootstrap": "/api/v1/app/bootstrap",
     "capabilities": "/api/v1/app/capabilities",
+    "traffic": "/api/v1/app/traffic",
     "state": "/api/v1/state",
     "scene_graph": "/api/v1/scene_graph",
     "locations": "/api/v1/locations",
@@ -28,9 +48,14 @@ CLIENT_LINKS: dict[str, str] = {
     "navigation_status": "/api/v1/navigation/status",
     "devices": "/api/v1/devices",
     "health": "/api/v1/health",
+    "auth_login": "/api/v1/auth/login",
+    "auth_check": "/api/v1/auth/check",
     "session": "/api/v1/session",
+    "session_start": "/api/v1/session/start",
+    "session_end": "/api/v1/session/end",
     "events": "/api/v1/events",
     "teleop_ws": "/ws/teleop",
+    "camera_ws": "/ws/camera",
     "cloud_ws": "/ws/cloud",
     "camera_snapshot": "/api/v1/camera/snapshot",
     "webrtc_stats": "/api/v1/webrtc/stats",
@@ -40,12 +65,19 @@ CLIENT_LINKS: dict[str, str] = {
     "go2rtc_status": "/api/v1/webrtc/go2rtc/status",
     "goal": "/api/v1/goal",
     "navigate_click": "/api/v1/navigate/click",
+    "navigation_plan": "/api/v1/navigation/plan",
+    "navigation_cancel": "/api/v1/navigation/cancel",
     "stop": "/api/v1/stop",
     "instruction": "/api/v1/instruction",
     "mode": "/api/v1/mode",
     "lease": "/api/v1/lease",
     "maps": "/api/v1/slam/maps",
     "map_lifecycle": "/api/v1/maps",
+    "map_activate": "/api/v1/map/activate",
+    "map_rename": "/api/v1/map/rename",
+    "map_save": "/api/v1/map/save",
+    "map_restore_predufo": "/api/v1/map/restore_predufo",
+    "map_cloud_reset": "/api/v1/map_cloud/reset",
     "map_points": "/api/v1/map/points",
     "saved_map_points": "/api/v1/maps/{name}/points",
     "explore_status": "/api/v1/explore/status",
@@ -67,6 +99,11 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
     "app": {
         "bootstrap": {"method": "GET", "path": CLIENT_LINKS["bootstrap"]},
         "capabilities": {"method": "GET", "path": CLIENT_LINKS["capabilities"]},
+        "traffic": {"method": "GET", "path": CLIENT_LINKS["traffic"]},
+    },
+    "auth": {
+        "login": {"method": "POST", "path": CLIENT_LINKS["auth_login"]},
+        "check": {"method": "GET", "path": CLIENT_LINKS["auth_check"]},
     },
     "state": {
         "snapshot": {"method": "GET", "path": CLIENT_LINKS["state"]},
@@ -87,9 +124,12 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
     "realtime": {
         "events": {"method": "SSE", "path": CLIENT_LINKS["events"]},
         "teleop": {"method": "WS", "path": CLIENT_LINKS["teleop_ws"]},
+        "camera": {"method": "WS", "path": CLIENT_LINKS["camera_ws"]},
         "cloud": {"method": "WS", "path": CLIENT_LINKS["cloud_ws"]},
     },
     "control": {
+        "navigation_plan": {"method": "POST", "path": CLIENT_LINKS["navigation_plan"]},
+        "navigation_cancel": {"method": "POST", "path": CLIENT_LINKS["navigation_cancel"]},
         "goal": {"method": "POST", "path": CLIENT_LINKS["goal"]},
         "navigate_click": {"method": "POST", "path": CLIENT_LINKS["navigate_click"]},
         "stop": {"method": "POST", "path": CLIENT_LINKS["stop"]},
@@ -108,9 +148,19 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
     "map": {
         "maps": {"method": "GET", "path": CLIENT_LINKS["maps"]},
         "map_lifecycle": {"method": "POST", "path": CLIENT_LINKS["map_lifecycle"]},
+        "map_activate": {"method": "POST", "path": CLIENT_LINKS["map_activate"]},
+        "map_rename": {"method": "POST", "path": CLIENT_LINKS["map_rename"]},
+        "map_save": {"method": "POST", "path": CLIENT_LINKS["map_save"]},
+        "map_restore_predufo": {
+            "method": "POST",
+            "path": CLIENT_LINKS["map_restore_predufo"],
+        },
+        "map_cloud_reset": {"method": "POST", "path": CLIENT_LINKS["map_cloud_reset"]},
         "map_points": {"method": "GET", "path": CLIENT_LINKS["map_points"]},
         "saved_map_points": {"method": "GET", "path": CLIENT_LINKS["saved_map_points"]},
         "session": {"method": "GET", "path": CLIENT_LINKS["session"]},
+        "session_start": {"method": "POST", "path": CLIENT_LINKS["session_start"]},
+        "session_end": {"method": "POST", "path": CLIENT_LINKS["session_end"]},
         "explore_status": {"method": "GET", "path": CLIENT_LINKS["explore_status"]},
         "explore_start": {"method": "POST", "path": CLIENT_LINKS["explore_start"]},
         "explore_stop": {"method": "POST", "path": CLIENT_LINKS["explore_stop"]},
@@ -150,13 +200,7 @@ def _mission_summary(mission: Any) -> dict[str, Any]:
 
 
 def _safety_summary(safety: Any) -> dict[str, Any]:
-    raw = _mapping(safety)
-    level = raw.get("level")
-    return {
-        "level": level,
-        "ok": level in (None, 0, "ok", "safe"),
-        "raw": raw,
-    }
+    return safety_summary(safety)
 
 
 def _map_summary(gw: Any, session: Mapping[str, Any]) -> dict[str, Any]:
@@ -203,6 +247,78 @@ def _traffic_summary(gw: Any) -> dict[str, Any]:
     }
 
 
+def _int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _max_depth(stats: Mapping[str, Any]) -> int:
+    depths = stats.get("queue_depths", [])
+    if isinstance(depths, list):
+        candidates = [_int_value(item) for item in depths]
+    else:
+        candidates = []
+    candidates.append(_int_value(stats.get("max_depth_seen")))
+    return max(candidates, default=0)
+
+
+def _traffic_warnings(traffic: Mapping[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    sse = _mapping(traffic.get("sse"))
+    cloud = _mapping(traffic.get("cloud"))
+
+    if _int_value(sse.get("dropped_events")) > 0:
+        warnings.append("sse_events_dropped")
+    sse_maxsize = _int_value(sse.get("queue_maxsize"))
+    if sse_maxsize > 0 and _max_depth(sse) >= max(1, int(sse_maxsize * 0.75)):
+        warnings.append("sse_queue_pressure")
+
+    if _int_value(cloud.get("dropped_frames")) > 0:
+        warnings.append("cloud_frames_dropped_latest_only")
+    cloud_maxsize = _int_value(cloud.get("queue_maxsize"))
+    if cloud_maxsize > 0 and _max_depth(cloud) >= cloud_maxsize:
+        warnings.append("cloud_queue_pressure")
+
+    return warnings
+
+
+def _large_event_policy(gw: Any) -> dict[str, Any]:
+    slope_inline = bool(
+        getattr(gw, "_sse_slope_payload_enabled", DEFAULT_SSE_SLOPE_PAYLOAD_ENABLED)
+    )
+    return {
+        "raster_min_interval_s": float(
+            getattr(gw, "_sse_raster_min_interval_s", DEFAULT_SSE_RASTER_MIN_INTERVAL_S)
+        ),
+        "costmap_payload": "inline_sse",
+        "slope_grid_payload": "inline_sse" if slope_inline else "metadata_sse",
+        "point_cloud_payload": "binary_websocket",
+        "binary_cloud_endpoint": CLIENT_LINKS["cloud_ws"],
+    }
+
+
+def _client_traffic_policy(
+    gw: Any,
+    traffic: Mapping[str, Any],
+    *,
+    usage: str,
+) -> dict[str, Any]:
+    return {
+        "usage": usage,
+        "poll_rates_hz": traffic.get("recommended_client_rates_hz", {}),
+        "events_endpoint": CLIENT_LINKS["events"],
+        "traffic_endpoint": CLIENT_LINKS["traffic"],
+        "cloud_endpoint": CLIENT_LINKS["cloud_ws"],
+        "large_event_policy": _large_event_policy(gw),
+        "backpressure": {
+            "sse": _mapping(traffic.get("sse")).get("drop_policy"),
+            "cloud": _mapping(traffic.get("cloud")).get("drop_policy"),
+        },
+    }
+
+
 def _command_policy(gw: Any) -> dict[str, Any]:
     try:
         snapshot = gw._command_stats_snapshot()
@@ -244,6 +360,9 @@ def _auth_summary() -> dict[str, Any]:
 
 
 def _feature_flags(gw: Any) -> dict[str, bool]:
+    explorer_available = getattr(gw, "_frontier_explorer", None) is not None
+    if hasattr(gw, "_explorer_available"):
+        explorer_available = bool(gw._explorer_available())
     return {
         "state": True,
         "health": True,
@@ -251,13 +370,44 @@ def _feature_flags(gw: Any) -> dict[str, bool]:
         "mapping": True,
         "localization": True,
         "navigation": True,
-        "exploration": getattr(gw, "_frontier_explorer", None) is not None,
+        "exploration": explorer_available,
         "teleop": True,
         "camera_snapshot": True,
         "webrtc": getattr(gw, "_webrtc", None) is not None,
         "scene_graph": True,
         "locations": True,
         "sessions": True,
+    }
+
+
+def _webrtc_summary(gw: Any) -> dict[str, Any]:
+    return {
+        "available": getattr(gw, "_webrtc", None) is not None,
+        "stats": CLIENT_LINKS["webrtc_stats"],
+        "offer": CLIENT_LINKS["webrtc_offer"],
+        "bitrate": CLIENT_LINKS["webrtc_bitrate"],
+        "whep": CLIENT_LINKS["webrtc_whep"],
+        "go2rtc_status": CLIENT_LINKS["go2rtc_status"],
+    }
+
+
+def _media_summary(gw: Any) -> dict[str, Any]:
+    media = build_media_status(gw)
+    webrtc = _webrtc_summary(gw)
+    return {
+        "events": CLIENT_LINKS["events"],
+        "teleop_ws": CLIENT_LINKS["teleop_ws"],
+        "camera_ws": CLIENT_LINKS["camera_ws"],
+        "cloud_ws": CLIENT_LINKS["cloud_ws"],
+        "camera_snapshot": CLIENT_LINKS["camera_snapshot"],
+        "webrtc_available": bool(webrtc["available"]),
+        "webrtc_stats": CLIENT_LINKS["webrtc_stats"],
+        "webrtc_offer": CLIENT_LINKS["webrtc_offer"],
+        "webrtc_bitrate": CLIENT_LINKS["webrtc_bitrate"],
+        "webrtc_whep": CLIENT_LINKS["webrtc_whep"],
+        "go2rtc_status": CLIENT_LINKS["go2rtc_status"],
+        "camera": media["camera"],
+        "webrtc": webrtc,
     }
 
 
@@ -273,46 +423,99 @@ def _schema_name(schema: Any) -> str | None:
             joined = "|".join(name for name in names if name)
             if joined:
                 return joined
+    if raw.get("type") == "object":
+        title = raw.get("title")
+        if isinstance(title, str) and title:
+            return title
     typ = raw.get("type")
     return str(typ) if typ else None
+
+
+def _openapi_route_signature(app: Any) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    routes = getattr(app, "routes", [])
+    signature: list[tuple[str, tuple[str, ...]]] = []
+    for route in routes:
+        path = getattr(route, "path", None)
+        if not path:
+            continue
+        methods = getattr(route, "methods", None) or []
+        signature.append(
+            (
+                str(path),
+                tuple(sorted(str(method).upper() for method in methods)),
+            )
+        )
+    return tuple(signature)
 
 
 def _operation_contracts(gw: Any) -> dict[tuple[str, str], dict[str, Any]]:
     app = getattr(gw, "_app", None)
     if app is None or not hasattr(app, "openapi"):
         return {}
-    try:
-        openapi = app.openapi()
-    except Exception:
-        return {}
+    route_signature = _openapi_route_signature(app)
+    with _OPERATION_CONTRACT_CACHE_LOCK:
+        cached = getattr(gw, _OPERATION_CONTRACT_CACHE_ATTR, None)
+        if (
+            isinstance(cached, tuple)
+            and len(cached) == 2
+            and cached[0] == route_signature
+            and isinstance(cached[1], dict)
+        ):
+            return cached[1]
+        try:
+            openapi = app.openapi()
+        except Exception:
+            return {}
 
-    contracts: dict[tuple[str, str], dict[str, Any]] = {}
-    for path, methods in _mapping(openapi.get("paths")).items():
-        if not isinstance(methods, Mapping):
-            continue
-        for method, operation in methods.items():
-            http_method = str(method).upper()
-            if http_method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        contracts: dict[tuple[str, str], dict[str, Any]] = {}
+        for path, methods in _mapping(openapi.get("paths")).items():
+            if not isinstance(methods, Mapping):
                 continue
-            op = _mapping(operation)
-            request_content = (
-                _mapping(op.get("requestBody")).get("content", {})
-                if isinstance(op.get("requestBody"), Mapping)
-                else {}
-            )
-            request_json = _mapping(_mapping(request_content).get("application/json"))
-            responses = _mapping(op.get("responses"))
-            response_200 = _mapping(responses.get("200"))
-            response_content = _mapping(response_200.get("content"))
-            response_json = _mapping(response_content.get("application/json"))
-            contracts[(http_method, str(path))] = {
-                "operation_id": op.get("operationId"),
-                "request_schema": _schema_name(request_json.get("schema")),
-                "response_schema": _schema_name(response_json.get("schema")),
-                "response_content_types": sorted(response_content.keys()),
-                "status_codes": sorted(str(code) for code in responses.keys()),
-            }
-    return contracts
+            for method, operation in methods.items():
+                http_method = str(method).upper()
+                if http_method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                    continue
+                op = _mapping(operation)
+                request_content = (
+                    _mapping(op.get("requestBody")).get("content", {})
+                    if isinstance(op.get("requestBody"), Mapping)
+                    else {}
+                )
+                request_json = _mapping(
+                    _mapping(request_content).get("application/json")
+                )
+                responses = _mapping(op.get("responses"))
+                response_200 = _mapping(responses.get("200"))
+                response_content = _mapping(response_200.get("content"))
+                response_json = _mapping(response_content.get("application/json"))
+                response_schema = _schema_name(response_json.get("schema"))
+                if response_schema is None:
+                    response_media = _mapping(
+                        response_content.get("text/event-stream")
+                    )
+                    response_schema = _schema_name(response_media.get("schema"))
+                contracts[(http_method, str(path))] = {
+                    "operation_id": op.get("operationId"),
+                    "request_schema": _schema_name(request_json.get("schema")),
+                    "response_schema": response_schema,
+                    "response_content_types": sorted(response_content.keys()),
+                    "status_codes": sorted(str(code) for code in responses.keys()),
+                }
+        setattr(gw, _OPERATION_CONTRACT_CACHE_ATTR, (route_signature, contracts))
+        return contracts
+
+
+def prewarm_app_capability_contracts(gw: Any) -> bool:
+    """Precompute App/Web capabilities metadata and response-model caches."""
+    contracts_ready = bool(_operation_contracts(gw))
+    try:
+        from gateway.schemas import AppCapabilitiesResponse
+
+        payload = build_app_capabilities(gw)
+        AppCapabilitiesResponse.model_validate(payload).model_dump(mode="json")
+    except Exception:
+        pass
+    return contracts_ready
 
 
 def _enrich_endpoint_specs(
@@ -329,7 +532,10 @@ def _enrich_endpoint_specs(
             lookup_method = "GET" if method == "SSE" else method
             contract = contracts.get((lookup_method, str(item.get("path", ""))))
             if contract:
-                item.update({k: v for k, v in contract.items() if v not in (None, [])})
+                for key, value in contract.items():
+                    if value in (None, []):
+                        continue
+                    item[key] = list(value) if isinstance(value, list) else value
             enriched[group][name] = item
     return enriched
 
@@ -355,12 +561,35 @@ def build_app_capabilities(gw: Any) -> dict[str, Any]:
                 "transport": "sse",
                 "initial_snapshot": True,
                 "heartbeat_s": 1.0,
+                "schema_version": SSE_EVENT_SCHEMA_VERSION,
+                "event_schema": "SSEEventEnvelope",
+                "event_id_field": "event_id",
+                "timestamp_field": "ts",
+                "heartbeat_type": "ping",
+                "snapshot_type": "snapshot",
+                "event_types": list(SSE_EVENT_TYPES),
+                "diagnostic_event_types": list(SSE_DIAGNOSTIC_EVENT_TYPES),
+                "legacy_event_types": list(SSE_LEGACY_EVENT_TYPES),
+                "named_events": False,
+                "browser_handler": "onmessage",
+                "retry_ms": SSE_RETRY_MS,
+                "replay_supported": False,
+                "last_event_id_header": "Last-Event-ID",
                 "drop_policy": traffic.get("sse", {}).get("drop_policy"),
+                "large_event_policy": _large_event_policy(gw),
             },
             "teleop": {
                 "path": CLIENT_LINKS["teleop_ws"],
                 "transport": "websocket",
+                "control_messages": ["joy", "stop"],
+                "binary_camera_frames": False,
+                "legacy_camera_query": "?video=1",
+            },
+            "camera": {
+                "path": CLIENT_LINKS["camera_ws"],
+                "transport": "websocket",
                 "binary_camera_frames": True,
+                "explicit_subscription": True,
             },
             "cloud": {
                 "path": CLIENT_LINKS["cloud_ws"],
@@ -378,6 +607,32 @@ def build_app_capabilities(gw: Any) -> dict[str, Any]:
     }
 
 
+def build_app_traffic(gw: Any) -> dict[str, Any]:
+    """Return low-frequency App/Web traffic and realtime backpressure status."""
+    now = time.time()
+    traffic = _traffic_summary(gw)
+    warnings = _traffic_warnings(traffic)
+    return {
+        "schema_version": APP_TRAFFIC_SCHEMA_VERSION,
+        "ts": now,
+        "server": {
+            "api_version": "v1",
+            "time": now,
+        },
+        "status": "degraded" if warnings else "ok",
+        "sse": _mapping(traffic.get("sse")),
+        "cloud": _mapping(traffic.get("cloud")),
+        "recommended_client_rates_hz": traffic.get("recommended_client_rates_hz", {}),
+        "client_policy": _client_traffic_policy(
+            gw,
+            traffic,
+            usage="low_frequency_monitoring",
+        ),
+        "warnings": warnings,
+        "links": dict(CLIENT_LINKS),
+    }
+
+
 def build_app_bootstrap(gw: Any) -> dict[str, Any]:
     """Return the first payload a mobile app or web client needs after login."""
     now = time.time()
@@ -389,8 +644,8 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
         scene_graph_json = gw._sg_json
         path_len = len(gw._last_path)
         teleop_active = gw._teleop_active
-        teleop_clients = gw._teleop_clients
         localization_status = getattr(gw, "_localization_status", None)
+    teleop_clients = gw._teleop_client_count()
 
     session = _safe_session(gw)
     icp_quality = float(getattr(gw, "_icp_quality", 0.0))
@@ -401,9 +656,13 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
         localization_status,
     )
     navigation = build_navigation_status(gw)
-    webrtc_available = getattr(gw, "_webrtc", None) is not None
     traffic = _traffic_summary(gw)
     control = dict(navigation.get("control", {}))
+    nav_readiness = navigation.get("readiness", {})
+    safety_clear = safety_clear_for_motion(safety)
+    goal_blockers = list(nav_readiness.get("blockers") or [])
+    if not safety_clear and SAFETY_STOP_BLOCKER not in goal_blockers:
+        goal_blockers.append(SAFETY_STOP_BLOCKER)
     control.update(
         {
             "teleop": {
@@ -411,7 +670,16 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
                 "clients": int(teleop_clients),
             },
             "estop_clear": mode != "estop",
-            "can_send_commands": mode != "estop" and not bool(session.get("pending")),
+            "safety_clear": safety_clear,
+            "can_send_commands": (
+                mode != "estop"
+                and safety_clear
+                and not bool(session.get("pending"))
+            ),
+            "can_send_goal": (
+                safety_clear and bool(navigation.get("can_accept_goal", False))
+            ),
+            "goal_blockers": goal_blockers,
             "command_policy": _command_policy(gw),
         }
     )
@@ -442,21 +710,14 @@ def build_app_bootstrap(gw: Any) -> dict[str, Any]:
             "points": path_len,
             "endpoint": CLIENT_LINKS["path"],
         },
-        "media": {
-            "events": CLIENT_LINKS["events"],
-            "teleop_ws": CLIENT_LINKS["teleop_ws"],
-            "cloud_ws": CLIENT_LINKS["cloud_ws"],
-            "camera_snapshot": CLIENT_LINKS["camera_snapshot"],
-            "webrtc_available": webrtc_available,
-            "webrtc_offer": CLIENT_LINKS["webrtc_offer"],
-        },
+        "media": _media_summary(gw),
         "traffic": {
             **traffic,
-            "client_policy": {
-                "usage": "cold_start_only",
-                "poll_rates_hz": traffic.get("recommended_client_rates_hz", {}),
-                "events_endpoint": CLIENT_LINKS["events"],
-            },
+            "client_policy": _client_traffic_policy(
+                gw,
+                traffic,
+                usage="cold_start_only",
+            ),
         },
         "capabilities": _feature_flags(gw),
         "capabilities_endpoint": CLIENT_LINKS["capabilities"],

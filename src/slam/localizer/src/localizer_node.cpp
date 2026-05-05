@@ -376,12 +376,22 @@ public:
         std::string desired = m_published_health;
         if (m_consec_lost >= LOST_CONFIRM_FRAMES)
             desired = "LOST";
-        else if (m_consec_locked >= RECOVER_CONFIRM_FRAMES && m_published_health != "UNKNOWN")
-            desired = "RECOVERED";
-        else if (m_consec_locked >= RECOVER_CONFIRM_FRAMES && m_published_health == "UNKNOWN")
-            desired = "LOCKED";
+        else if (m_consec_locked >= RECOVER_CONFIRM_FRAMES) {
+            if (m_published_health == "UNKNOWN")
+                desired = "LOCKED";
+            else if (m_published_health == "LOST")
+                desired = "RECOVERED";
+            else
+                desired = "LOCKED";
+        }
 
-        if (desired != m_published_health)
+        const auto now = std::chrono::steady_clock::now();
+        const bool state_changed = desired != m_published_health;
+        const bool heartbeat_due =
+            now - m_last_health_publish >= m_health_heartbeat_interval;
+        const bool publishable = desired != "UNKNOWN" || m_published_health != "UNKNOWN";
+
+        if (publishable && (state_changed || heartbeat_due))
         {
             std_msgs::msg::String msg;
             // R4: extended payload format
@@ -399,9 +409,16 @@ public:
                      + "|iter="    + std::to_string(iter)
                      + "|cov="     + std::to_string(cov);
             m_health_pub->publish(msg);
-            RCLCPP_INFO(this->get_logger(),
-                "Localization health → %s (fitness=%.4f iter=%d cov=%.4f)",
-                desired.c_str(), fitness, iter, cov);
+            m_last_health_publish = now;
+            if (state_changed) {
+                RCLCPP_INFO(this->get_logger(),
+                    "Localization health → %s (fitness=%.4f iter=%d cov=%.4f)",
+                    desired.c_str(), fitness, iter, cov);
+            } else {
+                RCLCPP_DEBUG(this->get_logger(),
+                    "Localization health heartbeat → %s (fitness=%.4f iter=%d cov=%.4f)",
+                    desired.c_str(), fitness, iter, cov);
+            }
 
             // P7a: on a fresh LOST transition, kick BBS3D for global
             // re-localization. Without this, the multi-frame health
@@ -413,7 +430,7 @@ public:
             // We deliberately do not block the publish itself on the
             // BBS3D launch — Navigation must see LOST before recovery
             // begins so it can stop / hold position.
-            if (desired == "LOST" && m_published_health != "LOST") {
+            if (state_changed && desired == "LOST" && m_published_health != "LOST") {
                 launchAutoBBS3D("multi-frame LOST (P3 health gate)");
             }
 
@@ -737,6 +754,10 @@ private:
     std::atomic<int> m_consec_lost{0};
     std::atomic<int> m_consec_locked{0};
     std::string m_published_health = "UNKNOWN";  // last value sent on m_health_pub
+    std::chrono::steady_clock::time_point m_last_health_publish =
+        std::chrono::steady_clock::now() - std::chrono::seconds(60);
+    std::chrono::steady_clock::duration m_health_heartbeat_interval =
+        std::chrono::milliseconds(500);
     static constexpr int LOST_CONFIRM_FRAMES = 5;
     static constexpr int RECOVER_CONFIRM_FRAMES = 3;
 

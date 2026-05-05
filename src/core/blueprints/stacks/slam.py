@@ -36,6 +36,7 @@ def slam(
     Profiles:
       "fastlio2"  → start slam + slam_pgo services (mapping mode)
       "localizer" → start slam + localizer services (navigation mode)
+      "super_lio" → start Super-LIO as an external experimental LIO backend
       "bridge"    → subscribe only, assume SLAM already running
       "none"/""   → empty (stub/dev mode)
 
@@ -50,6 +51,7 @@ def slam(
                                     → gnss_residual_*
     """
     bp = Blueprint()
+    profile = normalize_slam_profile(profile)
 
     if not profile or profile == "none":
         return bp
@@ -61,22 +63,39 @@ def slam(
             svc = get_service_manager()
 
             if profile == "fastlio2":
-                svc.stop("localizer")  # stop nav mode if running
+                svc.stop("localizer", "super_lio", "super_lio_relocation")  # stop nav/experimental modes if running
                 svc.ensure("slam", "slam_pgo")
                 svc.wait_ready("slam", timeout=10.0)
                 logger.info("SLAM mapping services started (slam + pgo)")
 
             elif profile == "localizer":
-                svc.stop("slam_pgo")  # stop map mode if running
+                svc.stop("slam_pgo", "super_lio", "super_lio_relocation")  # stop map/experimental modes if running
                 svc.ensure("slam", "localizer")
                 svc.wait_ready("slam", "localizer", timeout=10.0)
                 logger.info("SLAM localization services started (slam + localizer)")
+
+            elif profile == "super_lio":
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio_relocation")
+                svc.ensure("lidar", "super_lio")
+                svc.wait_ready("lidar", "super_lio", timeout=10.0)
+                logger.info("Super-LIO service started as experimental external LIO backend")
+
+            elif profile == "super_lio_relocation":
+                svc.stop("slam", "slam_pgo", "localizer", "super_lio")
+                svc.ensure("lidar", "super_lio_relocation")
+                svc.wait_ready("lidar", "super_lio_relocation", timeout=10.0)
+                logger.info("Super-LIO relocation service started as experimental saved-map backend")
 
             elif profile == "bridge":
                 pass  # assume SLAM already running
 
         except Exception as e:
-            if profile in ("fastlio2", "localizer"):
+            if profile in (
+                "fastlio2",
+                "localizer",
+                "super_lio",
+                "super_lio_relocation",
+            ):
                 logger.warning(
                     "SLAM service manager unavailable (no systemd?): %s. "
                     "SLAM C++ nodes will not be started automatically. "
@@ -88,7 +107,9 @@ def slam(
     # Bridge ROS2 topics into Python Module ports
     try:
         from slam.slam_bridge_module import SlamBridgeModule
-        bp.add(SlamBridgeModule, **_read_gnss_fusion_kwargs())
+        bridge_kwargs = _read_gnss_fusion_kwargs()
+        bridge_kwargs["backend_profile"] = profile
+        bp.add(SlamBridgeModule, **bridge_kwargs)
     except ImportError as e:
         logger.warning("SlamBridgeModule not available: %s", e)
 
@@ -112,6 +133,27 @@ def slam_module_name(profile: str) -> str:
     if not profile or profile == "none":
         return ""
     return "SlamBridgeModule"
+
+
+def normalize_slam_profile(profile: str) -> str:
+    """Return the canonical SLAM profile name used by stack factories."""
+    raw = str(profile or "").strip().lower()
+    aliases = {
+        "super-lio": "super_lio",
+        "superlio": "super_lio",
+        "super_lio_reloc": "super_lio_relocation",
+        "super-lio-reloc": "super_lio_relocation",
+        "superlio-reloc": "super_lio_relocation",
+        "super-lio-relocation": "super_lio_relocation",
+        "superlio-relocation": "super_lio_relocation",
+        "relocation": "super_lio_relocation",
+    }
+    return aliases.get(raw, raw)
+
+
+def _normalize_slam_profile(profile: str) -> str:
+    """Backward-compatible private alias for existing imports/tests."""
+    return normalize_slam_profile(profile)
 
 
 def _read_gnss_fusion_kwargs() -> dict:

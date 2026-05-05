@@ -33,13 +33,33 @@ class WireSpec:
 
 
 def _wire_if_present(bp: Blueprint, names: set[str], spec: WireSpec) -> None:
-    if spec.out_module in names and spec.in_module in names:
+    if (
+        spec.out_module in names
+        and spec.in_module in names
+        and _declares_port(bp, spec.out_module, spec.out_port)
+        and _declares_port(bp, spec.in_module, spec.in_port)
+    ):
         spec.apply(bp)
 
 
 def _apply_if_present(bp: Blueprint, names: set[str], specs: list[WireSpec]) -> None:
     for spec in specs:
         _wire_if_present(bp, names, spec)
+
+
+def _declares_port(bp: Blueprint, module_name: str, port_name: str) -> bool:
+    for entry in bp._entries:
+        if entry.name != module_name:
+            continue
+        if entry.instance is not None:
+            ports = getattr(entry.instance, "all_ports", {})
+            if port_name in ports:
+                return True
+        for cls in entry.module_cls.__mro__:
+            if port_name in getattr(cls, "__annotations__", {}):
+                return True
+        return hasattr(entry.module_cls, port_name)
+    return False
 
 
 def apply_full_stack_wires(
@@ -110,6 +130,7 @@ def apply_full_stack_wires(
             WireSpec("SlamBridgeModule", "localization_status", "SafetyRingModule", "localization_status"),
             WireSpec("SlamBridgeModule", "localization_status", "NavigationModule", "localization_status"),
             WireSpec("SlamBridgeModule", "localization_status", "DepthVisualOdomModule", "localization_status"),
+            WireSpec("SlamBridgeModule", "localization_status", "GatewayModule", "localization_status"),
             WireSpec("DepthVisualOdomModule", "visual_odometry", "SlamBridgeModule", "visual_odom"),
             WireSpec(camera_src, color_out, "DepthVisualOdomModule", "color_image"),
             WireSpec(camera_src, "depth_image", "DepthVisualOdomModule", "depth_image"),
@@ -119,8 +140,10 @@ def apply_full_stack_wires(
             WireSpec("GatewayModule", "instruction", "NavigationModule", "instruction"),
             WireSpec("MCPServerModule", "instruction", "NavigationModule", "instruction"),
             WireSpec("GatewayModule", "goal_pose", "NavigationModule", "goal_pose"),
+            WireSpec("GatewayModule", "cancel", "NavigationModule", "cancel"),
             WireSpec("MCPServerModule", "goal_pose", "NavigationModule", "goal_pose"),
             WireSpec("SemanticPlannerModule", "goal_pose", "NavigationModule", "goal_pose"),
+            WireSpec("TAREExplorerModule", "exploration_goal", "NavigationModule", "goal_pose"),
             WireSpec("PerceptionModule", "detections_3d", "SemanticPlannerModule", "detections"),
         ],
     )
@@ -134,6 +157,10 @@ def apply_full_stack_wires(
             WireSpec(nav_odom_src, "odometry", "PerceptionModule", "odometry"),
         ],
     )
+    # Navigation-state consumers must use the same odometry frame as
+    # NavigationModule/Gateway. On real profiles this is the SLAM bridge or
+    # managed SLAM output; falling back to driver odometry only applies when no
+    # localization module exists.
     for consumer in [
         "OccupancyGridModule",
         "ElevationMapModule",
@@ -156,7 +183,11 @@ def apply_full_stack_wires(
         "GeofenceManagerModule",
         "MCPServerModule",
     ]:
-        _wire_if_present(bp, names, WireSpec(drv, "odometry", consumer, "odometry"))
+        _wire_if_present(
+            bp,
+            names,
+            WireSpec(nav_odom_src, "odometry", consumer, "odometry"),
+        )
     _wire_if_present(bp, names, WireSpec(nav_odom_src, "odometry", "GatewayModule", "odometry"))
 
     _apply_if_present(
@@ -192,7 +223,7 @@ def apply_full_stack_wires(
                 WireSpec(camera_src, color_out, recorder, "color_image"),
                 WireSpec(camera_src, "depth_image", recorder, "depth_image"),
                 WireSpec(camera_src, "camera_info", recorder, "camera_info"),
-                WireSpec(drv, "odometry", recorder, "odometry"),
+                WireSpec(nav_odom_src, "odometry", recorder, "odometry"),
             ],
         )
 
@@ -241,7 +272,7 @@ def apply_full_stack_wires(
             WireSpec("PathFollowerModule", "cmd_vel", "CmdVelMux", "path_follower_cmd_vel"),
         ],
     )
-    WireSpec("CmdVelMux", "driver_cmd_vel", drv, "cmd_vel").apply(bp)
+    _wire_if_present(bp, names, WireSpec("CmdVelMux", "driver_cmd_vel", drv, "cmd_vel"))
     _wire_if_present(bp, names, WireSpec("CmdVelMux", "driver_cmd_vel", "SafetyRingModule", "cmd_vel"))
 
     return bp

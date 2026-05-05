@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
-from gateway.schemas import AppBootstrapResponse, AppCapabilitiesResponse
-from gateway.services.app_bootstrap import build_app_bootstrap, build_app_capabilities
+from gateway.schemas import (
+    AppBootstrapResponse,
+    AppCapabilitiesResponse,
+    AppTrafficResponse,
+)
+from gateway.services.app_bootstrap import (
+    build_app_bootstrap,
+    build_app_capabilities,
+    build_app_traffic,
+)
 
 
 def register_app_routes(app, gw) -> None:
@@ -22,3 +30,11 @@ def register_app_routes(app, gw) -> None:
     )
     async def app_capabilities():
         return build_app_capabilities(gw)
+
+    @app.get(
+        "/api/v1/app/traffic",
+        summary="App/Web realtime traffic and client polling policy",
+        response_model=AppTrafficResponse,
+    )
+    async def app_traffic():
+        return build_app_traffic(gw)

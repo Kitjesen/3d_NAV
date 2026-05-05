@@ -162,7 +162,12 @@ def _nav_core_available() -> bool:
 def preflight(profile_name: str, cfg: dict) -> None:
     slam = cfg.get("slam_profile", "none")
 
-    if slam in ("fastlio2", "pointlio") and os.name != "nt":
+    if slam in (
+        "fastlio2",
+        "pointlio",
+        "super_lio",
+        "super_lio_relocation",
+    ) and os.name != "nt":
         import shutil
         if not shutil.which("ros2"):
             print(f"  {T.yellow('!')} ros2 not in PATH — SLAM won't start")
@@ -184,7 +189,11 @@ def preflight(profile_name: str, cfg: dict) -> None:
             try:
                 result = subprocess.run(
                     ["iptables", "-L", "INPUT", "-n", "--line-numbers"],
-                    capture_output=True, text=True, timeout=2
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=2,
                 )
                 rules = result.stdout
                 # If there's a DROP/REJECT default policy and no ACCEPT for our port, warn
@@ -200,8 +209,8 @@ def preflight(profile_name: str, cfg: dict) -> None:
             except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError):
                 pass
 
-    # For nav/explore profiles that use slam=localizer, offer interactive map selection.
-    if slam == "localizer":
+    # For saved-map localization profiles, offer interactive map selection.
+    if slam in ("localizer", "super_lio_relocation"):
         map_dir = _default_map_dir()
         _select_map_interactive(cfg, map_dir)
 

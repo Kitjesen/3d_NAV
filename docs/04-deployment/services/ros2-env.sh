@@ -1,6 +1,6 @@
 #!/bin/bash
-# ROS2 environment — sourced by all robot-* services
-# NAV_WS follows the /opt/lingtu/current symlink so OTA updates work automatically
+# ROS2 environment helper for systemd service wrappers.
+# NAV_WS follows the /opt/lingtu/current symlink so OTA updates work automatically.
 
 export NAV_WS=/opt/lingtu/current
 source /opt/ros/humble/setup.bash

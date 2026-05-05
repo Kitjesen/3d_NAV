@@ -131,6 +131,16 @@ class SafetyRingModule(Module, layer=0):
         self._latest_mission: dict | None = None
         self._instruction = ""
 
+    def _has_motion_intent(self) -> bool:
+        mission = self._latest_mission or {}
+        state = str(mission.get("state", "")).upper()
+        idle_states = {"", "IDLE", "SUCCESS", "DONE", "CANCELLED", "CANCELED", "FAILED", "ABORTED"}
+        return (
+            state not in idle_states
+            or self._path_points is not None
+            or self._cmd_speed > self._stall_thr
+        )
+
     def setup(self):
         self.odometry.subscribe(self._on_odom)
         self.path.subscribe(self._on_path)
@@ -153,7 +163,7 @@ class SafetyRingModule(Module, layer=0):
             return SafetyLevel.STOP
         if self._loc_state == "LOST":
             return SafetyLevel.STOP
-        if not cmd_alive:
+        if not cmd_alive and self._has_motion_intent():
             return SafetyLevel.WARN
         if self._loc_state == "DEGRADED":
             return SafetyLevel.WARN

@@ -12,6 +12,9 @@ ExecStart=/bin/bash -c '\
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=10s
 
 [Install]
 WantedBy=multi-user.target

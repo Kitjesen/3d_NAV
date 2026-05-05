@@ -21,13 +21,16 @@ slam:
   odometry: /nav/odometry               # nav_msgs/Odometry — 唯一发布者: Fast-LIO2 (含位置+姿态)
   registered_cloud: /nav/registered_cloud  # sensor_msgs/PointCloud2 (机体坐标系)
   map_cloud: /nav/map_cloud             # sensor_msgs/PointCloud2 (世界坐标系)
+  saved_map_cloud: /nav/saved_map_cloud # sensor_msgs/PointCloud2 (static localization map)
   save_map_service: /nav/save_map       # interface/srv/SaveMaps
   dog_odometry: /nav/dog_odometry       # nav_msgs/Odometry — han_dog_bridge IMU 姿态反馈 (仅姿态+角速度，无位置)
 
 # ── 定位层 ──
 localization:
   quality: /nav/localization_quality      # std_msgs/Float32 (ICP 匹配质量)
+  health: /nav/localization_health        # std_msgs/String (LOCKED/LOST/RECOVERED health)
   relocalize_service: /nav/relocalize     # interface/srv/Relocalize
+  global_relocalize_service: /nav/global_relocalize # std_srvs/Trigger
   relocalize_check_service: /nav/relocalize_check  # interface/srv/IsValid (检查重定位是否完成)
 
 # ── 全局规划层 ──

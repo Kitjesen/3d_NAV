@@ -26,15 +26,21 @@ import json
 import logging
 import os
 import shutil
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 from core import In, Module, Out, skill
+from core.msgs.sensor import PointCloud2
 from nav.services.nav_services.yaml_helpers import load_yaml, save_yaml
 
 logger = logging.getLogger(__name__)
+
+
+class _LiveMapCloudSnapshotSaved(Exception):
+    """Internal control-flow marker after saving a live map_cloud snapshot."""
 
 
 class MapManagerModule(Module, layer=6):
@@ -57,6 +63,7 @@ class MapManagerModule(Module, layer=6):
     currently selected map directory.
     """
 
+    map_cloud: In[PointCloud2]
     map_command: In[str]
     map_response: Out[dict]
 
@@ -90,9 +97,34 @@ class MapManagerModule(Module, layer=6):
         self._active_map: str = load_yaml(
             self._active_map_file, default={}
         ).get("active", "")
+        self._slam_profile = str(
+            config.get("slam_profile")
+            or config.get("backend_profile")
+            or os.environ.get("LINGTU_SLAM_PROFILE")
+            or ""
+        ).strip().lower()
+        self._map_cloud_lock = threading.Lock()
+        self._latest_map_points: np.ndarray | None = None
 
     def setup(self) -> None:
+        self.map_cloud.subscribe(self._on_map_cloud)
+        self.map_cloud.set_policy("latest")
         self.map_command.subscribe(self._on_command)
+
+    def _on_map_cloud(self, cloud: PointCloud2) -> None:
+        """Store the latest finite XYZ map cloud for Super-LIO snapshot saves."""
+        try:
+            pts = np.asarray(cloud.points, dtype=np.float32)
+            if pts.ndim != 2 or pts.shape[1] < 3:
+                return
+            pts = pts[:, :3]
+            valid = np.isfinite(pts).all(axis=1) & (np.abs(pts) < 500.0).all(axis=1)
+            pts = pts[valid]
+        except Exception:
+            logger.debug("failed to normalize live map_cloud", exc_info=True)
+            return
+        with self._map_cloud_lock:
+            self._latest_map_points = pts.copy()
 
     # -- command dispatch -------------------------------------------------------
 
@@ -110,7 +142,12 @@ class MapManagerModule(Module, layer=6):
             if action == "list":
                 resp = self._map_list()
             elif action == "save":
-                resp = self._map_save(cmd.get("name", ""))
+                resp = self._map_save(
+                    cmd.get("name", ""),
+                    slam_profile=cmd.get("slam_profile")
+                    or cmd.get("backend")
+                    or cmd.get("localization_backend"),
+                )
             elif action == "delete":
                 resp = self._map_delete(cmd.get("name", ""))
             elif action == "rename":
@@ -157,7 +194,11 @@ class MapManagerModule(Module, layer=6):
             "active": self._active_map,
         }
 
-    def _map_save(self, name: str) -> dict[str, Any]:
+    def _map_save(
+        self,
+        name: str,
+        slam_profile: str | None = None,
+    ) -> dict[str, Any]:
         """Save SLAM map via ROS2 SaveMaps service, then build all planning artifacts.
 
         Pipeline
@@ -189,12 +230,38 @@ class MapManagerModule(Module, layer=6):
         if not name:
             return {"action": "save", "success": False, "message": "missing map name"}
 
+        resolved_slam_profile = self._resolve_slam_profile(slam_profile)
+        capability_fields = self._map_save_capability_fields(resolved_slam_profile)
         map_dir = self._map_dir / name
         map_dir.mkdir(parents=True, exist_ok=True)
         pcd_path = map_dir / "map.pcd"
 
+        if not capability_fields.get("map_save_supported", True):
+            return {
+                "action": "save",
+                "success": False,
+                "message": (
+                    f"Map save is not supported for slam_profile="
+                    f"{resolved_slam_profile!r}"
+                ),
+                "slam_profile": resolved_slam_profile,
+                **capability_fields,
+            }
+
         # Step 1 — Call the ROS2 SLAM save_maps service
         try:
+            if resolved_slam_profile == "super_lio":
+                snapshot_resp = self._save_live_map_cloud_snapshot(pcd_path)
+                if not snapshot_resp["success"]:
+                    return {
+                        "action": "save",
+                        "success": False,
+                        "message": snapshot_resp["message"],
+                        "slam_profile": resolved_slam_profile,
+                        **capability_fields,
+                    }
+                raise _LiveMapCloudSnapshotSaved()
+
             import subprocess
 
             # save_patches=true makes PGO dump per-frame patch PCDs +
@@ -213,6 +280,8 @@ class MapManagerModule(Module, layer=6):
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
             if result.returncode != 0:
@@ -220,18 +289,26 @@ class MapManagerModule(Module, layer=6):
                     "action": "save",
                     "success": False,
                     "message": f"SaveMaps failed: {result.stderr}",
+                    "slam_profile": resolved_slam_profile,
+                    **capability_fields,
                 }
         except FileNotFoundError as e:
             return {
                 "action": "save",
                 "success": False,
                 "message": f"ROS2 not available: {e}",
+                "slam_profile": resolved_slam_profile,
+                **capability_fields,
             }
+        except _LiveMapCloudSnapshotSaved:
+            pass
         except subprocess.TimeoutExpired as e:
             return {
                 "action": "save",
                 "success": False,
                 "message": f"ROS2 not available: {e}",
+                "slam_profile": resolved_slam_profile,
+                **capability_fields,
             }
 
         # Step 1½ — DUFOMap dynamic-obstacle filter (shared with gateway path).
@@ -251,16 +328,165 @@ class MapManagerModule(Module, layer=6):
             "success": True,
             "map_dir": str(map_dir),
             "pcd": str(pcd_path),
+            "slam_profile": resolved_slam_profile,
+            "source": capability_fields["map_save_source"],
             "tomogram": tomo_result.get("tomogram"),
             "tomogram_ok": tomo_result.get("success", False),
             "occupancy": occ_result.get("occupancy"),
             "occupancy_ok": occ_result.get("success", False),
+            **capability_fields,
         }
+        if resolved_slam_profile == "super_lio":
+            resp["warnings"] = [
+                "Super-LIO: saved map uses a live map_cloud snapshot; "
+                "saved-map relocalization is unsupported"
+            ]
         if not occ_result.get("success"):
             resp["occupancy_message"] = occ_result.get("message", "")
         if dufo_result is not None:
             resp["dynamic_filter"] = dufo_result
         return resp
+
+    def _save_live_map_cloud_snapshot(self, pcd_path: Path) -> dict[str, Any]:
+        """Persist the latest map_cloud snapshot as binary XYZ PCD."""
+        with self._map_cloud_lock:
+            pts = None if self._latest_map_points is None else self._latest_map_points.copy()
+        if pts is None or pts.size == 0:
+            return {
+                "success": False,
+                "message": (
+                    "No live map_cloud snapshot is available for Super-LIO map save"
+                ),
+            }
+        try:
+            point_count = self._write_binary_xyz_pcd(pcd_path, pts)
+        except Exception as exc:
+            return {"success": False, "message": f"Failed to write PCD: {exc}"}
+        if point_count <= 0:
+            return {
+                "success": False,
+                "message": "Live map_cloud snapshot had no finite XYZ points",
+            }
+        return {"success": True, "point_count": point_count}
+
+    @staticmethod
+    def _write_binary_xyz_pcd(path: Path, points: np.ndarray) -> int:
+        pts = np.asarray(points, dtype=np.float32)
+        if pts.ndim != 2 or pts.shape[1] < 3:
+            raise ValueError("points must have shape Nx3 or wider")
+        pts = pts[:, :3]
+        valid = np.isfinite(pts).all(axis=1) & (np.abs(pts) < 500.0).all(axis=1)
+        pts = pts[valid]
+        header = (
+            "# .PCD v0.7 - Point Cloud Data file format\n"
+            "VERSION 0.7\n"
+            "FIELDS x y z\n"
+            "SIZE 4 4 4\n"
+            "TYPE F F F\n"
+            "COUNT 1 1 1\n"
+            f"WIDTH {len(pts)}\n"
+            "HEIGHT 1\n"
+            "VIEWPOINT 0 0 0 1 0 0 0\n"
+            f"POINTS {len(pts)}\n"
+            "DATA binary\n"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as f:
+            f.write(header.encode("ascii"))
+            f.write(pts.astype("<f4", copy=False).tobytes())
+        return int(len(pts))
+
+    def _resolve_slam_profile(self, slam_profile: str | None = None) -> str:
+        """Resolve the backend used for a map save response."""
+        profile = str(slam_profile or self._slam_profile or "").strip().lower()
+        if profile:
+            return self._normalize_slam_profile(profile)
+        try:
+            from core.service_manager import get_service_manager
+
+            services = get_service_manager().status(
+                "super_lio_relocation",
+                "super_lio",
+                "slam_pgo",
+                "localizer",
+                "slam",
+            )
+            if services.get("super_lio_relocation") in ("running", "active"):
+                return "super_lio_relocation"
+            if services.get("super_lio") in ("running", "active"):
+                return "super_lio"
+            if services.get("slam_pgo") in ("running", "active"):
+                return "fastlio2"
+            if services.get("localizer") in ("running", "active"):
+                return "localizer"
+            if services.get("slam") in ("running", "active"):
+                return "slam"
+        except Exception:
+            pass
+        return "unknown"
+
+    @staticmethod
+    def _map_save_capability_fields(slam_profile: str | None) -> dict[str, Any]:
+        """Return the map-save capability contract shared by Gateway/MCP users."""
+        profile = MapManagerModule._normalize_slam_profile(slam_profile)
+        if profile == "super_lio":
+            return {
+                "map_save_supported": True,
+                "map_save_source": "live_map_cloud_snapshot",
+                "relocalization_supported": False,
+                "saved_map_relocalization_supported": False,
+                "restart_recovery_supported": True,
+                "recovery_method": "restart_super_lio",
+            }
+        if profile == "super_lio_relocation":
+            return {
+                "map_save_supported": False,
+                "map_save_source": "active_map",
+                "relocalization_supported": False,
+                "saved_map_relocalization_supported": False,
+                "restart_recovery_supported": True,
+                "recovery_method": "restart_super_lio_relocation",
+            }
+        if profile == "localizer":
+            return {
+                "map_save_supported": True,
+                "map_save_source": "slam_service",
+                "relocalization_supported": True,
+                "saved_map_relocalization_supported": True,
+                "restart_recovery_supported": True,
+                "recovery_method": "relocalize_service",
+            }
+        if profile in {"fastlio2", "slam"}:
+            return {
+                "map_save_supported": True,
+                "map_save_source": "slam_service",
+                "relocalization_supported": False,
+                "saved_map_relocalization_supported": False,
+                "restart_recovery_supported": True,
+                "recovery_method": "restart_slam",
+            }
+        return {
+            "map_save_supported": False,
+            "map_save_source": "unknown",
+            "relocalization_supported": False,
+            "saved_map_relocalization_supported": False,
+            "restart_recovery_supported": False,
+            "recovery_method": "none",
+        }
+
+    @staticmethod
+    def _normalize_slam_profile(slam_profile: str | None) -> str:
+        profile = str(slam_profile or "").strip().lower()
+        return {
+            "super-lio": "super_lio",
+            "superlio": "super_lio",
+            "super_lio_reloc": "super_lio_relocation",
+            "super-lio-reloc": "super_lio_relocation",
+            "superlio-reloc": "super_lio_relocation",
+            "super-lio-relocation": "super_lio_relocation",
+            "superlio-relocation": "super_lio_relocation",
+            "relocation": "super_lio_relocation",
+        }.get(profile, profile)
 
     def _build_tomogram(self, name: str) -> dict[str, Any]:
         """Build tomogram.pickle from map.pcd using the PCT planner pipeline."""
@@ -786,9 +1012,9 @@ class MapManagerModule(Module, layer=6):
         return json.dumps(self._map_list(), default=str)
 
     @skill
-    def save_map(self, name: str) -> str:
+    def save_map(self, name: str, slam_profile: str | None = None) -> str:
         """Save current SLAM map as *name* (ROS2 SaveMaps) and build all artifacts."""
-        return json.dumps(self._map_save(name), default=str)
+        return json.dumps(self._map_save(name, slam_profile=slam_profile), default=str)
 
     @skill
     def use_map(self, name: str) -> str:

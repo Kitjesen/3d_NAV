@@ -13,7 +13,7 @@ WorkingDirectory=/home/sunrise/data/inovxio/lingtu
 ExecStart=/bin/bash -c '\
   source /opt/ros/humble/setup.bash && \
   source ~/data/inovxio/lingtu/install/setup.bash && \
-  MAP_PATH=$${NAV_MAP_PATH:-/home/sunrise/data/inovxio/data/maps/active/map}; \
+  MAP_PATH=$${NAV_MAP_PATH:-/home/sunrise/data/nova/maps/active/map}; \
   exec ros2 run localizer localizer_node \
     --ros-args \
     -p config_path:=/home/sunrise/data/inovxio/lingtu/install/localizer/share/localizer/config/localizer.yaml \
@@ -24,9 +24,11 @@ ExecStart=/bin/bash -c '\
     -p initial_yaw:=0.0 \
     -r /cloud_registered:=/nav/registered_cloud \
     -r /Odometry:=/nav/odometry \
-    -r map_cloud:=/nav/map_cloud \
+    -r map_cloud:=/nav/saved_map_cloud \
+    -r /localization_quality:=/nav/localization_quality \
     -r relocalize:=/nav/relocalize \
-    -r relocalize_check:=/nav/relocalize_check'
+    -r relocalize_check:=/nav/relocalize_check \
+    -r global_relocalize:=/nav/global_relocalize'
 Restart=on-failure
 RestartSec=3
 MemoryMax=3G

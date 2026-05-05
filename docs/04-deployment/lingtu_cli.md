@@ -111,24 +111,129 @@ lingtu nav goal 3.5 2.1 0.0                   # send map-frame goal (x, y, yaw)
 lingtu nav stop                               # same as map end
 ```
 
+The optional `yaw` is in radians. It is forwarded to Gateway `/api/v1/goal` and
+published as the map-frame pose orientation; when omitted, the heading defaults
+to `0.0`.
+
+### Exploration profiles and Gateway contract
+
+`python lingtu.py explore` runs the Wavefront frontier backend, while
+`python lingtu.py tare_explore` runs the TARE backend when its binary and module
+are available. Gateway `/api/v1/explore/status` reports
+`backend=frontier|tare|none`; `/api/v1/explore/start` and `/api/v1/explore/stop`
+dispatch to the active backend. In the normal `nav` profile, `backend=none` and
+start returns `503`; this is expected because exploration is not part of the
+default saved-map navigation path.
+
 ### `svc` — systemd service control
 
 ```bash
 lingtu svc status               # 6 core services: enabled / active
 lingtu doctor                   # read-only service/topic/Gateway diagnostics
 lingtu svc restart slam         # restart Fast-LIO2 (i.e. robot-fastlio2.service)
+lingtu svc restart localization # restart Fast-LIO2 + localizer, then wait for /ready
 lingtu svc restart lidar        # restart Livox driver (i.e. robot-lidar.service)
 lingtu svc restart localizer    # restart ICP localizer
+lingtu svc restart super_lio    # restart experimental Super-LIO backend
+lingtu svc restart super_lio_relocation
 lingtu svc restart lingtu       # restart algorithm layer (clears odom cache)
 lingtu svc restart all          # restart LiDAR + SLAM + localizer + lingtu
 lingtu svc stop slam            # stop a single service
 ```
 
-The aliases `lidar` / `slam` / `localizer` / `lingtu` / `camera` / `brainstem` map
+The aliases `lidar` / `slam` / `localization` / `localizer` / `lingtu` / `camera` / `brainstem` map
 to the corresponding production systemd unit. There is no `slam.service` anymore;
 `slam` aliases to `robot-fastlio2.service`. `svc status` warns if legacy
 `lidar.service`, `slam.service`, or `localizer.service` is still active because those
 services can duplicate ROS nodes and starve `/nav/lidar_scan` / `/nav/imu`.
+Use `svc restart localization` when systemd still shows Fast-LIO2 active but
+`/nav/odometry` has no publisher; it restarts only Fast-LIO2 and the ICP
+localizer, preserving the LiDAR driver and LingTu process.
+The LingTu localization watchdog now performs the same ordered restart
+automatically for the `localizer` backend when fresh `LOCKED`/`RECOVERED`
+localizer health contradicts a sustained `/nav/odometry` publisher loss. Tune it
+with `LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY`,
+`LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY_S`, and
+`LINGTU_LOCALIZER_ODOM_LOSS_RECOVERY_COOLDOWN_S` on `lingtu.service`.
+
+The Super-LIO aliases are experimental. They map to `robot-super-lio.service`
+and `robot-super-lio-relocation.service` when those field-evaluation units are
+installed. They must not replace the default `nav`/`localizer` path until the
+route-level gate in `super_lio_backend.md` passes.
+
+### `slamcheck` - Super-LIO non-motion smoke
+
+```bash
+lingtu slamcheck super_lio --duration 60 --rollback previous
+lingtu slamcheck super_lio_relocation \
+  --map corrected_20260406_224020 \
+  --initial-pose 0 0 0 \
+  --duration 60 \
+  --rollback previous
+```
+
+This command switches the SLAM backend through Gateway, samples the localization
+contract, and rolls back. It is intended for non-motion field checks. The smoke
+requires:
+
+- `backend=super_lio` or `backend=super_lio_relocation`
+- `health_source=odom_map_cloud`
+- `map_save_source=live_map_cloud_snapshot` for normal Super-LIO
+- `map_save_source=active_map` for relocation
+- `saved_map_relocalization_supported=false`
+- `restart_recovery_supported=true`
+- `recovery_method=restart_super_lio*`
+- `recovery_signal=NONE` or `RECOVERED`
+- `recovery_action=none` or the matching restart action
+- no unit restart-count increase during the window
+
+For relocation, `--initial-pose X Y YAW` writes a fixed-decimal
+`SUPER_LIO_RELOCATION_INIT_POSE=[x,y,0.0,0.0,0.0,yaw]` into
+`/run/lingtu/super_lio_relocation.env`, and `--map NAME` points the active map
+symlink at `$HOME/data/nova/maps/NAME`.
+
+The relocation map must be a direct child of `$HOME/data/nova/maps`. `slamcheck`
+rejects nested paths, path traversal, absolute paths outside the map root, and
+unsafe active-map symlink targets before it writes the runtime env file or
+switches services.
+
+Passing `slamcheck` is not promotion evidence by itself. Save the command
+output and then run the route-level validation gate in
+`docs/04-deployment/super_lio_backend.md` before considering
+`super_lio_relocation` for navigation defaults.
+
+### `slamcompare` - localizer vs Super-LIO static gate
+
+```bash
+lingtu slamcompare \
+  --map corrected_20260406_224020 \
+  --duration 60 \
+  --warmup 20 \
+  --initial-pose current
+```
+
+This command is the repeatable version of the pre-motion A/B check. It switches
+to `localizer`, samples a stationary baseline, uses the current localizer pose as
+the Super-LIO relocation initial pose, runs a `slamcheck` warm-up for
+`super_lio_relocation`, samples the candidate, and always rolls back to
+`localizer`. It does not send goals or velocity commands.
+
+Default gates are intentionally conservative:
+
+- localizer stationary XY drift <= 0.20 m
+- Super-LIO relocation stationary XY drift <= 0.30 m
+- localizer-to-candidate first-pose jump <= 0.50 m
+- Super-LIO relocation stationary yaw drift <= 0.25 rad
+- localizer-to-candidate yaw jump <= 0.35 rad
+- candidate stays ready with `health_source=odom_map_cloud`
+- candidate reports `map_save_source=active_map`
+- recovery signal stays `NONE` or `RECOVERED`
+- active command source stays `none`
+
+Tune the thresholds with `--max-localizer-drift`, `--max-candidate-drift`,
+`--max-pose-jump`, `--max-yaw-drift`, and `--max-yaw-jump` only when the route
+artifact explains the reason. A failed `slamcompare` blocks robot-motion
+validation for Super-LIO and keeps the default navigation path on `localizer`.
 
 ### `doctor` - localization chain diagnostics
 
@@ -145,12 +250,35 @@ This is read-only. It checks:
   `/nav/map_cloud`, and `/localization_quality`
 - Gateway `/api/v1/health` SLAM summary
 
+### `soak` - non-motion readiness soak
+
+```bash
+lingtu soak --duration 120 --interval 2 --json --strict
+```
+
+This is read-only. It samples `/ready`, `/api/v1/health`,
+`/api/v1/localization/status`, `/api/v1/navigation/status`, `/api/v1/state`, and
+`/api/v1/path`. It does not start sessions, send goals, publish velocity
+commands, or restart services.
+
+Use it after boot, sensor reconnects, or localization changes to produce a
+repeatable evidence window. The report records localization state/confidence,
+odometry and map-cloud freshness, Gateway latency, live map-point stability,
+navigation command source, and stationary pose drift inferred from odometry
+samples. That drift is windowed no-motion displacement, not absolute drift
+against a survey-grade map.
+
+In `--strict` mode, stale localization, non-idle command sources, readiness
+failures, or excessive stationary drift return a non-zero exit code.
+
 ### `log` — journalctl filters
 
 ```bash
 lingtu log drift      # drift_watchdog firings
 lingtu log dufomap    # DUFOMap save stats (last hour)
 lingtu log error      # last 30 min ERROR-level (filters VectorMemory / WebRTC noise)
+lingtu log super_lio  # Super-LIO normal backend journals
+lingtu log relocation # Super-LIO relocation backend journals
 lingtu log tail       # live tail (Ctrl+C to exit)
 lingtu log all        # last 10 min, everything
 ```
@@ -222,6 +350,9 @@ lingtu map end && sleep 2 && lingtu map start
 ---
 
 ## Related
+
+- `docs/04-deployment/super_lio_backend.md` - experimental Super-LIO build,
+  smoke, rollback, failure table, and route-validation gate
 
 - `docs/04-deployment/README.md` — deployment overview, service inventory
 - `docs/archive/05-specialized/dynamic_obstacle_removal.md` — DUFOMap Phase 1 + 2

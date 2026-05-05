@@ -8,6 +8,7 @@ from typing import Any
 from gateway.services.app_bootstrap import (
     CLIENT_LINKS,
     _map_summary,
+    _media_summary,
 )
 from gateway.services.runtime_status import (
     build_localization_status_from_parts,
@@ -31,10 +32,10 @@ def build_state_snapshot(gw: Any) -> dict[str, Any]:
         dialogue = gw._dialogue
         mode = gw._mode
         teleop_active = gw._teleop_active
-        teleop_clients = gw._teleop_clients
         scene_graph_json = gw._sg_json
         path_len = len(gw._last_path)
         localization_status = getattr(gw, "_localization_status", None)
+    teleop_clients = gw._teleop_client_count()
 
     session = safe_session(gw)
     localization = build_localization_status_from_parts(
@@ -77,11 +78,6 @@ def build_state_snapshot(gw: Any) -> dict[str, Any]:
             "points": path_len,
             "endpoint": CLIENT_LINKS["path"],
         },
-        "links": {
-            "bootstrap": CLIENT_LINKS["bootstrap"],
-            "capabilities": CLIENT_LINKS["capabilities"],
-            "events": CLIENT_LINKS["events"],
-            "localization_status": CLIENT_LINKS["localization_status"],
-            "navigation_status": CLIENT_LINKS["navigation_status"],
-        },
+        "media": _media_summary(gw),
+        "links": dict(CLIENT_LINKS),
     }

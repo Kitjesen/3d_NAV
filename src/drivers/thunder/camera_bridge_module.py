@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -37,6 +38,12 @@ from core.registry import register
 from core.stream import Out
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_CAMERA_INFO_TOPICS = (
+    "/camera/color/camera_info",
+    "/camera/depth/camera_info",
+    "/camera/camera_info",
+)
 
 
 @register("camera_bridge", "default", description="ROS2 camera → Python Module bridge")
@@ -58,6 +65,8 @@ class CameraBridgeModule(Module, layer=1):
         color_topic: str = "/camera/color/image_raw",
         depth_topic: str = "/camera/depth/image_raw",
         info_topic: str = "/camera/camera_info",
+        info_topics: tuple[str, ...] | list[str] | str | None = None,
+        preferred_info_topic: str | None = None,
         spin_rate: float = 30.0,
         qos_depth: int = 5,
         rotate: int = 0,
@@ -68,12 +77,27 @@ class CameraBridgeModule(Module, layer=1):
         self._color_topic = color_topic
         self._depth_topic = depth_topic
         self._info_topic = info_topic
+        self._info_topics = self._normalize_info_topics(info_topic, info_topics)
+        env_preferred = os.environ.get("LINGTU_CAMERA_INFO_PREFERRED_TOPIC", "").strip()
+        preferred = preferred_info_topic or env_preferred
+        self._preferred_info_topic = (
+            preferred
+            if preferred in self._info_topics
+            else (
+                "/camera/color/camera_info"
+                if "/camera/color/camera_info" in self._info_topics
+                else self._info_topics[0]
+            )
+        )
+        self._active_info_topic: str | None = None
+        self._info_topic_cache: Dict[str, CameraIntrinsics] = {}
         self._spin_rate = spin_rate
         self._qos_depth = qos_depth
         # Rotation: 0=none, 90=CW, 180=flip, 270=CCW
         self._rotate = rotate
 
         self._node = None
+        self._executor = None
         self._running = False
         self._rclpy_available = False
         self._dds_reader = None
@@ -89,9 +113,51 @@ class CameraBridgeModule(Module, layer=1):
         self._last_depth_ts: float = 0.0
         self._stale_timeout: float = kw.get("stale_timeout", 5.0)
         self._max_reconnects: int = kw.get("max_reconnects", 10)
+        raw_allow_service_recovery = kw.get(
+            "allow_service_recovery",
+            os.environ.get("LINGTU_CAMERA_ALLOW_SERVICE_RECOVERY", "0"),
+        )
+        self._allow_service_recovery = str(raw_allow_service_recovery).lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self._service_recovery_suppressed = False
         self._reconnect_count: int = 0
         self._watchdog_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
+
+    @staticmethod
+    def _split_topic_list(raw: str) -> tuple[str, ...]:
+        return tuple(topic.strip() for topic in raw.replace(",", " ").split() if topic.strip())
+
+    @classmethod
+    def _normalize_info_topics(
+        cls,
+        info_topic: str,
+        info_topics: tuple[str, ...] | list[str] | str | None,
+    ) -> tuple[str, ...]:
+        env_topics = os.environ.get("LINGTU_CAMERA_INFO_TOPICS", "").strip()
+        if info_topics is None and env_topics:
+            raw_topics: tuple[str, ...] | list[str] = cls._split_topic_list(env_topics)
+        elif info_topics is None:
+            raw_topics = (
+                DEFAULT_CAMERA_INFO_TOPICS
+                if info_topic == "/camera/camera_info"
+                else (info_topic,)
+            )
+        elif isinstance(info_topics, str):
+            raw_topics = cls._split_topic_list(info_topics)
+        else:
+            raw_topics = info_topics
+
+        topics: list[str] = []
+        for topic in raw_topics:
+            clean = str(topic).strip()
+            if clean and clean not in topics:
+                topics.append(clean)
+        return tuple(topics or (info_topic,))
 
     def setup(self) -> None:
         # Prefer DDS — works without `source /opt/ros/humble/setup.bash`
@@ -116,19 +182,28 @@ class CameraBridgeModule(Module, layer=1):
         reader = ROS2TopicReader()
         reader.on_image(self._color_topic, self._on_ros2_color)
         reader.on_image(self._depth_topic, self._on_ros2_depth)
-        reader.on_camera_info(self._info_topic, self._on_ros2_info)
+        for topic in self._info_topics:
+            reader.on_camera_info(
+                topic,
+                lambda msg, topic=topic: self._on_ros2_info(msg, topic),
+            )
         if not reader.start():
             return False
         reader.spin_background()
         self._dds_reader = reader
         logger.info(
-            "CameraBridgeModule (DDS): color=%s depth=%s info=%s",
-            self._color_topic, self._depth_topic, self._info_topic,
+            "CameraBridgeModule (DDS): color=%s depth=%s info_topics=%s preferred=%s",
+            self._color_topic,
+            self._depth_topic,
+            ",".join(self._info_topics),
+            self._preferred_info_topic,
         )
         return True
 
     def _create_ros2_node(self) -> bool:
         """Create ROS2 node and subscriptions. Returns True on success."""
+        node = None
+        executor = None
         try:
             from rclpy.node import Node
             from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -145,33 +220,58 @@ class CameraBridgeModule(Module, layer=1):
                 depth=self._qos_depth,
             )
 
-            # Destroy old node if exists (reconnection path)
-            if self._node is not None:
-                try:
-                    self._node.destroy_node()
-                except Exception:
-                    pass
+            # Reconnection path: remove the old node from the shared executor
+            # before destroying it, otherwise stale nodes remain in the spin set.
+            self._cleanup_ros2_node()
 
-            self._node = Node(self._node_name)
-            get_shared_executor().add_node(self._node)
-            self._node.create_subscription(
+            node = Node(self._node_name)
+            executor = get_shared_executor()
+            executor.add_node(node)
+            node.create_subscription(
                 ROS2Image, self._color_topic, self._on_ros2_color, qos)
-            self._node.create_subscription(
+            node.create_subscription(
                 ROS2Image, self._depth_topic, self._on_ros2_depth, qos)
-            self._node.create_subscription(
-                CameraInfo, self._info_topic, self._on_ros2_info, qos)
+            for topic in self._info_topics:
+                node.create_subscription(
+                    CameraInfo,
+                    topic,
+                    lambda msg, topic=topic: self._on_ros2_info(msg, topic),
+                    qos,
+                )
+            self._node = node
+            self._executor = executor
 
             logger.info(
                 "CameraBridgeModule: node '%s' — color=%s depth=%s info=%s",
-                self._node_name, self._color_topic, self._depth_topic, self._info_topic,
+                self._node_name, self._color_topic, self._depth_topic, ",".join(self._info_topics),
             )
             return True
         except ImportError:
             logger.info("CameraBridgeModule: rclpy not available, running in stub mode")
             return False
         except Exception as e:
+            self._cleanup_ros2_node(node=node, executor=executor)
             logger.warning("CameraBridgeModule: setup failed: %s", e)
             return False
+
+    def _cleanup_ros2_node(self, node=None, executor=None) -> None:
+        node = node if node is not None else self._node
+        executor = executor if executor is not None else self._executor
+        if node is None:
+            return
+        try:
+            if executor is not None:
+                executor.remove_node(node)
+        except Exception:
+            pass
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        if node is self._node:
+            self._node = None
+        if executor is self._executor:
+            self._executor = None
 
     def start(self) -> None:
         super().start()
@@ -202,12 +302,7 @@ class CameraBridgeModule(Module, layer=1):
             except Exception:
                 pass
             self._dds_reader = None
-        if self._node:
-            try:
-                self._node.destroy_node()
-            except Exception:
-                pass
-            self._node = None
+        self._cleanup_ros2_node()
         super().stop()
 
     def health(self) -> dict[str, Any]:
@@ -219,6 +314,12 @@ class CameraBridgeModule(Module, layer=1):
             info["fps"] = round(1.0 / dt, 1) if dt > 0 else 0.0
         else:
             info["fps"] = 0.0
+        info["reconnect_count"] = self._reconnect_count
+        info["service_recovery_allowed"] = self._allow_service_recovery
+        info["service_recovery_suppressed"] = self._service_recovery_suppressed
+        info["camera_info_topics"] = list(self._info_topics)
+        info["camera_info_preferred_topic"] = self._preferred_info_topic
+        info["camera_info_active_topic"] = self._active_info_topic
         return info
 
     # ── Auto-recovery watchdog ────────────────────────────────────────────────
@@ -268,6 +369,9 @@ class CameraBridgeModule(Module, layer=1):
             level = self._recovery_level(self._reconnect_count)
             backoff = min(5.0 * self._reconnect_count, 30.0)
 
+            if self._suppress_service_recovery(level):
+                continue
+
             if level == 1:
                 logger.warning(
                     "CameraBridge: L1 recovery — reconnect rclpy (%d/%d)",
@@ -278,7 +382,7 @@ class CameraBridgeModule(Module, layer=1):
                     self.alive.publish(False)
             elif level == 2:
                 logger.warning(
-                    "CameraBridge: L2 recovery — restart camera.service (%d/%d)",
+                    "CameraBridge: L2 recovery — restart robot-camera.service (%d/%d)",
                     self._reconnect_count, self._max_reconnects)
                 self._restart_camera_service()
                 self._shutdown_event.wait(timeout=8.0)
@@ -299,6 +403,19 @@ class CameraBridgeModule(Module, layer=1):
 
             self._shutdown_event.wait(timeout=backoff)
 
+    def _suppress_service_recovery(self, level: int) -> bool:
+        if level <= 1 or self._allow_service_recovery:
+            return False
+        if not self._service_recovery_suppressed:
+            logger.warning(
+                "CameraBridge: service/USB recovery suppressed; set "
+                "LINGTU_CAMERA_ALLOW_SERVICE_RECOVERY=1 to enable "
+                "robot-camera.service restarts")
+            self._service_recovery_suppressed = True
+        self.alive.publish(False)
+        self._reconnect_count = self._max_reconnects + 1
+        return True
+
     @staticmethod
     def _recovery_level(attempt: int) -> int:
         """L1 for first 2 attempts, L2 for next 3, L3 after that."""
@@ -310,26 +427,56 @@ class CameraBridgeModule(Module, layer=1):
 
     @staticmethod
     def _restart_camera_service() -> None:
-        """Restart the camera systemd service (kill stale children first)."""
+        """Restart the canonical camera systemd service.
+
+        The robot used to have a legacy ``camera.service`` unit. Starting it
+        alongside ``robot-camera.service`` can duplicate Orbbec publishers or
+        node instances. A single ``/camera/camera`` component plus a single
+        ``/camera/camera_container`` is normal, so recovery stops only legacy
+        units before bringing the canonical unit back.
+        """
         import subprocess
+
+        canonical_unit = os.environ.get("LINGTU_CAMERA_SERVICE", "robot-camera.service")
+        legacy_units = tuple(
+            unit.strip()
+            for unit in os.environ.get(
+                "LINGTU_CAMERA_LEGACY_SERVICES",
+                "camera.service orbbec-camera.service",
+            ).replace(",", " ").split()
+            if unit.strip()
+        )
+
+        def run_systemctl(action: str, unit: str, timeout: float = 10.0) -> None:
+            subprocess.run(
+                ["sudo", "systemctl", action, unit],
+                capture_output=True,
+                timeout=timeout,
+            )
+
         try:
-            # Stop + kill stale component_container to prevent device lock fights
-            subprocess.run(
-                ["sudo", "systemctl", "stop", "camera"],
-                capture_output=True, timeout=10,
-            )
-            subprocess.run(
-                ["sudo", "killall", "-9", "component_container"],
-                capture_output=True, timeout=5,
-            )
+            for unit in legacy_units:
+                if unit != canonical_unit:
+                    run_systemctl("stop", unit)
+            run_systemctl("stop", canonical_unit)
+
+            # Clean only stale Orbbec camera launch/container processes. Avoid a
+            # broad component_container kill because other ROS components may
+            # share that binary name.
+            for pattern in (
+                r"component_container.*__ns:=/camera",
+                r"ros2 launch orbbec_camera",
+            ):
+                subprocess.run(
+                    ["sudo", "pkill", "-TERM", "-f", pattern],
+                    capture_output=True,
+                    timeout=5,
+                )
             time.sleep(1)
-            subprocess.run(
-                ["sudo", "systemctl", "start", "camera"],
-                capture_output=True, timeout=10,
-            )
-            logger.info("CameraBridge: camera.service restarted (clean)")
+            run_systemctl("start", canonical_unit)
+            logger.info("CameraBridge: %s restarted (legacy units stopped)", canonical_unit)
         except Exception as e:
-            logger.warning("CameraBridge: failed to restart camera.service: %s", e)
+            logger.warning("CameraBridge: failed to restart %s: %s", canonical_unit, e)
 
     @staticmethod
     def _usb_reset_camera() -> None:
@@ -341,7 +488,11 @@ class CameraBridgeModule(Module, layer=1):
                 ["bash", "-c",
                  "grep -rl '2bc5' /sys/bus/usb/devices/*/idVendor 2>/dev/null "
                  "| head -1 | xargs dirname"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
             )
             dev_path = result.stdout.strip()
             if dev_path:
@@ -361,6 +512,8 @@ class CameraBridgeModule(Module, layer=1):
     # ── ROS2 callbacks ────────────────────────────────────────────────────────
 
     def _on_ros2_color(self, msg) -> None:
+        now = time.time()
+        self._last_color_ts = now
         try:
             encoding = getattr(msg, "encoding", "bgr8").lower()
             h, w = msg.height, msg.width
@@ -383,7 +536,7 @@ class CameraBridgeModule(Module, layer=1):
                 fmt = ImageFormat.GRAY
 
             # Apply undistortion at source (linear interpolation for color)
-            if self._undistort_maps is not None:
+            if self._undistortion_maps_match(arr):
                 import cv2
                 arr = cv2.remap(arr, *self._undistort_maps, cv2.INTER_LINEAR)
 
@@ -397,8 +550,6 @@ class CameraBridgeModule(Module, layer=1):
                 if rot_code is not None:
                     arr = cv2.rotate(arr, rot_code)
 
-            now = time.time()
-            self._last_color_ts = now
             self.color_image.publish(Image(
                 data=arr.copy(), format=fmt,
                 ts=now, frame_id=msg.header.frame_id or "camera",
@@ -407,6 +558,8 @@ class CameraBridgeModule(Module, layer=1):
             logger.debug("CameraBridge: color parse error: %s", e)
 
     def _on_ros2_depth(self, msg) -> None:
+        now = time.time()
+        self._last_depth_ts = now
         try:
             encoding = getattr(msg, "encoding", "16uc1").lower()
             h, w = msg.height, msg.width
@@ -423,12 +576,10 @@ class CameraBridgeModule(Module, layer=1):
                 fmt = ImageFormat.DEPTH_U16
 
             # Apply undistortion at source (nearest-neighbor for depth to avoid blending)
-            if self._undistort_maps is not None:
+            if self._undistortion_maps_match(arr):
                 import cv2
                 arr = cv2.remap(arr, *self._undistort_maps, cv2.INTER_NEAREST)
 
-            now = time.time()
-            self._last_depth_ts = now
             self.depth_image.publish(Image(
                 data=arr.copy(), format=fmt,
                 ts=now, frame_id=msg.header.frame_id or "camera",
@@ -436,8 +587,31 @@ class CameraBridgeModule(Module, layer=1):
         except Exception as e:
             logger.debug("CameraBridge: depth parse error: %s", e)
 
-    def _on_ros2_info(self, msg) -> None:
+    def _topic_priority(self, topic: str) -> int:
         try:
+            return self._info_topics.index(topic)
+        except ValueError:
+            return len(self._info_topics)
+
+    def _should_accept_info_topic(self, topic: str) -> bool:
+        active = self._active_info_topic
+        if active is None or active == topic:
+            return True
+        if topic == self._preferred_info_topic:
+            return True
+        if active == self._preferred_info_topic:
+            return False
+        return self._topic_priority(topic) < self._topic_priority(active)
+
+    def _undistortion_maps_match(self, arr: np.ndarray) -> bool:
+        if self._undistort_maps is None:
+            return False
+        map1 = self._undistort_maps[0]
+        return tuple(map1.shape[:2]) == tuple(arr.shape[:2])
+
+    def _on_ros2_info(self, msg, topic: str | None = None) -> None:
+        try:
+            topic = topic or self._info_topic
             k = msg.k  # 3x3 intrinsic matrix, row-major
             fx, fy = float(k[0]), float(k[4])
             cx, cy = float(k[2]), float(k[5])
@@ -451,6 +625,23 @@ class CameraBridgeModule(Module, layer=1):
             dp2 = float(d[3]) if len(d) > 3 else 0.0
             dk3 = float(d[4]) if len(d) > 4 else 0.0
 
+            intrinsics = CameraIntrinsics(
+                fx=fx, fy=fy, cx=cx, cy=cy,
+                width=w, height=h,
+                dist_k1=dk1, dist_k2=dk2,
+                dist_p1=dp1, dist_p2=dp2, dist_k3=dk3,
+            )
+            self._info_topic_cache[topic] = intrinsics
+            if not self._should_accept_info_topic(topic):
+                return
+
+            if self._active_info_topic != topic:
+                self._active_info_topic = topic
+                self._undistort_maps = None
+                self._undistorted_intrinsics = None
+                self._K = None
+                logger.info("CameraBridge: using camera_info topic %s", topic)
+
             # Build undistortion maps once (idempotent)
             if self._undistort_maps is None and any(
                 abs(v) > 1e-12 for v in (dk1, dk2, dp1, dp2, dk3)
@@ -462,12 +653,7 @@ class CameraBridgeModule(Module, layer=1):
             if self._undistorted_intrinsics is not None:
                 self.camera_info.publish(self._undistorted_intrinsics)
             else:
-                self.camera_info.publish(CameraIntrinsics(
-                    fx=fx, fy=fy, cx=cx, cy=cy,
-                    width=w, height=h,
-                    dist_k1=dk1, dist_k2=dk2,
-                    dist_p1=dp1, dist_p2=dp2, dist_k3=dk3,
-                ))
+                self.camera_info.publish(intrinsics)
         except Exception as e:
             logger.debug("CameraBridge: info parse error: %s", e)
 
