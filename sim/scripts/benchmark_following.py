@@ -47,11 +47,18 @@ from scripts.run_person_following import (
     get_obs, pd_control, build_scene_xml,
 )
 
-_BRAINSTEM_SIM = _ROOT.parent / "brainstem" / "sim"
+_BRAINSTEM_ROOT = _ROOT.parent / "brainstem"
+_BRAINSTEM_SIM = _BRAINSTEM_ROOT / "sim"
+_DEFAULT_POLICY_NAME = "policy_251119.onnx"
 
 
 def find_policy() -> str:
     for c in [
+        _ROOT / "sim" / "robots" / "nova_dog" / "model" / _DEFAULT_POLICY_NAME,
+        _ROOT / "model" / _DEFAULT_POLICY_NAME,
+        _BRAINSTEM_ROOT / "model" / _DEFAULT_POLICY_NAME,
+        _BRAINSTEM_ROOT / "han_dog" / "model" / _DEFAULT_POLICY_NAME,
+        _BRAINSTEM_SIM / "model" / _DEFAULT_POLICY_NAME,
         _BRAINSTEM_SIM / "model" / "policy_v9_800.onnx",
         _ROOT.parent / "brainstem" / "sim" / "model" / "policy_v9_800.onnx",
     ]:

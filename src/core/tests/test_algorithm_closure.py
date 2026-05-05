@@ -283,6 +283,34 @@ def test_traversability_fusion_preserves_hard_costs_and_relays_esdf():
     assert relayed_esdf == [esdf]
     assert len(fused) == 1
     assert np.allclose(fused[0]["grid"], [[50.0, 100.0], [99.0, 0.0]])
+    assert fused[0]["frame_id"] == "map"
+
+
+def test_traversability_slope_grid_propagates_costmap_frame_id():
+    module = TraversabilityCostModule(max_slope_deg=45.0, publish_hz=1000.0)
+    slopes: list[dict] = []
+    fused: list[dict] = []
+    module.slope_grid._add_callback(slopes.append)
+    module.fused_cost._add_callback(fused.append)
+
+    module._on_elevation({
+        "max_z": np.array([[0.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        "valid": np.ones((2, 2), dtype=bool),
+        "resolution": 1.0,
+        "origin": [0.0, 0.0],
+        "frame_id": "map",
+    })
+    module._on_costmap({
+        "grid": np.zeros((2, 2), dtype=np.float32),
+        "resolution": 1.0,
+        "origin": [0.0, 0.0],
+        "frame_id": "map",
+    })
+
+    assert len(slopes) == 1
+    assert len(fused) == 1
+    assert slopes[0]["frame_id"] == "map"
+    assert fused[0]["frame_id"] == "map"
 
 
 def test_traversability_storage_inputs_keep_latest_without_changing_costmap_clock():

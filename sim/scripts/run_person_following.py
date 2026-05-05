@@ -53,7 +53,9 @@ from following.behavior import FollowingBehavior, BehaviorConfig
 # RL policy runner (adapted from brainstem walk_ref.py)
 # ---------------------------------------------------------------------------
 
-_BRAINSTEM_SIM = Path(__file__).resolve().parent.parent.parent.parent / "brainstem" / "sim"
+_BRAINSTEM_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "brainstem"
+_BRAINSTEM_SIM = _BRAINSTEM_ROOT / "sim"
+_DEFAULT_POLICY_NAME = "policy_251119.onnx"
 
 # Joint indices (Dart order → MuJoCo qpos/qvel indices)
 DOF_IDS = [7, 8, 9, 11, 12, 13, 15, 16, 17, 19, 20, 21, 10, 14, 18, 22]
@@ -199,6 +201,11 @@ def main():
     policy_path = args.policy
     if policy_path is None:
         candidates = [
+            sim_dir / "robots" / "nova_dog" / "model" / _DEFAULT_POLICY_NAME,
+            _ROOT / "model" / _DEFAULT_POLICY_NAME,
+            _BRAINSTEM_ROOT / "model" / _DEFAULT_POLICY_NAME,
+            _BRAINSTEM_ROOT / "han_dog" / "model" / _DEFAULT_POLICY_NAME,
+            _BRAINSTEM_SIM / "model" / _DEFAULT_POLICY_NAME,
             _BRAINSTEM_SIM / "model" / "policy_v9_800.onnx",
             _ROOT.parent / "brainstem" / "sim" / "model" / "policy_v9_800.onnx",
         ]

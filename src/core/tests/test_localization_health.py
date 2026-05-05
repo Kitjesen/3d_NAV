@@ -448,15 +448,15 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         self.assertIn("DEGRADED", states)
 
     def test_recovery_from_lost(self):
-        m = self._make()
+        m = self._make(reconnect_timeout=999.0, max_reconnects=0)
         received = []
         m.localization_status._add_callback(received.append)
-        m.start()
         # Go to LOST
         m._last_odom_time = time.time() - 0.5
         m._last_cloud_time = time.time() - 0.5
         m._last_odom_mono = 0.0
         m._last_cloud_mono = 0.0
+        m.start()
         time.sleep(0.15)
         # Recover
         for _ in range(10):
@@ -501,6 +501,8 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
             "watchdog_hz": 50,
             "fallback_after_degraded_s": 0.05,  # short for unit test
             "gnss_max_age_for_fallback_s": 1.0,
+            "reconnect_timeout": 999.0,
+            "max_reconnects": 0,
         }
         defaults.update(kw)
         return SlamBridgeModule(**defaults)
@@ -520,12 +522,12 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m = self._make()
         received = []
         m.localization_status._add_callback(received.append)
-        m.start()
         # Force DEGRADED by leaving cloud stale, odom fresh.
         self._stub_healthy_gnss(m)
         m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
         m._last_cloud_mono = 0.0
+        m.start()
         # Hold long enough to clear fallback_after_degraded_s.
         time.sleep(0.15)
         m.stop()
@@ -537,11 +539,11 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m = self._make()
         received = []
         m.localization_status._add_callback(received.append)
-        m.start()
         # No GNSS planted → fallback gate must keep us at DEGRADED.
         m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
         m._last_cloud_mono = 0.0
+        m.start()
         time.sleep(0.15)
         m.stop()
         states = [r["state"] for r in received]
@@ -552,13 +554,13 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m = self._make()
         received = []
         m.localization_status._add_callback(received.append)
-        m.start()
         # GNSS rx > gnss_max_age_for_fallback_s → fallback gate closed.
         self._stub_healthy_gnss(m)
         m._last_gnss_rx_ts = time.time() - 5.0  # stale
         m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
         m._last_cloud_mono = 0.0
+        m.start()
         time.sleep(0.15)
         m.stop()
         states = [r["state"] for r in received]
@@ -569,7 +571,6 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m = self._make()
         received = []
         m.localization_status._add_callback(received.append)
-        m.start()
         from core.msgs.gnss import GnssFixType, GnssOdom
         m._last_gnss_odom = GnssOdom(
             east=0.0, north=0.0, up=0.0, ve=0.0, vn=0.0, vu=0.0,
@@ -580,6 +581,7 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
         m._last_cloud_mono = 0.0
+        m.start()
         time.sleep(0.15)
         m.stop()
         states = [r["state"] for r in received]
@@ -589,11 +591,11 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m = self._make()
         received = []
         m.localization_status._add_callback(received.append)
-        m.start()
         self._stub_healthy_gnss(m)
         m._mark_odom_received()
         m._last_cloud_time = time.time() - 0.5
         m._last_cloud_mono = 0.0
+        m.start()
         time.sleep(0.15)  # enter FALLBACK
         # Now restore both odom and cloud freshness — keep them fresh while we
         # observe recovery so the watchdog does not race us into LOST.
@@ -1080,7 +1082,11 @@ class TestNavigationPauseResume(unittest.TestCase):
         m._on_localization_status(self._tracking_recovered_from_restart())
         m._tracker._last_progress_time = time.time() - 1.0
         m._tracker._stuck_warn_sent = True
-        m._on_odom(Odometry(pose=Pose(position=Vector3(0, 0, 0)), ts=time.time()))
+        m._on_odom(Odometry(
+            pose=Pose(position=Vector3(0, 0, 0)),
+            frame_id="map",
+            ts=time.time(),
+        ))
 
         self.assertEqual(m._state, MS.IDLE)
         self.assertEqual(waypoints, [])
@@ -1142,7 +1148,11 @@ class TestNavigationPauseResume(unittest.TestCase):
         m._on_localization_status({"state": "LOST", "confidence": 0.0})
 
         # Send odom — should be skipped (position updates but tracker not called)
-        odom = Odometry(pose=Pose(position=Vector3(5, 5, 0)), ts=time.time())
+        odom = Odometry(
+            pose=Pose(position=Vector3(5, 5, 0)),
+            frame_id="map",
+            ts=time.time(),
+        )
         m._on_odom(odom)
         # mission_status should not change (no tracker event)
         self.assertEqual(m._state, MS.IDLE)

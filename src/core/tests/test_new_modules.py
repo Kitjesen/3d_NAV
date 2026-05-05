@@ -38,6 +38,7 @@ class TestNavigationModule(unittest.TestCase):
         m = self._make()
         self.assertIn("waypoint", m.ports_out)
         self.assertIn("global_path", m.ports_out)
+        self.assertIn("clear_path", m.ports_out)
         self.assertIn("planner_status", m.ports_out)
         self.assertIn("mission_status", m.ports_out)
 
@@ -50,16 +51,26 @@ class TestNavigationModule(unittest.TestCase):
 
     def test_on_stop_clears(self):
         m = self._make()
+        clears = []
+        recovery = []
+        m.clear_path._add_callback(clears.append)
+        m.recovery_cmd_vel._add_callback(recovery.append)
         # Path now lives in the WaypointTracker service
         m._tracker._path = [np.array([1, 2, 0])]
         m._on_stop(2)
         self.assertEqual(m._tracker.path_length, 0)
         self.assertEqual(m._state, "IDLE")
+        self.assertEqual(clears, [True])
+        self.assertTrue(recovery[-1].is_zero())
 
     def test_on_cancel_clears_active_mission(self):
         m = self._make()
         statuses = []
+        clears = []
+        recovery = []
         m.mission_status._add_callback(statuses.append)
+        m.clear_path._add_callback(clears.append)
+        m.recovery_cmd_vel._add_callback(recovery.append)
         m._state = "EXECUTING"
         m._goal = np.array([5.0, 6.0, 0.0])
         m._tracker.reset(
@@ -75,6 +86,8 @@ class TestNavigationModule(unittest.TestCase):
         self.assertEqual(statuses[-1]["state"], "CANCELLED")
         self.assertEqual(statuses[-1]["remaining_waypoints"], 0)
         self.assertIsNone(statuses[-1]["goal"])
+        self.assertEqual(clears, [True])
+        self.assertTrue(recovery[-1].is_zero())
 
     def test_downsample(self):
         m = self._make(downsample_dist=2.0)
@@ -86,7 +99,11 @@ class TestNavigationModule(unittest.TestCase):
 
     def test_on_odom_updates_pos(self):
         m = self._make()
-        odom = Odometry(pose=Pose(position=Vector3(1, 2, 0)), ts=time.time())
+        odom = Odometry(
+            pose=Pose(position=Vector3(1, 2, 0)),
+            frame_id="map",
+            ts=time.time(),
+        )
         m._on_odom(odom)
         self.assertAlmostEqual(m._robot_pos[0], 1.0)
         self.assertAlmostEqual(m._robot_pos[1], 2.0)
@@ -178,6 +195,48 @@ class TestNavigationModule(unittest.TestCase):
         self.assertEqual(m._tracker.path_length, first_path_len)
         self.assertTrue(any(e.get("event") == "goal_update_ignored" for e in events))
 
+    def test_rejects_non_map_goal_frame(self):
+        m = self._make(enable_ros2_bridge=False, allow_direct_goal_fallback=True)
+        events = []
+        statuses = []
+        waypoints = []
+        m.adapter_status._add_callback(events.append)
+        m.mission_status._add_callback(statuses.append)
+        m.waypoint._add_callback(waypoints.append)
+
+        m._on_goal(PoseStamped(
+            pose=Pose(position=Vector3(4.0, 2.0, 0.0), orientation=Quaternion()),
+            frame_id="odom", ts=time.time(),
+        ))
+
+        self.assertIsNone(m._goal)
+        self.assertEqual(m._state, "IDLE")
+        self.assertEqual(waypoints, [])
+        self.assertEqual(events[-1]["event"], "goal_rejected")
+        self.assertEqual(events[-1]["expected_frame"], "map")
+        self.assertEqual(events[-1]["received_frame"], "odom")
+        self.assertEqual(statuses[-1]["planning_frame_id"], "map")
+        self.assertEqual(
+            statuses[-1]["failure_reason"],
+            "unsupported goal_pose frame 'odom'; expected 'map'",
+        )
+
+    def test_mission_status_exposes_coordinate_frames(self):
+        m = self._make()
+        statuses = []
+        m.mission_status._add_callback(statuses.append)
+
+        m._on_odom(Odometry(
+            pose=Pose(position=Vector3(1, 2, 0)),
+            frame_id="map",
+            ts=time.time(),
+        ))
+        m._set_state("IDLE")
+
+        self.assertEqual(statuses[-1]["frame_id"], "map")
+        self.assertEqual(statuses[-1]["planning_frame_id"], "map")
+        self.assertEqual(statuses[-1]["odom_frame_id"], "map")
+
 
 # ============================================================================
 # SafetyRingModule
@@ -263,6 +322,7 @@ class TestLocalPlannerModule(unittest.TestCase):
         self.assertIn("odometry", m.ports_in)
         self.assertIn("terrain_map", m.ports_in)
         self.assertIn("waypoint", m.ports_in)
+        self.assertIn("clear_path", m.ports_in)
         self.assertIn("local_path", m.ports_out)
 
     def test_layer(self):
@@ -279,6 +339,24 @@ class TestLocalPlannerModule(unittest.TestCase):
         self.assertEqual(m.boundary._policy, "latest")
         self.assertEqual(m.added_obstacles._policy, "latest")
         self.assertEqual(m.esdf._policy, "latest")
+
+    def test_clear_path_drops_waypoint_and_publishes_empty_path(self):
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule
+
+        m = LocalPlannerModule(backend="simple")
+        paths = []
+        m.local_path._add_callback(paths.append)
+        m._latest_waypoint = PoseStamped(
+            pose=Pose(position=Vector3(1.0, 2.0, 0.0)),
+            frame_id="map",
+        )
+
+        m._on_clear_path(True)
+
+        self.assertIsNone(m._latest_waypoint)
+        self.assertEqual(len(paths), 1)
+        self.assertEqual(len(paths[-1].poses), 0)
+        self.assertEqual(paths[-1].frame_id, "map")
 
 
 class TestPathFollowerModule(unittest.TestCase):

@@ -289,6 +289,92 @@ class TestMapManagerModule(unittest.TestCase):
         self.assertTrue(resp["restart_recovery_supported"])
         self.assertEqual(resp["recovery_method"], "relocalize_service")
 
+    @patch("subprocess.run")
+    @patch(
+        "gateway.gateway_module._apply_dynamic_filter_step1half",
+        return_value=None,
+    )
+    def test_simulation_only_map_save_closes_active_artifact_loop(
+        self,
+        _filter,
+        run,
+    ):
+        """Map save produces active map artifacts without ROS2 or hardware."""
+        map_name = "sim_saved"
+        map_dir = Path(self._map_dir) / map_name
+
+        def _fake_save_maps(*_args, **_kw):
+            map_dir.mkdir(parents=True, exist_ok=True)
+            (map_dir / "map.pcd").write_text(
+                "VERSION 0.7\n"
+                "FIELDS x y z\n"
+                "SIZE 4 4 4\n"
+                "TYPE F F F\n"
+                "COUNT 1 1 1\n"
+                "WIDTH 8\n"
+                "HEIGHT 1\n"
+                "VIEWPOINT 0 0 0 1 0 0 0\n"
+                "POINTS 8\n"
+                "DATA ascii\n"
+                "0.0 0.0 0.0\n"
+                "1.0 0.0 0.0\n"
+                "0.0 1.0 0.0\n"
+                "1.0 1.0 0.0\n"
+                "0.0 0.0 0.5\n"
+                "1.0 0.0 0.5\n"
+                "0.0 1.0 0.5\n"
+                "1.0 1.0 0.5\n",
+                encoding="utf-8",
+            )
+            return MagicMock(returncode=0, stderr="")
+
+        def _fake_build_tomogram(name):
+            tomogram_path = Path(self._map_dir) / name / "tomogram.pickle"
+            tomogram_path.write_bytes(b"sim-tomogram")
+            return {
+                "action": "build_tomogram",
+                "success": True,
+                "tomogram": str(tomogram_path),
+            }
+
+        run.side_effect = _fake_save_maps
+        with patch.object(self.mod, "_build_tomogram", side_effect=_fake_build_tomogram):
+            resp = self.mod._map_save(map_name, slam_profile="localizer")
+
+        self.assertTrue(resp["success"], resp)
+        self.assertEqual(resp["slam_profile"], "localizer")
+        self.assertEqual(resp["map_save_source"], "slam_service")
+        self.assertTrue(resp["tomogram_ok"])
+        self.assertTrue(resp["occupancy_ok"])
+        self.assertTrue(Path(resp["pcd"]).exists())
+        self.assertTrue(Path(resp["tomogram"]).exists())
+        self.assertTrue(Path(resp["occupancy"]).exists())
+        self.assertTrue(resp["saved_map_relocalization_supported"])
+        run.assert_called_once()
+        self.assertIn("/pgo/save_maps", run.call_args.args[0])
+
+        active = self._cmd({"action": "set_active", "name": map_name})
+        self.assertTrue(active["success"], active)
+        self.assertEqual(self.mod._active_map, map_name)
+        self.assertEqual(
+            Path(self.mod.get_active_tomogram()).resolve(),
+            (map_dir / "tomogram.pickle").resolve(),
+        )
+        self.assertEqual(
+            Path(self.mod.get_active_occupancy()).resolve(),
+            (map_dir / "occupancy.npz").resolve(),
+        )
+
+        listed = self._cmd({"action": "list"})
+        entry = next(m for m in listed["maps"] if m["name"] == map_name)
+        self.assertTrue(entry["has_pcd"])
+        self.assertTrue(entry["has_tomogram"])
+        self.assertTrue(entry["has_occupancy"])
+
+        occupancy = np.load(resp["occupancy"])
+        self.assertIn("grid", occupancy)
+        self.assertTrue(np.any(occupancy["grid"] == 100))
+
     # -- occupancy snapshot tests --
 
     def test_build_occupancy_snapshot_missing_name(self):
@@ -889,6 +975,12 @@ class TestCameraBridgeModule(unittest.TestCase):
         from drivers.thunder.camera_bridge_module import CameraBridgeModule
         return CameraBridgeModule(**kw)
 
+    def _make_stub_bridge(self, **kw):
+        mod = self._make_bridge(**kw)
+        mod._create_dds_reader = MagicMock(return_value=False)
+        mod._create_ros2_node = MagicMock(return_value=False)
+        return mod
+
     def test_instantiation_defaults(self):
         mod = self._make_bridge()
         self.assertEqual(mod._color_topic, "/camera/color/image_raw")
@@ -944,18 +1036,19 @@ class TestCameraBridgeModule(unittest.TestCase):
 
     def test_setup_no_rclpy(self):
         """setup() should not crash when rclpy is not available."""
-        mod = self._make_bridge()
+        mod = self._make_stub_bridge()
         mod.setup()  # Should gracefully handle ImportError
+        self.assertEqual(mod._backend, "stub")
         self.assertFalse(mod._rclpy_available)
 
     def test_health_no_frames(self):
-        mod = self._make_bridge()
+        mod = self._make_stub_bridge()
         mod.setup()
         h = mod.health()
         self.assertAlmostEqual(h["fps"], 0.0)
 
     def test_health_with_timestamp(self):
-        mod = self._make_bridge()
+        mod = self._make_stub_bridge()
         mod.setup()
         mod._last_color_ts = time.time()
         h = mod.health()
@@ -963,8 +1056,8 @@ class TestCameraBridgeModule(unittest.TestCase):
         self.assertIn("fps", h)
 
     def test_start_without_node(self):
-        """start() without rclpy node publishes alive=False."""
-        mod = self._make_bridge()
+        """start() in stub mode publishes alive=False."""
+        mod = self._make_stub_bridge()
         mod.setup()
         published = []
         mod.alive.subscribe(lambda v: published.append(v))
@@ -972,7 +1065,7 @@ class TestCameraBridgeModule(unittest.TestCase):
         self.assertIn(False, published)
 
     def test_stop_idempotent(self):
-        mod = self._make_bridge()
+        mod = self._make_stub_bridge()
         mod.setup()
         mod.start()
         mod.stop()

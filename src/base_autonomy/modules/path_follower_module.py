@@ -74,7 +74,7 @@ class PathFollowerModule(Module, layer=2):
         self._nc = None           # _nav_core module reference
         self._nc_params = None    # PathFollowerParams
         self._nc_state = None     # PathFollowerState (persistent across calls)
-        self._nc_path: list = []  # list of _nav_core.Vec3 (world frame)
+        self._nc_path: list = []  # list of _nav_core.Vec3 (path reference frame)
 
         # Recorded pose at path receipt time (for vehicleRel transform)
         self._x_rec = 0.0
@@ -222,6 +222,33 @@ class PathFollowerModule(Module, layer=2):
 
     # ── Callbacks ─────────────────────────────────────────────────────────
 
+    def _reset_nav_core_state(self) -> None:
+        if self._backend != "nav_core" or self._nc is None:
+            return
+        try:
+            self._nc_state = self._nc.PathFollowerState()
+            return
+        except Exception:
+            pass
+        state = self._nc_state
+        if state is None:
+            return
+        for attr in ("vehicle_speed", "vehicleSpeed", "nav_fwd", "pathPointID", "path_point_id"):
+            if hasattr(state, attr):
+                try:
+                    setattr(state, attr, 0)
+                except Exception:
+                    pass
+
+    def _publish_zero(self, *, reset_nav_core_state: bool = False) -> None:
+        self._smooth_vx = 0.0
+        self._smooth_wz = 0.0
+        if hasattr(self, "_pp_v_prev"):
+            self._pp_v_prev = 0.0
+        if reset_nav_core_state:
+            self._reset_nav_core_state()
+        self.cmd_vel.publish(Twist())
+
     def _on_odom(self, odom: Odometry):
         _prev_x, _prev_y = self._robot_x, self._robot_y
         self._robot_x = odom.pose.position.x
@@ -249,16 +276,24 @@ class PathFollowerModule(Module, layer=2):
             self._cos_yaw_rec = math.cos(self._yaw_rec)
             self._sin_yaw_rec = math.sin(self._yaw_rec)
 
-            # Convert path to list of Vec3 (world/odom frame, as-is from C++ pathFollower)
+            # nav_core expects path points and vehicleRel in the same frame.
             nc = self._nc
             pts = []
             for ps in path.poses:
-                v = nc.Vec3(
+                x_rel, y_rel = self._to_path_reference_frame(
                     ps.pose.position.x,
                     ps.pose.position.y,
+                )
+                v = nc.Vec3(
+                    x_rel,
+                    y_rel,
                     ps.pose.position.z,
                 )
                 pts.append(v)
+            if len(pts) < 2:
+                self._nc_path = []
+                self._publish_zero(reset_nav_core_state=True)
+                return
             self._nc_path = pts
             # Note: do NOT reset nc_state here — compute_control needs
             # continuous state to ramp up speed (vehicleSpeed persists)
@@ -267,27 +302,39 @@ class PathFollowerModule(Module, layer=2):
             pts = []
             for ps in path.poses:
                 pts.append([ps.pose.position.x, ps.pose.position.y])
-            self._path_points = np.array(pts) if len(pts) >= 2 else None
+            if len(pts) < 2:
+                self._path_points = None
+                self._publish_zero()
+                return
+            self._path_points = np.array(pts)
             # Kick off the cmd_vel → odom loop immediately
             if self._path_points is not None:
                 self._pid_step()
 
     # ── nav_core control step ──────────────────────────────────────────────
 
+    def _to_path_reference_frame(self, x: float, y: float) -> tuple[float, float]:
+        dx = x - self._x_rec
+        dy = y - self._y_rec
+        return (
+            self._cos_yaw_rec * dx + self._sin_yaw_rec * dy,
+            -self._sin_yaw_rec * dx + self._cos_yaw_rec * dy,
+        )
+
     def _nav_core_step(self, current_time: float):
         """Compute cmd_vel using C++ compute_control."""
         if not self._nc_path:
-            self.cmd_vel.publish(Twist())
+            self._publish_zero()
             return
 
         nc = self._nc
 
         # Transform robot position into path reference frame
         # (rotation by -yaw_rec, then translate by -(x_rec, y_rec))
-        dx = self._robot_x - self._x_rec
-        dy = self._robot_y - self._y_rec
-        vehicle_x_rel =  self._cos_yaw_rec * dx + self._sin_yaw_rec * dy
-        vehicle_y_rel = -self._sin_yaw_rec * dx + self._cos_yaw_rec * dy
+        vehicle_x_rel, vehicle_y_rel = self._to_path_reference_frame(
+            self._robot_x,
+            self._robot_y,
+        )
         vehicle_rel = nc.Vec3(vehicle_x_rel, vehicle_y_rel, 0.0)
 
         # Yaw change since path was received
@@ -325,7 +372,7 @@ class PathFollowerModule(Module, layer=2):
     def _pid_step(self):
         """Simple Pure Pursuit in Python for testing."""
         if self._path_points is None or len(self._path_points) < 2:
-            self.cmd_vel.publish(Twist())
+            self._publish_zero()
             return
 
         robot = np.array([self._robot_x, self._robot_y])

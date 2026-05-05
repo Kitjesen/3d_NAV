@@ -42,7 +42,13 @@ _WORLDS_DIR = _SIM_ROOT / "worlds"
 _THUNDER_MJCF = _SIM_ROOT / "assets" / "mjcf" / "thunder_v3_lingtu.xml"
 _LEGACY_ROBOTS_DIR = _SIM_ROOT / "robots" / "nova_dog"
 _ROBOT_XML = _THUNDER_MJCF
+_BRAINSTEM_POLICY_NAME = "policy_251119.onnx"
 _POLICY_CANDIDATES = (
+    _LEGACY_ROBOTS_DIR / "model" / _BRAINSTEM_POLICY_NAME,
+    _SIM_ROOT.parent / "model" / _BRAINSTEM_POLICY_NAME,
+    _SIM_ROOT.parent.parent / "brainstem" / "model" / _BRAINSTEM_POLICY_NAME,
+    _SIM_ROOT.parent.parent / "brainstem" / "han_dog" / "model" / _BRAINSTEM_POLICY_NAME,
+    _SIM_ROOT.parent.parent / "brainstem" / "sim" / "model" / _BRAINSTEM_POLICY_NAME,
     _LEGACY_ROBOTS_DIR / "thunder_policy.onnx",
     _LEGACY_ROBOTS_DIR / "policy.onnx",
 )
@@ -70,6 +76,9 @@ def _resolve_sim_path(path: str) -> str:
         candidate_paths.append(_SIM_ROOT.parent / candidate)
         if len(parts) > 1:
             candidate_paths.append(_SIM_ROOT / Path(*parts[1:]))
+    elif parts and parts[0].lower() == "model":
+        candidate_paths.append(_SIM_ROOT / "robots" / "nova_dog" / candidate)
+        candidate_paths.append(_SIM_ROOT.parent / candidate)
     else:
         candidate_paths.append(_SIM_ROOT / candidate)
         candidate_paths.append(_SIM_ROOT.parent / candidate)
@@ -347,6 +356,8 @@ class MujocoDriverModule(Module, layer=1):
                             float(state.angular_velocity[1]),
                             float(state.angular_velocity[2]))),
                     ts=ts,
+                    frame_id="map",
+                    child_frame_id="body",
                 ))
 
                 # Publish LiDAR (every 5th step = ~10 Hz)

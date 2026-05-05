@@ -45,24 +45,28 @@ def _command_rejected_response(
     message: str,
     detail: dict[str, Any],
     status_code: int = 409,
+    gw: Any | None = None,
 ) -> JSONResponse:
+    content = {
+        "schema_version": 1,
+        "ok": False,
+        "error": error,
+        "message": message,
+        "command": {
+            "name": command,
+            "request_id": getattr(body, "request_id", None),
+            "client_id": getattr(body, "client_id", "unknown"),
+            "accepted": False,
+            "replay": False,
+            "ts": time.time(),
+        },
+        "detail": detail,
+    }
+    if gw is not None and hasattr(gw, "_publish_command_ack"):
+        gw._publish_command_ack(content, status_code=status_code)
     return JSONResponse(
         status_code=status_code,
-        content={
-            "schema_version": 1,
-            "ok": False,
-            "error": error,
-            "message": message,
-            "command": {
-                "name": command,
-                "request_id": getattr(body, "request_id", None),
-                "client_id": getattr(body, "client_id", "unknown"),
-                "accepted": False,
-                "replay": False,
-                "ts": time.time(),
-            },
-            "detail": detail,
-        },
+        content=content,
     )
 
 
@@ -88,6 +92,7 @@ def _goal_readiness_rejection(gw, command: str, body: Any) -> JSONResponse | Non
             "localization": status.get("localization", {}),
             "path": "/api/v1/navigation/status",
         },
+        gw=gw,
     )
 
 
@@ -109,15 +114,23 @@ def _motion_safety_rejection(gw, command: str, body: Any) -> JSONResponse | None
             "safety": safety_summary(safety),
             "path": "/api/v1/state",
         },
+        gw=gw,
     )
 
 
-def _point_payload(x: float, y: float, z: float, *, ts: float) -> dict[str, Any]:
+def _point_payload(
+    x: float,
+    y: float,
+    z: float,
+    *,
+    ts: float,
+    frame_id: str = "map",
+) -> dict[str, Any]:
     return {
         "x": float(x),
         "y": float(y),
         "z": float(z),
-        "frame_id": "map",
+        "frame_id": frame_id,
         "ts": ts,
         "metadata": {},
     }
@@ -157,9 +170,9 @@ def _plan_preview_unavailable(
         "schema_version": 1,
         "ok": error is None,
         "feasible": False,
-        "frame_id": "map",
+        "frame_id": body.frame_id,
         "start": _current_start_payload(gw, ts=ts),
-        "goal": _point_payload(body.x, body.y, body.z, ts=ts),
+        "goal": _point_payload(body.x, body.y, body.z, ts=ts, frame_id=body.frame_id),
         "adjusted_goal": None,
         "path": [],
         "count": 0,
@@ -217,6 +230,7 @@ def _goal_plan_preview_rejection(gw, command: str, body: Any) -> JSONResponse | 
             x=body.x,
             y=body.y,
             z=body.z,
+            frame_id=getattr(body, "frame_id", "map"),
             client_id=getattr(body, "client_id", "unknown"),
         )
     except Exception as exc:
@@ -226,6 +240,7 @@ def _goal_plan_preview_rejection(gw, command: str, body: Any) -> JSONResponse | 
             error="navigation_plan_invalid",
             message="Navigation goal cannot be previewed.",
             detail={"error": str(exc)},
+            gw=gw,
         )
 
     preview = _preview_navigation_plan(gw, preview_body)
@@ -240,6 +255,7 @@ def _goal_plan_preview_rejection(gw, command: str, body: Any) -> JSONResponse | 
             "preview": preview,
             "path": "/api/v1/navigation/plan",
         },
+        gw=gw,
     )
 
 
@@ -256,6 +272,8 @@ def _run_planned_goal_command(
         return rejection
     replay = gw._command_journal.replay(command, request_id)
     if replay is not None:
+        if hasattr(gw, "_publish_command_ack"):
+            gw._publish_command_ack(replay, status_code=200)
         return replay
 
     rejection = _goal_readiness_rejection(gw, command, body)
@@ -265,7 +283,10 @@ def _run_planned_goal_command(
     if rejection is not None:
         return rejection
 
-    return gw._command_journal.accept(command, request_id, client_id, action())
+    response = gw._command_journal.accept(command, request_id, client_id, action())
+    if hasattr(gw, "_publish_command_ack"):
+        gw._publish_command_ack(response, status_code=200)
+    return response
 
 
 def register_command_routes(app, gw) -> None:
@@ -291,13 +312,18 @@ def register_command_routes(app, gw) -> None:
                         position=Vector3(body.x, body.y, body.z),
                         orientation=Quaternion.from_yaw(body.yaw),
                     ),
-                    frame_id="map",
+                    frame_id=body.frame_id,
                     ts=time.time(),
                 )
             )
             if body.instruction:
                 gw.instruction.publish(body.instruction)
-            return {"status": "ok", "goal": [body.x, body.y, body.z], "yaw": body.yaw}
+            return {
+                "status": "ok",
+                "goal": [body.x, body.y, body.z],
+                "yaw": body.yaw,
+                "frame_id": body.frame_id,
+            }
 
         return _run_planned_goal_command(gw, "goal", body, _publish)
 
@@ -315,11 +341,15 @@ def register_command_routes(app, gw) -> None:
                         position=Vector3(body.x, body.y, body.z),
                         orientation=Quaternion(0, 0, 0, 1),
                     ),
-                    frame_id="map",
+                    frame_id=body.frame_id,
                     ts=time.time(),
                 )
             )
-            return {"status": "ok", "goal": [body.x, body.y, body.z]}
+            return {
+                "status": "ok",
+                "goal": [body.x, body.y, body.z],
+                "frame_id": body.frame_id,
+            }
 
         return _run_planned_goal_command(gw, "navigate_click", body, _publish)
 
@@ -414,21 +444,31 @@ def register_command_routes(app, gw) -> None:
         responses=LEASE_ERROR_RESPONSES,
     )
     async def post_lease(body: LeaseRequest):
+        def _publish_lease_event(payload: dict[str, Any]) -> None:
+            if hasattr(gw, "push_event"):
+                gw.push_event({"type": "lease", "data": payload})
+
         def _apply() -> dict[str, Any]:
             if body.action == "acquire":
                 ok = gw._lease.acquire(body.client_id, body.ttl)
                 if not ok:
                     raise PermissionError("lease_conflict")
-                return {"status": "acquired", **gw._lease.to_dict()}
+                result = {"status": "acquired", **gw._lease.to_dict()}
+                _publish_lease_event(result)
+                return result
 
             if body.action == "release":
                 gw._lease.release(body.client_id)
-                return {"status": "released", **gw._lease.to_dict()}
+                result = {"status": "released", **gw._lease.to_dict()}
+                _publish_lease_event(result)
+                return result
 
             ok = gw._lease.renew(body.client_id, body.ttl)
             if not ok:
                 raise PermissionError("not_lease_holder")
-            return {"status": "renewed", **gw._lease.to_dict()}
+            result = {"status": "renewed", **gw._lease.to_dict()}
+            _publish_lease_event(result)
+            return result
 
         try:
             return gw._run_control_command("lease", body, _apply)
@@ -440,21 +480,29 @@ def register_command_routes(app, gw) -> None:
                 if error == "lease_conflict"
                 else "client does not hold the active control lease"
             )
+            content = {
+                "schema_version": 1,
+                "ok": False,
+                "error": error,
+                "message": message,
+                "command": {
+                    "name": "lease",
+                    "request_id": body.request_id,
+                    "client_id": body.client_id,
+                    "accepted": False,
+                    "replay": False,
+                    "ts": time.time(),
+                },
+                "detail": gw._lease.to_dict(),
+            }
+            if hasattr(gw, "_publish_command_ack"):
+                gw._publish_command_ack(content, status_code=status_code)
+            _publish_lease_event({
+                "status": "rejected",
+                "error": error,
+                **gw._lease.to_dict(),
+            })
             return JSONResponse(
                 status_code=status_code,
-                content={
-                    "schema_version": 1,
-                    "ok": False,
-                    "error": error,
-                    "message": message,
-                    "command": {
-                        "name": "lease",
-                        "request_id": body.request_id,
-                        "client_id": body.client_id,
-                        "accepted": False,
-                        "replay": False,
-                        "ts": time.time(),
-                    },
-                    "detail": gw._lease.to_dict(),
-                },
+                content=content,
             )

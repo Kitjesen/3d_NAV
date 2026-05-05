@@ -99,7 +99,7 @@ class StubDogModule(Module, layer=1):
                 ),
             ),
             twist=Twist(linear=Vector3(0, 0, 0), angular=Vector3(0, 0, 0)),
-            ts=now, frame_id="odom", child_frame_id="body",
+            ts=now, frame_id="map", child_frame_id="body",
         ))
 
     # -- Port callbacks ------------------------------------------------
@@ -136,7 +136,7 @@ class StubDogModule(Module, layer=1):
                     angular=Vector3(0.0, 0.0, self._wz),
                 ),
                 ts=now,
-                frame_id="odom",
+                frame_id="map",
                 child_frame_id="body",
             ))
             time.sleep(dt)

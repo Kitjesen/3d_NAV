@@ -508,6 +508,7 @@ def test_session_snapshot_exposes_super_lio_relocation_capabilities():
 
 def test_navigation_status_reports_mission_path_and_control_source():
     from gateway.gateway_module import GatewayModule
+    from gateway.schemas import NavigationStatusResponse
     from gateway.services.runtime_status import build_navigation_status
 
     class FakeMux:
@@ -526,6 +527,10 @@ def test_navigation_status_reports_mission_path_and_control_source():
         gateway._mode = "autonomous"
         gateway._mission = {
             "state": "EXECUTING",
+            "planning_frame_id": "map",
+            "odom_frame_id": "map",
+            "costmap_frame_id": "map",
+            "goal_frame_id": "map",
             "wp_index": 2,
             "wp_total": 5,
             "remaining_waypoints": 3,
@@ -554,6 +559,7 @@ def test_navigation_status_reports_mission_path_and_control_source():
     gateway._all_modules = {"CmdVelMux": FakeMux()}
 
     payload = build_navigation_status(gateway)
+    NavigationStatusResponse.model_validate(payload)
 
     assert payload["state"] == "EXECUTING"
     assert payload["can_accept_goal"] is True
@@ -563,6 +569,12 @@ def test_navigation_status_reports_mission_path_and_control_source():
     assert payload["speed_scale"] == 0.5
     assert payload["path"]["points"] == 3
     assert payload["path"]["endpoint"] == "/api/v1/path"
+    assert payload["frames"]["planning_frame_id"] == "map"
+    assert payload["frames"]["odom_frame_id"] == "map"
+    assert payload["frames"]["costmap_frame_id"] == "map"
+    assert payload["frames"]["goal_frame_id"] == "map"
+    assert payload["frames"]["ok"] is True
+    assert payload["frames"]["mismatches"] == []
     assert payload["control"]["mode"] == "autonomous"
     assert payload["control"]["active_cmd_source"] == "path_follower"
     assert payload["control"]["command_owner"] == "navigation"
@@ -584,6 +596,144 @@ def test_navigation_status_reports_mission_path_and_control_source():
     assert payload["feedback"]["next_action"] == "monitor_progress"
     assert payload["reason_codes"] == []
     assert payload["localization"]["degraded"] is False
+
+
+def test_navigation_status_blocks_goal_on_odometry_frame_mismatch():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import NavigationStatusResponse
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0, "frame_id": "odom"}
+        gateway._mode = "autonomous"
+        gateway._mission = {
+            "state": "IDLE",
+            "planning_frame_id": "map",
+            "costmap_frame_id": "map",
+        }
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    payload = build_navigation_status(gateway)
+    NavigationStatusResponse.model_validate(payload)
+
+    assert payload["frames"]["ok"] is False
+    assert payload["frames"]["mismatches"] == [
+        {
+            "source": "odometry",
+            "expected_frame": "map",
+            "received_frame": "odom",
+        }
+    ]
+    assert "frame_mismatch_odometry" in payload["reason_codes"]
+    assert "frame_mismatch_odometry" in payload["readiness"]["blockers"]
+    assert payload["diagnostics"]["frame_mismatches"] == payload["frames"]["mismatches"]
+    assert payload["can_accept_goal"] is False
+    assert payload["readiness"]["can_execute_autonomy"] is False
+
+
+def test_gateway_odometry_preserves_frame_for_navigation_status():
+    from core.msgs.geometry import Pose, Quaternion, Vector3
+    from core.msgs.nav import Odometry
+    from gateway.gateway_module import GatewayModule
+    from gateway.services.runtime_status import build_navigation_status
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._mode = "autonomous"
+        gateway._mission = {"state": "IDLE", "planning_frame_id": "map"}
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+
+    gateway._on_odometry(Odometry(
+        pose=Pose(position=Vector3(1.0, 2.0, 0.0), orientation=Quaternion()),
+        frame_id="odom",
+        child_frame_id="base_link",
+    ))
+    payload = build_navigation_status(gateway)
+
+    assert gateway._odom["frame_id"] == "odom"
+    assert gateway._odom["child_frame_id"] == "base_link"
+    assert payload["frames"]["odom_frame_id"] == "odom"
+    assert "frame_mismatch_odometry" in payload["reason_codes"]
+
+
+def test_gateway_mission_event_pushes_navigation_status_update():
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 0.0, "y": 0.0, "frame_id": "map"}
+        gateway._mode = "autonomous"
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+    queue = gateway._sse_subscribe()
+
+    try:
+        gateway._on_mission({
+            "state": "EXECUTING",
+            "planning_frame_id": "map",
+            "odom_frame_id": "map",
+            "costmap_frame_id": "map",
+        })
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+    finally:
+        gateway._sse_unsubscribe(queue)
+
+    assert [event["type"] for event in events] == ["mission", "navigation_status"]
+    assert events[1]["data"]["state"] == "EXECUTING"
+    assert events[1]["data"]["frames"]["ok"] is True
+
+
+def test_navigation_status_reports_costmap_frame_mismatch():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import NavigationStatusResponse
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0, "frame_id": "map"}
+        gateway._mode = "autonomous"
+        gateway._mission = {
+            "state": "IDLE",
+            "planning_frame_id": "map",
+            "odom_frame_id": "map",
+            "costmap_frame_id": "odom",
+        }
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+    gateway._all_modules = {"CmdVelMux": FakeMux()}
+
+    payload = build_navigation_status(gateway)
+    NavigationStatusResponse.model_validate(payload)
+
+    assert payload["frames"]["ok"] is False
+    assert payload["frames"]["mismatches"] == [
+        {
+            "source": "costmap",
+            "expected_frame": "map",
+            "received_frame": "odom",
+        }
+    ]
+    assert "frame_mismatch_costmap" in payload["reason_codes"]
+    assert "frame_mismatch_costmap" in payload["readiness"]["blockers"]
+    assert payload["can_accept_goal"] is False
 
 
 def test_navigation_status_blocks_goal_when_session_is_not_navigating():

@@ -1209,6 +1209,8 @@ class GatewayModule(Module, layer=6):
             "yaw": float(getattr(odom, "yaw", 0.0)),
             "vx": odom.twist.linear.x  if odom.twist else 0.0,
             "wz": odom.twist.angular.z if odom.twist else 0.0,
+            "frame_id": str(getattr(odom, "frame_id", "") or "unknown"),
+            "child_frame_id": str(getattr(odom, "child_frame_id", "") or "body"),
             "ts": odom.ts,
         }
         with self._state_lock:
@@ -1789,6 +1791,15 @@ class GatewayModule(Module, layer=6):
         with self._state_lock:
             self._mission = d
         self.push_event({"type": "mission", "data": d})
+        try:
+            from gateway.services.runtime_status import build_navigation_status
+
+            self.push_event({
+                "type": "navigation_status",
+                "data": build_navigation_status(self),
+            })
+        except Exception:
+            pass
 
     def _on_eval(self, ev: ExecutionEval) -> None:
         d = ev.to_dict() if hasattr(ev, "to_dict") else {"raw": str(ev)}
@@ -2199,6 +2210,31 @@ class GatewayModule(Module, layer=6):
     def _command_stats_snapshot(self) -> dict[str, Any]:
         return self._command_journal.snapshot()
 
+    def _publish_command_ack(
+        self,
+        payload: dict[str, Any],
+        *,
+        status_code: int | None = None,
+    ) -> None:
+        """Publish a lightweight command acknowledgement for App/Web clients."""
+        if not isinstance(payload, dict):
+            return
+        command = payload.get("command")
+        if not isinstance(command, dict):
+            return
+        data = {
+            "schema_version": 1,
+            "ok": bool(payload.get("ok", False)),
+            "status": payload.get("status"),
+            "error": payload.get("error"),
+            "message": payload.get("message"),
+            "command": command,
+            "detail": payload.get("detail"),
+            "status_code": status_code,
+            "ts": time.time(),
+        }
+        self.push_event({"type": "command_ack", "data": data})
+
     def _run_control_command(
         self,
         command: str,
@@ -2209,8 +2245,16 @@ class GatewayModule(Module, layer=6):
         client_id = getattr(body, "client_id", None) if body is not None else None
         replay = self._command_journal.replay(command, request_id)
         if replay is not None:
+            self._publish_command_ack(replay, status_code=200)
             return replay
-        return self._command_journal.accept(command, request_id, client_id, action())
+        response = self._command_journal.accept(
+            command,
+            request_id,
+            client_id,
+            action(),
+        )
+        self._publish_command_ack(response, status_code=200)
+        return response
 
     # -- teleop internals (forwarded to TeleopModule) -------------------------
 

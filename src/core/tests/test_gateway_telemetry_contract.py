@@ -109,6 +109,48 @@ def test_scene_graph_route_degrades_invalid_json_to_empty_structured_payload():
     assert scene.count == 0
 
 
+def test_path_route_accepts_core_path_messages_without_dropping_points():
+    from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
+    from core.msgs.nav import Path
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import PathResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._last_path = Path(
+            poses=[
+                PoseStamped(
+                    pose=Pose(
+                        position=Vector3(1.0, 2.0, 0.0),
+                        orientation=Quaternion.from_yaw(0.25),
+                    ),
+                    frame_id="map",
+                    ts=100.0,
+                ),
+                PoseStamped(
+                    pose=Pose(position=Vector3(2.0, 3.0, 0.1)),
+                    frame_id="map",
+                    ts=101.0,
+                ),
+            ],
+            frame_id="map",
+        )
+        gateway._odom = {"x": 0.5, "y": 0.25, "frame_id": "map"}
+
+    payload = asyncio.run(_endpoint(gateway, "/api/v1/path")())
+    path = PathResponse.model_validate(payload)
+
+    assert path.schema_version == 1
+    assert path.frame_id == "map"
+    assert path.count == 2
+    assert path.path[0].x == 1.0
+    assert path.path[0].y == 2.0
+    assert path.path[0].yaw == pytest.approx(0.25)
+    assert path.path[0].frame_id == "map"
+    assert path.path[1].z == 0.1
+
+
 def test_locations_route_is_empty_without_tagged_location_module():
     from gateway.gateway_module import GatewayModule
     from gateway.schemas import LocationsResponse

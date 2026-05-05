@@ -6,6 +6,7 @@ All tests are pure-Python, no ROS2 / hardware / MuJoCo required.
 
 from __future__ import annotations
 
+import math
 import time
 import unittest
 from unittest.mock import patch
@@ -224,7 +225,137 @@ class TestGlobalPlannerService(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 3. OccupancyGridModule
+# 3. PathFollowerModule
+# ---------------------------------------------------------------------------
+
+class _FakeNavCore:
+    class Vec3:
+        def __init__(self, x, y, z):
+            self.x = float(x)
+            self.y = float(y)
+            self.z = float(z)
+
+    class Cmd:
+        def __init__(self, vx, vy, wz):
+            self.vx = float(vx)
+            self.vy = float(vy)
+            self.wz = float(wz)
+
+    class ControlOut:
+        def __init__(self, cmd):
+            self.cmd = cmd
+
+    class PathFollowerState:
+        def __init__(self):
+            self.vehicle_speed = 0.0
+            self.nav_fwd = 0
+            self.pathPointID = 0
+
+    @staticmethod
+    def compute_control(*_args):
+        return _FakeNavCore.ControlOut(_FakeNavCore.Cmd(1.0, 0.0, 0.4))
+
+
+class TestPathFollowerModule(unittest.TestCase):
+
+    def test_nav_core_records_path_in_receipt_reference_frame(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = _FakeNavCore
+
+        yaw = math.pi / 2.0
+        m._on_odom(
+            Odometry(
+                pose=Pose(
+                    position=Vector3(10.0, -2.0, 0.0),
+                    orientation=Quaternion.from_yaw(yaw),
+                )
+            )
+        )
+
+        path = Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(10.0, -2.0, 0.5))),
+                PoseStamped(pose=Pose(position=Vector3(10.0, 1.0, 1.5))),
+            ],
+            frame_id="map",
+        )
+        m._on_path(path)
+
+        self.assertEqual(len(m._nc_path), 2)
+        first, last = m._nc_path[0], m._nc_path[-1]
+        self.assertAlmostEqual(first.x, 0.0)
+        self.assertAlmostEqual(first.y, 0.0)
+        self.assertAlmostEqual(first.z, 0.5)
+        self.assertAlmostEqual(last.x, 3.0)
+        self.assertAlmostEqual(last.y, 0.0)
+        self.assertAlmostEqual(last.z, 1.5)
+
+    def test_nav_core_publishes_zero_when_path_is_cleared(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = _FakeNavCore
+        m._nc_params = object()
+        m._nc_state = _FakeNavCore.PathFollowerState()
+        outputs = []
+        m.cmd_vel._add_callback(outputs.append)
+
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.0, 0.0, 0.0))))
+        m._on_path(Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(0.0, 0.0, 0.0))),
+                PoseStamped(pose=Pose(position=Vector3(2.0, 0.0, 0.0))),
+            ],
+            frame_id="map",
+        ))
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.1, 0.0, 0.0))))
+
+        self.assertGreater(outputs[-1].linear.x, 0.0)
+        self.assertGreater(outputs[-1].angular.z, 0.0)
+
+        m._on_path(Path(poses=[], frame_id="map"))
+
+        self.assertEqual(outputs[-1].linear.x, 0.0)
+        self.assertEqual(outputs[-1].linear.y, 0.0)
+        self.assertEqual(outputs[-1].angular.z, 0.0)
+        self.assertEqual(m._smooth_vx, 0.0)
+        self.assertEqual(m._smooth_wz, 0.0)
+        self.assertEqual(m._nc_path, [])
+        self.assertEqual(m._nc_state.vehicle_speed, 0.0)
+        self.assertEqual(m._nc_state.nav_fwd, 0)
+        self.assertEqual(m._nc_state.pathPointID, 0)
+
+    def test_pid_publishes_zero_when_path_is_cleared(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="pid")
+        outputs = []
+        m.cmd_vel._add_callback(outputs.append)
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.0, 0.0, 0.0))))
+
+        m._on_path(Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(0.0, 0.0, 0.0))),
+                PoseStamped(pose=Pose(position=Vector3(2.0, 0.0, 0.0))),
+            ],
+            frame_id="map",
+        ))
+        self.assertGreater(outputs[-1].linear.x, 0.0)
+
+        m._on_path(Path(poses=[PoseStamped(pose=Pose(position=Vector3(0.0, 0.0, 0.0)))], frame_id="map"))
+
+        self.assertEqual(outputs[-1].linear.x, 0.0)
+        self.assertEqual(outputs[-1].linear.y, 0.0)
+        self.assertEqual(outputs[-1].angular.z, 0.0)
+        self.assertEqual(m._smooth_vx, 0.0)
+        self.assertEqual(m._smooth_wz, 0.0)
+        self.assertIsNone(m._path_points)
+
+
+# ---------------------------------------------------------------------------
+# 4. OccupancyGridModule
 # ---------------------------------------------------------------------------
 
 from nav.occupancy_grid_module import OccupancyGridModule
@@ -268,6 +399,7 @@ class TestOccupancyGridModule(unittest.TestCase):
         grid = costmap["grid"]
         # Verify at least some cells are occupied (100)
         self.assertTrue(np.any(grid == 100), "Expected occupied cells in costmap")
+        self.assertEqual(costmap["frame_id"], "map")
 
     def test_height_filter(self):
         """Points outside z_min/z_max are ignored."""
@@ -460,6 +592,7 @@ class TestElevationMapModule(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         emap = results[0]
+        self.assertEqual(emap["frame_id"], "map")
 
         # Find the cell that got hit
         valid = emap["valid"]

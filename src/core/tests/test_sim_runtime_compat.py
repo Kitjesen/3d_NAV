@@ -188,25 +188,37 @@ def test_mujoco_driver_uses_scene_placeholder_start_pose(monkeypatch):
     assert driver._engine.robot_config.init_position == [2.0, 3.0, 0.5]
 
 
-def test_mujoco_driver_prefers_thunder_policy_and_resolves_repo_relative_paths(monkeypatch, tmp_path):
+def test_mujoco_driver_policy_candidates_prioritize_brainstem_default():
+    import drivers.sim.mujoco_driver_module as driver_mod
+
+    first = driver_mod._POLICY_CANDIDATES[0]
+    assert first.name == "policy_251119.onnx"
+    assert first.parent.name == "model"
+    assert first.parent.parent.name == "nova_dog"
+
+
+def test_mujoco_driver_prefers_brainstem_policy_and_resolves_repo_relative_paths(monkeypatch, tmp_path):
     import drivers.sim.mujoco_driver_module as driver_mod
 
     sim_root = tmp_path / "sim"
     policy_dir = sim_root / "robots" / "nova_dog"
-    policy_dir.mkdir(parents=True)
+    brainstem_policy = policy_dir / "model" / "policy_251119.onnx"
     thunder_policy = policy_dir / "thunder_policy.onnx"
     legacy_policy = policy_dir / "policy.onnx"
+    brainstem_policy.parent.mkdir(parents=True)
+    policy_dir.mkdir(parents=True, exist_ok=True)
+    brainstem_policy.write_bytes(b"brainstem")
     thunder_policy.write_bytes(b"thunder")
     legacy_policy.write_bytes(b"legacy")
 
     monkeypatch.setattr(driver_mod, "_SIM_ROOT", sim_root)
-    monkeypatch.setattr(driver_mod, "_POLICY_CANDIDATES", (thunder_policy, legacy_policy))
+    monkeypatch.setattr(driver_mod, "_POLICY_CANDIDATES", (brainstem_policy, thunder_policy, legacy_policy))
 
     driver = MujocoDriverModule(policy_path="")
-    assert Path(driver._policy_path) == thunder_policy
+    assert Path(driver._policy_path) == brainstem_policy
 
-    explicit = MujocoDriverModule(policy_path="sim/robots/nova_dog/thunder_policy.onnx")
-    assert Path(explicit._policy_path) == thunder_policy.resolve()
+    explicit = MujocoDriverModule(policy_path="model/policy_251119.onnx")
+    assert Path(explicit._policy_path) == brainstem_policy.resolve()
 
     missing_explicit = driver_mod._resolve_sim_path("sim/robots/nova_dog/missing.onnx")
     assert Path(missing_explicit) == (sim_root / "robots" / "nova_dog" / "missing.onnx").resolve()
@@ -252,19 +264,84 @@ def test_mujoco_driver_stop_signal_zero_clears_soft_stop_latch():
     assert driver._cmd_vx == pytest.approx(0.4)
 
 
-def test_mujoco_policy_runner_pads_legacy_obs_for_single_frame_policy():
+def test_mujoco_policy_runner_resolves_legacy_history_contracts():
+    from sim.engine.mujoco.robot_controller import OBS_DIM, PolicyRunner
+
+    assert PolicyRunner._resolve_history_len(OBS_DIM) == 1
+    assert PolicyRunner._resolve_history_len(OBS_DIM * 5) == 5
+
+
+def test_mujoco_policy_runner_rejects_unknown_obs_contract():
+    from sim.engine.mujoco.robot_controller import PolicyRunner, UnsupportedPolicyInputError
+
+    with pytest.raises(UnsupportedPolicyInputError, match="76-D input"):
+        PolicyRunner._resolve_history_len(76)
+
+
+def test_mujoco_policy_runner_does_not_pad_or_truncate_obs():
     from sim.engine.mujoco.robot_controller import OBS_DIM, PolicyRunner
 
     runner = object.__new__(PolicyRunner)
     runner._history_len = 1
-    runner._policy_input_dim = 76
 
     obs = np.arange(OBS_DIM, dtype=np.float32)
     adapted = runner._adapt_obs_to_policy_input(obs)
 
-    assert adapted.shape == (76,)
-    assert np.allclose(adapted[:OBS_DIM], obs)
-    assert np.allclose(adapted[OBS_DIM:], 0.0)
+    assert adapted.shape == (OBS_DIM,)
+    assert np.allclose(adapted, obs)
+
+    with pytest.raises(ValueError, match="expected one 57-D observation"):
+        runner._adapt_obs_to_policy_input(np.arange(76, dtype=np.float32))
+
+
+def test_mujoco_policy_runner_clamp_matches_brainstem_noop():
+    from sim.engine.mujoco.robot_controller import PolicyRunner
+
+    action = np.array(
+        [2.0, -3.0, 4.0, -2.0, 3.0, -4.0, 1.8, -2.8,
+         3.8, -1.8, 2.8, -3.8, 0.8, -0.9, 1.1, -1.2],
+        dtype=np.float64,
+    )
+
+    clamped = PolicyRunner.clamp_action(action)
+
+    assert np.allclose(clamped, action)
+    assert clamped is not action
+
+
+def test_policy_nav_smoke_pass_fail_gates_are_conservative():
+    from sim.scripts import policy_nav_smoke
+
+    direct = {
+        "policy_loaded": True,
+        "finite": True,
+        "moved_m": 0.25,
+        "z": {"min": 0.40, "max": 0.45},
+        "roll_abs": {"max": 0.05},
+        "pitch_abs": {"max": 0.04},
+    }
+    nav = {
+        "policy_loaded": True,
+        "finite": True,
+        "moved_m": 0.25,
+        "z": {"min": 0.40, "max": 0.45},
+        "seen": {
+            "costmap": 1,
+            "waypoints": 1,
+            "local_path": 1,
+            "path_follower_cmd": 4,
+            "mux_cmd": 4,
+            "direct_fallback": 0,
+        },
+    }
+
+    assert policy_nav_smoke._passes_direct(direct, min_motion=0.20) is True
+    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20) is True
+
+    direct["moved_m"] = 0.05
+    nav["seen"]["direct_fallback"] = 1
+    assert policy_nav_smoke._passes_direct(direct, min_motion=0.20) is False
+    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20) is False
 
 
 def test_mujoco_camera_preserves_metric_depth_output():
@@ -315,6 +392,75 @@ def test_mujoco_driver_kinematic_cmd_vel_moves_free_base():
 
         moved = math.hypot(state.position[0] - start[0], state.position[1] - start[1])
         assert moved > 0.75
+    finally:
+        if driver._engine is not None:
+            driver._engine.close()
+            driver._engine = None
+
+
+def _real_policy_path_or_skip() -> Path:
+    import drivers.sim.mujoco_driver_module as driver_mod
+
+    policy_path = driver_mod._first_existing_path(driver_mod._POLICY_CANDIDATES)
+    if not policy_path:
+        pytest.skip("policy_251119.onnx is not available in this checkout")
+    return Path(policy_path)
+
+
+def _rpy_from_xyzw(q) -> tuple[float, float, float]:
+    x, y, z, w = [float(v) for v in q]
+    sinr = 2.0 * (w * x + y * z)
+    cosr = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr, cosr)
+    sinp = 2.0 * (w * y - z * x)
+    pitch = math.copysign(math.pi / 2.0, sinp) if abs(sinp) >= 1.0 else math.asin(sinp)
+    siny = 2.0 * (w * z + x * y)
+    cosy = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny, cosy)
+    return roll, pitch, yaw
+
+
+def test_mujoco_policy_cmd_vel_produces_stable_motion_when_real_policy_available():
+    pytest.importorskip("mujoco")
+    pytest.importorskip("onnxruntime")
+    from sim.engine.core.engine import VelocityCommand
+
+    policy_path = _real_policy_path_or_skip()
+    driver = MujocoDriverModule(
+        world="open_field",
+        render=False,
+        enable_camera=False,
+        drive_mode="policy",
+        policy_path=str(policy_path),
+    )
+    driver.setup()
+    try:
+        assert driver._engine is not None
+        assert driver._engine.drive_mode == "policy"
+        assert driver._engine.has_policy is True
+
+        start = driver._engine.get_robot_state()
+        start_xy = np.array(start.position[:2], dtype=float)
+        z_values = []
+        roll_values = []
+        pitch_values = []
+        for _ in range(300):
+            state = driver._engine.step(VelocityCommand(linear_x=0.2))
+            roll, pitch, _ = _rpy_from_xyzw(state.orientation)
+            z_values.append(float(state.position[2]))
+            roll_values.append(abs(roll))
+            pitch_values.append(abs(pitch))
+            assert np.isfinite(state.position).all()
+            assert np.isfinite(state.orientation).all()
+
+        end = driver._engine.get_robot_state()
+        moved = float(np.linalg.norm(np.array(end.position[:2], dtype=float) - start_xy))
+
+        assert moved > 0.20
+        assert min(z_values) > 0.35
+        assert max(z_values) < 0.50
+        assert max(roll_values) < 0.20
+        assert max(pitch_values) < 0.20
     finally:
         if driver._engine is not None:
             driver._engine.close()
@@ -425,6 +571,120 @@ def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
         assert seen["direct_fallback"] == 0
         assert moved > 0.75
         assert dist_to_goal < 1.75
+        assert nav._state in ("EXECUTING", "SUCCESS")
+    finally:
+        system.stop()
+
+
+def test_sim_mujoco_full_stack_policy_mode_moves_under_nav_cmds_when_real_policy_available():
+    pytest.importorskip("mujoco")
+    pytest.importorskip("onnxruntime")
+    _real_policy_path_or_skip()
+
+    system = full_stack_blueprint(
+        robot="sim_mujoco",
+        world="open_field",
+        slam_profile="none",
+        detector="sim_scene",
+        llm="mock",
+        enable_native=False,
+        enable_semantic=False,
+        enable_gateway=False,
+        render=False,
+        python_autonomy_backend="simple",
+        python_path_follower_backend="pid",
+        drive_mode="policy",
+        waypoint_threshold=0.35,
+        downsample_dist=0.5,
+        run_startup_checks=False,
+    ).build()
+    driver = system.get_module("MujocoDriverModule")
+    ogm = system.get_module("OccupancyGridModule")
+    nav = system.get_module("NavigationModule")
+    local_planner = system.get_module("LocalPlannerModule")
+    path_follower = system.get_module("PathFollowerModule")
+    mux = system.get_module("CmdVelMux")
+
+    seen = {
+        "costmap": 0,
+        "waypoints": 0,
+        "local_path": 0,
+        "path_follower_cmd": 0,
+        "mux_cmd": 0,
+        "direct_fallback": 0,
+    }
+    odom = []
+    ogm.costmap._add_callback(lambda _: seen.__setitem__("costmap", seen["costmap"] + 1))
+    nav.waypoint._add_callback(lambda _: seen.__setitem__("waypoints", seen["waypoints"] + 1))
+    nav.adapter_status._add_callback(
+        lambda e: seen.__setitem__(
+            "direct_fallback",
+            seen["direct_fallback"] + (1 if e.get("event") == "direct_goal_fallback" else 0),
+        )
+    )
+    local_planner.local_path._add_callback(
+        lambda _: seen.__setitem__("local_path", seen["local_path"] + 1)
+    )
+    path_follower.cmd_vel._add_callback(
+        lambda _: seen.__setitem__("path_follower_cmd", seen["path_follower_cmd"] + 1)
+    )
+    mux.driver_cmd_vel._add_callback(lambda _: seen.__setitem__("mux_cmd", seen["mux_cmd"] + 1))
+    driver.odometry._add_callback(
+        lambda m: odom.append((float(m.pose.position.x), float(m.pose.position.y), float(m.pose.position.z)))
+    )
+
+    system.start()
+    try:
+        deadline = time.time() + 8.0
+        while time.time() < deadline and (seen["costmap"] == 0 or not odom):
+            time.sleep(0.1)
+        assert driver._engine is not None
+        assert driver._engine.drive_mode == "policy"
+        assert driver._engine.has_policy is True
+        assert seen["costmap"] > 0
+
+        start = odom[-1]
+        goal_x = start[0] + 1.0
+        goal_y = start[1]
+        nav.goal_pose._deliver(
+            PoseStamped(
+                pose=Pose(
+                    position=Vector3(goal_x, goal_y, 0.0),
+                    orientation=Quaternion(0.0, 0.0, 0.0, 1.0),
+                ),
+                frame_id="map",
+                ts=time.time(),
+            )
+        )
+
+        deadline = time.time() + 18.0
+        moved = 0.0
+        dist_to_goal = math.hypot(goal_x - start[0], goal_y - start[1])
+        z_values = []
+        while time.time() < deadline:
+            time.sleep(0.1)
+            if odom:
+                moved = math.hypot(odom[-1][0] - start[0], odom[-1][1] - start[1])
+                dist_to_goal = math.hypot(goal_x - odom[-1][0], goal_y - odom[-1][1])
+                z_values.append(odom[-1][2])
+            if (
+                seen["waypoints"] > 0
+                and seen["local_path"] > 0
+                and seen["path_follower_cmd"] > 3
+                and seen["mux_cmd"] > 3
+                and moved > 0.20
+            ):
+                break
+
+        assert seen["waypoints"] > 0
+        assert seen["local_path"] > 0
+        assert seen["path_follower_cmd"] > 3
+        assert seen["mux_cmd"] > 3
+        assert seen["direct_fallback"] == 0
+        assert moved > 0.20
+        assert dist_to_goal < 0.90
+        assert min(z_values) > 0.35
+        assert max(z_values) < 0.50
         assert nav._state in ("EXECUTING", "SUCCESS")
     finally:
         system.stop()
@@ -609,7 +869,7 @@ def test_frontier_exploration_goal_reaches_navigation_planner():
         "width": 50,
         "height": 50,
     }
-    odom = Odometry(pose=Pose(0.0, 0.0, 0.0))
+    odom = Odometry(pose=Pose(0.0, 0.0, 0.0), frame_id="map")
 
     system.start()
     try:

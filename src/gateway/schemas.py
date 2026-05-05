@@ -41,6 +41,7 @@ class GoalRequest(BaseModel):
     y: float
     z: float = 0.0
     yaw: float = 0.0
+    frame_id: Literal["map"] = "map"
     instruction: str | None = None
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
@@ -50,6 +51,7 @@ class ClickNavRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
+    frame_id: Literal["map"] = "map"
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
 
@@ -58,6 +60,7 @@ class PlanPreviewRequest(BaseModel):
     x: float
     y: float
     z: float = 0.0
+    frame_id: Literal["map"] = "map"
     client_id: str = Field(default="unknown", max_length=128)
 
     @field_validator("x", "y", "z")
@@ -288,6 +291,7 @@ class ControlCommandResponse(GatewayResponseModel):
     command: CommandReceipt
     goal: list[float] | None = None
     yaw: float | None = None
+    frame_id: str | None = None
     instruction: str | None = None
     mode: str | None = None
     reason: str | None = None
@@ -543,11 +547,19 @@ class NavigationProgressSummary(GatewayResponseModel):
     terminal: bool = False
 
 
+class NavigationFrameMismatch(GatewayResponseModel):
+    source: str
+    expected_frame: str
+    received_frame: str
+
+
 class NavigationDiagnosticsSummary(GatewayResponseModel):
     reason_codes: list[str] = Field(default_factory=list)
     failure_reason: str = ""
     localization_reasons: list[str] = Field(default_factory=list)
     cmd_vel_mux_available: bool = False
+    frame_mismatches: list[NavigationFrameMismatch] = Field(default_factory=list)
+    safety: dict[str, Any] | None = None
 
 
 class NavigationMissionSummary(GatewayResponseModel):
@@ -587,6 +599,15 @@ class NavigationFeedbackSummary(GatewayResponseModel):
     reason_codes: list[str] = Field(default_factory=list)
 
 
+class NavigationFrameSummary(GatewayResponseModel):
+    planning_frame_id: str = "map"
+    odom_frame_id: str = "unknown"
+    costmap_frame_id: str = "unknown"
+    goal_frame_id: str | None = None
+    ok: bool = True
+    mismatches: list[NavigationFrameMismatch] = Field(default_factory=list)
+
+
 class NavigationStatusResponse(GatewayResponseModel):
     schema_version: int
     state: str
@@ -601,6 +622,7 @@ class NavigationStatusResponse(GatewayResponseModel):
     readiness: NavigationReadinessSummary
     progress: NavigationProgressSummary
     path: NavigationPathSummary
+    frames: NavigationFrameSummary
     control: NavigationControlSummary
     localization: NavigationLocalizationSummary
     target: NavigationTargetSummary

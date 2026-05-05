@@ -184,6 +184,7 @@ def test_odom_translation_applies():
     assert odom.pose.position.x == pytest.approx(101)
     assert odom.pose.position.y == pytest.approx(202)
     assert odom.pose.position.z == pytest.approx(303)
+    assert odom.frame_id == "map"
 
 
 def test_odom_yaw_composition():
@@ -249,6 +250,7 @@ def test_maybe_odom_applies_tf_for_localizer_only():
     assert odom.pose.position.x == pytest.approx(101)
     assert odom.pose.position.y == pytest.approx(202)
     assert odom.pose.position.z == pytest.approx(303)
+    assert odom.frame_id == "map"
 
     h._backend_profile = "super_lio_relocation"
     odom = _make_odom(1, 2, 3)
@@ -256,6 +258,7 @@ def test_maybe_odom_applies_tf_for_localizer_only():
     assert odom.pose.position.x == pytest.approx(1)
     assert odom.pose.position.y == pytest.approx(2)
     assert odom.pose.position.z == pytest.approx(3)
+    assert odom.frame_id == "odom"
 
 
 # ── Round-trip: transform and inverse-transform gives back original ──────

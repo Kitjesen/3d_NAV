@@ -151,6 +151,80 @@ LINGTU_SIM_DRIVE_MODE=kinematic python lingtu.py sim
 Kinematic mode proves the navigation stack can command route-level motion in
 simulation. It is not evidence that the Thunder v3 RL gait policy is healthy;
 policy-mode smoke tests should still be run before claiming gait-level fidelity.
+Run the policy-mode smoke tests on a machine that has MuJoCo, ONNX Runtime, and
+`policy_251119.onnx` available:
+
+```bash
+PYTHONPATH=src:. python -m pytest src/core/tests/test_sim_runtime_compat.py -q \
+  -k "policy_cmd_vel or full_stack_policy_mode"
+
+PYTHONPATH=src:. python sim/scripts/policy_nav_smoke.py \
+  --world open_field \
+  --direct-duration 6 \
+  --nav-duration 18 \
+  --goal-distance 1.0
+```
+
+For a longer server-side soak, increase `--nav-duration` to 60 seconds and save
+the JSON output with `--json-out artifacts/policy_nav_smoke_open_field.json`.
+
+#### Policy-Mode Soak On Sunrise
+
+Use `sunrise` only as a simulation compute host for this check. Do not start
+robot services, publish real `/nav/cmd_vel`, send Gateway goals, or run
+`scripts/lingtu nav`, `scripts/lingtu map`, `ros2 topic pub`, or
+`systemctl restart robot-*` during the soak.
+
+```bash
+ssh sunrise@192.168.66.190
+cd ~/data/SLAM/navigation
+mkdir -p artifacts
+export PYTHONPATH=src:.
+export LINGTU_SIM_DRIVE_MODE=policy
+export PYTHONIOENCODING=utf-8
+
+python sim/scripts/policy_nav_smoke.py \
+  --world open_field \
+  --direct-duration 6 \
+  --nav-duration 60 \
+  --goal-distance 1.0 \
+  --json-out artifacts/policy_nav_smoke_open_field.json
+```
+
+Treat skipped policy tests as `BLOCKED`, not `PASS`. The pass gate is: policy
+loads, all poses stay finite, direct policy motion exceeds `0.20 m`, body height
+stays inside `0.35 m < z < 0.55 m`, roll/pitch stay below the script gate,
+full-stack nav emits costmap, waypoint, local path, path-follower command and
+mux command, `direct_fallback == 0`, and full-stack policy motion exceeds
+`0.20 m`.
+
+Common failures:
+
+| Symptom | Likely Cause | First Checks |
+| --- | --- | --- |
+| policy test skipped | MuJoCo, `onnxruntime`, or checkpoint missing | Check `_POLICY_CANDIDATES` and the sunrise brainstem checkout. |
+| `UnsupportedPolicyInputError` | Wrong checkpoint contract | Do not pad or truncate; wire the original observation builder first. |
+| little forward motion | Direction/action scale, standing pose, or joint order mismatch | Check `PolicyRunner.build_obs`, `ACTION_SCALE`, `MJ_TO_DART`, and `DART_TO_MJ`. |
+| low body height or high roll/pitch | Bad warm-up, contact, actuator mapping, or incompatible policy | Check MJCF actuator-to-joint resolution and policy warm-up. |
+| no costmap | LiDAR scene/body/group problem | Run the MuJoCo LiDAR smoke and inspect `get_lidar_points()`. |
+| no waypoint/local path/mux command | Navigation wiring, not gait | Compare the kinematic full-stack test first. |
+| `direct_fallback > 0` | Planner or adapter path generation failed | Treat as a full-stack failure, not a gait pass. |
+
+Policy mode currently follows the brainstem `StandardObservationBuilder`
+contract: 57 values per frame, optionally stacked as `57 * N` history frames.
+The preferred navigation gait checkpoint is brainstem's default
+`model/policy_251119.onnx`; place it at
+`sim/robots/nova_dog/model/policy_251119.onnx`, repo-root
+`model/policy_251119.onnx`, or a sibling `brainstem` checkout using the same
+relative `model/policy_251119.onnx` path. The checked-in legacy
+`robots/nova_dog/policy.onnx` remains only as a development fallback and uses
+5 frames (`285` input values), while brainstem's public
+`onnx_runtime/example/policy.onnx` is a single-frame (`57` input values)
+example. Newer Thunder checkpoints with non-57-multiple inputs, such as 76-D
+RobotLab-style exports, need their original training observation field order,
+normalization, and action semantics wired into a dedicated observation builder
+before running. The runner intentionally refuses to pad or truncate those inputs
+because that produces misleading "policy runs but robot will not walk" failures.
 
 ### 6.3 Full Stack with ROS2
 

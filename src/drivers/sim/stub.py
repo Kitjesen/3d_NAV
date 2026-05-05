@@ -80,7 +80,7 @@ class StubConnection(Module, layer=1):
         self.odometry.publish(Odometry(
             pose=Pose(Vector3(self._x, self._y, 0.0), q),
             twist=Twist(Vector3(self._vx, self._vy, 0.0), Vector3(0.0, 0.0, self._wz)),
-            ts=time.time(), frame_id="odom", child_frame_id="body",
+            ts=time.time(), frame_id="map", child_frame_id="body",
         ))
 
 

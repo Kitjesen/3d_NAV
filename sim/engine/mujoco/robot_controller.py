@@ -42,6 +42,10 @@ MJ_TO_DART = np.array([0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 3, 7, 11, 15])
 DART_TO_MJ = np.array([0, 1, 2, 12, 3, 4, 5, 13, 6, 7, 8, 14, 9, 10, 11, 15])
 
 
+class UnsupportedPolicyInputError(ValueError):
+    """Raised when an ONNX policy uses an unknown observation contract."""
+
+
 class PolicyRunner:
     """ONNX gait policy inference, matching brainstem StandardObservationBuilder.
 
@@ -62,10 +66,7 @@ class PolicyRunner:
 
         policy_input_dim = self._extract_input_dim(inp.shape)
         self._policy_input_dim = policy_input_dim or (OBS_DIM * HISTORY_LEN)
-        if self._policy_input_dim % OBS_DIM == 0:
-            self._history_len = max(1, self._policy_input_dim // OBS_DIM)
-        else:
-            self._history_len = 1
+        self._history_len = self._resolve_history_len(self._policy_input_dim)
         self.history: deque = deque(maxlen=self._history_len)
         self.last_action = STANDING_POSE.copy()
         # Will be filled with real sensor data in warm_up()
@@ -78,6 +79,20 @@ class PolicyRunner:
         if isinstance(dim, int) and dim > 0:
             return dim
         return None
+
+    @staticmethod
+    def _resolve_history_len(policy_input_dim: int) -> int:
+        if policy_input_dim % OBS_DIM == 0:
+            return max(1, policy_input_dim // OBS_DIM)
+        raise UnsupportedPolicyInputError(
+            "Unsupported ONNX policy observation input dimension "
+            f"{policy_input_dim}. This runner can only build the legacy "
+            f"{OBS_DIM}-D Thunder/Dart observation, optionally stacked as "
+            f"{OBS_DIM} * N history frames. A checkpoint with a "
+            f"{policy_input_dim}-D input needs its original training "
+            "observation field order, normalization, and action semantics "
+            "before it can be run safely."
+        )
 
     def warm_up(self, gyroscope: np.ndarray, projected_gravity: np.ndarray,
                 joint_pos_16: np.ndarray, joint_vel_16: np.ndarray) -> None:
@@ -94,16 +109,8 @@ class PolicyRunner:
 
     @staticmethod
     def clamp_action(action: np.ndarray) -> np.ndarray:
-        """clampPerJoint — matches brainstem Walk.clampAction()."""
-        clamped = action.copy()
-        for leg in range(4):
-            base = leg * 3
-            clamped[base + 0] = np.clip(clamped[base + 0], -0.5, 0.5)    # hip
-            clamped[base + 1] = np.clip(clamped[base + 1], -1.5, 1.5)    # thigh
-            clamped[base + 2] = np.clip(clamped[base + 2], -2.5, 2.5)    # calf
-        for i in range(12, 16):
-            clamped[i] = np.clip(clamped[i], -0.5, 0.5)  # foot
-        return clamped
+        """Return real action unchanged, matching brainstem Walk.clampAction()."""
+        return np.asarray(action, dtype=np.float64).copy()
 
     def build_obs(self, gyroscope: np.ndarray, projected_gravity: np.ndarray,
                   direction: np.ndarray, joint_pos_16: np.ndarray,
@@ -143,17 +150,14 @@ class PolicyRunner:
         return obs
 
     def _adapt_obs_to_policy_input(self, obs: np.ndarray) -> np.ndarray:
-        """Adapt legacy 57-dim observations to the loaded ONNX input contract."""
+        """Validate the legacy 57-D observation before history stacking."""
         obs = np.asarray(obs, dtype=np.float32).reshape(-1)
-        if self._history_len > 1:
+        if obs.size == OBS_DIM:
             return obs
-        if obs.size == self._policy_input_dim:
-            return obs
-        if obs.size > self._policy_input_dim:
-            return obs[:self._policy_input_dim].copy()
-        padded = np.zeros(self._policy_input_dim, dtype=np.float32)
-        padded[: obs.size] = obs
-        return padded
+        raise ValueError(
+            f"PolicyRunner expected one {OBS_DIM}-D observation frame before "
+            f"history stacking, got {obs.size} values."
+        )
 
     def infer(self, obs: np.ndarray) -> np.ndarray:
         """Inference: obs -> append to history -> ONNX -> action(16)."""

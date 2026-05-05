@@ -111,6 +111,11 @@ class OcclusionPerception:
 
 def find_policy():
     for c in [
+        _ROOT / "sim" / "robots" / "nova_dog" / "model" / "policy_251119.onnx",
+        _ROOT / "model" / "policy_251119.onnx",
+        _ROOT.parent / "brainstem" / "model" / "policy_251119.onnx",
+        _ROOT.parent / "brainstem" / "han_dog" / "model" / "policy_251119.onnx",
+        _BRAINSTEM_SIM / "model" / "policy_251119.onnx",
         _BRAINSTEM_SIM / "model" / "policy_v9_800.onnx",
         _ROOT.parent / "brainstem" / "sim" / "model" / "policy_v9_800.onnx",
     ]:

@@ -24,6 +24,9 @@ export type {
   SnapshotEvent,
   MissionEvent,
   SafetyEvent,
+  NavigationStatusEvent,
+  LeaseEvent,
+  CommandAckEvent,
   EvalEvent,
   DialogueEvent,
   GnssFusionEvent,
@@ -56,6 +59,9 @@ const INITIAL_STATE: SSEState = {
   mapCloud: null,
   savedMap: null,
   session: null,
+  navigationStatus: null,
+  lease: null,
+  commandAck: null,
   locations: null,
   stateSnapshot: null,
   traffic: null,
@@ -83,6 +89,7 @@ const INITIAL_STATE: SSEState = {
 }
 
 const TRAFFIC_REFRESH_MS = 5000
+type SnapshotRefreshMode = 'full' | 'auxiliary'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -185,6 +192,7 @@ export function useSSE(url: string = '/api/v1/events') {
   const esRef = useRef<EventSource | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const initialSnapshotFallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const trafficTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const refreshInFlight = useRef(false)
   const trafficInFlight = useRef(false)
@@ -192,16 +200,23 @@ export function useSSE(url: string = '/api/v1/events') {
   const trafficEndpointRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
   const everConnectedRef = useRef(false)
+  const initialSnapshotSeenRef = useRef(false)
   const lastEventIdRef = useRef<number | null>(null)
   const connectRef = useRef<() => void>(() => {})
-  const refreshRef = useRef<(reason: string) => void>(() => {})
+  const refreshRef = useRef<(reason: string, mode?: SnapshotRefreshMode) => void>(() => {})
 
-  const refreshSnapshot = useCallback(async (reason: string) => {
+  const refreshSnapshot = useCallback(async (
+    reason: string,
+    mode: SnapshotRefreshMode = 'full',
+  ) => {
     if (refreshInFlight.current) return
     refreshInFlight.current = true
     try {
+      const statePromise: Promise<StateResponse | null> = mode === 'full'
+        ? api.fetchState()
+        : Promise.resolve(null)
       const [stateResult, pathResult, sceneResult, locationsResult] = await Promise.allSettled([
-        api.fetchState(),
+        statePromise,
         api.fetchPath(),
         api.fetchSceneGraph(),
         api.fetchLocations(),
@@ -226,6 +241,8 @@ export function useSSE(url: string = '/api/v1/events') {
         missionStatus: mission ?? prev.missionStatus,
         safetyState: safety ?? prev.safetyState,
         session: (statePayload?.session as SSEState['session'] | undefined) ?? prev.session,
+        navigationStatus: statePayload?.navigation ?? prev.navigationStatus,
+        lease: statePayload?.lease ?? prev.lease,
         stateSnapshot: statePayload ?? prev.stateSnapshot,
         globalPath: pathPayload
           ? { type: 'global_path', points: pathPayload.path }
@@ -248,12 +265,18 @@ export function useSSE(url: string = '/api/v1/events') {
     }
   }, [])
 
-  const queueRefresh = useCallback((reason: string) => {
+  const queueRefresh = useCallback((reason: string, mode: SnapshotRefreshMode = 'full') => {
     if (refreshTimer.current) return
     refreshTimer.current = setTimeout(() => {
       refreshTimer.current = null
-      refreshRef.current(reason)
+      refreshRef.current(reason, mode)
     }, 250)
+  }, [])
+
+  const clearInitialSnapshotFallback = useCallback(() => {
+    if (!initialSnapshotFallbackTimer.current) return
+    clearTimeout(initialSnapshotFallbackTimer.current)
+    initialSnapshotFallbackTimer.current = null
   }, [])
 
   const discoverTrafficEndpoint = useCallback(async (): Promise<string | null> => {
@@ -317,7 +340,17 @@ export function useSSE(url: string = '/api/v1/events') {
     es.onopen = () => {
       if (!mountedRef.current) return
       setState(prev => ({ ...prev, connected: true, lastError: null }))
-      queueRefresh(everConnectedRef.current ? 'event_stream_reconnected' : 'event_stream_connected')
+      if (everConnectedRef.current) {
+        queueRefresh('event_stream_reconnected')
+      } else {
+        initialSnapshotSeenRef.current = false
+        clearInitialSnapshotFallback()
+        initialSnapshotFallbackTimer.current = setTimeout(() => {
+          initialSnapshotFallbackTimer.current = null
+          if (!mountedRef.current || initialSnapshotSeenRef.current) return
+          queueRefresh('event_stream_initial_snapshot_timeout')
+        }, 1000)
+      }
       everConnectedRef.current = true
     }
 
@@ -349,11 +382,19 @@ export function useSSE(url: string = '/api/v1/events') {
             switch (evt.type) {
               case 'snapshot': {
                 // Backend sends nested {type: snapshot, data: {odometry, safety, mission, ...}}
+                const isInitialSnapshot = !initialSnapshotSeenRef.current
+                initialSnapshotSeenRef.current = true
+                clearInitialSnapshotFallback()
+                if (isInitialSnapshot) {
+                  queueRefresh('event_stream_initial_snapshot_auxiliary', 'auxiliary')
+                }
                 const d = evt.data || {}
                 if (d.odometry) next.odometry = { type: 'odometry', ...d.odometry as object } as never
                 if (d.mission)  next.missionStatus = { type: 'mission_status', ...d.mission as object } as never
                 if (d.safety)   next.safetyState = { type: 'safety_state', ...d.safety as object } as never
                 if (d.session)  next.session = d.session as never
+                if (d.navigation) next.navigationStatus = d.navigation as never
+                if (d.lease) next.lease = d.lease as never
                 break
               }
               case 'odometry':
@@ -366,6 +407,15 @@ export function useSSE(url: string = '/api/v1/events') {
               case 'safety':
               case 'safety_state':
                 next.safetyState = { type: 'safety_state', ...(evt.data as object || evt) } as never
+                break
+              case 'navigation_status':
+                next.navigationStatus = (evt.data ?? evt) as never
+                break
+              case 'lease':
+                next.lease = (evt.data ?? evt) as never
+                break
+              case 'command_ack':
+                next.commandAck = (evt.data ?? evt) as never
                 break
               case 'scene_graph':
                 next.sceneGraph = event as never
@@ -443,6 +493,7 @@ export function useSSE(url: string = '/api/v1/events') {
 
     es.onerror = () => {
       if (!mountedRef.current) return
+      clearInitialSnapshotFallback()
       es.close()
       esRef.current = null
       setState(prev => ({
@@ -456,7 +507,7 @@ export function useSSE(url: string = '/api/v1/events') {
         if (mountedRef.current) connectRef.current()
       }, 3000)
     }
-  }, [queueRefresh, url])
+  }, [clearInitialSnapshotFallback, queueRefresh, url])
 
   useEffect(() => {
     connectRef.current = connect
@@ -472,6 +523,7 @@ export function useSSE(url: string = '/api/v1/events') {
     return () => {
       mountedRef.current = false
       if (refreshTimer.current) clearTimeout(refreshTimer.current)
+      clearInitialSnapshotFallback()
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       if (esRef.current) {
         esRef.current.close()

@@ -153,6 +153,7 @@ class OccupancyGridModule(Module, layer=2):
             "resolution": self._res,
             "origin":     origin_xy.tolist(),
             "ts":         og.ts,
+            "frame_id":   og.frame_id,
         })
 
     def _inflate(self, binary: np.ndarray) -> np.ndarray:

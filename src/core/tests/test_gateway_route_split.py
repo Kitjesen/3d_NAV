@@ -768,6 +768,9 @@ def test_openapi_exposes_client_response_models():
     assert schemas["NavigationStatusResponse"]["properties"]["progress"][
         "$ref"
     ].endswith("/NavigationProgressSummary")
+    assert schemas["NavigationStatusResponse"]["properties"]["frames"]["$ref"].endswith(
+        "/NavigationFrameSummary"
+    )
     assert schemas["NavigationStatusResponse"]["properties"]["target"]["$ref"].endswith(
         "/NavigationTargetSummary"
     )
@@ -777,6 +780,9 @@ def test_openapi_exposes_client_response_models():
     assert schemas["NavigationStatusResponse"]["properties"]["feedback"][
         "$ref"
     ].endswith("/NavigationFeedbackSummary")
+    assert schemas["NavigationDiagnosticsSummary"]["properties"]["frame_mismatches"][
+        "items"
+    ]["$ref"].endswith("/NavigationFrameMismatch")
     assert schemas["AppTrafficResponse"]["properties"]["sse"]["$ref"].endswith(
         "/TrafficSSEStats"
     )

@@ -222,6 +222,7 @@ class TraversabilityCostModule(Module, layer=2):
         obs_grid = np.asarray(cm["grid"], dtype=np.float32)
         res = cm["resolution"]
         origin = np.array(cm["origin"][:2], dtype=np.float64)
+        frame_id = str(cm.get("frame_id") or "map")
         shape = obs_grid.shape
 
         # L0: Obstacle layer is the base — lethal and inscribed cells are protected
@@ -245,6 +246,7 @@ class TraversabilityCostModule(Module, layer=2):
                 "resolution": res,
                 "origin": origin.tolist(),
                 "ts": now,
+                "frame_id": frame_id,
             })
 
         # L3: Proximity preference — only on free-ish cells (cost < INSCRIBED)
@@ -264,6 +266,7 @@ class TraversabilityCostModule(Module, layer=2):
             "resolution": res,
             "origin": origin.tolist(),
             "ts": now,
+            "frame_id": frame_id,
         })
 
     def _compute_slope(

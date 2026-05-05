@@ -855,10 +855,16 @@ def _navigation_reason_codes(
     session: Mapping[str, Any],
     localization: Mapping[str, Any],
     control: Mapping[str, Any],
+    frames: Mapping[str, Any],
 ) -> list[str]:
     codes: list[str] = []
     if not has_odometry:
         codes.append("odometry_missing")
+    for mismatch in frames.get("mismatches", []):
+        if isinstance(mismatch, Mapping):
+            source = str(mismatch.get("source") or "").strip()
+            if source:
+                codes.append(f"frame_mismatch_{source}")
     if mode == "estop":
         codes.append("estop_active")
     if safety_stop_active(safety):
@@ -902,6 +908,9 @@ def _navigation_reason_codes(
 
 _NAVIGATION_BLOCKER_CODES = {
     "odometry_missing",
+    "frame_mismatch_odometry",
+    "frame_mismatch_costmap",
+    "frame_mismatch_goal",
     "estop_active",
     SAFETY_STOP_BLOCKER,
     "session_transition_pending",
@@ -912,6 +921,67 @@ _NAVIGATION_BLOCKER_CODES = {
     "localization_recovery_active",
     "pose_stale",
 }
+
+
+def _frame_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    frame = str(value).strip()
+    return frame or None
+
+
+def _frame_from_payload(value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    frame = _frame_id(value.get("frame_id") or value.get("frame"))
+    if frame:
+        return frame
+    header = value.get("header")
+    if isinstance(header, Mapping):
+        return _frame_id(header.get("frame_id") or header.get("frame"))
+    return None
+
+
+def _navigation_frame_summary(
+    mission: Mapping[str, Any],
+    odometry: Any,
+) -> dict[str, Any]:
+    planning_frame_id = (
+        _frame_id(mission.get("planning_frame_id") or mission.get("frame_id"))
+        or "map"
+    )
+    odom_frame_id = (
+        _frame_id(mission.get("odom_frame_id"))
+        or _frame_from_payload(odometry)
+        or "unknown"
+    )
+    costmap_frame_id = _frame_id(mission.get("costmap_frame_id")) or "unknown"
+    goal_frame_id = (
+        _frame_id(mission.get("goal_frame_id"))
+        or _frame_from_payload(mission.get("goal"))
+    )
+    mismatches: list[dict[str, str]] = []
+    for source, frame in (
+        ("odometry", odom_frame_id),
+        ("costmap", costmap_frame_id),
+        ("goal", goal_frame_id),
+    ):
+        if frame and frame != "unknown" and frame != planning_frame_id:
+            mismatches.append(
+                {
+                    "source": source,
+                    "expected_frame": planning_frame_id,
+                    "received_frame": frame,
+                }
+            )
+    return {
+        "planning_frame_id": planning_frame_id,
+        "odom_frame_id": odom_frame_id,
+        "costmap_frame_id": costmap_frame_id,
+        "goal_frame_id": goal_frame_id,
+        "ok": not mismatches,
+        "mismatches": mismatches,
+    }
 
 
 def _navigation_blockers(reason_codes: list[str]) -> list[str]:
@@ -986,6 +1056,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         path_points=path_len,
         replan_count=replan_count,
     )
+    frames = _navigation_frame_summary(mission, odometry)
     reason_codes = _navigation_reason_codes(
         state=state,
         failure_reason=failure_reason,
@@ -995,6 +1066,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         session=session,
         localization=localization,
         control=control,
+        frames=frames,
     )
     can_accept_goal = base_can_accept_goal and not _navigation_blockers(reason_codes)
     readiness = _readiness_summary(
@@ -1042,6 +1114,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "points": path_len,
             "endpoint": PATH_ENDPOINT,
         },
+        "frames": frames,
         "control": control,
         "localization": {
             "state": localization.get("state"),
@@ -1062,6 +1135,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "failure_reason": failure_reason,
             "localization_reasons": localization.get("reasons", []),
             "cmd_vel_mux_available": control.get("mux_available", False),
+            "frame_mismatches": frames.get("mismatches", []),
             "safety": safety_summary(safety),
         },
         "mission": {

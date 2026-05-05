@@ -22,6 +22,34 @@ from nav.global_planner_service import GlobalPlannerService
 # Helper: create a fake tomogram pickle for testing
 # ---------------------------------------------------------------------------
 
+
+class _DummyTomogramPlanner:
+    """Small planner stand-in for PCT height selection tests."""
+
+    def __init__(
+        self,
+        traversability: np.ndarray,
+        elevation: np.ndarray | None = None,
+        slice_h0: float = -0.5,
+        slice_dh: float = 0.5,
+    ):
+        self.layers_t = traversability
+        self.layers_g = elevation
+        self.slice_h0 = slice_h0
+        self.slice_dh = slice_dh
+        self.n_slice = traversability.shape[0]
+
+    def pos2idx(self, _pos):
+        return np.array([1, 1], dtype=np.float32)
+
+    def pos2slice(self, z):
+        raw_slice = round((z - self.slice_h0) / self.slice_dh)
+        return float(np.clip(raw_slice, 0, self.n_slice - 1))
+
+    def get_surface_height(self, _pos):
+        return 0.0
+
+
 def _make_tomogram_pickle(
     shape: tuple = (100, 100),
     resolution: float = 0.2,
@@ -146,8 +174,11 @@ class TestPCTGridExtraction(unittest.TestCase):
         backend._available = False
         backend._load_error = "test"
         backend._grid = None
+        backend._trav_3d = None
         backend._resolution = 0.2
         backend._origin = np.zeros(2)
+        backend._slice_h0 = 0.0
+        backend._slice_dh = 0.5
         backend._costmap = None
         backend._costmap_resolution = 0.2
         backend._costmap_origin = np.zeros(2)
@@ -162,6 +193,8 @@ class TestPCTGridExtraction(unittest.TestCase):
 
         self.assertIsNotNone(backend._grid)
         self.assertEqual(backend._grid.shape, (80, 60))
+        self.assertIsNotNone(backend._trav_3d)
+        self.assertEqual(backend._trav_3d.shape, (1, 80, 60))
         self.assertAlmostEqual(backend._resolution, 0.3)
         # origin = center - (W*res/2, H*res/2) = (5, 10) - (9, 12) = (-4, -2)
         self.assertAlmostEqual(backend._origin[0], 5 - 60 * 0.3 / 2, places=3)
@@ -212,6 +245,24 @@ class TestPCTGridExtraction(unittest.TestCase):
         # Modifying _grid should not affect _static_grid
         backend._grid[0, 0] = 999.0
         self.assertAlmostEqual(backend._static_grid[0, 0], 0.0)
+
+    def test_select_traversable_height_skips_blocked_surface_slice(self):
+        """PCT height selection should not choose a blocked upper slice."""
+        backend = self._make_pct_backend()
+        traversability = np.full((3, 3, 3), 50.0, dtype=np.float32)
+        traversability[0, 1, 1] = 13.0
+        elevation = np.full_like(traversability, np.nan)
+        elevation[1, 1, 1] = 0.0
+
+        backend._planner = _DummyTomogramPlanner(traversability, elevation)
+        backend._trav_3d = traversability
+        backend._slice_h0 = -0.5
+        backend._slice_dh = 0.5
+
+        height = backend._select_traversable_height(np.array([0.0, 0.0]), 0.0)
+
+        self.assertAlmostEqual(height, -0.5)
+        self.assertEqual(int(backend._planner.pos2slice(height)), 0)
 
 
 # ---------------------------------------------------------------------------

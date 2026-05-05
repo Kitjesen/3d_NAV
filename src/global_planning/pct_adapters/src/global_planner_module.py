@@ -96,8 +96,11 @@ class _PCTBackend:
 
         # 2D ground-floor grid for _find_safe_goal BFS (extracted from tomogram)
         self._grid: np.ndarray | None = None
+        self._trav_3d: np.ndarray | None = None
         self._resolution: float = 0.2
         self._origin: np.ndarray = np.zeros(2)
+        self._slice_h0: float = 0.0
+        self._slice_dh: float = 0.5
 
         # Live costmap overlay for dynamic obstacle avoidance
         self._costmap: np.ndarray | None = None
@@ -216,10 +219,13 @@ class _PCTBackend:
 
         tomo_data = raw.get("data")
         res = float(raw.get("resolution", 0.2))
+        self._slice_h0 = float(raw.get("slice_h0", 0.0))
+        self._slice_dh = float(raw.get("slice_dh", 0.5))
 
         if tomo_data is not None and hasattr(tomo_data, "ndim") and tomo_data.ndim == 4:
             # data shape: (5, n_slices, H, W) — channel 0 = traversability
-            self._grid = np.asarray(tomo_data[0, 0], dtype=np.float32)
+            self._trav_3d = np.asarray(tomo_data[0], dtype=np.float32)
+            self._grid = np.asarray(self._trav_3d[0], dtype=np.float32)
             center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
             h, w = self._grid.shape
             self._origin = center - np.array([w * res / 2, h * res / 2])
@@ -227,6 +233,7 @@ class _PCTBackend:
             grid = raw.get("grid", raw.get("traversability"))
             if grid is not None:
                 self._grid = np.asarray(grid, dtype=np.float32)
+            self._trav_3d = None
             self._origin = np.array(raw.get("origin", [0, 0])[:2], dtype=np.float64)
 
         self._resolution = res
@@ -317,24 +324,17 @@ class _PCTBackend:
 
         start_pos = np.asarray(start[:2], dtype=np.float64)
         goal_pos  = np.asarray(goal[:2],  dtype=np.float64)
-        # Heights: use the tomogram's surface height at each XY cell instead
-        # of the robot's raw z. Localizer TF often puts the robot body at
-        # z ≈ -0.6 (map frame), which pos2slice rounds to slice 0 — that
-        # layer is the "below ground" barrier. By asking the planner wrapper
-        # for the surface height at each XY, we guarantee slice hits the
-        # actual traversable layer.
-        try:
-            start_h = float(self._planner.get_surface_height(
-                np.array([start_pos[0], start_pos[1]], dtype=np.float64)))
-        except Exception:
-            start_h = float(start[2]) if len(start) > 2 else 0.0
-        try:
-            goal_h = float(self._planner.get_surface_height(
-                np.array([goal_pos[0], goal_pos[1]], dtype=np.float64)))
-        except Exception:
-            goal_h = float(goal[2]) if len(goal) > 2 else 0.0
-        if not np.isfinite(start_h): start_h = 0.0
-        if not np.isfinite(goal_h):  goal_h = 0.0
+        # Choose heights that land on traversable tomogram slices at each XY.
+        # A raw 2-D goal often arrives with z=0, while get_surface_height()
+        # can snap to an upper slice whose traversability is a hard barrier.
+        start_h = self._select_traversable_height(
+            start_pos,
+            float(start[2]) if len(start) > 2 else 0.0,
+        )
+        goal_h = self._select_traversable_height(
+            goal_pos,
+            float(goal[2]) if len(goal) > 2 else 0.0,
+        )
 
         try:
             result = self._planner.plan(start_pos, goal_pos, start_h, goal_h)
@@ -363,6 +363,90 @@ class _PCTBackend:
         except Exception:
             logger.exception("PCT result conversion failed")
             return []
+
+    def _select_traversable_height(self, pos: np.ndarray, fallback_z: float) -> float:
+        """Return a height that maps to a traversable tomogram slice."""
+        fallback = float(fallback_z) if np.isfinite(fallback_z) else 0.0
+        planner = self._planner
+        trav = getattr(planner, "layers_t", None)
+        if trav is None:
+            trav = getattr(self, "_trav_3d", None)
+        if planner is None or trav is None:
+            return fallback
+
+        trav = np.asarray(trav, dtype=np.float32)
+        if trav.ndim != 3 or trav.shape[0] == 0:
+            return fallback
+
+        try:
+            idx = planner.pos2idx(np.asarray(pos[:2], dtype=np.float64))
+            col = int(np.clip(idx[0], 0, trav.shape[2] - 1))
+            row = int(np.clip(idx[1], 0, trav.shape[1] - 1))
+        except Exception:
+            if self._resolution <= 0:
+                return fallback
+            col = int(round((float(pos[0]) - self._origin[0]) / self._resolution))
+            row = int(round((float(pos[1]) - self._origin[1]) / self._resolution))
+            col = int(np.clip(col, 0, trav.shape[2] - 1))
+            row = int(np.clip(row, 0, trav.shape[1] - 1))
+
+        elev = getattr(planner, "layers_g", None)
+        if elev is not None:
+            elev = np.asarray(elev, dtype=np.float32)
+            if elev.shape != trav.shape:
+                elev = None
+
+        def to_slice(z: float) -> int:
+            try:
+                raw_slice = round(float(planner.pos2slice(float(z))))
+                return int(
+                    np.clip(raw_slice, 0, trav.shape[0] - 1)
+                )
+            except Exception:
+                if self._slice_dh == 0:
+                    return 0
+                return int(
+                    np.clip(
+                        round((float(z) - self._slice_h0) / self._slice_dh),
+                        0,
+                        trav.shape[0] - 1,
+                    )
+                )
+
+        def slice_height(slice_idx: int, preferred: float | None = None) -> float:
+            if (
+                preferred is not None
+                and np.isfinite(preferred)
+                and to_slice(preferred) == slice_idx
+            ):
+                return float(preferred)
+            if elev is not None:
+                height = float(elev[slice_idx, row, col])
+                if np.isfinite(height):
+                    return height
+            return float(self._slice_h0 + slice_idx * self._slice_dh)
+
+        candidates: list[tuple[int, float | None]] = [(to_slice(fallback), fallback)]
+        try:
+            surface_h = float(
+                planner.get_surface_height(np.asarray(pos[:2], dtype=np.float64))
+            )
+            if np.isfinite(surface_h):
+                candidates.append((to_slice(surface_h), surface_h))
+        except Exception:
+            pass
+        candidates.extend((slice_idx, None) for slice_idx in range(trav.shape[0]))
+
+        seen: set[int] = set()
+        for slice_idx, preferred_h in candidates:
+            if slice_idx in seen:
+                continue
+            seen.add(slice_idx)
+            cost = float(trav[slice_idx, row, col])
+            if np.isfinite(cost) and cost < self._obstacle_thr:
+                return slice_height(slice_idx, preferred_h)
+
+        return fallback
 
 
 # ---------------------------------------------------------------------------

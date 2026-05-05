@@ -323,6 +323,7 @@ class LocalPlannerModule(Module, layer=2):
     odometry:    In[Odometry]
     terrain_map: In[PointCloud2]
     waypoint:    In[PoseStamped]
+    clear_path:  In[bool]
     boundary:    In[PointCloud2]
     added_obstacles: In[PointCloud2]
     esdf:        In[dict]       # ESDF distance field + gradients for smoother scoring
@@ -392,6 +393,7 @@ class LocalPlannerModule(Module, layer=2):
         self.terrain_map.subscribe(self._on_terrain)
         self.terrain_map.set_policy("latest")
         self.waypoint.subscribe(self._on_waypoint)
+        self.clear_path.subscribe(self._on_clear_path)
         self.boundary.subscribe(self._on_boundary)
         self.boundary.set_policy("latest")
         self.added_obstacles.subscribe(self._on_added_obstacles)
@@ -586,6 +588,12 @@ class LocalPlannerModule(Module, layer=2):
                 for p in path_points
             ]
             self.local_path.publish(Path(poses=poses))
+
+    def _on_clear_path(self, clear: bool) -> None:
+        if not clear:
+            return
+        self._latest_waypoint = None
+        self.local_path.publish(Path(poses=[], frame_id="map"))
 
     # ------------------------------------------------------------------ #
     # nanobind C++ scorer (full CMU algorithm, in-process)                 #

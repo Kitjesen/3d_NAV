@@ -6,6 +6,7 @@ import math
 import time
 
 import pytest
+from pydantic import ValidationError
 
 
 pytest.importorskip("fastapi")
@@ -124,6 +125,20 @@ def test_navigation_plan_preview_is_non_motion_and_typed():
     assert gateway.cmd_vel.msg_count == 0
 
 
+def test_navigation_goal_requests_are_map_frame_only():
+    from gateway.schemas import ClickNavRequest, GoalRequest, PlanPreviewRequest
+
+    assert GoalRequest(x=1.0, y=2.0).frame_id == "map"
+    assert ClickNavRequest(x=1.0, y=2.0).frame_id == "map"
+    assert PlanPreviewRequest(x=1.0, y=2.0).frame_id == "map"
+    with pytest.raises(ValidationError):
+        GoalRequest(x=1.0, y=2.0, frame_id="odom")
+    with pytest.raises(ValidationError):
+        ClickNavRequest(x=1.0, y=2.0, frame_id="odom")
+    with pytest.raises(ValidationError):
+        PlanPreviewRequest(x=1.0, y=2.0, frame_id="odom")
+
+
 def test_navigation_plan_preview_degrades_without_odometry_and_does_not_plan():
     from gateway.gateway_module import GatewayModule
     from gateway.schemas import PlanPreviewRequest, PlanPreviewResponse
@@ -211,6 +226,46 @@ def test_command_journal_replays_duplicate_request_id_without_republish():
     assert second["command"]["request_id"] == "goal-001"
 
 
+def test_control_commands_publish_command_ack_events():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    post_goal = _endpoint(gateway, "/api/v1/goal")
+    queue = gateway._sse_subscribe()
+
+    try:
+        body = GoalRequest(
+            x=1.0,
+            y=2.0,
+            z=0.0,
+            request_id="goal-ack-001",
+            client_id="web",
+        )
+        first = asyncio.run(post_goal(body))
+        second = asyncio.run(post_goal(body))
+
+        first_event = queue.get_nowait()
+        second_event = queue.get_nowait()
+    finally:
+        gateway._sse_unsubscribe(queue)
+
+    assert first["command"]["replay"] is False
+    assert second["command"]["replay"] is True
+    assert first_event["type"] == "command_ack"
+    assert first_event["data"]["ok"] is True
+    assert first_event["data"]["status"] == "ok"
+    assert first_event["data"]["status_code"] == 200
+    assert first_event["data"]["command"]["name"] == "goal"
+    assert first_event["data"]["command"]["request_id"] == "goal-ack-001"
+    assert first_event["data"]["command"]["replay"] is False
+    assert second_event["type"] == "command_ack"
+    assert second_event["data"]["command"]["replay"] is True
+
+
 def test_goal_request_yaw_is_published_as_pose_orientation():
     from gateway.gateway_module import GatewayModule, GoalRequest
     from gateway.schemas import ControlCommandResponse
@@ -243,7 +298,9 @@ def test_goal_request_yaw_is_published_as_pose_orientation():
     assert sent_goals[0].pose.orientation.yaw == pytest.approx(math.pi / 2)
     assert model.goal == [1.0, 2.0, 0.0]
     assert model.yaw == pytest.approx(math.pi / 2)
+    assert model.frame_id == "map"
     assert result["yaw"] == pytest.approx(math.pi / 2)
+    assert result["frame_id"] == "map"
 
 
 def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
@@ -258,18 +315,23 @@ def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
     sent_goals = []
     gateway.goal_pose._add_callback(sent_goals.append)
     post_goal = _endpoint(gateway, "/api/v1/goal")
+    queue = gateway._sse_subscribe()
 
-    response = asyncio.run(
-        post_goal(
-            GoalRequest(
-                x=1.0,
-                y=2.0,
-                z=0.0,
-                request_id="blocked-goal",
-                client_id="web",
+    try:
+        response = asyncio.run(
+            post_goal(
+                GoalRequest(
+                    x=1.0,
+                    y=2.0,
+                    z=0.0,
+                    request_id="blocked-goal",
+                    client_id="web",
+                )
             )
         )
-    )
+        event = queue.get_nowait()
+    finally:
+        gateway._sse_unsubscribe(queue)
     model = GatewayErrorResponse.model_validate(_payload(response))
 
     assert response.status_code == 409
@@ -281,6 +343,12 @@ def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
     assert model.command.accepted is False
     assert model.detail["path"] == "/api/v1/navigation/plan"
     assert model.detail["preview"]["reasons"] == ["blocked_by_costmap"]
+    assert event["type"] == "command_ack"
+    assert event["data"]["ok"] is False
+    assert event["data"]["error"] == "navigation_plan_infeasible"
+    assert event["data"]["command"]["accepted"] is False
+    assert event["data"]["command"]["request_id"] == "blocked-goal"
+    assert event["data"]["detail"]["path"] == "/api/v1/navigation/plan"
     assert nav.calls == [(1.0, 2.0, 0.0)]
     assert sent_goals == []
     assert gateway.goal_pose.msg_count == 0
@@ -466,6 +534,8 @@ def test_click_navigation_previews_publishes_and_replays_request_id_once():
     assert len(sent_goals) == 1
     assert sent_goals[0].pose.position.x == pytest.approx(3.0)
     assert sent_goals[0].pose.position.y == pytest.approx(4.0)
+    assert sent_goals[0].frame_id == "map"
+    assert model.frame_id == "map"
 
 
 def test_goal_route_rejects_missing_plan_preview_without_publishing():
@@ -638,25 +708,32 @@ def test_lease_command_uses_receipt_and_replays_duplicate_request_id():
     gateway = GatewayModule()
     gateway.setup()
     post_lease = _endpoint(gateway, "/api/v1/lease")
+    queue = gateway._sse_subscribe()
 
-    acquire = LeaseRequest(
-        action="acquire",
-        client_id="web",
-        ttl=30.0,
-        request_id="lease-001",
-    )
-    first = asyncio.run(post_lease(acquire))
-    second = asyncio.run(post_lease(acquire))
-    release = asyncio.run(
-        post_lease(
-            LeaseRequest(
-                action="release",
-                client_id="web",
-                ttl=30.0,
-                request_id="lease-release-001",
+    try:
+        acquire = LeaseRequest(
+            action="acquire",
+            client_id="web",
+            ttl=30.0,
+            request_id="lease-001",
+        )
+        first = asyncio.run(post_lease(acquire))
+        second = asyncio.run(post_lease(acquire))
+        release = asyncio.run(
+            post_lease(
+                LeaseRequest(
+                    action="release",
+                    client_id="web",
+                    ttl=30.0,
+                    request_id="lease-release-001",
+                )
             )
         )
-    )
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+    finally:
+        gateway._sse_unsubscribe(queue)
 
     acquired = LeaseResponse.model_validate(first)
     replayed = LeaseResponse.model_validate(second)
@@ -679,6 +756,10 @@ def test_lease_command_uses_receipt_and_replays_duplicate_request_id():
     assert released.command.request_id == "lease-release-001"
     assert command_stats["accepted_commands"] == 2
     assert command_stats["replayed_commands"] == 1
+    lease_events = [event for event in events if event["type"] == "lease"]
+    ack_events = [event for event in events if event["type"] == "command_ack"]
+    assert [event["data"]["status"] for event in lease_events] == ["acquired", "released"]
+    assert ack_events[0]["data"]["command"]["name"] == "lease"
 
 
 def test_bootstrap_and_health_expose_command_policy():

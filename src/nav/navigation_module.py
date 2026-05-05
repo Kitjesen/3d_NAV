@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 LOCALIZATION_MOTION_HOLD_SIGNALS = {"ODOM_MISSING"}
 LOCALIZATION_MOTION_HOLD_ACTIONS = {"restart_localization_chain"}
+PLANNING_FRAME_ID = "map"
 
 
 class _PlanPreviewBusy(RuntimeError):
@@ -64,7 +65,7 @@ class MissionState:
 
     # Legal state transitions. Any state → IDLE is always allowed (stop/cancel/reset).
     TRANSITIONS: dict[str, frozenset[str]] = {
-        "IDLE":       frozenset(["PLANNING", "PATROLLING"]),
+        "IDLE":       frozenset(["PLANNING", "PATROLLING", "FAILED", "CANCELLED"]),
         "PLANNING":   frozenset(["EXECUTING", "FAILED", "IDLE", "CANCELLED"]),
         "EXECUTING":  frozenset(["SUCCESS", "FAILED", "STUCK", "IDLE", "PLANNING", "CANCELLED"]),
         "PATROLLING": frozenset(["EXECUTING", "SUCCESS", "FAILED", "STUCK", "IDLE", "PLANNING", "CANCELLED"]),
@@ -105,6 +106,7 @@ class NavigationModule(Module, layer=5):
     # -- Outputs --
     waypoint:       Out[PoseStamped]
     global_path:    Out[list]
+    clear_path:     Out[bool]
     planner_status: Out[str]
     mission_status: Out[dict]
     adapter_status: Out[dict]
@@ -145,6 +147,11 @@ class NavigationModule(Module, layer=5):
         # Mission FSM state
         self._state = MissionState.IDLE
         self._robot_pos = np.zeros(3)
+        self._planning_frame_id = str(kw.get("planning_frame_id", PLANNING_FRAME_ID))
+        self._odom_frame_id = "unknown"
+        self._costmap_frame_id = "unknown"
+        self._goal_frame_id: str | None = None
+        self._reported_frame_mismatches: set[tuple[str, str]] = set()
         self._goal: np.ndarray | None = None
         self._replan_count = 0
         self._max_replan = max_replan_count
@@ -281,6 +288,11 @@ class NavigationModule(Module, layer=5):
             "wp_index": wp_index,
             "wp_total": wp_total,
             "remaining_waypoints": remaining_waypoints,
+            "frame_id": self._planning_frame_id,
+            "planning_frame_id": self._planning_frame_id,
+            "odom_frame_id": self._odom_frame_id,
+            "costmap_frame_id": self._costmap_frame_id,
+            "goal_frame_id": self._goal_frame_id,
             "goal": self._point_summary(self._goal),
             "current_waypoint": self._point_summary(current_waypoint),
             "distance_to_goal_m": self._distance_xy(self._robot_pos, self._goal),
@@ -311,7 +323,102 @@ class NavigationModule(Module, layer=5):
 
     # ── Input handlers ────────────────────────────────────────────────────
 
+    def _goal_frame(self, goal: PoseStamped) -> str:
+        return str(getattr(goal, "frame_id", "") or self._planning_frame_id)
+
+    def _report_frame_mismatch(self, source: str, frame_id: str) -> None:
+        if not self._is_frame_mismatch(frame_id):
+            return
+        key = (source, frame_id)
+        if key in self._reported_frame_mismatches:
+            return
+        self._reported_frame_mismatches.add(key)
+        self.adapter_status.publish({
+            "event": "frame_mismatch",
+            "reason": "unsupported_frame",
+            "source": source,
+            "expected_frame": self._planning_frame_id,
+            "received_frame": frame_id,
+            "ts": time.time(),
+        })
+
+    def _is_frame_mismatch(self, frame_id: str) -> bool:
+        return bool(
+            frame_id
+            and frame_id != "unknown"
+            and frame_id != self._planning_frame_id
+        )
+
+    def _planning_frame_blocker(self) -> tuple[str, str] | None:
+        for source, frame_id in (
+            ("odometry", self._odom_frame_id),
+            ("costmap", self._costmap_frame_id),
+        ):
+            if self._is_frame_mismatch(frame_id):
+                return source, frame_id
+        return None
+
+    def _has_motion_artifacts(self) -> bool:
+        return (
+            self._state in (
+                MissionState.PLANNING,
+                MissionState.EXECUTING,
+                MissionState.PATROLLING,
+                MissionState.STUCK,
+            )
+            or self._tracker.path_length > 0
+            or self._goal is not None
+            or bool(self._patrol_goals)
+        )
+
+    def _block_for_frame_mismatch(self, source: str, frame_id: str) -> None:
+        self._failure_reason = (
+            f"unsupported {source} frame {frame_id!r}; expected "
+            f"{self._planning_frame_id!r}"
+        )
+        self.adapter_status.publish({
+            "event": "navigation_blocked",
+            "reason": "frame_mismatch",
+            "source": source,
+            "expected_frame": self._planning_frame_id,
+            "received_frame": frame_id,
+            "ts": time.time(),
+        })
+        self._tracker.clear()
+        self._publish_motion_stop()
+        self._set_state(MissionState.FAILED)
+
+    def _reject_goal_frame(self, frame_id: str, *, source: str) -> None:
+        self._failure_reason = (
+            f"unsupported {source} frame {frame_id!r}; expected "
+            f"{self._planning_frame_id!r}"
+        )
+        self.adapter_status.publish({
+            "event": "goal_rejected",
+            "reason": "unsupported_frame",
+            "source": source,
+            "expected_frame": self._planning_frame_id,
+            "received_frame": frame_id,
+            "ts": time.time(),
+        })
+        self._tracker.clear()
+        self._goal = None
+        self._goal_frame_id = None
+        self._publish_motion_stop()
+        if self._state not in (
+            MissionState.IDLE,
+            MissionState.SUCCESS,
+            MissionState.CANCELLED,
+        ):
+            self._set_state(MissionState.FAILED)
+        else:
+            self._set_state(self._state)
+
     def _on_goal(self, goal: PoseStamped) -> None:
+        frame_id = self._goal_frame(goal)
+        if frame_id != self._planning_frame_id:
+            self._reject_goal_frame(frame_id, source="goal_pose")
+            return
         new_goal = np.array([
             goal.pose.position.x,
             goal.pose.position.y,
@@ -324,6 +431,7 @@ class NavigationModule(Module, layer=5):
             clear_goal=False,
         )
         self._goal = new_goal
+        self._goal_frame_id = frame_id
         self._replan_count = 0
         self._plan()
 
@@ -349,7 +457,12 @@ class NavigationModule(Module, layer=5):
     def _on_stop(self, level: int) -> None:
         if level >= 1:
             self._tracker.clear()
+            self._publish_motion_stop()
             self._set_state(MissionState.IDLE)
+
+    def _publish_motion_stop(self) -> None:
+        self.clear_path.publish(True)
+        self.recovery_cmd_vel.publish(Twist.zero())
 
     def _on_teleop_active(self, active: bool) -> None:
         """Pause navigation when teleop engages, resume when released."""
@@ -359,6 +472,7 @@ class NavigationModule(Module, layer=5):
                 self._pre_teleop_goal = self._goal.copy() if self._goal is not None else None
                 self._pre_teleop_state = self._state
                 self._tracker.clear()
+                self._publish_motion_stop()
                 self._set_state(MissionState.IDLE)
                 logger.info("NavigationModule: paused for teleop (saved goal)")
             self._paused_for_teleop = True
@@ -379,6 +493,12 @@ class NavigationModule(Module, layer=5):
                 self._pre_teleop_state = None
 
     def _on_costmap(self, data: dict) -> None:
+        self._costmap_frame_id = str(data.get("frame_id") or self._planning_frame_id)
+        self._report_frame_mismatch("costmap", self._costmap_frame_id)
+        if self._is_frame_mismatch(self._costmap_frame_id):
+            if self._has_motion_artifacts():
+                self._block_for_frame_mismatch("costmap", self._costmap_frame_id)
+            return
         grid = data.get("grid")
         if grid is None:
             return
@@ -400,13 +520,16 @@ class NavigationModule(Module, layer=5):
             or self._pre_pause_state is not None
             or self._localization_recovery_motion_hold
         )
-        if self._state in (MissionState.IDLE, MissionState.CANCELLED) \
-                and not had_localization_pause:
-            return
         self._tracker.clear()
         self._patrol_goals.clear()
         self._patrol_index = 0
+        self._goal = None
+        self._goal_frame_id = None
         self._failure_reason = f"cancelled: {msg}" if msg else "cancelled"
+        self._publish_motion_stop()
+        if self._state in (MissionState.IDLE, MissionState.CANCELLED) \
+                and not had_localization_pause:
+            return
         self._clear_localization_pause_for_explicit_action(
             reason="cancel",
             clear_goal=True,
@@ -571,6 +694,11 @@ class NavigationModule(Module, layer=5):
         self._patrol_loop = False
         for g in goals:
             if isinstance(g, dict):
+                frame_id = str(g.get("frame_id") or self._planning_frame_id)
+                if frame_id != self._planning_frame_id:
+                    self._patrol_goals.clear()
+                    self._reject_goal_frame(frame_id, source="patrol_goals")
+                    return
                 self._patrol_goals.append(
                     np.array([g["x"], g["y"], g.get("z", 0.0)])
                 )
@@ -583,6 +711,7 @@ class NavigationModule(Module, layer=5):
         if self._patrol_goals:
             self._patrol_index = 0
             self._goal = self._patrol_goals[0]
+            self._goal_frame_id = self._planning_frame_id
             self._replan_count = 0
             self._set_state(MissionState.PATROLLING)
             logger.info(
@@ -592,6 +721,12 @@ class NavigationModule(Module, layer=5):
             self._plan()
 
     def _on_odom(self, odom: Odometry) -> None:
+        self._odom_frame_id = str(getattr(odom, "frame_id", "") or "unknown")
+        self._report_frame_mismatch("odometry", self._odom_frame_id)
+        if self._is_frame_mismatch(self._odom_frame_id):
+            if self._has_motion_artifacts():
+                self._block_for_frame_mismatch("odometry", self._odom_frame_id)
+            return
         self._robot_pos = np.array([
             odom.pose.position.x,
             odom.pose.position.y,
@@ -826,9 +961,13 @@ class NavigationModule(Module, layer=5):
             "schema_version": 1,
             "ok": True,
             "feasible": False,
-            "frame_id": "map",
-            "start": self._preview_path_point(start, ts=ts),
-            "goal": self._preview_path_point(goal, ts=ts),
+            "frame_id": self._planning_frame_id,
+            "start": self._preview_path_point(
+                start, frame_id=self._planning_frame_id, ts=ts
+            ),
+            "goal": self._preview_path_point(
+                goal, frame_id=self._planning_frame_id, ts=ts
+            ),
             "adjusted_goal": None,
             "path": [],
             "count": 0,
@@ -844,6 +983,15 @@ class NavigationModule(Module, layer=5):
         if not np.all(np.isfinite(start)):
             result["reasons"] = ["odometry_invalid"]
             result["error"] = "current robot position is not finite"
+            return result
+        frame_blocker = self._planning_frame_blocker()
+        if frame_blocker is not None:
+            source, frame_id = frame_blocker
+            result["reasons"] = ["frame_mismatch"]
+            result["error"] = (
+                f"unsupported {source} frame {frame_id!r}; expected "
+                f"{self._planning_frame_id!r}"
+            )
             return result
         if not np.all(np.isfinite(goal)):
             result["ok"] = False
@@ -873,7 +1021,14 @@ class NavigationModule(Module, layer=5):
         if start_goal_delta <= 0.05:
             result.update({
                 "feasible": True,
-                "path": [self._preview_path_point(start, ts=ts, index=0)],
+                "path": [
+                    self._preview_path_point(
+                        start,
+                        frame_id=self._planning_frame_id,
+                        ts=ts,
+                        index=0,
+                    )
+                ],
                 "count": 1,
                 "distance_m": 0.0,
                 "plan_ms": 0.0,
@@ -936,7 +1091,12 @@ class NavigationModule(Module, layer=5):
             return result
 
         serialized = [
-            self._preview_path_point(point, ts=ts, index=index)
+            self._preview_path_point(
+                point,
+                frame_id=self._planning_frame_id,
+                ts=ts,
+                index=index,
+            )
             for index, point in enumerate(path_arrays)
         ]
         final = path_arrays[-1]
@@ -948,7 +1108,11 @@ class NavigationModule(Module, layer=5):
             result["error"] = "planner returned a path with non-finite goal distance"
             return result
         if goal_delta > 0.05:
-            adjusted_goal = self._preview_path_point(final, ts=ts)
+            adjusted_goal = self._preview_path_point(
+                final,
+                frame_id=self._planning_frame_id,
+                ts=ts,
+            )
 
         result.update({
             "feasible": True,
@@ -989,6 +1153,11 @@ class NavigationModule(Module, layer=5):
     def _plan(self) -> None:
         if self._goal is None:
             self._set_state(MissionState.FAILED)
+            return
+
+        frame_blocker = self._planning_frame_blocker()
+        if frame_blocker is not None:
+            self._block_for_frame_mismatch(*frame_blocker)
             return
 
         self._set_state(MissionState.PLANNING)
@@ -1070,7 +1239,7 @@ class NavigationModule(Module, layer=5):
                 ),
                 orientation=Quaternion(0, 0, 0, 1),
             ),
-            frame_id="map",
+            frame_id=self._planning_frame_id,
             ts=time.time(),
         )
         self.waypoint.publish(pose)
@@ -1078,7 +1247,7 @@ class NavigationModule(Module, layer=5):
             try:
                 from geometry_msgs.msg import PointStamped
                 pt = PointStamped()
-                pt.header.frame_id = "map"
+                pt.header.frame_id = self._planning_frame_id
                 pt.point.x = float(wp[0])
                 pt.point.y = float(wp[1])
                 pt.point.z = float(wp[2]) if len(wp) > 2 else 0.0
@@ -1104,9 +1273,14 @@ class NavigationModule(Module, layer=5):
                 position=Vector3(x, y, 0.0),
                 orientation=Quaternion(0.0, 0.0, q_z, q_w),
             ),
-            frame_id="map", ts=0.0,
+            frame_id=self._planning_frame_id, ts=0.0,
         ))
-        return json.dumps({"status": "navigating", "goal": [x, y], "yaw": yaw})
+        return json.dumps({
+            "status": "navigating",
+            "goal": [x, y],
+            "yaw": yaw,
+            "frame_id": self._planning_frame_id,
+        })
 
     @skill
     def stop_navigation(self) -> str:
@@ -1131,6 +1305,10 @@ class NavigationModule(Module, layer=5):
                 if self._goal is not None else None)
         return json.dumps({
             "state": self._state,
+            "frame_id": self._planning_frame_id,
+            "planning_frame_id": self._planning_frame_id,
+            "odom_frame_id": self._odom_frame_id,
+            "costmap_frame_id": self._costmap_frame_id,
             "position": pos,
             "goal": goal,
             "path_length": self._tracker.path_length,

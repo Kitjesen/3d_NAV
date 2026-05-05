@@ -228,17 +228,10 @@ def register_status_routes(app, gw) -> None:
 
         async def _stream():
             try:
-                with gw._state_lock:
-                    snapshot = {
-                        "type": "snapshot",
-                        "data": {
-                            "odometry": gw._odom,
-                            "safety": gw._safety,
-                            "mission": gw._mission,
-                            "mode": gw._mode,
-                            "session": gw._session_snapshot(),
-                        },
-                    }
+                snapshot = {
+                    "type": "snapshot",
+                    "data": build_state_snapshot(gw),
+                }
                 yield format_sse_message(
                     normalize_sse_event(snapshot, event_id=snapshot_event_id),
                     retry_ms=SSE_RETRY_MS,

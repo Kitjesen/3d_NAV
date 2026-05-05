@@ -122,6 +122,15 @@ def apply_full_stack_wires(
 
     WireSpec("SafetyRingModule", "stop_cmd", drv, "stop_signal").apply(bp)
     WireSpec("SafetyRingModule", "stop_cmd", "NavigationModule", "stop_signal").apply(bp)
+    _apply_if_present(
+        bp,
+        names,
+        [
+            WireSpec("GatewayModule", "stop_cmd", drv, "stop_signal"),
+            WireSpec("GatewayModule", "stop_cmd", "NavigationModule", "stop_signal"),
+            WireSpec("GatewayModule", "cmd_vel", "CmdVelMux", "teleop_cmd_vel"),
+        ],
+    )
 
     _apply_if_present(
         bp,
@@ -256,6 +265,7 @@ def apply_full_stack_wires(
         names,
         [
             WireSpec("NavigationModule", "waypoint", "LocalPlannerModule", "waypoint"),
+            WireSpec("NavigationModule", "clear_path", "LocalPlannerModule", "clear_path"),
             WireSpec("TerrainModule", "terrain_map", "LocalPlannerModule", "terrain_map"),
             WireSpec("LocalPlannerModule", "local_path", "PathFollowerModule", "local_path"),
             WireSpec("LocalPlannerModule", "local_path", "SafetyRingModule", "path"),

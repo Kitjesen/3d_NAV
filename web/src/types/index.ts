@@ -282,11 +282,28 @@ export interface NavigationProgressSummary {
   terminal: boolean
 }
 
+export interface NavigationFrameMismatch {
+  source: string
+  expected_frame: string
+  received_frame: string
+}
+
+export interface NavigationFrameSummary {
+  planning_frame_id: string
+  odom_frame_id: string
+  costmap_frame_id: string
+  goal_frame_id?: string | null
+  ok: boolean
+  mismatches: NavigationFrameMismatch[]
+}
+
 export interface NavigationDiagnosticsSummary {
   reason_codes: string[]
   failure_reason: string
   localization_reasons: string[]
   cmd_vel_mux_available: boolean
+  frame_mismatches: NavigationFrameMismatch[]
+  safety?: Record<string, unknown> | null
 }
 
 export interface NavigationMissionSummary {
@@ -342,6 +359,7 @@ export interface NavigationStatusResponse {
   readiness: NavigationReadinessSummary
   progress: NavigationProgressSummary
   path: NavigationPathSummary
+  frames: NavigationFrameSummary
   control: NavigationControlSummary
   localization: NavigationLocalizationSummary
   target: NavigationTargetSummary
@@ -715,7 +733,9 @@ export interface SnapshotEventData {
   safety?: Record<string, unknown>
   mission?: Record<string, unknown>
   mode?: string
+  lease?: Record<string, unknown>
   session?: Record<string, unknown>
+  navigation?: NavigationStatusResponse
 }
 
 export interface SnapshotEvent {
@@ -731,6 +751,21 @@ export interface MissionEvent {
 export interface SafetyEvent {
   type: 'safety'
   data?: Record<string, unknown>
+}
+
+export interface NavigationStatusEvent {
+  type: 'navigation_status'
+  data?: NavigationStatusResponse
+}
+
+export interface LeaseEvent {
+  type: 'lease'
+  data?: LeaseResponse | Record<string, unknown>
+}
+
+export interface CommandAckEvent {
+  type: 'command_ack'
+  data?: (ControlCommandResponse & { status_code?: number | null; detail?: unknown }) | Record<string, unknown>
 }
 
 export interface EvalEvent {
@@ -959,6 +994,9 @@ export type SSEEvent = SSEEnvelopeFields & (
   | SnapshotEvent
   | MissionEvent
   | SafetyEvent
+  | NavigationStatusEvent
+  | LeaseEvent
+  | CommandAckEvent
   | EvalEvent
   | DialogueEvent
   | GnssFusionEvent
@@ -991,6 +1029,9 @@ export interface SSEState {
   mapCloud: MapCloudEvent | null
   savedMap: SavedMapEvent | null
   session: SessionEvent['data'] | null
+  navigationStatus: NavigationStatusResponse | null
+  lease: LeaseResponse | Record<string, unknown> | null
+  commandAck: CommandAckEvent['data'] | null
   locations: LocationsResponse | null
   stateSnapshot: StateResponse | null
   traffic: AppTrafficResponse | null

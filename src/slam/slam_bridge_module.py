@@ -1594,6 +1594,7 @@ class SlamBridgeModule(Module, layer=1):
         odom.pose.orientation.y = float(ny)
         odom.pose.orientation.z = float(nz)
         odom.pose.orientation.w = float(nw)
+        odom.frame_id = "map"
         return odom
 
     def _cache_map_odom_tf(self, tx, ty, tz, qx, qy, qz, qw):
@@ -1732,6 +1733,8 @@ class SlamBridgeModule(Module, layer=1):
                     linear=Vector3(x=float(t.linear.x), y=float(t.linear.y), z=float(t.linear.z)),
                     angular=Vector3(x=float(t.angular.x), y=float(t.angular.y), z=float(t.angular.z)),
                 ),
+                frame_id=str(getattr(msg.header, "frame_id", "") or "odom"),
+                child_frame_id=str(getattr(msg, "child_frame_id", "") or "body"),
             )
             # Track max position covariance from IESKF P matrix (filled by lio_node.cpp)
             cov = msg.pose.covariance  # 36-element row-major 6x6
@@ -2021,6 +2024,8 @@ class SlamBridgeModule(Module, layer=1):
             ),
             twist=slam_odom.twist,
             ts=slam_odom.ts,
+            frame_id=slam_odom.frame_id,
+            child_frame_id=slam_odom.child_frame_id,
         )
         self._last_slam_odom = fused_odom
         return fused_odom
@@ -2158,6 +2163,8 @@ class SlamBridgeModule(Module, layer=1):
             ),
             twist=odom.twist,
             ts=odom.ts,
+            frame_id=odom.frame_id,
+            child_frame_id=odom.child_frame_id,
         )
 
     def _check_residual_and_maybe_relock(self, residual: float) -> bool:
@@ -2574,7 +2581,10 @@ class SlamBridgeModule(Module, layer=1):
             "condition_number": round(self._condition_number, 1),
             "degenerate_dof_count": self._degenerate_dof_count,
             "dof_mask": self._dof_mask.tolist() if self._dof_mask is not None else None,
-            "visual_fusion_active": self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL) and self._last_visual_odom is not None,
+            "visual_fusion_active": (
+                self._degen_level in (DEGEN_SEVERE, DEGEN_CRITICAL)
+                and self._last_visual_odom is not None
+            ),
             "visual_fused_count": self._visual_fused_count,
             "odom_worker_drops": self._odom_worker_drops,
             "pointcloud_worker_drops": self._pointcloud_worker_drops,

@@ -65,6 +65,35 @@ After the run:
 
 ---
 
+## Simulation-only policy soak on Sunrise
+
+Use Sunrise as a compute host for MuJoCo policy validation only. This gate must
+not start robot services, publish real robot commands, or run the field
+`scripts/lingtu map|nav` commands.
+
+Run it after changing MuJoCo assets, ONNX policy loading, `PolicyRunner`,
+`MujocoDriverModule`, or sim navigation wiring:
+
+```bash
+ssh sunrise@192.168.66.190
+cd ~/data/SLAM/navigation
+mkdir -p artifacts
+PYTHONPATH=src:. PYTHONIOENCODING=utf-8 LINGTU_SIM_DRIVE_MODE=policy \
+  python sim/scripts/policy_nav_smoke.py \
+    --world open_field \
+    --direct-duration 6 \
+    --nav-duration 60 \
+    --goal-distance 1.0 \
+    --json-out artifacts/policy_nav_smoke_open_field.json
+```
+
+Expected pass evidence: policy metadata shows `obs_history [1, 285]` to
+`actions [1, 16]`, direct and full-stack nav motion both exceed the configured
+thresholds, `nav_state` reaches `SUCCESS`, and `direct_fallback` remains zero.
+The detailed runbook is in `sim/README.md`.
+
+---
+
 ## Rules
 
 - Never run validation commands ad hoc over SSH; always go through a script.

@@ -175,6 +175,13 @@ def build_scene_graph_response(scene_graph: Any) -> dict[str, Any]:
 
 
 def _point_mapping(item: Any) -> dict[str, Any]:
+    attrs = {
+        key: getattr(item, key)
+        for key in ("x", "y", "z", "yaw", "frame_id", "ts")
+        if hasattr(item, key)
+    }
+    if attrs:
+        return attrs
     raw = _mapping(item)
     if raw:
         return raw
@@ -189,12 +196,7 @@ def _point_mapping(item: Any) -> dict[str, Any]:
     pos = _mapping(getattr(item, "position", None))
     if pos:
         return pos
-    attrs = {
-        key: getattr(item, key)
-        for key in ("x", "y", "z", "yaw", "frame_id", "ts")
-        if hasattr(item, key)
-    }
-    return attrs
+    return {}
 
 
 def _path_point(item: Any) -> dict[str, Any] | None:

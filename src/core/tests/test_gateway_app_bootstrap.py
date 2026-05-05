@@ -130,9 +130,16 @@ def test_app_bootstrap_service_returns_client_contract():
     assert capabilities["realtime"]["events"]["last_event_id_header"] == "Last-Event-ID"
     assert capabilities["realtime"]["events"]["named_events"] is False
     assert capabilities["realtime"]["events"]["browser_handler"] == "onmessage"
-    assert {"snapshot", "ping", "slam_diag", "gnss_fusion", "slam_drift"} <= set(
-        capabilities["realtime"]["events"]["event_types"]
-    )
+    assert {
+        "snapshot",
+        "ping",
+        "slam_diag",
+        "gnss_fusion",
+        "slam_drift",
+        "navigation_status",
+        "lease",
+        "command_ack",
+    } <= set(capabilities["realtime"]["events"]["event_types"])
     assert {"slam_diag", "gnss_fusion", "slam_drift"} <= set(
         capabilities["realtime"]["events"]["diagnostic_event_types"]
     )
@@ -698,6 +705,10 @@ def test_app_web_events_stream_starts_with_snapshot_contract():
     assert payload["data"]["mission"]["state"] == "idle"
     assert payload["data"]["mode"] == "manual"
     assert payload["data"]["session"]["mode"] in {"idle", "navigating", "mapping"}
+    assert payload["data"]["lease"]["active"] is False
+    assert payload["data"]["navigation"]["path"]["endpoint"] == "/api/v1/path"
+    assert payload["data"]["navigation"]["readiness"]["can_accept_goal"] is False
+    assert payload["data"]["navigation"]["frames"]["planning_frame_id"] == "map"
     assert gateway._traffic_stats_snapshot()["sse"]["clients"] == 0
 
 
