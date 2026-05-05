@@ -145,6 +145,9 @@ def test_sim_mujoco_full_stack_emits_costmap_and_plans_local_goal():
         enable_native=False,
         enable_semantic=False,
         enable_gateway=False,
+        python_autonomy_backend="simple",
+        python_path_follower_backend="pid",
+        odom_frame_id="map",
         render=False,
     ).build()
     driver = system.get_module("MujocoDriverModule")

@@ -294,10 +294,13 @@ class TestGatewayModule(unittest.TestCase):
 
     def test_ports_out(self):
         m = self._make()
-        self.assertEqual(len(m.ports_out), 5)
+        self.assertGreaterEqual(len(m.ports_out), 5)
+        self.assertIn("instruction", m.ports_out)
+        self.assertIn("mode_cmd", m.ports_out)
         self.assertIn("goal_pose", m.ports_out)
         self.assertIn("cmd_vel", m.ports_out)
         self.assertIn("stop_cmd", m.ports_out)
+        self.assertIn("cancel", m.ports_out)
 
     def test_on_odometry_caches(self):
         m = self._make()
