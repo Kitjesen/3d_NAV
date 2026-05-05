@@ -736,6 +736,54 @@ def test_navigation_status_reports_costmap_frame_mismatch():
     assert payload["can_accept_goal"] is False
 
 
+def test_navigation_status_reads_idle_costmap_frame_from_navigation_module():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import NavigationStatusResponse
+    from gateway.services.runtime_status import build_navigation_status
+
+    class FakeMux:
+        def health(self):
+            return {"active_source": "none", "sources": {}}
+
+    class FakeNavigation:
+        def get_navigation_status(self):
+            return json.dumps({
+                "state": "IDLE",
+                "planning_frame_id": "map",
+                "odom_frame_id": "map",
+                "costmap_frame_id": "odom",
+            })
+
+    gateway = GatewayModule()
+    gateway._session_mode = "navigating"
+    gateway._icp_quality = 0.03
+    with gateway._state_lock:
+        gateway._odom = {"x": 1.0, "y": 2.0, "frame_id": "map"}
+        gateway._mode = "autonomous"
+        gateway._mission = {"state": "IDLE", "planning_frame_id": "map"}
+        gateway._localization_status = {"state": "TRACKING", "confidence": 0.9}
+    gateway._all_modules = {
+        "CmdVelMux": FakeMux(),
+        "NavigationModule": FakeNavigation(),
+    }
+
+    payload = build_navigation_status(gateway)
+    NavigationStatusResponse.model_validate(payload)
+
+    assert payload["frames"]["costmap_frame_id"] == "odom"
+    assert payload["frames"]["ok"] is False
+    assert payload["frames"]["mismatches"] == [
+        {
+            "source": "costmap",
+            "expected_frame": "map",
+            "received_frame": "odom",
+        }
+    ]
+    assert "frame_mismatch_costmap" in payload["reason_codes"]
+    assert "frame_mismatch_costmap" in payload["readiness"]["blockers"]
+    assert payload["can_accept_goal"] is False
+
+
 def test_navigation_status_blocks_goal_when_session_is_not_navigating():
     from gateway.gateway_module import GatewayModule
     from gateway.services.runtime_status import build_navigation_status

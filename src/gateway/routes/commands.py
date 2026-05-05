@@ -149,11 +149,19 @@ def _current_start_payload(gw, *, ts: float) -> dict[str, Any] | None:
         return None
     if not all(math.isfinite(value) for value in (x, y, z)):
         return None
+    frame_id = str(odom.get("frame_id") or odom.get("frame") or "").strip()
+    if not frame_id:
+        header = odom.get("header")
+        if isinstance(header, dict):
+            frame_id = str(
+                header.get("frame_id") or header.get("frame") or ""
+            ).strip()
     return _point_payload(
         x,
         y,
         z,
         ts=ts,
+        frame_id=frame_id or "map",
     )
 
 

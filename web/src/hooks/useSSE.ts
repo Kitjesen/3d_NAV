@@ -530,7 +530,7 @@ export function useSSE(url: string = '/api/v1/events') {
         esRef.current = null
       }
     }
-  }, [connect])
+  }, [clearInitialSnapshotFallback, connect])
 
   useEffect(() => {
     let cancelled = false

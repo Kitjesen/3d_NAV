@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import time
 from collections.abc import Mapping
@@ -620,6 +621,39 @@ def _cmd_vel_health(gw: Any) -> dict[str, Any]:
     return {"active_source": "unknown", "sources": {}, "available": False}
 
 
+def _navigation_module_status(gw: Any) -> dict[str, Any]:
+    modules = getattr(gw, "_all_modules", None) or {}
+    candidates = []
+    direct = modules.get("NavigationModule")
+    if direct is not None:
+        candidates.append(direct)
+    for name, module in modules.items():
+        if module is direct:
+            continue
+        token = str(name).lower()
+        class_token = module.__class__.__name__.lower()
+        if "navigationmodule" in token or "navigation_module" in token:
+            candidates.append(module)
+            continue
+        if "navigationmodule" in class_token or "navigation_module" in class_token:
+            candidates.append(module)
+
+    for module in candidates:
+        get_status = getattr(module, "get_navigation_status", None)
+        if not callable(get_status):
+            continue
+        try:
+            raw = get_status()
+            if isinstance(raw, str):
+                raw = json.loads(raw)
+            status = _mapping(raw)
+            if status:
+                return status
+        except Exception:
+            continue
+    return {}
+
+
 def _control_summary(
     *,
     mode: str,
@@ -1021,6 +1055,7 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
     lease = safe_lease(gw)
     localization = build_localization_status(gw)
     cmd_vel = _cmd_vel_health(gw)
+    nav_runtime = _navigation_module_status(gw)
     state = str(mission.get("state", "IDLE"))
     wp_index = _as_int(mission.get("wp_index"), 0)
     wp_total = _as_int(mission.get("wp_total"), 0)
@@ -1056,7 +1091,18 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
         path_points=path_len,
         replan_count=replan_count,
     )
-    frames = _navigation_frame_summary(mission, odometry)
+    frame_mission = dict(mission)
+    for key in (
+        "frame_id",
+        "planning_frame_id",
+        "odom_frame_id",
+        "costmap_frame_id",
+        "goal_frame_id",
+    ):
+        value = _frame_id(nav_runtime.get(key))
+        if value:
+            frame_mission[key] = value
+    frames = _navigation_frame_summary(frame_mission, odometry)
     reason_codes = _navigation_reason_codes(
         state=state,
         failure_reason=failure_reason,

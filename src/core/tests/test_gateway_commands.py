@@ -185,6 +185,38 @@ def test_navigation_plan_preview_omits_invalid_start_when_unavailable():
     assert gateway.goal_pose.msg_count == 0
 
 
+def test_navigation_plan_preview_preserves_non_map_start_frame_when_blocked():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import PlanPreviewRequest, PlanPreviewResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    gateway._mode = "estop"
+    with gateway._state_lock:
+        gateway._odom = {
+            "x": 1.0,
+            "y": 2.0,
+            "z": 0.0,
+            "frame_id": "odom",
+            "ts": time.time(),
+        }
+    post_plan = _endpoint(gateway, "/api/v1/navigation/plan")
+
+    result = asyncio.run(post_plan(PlanPreviewRequest(x=3.0, y=4.0)))
+    model = PlanPreviewResponse.model_validate(result)
+
+    assert nav.calls == []
+    assert model.feasible is False
+    assert model.frame_id == "map"
+    assert model.start is not None
+    assert model.start.frame_id == "odom"
+    assert "estop_active" in model.reasons
+    assert gateway.goal_pose.msg_count == 0
+
+
 def test_command_journal_replays_duplicate_request_id_without_republish():
     from gateway.gateway_module import GatewayModule, GoalRequest
     from gateway.schemas import ControlCommandResponse
@@ -760,6 +792,59 @@ def test_lease_command_uses_receipt_and_replays_duplicate_request_id():
     ack_events = [event for event in events if event["type"] == "command_ack"]
     assert [event["data"]["status"] for event in lease_events] == ["acquired", "released"]
     assert ack_events[0]["data"]["command"]["name"] == "lease"
+
+
+def test_lease_conflict_emits_rejected_ack_and_lease_event():
+    from gateway.gateway_module import GatewayModule, LeaseRequest
+
+    gateway = GatewayModule()
+    gateway.setup()
+    post_lease = _endpoint(gateway, "/api/v1/lease")
+    queue = gateway._sse_subscribe()
+
+    try:
+        first = asyncio.run(
+            post_lease(
+                LeaseRequest(
+                    action="acquire",
+                    client_id="web",
+                    ttl=30.0,
+                    request_id="lease-web",
+                )
+            )
+        )
+        conflict = _payload(
+            asyncio.run(
+                post_lease(
+                    LeaseRequest(
+                        action="acquire",
+                        client_id="mobile",
+                        ttl=30.0,
+                        request_id="lease-mobile",
+                    )
+                )
+            )
+        )
+        events = []
+        while not queue.empty():
+            events.append(queue.get_nowait())
+    finally:
+        gateway._sse_unsubscribe(queue)
+
+    lease_events = [event for event in events if event["type"] == "lease"]
+    ack_events = [event for event in events if event["type"] == "command_ack"]
+
+    assert first["ok"] is True
+    assert conflict["ok"] is False
+    assert conflict["error"] == "lease_conflict"
+    assert conflict["command"]["accepted"] is False
+    assert [event["data"]["status"] for event in lease_events] == [
+        "acquired",
+        "rejected",
+    ]
+    assert ack_events[-1]["data"]["ok"] is False
+    assert ack_events[-1]["data"]["status_code"] == 409
+    assert ack_events[-1]["data"]["command"]["client_id"] == "mobile"
 
 
 def test_bootstrap_and_health_expose_command_policy():
