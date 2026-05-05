@@ -43,6 +43,7 @@ def _build_sim_nav():
         # Start inside building_scene (robot_placeholder is at 2,3)
         initial_x=2.0,
         initial_y=3.0,
+        odom_frame_id="map",
     )
 
 

@@ -51,8 +51,15 @@ class StubDogModule(Module, layer=1):
     depth_image: Out[Image]
     scene_graph: Out[SceneGraph]
 
-    def __init__(self, initial_x: float = 0.0, initial_y: float = 0.0,
-                 initial_yaw: float = 0.0, **kw: Any) -> None:
+    def __init__(
+        self,
+        initial_x: float = 0.0,
+        initial_y: float = 0.0,
+        initial_yaw: float = 0.0,
+        odom_frame_id: str = "odom",
+        child_frame_id: str = "body",
+        **kw: Any,
+    ) -> None:
         super().__init__(**kw)
         self._vx = 0.0
         self._vy = 0.0
@@ -63,6 +70,8 @@ class StubDogModule(Module, layer=1):
         self._last_ts: float = 0.0
         self._stopped = False
         self._odom_hz = 50.0
+        self._odom_frame_id = odom_frame_id
+        self._child_frame_id = child_frame_id
         self._odom_thread: threading.Thread | None = None
         self._running = False
 
@@ -99,7 +108,7 @@ class StubDogModule(Module, layer=1):
                 ),
             ),
             twist=Twist(linear=Vector3(0, 0, 0), angular=Vector3(0, 0, 0)),
-            ts=now, frame_id="map", child_frame_id="body",
+            ts=now, frame_id=self._odom_frame_id, child_frame_id=self._child_frame_id,
         ))
 
     # -- Port callbacks ------------------------------------------------
@@ -136,8 +145,8 @@ class StubDogModule(Module, layer=1):
                     angular=Vector3(0.0, 0.0, self._wz),
                 ),
                 ts=now,
-                frame_id="map",
-                child_frame_id="body",
+                frame_id=self._odom_frame_id,
+                child_frame_id=self._child_frame_id,
             ))
             time.sleep(dt)
 

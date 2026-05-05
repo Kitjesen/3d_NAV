@@ -157,6 +157,8 @@ class MujocoDriverModule(Module, layer=1):
         drive_mode: str = "",
         start_pos: tuple = _DEFAULT_START_POS,
         obstacles: list | None = None,
+        odom_frame_id: str = "odom",
+        child_frame_id: str = "body",
         **kw,
     ):
         super().__init__(**kw)
@@ -178,6 +180,8 @@ class MujocoDriverModule(Module, layer=1):
         self._robot_xml = _resolve_sim_path(robot_xml) if robot_xml else str(_ROBOT_XML)
         self._start_pos = start_pos
         self._obstacles = obstacles or []
+        self._odom_frame_id = odom_frame_id
+        self._child_frame_id = child_frame_id
 
         self._engine = None
         self._sim_thread: threading.Thread | None = None
@@ -356,8 +360,8 @@ class MujocoDriverModule(Module, layer=1):
                             float(state.angular_velocity[1]),
                             float(state.angular_velocity[2]))),
                     ts=ts,
-                    frame_id="map",
-                    child_frame_id="body",
+                    frame_id=self._odom_frame_id,
+                    child_frame_id=self._child_frame_id,
                 ))
 
                 # Publish LiDAR (every 5th step = ~10 Hz)

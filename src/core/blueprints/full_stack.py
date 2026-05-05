@@ -98,6 +98,8 @@ def full_stack_blueprint(
             )
 
     driver_config = dict(config)
+    if slam_profile in ("", "none") and drv in {"StubDogModule", "MujocoDriverModule"}:
+        driver_config.setdefault("odom_frame_id", "map")
     if enable_semantic and drv == "MujocoDriverModule":
         driver_config.setdefault("enable_camera", True)
 
