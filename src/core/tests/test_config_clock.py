@@ -42,7 +42,8 @@ class TestLoadConfigDefaults:
     def test_driver_defaults(self):
         cfg = load_config(path="/nonexistent/path.yaml")
         assert cfg.driver.dog_port == 13145
-        assert cfg.driver.auto_standup is True
+        assert cfg.driver.auto_enable is False
+        assert cfg.driver.auto_standup is False
 
     def test_safety_defaults(self):
         cfg = load_config(path="/nonexistent/path.yaml")

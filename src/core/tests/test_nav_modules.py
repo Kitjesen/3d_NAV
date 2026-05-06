@@ -327,6 +327,44 @@ class TestPathFollowerModule(unittest.TestCase):
         self.assertEqual(m._nc_state.nav_fwd, 0)
         self.assertEqual(m._nc_state.pathPointID, 0)
 
+    def test_nav_core_resets_path_reference_on_map_frame_jump(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = _FakeNavCore
+        m._nc_params = object()
+        m._nc_state = _FakeNavCore.PathFollowerState()
+        outputs = []
+        m.cmd_vel._add_callback(outputs.append)
+
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.0, 0.0, 0.0))))
+        m._on_path(Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(0.0, 0.0, 0.0))),
+                PoseStamped(pose=Pose(position=Vector3(2.0, 0.0, 0.0))),
+            ],
+            frame_id="map",
+        ))
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.1, 0.0, 0.0))))
+
+        self.assertGreater(outputs[-1].linear.x, 0.0)
+        m._nc_state.vehicle_speed = 2.0
+        m._nc_state.nav_fwd = 1
+        m._nc_state.pathPointID = 4
+
+        m._on_map_frame_jump({"dt_m": 1.0, "dyaw_deg": 20.0})
+
+        self.assertEqual(outputs[-1].linear.x, 0.0)
+        self.assertEqual(outputs[-1].linear.y, 0.0)
+        self.assertEqual(outputs[-1].angular.z, 0.0)
+        self.assertEqual(m._nc_path, [])
+        self.assertIsNone(m._path_points)
+        self.assertEqual(m._x_rec, m._robot_x)
+        self.assertEqual(m._y_rec, m._robot_y)
+        self.assertEqual(m._nc_state.vehicle_speed, 0.0)
+        self.assertEqual(m._nc_state.nav_fwd, 0)
+        self.assertEqual(m._nc_state.pathPointID, 0)
+
     def test_pid_publishes_zero_when_path_is_cleared(self):
         from base_autonomy.modules.path_follower_module import PathFollowerModule
 

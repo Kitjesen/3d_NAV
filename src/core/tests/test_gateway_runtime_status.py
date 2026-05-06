@@ -1311,6 +1311,40 @@ def test_navigation_status_route_returns_stable_schema():
     ]
 
 
+def test_navigation_status_routes_pass_fastapi_response_validation():
+    from fastapi.testclient import TestClient
+
+    from gateway.gateway_module import GatewayModule
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._mission = {"state": "IDLE"}
+
+    client = TestClient(gateway._app)
+    for path in ("/api/v1/navigation/status", "/api/v1/navigation"):
+        response = client.get(path)
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["schema_version"] == 1
+        assert payload["state"] == "IDLE"
+        assert payload["frames"]["planning_frame_id"] == "map"
+        assert payload["target"] == {
+            "goal": None,
+            "current_waypoint": None,
+            "distance_to_goal_m": None,
+            "active_waypoint_distance_m": None,
+            "remaining_waypoints": None,
+        }
+        assert payload["motion"]["active_cmd_source"] == "unknown"
+        assert payload["feedback"]["next_action"] == "resolve_blockers"
+        assert payload["feedback"]["blockers"] == [
+            "odometry_missing",
+            "navigation_session_inactive",
+        ]
+
+
 def test_drift_watchdog_restores_idle_running_localization_services(monkeypatch):
     import core.service_manager as service_manager
     import gateway.gateway_module as gateway_module

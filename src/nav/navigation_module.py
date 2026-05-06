@@ -559,6 +559,7 @@ class NavigationModule(Module, layer=5):
             logger.warning(
                 "TF jump (Δt=%.2fm Δyaw=%.1f°) → forced replan",
                 dt_m, dyaw)
+            self._publish_motion_stop()
             self._tracker.clear()  # invalidate current waypoint tracking
             self._plan()
 
@@ -861,6 +862,7 @@ class NavigationModule(Module, layer=5):
         logger.info(
             "Recovery: strategy=%s, reason=%s", strat["strategy"], klass,
         )
+        self.clear_path.publish(True)
 
         step_hz = 10
 

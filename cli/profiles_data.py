@@ -61,9 +61,29 @@ ROBOT_PRESETS = {
     "stub": dict(robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip"),
     "sim": dict(robot="sim_mujoco", slam_profile="bridge", detector="yoloe", encoder="mobileclip"),
     "ros2": dict(robot="sim_ros2", slam_profile="bridge", detector="yoloe", encoder="mobileclip"),
-    # S100P hardware preset (RDK X5, Nash BPU, Livox MID-360)
-    "s100p": dict(robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip"),
-    "navigate": dict(robot="sim_ros2", slam_profile="localizer", detector="bpu", encoder="mobileclip"),  # alias
+    # S100P hardware preset (RDK X5, Nash BPU, Livox MID-360).
+    # Real robot control must terminate at brainstem.  The explicit "ros2"
+    # preset remains available for simulation/bridge-only experiments.
+    "s100p": dict(
+        robot="thunder",
+        slam_profile="localizer",
+        detector="bpu",
+        encoder="mobileclip",
+        dog_host="127.0.0.1",
+        dog_port=13145,
+        auto_enable=False,
+        auto_standup=False,
+    ),
+    "navigate": dict(
+        robot="thunder",
+        slam_profile="localizer",
+        detector="bpu",
+        encoder="mobileclip",
+        dog_host="127.0.0.1",
+        dog_port=13145,
+        auto_enable=False,
+        auto_standup=False,
+    ),  # alias
     "thunder": dict(
         robot="thunder",
         slam_profile="localizer",
@@ -71,6 +91,8 @@ ROBOT_PRESETS = {
         encoder="mobileclip",
         dog_host="192.168.66.190",
         dog_port=13145,
+        auto_enable=False,
+        auto_standup=False,
     ),
 }
 
@@ -85,6 +107,7 @@ PROFILES = {
         enable_semantic=False,
         enable_gateway=True,
         enable_map_modules=True,
+        planning_frame_id="odom",
         gateway_port=5050,
     ),
     "nav": dict(
@@ -106,6 +129,10 @@ PROFILES = {
         enable_native=False,
         enable_semantic=True,
         enable_gateway=True,
+        # Real S100P SLAM/localizer topics publish odometry and map clouds in
+        # the odom/world frame. NavigationModule is not TF-aware, so keep its
+        # planning frame aligned with the live topic contract.
+        planning_frame_id="odom",
         gateway_port=5050,
     ),
     "super_lio": dict(
@@ -119,6 +146,7 @@ PROFILES = {
         enable_semantic=True,
         enable_gateway=True,
         enable_map_modules=True,
+        planning_frame_id="odom",
         gateway_port=5050,
     ),
     "super_lio_relocation": dict(
@@ -132,6 +160,7 @@ PROFILES = {
         enable_semantic=True,
         enable_gateway=True,
         enable_map_modules=True,
+        planning_frame_id="odom",
         gateway_port=5050,
     ),
     "explore": dict(
@@ -149,6 +178,7 @@ PROFILES = {
         # don't try to spawn a TARE NativeModule on top of wavefront.
         enable_frontier=True,
         exploration_backend="none",
+        planning_frame_id="odom",
         gateway_port=5050,
     ),
     "tare_explore": dict(
@@ -164,6 +194,7 @@ PROFILES = {
         enable_frontier=False,
         exploration_backend="tare",
         tare_scenario="forest",
+        planning_frame_id="odom",
         gateway_port=5050,
     ),
     "sim": dict(

@@ -46,8 +46,8 @@ class DriverConfig:
     dog_host: str = "127.0.0.1"
     dog_port: int = 13145
     control_rate: float = 50.0
-    auto_enable: bool = True
-    auto_standup: bool = True
+    auto_enable: bool = False
+    auto_standup: bool = False
     reconnect_interval: float = 3.0
     slam_reset_interval: float = 5.0
 

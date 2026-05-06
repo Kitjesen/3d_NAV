@@ -108,6 +108,19 @@ def test_health_falls_back_to_cached_slam_rate_when_module_rate_missing(monkeypa
     assert health["slam_hz"] == 3.7
 
 
+def test_gateway_slam_rate_uses_existing_odometry_window(monkeypatch):
+    import gateway.gateway_module as gateway_module
+
+    gateway = gateway_module.GatewayModule()
+    gateway._odom_timestamps = [100.0 + i * 0.1 for i in range(20)]
+
+    monkeypatch.setattr(gateway_module.time, "time", lambda: 101.95)
+    assert gateway._get_slam_hz_cached() == 10.0
+
+    monkeypatch.setattr(gateway_module.time, "time", lambda: 104.0)
+    assert gateway._get_slam_hz_cached() == 0.0
+
+
 def test_health_reports_camera_idle_reason_from_bridge_health(monkeypatch):
     from gateway.gateway_module import GatewayModule
 

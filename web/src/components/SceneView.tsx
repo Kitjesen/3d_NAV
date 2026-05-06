@@ -153,6 +153,26 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const recoveryMethod = session?.recovery_method ?? '--'
   const relocalizeUnavailableMessage =
     `Backend ${localizationBackend} does not support saved-map relocalize; recovery=${recoveryMethod}`
+  const navigationStatus = sseState.navigationStatus
+  const activeCmdSource = navigationStatus?.control?.active_cmd_source ?? 'none'
+  const activeCmdBlocksGoal = activeCmdSource !== '' && activeCmdSource !== 'none'
+  const canAcceptGoal =
+    navigationStatus?.readiness?.can_accept_goal ??
+    navigationStatus?.can_accept_goal ??
+    false
+  const goalBlockers = [
+    ...(navigationStatus?.readiness?.blockers ?? []),
+    ...(navigationStatus?.feedback?.blockers ?? []),
+    activeCmdBlocksGoal
+      ? `当前控制源: ${navigationStatus?.control?.active_source?.label ?? activeCmdSource}`
+      : null,
+    !odomValid ? '无有效里程计' : null,
+  ].filter((v): v is string => Boolean(v))
+  const goalDisabledReason =
+    canAcceptGoal && !activeCmdBlocksGoal
+      ? ''
+      : goalBlockers.slice(0, 4).join(' · ') || '导航未 ready，暂不允许下发目标'
+  const canSendGoal = goalDisabledReason === ''
   // Legacy SSE map_cloud now carries only metadata (count/seq) — points
   // are streamed over /ws/cloud and live in `cloud.positions`.
 
@@ -248,8 +268,12 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
 
   // ── Handlers ──────────────────────────────────────────────────
   const handlePendingGoal = useCallback((x: number, y: number) => {
+    if (!canSendGoal) {
+      showToast(`不能下发目标: ${goalDisabledReason}`, 'error')
+      return
+    }
     setPendingGoal({ x, y })
-  }, [])
+  }, [canSendGoal, goalDisabledReason, showToast])
 
   const handleSceneRelocalize = useCallback(async (x: number, y: number) => {
     if (!savedMapRelocalizeSupported) {
@@ -275,15 +299,19 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
 
   const handleConfirmGoal = useCallback(async () => {
     if (!pendingGoal) return
+    if (!canSendGoal) {
+      showToast(`不能下发目标: ${goalDisabledReason}`, 'error')
+      return
+    }
     const { x, y } = pendingGoal
-    setPendingGoal(null)
     try {
       const res = await api.sendGoal(x, y)
+      setPendingGoal(null)
       showToast(api.formatCommandAck(res, `目标 (${x.toFixed(2)}, ${y.toFixed(2)})`), 'success')
     } catch (e: unknown) {
       showToast(api.formatCommandError(e, '发送目标失败'), 'error')
     }
-  }, [pendingGoal, showToast])
+  }, [canSendGoal, goalDisabledReason, pendingGoal, showToast])
 
   const handleClearTrail = useCallback(() => {
     setTrail([])
@@ -324,12 +352,12 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     } catch { showToast('保存失败', 'error') }
   }
 
-  const handleActivate = async (name: string) => {
-    // Left click = select/activate only (highlight in list), no relocalization, no toast
-    try {
-      await api.activateMap(name)
-      loadMaps()
-    } catch { /* silent */ }
+  const handleActivate = (name: string) => {
+    if (maps.find(m => m.name === name)?.is_active) {
+      showToast(`当前已激活: ${name}`, 'info')
+      return
+    }
+    setLoadTarget(name)
   }
 
   const confirmLoadMap = async () => {
@@ -567,7 +595,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
                         setMapContextMenu({ name: m.name, x: rect.right + 4, y: rect.top })
                       }}
-                      title="左键选中 · 右键管理"
+                      title="左键加载确认 · 右键管理"
                     >
                       <span>{m.name}</span>
                       {m.has_tomogram && <span className={styles.mapBadge}>T</span>}
@@ -634,7 +662,17 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 <span className={styles.goalConfirmCoords}>
                   ({pendingGoal.x.toFixed(2)}, {pendingGoal.y.toFixed(2)})
                 </span>
-                <button className={styles.goalConfirmBtn} onClick={handleConfirmGoal}>
+                {goalDisabledReason && (
+                  <span className={styles.goalConfirmReason} title={goalDisabledReason}>
+                    {goalDisabledReason}
+                  </span>
+                )}
+                <button
+                  className={styles.goalConfirmBtn}
+                  onClick={handleConfirmGoal}
+                  disabled={!canSendGoal}
+                  title={goalDisabledReason || '发送导航目标'}
+                >
                   <Navigation size={12} /> 发送
                 </button>
                 <button className={styles.goalCancelBtn} onClick={() => setPendingGoal(null)}>

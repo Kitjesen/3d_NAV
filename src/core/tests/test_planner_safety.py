@@ -11,6 +11,7 @@ import pickle
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -389,9 +390,11 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
 
     def test_find_safe_goal_without_grid_returns_none(self):
         """If backend has no grid, _find_safe_goal returns None (passthrough)."""
-        svc = GlobalPlannerService(planner_name="astar", tomogram="")
-        svc.setup()
-        result = svc._find_safe_goal(np.array([1.0, 2.0, 0.0]))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict(os.environ, {"NAV_MAP_DIR": tmpdir}):
+                svc = GlobalPlannerService(planner_name="astar", tomogram="")
+                svc.setup()
+                result = svc._find_safe_goal(np.array([1.0, 2.0, 0.0]))
         self.assertIsNone(result)
 
     def test_find_safe_goal_out_of_bounds(self):

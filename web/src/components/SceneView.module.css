@@ -1139,6 +1139,14 @@
   margin-right: 4px;
 }
 
+.goalConfirmReason {
+  max-width: min(42vw, 360px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--warn);
+  font-size: 12px;
+}
+
 .goalConfirmBtn {
   display: flex;
   align-items: center;
@@ -1158,6 +1166,19 @@
 .goalConfirmBtn:hover {
   background: rgba(94, 234, 212, 0.2);
   border-color: rgba(94, 234, 212, 0.55);
+}
+
+.goalConfirmBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(148, 163, 184, 0.08);
+  border-color: var(--border);
+  color: var(--text-faint);
+}
+
+.goalConfirmBtn:disabled:hover {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: var(--border);
 }
 
 .goalCancelBtn {

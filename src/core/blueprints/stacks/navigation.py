@@ -32,6 +32,7 @@ def navigation(
             "allow_direct_goal_fallback",
             "goal_update_epsilon",
             "mission_timeout",
+            "planning_frame_id",
             "planning_timeout",
             "preview_timeout",
         )

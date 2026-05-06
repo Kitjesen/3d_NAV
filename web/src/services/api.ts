@@ -9,6 +9,7 @@ import type {
   AuthLoginResponse,
   BagOperationResponse,
   BagStatusResponse,
+  ClientLinks,
   CommandReceipt,
   ControlCommandResponse,
   DevicesResponse,
@@ -37,6 +38,8 @@ import type {
 const WEB_CLIENT_ID = 'web-dashboard'
 
 type CommandResponse = ControlCommandResponse | LeaseResponse
+
+let clientLinks: ClientLinks = {}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -125,6 +128,38 @@ async function fetchJson<T>(url: string): Promise<T> {
   return readJsonResponse<T>(await fetch(url))
 }
 
+function setClientLinks(links?: ClientLinks | null): void {
+  if (!links) return
+  clientLinks = { ...clientLinks, ...links }
+}
+
+function apiPath(linkName: keyof ClientLinks, fallback: string): string {
+  const link = clientLinks[linkName]
+  if (!link) return fallback
+  try {
+    const url = new URL(link, window.location.origin)
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return `${url.pathname}${url.search}`
+    }
+  } catch {
+    return link
+  }
+  return link
+}
+
+function mapPointsPath(name: string): string {
+  const encoded = encodeURIComponent(name)
+  const template =
+    clientLinks.map_points ??
+    clientLinks.saved_map_points ??
+    '/api/v1/maps/{name}/points?max_points=30000'
+  const withName = template.includes('{name}')
+    ? template.replace('{name}', encoded)
+    : `/api/v1/maps/${encoded}/points?max_points=30000`
+  const url = new URL(withName, window.location.origin)
+  return `${url.pathname}${url.search || '?max_points=30000'}`
+}
+
 function makeRequestId(prefix: string): string {
   if (globalThis.crypto?.randomUUID) {
     return `${prefix}-${globalThis.crypto.randomUUID()}`
@@ -201,11 +236,15 @@ async function readSlamOperation(res: Response): Promise<SlamOperationResponse> 
 // --- App bootstrap / read APIs ---
 
 export async function fetchAppBootstrap(): Promise<AppBootstrapResponse> {
-  return fetchJson<AppBootstrapResponse>('/api/v1/app/bootstrap')
+  const data = await fetchJson<AppBootstrapResponse>(apiPath('bootstrap', '/api/v1/app/bootstrap'))
+  setClientLinks(data.links)
+  return data
 }
 
 export async function fetchAppCapabilities(): Promise<AppCapabilitiesResponse> {
-  return fetchJson<AppCapabilitiesResponse>('/api/v1/app/capabilities')
+  const data = await fetchJson<AppCapabilitiesResponse>(apiPath('capabilities', '/api/v1/app/capabilities'))
+  setClientLinks(data.links)
+  return data
 }
 
 export async function fetchAppTraffic(url = '/api/v1/app/traffic'): Promise<AppTrafficResponse> {
@@ -213,45 +252,45 @@ export async function fetchAppTraffic(url = '/api/v1/app/traffic'): Promise<AppT
 }
 
 export async function fetchState(): Promise<StateResponse> {
-  return fetchJson<StateResponse>('/api/v1/state')
+  return fetchJson<StateResponse>(apiPath('state', '/api/v1/state'))
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
-  return fetchJson<HealthResponse>('/api/v1/health')
+  return fetchJson<HealthResponse>(apiPath('health', '/api/v1/health'))
 }
 
 export async function fetchDevices(): Promise<DevicesResponse> {
-  return fetchJson<DevicesResponse>('/api/v1/devices')
+  return fetchJson<DevicesResponse>(apiPath('devices', '/api/v1/devices'))
 }
 
 export async function fetchSceneGraph(): Promise<SceneGraphResponse> {
-  return fetchJson<SceneGraphResponse>('/api/v1/scene_graph')
+  return fetchJson<SceneGraphResponse>(apiPath('scene_graph', '/api/v1/scene_graph'))
 }
 
 export async function fetchPath(): Promise<PathResponse> {
-  return fetchJson<PathResponse>('/api/v1/path')
+  return fetchJson<PathResponse>(apiPath('path', '/api/v1/path'))
 }
 
 export async function fetchNavigationStatus(): Promise<NavigationStatusResponse> {
-  return fetchJson<NavigationStatusResponse>('/api/v1/navigation/status')
+  return fetchJson<NavigationStatusResponse>(apiPath('navigation_status', '/api/v1/navigation/status'))
 }
 
 export async function fetchLocations(): Promise<LocationsResponse> {
-  return fetchJson<LocationsResponse>('/api/v1/locations')
+  return fetchJson<LocationsResponse>(apiPath('locations', '/api/v1/locations'))
 }
 
 // --- Navigation ---
 
 export async function sendInstruction(text: string): Promise<ControlCommandResponse> {
   return postJson<ControlCommandResponse>(
-    '/api/v1/instruction',
+    apiPath('instruction', '/api/v1/instruction'),
     commandBody('instruction', { text }),
   )
 }
 
 export async function sendGoal(x: number, y: number): Promise<ControlCommandResponse> {
   return postJson<ControlCommandResponse>(
-    '/api/v1/goal',
+    apiPath('goal', '/api/v1/goal'),
     commandBody('goal', { x, y }),
   )
 }
@@ -267,33 +306,33 @@ export async function previewNavigationPlan(
     z,
     client_id: WEB_CLIENT_ID,
   }
-  return postJson<PlanPreviewResponse>('/api/v1/navigation/plan', body)
+  return postJson<PlanPreviewResponse>(apiPath('navigation_plan', '/api/v1/navigation/plan'), body)
 }
 
 export async function sendStop(): Promise<ControlCommandResponse> {
   return postJson<ControlCommandResponse>(
-    '/api/v1/stop',
+    apiPath('stop', '/api/v1/stop'),
     commandBody('stop', {}),
   )
 }
 
 export async function cancelNavigation(reason = 'client_cancel'): Promise<ControlCommandResponse> {
   return postJson<ControlCommandResponse>(
-    '/api/v1/navigation/cancel',
+    apiPath('navigation_cancel', '/api/v1/navigation/cancel'),
     commandBody('navigation_cancel', { reason }),
   )
 }
 
 export async function sendMode(mode: 'manual' | 'autonomous' | 'estop'): Promise<ControlCommandResponse> {
   return postJson<ControlCommandResponse>(
-    '/api/v1/mode',
+    apiPath('mode', '/api/v1/mode'),
     commandBody('mode', { mode }),
   )
 }
 
 export async function updateLease(action: LeaseAction, ttl = 30): Promise<LeaseResponse> {
   return postJson<LeaseResponse>(
-    '/api/v1/lease',
+    apiPath('lease', '/api/v1/lease'),
     commandBody('lease', { action, ttl }),
   )
 }
@@ -301,7 +340,7 @@ export async function updateLease(action: LeaseAction, ttl = 30): Promise<LeaseR
 // --- SLAM ---
 
 export async function switchSlamMode(profile: SlamProfile): Promise<SlamOperationResponse> {
-  const res = await fetch('/api/v1/slam/switch', {
+  const res = await fetch(apiPath('slam_switch', '/api/v1/slam/switch'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ profile }),
@@ -312,7 +351,7 @@ export async function switchSlamMode(profile: SlamProfile): Promise<SlamOperatio
 // --- Maps ---
 
 export async function fetchMapList(): Promise<MapListResponse> {
-  return fetchJson<MapListResponse>('/api/v1/slam/maps')
+  return fetchJson<MapListResponse>(apiPath('maps', '/api/v1/slam/maps'))
 }
 
 export async function fetchMaps(): Promise<MapInfo[]> {
@@ -321,7 +360,7 @@ export async function fetchMaps(): Promise<MapInfo[]> {
 }
 
 export async function activateMap(name: string): Promise<MapLifecycleResponse> {
-  const res = await fetch('/api/v1/map/activate', {
+  const res = await fetch(apiPath('map_activate', '/api/v1/map/activate'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -330,7 +369,7 @@ export async function activateMap(name: string): Promise<MapLifecycleResponse> {
 }
 
 export async function deleteMap(name: string): Promise<MapLifecycleResponse> {
-  const res = await fetch('/api/v1/maps', {
+  const res = await fetch(apiPath('map_lifecycle', '/api/v1/maps'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'delete', name }),
@@ -339,7 +378,7 @@ export async function deleteMap(name: string): Promise<MapLifecycleResponse> {
 }
 
 export async function renameMap(oldName: string, newName: string): Promise<MapLifecycleResponse> {
-  const res = await fetch('/api/v1/map/rename', {
+  const res = await fetch(apiPath('map_rename', '/api/v1/map/rename'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ old_name: oldName, new_name: newName }),
@@ -366,7 +405,7 @@ export interface SaveMapResult extends MapLifecycleResponse {
 export async function saveMap(name: string): Promise<SaveMapResult> {
   // Save can take up to ~2 min on a busy robot because PGO + DUFOMap
   // run synchronously. Default fetch has no timeout which is what we want.
-  const res = await fetch('/api/v1/map/save', {
+  const res = await fetch(apiPath('map_save', '/api/v1/map/save'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
@@ -384,7 +423,7 @@ export interface StartSessionOptions {
 }
 
 export async function fetchSession(): Promise<SessionState> {
-  return fetchJson<SessionState>('/api/v1/session')
+  return fetchJson<SessionState>(apiPath('session', '/api/v1/session'))
 }
 
 export async function startSession(mode: SessionMode, mapNameOrOptions?: string | StartSessionOptions): Promise<SessionState> {
@@ -398,26 +437,24 @@ export async function startSession(mode: SessionMode, mapNameOrOptions?: string 
   if (options.slamProfile) {
     body.slam_profile = options.slamProfile
   }
-  const data = await postJson<SessionTransitionResponse>('/api/v1/session/start', body)
+  const data = await postJson<SessionTransitionResponse>(apiPath('session_start', '/api/v1/session/start'), body)
   if (!data.success) throw new Error(data.message || 'Session start failed')
   return data.session as SessionState
 }
 
 export async function endSession(): Promise<SessionState> {
-  const data = await postJson<SessionTransitionResponse>('/api/v1/session/end')
+  const data = await postJson<SessionTransitionResponse>(apiPath('session_end', '/api/v1/session/end'))
   if (!data.success) throw new Error(data.message || 'Session end failed')
   return data.session as SessionState
 }
 
 export async function resetMapCloud(): Promise<MapLifecycleResponse> {
-  const res = await fetch('/api/v1/map_cloud/reset', { method: 'POST' })
+  const res = await fetch(apiPath('map_cloud_reset', '/api/v1/map_cloud/reset'), { method: 'POST' })
   return readMapLifecycle(res)
 }
 
 export async function fetchSavedMapPointsResponse(name: string): Promise<MapPointsResponse> {
-  return fetchJson<MapPointsResponse>(
-    `/api/v1/maps/${encodeURIComponent(name)}/points?max_points=30000`,
-  )
+  return fetchJson<MapPointsResponse>(mapPointsPath(name))
 }
 
 export async function fetchSavedMapPoints(name: string): Promise<number[]> {
@@ -431,7 +468,7 @@ export async function relocalize(
   y: number,
   yaw: number,
 ): Promise<SlamOperationResponse> {
-  const res = await fetch('/api/v1/slam/relocalize', {
+  const res = await fetch(apiPath('slam_relocalize', '/api/v1/slam/relocalize'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ map_name: mapName, x, y, yaw }),
@@ -443,33 +480,33 @@ export async function relocalize(
 // the 2-4 s scan runs async, so the response is immediate. Fitness appears
 // on /localization_quality after the worker finishes.
 export async function autoRelocalize(): Promise<SlamOperationResponse> {
-  const res = await fetch('/api/v1/slam/auto_relocalize', { method: 'POST' })
+  const res = await fetch(apiPath('slam_auto_relocalize', '/api/v1/slam/auto_relocalize'), { method: 'POST' })
   return readSlamOperation(res)
 }
 
 // --- Diagnostics / bag recording ---
 
 export async function fetchBagStatus(): Promise<BagStatusResponse> {
-  return fetchJson<BagStatusResponse>('/api/v1/bag/status')
+  return fetchJson<BagStatusResponse>(apiPath('bag_status', '/api/v1/bag/status'))
 }
 
 export async function startBagRecording(
   duration = 600,
   prefix = 'web',
 ): Promise<BagOperationResponse> {
-  return postJson<BagOperationResponse>('/api/v1/bag/start', { duration, prefix })
+  return postJson<BagOperationResponse>(apiPath('bag_start', '/api/v1/bag/start'), { duration, prefix })
 }
 
 export async function stopBagRecording(): Promise<BagOperationResponse> {
-  return postJson<BagOperationResponse>('/api/v1/bag/stop')
+  return postJson<BagOperationResponse>(apiPath('bag_stop', '/api/v1/bag/stop'))
 }
 
 // --- Auth ---
 
 export async function login(key: string): Promise<AuthLoginResponse> {
-  return postJson<AuthLoginResponse>('/api/v1/auth/login', { key })
+  return postJson<AuthLoginResponse>(apiPath('auth_login', '/api/v1/auth/login'), { key })
 }
 
 export async function checkAuth(): Promise<AuthCheckResponse> {
-  return fetchJson<AuthCheckResponse>('/api/v1/auth/check')
+  return fetchJson<AuthCheckResponse>(apiPath('auth_check', '/api/v1/auth/check'))
 }

@@ -45,6 +45,7 @@ class PathFollowerModule(Module, layer=2):
     # -- Inputs --
     odometry: In[Odometry]
     local_path: In[Path]
+    map_frame_jump_event: In[dict]
 
     # -- Outputs --
     cmd_vel: Out[Twist]
@@ -86,6 +87,7 @@ class PathFollowerModule(Module, layer=2):
     def setup(self):
         self.odometry.subscribe(self._on_odom)
         self.local_path.subscribe(self._on_path)
+        self.map_frame_jump_event.subscribe(self._on_map_frame_jump)
 
         if self._backend == "nav_core":
             self._setup_nav_core()
@@ -249,6 +251,20 @@ class PathFollowerModule(Module, layer=2):
             self._reset_nav_core_state()
         self.cmd_vel.publish(Twist())
 
+    def _reset_path_tracking(self, *, reset_nav_core_state: bool = True) -> None:
+        self._nc_path = []
+        self._path_points = None
+        self._x_rec = self._robot_x
+        self._y_rec = self._robot_y
+        self._yaw_rec = self._robot_yaw
+        self._cos_yaw_rec = math.cos(self._yaw_rec)
+        self._sin_yaw_rec = math.sin(self._yaw_rec)
+        self._publish_zero(reset_nav_core_state=reset_nav_core_state)
+
+    def _on_map_frame_jump(self, event: dict) -> None:
+        if isinstance(event, dict):
+            self._reset_path_tracking(reset_nav_core_state=True)
+
     def _on_odom(self, odom: Odometry):
         _prev_x, _prev_y = self._robot_x, self._robot_y
         self._robot_x = odom.pose.position.x
@@ -291,8 +307,7 @@ class PathFollowerModule(Module, layer=2):
                 )
                 pts.append(v)
             if len(pts) < 2:
-                self._nc_path = []
-                self._publish_zero(reset_nav_core_state=True)
+                self._reset_path_tracking(reset_nav_core_state=True)
                 return
             self._nc_path = pts
             # Note: do NOT reset nc_state here — compute_control needs
@@ -303,8 +318,7 @@ class PathFollowerModule(Module, layer=2):
             for ps in path.poses:
                 pts.append([ps.pose.position.x, ps.pose.position.y])
             if len(pts) < 2:
-                self._path_points = None
-                self._publish_zero()
+                self._reset_path_tracking(reset_nav_core_state=False)
                 return
             self._path_points = np.array(pts)
             # Kick off the cmd_vel → odom loop immediately

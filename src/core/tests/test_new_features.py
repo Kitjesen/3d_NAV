@@ -162,30 +162,44 @@ def test_33_no_api_key_startup():
 # =========================================================================
 def test_34_no_clip_startup():
     from core.blueprints.full_stack import full_stack_blueprint
+    from semantic.perception.semantic_perception.encoder_module import EncoderModule
+    from unittest.mock import patch
 
     # Build dev profile — on Windows, open_clip is typically not installed.
     # EncoderModule should catch ImportError and set _backend = None.
-    system = full_stack_blueprint(
-        robot="stub",
-        slam_profile="none",
-        detector="yoloe",
-        encoder="clip",
-        llm="mock",
-        planner="astar",
-        enable_native=False,
-        enable_semantic=True,
-        enable_gateway=False,
-    ).build()
+    class MissingClipBackend:
+        def load_model(self):
+            raise ImportError("open_clip unavailable in test")
 
-    try:
-        system.start()
-        assert system._started, "System should start even without CLIP"
+    system = None
+    with patch.object(
+        EncoderModule,
+        "_create_backend",
+        return_value=MissingClipBackend(),
+    ):
+        system = full_stack_blueprint(
+            robot="stub",
+            slam_profile="none",
+            detector="yoloe",
+            encoder="clip",
+            llm="mock",
+            planner="astar",
+            enable_native=False,
+            enable_semantic=True,
+            enable_gateway=False,
+        ).build()
 
-        # EncoderModule should exist but backend may be None (no crash)
-        enc = system.get_module("EncoderModule")
-        assert enc is not None, "EncoderModule should be in system"
-    finally:
-        system.stop()
+        try:
+            system.start()
+            assert system._started, "System should start even without CLIP"
+
+            # EncoderModule should exist and degrade to a disabled backend.
+            enc = system.get_module("EncoderModule")
+            assert enc is not None, "EncoderModule should be in system"
+            assert enc._backend is None, "EncoderModule should disable missing CLIP"
+        finally:
+            if system is not None:
+                system.stop()
 
 
 # =========================================================================

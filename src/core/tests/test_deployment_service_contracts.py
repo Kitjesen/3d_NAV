@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import shlex
@@ -14,6 +15,51 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _read(path: str) -> str:
     return (REPO_ROOT / path).read_text(encoding="utf-8")
+
+
+def _load_soak_module():
+    spec = importlib.util.spec_from_file_location(
+        "lingtu_soak_under_test",
+        REPO_ROOT / "scripts" / "soak.py",
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _healthy_soak_sample() -> dict:
+    return {
+        "endpoint_errors": [],
+        "client_contract_violations": [],
+        "has_odometry": True,
+        "localization_state": "ready",
+        "pose_fresh": True,
+        "odom_age_ms": 90.0,
+        "cloud_age_ms": 120.0,
+        "diag_age_ms": 300.0,
+        "localizer_health_topic_age_ms": 250.0,
+        "slam_hz": 10.0,
+        "map_points": 5000.0,
+        "confidence": 0.95,
+        "active_cmd_source": "none",
+        "navigation_state": "IDLE",
+        "navigation_blockers": ["navigation_session_inactive"],
+        "non_motion_safe": True,
+    }
+
+
+def _soak_limits() -> dict:
+    return {
+        "min_slam_hz": 1.0,
+        "min_map_points": 1.0,
+        "max_odom_age_ms": 1500.0,
+        "max_cloud_age_ms": 5000.0,
+        "max_diag_age_ms": 3000.0,
+        "max_localizer_health_age_ms": 3000.0,
+        "min_localization_confidence": 0.5,
+    }
 
 
 def _wsl_path(path: Path) -> str:
@@ -584,6 +630,11 @@ def test_lingtu_soak_is_read_only_non_motion_field_verification():
     assert "capabilities.endpoints" in impl
     assert "data_ready:false" in impl
     assert '"non_motion_safe": as_bool' in impl
+    assert "NON_MOTION_NAVIGATION_BLOCKERS" in impl
+    assert "NON_MOTION_READY_REASONS" in impl
+    assert "ready_status_is_non_motion_safe" in impl
+    assert "blockers_are_non_motion_safe" in impl
+    assert '"navigation_session_inactive"' in impl
     assert '"app_web": {' in impl
     for forbidden in (
         "-X POST",
@@ -606,6 +657,66 @@ def test_lingtu_soak_is_read_only_non_motion_field_verification():
     assert '"max_xy_drift_m": max_xy_drift_m' in impl
     assert '"active_cmd_source_values":' in impl
     assert 'return 1 if args.strict and report["violations"] else 0' in impl
+
+
+def test_lingtu_soak_accepts_ready_503_when_only_navigation_session_is_inactive():
+    soak = _load_soak_module()
+    payload = {
+        "data_ready": True,
+        "non_motion_safe": True,
+        "reasons": ["navigation_blocked:navigation_session_inactive"],
+        "failed_modules": [],
+    }
+    sample = _healthy_soak_sample()
+
+    assert soak.ready_status_is_non_motion_safe("ready", 503, payload) is True
+    violations, warnings = soak.sample_violations(sample, _soak_limits())
+
+    assert violations == []
+    assert warnings == []
+
+
+def test_lingtu_soak_rejects_ready_503_when_data_is_not_ready():
+    soak = _load_soak_module()
+    payload = {
+        "data_ready": False,
+        "non_motion_safe": True,
+        "reasons": ["navigation_blocked:navigation_session_inactive"],
+        "failed_modules": [],
+    }
+
+    assert soak.ready_status_is_non_motion_safe("ready", 503, payload) is False
+
+
+def test_lingtu_soak_rejects_ready_503_when_command_source_is_active():
+    soak = _load_soak_module()
+    sample = _healthy_soak_sample()
+    sample["active_cmd_source"] = "teleop"
+
+    violations, _warnings = soak.sample_violations(sample, _soak_limits())
+
+    assert "active_cmd_source=teleop" in violations
+    assert "navigation_blockers=navigation_session_inactive" in violations
+
+
+def test_lingtu_soak_rejects_ready_503_when_additional_navigation_blocker_exists():
+    soak = _load_soak_module()
+    payload = {
+        "data_ready": True,
+        "non_motion_safe": True,
+        "reasons": [
+            "navigation_blocked:navigation_session_inactive",
+            "navigation_blocked:safety_stop",
+        ],
+        "failed_modules": [],
+    }
+    sample = _healthy_soak_sample()
+    sample["navigation_blockers"] = ["navigation_session_inactive", "safety_stop"]
+
+    violations, _warnings = soak.sample_violations(sample, _soak_limits())
+
+    assert soak.ready_status_is_non_motion_safe("ready", 503, payload) is False
+    assert "navigation_blockers=navigation_session_inactive,safety_stop" in violations
 
 
 def test_lingtu_slamcheck_writes_float_relocation_initial_pose():

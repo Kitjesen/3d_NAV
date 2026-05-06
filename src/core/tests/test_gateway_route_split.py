@@ -297,6 +297,7 @@ def test_gateway_module_builds_split_routes_once():
 
     counts = Counter(getattr(route, "path", "") for route in gateway._app.routes)
     assert counts["/api/v1/app/bootstrap"] == 1
+    assert counts["/api/v1/bootstrap"] == 1
     assert counts["/api/v1/app/capabilities"] == 1
     assert counts["/api/v1/auth/login"] == 1
     assert counts["/api/v1/auth/check"] == 1
@@ -305,6 +306,7 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/state"] == 1
     assert counts["/api/v1/localization/status"] == 1
     assert counts["/api/v1/navigation/status"] == 1
+    assert counts["/api/v1/navigation"] == 1
     assert counts["/api/v1/health"] == 1
     assert counts["/health"] == 1
     assert counts["/ready"] == 1

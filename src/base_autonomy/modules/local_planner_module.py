@@ -323,7 +323,9 @@ class LocalPlannerModule(Module, layer=2):
     odometry:    In[Odometry]
     terrain_map: In[PointCloud2]
     waypoint:    In[PoseStamped]
+    global_path: In[list]
     clear_path:  In[bool]
+    map_frame_jump_event: In[dict]
     boundary:    In[PointCloud2]
     added_obstacles: In[PointCloud2]
     esdf:        In[dict]       # ESDF distance field + gradients for smoother scoring
@@ -339,6 +341,9 @@ class LocalPlannerModule(Module, layer=2):
         self._robot_pos = np.zeros(3)
         self._robot_yaw = 0.0
         self._latest_waypoint: PoseStamped | None = None
+        self._global_path_points: np.ndarray | None = None
+        self._path_frame_id = "map"
+        self._corridor_lookahead_m = float(kw.get("corridor_lookahead_m", 3.0))
         self._terrain_points: np.ndarray | None = None
         self._boundary_points: np.ndarray | None = None
         self._added_obstacle_points: np.ndarray | None = None
@@ -393,7 +398,9 @@ class LocalPlannerModule(Module, layer=2):
         self.terrain_map.subscribe(self._on_terrain)
         self.terrain_map.set_policy("latest")
         self.waypoint.subscribe(self._on_waypoint)
+        self.global_path.subscribe(self._on_global_path)
         self.clear_path.subscribe(self._on_clear_path)
+        self.map_frame_jump_event.subscribe(self._on_map_frame_jump)
         self.boundary.subscribe(self._on_boundary)
         self.boundary.set_policy("latest")
         self.added_obstacles.subscribe(self._on_added_obstacles)
@@ -570,12 +577,110 @@ class LocalPlannerModule(Module, layer=2):
         if cloud.points is not None:
             self._added_obstacle_points = cloud.points
 
+    def _coerce_path_point(self, point: Any) -> np.ndarray | None:
+        if isinstance(point, PoseStamped):
+            return np.array([point.x, point.y, point.z], dtype=float)
+        pose = getattr(point, "pose", None)
+        if pose is not None and hasattr(pose, "position"):
+            pos = pose.position
+            return np.array([
+                float(getattr(pos, "x", 0.0)),
+                float(getattr(pos, "y", 0.0)),
+                float(getattr(pos, "z", 0.0)),
+            ], dtype=float)
+        if isinstance(point, dict):
+            if "pose" in point and isinstance(point["pose"], dict):
+                return self._coerce_path_point(point["pose"])
+            if "position" in point:
+                return self._coerce_path_point(point["position"])
+            if "x" in point and "y" in point:
+                return np.array([
+                    float(point.get("x", 0.0)),
+                    float(point.get("y", 0.0)),
+                    float(point.get("z", 0.0)),
+                ], dtype=float)
+        try:
+            arr = np.asarray(point, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if arr.size < 2 or not np.all(np.isfinite(arr[:2])):
+            return None
+        out = np.zeros(3, dtype=float)
+        out[: min(arr.size, 3)] = arr[: min(arr.size, 3)]
+        return out
+
+    def _on_global_path(self, path: Any) -> None:
+        frame_id = getattr(path, "frame_id", None)
+        if frame_id:
+            self._path_frame_id = str(frame_id)
+        points_src = getattr(path, "poses", path)
+        points = []
+        try:
+            iterator = iter(points_src)
+        except TypeError:
+            iterator = iter(())
+        for item in iterator:
+            point = self._coerce_path_point(item)
+            if point is not None:
+                points.append(point)
+        self._global_path_points = (
+            np.asarray(points, dtype=float) if points else None
+        )
+
+    def _clear_local_plan(self) -> None:
+        self._latest_waypoint = None
+        self._global_path_points = None
+        self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
+
+    def _on_map_frame_jump(self, event: dict) -> None:
+        if isinstance(event, dict):
+            self._clear_local_plan()
+
+    def _waypoint_goal(self, wp: PoseStamped) -> np.ndarray:
+        return np.array([
+            wp.pose.position.x,
+            wp.pose.position.y,
+            wp.pose.position.z,
+        ], dtype=float)
+
+    def _effective_goal(self, wp: PoseStamped) -> np.ndarray:
+        return self._select_corridor_goal(self._waypoint_goal(wp))
+
+    def _select_corridor_goal(self, fallback_goal: np.ndarray) -> np.ndarray:
+        points = self._global_path_points
+        if points is None or len(points) < 2:
+            return fallback_goal
+        robot_xy = self._robot_pos[:2]
+        dists = np.linalg.norm(points[:, :2] - robot_xy, axis=1)
+        if not np.all(np.isfinite(dists)):
+            return fallback_goal
+        idx = int(np.argmin(dists))
+        if idx >= len(points) - 1:
+            return fallback_goal
+
+        remaining = max(0.1, self._corridor_lookahead_m)
+        cursor = points[idx].astype(float, copy=True)
+        for next_idx in range(idx + 1, len(points)):
+            target = points[next_idx].astype(float, copy=False)
+            segment = target - cursor
+            seg_len = float(np.linalg.norm(segment[:2]))
+            if seg_len <= 1e-6:
+                cursor = target.astype(float, copy=True)
+                continue
+            if remaining <= seg_len:
+                return cursor + segment * (remaining / seg_len)
+            remaining -= seg_len
+            cursor = target.astype(float, copy=True)
+        return fallback_goal
+
     def _on_waypoint(self, wp: PoseStamped):
         """Store waypoint; simple backend generates path immediately."""
         self._latest_waypoint = wp
+        if wp is not None:
+            self._path_frame_id = wp.frame_id or self._path_frame_id
 
         if self._backend == "simple" and wp is not None:
-            goal = np.array([wp.pose.position.x, wp.pose.position.y, 0.0])
+            goal = self._effective_goal(wp)
             path_points = self._straight_line(self._robot_pos, goal, step=0.5)
             poses = [
                 PoseStamped(
@@ -583,17 +688,16 @@ class LocalPlannerModule(Module, layer=2):
                         position=Vector3(p[0], p[1], p[2]),
                         orientation=Quaternion(0, 0, 0, 1),
                     ),
-                    frame_id="map",
+                    frame_id=self._path_frame_id,
                 )
                 for p in path_points
             ]
-            self.local_path.publish(Path(poses=poses))
+            self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
 
     def _on_clear_path(self, clear: bool) -> None:
         if not clear:
             return
-        self._latest_waypoint = None
-        self.local_path.publish(Path(poses=[], frame_id="map"))
+        self._clear_local_plan()
 
     # ------------------------------------------------------------------ #
     # nanobind C++ scorer (full CMU algorithm, in-process)                 #
@@ -647,7 +751,8 @@ class LocalPlannerModule(Module, layer=2):
         self._core.set_vehicle(
             self._robot_pos[0], self._robot_pos[1], self._robot_pos[2],
             self._robot_yaw)
-        self._core.set_goal(wp.pose.position.x, wp.pose.position.y)
+        goal = self._effective_goal(wp)
+        self._core.set_goal(float(goal[0]), float(goal[1]))
 
         merged = self._merge_obstacle_clouds()
         obs_flat = merged.ravel().tolist() if merged.shape[0] > 0 else []
@@ -667,9 +772,9 @@ class LocalPlannerModule(Module, layer=2):
                         position=Vector3(wx, wy, wz),
                         orientation=Quaternion(0, 0, 0, 1),
                     ),
-                    frame_id="map",
+                    frame_id=self._path_frame_id,
                 ))
-            self.local_path.publish(Path(poses=poses))
+            self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
 
     # ------------------------------------------------------------------ #
     # CMU Python scorer                                                    #
@@ -697,8 +802,9 @@ class LocalPlannerModule(Module, layer=2):
         grid_voxel_num_y   = pd["grid_voxel_num_y"]
 
         # Goal in body frame
-        gx = wp.pose.position.x - self._robot_pos[0]
-        gy = wp.pose.position.y - self._robot_pos[1]
+        goal = self._effective_goal(wp)
+        gx = goal[0] - self._robot_pos[0]
+        gy = goal[1] - self._robot_pos[1]
         cos_yaw = math.cos(self._robot_yaw)
         sin_yaw = math.sin(self._robot_yaw)
         rel_goal_x = gx * cos_yaw + gy * sin_yaw
@@ -741,7 +847,7 @@ class LocalPlannerModule(Module, layer=2):
 
         if selected_group_id < 0 or max_score <= 0.0:
             # No feasible path — publish straight-line fallback
-            goal_world = np.array([wp.pose.position.x, wp.pose.position.y, 0.0])
+            goal_world = goal
             path_points = self._straight_line(self._robot_pos, goal_world, step=0.5)
             poses = [
                 PoseStamped(
@@ -749,11 +855,11 @@ class LocalPlannerModule(Module, layer=2):
                         position=Vector3(float(p[0]), float(p[1]), float(p[2])),
                         orientation=Quaternion(0, 0, 0, 1),
                     ),
-                    frame_id="map",
+                    frame_id=self._path_frame_id,
                 )
                 for p in path_points
             ]
-            self.local_path.publish(Path(poses=poses))
+            self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
             return
 
         rot_dir    = selected_group_id // _GROUP_NUM
@@ -787,11 +893,11 @@ class LocalPlannerModule(Module, layer=2):
                         position=Vector3(x_world, y_world, z_world),
                         orientation=Quaternion(0, 0, 0, 1),
                     ),
-                    frame_id="map",
+                    frame_id=self._path_frame_id,
                 )
             )
 
-        self.local_path.publish(Path(poses=poses))
+        self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #

@@ -320,6 +320,14 @@ def register_status_routes(app, gw) -> None:
         return build_navigation_status(gw)
 
     @app.get(
+        "/api/v1/navigation",
+        response_model=NavigationStatusResponse,
+        include_in_schema=False,
+    )
+    async def get_navigation_status_legacy_alias():
+        return build_navigation_status(gw)
+
+    @app.get(
         "/api/v1/devices",
         summary="Hardware device registry status",
         response_model=DevicesResponse,

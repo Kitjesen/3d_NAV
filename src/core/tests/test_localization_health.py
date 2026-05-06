@@ -518,6 +518,24 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         )
         m._last_gnss_rx_ts = time.time()
 
+    def _wait_for_state(
+        self,
+        m,
+        received,
+        state,
+        *,
+        timeout=2.0,
+        refresh_gnss=False,
+    ):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if any(r["state"] == state for r in received):
+                return True
+            if refresh_gnss:
+                self._stub_healthy_gnss(m)
+            time.sleep(0.01)
+        return any(r["state"] == state for r in received)
+
     def test_degraded_promotes_to_fallback_when_gnss_healthy(self):
         m = self._make()
         received = []
@@ -528,12 +546,17 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m._last_cloud_time = time.time() - 0.5
         m._last_cloud_mono = 0.0
         m.start()
-        # Hold long enough to clear fallback_after_degraded_s.
-        time.sleep(0.15)
-        m.stop()
-        states = [r["state"] for r in received]
-        self.assertIn("FALLBACK_GNSS_ONLY", states,
-                      f"Expected fallback transition, saw: {set(states)}")
+        try:
+            seen = self._wait_for_state(
+                m, received, "FALLBACK_GNSS_ONLY", refresh_gnss=True
+            )
+            states = [r["state"] for r in received]
+        finally:
+            m.stop()
+        self.assertTrue(
+            seen,
+            f"Expected fallback transition, saw: {set(states)}",
+        )
 
     def test_degraded_stays_degraded_without_gnss(self):
         m = self._make()
@@ -596,6 +619,9 @@ class TestSlamBridgeFallbackTransition(unittest.TestCase):
         m._last_cloud_time = time.time() - 0.5
         m._last_cloud_mono = 0.0
         m.start()
+        self._wait_for_state(
+            m, received, "FALLBACK_GNSS_ONLY", refresh_gnss=True
+        )
         time.sleep(0.15)  # enter FALLBACK
         # Now restore both odom and cloud freshness — keep them fresh while we
         # observe recovery so the watchdog does not race us into LOST.

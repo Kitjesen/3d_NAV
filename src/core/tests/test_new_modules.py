@@ -322,7 +322,9 @@ class TestLocalPlannerModule(unittest.TestCase):
         self.assertIn("odometry", m.ports_in)
         self.assertIn("terrain_map", m.ports_in)
         self.assertIn("waypoint", m.ports_in)
+        self.assertIn("global_path", m.ports_in)
         self.assertIn("clear_path", m.ports_in)
+        self.assertIn("map_frame_jump_event", m.ports_in)
         self.assertIn("local_path", m.ports_out)
 
     def test_layer(self):
@@ -358,6 +360,48 @@ class TestLocalPlannerModule(unittest.TestCase):
         self.assertEqual(len(paths[-1].poses), 0)
         self.assertEqual(paths[-1].frame_id, "map")
 
+    def test_global_path_biases_simple_backend_toward_corridor(self):
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule
+
+        m = LocalPlannerModule(backend="simple")
+        paths = []
+        m.local_path._add_callback(paths.append)
+        m._on_odom(Odometry(pose=Pose(position=Vector3(0.0, 0.0, 0.0))))
+        m._on_global_path([
+            np.array([0.0, 0.0, 0.0]),
+            np.array([0.0, 3.0, 0.0]),
+            np.array([3.0, 3.0, 0.0]),
+        ])
+
+        m._on_waypoint(PoseStamped(
+            pose=Pose(position=Vector3(3.0, 3.0, 0.0)),
+            frame_id="odom",
+        ))
+
+        self.assertEqual(paths[-1].frame_id, "odom")
+        last = paths[-1].poses[-1]
+        self.assertAlmostEqual(last.x, 0.0)
+        self.assertAlmostEqual(last.y, 3.0)
+
+    def test_map_frame_jump_drops_local_planner_state(self):
+        from base_autonomy.modules.local_planner_module import LocalPlannerModule
+
+        m = LocalPlannerModule(backend="simple")
+        paths = []
+        m.local_path._add_callback(paths.append)
+        m._latest_waypoint = PoseStamped(
+            pose=Pose(position=Vector3(1.0, 2.0, 0.0)),
+            frame_id="map",
+        )
+        m._global_path_points = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 0.0]])
+
+        m._on_map_frame_jump({"dt_m": 1.2})
+
+        self.assertIsNone(m._latest_waypoint)
+        self.assertIsNone(m._global_path_points)
+        self.assertEqual(len(paths[-1].poses), 0)
+        self.assertEqual(paths[-1].frame_id, "map")
+
 
 class TestPathFollowerModule(unittest.TestCase):
 
@@ -366,6 +410,7 @@ class TestPathFollowerModule(unittest.TestCase):
         m = PathFollowerModule(backend="pid")
         self.assertIn("odometry", m.ports_in)
         self.assertIn("local_path", m.ports_in)
+        self.assertIn("map_frame_jump_event", m.ports_in)
         self.assertIn("cmd_vel", m.ports_out)
 
     def test_layer(self):

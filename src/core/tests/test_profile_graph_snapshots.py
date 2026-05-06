@@ -1,4 +1,9 @@
-from core.blueprints.profile_graph import PROFILE_SNAPSHOT_TARGETS, graph_for_profile
+from core.blueprints.profile_graph import (
+    PROFILE_SNAPSHOT_TARGETS,
+    graph_for_profile,
+    resolve_profile_config,
+)
+from core.blueprints.stacks.navigation import navigation
 
 
 def _wire_set(graph):
@@ -25,7 +30,9 @@ def test_profile_graph_snapshot_locks_safety_gateway_and_mux_edges():
         driver = next(
             module
             for module in modules
-            if module.endswith("DriverModule") or module.endswith("DogModule")
+            if module.endswith("Driver")
+            or module.endswith("DriverModule")
+            or module.endswith("DogModule")
         )
 
         assert f"SafetyRingModule.stop_cmd->{driver}.stop_signal" in wires
@@ -36,6 +43,7 @@ def test_profile_graph_snapshot_locks_safety_gateway_and_mux_edges():
         assert "NavigationModule.mission_status->GatewayModule.mission_status" in wires
         assert "NavigationModule.mission_status->MCPServerModule.mission_status" in wires
         assert "NavigationModule.clear_path->LocalPlannerModule.clear_path" in wires
+        assert "NavigationModule.global_path->LocalPlannerModule.global_path" in wires
         assert "GatewayModule.cancel->NavigationModule.cancel" in wires
         assert f"CmdVelMux.driver_cmd_vel->{driver}.cmd_vel" in wires
 
@@ -57,6 +65,26 @@ def test_nav_profile_uses_slam_bridge_localization_health_edges():
     assert "SlamBridgeModule.localization_status->NavigationModule.localization_status" in wires
     assert "SlamBridgeModule.localization_status->DepthVisualOdomModule.localization_status" in wires
     assert "SlamBridgeModule.localization_status->GatewayModule.localization_status" in wires
+    assert "SlamBridgeModule.map_frame_jump_event->NavigationModule.map_frame_jump_event" in wires
+    assert "SlamBridgeModule.map_frame_jump_event->LocalPlannerModule.map_frame_jump_event" in wires
+    assert "SlamBridgeModule.map_frame_jump_event->PathFollowerModule.map_frame_jump_event" in wires
+
+
+def test_s100p_profiles_drive_real_brainstem_driver_by_default():
+    for profile in ("map", "nav", "explore"):
+        graph = graph_for_profile(profile)
+
+        assert "ThunderDriver" in graph.modules
+        assert "ROS2SimDriverModule" not in graph.modules
+
+
+def test_real_robot_profiles_do_not_auto_actuate_on_startup():
+    for profile in ("map", "nav", "super_lio", "super_lio_relocation", "explore", "tare_explore"):
+        config = resolve_profile_config(profile)
+
+        assert config["robot"] == "thunder"
+        assert config["auto_enable"] is False
+        assert config["auto_standup"] is False
 
 
 def test_navigation_profiles_use_localization_odometry_for_runtime_consumers():
@@ -82,4 +110,33 @@ def test_super_lio_profiles_wire_bridge_localization_status_to_gateway():
 
         assert "SlamBridgeModule" in graph.modules
         assert "SlamBridgeModule.localization_status->GatewayModule.localization_status" in wires
+        assert "SlamBridgeModule.map_frame_jump_event->NavigationModule.map_frame_jump_event" in wires
+        assert "SlamBridgeModule.map_frame_jump_event->LocalPlannerModule.map_frame_jump_event" in wires
+        assert "SlamBridgeModule.map_frame_jump_event->PathFollowerModule.map_frame_jump_event" in wires
         assert not graph.dangling_wires(), profile
+
+
+def test_real_robot_profiles_plan_in_live_odometry_frame():
+    profiles = (
+        "map",
+        "nav",
+        "super_lio",
+        "super_lio_relocation",
+        "explore",
+        "tare_explore",
+    )
+    for profile in profiles:
+        config = resolve_profile_config(profile)
+        nav_config = dict(config)
+        planner = nav_config.pop("planner", "astar")
+        tomogram = nav_config.pop("tomogram", "")
+        enable_native = nav_config.pop("enable_native", False)
+        bp = navigation(
+            planner,
+            tomogram,
+            enable_native,
+            **nav_config,
+        )
+        nav_entry = next(entry for entry in bp._entries if entry.name == "NavigationModule")
+
+        assert nav_entry.config["planning_frame_id"] == "odom"

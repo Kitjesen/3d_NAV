@@ -50,8 +50,8 @@ driver:
   dog_host: "127.0.0.1"
   dog_port: 13145
   control_rate: 50.0          # Hz
-  auto_enable: true
-  auto_standup: true
+  auto_enable: false
+  auto_standup: false
   reconnect_interval: 3.0     # 秒
   slam_reset_interval: 5.0    # SLAM 位置重置间隔 (秒)，防止航位推算漂移
 

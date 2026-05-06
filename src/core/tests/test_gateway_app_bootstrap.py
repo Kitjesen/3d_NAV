@@ -347,6 +347,12 @@ def test_app_bootstrap_route_endpoint_returns_payload():
     assert payload["ts"] > 0
     assert payload["links"]["health"] == "/api/v1/health"
 
+    legacy_route = next(route for route in app.routes if route.path == "/api/v1/bootstrap")
+    legacy_payload = asyncio.run(legacy_route.endpoint())
+
+    assert legacy_payload["schema_version"] == 1
+    assert legacy_payload["links"]["bootstrap"] == "/api/v1/app/bootstrap"
+
     cap_route = next(route for route in app.routes if route.path == "/api/v1/app/capabilities")
     capabilities = asyncio.run(cap_route.endpoint())
 

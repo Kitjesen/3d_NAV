@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 
 from core.module import Module, skill
-from core.msgs.geometry import Pose, Quaternion, Vector3
+from core.msgs.geometry import Pose, Quaternion, Twist, Vector3
 from core.msgs.gnss import GnssFixType, GnssOdom
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
@@ -1296,7 +1296,6 @@ class SlamBridgeModule(Module, layer=1):
             q = msg.pose.pose.orientation
             t = msg.twist.twist
             stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            from core.msgs.geometry import Twist
             slam_odom = Odometry(
                 pose=Pose(
                     position=Vector3(x=p.x, y=p.y, z=p.z),
@@ -1518,18 +1517,25 @@ class SlamBridgeModule(Module, layer=1):
         directly after ICP. Applying a cached localizer TF to Super-LIO outputs
         double-transforms the pose and shows up as a stationary jump.
         """
-        try:
-            backend = str(self._current_backend_profile()).strip().lower()
-        except Exception:
-            backend = str(getattr(self, "_backend_profile", "bridge") or "bridge").strip().lower()
+        configured = str(getattr(self, "_backend_profile", "bridge") or "bridge").strip().lower()
+        if configured and configured != "bridge":
+            backend = configured
+        else:
+            backend = str(
+                getattr(self, "_backend_detect_cache", configured or "bridge") or "bridge"
+            ).strip().lower()
         return backend in MAP_ODOM_TF_BACKENDS
 
     def _maybe_apply_map_odom_to_points(self, xyz: np.ndarray) -> np.ndarray:
+        if getattr(self, "_T_map_odom", None) is None:
+            return xyz
         if not self._should_apply_map_odom_tf():
             return xyz
         return self._apply_map_odom_to_points(xyz)
 
     def _maybe_apply_map_odom_to_odometry(self, odom: Odometry) -> Odometry:
+        if getattr(self, "_T_map_odom", None) is None:
+            return odom
         if not self._should_apply_map_odom_tf():
             return odom
         return self._apply_map_odom_to_odometry(odom)
@@ -1663,6 +1669,12 @@ class SlamBridgeModule(Module, layer=1):
                     logger.debug("map_frame_jump_event publish failed: %s", e)
 
         self._T_map_odom = T
+        configured = str(getattr(self, "_backend_profile", "bridge") or "bridge").strip().lower()
+        cached = str(
+            getattr(self, "_backend_detect_cache", configured or "bridge") or "bridge"
+        ).strip().lower()
+        if configured in {"", "bridge"} and cached in {"", "bridge"}:
+            self._backend_detect_cache = "localizer"
 
     def _on_rclpy_tf(self, msg) -> None:
         try:
@@ -1723,7 +1735,6 @@ class SlamBridgeModule(Module, layer=1):
             p = msg.pose.pose.position
             q = msg.pose.pose.orientation
             t = msg.twist.twist
-            from core.msgs.geometry import Twist
             slam_odom = Odometry(
                 pose=Pose(
                     position=Vector3(x=float(p.x), y=float(p.y), z=float(p.z)),

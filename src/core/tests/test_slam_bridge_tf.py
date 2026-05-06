@@ -146,7 +146,7 @@ def test_maybe_points_applies_tf_when_bridge_detects_localizer_backend():
     h = _make_holder()
     h._cache_map_odom_tf(10.0, -5.0, 2.0, 0, 0, 0, 1)
     h._backend_profile = "bridge"
-    h._current_backend_profile = lambda: "localizer"
+    h._backend_detect_cache = "localizer"
     pts = np.array([[1, 1, 1]], dtype=np.float32)
 
     out = h._maybe_apply_map_odom_to_points(pts)

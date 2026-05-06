@@ -50,6 +50,13 @@ MOVING_STATES = {
     "PATROLLING",
 }
 BAD_LOCALIZATION_STATES = {"no_odometry", "lost", "relocalizing", "initializing"}
+NON_MOTION_NAVIGATION_BLOCKERS = {
+    "navigation_session_inactive",
+    "navigation_not_ready",
+}
+NON_MOTION_READY_REASONS = {
+    f"navigation_blocked:{blocker}" for blocker in NON_MOTION_NAVIGATION_BLOCKERS
+}
 
 
 def env_float(name: str, default: float) -> float:
@@ -231,6 +238,36 @@ def command_source_name(control: dict[str, Any]) -> str:
     return str(source)
 
 
+def ready_status_is_non_motion_safe(
+    name: str,
+    code: int | None,
+    payload: dict[str, Any],
+) -> bool:
+    reasons = {str(reason) for reason in payload.get("reasons") or []}
+    return (
+        name == "ready"
+        and code == 503
+        and as_bool(payload.get("data_ready")) is True
+        and as_bool(payload.get("non_motion_safe")) is True
+        and not list(payload.get("failed_modules") or [])
+        and bool(reasons)
+        and reasons.issubset(NON_MOTION_READY_REASONS)
+    )
+
+
+def blockers_are_non_motion_safe(sample: dict[str, Any]) -> bool:
+    blockers = {str(blocker) for blocker in sample.get("navigation_blockers") or []}
+    if not blockers or not blockers.issubset(NON_MOTION_NAVIGATION_BLOCKERS):
+        return False
+    source = str(sample.get("active_cmd_source") or "none").lower()
+    nav_state = str(sample.get("navigation_state") or "").upper()
+    return (
+        sample.get("non_motion_safe") is True
+        and source in IDLE_SOURCES
+        and nav_state not in MOVING_STATES
+    )
+
+
 def extract_pose(state_payload: dict[str, Any], path_payload: dict[str, Any]) -> dict[str, float | None] | None:
     candidates = [
         mapping(state_payload.get("odometry")),
@@ -311,7 +348,7 @@ def sample_violations(sample: dict[str, Any], limits: dict[str, float | int]) ->
     if nav_state in MOVING_STATES:
         violations.append(f"navigation_state={nav_state}")
     blockers = sample.get("navigation_blockers") or []
-    if blockers:
+    if blockers and not blockers_are_non_motion_safe(sample):
         violations.append("navigation_blockers=" + ",".join(map(str, blockers)))
     return violations, warnings
 
@@ -327,7 +364,11 @@ def sample_once(gateway: str, index: int, started_mono: float, limits: dict[str,
         payloads[name] = payload
         statuses[name] = code
         latencies[name] = latency
-        if error or code is None or int(code) >= 400:
+        http_failed = code is None or (
+            int(code) >= 400
+            and not ready_status_is_non_motion_safe(name, code, payload)
+        )
+        if error or http_failed:
             endpoint_errors.append(f"{name}:{error or code}")
 
     for path in READ_ONLY_ENDPOINTS:

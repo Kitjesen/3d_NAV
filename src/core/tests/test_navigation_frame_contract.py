@@ -163,6 +163,36 @@ def test_navigation_clears_motion_when_active_costmap_frame_mismatches():
     assert events[-1]["source"] == "costmap"
 
 
+def test_navigation_clears_motion_before_replanning_after_map_frame_jump():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _RecordingPlanner()
+    clears: list[bool] = []
+    zeros = []
+    paths: list[list[np.ndarray]] = []
+    waypoints: list[PoseStamped] = []
+    nav.clear_path._add_callback(clears.append)
+    nav.recovery_cmd_vel._add_callback(zeros.append)
+    nav.global_path._add_callback(paths.append)
+    nav.waypoint._add_callback(waypoints.append)
+    nav._on_odom(Odometry(
+        pose=Pose(position=Vector3(0.0, 0.0, 0.0), orientation=Quaternion()),
+        frame_id="map",
+    ))
+    nav._state = "EXECUTING"
+    nav._goal = np.array([2.0, 0.0, 0.0])
+    nav._tracker.reset([np.array([2.0, 0.0, 0.0])], nav._robot_pos)
+
+    nav._on_map_frame_jump({"dt_m": 1.0, "dyaw_deg": 15.0})
+
+    assert clears == [True]
+    assert zeros[-1].linear.x == 0.0
+    assert zeros[-1].angular.z == 0.0
+    assert nav._state == "EXECUTING"
+    assert len(paths) == 1
+    assert len(paths[-1]) == 2
+    assert waypoints[-1].frame_id == "map"
+
+
 def test_navigation_cancel_is_idempotent_motion_cleanup_while_idle():
     nav = NavigationModule(enable_ros2_bridge=False)
     clears: list[bool] = []
