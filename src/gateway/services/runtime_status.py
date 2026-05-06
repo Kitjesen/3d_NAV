@@ -8,6 +8,9 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from core.runtime_policy import (
+    backend_capability_defaults as _backend_capability_defaults,
+)
 from gateway.services.safety_status import (
     SAFETY_STOP_BLOCKER,
     safety_stop_active,
@@ -188,61 +191,7 @@ def _as_optional_bool(value: Any) -> bool | None:
 
 
 def backend_capability_defaults(backend_name: str | None) -> dict[str, Any]:
-    backend = str(backend_name or "").strip().lower()
-    backend = {
-        "super-lio": "super_lio",
-        "superlio": "super_lio",
-        "super_lio_reloc": "super_lio_relocation",
-        "super-lio-reloc": "super_lio_relocation",
-        "superlio-reloc": "super_lio_relocation",
-        "super-lio-relocation": "super_lio_relocation",
-        "superlio-relocation": "super_lio_relocation",
-        "relocation": "super_lio_relocation",
-    }.get(backend, backend)
-    if backend == "super_lio":
-        return {
-            "map_save_supported": True,
-            "map_save_source": "live_map_cloud_snapshot",
-            "relocalization_supported": False,
-            "saved_map_relocalization_supported": False,
-            "restart_recovery_supported": True,
-            "recovery_method": "restart_super_lio",
-        }
-    if backend == "super_lio_relocation":
-        return {
-            "map_save_supported": False,
-            "map_save_source": "active_map",
-            "relocalization_supported": False,
-            "saved_map_relocalization_supported": False,
-            "restart_recovery_supported": True,
-            "recovery_method": "restart_super_lio_relocation",
-        }
-    if backend == "localizer":
-        return {
-            "map_save_supported": False,
-            "map_save_source": "active_map",
-            "relocalization_supported": True,
-            "saved_map_relocalization_supported": True,
-            "restart_recovery_supported": True,
-            "recovery_method": "relocalize_service",
-        }
-    if backend in {"fastlio2", "slam"}:
-        return {
-            "map_save_supported": True,
-            "map_save_source": "slam_save_maps",
-            "relocalization_supported": False,
-            "saved_map_relocalization_supported": False,
-            "restart_recovery_supported": True,
-            "recovery_method": "restart_slam",
-        }
-    return {
-        "map_save_supported": False,
-        "map_save_source": None,
-        "relocalization_supported": True,
-        "saved_map_relocalization_supported": True,
-        "restart_recovery_supported": False,
-        "recovery_method": "relocalize_service",
-    }
+    return _backend_capability_defaults(backend_name)
 
 
 def _reason_code_from_text(prefix: str, text: str) -> str:

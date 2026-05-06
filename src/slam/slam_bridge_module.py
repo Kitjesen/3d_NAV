@@ -29,6 +29,7 @@ from core.msgs.gnss import GnssFixType, GnssOdom
 from core.msgs.nav import Odometry
 from core.msgs.sensor import PointCloud2
 from core.registry import register
+from core.runtime_policy import slam_backend_contract
 from core.stream import In, Out
 from core.utils.scene_mode_detector import SceneModeConfig, SceneModeDetector
 
@@ -1149,66 +1150,7 @@ class SlamBridgeModule(Module, layer=1):
 
     def _backend_contract(self, profile: str | None = None) -> dict[str, Any]:
         """Expose backend capabilities for Gateway/session consumers."""
-        backend = str(profile or self._backend_profile or "bridge").strip().lower()
-        if backend == "super_lio":
-            return {
-                "backend": "super_lio",
-                "health_source": "odom_map_cloud",
-                "map_save_supported": True,
-                "map_save_source": "live_map_cloud_snapshot",
-                "relocalization_supported": False,
-                "saved_map_relocalization_supported": False,
-                "restart_recovery_supported": True,
-                "recovery_method": "restart_super_lio",
-                "recovery_action": "restart_super_lio",
-            }
-        if backend == "super_lio_relocation":
-            return {
-                "backend": "super_lio_relocation",
-                "health_source": "odom_map_cloud",
-                "map_save_supported": False,
-                "map_save_source": "active_map",
-                "relocalization_supported": False,
-                "saved_map_relocalization_supported": False,
-                "restart_recovery_supported": True,
-                "recovery_method": "restart_super_lio_relocation",
-                "recovery_action": "restart_super_lio_relocation",
-            }
-        if backend == "localizer":
-            return {
-                "backend": "localizer",
-                "health_source": "localizer_health_topic",
-                "map_save_supported": False,
-                "map_save_source": "active_map",
-                "relocalization_supported": True,
-                "saved_map_relocalization_supported": True,
-                "restart_recovery_supported": True,
-                "recovery_method": "relocalize_service",
-                "recovery_action": "relocalize_service",
-            }
-        if backend in {"fastlio2", "slam"}:
-            return {
-                "backend": "fastlio2",
-                "health_source": "odom_map_cloud",
-                "map_save_supported": True,
-                "map_save_source": "slam_save_maps",
-                "relocalization_supported": False,
-                "saved_map_relocalization_supported": False,
-                "restart_recovery_supported": True,
-                "recovery_method": "restart_slam",
-                "recovery_action": "restart_slam",
-            }
-        return {
-            "backend": backend or "bridge",
-            "health_source": "odom_map_cloud",
-            "map_save_supported": True,
-            "map_save_source": "slam_services_or_live_cloud",
-            "relocalization_supported": False,
-            "saved_map_relocalization_supported": False,
-            "restart_recovery_supported": True,
-            "recovery_method": "restart_backend",
-            "recovery_action": "restart_backend",
-        }
+        return slam_backend_contract(profile or self._backend_profile or "bridge")
 
     def _localizer_health_topic_fresh(self, now: float) -> bool:
         return (

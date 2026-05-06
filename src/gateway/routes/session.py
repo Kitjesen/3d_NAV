@@ -9,6 +9,13 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
+from core.runtime_policy import (
+    default_slam_profile_for_mode,
+    is_supported_slam_profile,
+    normalize_slam_profile,
+    session_transition_plan,
+    slam_switch_plan,
+)
 from gateway.schemas import (
     SessionResponse,
     SessionStartRequest,
@@ -19,18 +26,6 @@ from gateway.services.map_safety import safe_map_name
 
 
 logger = logging.getLogger(__name__)
-
-_SLAM_PROFILE_ALIASES = {
-    "super-lio": "super_lio",
-    "superlio": "super_lio",
-    "super_lio_reloc": "super_lio_relocation",
-    "super-lio-reloc": "super_lio_relocation",
-    "superlio-reloc": "super_lio_relocation",
-    "super_lio_relocation": "super_lio_relocation",
-    "super-lio-relocation": "super_lio_relocation",
-    "superlio-relocation": "super_lio_relocation",
-    "relocation": "super_lio_relocation",
-}
 
 
 def _transition_payload(
@@ -83,8 +78,7 @@ def _body_mapping(body: Any) -> dict[str, Any]:
 
 
 def _normalize_slam_profile(profile: str) -> str:
-    raw = str(profile or "").strip().lower()
-    return _SLAM_PROFILE_ALIASES.get(raw, raw)
+    return normalize_slam_profile(profile)
 
 
 def register_session_routes(app, gw) -> None:
@@ -129,12 +123,7 @@ def register_session_routes(app, gw) -> None:
                     "Use 'mapping' | 'navigating' | 'exploring'."
                 ),
             )
-        if slam_profile and slam_profile not in (
-            "fastlio2",
-            "localizer",
-            "super_lio",
-            "super_lio_relocation",
-        ):
+        if slam_profile and not is_supported_slam_profile(slam_profile):
             return _transition_response(
                 False,
                 status_code=400,
@@ -243,32 +232,20 @@ def register_session_routes(app, gw) -> None:
             from core.service_manager import get_service_manager
 
             svc = get_service_manager()
-            backend = slam_profile or (
-                "localizer" if mode == "navigating" else "fastlio2"
+            backend = slam_profile or default_slam_profile_for_mode(mode)
+            plan = session_transition_plan(mode, backend)
+            svc.stop(*plan.stop)
+            if plan.ensure:
+                svc.ensure(*plan.ensure)
+            ok = (
+                svc.wait_ready(*plan.wait_ready, timeout=10.0)
+                if plan.wait_ready
+                else True
             )
-            if backend == "super_lio":
-                svc.stop("slam", "slam_pgo", "localizer", "super_lio_relocation")
-                svc.ensure("lidar", "super_lio")
-                ok = svc.wait_ready("lidar", "super_lio", timeout=10.0)
-                if mode == "mapping" or mode == "exploring":
-                    with gw._map_cloud_lock:
-                        gw._map_points = None
-                        gw._voxel_hits.clear()
-            elif backend == "super_lio_relocation":
-                svc.stop("slam", "slam_pgo", "localizer", "super_lio")
-                svc.ensure("lidar", "super_lio_relocation")
-                ok = svc.wait_ready("lidar", "super_lio_relocation", timeout=10.0)
-            elif mode == "mapping" or mode == "exploring":
-                svc.stop("localizer", "super_lio", "super_lio_relocation")
-                svc.ensure("slam", "slam_pgo")
-                ok = svc.wait_ready("slam", "slam_pgo", timeout=10.0)
+            if plan.clear_live_map:
                 with gw._map_cloud_lock:
                     gw._map_points = None
                     gw._voxel_hits.clear()
-            else:
-                svc.stop("slam_pgo", "super_lio", "super_lio_relocation")
-                svc.ensure("slam", "localizer")
-                ok = svc.wait_ready("slam", "localizer", timeout=10.0)
             if not ok:
                 gw._session_error = "Services not ready after 10s"
                 return _transition_response(
@@ -344,13 +321,7 @@ def register_session_routes(app, gw) -> None:
             from core.service_manager import get_service_manager
 
             svc = get_service_manager()
-            svc.stop(
-                "super_lio_relocation",
-                "super_lio",
-                "slam_pgo",
-                "localizer",
-                "slam",
-            )
+            svc.stop(*slam_switch_plan("stop").stop)
             gw._session_mode = "idle"
             gw._session_map = None
             gw._session_slam_profile = "stopped"
