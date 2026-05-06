@@ -193,6 +193,27 @@ def test_navigation_clears_motion_before_replanning_after_map_frame_jump():
     assert waypoints[-1].frame_id == "map"
 
 
+def test_navigation_clears_motion_when_path_completes():
+    nav = NavigationModule(enable_ros2_bridge=False, waypoint_threshold=0.35)
+    clears: list[bool] = []
+    zeros = []
+    nav.clear_path._add_callback(clears.append)
+    nav.recovery_cmd_vel._add_callback(zeros.append)
+    nav._state = "EXECUTING"
+    nav._goal = np.array([0.1, 0.0, 0.0])
+    nav._tracker.reset([np.array([0.1, 0.0, 0.0])], np.zeros(3))
+
+    nav._on_odom(Odometry(
+        pose=Pose(position=Vector3(0.1, 0.0, 0.0), orientation=Quaternion()),
+        frame_id="map",
+    ))
+
+    assert nav._state == "SUCCESS"
+    assert clears == [True]
+    assert zeros[-1].linear.x == 0.0
+    assert zeros[-1].angular.z == 0.0
+
+
 def test_navigation_cancel_is_idempotent_motion_cleanup_while_idle():
     nav = NavigationModule(enable_ros2_bridge=False)
     clears: list[bool] = []

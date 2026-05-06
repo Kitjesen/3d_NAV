@@ -88,6 +88,8 @@ class MuJoCoEngine(SimEngine):
 
         # Policy controller
         self._policy: Optional[PolicyRunner] = None
+        self._policy_idle_hold = False
+        self._policy_idle_cmd_eps = 1e-4
 
         # Joint ID lists (populated after load())
         self._leg_joint_ids: List[int] = []
@@ -457,6 +459,7 @@ class MuJoCoEngine(SimEngine):
             gyro, pg = self._get_imu()
             jp, jv = self._get_joint_state()
             self._policy.warm_up(gyro, pg, jp, jv)
+            self._policy_idle_hold = False
 
         # Update LiDAR data reference
         if self._lidar is not None:
@@ -558,6 +561,15 @@ class MuJoCoEngine(SimEngine):
         jp, jv = self._get_joint_state()
 
         if self._policy is not None:
+            if self._is_idle_policy_command(direction):
+                self._policy_idle_hold = True
+                standing_dart = self._robot_cfg.standing_pose_array
+                self._write_leg_ctrl(standing_dart[DART_TO_MJ])
+                return
+            if self._policy_idle_hold:
+                self._policy.reset()
+                self._policy.warm_up(gyro, pg, jp, jv)
+                self._policy_idle_hold = False
             obs = self._policy.build_obs(gyro, pg, direction, jp, jv)
             action_dart = self._policy.infer(obs)     # (16,) Dart order
             # Dart -> MuJoCo order
@@ -568,6 +580,9 @@ class MuJoCoEngine(SimEngine):
             standing_dart = self._robot_cfg.standing_pose_array
             action_mj = standing_dart[DART_TO_MJ]
             self._write_leg_ctrl(action_mj)
+
+    def _is_idle_policy_command(self, direction: np.ndarray) -> bool:
+        return bool(np.linalg.norm(direction) <= self._policy_idle_cmd_eps)
 
     def _apply_kinematic_cmd(self) -> None:
         """Apply cmd_vel directly to the free joint for deterministic nav smoke tests."""

@@ -229,6 +229,26 @@ def test_mujoco_driver_prefers_brainstem_policy_and_resolves_repo_relative_paths
     ).resolve()
 
 
+def test_mujoco_driver_applies_explicit_cmd_velocity_limits(monkeypatch):
+    import sim.engine.mujoco.engine as mujoco_engine
+
+    monkeypatch.setitem(sys.modules, "mujoco", types.SimpleNamespace(__version__="test"))
+    monkeypatch.setattr(mujoco_engine, "MuJoCoEngine", _FakeEngine)
+
+    driver = MujocoDriverModule(
+        world="open_field",
+        render=False,
+        enable_camera=False,
+        max_linear_vel=0.3,
+        max_angular_vel=0.2,
+    )
+    driver.setup()
+
+    assert driver._engine is not None
+    assert driver._engine.robot_config.max_linear_vel == pytest.approx(0.3)
+    assert driver._engine.robot_config.max_angular_vel == pytest.approx(0.2)
+
+
 def test_mujoco_driver_kinematic_mode_disables_policy(monkeypatch):
     import sim.engine.mujoco.engine as mujoco_engine
 
@@ -348,11 +368,22 @@ def test_policy_nav_smoke_accepts_explicit_policy_argument():
     from sim.scripts import policy_nav_smoke
 
     args = policy_nav_smoke._build_parser().parse_args(
-        ["--policy", "/tmp/policy.onnx", "--direct-only"]
+        ["--policy", "/tmp/policy.onnx", "--nav-max-angular-z", "0.2", "--direct-only"]
     )
 
     assert args.policy == "/tmp/policy.onnx"
+    assert args.nav_max_angular_z == pytest.approx(0.2)
     assert args.direct_only is True
+
+
+def test_mujoco_policy_idle_command_detection():
+    from sim.engine.mujoco.engine import MuJoCoEngine
+
+    engine = MuJoCoEngine()
+
+    assert engine._is_idle_policy_command(np.array([0.0, 0.0, 0.0]))
+    assert engine._is_idle_policy_command(np.array([1e-5, 0.0, 0.0]))
+    assert not engine._is_idle_policy_command(np.array([1e-3, 0.0, 0.0]))
 
 
 def test_mujoco_camera_preserves_metric_depth_output():

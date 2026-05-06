@@ -174,6 +174,7 @@ def run_full_stack_nav(
     duration: float,
     goal_distance: float,
     policy_path: str = "",
+    nav_max_angular_z: float = 0.2,
 ) -> dict[str, Any]:
     from core.blueprints.full_stack import full_stack_blueprint
     from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
@@ -192,6 +193,7 @@ def run_full_stack_nav(
         python_path_follower_backend="pid",
         drive_mode="policy",
         policy_path=policy_path,
+        max_angular_vel=nav_max_angular_z,
         waypoint_threshold=0.35,
         downsample_dist=0.5,
         run_startup_checks=False,
@@ -282,6 +284,7 @@ def run_full_stack_nav(
             "world": world,
             "duration_s": duration,
             "goal_distance_m": goal_distance,
+            "nav_max_angular_z": nav_max_angular_z,
             "policy_loaded": bool(engine.has_policy) if engine is not None else False,
             "policy_path": str(driver._policy_path),
             "finite": finite,
@@ -336,6 +339,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--linear-x", type=float, default=0.2)
     parser.add_argument("--angular-z", type=float, default=0.0)
     parser.add_argument("--policy", default="", help="Explicit ONNX policy path")
+    parser.add_argument(
+        "--nav-max-angular-z",
+        type=float,
+        default=0.2,
+        help="Full-stack policy-mode angular velocity clamp in rad/s",
+    )
     parser.add_argument("--min-direct-motion", type=float, default=0.20)
     parser.add_argument("--min-nav-motion", type=float, default=0.20)
     parser.add_argument("--direct-only", action="store_true")
@@ -372,6 +381,7 @@ def main() -> int:
             duration=args.nav_duration,
             goal_distance=args.goal_distance,
             policy_path=args.policy,
+            nav_max_angular_z=args.nav_max_angular_z,
         )
         nav_result["passed"] = _passes_nav(nav_result, args.min_nav_motion)
         nav_result["policy"] = _load_policy_metadata(str(nav_result.get("policy_path", "")))

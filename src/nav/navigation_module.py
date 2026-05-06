@@ -746,6 +746,7 @@ class NavigationModule(Module, layer=5):
             if self._state == MissionState.PATROLLING and self._patrol_goals:
                 if self._advance_patrol():
                     return
+            self._publish_motion_stop()
             self._set_state(MissionState.SUCCESS)
 
         elif status.event == EV_WAYPOINT_REACHED:

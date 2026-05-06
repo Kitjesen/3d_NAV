@@ -155,6 +155,8 @@ class MujocoDriverModule(Module, layer=1):
         policy_path: str = "",
         robot_xml: str = "",
         drive_mode: str = "",
+        max_linear_vel: float | None = None,
+        max_angular_vel: float | None = None,
         start_pos: tuple = _DEFAULT_START_POS,
         obstacles: list | None = None,
         odom_frame_id: str = "odom",
@@ -177,6 +179,8 @@ class MujocoDriverModule(Module, layer=1):
         )
         if self._drive_mode == "kinematic":
             self._policy_path = ""
+        self._max_linear_vel = max_linear_vel
+        self._max_angular_vel = max_angular_vel
         self._robot_xml = _resolve_sim_path(robot_xml) if robot_xml else str(_ROBOT_XML)
         self._start_pos = start_pos
         self._obstacles = obstacles or []
@@ -221,6 +225,10 @@ class MujocoDriverModule(Module, layer=1):
             robot_cfg = RobotConfig.default_thunder_v3()
             robot_cfg.resolve_paths(base_dir=str(_SIM_ROOT))
             robot_cfg.robot_xml = self._robot_xml
+            if self._max_linear_vel is not None:
+                robot_cfg.max_linear_vel = float(self._max_linear_vel)
+            if self._max_angular_vel is not None:
+                robot_cfg.max_angular_vel = float(self._max_angular_vel)
             scene_start = _scene_placeholder_start(world_path)
             start_pos = scene_start if scene_start is not None and _is_default_start_pos(self._start_pos) else list(self._start_pos)
             robot_cfg.init_position = [float(v) for v in start_pos[:3]]
