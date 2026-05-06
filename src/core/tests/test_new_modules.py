@@ -126,7 +126,7 @@ class TestNavigationModule(unittest.TestCase):
         class _NoMapBackend:
             _grid = None
 
-            def plan(self, start, goal):
+            def plan(self, start, goal, **kwargs):
                 return []
 
         m._planner_svc._backend = _NoMapBackend()
@@ -153,7 +153,7 @@ class TestNavigationModule(unittest.TestCase):
         class _MappedBackend:
             _grid = np.zeros((10, 10), dtype=np.float32)
 
-            def plan(self, start, goal):
+            def plan(self, start, goal, **kwargs):
                 return []
 
         m._planner_svc._backend = _MappedBackend()
@@ -174,7 +174,7 @@ class TestNavigationModule(unittest.TestCase):
         class _NoMapBackend:
             _grid = None
 
-            def plan(self, start, goal):
+            def plan(self, start, goal, **kwargs):
                 return []
 
         m._planner_svc._backend = _NoMapBackend()

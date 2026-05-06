@@ -52,11 +52,15 @@ class PathFollowerModule(Module, layer=2):
     alive: Out[bool]
 
     def __init__(self, backend: str = "nav_core",
-                 max_speed: float = 0.4, lookahead: float = 1.5, **kw):
+                 max_speed: float = 0.4, lookahead: float = 1.5,
+                 goal_tolerance: float = 0.2,
+                 min_speed: float = 0.15, **kw):
         super().__init__(**kw)
         self._backend = backend
         self._max_speed = max_speed
         self._lookahead = lookahead
+        self._goal_tolerance = goal_tolerance
+        self._min_speed = min_speed
         self._node = None
 
         # Current robot pose (odom frame)
@@ -169,7 +173,7 @@ class PathFollowerModule(Module, layer=2):
             params.dir_diff_thre = 0.1
             params.omni_dir_goal_thre = 1.0
             params.omni_dir_diff_thre = 1.5
-            params.stop_dis_thre = 0.2
+            params.stop_dis_thre = self._goal_tolerance
             params.slow_dwn_dis_thre = 1.0
             params.two_way_drive = True
             params.no_rot_at_goal = True
@@ -402,7 +406,7 @@ class PathFollowerModule(Module, layer=2):
         dy = target[1] - self._robot_y
         dist = math.hypot(dx, dy)
 
-        if dist < 0.2:
+        if dist < self._goal_tolerance:
             self._smooth_vx *= 0.5  # decay to zero
             self._smooth_wz *= 0.5
             if abs(self._smooth_vx) < 0.01:
@@ -425,7 +429,7 @@ class PathFollowerModule(Module, layer=2):
         # P controller with cos coupling — Go1 has low yaw drift (~2°/8s)
         wz = max(-0.8, min(0.8, yaw_err * 0.5))
         turn_factor = max(0.2, math.cos(yaw_err))
-        vx = min(self._max_speed, max(0.15, dist * 0.25)) * turn_factor
+        vx = min(self._max_speed, max(self._min_speed, dist * 0.25)) * turn_factor
 
         alpha = 0.2
         self._smooth_vx = (1 - alpha) * self._smooth_vx + alpha * vx

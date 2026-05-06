@@ -123,14 +123,17 @@ class NavigationModule(Module, layer=5):
         max_replan_count: int = 3,
         downsample_dist: float = 2.0,
         enable_ros2_bridge: bool = False,
+        final_waypoint_threshold: float | None = None,
         allow_direct_goal_fallback: bool = False,
         goal_update_epsilon: float = 0.25,
+        safe_goal_tolerance: float = 4.0,
         **kw,
     ):
         super().__init__(**kw)
         self._enable_ros2_bridge = enable_ros2_bridge
         self._allow_direct_goal_fallback = allow_direct_goal_fallback
         self._goal_update_epsilon = goal_update_epsilon
+        self._safe_goal_tolerance = safe_goal_tolerance
 
         self._planner_svc = GlobalPlannerService(
             planner_name=planner,
@@ -140,6 +143,7 @@ class NavigationModule(Module, layer=5):
         )
         self._tracker = WaypointTracker(
             threshold=waypoint_threshold,
+            final_threshold=final_waypoint_threshold,
             stuck_timeout=stuck_timeout,
             stuck_dist=stuck_dist_thre,
         )
@@ -1177,7 +1181,11 @@ class NavigationModule(Module, layer=5):
                 return
         else:
             try:
-                path, _ = self._planner_svc.plan(self._robot_pos, self._goal)
+                path, _ = self._planner_svc.plan(
+                    self._robot_pos,
+                    self._goal,
+                    safe_goal_tolerance=self._safe_goal_tolerance,
+                )
             except Exception as exc:
                 if self._should_use_direct_goal_fallback(exc):
                     path = self._direct_goal_path(reason=str(exc))

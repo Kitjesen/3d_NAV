@@ -13,8 +13,10 @@ class _RecordingPlanner:
 
     def __init__(self) -> None:
         self.maps: list[dict] = []
+        self.safe_goal_tolerances: list[float | None] = []
 
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
+        self.safe_goal_tolerances.append(kwargs.get("safe_goal_tolerance"))
         return [start.copy(), goal.copy()], 0.0
 
     def update_map(self, grid, resolution=0.2, origin=None) -> None:
@@ -191,6 +193,23 @@ def test_navigation_clears_motion_before_replanning_after_map_frame_jump():
     assert len(paths) == 1
     assert len(paths[-1]) == 2
     assert waypoints[-1].frame_id == "map"
+
+
+def test_navigation_passes_safe_goal_tolerance_to_planner_service():
+    nav = NavigationModule(enable_ros2_bridge=False, safe_goal_tolerance=0.0)
+    planner = _RecordingPlanner()
+    nav._planner_svc = planner
+    nav._on_odom(Odometry(
+        pose=Pose(position=Vector3(0.0, 0.0, 0.0), orientation=Quaternion()),
+        frame_id="map",
+    ))
+
+    nav._on_goal(PoseStamped(
+        pose=Pose(position=Vector3(1.0, 0.0, 0.0), orientation=Quaternion()),
+        frame_id="map",
+    ))
+
+    assert planner.safe_goal_tolerances == [0.0]
 
 
 def test_navigation_clears_motion_when_path_completes():

@@ -56,6 +56,21 @@ class TestWaypointTracker(unittest.TestCase):
         self.assertEqual(status.event, EV_PATH_COMPLETE)
         self.assertEqual(status.wp_index, 2)
 
+    def test_final_threshold_can_be_tighter_than_intermediate_threshold(self):
+        tracker = WaypointTracker(threshold=1.0, final_threshold=0.2)
+        wp0 = np.array([5.0, 0.0, 0.0])
+        wp1 = np.array([10.0, 0.0, 0.0])
+        tracker.reset([wp0, wp1], np.array([0.0, 0.0, 0.0]))
+
+        status = tracker.update(np.array([4.5, 0.0, 0.0]))
+        self.assertEqual(status.event, EV_WAYPOINT_REACHED)
+
+        status = tracker.update(np.array([9.7, 0.0, 0.0]))
+        self.assertIsNone(status.event)
+
+        status = tracker.update(np.array([9.9, 0.0, 0.0]))
+        self.assertEqual(status.event, EV_PATH_COMPLETE)
+
     def test_stuck_warn_at_half_timeout(self):
         """Not moving for >50% of timeout fires EV_STUCK_WARN once."""
         tracker = WaypointTracker(threshold=1.0, stuck_timeout=0.2, stuck_dist=0.15)
@@ -208,6 +223,15 @@ class TestGlobalPlannerService(unittest.TestCase):
                 np.array([5, 0, 0]), np.array([7, 0, 0])]
         goal = np.array([7.0, 0.0, 0.0])
         result = svc._downsample(path, goal)
+        np.testing.assert_array_almost_equal(result[-1], goal)
+
+    def test_downsample_keeps_precise_goal_near_grid_center(self):
+        svc = GlobalPlannerService(downsample_dist=2.0)
+        path = [np.array([0.0, 0.0, 0.0]), np.array([0.95, 0.0, 0.0])]
+        goal = np.array([1.0, 0.0, 0.0])
+
+        result = svc._downsample(path, goal)
+
         np.testing.assert_array_almost_equal(result[-1], goal)
 
     def test_downsample_spacing(self):

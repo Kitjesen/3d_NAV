@@ -353,15 +353,17 @@ def test_policy_nav_smoke_pass_fail_gates_are_conservative():
             "mux_cmd": 4,
             "direct_fallback": 0,
         },
+        "dist_to_goal_m": 0.30,
+        "dist_at_success_m": 0.05,
     }
 
     assert policy_nav_smoke._passes_direct(direct, min_motion=0.20) is True
-    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20) is True
+    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20, max_dist_to_goal=0.10) is True
 
     direct["moved_m"] = 0.05
     nav["seen"]["direct_fallback"] = 1
     assert policy_nav_smoke._passes_direct(direct, min_motion=0.20) is False
-    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20) is False
+    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20, max_dist_to_goal=0.10) is False
 
 
 def test_policy_nav_smoke_accepts_explicit_policy_argument():
@@ -373,6 +375,13 @@ def test_policy_nav_smoke_accepts_explicit_policy_argument():
 
     assert args.policy == "/tmp/policy.onnx"
     assert args.nav_max_angular_z == pytest.approx(0.2)
+    assert args.nav_waypoint_threshold == pytest.approx(0.25)
+    assert args.nav_final_waypoint_threshold == pytest.approx(0.06)
+    assert args.nav_path_goal_tolerance == pytest.approx(0.08)
+    assert args.nav_path_min_speed == pytest.approx(0.05)
+    assert args.nav_post_success_settle == pytest.approx(0.0)
+    assert args.nav_safe_goal_tolerance == pytest.approx(0.0)
+    assert args.max_nav_dist_to_goal == pytest.approx(0.10)
     assert args.direct_only is True
 
 
@@ -384,6 +393,31 @@ def test_mujoco_policy_idle_command_detection():
     assert engine._is_idle_policy_command(np.array([0.0, 0.0, 0.0]))
     assert engine._is_idle_policy_command(np.array([1e-5, 0.0, 0.0]))
     assert not engine._is_idle_policy_command(np.array([1e-3, 0.0, 0.0]))
+
+
+def test_navigation_stack_passes_path_follower_precision_params():
+    system = full_stack_blueprint(
+        robot="sim_mujoco",
+        slam_profile="none",
+        detector="sim_scene",
+        llm="mock",
+        enable_native=False,
+        enable_semantic=False,
+        enable_gateway=False,
+        final_waypoint_threshold=0.09,
+        path_follower_goal_tolerance=0.07,
+        path_follower_min_speed=0.04,
+        path_follower_max_speed=0.22,
+        run_startup_checks=False,
+    ).build()
+
+    follower = system.get_module("PathFollowerModule")
+    nav = system.get_module("NavigationModule")
+
+    assert nav._tracker._final_threshold == pytest.approx(0.09)
+    assert follower._goal_tolerance == pytest.approx(0.07)
+    assert follower._min_speed == pytest.approx(0.04)
+    assert follower._max_speed == pytest.approx(0.22)
 
 
 def test_mujoco_camera_preserves_metric_depth_output():

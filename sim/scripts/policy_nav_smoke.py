@@ -49,6 +49,59 @@ def _stats(values: list[float]) -> dict[str, float | None]:
     }
 
 
+def _xyz_from_any(value: Any) -> list[float] | None:
+    if hasattr(value, "pose"):
+        value = value.pose.position
+    elif hasattr(value, "position"):
+        value = value.position
+    if all(hasattr(value, attr) for attr in ("x", "y")):
+        return [
+            float(value.x),
+            float(value.y),
+            float(getattr(value, "z", 0.0)),
+        ]
+    if isinstance(value, dict):
+        if "position" in value:
+            return _xyz_from_any(value["position"])
+        try:
+            return [
+                float(value.get("x", 0.0)),
+                float(value.get("y", 0.0)),
+                float(value.get("z", 0.0)),
+            ]
+        except Exception:
+            return None
+    try:
+        arr = np.asarray(value, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if arr.size < 2 or not np.all(np.isfinite(arr[:2])):
+        return None
+    out = [0.0, 0.0, 0.0]
+    for idx in range(min(arr.size, 3)):
+        out[idx] = float(arr[idx])
+    return out
+
+
+def _path_summary(path: Any) -> dict[str, Any]:
+    points_src = getattr(path, "poses", path)
+    points: list[list[float]] = []
+    try:
+        iterator = iter(points_src)
+    except TypeError:
+        iterator = iter(())
+    for item in iterator:
+        point = _xyz_from_any(item)
+        if point is not None:
+            points.append(point)
+    return {
+        "count": len(points),
+        "first": points[0] if points else None,
+        "last": points[-1] if points else None,
+        "frame_id": str(getattr(path, "frame_id", "") or ""),
+    }
+
+
 def _safe_float(value: Any) -> float:
     try:
         return float(value)
@@ -175,6 +228,14 @@ def run_full_stack_nav(
     goal_distance: float,
     policy_path: str = "",
     nav_max_angular_z: float = 0.2,
+    waypoint_threshold: float = 0.25,
+    final_waypoint_threshold: float = 0.06,
+    downsample_dist: float = 0.25,
+    path_goal_tolerance: float = 0.08,
+    path_min_speed: float = 0.05,
+    path_max_speed: float = 0.25,
+    post_success_settle: float = 0.0,
+    safe_goal_tolerance: float = 0.0,
 ) -> dict[str, Any]:
     from core.blueprints.full_stack import full_stack_blueprint
     from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
@@ -194,8 +255,13 @@ def run_full_stack_nav(
         drive_mode="policy",
         policy_path=policy_path,
         max_angular_vel=nav_max_angular_z,
-        waypoint_threshold=0.35,
-        downsample_dist=0.5,
+        waypoint_threshold=waypoint_threshold,
+        final_waypoint_threshold=final_waypoint_threshold,
+        downsample_dist=downsample_dist,
+        path_follower_goal_tolerance=path_goal_tolerance,
+        path_follower_min_speed=path_min_speed,
+        path_follower_max_speed=path_max_speed,
+        safe_goal_tolerance=safe_goal_tolerance,
         run_startup_checks=False,
     ).build()
 
@@ -216,17 +282,33 @@ def run_full_stack_nav(
     }
     odom: list[tuple[float, float, float]] = []
     last_mux: list[tuple[float, float]] = []
+    global_path_summaries: list[dict[str, Any]] = []
+    waypoint_points: list[list[float]] = []
+    local_path_summaries: list[dict[str, Any]] = []
+
+    def _record_global_path(path: Any) -> None:
+        global_path_summaries.append(_path_summary(path))
+
+    def _record_waypoint(wp: Any) -> None:
+        seen["waypoints"] += 1
+        point = _xyz_from_any(wp)
+        if point is not None:
+            waypoint_points.append(point)
+
+    def _record_local_path(path: Any) -> None:
+        seen["local_path"] += 1
+        local_path_summaries.append(_path_summary(path))
+
     ogm.costmap._add_callback(lambda _: seen.__setitem__("costmap", seen["costmap"] + 1))
-    nav.waypoint._add_callback(lambda _: seen.__setitem__("waypoints", seen["waypoints"] + 1))
+    nav.global_path._add_callback(_record_global_path)
+    nav.waypoint._add_callback(_record_waypoint)
     nav.adapter_status._add_callback(
         lambda e: seen.__setitem__(
             "direct_fallback",
             seen["direct_fallback"] + (1 if e.get("event") == "direct_goal_fallback" else 0),
         )
     )
-    local_planner.local_path._add_callback(
-        lambda _: seen.__setitem__("local_path", seen["local_path"] + 1)
-    )
+    local_planner.local_path._add_callback(_record_local_path)
     path_follower.cmd_vel._add_callback(
         lambda _: seen.__setitem__("path_follower_cmd", seen["path_follower_cmd"] + 1)
     )
@@ -266,6 +348,11 @@ def run_full_stack_nav(
         )
 
         deadline = time.time() + duration
+        started_at = time.time()
+        success_at: float | None = None
+        success_pose: tuple[float, float, float] | None = None
+        dist_at_success: float | None = None
+        moved_at_success: float | None = None
         moved = 0.0
         dist_to_goal = math.hypot(goal_x - start[0], goal_y - start[1])
         z_values: list[float] = []
@@ -278,17 +365,44 @@ def run_full_stack_nav(
                 dist_to_goal = math.hypot(goal_x - x, goal_y - y)
                 z_values.append(z)
                 finite = finite and all(math.isfinite(v) for v in odom[-1])
+            if str(getattr(nav, "_state", "")) == "SUCCESS":
+                if success_at is None:
+                    success_at = time.time()
+                    success_pose = odom[-1] if odom else None
+                    dist_at_success = dist_to_goal
+                    moved_at_success = moved
+                if time.time() - success_at >= post_success_settle:
+                    break
 
         return {
             "mode": "full_stack_policy_nav",
             "world": world,
             "duration_s": duration,
+            "elapsed_s": time.time() - started_at,
             "goal_distance_m": goal_distance,
             "nav_max_angular_z": nav_max_angular_z,
+            "waypoint_threshold_m": waypoint_threshold,
+            "final_waypoint_threshold_m": final_waypoint_threshold,
+            "downsample_dist_m": downsample_dist,
+            "path_goal_tolerance_m": path_goal_tolerance,
+            "path_min_speed_mps": path_min_speed,
+            "path_max_speed_mps": path_max_speed,
+            "post_success_settle_s": post_success_settle,
+            "safe_goal_tolerance_m": safe_goal_tolerance,
+            "success_seen": success_at is not None,
+            "dist_at_success_m": dist_at_success,
+            "moved_at_success_m": moved_at_success,
+            "success_end": [float(v) for v in success_pose[:3]] if success_pose else None,
+            "settled_dist_delta_m": (
+                float(dist_to_goal - dist_at_success) if dist_at_success is not None else None
+            ),
             "policy_loaded": bool(engine.has_policy) if engine is not None else False,
             "policy_path": str(driver._policy_path),
             "finite": finite,
             "seen": seen,
+            "global_path": global_path_summaries[-1] if global_path_summaries else None,
+            "last_waypoint": waypoint_points[-1] if waypoint_points else None,
+            "last_local_path": local_path_summaries[-1] if local_path_summaries else None,
             "moved_m": moved,
             "dist_to_goal_m": dist_to_goal,
             "z": _stats(z_values),
@@ -313,8 +427,11 @@ def _passes_direct(result: dict[str, Any], min_motion: float) -> bool:
     )
 
 
-def _passes_nav(result: dict[str, Any], min_motion: float) -> bool:
+def _passes_nav(result: dict[str, Any], min_motion: float, max_dist_to_goal: float) -> bool:
     seen = result.get("seen", {})
+    dist_for_gate = result.get("dist_at_success_m")
+    if dist_for_gate is None:
+        dist_for_gate = result.get("dist_to_goal_m", 999.0)
     return (
         bool(result.get("policy_loaded"))
         and bool(result.get("finite"))
@@ -325,6 +442,7 @@ def _passes_nav(result: dict[str, Any], min_motion: float) -> bool:
         and int(seen.get("mux_cmd", 0)) > 3
         and int(seen.get("direct_fallback", 0)) == 0
         and float(result.get("moved_m", 0.0)) >= min_motion
+        and float(dist_for_gate) <= max_dist_to_goal
         and (result.get("z", {}).get("min") or 0.0) > 0.35
         and (result.get("z", {}).get("max") or 999.0) < 0.55
     )
@@ -345,8 +463,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0.2,
         help="Full-stack policy-mode angular velocity clamp in rad/s",
     )
+    parser.add_argument("--nav-waypoint-threshold", type=float, default=0.25)
+    parser.add_argument("--nav-final-waypoint-threshold", type=float, default=0.06)
+    parser.add_argument("--nav-downsample-dist", type=float, default=0.25)
+    parser.add_argument("--nav-path-goal-tolerance", type=float, default=0.08)
+    parser.add_argument("--nav-path-min-speed", type=float, default=0.05)
+    parser.add_argument("--nav-path-max-speed", type=float, default=0.25)
+    parser.add_argument("--nav-post-success-settle", type=float, default=0.0)
+    parser.add_argument("--nav-safe-goal-tolerance", type=float, default=0.0)
     parser.add_argument("--min-direct-motion", type=float, default=0.20)
     parser.add_argument("--min-nav-motion", type=float, default=0.20)
+    parser.add_argument("--max-nav-dist-to-goal", type=float, default=0.10)
     parser.add_argument("--direct-only", action="store_true")
     parser.add_argument("--nav-only", action="store_true")
     parser.add_argument("--json-out", default="")
@@ -382,8 +509,20 @@ def main() -> int:
             goal_distance=args.goal_distance,
             policy_path=args.policy,
             nav_max_angular_z=args.nav_max_angular_z,
+            waypoint_threshold=args.nav_waypoint_threshold,
+            final_waypoint_threshold=args.nav_final_waypoint_threshold,
+            downsample_dist=args.nav_downsample_dist,
+            path_goal_tolerance=args.nav_path_goal_tolerance,
+            path_min_speed=args.nav_path_min_speed,
+            path_max_speed=args.nav_path_max_speed,
+            post_success_settle=args.nav_post_success_settle,
+            safe_goal_tolerance=args.nav_safe_goal_tolerance,
         )
-        nav_result["passed"] = _passes_nav(nav_result, args.min_nav_motion)
+        nav_result["passed"] = _passes_nav(
+            nav_result,
+            args.min_nav_motion,
+            args.max_nav_dist_to_goal,
+        )
         nav_result["policy"] = _load_policy_metadata(str(nav_result.get("policy_path", "")))
         results["checks"].append(nav_result)
 

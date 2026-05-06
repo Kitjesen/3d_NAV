@@ -22,7 +22,7 @@ class _FakePlanner:
     is_ready = True
     has_map = True
 
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         midpoint = np.array([2.5, 0.0, 0.0])
         return [start.copy(), midpoint, goal.copy()], 1.0
 
@@ -31,12 +31,12 @@ class _FakePlanner:
 
 
 class _ExplodingPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         raise AssertionError("planner should not run for an already-at-goal preview")
 
 
 class _SlowPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         time.sleep(0.05)
         return super().plan(start, goal)
 
@@ -50,27 +50,27 @@ class _BrokenPlannerStatus:
     def has_map(self) -> bool:
         return True
 
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         raise AssertionError("planner should not run when status is unavailable")
 
 
 class _NonfinitePathPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         return [start.copy(), np.array([np.nan, 1.0, 0.0])], 1.0
 
 
 class _NonfiniteTimingPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         return [start.copy(), goal.copy()], float("nan")
 
 
 class _OverflowDistancePlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         return [start.copy(), np.array([1e308, 0.0, 0.0])], 1.0
 
 
 class _RuntimeErrorPlanner(_FakePlanner):
-    def plan(self, start: np.ndarray, goal: np.ndarray):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
         raise RuntimeError("planner returned empty path")
 
 

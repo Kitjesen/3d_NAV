@@ -25,6 +25,7 @@ def navigation(
         for key in (
             "obstacle_thr",
             "waypoint_threshold",
+            "final_waypoint_threshold",
             "stuck_timeout",
             "stuck_dist_thre",
             "max_replan_count",
@@ -35,6 +36,7 @@ def navigation(
             "planning_frame_id",
             "planning_timeout",
             "preview_timeout",
+            "safe_goal_tolerance",
         )
         if key in config
     }
@@ -66,13 +68,29 @@ def navigation(
 
     try:
         from base_autonomy.modules.autonomy_module import add_autonomy_stack
+        path_follower_config = {
+            param: config[key]
+            for key, param in (
+                ("path_follower_max_speed", "max_speed"),
+                ("path_follower_lookahead", "lookahead"),
+                ("path_follower_goal_tolerance", "goal_tolerance"),
+                ("path_follower_min_speed", "min_speed"),
+            )
+            if key in config
+        }
         if enable_native:
-            add_autonomy_stack(bp, backend="cmu", path_follower_backend="nav_core")
+            add_autonomy_stack(
+                bp,
+                backend="cmu",
+                path_follower_backend="nav_core",
+                **path_follower_config,
+            )
         else:
             add_autonomy_stack(
                 bp,
                 backend=config.get("python_autonomy_backend", "nanobind"),
                 path_follower_backend=config.get("python_path_follower_backend", "nav_core"),
+                **path_follower_config,
             )
     except ImportError as e:
         logger.warning("Autonomy stack not available: %s", e)

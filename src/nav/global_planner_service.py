@@ -229,6 +229,6 @@ class GlobalPlannerService:
                 result.append(pt)
         goal_pt = (np.array(goal[:3]) if len(goal) >= 3
                    else np.array([goal[0], goal[1], 0.0]))
-        if np.linalg.norm(goal_pt - result[-1]) > 0.1:
+        if np.linalg.norm(goal_pt - result[-1]) > 1e-6:
             result.append(goal_pt)
         return result

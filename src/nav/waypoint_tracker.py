@@ -57,11 +57,13 @@ class WaypointTracker:
     def __init__(
         self,
         threshold: float = 1.5,
+        final_threshold: float | None = None,
         stuck_timeout: float = 10.0,
         stuck_dist: float = 0.15,
         stuck_yaw_rad: float = 0.35,  # ~20° — yaw drift below this counts as "stuck"
     ) -> None:
         self._threshold = threshold
+        self._final_threshold = threshold if final_threshold is None else final_threshold
         self._stuck_timeout = stuck_timeout
         self._stuck_dist = stuck_dist
         self._stuck_yaw = stuck_yaw_rad
@@ -126,7 +128,9 @@ class WaypointTracker:
 
         # -- Arrival check ---------------------------------------------------
         wp = self._path[self._wp_index]
-        if np.linalg.norm(robot_pos[:2] - wp[:2]) < self._threshold:
+        is_final_wp = self._wp_index >= len(self._path) - 1
+        threshold = self._final_threshold if is_final_wp else self._threshold
+        if np.linalg.norm(robot_pos[:2] - wp[:2]) < threshold:
             self._wp_index += 1
             self._last_progress_time = time.time()
             self._last_progress_pos = robot_pos.copy()
