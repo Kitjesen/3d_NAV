@@ -1014,6 +1014,23 @@ def latest_livox_sdk_event():
     return status, {"returncode": rc, "latest_event": line}
 
 
+def netdev_state(name):
+    base = f"/sys/class/net/{name}"
+    evidence = {"interface": name}
+    for field in ("operstate", "carrier"):
+        path = os.path.join(base, field)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                evidence[field] = fh.read().strip()
+        except OSError as exc:
+            evidence[f"{field}_error"] = str(exc)
+    rc, out, err = run(["ip", "-br", "addr", "show", name], timeout=2)
+    evidence["ip_br"] = out.strip()
+    if err:
+        evidence["ip_error"] = err
+    return evidence
+
+
 def add(check_id, status, level, message, evidence=None):
     checks.append(
         {
@@ -1070,6 +1087,14 @@ if active_legacy:
     )
 else:
     add("service.legacy_conflicts", "pass", "p0", "no active legacy localization services")
+
+eth0 = netdev_state(os.environ.get("LINGTU_LIDAR_NETDEV", "eth0"))
+if eth0.get("carrier") == "1":
+    add("livox.netdev_carrier", "pass", "p0", "LiDAR network interface has carrier", eth0)
+elif "carrier" in eth0:
+    add("livox.netdev_carrier", "fail", "p0", "LiDAR network interface has no carrier", eth0)
+else:
+    add("livox.netdev_carrier", "warn", "p1", "could not inspect LiDAR network interface carrier", eth0)
 
 livox_event, livox_evidence = latest_livox_sdk_event()
 if livox_event == "success":

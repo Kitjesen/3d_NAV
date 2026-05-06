@@ -550,6 +550,9 @@ def test_lingtu_doctor_json_gates_runtime_readiness_freshness():
     assert "livox.sdk_init" in text
     assert "latest_livox_sdk_event" in text
     assert "Init lds lidar success" in text
+    assert "livox.netdev_carrier" in text
+    assert "LINGTU_LIDAR_NETDEV" in text
+    assert "/sys/class/net/{name}" in text
     assert "bind failed" in text
     assert "gateway.slam_stream" in text
     assert "gateway.localization_status" in text
