@@ -344,6 +344,17 @@ def test_policy_nav_smoke_pass_fail_gates_are_conservative():
     assert policy_nav_smoke._passes_nav(nav, min_motion=0.20) is False
 
 
+def test_policy_nav_smoke_accepts_explicit_policy_argument():
+    from sim.scripts import policy_nav_smoke
+
+    args = policy_nav_smoke._build_parser().parse_args(
+        ["--policy", "/tmp/policy.onnx", "--direct-only"]
+    )
+
+    assert args.policy == "/tmp/policy.onnx"
+    assert args.direct_only is True
+
+
 def test_mujoco_camera_preserves_metric_depth_output():
     from sim.engine.mujoco.camera import MuJoCoCamera
 
