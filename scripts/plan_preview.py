@@ -14,11 +14,13 @@ calls preview_plan(), prints JSON evidence, and exits.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import os
 import pickle
 import platform
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -414,7 +416,7 @@ def make_odom(start: list[float], planning_frame: str) -> Any:
     return Odometry(pose=Pose(float(start[0]), float(start[1]), float(start[2])), frame_id=planning_frame)
 
 
-def run_navigation_preview(
+def run_navigation_preview_inprocess(
     *,
     tomogram_path: Path,
     case: PreviewCase,
@@ -474,6 +476,163 @@ def run_navigation_preview(
     }
 
 
+def run_navigation_preview(
+    *,
+    tomogram_path: Path,
+    case: PreviewCase,
+    planner: str,
+    planning_frame: str,
+    obstacle_thr: float,
+    timeout_s: float,
+    downsample_dist: float,
+) -> dict[str, Any]:
+    payload = {
+        "case": {
+            "name": case.name,
+            "start": case.start,
+            "goal": case.goal,
+            "source": case.source,
+        },
+        "tomogram": str(tomogram_path),
+        "planner": planner,
+        "planning_frame": planning_frame,
+        "obstacle_thr": obstacle_thr,
+        "timeout_s": timeout_s,
+        "downsample_dist": downsample_dist,
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    cmd = [sys.executable, str(SCRIPT_PATH), "--_child-preview", encoded]
+    wall_timeout = max(float(timeout_s) + 3.0, 5.0)
+    t0 = time.time()
+    try:
+        proc = subprocess.run(
+            cmd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=wall_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "planner": planner,
+            "backend_class": None,
+            "backend_available": False,
+            "backend_load_error": "",
+            "has_map": False,
+            "wall_ms": round((time.time() - t0) * 1000.0, 3),
+            "preview": {
+                "ok": True,
+                "feasible": False,
+                "reasons": ["planning_timeout"],
+                "error": f"plan preview subprocess timed out after {wall_timeout:.1f}s",
+            },
+            "first_point": None,
+            "last_point": None,
+            "segments_m": [],
+            "native_output_tail": tail_lines((exc.stdout or "") + "\n" + (exc.stderr or "")),
+        }
+
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
+    if proc.returncode != 0:
+        return {
+            "planner": planner,
+            "backend_class": None,
+            "backend_available": False,
+            "backend_load_error": "",
+            "has_map": False,
+            "wall_ms": round((time.time() - t0) * 1000.0, 3),
+            "preview": {
+                "ok": True,
+                "feasible": False,
+                "reasons": ["planning_subprocess_failed"],
+                "error": f"plan preview subprocess exited {proc.returncode}",
+            },
+            "first_point": None,
+            "last_point": None,
+            "segments_m": [],
+            "native_output_tail": tail_lines(stdout + "\n" + stderr),
+        }
+
+    try:
+        result = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        return {
+            "planner": planner,
+            "backend_class": None,
+            "backend_available": False,
+            "backend_load_error": "",
+            "has_map": False,
+            "wall_ms": round((time.time() - t0) * 1000.0, 3),
+            "preview": {
+                "ok": True,
+                "feasible": False,
+                "reasons": ["planning_subprocess_invalid_json"],
+                "error": str(exc),
+            },
+            "first_point": None,
+            "last_point": None,
+            "segments_m": [],
+            "native_output_tail": tail_lines(stdout + "\n" + stderr),
+        }
+    result["wall_ms"] = round((time.time() - t0) * 1000.0, 3)
+    if stderr:
+        result.setdefault("native_output_tail", [])
+        result["native_output_tail"].extend(tail_lines(stderr))
+        result["native_output_tail"] = result["native_output_tail"][-40:]
+    return result
+
+
+def child_preview(encoded_payload: str) -> int:
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded_payload.encode("ascii")).decode("utf-8")
+        )
+        case_raw = payload["case"]
+        case = PreviewCase(
+            name=str(case_raw["name"]),
+            start=point3(case_raw["start"]),
+            goal=point3(case_raw["goal"]),
+            source=str(case_raw.get("source") or "child"),
+        )
+        result = run_navigation_preview_inprocess(
+            tomogram_path=Path(payload["tomogram"]).expanduser(),
+            case=case,
+            planner=str(payload["planner"]),
+            planning_frame=str(payload["planning_frame"]),
+            obstacle_thr=float(payload["obstacle_thr"]),
+            timeout_s=float(payload["timeout_s"]),
+            downsample_dist=float(payload["downsample_dist"]),
+        )
+        print(json.dumps(result, allow_nan=False, separators=(",", ":"), sort_keys=True))
+        return 0
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "preview": {
+                        "ok": True,
+                        "feasible": False,
+                        "reasons": ["planning_child_exception"],
+                        "error": str(exc),
+                    },
+                    "backend_available": False,
+                    "backend_class": None,
+                    "backend_load_error": "",
+                    "has_map": False,
+                    "native_output_tail": [],
+                },
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        return 0
+
+
 def summarize_case(
     info: TomogramInfo,
     case: PreviewCase,
@@ -485,6 +644,7 @@ def summarize_case(
     timeout_s: float,
     downsample_dist: float,
     allow_out_of_bounds: bool,
+    pct_runtime_libs: dict[str, Any],
 ) -> dict[str, Any]:
     start_in_bounds = info.in_bounds(case.start)
     goal_in_bounds = info.in_bounds(case.goal)
@@ -512,6 +672,18 @@ def summarize_case(
                 "skipped": True,
                 "reasons": reasons,
                 "error": ",".join(reasons),
+            }
+        )
+        return result
+    if planner == "pct" and not bool(pct_runtime_libs.get("ok", False)):
+        result.update(
+            {
+                "skipped": True,
+                "reasons": ["pct_runtime_libs_missing"],
+                "error": ",".join(pct_runtime_libs.get("missing") or ["pct_runtime_libs_missing"]),
+                "backend_available": False,
+                "backend_class": "_PCTBackend",
+                "backend_load_error": "PCT runtime libraries are missing",
             }
         )
         return result
@@ -554,13 +726,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strict", action="store_true", help="Fail if any case is infeasible, backend unavailable, or endpoints are out of bounds.")
     parser.add_argument("--allow-out-of-bounds", action="store_true", help="Do not make --strict fail on out-of-bounds endpoints.")
     parser.add_argument("--compact", action="store_true", help="Print compact JSON.")
+    parser.add_argument("--_child-preview", help=argparse.SUPPRESS)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    if args._child_preview:
+        return child_preview(args._child_preview)
     map_root = resolve_map_root(args.map_root)
     tomogram_path = resolve_tomogram(map_root, args.tomogram)
+    pct_libs = pct_runtime_lib_report()
 
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -574,7 +750,7 @@ def main(argv: list[str] | None = None) -> int:
         "planning_frame": args.planning_frame,
         "planner": args.planner,
         "strict": bool(args.strict),
-        "pct_runtime_libs": pct_runtime_lib_report(),
+        "pct_runtime_libs": pct_libs,
         "tomogram": None,
         "last_pose": None,
         "last_pose_in_bounds": None,
@@ -619,6 +795,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_s=args.timeout,
                 downsample_dist=args.downsample_dist,
                 allow_out_of_bounds=bool(args.allow_out_of_bounds),
+                pct_runtime_libs=pct_libs,
             )
             for case in cases
         ]
@@ -646,9 +823,9 @@ def main(argv: list[str] | None = None) -> int:
         report["error"] = str(exc)
 
     if args.compact:
-        print(json.dumps(report, separators=(",", ":"), sort_keys=True))
+        print(json.dumps(report, allow_nan=False, separators=(",", ":"), sort_keys=True))
     else:
-        print(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(report, allow_nan=False, indent=2, sort_keys=True))
 
     if args.strict and not report["ok"]:
         return 1

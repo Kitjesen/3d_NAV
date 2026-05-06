@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pickle
+import subprocess
 import sys
 from pathlib import Path
 
@@ -105,12 +107,73 @@ def test_out_of_bounds_case_is_skipped_before_native_planner(tmp_path):
         timeout_s=0.1,
         downsample_dist=2.0,
         allow_out_of_bounds=False,
+        pct_runtime_libs={"ok": True},
     )
 
     assert result["skipped"] is True
     assert result["reasons"] == ["start_out_of_bounds"]
     assert result["feasible"] is False
     assert "backend_class" not in result
+
+
+def test_main_outputs_strict_json_for_astar_preview(tmp_path):
+    tool = _load_tool()
+    _write_tomogram(tmp_path)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(Path(tool.__file__)),
+            "--map-root",
+            str(tmp_path),
+            "--planner",
+            "astar",
+            "--internal-only",
+            "--strict",
+            "--compact",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    json.dumps(payload, allow_nan=False)
+    assert proc.stderr == ""
+    assert payload["ok"] is True
+    assert payload["cases"][0]["feasible"] is True
+
+
+def test_missing_aarch64_pct_libs_skip_native_backend(tmp_path):
+    tool = _load_tool()
+    tomo = _write_tomogram(tmp_path)
+    info = tool.load_tomogram_info(tomo)
+
+    result = tool.summarize_case(
+        info,
+        tool.PreviewCase(
+            "internal",
+            start=[9.0, 19.5, 0.0],
+            goal=[10.0, 20.0, 0.0],
+            source="test",
+        ),
+        tomogram_path=tomo,
+        planner="pct",
+        planning_frame="odom",
+        obstacle_thr=49.9,
+        timeout_s=0.1,
+        downsample_dist=2.0,
+        allow_out_of_bounds=False,
+        pct_runtime_libs={"ok": False, "missing": ["ele_planner.cpython-310-aarch64-linux-gnu.so"]},
+    )
+
+    assert result["skipped"] is True
+    assert result["reasons"] == ["pct_runtime_libs_missing"]
+    assert result["backend_available"] is False
+    assert "ele_planner" in result["error"]
 
 
 def test_aarch64_pct_runtime_report_lists_missing_root_libs(tmp_path):
