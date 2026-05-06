@@ -125,6 +125,36 @@ def test_navigation_plan_preview_is_non_motion_and_typed():
     assert gateway.cmd_vel.msg_count == 0
 
 
+def test_navigation_plan_preview_does_not_publish_any_control_outputs():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import PlanPreviewRequest
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    post_plan = _endpoint(gateway, "/api/v1/navigation/plan")
+
+    asyncio.run(
+        post_plan(
+            PlanPreviewRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                client_id="web",
+            )
+        )
+    )
+
+    assert gateway.goal_pose.msg_count == 0
+    assert gateway.cmd_vel.msg_count == 0
+    assert gateway.instruction.msg_count == 0
+    assert gateway.stop_cmd.msg_count == 0
+    assert gateway.cancel.msg_count == 0
+    assert gateway.mode_cmd.msg_count == 0
+
+
 def test_navigation_goal_requests_are_map_frame_only():
     from gateway.schemas import ClickNavRequest, GoalRequest, PlanPreviewRequest
 
@@ -384,6 +414,39 @@ def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
     assert nav.calls == [(1.0, 2.0, 0.0)]
     assert sent_goals == []
     assert gateway.goal_pose.msg_count == 0
+
+
+def test_goal_route_rejects_infeasible_preview_with_instruction_without_any_publish():
+    from gateway.gateway_module import GatewayModule, GoalRequest
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav(feasible=False, reasons=["blocked_by_costmap"])
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    post_goal = _endpoint(gateway, "/api/v1/goal")
+
+    response = asyncio.run(
+        post_goal(
+            GoalRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                instruction="dock",
+                request_id="blocked-goal-with-instruction",
+                client_id="web",
+            )
+        )
+    )
+    model = GatewayErrorResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert model.error == "navigation_plan_infeasible"
+    assert model.detail["preview"]["reasons"] == ["blocked_by_costmap"]
+    assert nav.calls == [(1.0, 2.0, 0.0)]
+    assert gateway.goal_pose.msg_count == 0
+    assert gateway.instruction.msg_count == 0
 
 
 def test_goal_route_rejects_safety_stop_without_planning_or_publishing():
@@ -650,6 +713,71 @@ def test_direct_motion_commands_reject_safety_stop_without_publishing():
     assert instruction_model.command.name == "instruction"
     assert gateway.cmd_vel.msg_count == 0
     assert gateway.instruction.msg_count == 0
+
+
+def test_cmd_vel_rejects_safety_stop_without_publishing_and_emits_rejected_ack():
+    from gateway.gateway_module import CmdVelRequest, GatewayModule
+    from gateway.schemas import GatewayErrorResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    with gateway._state_lock:
+        gateway._safety = {"level": 2}
+    post_cmd_vel = _endpoint(gateway, "/api/v1/cmd_vel")
+    queue = gateway._sse_subscribe()
+
+    try:
+        response = asyncio.run(
+            post_cmd_vel(
+                CmdVelRequest(
+                    vx=0.2,
+                    wz=0.1,
+                    request_id="safety-stop-cmd-ack",
+                    client_id="web",
+                )
+            )
+        )
+        event = queue.get_nowait()
+    finally:
+        gateway._sse_unsubscribe(queue)
+    model = GatewayErrorResponse.model_validate(_payload(response))
+
+    assert response.status_code == 409
+    assert model.error == "safety_stop"
+    assert model.command is not None
+    assert model.command.accepted is False
+    assert gateway.cmd_vel.msg_count == 0
+    assert event["type"] == "command_ack"
+    assert event["data"]["status_code"] == 409
+    assert event["data"]["command"]["name"] == "cmd_vel"
+    assert event["data"]["command"]["accepted"] is False
+
+
+def test_cmd_vel_replays_duplicate_request_id_without_republish():
+    from gateway.gateway_module import CmdVelRequest, GatewayModule
+    from gateway.schemas import ControlCommandResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    post_cmd_vel = _endpoint(gateway, "/api/v1/cmd_vel")
+    body = CmdVelRequest(
+        vx=0.2,
+        vy=0.0,
+        wz=0.1,
+        request_id="cmd-001",
+        client_id="web",
+    )
+
+    first = asyncio.run(post_cmd_vel(body))
+    second = asyncio.run(post_cmd_vel(body))
+    first_model = ControlCommandResponse.model_validate(first)
+    second_model = ControlCommandResponse.model_validate(second)
+
+    assert first_model.ok is True
+    assert first_model.command.name == "cmd_vel"
+    assert first_model.command.replay is False
+    assert second_model.command.replay is True
+    assert gateway.cmd_vel.msg_count == 1
 
 
 def test_cmd_vel_rejects_non_finite_vy():
