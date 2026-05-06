@@ -147,6 +147,15 @@ def test_main_outputs_strict_json_for_astar_preview(tmp_path):
     assert payload["cases"][0]["feasible"] is True
 
 
+def test_extract_first_json_object_tolerates_native_trailing_stdout():
+    tool = _load_tool()
+
+    payload, extra = tool.extract_first_json_object('{"ok":true}\nshape: 91, 6\n')
+
+    assert payload == {"ok": True}
+    assert "shape: 91" in extra
+
+
 def test_missing_aarch64_pct_libs_skip_native_backend(tmp_path):
     tool = _load_tool()
     tomo = _write_tomogram(tmp_path)

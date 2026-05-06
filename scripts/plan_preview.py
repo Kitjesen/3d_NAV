@@ -365,6 +365,21 @@ def tail_lines(text: str, max_lines: int = 40) -> list[str]:
     return lines[-max_lines:]
 
 
+def extract_first_json_object(text: str) -> tuple[dict[str, Any] | None, str]:
+    for index, line in enumerate(text.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            remaining = "\n".join(text.splitlines()[:index] + text.splitlines()[index + 1 :])
+            return parsed, remaining
+    return None, text
+
+
 def call_with_captured_fds(fn: Any) -> tuple[Any, str]:
     """Run fn while capturing Python and native stdout/stderr writes."""
 
@@ -557,9 +572,8 @@ def run_navigation_preview(
             "native_output_tail": tail_lines(stdout + "\n" + stderr),
         }
 
-    try:
-        result = json.loads(stdout)
-    except json.JSONDecodeError as exc:
+    result, unparsed_stdout = extract_first_json_object(stdout)
+    if result is None:
         return {
             "planner": planner,
             "backend_class": None,
@@ -571,7 +585,7 @@ def run_navigation_preview(
                 "ok": True,
                 "feasible": False,
                 "reasons": ["planning_subprocess_invalid_json"],
-                "error": str(exc),
+                "error": "plan preview subprocess did not emit a JSON object",
             },
             "first_point": None,
             "last_point": None,
@@ -579,9 +593,10 @@ def run_navigation_preview(
             "native_output_tail": tail_lines(stdout + "\n" + stderr),
         }
     result["wall_ms"] = round((time.time() - t0) * 1000.0, 3)
-    if stderr:
+    extra_output = "\n".join(part for part in (unparsed_stdout, stderr) if part)
+    if extra_output:
         result.setdefault("native_output_tail", [])
-        result["native_output_tail"].extend(tail_lines(stderr))
+        result["native_output_tail"].extend(tail_lines(extra_output))
         result["native_output_tail"] = result["native_output_tail"][-40:]
     return result
 
