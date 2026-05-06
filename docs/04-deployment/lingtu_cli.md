@@ -115,6 +115,25 @@ The optional `yaw` is in radians. It is forwarded to Gateway `/api/v1/goal` and
 published as the map-frame pose orientation; when omitted, the heading defaults
 to `0.0`.
 
+### `plan-preview` - offline tomogram planner gate
+
+```bash
+lingtu plan-preview --internal-only --strict
+lingtu plan-preview --start -9.974 -8.141 0 --goal 2.826 -6.741 0 --strict
+```
+
+This command is the safest planner check. It does not start `lingtu.service`,
+does not call Gateway, does not send `/api/v1/goal`, and does not publish
+`cmd_vel`. It loads `<map-root>/active/tomogram.pickle`, injects synthetic
+odometry into `NavigationModule`, calls `preview_plan()`, prints JSON evidence,
+and exits.
+
+Use it before any real navigation session when validating that the active
+tomogram and planner runtime can produce a feasible global path. The output
+reports tomogram bounds, `last_pose.txt` bounds, PCT runtime library status,
+planner backend class/load errors, start/goal bounds, path point count,
+distance, per-segment spacing, and plan latency.
+
 ### Exploration profiles and Gateway contract
 
 `python lingtu.py explore` runs the Wavefront frontier backend, while

@@ -44,6 +44,7 @@
 #   lingtu soak --duration 120 --json --strict # non-motion readiness soak
 #   lingtu slamcheck super_lio # switch, verify Super-LIO Gateway contract, rollback
 #   lingtu slamcompare --map <name> # localizer vs Super-LIO relocation non-motion gate
+#   lingtu plan-preview --internal-only --strict # offline tomogram planner preview, no motion
 #   lingtu routecheck --map <name> --goal X Y YAW # route A/B preflight, no motion
 #   lingtu routecompare --map <name> --goal X Y YAW --allow-motion # route A/B motion run
 set -u
@@ -2652,6 +2653,22 @@ sys.exit(1 if violations else 0)
 PY
 }
 
+# -- Subcommand: plan-preview --
+plan_preview_usage() {
+    echo "Usage: lingtu plan-preview [--tomogram PATH] [--map-root DIR] [--start X Y [Z]] [--goal X Y [Z]] [--internal-only] [--strict]"
+    echo "Runs an offline NavigationModule.preview_plan() against a tomogram. No services, Gateway calls, goals, or cmd_vel are used."
+}
+
+cmd_plan_preview() {
+    local map_root
+    map_root="$(lingtu_maps_root)"
+    if [ ! -f "$SCRIPT_DIR/plan_preview.py" ]; then
+        echo -e "${R}FAIL${N}: plan preview helper not found: $SCRIPT_DIR/plan_preview.py"
+        return 1
+    fi
+    python3 "$SCRIPT_DIR/plan_preview.py" --map-root "$map_root" "$@"
+}
+
 # -- Subcommand: routecheck --
 routecheck_usage() {
     echo "Usage: lingtu routecheck --map NAME --goal X Y [YAW] [--artifact-dir DIR] [--candidate-warmup SEC] [--with-slamcompare] [--slamcompare-duration SEC] [--slamcompare-warmup SEC]"
@@ -3469,6 +3486,7 @@ case "${1:-status}" in
     soak|field-soak|readiness-soak) shift; cmd_soak "$@" ;;
     slamcheck|slam-check) shift; cmd_slamcheck "$@" ;;
     slamcompare|slam-compare|super-lio-compare|super_lio_compare|superlio-compare) shift; cmd_slamcompare "$@" ;;
+    plan-preview|planpreview|preview-plan) shift; cmd_plan_preview "$@" ;;
     routecheck|route-check|route-preflight|super-lio-routecheck|super_lio_routecheck) shift; cmd_routecheck "$@" ;;
     routecompare|route-compare|super-lio-routecompare|super_lio_routecompare) shift; cmd_routecompare "$@" ;;
     super-lio-smoke|super_lio_smoke|superlio-smoke) shift; cmd_slamcheck super_lio "$@" ;;

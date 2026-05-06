@@ -797,6 +797,23 @@ def test_lingtu_routecheck_is_non_motion_route_preflight():
     assert "cmd_nav" not in impl
 
 
+def test_lingtu_plan_preview_is_offline_non_motion_planner_gate():
+    text = _read("scripts/lingtu")
+    start = text.index("plan_preview_usage()")
+    end = text.index("# -- Subcommand: routecheck --", start)
+    impl = text[start:end]
+
+    assert "Usage: lingtu plan-preview" in text
+    assert "plan-preview|planpreview|preview-plan" in text
+    assert 'python3 "$SCRIPT_DIR/plan_preview.py"' in impl
+    assert "--map-root \"$map_root\"" in impl
+    assert "Gateway calls, goals, or cmd_vel" in impl
+    assert "/api/v1/goal" not in impl
+    assert "/api/v1/navigation/plan" not in impl
+    assert "/api/v1/cmd_vel" not in impl
+    assert "cmd_nav" not in impl
+
+
 def test_lingtu_routecompare_is_allow_motion_gated():
     text = _read("scripts/lingtu")
     start = text.index("routecompare_usage()")
