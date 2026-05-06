@@ -491,6 +491,54 @@ def run_navigation_preview_inprocess(
     }
 
 
+def join_output(*parts: Any) -> str:
+    text_parts: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        if isinstance(part, bytes):
+            text_parts.append(part.decode("utf-8", errors="replace"))
+        else:
+            text_parts.append(str(part))
+    return "\n".join(text_parts)
+
+
+def subprocess_failure_result(
+    *,
+    planner: str,
+    reason: str,
+    error: str,
+    wall_ms: float,
+    output: str = "",
+) -> dict[str, Any]:
+    return {
+        "planner": planner,
+        "backend_class": None,
+        "backend_available": False,
+        "backend_load_error": "",
+        "has_map": False,
+        "wall_ms": round(wall_ms, 3),
+        "preview": {
+            "ok": True,
+            "feasible": False,
+            "reasons": [reason],
+            "error": error,
+        },
+        "first_point": None,
+        "last_point": None,
+        "segments_m": [],
+        "native_output_tail": tail_lines(output),
+    }
+
+
+def append_native_output(result: dict[str, Any], output: str) -> dict[str, Any]:
+    if output:
+        result.setdefault("native_output_tail", [])
+        result["native_output_tail"].extend(tail_lines(output))
+        result["native_output_tail"] = result["native_output_tail"][-40:]
+    return result
+
+
 def run_navigation_preview(
     *,
     tomogram_path: Path,
@@ -531,74 +579,36 @@ def run_navigation_preview(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        return {
-            "planner": planner,
-            "backend_class": None,
-            "backend_available": False,
-            "backend_load_error": "",
-            "has_map": False,
-            "wall_ms": round((time.time() - t0) * 1000.0, 3),
-            "preview": {
-                "ok": True,
-                "feasible": False,
-                "reasons": ["planning_timeout"],
-                "error": f"plan preview subprocess timed out after {wall_timeout:.1f}s",
-            },
-            "first_point": None,
-            "last_point": None,
-            "segments_m": [],
-            "native_output_tail": tail_lines((exc.stdout or "") + "\n" + (exc.stderr or "")),
-        }
+        return subprocess_failure_result(
+            planner=planner,
+            reason="planning_timeout",
+            error=f"plan preview subprocess timed out after {wall_timeout:.1f}s",
+            wall_ms=(time.time() - t0) * 1000.0,
+            output=join_output(exc.stdout, exc.stderr),
+        )
 
     stdout = proc.stdout or ""
     stderr = proc.stderr or ""
     if proc.returncode != 0:
-        return {
-            "planner": planner,
-            "backend_class": None,
-            "backend_available": False,
-            "backend_load_error": "",
-            "has_map": False,
-            "wall_ms": round((time.time() - t0) * 1000.0, 3),
-            "preview": {
-                "ok": True,
-                "feasible": False,
-                "reasons": ["planning_subprocess_failed"],
-                "error": f"plan preview subprocess exited {proc.returncode}",
-            },
-            "first_point": None,
-            "last_point": None,
-            "segments_m": [],
-            "native_output_tail": tail_lines(stdout + "\n" + stderr),
-        }
+        return subprocess_failure_result(
+            planner=planner,
+            reason="planning_subprocess_failed",
+            error=f"plan preview subprocess exited {proc.returncode}",
+            wall_ms=(time.time() - t0) * 1000.0,
+            output=join_output(stdout, stderr),
+        )
 
     result, unparsed_stdout = extract_first_json_object(stdout)
     if result is None:
-        return {
-            "planner": planner,
-            "backend_class": None,
-            "backend_available": False,
-            "backend_load_error": "",
-            "has_map": False,
-            "wall_ms": round((time.time() - t0) * 1000.0, 3),
-            "preview": {
-                "ok": True,
-                "feasible": False,
-                "reasons": ["planning_subprocess_invalid_json"],
-                "error": "plan preview subprocess did not emit a JSON object",
-            },
-            "first_point": None,
-            "last_point": None,
-            "segments_m": [],
-            "native_output_tail": tail_lines(stdout + "\n" + stderr),
-        }
+        return subprocess_failure_result(
+            planner=planner,
+            reason="planning_subprocess_invalid_json",
+            error="plan preview subprocess did not emit a JSON object",
+            wall_ms=(time.time() - t0) * 1000.0,
+            output=join_output(stdout, stderr),
+        )
     result["wall_ms"] = round((time.time() - t0) * 1000.0, 3)
-    extra_output = "\n".join(part for part in (unparsed_stdout, stderr) if part)
-    if extra_output:
-        result.setdefault("native_output_tail", [])
-        result["native_output_tail"].extend(tail_lines(extra_output))
-        result["native_output_tail"] = result["native_output_tail"][-40:]
-    return result
+    return append_native_output(result, join_output(unparsed_stdout, stderr))
 
 
 def child_preview(encoded_payload: str) -> int:
@@ -722,6 +732,31 @@ def summarize_case(
     return result
 
 
+def case_failures(
+    cases: list[dict[str, Any]],
+    *,
+    strict: bool,
+    allow_out_of_bounds: bool,
+) -> list[str]:
+    failures: list[str] = []
+    for case in cases:
+        name = case.get("name")
+        if case.get("skipped"):
+            reasons = case.get("reasons") or ["skipped"]
+            failures.extend(f"{name}:{reason}" for reason in reasons)
+            continue
+        if not case.get("backend_available"):
+            failures.append(f"{name}:backend_unavailable")
+        if not case.get("feasible"):
+            failures.append(f"{name}:infeasible")
+        if strict and not allow_out_of_bounds:
+            if not case.get("start_in_bounds"):
+                failures.append(f"{name}:start_out_of_bounds")
+            if not case.get("goal_in_bounds"):
+                failures.append(f"{name}:goal_out_of_bounds")
+    return failures
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Offline non-motion plan preview against an active tomogram."
@@ -815,21 +850,11 @@ def main(argv: list[str] | None = None) -> int:
             for case in cases
         ]
 
-        failures = []
-        for case in report["cases"]:
-            if case.get("skipped"):
-                reasons = case.get("reasons") or ["skipped"]
-                failures.extend(f"{case.get('name')}:{reason}" for reason in reasons)
-                continue
-            if not case.get("backend_available"):
-                failures.append(f"{case.get('name')}:backend_unavailable")
-            if not case.get("feasible"):
-                failures.append(f"{case.get('name')}:infeasible")
-            if args.strict and not args.allow_out_of_bounds:
-                if not case.get("start_in_bounds"):
-                    failures.append(f"{case.get('name')}:start_out_of_bounds")
-                if not case.get("goal_in_bounds"):
-                    failures.append(f"{case.get('name')}:goal_out_of_bounds")
+        failures = case_failures(
+            report["cases"],
+            strict=bool(args.strict),
+            allow_out_of_bounds=bool(args.allow_out_of_bounds),
+        )
         report["ok"] = not failures
         if failures:
             report["error"] = ";".join(failures)

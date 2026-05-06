@@ -156,6 +156,52 @@ def test_extract_first_json_object_tolerates_native_trailing_stdout():
     assert "shape: 91" in extra
 
 
+def test_subprocess_failure_result_keeps_standard_case_shape():
+    tool = _load_tool()
+
+    result = tool.subprocess_failure_result(
+        planner="pct",
+        reason="planning_timeout",
+        error="timed out",
+        wall_ms=123.4567,
+        output="native line\n",
+    )
+
+    assert result["planner"] == "pct"
+    assert result["backend_available"] is False
+    assert result["preview"]["feasible"] is False
+    assert result["preview"]["reasons"] == ["planning_timeout"]
+    assert result["segments_m"] == []
+    assert result["native_output_tail"] == ["native line"]
+
+
+def test_case_failures_preserves_strict_bounds_and_backend_reasons():
+    tool = _load_tool()
+
+    failures = tool.case_failures(
+        [
+            {"name": "a", "skipped": True, "reasons": ["start_out_of_bounds"]},
+            {
+                "name": "b",
+                "skipped": False,
+                "backend_available": False,
+                "feasible": False,
+                "start_in_bounds": True,
+                "goal_in_bounds": False,
+            },
+        ],
+        strict=True,
+        allow_out_of_bounds=False,
+    )
+
+    assert failures == [
+        "a:start_out_of_bounds",
+        "b:backend_unavailable",
+        "b:infeasible",
+        "b:goal_out_of_bounds",
+    ]
+
+
 def test_missing_aarch64_pct_libs_skip_native_backend(tmp_path):
     tool = _load_tool()
     tomo = _write_tomogram(tmp_path)
