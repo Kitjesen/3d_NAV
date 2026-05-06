@@ -439,9 +439,22 @@ svc_unit() {
         super_lio_relocation|super_lio_reloc|super-lio-relocation|super-lio-reloc|superlio-relocation|superlio-reloc|relocation)
                     echo "robot-super-lio-relocation.service" ;;
         lingtu|app) echo "lingtu.service" ;;
-        robot-*.service|lingtu.service)
-                    echo "$1" ;;
-        robot-*)    echo "$1.service" ;;
+        robot-lidar|robot-lidar.service)
+                    echo "robot-lidar.service" ;;
+        robot-camera|robot-camera.service)
+                    echo "robot-camera.service" ;;
+        robot-brainstem|robot-brainstem.service)
+                    echo "robot-brainstem.service" ;;
+        robot-fastlio2|robot-fastlio2.service)
+                    echo "robot-fastlio2.service" ;;
+        robot-localizer|robot-localizer.service)
+                    echo "robot-localizer.service" ;;
+        robot-super-lio|robot-super-lio.service)
+                    echo "robot-super-lio.service" ;;
+        robot-super-lio-relocation|robot-super-lio-relocation.service)
+                    echo "robot-super-lio-relocation.service" ;;
+        lingtu.service)
+                    echo "lingtu.service" ;;
         *)          return 1 ;;
     esac
 }
@@ -724,6 +737,7 @@ DATA_NAV_BLOCKERS = {
     "localization_initializing",
     "pose_stale",
 }
+MOVING_NAV_STATES = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY", "RUNNING"}
 
 
 def run(args, timeout=3):
@@ -794,6 +808,17 @@ def command_source_name(control):
     if source in (None, ""):
         return "none"
     return str(source)
+
+
+def navigation_state_name(nav):
+    mission = nav.get("mission") if isinstance(nav, dict) else {}
+    if not isinstance(mission, dict):
+        mission = {}
+    return str(nav.get("state") or mission.get("state") or "unknown")
+
+
+def navigation_state_is_idle(state):
+    return str(state or "").upper() not in MOVING_NAV_STATES
 
 
 def check_age(payload, key, max_age_ms, blockers):
@@ -1361,7 +1386,7 @@ else:
     blockers = readiness.get("blockers") or []
     reason_codes = nav.get("reason_codes") or []
     can_accept = bool(nav.get("can_accept_goal", readiness.get("can_execute_autonomy", False)))
-    state = str(nav.get("state") or nav.get("mission", {}).get("state") or "unknown")
+    state = navigation_state_name(nav)
     control = nav.get("control") or {}
     active_source = command_source_name(control)
     data_blockers = list(
@@ -1400,9 +1425,8 @@ else:
         },
     )
     if non_motion:
-        moving_states = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY"}
         source_idle = str(active_source).lower() in {"", "none", "unknown", "null"}
-        state_idle = state.upper() not in moving_states
+        state_idle = navigation_state_is_idle(state)
         add(
             "safety.non_motion_guard",
             "pass" if source_idle and state_idle else "fail",
@@ -1485,16 +1509,21 @@ if non_motion:
         nav_after_code, nav_after, nav_after_err = http_json("/api/v1/navigation/status", timeout=3)
         nav_after_ok = nav_after_code == 200 and isinstance(nav_after, dict)
         active_after = command_source_name((nav_after or {}).get("control") or {}) if nav_after_ok else "unavailable"
+        state_after = navigation_state_name(nav_after) if nav_after_ok else "unavailable"
         source_idle_after = str(active_after).lower() in {"", "none", "null"}
+        state_idle_after = navigation_state_is_idle(state_after) if nav_after_ok else False
         if not preview_ok:
             status = "fail"
             message = "navigation plan preview endpoint is unavailable or unversioned"
         elif not nav_after_ok:
             status = "fail"
-            message = "navigation plan preview could not verify command source afterwards"
+            message = "navigation plan preview could not verify non-motion state afterwards"
         elif not source_idle_after:
             status = "fail"
             message = "navigation plan preview changed the active command source"
+        elif not state_idle_after:
+            status = "fail"
+            message = "navigation plan preview changed the mission state"
         elif preview_feasible:
             status = "pass"
             message = "navigation plan preview produced a path without taking control"
@@ -1510,6 +1539,7 @@ if non_motion:
                 "offset_m": PLAN_PREVIEW_OFFSET_M,
                 "attempts": attempts,
                 "active_cmd_source_after": active_after,
+                "state_after": state_after,
                 "nav_after_http_status": nav_after_code,
                 "nav_after_error": nav_after_err,
             },
@@ -1848,6 +1878,20 @@ def active_cmd_source(nav):
     return source
 
 
+MOVING_NAV_STATES = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY", "RUNNING"}
+
+
+def navigation_state(nav):
+    mission = nav.get("mission") if isinstance(nav, dict) else {}
+    if not isinstance(mission, dict):
+        mission = {}
+    return str(nav.get("state") or mission.get("state") or "unknown")
+
+
+def navigation_state_idle(state):
+    return str(state or "").upper() not in MOVING_NAV_STATES
+
+
 try:
     _, state = get_json("/api/v1/state")
     odom = state.get("odometry") or {}
@@ -1887,14 +1931,17 @@ for label, dx, dy in offsets:
 try:
     _, nav = get_json("/api/v1/navigation/status")
     source = str(active_cmd_source(nav)).lower()
+    state_after = navigation_state(nav)
 except Exception as exc:
-    print(f"  FAIL: cannot verify command source after preview ({exc})")
+    print(f"  FAIL: cannot verify non-motion state after preview ({exc})")
     raise SystemExit(0)
 
-if source in {"", "none", "null"}:
-    print("  ok: preview did not take control; active_cmd_source_after=none")
-else:
+if source in {"", "none", "null"} and navigation_state_idle(state_after):
+    print(f"  ok: preview did not take control; active_cmd_source_after=none state_after={state_after}")
+elif source not in {"", "none", "null"}:
     print(f"  FAIL: preview changed active_cmd_source_after={source}")
+else:
+    print(f"  FAIL: preview changed state_after={state_after}")
 if endpoint_ok and not path_ok:
     print("  WARN: preview endpoint works, but nearby moving candidates were not feasible")
 PY

@@ -612,10 +612,13 @@ def run_navigation_preview(
 
 
 def child_preview(encoded_payload: str) -> int:
+    t0 = time.time()
+    planner = "unknown"
     try:
         payload = json.loads(
             base64.urlsafe_b64decode(encoded_payload.encode("ascii")).decode("utf-8")
         )
+        planner = str(payload.get("planner") or "unknown")
         case_raw = payload["case"]
         case = PreviewCase(
             name=str(case_raw["name"]),
@@ -626,7 +629,7 @@ def child_preview(encoded_payload: str) -> int:
         result = run_navigation_preview_inprocess(
             tomogram_path=Path(payload["tomogram"]).expanduser(),
             case=case,
-            planner=str(payload["planner"]),
+            planner=planner,
             planning_frame=str(payload["planning_frame"]),
             obstacle_thr=float(payload["obstacle_thr"]),
             timeout_s=float(payload["timeout_s"]),
@@ -637,19 +640,12 @@ def child_preview(encoded_payload: str) -> int:
     except Exception as exc:
         print(
             json.dumps(
-                {
-                    "preview": {
-                        "ok": True,
-                        "feasible": False,
-                        "reasons": ["planning_child_exception"],
-                        "error": str(exc),
-                    },
-                    "backend_available": False,
-                    "backend_class": None,
-                    "backend_load_error": "",
-                    "has_map": False,
-                    "native_output_tail": [],
-                },
+                subprocess_failure_result(
+                    planner=planner,
+                    reason="planning_child_exception",
+                    error=str(exc),
+                    wall_ms=(time.time() - t0) * 1000.0,
+                ),
                 allow_nan=False,
                 separators=(",", ":"),
                 sort_keys=True,

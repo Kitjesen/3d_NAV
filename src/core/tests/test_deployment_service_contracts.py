@@ -5,6 +5,8 @@ import shlex
 import shutil
 import subprocess
 import textwrap
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -83,6 +85,153 @@ def _write_executable(path: Path, text: str) -> None:
     path.chmod(0o755)
 
 
+@contextmanager
+def _gateway_fixture(tmp_path: Path, *, mutate_plan_state: bool = False):
+    script = tmp_path / "gateway_fixture.py"
+    log_path = tmp_path / "gateway_requests.jsonl"
+    script.write_text(
+        textwrap.dedent(
+            r"""
+            import json
+            import sys
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+            log_path = sys.argv[1]
+            mutate_plan_state = sys.argv[2] == "1"
+            mission_state = "IDLE"
+
+
+            def write_log(method, path, body=None):
+                with open(log_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps([method, path, body], separators=(",", ":")) + "\n")
+
+
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self, *_args):
+                    return
+
+                def send_json(self, payload, status=200):
+                    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def do_GET(self):
+                    write_log("GET", self.path)
+                    if self.path == "/ready":
+                        self.send_json({
+                            "ready": True,
+                            "data_ready": True,
+                            "motion_ready": False,
+                            "non_motion_safe": True,
+                            "reasons": ["navigation_blocked:navigation_session_inactive"],
+                            "failed_modules": [],
+                            "runtime": {"summary": {"data_blockers": []}},
+                        })
+                    elif self.path == "/api/v1/health":
+                        self.send_json({
+                            "status": "ok",
+                            "modules_ok": 8,
+                            "modules_fail": 0,
+                            "sensors": {"slam": {"status": "ok", "hz": 10.0}},
+                            "map_points": 5000,
+                            "has_odom": True,
+                        })
+                    elif self.path == "/api/v1/localization/status":
+                        self.send_json({
+                            "state": "TRACKING",
+                            "ready": True,
+                            "pose_fresh": True,
+                            "has_odometry": True,
+                            "odom_age_ms": 80.0,
+                            "cloud_age_ms": 90.0,
+                            "diag_age_ms": 80.0,
+                            "localizer_health_topic_age_ms": 80.0,
+                            "map_cloud_fresh": True,
+                            "confidence": 0.96,
+                            "backend": "localizer",
+                        })
+                    elif self.path == "/api/v1/navigation/status":
+                        self.send_json({
+                            "schema_version": 1,
+                            "state": mission_state,
+                            "can_accept_goal": True,
+                            "readiness": {
+                                "can_accept_goal": True,
+                                "can_execute_autonomy": True,
+                                "blockers": [],
+                                "advisories": [],
+                            },
+                            "control": {"active_cmd_source": "none"},
+                        })
+                    elif self.path == "/api/v1/state":
+                        self.send_json({
+                            "schema_version": 1,
+                            "odometry": {"x": 1.0, "y": 2.0, "z": 0.0, "yaw": 0.3},
+                            "localization": {"state": "TRACKING", "ready": True},
+                            "navigation": {"control": {"active_cmd_source": "none"}},
+                        })
+                    else:
+                        self.send_json({}, status=404)
+
+                def do_POST(self):
+                    global mission_state
+                    length = int(self.headers.get("Content-Length") or "0")
+                    body = self.rfile.read(length).decode("utf-8", "replace")
+                    write_log("POST", self.path, body)
+                    if self.path == "/api/v1/navigation/plan":
+                        if mutate_plan_state:
+                            mission_state = "RUNNING"
+                        self.send_json({
+                            "schema_version": 1,
+                            "ok": True,
+                            "feasible": True,
+                            "count": 3,
+                            "planner": "pct",
+                            "reasons": [],
+                        })
+                    else:
+                        self.send_json({}, status=404)
+
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            print(server.server_address[1], flush=True)
+            server.serve_forever()
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    cmd = (
+        f"python3 -u {shlex.quote(_wsl_path(script))} "
+        f"{shlex.quote(_wsl_path(log_path))} {'1' if mutate_plan_state else '0'}"
+    )
+    proc = subprocess.Popen(
+        ["bash", "-lc", cmd],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+    )
+    try:
+        assert proc.stdout is not None
+        port = proc.stdout.readline().strip()
+        if not port:
+            stderr = proc.stderr.read() if proc.stderr else ""
+            raise AssertionError(f"gateway fixture failed to start: {stderr}")
+        time.sleep(0.1)
+        yield f"http://127.0.0.1:{port}", {"requests_log": log_path}
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
     fake_root = tmp_path / "fake"
     fake_bin = fake_root / "bin"
@@ -103,7 +252,36 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
         #!/usr/bin/env bash
         set -euo pipefail
         echo "systemctl:$*" >> "${FAKE_ROOT}/calls.log"
-        if [ "${1:-}" = "show" ]; then
+        cmd="${1:-}"
+        shift || true
+        case "$cmd" in
+            is-active)
+                quiet=0
+                while [ "$#" -gt 0 ] && [[ "${1:-}" == --* ]]; do
+                    [ "${1:-}" = "--quiet" ] && quiet=1
+                    shift
+                done
+                unit="${1:-}"
+                active=inactive
+                case "$unit" in
+                    robot-lidar.service|robot-camera.service|robot-brainstem.service|robot-fastlio2.service|robot-localizer.service|robot-super-lio.service|robot-super-lio-relocation.service|lingtu.service)
+                        active=active ;;
+                esac
+                case " ${FAKE_LEGACY_ACTIVE:-} " in
+                    *" $unit "*) active=active ;;
+                esac
+                if [ "$quiet" = "1" ]; then
+                    [ "$active" = "active" ]
+                    exit $?
+                fi
+                echo "$active"
+                [ "$active" = "active" ] && exit 0 || exit 3
+                ;;
+            is-enabled)
+                echo enabled
+                exit 0
+                ;;
+            show)
             prop=""
             while [ "$#" -gt 0 ]; do
                 if [ "${1:-}" = "-p" ]; then
@@ -116,9 +294,15 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
             case "$prop" in
                 ActiveState) echo active ;;
                 NRestarts) echo "${FAKE_NRESTARTS:-0}" ;;
+                MainPID) echo 0 ;;
                 *) echo "" ;;
             esac
-        fi
+                exit 0
+                ;;
+            start|stop|restart|reset-failed)
+                exit 0
+                ;;
+        esac
         exit 0
         """,
     )
@@ -207,11 +391,11 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
                 signal="${FAKE_RECOVERY_SIGNAL:-RECOVERED}"
                 action="${FAKE_RECOVERY_ACTION:-none}"
                 if [ "$current" = "super_lio_relocation" ]; then
-                    printf '{"backend":"super_lio_relocation","health_source":"odom_map_cloud","map_save_source":"active_map","saved_map_relocalization_supported":false,"restart_recovery_supported":true,"recovery_method":"restart_super_lio_relocation","relocalization_state":"unsupported","recovery_signal":"%s","recovery_action":"%s"}\n' "$signal" "$action"
+                    printf '{"state":"TRACKING","ready":true,"pose_fresh":true,"has_odometry":true,"odom_age_ms":100.0,"cloud_age_ms":120.0,"diag_age_ms":100.0,"localizer_health_topic_age_ms":100.0,"map_cloud_fresh":true,"confidence":0.91,"backend":"super_lio_relocation","health_source":"odom_map_cloud","map_save_source":"active_map","saved_map_relocalization_supported":false,"restart_recovery_supported":true,"recovery_method":"restart_super_lio_relocation","relocalization_state":"unsupported","recovery_signal":"%s","recovery_action":"%s"}\n' "$signal" "$action"
                 elif [ "$current" = "super_lio" ]; then
-                    printf '{"backend":"super_lio","health_source":"odom_map_cloud","map_save_source":"live_map_cloud_snapshot","saved_map_relocalization_supported":false,"restart_recovery_supported":true,"recovery_method":"restart_super_lio","relocalization_state":"unsupported","recovery_signal":"%s","recovery_action":"%s"}\n' "$signal" "$action"
+                    printf '{"state":"TRACKING","ready":true,"pose_fresh":true,"has_odometry":true,"odom_age_ms":100.0,"cloud_age_ms":120.0,"diag_age_ms":100.0,"localizer_health_topic_age_ms":100.0,"map_cloud_fresh":true,"confidence":0.91,"backend":"super_lio","health_source":"odom_map_cloud","map_save_source":"live_map_cloud_snapshot","saved_map_relocalization_supported":false,"restart_recovery_supported":true,"recovery_method":"restart_super_lio","relocalization_state":"unsupported","recovery_signal":"%s","recovery_action":"%s"}\n' "$signal" "$action"
                 else
-                    printf '{"backend":"localizer","health_source":"localizer_health_topic","map_save_source":"active_map","saved_map_relocalization_supported":true,"restart_recovery_supported":true,"recovery_method":"relocalize_service","relocalization_state":"idle","recovery_signal":"RECOVERED","recovery_action":"none"}\n'
+                    printf '{"state":"TRACKING","ready":true,"pose_fresh":true,"has_odometry":true,"odom_age_ms":80.0,"cloud_age_ms":90.0,"diag_age_ms":80.0,"localizer_health_topic_age_ms":80.0,"map_cloud_fresh":true,"confidence":0.96,"backend":"localizer","health_source":"localizer_health_topic","map_save_source":"active_map","saved_map_relocalization_supported":true,"restart_recovery_supported":true,"recovery_method":"relocalize_service","relocalization_state":"idle","recovery_signal":"RECOVERED","recovery_action":"none"}\n'
                 fi
                 ;;
             */api/v1/state)
@@ -298,8 +482,11 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
             */api/v1/session)
                 echo '{}'
                 ;;
+            */ready)
+                echo '{"ready":true,"data_ready":true,"motion_ready":false,"non_motion_safe":true,"reasons":["navigation_blocked:navigation_session_inactive"],"failed_modules":[],"runtime":{"summary":{"data_blockers":[]}}}'
+                ;;
             */api/v1/health)
-                echo '{"sensors":{"slam":{"hz":10.0}},"map_points":5000}'
+                echo '{"status":"ok","modules_ok":8,"modules_fail":0,"sensors":{"slam":{"status":"ok","hz":10.0}},"map_points":5000,"has_odom":true}'
                 ;;
             */api/v1/map/save)
                 echo "save:$data" >> "${FAKE_ROOT}/calls.log"
@@ -309,6 +496,52 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
                 echo '{}'
                 ;;
         esac
+        """,
+    )
+    _write_executable(
+        fake_bin / "ros2",
+        r"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        case "${1:-} ${2:-}" in
+            "node list")
+                printf '/livox_driver_node\n/lio_node\n/localizer_node\n/camera/camera\n/camera/camera_container\n'
+                ;;
+            "topic info")
+                topic="${3:-}"
+                case "$topic" in
+                    /nav/lidar_scan|/nav/imu|/nav/odometry|/nav/localization_health|/nav/map_cloud|/nav/localization_quality|/camera/color/image_raw|/camera/depth/image_raw|/camera/color/camera_info|/camera/depth/camera_info|/camera/device_status)
+                        pubs=1 ;;
+                    *)
+                        pubs=0 ;;
+                esac
+                printf 'Type: std_msgs/msg/String\nPublisher count: %s\nSubscription count: 1\n' "$pubs"
+                ;;
+            "topic echo")
+                printf 'device_online: true\nconnection_type: usb\ncolor_frame_rate_cur: 30.0\ndepth_frame_rate_cur: 30.0\n'
+                ;;
+            *)
+                ;;
+        esac
+        """,
+    )
+    _write_executable(
+        fake_bin / "journalctl",
+        r"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        echo "May 06 12:00:00 sunrise livox_driver[1]: Init lds lidar success"
+        """,
+    )
+    _write_executable(
+        fake_bin / "ip",
+        r"""
+        #!/usr/bin/env bash
+        set -euo pipefail
+        if [ "${1:-}" = "-br" ]; then
+            iface="${4:-eth0}"
+            printf '%s             UP             192.168.1.5/24\n' "$iface"
+        fi
         """,
     )
 
@@ -574,6 +807,7 @@ def test_lingtu_doctor_json_gates_runtime_readiness_freshness():
     assert "LINGTU_DOCTOR_PLAN_PREVIEW_OFFSET_M" in text
     assert "navigation plan preview produced a path without taking control" in text
     assert "active_cmd_source_after" in text
+    assert "state_after" in text
     assert "Navigation plan preview (non-motion)" in text
     assert "preview did not take control" in text
 
@@ -596,6 +830,71 @@ def test_lingtu_doctor_normalizes_structured_active_command_source():
     assert "def command_source_name(control):" in text
     assert 'source.get("name") or source.get("source") or source.get("owner") or "none"' in text
     assert 'isinstance(s,dict)' in text
+
+
+def test_lingtu_doctor_non_motion_json_runs_without_motion_side_effects(tmp_path):
+    with _gateway_fixture(tmp_path) as (gateway_url, gateway):
+        result, harness = _run_lingtu_command(
+            tmp_path,
+            "doctor --non-motion --json --strict",
+            extra_env={"GW": gateway_url, "LINGTU_LIDAR_NETDEV": "lo"},
+        )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    preview = next(
+        check for check in payload["checks"] if check["id"] == "gateway.navigation_plan_preview"
+    )
+    assert preview["status"] == "pass"
+    assert preview["evidence"]["active_cmd_source_after"] == "none"
+    assert preview["evidence"]["state_after"] == "IDLE"
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    requests = [
+        tuple(json.loads(line)[:2])
+        for line in gateway["requests_log"].read_text(encoding="utf-8").splitlines()
+    ]
+    assert ("POST", "/api/v1/navigation/plan") in requests
+    assert ("POST", "/api/v1/goal") not in requests
+    assert ("POST", "/api/v1/session/start") not in requests
+    assert ("POST", "/api/v1/session/end") not in requests
+    assert "sudo:" not in calls
+    assert "goal:" not in calls
+    assert "session_start:" not in calls
+    assert "session_end" not in calls
+    assert "cmd_vel" not in calls
+    assert "systemctl:restart" not in calls
+    assert "systemctl:stop" not in calls
+
+
+def test_lingtu_doctor_non_motion_preview_fails_if_plan_changes_state(tmp_path):
+    with _gateway_fixture(tmp_path, mutate_plan_state=True) as (gateway_url, gateway):
+        result, harness = _run_lingtu_command(
+            tmp_path,
+            "doctor --non-motion --json --strict",
+            extra_env={"GW": gateway_url, "LINGTU_LIDAR_NETDEV": "lo"},
+        )
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    preview = next(
+        check for check in payload["checks"] if check["id"] == "gateway.navigation_plan_preview"
+    )
+    assert preview["status"] == "fail"
+    assert "mission state" in preview["message"]
+    assert preview["evidence"]["active_cmd_source_after"] == "none"
+    assert preview["evidence"]["state_after"] == "RUNNING"
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    requests = [
+        tuple(json.loads(line)[:2])
+        for line in gateway["requests_log"].read_text(encoding="utf-8").splitlines()
+    ]
+    assert ("POST", "/api/v1/navigation/plan") in requests
+    assert ("POST", "/api/v1/goal") not in requests
+    assert ("POST", "/api/v1/session/start") not in requests
+    assert "goal:" not in calls
+    assert "session_start:" not in calls
+    assert "cmd_vel" not in calls
 
 
 def test_lingtu_soak_is_read_only_non_motion_field_verification():
@@ -890,6 +1189,18 @@ def test_lingtu_nav_goal_rejects_infeasible_plan_preview_before_goal(tmp_path):
     calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
     assert "plan:" in calls
     assert "goal:" not in calls
+
+
+def test_lingtu_svc_rejects_unknown_robot_prefixed_unit(tmp_path):
+    result, harness = _run_lingtu_command(tmp_path, "svc stop robot-unrelated")
+
+    assert result.returncode != 0
+    assert "Usage: lingtu svc stop" in result.stdout
+    calls = harness["root"] / "calls.log"
+    if calls.exists():
+        text = calls.read_text(encoding="utf-8")
+        assert "sudo:systemctl stop robot-unrelated.service" not in text
+        assert "systemctl:stop robot-unrelated.service" not in text
 
 
 def test_lingtu_slamcompare_waits_for_candidate_ready_before_probe(tmp_path):

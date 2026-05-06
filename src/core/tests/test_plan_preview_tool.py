@@ -175,6 +175,26 @@ def test_subprocess_failure_result_keeps_standard_case_shape():
     assert result["native_output_tail"] == ["native line"]
 
 
+def test_child_preview_exception_keeps_standard_case_shape(capsys):
+    tool = _load_tool()
+
+    rc = tool.child_preview("not-base64")
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+
+    assert rc == 0
+    assert result["planner"] == "unknown"
+    assert result["backend_available"] is False
+    assert result["backend_class"] is None
+    assert result["has_map"] is False
+    assert result["preview"]["feasible"] is False
+    assert result["preview"]["reasons"] == ["planning_child_exception"]
+    assert result["first_point"] is None
+    assert result["last_point"] is None
+    assert result["segments_m"] == []
+    assert "wall_ms" in result
+
+
 def test_case_failures_preserves_strict_bounds_and_backend_reasons():
     tool = _load_tool()
 
