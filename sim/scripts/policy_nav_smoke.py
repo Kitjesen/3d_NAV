@@ -92,6 +92,7 @@ def run_direct_policy(
     duration: float,
     linear_x: float,
     angular_z: float,
+    policy_path: str = "",
 ) -> dict[str, Any]:
     from drivers.sim.mujoco_driver_module import MujocoDriverModule
     from sim.engine.core.engine import VelocityCommand
@@ -101,6 +102,7 @@ def run_direct_policy(
         render=False,
         enable_camera=False,
         drive_mode="policy",
+        policy_path=policy_path,
     )
     driver.setup()
     engine = driver._engine
@@ -171,6 +173,7 @@ def run_full_stack_nav(
     world: str,
     duration: float,
     goal_distance: float,
+    policy_path: str = "",
 ) -> dict[str, Any]:
     from core.blueprints.full_stack import full_stack_blueprint
     from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
@@ -188,6 +191,7 @@ def run_full_stack_nav(
         python_autonomy_backend="simple",
         python_path_follower_backend="pid",
         drive_mode="policy",
+        policy_path=policy_path,
         waypoint_threshold=0.35,
         downsample_dist=0.5,
         run_startup_checks=False,
@@ -331,6 +335,11 @@ def main() -> int:
     parser.add_argument("--goal-distance", type=float, default=1.0)
     parser.add_argument("--linear-x", type=float, default=0.2)
     parser.add_argument("--angular-z", type=float, default=0.0)
+    parser.add_argument(
+        "--policy-path",
+        default="",
+        help="Explicit ONNX policy path. If omitted, MujocoDriverModule searches its default candidates.",
+    )
     parser.add_argument("--min-direct-motion", type=float, default=0.20)
     parser.add_argument("--min-nav-motion", type=float, default=0.20)
     parser.add_argument("--direct-only", action="store_true")
@@ -350,6 +359,7 @@ def main() -> int:
             duration=args.direct_duration,
             linear_x=args.linear_x,
             angular_z=args.angular_z,
+            policy_path=args.policy_path,
         )
         direct_result["passed"] = _passes_direct(direct_result, args.min_direct_motion)
         direct_result["policy"] = _load_policy_metadata(str(direct_result.get("policy_path", "")))
@@ -360,6 +370,7 @@ def main() -> int:
             world=args.world,
             duration=args.nav_duration,
             goal_distance=args.goal_distance,
+            policy_path=args.policy_path,
         )
         nav_result["passed"] = _passes_nav(nav_result, args.min_nav_motion)
         nav_result["policy"] = _load_policy_metadata(str(nav_result.get("policy_path", "")))

@@ -168,6 +168,44 @@ PYTHONPATH=src:. python sim/scripts/policy_nav_smoke.py \
 For a longer server-side soak, increase `--nav-duration` to 60 seconds and save
 the JSON output with `--json-out artifacts/policy_nav_smoke_open_field.json`.
 
+### 6.2.2 Full Simulation Validation Gate
+
+Run the server-side validation gate before claiming simulation readiness. It is
+simulation-only: it does not connect to robot services, publish real robot
+commands, or manage systemd units.
+
+```bash
+PYTHONPATH=src:. python sim/scripts/full_sim_validation.py \
+  --run-mujoco \
+  --require-all \
+  --nav-duration 10 \
+  --json-out artifacts/full_sim_validation_mujoco.json
+```
+
+The gate records JSON evidence for required worlds, the multi-floor building
+scene, Fast-LIO2 localization metric contracts, global/local planning wiring,
+frontier exploration, person-tracking behavior, MuJoCo LiDAR point clouds, and
+kinematic full-stack navigation motion through path follower and `CmdVelMux`.
+Use `--require-all` when blocked checks should fail the run instead of being
+reported as incomplete evidence.
+
+Policy-mode gait validation is opt-in because it requires a compatible ONNX
+checkpoint:
+
+```bash
+PYTHONPATH=src:. python sim/scripts/full_sim_validation.py \
+  --run-mujoco \
+  --run-policy \
+  --policy-path /path/to/compatible_policy.onnx \
+  --require-all \
+  --json-out artifacts/full_sim_validation_policy.json
+```
+
+If the checkpoint is missing or incompatible, the policy check is reported as
+blocked or failed explicitly; it is not folded into a kinematic navigation pass.
+The report records the ONNX input/output shapes and SHA-256 hash, so policy
+results remain attributable to an exact checkpoint.
+
 #### Policy-Mode Soak On Sunrise
 
 Use `sunrise` only as a simulation compute host for this check. Do not start

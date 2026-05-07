@@ -119,6 +119,7 @@ paper_figures/
 pipeline_videos/
 functional_test_output/
 test_results/
+artifacts/
 src/semantic_perception/test_results/
 det_*.jpg
 det_*.png
