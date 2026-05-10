@@ -25,6 +25,7 @@ CONDA_ENV="${LINGTU_CONDA_ENV:-}"
 SKIP_APT="${LINGTU_SKIP_APT:-0}"
 RUN_MUJOCO="${LINGTU_RUN_MUJOCO:-1}"
 RUN_PCT="${LINGTU_RUN_PCT:-1}"
+RUN_MULTIFLOOR="${LINGTU_RUN_MULTIFLOOR:-1}"
 INSTALL_SYSTEM_DEPS="${LINGTU_INSTALL_SYSTEM_DEPS:-1}"
 INSTALL_PYTHON_DEPS="${LINGTU_INSTALL_PYTHON_DEPS:-1}"
 RUN_VERIFY="${LINGTU_RUN_VERIFY:-1}"
@@ -321,6 +322,20 @@ PY
       --skip-mujoco \
       --strict \
       --json-out artifacts/server_pct_gate/report.json
+  fi
+
+  if [[ "${RUN_PCT}" == "1" && "${RUN_MULTIFLOOR}" == "1" ]]; then
+    log "multi-floor exploration/local-planning closure gate, simulation-only"
+    python3 sim/scripts/multifloor_nav_validation.py \
+      --output-dir artifacts/server_sim_closure/multifloor_exploration \
+      --route matrix \
+      --planners pct,astar \
+      --skip-mujoco \
+      --frontier-loop \
+      --local-planner-backend nanobind \
+      --require-production-local-planner \
+      --strict \
+      --json-out artifacts/server_sim_closure/multifloor_exploration/report.json
   fi
 
   if [[ "${RUN_MUJOCO}" == "1" ]]; then

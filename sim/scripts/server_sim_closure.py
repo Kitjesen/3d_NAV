@@ -272,7 +272,107 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
     }
 
 
+def _eval_multifloor_exploration(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("passed") is not True:
+        blockers.append("report.passed is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if report.get("cmd_vel_sent_to_hardware") is not False:
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if report.get("suite") != "multifloor_route_matrix":
+        blockers.append("suite is not multifloor_route_matrix")
+    if report.get("validation_level") != "kinematic_module_ports":
+        blockers.append("validation_level is not kinematic_module_ports")
+    if report.get("local_planner_backend_verified") not in {"nanobind", "cmu", "cmu_py"}:
+        blockers.append("production local planner backend was not verified")
+    if report.get("production_local_planner_required") is not True:
+        blockers.append("production_local_planner_required is not true")
+    if report.get("production_local_planner_verified") is not True:
+        blockers.append("production_local_planner_verified is not true")
+    if report.get("frontier_loop_enabled") is not True:
+        blockers.append("frontier_loop_enabled is not true")
+
+    required_routes = {"same_floor", "lower_approach", "upper_floor", "cross_floor"}
+    routes = set(report.get("routes") or [])
+    missing_routes = sorted(required_routes - routes)
+    if missing_routes:
+        blockers.append(f"missing routes: {', '.join(missing_routes)}")
+
+    exploration = report.get("exploration") or {}
+    if exploration.get("ok") is not True:
+        blockers.append("exploration.ok is not true")
+    if exploration.get("closed_loop") is not True:
+        blockers.append("exploration.closed_loop is not true")
+    if exploration.get("probe_mode") != "frontier_navigation_closed_loop":
+        blockers.append("exploration probe is not frontier_navigation_closed_loop")
+    rounds = list(exploration.get("rounds") or [])
+    if not rounds:
+        blockers.append("frontier closed-loop rounds missing")
+    for idx, item in enumerate(rounds):
+        if not (item.get("goal") or {}).get("frontier"):
+            blockers.append(f"frontier round {idx} missing frontier goal")
+        if (item.get("command_flow") or {}).get("ok") is not True:
+            blockers.append(f"frontier round {idx} command_flow failed")
+        if (item.get("tracking_replay") or {}).get("ok") is not True:
+            blockers.append(f"frontier round {idx} tracking_replay failed")
+
+    cases = list(report.get("cases") or [])
+    if len(cases) < len(required_routes):
+        blockers.append("case_count is lower than required route count")
+    for case in cases:
+        route = str(case.get("route") or "")
+        if case.get("passed") is not True:
+            blockers.append(f"{route or 'unknown'} case did not pass")
+        if (case.get("lidar_localization") or {}).get("ok") is not True:
+            blockers.append(f"{route or 'unknown'} lidar_localization failed")
+        if (case.get("native_pct_gate") or {}).get("ok") is not True:
+            blockers.append(f"{route or 'unknown'} native_pct_gate failed")
+        if (case.get("command_flow") or {}).get("ok") is not True:
+            blockers.append(f"{route or 'unknown'} command_flow failed")
+        if (case.get("tracking_replay") or {}).get("ok") is not True:
+            blockers.append(f"{route or 'unknown'} tracking_replay failed")
+        if (case.get("command_flow") or {}).get("cmd_vel_sent_to_hardware") is not False:
+            blockers.append(f"{route or 'unknown'} command_flow did not report hardware-safe cmd_vel")
+        if (case.get("tracking_replay") or {}).get("cmd_vel_sent_to_hardware") is not False:
+            blockers.append(f"{route or 'unknown'} tracking_replay did not report hardware-safe cmd_vel")
+    if "cross_floor" in routes:
+        cross_floor = next((case for case in cases if case.get("route") == "cross_floor"), {})
+        gate = cross_floor.get("native_pct_gate") or {}
+        if gate.get("floor_graph_composition_verified") is not True:
+            blockers.append("cross_floor floor-graph composition not verified")
+        if int(gate.get("native_pct_feasible_segments") or 0) < 2:
+            blockers.append("cross_floor does not have two feasible native PCT segments")
+
+    return not blockers, blockers, {
+        "case_count": len(cases),
+        "routes": sorted(routes),
+        "local_planner_backend_verified": report.get("local_planner_backend_verified"),
+        "production_local_planner_verified": report.get("production_local_planner_verified"),
+        "frontier_loop_enabled": report.get("frontier_loop_enabled"),
+        "frontier_rounds": len(rounds),
+        "native_pct_gate_passed_count": report.get("native_pct_gate_passed_count"),
+        "validation_level": report.get("validation_level"),
+    }
+
+
 GATES: tuple[GateSpec, ...] = (
+    GateSpec(
+        "multifloor_exploration",
+        "Multi-floor route matrix with LiDAR localization contract, local planning, tracking, and frontier closed-loop",
+        (
+            "artifacts/server_sim_closure/multifloor_exploration/report.json",
+            "artifacts/multifloor_nav_validation*/report.json",
+        ),
+        "PYTHONPATH=src:. python3 sim/scripts/multifloor_nav_validation.py "
+        "--route matrix --planners pct,astar --skip-mujoco --frontier-loop "
+        "--local-planner-backend nanobind --require-production-local-planner "
+        "--output-dir artifacts/server_sim_closure/multifloor_exploration "
+        "--json-out artifacts/server_sim_closure/multifloor_exploration/report.json --strict",
+        _eval_multifloor_exploration,
+    ),
     GateSpec(
         "large_terrain",
         "PCT/native path generation over large static terrain assets",

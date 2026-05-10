@@ -14,6 +14,70 @@ def _write_json(path: Path, payload: dict) -> Path:
     return path
 
 
+def _complete_multifloor_report() -> dict:
+    localization = {"ok": True}
+    command_flow = {"ok": True, "cmd_vel_sent_to_hardware": False}
+    tracking_replay = {"ok": True, "cmd_vel_sent_to_hardware": False}
+    native_pct_gate = {
+        "ok": True,
+        "floor_graph_composition_verified": False,
+        "native_pct_feasible_segments": 1,
+    }
+    cases = []
+    for route in ("same_floor", "lower_approach", "upper_floor"):
+        cases.append(
+            {
+                "route": route,
+                "passed": True,
+                "lidar_localization": localization,
+                "native_pct_gate": native_pct_gate,
+                "command_flow": command_flow,
+                "tracking_replay": tracking_replay,
+            }
+        )
+    cases.append(
+        {
+            "route": "cross_floor",
+            "passed": True,
+            "lidar_localization": localization,
+            "native_pct_gate": {
+                "ok": True,
+                "floor_graph_composition_verified": True,
+                "native_pct_feasible_segments": 2,
+            },
+            "command_flow": command_flow,
+            "tracking_replay": tracking_replay,
+        }
+    )
+    return {
+        "passed": True,
+        "suite": "multifloor_route_matrix",
+        "validation_level": "kinematic_module_ports",
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "local_planner_backend_verified": "nanobind",
+        "production_local_planner_required": True,
+        "production_local_planner_verified": True,
+        "frontier_loop_enabled": True,
+        "routes": ["same_floor", "lower_approach", "upper_floor", "cross_floor"],
+        "native_pct_gate_passed_count": 4,
+        "exploration": {
+            "ok": True,
+            "closed_loop": True,
+            "probe_mode": "frontier_navigation_closed_loop",
+            "rounds": [
+                {
+                    "goal": {"frontier": [1.0, 0.0, 0.0]},
+                    "command_flow": command_flow,
+                    "tracking_replay": tracking_replay,
+                }
+            ],
+        },
+        "cases": cases,
+    }
+
+
 def test_gateway_goal_dry_run_gate_publishes_goal_without_cmd_vel():
     pytest.importorskip("fastapi")
     from sim.scripts.gateway_goal_dry_run_gate import run_gate
@@ -32,6 +96,7 @@ def test_gateway_goal_dry_run_gate_publishes_goal_without_cmd_vel():
 
 
 def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
+    multifloor = _write_json(tmp_path / "multifloor.json", _complete_multifloor_report())
     large = _write_json(
         tmp_path / "large.json",
         {
@@ -175,6 +240,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
 
     summary = server_sim_closure.summarize(
         report_overrides={
+            "multifloor_exploration": multifloor,
             "large_terrain": large,
             "native_pct_mujoco": native,
             "fastlio2_live": fastlio,
@@ -183,6 +249,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "gazebo_runtime": gazebo,
         },
         required={
+            "multifloor_exploration",
             "large_terrain",
             "native_pct_mujoco",
             "fastlio2_live",
@@ -198,6 +265,36 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
     assert summary["cmd_vel_sent_to_hardware"] is False
     assert summary["missing_or_failed"] == []
     assert all(summary["verified"].values())
+
+
+def test_server_sim_closure_rejects_weak_multifloor_exploration_report(tmp_path: Path):
+    weak = _complete_multifloor_report()
+    weak["frontier_loop_enabled"] = False
+    weak["exploration"] = {
+        "ok": True,
+        "closed_loop": False,
+        "probe_mode": "candidate_only",
+        "rounds": [],
+    }
+    weak["cases"][-1]["native_pct_gate"] = {
+        "ok": True,
+        "floor_graph_composition_verified": False,
+        "native_pct_feasible_segments": 1,
+    }
+    report_path = _write_json(tmp_path / "weak_multifloor.json", weak)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"multifloor_exploration": report_path},
+        required={"multifloor_exploration"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["multifloor_exploration"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "frontier_loop_enabled is not true" in gaps
+    assert "exploration.closed_loop is not true" in gaps
+    assert "exploration probe is not frontier_navigation_closed_loop" in gaps
+    assert "cross_floor floor-graph composition not verified" in gaps
 
 
 def test_server_sim_closure_reports_remaining_gaps(tmp_path: Path):
