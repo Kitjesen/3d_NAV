@@ -75,8 +75,8 @@ function Dashboard() {
             <FloatingWidget
               id="readiness"
               defaultPos={{ x: 1492, y: 396 }}
-              defaultSize={{ w: 400, h: 300 }}
-              minSize={{ w: 300, h: 240 }}
+              defaultSize={{ w: 400, h: 534 }}
+              minSize={{ w: 300, h: 300 }}
             >
               <ReadinessCard sseState={sseState} />
             </FloatingWidget>

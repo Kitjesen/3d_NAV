@@ -11,7 +11,7 @@
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-md);
-  overflow: hidden;
+  overflow: auto;
 }
 
 .header {
