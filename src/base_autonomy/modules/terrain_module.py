@@ -77,10 +77,10 @@ class TerrainModule(Module, layer=2):
 
     def _setup_nanobind(self):
         """Setup C++ terrain_core via nanobind binding."""
-        _nav_core = try_import_nav_core()
+        _nav_core = try_import_nav_core(("TerrainParams", "TerrainAnalysisCore"))
         if _nav_core is None:
             raise RuntimeError(
-                f"TerrainModule [nanobind]: _nav_core.so not found. "
+                f"TerrainModule [nanobind]: compatible _nav_core not found. "
                 f"Build C++ backend or explicitly choose backend='simple' for passthrough testing.\n"
                 f"  To build: {nav_core_build_hint()}"
             )

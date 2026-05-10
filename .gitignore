@@ -39,10 +39,13 @@ env/
 # ── C/C++ build artifacts ──
 *.o
 *.so
+*.pyd
+*.dll
 *.a
 *.dylib
 *.exe
 *.out
+src/nav/core/build_nb*/
 
 # ── Model weights (large binaries — distribute via release-models.yml) ──
 *.pt

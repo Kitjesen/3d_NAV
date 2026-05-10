@@ -424,10 +424,10 @@ class LocalPlannerModule(Module, layer=2):
 
     def _setup_nanobind(self):
         """C++ LocalPlannerCore via nanobind — full CMU scoring in-process, zero ROS2."""
-        _nav_core = try_import_nav_core()
+        _nav_core = try_import_nav_core(("LocalPlannerParams", "LocalPlannerCore"))
         if _nav_core is None:
             raise RuntimeError(
-                f"LocalPlannerModule [nanobind]: _nav_core.so not found. "
+                f"LocalPlannerModule [nanobind]: compatible _nav_core not found. "
                 f"Build the C++ backend or explicitly choose backend='cmu_py' / 'simple'.\n"
                 f"  To build: {nav_core_build_hint()}"
             )
@@ -464,7 +464,7 @@ class LocalPlannerModule(Module, layer=2):
         except Exception as e:
             raise RuntimeError(
                 f"LocalPlannerModule [nanobind]: _nav_core init failed: {e}. "
-                f"Install _nav_core.so or explicitly choose backend='cmu_py' / 'simple'."
+                f"Rebuild _nav_core or explicitly choose backend='cmu_py' / 'simple'."
             ) from e
 
     def _setup_cmu(self):

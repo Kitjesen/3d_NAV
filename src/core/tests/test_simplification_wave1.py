@@ -40,6 +40,15 @@ class TestW1LocalPlannerNoFallback(unittest.TestCase):
                 planner._setup_nanobind()
             self.assertIn("_nav_core", str(ctx.exception))
 
+    def test_nanobind_backend_requires_local_planner_symbols(self):
+        """A stale _nav_core extension must not count as production local planning."""
+        from base_autonomy.modules import local_planner_module as mod
+        planner = mod.LocalPlannerModule(backend="nanobind")
+        with mock.patch.object(mod, "try_import_nav_core", return_value=None) as importer:
+            with self.assertRaises(RuntimeError):
+                planner._setup_nanobind()
+            importer.assert_called_once_with(("LocalPlannerParams", "LocalPlannerCore"))
+
 
 # ---------------------------------------------------------------------------
 # W1-2  TerrainModule — no silent fallback when _nav_core missing
@@ -53,6 +62,14 @@ class TestW1TerrainNoFallback(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 terrain._setup_nanobind()
             self.assertIn("_nav_core", str(ctx.exception))
+
+    def test_nanobind_backend_requires_terrain_symbols(self):
+        from base_autonomy.modules import terrain_module as mod
+        terrain = mod.TerrainModule(backend="nanobind")
+        with mock.patch.object(mod, "try_import_nav_core", return_value=None) as importer:
+            with self.assertRaises(RuntimeError):
+                terrain._setup_nanobind()
+            importer.assert_called_once_with(("TerrainParams", "TerrainAnalysisCore"))
 
     def test_simple_backend_still_allowed_explicitly(self):
         """`backend="simple"` remains a valid passthrough choice for tests."""

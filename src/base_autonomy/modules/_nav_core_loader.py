@@ -16,7 +16,17 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Candidate directories where _nav_core*.so might live, in priority order.
+# Candidate directories where _nav_core native modules might live, in priority order.
+_NATIVE_SUFFIXES = (".so", ".pyd", ".dll", ".dylib")
+
+
+def _has_nav_core_binary(directory: str) -> bool:
+    return any(
+        f.startswith("_nav_core") and f.endswith(_NATIVE_SUFFIXES)
+        for f in os.listdir(directory)
+    )
+
+
 def _candidate_dirs() -> list[str]:
     # Walk up from this file to find the repo root (contains lingtu.py or src/)
     here = Path(__file__).resolve()
@@ -43,22 +53,34 @@ def ensure_nav_core_on_path() -> None:
     for d in _candidate_dirs():
         if not os.path.isdir(d):
             continue
-        # Check if any _nav_core*.so exists in this dir
-        has_so = any(
-            f.startswith("_nav_core") and f.endswith(".so")
-            for f in os.listdir(d)
-        )
-        if has_so and d not in sys.path:
+        if _has_nav_core_binary(d) and d not in sys.path:
             sys.path.insert(0, d)
             logger.debug("_nav_core_loader: added %s to sys.path", d)
             break
 
 
-def try_import_nav_core():
-    """Import and return _nav_core, or None if not available."""
+def try_import_nav_core(required_symbols: tuple[str, ...] = ()):
+    """Import and return _nav_core, or None if unavailable/incompatible.
+
+    Native _nav_core artifacts are frequently rebuilt while developing the
+    C++ navigation stack. A stale extension can still import successfully but
+    lack newer symbols such as LocalPlannerCore; treating that as available
+    makes production-backend checks fail later with misleading AttributeError
+    messages. Callers can require the symbols they need so stale artifacts are
+    rejected at the boundary.
+    """
     ensure_nav_core_on_path()
     try:
         import _nav_core
+        missing = [name for name in required_symbols if not hasattr(_nav_core, name)]
+        if missing:
+            origin = getattr(_nav_core, "__file__", "<unknown>")
+            logger.warning(
+                "_nav_core at %s is missing required symbols: %s",
+                origin,
+                ", ".join(missing),
+            )
+            return None
         return _nav_core
     except ImportError:
         return None

@@ -148,7 +148,7 @@ class PathFollowerModule(Module, layer=2):
 
     def _setup_nav_core(self):
         """Import _nav_core and create PathFollowerParams/State."""
-        _nav_core = try_import_nav_core()
+        _nav_core = try_import_nav_core(("PathFollowerParams", "PathFollowerState", "compute_control"))
         if _nav_core is None:
             logger.info(
                 "PathFollowerModule: _nav_core.so not found — using pid backend.\n"

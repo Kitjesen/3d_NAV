@@ -18,6 +18,14 @@ def test_nav_core_builder_does_not_force_user_site_install():
     assert '"$PYTHON" -m pip "${pip_install_args[@]}"' in script
 
 
+def test_nav_core_loader_rejects_stale_or_wrong_platform_extensions():
+    loader = _read_repo_file("src/base_autonomy/modules/_nav_core_loader.py")
+
+    assert '".pyd"' in loader
+    assert "required_symbols" in loader
+    assert "missing required symbols" in loader
+
+
 def test_disabled_bbs3d_stub_never_advertises_map_available():
     source = _read_repo_file(
         "src/slam/localizer/src/localizers/bbs3d_global_localizer.cpp"
