@@ -28,6 +28,8 @@ class MuJoCoCamera:
                 f"Check robot.xml camera definitions."
             )
         self._cam_id = cam_id
+        if config.fovy > 0:
+            model.cam_fovy[cam_id] = float(config.fovy)
         self._mujoco = mujoco
         self._renderer_rgb: Optional[object] = None
         self._renderer_depth: Optional[object] = None

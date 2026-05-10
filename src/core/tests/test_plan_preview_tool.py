@@ -31,6 +31,12 @@ def _write_tomogram(root: Path) -> Path:
     return path
 
 
+def _touch_pct_extensions(lib_dir: Path) -> None:
+    abi = f"{sys.version_info.major}{sys.version_info.minor}"
+    for name in ("a_star", "ele_planner", "traj_opt"):
+        (lib_dir / f"{name}.cpython-{abi}-x86_64-linux-gnu.so").write_bytes(b"")
+
+
 def test_tomogram_info_reports_bounds_and_last_pose_out_of_bounds(tmp_path):
     tool = _load_tool()
     tomo = _write_tomogram(tmp_path)
@@ -254,7 +260,25 @@ def test_missing_aarch64_pct_libs_skip_native_backend(tmp_path):
 def test_aarch64_pct_runtime_report_lists_missing_root_libs(tmp_path):
     tool = _load_tool()
     report = tool.pct_runtime_lib_report(repo_root=tmp_path, machine="aarch64")
+    abi = f"{sys.version_info.major}{sys.version_info.minor}"
 
     assert report["canonical_arch"] == "aarch64"
     assert report["ok"] is False
-    assert "ele_planner.cpython-310-aarch64-linux-gnu.so" in report["missing"]
+    assert f"ele_planner.cpython-{abi}-aarch64-linux-gnu.so" in report["missing"]
+
+
+def test_pct_runtime_report_honors_env_override(tmp_path, monkeypatch):
+    tool = _load_tool()
+    env_dir = tmp_path / "runtime_env"
+    fallback_dir = tmp_path / "src/global_planning/PCT_planner_runnable/native/x86_64"
+    env_dir.mkdir(parents=True)
+    fallback_dir.mkdir(parents=True)
+    _touch_pct_extensions(env_dir)
+    _touch_pct_extensions(fallback_dir)
+    monkeypatch.setenv("LINGTU_PCT_LIB_DIR", str(env_dir))
+
+    report = tool.pct_runtime_lib_report(repo_root=tmp_path, machine="x86_64")
+
+    assert report["ok"] is True
+    assert Path(report["lib_dir"]) == env_dir
+    assert report["missing"] == []

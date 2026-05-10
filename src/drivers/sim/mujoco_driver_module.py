@@ -49,8 +49,9 @@ _POLICY_CANDIDATES = (
     _SIM_ROOT.parent.parent / "brainstem" / "model" / _BRAINSTEM_POLICY_NAME,
     _SIM_ROOT.parent.parent / "brainstem" / "han_dog" / "model" / _BRAINSTEM_POLICY_NAME,
     _SIM_ROOT.parent.parent / "brainstem" / "sim" / "model" / _BRAINSTEM_POLICY_NAME,
-    _LEGACY_ROBOTS_DIR / "thunder_policy.onnx",
     _LEGACY_ROBOTS_DIR / "policy.onnx",
+    # Legacy 76-D policy kept last: it needs its original observation contract.
+    _LEGACY_ROBOTS_DIR / "thunder_policy.onnx",
 )
 _POLICY_ONNX = _POLICY_CANDIDATES[-1]
 _DEFAULT_START_POS = (0.0, 0.0, 0.55)

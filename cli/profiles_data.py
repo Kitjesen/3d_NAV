@@ -61,6 +61,7 @@ ROBOT_PRESETS = {
     "stub": dict(robot="stub", slam_profile="none", detector="yoloe", encoder="mobileclip"),
     "sim": dict(robot="sim_mujoco", slam_profile="bridge", detector="yoloe", encoder="mobileclip"),
     "ros2": dict(robot="sim_ros2", slam_profile="bridge", detector="yoloe", encoder="mobileclip"),
+    "sim_gazebo": dict(robot="sim_ros2", slam_profile="none", detector="yoloe", encoder="mobileclip"),
     # S100P hardware preset (RDK X5, Nash BPU, Livox MID-360).
     # Real robot control must terminate at brainstem.  The explicit "ros2"
     # preset remains available for simulation/bridge-only experiments.
@@ -123,6 +124,11 @@ PROFILES = {
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
         tomogram=_ACTIVE_TOMOGRAM,
+        # First deployment keeps PCT behavior observable instead of silently
+        # changing real-robot route selection. Switch to reject/fallback only
+        # after field validation proves the safety gate policy.
+        plan_safety_policy="observe",
+        fallback_planner_name="astar",
         # enable_native=False: C++ local_planner requires the 'local_planner'
         # ROS2 package installed via colcon. Use Python autonomy chain instead.
         # Switch to True only after running: make build && ros2 pkg list | grep local_planner
@@ -142,6 +148,8 @@ PROFILES = {
         llm="qwen",
         planner="pct",
         tomogram=_ACTIVE_TOMOGRAM,
+        plan_safety_policy="observe",
+        fallback_planner_name="astar",
         enable_native=False,
         enable_semantic=True,
         enable_gateway=True,
@@ -156,6 +164,8 @@ PROFILES = {
         llm="qwen",
         planner="pct",
         tomogram=_ACTIVE_TOMOGRAM,
+        plan_safety_policy="observe",
+        fallback_planner_name="astar",
         enable_native=False,
         enable_semantic=True,
         enable_gateway=True,
@@ -169,6 +179,8 @@ PROFILES = {
         slam_profile="fastlio2",
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
+        plan_safety_policy="observe",
+        fallback_planner_name="astar",
         enable_native=False,    # same reason as nav profile above
         enable_semantic=True,
         enable_gateway=True,
@@ -187,6 +199,8 @@ PROFILES = {
         slam_profile="fastlio2",
         llm="qwen",
         planner="pct",
+        plan_safety_policy="observe",
+        fallback_planner_name="astar",
         enable_native=False,
         enable_semantic=True,
         enable_gateway=True,
@@ -203,9 +217,35 @@ PROFILES = {
         llm="mock",
         planner="astar",
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+        # Simulation can safely exercise fallback behavior without changing
+        # the hardware navigation profile.
+        plan_safety_policy="fallback_astar",
+        fallback_planner_name="astar",
         enable_native=True,
         enable_semantic=True,
         enable_gateway=True,
+        gateway_port=5050,
+    ),
+    "sim_gazebo": dict(
+        _desc="Gazebo/GZ ROS-native simulation",
+        _default_robot="sim_gazebo",
+        slam_profile="none",
+        llm="mock",
+        planner="astar",
+        tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
+        plan_safety_policy="fallback_astar",
+        fallback_planner_name="astar",
+        enable_native=True,
+        enable_semantic=True,
+        enable_gateway=True,
+        enable_map_modules=True,
+        enable_camera=True,
+        use_driver_camera=True,
+        cloud_topic="/nav/map_cloud",
+        # Gazebo enters LingTu through ROS2SimDriverModule topics. Keep
+        # planning aligned with the live /nav/odometry contract until the
+        # map->odom transform gate is enforced at runtime.
+        planning_frame_id="odom",
         gateway_port=5050,
     ),
     "sim_nav": dict(
@@ -215,6 +255,8 @@ PROFILES = {
         llm="mock",
         planner="astar",
         scene_xml="sim/worlds/building_scene.xml",
+        plan_safety_policy="fallback_astar",
+        fallback_planner_name="astar",
         enable_native=False,
         enable_semantic=False,
         enable_gateway=True,

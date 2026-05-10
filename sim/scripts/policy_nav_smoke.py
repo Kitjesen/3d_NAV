@@ -12,6 +12,7 @@ import json
 import math
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,10 @@ def _safe_float(value: Any) -> float:
         return 0.0
 
 
+def _angle_delta_rad(start: float, end: float) -> float:
+    return math.atan2(math.sin(end - start), math.cos(end - start))
+
+
 def _load_policy_metadata(policy_path: str) -> dict[str, Any]:
     if not policy_path:
         return {"path": "", "exists": False}
@@ -139,12 +144,110 @@ def _load_policy_metadata(policy_path: str) -> dict[str, Any]:
     return meta
 
 
+def _free_costmap_for_goal(
+    start: tuple[float, float, float] | list[float],
+    goal: tuple[float, float, float] | list[float],
+    *,
+    resolution: float,
+    margin: float,
+) -> dict[str, Any]:
+    sx, sy = float(start[0]), float(start[1])
+    gx, gy = float(goal[0]), float(goal[1])
+    min_x = min(sx, gx) - margin
+    max_x = max(sx, gx) + margin
+    min_y = min(sy, gy) - margin
+    max_y = max(sy, gy) + margin
+    width = max(32, int(math.ceil((max_x - min_x) / resolution)) + 1)
+    height = max(32, int(math.ceil((max_y - min_y) / resolution)) + 1)
+    return {
+        "grid": np.zeros((height, width), dtype=np.float32),
+        "resolution": float(resolution),
+        "origin": [float(min_x), float(min_y)],
+        "height": height,
+        "width": width,
+        "frame_id": "map",
+        "source": "policy_nav_smoke_free_space",
+        "ts": time.time(),
+    }
+
+
+def _ensure_nav_planner_map(
+    nav: Any,
+    *,
+    start: tuple[float, float, float] | list[float],
+    goal: tuple[float, float, float] | list[float],
+    wait_s: float,
+    inject_if_missing: bool,
+    resolution: float,
+    margin: float,
+) -> dict[str, Any]:
+    deadline = time.time() + max(0.0, wait_s)
+    while time.time() < deadline:
+        if bool(getattr(nav._planner_svc, "has_map", False)):
+            return {
+                "planner_has_map": True,
+                "source": "live_stack_costmap",
+                "in_msg_count": int(getattr(nav.costmap, "msg_count", 0)),
+                "in_deliver_count": int(getattr(nav.costmap, "deliver_count", 0)),
+            }
+        time.sleep(0.05)
+
+    before_msg_count = int(getattr(nav.costmap, "msg_count", 0))
+    if not inject_if_missing:
+        return {
+            "planner_has_map": bool(getattr(nav._planner_svc, "has_map", False)),
+            "source": "missing",
+            "in_msg_count": before_msg_count,
+            "in_deliver_count": int(getattr(nav.costmap, "deliver_count", 0)),
+        }
+
+    injected = _free_costmap_for_goal(
+        start,
+        goal,
+        resolution=resolution,
+        margin=margin,
+    )
+    nav.costmap._deliver(injected)
+    return {
+        "planner_has_map": bool(getattr(nav._planner_svc, "has_map", False)),
+        "source": "injected_free_space",
+        "in_msg_count": int(getattr(nav.costmap, "msg_count", 0)),
+        "in_deliver_count": int(getattr(nav.costmap, "deliver_count", 0)),
+        "injected": {
+            "resolution": float(injected["resolution"]),
+            "origin": list(injected["origin"]),
+            "height": int(injected["height"]),
+            "width": int(injected["width"]),
+            "frame_id": injected["frame_id"],
+        },
+        "in_msg_count_before_inject": before_msg_count,
+    }
+
+
+def _failed_check(mode: str, exc: BaseException, *, policy_path: str = "") -> dict[str, Any]:
+    result = {
+        "mode": mode,
+        "passed": False,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "policy_loaded": False,
+        "policy_backend": "unloaded",
+        "policy_path": policy_path,
+        "error": str(exc),
+        "traceback": traceback.format_exc(limit=8),
+    }
+    result["policy"] = _load_policy_metadata(policy_path)
+    return result
+
+
 def run_direct_policy(
     *,
     world: str,
     duration: float,
     linear_x: float,
     angular_z: float,
+    direct_mode: str = "walk",
     policy_path: str = "",
 ) -> dict[str, Any]:
     from drivers.sim.mujoco_driver_module import MujocoDriverModule
@@ -165,6 +268,7 @@ def run_direct_policy(
     try:
         start = engine.get_robot_state()
         start_xy = np.array(start.position[:2], dtype=float)
+        _, _, start_yaw = _rpy_from_xyzw(start.orientation)
         dt = max(0.001, _safe_float(engine.control_dt))
         steps = max(1, int(duration / dt))
         z_values: list[float] = []
@@ -173,7 +277,16 @@ def run_direct_policy(
         speed_values: list[float] = []
         finite = True
         ctrl_abs_max = 0.0
-        cmd = VelocityCommand(linear_x=linear_x, angular_z=angular_z)
+        if direct_mode == "stand":
+            cmd_linear_x = 0.0
+            cmd_angular_z = 0.0
+        elif direct_mode == "turn":
+            cmd_linear_x = 0.0
+            cmd_angular_z = angular_z if abs(angular_z) > 1e-9 else 0.4
+        else:
+            cmd_linear_x = linear_x
+            cmd_angular_z = angular_z
+        cmd = VelocityCommand(linear_x=cmd_linear_x, angular_z=cmd_angular_z)
 
         for _ in range(steps):
             state = engine.step(cmd)
@@ -198,15 +311,32 @@ def run_direct_policy(
                 ctrl_abs_max = max(ctrl_abs_max, float(np.max(np.abs(engine.data.ctrl))))
 
         end = engine.get_robot_state()
+        _, _, end_yaw = _rpy_from_xyzw(end.orientation)
         moved = float(np.linalg.norm(np.array(end.position[:2], dtype=float) - start_xy))
+        yaw_delta = _angle_delta_rad(start_yaw, end_yaw)
         return {
             "mode": "direct_policy",
+            "direct_mode": direct_mode,
+            "drive_mode": str(getattr(engine, "drive_mode", "")),
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "policy_backend": "onnx" if engine.has_policy else "unloaded",
             "world": world,
             "duration_s": duration,
+            "command_linear_x": float(cmd_linear_x),
+            "command_angular_z": float(cmd_angular_z),
             "policy_loaded": bool(engine.has_policy),
             "policy_path": str(driver._policy_path),
+            "frames": {
+                "command": "base_link",
+                "odometry": "map",
+                "cmd_vel": "base_link",
+            },
             "finite": finite,
             "moved_m": moved,
+            "yaw_delta_rad": float(yaw_delta),
+            "yaw_delta_abs_rad": float(abs(yaw_delta)),
             "z": _stats(z_values),
             "roll_abs": _stats(roll_values),
             "pitch_abs": _stats(pitch_values),
@@ -227,6 +357,8 @@ def run_full_stack_nav(
     duration: float,
     goal_distance: float,
     policy_path: str = "",
+    local_planner_backend: str = "simple",
+    path_follower_backend: str = "pid",
     nav_max_angular_z: float = 0.2,
     waypoint_threshold: float = 0.25,
     final_waypoint_threshold: float = 0.06,
@@ -236,6 +368,10 @@ def run_full_stack_nav(
     path_max_speed: float = 0.25,
     post_success_settle: float = 0.0,
     safe_goal_tolerance: float = 0.0,
+    nav_costmap_wait: float = 2.0,
+    inject_free_costmap: bool = True,
+    free_costmap_resolution: float = 0.10,
+    free_costmap_margin: float = 3.0,
 ) -> dict[str, Any]:
     from core.blueprints.full_stack import full_stack_blueprint
     from core.msgs.geometry import Pose, PoseStamped, Quaternion, Vector3
@@ -250,8 +386,8 @@ def run_full_stack_nav(
         enable_semantic=False,
         enable_gateway=False,
         render=False,
-        python_autonomy_backend="simple",
-        python_path_follower_backend="pid",
+        python_autonomy_backend=local_planner_backend,
+        python_path_follower_backend=path_follower_backend,
         drive_mode="policy",
         policy_path=policy_path,
         max_angular_vel=nav_max_angular_z,
@@ -285,6 +421,10 @@ def run_full_stack_nav(
     global_path_summaries: list[dict[str, Any]] = []
     waypoint_points: list[list[float]] = []
     local_path_summaries: list[dict[str, Any]] = []
+    map_readiness: dict[str, Any] = {
+        "planner_has_map": False,
+        "source": "not_checked",
+    }
 
     def _record_global_path(path: Any) -> None:
         global_path_summaries.append(_path_summary(path))
@@ -336,6 +476,16 @@ def run_full_stack_nav(
         start = odom[-1]
         goal_x = start[0] + goal_distance
         goal_y = start[1]
+        goal = (goal_x, goal_y, 0.0)
+        map_readiness = _ensure_nav_planner_map(
+            nav,
+            start=start,
+            goal=goal,
+            wait_s=nav_costmap_wait,
+            inject_if_missing=inject_free_costmap,
+            resolution=free_costmap_resolution,
+            margin=free_costmap_margin,
+        )
         nav.goal_pose._deliver(
             PoseStamped(
                 pose=Pose(
@@ -376,10 +526,18 @@ def run_full_stack_nav(
 
         return {
             "mode": "full_stack_policy_nav",
+            "drive_mode": str(getattr(engine, "drive_mode", "")) if engine is not None else "",
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
             "world": world,
             "duration_s": duration,
             "elapsed_s": time.time() - started_at,
             "goal_distance_m": goal_distance,
+            "local_planner_backend_requested": local_planner_backend,
+            "local_planner_backend_actual": str(getattr(local_planner, "_backend", "")),
+            "path_follower_backend_requested": path_follower_backend,
+            "path_follower_backend_actual": str(getattr(path_follower, "_backend", "")),
             "nav_max_angular_z": nav_max_angular_z,
             "waypoint_threshold_m": waypoint_threshold,
             "final_waypoint_threshold_m": final_waypoint_threshold,
@@ -389,6 +547,9 @@ def run_full_stack_nav(
             "path_max_speed_mps": path_max_speed,
             "post_success_settle_s": post_success_settle,
             "safe_goal_tolerance_m": safe_goal_tolerance,
+            "nav_costmap_wait_s": nav_costmap_wait,
+            "inject_free_costmap_if_missing": inject_free_costmap,
+            "costmap_readiness": map_readiness,
             "success_seen": success_at is not None,
             "dist_at_success_m": dist_at_success,
             "moved_at_success_m": moved_at_success,
@@ -397,7 +558,25 @@ def run_full_stack_nav(
                 float(dist_to_goal - dist_at_success) if dist_at_success is not None else None
             ),
             "policy_loaded": bool(engine.has_policy) if engine is not None else False,
+            "policy_backend": "onnx" if engine is not None and engine.has_policy else "unloaded",
             "policy_path": str(driver._policy_path),
+            "frames": {
+                "goal": "map",
+                "global_path": (
+                    str((global_path_summaries[-1] or {}).get("frame_id", ""))
+                    if global_path_summaries
+                    else ""
+                ),
+                "waypoint": "map",
+                "local_path": (
+                    str((local_path_summaries[-1] or {}).get("frame_id", ""))
+                    if local_path_summaries
+                    else ""
+                ),
+                "cmd_vel": "base_link",
+                "driver_cmd_vel": "base_link",
+                "odometry": "map",
+            },
             "finite": finite,
             "seen": seen,
             "global_path": global_path_summaries[-1] if global_path_summaries else None,
@@ -415,16 +594,41 @@ def run_full_stack_nav(
         system.stop()
 
 
-def _passes_direct(result: dict[str, Any], min_motion: float) -> bool:
+def _passes_direct_common(result: dict[str, Any]) -> bool:
     return (
-        bool(result.get("policy_loaded"))
+        result.get("drive_mode") == "policy"
+        and bool(result.get("policy_loaded"))
         and bool(result.get("finite"))
-        and float(result.get("moved_m", 0.0)) >= min_motion
         and (result.get("z", {}).get("min") or 0.0) > 0.35
         and (result.get("z", {}).get("max") or 999.0) < 0.55
         and (result.get("roll_abs", {}).get("max") or 999.0) < 0.35
         and (result.get("pitch_abs", {}).get("max") or 999.0) < 0.35
     )
+
+
+def _passes_direct(
+    result: dict[str, Any],
+    min_motion: float,
+    *,
+    direct_mode: str = "walk",
+    max_stand_drift: float = 0.05,
+    min_turn_yaw: float = 0.35,
+    max_turn_drift: float = 0.10,
+) -> bool:
+    if not _passes_direct_common(result):
+        return False
+    moved = float(result.get("moved_m", 0.0))
+    if direct_mode == "stand":
+        return moved <= max_stand_drift
+    if direct_mode == "turn":
+        yaw_delta = float(
+            result.get(
+                "yaw_delta_abs_rad",
+                abs(float(result.get("yaw_delta_rad", 0.0))),
+            )
+        )
+        return yaw_delta >= min_turn_yaw and moved <= max_turn_drift
+    return moved >= min_motion
 
 
 def _passes_nav(result: dict[str, Any], min_motion: float, max_dist_to_goal: float) -> bool:
@@ -433,8 +637,10 @@ def _passes_nav(result: dict[str, Any], min_motion: float, max_dist_to_goal: flo
     if dist_for_gate is None:
         dist_for_gate = result.get("dist_to_goal_m", 999.0)
     return (
-        bool(result.get("policy_loaded"))
+        result.get("drive_mode") == "policy"
+        and bool(result.get("policy_loaded"))
         and bool(result.get("finite"))
+        and bool(result.get("success_seen"))
         and int(seen.get("costmap", 0)) > 0
         and int(seen.get("waypoints", 0)) > 0
         and int(seen.get("local_path", 0)) > 0
@@ -456,7 +662,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--goal-distance", type=float, default=1.0)
     parser.add_argument("--linear-x", type=float, default=0.2)
     parser.add_argument("--angular-z", type=float, default=0.0)
+    parser.add_argument(
+        "--direct-mode",
+        choices=("walk", "stand", "turn"),
+        default="walk",
+        help="Direct policy gate mode: walk motion, stand drift, or turn yaw response",
+    )
     parser.add_argument("--policy", default="", help="Explicit ONNX policy path")
+    parser.add_argument(
+        "--nav-local-planner-backend",
+        choices=("simple", "nanobind", "cmu", "cmu_py"),
+        default="simple",
+    )
+    parser.add_argument(
+        "--nav-path-follower-backend",
+        choices=("pid", "nav_core", "pure_pursuit"),
+        default="pid",
+    )
     parser.add_argument(
         "--nav-max-angular-z",
         type=float,
@@ -471,7 +693,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nav-path-max-speed", type=float, default=0.25)
     parser.add_argument("--nav-post-success-settle", type=float, default=0.0)
     parser.add_argument("--nav-safe-goal-tolerance", type=float, default=0.0)
+    parser.add_argument(
+        "--nav-costmap-wait",
+        type=float,
+        default=2.0,
+        help="Wait for NavigationModule planner map after odometry/costmap warmup",
+    )
+    parser.add_argument(
+        "--no-nav-inject-free-costmap",
+        action="store_true",
+        help="Disable simulation-only free-space costmap injection when live map is late",
+    )
+    parser.add_argument("--nav-free-costmap-resolution", type=float, default=0.10)
+    parser.add_argument("--nav-free-costmap-margin", type=float, default=3.0)
     parser.add_argument("--min-direct-motion", type=float, default=0.20)
+    parser.add_argument("--max-stand-drift", type=float, default=0.05)
+    parser.add_argument("--min-turn-yaw", type=float, default=0.35)
+    parser.add_argument("--max-turn-drift", type=float, default=0.10)
     parser.add_argument("--min-nav-motion", type=float, default=0.20)
     parser.add_argument("--max-nav-dist-to-goal", type=float, default=0.10)
     parser.add_argument("--direct-only", action="store_true")
@@ -487,50 +725,79 @@ def main() -> int:
     if args.direct_only and args.nav_only:
         parser.error("--direct-only and --nav-only are mutually exclusive")
 
-    results: dict[str, Any] = {"world": args.world, "checks": []}
+    results: dict[str, Any] = {
+        "schema_version": "lingtu.policy_nav_smoke.v1",
+        "world": args.world,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "checks": [],
+    }
     direct_result = None
     nav_result = None
     if not args.nav_only:
-        direct_result = run_direct_policy(
-            world=args.world,
-            duration=args.direct_duration,
-            linear_x=args.linear_x,
-            angular_z=args.angular_z,
-            policy_path=args.policy,
-        )
-        direct_result["passed"] = _passes_direct(direct_result, args.min_direct_motion)
-        direct_result["policy"] = _load_policy_metadata(str(direct_result.get("policy_path", "")))
+        try:
+            direct_result = run_direct_policy(
+                world=args.world,
+                duration=args.direct_duration,
+                linear_x=args.linear_x,
+                angular_z=args.angular_z,
+                direct_mode=args.direct_mode,
+                policy_path=args.policy,
+            )
+            direct_result["passed"] = _passes_direct(
+                direct_result,
+                args.min_direct_motion,
+                direct_mode=args.direct_mode,
+                max_stand_drift=args.max_stand_drift,
+                min_turn_yaw=args.min_turn_yaw,
+                max_turn_drift=args.max_turn_drift,
+            )
+            direct_result["policy"] = _load_policy_metadata(str(direct_result.get("policy_path", "")))
+        except Exception as exc:
+            direct_result = _failed_check("direct_policy", exc, policy_path=args.policy)
         results["checks"].append(direct_result)
 
     if not args.direct_only:
-        nav_result = run_full_stack_nav(
-            world=args.world,
-            duration=args.nav_duration,
-            goal_distance=args.goal_distance,
-            policy_path=args.policy,
-            nav_max_angular_z=args.nav_max_angular_z,
-            waypoint_threshold=args.nav_waypoint_threshold,
-            final_waypoint_threshold=args.nav_final_waypoint_threshold,
-            downsample_dist=args.nav_downsample_dist,
-            path_goal_tolerance=args.nav_path_goal_tolerance,
-            path_min_speed=args.nav_path_min_speed,
-            path_max_speed=args.nav_path_max_speed,
-            post_success_settle=args.nav_post_success_settle,
-            safe_goal_tolerance=args.nav_safe_goal_tolerance,
-        )
-        nav_result["passed"] = _passes_nav(
-            nav_result,
-            args.min_nav_motion,
-            args.max_nav_dist_to_goal,
-        )
-        nav_result["policy"] = _load_policy_metadata(str(nav_result.get("policy_path", "")))
+        try:
+            nav_result = run_full_stack_nav(
+                world=args.world,
+                duration=args.nav_duration,
+                goal_distance=args.goal_distance,
+                policy_path=args.policy,
+                local_planner_backend=args.nav_local_planner_backend,
+                path_follower_backend=args.nav_path_follower_backend,
+                nav_max_angular_z=args.nav_max_angular_z,
+                waypoint_threshold=args.nav_waypoint_threshold,
+                final_waypoint_threshold=args.nav_final_waypoint_threshold,
+                downsample_dist=args.nav_downsample_dist,
+                path_goal_tolerance=args.nav_path_goal_tolerance,
+                path_min_speed=args.nav_path_min_speed,
+                path_max_speed=args.nav_path_max_speed,
+                post_success_settle=args.nav_post_success_settle,
+                safe_goal_tolerance=args.nav_safe_goal_tolerance,
+                nav_costmap_wait=args.nav_costmap_wait,
+                inject_free_costmap=not args.no_nav_inject_free_costmap,
+                free_costmap_resolution=args.nav_free_costmap_resolution,
+                free_costmap_margin=args.nav_free_costmap_margin,
+            )
+            nav_result["passed"] = _passes_nav(
+                nav_result,
+                args.min_nav_motion,
+                args.max_nav_dist_to_goal,
+            )
+            nav_result["policy"] = _load_policy_metadata(str(nav_result.get("policy_path", "")))
+        except Exception as exc:
+            nav_result = _failed_check("full_stack_policy_nav", exc, policy_path=args.policy)
         results["checks"].append(nav_result)
 
     results["passed"] = all(bool(check.get("passed")) for check in results["checks"])
     output = json.dumps(results, indent=2, sort_keys=True)
     print(output)
     if args.json_out:
-        Path(args.json_out).write_text(output + "\n", encoding="utf-8")
+        out = Path(args.json_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(output + "\n", encoding="utf-8")
     return 0 if results["passed"] else 1
 
 

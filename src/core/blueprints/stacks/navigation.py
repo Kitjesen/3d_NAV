@@ -37,6 +37,8 @@ def navigation(
             "planning_timeout",
             "preview_timeout",
             "safe_goal_tolerance",
+            "plan_safety_policy",
+            "fallback_planner_name",
         )
         if key in config
     }

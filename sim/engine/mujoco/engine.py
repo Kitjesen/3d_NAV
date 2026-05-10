@@ -161,6 +161,15 @@ class MuJoCoEngine(SimEngine):
                 else:
                     scene_asset = scene_root.find("asset")
                     robot_asset = robot_root.find("asset")
+                    scene_size = scene_root.find("size")
+                    if scene_size is not None and robot_root.find("size") is None:
+                        insert_at = 0
+                        for idx, child in enumerate(list(robot_root)):
+                            if child.tag == "compiler":
+                                insert_at = idx + 1
+                                break
+                        robot_root.insert(insert_at, copy.deepcopy(scene_size))
+
                     if scene_asset is not None and len(scene_asset) > 0:
                         if robot_asset is None:
                             robot_asset = ET.Element("asset")

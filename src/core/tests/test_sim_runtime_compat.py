@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import math
 import sys
 import time
@@ -118,6 +119,89 @@ def test_semantic_namespace_wrappers_expose_runtime_import_paths():
     assert scene_msgs.TrackedObject is TrackedObject
 
 
+def test_rosbag_slam_bridge_replay_classifies_algorithm_vs_raw_topics():
+    from sim.scripts.rosbag_slam_bridge_replay import _choose_topic, _topic_class
+
+    slam = _topic_class("/Odometry", "/cloud_registered")
+    assert slam["slam_algorithm_output_verified"] is True
+    assert slam["raw_sensor_bag_only"] is False
+
+    raw = _topic_class("/state_SDK", "/points_raw")
+    assert raw["slam_algorithm_output_verified"] is False
+    assert raw["raw_sensor_bag_only"] is True
+
+    topics = {
+        "/state_SDK": "nav_msgs/msg/Odometry",
+        "/points_raw": "sensor_msgs/msg/PointCloud2",
+    }
+    assert _choose_topic(topics, ["/Odometry", "/state_SDK"], "") == "/state_SDK"
+    assert _choose_topic(topics, ["/Odometry"], "/state_SDK") == "/state_SDK"
+
+
+def test_fastlio2_rosbag_replay_config_targets_raw_bag_topics(tmp_path):
+    from sim.scripts.fastlio2_rosbag_replay_gate import _write_fastlio2_config
+
+    config = tmp_path / "fastlio2_replay.yaml"
+    _write_fastlio2_config(config, imu_topic="/imu_raw", lidar_topic="/points_raw")
+    text = config.read_text(encoding="utf-8")
+
+    assert "imu_topic: /imu_raw" in text
+    assert "lidar_topic: /points_raw" in text
+    assert "lidar_type: 3" in text
+    assert "acc_scale: 1.0" in text
+
+
+def test_mujoco_fastlio2_live_gate_converts_world_cloud_to_sensor_frame():
+    from sim.scripts.mujoco_fastlio2_live_gate import _world_xyzi_to_sensor_xyzi
+
+    class FakeData:
+        xpos = [None, np.array([1.0, 2.0, 0.5])]
+        xmat = [None, np.eye(3).reshape(-1)]
+
+    class FakeEngine:
+        _data = FakeData()
+        _lidar_body_id = 1
+
+    world_cloud = np.array(
+        [
+            [2.0, 4.0, 1.5, 42.0],
+            [0.5, 1.0, 0.0, 12.0],
+        ],
+        dtype=np.float32,
+    )
+
+    sensor_cloud = _world_xyzi_to_sensor_xyzi(FakeEngine(), world_cloud)
+
+    np.testing.assert_allclose(sensor_cloud[:, :3], [[1.0, 2.0, 1.0], [-0.5, -1.0, -0.5]])
+    np.testing.assert_allclose(sensor_cloud[:, 3], [42.0, 12.0])
+
+
+def test_mujoco_fastlio2_live_gate_stationary_imu_specific_force_points_up():
+    from sim.scripts.mujoco_fastlio2_live_gate import _specific_force_body
+
+    state = types.SimpleNamespace(
+        orientation=np.array([0.0, 0.0, 0.0, 1.0]),
+        linear_velocity=np.zeros(3),
+    )
+
+    acc = _specific_force_body(state, np.zeros(3), 0.02)
+
+    np.testing.assert_allclose(acc, [0.0, 0.0, 9.81], atol=1e-6)
+
+
+def test_mujoco_fastlio2_live_gate_defaults_use_raw_fastlio2_topics():
+    from sim.scripts.mujoco_fastlio2_live_gate import _build_parser, _parse_start
+
+    args = _build_parser().parse_args([])
+
+    assert args.world == "building_scene"
+    assert args.drive_mode == "kinematic"
+    assert args.drive_vx > 0.0
+    assert args.mujoco_memory == "64M"
+    assert args.work_dir.endswith("mujoco_fastlio2_live")
+    assert _parse_start("5,3,-2") == [5.0, 3.0, -2.0]
+
+
 class _FakeEngine:
     def __init__(
         self,
@@ -195,6 +279,8 @@ def test_mujoco_driver_policy_candidates_prioritize_brainstem_default():
     assert first.name == "policy_251119.onnx"
     assert first.parent.name == "model"
     assert first.parent.parent.name == "nova_dog"
+    assert driver_mod._POLICY_CANDIDATES[-2].name == "policy.onnx"
+    assert driver_mod._POLICY_CANDIDATES[-1].name == "thunder_policy.onnx"
 
 
 def test_mujoco_driver_prefers_brainstem_policy_and_resolves_repo_relative_paths(monkeypatch, tmp_path):
@@ -212,7 +298,7 @@ def test_mujoco_driver_prefers_brainstem_policy_and_resolves_repo_relative_paths
     legacy_policy.write_bytes(b"legacy")
 
     monkeypatch.setattr(driver_mod, "_SIM_ROOT", sim_root)
-    monkeypatch.setattr(driver_mod, "_POLICY_CANDIDATES", (brainstem_policy, thunder_policy, legacy_policy))
+    monkeypatch.setattr(driver_mod, "_POLICY_CANDIDATES", (brainstem_policy, legacy_policy, thunder_policy))
 
     driver = MujocoDriverModule(policy_path="")
     assert Path(driver._policy_path) == brainstem_policy
@@ -333,16 +419,20 @@ def test_policy_nav_smoke_pass_fail_gates_are_conservative():
     from sim.scripts import policy_nav_smoke
 
     direct = {
+        "drive_mode": "policy",
         "policy_loaded": True,
         "finite": True,
         "moved_m": 0.25,
+        "yaw_delta_abs_rad": 0.0,
         "z": {"min": 0.40, "max": 0.45},
         "roll_abs": {"max": 0.05},
         "pitch_abs": {"max": 0.04},
     }
     nav = {
+        "drive_mode": "policy",
         "policy_loaded": True,
         "finite": True,
+        "success_seen": True,
         "moved_m": 0.25,
         "z": {"min": 0.40, "max": 0.45},
         "seen": {
@@ -366,14 +456,162 @@ def test_policy_nav_smoke_pass_fail_gates_are_conservative():
     assert policy_nav_smoke._passes_nav(nav, min_motion=0.20, max_dist_to_goal=0.10) is False
 
 
+def test_policy_nav_smoke_requires_real_policy_drive_mode():
+    from sim.scripts import policy_nav_smoke
+
+    direct = {
+        "drive_mode": "kinematic",
+        "policy_loaded": True,
+        "finite": True,
+        "moved_m": 0.30,
+        "z": {"min": 0.40, "max": 0.45},
+        "roll_abs": {"max": 0.05},
+        "pitch_abs": {"max": 0.04},
+    }
+    nav = {
+        "drive_mode": "kinematic",
+        "policy_loaded": True,
+        "finite": True,
+        "success_seen": True,
+        "moved_m": 0.30,
+        "z": {"min": 0.40, "max": 0.45},
+        "seen": {
+            "costmap": 1,
+            "waypoints": 1,
+            "local_path": 1,
+            "path_follower_cmd": 4,
+            "mux_cmd": 4,
+            "direct_fallback": 0,
+        },
+        "dist_at_success_m": 0.05,
+    }
+
+    assert policy_nav_smoke._passes_direct(direct, min_motion=0.20) is False
+    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20, max_dist_to_goal=0.10) is False
+
+    direct["drive_mode"] = "policy"
+    direct["policy_loaded"] = False
+    nav["drive_mode"] = "policy"
+    nav["policy_loaded"] = False
+    assert policy_nav_smoke._passes_direct(direct, min_motion=0.20) is False
+    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20, max_dist_to_goal=0.10) is False
+
+
+def test_policy_nav_smoke_requires_nav_success_state():
+    from sim.scripts import policy_nav_smoke
+
+    nav = {
+        "drive_mode": "policy",
+        "policy_loaded": True,
+        "finite": True,
+        "success_seen": False,
+        "moved_m": 0.30,
+        "dist_to_goal_m": 0.05,
+        "z": {"min": 0.40, "max": 0.45},
+        "seen": {
+            "costmap": 1,
+            "waypoints": 1,
+            "local_path": 1,
+            "path_follower_cmd": 4,
+            "mux_cmd": 4,
+            "direct_fallback": 0,
+        },
+    }
+
+    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20, max_dist_to_goal=0.10) is False
+    nav["success_seen"] = True
+    assert policy_nav_smoke._passes_nav(nav, min_motion=0.20, max_dist_to_goal=0.10) is True
+
+
+def test_policy_nav_smoke_direct_stand_and_turn_gates():
+    from sim.scripts import policy_nav_smoke
+
+    base = {
+        "drive_mode": "policy",
+        "policy_loaded": True,
+        "finite": True,
+        "z": {"min": 0.40, "max": 0.45},
+        "roll_abs": {"max": 0.05},
+        "pitch_abs": {"max": 0.04},
+    }
+
+    stand = {**base, "moved_m": 0.03, "yaw_delta_abs_rad": 0.0}
+    assert policy_nav_smoke._passes_direct(
+        stand,
+        min_motion=0.20,
+        direct_mode="stand",
+        max_stand_drift=0.05,
+    ) is True
+    stand["moved_m"] = 0.08
+    assert policy_nav_smoke._passes_direct(
+        stand,
+        min_motion=0.20,
+        direct_mode="stand",
+        max_stand_drift=0.05,
+    ) is False
+
+    turn = {**base, "moved_m": 0.04, "yaw_delta_abs_rad": 0.45}
+    assert policy_nav_smoke._passes_direct(
+        turn,
+        min_motion=0.20,
+        direct_mode="turn",
+        min_turn_yaw=0.35,
+        max_turn_drift=0.10,
+    ) is True
+    turn["yaw_delta_abs_rad"] = 0.20
+    assert policy_nav_smoke._passes_direct(
+        turn,
+        min_motion=0.20,
+        direct_mode="turn",
+        min_turn_yaw=0.35,
+        max_turn_drift=0.10,
+    ) is False
+    turn["yaw_delta_abs_rad"] = 0.45
+    turn["moved_m"] = 0.15
+    assert policy_nav_smoke._passes_direct(
+        turn,
+        min_motion=0.20,
+        direct_mode="turn",
+        min_turn_yaw=0.35,
+        max_turn_drift=0.10,
+    ) is False
+
+
 def test_policy_nav_smoke_accepts_explicit_policy_argument():
     from sim.scripts import policy_nav_smoke
 
     args = policy_nav_smoke._build_parser().parse_args(
-        ["--policy", "/tmp/policy.onnx", "--nav-max-angular-z", "0.2", "--direct-only"]
+        [
+            "--policy",
+            "/tmp/policy.onnx",
+            "--nav-max-angular-z",
+            "0.2",
+            "--nav-local-planner-backend",
+            "nanobind",
+            "--nav-path-follower-backend",
+            "nav_core",
+            "--direct-mode",
+            "turn",
+            "--max-stand-drift",
+            "0.04",
+            "--min-turn-yaw",
+            "0.25",
+            "--max-turn-drift",
+            "0.12",
+            "--nav-costmap-wait",
+            "1.5",
+            "--nav-free-costmap-resolution",
+            "0.2",
+            "--nav-free-costmap-margin",
+            "4.0",
+            "--direct-only",
+        ]
     )
 
     assert args.policy == "/tmp/policy.onnx"
+    assert args.nav_local_planner_backend == "nanobind"
+    assert args.nav_path_follower_backend == "nav_core"
+    assert args.direct_mode == "turn"
     assert args.nav_max_angular_z == pytest.approx(0.2)
     assert args.nav_waypoint_threshold == pytest.approx(0.25)
     assert args.nav_final_waypoint_threshold == pytest.approx(0.06)
@@ -381,8 +619,59 @@ def test_policy_nav_smoke_accepts_explicit_policy_argument():
     assert args.nav_path_min_speed == pytest.approx(0.05)
     assert args.nav_post_success_settle == pytest.approx(0.0)
     assert args.nav_safe_goal_tolerance == pytest.approx(0.0)
+    assert args.nav_costmap_wait == pytest.approx(1.5)
+    assert args.no_nav_inject_free_costmap is False
+    assert args.nav_free_costmap_resolution == pytest.approx(0.2)
+    assert args.nav_free_costmap_margin == pytest.approx(4.0)
     assert args.max_nav_dist_to_goal == pytest.approx(0.10)
+    assert args.max_stand_drift == pytest.approx(0.04)
+    assert args.min_turn_yaw == pytest.approx(0.25)
+    assert args.max_turn_drift == pytest.approx(0.12)
     assert args.direct_only is True
+
+
+def test_policy_nav_smoke_free_costmap_covers_start_and_goal():
+    from sim.scripts import policy_nav_smoke
+
+    cm = policy_nav_smoke._free_costmap_for_goal(
+        (1.0, -2.0, 0.0),
+        (2.5, -1.0, 0.0),
+        resolution=0.25,
+        margin=1.0,
+    )
+
+    grid = cm["grid"]
+    origin = cm["origin"]
+    assert cm["source"] == "policy_nav_smoke_free_space"
+    assert cm["frame_id"] == "map"
+    assert grid.ndim == 2
+    assert grid.shape[0] >= 32
+    assert grid.shape[1] >= 32
+    assert float(grid.max()) == 0.0
+    assert origin[0] <= 0.0
+    assert origin[1] <= -3.0
+    assert origin[0] + grid.shape[1] * cm["resolution"] >= 3.5
+    assert origin[1] + grid.shape[0] * cm["resolution"] >= 0.0
+
+
+def test_nova_dog_policy_manifest_records_verified_contract():
+    manifest = (
+        Path(__file__).resolve().parents[3]
+        / "sim"
+        / "robots"
+        / "nova_dog"
+        / "policy_manifest.json"
+    )
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+
+    assert data["schema_version"] == "lingtu.sim_policy_manifest.v1"
+    assert data["asset"] == "policy.onnx"
+    assert data["sha256"] == "c672253ffb89ae4f0c766615e7028a9a676572c77fc1741474e552eae55b2672"
+    assert data["onnx"]["input_shape"] == [1, 57]
+    assert data["onnx"]["output_shape"] == [1, 16]
+    assert data["contract"]["observation"] == "brainstem StandardObservationBuilder"
+    assert data["simulation_only"] is True
+    assert data["real_robot_motion"] is False
 
 
 def test_mujoco_policy_idle_command_detection():
@@ -671,8 +960,13 @@ def test_sim_mujoco_full_stack_policy_mode_moves_under_nav_cmds_when_real_policy
         python_autonomy_backend="simple",
         python_path_follower_backend="pid",
         drive_mode="policy",
+        max_angular_vel=0.2,
         waypoint_threshold=0.35,
-        downsample_dist=0.5,
+        final_waypoint_threshold=0.06,
+        downsample_dist=0.25,
+        path_follower_goal_tolerance=0.08,
+        path_follower_min_speed=0.05,
+        path_follower_max_speed=0.25,
         run_startup_checks=False,
     ).build()
     driver = system.get_module("MujocoDriverModule")

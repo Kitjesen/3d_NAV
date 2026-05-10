@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="lingtu_omni_cart">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.001" iterations="40" solver="PGS" gravity="0 0 -9.81"/>
+  <asset>
+    <material name="cart_body" rgba="0.12 0.38 0.68 1"/>
+    <material name="cart_top" rgba="0.06 0.12 0.18 1"/>
+    <material name="cart_front" rgba="0.95 0.72 0.18 1"/>
+    <material name="sensor_black" rgba="0.02 0.025 0.03 1"/>
+  </asset>
+  <worldbody>
+    <body name="base_link" pos="0 0 0">
+      <joint name="floating_base_joint" type="free"/>
+      <geom name="cart_base" type="cylinder" size="0.34 0.08" pos="0 0 0.08"
+            material="cart_body" contype="1" conaffinity="1" condim="3"
+            friction="1 0.5 0.5"/>
+      <geom name="cart_top_plate" type="box" size="0.26 0.22 0.035"
+            pos="0 0 0.19" material="cart_top" contype="1" conaffinity="1"/>
+      <geom name="cart_front_marker" type="box" size="0.13 0.045 0.04"
+            pos="0.28 0 0.18" material="cart_front" contype="0" conaffinity="0"/>
+      <geom name="front_camera_body" type="box" size="0.055 0.075 0.045"
+            pos="0.32 0 0.31" material="sensor_black" contype="0" conaffinity="0"/>
+      <camera name="front_camera" pos="0.38 0 0.34" xyaxes="0 -1 0 0 0 1" fovy="78"/>
+      <body name="lidar_link" pos="0 0 0.37">
+        <geom name="lidar_mid360_visual" type="cylinder" size="0.075 0.045"
+              rgba="0.02 0.025 0.03 1" contype="0" conaffinity="0"/>
+        <site name="lidar_site" pos="0 0 0" size="0.001"/>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

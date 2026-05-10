@@ -24,6 +24,7 @@ def perception(detector: str = "yoloe", encoder: str = "mobileclip", **config) -
     drv_name = config.get("_driver_cls_name", "")
     needs_camera_bridge = bool(config.get("force_camera_bridge")) or (
         drv_name not in _NATIVE_CAMERA_DRIVERS
+        and not bool(config.get("use_driver_camera", False))
     )
 
     try:

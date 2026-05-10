@@ -38,6 +38,7 @@ _PROFILE_META = {
     "explore": ("◎", "Explore unknown area",                         T.cyan),
     "map":     ("⊕", "Build a new map",                              T.yellow),
     "sim":     ("◈", "MuJoCo simulation",                            T.blue),
+    "sim_gazebo": ("▣", "Gazebo/GZ ROS-native simulation",            T.blue),
     "dev":     ("◇", "Test perception & planning without a robot",   T.navy),
     "stub":    ("○", "Framework testing only",                       T.dim),
 }
@@ -50,6 +51,7 @@ _PROFILE_WIZARD: dict[str, tuple[bool, bool, bool]] = {
     "explore": (True,  True,  False),  # exploring — no joystick needed
     "map":     (False, True,  False),  # mapping — no semantics, no joystick
     "sim":     (True,  True,  True),   # full stack in sim
+    "sim_gazebo": (True, True, True),  # ROS-native Gazebo simulation
     "dev":     (True,  True,  False),  # no robot → no teleop
     "stub":    (False, True,  False),  # bare framework
 }

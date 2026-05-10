@@ -94,6 +94,8 @@ def _resolve_config(
         "llm": args.llm,
         "planner": args.planner,
         "tomogram": args.tomogram,
+        "plan_safety_policy": args.plan_safety_policy,
+        "fallback_planner_name": args.fallback_planner_name,
         "gateway_port": args.gateway_port,
     }
     for k, v in overrides.items():
@@ -125,6 +127,7 @@ def main() -> None:
             profiles:
               stub      No hardware, framework testing
               sim       MuJoCo kinematic simulation
+              sim_gazebo Gazebo/GZ ROS-native simulation
               dev       Semantic pipeline, no C++ nodes
               nav       Navigation with pre-built map
               explore   Exploration, no pre-built map
@@ -159,6 +162,19 @@ def main() -> None:
     parser.add_argument("--llm", default=None)
     parser.add_argument("--planner", default=None)
     parser.add_argument("--tomogram", default=None)
+    parser.add_argument(
+        "--plan-safety-policy",
+        default=None,
+        choices=["off", "observe", "reject", "fallback_astar"],
+        dest="plan_safety_policy",
+        help="Global plan safety handling: observe by default, or fallback/reject unsafe plans",
+    )
+    parser.add_argument(
+        "--fallback-planner",
+        default=None,
+        dest="fallback_planner_name",
+        help="Planner backend used when --plan-safety-policy=fallback_astar",
+    )
     parser.add_argument("--gateway-port", type=int, default=None, dest="gateway_port")
     parser.add_argument("--no-semantic", action="store_true")
     parser.add_argument("--no-gateway", action="store_true")

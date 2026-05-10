@@ -15,7 +15,18 @@ from core.blueprint import Blueprint
 from core.blueprints.full_stack import full_stack_blueprint
 
 
-PROFILE_SNAPSHOT_TARGETS = ("stub", "dev", "sim", "map", "nav", "explore")
+PROFILE_SNAPSHOT_TARGETS = (
+    "stub",
+    "dev",
+    "sim",
+    "sim_gazebo",
+    "sim_nav",
+    "map",
+    "nav",
+    "explore",
+    "super_lio",
+    "super_lio_relocation",
+)
 
 
 @dataclass(frozen=True, order=True)

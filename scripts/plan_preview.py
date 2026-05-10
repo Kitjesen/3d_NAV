@@ -19,7 +19,6 @@ import json
 import math
 import os
 import pickle
-import platform
 import subprocess
 import sys
 import time
@@ -37,18 +36,9 @@ for _path in (REPO_ROOT, REPO_ROOT / "src"):
     if text not in sys.path:
         sys.path.insert(0, text)
 
-
-PCT_LIB_NAMES = [
-    "libcommon_smoothing.so",
-    "liba_star_search.so",
-    "libmap_manager.so",
-    "libgpmp_optimizer.so",
-    "libele_planner_lib.so",
-    "a_star.cpython-310-aarch64-linux-gnu.so",
-    "ele_planner.cpython-310-aarch64-linux-gnu.so",
-    "py_map_manager.cpython-310-aarch64-linux-gnu.so",
-    "traj_opt.cpython-310-aarch64-linux-gnu.so",
-]
+from global_planning.PCT_planner_runnable.runtime import (  # noqa: E402
+    inspect_pct_runtime,
+)
 
 
 @dataclass(frozen=True)
@@ -208,6 +198,8 @@ def load_tomogram_info(path: Path, obstacle_thr: float = 49.9) -> TomogramInfo:
         if arr.ndim != 4 or arr.shape[0] < 1 or arr.shape[1] < 1:
             raise ValueError(f"unexpected tomogram data shape in {path}: {arr.shape}")
         grid = np.asarray(arr[0, 0], dtype=np.float32)
+        if "slice_h0" in raw and "slice_dh" in raw:
+            grid = grid.T
         center = np.asarray(raw.get("center", [0, 0])[:2], dtype=np.float64)
         h, w = grid.shape
         origin = center - np.array([w * resolution / 2.0, h * resolution / 2.0])
@@ -407,21 +399,7 @@ def call_with_captured_fds(fn: Any) -> tuple[Any, str]:
 
 
 def pct_runtime_lib_report(repo_root: Path = REPO_ROOT, machine: str | None = None) -> dict[str, Any]:
-    arch = (machine or platform.machine()).lower()
-    canonical = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(arch, arch)
-    lib_root = repo_root / "src" / "global_planning" / "PCT_planner" / "planner" / "lib"
-    candidates = [lib_root / canonical, lib_root]
-    chosen = next((path for path in candidates if path.exists() and any(path.glob("*.so"))), lib_root)
-    required = PCT_LIB_NAMES if canonical == "aarch64" else []
-    missing = [name for name in required if not (chosen / name).exists()]
-    return {
-        "machine": arch,
-        "canonical_arch": canonical,
-        "lib_dir": str(chosen),
-        "required": required,
-        "missing": missing,
-        "ok": not missing,
-    }
+    return inspect_pct_runtime(repo_root, machine=machine)
 
 
 def make_odom(start: list[float], planning_frame: str) -> Any:
