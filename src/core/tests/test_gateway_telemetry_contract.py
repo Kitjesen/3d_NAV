@@ -202,6 +202,39 @@ def test_locations_route_reads_real_tagged_location_store_shape():
     assert locations.locations[0].source == "test"
 
 
+def test_tagged_location_store_persists_tag_and_remove(tmp_path):
+    from memory.spatial.tagged_locations import TaggedLocationStore
+
+    path = tmp_path / "locations.json"
+    store = TaggedLocationStore(str(path))
+
+    store.tag(
+        "dock",
+        x=1.0,
+        y=2.0,
+        z=0.1,
+        yaw=0.25,
+        tags=["charger"],
+        source="web",
+        ts=123.0,
+        metadata={"floor": "1f"},
+    )
+
+    reloaded = TaggedLocationStore(str(path))
+    entry = reloaded.query("dock")
+    assert entry is not None
+    assert entry["position"] == [1.0, 2.0, 0.1]
+    assert entry["yaw"] == 0.25
+    assert entry["tags"] == ["charger"]
+    assert entry["source"] == "web"
+    assert entry["ts"] == 123.0
+    assert entry["metadata"] == {"floor": "1f"}
+
+    assert reloaded.remove("dock") is True
+    removed = TaggedLocationStore(str(path))
+    assert removed.query("dock") is None
+
+
 def test_location_write_routes_save_delete_and_emit_events():
     from gateway.gateway_module import GatewayModule
     from gateway.schemas import LocationOperationResponse, LocationUpsertRequest
