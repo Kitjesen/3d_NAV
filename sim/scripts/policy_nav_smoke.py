@@ -391,6 +391,7 @@ def run_full_stack_nav(
         drive_mode="policy",
         policy_path=policy_path,
         max_angular_vel=nav_max_angular_z,
+        path_follower_max_yaw_rate=nav_max_angular_z,
         waypoint_threshold=waypoint_threshold,
         final_waypoint_threshold=final_waypoint_threshold,
         downsample_dist=downsample_dist,

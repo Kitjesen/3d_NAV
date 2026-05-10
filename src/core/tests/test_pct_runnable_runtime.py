@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 import pickle
 
 import numpy as np
+import pytest
 from global_planning.PCT_planner_runnable import runtime as pct_runtime
 from global_planning.PCT_planner_runnable.runtime import (
     inspect_pct_runtime,
@@ -107,7 +109,7 @@ def test_prepare_installs_lib_namespace_for_original_wrapper(tmp_path):
 
     previous_lib = sys.modules.pop("lib", None)
     try:
-        paths = prepare_pct_runtime(repo, machine="x86_64")
+        paths = prepare_pct_runtime(repo, machine="x86_64", preload_shared=False)
         lib_module = sys.modules["lib"]
         assert str(paths.lib_dir) in list(lib_module.__path__)
         assert str(paths.lib_root) in list(lib_module.__path__)
@@ -117,6 +119,18 @@ def test_prepare_installs_lib_namespace_for_original_wrapper(tmp_path):
             sys.modules["lib"] = previous_lib
         else:
             sys.modules.pop("lib", None)
+
+
+def test_prepare_reports_unloadable_shared_library(tmp_path):
+    if os.name == "nt":
+        pytest.skip("Windows does not preload Linux shared libraries")
+    repo = tmp_path
+    lib_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
+    lib_dir.mkdir(parents=True)
+    _touch_pct_runtime(lib_dir)
+
+    with pytest.raises(RuntimeError, match="PCT shared library failed to load"):
+        prepare_pct_runtime(repo, machine="x86_64")
 
 
 def test_inspect_pct_runtime_rejects_missing_shared_libraries(tmp_path):

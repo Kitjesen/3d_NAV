@@ -61,6 +61,7 @@ def test_large_terrain_tomogram_marks_obstacles_and_terrain_costs(tmp_path):
     assert _builder_cell(tomo, -3.5, 3.9) == 18.0
     assert _builder_cell(tomo, 4.8, 4.1) == 12.0
     assert _builder_cell(tomo, 4.1, -3.1) >= 100.0
+    assert _builder_cell(tomo, -5.55, 2.85) >= 100.0
     assert _builder_cell(tomo, -9.5, -5.6) < 49.9
     assert _builder_cell(tomo, 9.4, 5.4) < 49.9
 

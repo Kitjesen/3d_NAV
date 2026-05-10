@@ -339,7 +339,8 @@ def _mark_box(
         center=(box.position[0], box.position[1]),
         half=(box.half_size[0] + inflation, box.half_size[1] + inflation),
     )
-    trav[mask] = obstacle_thr
+    hard_obstacle_cost = max(float(obstacle_thr), 100.0)
+    trav[mask] = hard_obstacle_cost
 
 
 def _mark_zone(trav: np.ndarray, xx: np.ndarray, yy: np.ndarray, *, zone: TerrainZone) -> None:

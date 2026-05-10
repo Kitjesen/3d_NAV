@@ -697,6 +697,7 @@ def test_navigation_stack_passes_path_follower_precision_params():
         path_follower_goal_tolerance=0.07,
         path_follower_min_speed=0.04,
         path_follower_max_speed=0.22,
+        path_follower_max_yaw_rate=0.18,
         run_startup_checks=False,
     ).build()
 
@@ -707,6 +708,7 @@ def test_navigation_stack_passes_path_follower_precision_params():
     assert follower._goal_tolerance == pytest.approx(0.07)
     assert follower._min_speed == pytest.approx(0.04)
     assert follower._max_speed == pytest.approx(0.22)
+    assert follower._max_yaw_rate == pytest.approx(0.18)
 
 
 def test_mujoco_camera_preserves_metric_depth_output():

@@ -7,6 +7,7 @@ import pytest
 
 from sim.scripts.native_pct_mujoco_gate import (
     _build_safe_follow_path,
+    _default_local_planner_path_folder,
     _load_pct_route,
     _native_node_commands,
     _omni_cart_cmd,
@@ -120,6 +121,22 @@ def test_native_node_commands_launch_only_local_planner_stack(tmp_path: Path) ->
     assert "checkRotObstacle:=false" in joined
     assert "Gateway" not in joined
     assert "driver" not in joined.lower()
+
+
+def test_default_local_planner_path_folder_supports_merge_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sim.scripts import native_pct_mujoco_gate as mod
+
+    merge_paths = tmp_path / "install/share/local_planner/paths"
+    merge_paths.mkdir(parents=True)
+    (merge_paths / "startPaths.ply").write_text("ply\n", encoding="utf-8")
+    (merge_paths / "paths.ply").write_text("ply\n", encoding="utf-8")
+    source_paths = tmp_path / "src/base_autonomy/local_planner/paths"
+    source_paths.mkdir(parents=True)
+    (source_paths / "startPaths.ply").write_text("ply\n", encoding="utf-8")
+    (source_paths / "paths.ply").write_text("ply\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "ROOT", tmp_path)
+
+    assert _default_local_planner_path_folder() == merge_paths
 
 
 def test_ros_path_to_points_extracts_native_local_path() -> None:

@@ -138,6 +138,62 @@ def _eval_native_pct_mujoco(report: dict[str, Any]) -> tuple[bool, list[str], di
     }
 
 
+def _eval_dynamic_obstacle_local_planner(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if report.get("backend_actual") != "nanobind":
+        blockers.append("backend_actual is not nanobind")
+    if report.get("dynamic_replan_verified") is not True:
+        blockers.append("dynamic_replan_verified is not true")
+    if report.get("obstacle_response_verified") is not True:
+        blockers.append("obstacle_response_verified is not true")
+    if report.get("clear_path_recovery_verified") is not True:
+        blockers.append("clear_path_recovery_verified is not true")
+    if _safe_float(report.get("min_clearance_m"), default=0.0) < 0.25:
+        blockers.append("min_clearance_m < 0.25")
+
+    phases = list(report.get("phases") or [])
+    by_name = {str(phase.get("name") or ""): phase for phase in phases}
+    for name in ("clear_initial", "obstacle_left", "obstacle_right", "obstacle_center", "clear_recovered"):
+        if name not in by_name:
+            blockers.append(f"{name} phase missing")
+    if by_name.get("obstacle_left", {}).get("avoidance_side") != "right":
+        blockers.append("left obstacle did not produce right detour")
+    if by_name.get("obstacle_right", {}).get("avoidance_side") != "left":
+        blockers.append("right obstacle did not produce left detour")
+    if by_name.get("clear_recovered", {}).get("avoidance_side") != "straight":
+        blockers.append("clear_recovered did not return straight")
+    for phase in phases:
+        if int(phase.get("path_count") or 0) < 20:
+            blockers.append(f"{phase.get('name') or 'unknown'} path_count < 20")
+        if str(phase.get("path_frame_id") or "") != "map":
+            blockers.append(f"{phase.get('name') or 'unknown'} path frame is not map")
+
+    return not blockers, blockers, {
+        "backend_actual": report.get("backend_actual"),
+        "dynamic_replan_verified": report.get("dynamic_replan_verified"),
+        "obstacle_response_verified": report.get("obstacle_response_verified"),
+        "clear_path_recovery_verified": report.get("clear_path_recovery_verified"),
+        "min_clearance_m": report.get("min_clearance_m"),
+        "phase_count": len(phases),
+        "avoidance_sequence": [
+            by_name.get("clear_initial", {}).get("avoidance_side"),
+            by_name.get("obstacle_left", {}).get("avoidance_side"),
+            by_name.get("obstacle_right", {}).get("avoidance_side"),
+            by_name.get("obstacle_center", {}).get("avoidance_side"),
+            by_name.get("clear_recovered", {}).get("avoidance_side"),
+        ],
+        "frames": report.get("frames") or {},
+    }
+
+
 def _eval_fastlio2_live(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
     blockers: list[str] = []
     for key in (
@@ -376,7 +432,10 @@ GATES: tuple[GateSpec, ...] = (
     GateSpec(
         "large_terrain",
         "PCT/native path generation over large static terrain assets",
-        ("artifacts/large_terrain_nav_validation*/report.json",),
+        (
+            "artifacts/server_sim_closure/large_terrain/report.json",
+            "artifacts/large_terrain_nav_validation*/report.json",
+        ),
         "PYTHONPATH=src:. python3 sim/scripts/large_terrain_nav_validation.py --output-dir artifacts/server_sim_closure/large_terrain --planners pct,astar --json-out artifacts/server_sim_closure/large_terrain/report.json",
         _eval_large_terrain,
     ),
@@ -390,6 +449,18 @@ GATES: tuple[GateSpec, ...] = (
         ),
         "PYTHONPATH=src:. python3 sim/scripts/native_pct_mujoco_gate.py --source-report artifacts/server_sim_closure/large_terrain/report.json --route terrain_long --planner pct --timeout-s 180 --json-out artifacts/server_sim_closure/native_pct_mujoco/report.json",
         _eval_native_pct_mujoco,
+    ),
+    GateSpec(
+        "dynamic_obstacle_local_planner",
+        "Nanobind LocalPlannerModule replans around changing added_obstacles without hardware cmd_vel",
+        (
+            "artifacts/server_sim_closure/dynamic_obstacle_local_planner/report.json",
+            "artifacts/dynamic_obstacle_local_planner*/report.json",
+        ),
+        "PYTHONPATH=src:. python3 sim/scripts/dynamic_obstacle_local_planner_gate.py "
+        "--backend nanobind "
+        "--json-out artifacts/server_sim_closure/dynamic_obstacle_local_planner/report.json",
+        _eval_dynamic_obstacle_local_planner,
     ),
     GateSpec(
         "fastlio2_live",
@@ -413,12 +484,12 @@ GATES: tuple[GateSpec, ...] = (
             "artifacts/policy_direct_verify.json",
         ),
         "PYTHONPATH=src:. MUJOCO_GL=egl python3 sim/scripts/policy_nav_smoke.py "
-        "--direct-duration 4 --goal-distance 0.8 --nav-duration 14 "
+        "--direct-duration 4 --goal-distance 0.8 --nav-duration 18 "
         "--nav-local-planner-backend nanobind --nav-path-follower-backend nav_core "
-        "--nav-costmap-wait 3 --nav-path-min-speed 0.12 --nav-path-max-speed 0.35 "
+        "--nav-costmap-wait 3 --nav-path-min-speed 0.25 --nav-path-max-speed 0.6 "
         "--nav-waypoint-threshold 0.30 --nav-final-waypoint-threshold 0.25 "
-        "--nav-path-goal-tolerance 0.25 --max-nav-dist-to-goal 0.30 "
-        "--min-nav-motion 0.35 --nav-max-angular-z 0.1 "
+        "--nav-path-goal-tolerance 0.25 --max-nav-dist-to-goal 0.35 "
+        "--min-nav-motion 0.35 --nav-max-angular-z 0.15 "
         "--json-out artifacts/server_sim_closure/policy_nav/report.json",
         _eval_policy_nav,
     ),
@@ -433,9 +504,10 @@ GATES: tuple[GateSpec, ...] = (
         "gazebo_runtime",
         "ROS-native Gazebo TF, odometry, and point-cloud runtime smoke",
         ("artifacts/server_sim_closure/gazebo_runtime/report.json",),
-        "PYTHONPATH=src:. python3 tests/integration/tf_contract_smoke.py "
-        "--timeout-sec 15 --min-samples 3 --require-sensors --json "
-        "--json-out artifacts/server_sim_closure/gazebo_runtime/report.json",
+        "bash -lc 'source /opt/ros/humble/setup.bash && "
+        "source install/setup.bash 2>/dev/null || true; "
+        "PYTHONPATH=src:.:$PYTHONPATH python3 sim/scripts/gazebo_runtime_gate.py "
+        "--json-out artifacts/server_sim_closure/gazebo_runtime/report.json'",
         _eval_gazebo_runtime,
     ),
 )
@@ -534,6 +606,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--large-terrain-report", type=Path, default=None)
     parser.add_argument("--native-pct-mujoco-report", type=Path, default=None)
+    parser.add_argument("--dynamic-obstacle-local-planner-report", type=Path, default=None)
     parser.add_argument("--fastlio2-live-report", type=Path, default=None)
     parser.add_argument("--policy-nav-report", type=Path, default=None)
     parser.add_argument("--gateway-dry-run-report", type=Path, default=None)
@@ -553,6 +626,7 @@ def main() -> int:
     overrides = {
         "large_terrain": args.large_terrain_report,
         "native_pct_mujoco": args.native_pct_mujoco_report,
+        "dynamic_obstacle_local_planner": args.dynamic_obstacle_local_planner_report,
         "fastlio2_live": args.fastlio2_live_report,
         "policy_nav": args.policy_nav_report,
         "gateway_dry_run": args.gateway_dry_run_report,

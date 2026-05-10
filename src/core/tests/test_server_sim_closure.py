@@ -95,6 +95,37 @@ def test_gateway_goal_dry_run_gate_publishes_goal_without_cmd_vel():
     assert report["published"]["cmd_vel"] == 0
 
 
+def test_server_sim_closure_finds_default_large_terrain_report_path():
+    spec = next(item for item in server_sim_closure.GATES if item.name == "large_terrain")
+
+    assert "artifacts/server_sim_closure/large_terrain/report.json" in spec.default_patterns
+
+
+def test_server_sim_closure_policy_nav_command_uses_verified_policy_gait_params():
+    spec = next(item for item in server_sim_closure.GATES if item.name == "policy_nav")
+
+    assert "--nav-duration 18" in spec.command
+    assert "--nav-path-min-speed 0.25" in spec.command
+    assert "--nav-path-max-speed 0.6" in spec.command
+    assert "--nav-max-angular-z 0.15" in spec.command
+
+
+def test_server_sim_closure_gazebo_runtime_command_starts_runtime_gate():
+    spec = next(item for item in server_sim_closure.GATES if item.name == "gazebo_runtime")
+
+    assert "sim/scripts/gazebo_runtime_gate.py" in spec.command
+    assert "tf_contract_smoke.py" not in spec.command
+    assert "source /opt/ros/humble/setup.bash" in spec.command
+
+
+def test_server_sim_closure_dynamic_obstacle_command_uses_nanobind_module_gate():
+    spec = next(item for item in server_sim_closure.GATES if item.name == "dynamic_obstacle_local_planner")
+
+    assert "sim/scripts/dynamic_obstacle_local_planner_gate.py" in spec.command
+    assert "--backend nanobind" in spec.command
+    assert "server_sim_closure/dynamic_obstacle_local_planner/report.json" in spec.command
+
+
 def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
     multifloor = _write_json(tmp_path / "multifloor.json", _complete_multifloor_report())
     large = _write_json(
@@ -146,6 +177,28 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
                 "p95_lateral_error_m": 0.12,
                 "final_progress_ratio": 0.99,
             },
+        },
+    )
+    dynamic_obstacles = _write_json(
+        tmp_path / "dynamic_obstacles.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "backend_actual": "nanobind",
+            "dynamic_replan_verified": True,
+            "obstacle_response_verified": True,
+            "clear_path_recovery_verified": True,
+            "min_clearance_m": 0.42,
+            "frames": {"local_path": "map", "cmd_vel": "not_published"},
+            "phases": [
+                {"name": "clear_initial", "path_count": 101, "path_frame_id": "map", "avoidance_side": "straight"},
+                {"name": "obstacle_left", "path_count": 101, "path_frame_id": "map", "avoidance_side": "right"},
+                {"name": "obstacle_right", "path_count": 101, "path_frame_id": "map", "avoidance_side": "left"},
+                {"name": "obstacle_center", "path_count": 101, "path_frame_id": "map", "avoidance_side": "right"},
+                {"name": "clear_recovered", "path_count": 101, "path_frame_id": "map", "avoidance_side": "straight"},
+            ],
         },
     )
     fastlio = _write_json(
@@ -243,6 +296,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "multifloor_exploration": multifloor,
             "large_terrain": large,
             "native_pct_mujoco": native,
+            "dynamic_obstacle_local_planner": dynamic_obstacles,
             "fastlio2_live": fastlio,
             "policy_nav": policy,
             "gateway_dry_run": gateway,
@@ -252,6 +306,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "multifloor_exploration",
             "large_terrain",
             "native_pct_mujoco",
+            "dynamic_obstacle_local_planner",
             "fastlio2_live",
             "policy_nav",
             "gateway_dry_run",
@@ -329,6 +384,42 @@ def test_server_sim_closure_reports_remaining_gaps(tmp_path: Path):
     assert "fastlio2_live" in summary["missing_or_failed"]
     assert any("collision is true" in gap for gap in summary["remaining_gaps"])
     assert any("missing_fastlio.json" in gap for gap in summary["remaining_gaps"])
+
+
+def test_server_sim_closure_rejects_weak_dynamic_obstacle_report(tmp_path: Path):
+    weak = _write_json(
+        tmp_path / "dynamic_weak.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "backend_actual": "cmu_py",
+            "dynamic_replan_verified": False,
+            "obstacle_response_verified": True,
+            "clear_path_recovery_verified": False,
+            "min_clearance_m": 0.10,
+            "phases": [
+                {"name": "clear_initial", "path_count": 101, "path_frame_id": "map", "avoidance_side": "straight"},
+                {"name": "obstacle_left", "path_count": 101, "path_frame_id": "map", "avoidance_side": "straight"},
+                {"name": "obstacle_right", "path_count": 101, "path_frame_id": "map", "avoidance_side": "straight"},
+            ],
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"dynamic_obstacle_local_planner": weak},
+        required={"dynamic_obstacle_local_planner"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["dynamic_obstacle_local_planner"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "backend_actual is not nanobind" in gaps
+    assert "dynamic_replan_verified is not true" in gaps
+    assert "clear_path_recovery_verified is not true" in gaps
+    assert "min_clearance_m < 0.25" in gaps
+    assert "left obstacle did not produce right detour" in gaps
 
 
 def test_server_sim_closure_rejects_non_pct_native_motion_report(tmp_path: Path):

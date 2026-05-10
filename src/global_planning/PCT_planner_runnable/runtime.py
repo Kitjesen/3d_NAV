@@ -266,7 +266,10 @@ def _preload_shared_libs(lib_dir: Path) -> list[str]:
         path = lib_dir / name
         if not path.exists():
             continue
-        ctypes.CDLL(str(path), mode=mode)
+        try:
+            ctypes.CDLL(str(path), mode=mode)
+        except OSError as exc:
+            raise RuntimeError(f"PCT shared library failed to load: {path}: {exc}") from exc
         loaded.append(str(path))
     return loaded
 
@@ -290,12 +293,14 @@ def prepare_pct_runtime(
     repo_root: str | os.PathLike[str] | None = None,
     *,
     machine: str | None = None,
+    preload_shared: bool = True,
 ) -> PctRuntimePaths:
     """Prepare imports and shared libraries for original PCT wrapper."""
     paths = resolve_pct_runtime_paths(repo_root, machine=machine)
     _prepend_sys_path([paths.scripts_dir, paths.planner_root, paths.lib_dir, paths.lib_root])
     _set_linux_library_env(paths.lib_dir)
-    _preload_shared_libs(paths.lib_dir)
+    if preload_shared:
+        _preload_shared_libs(paths.lib_dir)
     _install_lib_namespace(paths)
     return paths
 

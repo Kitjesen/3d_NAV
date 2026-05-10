@@ -77,6 +77,7 @@ def navigation(
                 ("path_follower_lookahead", "lookahead"),
                 ("path_follower_goal_tolerance", "goal_tolerance"),
                 ("path_follower_min_speed", "min_speed"),
+                ("path_follower_max_yaw_rate", "max_yaw_rate"),
             )
             if key in config
         }

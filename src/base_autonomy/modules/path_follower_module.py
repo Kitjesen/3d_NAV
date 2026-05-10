@@ -54,13 +54,15 @@ class PathFollowerModule(Module, layer=2):
     def __init__(self, backend: str = "nav_core",
                  max_speed: float = 0.4, lookahead: float = 1.5,
                  goal_tolerance: float = 0.2,
-                 min_speed: float = 0.15, **kw):
+                 min_speed: float = 0.15,
+                 max_yaw_rate: float | None = None, **kw):
         super().__init__(**kw)
         self._backend = backend
         self._max_speed = max_speed
         self._lookahead = lookahead
         self._goal_tolerance = goal_tolerance
         self._min_speed = min_speed
+        self._max_yaw_rate = max_yaw_rate
         self._node = None
 
         # Current robot pose (odom frame)
@@ -173,7 +175,11 @@ class PathFollowerModule(Module, layer=2):
             params.look_ahead_ratio = 0.5
             params.yaw_rate_gain = 7.5
             params.stop_yaw_rate_gain = 7.5
-            params.max_yaw_rate = 45.0
+            params.max_yaw_rate = (
+                math.degrees(float(self._max_yaw_rate))
+                if self._max_yaw_rate is not None
+                else 45.0
+            )
             params.max_accel = 1.0
             params.switch_time_thre = 1.0
             params.dir_diff_thre = 0.1
@@ -443,7 +449,8 @@ class PathFollowerModule(Module, layer=2):
             yaw_err += 2 * math.pi
 
         # P controller with cos coupling — Go1 has low yaw drift (~2°/8s)
-        wz = max(-0.8, min(0.8, yaw_err * 0.5))
+        yaw_limit = float(self._max_yaw_rate) if self._max_yaw_rate is not None else 0.8
+        wz = max(-yaw_limit, min(yaw_limit, yaw_err * 0.5))
         turn_factor = max(0.2, math.cos(yaw_err))
         vx = min(self._max_speed, max(self._min_speed, dist * 0.25)) * turn_factor
 
@@ -464,6 +471,7 @@ class PathFollowerModule(Module, layer=2):
             "backend": self._backend,
             "has_path": bool(self._nc_path) if self._backend == "nav_core"
                         else self._path_points is not None,
+            "max_yaw_rate": self._max_yaw_rate,
         }
         if self._backend == "nav_core" and self._nc_state is not None:
             h["vehicle_speed"] = self._nc_state.vehicle_speed

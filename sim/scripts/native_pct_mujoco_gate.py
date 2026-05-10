@@ -247,6 +247,18 @@ def _native_node_commands(
     return local_planner_cmd, path_follower_cmd
 
 
+def _default_local_planner_path_folder() -> Path:
+    candidates = (
+        ROOT / "install/local_planner/share/local_planner/paths",
+        ROOT / "install/share/local_planner/paths",
+        ROOT / "src/base_autonomy/local_planner/paths",
+    )
+    for candidate in candidates:
+        if (candidate / "startPaths.ply").is_file() and (candidate / "paths.ply").is_file():
+            return candidate
+    return candidates[0]
+
+
 def _load_ros_modules() -> dict[str, Any]:
     if shutil.which("ros2") is None:
         raise RuntimeError("ros2 CLI is unavailable; source ROS2 and install/setup.bash first")
@@ -1694,7 +1706,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     local_planner_log = artifact_dir / "localPlanner.log"
     path_follower_log = artifact_dir / "pathFollower.log"
-    path_folder = args.path_folder or (ROOT / "install/local_planner/share/local_planner/paths")
+    path_folder = args.path_folder or _default_local_planner_path_folder()
     obstacle_aware = not args.disable_obstacle_check
     local_planner_cmd, path_follower_cmd = _native_node_commands(
         path_folder=path_folder,
