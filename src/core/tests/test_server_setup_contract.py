@@ -12,6 +12,10 @@ def test_server_setup_runs_multifloor_closure_without_robot_motion():
     )
 
     assert 'RUN_MULTIFLOOR="${LINGTU_RUN_MULTIFLOOR:-1}"' in script
+    assert 'RUN_NAV_CORE="${LINGTU_RUN_NAV_CORE:-1}"' in script
+    assert "build_nav_core_runtime" in script
+    assert 'bash "${ROOT}/scripts/build_nav_core.sh" --clean' in script
+    assert "building nav_core nanobind runtime for production local planning" in script
     assert "multi-floor exploration/local-planning closure gate" in script
     assert "--route matrix" in script
     assert "--frontier-loop" in script

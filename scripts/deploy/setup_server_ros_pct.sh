@@ -26,6 +26,7 @@ SKIP_APT="${LINGTU_SKIP_APT:-0}"
 RUN_MUJOCO="${LINGTU_RUN_MUJOCO:-1}"
 RUN_PCT="${LINGTU_RUN_PCT:-1}"
 RUN_MULTIFLOOR="${LINGTU_RUN_MULTIFLOOR:-1}"
+RUN_NAV_CORE="${LINGTU_RUN_NAV_CORE:-1}"
 INSTALL_SYSTEM_DEPS="${LINGTU_INSTALL_SYSTEM_DEPS:-1}"
 INSTALL_PYTHON_DEPS="${LINGTU_INSTALL_PYTHON_DEPS:-1}"
 RUN_VERIFY="${LINGTU_RUN_VERIFY:-1}"
@@ -272,6 +273,14 @@ build_pct_runtime() {
     bash "${ROOT}/src/global_planning/PCT_planner_runnable/build_host_x86_64.sh"
 }
 
+build_nav_core_runtime() {
+  if [[ "${RUN_NAV_CORE}" != "1" ]]; then
+    return
+  fi
+  log "building nav_core nanobind runtime for production local planning"
+  bash "${ROOT}/scripts/build_nav_core.sh" --clean
+}
+
 run_verification() {
   if [[ "${RUN_VERIFY}" != "1" ]]; then
     log "LINGTU_RUN_VERIFY=0; skipping verification commands"
@@ -369,6 +378,7 @@ main() {
   install_system_deps
   install_python_deps
   build_pct_runtime
+  build_nav_core_runtime
   run_verification
 
   log "server setup and non-motion verification complete"
