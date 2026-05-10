@@ -193,6 +193,7 @@ export interface ReadinessResponse {
   module_count: number
   failed_modules: string[]
   reasons: string[]
+  advisories?: string[]
   runtime: Record<string, unknown>
   ts: number
 }

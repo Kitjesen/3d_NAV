@@ -1,4 +1,6 @@
-import type { SSEState } from '../types'
+import { useEffect, useState } from 'react'
+import type { ReadinessResponse, SSEState } from '../types'
+import * as api from '../services/api'
 import styles from './ReadinessCard.module.css'
 
 interface ReadinessCardProps {
@@ -14,7 +16,20 @@ function labelList(values: string[], fallback: string): string[] {
   return clean.length > 0 ? clean.slice(0, 5) : [fallback]
 }
 
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map(item => String(item).trim()).filter(Boolean)
+    : []
+}
+
+function calibrationWarnings(readiness: ReadinessResponse | null): string[] {
+  const calibration = readiness?.runtime?.calibration
+  if (calibration == null || typeof calibration !== 'object') return []
+  return stringList((calibration as Record<string, unknown>).warnings)
+}
+
 export function ReadinessCard({ sseState }: ReadinessCardProps) {
+  const [clientReadiness, setClientReadiness] = useState<ReadinessResponse | null>(null)
   const nav = sseState.navigationStatus
   const readiness = nav?.readiness
   const localization = nav?.localization
@@ -25,14 +40,37 @@ export function ReadinessCard({ sseState }: ReadinessCardProps) {
 
   const goalReady = readiness?.can_accept_goal ?? nav?.can_accept_goal ?? false
   const canExecute = readiness?.can_execute_autonomy ?? false
-  const blockers = labelList(readiness?.blockers ?? [], 'No readiness blockers')
-  const advisories = labelList(readiness?.advisories ?? [], 'No advisories')
+  const clientReasons = clientReadiness?.reasons ?? []
+  const clientAdvisories = [
+    ...(clientReadiness?.advisories ?? []),
+    ...calibrationWarnings(clientReadiness),
+  ]
+  const blockers = labelList([...(readiness?.blockers ?? []), ...clientReasons], 'No readiness blockers')
+  const advisories = labelList([...(readiness?.advisories ?? []), ...clientAdvisories], 'No advisories')
   const owner = control?.active_source?.label ?? control?.active_cmd_source ?? 'none'
   const speedMode = motion?.speed_policy?.mode ?? 'unknown'
   const distanceToGoal = fmtNum(target?.distance_to_goal_m)
   const progressText = progress
     ? `${progress.wp_index}/${progress.wp_total} (${Math.round(progress.fraction * 100)}%)`
     : '--'
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const next = await api.fetchReadiness()
+        if (!cancelled) setClientReadiness(next)
+      } catch {
+        if (!cancelled) setClientReadiness(null)
+      }
+    }
+    void load()
+    const timer = window.setInterval(load, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
   return (
     <div className={styles.card}>

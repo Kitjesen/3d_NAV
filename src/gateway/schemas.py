@@ -333,6 +333,7 @@ class ReadinessResponse(GatewayResponseModel):
     module_count: int
     failed_modules: list[str]
     reasons: list[str]
+    advisories: list[str] = Field(default_factory=list)
     runtime: dict[str, Any] = Field(default_factory=dict)
     ts: float
 
