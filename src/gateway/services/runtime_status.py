@@ -1132,6 +1132,8 @@ def build_navigation_status(gw: Any) -> dict[str, Any]:
             "cmd_vel_mux_available": control.get("mux_available", False),
             "frame_mismatches": frames.get("mismatches", []),
             "safety": safety_summary(safety),
+            "plan_safety_policy": nav_runtime.get("plan_safety_policy"),
+            "last_plan_report": _mapping(nav_runtime.get("last_plan_report")),
         },
         "mission": {
             "state": state,

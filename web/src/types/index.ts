@@ -265,6 +265,11 @@ export interface PlanPreviewResponse {
   distance_m?: number | null
   plan_ms?: number | null
   planner?: string | null
+  selected_planner?: string | null
+  plan_safety_policy?: string | null
+  path_safety?: Record<string, unknown> | null
+  fallback_reason?: string
+  rejected_plans?: Record<string, unknown>[]
   source: string
   reasons: string[]
   error?: string | null
@@ -416,6 +421,8 @@ export interface NavigationDiagnosticsSummary {
   cmd_vel_mux_available: boolean
   frame_mismatches: NavigationFrameMismatch[]
   safety?: Record<string, unknown> | null
+  plan_safety_policy?: string | null
+  last_plan_report?: Record<string, unknown>
 }
 
 export interface NavigationMissionSummary {

@@ -569,6 +569,11 @@ class PlanPreviewResponse(GatewayResponseModel):
     distance_m: float | None = None
     plan_ms: float | None = None
     planner: str | None = None
+    selected_planner: str | None = None
+    plan_safety_policy: str | None = None
+    path_safety: dict[str, Any] | None = None
+    fallback_reason: str = ""
+    rejected_plans: list[dict[str, Any]] = Field(default_factory=list)
     source: str = "navigation_preview"
     reasons: list[str] = Field(default_factory=list)
     error: str | None = None
@@ -713,6 +718,8 @@ class NavigationDiagnosticsSummary(GatewayResponseModel):
     cmd_vel_mux_available: bool = False
     frame_mismatches: list[NavigationFrameMismatch] = Field(default_factory=list)
     safety: dict[str, Any] | None = None
+    plan_safety_policy: str | None = None
+    last_plan_report: dict[str, Any] = Field(default_factory=dict)
 
 
 class NavigationMissionSummary(GatewayResponseModel):

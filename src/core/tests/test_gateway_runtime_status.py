@@ -520,6 +520,22 @@ def test_navigation_status_reports_mission_path_and_control_source():
                 },
             }
 
+    class FakeNavigation:
+        def get_navigation_status(self):
+            return json.dumps({
+                "plan_safety_policy": "reject",
+                "last_plan_report": {
+                    "selected_planner": "pct",
+                    "selected_path_safety": {
+                        "ok": False,
+                        "blocked_sample_count": 2,
+                    },
+                    "fallback_reason": "pct path_safety failed",
+                    "rejected_plans": [{"planner": "pct", "reason": "unsafe"}],
+                    "policy": "reject",
+                },
+            })
+
     gateway = GatewayModule()
     gateway._session_mode = "navigating"
     with gateway._state_lock:
@@ -556,7 +572,10 @@ def test_navigation_status_reports_mission_path_and_control_source():
             "confidence": 0.9,
             "icp_fitness": 0.03,
         }
-    gateway._all_modules = {"CmdVelMux": FakeMux()}
+    gateway._all_modules = {
+        "CmdVelMux": FakeMux(),
+        "NavigationModule": FakeNavigation(),
+    }
 
     payload = build_navigation_status(gateway)
     NavigationStatusResponse.model_validate(payload)
@@ -594,6 +613,12 @@ def test_navigation_status_reports_mission_path_and_control_source():
     assert payload["motion"]["speed_policy"]["mode"] == "cautious"
     assert payload["motion"]["speed_policy"]["reason"] == "degeneracy=MILD"
     assert payload["feedback"]["next_action"] == "monitor_progress"
+    assert payload["diagnostics"]["plan_safety_policy"] == "reject"
+    assert payload["diagnostics"]["last_plan_report"]["selected_planner"] == "pct"
+    assert (
+        payload["diagnostics"]["last_plan_report"]["selected_path_safety"]["ok"]
+        is False
+    )
     assert payload["reason_codes"] == []
     assert payload["localization"]["degraded"] is False
 

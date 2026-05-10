@@ -809,6 +809,11 @@ def test_openapi_exposes_client_response_models():
     assert schemas["PlanPreviewResponse"]["properties"]["path"]["items"][
         "$ref"
     ].endswith("/PathPoint")
+    assert "selected_planner" in schemas["PlanPreviewResponse"]["properties"]
+    assert "plan_safety_policy" in schemas["PlanPreviewResponse"]["properties"]
+    assert "path_safety" in schemas["PlanPreviewResponse"]["properties"]
+    assert "fallback_reason" in schemas["PlanPreviewResponse"]["properties"]
+    assert "rejected_plans" in schemas["PlanPreviewResponse"]["properties"]
     assert schemas["GoalCandidateResponse"]["properties"]["target"]["anyOf"][0][
         "$ref"
     ].endswith("/ConstructedGoalTarget")
@@ -839,6 +844,14 @@ def test_openapi_exposes_client_response_models():
     assert schemas["NavigationDiagnosticsSummary"]["properties"]["frame_mismatches"][
         "items"
     ]["$ref"].endswith("/NavigationFrameMismatch")
+    assert (
+        "plan_safety_policy"
+        in schemas["NavigationDiagnosticsSummary"]["properties"]
+    )
+    assert (
+        "last_plan_report"
+        in schemas["NavigationDiagnosticsSummary"]["properties"]
+    )
     assert schemas["AppTrafficResponse"]["properties"]["sse"]["$ref"].endswith(
         "/TrafficSSEStats"
     )

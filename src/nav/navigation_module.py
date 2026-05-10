@@ -985,6 +985,11 @@ class NavigationModule(Module, layer=5):
             "distance_m": None,
             "plan_ms": None,
             "planner": getattr(planner, "_planner_name", None),
+            "selected_planner": None,
+            "plan_safety_policy": getattr(planner, "_plan_safety_policy", None),
+            "path_safety": None,
+            "fallback_reason": "",
+            "rejected_plans": [],
             "source": "navigation_preview",
             "reasons": [],
             "error": None,
@@ -1062,6 +1067,7 @@ class NavigationModule(Module, layer=5):
             logger.warning("NavigationModule: plan preview failed: %s", exc)
             result["reasons"] = ["planning_failed"]
             result["error"] = str(exc)
+            result.update(self._preview_plan_report_fields(planner))
             return result
 
         try:
@@ -1134,7 +1140,38 @@ class NavigationModule(Module, layer=5):
             "adjusted_goal": adjusted_goal,
             "reasons": ["goal_adjusted"] if adjusted_goal is not None else [],
         })
+        result.update(self._preview_plan_report_fields(planner))
         return result
+
+    @staticmethod
+    def _preview_plan_report_fields(planner: Any) -> dict[str, Any]:
+        """Expose planner safety/selection diagnostics without changing state."""
+        report = NavigationModule._planner_last_plan_report(planner)
+        selected = report.get("selected_planner") or getattr(
+            planner,
+            "_planner_name",
+            None,
+        )
+        return {
+            "planner": selected or getattr(planner, "_planner_name", None),
+            "selected_planner": selected,
+            "plan_safety_policy": (
+                report.get("policy")
+                or getattr(planner, "_plan_safety_policy", None)
+            ),
+            "path_safety": report.get("selected_path_safety"),
+            "fallback_reason": report.get("fallback_reason", ""),
+            "rejected_plans": list(report.get("rejected_plans") or []),
+        }
+
+    @staticmethod
+    def _planner_last_plan_report(planner: Any) -> dict[str, Any]:
+        report = getattr(planner, "last_plan_report", {}) or {}
+        if callable(report):
+            report = report()
+        if not isinstance(report, dict):
+            return {}
+        return dict(report)
 
     def _preview_plan_with_timeout(
         self,
@@ -1220,7 +1257,7 @@ class NavigationModule(Module, layer=5):
         self._publish_waypoint()
 
     def _publish_plan_report(self) -> None:
-        report = getattr(self._planner_svc, "last_plan_report", {}) or {}
+        report = self._planner_last_plan_report(self._planner_svc)
         if not report:
             return
         selected = report.get("selected_planner")
@@ -1385,6 +1422,12 @@ class NavigationModule(Module, layer=5):
             "waypoint_index": self._tracker.wp_index,
             "replan_count": self._replan_count,
             "failure_reason": self._failure_reason,
+            "plan_safety_policy": getattr(
+                self._planner_svc,
+                "_plan_safety_policy",
+                "observe",
+            ),
+            "last_plan_report": self._planner_last_plan_report(self._planner_svc),
         })
 
     @skill
@@ -1412,9 +1455,13 @@ class NavigationModule(Module, layer=5):
     def health(self) -> dict[str, Any]:
         info = super().port_summary()
         info["navigation"] = {
-            "planner": self._planner_svc._planner_name,
-            "plan_safety_policy": getattr(self._planner_svc, "_plan_safety_policy", "observe"),
-            "last_plan_report": self._planner_svc.last_plan_report,
+            "planner": getattr(self._planner_svc, "_planner_name", None),
+            "plan_safety_policy": getattr(
+                self._planner_svc,
+                "_plan_safety_policy",
+                "observe",
+            ),
+            "last_plan_report": self._planner_last_plan_report(self._planner_svc),
             "state": self._state,
             "wp_index": self._tracker.wp_index,
             "wp_total": self._tracker.path_length,

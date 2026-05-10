@@ -82,6 +82,7 @@ class _ReportingFailurePlanner(_FakePlanner):
         return {
             "selected_planner": "pct",
             "fallback_reason": "pct path_safety failed",
+            "selected_path_safety": {"ok": False, "blocked_sample_count": 2},
             "rejected_plans": [{"planner": "pct", "reason": "unsafe"}],
             "policy": "reject",
         }
@@ -259,6 +260,26 @@ def test_navigation_plan_preview_reports_planner_runtime_error_as_failure():
     assert preview["feasible"] is False
     assert preview["reasons"] == ["planning_failed"]
     assert "planner returned empty path" in preview["error"]
+    assert nav.global_path.msg_count == 0
+    assert nav.waypoint.msg_count == 0
+    assert nav.recovery_cmd_vel.msg_count == 0
+
+
+def test_navigation_plan_preview_exposes_plan_safety_failure_report():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _ReportingFailurePlanner()
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+
+    preview = nav.preview_plan(5.0, 0.0, 0.0)
+
+    assert preview["ok"] is True
+    assert preview["feasible"] is False
+    assert preview["selected_planner"] == "pct"
+    assert preview["plan_safety_policy"] == "reject"
+    assert preview["fallback_reason"] == "pct path_safety failed"
+    assert preview["path_safety"]["ok"] is False
+    assert preview["path_safety"]["blocked_sample_count"] == 2
+    assert preview["rejected_plans"][0]["planner"] == "pct"
     assert nav.global_path.msg_count == 0
     assert nav.waypoint.msg_count == 0
     assert nav.recovery_cmd_vel.msg_count == 0
