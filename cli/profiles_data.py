@@ -221,7 +221,12 @@ PROFILES = {
         # the hardware navigation profile.
         plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
-        enable_native=True,
+        # Keep profile execution inside the Module graph. The ROS2 native
+        # localPlanner publishes /nav/local_path, but this profile consumes
+        # LocalPlannerModule.local_path, so use the in-process planner here.
+        enable_native=False,
+        python_autonomy_backend="nanobind",
+        python_path_follower_backend="nav_core",
         enable_semantic=True,
         enable_gateway=True,
         gateway_port=5050,
@@ -235,7 +240,6 @@ PROFILES = {
         tomogram="src/global_planning/PCT_planner/rsc/tomogram/building2_9.pickle",
         plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
-        enable_native=True,
         enable_semantic=True,
         enable_gateway=True,
         enable_map_modules=True,
@@ -246,6 +250,12 @@ PROFILES = {
         # planning aligned with the live /nav/odometry contract until the
         # map->odom transform gate is enforced at runtime.
         planning_frame_id="odom",
+        # The Gazebo profile is ROS-native at the simulator boundary, while
+        # planning/tracking stay in the Module graph so /nav/local_path cannot
+        # disappear into an unbridged external ROS2 process.
+        enable_native=False,
+        python_autonomy_backend="nanobind",
+        python_path_follower_backend="nav_core",
         gateway_port=5050,
     ),
     "sim_nav": dict(

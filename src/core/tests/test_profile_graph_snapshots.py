@@ -95,6 +95,9 @@ def test_sim_gazebo_profile_uses_ros2_driver_and_live_odometry_frame():
     assert config["robot"] == "sim_ros2"
     assert config["slam_profile"] == "none"
     assert config["planning_frame_id"] == "odom"
+    assert config["enable_native"] is False
+    assert config["python_autonomy_backend"] == "nanobind"
+    assert config["python_path_follower_backend"] == "nav_core"
     assert config["enable_camera"] is True
     assert config["use_driver_camera"] is True
     assert config["cloud_topic"] == "/nav/map_cloud"
@@ -107,6 +110,23 @@ def test_sim_gazebo_profile_uses_ros2_driver_and_live_odometry_frame():
     assert "ROS2SimDriverModule.odometry->NavigationModule.odometry" in wires
     assert "SlamBridgeModule" not in graph.modules
     assert not graph.dangling_wires()
+
+
+def test_sim_profiles_keep_autonomy_inside_module_graph():
+    for profile in ("sim", "sim_gazebo"):
+        config = resolve_profile_config(profile)
+        nav_config = dict(config)
+        planner = nav_config.pop("planner", "astar")
+        tomogram = nav_config.pop("tomogram", "")
+        enable_native = nav_config.pop("enable_native", False)
+
+        bp = navigation(planner, tomogram, enable_native, **nav_config)
+        entries = {entry.name: entry for entry in bp._entries}
+
+        assert enable_native is False
+        assert entries["TerrainModule"].config["backend"] == "nanobind"
+        assert entries["LocalPlannerModule"].config["backend"] == "nanobind"
+        assert entries["PathFollowerModule"].config["backend"] == "nav_core"
 
 
 def test_real_robot_profiles_do_not_auto_actuate_on_startup():
