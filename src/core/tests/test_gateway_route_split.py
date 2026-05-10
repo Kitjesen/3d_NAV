@@ -282,10 +282,19 @@ def test_diagnostic_routes_export_tarball(monkeypatch):
             names = set(tar.getnames())
             assert "diag/modules.json" in names
             assert "diag/health.json" in names
+            assert "diag/app_web_snapshots.json" in names
+            assert "diag/app_web/readiness.json" in names
+            assert "diag/app_web/state.json" in names
             modules_file = tar.extractfile("diag/modules.json")
             assert modules_file is not None
             modules = json.loads(modules_file.read().decode("utf-8"))
             assert modules["healthy"] == {"ok": True}
+            readiness_file = tar.extractfile("diag/app_web/readiness.json")
+            assert readiness_file is not None
+            readiness = json.loads(readiness_file.read().decode("utf-8"))
+            assert readiness["ok"] is True
+            assert readiness["data"]["schema_version"] == 1
+            assert readiness["data"]["status"] in {"ready", "degraded", "not_started"}
         assert list(temp_root.glob("diag_*.tar.gz")) == []
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)

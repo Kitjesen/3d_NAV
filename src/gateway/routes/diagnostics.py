@@ -13,6 +13,83 @@ from datetime import datetime
 from typing import Any
 
 
+def _json_ready(value: Any) -> Any:
+    try:
+        json.dumps(value, ensure_ascii=False, default=str)
+        return value
+    except Exception:
+        return str(value)
+
+
+def _location_entries(gw: Any) -> list[Any]:
+    tlm = getattr(gw, "_tagged_loc_module", None)
+    if tlm is None:
+        return []
+    try:
+        return list(tlm.store.list_all())
+    except Exception:
+        try:
+            return list(tlm.store._store.values())
+        except Exception:
+            return []
+
+
+def _snapshot_or_error(name: str, builder) -> dict[str, Any]:
+    try:
+        value = builder()
+        return {"ok": True, "data": _json_ready(value)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "snapshot": name}
+
+
+def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
+    from gateway.services.readiness import build_readiness_snapshot
+    from gateway.services.runtime_status import (
+        build_localization_status,
+        build_navigation_status,
+    )
+    from gateway.services.state_snapshot import build_state_snapshot
+    from gateway.services.telemetry_normalizers import (
+        build_locations_response,
+        build_path_response,
+        build_scene_graph_response,
+    )
+
+    def _scene_graph():
+        with gw._state_lock:
+            sg = gw._sg_json
+        return build_scene_graph_response(sg)
+
+    def _path():
+        with gw._state_lock:
+            path = gw._last_path
+            robot = gw._odom
+        return build_path_response(path, robot)
+
+    readiness = _snapshot_or_error(
+        "readiness",
+        lambda: build_readiness_snapshot(gw, include_details=True)[0],
+    )
+    return {
+        "readiness": readiness,
+        "state": _snapshot_or_error("state", lambda: build_state_snapshot(gw)),
+        "localization": _snapshot_or_error(
+            "localization",
+            lambda: build_localization_status(gw),
+        ),
+        "navigation": _snapshot_or_error(
+            "navigation",
+            lambda: build_navigation_status(gw),
+        ),
+        "path": _snapshot_or_error("path", _path),
+        "scene_graph": _snapshot_or_error("scene_graph", _scene_graph),
+        "locations": _snapshot_or_error(
+            "locations",
+            lambda: build_locations_response(_location_entries(gw)),
+        ),
+    }
+
+
 def register_diagnostic_routes(app, gw) -> None:
     from fastapi.responses import FileResponse
     from starlette.background import BackgroundTask
@@ -93,6 +170,29 @@ def register_diagnostic_routes(app, gw) -> None:
             except Exception:
                 git_out, short = "unknown", "unknown"
             _add_text(tar, "diag/git_head.txt", f"{git_out}\nshort: {short}\n")
+
+            app_web_snapshots = _build_app_web_snapshots(gw)
+            _add_text(
+                tar,
+                "diag/app_web_snapshots.json",
+                json.dumps(
+                    app_web_snapshots,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
+            for name, snapshot in app_web_snapshots.items():
+                _add_text(
+                    tar,
+                    f"diag/app_web/{name}.json",
+                    json.dumps(
+                        snapshot,
+                        indent=2,
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                )
 
             cfg_path = repo_root / "config" / "robot_config.yaml"
             if cfg_path.exists():
