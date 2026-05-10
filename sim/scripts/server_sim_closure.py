@@ -1,0 +1,480 @@
+#!/usr/bin/env python3
+"""Summarize LingTu server-side simulation closure reports."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True)
+class GateSpec:
+    name: str
+    description: str
+    default_patterns: tuple[str, ...]
+    command: str
+    evaluator: Callable[[dict[str, Any]], tuple[bool, list[str], dict[str, Any]]]
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _bool_false(report: dict[str, Any], key: str) -> bool:
+    return report.get(key) is False
+
+
+def _safe_float(value: Any, default: float = 999.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _frame(report: dict[str, Any], key: str) -> str:
+    frames = report.get("frames") or {}
+    return str(frames.get(key) or "")
+
+
+def _eval_large_terrain(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+
+    cases = list(report.get("cases") or [])
+    pct_plans = [
+        plan
+        for case in cases
+        for plan in case.get("planning", [])
+        if str(plan.get("planner")).lower() == "pct"
+    ]
+    native_pct = any(bool(plan.get("native_backend_used")) for plan in pct_plans)
+    path_safe = all(bool((case.get("path_safety") or {}).get("ok", True)) for case in cases)
+    if not pct_plans:
+        blockers.append("no PCT planning case found")
+    if not native_pct:
+        blockers.append("no native PCT case found")
+    if not path_safe:
+        blockers.append("path safety failed")
+
+    return not blockers, blockers, {
+        "case_count": len(cases),
+        "native_pct": native_pct,
+        "path_safe": path_safe,
+        "routes": [case.get("route") for case in cases],
+    }
+
+
+def _eval_native_pct_mujoco(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if report.get("reached_goal") is not True:
+        blockers.append("reached_goal is not true")
+    if str(report.get("planner") or "").lower() != "pct":
+        blockers.append("planner is not pct")
+    if report.get("pct_native_backend_used") is not True:
+        blockers.append("pct_native_backend_used is not true")
+    obstacle_aware = report.get("obstacle_aware") or {}
+    if obstacle_aware.get("enabled") is not True:
+        blockers.append("obstacle_aware.enabled is not true")
+    if int(obstacle_aware.get("metadata_points") or 0) <= 0:
+        blockers.append("obstacle_aware.metadata_points missing")
+    clearance = report.get("obstacle_clearance") or {}
+    if clearance.get("checked") is not True:
+        blockers.append("obstacle clearance was not checked")
+    if clearance.get("collision") is True:
+        blockers.append("collision is true")
+    local_path_samples = report.get("local_path_samples") or []
+    if not local_path_samples:
+        blockers.append("local_path_samples missing")
+    trajectory_quality = report.get("trajectory_quality") or {}
+    if trajectory_quality.get("ok") is not True:
+        blockers.append("trajectory_quality.ok is not true")
+    if _safe_float(report.get("final_distance_m")) > 0.8:
+        blockers.append("final_distance_m > 0.8")
+    if _frame(report, "goal") and _frame(report, "goal") != "map":
+        blockers.append("goal frame is not map")
+    if _frame(report, "cmd_vel") and _frame(report, "cmd_vel") != "base_link":
+        blockers.append("cmd_vel frame is not base_link")
+
+    return not blockers, blockers, {
+        "planner": report.get("planner"),
+        "pct_native_backend_used": report.get("pct_native_backend_used"),
+        "final_distance_m": report.get("final_distance_m"),
+        "moved_m": report.get("moved_m"),
+        "obstacle_aware": {
+            "enabled": obstacle_aware.get("enabled"),
+            "metadata_points": obstacle_aware.get("metadata_points"),
+        },
+        "local_path_sample_count": len(local_path_samples),
+        "min_clearance_m": clearance.get("min_clearance_m"),
+        "clearance_checked": clearance.get("checked"),
+        "collision": clearance.get("collision"),
+        "trajectory_quality": {
+            "ok": trajectory_quality.get("ok"),
+            "p95_lateral_error_m": trajectory_quality.get("p95_lateral_error_m"),
+            "final_progress_ratio": trajectory_quality.get("final_progress_ratio"),
+        },
+        "frames": report.get("frames") or {},
+    }
+
+
+def _eval_fastlio2_live(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    for key in (
+        "ok",
+        "simulation_only",
+        "live_mujoco_lidar_verified",
+        "live_mujoco_imu_verified",
+        "slam_algorithm_output_verified",
+        "bridge_verified",
+    ):
+        if report.get(key) is not True:
+            blockers.append(f"{key} is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if report.get("cmd_vel_sent_to_hardware") is not False:
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if _frame(report, "published_lidar") and _frame(report, "published_lidar") != "body":
+        blockers.append("published_lidar frame is not body")
+
+    return not blockers, blockers, {
+        "outputs": report.get("outputs") or {},
+        "states_seen": report.get("states_seen") or [],
+        "point_count": report.get("point_count") or {},
+        "frames": report.get("frames") or {},
+    }
+
+
+def _eval_policy_nav(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("passed") is not True:
+        blockers.append("report.passed is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+
+    checks = list(report.get("checks") or [])
+    policy_loaded = any(bool(check.get("policy_loaded")) for check in checks)
+    nav_checks = [check for check in checks if check.get("mode") == "full_stack_policy_nav"]
+    nav_passed = any(bool(check.get("passed")) for check in nav_checks)
+    if not policy_loaded:
+        blockers.append("no ONNX policy loaded")
+    if not nav_passed:
+        blockers.append("full_stack_policy_nav did not pass")
+    for nav_check in nav_checks:
+        seen = nav_check.get("seen") or {}
+        if int(seen.get("direct_fallback", 0)) != 0:
+            blockers.append("full_stack_policy_nav used direct_goal_fallback")
+        for key in ("local_path", "path_follower_cmd", "mux_cmd", "waypoints"):
+            if int(seen.get(key, 0)) <= 0:
+                blockers.append(f"full_stack_policy_nav missing {key}")
+    for check in checks:
+        if check.get("cmd_vel_sent_to_hardware") is not False:
+            blockers.append(f"{check.get('mode')} did not report hardware-safe cmd_vel")
+
+    last_nav = nav_checks[-1] if nav_checks else {}
+    return not blockers, blockers, {
+        "check_count": len(checks),
+        "policy_loaded": policy_loaded,
+        "nav_passed": nav_passed,
+        "policy_paths": [check.get("policy_path") for check in checks if check.get("policy_path")],
+        "nav_seen": last_nav.get("seen") or {},
+        "nav_state": last_nav.get("nav_state"),
+        "nav_dist_to_goal_m": last_nav.get("dist_to_goal_m"),
+        "frames": [check.get("frames") for check in checks if check.get("frames")],
+    }
+
+
+def _eval_gateway_dry_run(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    published = report.get("published") or {}
+    if int(published.get("goal_pose", 0)) != 1:
+        blockers.append("goal_pose publish count is not 1")
+    if int(published.get("cmd_vel", 0)) != 0:
+        blockers.append("cmd_vel was published")
+
+    return not blockers, blockers, {
+        "published": published,
+        "frames": report.get("frames") or {},
+        "target": report.get("target"),
+    }
+
+
+def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if int(report.get("samples") or 0) <= 0:
+        blockers.append("tf samples missing")
+    if report.get("odometry_frame_id") != "odom":
+        blockers.append("odometry_frame_id is not odom")
+    if report.get("odometry_child_frame_id") != "body":
+        blockers.append("odometry_child_frame_id is not body")
+
+    frames = report.get("topic_frames") or {}
+    samples = report.get("topic_samples") or {}
+    point_counts = report.get("point_counts") or {}
+    expected = {
+        "/nav/map_cloud": "odom",
+        "/nav/registered_cloud": "body",
+    }
+    for topic, frame in expected.items():
+        if int(samples.get(topic) or 0) <= 0:
+            blockers.append(f"{topic} samples missing")
+        if frames.get(topic) != frame:
+            blockers.append(f"{topic} frame is not {frame}")
+    for topic in ("/nav/map_cloud", "/nav/registered_cloud"):
+        if int(point_counts.get(topic) or 0) <= 0:
+            blockers.append(f"{topic} points missing")
+
+    return not blockers, blockers, {
+        "samples": report.get("samples"),
+        "topic_samples": samples,
+        "topic_frames": frames,
+        "point_counts": point_counts,
+    }
+
+
+GATES: tuple[GateSpec, ...] = (
+    GateSpec(
+        "large_terrain",
+        "PCT/native path generation over large static terrain assets",
+        ("artifacts/large_terrain_nav_validation*/report.json",),
+        "PYTHONPATH=src:. python3 sim/scripts/large_terrain_nav_validation.py --output-dir artifacts/server_sim_closure/large_terrain --planners pct,astar --json-out artifacts/server_sim_closure/large_terrain/report.json",
+        _eval_large_terrain,
+    ),
+    GateSpec(
+        "native_pct_mujoco",
+        "Native PCT route through ROS2 localPlanner/pathFollower into MuJoCo kinematic motion",
+        (
+            "artifacts/server_sim_closure/native_pct_mujoco/report.json",
+            "artifacts/native_pct_mujoco_gate*/report.json",
+            "artifacts/native_pct_large_terrain*/report.json",
+        ),
+        "PYTHONPATH=src:. python3 sim/scripts/native_pct_mujoco_gate.py --source-report artifacts/server_sim_closure/large_terrain/report.json --route terrain_long --planner pct --timeout-s 180 --json-out artifacts/server_sim_closure/native_pct_mujoco/report.json",
+        _eval_native_pct_mujoco,
+    ),
+    GateSpec(
+        "fastlio2_live",
+        "Fast-LIO2 on live MuJoCo LiDAR/IMU into SlamBridgeModule",
+        (
+            "artifacts/server_sim_closure/fastlio2_live/report.json",
+            "artifacts/mujoco_fastlio2_live*/report.json",
+            "artifacts/mujoco_fastlio2_live*/*/report.json",
+            "artifacts/fastlio2*/report.json",
+        ),
+        "PYTHONPATH=src:. python3 sim/scripts/mujoco_fastlio2_live_gate.py --json-out artifacts/server_sim_closure/fastlio2_live/report.json --strict",
+        _eval_fastlio2_live,
+    ),
+    GateSpec(
+        "policy_nav",
+        "ONNX gait policy with full-stack simulated navigation",
+        (
+            "artifacts/server_sim_closure/policy_nav/report.json",
+            "artifacts/policy_nav*/report.json",
+            "artifacts/*policy*/*.json",
+            "artifacts/policy_direct_verify.json",
+        ),
+        "PYTHONPATH=src:. MUJOCO_GL=egl python3 sim/scripts/policy_nav_smoke.py "
+        "--direct-duration 4 --goal-distance 0.8 --nav-duration 14 "
+        "--nav-local-planner-backend nanobind --nav-path-follower-backend nav_core "
+        "--nav-costmap-wait 3 --nav-path-min-speed 0.12 --nav-path-max-speed 0.35 "
+        "--nav-waypoint-threshold 0.30 --nav-final-waypoint-threshold 0.25 "
+        "--nav-path-goal-tolerance 0.25 --max-nav-dist-to-goal 0.30 "
+        "--min-nav-motion 0.35 --nav-max-angular-z 0.1 "
+        "--json-out artifacts/server_sim_closure/policy_nav/report.json",
+        _eval_policy_nav,
+    ),
+    GateSpec(
+        "gateway_dry_run",
+        "Gateway goal/preview command flow without driver or hardware cmd_vel",
+        ("artifacts/gateway_goal_dry_run*/report.json", "artifacts/server_sim_closure/gateway_dry_run/report.json"),
+        "PYTHONPATH=src:. python3 sim/scripts/gateway_goal_dry_run_gate.py --json-out artifacts/server_sim_closure/gateway_dry_run/report.json --strict",
+        _eval_gateway_dry_run,
+    ),
+    GateSpec(
+        "gazebo_runtime",
+        "ROS-native Gazebo TF, odometry, and point-cloud runtime smoke",
+        ("artifacts/server_sim_closure/gazebo_runtime/report.json",),
+        "PYTHONPATH=src:. python3 tests/integration/tf_contract_smoke.py "
+        "--timeout-sec 15 --min-samples 3 --require-sensors --json "
+        "--json-out artifacts/server_sim_closure/gazebo_runtime/report.json",
+        _eval_gazebo_runtime,
+    ),
+)
+
+
+def _candidate_matches(patterns: tuple[str, ...]) -> list[Path]:
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    for pattern in patterns:
+        for path in ROOT.glob(pattern):
+            if path.is_file() and path not in seen:
+                seen.add(path)
+                candidates.append(path)
+    return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def _best_match(spec: GateSpec) -> Path | None:
+    candidates = _candidate_matches(spec.default_patterns)
+    if not candidates:
+        return None
+    for path in candidates:
+        try:
+            ok, _, _ = spec.evaluator(_load_json(path))
+        except Exception:
+            ok = False
+        if ok:
+            return path
+    return candidates[0]
+
+
+def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[str, Any]:
+    gates: dict[str, Any] = {}
+    for spec in GATES:
+        path = report_overrides.get(spec.name) or _best_match(spec)
+        if path is None:
+            gates[spec.name] = {
+                "description": spec.description,
+                "exists": False,
+                "ok": False,
+                "status": "missing",
+                "blockers": ["report missing"],
+                "path": "",
+                "command": spec.command,
+            }
+            continue
+        try:
+            report = _load_json(path)
+            ok, blockers, evidence = spec.evaluator(report)
+            gates[spec.name] = {
+                "description": spec.description,
+                "exists": True,
+                "ok": bool(ok),
+                "status": "passed" if ok else "failed",
+                "blockers": blockers,
+                "path": str(path),
+                "command": spec.command,
+                "evidence": evidence,
+            }
+        except Exception as exc:
+            gates[spec.name] = {
+                "description": spec.description,
+                "exists": True,
+                "ok": False,
+                "status": "invalid",
+                "blockers": [str(exc)],
+                "path": str(path),
+                "command": spec.command,
+            }
+
+    required_names = required or {spec.name for spec in GATES}
+    missing_or_failed = [
+        name
+        for name in sorted(required_names)
+        if not bool((gates.get(name) or {}).get("ok"))
+    ]
+    verified = {name: bool(item.get("ok")) for name, item in gates.items()}
+    return {
+        "schema_version": "lingtu.server_sim_closure.v1",
+        "ok": not missing_or_failed,
+        "simulation_only": True,
+        "real_robot_motion": False,
+        "cmd_vel_sent_to_hardware": False,
+        "generated_at": time.time(),
+        "required": sorted(required_names),
+        "verified": verified,
+        "missing_or_failed": missing_or_failed,
+        "gates": gates,
+        "remaining_gaps": [
+            f"{name}: {', '.join((gates.get(name) or {}).get('blockers') or ['not verified'])}"
+            for name in missing_or_failed
+        ],
+    }
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--large-terrain-report", type=Path, default=None)
+    parser.add_argument("--native-pct-mujoco-report", type=Path, default=None)
+    parser.add_argument("--fastlio2-live-report", type=Path, default=None)
+    parser.add_argument("--policy-nav-report", type=Path, default=None)
+    parser.add_argument("--gateway-dry-run-report", type=Path, default=None)
+    parser.add_argument("--gazebo-runtime-report", type=Path, default=None)
+    parser.add_argument(
+        "--required",
+        default=",".join(spec.name for spec in GATES),
+        help="Comma-separated gate names required for ok=true",
+    )
+    parser.add_argument("--json-out", type=Path, default=ROOT / "artifacts/server_sim_closure_summary.json")
+    parser.add_argument("--strict", action="store_true")
+    return parser
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
+    overrides = {
+        "large_terrain": args.large_terrain_report,
+        "native_pct_mujoco": args.native_pct_mujoco_report,
+        "fastlio2_live": args.fastlio2_live_report,
+        "policy_nav": args.policy_nav_report,
+        "gateway_dry_run": args.gateway_dry_run_report,
+        "gazebo_runtime": args.gazebo_runtime_report,
+    }
+    required = {item.strip() for item in args.required.split(",") if item.strip()}
+    valid_names = {spec.name for spec in GATES}
+    unknown = sorted(required - valid_names)
+    if unknown:
+        raise SystemExit(f"unknown required gate(s): {', '.join(unknown)}")
+
+    summary = summarize(
+        report_overrides={key: value for key, value in overrides.items() if value is not None},
+        required=required,
+    )
+    text = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)
+    print(text)
+    if args.json_out:
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(text + "\n", encoding="utf-8")
+    return 0 if summary.get("ok") or not args.strict else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

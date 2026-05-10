@@ -1,0 +1,400 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from sim.scripts import server_sim_closure
+
+
+def _write_json(path: Path, payload: dict) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_gateway_goal_dry_run_gate_publishes_goal_without_cmd_vel():
+    pytest.importorskip("fastapi")
+    from sim.scripts.gateway_goal_dry_run_gate import run_gate
+
+    report = run_gate(x=1.2, y=-0.4, z=0.0, client_id="pytest")
+
+    assert report["ok"] is True
+    assert report["simulation_only"] is True
+    assert report["real_robot_motion"] is False
+    assert report["cmd_vel_sent_to_hardware"] is False
+    assert report["driver_used"] is False
+    assert report["frames"]["published_goal"] == "map"
+    assert report["frames"]["cmd_vel"] == "not_published"
+    assert report["published"]["goal_pose"] == 1
+    assert report["published"]["cmd_vel"] == 0
+
+
+def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
+    large = _write_json(
+        tmp_path / "large.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "cases": [
+                {
+                    "route": "terrain_long",
+                    "path_safety": {"ok": True},
+                    "planning": [
+                        {
+                            "planner": "pct",
+                            "native_backend_used": True,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    native = _write_json(
+        tmp_path / "native.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "reached_goal": True,
+            "final_distance_m": 0.4,
+            "planner": "pct",
+            "pct_native_backend_used": True,
+            "moved_m": 10.0,
+            "frames": {"goal": "map", "cmd_vel": "base_link"},
+            "obstacle_aware": {
+                "enabled": True,
+                "metadata_points": 32,
+            },
+            "obstacle_clearance": {
+                "checked": True,
+                "collision": False,
+                "min_clearance_m": 0.65,
+            },
+            "local_path_samples": [{"frame_id": "body", "point_count": 8}],
+            "trajectory_quality": {
+                "ok": True,
+                "p95_lateral_error_m": 0.12,
+                "final_progress_ratio": 0.99,
+            },
+        },
+    )
+    fastlio = _write_json(
+        tmp_path / "fastlio.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "live_mujoco_lidar_verified": True,
+            "live_mujoco_imu_verified": True,
+            "slam_algorithm_output_verified": True,
+            "bridge_verified": True,
+            "outputs": {"fastlio2_odometry": 12},
+            "frames": {"published_lidar": "body"},
+        },
+    )
+    policy = _write_json(
+        tmp_path / "policy.json",
+        {
+            "passed": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "checks": [
+                {
+                    "mode": "direct_policy",
+                    "passed": True,
+                    "policy_loaded": True,
+                    "policy_path": "/tmp/policy.onnx",
+                    "cmd_vel_sent_to_hardware": False,
+                },
+                {
+                    "mode": "full_stack_policy_nav",
+                    "passed": True,
+                    "policy_loaded": True,
+                    "policy_path": "/tmp/policy.onnx",
+                    "cmd_vel_sent_to_hardware": False,
+                    "seen": {
+                        "direct_fallback": 0,
+                        "local_path": 4,
+                        "path_follower_cmd": 4,
+                        "mux_cmd": 4,
+                        "waypoints": 1,
+                    },
+                    "frames": {"goal": "map", "cmd_vel": "base_link"},
+                },
+            ],
+        },
+    )
+    gateway = _write_json(
+        tmp_path / "gateway.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "published": {"goal_pose": 1, "cmd_vel": 0},
+            "frames": {"published_goal": "map", "cmd_vel": "not_published"},
+        },
+    )
+    gazebo = _write_json(
+        tmp_path / "gazebo.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "samples": 4,
+            "odometry_frame_id": "odom",
+            "odometry_child_frame_id": "body",
+            "topic_samples": {
+                "/nav/map_cloud": 3,
+                "/nav/registered_cloud": 3,
+                "/camera/color/image_raw": 3,
+                "/camera/depth/image_raw": 3,
+                "/camera/color/camera_info": 3,
+            },
+            "topic_frames": {
+                "/nav/map_cloud": "odom",
+                "/nav/registered_cloud": "body",
+                "/camera/color/image_raw": "camera_link",
+                "/camera/depth/image_raw": "camera_link",
+                "/camera/color/camera_info": "camera_link",
+            },
+            "point_counts": {
+                "/nav/map_cloud": 1024,
+                "/nav/registered_cloud": 1024,
+            },
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={
+            "large_terrain": large,
+            "native_pct_mujoco": native,
+            "fastlio2_live": fastlio,
+            "policy_nav": policy,
+            "gateway_dry_run": gateway,
+            "gazebo_runtime": gazebo,
+        },
+        required={
+            "large_terrain",
+            "native_pct_mujoco",
+            "fastlio2_live",
+            "policy_nav",
+            "gateway_dry_run",
+            "gazebo_runtime",
+        },
+    )
+
+    assert summary["ok"] is True
+    assert summary["simulation_only"] is True
+    assert summary["real_robot_motion"] is False
+    assert summary["cmd_vel_sent_to_hardware"] is False
+    assert summary["missing_or_failed"] == []
+    assert all(summary["verified"].values())
+
+
+def test_server_sim_closure_reports_remaining_gaps(tmp_path: Path):
+    native = _write_json(
+        tmp_path / "native.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "reached_goal": True,
+            "final_distance_m": 1.2,
+            "frames": {"goal": "map", "cmd_vel": "base_link"},
+            "obstacle_aware": {"enabled": True, "metadata_points": 24},
+            "obstacle_clearance": {"checked": True, "collision": True},
+            "local_path_samples": [{"frame_id": "body", "point_count": 4}],
+            "trajectory_quality": {"ok": True},
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={
+            "native_pct_mujoco": native,
+            "fastlio2_live": tmp_path / "missing_fastlio.json",
+        },
+        required={"native_pct_mujoco", "fastlio2_live"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["native_pct_mujoco"] is False
+    assert "native_pct_mujoco" in summary["missing_or_failed"]
+    assert "fastlio2_live" in summary["missing_or_failed"]
+    assert any("collision is true" in gap for gap in summary["remaining_gaps"])
+    assert any("missing_fastlio.json" in gap for gap in summary["remaining_gaps"])
+
+
+def test_server_sim_closure_rejects_non_pct_native_motion_report(tmp_path: Path):
+    native = _write_json(
+        tmp_path / "native_astar.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "reached_goal": True,
+            "final_distance_m": 0.4,
+            "planner": "astar",
+            "pct_native_backend_used": False,
+            "frames": {"goal": "map", "cmd_vel": "base_link"},
+            "obstacle_aware": {"enabled": True, "metadata_points": 24},
+            "obstacle_clearance": {"checked": True, "collision": False, "min_clearance_m": 0.7},
+            "local_path_samples": [{"frame_id": "body", "point_count": 4}],
+            "trajectory_quality": {"ok": True},
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"native_pct_mujoco": native},
+        required={"native_pct_mujoco"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["native_pct_mujoco"] is False
+    assert any("planner is not pct" in gap for gap in summary["remaining_gaps"])
+    assert any("pct_native_backend_used is not true" in gap for gap in summary["remaining_gaps"])
+
+
+def test_server_sim_closure_rejects_native_pct_without_obstacle_local_path_evidence(tmp_path: Path):
+    native = _write_json(
+        tmp_path / "native_weak.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "reached_goal": True,
+            "final_distance_m": 0.4,
+            "planner": "pct",
+            "pct_native_backend_used": True,
+            "moved_m": 10.0,
+            "frames": {"goal": "map", "cmd_vel": "base_link"},
+            "obstacle_aware": {"enabled": False, "metadata_points": 0},
+            "obstacle_clearance": {"collision": False, "min_clearance_m": 0.7},
+            "local_path_samples": [],
+            "trajectory_quality": {"ok": False},
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"native_pct_mujoco": native},
+        required={"native_pct_mujoco"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["native_pct_mujoco"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "obstacle_aware.enabled is not true" in gaps
+    assert "obstacle_aware.metadata_points missing" in gaps
+    assert "obstacle clearance was not checked" in gaps
+    assert "local_path_samples missing" in gaps
+    assert "trajectory_quality.ok is not true" in gaps
+
+
+def test_server_sim_closure_finds_nested_fastlio2_live_report(tmp_path: Path, monkeypatch):
+    nested = _write_json(
+        tmp_path / "artifacts" / "mujoco_fastlio2_live" / "factory_scene" / "report.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "live_mujoco_lidar_verified": True,
+            "live_mujoco_imu_verified": True,
+            "slam_algorithm_output_verified": True,
+            "bridge_verified": True,
+            "outputs": {"fastlio2_odometry": 8},
+            "states_seen": ["TRACKING"],
+            "point_count": {"cloud_map": 100},
+            "frames": {"published_lidar": "body"},
+        },
+    )
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+
+    summary = server_sim_closure.summarize(report_overrides={}, required={"fastlio2_live"})
+
+    assert summary["ok"] is True
+    assert summary["gates"]["fastlio2_live"]["path"] == str(nested)
+
+
+def test_server_sim_closure_ignores_native_pct_showcase_reports(tmp_path: Path, monkeypatch):
+    _write_json(
+        tmp_path / "artifacts" / "native_pct_effect" / "report.json",
+        {
+            "schema_version": "lingtu.native_pct_mujoco_gate.v1",
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "reached_goal": True,
+            "final_distance_m": 0.2,
+            "planner": "pct",
+            "pct_native_backend_used": True,
+            "frames": {"goal": "map", "cmd_vel": "base_link"},
+            "obstacle_aware": {"enabled": True, "metadata_points": 32},
+            "obstacle_clearance": {"checked": True, "collision": False},
+            "local_path_samples": [{"frame_id": "body", "point_count": 8}],
+            "trajectory_quality": {"ok": True},
+        },
+    )
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+
+    summary = server_sim_closure.summarize(report_overrides={}, required={"native_pct_mujoco"})
+
+    assert summary["ok"] is False
+    assert summary["gates"]["native_pct_mujoco"]["exists"] is False
+    assert "native_pct_mujoco" in summary["missing_or_failed"]
+
+
+def test_server_sim_closure_rejects_policy_nav_direct_fallback(tmp_path: Path):
+    policy = _write_json(
+        tmp_path / "policy.json",
+        {
+            "passed": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "checks": [
+                {
+                    "mode": "direct_policy",
+                    "passed": True,
+                    "policy_loaded": True,
+                    "policy_path": "/tmp/policy.onnx",
+                    "cmd_vel_sent_to_hardware": False,
+                },
+                {
+                    "mode": "full_stack_policy_nav",
+                    "passed": True,
+                    "policy_loaded": True,
+                    "policy_path": "/tmp/policy.onnx",
+                    "cmd_vel_sent_to_hardware": False,
+                    "seen": {
+                        "direct_fallback": 1,
+                        "local_path": 12,
+                        "path_follower_cmd": 12,
+                        "mux_cmd": 12,
+                        "waypoints": 2,
+                    },
+                },
+            ],
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"policy_nav": policy},
+        required={"policy_nav"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["policy_nav"] is False
+    assert any("direct_goal_fallback" in gap for gap in summary["remaining_gaps"])

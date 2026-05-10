@@ -51,6 +51,7 @@ _PATH_SCALE           = 1.0   # pathScale_ default
 _PATH_RANGE           = 3.5   # adjacentRange_ default — scan radius in metres
 _DIR_THRE             = 90.0  # degrees — max allowed direction deviation
 _GOAL_CLEAR_RANGE     = 0.5   # m
+_MIN_TRACKABLE_LOCAL_PATH_XY = 0.30
 
 
 def _load_paths(paths_dir: str) -> dict | None:
@@ -760,6 +761,24 @@ class LocalPlannerModule(Module, layer=2):
         result = self._core.plan(obs_flat, timestamp)
 
         if result.path:
+            raw_xy = np.asarray([[float(v.x), float(v.y)] for v in result.path], dtype=float)
+            xy_length = (
+                float(np.sum(np.linalg.norm(np.diff(raw_xy, axis=0), axis=1)))
+                if len(raw_xy) > 1
+                else 0.0
+            )
+            xy_span = float(np.linalg.norm(raw_xy[-1] - raw_xy[0])) if len(raw_xy) > 1 else 0.0
+            path_found = bool(getattr(result, "path_found", True))
+            recovery_state = int(getattr(result, "recovery_state", 0))
+            trackable = (
+                len(result.path) >= 2
+                and max(xy_length, xy_span) >= _MIN_TRACKABLE_LOCAL_PATH_XY
+                and (path_found or recovery_state in (1, 2))
+            )
+            if not trackable:
+                self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
+                return
+
             poses = []
             cos_yaw = math.cos(self._robot_yaw)
             sin_yaw = math.sin(self._robot_yaw)
@@ -846,20 +865,8 @@ class LocalPlannerModule(Module, layer=2):
                 selected_group_id = i
 
         if selected_group_id < 0 or max_score <= 0.0:
-            # No feasible path — publish straight-line fallback
-            goal_world = goal
-            path_points = self._straight_line(self._robot_pos, goal_world, step=0.5)
-            poses = [
-                PoseStamped(
-                    pose=Pose(
-                        position=Vector3(float(p[0]), float(p[1]), float(p[2])),
-                        orientation=Quaternion(0, 0, 0, 1),
-                    ),
-                    frame_id=self._path_frame_id,
-                )
-                for p in path_points
-            ]
-            self.local_path.publish(Path(poses=poses, frame_id=self._path_frame_id))
+            # No feasible local path: publish empty so downstream stops instead of tracking into obstacles.
+            self.local_path.publish(Path(poses=[], frame_id=self._path_frame_id))
             return
 
         rot_dir    = selected_group_id // _GROUP_NUM
@@ -907,7 +914,7 @@ class LocalPlannerModule(Module, layer=2):
         diff = goal - start
         dist = np.linalg.norm(diff)
         if dist < step:
-            return [goal]
+            return [start, goal]
         n = max(int(dist / step), 2)
         return [start + diff * (i / n) for i in range(1, n + 1)]
 
