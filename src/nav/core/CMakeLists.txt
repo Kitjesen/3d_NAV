@@ -37,6 +37,7 @@ if(DEFINED ENV{AMENT_PREFIX_PATH})
     $<INSTALL_INTERFACE:include>)
   if(OpenMP_CXX_FOUND)
     target_link_libraries(${PROJECT_NAME} INTERFACE OpenMP::OpenMP_CXX)
+    ament_export_dependencies(OpenMP)
   endif()
 
   ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET)

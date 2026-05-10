@@ -1,11 +1,11 @@
-"""Planner backends — A* (dev/sim) and PCT C++ (S100P production).
+"""Planner backends: A* (dev/sim fallback) and native PCT.
 
-FROZEN — this module is stable and should not need changes.
+FROZEN: this module is stable and should not need changes.
 New planner backends (e.g. RRT*) should be registered in separate files
 via @register("planner_backend", "name"), not added here.
 
 Used by GlobalPlannerService (nav/global_planner_service.py) via Registry:
-    backend = get("planner_backend", "pct")    # S100P: ele_planner.so
+    backend = get("planner_backend", "pct")    # native ele_planner.so
     backend = get("planner_backend", "astar")  # dev/sim: pure Python fallback
 
 See docs/02-architecture/PLANNER_SELECTION.md for the selection rationale.
@@ -23,56 +23,21 @@ from __future__ import annotations
 import heapq
 import logging
 import os
-import sys
 from typing import List, Optional, Tuple
 
 import numpy as np
 
 from core.registry import register
+from global_planning.PCT_planner_runnable.runtime import load_tomogram_planner
 
 logger = logging.getLogger(__name__)
 
-# Paths needed by planner_wrapper.py and the C++ .so bindings.
-#
-# planner_wrapper.py uses:
-#   from lib import a_star, ele_planner, traj_opt   ← needs _PCT_PLANNER in sys.path
-#   from utils import *                              ← utils.py is in scripts/
-#
-# The .so files (ele_planner, a_star, traj_opt) are inside lib/, so lib/ must
-# also be on sys.path for Python to find them as extension modules.
-#
-# Platform auto-detection: if lib/{arch}/ exists with .so files, prefer that
-# over the default lib/ (which may contain a different architecture).
-_PCT_PLANNER = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "PCT_planner", "planner")
-)
-_PCT_LIB_BASE = os.path.join(_PCT_PLANNER, "lib")
-
-def _resolve_pct_lib() -> str:
-    """Return the lib directory with .so files matching the current platform."""
-    import platform
-    arch = platform.machine().lower()
-    # Canonical mapping
-    arch_map = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
-    canonical = arch_map.get(arch, arch)
-    # Prefer platform-specific subdirectory if it has .so files
-    platform_dir = os.path.join(_PCT_LIB_BASE, canonical)
-    if os.path.isdir(platform_dir) and any(f.endswith(".so") for f in os.listdir(platform_dir)):
-        logger.info("PCT lib: using platform-specific %s/", canonical)
-        return platform_dir
-    # Fall back to default lib/ (original aarch64 .so files)
-    return _PCT_LIB_BASE
-
-_PCT_LIB = _resolve_pct_lib()
-_PCT_SCRIPTS = os.path.join(_PCT_PLANNER, "scripts")
-
-
 # ---------------------------------------------------------------------------
-# PCT backend — production quality, S100P only
+# PCT backend: native terrain-aware planner
 # ---------------------------------------------------------------------------
 
 @register("planner_backend", "pct",
-          description="C++ ele_planner via .so — 3D terrain-aware, S100P (aarch64) only")
+          description="C++ ele_planner via .so, 3D terrain-aware native PCT")
 class _PCTBackend:
     """Production planner: TomogramPlanner wrapping ele_planner.so + traj_opt.so.
 
@@ -81,7 +46,7 @@ class _PCTBackend:
       - GPMP trajectory optimisation (smooth, kinematically feasible)
       - Gradient-aware elevation planning
 
-    Requires aarch64 compiled .so files — not available on x86_64 dev machines.
+    Requires compiled native .so files matching the current Linux arch/Python ABI.
     On import failure logs a clear error and marks itself unavailable; all
     plan() calls then return [] so GlobalPlannerService raises RuntimeError
     and NavigationModule falls back to direct-goal mode.
@@ -115,47 +80,6 @@ class _PCTBackend:
         Sets self._available = True only when both the .so and the tomogram
         are successfully loaded.
         """
-        # sys.path setup required by planner_wrapper.py:
-        #   _PCT_PLANNER  → enables  `from lib import a_star, ele_planner, traj_opt`
-        #   _PCT_LIB      → Python finds the .so extension modules inside lib/
-        #   _PCT_SCRIPTS  → enables  `from utils import *`  (utils.py lives here)
-        for p in [_PCT_PLANNER, _PCT_LIB, _PCT_SCRIPTS]:
-            if p not in sys.path:
-                sys.path.insert(0, p)
-
-        # Pre-load internal shared libraries so the pybind11 modules can find
-        # them. Setting LD_LIBRARY_PATH after process start is too late for
-        # dlopen, so we use ctypes.CDLL with RTLD_GLOBAL instead.
-        import ctypes
-        for lib_name in [
-            "libcommon_smoothing.so",
-            "liba_star_search.so",
-            "libmap_manager.so",
-            "libgpmp_optimizer.so",
-            "libele_planner_lib.so",
-        ]:
-            lib_path = os.path.join(_PCT_LIB, lib_name)
-            if os.path.isfile(lib_path):
-                try:
-                    ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
-                except OSError as e:
-                    logger.debug("PCT: preload %s failed: %s", lib_name, e)
-
-        try:
-            from planner_wrapper import TomogramPlanner  # type: ignore
-        except ImportError as e:
-            self._load_error = (
-                f"ele_planner.so not available ({e}). "
-                f"This is expected on x86_64 dev machines. "
-                f"Use planner='astar' for simulation/development."
-            )
-            logger.warning("PCT backend unavailable: %s", self._load_error)
-            return
-
-        # Resolve to absolute path before passing to loadTomogram().
-        # planner_wrapper.py resolves relative paths relative to its own script
-        # directory (PCT_planner/planner/scripts/), which would produce a wrong
-        # doubled path when a relative path is passed from outside.
         tomogram_path = os.path.abspath(tomogram_path)
 
         if not os.path.exists(tomogram_path):
@@ -168,32 +92,22 @@ class _PCTBackend:
             return
 
         try:
-            # TomogramPlanner.__init__ takes a cfg object, not a path.
-            # We use loadTomogram() which accepts a path string directly.
-            class _MinimalCfg:
-                class planner:
-                    use_quintic = True
-                    max_heading_rate = 10
-                    obstacle_thr = 49.9
-                class wrapper:
-                    tomo_dir = "/"
-                    pcd_dir = None
-
-            _MinimalCfg.planner.obstacle_thr = self._obstacle_thr
-            planner = TomogramPlanner(_MinimalCfg)
-            planner.loadTomogram(tomogram_path)
+            planner, runtime_paths = load_tomogram_planner(
+                tomogram_path,
+                obstacle_thr=self._obstacle_thr,
+            )
             self._planner = planner
             self._available = True
             logger.info(
-                "PCT ele_planner loaded: %s  map_dim=%s slices=%s",
+                "PCT ele_planner loaded: %s  lib_dir=%s map_dim=%s slices=%s",
                 tomogram_path,
+                runtime_paths.lib_dir,
                 getattr(planner, "map_dim", "?"),
                 getattr(planner, "n_slice", "?"),
             )
-            # Extract 2D ground-floor grid for _find_safe_goal BFS
             self._extract_grid(tomogram_path)
         except Exception as e:
-            self._load_error = f"TomogramPlanner.loadTomogram failed: {e}"
+            self._load_error = f"PCT runtime/loadTomogram failed: {e}"
             logger.exception("PCT backend failed to load tomogram: %s", tomogram_path)
 
     @property
@@ -223,8 +137,11 @@ class _PCTBackend:
         self._slice_dh = float(raw.get("slice_dh", 0.5))
 
         if tomo_data is not None and hasattr(tomo_data, "ndim") and tomo_data.ndim == 4:
-            # data shape: (5, n_slices, H, W) — channel 0 = traversability
-            self._trav_3d = np.asarray(tomo_data[0], dtype=np.float32)
+            # data shape: (5, n_slices, H, W), channel 0 = traversability
+            trav_3d = np.asarray(tomo_data[0], dtype=np.float32)
+            if "slice_h0" in raw and "slice_dh" in raw:
+                trav_3d = np.transpose(trav_3d, (0, 2, 1))
+            self._trav_3d = trav_3d
             self._grid = np.asarray(self._trav_3d[0], dtype=np.float32)
             center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
             h, w = self._grid.shape
@@ -311,13 +228,13 @@ class _PCTBackend:
             goal:  world coords [x, y, z]
 
         Returns:
-            List of (x, y, z) tuples — empty list means planning failed.
+            List of (x, y, z) tuples; empty list means planning failed.
             Caller (GlobalPlannerService) raises RuntimeError on empty return.
         """
         if self._planner is None:
             logger.error(
-                "PCT planner unavailable (%s) — cannot plan. "
-                "Is this running on S100P with ele_planner.so compiled?",
+                "PCT planner unavailable (%s); cannot plan. "
+                "Is this running with native PCT .so files matching this arch/Python ABI?",
                 self._load_error,
             )
             return []
@@ -450,23 +367,27 @@ class _PCTBackend:
 
 
 # ---------------------------------------------------------------------------
-# A* backend — cross-platform fallback for dev/sim (not production)
+# A* backend: cross-platform fallback for dev/sim (not production)
 # ---------------------------------------------------------------------------
 
 @register("planner_backend", "astar",
-          description="Pure Python A* on tomogram ground-floor — dev/sim only, NOT for production")
+          description="Pure Python A* on tomogram ground-floor, dev/sim only, NOT for production")
 class _AStarBackend:
     """Cross-platform 2D A* for development machines and CI.
 
     Uses only the ground-floor traversability slice from the tomogram.
     No trajectory optimisation, no 3D terrain awareness.
 
-    This backend exists solely because ele_planner.so is aarch64-only.
-    Do NOT use in production (nav/explore profiles on S100P).
+    This backend exists as a deterministic development/simulation fallback when
+    native PCT libraries are unavailable or unsuitable for the current runtime.
     """
 
     def __init__(self, tomogram_path: str = "", obstacle_thr: float = 49.9):
         self._grid: np.ndarray | None = None
+        self._static_grid: np.ndarray | None = None
+        self._costmap: np.ndarray | None = None
+        self._costmap_resolution = 0.2
+        self._costmap_origin = np.zeros(2)
         self._resolution = 0.2
         self._origin = np.zeros(2)
         self._obstacle_thr = obstacle_thr
@@ -483,8 +404,11 @@ class _AStarBackend:
         tomo_data = raw.get("data")
         res = float(raw.get("resolution", 0.2))
         if tomo_data is not None and hasattr(tomo_data, "ndim") and tomo_data.ndim == 4:
-            # data shape: (5, n_slices, H, W) — channel 0 = traversability
-            self._grid = np.asarray(tomo_data[0, 0], dtype=np.float32)
+            # data shape: (5, n_slices, H, W), channel 0 = traversability
+            grid = np.asarray(tomo_data[0, 0], dtype=np.float32)
+            if "slice_h0" in raw and "slice_dh" in raw:
+                grid = grid.T
+            self._grid = grid
             center = np.array(raw.get("center", [0, 0])[:2], dtype=np.float64)
             h, w = self._grid.shape
             self._origin = center - np.array([w * res / 2, h * res / 2])
@@ -494,6 +418,7 @@ class _AStarBackend:
                 self._grid = np.asarray(self._grid, dtype=np.float32)
             self._origin = np.array(raw.get("origin", [0, 0])[:2], dtype=np.float64)
         self._resolution = res
+        self._static_grid = self._grid.copy() if self._grid is not None else None
         logger.info(
             "A* backend: loaded %s  grid=%s  res=%.3f",
             path,
@@ -503,11 +428,48 @@ class _AStarBackend:
 
     def update_map(self, grid: np.ndarray, resolution: float = 0.2,
                    origin: np.ndarray | None = None) -> None:
-        """Live costmap update — replaces the static pickle-loaded grid."""
-        self._grid = np.asarray(grid, dtype=np.float32)
-        self._resolution = resolution
+        """Live costmap update; replaces the static pickle-loaded grid."""
+        self._costmap = np.asarray(grid, dtype=np.float32)
+        self._costmap_resolution = resolution
         if origin is not None:
-            self._origin = np.array(origin[:2], dtype=np.float64)
+            self._costmap_origin = np.array(origin[:2], dtype=np.float64)
+        if self._static_grid is None:
+            self._grid = self._costmap
+            self._resolution = resolution
+            if origin is not None:
+                self._origin = np.array(origin[:2], dtype=np.float64)
+            return
+        self._merge_costmap()
+
+    def _merge_costmap(self) -> None:
+        if self._costmap is None or self._static_grid is None:
+            return
+        self._grid = self._static_grid.copy()
+
+        cm = self._costmap
+        cm_res = self._costmap_resolution
+        cm_ox, cm_oy = self._costmap_origin[0], self._costmap_origin[1]
+        g_res = self._resolution
+        g_ox, g_oy = self._origin[0], self._origin[1]
+        gh, gw = self._grid.shape
+
+        obs_rows, obs_cols = np.where(cm >= self._obstacle_thr)
+        if len(obs_rows) == 0:
+            return
+
+        world_x = cm_ox + obs_cols * cm_res
+        world_y = cm_oy + obs_rows * cm_res
+        grid_cols = np.round((world_x - g_ox) / g_res).astype(int)
+        grid_rows = np.round((world_y - g_oy) / g_res).astype(int)
+
+        mask = (grid_cols >= 0) & (grid_cols < gw) & (grid_rows >= 0) & (grid_rows < gh)
+        valid_rows = grid_rows[mask]
+        valid_cols = grid_cols[mask]
+        if len(valid_rows) > 0:
+            self._grid[valid_rows, valid_cols] = np.maximum(
+                self._grid[valid_rows, valid_cols],
+                cm[obs_rows[mask], obs_cols[mask]],
+            )
 
     def plan(self, start: np.ndarray, goal: np.ndarray) -> list:
         """Plan a 2D path on the ground-floor traversability grid.
@@ -530,6 +492,9 @@ class _AStarBackend:
 
         def grid2world(col: int, row: int) -> tuple[float, float]:
             return (col * res + self._origin[0], row * res + self._origin[1])
+
+        def is_free(col: int, row: int) -> bool:
+            return 0 <= col < ncols and 0 <= row < nrows and self._grid[row, col] < self._obstacle_thr
 
         sc, sr = world2grid(float(start[0]), float(start[1]))
         gc, gr = world2grid(float(goal[0]),  float(goal[1]))
@@ -556,7 +521,9 @@ class _AStarBackend:
                 nc, nr = cc + dc, cr + dr
                 if not (0 <= nc < ncols and 0 <= nr < nrows):
                     continue
-                if self._grid[nr, nc] >= self._obstacle_thr:
+                if not is_free(nc, nr):
+                    continue
+                if dc and dr and (not is_free(cc + dc, cr) or not is_free(cc, cr + dr)):
                     continue
                 step = 1.414 if dc and dr else 1.0
                 ng = g + step
@@ -572,7 +539,7 @@ class _AStarBackend:
             )
             return []
 
-        # Reconstruct — walk came_from back to start, include start point
+        # Reconstruct by walking came_from back to start, include start point.
         path_cells: list[tuple[int, int]] = []
         cur = (gc, gr)
         while cur in came_from:

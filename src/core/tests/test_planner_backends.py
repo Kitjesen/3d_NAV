@@ -213,6 +213,17 @@ class TestAStarBackend:
             row = max(0, min(row, h - 1))
             assert trav[row, col] < 49.9, f"Path goes through obstacle at ({col},{row})"
 
+    def test_diagonal_move_does_not_cut_blocked_corner(self):
+        """Diagonal steps must not pass between blocked orthogonal cells."""
+        trav = _make_open_grid(3, 3)
+        trav[0, 1] = 100.0
+        trav[1, 0] = 100.0
+        b = self._backend(trav, resolution=1.0, center=(1.5, 1.5))
+
+        path = b.plan(np.array([0.0, 0.0, 0.0]), np.array([1.0, 1.0, 0.0]))
+
+        assert path == []
+
     def test_euclidean_heuristic_not_manhattan(self):
         """Heuristic must be Euclidean (admissible) — indirect check via path length.
 

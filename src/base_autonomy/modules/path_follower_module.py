@@ -87,6 +87,7 @@ class PathFollowerModule(Module, layer=2):
         self._yaw_rec = 0.0
         self._cos_yaw_rec = 1.0
         self._sin_yaw_rec = 0.0
+        self._odom_frame_id = "map"
 
     def setup(self):
         self.odometry.subscribe(self._on_odom)
@@ -161,9 +162,14 @@ class PathFollowerModule(Module, layer=2):
 
             params = _nav_core.PathFollowerParams()
             params.max_speed = self._max_speed
-            params.base_look_ahead_dis = self._lookahead * 0.2
-            params.min_look_ahead_dis = 0.2
-            params.max_look_ahead_dis = min(self._lookahead, 2.0)
+            params.stop_dis_thre = self._goal_tolerance
+            # compute_control compares the selected lookahead point distance
+            # against stop_dis_thre. Dense local-planner paths can otherwise
+            # select a near-start point inside the stop band and never ramp up.
+            min_lookahead = max(0.2, params.stop_dis_thre + 0.05)
+            params.base_look_ahead_dis = max(self._lookahead * 0.2, min_lookahead)
+            params.min_look_ahead_dis = min_lookahead
+            params.max_look_ahead_dis = max(min(self._lookahead, 2.0), min_lookahead)
             params.look_ahead_ratio = 0.5
             params.yaw_rate_gain = 7.5
             params.stop_yaw_rate_gain = 7.5
@@ -173,7 +179,6 @@ class PathFollowerModule(Module, layer=2):
             params.dir_diff_thre = 0.1
             params.omni_dir_goal_thre = 1.0
             params.omni_dir_diff_thre = 1.5
-            params.stop_dis_thre = self._goal_tolerance
             params.slow_dwn_dis_thre = 1.0
             params.two_way_drive = True
             params.no_rot_at_goal = True
@@ -273,6 +278,8 @@ class PathFollowerModule(Module, layer=2):
         _prev_x, _prev_y = self._robot_x, self._robot_y
         self._robot_x = odom.pose.position.x
         self._robot_y = odom.pose.position.y
+        if getattr(odom, "frame_id", None):
+            self._odom_frame_id = str(odom.frame_id)
 
         # Extract yaw from quaternion (reliable, works at all speeds)
         self._robot_yaw = odom.yaw
@@ -290,9 +297,18 @@ class PathFollowerModule(Module, layer=2):
     def _on_path(self, path: Path):
         if self._backend == "nav_core":
             # Record robot pose at path receipt — defines the reference frame
-            self._x_rec = self._robot_x
-            self._y_rec = self._robot_y
-            self._yaw_rec = self._robot_yaw
+            frame_id = str(getattr(path, "frame_id", "") or "").strip()
+            fixed_frame_path = frame_id in {self._odom_frame_id, "map", "odom", "world"}
+            if fixed_frame_path:
+                self._x_rec = 0.0
+                self._y_rec = 0.0
+                self._yaw_rec = 0.0
+            else:
+                # Legacy local/body-frame paths use robot pose at receipt as
+                # the reference frame, matching the original pathFollower API.
+                self._x_rec = self._robot_x
+                self._y_rec = self._robot_y
+                self._yaw_rec = self._robot_yaw
             self._cos_yaw_rec = math.cos(self._yaw_rec)
             self._sin_yaw_rec = math.sin(self._yaw_rec)
 

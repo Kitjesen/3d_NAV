@@ -36,6 +36,7 @@ localization:
 # ── 全局规划层 ──
 planning:
   global_path: /nav/global_path         # nav_msgs/Path (全局路径)
+  far_reach_goal: /nav/far_reach_goal   # std_msgs/Bool/String (FAR Planner reach-goal status)
   planner_status: /nav/planner_status   # std_msgs/String 纯字符串: "IDLE"/"PLANNING"/"SUCCESS"/"FAILED"/"WARN_STUCK"/"STUCK" (global_planner + pathFollower 发布; WARN_STUCK=半超时预警, STUCK=全超时确认卡死)
   adapter_status: /nav/adapter_status   # std_msgs/String JSON: {"event":...,"index":N,"total":N} (pct_path_adapter 发布; event: path_received/waypoint_reached/goal_reached/replanning/stuck_final/failed)
   mission_status: /nav/mission_status   # std_msgs/String JSON: {"state","goal","progress","replan_count","elapsed_sec","estop","failure_reason"} (mission_arc 发布; state: IDLE/PLANNING/EXECUTING/RECOVERING/REPLANNING/COMPLETE/FAILED)
@@ -61,6 +62,7 @@ autonomy:
 # ── 高层控制 ──
 control:
   goal_pose: /nav/goal_pose             # geometry_msgs/PoseStamped (导航目标)
+  goal_point: /nav/goal_point           # geometry_msgs/PointStamped (FAR Planner point-goal adapter)
   patrol_goals: /nav/patrol_goals       # std_msgs/String JSON: {waypoints, loop, route_name} (巡检路线 → mission_arc)
   cancel: /nav/cancel                   # std_msgs/Empty (取消当前任务)
 
@@ -121,3 +123,12 @@ tf:
   map_frame: map
   odom_frame: odom
   body_frame: body
+  links:
+    map_to_odom:
+      parent: map
+      child: odom
+      required: true
+    odom_to_body:
+      parent: odom
+      child: body
+      required: true

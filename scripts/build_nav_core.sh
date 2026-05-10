@@ -53,17 +53,41 @@ PYTHON=$(command -v python3)
 PY_VER=$($PYTHON --version 2>&1)
 info "Python: $PY_VER"
 
+nanobind_pip_user_flag() {
+    "$PYTHON" - <<'PY'
+import os
+import site
+import sys
+
+in_virtualenv = (
+    sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    or hasattr(sys, "real_prefix")
+)
+in_conda = bool(os.environ.get("CONDA_PREFIX"))
+user_site_enabled = bool(getattr(site, "ENABLE_USER_SITE", False))
+
+if user_site_enabled and not in_virtualenv and not in_conda:
+    print("--user")
+PY
+}
+
 # Check Python dev headers
 if ! $PYTHON -c "import sysconfig; sysconfig.get_path('include')" >/dev/null 2>&1; then
     fail "Python dev headers missing. Install: sudo apt install python3-dev"
 fi
 
 # Check nanobind
-if ! $PYTHON -c "import nanobind" >/dev/null 2>&1; then
+if ! "$PYTHON" -c "import nanobind" >/dev/null 2>&1; then
     warn "nanobind not found. Installing..."
-    pip install nanobind || fail "Failed to install nanobind"
+    pip_install_args=(install)
+    PIP_USER_FLAG="$(nanobind_pip_user_flag)"
+    if [[ -n "$PIP_USER_FLAG" ]]; then
+        pip_install_args+=("$PIP_USER_FLAG")
+    fi
+    pip_install_args+=(nanobind)
+    "$PYTHON" -m pip "${pip_install_args[@]}" || fail "Failed to install nanobind"
 fi
-NB_DIR=$($PYTHON -c "import nanobind; print(nanobind.cmake_dir())")
+NB_DIR=$("$PYTHON" -c "import nanobind; print(nanobind.cmake_dir())")
 ok "nanobind found at: $NB_DIR"
 
 # ── Configure ────────────────────────────────────────────────────────────────
@@ -130,7 +154,7 @@ ok "Symlinked: $LINK_TARGET → $SO_FILE"
 
 # ── Verify import ─────────────────────────────────────────────────────────────
 info "Verifying import..."
-if PYTHONPATH="$INSTALL_LINK:$PYTHONPATH" $PYTHON -c "
+if PYTHONPATH="$INSTALL_LINK:${PYTHONPATH:-}" $PYTHON -c "
 import _nav_core
 print('  _nav_core version check:')
 print('  TerrainAnalysisCore:', _nav_core.TerrainAnalysisCore)

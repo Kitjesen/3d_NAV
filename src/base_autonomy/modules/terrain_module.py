@@ -219,7 +219,7 @@ class TerrainModule(Module, layer=2):
         if result.n_points > 0:
             arr = np.array(result.terrain_points, dtype=np.float32).reshape(-1, 4)
             self.terrain_map.publish(PointCloud2(
-                points=arr[:, :3],
+                points=arr,
                 frame_id="map",
                 ts=ts,
             ))

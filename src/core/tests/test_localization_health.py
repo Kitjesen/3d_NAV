@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 
 # Ensure src/ is on path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -132,6 +133,100 @@ class TestSlamBridgeWatchdog(unittest.TestCase):
         self.assertEqual(tracking["localizer_health"], "LOCKED")
         self.assertEqual(tracking["localizer_health_raw"], "LOCKED")
         self.assertEqual(tracking["localizer_health_source"], "localizer_health_topic")
+        self.assertIsNotNone(tracking["localizer_health_topic_age_ms"])
+
+    def test_ros2_shaped_odom_cloud_and_health_topic_drive_bridge_status(self):
+        import numpy as np
+
+        def ns(**kw):
+            return SimpleNamespace(**kw)
+
+        def odom_msg():
+            pose = ns(
+                position=ns(x=1.25, y=-0.5, z=0.1),
+                orientation=ns(x=0.0, y=0.0, z=0.0, w=1.0),
+            )
+            twist = ns(
+                linear=ns(x=0.1, y=0.0, z=0.0),
+                angular=ns(x=0.0, y=0.0, z=0.02),
+            )
+            cov = [0.0] * 36
+            cov[0] = 0.01
+            cov[7] = 0.01
+            cov[14] = 0.02
+            return ns(
+                header=ns(frame_id="odom"),
+                child_frame_id="base_link",
+                pose=ns(pose=pose, covariance=cov),
+                twist=ns(twist=twist),
+            )
+
+        def cloud_msg():
+            pts = np.asarray(
+                [
+                    [0.0, 0.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.1, 1.0],
+                    [0.0, 1.0, 0.2, 1.0],
+                ],
+                dtype=np.float32,
+            )
+            return ns(
+                width=pts.shape[0],
+                height=1,
+                point_step=16,
+                data=pts.tobytes(),
+            )
+
+        class HealthMsg:
+            data = "LOCKED|fitness=0.023|iter=4|cov=0.01"
+
+        m = self._make(
+            backend_profile="localizer",
+            odom_timeout=0.5,
+            cloud_timeout=0.5,
+            localizer_health_timeout=0.5,
+            watchdog_hz=50,
+        )
+        odom_seen = []
+        cloud_seen = []
+        status_seen = []
+        m.odometry._add_callback(odom_seen.append)
+        m.map_cloud._add_callback(cloud_seen.append)
+        m.localization_status._add_callback(status_seen.append)
+
+        m._on_rclpy_localization_health(HealthMsg())
+        m._on_rclpy_odom(odom_msg())
+        if m._odom_worker_thread is not None:
+            m._odom_worker_thread.join(timeout=1.0)
+        m._process_rclpy_cloud(cloud_msg())
+
+        m.start()
+        deadline = time.time() + 1.0
+        try:
+            while time.time() < deadline and not any(
+                item.get("state") == "TRACKING" for item in status_seen
+            ):
+                time.sleep(0.02)
+        finally:
+            m.stop()
+
+        self.assertTrue(odom_seen)
+        self.assertEqual(odom_seen[-1].frame_id, "odom")
+        self.assertEqual(odom_seen[-1].child_frame_id, "base_link")
+        self.assertTrue(cloud_seen)
+        self.assertEqual(cloud_seen[-1].frame_id, "map")
+        self.assertEqual(cloud_seen[-1].num_points, 3)
+        tracking = next(item for item in status_seen if item["state"] == "TRACKING")
+        self.assertEqual(tracking["backend"], "localizer")
+        self.assertEqual(tracking["health_source"], "localizer_health_topic")
+        self.assertEqual(tracking["localizer_health"], "LOCKED")
+        self.assertEqual(tracking["localizer_health_raw"], "LOCKED")
+        self.assertEqual(tracking["localizer_health_source"], "localizer_health_topic")
+        self.assertEqual(tracking["localizer_health_iter"], 4)
+        self.assertAlmostEqual(tracking["localizer_health_cov_trace"], 0.01, places=4)
+        self.assertTrue(tracking["pose_fresh"])
+        self.assertTrue(tracking["map_cloud_fresh"])
+        self.assertEqual(tracking["map_state"], "live_map_cloud")
         self.assertIsNotNone(tracking["localizer_health_topic_age_ms"])
 
     def test_fresh_locked_localizer_health_graces_short_odom_gap(self):

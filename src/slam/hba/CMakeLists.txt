@@ -32,12 +32,17 @@ find_package(yaml-cpp REQUIRED)
 find_package(OpenMP QUIET)
 find_package(Sophus REQUIRED)
 
+if(TARGET Sophus::Sophus)
+  get_target_property(SOPHUS_INCLUDE_DIRS Sophus::Sophus INTERFACE_INCLUDE_DIRECTORIES)
+endif()
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}   ${OpenMP_C_FLAGS}")
 
 include_directories(
   ${EIGEN3_INCLUDE_DIR}
   ${PCL_INCLUDE_DIRS}
+  ${SOPHUS_INCLUDE_DIRS}
 )
 
 set(SRC_LIST src/hba/commons.cpp
@@ -46,7 +51,24 @@ set(SRC_LIST src/hba/commons.cpp
 
 add_executable(hba_node src/hba_node.cpp ${SRC_LIST})
 ament_target_dependencies(hba_node rclcpp std_msgs sensor_msgs interface pcl_conversions GTSAM)
-target_link_libraries(hba_node ${PCL_LIBRARIES} gtsam yaml-cpp)
+target_link_libraries(hba_node ${PCL_LIBRARIES} gtsam yaml-cpp Sophus::Sophus)
+
+if(GTSAM_DIR)
+  get_filename_component(GTSAM_LIB_DIR "${GTSAM_DIR}/../.." ABSOLUTE)
+  find_library(GTSAM_METIS_LIBRARY
+    NAMES metis-gtsam libmetis-gtsam
+    PATHS "${GTSAM_LIB_DIR}"
+    NO_DEFAULT_PATH
+  )
+  if(GTSAM_METIS_LIBRARY)
+    target_link_libraries(hba_node ${GTSAM_METIS_LIBRARY})
+  endif()
+  target_link_options(hba_node PRIVATE "-Wl,--disable-new-dtags")
+  set_target_properties(hba_node PROPERTIES
+    BUILD_RPATH "${GTSAM_LIB_DIR}"
+    INSTALL_RPATH "${GTSAM_LIB_DIR}"
+  )
+endif()
 
 install(TARGETS hba_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})

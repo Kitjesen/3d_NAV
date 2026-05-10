@@ -73,10 +73,12 @@ if [ -z "$EXTRACTED" ]; then
     exit 1
 fi
 
-# Copy lib + include only (skip docs, examples, etc.)
-mkdir -p "$DEST/lib" "$DEST/include"
+# Copy the runtime/development surface needed by OR-Tools CMake packages.
+# lib/cmake/protobuf references bin/protoc-*, so bin/ must stay with lib/.
+mkdir -p "$DEST/lib" "$DEST/include" "$DEST/bin"
 cp -r "$EXTRACTED/lib/"*     "$DEST/lib/"
 cp -r "$EXTRACTED/include/"* "$DEST/include/"
+cp -r "$EXTRACTED/bin/"*     "$DEST/bin/"
 
 echo ">>> [OR-Tools] Installed to $DEST/"
 echo ">>> Arch: $OT_ARCH  version: $VERSION"

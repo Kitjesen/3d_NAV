@@ -282,7 +282,7 @@ class _FakeNavCore:
 
 class TestPathFollowerModule(unittest.TestCase):
 
-    def test_nav_core_records_path_in_receipt_reference_frame(self):
+    def test_nav_core_keeps_fixed_frame_paths_in_world_reference(self):
         from base_autonomy.modules.path_follower_module import PathFollowerModule
 
         m = PathFollowerModule(backend="nav_core")
@@ -294,9 +294,11 @@ class TestPathFollowerModule(unittest.TestCase):
                 pose=Pose(
                     position=Vector3(10.0, -2.0, 0.0),
                     orientation=Quaternion.from_yaw(yaw),
-                )
+                ),
+                frame_id="map",
             )
         )
+        self.assertEqual(m._odom_frame_id, "map")
 
         path = Path(
             poses=[
@@ -309,12 +311,53 @@ class TestPathFollowerModule(unittest.TestCase):
 
         self.assertEqual(len(m._nc_path), 2)
         first, last = m._nc_path[0], m._nc_path[-1]
+        self.assertAlmostEqual(first.x, 10.0)
+        self.assertAlmostEqual(first.y, -2.0)
+        self.assertAlmostEqual(first.z, 0.5)
+        self.assertAlmostEqual(last.x, 10.0)
+        self.assertAlmostEqual(last.y, 1.0)
+        self.assertAlmostEqual(last.z, 1.5)
+        self.assertEqual(m._x_rec, 0.0)
+        self.assertEqual(m._y_rec, 0.0)
+        self.assertEqual(m._yaw_rec, 0.0)
+
+    def test_nav_core_records_body_frame_path_in_receipt_reference_frame(self):
+        from base_autonomy.modules.path_follower_module import PathFollowerModule
+
+        m = PathFollowerModule(backend="nav_core")
+        m._nc = _FakeNavCore
+
+        yaw = math.pi / 2.0
+        m._on_odom(
+            Odometry(
+                pose=Pose(
+                    position=Vector3(10.0, -2.0, 0.0),
+                    orientation=Quaternion.from_yaw(yaw),
+                ),
+                frame_id="map",
+            )
+        )
+
+        path = Path(
+            poses=[
+                PoseStamped(pose=Pose(position=Vector3(10.0, -2.0, 0.5))),
+                PoseStamped(pose=Pose(position=Vector3(10.0, 1.0, 1.5))),
+            ],
+            frame_id="base_link",
+        )
+        m._on_path(path)
+
+        self.assertEqual(len(m._nc_path), 2)
+        first, last = m._nc_path[0], m._nc_path[-1]
         self.assertAlmostEqual(first.x, 0.0)
         self.assertAlmostEqual(first.y, 0.0)
         self.assertAlmostEqual(first.z, 0.5)
         self.assertAlmostEqual(last.x, 3.0)
         self.assertAlmostEqual(last.y, 0.0)
         self.assertAlmostEqual(last.z, 1.5)
+        self.assertEqual(m._x_rec, 10.0)
+        self.assertEqual(m._y_rec, -2.0)
+        self.assertAlmostEqual(m._yaw_rec, yaw)
 
     def test_nav_core_publishes_zero_when_path_is_cleared(self):
         from base_autonomy.modules.path_follower_module import PathFollowerModule

@@ -93,7 +93,8 @@ public:
     using Descriptor = Eigen::Matrix<float, NUM_RING, NUM_SECTOR>;
     using RingKey = Eigen::Matrix<float, NUM_RING, 1>;
 
-    explicit ScanContext(const Config &config = Config{}) : m_config(config) {}
+    ScanContext() : m_config(Config{}) {}
+    explicit ScanContext(const Config &config) : m_config(config) {}
 
     // Build a descriptor from a body-frame point cloud and store it.
     // Returns the index assigned to this descriptor.
