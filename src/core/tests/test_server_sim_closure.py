@@ -126,6 +126,14 @@ def test_server_sim_closure_dynamic_obstacle_command_uses_nanobind_module_gate()
     assert "server_sim_closure/dynamic_obstacle_local_planner/report.json" in spec.command
 
 
+def test_server_sim_closure_saved_map_relocalize_command_uses_contract_gate():
+    spec = next(item for item in server_sim_closure.GATES if item.name == "saved_map_relocalize")
+
+    assert "sim/scripts/saved_map_relocalize_contract_gate.py" in spec.command
+    assert "server_sim_closure/saved_map_relocalize/report.json" in spec.command
+    assert "--strict" in spec.command
+
+
 def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
     multifloor = _write_json(tmp_path / "multifloor.json", _complete_multifloor_report())
     large = _write_json(
@@ -290,6 +298,51 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             },
         },
     )
+    saved_map_relocalize = _write_json(
+        tmp_path / "saved_map_relocalize.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "default_profiles": {"navigating": "localizer", "mapping": "fastlio2"},
+            "contracts": {
+                "localizer": {
+                    "health_source": "localizer_health_topic",
+                    "map_save_source": "active_map",
+                    "relocalization_supported": True,
+                    "saved_map_relocalization_supported": True,
+                    "recovery_method": "relocalize_service",
+                    "recovery_action": "relocalize_service",
+                },
+                "fastlio2": {"saved_map_relocalization_supported": False},
+                "super_lio": {"saved_map_relocalization_supported": False},
+                "super_lio_relocation": {"saved_map_relocalization_supported": False},
+            },
+            "plans": {
+                "session_navigating_fastlio2": {"ensure": ["slam", "localizer"]},
+                "switch_localizer": {"ensure": ["slam", "localizer"]},
+            },
+            "launch_services": {
+                "/nav/relocalize": True,
+                "/nav/relocalize_check": True,
+                "/nav/global_relocalize": True,
+                "/nav/saved_map_cloud": True,
+            },
+            "bridge_status": {
+                "localizer": {
+                    "backend": "localizer",
+                    "localizer_health": "LOCKED",
+                    "relocalization_state": "idle",
+                    "saved_map_relocalization_supported": True,
+                },
+                "super_lio": {
+                    "saved_map_relocalization_supported": False,
+                    "relocalization_state": "unsupported",
+                },
+            },
+        },
+    )
 
     summary = server_sim_closure.summarize(
         report_overrides={
@@ -301,6 +354,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "policy_nav": policy,
             "gateway_dry_run": gateway,
             "gazebo_runtime": gazebo,
+            "saved_map_relocalize": saved_map_relocalize,
         },
         required={
             "multifloor_exploration",
@@ -311,6 +365,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "policy_nav",
             "gateway_dry_run",
             "gazebo_runtime",
+            "saved_map_relocalize",
         },
     )
 
@@ -420,6 +475,59 @@ def test_server_sim_closure_rejects_weak_dynamic_obstacle_report(tmp_path: Path)
     assert "clear_path_recovery_verified is not true" in gaps
     assert "min_clearance_m < 0.25" in gaps
     assert "left obstacle did not produce right detour" in gaps
+
+
+def test_server_sim_closure_rejects_weak_saved_map_relocalize_report(tmp_path: Path):
+    weak = _write_json(
+        tmp_path / "saved_map_relocalize_weak.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "default_profiles": {"navigating": "fastlio2"},
+            "contracts": {
+                "localizer": {
+                    "health_source": "odom_map_cloud",
+                    "map_save_source": "slam_service",
+                    "saved_map_relocalization_supported": False,
+                    "recovery_method": "restart_slam",
+                    "recovery_action": "restart_slam",
+                },
+                "fastlio2": {"saved_map_relocalization_supported": True},
+            },
+            "plans": {
+                "session_navigating_fastlio2": {"ensure": ["slam", "slam_pgo"]},
+                "switch_localizer": {"ensure": ["slam", "slam_pgo"]},
+            },
+            "launch_services": {"/nav/relocalize": False},
+            "bridge_status": {
+                "localizer": {
+                    "backend": "fastlio2",
+                    "localizer_health": "UNKNOWN",
+                    "relocalization_state": "unsupported",
+                    "saved_map_relocalization_supported": False,
+                },
+                "super_lio": {
+                    "saved_map_relocalization_supported": True,
+                    "relocalization_state": "idle",
+                },
+            },
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"saved_map_relocalize": weak},
+        required={"saved_map_relocalize"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["saved_map_relocalize"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "localizer health_source is not localizer_health_topic" in gaps
+    assert "fastlio2 saved_map_relocalization_supported is not false" in gaps
+    assert "navigating default profile is not localizer" in gaps
+    assert "/nav/relocalize launch remap missing" in gaps
 
 
 def test_server_sim_closure_rejects_non_pct_native_motion_report(tmp_path: Path):

@@ -328,6 +328,80 @@ def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[
     }
 
 
+def _eval_saved_map_relocalize(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("ok") is not True:
+        blockers.append("report.ok is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+
+    contracts = report.get("contracts") or {}
+    localizer = contracts.get("localizer") or {}
+    if localizer.get("health_source") != "localizer_health_topic":
+        blockers.append("localizer health_source is not localizer_health_topic")
+    if localizer.get("map_save_source") != "active_map":
+        blockers.append("localizer map_save_source is not active_map")
+    if localizer.get("recovery_method") != "relocalize_service":
+        blockers.append("localizer recovery_method is not relocalize_service")
+    if localizer.get("recovery_action") != "relocalize_service":
+        blockers.append("localizer recovery_action is not relocalize_service")
+    if localizer.get("saved_map_relocalization_supported") is not True:
+        blockers.append("localizer saved_map_relocalization_supported is not true")
+    for backend in ("fastlio2", "super_lio", "super_lio_relocation"):
+        if (contracts.get(backend) or {}).get("saved_map_relocalization_supported") is not False:
+            blockers.append(f"{backend} saved_map_relocalization_supported is not false")
+
+    defaults = report.get("default_profiles") or {}
+    if defaults.get("navigating") != "localizer":
+        blockers.append("navigating default profile is not localizer")
+    plans = report.get("plans") or {}
+    nav_plan = plans.get("session_navigating_fastlio2") or {}
+    if tuple(nav_plan.get("ensure") or ()) != ("slam", "localizer"):
+        blockers.append("navigating plan does not ensure slam/localizer")
+    switch_plan = plans.get("switch_localizer") or {}
+    if tuple(switch_plan.get("ensure") or ()) != ("slam", "localizer"):
+        blockers.append("localizer switch plan does not ensure slam/localizer")
+
+    launch_services = report.get("launch_services") or {}
+    for service in ("/nav/relocalize", "/nav/relocalize_check", "/nav/global_relocalize", "/nav/saved_map_cloud"):
+        if launch_services.get(service) is not True:
+            blockers.append(f"{service} launch remap missing")
+
+    bridge = report.get("bridge_status") or {}
+    localizer_status = bridge.get("localizer") or {}
+    super_lio_status = bridge.get("super_lio") or {}
+    if localizer_status.get("backend") != "localizer":
+        blockers.append("bridge localizer status backend is not localizer")
+    if localizer_status.get("localizer_health") != "LOCKED":
+        blockers.append("bridge localizer health is not LOCKED")
+    if localizer_status.get("relocalization_state") != "idle":
+        blockers.append("bridge localizer relocalization_state is not idle")
+    if localizer_status.get("saved_map_relocalization_supported") is not True:
+        blockers.append("bridge localizer saved_map_relocalization_supported is not true")
+    if super_lio_status.get("saved_map_relocalization_supported") is not False:
+        blockers.append("bridge super_lio saved_map_relocalization_supported is not false")
+    if super_lio_status.get("relocalization_state") != "unsupported":
+        blockers.append("bridge super_lio relocalization_state is not unsupported")
+
+    return not blockers, blockers, {
+        "default_profiles": defaults,
+        "localizer_contract": {
+            "health_source": localizer.get("health_source"),
+            "map_save_source": localizer.get("map_save_source"),
+            "saved_map_relocalization_supported": localizer.get(
+                "saved_map_relocalization_supported"
+            ),
+            "recovery_method": localizer.get("recovery_method"),
+        },
+        "launch_services": launch_services,
+        "bridge_status": bridge,
+    }
+
+
 def _eval_multifloor_exploration(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
     blockers: list[str] = []
     if report.get("passed") is not True:
@@ -510,6 +584,17 @@ GATES: tuple[GateSpec, ...] = (
         "--json-out artifacts/server_sim_closure/gazebo_runtime/report.json'",
         _eval_gazebo_runtime,
     ),
+    GateSpec(
+        "saved_map_relocalize",
+        "Saved-map relocalization contract for navigation mode and localizer bridge status",
+        (
+            "artifacts/server_sim_closure/saved_map_relocalize/report.json",
+            "artifacts/saved_map_relocalize*/report.json",
+        ),
+        "PYTHONPATH=src:. python3 sim/scripts/saved_map_relocalize_contract_gate.py "
+        "--json-out artifacts/server_sim_closure/saved_map_relocalize/report.json --strict",
+        _eval_saved_map_relocalize,
+    ),
 )
 
 
@@ -611,6 +696,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--policy-nav-report", type=Path, default=None)
     parser.add_argument("--gateway-dry-run-report", type=Path, default=None)
     parser.add_argument("--gazebo-runtime-report", type=Path, default=None)
+    parser.add_argument("--saved-map-relocalize-report", type=Path, default=None)
     parser.add_argument(
         "--required",
         default=",".join(spec.name for spec in GATES),
@@ -631,6 +717,7 @@ def main() -> int:
         "policy_nav": args.policy_nav_report,
         "gateway_dry_run": args.gateway_dry_run_report,
         "gazebo_runtime": args.gazebo_runtime_report,
+        "saved_map_relocalize": args.saved_map_relocalize_report,
     }
     required = {item.strip() for item in args.required.split(",") if item.strip()}
     valid_names = {spec.name for spec in GATES}
