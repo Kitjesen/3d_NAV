@@ -520,6 +520,8 @@ GATES: tuple[GateSpec, ...] = (
             "artifacts/server_sim_closure/native_pct_mujoco/report.json",
             "artifacts/native_pct_mujoco_gate*/report.json",
             "artifacts/native_pct_large_terrain*/report.json",
+            "artifacts/native_pct_effect/report.json",
+            "artifacts/native_pct_effect/*pct*overlay*_report.json",
         ),
         "PYTHONPATH=src:. python3 sim/scripts/native_pct_mujoco_gate.py --source-report artifacts/server_sim_closure/large_terrain/report.json --route terrain_long --planner pct --timeout-s 180 --json-out artifacts/server_sim_closure/native_pct_mujoco/report.json",
         _eval_native_pct_mujoco,

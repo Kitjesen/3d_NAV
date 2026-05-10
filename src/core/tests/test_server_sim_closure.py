@@ -623,9 +623,9 @@ def test_server_sim_closure_finds_nested_fastlio2_live_report(tmp_path: Path, mo
     assert summary["gates"]["fastlio2_live"]["path"] == str(nested)
 
 
-def test_server_sim_closure_ignores_native_pct_showcase_reports(tmp_path: Path, monkeypatch):
-    _write_json(
-        tmp_path / "artifacts" / "native_pct_effect" / "report.json",
+def test_server_sim_closure_accepts_native_pct_effect_overlay_report(tmp_path: Path, monkeypatch):
+    report = _write_json(
+        tmp_path / "artifacts" / "native_pct_effect" / "native_pct_omni_scene_overlay_report.json",
         {
             "schema_version": "lingtu.native_pct_mujoco_gate.v1",
             "ok": True,
@@ -647,9 +647,9 @@ def test_server_sim_closure_ignores_native_pct_showcase_reports(tmp_path: Path, 
 
     summary = server_sim_closure.summarize(report_overrides={}, required={"native_pct_mujoco"})
 
-    assert summary["ok"] is False
-    assert summary["gates"]["native_pct_mujoco"]["exists"] is False
-    assert "native_pct_mujoco" in summary["missing_or_failed"]
+    assert summary["ok"] is True
+    assert summary["gates"]["native_pct_mujoco"]["path"] == str(report)
+    assert summary["verified"]["native_pct_mujoco"] is True
 
 
 def test_server_sim_closure_rejects_policy_nav_direct_fallback(tmp_path: Path):
