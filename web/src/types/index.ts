@@ -96,6 +96,7 @@ export interface LocationEntry {
   tags: string[]
   source?: string | null
   ts?: number | null
+  metadata?: Record<string, unknown>
 }
 
 export interface LocationsResponse {
@@ -105,6 +106,34 @@ export interface LocationsResponse {
   frame_id: string
   ts?: number | null
   source: string
+}
+
+export interface LocationUpsertRequest {
+  name: string
+  x?: number | null
+  y?: number | null
+  z?: number
+  yaw?: number | null
+  tags?: string[]
+  source?: string
+  metadata?: Record<string, unknown>
+  use_current_pose?: boolean
+  request_id?: string | null
+  client_id?: string
+}
+
+export interface LocationOperationResponse {
+  schema_version: number
+  ok: boolean
+  status: 'saved' | 'deleted' | 'not_found' | 'unavailable' | 'invalid' | 'error'
+  action: 'create' | 'update' | 'delete'
+  location?: LocationEntry | null
+  locations: LocationsResponse
+  message?: string | null
+  error?: string | null
+  request_id?: string | null
+  client_id: string
+  ts: number
 }
 
 export interface StateResponse {
@@ -197,6 +226,7 @@ export interface PlanPreviewRequest {
   x: number
   y: number
   z?: number
+  frame_id?: 'map'
   client_id?: string
 }
 
@@ -214,6 +244,66 @@ export interface PlanPreviewResponse {
   plan_ms?: number | null
   planner?: string | null
   source: string
+  reasons: string[]
+  error?: string | null
+  ts: number
+}
+
+export type GoalSource =
+  | 'coordinate'
+  | 'map_click'
+  | 'saved_location'
+  | 'semantic'
+  | 'frontier'
+  | 'api'
+
+export type GoalTargetType =
+  | 'coordinate'
+  | 'map_point'
+  | 'saved_location'
+  | 'semantic_target'
+  | 'frontier'
+
+export interface GoalCandidateRequest {
+  x?: number | null
+  y?: number | null
+  z?: number
+  yaw?: number | null
+  frame_id?: 'map'
+  source?: GoalSource
+  target_type?: GoalTargetType
+  label?: string | null
+  location_name?: string | null
+  acceptance_radius_m?: number | null
+  max_speed_mps?: number | null
+  metadata?: Record<string, unknown>
+  preview?: boolean
+  client_id?: string
+}
+
+export interface ConstructedGoalTarget {
+  schema_version: number
+  x: number
+  y: number
+  z: number
+  yaw: number
+  frame_id: string
+  source: string
+  target_type: string
+  label?: string | null
+  location_name?: string | null
+  acceptance_radius_m?: number | null
+  max_speed_mps?: number | null
+  metadata: Record<string, unknown>
+  ts?: number | null
+}
+
+export interface GoalCandidateResponse {
+  schema_version: number
+  ok: boolean
+  status: string
+  target?: ConstructedGoalTarget | null
+  preview?: PlanPreviewResponse | null
   reasons: string[]
   error?: string | null
   ts: number
@@ -377,6 +467,7 @@ export interface ClientLinks {
   state?: string
   scene_graph?: string
   locations?: string
+  location_detail?: string
   path?: string
   localization_status?: string
   navigation_status?: string
@@ -397,6 +488,7 @@ export interface ClientLinks {
   session?: string
   session_start?: string
   session_end?: string
+  navigation_goal_candidate?: string
   navigation_plan?: string
   navigation_cancel?: string
   goal?: string
@@ -669,9 +761,11 @@ export interface ControlCommandResponse {
   command: CommandReceipt
   goal?: number[] | null
   yaw?: number | null
+  frame_id?: string | null
   instruction?: string | null
   mode?: string | null
   reason?: string | null
+  target?: ConstructedGoalTarget | null
   [key: string]: unknown
 }
 
@@ -761,6 +855,16 @@ export interface NavigationStatusEvent {
 export interface LeaseEvent {
   type: 'lease'
   data?: LeaseResponse | Record<string, unknown>
+}
+
+export interface LocationEvent {
+  type: 'location'
+  data?: LocationOperationResponse | Record<string, unknown>
+}
+
+export interface LocationsEvent {
+  type: 'locations'
+  data?: LocationsResponse | Record<string, unknown>
 }
 
 export interface CommandAckEvent {
@@ -996,6 +1100,8 @@ export type SSEEvent = SSEEnvelopeFields & (
   | SafetyEvent
   | NavigationStatusEvent
   | LeaseEvent
+  | LocationEvent
+  | LocationsEvent
   | CommandAckEvent
   | EvalEvent
   | DialogueEvent

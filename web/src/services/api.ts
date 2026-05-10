@@ -15,9 +15,15 @@ import type {
   DevicesResponse,
   DynamicFilterResult,
   GatewayErrorResponse,
+  GoalCandidateRequest,
+  GoalCandidateResponse,
+  GoalSource,
+  GoalTargetType,
   HealthResponse,
   LeaseAction,
   LeaseResponse,
+  LocationOperationResponse,
+  LocationUpsertRequest,
   LocationsResponse,
   MapInfo,
   MapLifecycleResponse,
@@ -160,6 +166,14 @@ function mapPointsPath(name: string): string {
   return `${url.pathname}${url.search || '?max_points=30000'}`
 }
 
+function locationDetailPath(name: string): string {
+  const encoded = encodeURIComponent(name)
+  const template = apiPath('location_detail', '/api/v1/locations/{name}')
+  return template.includes('{name}')
+    ? template.replace('{name}', encoded)
+    : `/api/v1/locations/${encoded}`
+}
+
 function makeRequestId(prefix: string): string {
   if (globalThis.crypto?.randomUUID) {
     return `${prefix}-${globalThis.crypto.randomUUID()}`
@@ -279,6 +293,41 @@ export async function fetchLocations(): Promise<LocationsResponse> {
   return fetchJson<LocationsResponse>(apiPath('locations', '/api/v1/locations'))
 }
 
+export async function saveLocation(body: LocationUpsertRequest): Promise<LocationOperationResponse> {
+  return postJson<LocationOperationResponse>(
+    apiPath('locations', '/api/v1/locations'),
+    {
+      ...body,
+      source: body.source ?? 'web',
+      client_id: body.client_id ?? WEB_CLIENT_ID,
+      request_id: body.request_id ?? makeRequestId('location'),
+    },
+  )
+}
+
+export async function updateLocation(
+  name: string,
+  body: LocationUpsertRequest,
+): Promise<LocationOperationResponse> {
+  const res = await fetch(locationDetailPath(name), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...body,
+      name,
+      source: body.source ?? 'web',
+      client_id: body.client_id ?? WEB_CLIENT_ID,
+      request_id: body.request_id ?? makeRequestId('location'),
+    }),
+  })
+  return readJsonResponse<LocationOperationResponse>(res)
+}
+
+export async function deleteLocation(name: string): Promise<LocationOperationResponse> {
+  const res = await fetch(locationDetailPath(name), { method: 'DELETE' })
+  return readJsonResponse<LocationOperationResponse>(res)
+}
+
 // --- Navigation ---
 
 export async function sendInstruction(text: string): Promise<ControlCommandResponse> {
@@ -288,10 +337,38 @@ export async function sendInstruction(text: string): Promise<ControlCommandRespo
   )
 }
 
-export async function sendGoal(x: number, y: number): Promise<ControlCommandResponse> {
+export interface SendGoalOptions {
+  z?: number
+  yaw?: number
+  source?: GoalSource
+  target_type?: GoalTargetType
+  label?: string | null
+  acceptance_radius_m?: number | null
+  max_speed_mps?: number | null
+  metadata?: Record<string, unknown>
+}
+
+export async function sendGoal(
+  x: number,
+  y: number,
+  options: SendGoalOptions = {},
+): Promise<ControlCommandResponse> {
   return postJson<ControlCommandResponse>(
     apiPath('goal', '/api/v1/goal'),
-    commandBody('goal', { x, y }),
+    commandBody('goal', { x, y, ...options }),
+  )
+}
+
+export async function constructGoalCandidate(
+  request: GoalCandidateRequest,
+): Promise<GoalCandidateResponse> {
+  return postJson<GoalCandidateResponse>(
+    apiPath('navigation_goal_candidate', '/api/v1/navigation/goal_candidate'),
+    {
+      preview: true,
+      client_id: WEB_CLIENT_ID,
+      ...request,
+    },
   )
 }
 

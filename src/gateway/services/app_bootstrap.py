@@ -43,6 +43,7 @@ CLIENT_LINKS: dict[str, str] = {
     "state": "/api/v1/state",
     "scene_graph": "/api/v1/scene_graph",
     "locations": "/api/v1/locations",
+    "location_detail": "/api/v1/locations/{name}",
     "path": "/api/v1/path",
     "localization_status": "/api/v1/localization/status",
     "navigation_status": "/api/v1/navigation/status",
@@ -65,6 +66,7 @@ CLIENT_LINKS: dict[str, str] = {
     "go2rtc_status": "/api/v1/webrtc/go2rtc/status",
     "goal": "/api/v1/goal",
     "navigate_click": "/api/v1/navigate/click",
+    "navigation_goal_candidate": "/api/v1/navigation/goal_candidate",
     "navigation_plan": "/api/v1/navigation/plan",
     "navigation_cancel": "/api/v1/navigation/cancel",
     "stop": "/api/v1/stop",
@@ -109,6 +111,9 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         "snapshot": {"method": "GET", "path": CLIENT_LINKS["state"]},
         "scene_graph": {"method": "GET", "path": CLIENT_LINKS["scene_graph"]},
         "locations": {"method": "GET", "path": CLIENT_LINKS["locations"]},
+        "location_create": {"method": "POST", "path": CLIENT_LINKS["locations"]},
+        "location_update": {"method": "PUT", "path": CLIENT_LINKS["location_detail"]},
+        "location_delete": {"method": "DELETE", "path": CLIENT_LINKS["location_detail"]},
         "path": {"method": "GET", "path": CLIENT_LINKS["path"]},
         "localization_status": {
             "method": "GET",
@@ -128,6 +133,10 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         "cloud": {"method": "WS", "path": CLIENT_LINKS["cloud_ws"]},
     },
     "control": {
+        "navigation_goal_candidate": {
+            "method": "POST",
+            "path": CLIENT_LINKS["navigation_goal_candidate"],
+        },
         "navigation_plan": {"method": "POST", "path": CLIENT_LINKS["navigation_plan"]},
         "navigation_cancel": {"method": "POST", "path": CLIENT_LINKS["navigation_cancel"]},
         "goal": {"method": "POST", "path": CLIENT_LINKS["goal"]},

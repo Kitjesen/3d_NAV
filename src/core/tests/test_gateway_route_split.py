@@ -92,6 +92,7 @@ def test_status_routes_register_expected_paths():
     assert "/api/v1/state" in paths
     assert "/api/v1/scene_graph" in paths
     assert "/api/v1/locations" in paths
+    assert "/api/v1/locations/{name}" in paths
     assert "/api/v1/path" in paths
     assert "/api/v1/localization/status" in paths
     assert "/api/v1/navigation/status" in paths
@@ -220,6 +221,7 @@ def test_command_routes_register_expected_paths():
 
     routes = {getattr(route, "path", ""): route for route in app.routes}
     assert "/api/v1/navigation/plan" in routes
+    assert "/api/v1/navigation/goal_candidate" in routes
     assert "/api/v1/goal" in routes
     assert "/api/v1/navigate/click" in routes
     assert "/api/v1/cmd_vel" in routes
@@ -304,6 +306,8 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/diagnostic_pack"] == 1
     assert counts["/api/v1/events"] == 1
     assert counts["/api/v1/state"] == 1
+    assert counts["/api/v1/locations"] == 2
+    assert counts["/api/v1/locations/{name}"] == 2
     assert counts["/api/v1/localization/status"] == 1
     assert counts["/api/v1/navigation/status"] == 1
     assert counts["/api/v1/navigation"] == 1
@@ -317,6 +321,7 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/map/points"] == 1
     assert counts["/api/v1/map_cloud/reset"] == 1
     assert counts["/api/v1/navigation/plan"] == 1
+    assert counts["/api/v1/navigation/goal_candidate"] == 1
     assert counts["/api/v1/goal"] == 1
     assert counts["/api/v1/navigate/click"] == 1
     assert counts["/api/v1/cmd_vel"] == 1
@@ -345,6 +350,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/state",
         "/api/v1/scene_graph",
         "/api/v1/locations",
+        "/api/v1/locations/{name}",
         "/api/v1/path",
         "/api/v1/localization/status",
         "/api/v1/navigation/status",
@@ -361,6 +367,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/api/v1/maps/{name}/points",
         "/api/v1/map_cloud/reset",
         "/api/v1/navigation/plan",
+        "/api/v1/navigation/goal_candidate",
         "/api/v1/goal",
         "/api/v1/navigate/click",
         "/api/v1/cmd_vel",
@@ -462,6 +469,9 @@ def test_openapi_exposes_client_response_models():
     assert "GatewayErrorResponse" in schemas
     assert "CommandReceipt" in schemas
     assert "CancelRequest" in schemas
+    assert "GoalCandidateRequest" in schemas
+    assert "GoalCandidateResponse" in schemas
+    assert "ConstructedGoalTarget" in schemas
     assert "PlanPreviewRequest" in schemas
     assert "PlanPreviewResponse" in schemas
     assert "SceneGraphResponse" in schemas
@@ -470,6 +480,8 @@ def test_openapi_exposes_client_response_models():
     assert "SceneGraphRegion" in schemas
     assert "LocationsResponse" in schemas
     assert "LocationEntry" in schemas
+    assert "LocationUpsertRequest" in schemas
+    assert "LocationOperationResponse" in schemas
     assert "PathResponse" in schemas
     assert "PathPoint" in schemas
     assert "RobotPoseSummary" in schemas
@@ -550,6 +562,21 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(openapi, "/api/v1/locations").endswith(
         "/LocationsResponse"
     )
+    assert _schema_ref_for(
+        openapi, "/api/v1/locations", method="post"
+    ).endswith("/LocationOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/locations"
+    ).endswith("/LocationUpsertRequest")
+    assert _schema_ref_for(
+        openapi, "/api/v1/locations/{name}", method="put"
+    ).endswith("/LocationOperationResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/locations/{name}", method="put"
+    ).endswith("/LocationUpsertRequest")
+    assert _schema_ref_for(
+        openapi, "/api/v1/locations/{name}", method="delete"
+    ).endswith("/LocationOperationResponse")
     assert _schema_ref_for(openapi, "/api/v1/path").endswith("/PathResponse")
     assert _schema_ref_for(openapi, "/api/v1/localization/status").endswith(
         "/LocalizationStatusResponse"
@@ -560,6 +587,12 @@ def test_openapi_exposes_client_response_models():
     assert _schema_ref_for(
         openapi, "/api/v1/goal", method="post"
     ).endswith("/ControlCommandResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/navigation/goal_candidate", method="post"
+    ).endswith("/GoalCandidateResponse")
+    assert _request_schema_ref_for(
+        openapi, "/api/v1/navigation/goal_candidate"
+    ).endswith("/GoalCandidateRequest")
     assert _schema_ref_for(
         openapi, "/api/v1/navigation/plan", method="post"
     ).endswith("/PlanPreviewResponse")
@@ -752,6 +785,12 @@ def test_openapi_exposes_client_response_models():
     assert schemas["LocationsResponse"]["properties"]["locations"]["items"][
         "$ref"
     ].endswith("/LocationEntry")
+    assert schemas["LocationOperationResponse"]["properties"]["location"]["anyOf"][0][
+        "$ref"
+    ].endswith("/LocationEntry")
+    assert schemas["LocationOperationResponse"]["properties"]["locations"]["$ref"].endswith(
+        "/LocationsResponse"
+    )
     assert schemas["PathResponse"]["properties"]["path"]["items"]["$ref"].endswith(
         "/PathPoint"
     )
@@ -761,6 +800,12 @@ def test_openapi_exposes_client_response_models():
     assert schemas["PlanPreviewResponse"]["properties"]["path"]["items"][
         "$ref"
     ].endswith("/PathPoint")
+    assert schemas["GoalCandidateResponse"]["properties"]["target"]["anyOf"][0][
+        "$ref"
+    ].endswith("/ConstructedGoalTarget")
+    assert schemas["GoalCandidateResponse"]["properties"]["preview"]["anyOf"][0][
+        "$ref"
+    ].endswith("/PlanPreviewResponse")
     assert schemas["NavigationStatusResponse"]["properties"]["control"]["$ref"].endswith(
         "/NavigationControlSummary"
     )
@@ -795,6 +840,9 @@ def test_openapi_exposes_client_response_models():
     assert "ok" in schemas["ControlCommandResponse"]["properties"]
     assert "yaw" in schemas["ControlCommandResponse"]["properties"]
     assert "reason" in schemas["ControlCommandResponse"]["properties"]
+    assert schemas["ControlCommandResponse"]["properties"]["target"]["anyOf"][0][
+        "$ref"
+    ].endswith("/ConstructedGoalTarget")
     assert schemas["ControlCommandResponse"]["properties"]["command"]["$ref"].endswith(
         "/CommandReceipt"
     )
@@ -850,6 +898,9 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["state"]["snapshot"],
         capabilities["endpoints"]["state"]["scene_graph"],
         capabilities["endpoints"]["state"]["locations"],
+        capabilities["endpoints"]["state"]["location_create"],
+        capabilities["endpoints"]["state"]["location_update"],
+        capabilities["endpoints"]["state"]["location_delete"],
         capabilities["endpoints"]["state"]["path"],
         capabilities["endpoints"]["state"]["localization_status"],
         capabilities["endpoints"]["state"]["navigation_status"],
@@ -860,6 +911,7 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["app"]["traffic"],
         capabilities["endpoints"]["auth"]["login"],
         capabilities["endpoints"]["auth"]["check"],
+        capabilities["endpoints"]["control"]["navigation_goal_candidate"],
         capabilities["endpoints"]["control"]["navigation_plan"],
     ]
     for spec in key_specs:

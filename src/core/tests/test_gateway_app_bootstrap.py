@@ -82,6 +82,7 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["links"]["auth_check"] == "/api/v1/auth/check"
     assert payload["links"]["localization_status"] == "/api/v1/localization/status"
     assert payload["links"]["navigation_status"] == "/api/v1/navigation/status"
+    assert payload["links"]["navigation_goal_candidate"] == "/api/v1/navigation/goal_candidate"
     assert payload["links"]["navigation_plan"] == "/api/v1/navigation/plan"
     assert payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
@@ -110,6 +111,7 @@ def test_app_bootstrap_service_returns_client_contract():
         == "/api/v1/navigation/status"
     )
     assert capabilities["endpoints"]["control"]["goal"]["method"] == "POST"
+    assert capabilities["endpoints"]["control"]["navigation_goal_candidate"]["method"] == "POST"
     assert capabilities["endpoints"]["control"]["navigation_plan"]["method"] == "POST"
     assert capabilities["endpoints"]["control"]["navigation_cancel"]["method"] == "POST"
     assert capabilities["endpoints"]["map"]["maps"]["path"] == "/api/v1/slam/maps"
@@ -397,6 +399,9 @@ def test_app_capabilities_enriches_specs_from_openapi():
     localization = capabilities["endpoints"]["state"]["localization_status"]
     navigation = capabilities["endpoints"]["state"]["navigation_status"]
     control = capabilities["endpoints"]["control"]
+    navigation_goal_candidate = capabilities["endpoints"]["control"][
+        "navigation_goal_candidate"
+    ]
     navigation_plan = capabilities["endpoints"]["control"]["navigation_plan"]
     navigation_cancel = capabilities["endpoints"]["control"]["navigation_cancel"]
     goal = capabilities["endpoints"]["control"]["goal"]
@@ -423,6 +428,8 @@ def test_app_capabilities_enriches_specs_from_openapi():
     assert auth_check["response_schema"] == "AuthCheckResponse"
     assert localization["response_schema"] == "LocalizationStatusResponse"
     assert navigation["response_schema"] == "NavigationStatusResponse"
+    assert navigation_goal_candidate["request_schema"] == "GoalCandidateRequest"
+    assert navigation_goal_candidate["response_schema"] == "GoalCandidateResponse"
     assert navigation_plan["request_schema"] == "PlanPreviewRequest"
     assert navigation_plan["response_schema"] == "PlanPreviewResponse"
     assert navigation_cancel["request_schema"] == "CancelRequest"
@@ -667,6 +674,10 @@ def test_app_web_cold_start_routes_return_stable_client_shapes():
     assert capabilities_payload["links"]["map_activate"] == "/api/v1/map/activate"
     assert capabilities_payload["links"]["map_rename"] == "/api/v1/map/rename"
     assert capabilities_payload["links"]["map_save"] == "/api/v1/map/save"
+    assert (
+        capabilities_payload["links"]["navigation_goal_candidate"]
+        == "/api/v1/navigation/goal_candidate"
+    )
     assert capabilities_payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
 
 

@@ -132,7 +132,22 @@ export async function executeSlashCommand(raw: string, sseState: SSEState): Prom
       return '用法：/go <x> <y>  （示例：/go 3.5 -1.2）'
     }
     try {
-      const res = await api.sendGoal(x, y)
+      const candidate = await api.constructGoalCandidate({
+        x,
+        y,
+        source: 'coordinate',
+        target_type: 'coordinate',
+        label: 'slash_go',
+      })
+      if (!candidate.ok || candidate.preview?.feasible === false) {
+        const reason = candidate.reasons.slice(0, 3).join(' / ') || candidate.error || '目标预检未通过'
+        return `目标不可达：${reason}`
+      }
+      const res = await api.sendGoal(x, y, {
+        source: 'coordinate',
+        target_type: 'coordinate',
+        label: 'slash_go',
+      })
       return api.formatCommandAck(res, `目标 (${x}, ${y})`)
     } catch (e: unknown) {
       return api.formatCommandError(e, '导航失败')

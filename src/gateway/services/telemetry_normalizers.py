@@ -269,6 +269,14 @@ def build_locations_response(entries: Any) -> dict[str, Any]:
             continue
         x = _finite_float(raw.get("x"))
         y = _finite_float(raw.get("y"))
+        position = raw.get("position")
+        if (x is None or y is None) and isinstance(position, Sequence) and not isinstance(position, str):
+            coords = list(position)
+            if len(coords) >= 2:
+                x = _finite_float(coords[0])
+                y = _finite_float(coords[1])
+                if raw.get("z") is None and len(coords) >= 3:
+                    raw["z"] = coords[2]
         if x is None or y is None:
             continue
         tags = raw.get("tags", [])
@@ -286,6 +294,7 @@ def build_locations_response(entries: Any) -> dict[str, Any]:
                 "tags": [str(tag) for tag in tags],
                 "source": _string_or_none(raw.get("source")),
                 "ts": _finite_float(raw.get("ts")),
+                "metadata": _metadata(raw.get("metadata")),
             }
         )
     return {

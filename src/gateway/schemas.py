@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class GatewayResponseModel(BaseModel):
@@ -36,6 +36,24 @@ class BitrateRequest(BaseModel):
     bps: int
 
 
+GoalSource = Literal[
+    "coordinate",
+    "map_click",
+    "saved_location",
+    "semantic",
+    "frontier",
+    "api",
+]
+
+GoalTargetType = Literal[
+    "coordinate",
+    "map_point",
+    "saved_location",
+    "semantic_target",
+    "frontier",
+]
+
+
 class GoalRequest(BaseModel):
     x: float
     y: float
@@ -43,8 +61,23 @@ class GoalRequest(BaseModel):
     yaw: float = 0.0
     frame_id: Literal["map"] = "map"
     instruction: str | None = None
+    source: GoalSource = "coordinate"
+    target_type: GoalTargetType = "coordinate"
+    label: str | None = Field(default=None, max_length=128)
+    acceptance_radius_m: float | None = Field(default=None, gt=0, le=20)
+    max_speed_mps: float | None = Field(default=None, gt=0, le=5)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z", "yaw")
+    @classmethod
+    def finite(cls, v: float) -> float:
+        import math
+
+        if not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
 
 
 class ClickNavRequest(BaseModel):
@@ -52,8 +85,23 @@ class ClickNavRequest(BaseModel):
     y: float
     z: float = 0.0
     frame_id: Literal["map"] = "map"
+    source: GoalSource = "map_click"
+    target_type: GoalTargetType = "map_point"
+    label: str | None = Field(default=None, max_length=128)
+    acceptance_radius_m: float | None = Field(default=None, gt=0, le=20)
+    max_speed_mps: float | None = Field(default=None, gt=0, le=5)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     request_id: str | None = Field(default=None, max_length=128)
     client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z")
+    @classmethod
+    def finite(cls, v: float) -> float:
+        import math
+
+        if not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
 
 
 class PlanPreviewRequest(BaseModel):
@@ -71,6 +119,38 @@ class PlanPreviewRequest(BaseModel):
         if not math.isfinite(v):
             raise ValueError("must be finite")
         return v
+
+
+class GoalCandidateRequest(BaseModel):
+    x: float | None = None
+    y: float | None = None
+    z: float = 0.0
+    yaw: float | None = None
+    frame_id: Literal["map"] = "map"
+    source: GoalSource = "coordinate"
+    target_type: GoalTargetType = "coordinate"
+    label: str | None = Field(default=None, max_length=128)
+    location_name: str | None = Field(default=None, min_length=1, max_length=128)
+    acceptance_radius_m: float | None = Field(default=None, gt=0, le=20)
+    max_speed_mps: float | None = Field(default=None, gt=0, le=5)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    preview: bool = True
+    client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z", "yaw")
+    @classmethod
+    def finite_optional(cls, v: float | None) -> float | None:
+        import math
+
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
+
+    @model_validator(mode="after")
+    def require_coordinates_or_location(self) -> "GoalCandidateRequest":
+        if self.location_name is None and (self.x is None or self.y is None):
+            raise ValueError("x and y are required unless location_name is provided")
+        return self
 
 
 class CmdVelRequest(BaseModel):
@@ -284,6 +364,23 @@ class HealthResponse(GatewayResponseModel):
     brainstem: dict[str, Any] = Field(default_factory=dict)
 
 
+class ConstructedGoalTarget(GatewayResponseModel):
+    schema_version: int = 1
+    x: float
+    y: float
+    z: float = 0.0
+    yaw: float = 0.0
+    frame_id: str = "map"
+    source: str = "coordinate"
+    target_type: str = "coordinate"
+    label: str | None = None
+    location_name: str | None = None
+    acceptance_radius_m: float | None = None
+    max_speed_mps: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    ts: float | None = None
+
+
 class ControlCommandResponse(GatewayResponseModel):
     schema_version: int = 1
     ok: bool = True
@@ -295,6 +392,7 @@ class ControlCommandResponse(GatewayResponseModel):
     instruction: str | None = None
     mode: str | None = None
     reason: str | None = None
+    target: ConstructedGoalTarget | None = None
 
 
 class AuthLoginRequest(BaseModel):
@@ -373,6 +471,35 @@ class LocationEntry(GatewayResponseModel):
     ts: float | None = None
 
 
+class LocationUpsertRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    x: float | None = None
+    y: float | None = None
+    z: float = 0.0
+    yaw: float | None = None
+    tags: list[str] = Field(default_factory=list)
+    source: str = Field(default="app", max_length=64)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    use_current_pose: bool = False
+    request_id: str | None = Field(default=None, max_length=128)
+    client_id: str = Field(default="unknown", max_length=128)
+
+    @field_validator("x", "y", "z", "yaw")
+    @classmethod
+    def finite_optional(cls, v: float | None) -> float | None:
+        import math
+
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be finite")
+        return v
+
+    @model_validator(mode="after")
+    def require_coordinates_or_current_pose(self) -> "LocationUpsertRequest":
+        if not self.use_current_pose and (self.x is None or self.y is None):
+            raise ValueError("x and y are required unless use_current_pose is true")
+        return self
+
+
 class LocationsResponse(GatewayResponseModel):
     schema_version: int = 1
     locations: list[LocationEntry] = Field(default_factory=list)
@@ -380,6 +507,20 @@ class LocationsResponse(GatewayResponseModel):
     frame_id: str = "map"
     ts: float | None = None
     source: str = "tagged_locations"
+
+
+class LocationOperationResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
+    status: Literal["saved", "deleted", "not_found", "unavailable", "invalid", "error"]
+    action: Literal["create", "update", "delete"]
+    location: LocationEntry | None = None
+    locations: LocationsResponse
+    message: str | None = None
+    error: str | None = None
+    request_id: str | None = None
+    client_id: str = "unknown"
+    ts: float = Field(default_factory=time.time)
 
 
 class PathPoint(GatewayResponseModel):
@@ -428,6 +569,17 @@ class PlanPreviewResponse(GatewayResponseModel):
     plan_ms: float | None = None
     planner: str | None = None
     source: str = "navigation_preview"
+    reasons: list[str] = Field(default_factory=list)
+    error: str | None = None
+    ts: float
+
+
+class GoalCandidateResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool = True
+    status: str
+    target: ConstructedGoalTarget | None = None
+    preview: PlanPreviewResponse | None = None
     reasons: list[str] = Field(default_factory=list)
     error: str | None = None
     ts: float
@@ -833,6 +985,7 @@ class ClientLinks(GatewayResponseModel):
     state: str | None = None
     scene_graph: str | None = None
     locations: str | None = None
+    location_detail: str | None = None
     path: str | None = None
     localization_status: str | None = None
     navigation_status: str | None = None
@@ -853,6 +1006,7 @@ class ClientLinks(GatewayResponseModel):
     session: str | None = None
     session_start: str | None = None
     session_end: str | None = None
+    navigation_goal_candidate: str | None = None
     navigation_plan: str | None = None
     navigation_cancel: str | None = None
     goal: str | None = None

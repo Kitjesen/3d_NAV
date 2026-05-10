@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import time
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -155,18 +156,128 @@ def test_navigation_plan_preview_does_not_publish_any_control_outputs():
     assert gateway.mode_cmd.msg_count == 0
 
 
+def test_navigation_goal_candidate_constructs_coordinate_without_publishing():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalCandidateRequest, GoalCandidateResponse
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    _mark_navigation_ready(gateway)
+    post_candidate = _endpoint(gateway, "/api/v1/navigation/goal_candidate")
+
+    result = asyncio.run(
+        post_candidate(
+            GoalCandidateRequest(
+                x=1.0,
+                y=2.0,
+                z=0.0,
+                yaw=0.25,
+                label="dock approach",
+                acceptance_radius_m=0.6,
+                max_speed_mps=0.3,
+                client_id="web",
+            )
+        )
+    )
+    model = GoalCandidateResponse.model_validate(result)
+
+    assert model.schema_version == 1
+    assert model.ok is True
+    assert model.status == "preview_feasible"
+    assert model.target is not None
+    assert model.target.x == 1.0
+    assert model.target.y == 2.0
+    assert model.target.yaw == 0.25
+    assert model.target.frame_id == "map"
+    assert model.target.source == "coordinate"
+    assert model.target.target_type == "coordinate"
+    assert model.target.label == "dock approach"
+    assert model.target.acceptance_radius_m == 0.6
+    assert model.target.max_speed_mps == 0.3
+    assert model.preview is not None
+    assert model.preview.feasible is True
+    assert nav.calls == [(1.0, 2.0, 0.0)]
+    assert gateway.goal_pose.msg_count == 0
+    assert gateway.cmd_vel.msg_count == 0
+
+
+def test_navigation_goal_candidate_constructs_saved_location_without_publishing():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import GoalCandidateRequest, GoalCandidateResponse
+
+    class Store:
+        def query(self, name: str):
+            if name == "dock":
+                return {
+                    "name": "dock",
+                    "position": [5.0, 6.0, 0.1],
+                    "yaw": 0.75,
+                }
+            return None
+
+        def query_fuzzy(self, name: str):
+            return None
+
+    gateway = GatewayModule()
+    gateway.setup()
+    nav = _FakePlanPreviewNav()
+    gateway.on_system_modules({"NavigationModule": nav})
+    gateway._tagged_loc_module = SimpleNamespace(store=Store())
+    _mark_navigation_ready(gateway)
+    post_candidate = _endpoint(gateway, "/api/v1/navigation/goal_candidate")
+
+    result = asyncio.run(
+        post_candidate(
+            GoalCandidateRequest(
+                location_name="dock",
+                client_id="mobile",
+            )
+        )
+    )
+    model = GoalCandidateResponse.model_validate(result)
+
+    assert model.ok is True
+    assert model.status == "preview_feasible"
+    assert model.target is not None
+    assert model.target.x == 5.0
+    assert model.target.y == 6.0
+    assert model.target.z == 0.1
+    assert model.target.yaw == 0.75
+    assert model.target.source == "saved_location"
+    assert model.target.target_type == "saved_location"
+    assert model.target.location_name == "dock"
+    assert model.target.label == "dock"
+    assert model.preview is not None
+    assert model.preview.goal.x == 5.0
+    assert nav.calls == [(5.0, 6.0, 0.1)]
+    assert gateway.goal_pose.msg_count == 0
+    assert gateway.instruction.msg_count == 0
+
+
 def test_navigation_goal_requests_are_map_frame_only():
-    from gateway.schemas import ClickNavRequest, GoalRequest, PlanPreviewRequest
+    from gateway.schemas import (
+        ClickNavRequest,
+        GoalCandidateRequest,
+        GoalRequest,
+        PlanPreviewRequest,
+    )
 
     assert GoalRequest(x=1.0, y=2.0).frame_id == "map"
     assert ClickNavRequest(x=1.0, y=2.0).frame_id == "map"
     assert PlanPreviewRequest(x=1.0, y=2.0).frame_id == "map"
+    assert GoalCandidateRequest(x=1.0, y=2.0).frame_id == "map"
     with pytest.raises(ValidationError):
         GoalRequest(x=1.0, y=2.0, frame_id="odom")
     with pytest.raises(ValidationError):
         ClickNavRequest(x=1.0, y=2.0, frame_id="odom")
     with pytest.raises(ValidationError):
         PlanPreviewRequest(x=1.0, y=2.0, frame_id="odom")
+    with pytest.raises(ValidationError):
+        GoalCandidateRequest(x=1.0, y=2.0, frame_id="odom")
+    with pytest.raises(ValidationError):
+        GoalRequest(x=float("nan"), y=2.0)
 
 
 def test_navigation_plan_preview_degrades_without_odometry_and_does_not_plan():
@@ -361,8 +472,13 @@ def test_goal_request_yaw_is_published_as_pose_orientation():
     assert model.goal == [1.0, 2.0, 0.0]
     assert model.yaw == pytest.approx(math.pi / 2)
     assert model.frame_id == "map"
+    assert model.target is not None
+    assert model.target.source == "coordinate"
+    assert model.target.target_type == "coordinate"
+    assert model.target.yaw == pytest.approx(math.pi / 2)
     assert result["yaw"] == pytest.approx(math.pi / 2)
     assert result["frame_id"] == "map"
+    assert result["target"]["source"] == "coordinate"
 
 
 def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
@@ -631,6 +747,9 @@ def test_click_navigation_previews_publishes_and_replays_request_id_once():
     assert sent_goals[0].pose.position.y == pytest.approx(4.0)
     assert sent_goals[0].frame_id == "map"
     assert model.frame_id == "map"
+    assert model.target is not None
+    assert model.target.source == "map_click"
+    assert model.target.target_type == "map_point"
 
 
 def test_goal_route_rejects_missing_plan_preview_without_publishing():

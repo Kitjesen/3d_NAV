@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -9,8 +10,13 @@ import pytest
 pytest.importorskip("fastapi")
 
 
-def _endpoint(gateway, path: str):
-    return next(route.endpoint for route in gateway._app.routes if route.path == path)
+def _endpoint(gateway, path: str, method: str | None = None):
+    for route in gateway._app.routes:
+        if route.path != path:
+            continue
+        if method is None or method.upper() in getattr(route, "methods", set()):
+            return route.endpoint
+    raise AssertionError(f"route not found: {method or '*'} {path}")
 
 
 def test_scene_graph_path_and_locations_routes_validate_response_contracts():
@@ -163,3 +169,153 @@ def test_locations_route_is_empty_without_tagged_location_module():
 
     assert locations.locations == []
     assert locations.count == 0
+
+
+def test_locations_route_reads_real_tagged_location_store_shape():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocationsResponse
+    from memory.spatial.tagged_locations import TaggedLocationStore
+
+    store = TaggedLocationStore()
+    store.tag(
+        "dock",
+        x=1.23456,
+        y=2.34567,
+        z=0.1,
+        yaw=0.4,
+        tags=["charger"],
+        source="test",
+        metadata={"floor": "1f"},
+    )
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._tagged_loc_module = SimpleNamespace(store=store)
+
+    payload = asyncio.run(_endpoint(gateway, "/api/v1/locations", "GET")())
+    locations = LocationsResponse.model_validate(payload)
+
+    assert locations.count == 1
+    assert locations.locations[0].name == "dock"
+    assert locations.locations[0].x == 1.235
+    assert locations.locations[0].y == 2.346
+    assert locations.locations[0].tags == ["charger"]
+    assert locations.locations[0].source == "test"
+
+
+def test_location_write_routes_save_delete_and_emit_events():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocationOperationResponse, LocationUpsertRequest
+    from memory.spatial.tagged_locations import TaggedLocationStore
+
+    statuses: list[str] = []
+    events: list[dict] = []
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._tagged_loc_module = SimpleNamespace(
+        store=TaggedLocationStore(),
+        tag_status=SimpleNamespace(publish=statuses.append),
+    )
+    gateway.push_event = events.append
+
+    body = LocationUpsertRequest(
+        name="dock",
+        x=1.0,
+        y=2.0,
+        yaw=0.25,
+        tags=["charger", "home"],
+        source="test",
+        request_id="req-1",
+        client_id="client-1",
+    )
+    saved_payload = asyncio.run(_endpoint(gateway, "/api/v1/locations", "POST")(body))
+    saved = LocationOperationResponse.model_validate(saved_payload)
+
+    assert saved.ok is True
+    assert saved.status == "saved"
+    assert saved.action == "create"
+    assert saved.location is not None
+    assert saved.location.name == "dock"
+    assert saved.locations.count == 1
+    assert statuses[-1] == "saved:dock"
+    assert [event["type"] for event in events[-2:]] == ["location", "locations"]
+
+    deleted_payload = asyncio.run(_endpoint(gateway, "/api/v1/locations/{name}", "DELETE")("dock"))
+    deleted = LocationOperationResponse.model_validate(deleted_payload)
+
+    assert deleted.ok is True
+    assert deleted.status == "deleted"
+    assert deleted.locations.count == 0
+    assert statuses[-1] == "removed:dock"
+
+
+def test_location_update_route_uses_current_pose_and_preserves_contract():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocationOperationResponse, LocationUpsertRequest
+    from memory.spatial.tagged_locations import TaggedLocationStore
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._tagged_loc_module = SimpleNamespace(
+        store=TaggedLocationStore(),
+        tag_status=SimpleNamespace(publish=lambda _msg: None),
+    )
+    with gateway._state_lock:
+        gateway._odom = {"x": 3.25, "y": -1.5, "z": 0.2, "yaw": 1.1}
+
+    gateway._tagged_loc_module.store.tag("dock", x=0.0, y=0.0, tags=["old"])
+    body = LocationUpsertRequest(
+        name="dock",
+        use_current_pose=True,
+        tags=["charger"],
+        source="web",
+        request_id="req-update",
+        client_id="web-client",
+    )
+
+    updated_payload = asyncio.run(_endpoint(gateway, "/api/v1/locations/{name}", "PUT")("dock", body))
+    updated = LocationOperationResponse.model_validate(updated_payload)
+
+    assert updated.ok is True
+    assert updated.status == "saved"
+    assert updated.action == "update"
+    assert updated.request_id == "req-update"
+    assert updated.client_id == "web-client"
+    assert updated.location is not None
+    assert updated.location.x == 3.25
+    assert updated.location.y == -1.5
+    assert updated.location.z == 0.2
+    assert updated.location.yaw == 1.1
+    assert updated.location.tags == ["charger"]
+    assert updated.locations.count == 1
+
+
+def test_location_update_rejects_name_mismatch_without_mutating_store():
+    from gateway.gateway_module import GatewayModule
+    from gateway.schemas import LocationOperationResponse, LocationUpsertRequest
+    from memory.spatial.tagged_locations import TaggedLocationStore
+
+    gateway = GatewayModule()
+    gateway.setup()
+    store = TaggedLocationStore()
+    store.tag("dock", x=1.0, y=2.0, tags=["original"])
+    gateway._tagged_loc_module = SimpleNamespace(store=store)
+
+    body = LocationUpsertRequest(
+        name="other",
+        x=8.0,
+        y=9.0,
+        request_id="req-mismatch",
+        client_id="web-client",
+    )
+    response = asyncio.run(_endpoint(gateway, "/api/v1/locations/{name}", "PUT")("dock", body))
+    payload = json.loads(response.body)
+    rejected = LocationOperationResponse.model_validate(payload)
+
+    assert response.status_code == 400
+    assert rejected.ok is False
+    assert rejected.status == "invalid"
+    assert rejected.error == "location_name_mismatch"
+    assert rejected.request_id == "req-mismatch"
+    assert rejected.locations.count == 1
+    assert store.query("dock")["position"] == [1.0, 2.0, 0.0]
+    assert store.query("other") is None

@@ -303,7 +303,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
     render()
   }, [render])
 
-  // Click on canvas → send goal to that world position
+  // Click on canvas → construct and preview a goal before sending it.
   const handleCanvasClick = useCallback(async (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -312,8 +312,27 @@ export function PathView({ sseState, showToast }: PathViewProps) {
     const cy = (e.clientY - rect.top)  * (canvas.height / rect.height)
     const [wx, wy] = canvasToWorld(cx, cy, transformRef.current)
     try {
-      const res = await api.sendGoal(wx, wy)
-      showToast(api.formatCommandAck(res, `导航目标 (${wx.toFixed(2)}, ${wy.toFixed(2)})`), 'success')
+      const candidate = await api.constructGoalCandidate({
+        x: wx,
+        y: wy,
+        source: 'map_click',
+        target_type: 'map_point',
+        label: 'path_view_click',
+      })
+      if (!candidate.ok || candidate.preview?.feasible === false) {
+        const reason = candidate.reasons.slice(0, 3).join(' / ') || candidate.error || '目标预检未通过'
+        showToast(`目标不可达: ${reason}`, 'error')
+        return
+      }
+      const target = candidate.target
+      const goalX = target?.x ?? wx
+      const goalY = target?.y ?? wy
+      const res = await api.sendGoal(goalX, goalY, {
+        source: 'map_click',
+        target_type: 'map_point',
+        label: 'path_view_click',
+      })
+      showToast(api.formatCommandAck(res, `导航目标 (${goalX.toFixed(2)}, ${goalY.toFixed(2)})`), 'success')
     } catch (e: unknown) {
       showToast(api.formatCommandError(e, '发送目标失败'), 'error')
     }

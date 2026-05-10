@@ -7,13 +7,15 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
-from core.msgs.geometry import Pose, PoseStamped, Quaternion, Twist, Vector3
+from core.msgs.geometry import Twist, Vector3
 from gateway.schemas import (
     CancelRequest,
     ClickNavRequest,
     CmdVelRequest,
     ControlCommandResponse,
     GatewayErrorResponse,
+    GoalCandidateRequest,
+    GoalCandidateResponse,
     GoalRequest,
     InstructionRequest,
     LeaseRequest,
@@ -24,6 +26,7 @@ from gateway.schemas import (
     StopRequest,
 )
 from gateway.services.control_commands import ControlCommandService
+from gateway.services.goal_builder import construct_goal_from_request
 
 
 CONTROL_COMMAND_ERROR_RESPONSES = {
@@ -48,31 +51,80 @@ def register_command_routes(app, gw) -> None:
         return command_service.preview_navigation_plan(body)
 
     @app.post(
+        "/api/v1/navigation/goal_candidate",
+        summary="Construct and optionally preview a navigation goal without publishing it",
+        response_model=GoalCandidateResponse,
+    )
+    async def post_navigation_goal_candidate(body: GoalCandidateRequest):
+        ts = time.time()
+        try:
+            goal = construct_goal_from_request(
+                body,
+                gw=gw,
+                default_source=body.source,
+                default_target_type=body.target_type,
+            )
+        except ValueError as exc:
+            return {
+                "schema_version": 1,
+                "ok": False,
+                "status": "invalid",
+                "target": None,
+                "preview": None,
+                "reasons": [str(exc)],
+                "error": str(exc),
+                "ts": ts,
+            }
+
+        preview = None
+        reasons: list[str] = []
+        status = "constructed"
+        if body.preview:
+            preview = command_service.preview_navigation_plan(
+                goal.preview_request(client_id=body.client_id)
+            )
+            reasons = list(preview.get("reasons") or [])
+            status = (
+                "preview_feasible"
+                if bool(preview.get("feasible", False))
+                else "preview_infeasible"
+            )
+
+        return {
+            "schema_version": 1,
+            "ok": True,
+            "status": status,
+            "target": goal.target_payload(ts=ts),
+            "preview": preview,
+            "reasons": reasons,
+            "error": None,
+            "ts": ts,
+        }
+
+    @app.post(
         "/api/v1/goal",
         summary="Send navigation goal",
         response_model=ControlCommandResponse,
         responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_goal(body: GoalRequest):
+        goal = construct_goal_from_request(
+            body,
+            gw=gw,
+            default_source="coordinate",
+            default_target_type="coordinate",
+        )
+
         def _publish() -> dict[str, Any]:
-            gw.goal_pose.publish(
-                PoseStamped(
-                    pose=Pose(
-                        position=Vector3(body.x, body.y, body.z),
-                        orientation=Quaternion.from_yaw(body.yaw),
-                    ),
-                    frame_id=body.frame_id,
-                    ts=time.time(),
-                )
-            )
+            ts = time.time()
+            gw.goal_pose.publish(goal.pose_stamped(ts=ts))
             if body.instruction:
                 gw.instruction.publish(body.instruction)
-            return {
-                "status": "ok",
-                "goal": [body.x, body.y, body.z],
-                "yaw": body.yaw,
-                "frame_id": body.frame_id,
-            }
+            return goal.command_payload(
+                status="ok",
+                instruction=body.instruction,
+                ts=ts,
+            )
 
         return command_service.run_planned_goal_command("goal", body, _publish)
 
@@ -83,22 +135,17 @@ def register_command_routes(app, gw) -> None:
         responses=CONTROL_COMMAND_ERROR_RESPONSES,
     )
     async def post_navigate_click(body: ClickNavRequest):
+        goal = construct_goal_from_request(
+            body,
+            gw=gw,
+            default_source="map_click",
+            default_target_type="map_point",
+        )
+
         def _publish() -> dict[str, Any]:
-            gw.goal_pose.publish(
-                PoseStamped(
-                    pose=Pose(
-                        position=Vector3(body.x, body.y, body.z),
-                        orientation=Quaternion(0, 0, 0, 1),
-                    ),
-                    frame_id=body.frame_id,
-                    ts=time.time(),
-                )
-            )
-            return {
-                "status": "ok",
-                "goal": [body.x, body.y, body.z],
-                "frame_id": body.frame_id,
-            }
+            ts = time.time()
+            gw.goal_pose.publish(goal.pose_stamped(ts=ts))
+            return goal.command_payload(status="ok", ts=ts)
 
         return command_service.run_planned_goal_command(
             "navigate_click",
