@@ -49,6 +49,7 @@ CLIENT_LINKS: dict[str, str] = {
     "navigation_status": "/api/v1/navigation/status",
     "devices": "/api/v1/devices",
     "health": "/api/v1/health",
+    "readiness": "/api/v1/readiness",
     "auth_login": "/api/v1/auth/login",
     "auth_check": "/api/v1/auth/check",
     "session": "/api/v1/session",
@@ -125,6 +126,7 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         },
         "devices": {"method": "GET", "path": CLIENT_LINKS["devices"]},
         "health": {"method": "GET", "path": CLIENT_LINKS["health"]},
+        "readiness": {"method": "GET", "path": CLIENT_LINKS["readiness"]},
     },
     "realtime": {
         "events": {"method": "SSE", "path": CLIENT_LINKS["events"]},

@@ -990,6 +990,7 @@ class ClientLinks(GatewayResponseModel):
     localization_status: str | None = None
     navigation_status: str | None = None
     devices: str | None = None
+    readiness: str | None = None
     auth_login: str | None = None
     auth_check: str | None = None
     events: str | None = None

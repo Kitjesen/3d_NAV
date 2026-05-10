@@ -176,6 +176,27 @@ export interface HealthResponse {
   [key: string]: unknown
 }
 
+export interface ReadinessModuleStatus {
+  ok: boolean
+  detail?: Record<string, unknown> | null
+  error?: string | null
+}
+
+export interface ReadinessResponse {
+  schema_version: number
+  status: string
+  ready: boolean
+  data_ready: boolean
+  motion_ready: boolean
+  non_motion_safe: boolean
+  modules: Record<string, ReadinessModuleStatus>
+  module_count: number
+  failed_modules: string[]
+  reasons: string[]
+  runtime: Record<string, unknown>
+  ts: number
+}
+
 export interface DeviceEntry {
   [key: string]: unknown
 }
@@ -472,6 +493,7 @@ export interface ClientLinks {
   localization_status?: string
   navigation_status?: string
   devices?: string
+  readiness?: string
   auth_login?: string
   auth_check?: string
   events?: string

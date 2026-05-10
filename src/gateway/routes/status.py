@@ -707,3 +707,16 @@ def register_status_routes(app, gw) -> None:
     ):
         payload, status_code = build_readiness_snapshot(gw, include_details=details)
         return JSONResponse(payload, status_code=status_code)
+
+    @app.get(
+        "/api/v1/readiness",
+        summary="Client readiness snapshot",
+        response_model=ReadinessResponse,
+    )
+    async def api_readiness(
+        details: Annotated[bool, Query(
+            description="Include per-module health details for operator screens.",
+        )] = False
+    ):
+        payload, _status_code = build_readiness_snapshot(gw, include_details=details)
+        return payload

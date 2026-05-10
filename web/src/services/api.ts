@@ -33,6 +33,7 @@ import type {
   PathResponse,
   PlanPreviewRequest,
   PlanPreviewResponse,
+  ReadinessResponse,
   SceneGraphResponse,
   SessionEvent,
   SessionTransitionResponse,
@@ -271,6 +272,10 @@ export async function fetchState(): Promise<StateResponse> {
 
 export async function fetchHealth(): Promise<HealthResponse> {
   return fetchJson<HealthResponse>(apiPath('health', '/api/v1/health'))
+}
+
+export async function fetchReadiness(): Promise<ReadinessResponse> {
+  return fetchJson<ReadinessResponse>(apiPath('readiness', '/api/v1/readiness'))
 }
 
 export async function fetchDevices(): Promise<DevicesResponse> {
