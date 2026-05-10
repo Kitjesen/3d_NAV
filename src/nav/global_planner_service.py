@@ -8,9 +8,11 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
+
+from nav.plan_safety import evaluate_backend_path_safety
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +30,18 @@ class GlobalPlannerService:
         tomogram: str = "",
         obstacle_thr: float = 49.9,
         downsample_dist: float = 2.0,
+        plan_safety_policy: str = "observe",
+        fallback_planner_name: str = "astar",
     ) -> None:
         self._planner_name = planner_name
         self._tomogram = tomogram
         self._obstacle_thr = obstacle_thr
         self._downsample_dist = downsample_dist
+        self._plan_safety_policy = plan_safety_policy
+        self._fallback_planner_name = fallback_planner_name
         self._backend = None
+        self._fallback_backend = None
+        self._last_plan_report: dict[str, Any] = {}
         self._warned_no_grid: bool = False
 
     def setup(self) -> None:
@@ -80,19 +88,99 @@ class GlobalPlannerService:
                 )
             goal = safe_goal
 
-        t0 = time.time()
-        raw_path = self._backend.plan(start, goal)
-        plan_ms = (time.time() - t0) * 1000
+        raw_path, plan_ms = self._plan_with_backend(self._backend, start, goal)
 
         if not raw_path:
             raise RuntimeError("GlobalPlannerService: planner returned empty path")
 
-        path = self._downsample(raw_path, goal)
+        selected_backend = self._backend
+        selected_planner = self._planner_name
+        selected_path = raw_path
+        selected_plan_ms = plan_ms
+        selected_safety = self._evaluate_path_safety(selected_backend, selected_path)
+        rejected_plans: list[dict[str, Any]] = []
+        fallback_reason = ""
+        if selected_safety is not None and not selected_safety.get("ok", True):
+            fallback_reason = (
+                f"{self._planner_name} path_safety failed "
+                f"({selected_safety.get('blocked_sample_count', 0)} blocked samples)"
+            )
+            rejected_plans.append(
+                {
+                    "planner": self._planner_name,
+                    "path_safety": selected_safety,
+                    "reason": fallback_reason,
+                }
+            )
+            if self._plan_safety_policy == "reject":
+                self._last_plan_report = {
+                    "selected_planner": self._planner_name,
+                    "selected_path_safety": selected_safety,
+                    "rejected_plans": rejected_plans,
+                    "fallback_reason": fallback_reason,
+                    "policy": self._plan_safety_policy,
+                }
+                raise RuntimeError(f"GlobalPlannerService: {fallback_reason}")
+            if self._plan_safety_policy == "fallback_astar":
+                if self._planner_name.lower() == self._fallback_planner_name.lower():
+                    self._last_plan_report = {
+                        "selected_planner": self._planner_name,
+                        "selected_path_safety": selected_safety,
+                        "rejected_plans": rejected_plans,
+                        "fallback_reason": fallback_reason,
+                        "policy": self._plan_safety_policy,
+                    }
+                    raise RuntimeError(
+                        "GlobalPlannerService: plan safety failed and no distinct fallback planner is configured"
+                    )
+                fb_backend = self._get_fallback_backend()
+                fb_path, fb_ms = self._plan_with_backend(fb_backend, start, goal)
+                fb_safety = self._evaluate_path_safety(fb_backend, fb_path)
+                if fb_path and (fb_safety is None or fb_safety.get("ok", False)):
+                    selected_backend = fb_backend
+                    selected_planner = self._fallback_planner_name
+                    selected_path = fb_path
+                    selected_plan_ms += fb_ms
+                    selected_safety = fb_safety
+                    logger.warning(
+                        "GlobalPlannerService: %s; using fallback planner '%s'",
+                        fallback_reason,
+                        self._fallback_planner_name,
+                    )
+                else:
+                    rejected_plans.append(
+                        {
+                            "planner": self._fallback_planner_name,
+                            "path_safety": fb_safety,
+                            "reason": "fallback planner unsafe or empty",
+                        }
+                    )
+                    self._last_plan_report = {
+                        "selected_planner": self._planner_name,
+                        "selected_path_safety": selected_safety,
+                        "rejected_plans": rejected_plans,
+                        "fallback_reason": fallback_reason,
+                        "policy": self._plan_safety_policy,
+                    }
+                    raise RuntimeError(
+                        "GlobalPlannerService: plan safety failed and fallback planner did not produce a safe path"
+                    )
+            elif self._plan_safety_policy == "observe":
+                logger.warning("GlobalPlannerService: %s", fallback_reason)
+
+        path = self._downsample(selected_path, goal)
+        self._last_plan_report = {
+            "selected_planner": selected_planner,
+            "selected_path_safety": selected_safety,
+            "fallback_reason": fallback_reason,
+            "rejected_plans": rejected_plans,
+            "policy": self._plan_safety_policy,
+        }
         logger.info(
             "Planned %d waypoints in %.1fms (planner=%s)",
-            len(path), plan_ms, self._planner_name,
+            len(path), selected_plan_ms, selected_planner,
         )
-        return path, plan_ms
+        return path, selected_plan_ms
 
     def update_map(
         self,
@@ -187,9 +275,33 @@ class GlobalPlannerService:
     # Internals                                                            #
     # ------------------------------------------------------------------ #
 
-    def _create_backend(self):
+    def _plan_with_backend(
+        self,
+        backend: Any,
+        start: np.ndarray,
+        goal: np.ndarray,
+    ) -> tuple[list, float]:
+        t0 = time.time()
+        raw_path = backend.plan(start, goal)
+        return raw_path, (time.time() - t0) * 1000
+
+    def _evaluate_path_safety(self, backend: Any, path: list) -> dict[str, Any] | None:
+        if self._plan_safety_policy == "off":
+            return None
+        return evaluate_backend_path_safety(path, backend, obstacle_thr=self._obstacle_thr)
+
+    def _get_fallback_backend(self):
+        if self._fallback_backend is None:
+            self._fallback_backend = self._create_backend(self._fallback_planner_name)
+        return self._fallback_backend
+
+    @property
+    def last_plan_report(self) -> dict[str, Any]:
+        return dict(self._last_plan_report)
+
+    def _create_backend(self, name: str | None = None):
         from core.registry import get
-        name = self._planner_name.lower()
+        name = (name or self._planner_name).lower()
         # Trigger @register decorators for astar / pct backends
         try:
             import global_planning.pct_adapters.src.global_planner_module

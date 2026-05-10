@@ -127,6 +127,8 @@ class NavigationModule(Module, layer=5):
         allow_direct_goal_fallback: bool = False,
         goal_update_epsilon: float = 0.25,
         safe_goal_tolerance: float = 4.0,
+        plan_safety_policy: str = "observe",
+        fallback_planner_name: str = "astar",
         **kw,
     ):
         super().__init__(**kw)
@@ -140,6 +142,8 @@ class NavigationModule(Module, layer=5):
             tomogram=tomogram,
             obstacle_thr=obstacle_thr,
             downsample_dist=downsample_dist,
+            plan_safety_policy=plan_safety_policy,
+            fallback_planner_name=fallback_planner_name,
         )
         self._tracker = WaypointTracker(
             threshold=waypoint_threshold,
@@ -1186,7 +1190,9 @@ class NavigationModule(Module, layer=5):
                     self._goal,
                     safe_goal_tolerance=self._safe_goal_tolerance,
                 )
+                self._publish_plan_report()
             except Exception as exc:
+                self._publish_plan_report()
                 if self._should_use_direct_goal_fallback(exc):
                     path = self._direct_goal_path(reason=str(exc))
                 else:
@@ -1195,6 +1201,16 @@ class NavigationModule(Module, layer=5):
                     self._set_state(MissionState.FAILED)
                     return
 
+        try:
+            path = self._validate_planned_path(path)
+        except RuntimeError as exc:
+            logger.error("Planning failed: %s", exc)
+            self._failure_reason = str(exc)
+            self._tracker.clear()
+            self._publish_motion_stop()
+            self._set_state(MissionState.FAILED)
+            return
+
         self._failure_reason = ""
         self._tracker.reset(path, self._robot_pos)
         # Advance past any waypoints the robot is already at (e.g. the start)
@@ -1202,6 +1218,24 @@ class NavigationModule(Module, layer=5):
         self.global_path.publish(path)
         self._set_state(MissionState.EXECUTING)
         self._publish_waypoint()
+
+    def _publish_plan_report(self) -> None:
+        report = getattr(self._planner_svc, "last_plan_report", {}) or {}
+        if not report:
+            return
+        selected = report.get("selected_planner")
+        rejected = report.get("rejected_plans") or []
+        planner_name = getattr(self._planner_svc, "_planner_name", selected)
+        if selected != planner_name or rejected:
+            payload = {
+                "event": "global_plan_selection",
+                "selected_planner": selected,
+                "fallback_reason": report.get("fallback_reason", ""),
+                "rejected_plans": rejected,
+                "policy": report.get("policy", ""),
+                "ts": time.time(),
+            }
+            self.adapter_status.publish(payload)
 
     def _should_use_direct_goal_fallback(self, exc: Exception) -> bool:
         if not self._allow_direct_goal_fallback:
@@ -1220,6 +1254,31 @@ class NavigationModule(Module, layer=5):
             "ts": time.time(),
         })
         return [self._goal.copy()]
+
+    def _validate_planned_path(self, path: Any) -> list[np.ndarray]:
+        try:
+            points = list(path) if path is not None else []
+        except TypeError as exc:
+            raise RuntimeError("planner returned a non-iterable path") from exc
+        if not points:
+            raise RuntimeError("planner returned empty path")
+
+        validated: list[np.ndarray] = []
+        for point in points:
+            try:
+                arr = np.asarray(point, dtype=float).reshape(-1)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("planner returned an invalid path point") from exc
+            if arr.size < 2:
+                raise RuntimeError("planner returned a path point with fewer than 2 coordinates")
+            if not np.all(np.isfinite(arr)):
+                raise RuntimeError("planner returned a non-finite path point")
+            if arr.size < 3:
+                arr = np.pad(arr[:2], (0, 1), constant_values=0.0)
+            else:
+                arr = arr[:3].copy()
+            validated.append(arr)
+        return validated
 
     def _advance_patrol(self) -> bool:
         """Advance to next patrol goal. Returns True if more goals remain."""
@@ -1354,6 +1413,8 @@ class NavigationModule(Module, layer=5):
         info = super().port_summary()
         info["navigation"] = {
             "planner": self._planner_svc._planner_name,
+            "plan_safety_policy": getattr(self._planner_svc, "_plan_safety_policy", "observe"),
+            "last_plan_report": self._planner_svc.last_plan_report,
             "state": self._state,
             "wp_index": self._tracker.wp_index,
             "wp_total": self._tracker.path_length,

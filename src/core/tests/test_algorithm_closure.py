@@ -74,6 +74,27 @@ class _RuntimeErrorPlanner(_FakePlanner):
         raise RuntimeError("planner returned empty path")
 
 
+class _ReportingFailurePlanner(_FakePlanner):
+    _planner_name = "pct"
+
+    @property
+    def last_plan_report(self):
+        return {
+            "selected_planner": "pct",
+            "fallback_reason": "pct path_safety failed",
+            "rejected_plans": [{"planner": "pct", "reason": "unsafe"}],
+            "policy": "reject",
+        }
+
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
+        raise RuntimeError("pct path_safety failed")
+
+
+class _EmptyPathPlanner(_FakePlanner):
+    def plan(self, start: np.ndarray, goal: np.ndarray, **kwargs):
+        return [], 1.0
+
+
 class _GridBackend:
     def __init__(self, grid: np.ndarray, resolution: float = 1.0):
         self._grid = grid
@@ -103,6 +124,54 @@ def test_navigation_goal_publishes_global_path_and_first_waypoint():
     assert len(waypoints) == 1
     assert waypoints[0].pose.position.x == 2.5
     assert states[-1]["state"] == "EXECUTING"
+
+
+@pytest.mark.parametrize(
+    ("planner", "reason"),
+    [
+        (_EmptyPathPlanner(), "planner returned empty path"),
+        (_NonfinitePathPlanner(), "planner returned a non-finite path point"),
+    ],
+)
+def test_navigation_rejects_invalid_planner_output_before_local_planning(planner, reason):
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = planner
+
+    paths: list[list[np.ndarray]] = []
+    waypoints: list[PoseStamped] = []
+    stops: list[Twist] = []
+    states: list[dict] = []
+    nav.global_path._add_callback(paths.append)
+    nav.waypoint._add_callback(waypoints.append)
+    nav.recovery_cmd_vel._add_callback(stops.append)
+    nav.mission_status._add_callback(states.append)
+
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+    nav._on_goal(PoseStamped(Pose(5.0, 0.0, 0.0)))
+
+    assert paths == []
+    assert waypoints == []
+    assert len(stops) == 1
+    assert states[-1]["state"] == "FAILED"
+    assert reason in states[-1]["failure_reason"]
+
+
+def test_navigation_publishes_plan_report_when_planner_rejects_path():
+    nav = NavigationModule(enable_ros2_bridge=False)
+    nav._planner_svc = _ReportingFailurePlanner()
+
+    reports: list[dict] = []
+    states: list[dict] = []
+    nav.adapter_status._add_callback(reports.append)
+    nav.mission_status._add_callback(states.append)
+
+    nav._robot_pos = np.array([0.0, 0.0, 0.0])
+    nav._on_goal(PoseStamped(Pose(5.0, 0.0, 0.0)))
+
+    assert reports[-1]["event"] == "global_plan_selection"
+    assert reports[-1]["fallback_reason"] == "pct path_safety failed"
+    assert reports[-1]["policy"] == "reject"
+    assert states[-1]["state"] == "FAILED"
 
 
 def test_navigation_plan_preview_does_not_mutate_mission_or_publish_ports():

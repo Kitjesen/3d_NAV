@@ -368,7 +368,7 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
     """Test that GlobalPlannerService.update_map works for both backends."""
 
     def test_update_map_astar(self):
-        """A* backend accepts costmap via update_map."""
+        """A* overlays costmap obstacles without discarding static tomogram."""
         path = _make_tomogram_pickle(shape=(30, 30), resolution=0.2, center=(0, 0))
         svc = GlobalPlannerService(planner_name="astar", tomogram=path)
         svc.setup()
@@ -380,8 +380,8 @@ class TestGlobalPlannerServiceCostmap(unittest.TestCase):
 
         # Grid should be updated
         backend = svc._backend
-        self.assertEqual(backend._grid.shape, (20, 20))
-        self.assertGreaterEqual(backend._grid[10, 10], 100.0)
+        self.assertEqual(backend._grid.shape, (30, 30))
+        self.assertGreaterEqual(backend._grid[25, 25], 100.0)
 
     def test_update_map_pct_has_method(self):
         """PCT backend now has update_map method."""
