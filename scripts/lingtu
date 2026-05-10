@@ -1264,6 +1264,41 @@ else:
     ]:
         add_dataflow_pressure_check(ready, module_name, port_name, level)
 
+client_ready_code, client_ready, client_ready_err = http_json("/api/v1/readiness", timeout=3)
+if client_ready_err or not isinstance(client_ready, dict):
+    add(
+        "gateway.client_readiness",
+        "fail",
+        "p0",
+        "/api/v1/readiness unavailable",
+        {"http_status": client_ready_code, "error": client_ready_err},
+    )
+else:
+    status_value = client_ready.get("status")
+    reasons_value = client_ready.get("reasons")
+    modules_value = client_ready.get("modules")
+    shape_ok = (
+        client_ready.get("schema_version") == 1
+        and status_value in {"ready", "degraded", "not_started"}
+        and isinstance(reasons_value, list)
+        and isinstance(modules_value, dict)
+    )
+    add(
+        "gateway.client_readiness",
+        "pass" if shape_ok else "fail",
+        "p0",
+        "/api/v1/readiness exposes client-readable readiness"
+        if shape_ok
+        else "/api/v1/readiness schema is not client-readable",
+        {
+            "http_status": client_ready_code,
+            "schema_version": client_ready.get("schema_version"),
+            "status": status_value,
+            "reasons": reasons_value if isinstance(reasons_value, list) else [],
+            "module_count": len(modules_value) if isinstance(modules_value, dict) else None,
+        },
+    )
+
 health_code, health, health_err = http_json("/api/v1/health", timeout=3)
 if health_err or not isinstance(health, dict):
     add("gateway.health", "fail", "p0", "/api/v1/health unavailable", {"http_status": health_code, "error": health_err})

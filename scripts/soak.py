@@ -17,6 +17,7 @@ from typing import Any
 
 READ_ONLY_ENDPOINT_NAMES = {
     "/ready": "ready",
+    "/api/v1/readiness": "readiness",
     "/api/v1/app/bootstrap": "bootstrap",
     "/api/v1/app/capabilities": "capabilities",
     "/api/v1/localization/status": "localization",
@@ -32,6 +33,7 @@ READ_ONLY_ENDPOINTS = tuple(READ_ONLY_ENDPOINT_NAMES)
 SCHEMA_VERSIONED_ENDPOINTS = {
     "bootstrap",
     "capabilities",
+    "readiness",
     "localization",
     "navigation",
     "state",
@@ -194,13 +196,21 @@ def client_contract_violations(payloads: dict[str, dict[str, Any]]) -> list[str]
 
     bootstrap = payloads.get("bootstrap") or {}
     links = mapping(bootstrap.get("links"))
-    for key in ("state", "events", "scene_graph", "locations", "path"):
+    for key in ("state", "events", "scene_graph", "locations", "path", "readiness"):
         if not links.get(key):
             violations.append(f"bootstrap.links.{key}")
 
     capabilities = payloads.get("capabilities") or {}
     if not mapping(capabilities.get("endpoints")):
         violations.append("capabilities.endpoints")
+    readiness = payloads.get("readiness") or {}
+    if readiness:
+        if not isinstance(readiness.get("reasons"), list):
+            violations.append("readiness.reasons")
+        if not isinstance(readiness.get("modules"), dict):
+            violations.append("readiness.modules")
+        if readiness.get("status") not in {"ready", "degraded", "not_started"}:
+            violations.append("readiness.status")
     return violations
 
 
@@ -378,6 +388,7 @@ def sample_once(gateway: str, index: int, started_mono: float, limits: dict[str,
             fetch_endpoint(path, name)
 
     ready = payloads["ready"]
+    client_readiness = payloads["readiness"]
     loc = payloads["localization"]
     nav = payloads["navigation"]
     health = payloads["health"]
@@ -396,7 +407,7 @@ def sample_once(gateway: str, index: int, started_mono: float, limits: dict[str,
     if failed_modules:
         endpoint_errors.append("ready_failed_modules=" + ",".join(map(str, failed_modules)))
 
-    readiness = mapping(nav.get("readiness"))
+    nav_readiness = mapping(nav.get("readiness"))
     nav_control = mapping(nav.get("control"))
     mission = mapping(nav.get("mission"))
     slam = mapping(nested(health, "sensors", "slam"))
@@ -413,10 +424,14 @@ def sample_once(gateway: str, index: int, started_mono: float, limits: dict[str,
         "motion_ready": as_bool(ready.get("motion_ready")),
         "non_motion_safe": as_bool(ready.get("non_motion_safe")),
         "gateway_ready_reasons": list(ready.get("reasons") or []),
+        "client_readiness_status": client_readiness.get("status"),
+        "client_readiness_reasons": list(client_readiness.get("reasons") or []),
         "gateway_failed_modules": failed_modules,
         "client_contract_violations": client_contract_violations(payloads),
         "app_web": {
             "checked_endpoints": sorted(payloads.keys()),
+            "readiness_status": client_readiness.get("status"),
+            "readiness_reason_count": len(list(client_readiness.get("reasons") or [])),
             "scene_graph_count": as_float(scene_payload.get("count")),
             "locations_count": as_float(locations_payload.get("count")),
             "path_count": as_float(path_payload.get("count")),
@@ -454,11 +469,11 @@ def sample_once(gateway: str, index: int, started_mono: float, limits: dict[str,
         "can_accept_goal": as_bool(
             first_value(
                 nav.get("can_accept_goal"),
-                readiness.get("can_accept_goal"),
-                readiness.get("can_execute_autonomy"),
+                nav_readiness.get("can_accept_goal"),
+                nav_readiness.get("can_execute_autonomy"),
             )
         ),
-        "navigation_blockers": list(readiness.get("blockers") or []),
+        "navigation_blockers": list(nav_readiness.get("blockers") or []),
         "active_cmd_source": command_source_name(nav_control),
         "pose": extract_pose(state_payload, path_payload),
     }
@@ -550,6 +565,17 @@ def summarize(samples: list[dict[str, Any]], elapsed_s: float, limits: dict[str,
                     for sample in samples
                     for name in mapping(sample.get("app_web")).get("checked_endpoints", [])
                 }
+            ),
+            "readiness_statuses": sorted(
+                {
+                    str(status)
+                    for sample in samples
+                    for status in [mapping(sample.get("app_web")).get("readiness_status")]
+                    if status
+                }
+            ),
+            "readiness_reason_count": stat(
+                [nested(sample, "app_web", "readiness_reason_count") for sample in samples]
             ),
             "scene_graph_count": stat(
                 [nested(sample, "app_web", "scene_graph_count") for sample in samples]
@@ -648,8 +674,10 @@ def print_text(report: dict[str, Any]) -> None:
     )
     app_web = summary["app_web"]
     print(
-        "  app/web endpoints={} scene_graph={} locations={} path={}".format(
+        "  app/web endpoints={} readiness={} readiness_reasons={} scene_graph={} locations={} path={}".format(
             ",".join(app_web["checked_endpoints"]) or "-",
+            ",".join(app_web["readiness_statuses"]) or "-",
+            app_web["readiness_reason_count"],
             app_web["scene_graph_count"],
             app_web["locations_count"],
             app_web["path_count"],

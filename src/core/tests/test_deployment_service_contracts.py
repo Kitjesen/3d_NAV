@@ -130,6 +130,19 @@ def _gateway_fixture(tmp_path: Path, *, mutate_plan_state: bool = False):
                             "failed_modules": [],
                             "runtime": {"summary": {"data_blockers": []}},
                         })
+                    elif self.path == "/api/v1/readiness":
+                        self.send_json({
+                            "schema_version": 1,
+                            "status": "degraded",
+                            "ts": 123.0,
+                            "ready": False,
+                            "data_ready": True,
+                            "motion_ready": False,
+                            "non_motion_safe": True,
+                            "reasons": ["navigation_blocked:navigation_session_inactive"],
+                            "failed_modules": [],
+                            "modules": {},
+                        })
                     elif self.path == "/api/v1/health":
                         self.send_json({
                             "status": "ok",
@@ -485,6 +498,9 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
             */ready)
                 echo '{"ready":true,"data_ready":true,"motion_ready":false,"non_motion_safe":true,"reasons":["navigation_blocked:navigation_session_inactive"],"failed_modules":[],"runtime":{"summary":{"data_blockers":[]}}}'
                 ;;
+            */api/v1/readiness)
+                echo '{"schema_version":1,"status":"degraded","ts":123.0,"ready":false,"data_ready":true,"motion_ready":false,"non_motion_safe":true,"reasons":["navigation_blocked:navigation_session_inactive"],"failed_modules":[],"modules":{}}'
+                ;;
             */api/v1/health)
                 echo '{"status":"ok","modules_ok":8,"modules_fail":0,"sensors":{"slam":{"status":"ok","hz":10.0}},"map_points":5000,"has_odom":true}'
                 ;;
@@ -788,6 +804,9 @@ def test_lingtu_doctor_json_gates_runtime_readiness_freshness():
     assert "/sys/class/net/{name}" in text
     assert "bind failed" in text
     assert "gateway.slam_stream" in text
+    assert "gateway.client_readiness" in text
+    assert "/api/v1/readiness exposes client-readable readiness" in text
+    assert 'client_ready_code, client_ready, client_ready_err = http_json("/api/v1/readiness"' in text
     assert "gateway.localization_status" in text
     assert "add_dataflow_pressure_check" in text
     assert '"VoxelGridModule", "map_cloud", "p1"' in text
@@ -846,6 +865,11 @@ def test_lingtu_doctor_non_motion_json_runs_without_motion_side_effects(tmp_path
     preview = next(
         check for check in payload["checks"] if check["id"] == "gateway.navigation_plan_preview"
     )
+    client_readiness = next(
+        check for check in payload["checks"] if check["id"] == "gateway.client_readiness"
+    )
+    assert client_readiness["status"] == "pass"
+    assert client_readiness["evidence"]["status"] == "degraded"
     assert preview["status"] == "pass"
     assert preview["evidence"]["active_cmd_source_after"] == "none"
     assert preview["evidence"]["state_after"] == "IDLE"
@@ -911,6 +935,7 @@ def test_lingtu_soak_is_read_only_non_motion_field_verification():
     assert "--interval)" in soak
     for endpoint in (
         '"/ready"',
+        '"/api/v1/readiness"',
         '"/api/v1/app/bootstrap"',
         '"/api/v1/app/capabilities"',
         '"/api/v1/localization/status"',
@@ -928,8 +953,11 @@ def test_lingtu_soak_is_read_only_non_motion_field_verification():
     assert "SCHEMA_VERSIONED_ENDPOINTS" in impl
     assert "advertised_read_only_endpoints" in impl
     assert "client_contract_violations" in impl
-    assert '("state", "events", "scene_graph", "locations", "path")' in impl
+    assert '("state", "events", "scene_graph", "locations", "path", "readiness")' in impl
     assert "capabilities.endpoints" in impl
+    assert "readiness.reasons" in impl
+    assert "readiness.modules" in impl
+    assert "readiness.status" in impl
     assert "data_ready:false" in impl
     assert '"non_motion_safe": as_bool' in impl
     assert "NON_MOTION_NAVIGATION_BLOCKERS" in impl
@@ -938,6 +966,10 @@ def test_lingtu_soak_is_read_only_non_motion_field_verification():
     assert "blockers_are_non_motion_safe" in impl
     assert '"navigation_session_inactive"' in impl
     assert '"app_web": {' in impl
+    assert '"client_readiness_status": client_readiness.get("status")' in impl
+    assert '"readiness_statuses": sorted' in impl
+    assert '"readiness_reason_count": stat' in impl
+    assert "readiness_reasons={}" in impl
     for forbidden in (
         "-X POST",
         "/api/v1/goal",
@@ -976,6 +1008,51 @@ def test_lingtu_soak_accepts_ready_503_when_only_navigation_session_is_inactive(
 
     assert violations == []
     assert warnings == []
+
+
+def test_lingtu_soak_checks_client_readiness_contract_shape():
+    soak = _load_soak_module()
+    payloads = {
+        "bootstrap": {
+            "schema_version": 1,
+            "links": {
+                "state": "/api/v1/state",
+                "events": "/api/v1/events",
+                "scene_graph": "/api/v1/scene_graph",
+                "locations": "/api/v1/locations",
+                "path": "/api/v1/path",
+                "readiness": "/api/v1/readiness",
+            },
+        },
+        "capabilities": {"schema_version": 1, "endpoints": {"state": {}}},
+        "readiness": {
+            "schema_version": 1,
+            "status": "degraded",
+            "reasons": ["navigation_blocked:navigation_session_inactive"],
+            "modules": {},
+        },
+        "localization": {"schema_version": 1},
+        "navigation": {"schema_version": 1},
+        "state": {"schema_version": 1},
+        "path": {"schema_version": 1},
+        "scene_graph": {"schema_version": 1},
+        "locations": {"schema_version": 1},
+    }
+
+    assert soak.client_contract_violations(payloads) == []
+
+    payloads["readiness"] = {
+        "schema_version": 1,
+        "status": "blocked",
+        "reasons": "navigation_blocked:navigation_session_inactive",
+        "modules": [],
+    }
+
+    assert soak.client_contract_violations(payloads) == [
+        "readiness.reasons",
+        "readiness.modules",
+        "readiness.status",
+    ]
 
 
 def test_lingtu_soak_rejects_ready_503_when_data_is_not_ready():
