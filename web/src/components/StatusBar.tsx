@@ -39,6 +39,7 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
   const odom = sseState.odometry
   const mission = sseState.missionStatus
   const safety = sseState.safetyState
+  const navigation = sseState.navigationStatus
   const [now, setNow] = useState(0)
 
   useEffect(() => {
@@ -53,6 +54,22 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
   const navState = mission?.state ?? 'IDLE'
   const estopActive = safety?.estop ?? false
   const navStateZh = NAV_STATE_ZH[navState] ?? navState
+  const goalReady =
+    navigation?.readiness?.can_accept_goal ??
+    navigation?.can_accept_goal ??
+    false
+  const goalBlockers = [
+    ...(navigation?.readiness?.blockers ?? []),
+    ...(navigation?.feedback?.blockers ?? []),
+  ]
+  const goalAdvisories = navigation?.readiness?.advisories ?? []
+  const goalReadinessTitle = goalReady
+    ? (goalAdvisories.length > 0 ? goalAdvisories.join('\n') : 'Ready to accept a navigation goal')
+    : (goalBlockers.length > 0 ? goalBlockers.join('\n') : 'Navigation readiness is unavailable')
+  const activeCmdSource =
+    navigation?.control?.active_source?.label ??
+    navigation?.control?.active_cmd_source ??
+    'none'
 
   return (
     <div className={styles.statusBar}>
@@ -83,6 +100,24 @@ export function StatusBar({ sseState, uptimeSeconds }: StatusBarProps) {
         <span className={styles.label}>导航</span>
         <span className={`${styles.value} ${navState === 'EXECUTING' ? styles.navActive : navState === 'FAILED' ? styles.navFail : ''}`}>
           {navStateZh}
+        </span>
+      </span>
+
+      <span className={styles.sep}>·</span>
+
+      <span className={styles.item} title={goalReadinessTitle}>
+        <span className={styles.label}>GOAL</span>
+        <span className={`${styles.value} ${goalReady ? styles.ready : styles.navFail}`}>
+          {navigation ? (goalReady ? 'READY' : 'BLOCKED') : 'UNKNOWN'}
+        </span>
+      </span>
+
+      <span className={styles.sep}>·</span>
+
+      <span className={styles.item} title={`Active command source: ${activeCmdSource}`}>
+        <span className={styles.label}>OWNER</span>
+        <span className={`${styles.value} ${activeCmdSource !== 'none' && activeCmdSource !== '' ? styles.warn : ''}`}>
+          {activeCmdSource}
         </span>
       </span>
 
