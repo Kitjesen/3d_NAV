@@ -629,6 +629,10 @@ def _run_lingtu_command(
         "FAKE_ROOT": harness["root_posix"],
         "FAKE_RUN": harness["run_posix"],
         "GW": "http://fake-gateway:5050",
+        "LINGTU_ROS2_BIN": f"{harness['bin_posix']}/ros2",
+        "LINGTU_SYSTEMCTL_BIN": f"{harness['bin_posix']}/systemctl",
+        "LINGTU_JOURNALCTL_BIN": f"{harness['bin_posix']}/journalctl",
+        "LINGTU_IP_BIN": f"{harness['bin_posix']}/ip",
     }
     if extra_env:
         exports.update(extra_env)
@@ -638,6 +642,7 @@ def _run_lingtu_command(
     command = (
         f"{export_cmd}; "
         f"export PATH={shlex.quote(str(harness['bin_posix']))}:\"$PATH\"; "
+        "hash -r; "
         f"bash scripts/lingtu {command_args}"
     )
     result = subprocess.run(

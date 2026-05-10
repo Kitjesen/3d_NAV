@@ -740,10 +740,25 @@ DATA_NAV_BLOCKERS = {
 MOVING_NAV_STATES = {"EXECUTING", "NAVIGATING", "PLANNING", "EXPLORING", "RECOVERY", "RUNNING"}
 
 
+def resolve_tool(args):
+    if not args:
+        return args
+    overrides = {
+        "ros2": os.environ.get("LINGTU_ROS2_BIN"),
+        "systemctl": os.environ.get("LINGTU_SYSTEMCTL_BIN"),
+        "journalctl": os.environ.get("LINGTU_JOURNALCTL_BIN"),
+        "ip": os.environ.get("LINGTU_IP_BIN"),
+    }
+    override = overrides.get(args[0])
+    if override:
+        return [override, *args[1:]]
+    return args
+
+
 def run(args, timeout=3):
     try:
         proc = subprocess.run(
-            args,
+            resolve_tool(args),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
