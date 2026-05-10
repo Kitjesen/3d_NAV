@@ -30,6 +30,8 @@ interface Layers {
 }
 
 const TRAIL_MAX = 300
+const GOAL_SPEED_OPTIONS = [0.25, 0.4, 0.6]
+const GOAL_RADIUS_OPTIONS = [0.25, 0.45, 0.8]
 
 const MAP_GROUPS: Array<{ label: string; filter: (m: MapInfo) => boolean }> = [
   { label: '语义地图', filter: m => m.has_pcd && m.has_tomogram },
@@ -96,6 +98,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   // instead of the unhelpful (0, 0, 0).
   const [relocDirty, setRelocDirty] = useState(false)
   const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
+  const [goalMaxSpeed, setGoalMaxSpeed] = useState(0.4)
+  const [goalAcceptanceRadius, setGoalAcceptanceRadius] = useState(0.45)
   const [locationName, setLocationName] = useState('')
   const [locationBusy, setLocationBusy] = useState<string | null>(null)
   const [locationDeleteTarget, setLocationDeleteTarget] = useState<LocationEntry | null>(null)
@@ -289,6 +293,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         source: 'map_click',
         target_type: 'map_point',
         label: 'scene_click',
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
       })
       if (!candidate.ok || candidate.preview?.feasible === false) {
         const reason = candidate.reasons.slice(0, 3).join(' / ') || candidate.error || '目标预检未通过'
@@ -300,7 +306,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     } catch (e: unknown) {
       showToast(`目标预检失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
     }
-  }, [canSendGoal, goalDisabledReason, showToast])
+  }, [canSendGoal, goalAcceptanceRadius, goalDisabledReason, goalMaxSpeed, showToast])
 
   const handleSceneRelocalize = useCallback(async (x: number, y: number) => {
     if (!savedMapRelocalizeSupported) {
@@ -336,13 +342,15 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         source: 'map_click',
         target_type: 'map_point',
         label: 'scene_click',
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
       })
       setPendingGoal(null)
       showToast(api.formatCommandAck(res, `目标 (${x.toFixed(2)}, ${y.toFixed(2)})`), 'success')
     } catch (e: unknown) {
       showToast(api.formatCommandError(e, '发送目标失败'), 'error')
     }
-  }, [canSendGoal, goalDisabledReason, pendingGoal, showToast])
+  }, [canSendGoal, goalAcceptanceRadius, goalDisabledReason, goalMaxSpeed, pendingGoal, showToast])
 
   const handleSaveCurrentLocation = useCallback(async () => {
     if (!odomValid) {
@@ -391,6 +399,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         target_type: 'saved_location',
         label: loc.name,
         location_name: loc.name,
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
       })
       if (!candidate.ok || candidate.preview?.feasible === false) {
         const reason = candidate.reasons.slice(0, 3).join(' / ') || candidate.error || 'location goal rejected'
@@ -403,6 +413,8 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         source: 'saved_location',
         target_type: 'saved_location',
         label: loc.name,
+        acceptance_radius_m: goalAcceptanceRadius,
+        max_speed_mps: goalMaxSpeed,
         metadata: { location_name: loc.name },
       })
       showToast(api.formatCommandAck(res, `Goal ${loc.name}`), 'success')
@@ -411,7 +423,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
     } finally {
       setLocationBusy(null)
     }
-  }, [canSendGoal, goalDisabledReason, showToast])
+  }, [canSendGoal, goalAcceptanceRadius, goalDisabledReason, goalMaxSpeed, showToast])
 
   const handleUpdateLocationToCurrent = useCallback(async (loc: LocationEntry) => {
     if (!odomValid) {
@@ -815,6 +827,32 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 <span className={styles.goalConfirmCoords}>
                   ({pendingGoal.x.toFixed(2)}, {pendingGoal.y.toFixed(2)})
                 </span>
+                <div className={styles.goalControlGroup}>
+                  <label className={styles.goalControl}>
+                    <span>Speed</span>
+                    <select
+                      className={styles.goalSelect}
+                      value={goalMaxSpeed}
+                      onChange={(e) => setGoalMaxSpeed(Number(e.target.value))}
+                    >
+                      {GOAL_SPEED_OPTIONS.map((speed) => (
+                        <option key={speed} value={speed}>{speed.toFixed(2)} m/s</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={styles.goalControl}>
+                    <span>Radius</span>
+                    <select
+                      className={styles.goalSelect}
+                      value={goalAcceptanceRadius}
+                      onChange={(e) => setGoalAcceptanceRadius(Number(e.target.value))}
+                    >
+                      {GOAL_RADIUS_OPTIONS.map((radius) => (
+                        <option key={radius} value={radius}>{radius.toFixed(2)} m</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
                 {goalDisabledReason && (
                   <span className={styles.goalConfirmReason} title={goalDisabledReason}>
                     {goalDisabledReason}
