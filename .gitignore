@@ -19,6 +19,8 @@ log/
 
 # ── Runtime state ──
 .lingtu/
+artifacts/
+MUJOCO_LOG.TXT
 
 # ── Python ──
 __pycache__/
