@@ -20,11 +20,29 @@ def _touch_pct_extensions(lib_dir: Path) -> None:
         (lib_dir / f"{name}.cpython-{abi}-x86_64-linux-gnu.so").write_bytes(b"")
 
 
+def _touch_pct_shared_libs(lib_dir: Path) -> None:
+    for name in (
+        "libmetis-gtsam.so",
+        "libgtsam.so",
+        "libcommon_smoothing.so",
+        "liba_star_search.so",
+        "libmap_manager.so",
+        "libgpmp_optimizer.so",
+        "libele_planner_lib.so",
+    ):
+        (lib_dir / name).write_bytes(b"")
+
+
+def _touch_pct_runtime(lib_dir: Path) -> None:
+    _touch_pct_extensions(lib_dir)
+    _touch_pct_shared_libs(lib_dir)
+
+
 def test_resolve_prefers_arch_specific_lib_dir(tmp_path):
     repo = tmp_path
     lib_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
     lib_dir.mkdir(parents=True)
-    _touch_pct_extensions(lib_dir)
+    _touch_pct_runtime(lib_dir)
 
     paths = resolve_pct_runtime_paths(repo, machine="x86_64")
 
@@ -38,8 +56,8 @@ def test_resolve_prefers_runnable_native_dir_over_original_lib(tmp_path):
     runnable_dir = repo / "src/global_planning/PCT_planner_runnable/native/x86_64"
     original_dir.mkdir(parents=True)
     runnable_dir.mkdir(parents=True)
-    _touch_pct_extensions(original_dir)
-    _touch_pct_extensions(runnable_dir)
+    _touch_pct_runtime(original_dir)
+    _touch_pct_runtime(runnable_dir)
 
     paths = resolve_pct_runtime_paths(repo, machine="x86_64")
 
@@ -52,8 +70,8 @@ def test_resolve_prefers_env_lib_dir_over_runnable_native_dir(tmp_path, monkeypa
     runnable_dir = repo / "src/global_planning/PCT_planner_runnable/native/x86_64"
     env_dir.mkdir(parents=True)
     runnable_dir.mkdir(parents=True)
-    _touch_pct_extensions(env_dir)
-    _touch_pct_extensions(runnable_dir)
+    _touch_pct_runtime(env_dir)
+    _touch_pct_runtime(runnable_dir)
     monkeypatch.setenv("LINGTU_PCT_LIB_DIR", str(env_dir))
 
     paths = resolve_pct_runtime_paths(repo, machine="x86_64")
@@ -67,8 +85,8 @@ def test_inspect_pct_runtime_uses_same_env_dir_as_loader(tmp_path, monkeypatch):
     fallback_dir = repo / "src/global_planning/PCT_planner_runnable/native/x86_64"
     env_dir.mkdir(parents=True)
     fallback_dir.mkdir(parents=True)
-    _touch_pct_extensions(env_dir)
-    _touch_pct_extensions(fallback_dir)
+    _touch_pct_runtime(env_dir)
+    _touch_pct_runtime(fallback_dir)
     monkeypatch.setenv("LINGTU_PCT_LIB_DIR", str(env_dir))
 
     report = inspect_pct_runtime(repo, machine="x86_64")
@@ -85,7 +103,7 @@ def test_prepare_installs_lib_namespace_for_original_wrapper(tmp_path):
     scripts_dir = planner_root / "scripts"
     lib_dir.mkdir(parents=True)
     scripts_dir.mkdir(parents=True)
-    _touch_pct_extensions(lib_dir)
+    _touch_pct_runtime(lib_dir)
 
     previous_lib = sys.modules.pop("lib", None)
     try:
@@ -99,6 +117,19 @@ def test_prepare_installs_lib_namespace_for_original_wrapper(tmp_path):
             sys.modules["lib"] = previous_lib
         else:
             sys.modules.pop("lib", None)
+
+
+def test_inspect_pct_runtime_rejects_missing_shared_libraries(tmp_path):
+    repo = tmp_path
+    lib_dir = repo / "src/global_planning/PCT_planner/planner/lib/x86_64"
+    lib_dir.mkdir(parents=True)
+    _touch_pct_extensions(lib_dir)
+
+    report = inspect_pct_runtime(repo, machine="x86_64")
+
+    assert report["ok"] is False
+    assert "libmetis-gtsam.so" in report["shared_missing"]
+    assert "Shared library gaps" in report["error"]
 
 
 def test_prepare_tomogram_for_pct_transposes_builder_axes(tmp_path):

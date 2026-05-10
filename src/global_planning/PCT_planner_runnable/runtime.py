@@ -88,6 +88,16 @@ def _has_extension_modules(path: Path, py_tag: str) -> bool:
     return True
 
 
+def _missing_shared_libs(path: Path) -> list[str]:
+    if not path.is_dir():
+        return list(PCT_SHARED_LIBS)
+    return [name for name in PCT_SHARED_LIBS if not (path / name).exists()]
+
+
+def _has_runtime_shared_libs(path: Path) -> bool:
+    return not _missing_shared_libs(path)
+
+
 def _candidate_lib_dirs(lib_root: Path, canonical_arch: str, py_tag: str) -> list[Path]:
     # Kept for tests and callers that only know the original lib root.
     candidates = [
@@ -155,8 +165,13 @@ def resolve_pct_runtime_paths(
     py_tag = _python_tag()
 
     candidates = _candidate_runtime_dirs(root, runnable_root, lib_root, canonical_arch, py_tag)
+    shared_diagnostics: list[str] = []
     for candidate in candidates:
         if _has_extension_modules(candidate, py_tag):
+            missing_shared = _missing_shared_libs(candidate)
+            if missing_shared:
+                shared_diagnostics.append(f"{candidate}: missing {', '.join(missing_shared)}")
+                continue
             return PctRuntimePaths(
                 repo_root=root,
                 runnable_root=runnable_root,
@@ -169,9 +184,12 @@ def resolve_pct_runtime_paths(
             )
 
     searched = ", ".join(str(path) for path in candidates)
+    shared_suffix = ""
+    if shared_diagnostics:
+        shared_suffix = f" Shared library gaps: {'; '.join(shared_diagnostics)}"
     raise FileNotFoundError(
         f"No runnable PCT native modules for arch={canonical_arch} python={py_tag}. "
-        f"Searched: {searched}"
+        f"Searched: {searched}.{shared_suffix}"
     )
 
 
@@ -209,7 +227,7 @@ def inspect_pct_runtime(
         for module, expected in zip(PCT_EXTENSION_MODULES, required)
         if not any(chosen.glob(_extension_glob(module, py_tag)))
     ]
-    shared_missing = [name for name in PCT_SHARED_LIBS if not (chosen / name).exists()]
+    shared_missing = _missing_shared_libs(chosen)
     return {
         "machine": (machine or platform.machine()).lower(),
         "canonical_arch": canonical_arch,
@@ -219,8 +237,8 @@ def inspect_pct_runtime(
         "required": required,
         "missing": missing,
         "shared_missing": shared_missing,
-        "optional_missing": shared_missing,
-        "ok": not missing,
+        "optional_missing": [],
+        "ok": not missing and not shared_missing,
         "error": load_error,
     }
 
