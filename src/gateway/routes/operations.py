@@ -17,6 +17,8 @@ from core.runtime_policy import (
     normalize_slam_profile,
     slam_switch_plan,
 )
+from gateway.services.map_paths import map_dir_for
+from gateway.services.map_safety import safe_map_name
 from gateway.schemas import (
     BagStartRequest,
     BagOperationResponse,
@@ -599,7 +601,6 @@ def register_operation_routes(app, gw) -> None:
         },
     )
     async def slam_relocalize(body: SlamRelocalizeRequest):
-        import os
         import subprocess
 
         unsupported_response = _unsupported_saved_map_relocalization_response(gw)
@@ -617,13 +618,15 @@ def register_operation_routes(app, gw) -> None:
                 message="map_name required",
                 status_code=400,
             )
-        map_dir = os.environ.get("NAV_MAP_DIR", os.path.expanduser("~/data/nova/maps"))
-        pcd_path = os.path.join(map_dir, map_name, "map.pcd")
-        if not os.path.isfile(pcd_path):
-            alt = os.path.expanduser(f"~/data/inovxio/data/maps/{map_name}/map.pcd")
-            if os.path.isfile(alt):
-                pcd_path = alt
-        if not os.path.isfile(pcd_path):
+        name_error = safe_map_name(map_name)
+        if name_error is not None:
+            return _slam_operation_response(
+                False,
+                message=name_error,
+                status_code=400,
+            )
+        pcd_path = map_dir_for(map_name) / "map.pcd"
+        if not pcd_path.is_file():
             return _slam_operation_response(
                 False,
                 message=f"Map not found: {pcd_path}",

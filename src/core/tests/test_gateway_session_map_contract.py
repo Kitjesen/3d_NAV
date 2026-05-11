@@ -1574,7 +1574,42 @@ def test_localizer_relocalize_keeps_ros_service_path(monkeypatch, tmp_path):
     assert payload["ts"] > 0
     assert payload["message"] == "Relocalized to demo"
     assert calls
-    assert any("/nav/relocalize" in " ".join(args) for args, _kwargs in calls)
+    commands = [" ".join(args) for args, _kwargs in calls]
+    relocalize_command = next(cmd for cmd in commands if "/nav/relocalize" in cmd)
+    assert str(map_dir / "demo" / "map.pcd") in relocalize_command
+    assert "data/inovxio/data/maps" not in relocalize_command
+
+
+def test_localizer_relocalize_rejects_unsafe_map_name(monkeypatch, tmp_path):
+    import subprocess
+
+    from gateway.gateway_module import GatewayModule
+
+    def fail_run(*_args, **_kwargs):
+        raise AssertionError("unsafe map names must not call ROS")
+
+    monkeypatch.setenv("NAV_MAP_DIR", str(tmp_path / "maps"))
+    monkeypatch.setattr(subprocess, "run", fail_run)
+
+    gateway = GatewayModule()
+    gateway.setup()
+    gateway._localization_status = {
+        "backend": "localizer",
+        "saved_map_relocalization_supported": True,
+    }
+
+    response = asyncio.run(
+        _endpoint(gateway, "/api/v1/slam/relocalize")(
+            {"map_name": "../outside", "x": 1.0, "y": 2.0, "yaw": 0.3}
+        )
+    )
+    payload = _payload(response)
+
+    assert response.status_code == 400
+    assert payload["schema_version"] == 1
+    assert payload["ok"] is False
+    assert payload["success"] is False
+    assert "unsafe characters" in payload["message"]
 
 
 def test_temporal_memory_response_accepts_observation_rows():
