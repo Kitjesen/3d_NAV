@@ -504,6 +504,19 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
             */api/v1/health)
                 echo '{"status":"ok","modules_ok":8,"modules_fail":0,"sensors":{"slam":{"status":"ok","hz":10.0}},"map_points":5000,"has_odom":true}'
                 ;;
+            */api/v1/maps)
+                echo "maps:$data" >> "${FAKE_ROOT}/calls.log"
+                action="$(printf '%s' "$data" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+                name="$(printf '%s' "$data" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+                [ -n "$action" ] || action=list
+                [ -n "$name" ] || name=demo
+                printf '{"schema_version":1,"ok":true,"success":true,"action":"%s","name":"%s","map_dir":"%s/data/nova/maps/%s","tomogram":"tomogram.pickle","occupancy":"occupancy.npz","occupancy_ok":true}\n' \
+                    "$action" "$name" "$HOME" "$name"
+                ;;
+            */api/v1/map/restore_predufo)
+                echo "restore:$data" >> "${FAKE_ROOT}/calls.log"
+                printf '{"schema_version":1,"ok":true,"success":true,"name":"demo","restored_size":123}\n'
+                ;;
             */api/v1/map/save)
                 echo "save:$data" >> "${FAKE_ROOT}/calls.log"
                 echo '{"success":true,"map_save_source":"live_map_cloud_snapshot","saved_map_relocalization_supported":false}'
@@ -1125,6 +1138,32 @@ def test_lingtu_map_save_uses_map_manager_lifecycle():
     assert "for rebuild_action in build_tomogram build_occupancy" in cmd_map
     assert '\\"action\\":\\"$rebuild_action\\"' in cmd_map
     assert "rebuild_ok=" in cmd_map
+
+
+def test_lingtu_map_save_executes_map_manager_lifecycle(tmp_path):
+    result, harness = _run_lingtu_command(tmp_path, "map save shell_map")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Saving MapManager artifacts" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    assert 'maps:{"action":"save","name":"shell_map"}' in calls
+    assert "save:" not in calls
+
+
+def test_lingtu_map_restore_rebuilds_derived_artifacts(tmp_path):
+    result, harness = _run_lingtu_command(tmp_path, "map restore demo")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Rebuilding tomogram for demo" in result.stdout
+    assert "Rebuilding occupancy for demo" in result.stdout
+    calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
+    restore = 'restore:{"name":"demo"}'
+    tomogram = 'maps:{"action":"build_tomogram","name":"demo"}'
+    occupancy = 'maps:{"action":"build_occupancy","name":"demo"}'
+    assert restore in calls
+    assert tomogram in calls
+    assert occupancy in calls
+    assert calls.index(restore) < calls.index(tomogram) < calls.index(occupancy)
 
 
 def test_lingtu_slamcheck_sets_active_map_symlink_and_runtime_env():
