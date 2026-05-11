@@ -134,6 +134,14 @@ def test_server_sim_closure_saved_map_relocalize_command_uses_contract_gate():
     assert "--strict" in spec.command
 
 
+def test_server_sim_closure_routecheck_command_is_non_motion_preflight():
+    spec = next(item for item in server_sim_closure.GATES if item.name == "routecheck_preflight")
+
+    assert "scripts/lingtu routecheck" in spec.command
+    assert "--artifact-dir artifacts/server_sim_closure/routecheck" in spec.command
+    assert "goal" in spec.command.lower()
+
+
 def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
     multifloor = _write_json(tmp_path / "multifloor.json", _complete_multifloor_report())
     large = _write_json(
@@ -268,6 +276,44 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "frames": {"published_goal": "map", "cmd_vel": "not_published"},
         },
     )
+    routecheck_phase = {
+        "schema_version": 1,
+        "phase": "baseline",
+        "non_motion": True,
+        "navigation_state": "idle",
+        "can_accept_goal": True,
+        "active_cmd_source_before": "none",
+        "feasible": True,
+        "count": 3,
+        "planner": "pct",
+        "selected_planner": "pct",
+        "plan_safety_policy": "fallback_astar",
+        "path_safety_ok": True,
+        "fallback_reason": "",
+        "rejected_plan_count": 0,
+        "reasons": [],
+    }
+    routecheck = _write_json(
+        tmp_path / "routecheck_summary.json",
+        {
+            "schema_version": 1,
+            "mode": "routecheck_non_motion",
+            "outcome": "pass",
+            "exit_status": 0,
+            "non_motion": True,
+            "map": "demo",
+            "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0},
+            "phases": {
+                "baseline": routecheck_phase,
+                "candidate": {**routecheck_phase, "phase": "candidate"},
+            },
+            "artifacts": {
+                "baseline": "/tmp/route/baseline",
+                "candidate": "/tmp/route/candidate",
+                "after_rollback": "/tmp/route/after_rollback",
+            },
+        },
+    )
     gazebo = _write_json(
         tmp_path / "gazebo.json",
         {
@@ -353,6 +399,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "fastlio2_live": fastlio,
             "policy_nav": policy,
             "gateway_dry_run": gateway,
+            "routecheck_preflight": routecheck,
             "gazebo_runtime": gazebo,
             "saved_map_relocalize": saved_map_relocalize,
         },
@@ -364,6 +411,7 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "fastlio2_live",
             "policy_nav",
             "gateway_dry_run",
+            "routecheck_preflight",
             "gazebo_runtime",
             "saved_map_relocalize",
         },
@@ -528,6 +576,55 @@ def test_server_sim_closure_rejects_weak_saved_map_relocalize_report(tmp_path: P
     assert "fastlio2 saved_map_relocalization_supported is not false" in gaps
     assert "navigating default profile is not localizer" in gaps
     assert "/nav/relocalize launch remap missing" in gaps
+
+
+def test_server_sim_closure_rejects_weak_routecheck_preflight_report(tmp_path: Path):
+    weak = _write_json(
+        tmp_path / "routecheck_weak.json",
+        {
+            "schema_version": 1,
+            "mode": "routecheck_non_motion",
+            "outcome": "pass",
+            "exit_status": 0,
+            "non_motion": True,
+            "map": "demo",
+            "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0},
+            "phases": {
+                "baseline": {
+                    "non_motion": True,
+                    "can_accept_goal": True,
+                    "active_cmd_source_before": "teleop",
+                    "feasible": True,
+                    "count": 3,
+                    "selected_planner": "pct",
+                    "path_safety_ok": True,
+                },
+                "candidate": {
+                    "non_motion": True,
+                    "can_accept_goal": True,
+                    "active_cmd_source_before": "none",
+                    "feasible": False,
+                    "count": 0,
+                    "selected_planner": "",
+                    "path_safety_ok": False,
+                },
+            },
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"routecheck_preflight": weak},
+        required={"routecheck_preflight"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["routecheck_preflight"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "baseline.active_cmd_source_before is not none" in gaps
+    assert "candidate.feasible is not true" in gaps
+    assert "candidate.count < 2" in gaps
+    assert "candidate.selected_planner is missing" in gaps
+    assert "candidate.path_safety_ok is not true" in gaps
 
 
 def test_server_sim_closure_rejects_non_pct_native_motion_report(tmp_path: Path):

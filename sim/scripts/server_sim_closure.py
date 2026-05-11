@@ -287,6 +287,60 @@ def _eval_gateway_dry_run(report: dict[str, Any]) -> tuple[bool, list[str], dict
     }
 
 
+def _eval_routecheck_preflight(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    blockers: list[str] = []
+    if report.get("mode") != "routecheck_non_motion":
+        blockers.append("mode is not routecheck_non_motion")
+    if report.get("outcome") != "pass":
+        blockers.append("outcome is not pass")
+    if int(report.get("exit_status") or 0) != 0:
+        blockers.append("exit_status is not 0")
+    if report.get("non_motion") is not True:
+        blockers.append("non_motion is not true")
+    if not report.get("map"):
+        blockers.append("map is missing")
+    goal = report.get("goal") or {}
+    for key in ("x", "y", "yaw"):
+        if key not in goal:
+            blockers.append(f"goal.{key} is missing")
+
+    phases = report.get("phases") or {}
+    phase_evidence: dict[str, Any] = {}
+    for name in ("baseline", "candidate"):
+        phase = phases.get(name) or {}
+        phase_evidence[name] = {
+            "feasible": phase.get("feasible"),
+            "count": phase.get("count"),
+            "selected_planner": phase.get("selected_planner") or phase.get("planner"),
+            "plan_safety_policy": phase.get("plan_safety_policy"),
+            "path_safety_ok": phase.get("path_safety_ok"),
+            "active_cmd_source_before": phase.get("active_cmd_source_before"),
+            "rejected_plan_count": phase.get("rejected_plan_count"),
+        }
+        if phase.get("non_motion") is not True:
+            blockers.append(f"{name}.non_motion is not true")
+        if phase.get("can_accept_goal") is not True:
+            blockers.append(f"{name}.can_accept_goal is not true")
+        if str(phase.get("active_cmd_source_before") or "none").lower() not in {"none", "null", "-", ""}:
+            blockers.append(f"{name}.active_cmd_source_before is not none")
+        if phase.get("feasible") is not True:
+            blockers.append(f"{name}.feasible is not true")
+        if int(phase.get("count") or 0) < 2:
+            blockers.append(f"{name}.count < 2")
+        if not (phase.get("selected_planner") or phase.get("planner")):
+            blockers.append(f"{name}.selected_planner is missing")
+        if phase.get("path_safety_ok") is not True:
+            blockers.append(f"{name}.path_safety_ok is not true")
+
+    return not blockers, blockers, {
+        "map": report.get("map"),
+        "goal": goal,
+        "outcome": report.get("outcome"),
+        "phases": phase_evidence,
+        "artifacts": report.get("artifacts") or {},
+    }
+
+
 def _eval_gazebo_runtime(report: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
     blockers: list[str] = []
     if report.get("ok") is not True:
@@ -577,6 +631,18 @@ GATES: tuple[GateSpec, ...] = (
         _eval_gateway_dry_run,
     ),
     GateSpec(
+        "routecheck_preflight",
+        "Robot-side non-motion route preflight comparing baseline and candidate SLAM planning",
+        (
+            "artifacts/server_sim_closure/routecheck/summary.json",
+            "artifacts/super_lio_route_preflight_*/summary.json",
+            "artifacts/routecheck*/summary.json",
+        ),
+        "bash scripts/lingtu routecheck --map <saved-map> --goal X Y YAW "
+        "--artifact-dir artifacts/server_sim_closure/routecheck",
+        _eval_routecheck_preflight,
+    ),
+    GateSpec(
         "gazebo_runtime",
         "ROS-native Gazebo TF, odometry, and point-cloud runtime smoke",
         ("artifacts/server_sim_closure/gazebo_runtime/report.json",),
@@ -697,6 +763,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fastlio2-live-report", type=Path, default=None)
     parser.add_argument("--policy-nav-report", type=Path, default=None)
     parser.add_argument("--gateway-dry-run-report", type=Path, default=None)
+    parser.add_argument("--routecheck-preflight-report", type=Path, default=None)
     parser.add_argument("--gazebo-runtime-report", type=Path, default=None)
     parser.add_argument("--saved-map-relocalize-report", type=Path, default=None)
     parser.add_argument(
@@ -718,6 +785,7 @@ def main() -> int:
         "fastlio2_live": args.fastlio2_live_report,
         "policy_nav": args.policy_nav_report,
         "gateway_dry_run": args.gateway_dry_run_report,
+        "routecheck_preflight": args.routecheck_preflight_report,
         "gazebo_runtime": args.gazebo_runtime_report,
         "saved_map_relocalize": args.saved_map_relocalize_report,
     }
