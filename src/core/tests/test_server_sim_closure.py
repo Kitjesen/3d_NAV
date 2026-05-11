@@ -338,12 +338,18 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
             "outcome": "pass",
             "exit_status": 0,
             "non_motion": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "gateway_used": True,
+            "driver_used": False,
             "map": "demo",
             "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0},
             "phases": {
                 "baseline": routecheck_phase,
                 "candidate": {**routecheck_phase, "phase": "candidate"},
             },
+            "published": {"goal_pose": 0, "cmd_vel": 0, "stop_cmd": 0},
             "artifacts": {
                 "baseline": "/tmp/route/baseline",
                 "candidate": "/tmp/route/candidate",
@@ -661,6 +667,11 @@ def test_server_sim_closure_rejects_weak_routecheck_preflight_report(tmp_path: P
             "outcome": "pass",
             "exit_status": 0,
             "non_motion": True,
+            "simulation_only": False,
+            "real_robot_motion": True,
+            "cmd_vel_sent_to_hardware": True,
+            "gateway_used": False,
+            "driver_used": True,
             "map": "demo",
             "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0},
             "phases": {
@@ -683,6 +694,7 @@ def test_server_sim_closure_rejects_weak_routecheck_preflight_report(tmp_path: P
                     "path_safety_ok": False,
                 },
             },
+            "published": {"goal_pose": 1, "cmd_vel": 1, "stop_cmd": 1},
         },
     )
 
@@ -694,11 +706,61 @@ def test_server_sim_closure_rejects_weak_routecheck_preflight_report(tmp_path: P
     assert summary["ok"] is False
     assert summary["verified"]["routecheck_preflight"] is False
     gaps = "\n".join(summary["remaining_gaps"])
+    assert "simulation_only is not true" in gaps
+    assert "real_robot_motion is not false" in gaps
+    assert "cmd_vel_sent_to_hardware is not false" in gaps
+    assert "gateway_used is not true" in gaps
+    assert "driver_used is not false" in gaps
+    assert "published.goal_pose is not 0" in gaps
+    assert "published.cmd_vel is not 0" in gaps
+    assert "published.stop_cmd is not 0" in gaps
     assert "baseline.active_cmd_source_before is not none" in gaps
     assert "candidate.feasible is not true" in gaps
     assert "candidate.count < 2" in gaps
     assert "candidate.selected_planner is missing" in gaps
     assert "candidate.path_safety_ok is not true" in gaps
+
+
+def test_server_sim_closure_rejects_routecheck_without_publish_counters(tmp_path: Path):
+    phase = {
+        "non_motion": True,
+        "can_accept_goal": True,
+        "active_cmd_source_before": "none",
+        "feasible": True,
+        "count": 3,
+        "selected_planner": "pct",
+        "path_safety_ok": True,
+    }
+    weak = _write_json(
+        tmp_path / "routecheck_missing_counters.json",
+        {
+            "schema_version": 1,
+            "mode": "routecheck_non_motion",
+            "outcome": "pass",
+            "exit_status": 0,
+            "non_motion": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "gateway_used": True,
+            "driver_used": False,
+            "map": "demo",
+            "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0},
+            "phases": {"baseline": phase, "candidate": phase},
+        },
+    )
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"routecheck_preflight": weak},
+        required={"routecheck_preflight"},
+    )
+
+    assert summary["ok"] is False
+    assert summary["verified"]["routecheck_preflight"] is False
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "published.goal_pose is missing" in gaps
+    assert "published.cmd_vel is missing" in gaps
+    assert "published.stop_cmd is missing" in gaps
 
 
 def test_server_sim_closure_rejects_non_pct_native_motion_report(tmp_path: Path):

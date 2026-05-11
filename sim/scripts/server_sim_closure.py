@@ -297,6 +297,22 @@ def _eval_routecheck_preflight(report: dict[str, Any]) -> tuple[bool, list[str],
         blockers.append("exit_status is not 0")
     if report.get("non_motion") is not True:
         blockers.append("non_motion is not true")
+    if report.get("simulation_only") is not True:
+        blockers.append("simulation_only is not true")
+    if not _bool_false(report, "real_robot_motion"):
+        blockers.append("real_robot_motion is not false")
+    if not _bool_false(report, "cmd_vel_sent_to_hardware"):
+        blockers.append("cmd_vel_sent_to_hardware is not false")
+    if report.get("gateway_used") is not True:
+        blockers.append("gateway_used is not true")
+    if not _bool_false(report, "driver_used"):
+        blockers.append("driver_used is not false")
+    published = report.get("published") or {}
+    for name in ("goal_pose", "cmd_vel", "stop_cmd"):
+        if name not in published:
+            blockers.append(f"published.{name} is missing")
+        elif int(published.get(name, 0)) != 0:
+            blockers.append(f"published.{name} is not 0")
     if not report.get("map"):
         blockers.append("map is missing")
     goal = report.get("goal") or {}
@@ -337,6 +353,7 @@ def _eval_routecheck_preflight(report: dict[str, Any]) -> tuple[bool, list[str],
         "goal": goal,
         "outcome": report.get("outcome"),
         "phases": phase_evidence,
+        "published": published,
         "artifacts": report.get("artifacts") or {},
     }
 
