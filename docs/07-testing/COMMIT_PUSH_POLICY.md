@@ -78,6 +78,10 @@ PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
   --strict
 ```
 
+Closure summaries include `report_age_s` per gate. Add
+`--max-report-age-s <seconds>` when a review requires freshly regenerated
+simulation evidence rather than an older passing artifact.
+
 For setup-only validation, `scripts/deploy/setup_server_ros_pct.sh` writes the
 setup-safe subset summary to `artifacts/server_sim_closure_summary_setup.json`.
 

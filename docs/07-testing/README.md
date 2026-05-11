@@ -59,6 +59,9 @@ command printed for each failed gate, then rerun the summary.
 When a command uses `--required` to validate only a subset, non-required
 failures appear as `optional_missing_or_failed`; that output is useful setup
 evidence but not a full closure pass.
+Each accepted report includes `report_mtime` and `report_age_s`. Add
+`--max-report-age-s <seconds>` when a review or release gate needs to reject
+stale artifacts instead of only displaying their age.
 
 The current full gate set covers:
 

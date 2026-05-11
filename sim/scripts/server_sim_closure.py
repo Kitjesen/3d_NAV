@@ -715,7 +715,12 @@ def _best_match(spec: GateSpec) -> Path | None:
     return candidates[0]
 
 
-def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[str, Any]:
+def summarize(
+    *,
+    report_overrides: dict[str, Path],
+    required: set[str],
+    max_report_age_s: float | None = None,
+) -> dict[str, Any]:
     gates: dict[str, Any] = {}
     generated_at = time.time()
     for spec in GATES:
@@ -744,9 +749,16 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
             continue
         report_mtime = path.stat().st_mtime
         report_age_s = max(0.0, generated_at - report_mtime)
+        freshness_blockers: list[str] = []
+        if max_report_age_s is not None and report_age_s > max_report_age_s:
+            freshness_blockers.append(
+                f"report_age_s {report_age_s:.3f} > max_report_age_s {max_report_age_s:.3f}"
+            )
         try:
             report = _load_json(path)
             ok, blockers, evidence = spec.evaluator(report)
+            blockers = [*blockers, *freshness_blockers]
+            ok = bool(ok) and not freshness_blockers
             gates[spec.name] = {
                 "description": spec.description,
                 "exists": True,
@@ -765,7 +777,7 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
                 "exists": True,
                 "ok": False,
                 "status": "invalid",
-                "blockers": [str(exc)],
+                "blockers": [str(exc), *freshness_blockers],
                 "path": str(path),
                 "report_mtime": report_mtime,
                 "report_age_s": round(report_age_s, 3),
@@ -791,6 +803,7 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
         "real_robot_motion": False,
         "cmd_vel_sent_to_hardware": False,
         "generated_at": generated_at,
+        "max_report_age_s": max_report_age_s,
         "required": sorted(required_names),
         "verified": verified,
         "missing_or_failed": missing_or_failed,
@@ -823,6 +836,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=",".join(spec.name for spec in GATES),
         help="Comma-separated gate names required for ok=true",
     )
+    parser.add_argument(
+        "--max-report-age-s",
+        type=float,
+        default=None,
+        help="Optional maximum age in seconds for accepted report artifacts.",
+    )
     parser.add_argument("--json-out", type=Path, default=ROOT / "artifacts/server_sim_closure_summary.json")
     parser.add_argument("--strict", action="store_true")
     return parser
@@ -850,6 +869,7 @@ def main() -> int:
     summary = summarize(
         report_overrides={key: value for key, value in overrides.items() if value is not None},
         required=required,
+        max_report_age_s=args.max_report_age_s,
     )
     text = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)
     print(text)

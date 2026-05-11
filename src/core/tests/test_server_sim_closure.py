@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -605,6 +606,42 @@ def test_server_sim_closure_separates_optional_gaps(tmp_path: Path, monkeypatch)
     assert "large_terrain" not in summary["optional_missing_or_failed"]
     assert "routecheck_preflight" in summary["optional_missing_or_failed"]
     assert any("routecheck_preflight" in gap for gap in summary["optional_gaps"])
+
+
+def test_server_sim_closure_can_require_fresh_reports(tmp_path: Path):
+    large = _write_json(
+        tmp_path / "large.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "cases": [
+                {
+                    "route": "terrain_long",
+                    "path_safety": {"ok": True},
+                    "planning": [{"planner": "pct", "native_backend_used": True}],
+                }
+            ],
+        },
+    )
+    old_mtime = server_sim_closure.time.time() - 120.0
+    os.utime(large, (old_mtime, old_mtime))
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"large_terrain": large},
+        required={"large_terrain"},
+        max_report_age_s=1.0,
+    )
+
+    assert summary["ok"] is False
+    assert summary["max_report_age_s"] == 1.0
+    assert summary["verified"]["large_terrain"] is False
+    assert "large_terrain" in summary["missing_or_failed"]
+    assert summary["gates"]["large_terrain"]["status"] == "failed"
+    gaps = "\n".join(summary["remaining_gaps"])
+    assert "report_age_s" in gaps
+    assert "max_report_age_s" in gaps
 
 
 def test_server_sim_closure_rejects_weak_dynamic_obstacle_report(tmp_path: Path):
