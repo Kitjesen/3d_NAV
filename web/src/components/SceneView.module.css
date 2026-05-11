@@ -1353,6 +1353,16 @@
   white-space: nowrap;
 }
 
+.goalPlanSummary {
+  max-width: min(48vw, 440px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .goalControlGroup {
   display: flex;
   align-items: center;

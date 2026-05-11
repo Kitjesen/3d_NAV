@@ -4,7 +4,15 @@ import {
   PanelLeftClose, PanelLeftOpen, Save, Trash2, StopCircle, Pencil, X,
   MapPinned, Cloud, Maximize2, Radio, Activity, LocateFixed, VideoOff,
 } from 'lucide-react'
-import type { SSEState, MapInfo, PathPoint, ToastKind, SlamProfile, LocationEntry } from '../types'
+import type {
+  SSEState,
+  MapInfo,
+  PathPoint,
+  ToastKind,
+  SlamProfile,
+  LocationEntry,
+  PlanPreviewResponse,
+} from '../types'
 import * as api from '../services/api'
 import { useCamera } from '../hooks/useCamera'
 import { useBinaryCloud } from '../hooks/useBinaryCloud'
@@ -55,6 +63,38 @@ function formatSaveMapSummary(r: api.SaveMapResult): string {
   ].filter((v): v is string => Boolean(v)).join(' | ')
 }
 
+function formatPlanSafetySummary(preview: PlanPreviewResponse | null | undefined): string {
+  if (!preview) return ''
+  const safety = preview.path_safety ?? {}
+  const planner = preview.selected_planner ?? preview.planner
+  const safetyOk = safety.ok === true ? 'ok' : safety.ok === false ? 'blocked' : ''
+  const blocked = typeof safety.blocked_sample_count === 'number'
+    ? `blocked=${safety.blocked_sample_count}`
+    : null
+  const clearance = typeof safety.min_clearance_m === 'number'
+    ? `clearance=${safety.min_clearance_m.toFixed(2)}m`
+    : null
+  return [
+    planner ? `planner=${planner}` : null,
+    preview.plan_safety_policy ? `policy=${preview.plan_safety_policy}` : null,
+    safetyOk ? `safety=${safetyOk}` : null,
+    blocked,
+    clearance,
+    preview.fallback_reason ? `fallback=${preview.fallback_reason}` : null,
+    preview.rejected_plans?.length ? `rejected=${preview.rejected_plans.length}` : null,
+  ].filter((v): v is string => Boolean(v)).join(' | ')
+}
+
+function formatPlanPreviewFailure(
+  preview: PlanPreviewResponse | null | undefined,
+  reasons: string[] = [],
+  error?: string | null,
+): string {
+  const safety = formatPlanSafetySummary(preview)
+  const reason = reasons.slice(0, 3).join(' / ') || error || preview?.error || 'plan preview rejected'
+  return safety ? `${reason} (${safety})` : reason
+}
+
 function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   const scene3DRef = useRef<Scene3DHandle>(null)
 
@@ -98,6 +138,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
   // instead of the unhelpful (0, 0, 0).
   const [relocDirty, setRelocDirty] = useState(false)
   const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
+  const [pendingGoalPreview, setPendingGoalPreview] = useState<PlanPreviewResponse | null>(null)
   const [goalMaxSpeed, setGoalMaxSpeed] = useState(0.4)
   const [goalAcceptanceRadius, setGoalAcceptanceRadius] = useState(0.45)
   const [locationName, setLocationName] = useState('')
@@ -181,6 +222,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
       ? ''
       : goalBlockers.slice(0, 4).join(' · ') || '导航未 ready，暂不允许下发目标'
   const canSendGoal = goalDisabledReason === ''
+  const pendingGoalPlanSummary = formatPlanSafetySummary(pendingGoalPreview)
   const savedLocations = locationsOverride ?? sseState.locations?.locations ?? []
   const normalizedLocationName = locationName.trim()
   // Legacy SSE map_cloud now carries only metadata (count/seq) — points
@@ -303,6 +345,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
       }
       const target = candidate.target
       setPendingGoal({ x: target?.x ?? x, y: target?.y ?? y })
+      setPendingGoalPreview(candidate.preview ?? null)
     } catch (e: unknown) {
       showToast(`目标预检失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
     }
@@ -346,6 +389,7 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         max_speed_mps: goalMaxSpeed,
       })
       setPendingGoal(null)
+      setPendingGoalPreview(null)
       showToast(api.formatCommandAck(res, `目标 (${x.toFixed(2)}, ${y.toFixed(2)})`), 'success')
     } catch (e: unknown) {
       showToast(api.formatCommandError(e, '发送目标失败'), 'error')
@@ -403,7 +447,11 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
         max_speed_mps: goalMaxSpeed,
       })
       if (!candidate.ok || candidate.preview?.feasible === false) {
-        const reason = candidate.reasons.slice(0, 3).join(' / ') || candidate.error || 'location goal rejected'
+        const reason = formatPlanPreviewFailure(
+          candidate.preview,
+          candidate.reasons,
+          candidate.error,
+        )
         throw new Error(reason)
       }
       const target = candidate.target
@@ -853,6 +901,11 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                     </select>
                   </label>
                 </div>
+                {pendingGoalPlanSummary && (
+                  <span className={styles.goalPlanSummary} title={pendingGoalPlanSummary}>
+                    {pendingGoalPlanSummary}
+                  </span>
+                )}
                 {goalDisabledReason && (
                   <span className={styles.goalConfirmReason} title={goalDisabledReason}>
                     {goalDisabledReason}
@@ -866,7 +919,13 @@ function SceneViewComponent({ sseState, showToast }: SceneViewProps) {
                 >
                   <Navigation size={12} /> 发送
                 </button>
-                <button className={styles.goalCancelBtn} onClick={() => setPendingGoal(null)}>
+                <button
+                  className={styles.goalCancelBtn}
+                  onClick={() => {
+                    setPendingGoal(null)
+                    setPendingGoalPreview(null)
+                  }}
+                >
                   取消
                 </button>
               </div>
