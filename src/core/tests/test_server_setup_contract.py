@@ -53,8 +53,11 @@ def test_p0_scripts_use_current_gateway_contracts():
     assert "/api/v1/safety/state" not in estop
     assert "curl -sf http://localhost:5050/api/v1/cmd_vel" not in estop
 
-    assert "/api/v1/map/save" in mapping
+    assert "/api/v1/maps" in mapping
+    assert '\\"action\\":\\"save\\"' in mapping
+    assert "/api/v1/map/save" not in mapping
     assert "SAVE_PATH=" in mapping
+    assert 'd.get("map_dir") or d.get("path")' in mapping
     assert "NAV_MAP_DIR" in mapping
     assert "~/data/nova/maps" in mapping
     assert "data/inovxio/data/maps" not in mapping

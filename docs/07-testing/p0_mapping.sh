@@ -43,10 +43,10 @@ echo "      Press [Enter] when mapping is complete ..."
 read -r
 
 # 3. Trigger save via MapManager action
-echo "[3/6] Triggering map save: $MAP_NAME"
-SAVE_RESP="$(curl -sf -X POST http://localhost:5050/api/v1/map/save \
+echo "[3/6] Triggering MapManager save pipeline: $MAP_NAME"
+SAVE_RESP="$(curl -sf -X POST http://localhost:5050/api/v1/maps \
   -H 'Content-Type: application/json' \
-  -d "{\"name\":\"$MAP_NAME\"}")"
+  -d "{\"action\":\"save\",\"name\":\"$MAP_NAME\"}")"
 echo "$SAVE_RESP" | python3 -m json.tool
 
 SUCCESS="$(echo "$SAVE_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("success", False))')"
@@ -54,7 +54,11 @@ if [[ "$SUCCESS" != "True" ]]; then
   echo "FAIL: save failed"
   exit 3
 fi
-SAVE_PATH="$(echo "$SAVE_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("path", ""))')"
+SAVE_PATH="$(echo "$SAVE_RESP" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d.get("map_dir") or d.get("path") or "")
+')"
 
 # 4. Verify artifacts
 if [[ -n "$SAVE_PATH" ]]; then
