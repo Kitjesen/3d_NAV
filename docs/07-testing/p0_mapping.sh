@@ -4,11 +4,20 @@
 # Interactive: requires a human walking the robot around for ~3 minutes.
 # Pre-condition: LingTu already running (map profile or fastlio2 profile).
 #
-# Post-condition: a new map saved under ~/data/inovxio/data/maps/<NAME>/
+# Post-condition: a new map saved under the Gateway map root:
+#   $NAV_MAP_DIR, then the Gateway default ~/data/nova/maps.
 #   containing map.pcd + tomogram.pickle + occupancy.npz + map.pgm + map.yaml
 #   and the active symlink points to it; localizer profile can load it.
 
 set -e
+
+resolve_map_root() {
+  if [[ -n "${NAV_MAP_DIR:-}" ]]; then
+    echo "$NAV_MAP_DIR"
+    return
+  fi
+  echo "${MAP_DIR:-$HOME/data/nova/maps}"
+}
 
 MAP_NAME="${1:-p0_$(date +%Y%m%d_%H%M%S)}"
 LOG_DIR="${HOME}/data/nav_logs"
@@ -45,9 +54,16 @@ if [[ "$SUCCESS" != "True" ]]; then
   echo "FAIL: save failed"
   exit 3
 fi
+SAVE_PATH="$(echo "$SAVE_RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("path", ""))')"
 
 # 4. Verify artifacts
-MAP_DIR="${HOME}/data/inovxio/data/maps/$MAP_NAME"
+if [[ -n "$SAVE_PATH" ]]; then
+  MAP_DIR="$SAVE_PATH"
+  MAP_ROOT="$(dirname "$SAVE_PATH")"
+else
+  MAP_ROOT="$(resolve_map_root)"
+  MAP_DIR="$MAP_ROOT/$MAP_NAME"
+fi
 echo "[4/6] Verifying artifacts at $MAP_DIR"
 for f in map.pcd tomogram.pickle occupancy.npz map.pgm map.yaml; do
   if [[ -f "$MAP_DIR/$f" ]]; then
@@ -65,7 +81,7 @@ curl -sf -X POST http://localhost:5050/api/v1/map/activate \
   -H 'Content-Type: application/json' \
   -d "{\"name\":\"$MAP_NAME\"}" | python3 -m json.tool
 
-ACTIVE_LINK="${HOME}/data/inovxio/data/maps/active"
+ACTIVE_LINK="$MAP_ROOT/active"
 if [[ "$(readlink "$ACTIVE_LINK")" != *"$MAP_NAME"* ]]; then
   echo "FAIL: active symlink not pointing at $MAP_NAME"
   exit 5

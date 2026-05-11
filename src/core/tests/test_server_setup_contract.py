@@ -39,6 +39,9 @@ def test_p0_scripts_use_current_gateway_contracts():
     estop = (REPO_ROOT / "docs/07-testing/p0_estop.sh").read_text(
         encoding="utf-8"
     )
+    mapping = (REPO_ROOT / "docs/07-testing/p0_mapping.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert "/api/v1/navigation/status" in goto
     assert "/api/v1/nav/status" not in goto
@@ -49,6 +52,12 @@ def test_p0_scripts_use_current_gateway_contracts():
     assert "GET /api/v1/state" in estop
     assert "/api/v1/safety/state" not in estop
     assert "curl -sf http://localhost:5050/api/v1/cmd_vel" not in estop
+
+    assert "/api/v1/map/save" in mapping
+    assert "SAVE_PATH=" in mapping
+    assert "NAV_MAP_DIR" in mapping
+    assert "~/data/nova/maps" in mapping
+    assert "data/inovxio/data/maps" not in mapping
 
 
 def test_p0_field_runbook_matches_script_contracts():
