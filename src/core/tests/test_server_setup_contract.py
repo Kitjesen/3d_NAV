@@ -14,6 +14,7 @@ def test_server_setup_runs_multifloor_closure_without_robot_motion():
     assert 'RUN_MULTIFLOOR="${LINGTU_RUN_MULTIFLOOR:-1}"' in script
     assert 'RUN_NAV_CORE="${LINGTU_RUN_NAV_CORE:-1}"' in script
     assert 'RUN_ROUTECHECK_PREFLIGHT="${LINGTU_RUN_ROUTECHECK_PREFLIGHT:-1}"' in script
+    assert 'SETUP_CLOSURE_MAX_REPORT_AGE_S="${LINGTU_SETUP_CLOSURE_MAX_REPORT_AGE_S:-21600}"' in script
     assert "build_nav_core_runtime" in script
     assert 'bash "${ROOT}/scripts/build_nav_core.sh" --clean' in script
     assert "building nav_core nanobind runtime for production local planning" in script
@@ -23,6 +24,8 @@ def test_server_setup_runs_multifloor_closure_without_robot_motion():
     assert "server simulation closure summary for setup-generated gates" in script
     assert "sim/scripts/server_sim_closure.py" in script
     assert "artifacts/server_sim_closure_summary_setup.json" in script
+    assert "--max-report-age-s" in script
+    assert '"${SETUP_CLOSURE_MAX_REPORT_AGE_S}"' in script
     assert "--route matrix" in script
     assert "--frontier-loop" in script
     assert "--local-planner-backend nanobind" in script

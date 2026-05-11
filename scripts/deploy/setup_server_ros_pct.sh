@@ -28,6 +28,7 @@ RUN_PCT="${LINGTU_RUN_PCT:-1}"
 RUN_MULTIFLOOR="${LINGTU_RUN_MULTIFLOOR:-1}"
 RUN_NAV_CORE="${LINGTU_RUN_NAV_CORE:-1}"
 RUN_ROUTECHECK_PREFLIGHT="${LINGTU_RUN_ROUTECHECK_PREFLIGHT:-1}"
+SETUP_CLOSURE_MAX_REPORT_AGE_S="${LINGTU_SETUP_CLOSURE_MAX_REPORT_AGE_S:-21600}"
 INSTALL_SYSTEM_DEPS="${LINGTU_INSTALL_SYSTEM_DEPS:-1}"
 INSTALL_PYTHON_DEPS="${LINGTU_INSTALL_PYTHON_DEPS:-1}"
 RUN_VERIFY="${LINGTU_RUN_VERIFY:-1}"
@@ -382,6 +383,7 @@ PY
     log "server simulation closure summary for setup-generated gates"
     python3 sim/scripts/server_sim_closure.py \
       --required "$(join_by_comma "${closure_required[@]}")" \
+      --max-report-age-s "${SETUP_CLOSURE_MAX_REPORT_AGE_S}" \
       --json-out artifacts/server_sim_closure_summary_setup.json \
       --strict
   fi

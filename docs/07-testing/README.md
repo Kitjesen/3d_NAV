@@ -84,7 +84,9 @@ bash scripts/deploy/setup_server_ros_pct.sh
 
 That script writes `artifacts/server_sim_closure_summary_setup.json` for the
 multi-floor and routecheck-preflight gates. It is not a substitute for the full
-closure summary unless those are the only changed surfaces.
+closure summary unless those are the only changed surfaces. The setup summary
+also uses `--max-report-age-s`, defaulting to 21600 seconds; override with
+`LINGTU_SETUP_CLOSURE_MAX_REPORT_AGE_S` when needed.
 
 ---
 
