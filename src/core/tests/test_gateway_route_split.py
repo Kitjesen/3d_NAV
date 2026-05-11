@@ -285,6 +285,13 @@ def test_diagnostic_routes_export_tarball(monkeypatch):
             assert "diag/app_web_snapshots.json" in names
             assert "diag/app_web/readiness.json" in names
             assert "diag/app_web/state.json" in names
+            assert "diag/app_web/bootstrap.json" in names
+            assert "diag/app_web/capabilities.json" in names
+            assert "diag/app_web/traffic.json" in names
+            assert "diag/app_web/media.json" in names
+            assert "diag/app_web/session.json" in names
+            assert "diag/app_web/maps.json" in names
+            assert "diag/app_web/commands.json" in names
             modules_file = tar.extractfile("diag/modules.json")
             assert modules_file is not None
             modules = json.loads(modules_file.read().decode("utf-8"))
@@ -298,6 +305,54 @@ def test_diagnostic_routes_export_tarball(monkeypatch):
         assert list(temp_root.glob("diag_*.tar.gz")) == []
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_diagnostic_app_web_snapshots_cover_client_startup_surfaces():
+    from gateway.gateway_module import GatewayModule
+    from gateway.routes.diagnostics import _build_app_web_snapshots
+
+    gateway = GatewayModule()
+    gateway.setup()
+
+    snapshots = _build_app_web_snapshots(gateway)
+    expected = {
+        "bootstrap",
+        "capabilities",
+        "traffic",
+        "readiness",
+        "state",
+        "localization",
+        "navigation",
+        "path",
+        "scene_graph",
+        "locations",
+        "media",
+        "session",
+        "maps",
+        "commands",
+    }
+
+    assert expected <= set(snapshots)
+    for name in expected:
+        assert "ok" in snapshots[name]
+
+    assert snapshots["bootstrap"]["ok"] is True
+    assert snapshots["bootstrap"]["data"]["links"]["diagnostic_pack"] == (
+        "/api/v1/diagnostic_pack"
+    )
+    assert snapshots["capabilities"]["ok"] is True
+    assert snapshots["capabilities"]["data"]["endpoints"]["app"]["bootstrap"][
+        "response_schema"
+    ] == "AppBootstrapResponse"
+    assert snapshots["traffic"]["ok"] is True
+    assert snapshots["traffic"]["data"]["client_policy"]["events_endpoint"] == (
+        "/api/v1/events"
+    )
+    assert snapshots["media"]["ok"] is True
+    assert snapshots["session"]["ok"] is True
+    assert snapshots["maps"]["ok"] is True
+    assert snapshots["commands"]["ok"] is True
+    assert snapshots["commands"]["data"]["idempotency_supported"] is True
 
 
 def test_gateway_module_builds_split_routes_once():

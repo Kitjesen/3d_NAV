@@ -42,7 +42,73 @@ def _snapshot_or_error(name: str, builder) -> dict[str, Any]:
         return {"ok": False, "error": str(exc), "snapshot": name}
 
 
+def _maps_snapshot(gw: Any) -> dict[str, Any]:
+    from gateway.services.map_paths import active_map_name, nav_map_root_str
+
+    root = pathlib.Path(nav_map_root_str())
+    maps: list[dict[str, Any]] = []
+    if root.is_dir():
+        for entry in sorted(root.iterdir()):
+            if not entry.is_dir() or entry.name == "active":
+                continue
+            pcd = entry / "map.pcd"
+            patches = entry / "patches"
+            maps.append(
+                {
+                    "name": entry.name,
+                    "has_pcd": pcd.is_file(),
+                    "has_tomogram": (entry / "tomogram.pickle").is_file(),
+                    "has_occupancy": (entry / "occupancy.npz").is_file(),
+                    "patch_count": (
+                        len(list(patches.iterdir())) if patches.is_dir() else 0
+                    ),
+                    "size_mb": (
+                        round(pcd.stat().st_size / 1024 / 1024, 1)
+                        if pcd.is_file()
+                        else None
+                    ),
+                }
+            )
+
+    manager_snapshot: dict[str, Any] | None = None
+    manager = getattr(gw, "_map_mgr", None)
+    if manager is not None and callable(getattr(manager, "_map_list", None)):
+        manager_snapshot = manager._map_list()
+
+    return {
+        "schema_version": 1,
+        "map_dir": str(root),
+        "active": active_map_name() or "",
+        "maps": maps,
+        "count": len(maps),
+        "has_manager": manager is not None,
+        "manager": manager_snapshot,
+        "ts": time.time(),
+    }
+
+
+def _command_snapshot(gw: Any) -> dict[str, Any]:
+    if callable(getattr(gw, "_command_stats_snapshot", None)):
+        snapshot = gw._command_stats_snapshot()
+        if isinstance(snapshot, dict):
+            return snapshot
+    return {
+        "idempotency_supported": False,
+        "stored_requests": 0,
+        "accepted_commands": 0,
+        "replayed_commands": 0,
+        "rate_policy_hz": {},
+        "rate_policy_enforcement": "unknown",
+    }
+
+
 def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
+    from gateway.services.app_bootstrap import (
+        build_app_bootstrap,
+        build_app_capabilities,
+        build_app_traffic,
+    )
+    from gateway.services.media_status import build_media_status
     from gateway.services.readiness import build_readiness_snapshot
     from gateway.services.runtime_status import (
         build_localization_status,
@@ -71,6 +137,18 @@ def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
         lambda: build_readiness_snapshot(gw, include_details=True)[0],
     )
     return {
+        "bootstrap": _snapshot_or_error(
+            "bootstrap",
+            lambda: build_app_bootstrap(gw),
+        ),
+        "capabilities": _snapshot_or_error(
+            "capabilities",
+            lambda: build_app_capabilities(gw),
+        ),
+        "traffic": _snapshot_or_error(
+            "traffic",
+            lambda: build_app_traffic(gw),
+        ),
         "readiness": readiness,
         "state": _snapshot_or_error("state", lambda: build_state_snapshot(gw)),
         "localization": _snapshot_or_error(
@@ -87,6 +165,16 @@ def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
             "locations",
             lambda: build_locations_response(_location_entries(gw)),
         ),
+        "media": _snapshot_or_error(
+            "media",
+            lambda: build_media_status(gw),
+        ),
+        "session": _snapshot_or_error(
+            "session",
+            lambda: gw._session_snapshot(),
+        ),
+        "maps": _snapshot_or_error("maps", lambda: _maps_snapshot(gw)),
+        "commands": _snapshot_or_error("commands", lambda: _command_snapshot(gw)),
     }
 
 
