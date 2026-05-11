@@ -269,7 +269,7 @@ def _load_ros_modules() -> dict[str, Any]:
         from nav_msgs.msg import Path as RosPath
         from sensor_msgs.msg import PointCloud2, PointField  # type: ignore
         from sensor_msgs_py import point_cloud2  # type: ignore
-        from std_msgs.msg import Float32, Header, String  # type: ignore
+        from std_msgs.msg import Float32, Header, Int8, String  # type: ignore
     except Exception as exc:  # pragma: no cover - depends on ROS2 env
         raise RuntimeError(
             "ROS2 Python modules are unavailable. Source /opt/ros/humble/setup.bash "
@@ -286,6 +286,7 @@ def _load_ros_modules() -> dict[str, Any]:
         "point_cloud2": point_cloud2,
         "Float32": Float32,
         "Header": Header,
+        "Int8": Int8,
         "String": String,
     }
 
@@ -462,6 +463,160 @@ def _trail_obstacle_clearance(
         "min_clearance_minus_robot_radius_m": round(float(margin), 4),
         "collision": bool(margin < 0.0),
         "nearest_obstacle": best_name,
+    }
+
+
+def _path_length_xy(points_xy: np.ndarray) -> float:
+    if len(points_xy) < 2:
+        return 0.0
+    return float(np.sum(np.linalg.norm(np.diff(points_xy, axis=0), axis=1)))
+
+
+def _local_path_obstacle_evidence(
+    *,
+    local_path: list[list[float]],
+    local_path_frame_id: str,
+    state: Any,
+    route: PctRoute,
+    robot_radius: float,
+    sample_step_m: float,
+) -> dict[str, Any]:
+    boxes = _obstacle_boxes(route)
+    robot_frame = _path_is_robot_frame(local_path_frame_id)
+    if len(local_path) < 2:
+        return {
+            "ok": False,
+            "reason": "local_path_too_short",
+            "frame_id": str(local_path_frame_id or ""),
+            "robot_frame": robot_frame,
+            "point_count": len(local_path),
+            "box_count": len(boxes),
+            "min_clearance_m": None,
+            "min_clearance_minus_robot_radius_m": None,
+            "collision": False,
+            "points_into_obstacle": False,
+        }
+
+    arr = np.asarray(local_path, dtype=np.float64)
+    path_xy = arr[:, :2]
+    if robot_frame:
+        local_xy = path_xy
+        world_xy = _robot_xy_to_world_xy(path_xy, state)
+    else:
+        world_xy = path_xy
+        local_xy = _world_xy_to_robot_xy(path_xy, state)
+
+    forward_count = int(np.sum(local_xy[:, 0] >= -0.05))
+    behind_count = int(len(local_xy) - forward_count)
+    best = None
+    best_name = None
+    segment_hits: list[dict[str, Any]] = []
+    for idx, point in enumerate(world_xy):
+        for box in boxes:
+            clearance = _point_box_clearance((float(point[0]), float(point[1])), box)
+            if best is None or clearance < best:
+                best = clearance
+                best_name = box.get("name")
+        if idx == 0:
+            continue
+        a = [float(world_xy[idx - 1, 0]), float(world_xy[idx - 1, 1]), 0.0]
+        b = [float(world_xy[idx, 0]), float(world_xy[idx, 1]), 0.0]
+        for box in boxes:
+            if _segment_intersects_expanded_box(
+                a,
+                b,
+                box,
+                clearance=float(robot_radius),
+                sample_step_m=sample_step_m,
+            ):
+                segment_hits.append(
+                    {
+                        "segment_index": idx - 1,
+                        "obstacle": box.get("name"),
+                    }
+                )
+                break
+
+    margin = None if best is None else best - float(robot_radius)
+    points_into_obstacle = bool(segment_hits)
+    collision = bool((margin is not None and margin < 0.0) or points_into_obstacle)
+    return {
+        "ok": not collision and not points_into_obstacle and forward_count > 0,
+        "reason": "" if forward_count > 0 else "local_path_not_forward",
+        "frame_id": str(local_path_frame_id or ""),
+        "robot_frame": robot_frame,
+        "point_count": int(len(local_path)),
+        "forward_point_count": forward_count,
+        "behind_point_count": behind_count,
+        "box_count": len(boxes),
+        "path_length_m": round(_path_length_xy(world_xy), 4),
+        "max_abs_lateral_m": round(float(np.max(np.abs(local_xy[:, 1]))), 4),
+        "min_clearance_m": None if best is None else round(float(best), 4),
+        "min_clearance_minus_robot_radius_m": (
+            None if margin is None else round(float(margin), 4)
+        ),
+        "collision": collision,
+        "points_into_obstacle": points_into_obstacle,
+        "nearest_obstacle": best_name,
+        "segment_hit_count": len(segment_hits),
+        "segment_hits": segment_hits[:8],
+    }
+
+
+def _summarize_local_path_obstacle_evidence(
+    *,
+    samples: list[dict[str, Any]],
+    path_count: int,
+    stop_samples: list[int],
+    slow_down_samples: list[int],
+    obstacle_aware: bool,
+) -> dict[str, Any]:
+    valid_margins = [
+        float(sample["min_clearance_minus_robot_radius_m"])
+        for sample in samples
+        if sample.get("min_clearance_minus_robot_radius_m") is not None
+    ]
+    collisions = [sample for sample in samples if sample.get("collision")]
+    point_hits = [sample for sample in samples if sample.get("points_into_obstacle")]
+    stopped = [value for value in stop_samples if int(value) > 0]
+    slowed = [value for value in slow_down_samples if int(value) > 0]
+    has_local_path = int(path_count) > 0 and bool(samples)
+    ok = has_local_path and (not obstacle_aware or (not collisions and not point_hits))
+    reasons: list[str] = []
+    if not has_local_path:
+        reasons.append("local_path_missing")
+    if collisions:
+        reasons.append("local_path_collision_margin")
+    if point_hits:
+        reasons.append("local_path_points_into_obstacle")
+    return {
+        "schema_version": "lingtu.native_local_path_obstacle_evidence.v1",
+        "ok": bool(ok),
+        "obstacle_aware": bool(obstacle_aware),
+        "path_update_count": int(path_count),
+        "sample_count": len(samples),
+        "min_clearance_minus_robot_radius_m": (
+            None if not valid_margins else round(min(valid_margins), 4)
+        ),
+        "collision_sample_count": len(collisions),
+        "points_into_obstacle_sample_count": len(point_hits),
+        "near_field_stop_count": len(stopped),
+        "slow_down_count": len(slowed),
+        "stop_samples": stop_samples[:12],
+        "slow_down_samples": slow_down_samples[:12],
+        "reasons": reasons,
+        "worst_sample": (
+            None
+            if not samples
+            else min(
+                samples,
+                key=lambda item: (
+                    float("inf")
+                    if item.get("min_clearance_minus_robot_radius_m") is None
+                    else float(item["min_clearance_minus_robot_radius_m"])
+                ),
+            )
+        ),
     }
 
 
@@ -1639,6 +1794,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
     TwistStamped = mods["TwistStamped"]
     Float32 = mods["Float32"]
     Header = mods["Header"]
+    Int8 = mods["Int8"]
     String = mods["String"]
     point_cloud2 = mods["point_cloud2"]
 
@@ -1877,6 +2033,9 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
         applied_cmd_samples: list[dict[str, Any]] = []
         trajectory_samples: list[list[float]] = []
         local_path_samples: list[dict[str, Any]] = []
+        local_path_evidence_samples: list[dict[str, Any]] = []
+        stop_samples: list[int] = []
+        slow_down_samples: list[int] = []
         latest_local_path: list[list[float]] = []
         latest_local_path_frame_id = ""
         latest_lidar_points = np.zeros((0, 4), dtype=np.float32)
@@ -1917,14 +2076,35 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                         ],
                     }
                 )
+            if len(local_path_evidence_samples) < args.sample_limit:
+                local_path_evidence_samples.append(
+                    _local_path_obstacle_evidence(
+                        local_path=latest_local_path,
+                        local_path_frame_id=latest_local_path_frame_id,
+                        state=state,
+                        route=route,
+                        robot_radius=float(args.robot_radius),
+                        sample_step_m=float(args.waypoint_collision_sample_step),
+                    )
+                )
 
         def on_status(msg: Any) -> None:
             if len(status_samples) < args.sample_limit:
                 status_samples.append(str(msg.data))
 
+        def on_stop(msg: Any) -> None:
+            if len(stop_samples) < args.sample_limit:
+                stop_samples.append(int(msg.data))
+
+        def on_slow_down(msg: Any) -> None:
+            if len(slow_down_samples) < args.sample_limit:
+                slow_down_samples.append(int(msg.data))
+
         node.create_subscription(TwistStamped, "/cmd_vel", on_cmd, 20)
         node.create_subscription(RosPath, "/path", on_path, 10)
         node.create_subscription(String, "/nav/planner_status", on_status, 10)
+        node.create_subscription(Int8, "/stop", on_stop, 10)
+        node.create_subscription(Int8, "/slow_down", on_slow_down, 10)
 
         fields = _make_fields(PointField)
 
@@ -2174,6 +2354,13 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             max_progress_regressions=int(args.max_progress_regressions),
             min_route_progress_ratio=float(args.min_route_progress_ratio),
         )
+        local_path_evidence = _summarize_local_path_obstacle_evidence(
+            samples=local_path_evidence_samples,
+            path_count=int(path_stats["count"]),
+            stop_samples=stop_samples,
+            slow_down_samples=slow_down_samples,
+            obstacle_aware=bool(obstacle_aware),
+        )
         ok = (
             reached_goal
             and path_stats["count"] > 0
@@ -2182,6 +2369,7 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
             and (planner_name != "pct" or bool(route.plan.get("native_backend_used")))
             and (not obstacle_aware or not obstacle_clearance["collision"])
             and bool(trajectory_quality["ok"])
+            and bool(local_path_evidence["ok"])
         )
         report.update(
             {
@@ -2205,6 +2393,8 @@ def run_gate(args: argparse.Namespace) -> dict[str, Any]:
                 "max_abs_angular_z": round(float(max_abs_angular_z), 5),
                 "planner_status_samples": status_samples,
                 "obstacle_clearance": obstacle_clearance,
+                "local_path_obstacle_evidence": local_path_evidence,
+                "local_path_obstacle_samples": local_path_evidence_samples,
                 "trajectory_quality": trajectory_quality,
                 "trajectory_samples": trajectory_samples[: args.sample_limit],
                 "native_nodes": ["local_planner/localPlanner", "local_planner/pathFollower"],

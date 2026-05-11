@@ -6,9 +6,11 @@ from pathlib import Path
 import pytest
 
 from sim.scripts.native_pct_mujoco_gate import (
+    PctRoute,
     _build_safe_follow_path,
     _default_local_planner_path_folder,
     _load_pct_route,
+    _local_path_obstacle_evidence,
     _native_node_commands,
     _omni_cart_cmd,
     _path_is_robot_frame,
@@ -16,6 +18,7 @@ from sim.scripts.native_pct_mujoco_gate import (
     _ros_path_to_points,
     _sample_lidar_points,
     _select_local_target,
+    _summarize_local_path_obstacle_evidence,
     _trajectory_correctness,
 )
 
@@ -277,3 +280,85 @@ def test_waypoint_safety_filter_skips_unsafe_points_without_auto_detour(tmp_path
     assert report["avoidance_clearance_m"] > report["clearance_m"]
     assert report["insertions"] == []
     assert len(path) < len(route.path)
+
+
+def _route_with_center_obstacle(tmp_path: Path) -> PctRoute:
+    metadata_path = tmp_path / "metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "obstacles": [
+                    {
+                        "name": "center_box",
+                        "floor_id": 0,
+                        "position": [1.0, 0.0, 0.35],
+                        "half_size": [0.20, 0.20, 0.35],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return PctRoute(
+        route="unit",
+        source_report=tmp_path / "report.json",
+        scene_xml=tmp_path / "scene.xml",
+        start=[0.0, 0.0, 0.0],
+        goal=[2.0, 0.0, 0.0],
+        path=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+        plan={},
+        case={"assets": {"metadata": str(metadata_path)}},
+    )
+
+
+def test_local_path_obstacle_evidence_flags_path_into_obstacle(tmp_path: Path) -> None:
+    class State:
+        position = [0.0, 0.0, 0.0]
+        orientation = [0.0, 0.0, 0.0, 1.0]
+
+    report = _local_path_obstacle_evidence(
+        local_path=[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+        local_path_frame_id="body",
+        state=State(),
+        route=_route_with_center_obstacle(tmp_path),
+        robot_radius=0.30,
+        sample_step_m=0.05,
+    )
+
+    assert report["ok"] is False
+    assert report["collision"] is True
+    assert report["points_into_obstacle"] is True
+    assert report["nearest_obstacle"] == "center_box"
+
+
+def test_local_path_obstacle_evidence_accepts_detour(tmp_path: Path) -> None:
+    class State:
+        position = [0.0, 0.0, 0.0]
+        orientation = [0.0, 0.0, 0.0, 1.0]
+
+    report = _local_path_obstacle_evidence(
+        local_path=[[0.0, 0.75, 0.0], [1.0, 0.75, 0.0], [2.0, 0.75, 0.0]],
+        local_path_frame_id="body",
+        state=State(),
+        route=_route_with_center_obstacle(tmp_path),
+        robot_radius=0.30,
+        sample_step_m=0.05,
+    )
+
+    assert report["ok"] is True
+    assert report["collision"] is False
+    assert report["points_into_obstacle"] is False
+    assert report["min_clearance_minus_robot_radius_m"] > 0.0
+
+
+def test_local_path_obstacle_summary_requires_native_path_when_obstacle_aware() -> None:
+    summary = _summarize_local_path_obstacle_evidence(
+        samples=[],
+        path_count=0,
+        stop_samples=[],
+        slow_down_samples=[],
+        obstacle_aware=True,
+    )
+
+    assert summary["ok"] is False
+    assert summary["reasons"] == ["local_path_missing"]
