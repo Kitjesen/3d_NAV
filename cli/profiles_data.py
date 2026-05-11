@@ -108,7 +108,7 @@ PROFILES = {
         enable_semantic=False,
         enable_gateway=True,
         enable_map_modules=True,
-        planning_frame_id="odom",
+        planning_frame_id="map",
         gateway_port=5050,
     ),
     "nav": dict(
@@ -135,10 +135,10 @@ PROFILES = {
         enable_native=False,
         enable_semantic=True,
         enable_gateway=True,
-        # Real S100P SLAM/localizer topics publish odometry and map clouds in
-        # the odom/world frame. NavigationModule is not TF-aware, so keep its
-        # planning frame aligned with the live topic contract.
-        planning_frame_id="odom",
+        # App/Web goals, semantic targets, saved locations, maps, and PCT paths
+        # are all contracted in map frame. SlamBridgeModule normalizes
+        # localization output into that contract before the Module graph sees it.
+        planning_frame_id="map",
         gateway_port=5050,
     ),
     "super_lio": dict(
@@ -154,7 +154,7 @@ PROFILES = {
         enable_semantic=True,
         enable_gateway=True,
         enable_map_modules=True,
-        planning_frame_id="odom",
+        planning_frame_id="map",
         gateway_port=5050,
     ),
     "super_lio_relocation": dict(
@@ -170,7 +170,7 @@ PROFILES = {
         enable_semantic=True,
         enable_gateway=True,
         enable_map_modules=True,
-        planning_frame_id="odom",
+        planning_frame_id="map",
         gateway_port=5050,
     ),
     "explore": dict(
@@ -190,7 +190,7 @@ PROFILES = {
         # don't try to spawn a TARE NativeModule on top of wavefront.
         enable_frontier=True,
         exploration_backend="none",
-        planning_frame_id="odom",
+        planning_frame_id="map",
         gateway_port=5050,
     ),
     "tare_explore": dict(
@@ -208,7 +208,7 @@ PROFILES = {
         enable_frontier=False,
         exploration_backend="tare",
         tare_scenario="forest",
-        planning_frame_id="odom",
+        planning_frame_id="map",
         gateway_port=5050,
     ),
     "sim": dict(
@@ -246,10 +246,9 @@ PROFILES = {
         enable_camera=True,
         use_driver_camera=True,
         cloud_topic="/nav/map_cloud",
-        # Gazebo enters LingTu through ROS2SimDriverModule topics. Keep
-        # planning aligned with the live /nav/odometry contract until the
-        # map->odom transform gate is enforced at runtime.
-        planning_frame_id="odom",
+        # Gazebo raw topics enter through ROS2SimDriverModule, but LingTu
+        # planning and App/Web goal contracts stay in map frame.
+        planning_frame_id="map",
         # The Gazebo profile is ROS-native at the simulator boundary, while
         # planning/tracking stay in the Module graph so /nav/local_path cannot
         # disappear into an unbridged external ROS2 process.

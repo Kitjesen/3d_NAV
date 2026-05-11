@@ -87,14 +87,14 @@ def test_s100p_profiles_drive_real_brainstem_driver_by_default():
         assert "ROS2SimDriverModule" not in graph.modules
 
 
-def test_sim_gazebo_profile_uses_ros2_driver_and_live_odometry_frame():
+def test_sim_gazebo_profile_uses_ros2_driver_and_map_planning_frame():
     graph = graph_for_profile("sim_gazebo")
     wires = _wire_set(graph)
     config = resolve_profile_config("sim_gazebo")
 
     assert config["robot"] == "sim_ros2"
     assert config["slam_profile"] == "none"
-    assert config["planning_frame_id"] == "odom"
+    assert config["planning_frame_id"] == "map"
     assert config["enable_native"] is False
     assert config["python_autonomy_backend"] == "nanobind"
     assert config["python_path_follower_backend"] == "nav_core"
@@ -175,7 +175,7 @@ def test_super_lio_profiles_wire_bridge_localization_status_to_gateway():
         assert not graph.dangling_wires(), profile
 
 
-def test_real_robot_profiles_plan_in_live_odometry_frame():
+def test_real_robot_profiles_plan_in_client_map_frame():
     profiles = (
         "map",
         "nav",
@@ -198,7 +198,7 @@ def test_real_robot_profiles_plan_in_live_odometry_frame():
         )
         nav_entry = next(entry for entry in bp._entries if entry.name == "NavigationModule")
 
-        assert nav_entry.config["planning_frame_id"] == "odom"
+        assert nav_entry.config["planning_frame_id"] == "map"
 
 
 def test_navigation_plan_safety_policy_is_profile_visible():
