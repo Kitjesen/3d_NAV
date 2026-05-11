@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import type { SSEState, PathPoint } from '../types'
+import type { SSEState, PathPoint, PlanPreviewResponse } from '../types'
 import * as api from '../services/api'
 import styles from './PathView.module.css'
 
@@ -32,6 +32,30 @@ function worldToCanvas(wx: number, wy: number, t: ViewTransform): [number, numbe
 
 function canvasToWorld(cx: number, cy: number, t: ViewTransform): [number, number] {
   return [(cx - t.originX) / t.scale, -(cy - t.originY) / t.scale]
+}
+
+function formatPlanSafetySummary(preview: PlanPreviewResponse | null | undefined): string {
+  if (!preview) return ''
+  const safety = preview.path_safety ?? {}
+  const planner = preview.selected_planner ?? preview.planner
+  const safetyOk = safety.ok === true ? 'ok' : safety.ok === false ? 'blocked' : ''
+  return [
+    planner ? `planner=${planner}` : null,
+    preview.plan_safety_policy ? `policy=${preview.plan_safety_policy}` : null,
+    safetyOk ? `safety=${safetyOk}` : null,
+    preview.fallback_reason ? `fallback=${preview.fallback_reason}` : null,
+    preview.rejected_plans?.length ? `rejected=${preview.rejected_plans.length}` : null,
+  ].filter((v): v is string => Boolean(v)).join(' | ')
+}
+
+function formatPlanPreviewFailure(
+  preview: PlanPreviewResponse | null | undefined,
+  reasons: string[] = [],
+  error?: string | null,
+): string {
+  const safety = formatPlanSafetySummary(preview)
+  const reason = reasons.slice(0, 3).join(' / ') || error || preview?.error || 'plan preview rejected'
+  return safety ? `${reason} (${safety})` : reason
 }
 
 function computeTransform(
@@ -255,6 +279,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
   const [hoverCoords, setHoverCoords] = useState<[number, number] | null>(null)
   const [trailLength, setTrailLength] = useState(0)
   const [pendingGoal, setPendingGoal] = useState<{ x: number; y: number } | null>(null)
+  const [pendingGoalPreview, setPendingGoalPreview] = useState<PlanPreviewResponse | null>(null)
   const [goalMaxSpeed, setGoalMaxSpeed] = useState(0.4)
   const [goalAcceptanceRadius, setGoalAcceptanceRadius] = useState(0.45)
 
@@ -289,6 +314,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
       ? ''
       : goalBlockers.slice(0, 4).join(' / ') || 'navigation is not ready'
   const canSendGoal = goalDisabledReason === ''
+  const pendingGoalPlanSummary = formatPlanSafetySummary(pendingGoalPreview)
 
   // Accumulate position trail
   useEffect(() => {
@@ -352,7 +378,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
     render()
   }, [render])
 
-  // Click on canvas → construct and preview a goal before sending it.
+  // Click on canvas -> construct and preview a goal before sending it.
   const handleCanvasClick = useCallback(async (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canSendGoal) {
       showToast(`Cannot send goal: ${goalDisabledReason}`, 'error')
@@ -375,7 +401,11 @@ export function PathView({ sseState, showToast }: PathViewProps) {
         max_speed_mps: goalMaxSpeed,
       })
       if (!candidate.ok || candidate.preview?.feasible === false) {
-        const reason = candidate.reasons.slice(0, 3).join(' / ') || candidate.error || '目标预检未通过'
+        const reason = formatPlanPreviewFailure(
+          candidate.preview,
+          candidate.reasons,
+          candidate.error,
+        )
         showToast(`目标不可达: ${reason}`, 'error')
         return
       }
@@ -383,6 +413,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
       const goalX = target?.x ?? wx
       const goalY = target?.y ?? wy
       setPendingGoal({ x: goalX, y: goalY })
+      setPendingGoalPreview(candidate.preview ?? null)
     } catch (e: unknown) {
       showToast(api.formatCommandError(e, 'Goal preview failed'), 'error')
     }
@@ -403,6 +434,7 @@ export function PathView({ sseState, showToast }: PathViewProps) {
         max_speed_mps: goalMaxSpeed,
       })
       setPendingGoal(null)
+      setPendingGoalPreview(null)
       showToast(
         api.formatCommandAck(res, `Goal (${pendingGoal.x.toFixed(2)}, ${pendingGoal.y.toFixed(2)})`),
         'success',
@@ -482,6 +514,11 @@ export function PathView({ sseState, showToast }: PathViewProps) {
             <span className={styles.goalCoords}>
               {pendingGoal.x.toFixed(2)}, {pendingGoal.y.toFixed(2)} m
             </span>
+            {pendingGoalPlanSummary && (
+              <span className={styles.goalPlanSummary} title={pendingGoalPlanSummary}>
+                {pendingGoalPlanSummary}
+              </span>
+            )}
             {goalDisabledReason && (
               <span className={styles.goalReason} title={goalDisabledReason}>{goalDisabledReason}</span>
             )}
@@ -492,7 +529,13 @@ export function PathView({ sseState, showToast }: PathViewProps) {
             >
               发送
             </button>
-            <button className={styles.goalCancel} onClick={() => setPendingGoal(null)}>
+            <button
+              className={styles.goalCancel}
+              onClick={() => {
+                setPendingGoal(null)
+                setPendingGoalPreview(null)
+              }}
+            >
               取消
             </button>
           </div>

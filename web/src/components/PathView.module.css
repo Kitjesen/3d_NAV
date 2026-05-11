@@ -156,6 +156,16 @@
   color: var(--text-dim, #8892a4);
 }
 
+.goalPlanSummary {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #00ff88;
+}
+
 .goalReason {
   max-width: 240px;
   overflow: hidden;
