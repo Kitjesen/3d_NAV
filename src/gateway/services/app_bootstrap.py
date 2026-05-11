@@ -96,6 +96,7 @@ CLIENT_LINKS: dict[str, str] = {
     "memory_temporal": "/api/v1/memory/temporal",
     "memory_temporal_semantic": "/api/v1/memory/temporal/semantic",
     "diagnostic_pack": "/api/v1/diagnostic_pack",
+    "routecheck_latest": "/api/v1/diagnostics/routecheck/latest",
 }
 
 CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
@@ -187,6 +188,7 @@ CLIENT_ENDPOINTS: dict[str, dict[str, dict[str, str]]] = {
         "memory_temporal": {"method": "GET", "path": CLIENT_LINKS["memory_temporal"]},
         "memory_temporal_semantic": {"method": "POST", "path": CLIENT_LINKS["memory_temporal_semantic"]},
         "diagnostic_pack": {"method": "GET", "path": CLIENT_LINKS["diagnostic_pack"]},
+        "routecheck_latest": {"method": "GET", "path": CLIENT_LINKS["routecheck_latest"]},
     },
 }
 

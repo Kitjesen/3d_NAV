@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import pathlib
 import subprocess
 import tarfile
@@ -99,6 +100,64 @@ def _command_snapshot(gw: Any) -> dict[str, Any]:
         "replayed_commands": 0,
         "rate_policy_hz": {},
         "rate_policy_enforcement": "unknown",
+    }
+
+
+def _routecheck_artifacts_root(explicit: str | os.PathLike[str] | None = None) -> pathlib.Path:
+    if explicit:
+        return pathlib.Path(explicit).expanduser()
+    env_root = os.environ.get("LINGTU_ROUTECHECK_ARTIFACT_ROOT")
+    if env_root:
+        return pathlib.Path(env_root).expanduser()
+    return pathlib.Path.home() / "data" / "SLAM" / "navigation" / "artifacts"
+
+
+def build_routecheck_latest_summary(
+    artifacts_root: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    root = _routecheck_artifacts_root(artifacts_root)
+    summaries: list[tuple[float, pathlib.Path, dict[str, Any]]] = []
+    if root.is_dir():
+        for summary_path in root.glob("*/summary.json"):
+            try:
+                data = json.loads(summary_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("mode") != "routecheck_non_motion":
+                continue
+            try:
+                mtime = summary_path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            summaries.append((mtime, summary_path, data))
+
+    if not summaries:
+        return {
+            "schema_version": 1,
+            "ok": False,
+            "artifacts_root": str(root),
+            "count": 0,
+            "artifact_dir": None,
+            "summary_path": None,
+            "latest": None,
+            "reason": "routecheck_summary_not_found",
+            "ts": time.time(),
+        }
+
+    summaries.sort(key=lambda item: item[0], reverse=True)
+    _mtime, summary_path, latest = summaries[0]
+    return {
+        "schema_version": 1,
+        "ok": True,
+        "artifacts_root": str(root),
+        "count": len(summaries),
+        "artifact_dir": str(summary_path.parent),
+        "summary_path": str(summary_path),
+        "latest": latest,
+        "reason": None,
+        "ts": time.time(),
     }
 
 
@@ -285,6 +344,10 @@ def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
         ),
         "maps": _snapshot_or_error("maps", lambda: _maps_snapshot(gw)),
         "commands": _snapshot_or_error("commands", lambda: _command_snapshot(gw)),
+        "routecheck": _snapshot_or_error(
+            "routecheck",
+            lambda: build_routecheck_latest_summary(),
+        ),
         "frame_contract": _snapshot_or_error(
             "frame_contract",
             lambda: _frame_contract_snapshot(gw),
@@ -295,6 +358,16 @@ def _build_app_web_snapshots(gw: Any) -> dict[str, dict[str, Any]]:
 def register_diagnostic_routes(app, gw) -> None:
     from fastapi.responses import FileResponse
     from starlette.background import BackgroundTask
+
+    from gateway.schemas import RoutecheckLatestResponse
+
+    @app.get(
+        "/api/v1/diagnostics/routecheck/latest",
+        response_model=RoutecheckLatestResponse,
+        summary="Read latest non-motion routecheck summary",
+    )
+    async def routecheck_latest():
+        return build_routecheck_latest_summary()
 
     @app.get(
         "/api/v1/diagnostic_pack",

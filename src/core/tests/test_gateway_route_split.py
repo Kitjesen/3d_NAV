@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import shutil
 import tarfile
 import threading
@@ -292,6 +293,7 @@ def test_diagnostic_routes_export_tarball(monkeypatch):
             assert "diag/app_web/session.json" in names
             assert "diag/app_web/maps.json" in names
             assert "diag/app_web/commands.json" in names
+            assert "diag/app_web/routecheck.json" in names
             assert "diag/app_web/frame_contract.json" in names
             modules_file = tar.extractfile("diag/modules.json")
             assert modules_file is not None
@@ -331,6 +333,7 @@ def test_diagnostic_app_web_snapshots_cover_client_startup_surfaces():
         "session",
         "maps",
         "commands",
+        "routecheck",
         "frame_contract",
     }
 
@@ -355,6 +358,8 @@ def test_diagnostic_app_web_snapshots_cover_client_startup_surfaces():
     assert snapshots["maps"]["ok"] is True
     assert snapshots["commands"]["ok"] is True
     assert snapshots["commands"]["data"]["idempotency_supported"] is True
+    assert snapshots["routecheck"]["ok"] is True
+    assert snapshots["routecheck"]["data"]["schema_version"] == 1
     assert snapshots["frame_contract"]["ok"] is True
     frame_contract = snapshots["frame_contract"]["data"]
     assert frame_contract["contract"]["exists"] is True
@@ -402,6 +407,7 @@ def test_gateway_module_builds_split_routes_once():
     assert counts["/api/v1/auth/login"] == 1
     assert counts["/api/v1/auth/check"] == 1
     assert counts["/api/v1/diagnostic_pack"] == 1
+    assert counts["/api/v1/diagnostics/routecheck/latest"] == 1
     assert counts["/api/v1/events"] == 1
     assert counts["/api/v1/state"] == 1
     assert counts["/api/v1/locations"] == 2
@@ -458,6 +464,7 @@ def test_gateway_module_keeps_client_route_inventory():
         "/ready",
         "/api/v1/session",
         "/api/v1/diagnostic_pack",
+        "/api/v1/diagnostics/routecheck/latest",
         "/api/v1/events",
         "/api/v1/maps",
         "/api/v1/slam/maps",
@@ -506,6 +513,62 @@ def test_capabilities_manifest_paths_exist_in_gateway_routes():
     assert manifest_paths <= route_paths
     assert capabilities["endpoints"]["realtime"]["camera"]["path"] == "/ws/camera"
     assert capabilities["endpoints"]["realtime"]["camera"]["method"] == "WS"
+
+
+def test_routecheck_latest_diagnostic_reads_latest_summary(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from gateway.routes.diagnostics import (
+        build_routecheck_latest_summary,
+        register_diagnostic_routes,
+    )
+
+    old_dir = tmp_path / "super_lio_route_preflight_old"
+    new_dir = tmp_path / "super_lio_route_preflight_new"
+    old_dir.mkdir()
+    new_dir.mkdir()
+    (old_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "mode": "routecheck_non_motion",
+                "outcome": "fail",
+                "non_motion": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    new_summary = {
+        "schema_version": 1,
+        "mode": "routecheck_non_motion",
+        "outcome": "pass",
+        "non_motion": True,
+        "phases": {"baseline": {"selected_planner": "pct"}},
+    }
+    (new_dir / "summary.json").write_text(
+        json.dumps(new_summary),
+        encoding="utf-8",
+    )
+    os.utime(old_dir / "summary.json", (1, 1))
+    os.utime(new_dir / "summary.json", (2, 2))
+
+    payload = build_routecheck_latest_summary(tmp_path)
+    assert payload["ok"] is True
+    assert payload["count"] == 2
+    assert payload["artifact_dir"] == str(new_dir)
+    assert payload["latest"]["outcome"] == "pass"
+    assert payload["latest"]["phases"]["baseline"]["selected_planner"] == "pct"
+
+    monkeypatch.setenv("LINGTU_ROUTECHECK_ARTIFACT_ROOT", str(tmp_path))
+    app = FastAPI()
+    register_diagnostic_routes(app, SimpleNamespace(_all_modules={}))
+    response = TestClient(app).get("/api/v1/diagnostics/routecheck/latest")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema_version"] == 1
+    assert body["ok"] is True
+    assert body["latest"]["outcome"] == "pass"
 
 
 def _schema_ref_for(
@@ -565,6 +628,7 @@ def test_openapi_exposes_client_response_models():
     assert "LivenessResponse" in schemas
     assert "ControlCommandResponse" in schemas
     assert "GatewayErrorResponse" in schemas
+    assert "RoutecheckLatestResponse" in schemas
     assert "CommandReceipt" in schemas
     assert "CancelRequest" in schemas
     assert "GoalCandidateRequest" in schemas
@@ -676,6 +740,9 @@ def test_openapi_exposes_client_response_models():
         openapi, "/api/v1/locations/{name}", method="delete"
     ).endswith("/LocationOperationResponse")
     assert _schema_ref_for(openapi, "/api/v1/path").endswith("/PathResponse")
+    assert _schema_ref_for(
+        openapi, "/api/v1/diagnostics/routecheck/latest"
+    ).endswith("/RoutecheckLatestResponse")
     assert _schema_ref_for(openapi, "/api/v1/localization/status").endswith(
         "/LocalizationStatusResponse"
     )
@@ -1024,6 +1091,7 @@ def test_capabilities_manifest_http_paths_exist_in_openapi():
         capabilities["endpoints"]["auth"]["check"],
         capabilities["endpoints"]["control"]["navigation_goal_candidate"],
         capabilities["endpoints"]["control"]["navigation_plan"],
+        capabilities["endpoints"]["ops"]["routecheck_latest"],
     ]
     for spec in key_specs:
         assert spec["response_schema"]

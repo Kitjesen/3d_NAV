@@ -49,6 +49,18 @@ class GatewayErrorResponse(GatewayResponseModel):
     command: CommandReceipt | None = None
 
 
+class RoutecheckLatestResponse(GatewayResponseModel):
+    schema_version: int = 1
+    ok: bool
+    artifacts_root: str
+    count: int = 0
+    artifact_dir: str | None = None
+    summary_path: str | None = None
+    latest: dict[str, Any] | None = None
+    reason: str | None = None
+    ts: float
+
+
 class BitrateRequest(BaseModel):
     bps: int
 

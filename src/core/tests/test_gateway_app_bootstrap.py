@@ -86,6 +86,7 @@ def test_app_bootstrap_service_returns_client_contract():
     assert payload["links"]["navigation_goal_candidate"] == "/api/v1/navigation/goal_candidate"
     assert payload["links"]["navigation_plan"] == "/api/v1/navigation/plan"
     assert payload["links"]["navigation_cancel"] == "/api/v1/navigation/cancel"
+    assert payload["links"]["routecheck_latest"] == "/api/v1/diagnostics/routecheck/latest"
     assert payload["links"]["teleop_ws"] == "/ws/teleop"
     assert payload["links"]["camera_ws"] == "/ws/camera"
     assert payload["links"]["session_start"] == "/api/v1/session/start"
@@ -126,6 +127,10 @@ def test_app_bootstrap_service_returns_client_contract():
         == "/api/v1/map/restore_predufo"
     )
     assert capabilities["probes"]["readiness"]["path"] == "/ready"
+    assert (
+        capabilities["endpoints"]["ops"]["routecheck_latest"]["path"]
+        == "/api/v1/diagnostics/routecheck/latest"
+    )
     assert capabilities["realtime"]["events"]["transport"] == "sse"
     assert capabilities["realtime"]["events"]["event_schema"] == "SSEEventEnvelope"
     assert capabilities["realtime"]["events"]["event_id_field"] == "event_id"
