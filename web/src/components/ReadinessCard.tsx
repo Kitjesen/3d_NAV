@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ReadinessResponse, SSEState } from '../types'
+import type { ReadinessResponse, RoutecheckLatestResponse, RoutecheckSummary, SSEState } from '../types'
 import * as api from '../services/api'
 import styles from './ReadinessCard.module.css'
 
@@ -68,8 +68,40 @@ function plannerSafetyLines(nav: SSEState['navigationStatus']): string[] {
   return lines.length > 0 ? lines : ['No planner safety report yet']
 }
 
+function routecheckLines(routecheck: RoutecheckLatestResponse | null): string[] {
+  if (!routecheck) return ['Routecheck not loaded yet']
+  if (!routecheck.ok || !routecheck.latest) {
+    return [routecheck.reason ?? 'No routecheck summary found']
+  }
+
+  const latest: RoutecheckSummary = routecheck.latest
+  const phases = latest.phases ?? {}
+  const phaseLines = Object.entries(phases).flatMap(([name, phase]) => {
+    const planner = stringValue(phase.selected_planner) ?? stringValue(phase.planner)
+    const outcome = stringValue(phase.outcome)
+      ?? (phase.ok === true || phase.feasible === true
+        ? 'pass'
+        : phase.ok === false || phase.feasible === false
+          ? 'blocked'
+          : null)
+    const fallback = stringValue(phase.fallback_reason)
+    const error = stringValue(phase.error)
+    return [
+      `${name}: ${[outcome, planner].filter(Boolean).join(' / ') || 'recorded'}`,
+      fallback ? `${name} fallback: ${fallback}` : null,
+      error ? `${name} error: ${error}` : null,
+    ].filter((line): line is string => Boolean(line))
+  })
+
+  const outcome = latest.outcome ? `Outcome: ${latest.outcome}` : null
+  const count = `Runs found: ${routecheck.count}`
+  const artifact = routecheck.artifact_dir ? `Artifact: ${routecheck.artifact_dir}` : null
+  return [outcome, count, ...phaseLines, artifact].filter((line): line is string => Boolean(line)).slice(0, 6)
+}
+
 export function ReadinessCard({ sseState }: ReadinessCardProps) {
   const [clientReadiness, setClientReadiness] = useState<ReadinessResponse | null>(null)
+  const [routecheck, setRoutecheck] = useState<RoutecheckLatestResponse | null>(null)
   const nav = sseState.navigationStatus
   const readiness = nav?.readiness
   const localization = nav?.localization
@@ -88,6 +120,8 @@ export function ReadinessCard({ sseState }: ReadinessCardProps) {
   ]
   const blockers = labelList([...(readiness?.blockers ?? []), ...clientReasons], 'No readiness blockers')
   const advisories = labelList([...(readiness?.advisories ?? []), ...clientAdvisories], 'No advisories')
+  const routecheckItems = routecheckLines(routecheck)
+  const routecheckBlocked = routecheck?.ok === false || routecheck?.latest?.outcome === 'fail'
   const owner = control?.active_source?.label ?? control?.active_cmd_source ?? 'none'
   const speedMode = motion?.speed_policy?.mode ?? 'unknown'
   const distanceToGoal = fmtNum(target?.distance_to_goal_m)
@@ -107,6 +141,24 @@ export function ReadinessCard({ sseState }: ReadinessCardProps) {
     }
     void load()
     const timer = window.setInterval(load, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const next = await api.fetchRoutecheckLatest()
+        if (!cancelled) setRoutecheck(next)
+      } catch {
+        if (!cancelled) setRoutecheck(null)
+      }
+    }
+    void load()
+    const timer = window.setInterval(load, 10000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -165,6 +217,25 @@ export function ReadinessCard({ sseState }: ReadinessCardProps) {
                   ? styles.alertItem
                   : styles.mutedItem
               }
+            >
+              {item}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionTitle}>Routecheck</div>
+        <ul className={styles.list}>
+          {routecheckItems.map(item => (
+            <li
+              key={item}
+              className={
+                routecheckBlocked || item.includes('blocked') || item.includes('fallback') || item.includes('error')
+                  ? styles.alertItem
+                  : styles.mutedItem
+              }
+              title={item}
             >
               {item}
             </li>

@@ -198,6 +198,41 @@ export interface ReadinessResponse {
   ts: number
 }
 
+export interface RoutecheckPhaseSummary {
+  selected_planner?: string | null
+  planner?: string | null
+  outcome?: string | null
+  ok?: boolean | null
+  feasible?: boolean | null
+  fallback_reason?: string | null
+  error?: string | null
+  reasons?: string[]
+  [key: string]: unknown
+}
+
+export interface RoutecheckSummary {
+  schema_version?: number
+  mode?: string | null
+  outcome?: string | null
+  non_motion?: boolean | null
+  phases?: Record<string, RoutecheckPhaseSummary>
+  generated_at?: string | null
+  ts?: number | null
+  [key: string]: unknown
+}
+
+export interface RoutecheckLatestResponse {
+  schema_version: number
+  ok: boolean
+  artifacts_root: string
+  count: number
+  artifact_dir?: string | null
+  summary_path?: string | null
+  latest?: RoutecheckSummary | null
+  reason?: string | null
+  ts: number
+}
+
 export interface DeviceEntry {
   [key: string]: unknown
 }
@@ -549,6 +584,7 @@ export interface ClientLinks {
   memory_temporal?: string
   memory_temporal_semantic?: string
   diagnostic_pack?: string
+  routecheck_latest?: string
   [key: string]: string | undefined
 }
 

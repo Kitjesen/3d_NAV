@@ -34,6 +34,7 @@ import type {
   PlanPreviewRequest,
   PlanPreviewResponse,
   ReadinessResponse,
+  RoutecheckLatestResponse,
   SceneGraphResponse,
   SessionEvent,
   SessionTransitionResponse,
@@ -276,6 +277,12 @@ export async function fetchHealth(): Promise<HealthResponse> {
 
 export async function fetchReadiness(): Promise<ReadinessResponse> {
   return fetchJson<ReadinessResponse>(apiPath('readiness', '/api/v1/readiness'))
+}
+
+export async function fetchRoutecheckLatest(): Promise<RoutecheckLatestResponse> {
+  return fetchJson<RoutecheckLatestResponse>(
+    apiPath('routecheck_latest', '/api/v1/diagnostics/routecheck/latest'),
+  )
 }
 
 export async function fetchDevices(): Promise<DevicesResponse> {
