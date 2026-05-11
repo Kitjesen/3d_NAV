@@ -179,9 +179,45 @@ PYTHONPATH=src:. python sim/scripts/policy_nav_smoke.py \
 For the full server-side closure report, run:
 
 ```bash
+PYTHONPATH=src:. python sim/scripts/routecheck_preflight_gate.py \
+  --map server_sim_demo \
+  --goal-x 1.0 \
+  --goal-y 0.0 \
+  --goal-yaw 0.0 \
+  --json-out artifacts/server_sim_closure/routecheck/summary.json \
+  --strict
+
 PYTHONPATH=src:. python sim/scripts/server_sim_closure.py \
-  --json-out artifacts/server_sim_closure_summary_all.json
+  --json-out artifacts/server_sim_closure_summary_all.json \
+  --strict
 ```
+
+The summary is an evidence aggregator. It does not launch missing gates on its
+own; run the command shown in each failed gate before treating the closure as
+complete. A passing full summary must report `ok=true`,
+`simulation_only=true`, `real_robot_motion=false`,
+`cmd_vel_sent_to_hardware=false`, and `missing_or_failed=[]`.
+
+Current full closure gates:
+
+| Gate | Required evidence |
+| --- | --- |
+| `multifloor_exploration` | multi-floor matrix, frontier loop, LiDAR localization contract, native PCT, nanobind local planning, nav_core tracking |
+| `large_terrain` | PCT/native planning on large terrain routes with path safety |
+| `native_pct_mujoco` | native PCT route through ROS2 local planner/path follower into MuJoCo kinematic motion |
+| `dynamic_obstacle_local_planner` | nanobind local planner replans around changing obstacles |
+| `fastlio2_live` | live MuJoCo LiDAR/IMU through Fast-LIO2 and SlamBridge tracking |
+| `policy_nav` | ONNX gait policy plus full-stack simulated navigation dataflow |
+| `gateway_dry_run` | Gateway preview/goal command flow without hardware cmd_vel |
+| `routecheck_preflight` | Gateway non-motion baseline/candidate route preflight with zero published goal/cmd_vel/stop |
+| `gazebo_runtime` | ROS-native Gazebo TF, odometry, and point-cloud frame smoke |
+| `saved_map_relocalize` | saved-map relocalization contract for localizer navigation mode |
+
+For server bootstrap verification, `scripts/deploy/setup_server_ros_pct.sh`
+runs the setup-safe subset it generates itself: the multi-floor closure gate,
+the Gateway routecheck preflight gate, and a strict summary at
+`artifacts/server_sim_closure_summary_setup.json`. Disable the routecheck
+preflight only with `LINGTU_RUN_ROUTECHECK_PREFLIGHT=0`.
 
 #### Policy-Mode Soak On Sunrise
 

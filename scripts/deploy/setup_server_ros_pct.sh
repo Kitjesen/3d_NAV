@@ -27,6 +27,7 @@ RUN_MUJOCO="${LINGTU_RUN_MUJOCO:-1}"
 RUN_PCT="${LINGTU_RUN_PCT:-1}"
 RUN_MULTIFLOOR="${LINGTU_RUN_MULTIFLOOR:-1}"
 RUN_NAV_CORE="${LINGTU_RUN_NAV_CORE:-1}"
+RUN_ROUTECHECK_PREFLIGHT="${LINGTU_RUN_ROUTECHECK_PREFLIGHT:-1}"
 INSTALL_SYSTEM_DEPS="${LINGTU_INSTALL_SYSTEM_DEPS:-1}"
 INSTALL_PYTHON_DEPS="${LINGTU_INSTALL_PYTHON_DEPS:-1}"
 RUN_VERIFY="${LINGTU_RUN_VERIFY:-1}"
@@ -40,6 +41,11 @@ log() {
 
 have() {
   command -v "$1" >/dev/null 2>&1
+}
+
+join_by_comma() {
+  local IFS=,
+  printf '%s' "$*"
 }
 
 need_sudo() {
@@ -287,6 +293,7 @@ run_verification() {
     return
   fi
 
+  local closure_required=()
   export PYTHONPATH="${ROOT}/src:${ROOT}:${PYTHONPATH:-}"
   # ROS2 installs launch_testing pytest hooks globally. They can import
   # unrelated script-style tests during focused Python checks, so keep this
@@ -345,6 +352,19 @@ PY
       --require-production-local-planner \
       --strict \
       --json-out artifacts/server_sim_closure/multifloor_exploration/report.json
+    closure_required+=(multifloor_exploration)
+  fi
+
+  if [[ "${RUN_ROUTECHECK_PREFLIGHT}" == "1" ]]; then
+    log "Gateway routecheck preflight closure gate, non-motion"
+    python3 sim/scripts/routecheck_preflight_gate.py \
+      --map server_sim_demo \
+      --goal-x 1.0 \
+      --goal-y 0.0 \
+      --goal-yaw 0.0 \
+      --json-out artifacts/server_sim_closure/routecheck/summary.json \
+      --strict
+    closure_required+=(routecheck_preflight)
   fi
 
   if [[ "${RUN_MUJOCO}" == "1" ]]; then
@@ -356,6 +376,14 @@ PY
       --bridge-loop \
       --strict \
       --json-out artifacts/server_mujoco_bridge/report.json
+  fi
+
+  if [[ "${#closure_required[@]}" -gt 0 ]]; then
+    log "server simulation closure summary for setup-generated gates"
+    python3 sim/scripts/server_sim_closure.py \
+      --required "$(join_by_comma "${closure_required[@]}")" \
+      --json-out artifacts/server_sim_closure_summary_setup.json \
+      --strict
   fi
 }
 
