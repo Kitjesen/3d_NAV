@@ -31,8 +31,8 @@ LingTu already has the right basic shape:
 
 | Gap | Why It Matters | Concrete Fix |
 | --- | --- | --- |
-| Global planner validity is not yet a first-class gate everywhere | PCT can output a path that looks smooth but cuts into inflated obstacles | Add a reusable `PlanSafetyGate` shared by validation scripts and runtime `GlobalPlannerService` dispatch. |
-| PCT lacks fallback/repair after unsafe smoothing | A native planner being available is not enough; the selected route must also be safe | If PCT route fails `path_safety`, try corridor repair or fallback to A* and record the fallback reason. |
+| Planner safety still needs more scenario coverage | PCT can output a path that looks smooth but cuts into inflated obstacles; runtime now checks this but the matrix is still small | Expand seeded validation scenarios and keep `path_safety` as a pass/fail gate in every planner report. |
+| PCT repair is still missing after unsafe smoothing | A native planner being available is not enough; the selected route must also be safe | Runtime now falls back to A* on the same active map when PCT fails `path_safety`; add corridor repair before fallback as the next improvement. |
 | Local planner evidence is still mostly visual/log based | Collision-free local decisions should be measured, not inferred from video | Persist local path samples, local path clearance, near-field stop count, and slow-down count in the JSON report. |
 | Frame/topic contracts are embedded in scripts | Mature stacks make `/tf`, odom, map, scan/cloud, and cmd frames explicit contracts | Add a `sim/contracts.py` or test helper that asserts frames and topic direction for each simulation gate. |
 | Camera and LiDAR overlays are useful but not product-grade diagnostics | User needs to see why the robot chose a route, not only where it moved | Add a stable single-scene overlay legend and export separate `global_path`, `local_path`, `trail`, `point_cloud`, and `obstacle_margin` tracks. |
@@ -55,8 +55,9 @@ LingTu already has the right basic shape:
    - Report fields: `selected_planner`, `fallback_reason`, `rejected_plans`.
    - Current status: `GlobalPlannerService` supports explicit
      `plan_safety_policy`: `off`, `observe`, `reject`, and `fallback_astar`.
-     `NavigationModule` exposes the policy and keeps default behavior in
-     `observe` mode unless a profile opts into rejection or fallback.
+     `NavigationModule` exposes the policy. Real PCT profiles use
+     `fallback_astar`, so unsafe PCT output is rejected and replanned through
+     A* on the latest live map instead of silently passing through.
 
 3. Upgrade the native local planner gate.
    - Count `/path` updates, near-field estop events, slowdown events, local path min clearance, and local path-to-global progress.

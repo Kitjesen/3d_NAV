@@ -339,28 +339,30 @@ class TestMapManagerModule(unittest.TestCase):
         map_dir = Path(self._map_dir) / map_name
 
         def _fake_save_maps(*_args, **_kw):
-            map_dir.mkdir(parents=True, exist_ok=True)
-            (map_dir / "map.pcd").write_text(
-                "VERSION 0.7\n"
-                "FIELDS x y z\n"
-                "SIZE 4 4 4\n"
-                "TYPE F F F\n"
-                "COUNT 1 1 1\n"
-                "WIDTH 8\n"
-                "HEIGHT 1\n"
-                "VIEWPOINT 0 0 0 1 0 0 0\n"
-                "POINTS 8\n"
-                "DATA ascii\n"
-                "0.0 0.0 0.0\n"
-                "1.0 0.0 0.0\n"
-                "0.0 1.0 0.0\n"
-                "1.0 1.0 0.0\n"
-                "0.0 0.0 0.5\n"
-                "1.0 0.0 0.5\n"
-                "0.0 1.0 0.5\n"
-                "1.0 1.0 0.5\n",
-                encoding="utf-8",
-            )
+            cmd = list(_args[0]) if _args else []
+            if "/pgo/save_maps" in cmd:
+                map_dir.mkdir(parents=True, exist_ok=True)
+                (map_dir / "map.pcd").write_text(
+                    "VERSION 0.7\n"
+                    "FIELDS x y z\n"
+                    "SIZE 4 4 4\n"
+                    "TYPE F F F\n"
+                    "COUNT 1 1 1\n"
+                    "WIDTH 8\n"
+                    "HEIGHT 1\n"
+                    "VIEWPOINT 0 0 0 1 0 0 0\n"
+                    "POINTS 8\n"
+                    "DATA ascii\n"
+                    "0.0 0.0 0.0\n"
+                    "1.0 0.0 0.0\n"
+                    "0.0 1.0 0.0\n"
+                    "1.0 1.0 0.0\n"
+                    "0.0 0.0 0.5\n"
+                    "1.0 0.0 0.5\n"
+                    "0.0 1.0 0.5\n"
+                    "1.0 1.0 0.5\n",
+                    encoding="utf-8",
+                )
             return MagicMock(returncode=0, stderr="")
 
         def _fake_build_tomogram(name):
@@ -385,8 +387,8 @@ class TestMapManagerModule(unittest.TestCase):
         self.assertTrue(Path(resp["tomogram"]).exists())
         self.assertTrue(Path(resp["occupancy"]).exists())
         self.assertTrue(resp["saved_map_relocalization_supported"])
-        run.assert_called_once()
-        self.assertIn("/pgo/save_maps", run.call_args.args[0])
+        save_calls = [call for call in run.call_args_list if "/pgo/save_maps" in call.args[0]]
+        self.assertEqual(len(save_calls), 1)
 
         active = self._cmd({"action": "set_active", "name": map_name})
         self.assertTrue(active["success"], active)

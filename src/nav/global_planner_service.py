@@ -42,6 +42,7 @@ class GlobalPlannerService:
         self._backend = None
         self._fallback_backend = None
         self._last_plan_report: dict[str, Any] = {}
+        self._last_map_update: tuple[np.ndarray, float, np.ndarray | None] | None = None
         self._warned_no_grid: bool = False
 
     def setup(self) -> None:
@@ -189,8 +190,11 @@ class GlobalPlannerService:
         origin: np.ndarray | None = None,
     ) -> None:
         """Push live costmap to the backend (if supported)."""
-        if self._backend is not None and hasattr(self._backend, "update_map"):
-            self._backend.update_map(grid, resolution=resolution, origin=origin)
+        grid_arr = np.asarray(grid, dtype=np.float32).copy()
+        origin_arr = None if origin is None else np.asarray(origin[:2], dtype=float).copy()
+        self._last_map_update = (grid_arr, float(resolution), origin_arr)
+        self._push_map_update(self._backend, grid_arr, float(resolution), origin_arr)
+        self._push_map_update(self._fallback_backend, grid_arr, float(resolution), origin_arr)
 
     # ------------------------------------------------------------------ #
     # Goal Safety (BFS nearest free cell, ref: dimos _find_safe_goal)      #
@@ -293,7 +297,20 @@ class GlobalPlannerService:
     def _get_fallback_backend(self):
         if self._fallback_backend is None:
             self._fallback_backend = self._create_backend(self._fallback_planner_name)
+            if self._last_map_update is not None:
+                grid, resolution, origin = self._last_map_update
+                self._push_map_update(self._fallback_backend, grid, resolution, origin)
         return self._fallback_backend
+
+    @staticmethod
+    def _push_map_update(
+        backend: Any,
+        grid: np.ndarray,
+        resolution: float,
+        origin: np.ndarray | None,
+    ) -> None:
+        if backend is not None and hasattr(backend, "update_map"):
+            backend.update_map(grid, resolution=resolution, origin=origin)
 
     @property
     def last_plan_report(self) -> dict[str, Any]:

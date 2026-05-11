@@ -124,10 +124,11 @@ PROFILES = {
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
         tomogram=_ACTIVE_TOMOGRAM,
-        # First deployment keeps PCT behavior observable instead of silently
-        # changing real-robot route selection. Switch to reject/fallback only
-        # after field validation proves the safety gate policy.
-        plan_safety_policy="observe",
+        # PCT remains the production planner, but unsafe global plans are not
+        # allowed to pass through just because the native backend produced
+        # waypoints. Fall back to A* on the same active map if the path safety
+        # gate finds blocked samples.
+        plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
         # enable_native=False: C++ local_planner requires the 'local_planner'
         # ROS2 package installed via colcon. Use Python autonomy chain instead.
@@ -148,7 +149,7 @@ PROFILES = {
         llm="qwen",
         planner="pct",
         tomogram=_ACTIVE_TOMOGRAM,
-        plan_safety_policy="observe",
+        plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
         enable_native=False,
         enable_semantic=True,
@@ -164,7 +165,7 @@ PROFILES = {
         llm="qwen",
         planner="pct",
         tomogram=_ACTIVE_TOMOGRAM,
-        plan_safety_policy="observe",
+        plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
         enable_native=False,
         enable_semantic=True,
@@ -179,7 +180,7 @@ PROFILES = {
         slam_profile="fastlio2",
         llm="qwen",
         planner="pct",          # S100P: use ele_planner.so (3D terrain-aware)
-        plan_safety_policy="observe",
+        plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
         enable_native=False,    # same reason as nav profile above
         enable_semantic=True,
@@ -199,7 +200,7 @@ PROFILES = {
         slam_profile="fastlio2",
         llm="qwen",
         planner="pct",
-        plan_safety_policy="observe",
+        plan_safety_policy="fallback_astar",
         fallback_planner_name="astar",
         enable_native=False,
         enable_semantic=True,

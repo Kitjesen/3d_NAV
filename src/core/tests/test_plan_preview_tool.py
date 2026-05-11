@@ -35,6 +35,16 @@ def _touch_pct_extensions(lib_dir: Path) -> None:
     abi = f"{sys.version_info.major}{sys.version_info.minor}"
     for name in ("a_star", "ele_planner", "traj_opt"):
         (lib_dir / f"{name}.cpython-{abi}-x86_64-linux-gnu.so").write_bytes(b"")
+    for name in (
+        "libmetis-gtsam.so",
+        "libgtsam.so",
+        "libcommon_smoothing.so",
+        "liba_star_search.so",
+        "libmap_manager.so",
+        "libgpmp_optimizer.so",
+        "libele_planner_lib.so",
+    ):
+        (lib_dir / name).write_bytes(b"")
 
 
 def test_tomogram_info_reports_bounds_and_last_pose_out_of_bounds(tmp_path):

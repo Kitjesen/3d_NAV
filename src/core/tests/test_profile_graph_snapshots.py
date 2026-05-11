@@ -223,5 +223,5 @@ def test_navigation_plan_safety_policy_is_profile_visible():
         bp = navigation(planner, tomogram, enable_native, **nav_config)
         nav_entry = next(entry for entry in bp._entries if entry.name == "NavigationModule")
 
-        assert nav_entry.config["plan_safety_policy"] == "observe"
+        assert nav_entry.config["plan_safety_policy"] == "fallback_astar"
         assert nav_entry.config["fallback_planner_name"] == "astar"

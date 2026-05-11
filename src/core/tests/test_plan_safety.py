@@ -129,6 +129,61 @@ def test_global_planner_service_reports_when_fallback_is_unsafe(monkeypatch: pyt
     assert [entry["planner"] for entry in report["rejected_plans"]] == ["pct", "astar"]
 
 
+def test_global_planner_service_applies_live_map_to_late_fallback_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live_grid = np.zeros((3, 3), dtype=np.float32)
+    live_grid[1, 1] = 100.0
+
+    class UnsafePrimaryBackend:
+        _grid = live_grid
+        _resolution = 1.0
+        _origin = np.asarray([0.0, 0.0], dtype=float)
+
+        def plan(self, start, goal):
+            return [[0.0, 1.0, 0.0], [2.0, 1.0, 0.0]]
+
+    class LateFallbackBackend:
+        def __init__(self):
+            self.update_calls = 0
+            self._grid = None
+            self._resolution = 1.0
+            self._origin = np.asarray([0.0, 0.0], dtype=float)
+
+        def update_map(self, grid, resolution=0.2, origin=None):
+            self.update_calls += 1
+            self._grid = np.asarray(grid, dtype=np.float32)
+            self._resolution = float(resolution)
+            self._origin = np.asarray(origin[:2], dtype=float) if origin is not None else np.zeros(2)
+
+        def plan(self, start, goal):
+            assert self.update_calls == 1
+            assert self._grid is not None
+            return [[0.0, 1.0, 0.0], [0.0, 2.0, 0.0], [2.0, 2.0, 0.0], [2.0, 1.0, 0.0]]
+
+    svc = GlobalPlannerService(
+        planner_name="pct",
+        obstacle_thr=49.9,
+        downsample_dist=0.1,
+        plan_safety_policy="fallback_astar",
+        fallback_planner_name="astar",
+    )
+    svc._backend = UnsafePrimaryBackend()
+    svc.update_map(live_grid, resolution=1.0, origin=np.asarray([0.0, 0.0], dtype=float))
+
+    monkeypatch.setattr(svc, "_create_backend", lambda name=None: LateFallbackBackend())
+
+    path, _plan_ms = svc.plan(
+        np.asarray([0.0, 1.0, 0.0], dtype=float),
+        np.asarray([2.0, 1.0, 0.0], dtype=float),
+        safe_goal_tolerance=0.0,
+    )
+
+    assert svc._fallback_backend.update_calls == 1
+    assert [[float(p[0]), float(p[1])] for p in path] == [[0.0, 1.0], [0.0, 2.0], [2.0, 2.0], [2.0, 1.0]]
+    assert svc.last_plan_report["selected_planner"] == "astar"
+
+
 def test_global_planner_service_can_reject_unsafe_plan() -> None:
     class UnsafeBackend:
         _grid = np.zeros((3, 3), dtype=np.float32)
