@@ -32,12 +32,26 @@ run_one() {
   fi
 }
 
+pause_for_profile() {
+  local name="$1"
+  local instruction="$2"
+  echo ""
+  echo "------------ profile switch: $name ------------"
+  echo "$instruction"
+  echo "Press [Enter] after the profile is running and Gateway is responsive."
+  read -r
+}
+
 run_one "P0-01 cold boot"   p0_cold_boot.sh
 run_one "P0-02 mapping"     p0_mapping.sh
+pause_for_profile "navigation/localizer" \
+  "Switch LingTu to the nav/localizer profile using the saved active map."
 run_one "P0-03 route safety" p0_route_safety.sh 2.0 0.0
 run_one "P0-04 goto"        p0_goto.sh 2.0 0.0 60
 run_one "P0-05 estop"       p0_estop.sh
 if [[ "${LINGTU_P0_RUN_EXPLORE:-0}" == "1" ]]; then
+  pause_for_profile "explore/tare_explore" \
+    "Switch LingTu to the explore or tare_explore profile in a safe open area."
   run_one "P0-06 explore"   p0_explore.sh "${LINGTU_P0_EXPLORE_DURATION:-30}"
 else
   echo ""

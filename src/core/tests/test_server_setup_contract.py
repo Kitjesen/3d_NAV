@@ -114,6 +114,9 @@ def test_p0_field_runbook_matches_script_contracts():
     readme = (REPO_ROOT / "docs/07-testing/README.md").read_text(
         encoding="utf-8"
     )
+    p0_all = (REPO_ROOT / "docs/07-testing/p0_all.sh").read_text(
+        encoding="utf-8"
+    )
     p0_scripts = [
         REPO_ROOT / "docs/07-testing/p0_all.sh",
         REPO_ROOT / "docs/07-testing/p0_cold_boot.sh",
@@ -127,12 +130,16 @@ def test_p0_field_runbook_matches_script_contracts():
     assert "/api/v1/navigation/status" in readme
     assert "/api/v1/navigation/plan" in readme
     assert "path_safety.ok=true" in readme
+    assert "pauses after mapping" in readme
     assert "POST /api/v1/stop" in readme
     assert "/api/v1/state" in readme
     assert "/api/v1/explore/status" in readme
     assert "LINGTU_P0_RUN_EXPLORE=1" in readme
     assert "CmdVelMux` outputs `Twist.zero()`" not in readme
     assert "watchdog log entry" not in readme
+    assert "pause_for_profile" in p0_all
+    assert "navigation/localizer" in p0_all
+    assert "explore/tare_explore" in p0_all
 
     for script in p0_scripts:
         script.read_text(encoding="utf-8").encode("ascii")

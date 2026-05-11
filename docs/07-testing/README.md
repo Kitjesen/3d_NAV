@@ -123,6 +123,10 @@ git pull --ff-only origin main
 bash docs/07-testing/p0_all.sh | tee ~/data/nav_logs/$(date +%Y%m%d_%H%M%S)_p0_all.log
 ```
 
+The aggregate script pauses after mapping so the operator can switch LingTu to
+the nav/localizer profile with the newly active map before route-safety and
+goto checks run.
+
 Exploration is opt-in for the aggregate script because it requires a dedicated
 runtime profile and an open test area:
 
