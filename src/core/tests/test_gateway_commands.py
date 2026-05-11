@@ -535,6 +535,9 @@ def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
     assert model.command.name == "goal"
     assert model.command.request_id == "blocked-goal"
     assert model.command.accepted is False
+    assert model.detail["reason_code"] == "navigation_plan_infeasible"
+    assert model.detail["blockers"] == ["blocked_by_costmap"]
+    assert model.detail["source"] == "navigation_preview"
     assert model.detail["path"] == "/api/v1/navigation/plan"
     assert model.detail["preview"]["reasons"] == ["blocked_by_costmap"]
     assert event["type"] == "command_ack"
@@ -542,6 +545,7 @@ def test_goal_route_rejects_infeasible_plan_preview_without_publishing():
     assert event["data"]["error"] == "navigation_plan_infeasible"
     assert event["data"]["command"]["accepted"] is False
     assert event["data"]["command"]["request_id"] == "blocked-goal"
+    assert event["data"]["detail"]["reason_code"] == "navigation_plan_infeasible"
     assert event["data"]["detail"]["path"] == "/api/v1/navigation/plan"
     assert nav.calls == [(1.0, 2.0, 0.0)]
     assert sent_goals == []
@@ -656,6 +660,9 @@ def test_goal_route_rejects_safety_stop_without_planning_or_publishing():
     assert model.command is not None
     assert model.command.name == "goal"
     assert model.command.accepted is False
+    assert model.detail["reason_code"] == "safety_stop"
+    assert model.detail["blockers"] == ["safety_stop"]
+    assert model.detail["source"] == "safety"
     assert model.detail["safety"]["stop_active"] is True
     assert nav.calls == []
     assert gateway.goal_pose.msg_count == 0
@@ -691,6 +698,8 @@ def test_goal_route_rejects_inactive_navigation_session_without_planning_or_publ
     assert model.command is not None
     assert model.command.name == "goal"
     assert model.command.accepted is False
+    assert model.detail["reason_code"] == "navigation_not_ready"
+    assert model.detail["source"] == "gateway_readiness"
     assert "navigation_session_inactive" in model.detail["blockers"]
     assert nav.calls == []
     assert gateway.goal_pose.msg_count == 0
@@ -1145,6 +1154,10 @@ def test_lease_conflict_emits_rejected_ack_and_lease_event():
     assert conflict["ok"] is False
     assert conflict["error"] == "lease_conflict"
     assert conflict["command"]["accepted"] is False
+    assert conflict["detail"]["reason_code"] == "lease_conflict"
+    assert conflict["detail"]["source"] == "control_lease"
+    assert conflict["detail"]["path"] == "/api/v1/lease"
+    assert conflict["detail"]["lease"]["holder"] == "web"
     assert [event["data"]["status"] for event in lease_events] == [
         "acquired",
         "rejected",
@@ -1152,6 +1165,7 @@ def test_lease_conflict_emits_rejected_ack_and_lease_event():
     assert ack_events[-1]["data"]["ok"] is False
     assert ack_events[-1]["data"]["status_code"] == 409
     assert ack_events[-1]["data"]["command"]["client_id"] == "mobile"
+    assert ack_events[-1]["data"]["detail"]["reason_code"] == "lease_conflict"
 
 
 def test_bootstrap_and_health_expose_command_policy():

@@ -276,6 +276,14 @@ def register_command_routes(app, gw) -> None:
                 if error == "lease_conflict"
                 else "client does not hold the active control lease"
             )
+            detail = command_service.command_error_detail(
+                reason_code=error,
+                reason=message,
+                source="control_lease",
+                path="/api/v1/lease",
+                blockers=[error],
+                lease=gw._lease.to_dict(),
+            )
             content = {
                 "schema_version": 1,
                 "ok": False,
@@ -289,7 +297,7 @@ def register_command_routes(app, gw) -> None:
                     "replay": False,
                     "ts": time.time(),
                 },
-                "detail": gw._lease.to_dict(),
+                "detail": detail,
             }
             if hasattr(gw, "_publish_command_ack"):
                 gw._publish_command_ack(content, status_code=status_code)

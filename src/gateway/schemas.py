@@ -23,12 +23,29 @@ class CommandReceipt(GatewayResponseModel):
     ts: float
 
 
+class GatewayCommandErrorDetail(GatewayResponseModel):
+    reason_code: str
+    reason: str | None = None
+    source: str | None = None
+    path: str | None = None
+    blockers: list[str] = Field(default_factory=list)
+    advisories: list[str] = Field(default_factory=list)
+    safety: dict[str, Any] | None = None
+    preview: dict[str, Any] | None = None
+    lease: dict[str, Any] | None = None
+    state: str | None = None
+    has_odometry: bool | None = None
+    session_mode: str | None = None
+    localization: dict[str, Any] | None = None
+    error: str | None = None
+
+
 class GatewayErrorResponse(GatewayResponseModel):
     schema_version: int = 1
     ok: Literal[False] = False
     error: str
     message: str | None = None
-    detail: Any = None
+    detail: dict[str, Any] | GatewayCommandErrorDetail | None = None
     command: CommandReceipt | None = None
 
 

@@ -775,12 +775,30 @@ export interface CommandReceipt {
   ts: number
 }
 
+export interface GatewayCommandErrorDetail {
+  reason_code: string
+  reason?: string | null
+  source?: string | null
+  path?: string | null
+  blockers?: string[]
+  advisories?: string[]
+  safety?: Record<string, unknown> | null
+  preview?: PlanPreviewResponse | Record<string, unknown> | null
+  lease?: Record<string, unknown> | null
+  state?: string | null
+  has_odometry?: boolean | null
+  session_mode?: string | null
+  localization?: Record<string, unknown> | null
+  error?: string | null
+  [key: string]: unknown
+}
+
 export interface GatewayErrorResponse {
   schema_version?: number
   ok?: false
   error: string
   message?: string | null
-  detail?: unknown
+  detail?: GatewayCommandErrorDetail | Record<string, unknown> | null
   command?: CommandReceipt
 }
 

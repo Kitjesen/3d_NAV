@@ -48,6 +48,28 @@ class ControlCommandService:
             self._gw._publish_command_ack(content, status_code=status_code)
         return JSONResponse(status_code=status_code, content=content)
 
+    def command_error_detail(
+        self,
+        *,
+        reason_code: str,
+        reason: str | None = None,
+        source: str | None = None,
+        path: str | None = None,
+        blockers: list[Any] | None = None,
+        advisories: list[Any] | None = None,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        detail: dict[str, Any] = {
+            "reason_code": reason_code,
+            "reason": reason or reason_code,
+            "source": source,
+            "path": path,
+            "blockers": [str(item) for item in (blockers or [])],
+            "advisories": [str(item) for item in (advisories or [])],
+        }
+        detail.update({key: value for key, value in extra.items() if value is not None})
+        return detail
+
     def motion_safety_rejection(
         self,
         command: str,
@@ -66,10 +88,14 @@ class ControlCommandService:
             body,
             error="safety_stop",
             message="Safety STOP is active; motion commands are not accepted.",
-            detail={
-                "safety": safety_summary(safety),
-                "path": "/api/v1/state",
-            },
+            detail=self.command_error_detail(
+                reason_code="safety_stop",
+                reason="Safety STOP is active; motion commands are not accepted.",
+                source="safety",
+                path="/api/v1/state",
+                blockers=["safety_stop"],
+                safety=safety_summary(safety),
+            ),
         )
 
     def preview_navigation_plan(self, body: PlanPreviewRequest) -> dict[str, Any]:
@@ -168,15 +194,18 @@ class ControlCommandService:
             body,
             error="navigation_not_ready",
             message="Navigation cannot accept a goal in the current state.",
-            detail={
-                "state": status.get("state"),
-                "has_odometry": status.get("has_odometry"),
-                "session_mode": getattr(self._gw, "_session_mode", None),
-                "blockers": blockers,
-                "advisories": list(readiness.get("advisories") or []),
-                "localization": status.get("localization", {}),
-                "path": "/api/v1/navigation/status",
-            },
+            detail=self.command_error_detail(
+                reason_code="navigation_not_ready",
+                reason="Navigation cannot accept a goal in the current state.",
+                source="gateway_readiness",
+                path="/api/v1/navigation/status",
+                blockers=blockers,
+                advisories=list(readiness.get("advisories") or []),
+                state=status.get("state"),
+                has_odometry=status.get("has_odometry"),
+                session_mode=getattr(self._gw, "_session_mode", None),
+                localization=status.get("localization", {}),
+            ),
         )
 
     def _goal_plan_preview_rejection(
@@ -198,7 +227,12 @@ class ControlCommandService:
                 body,
                 error="navigation_plan_invalid",
                 message="Navigation goal cannot be previewed.",
-                detail={"error": str(exc)},
+                detail=self.command_error_detail(
+                    reason_code="navigation_plan_invalid",
+                    reason="Navigation goal cannot be previewed.",
+                    source="gateway_request",
+                    error=str(exc),
+                ),
             )
 
         preview = self.preview_navigation_plan(preview_body)
@@ -213,10 +247,14 @@ class ControlCommandService:
             body,
             error="navigation_plan_infeasible",
             message="Navigation plan preview is not feasible.",
-            detail={
-                "preview": preview,
-                "path": "/api/v1/navigation/plan",
-            },
+            detail=self.command_error_detail(
+                reason_code="navigation_plan_infeasible",
+                reason="Navigation plan preview is not feasible.",
+                source=str(preview.get("source") or "navigation_preview"),
+                path="/api/v1/navigation/plan",
+                blockers=list(preview.get("reasons") or []),
+                preview=preview,
+            ),
         )
 
     def _plan_preview_unavailable(
