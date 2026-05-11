@@ -259,6 +259,8 @@ class MapRequest(BaseModel):
             "delete",
             "rename",
             "set_active",
+            "build_occupancy",
+            "build_occupancy_snapshot",
             "build_tomogram",
         }
         if v not in allowed:

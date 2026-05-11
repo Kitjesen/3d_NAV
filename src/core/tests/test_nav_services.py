@@ -148,6 +148,22 @@ class TestMapManagerModule(unittest.TestCase):
         resp = self.mod._build_tomogram("")
         self.assertFalse(resp["success"])
 
+    def test_build_occupancy_command_dispatches_snapshot_builder(self):
+        with patch.object(
+            self.mod,
+            "_build_occupancy_snapshot",
+            return_value={
+                "action": "build_occupancy_snapshot",
+                "success": True,
+                "occupancy": "occupancy.npz",
+            },
+        ) as occupancy:
+            resp = self._cmd({"action": "build_occupancy", "name": "demo"})
+
+        self.assertTrue(resp["success"])
+        self.assertEqual(resp["action"], "build_occupancy_snapshot")
+        occupancy.assert_called_once_with("demo")
+
     def test_map_save_missing_name(self):
         resp = self.mod._map_save("")
         self.assertFalse(resp["success"])

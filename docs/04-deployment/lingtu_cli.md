@@ -101,6 +101,9 @@ occupancy grid:
 curl -X POST -H 'Content-Type: application/json' \
     -d '{"action":"build_tomogram","name":"lab_0423"}' \
     http://localhost:5050/api/v1/maps
+curl -X POST -H 'Content-Type: application/json' \
+    -d '{"action":"build_occupancy","name":"lab_0423"}' \
+    http://localhost:5050/api/v1/maps
 ```
 
 ### `nav` — navigation session

@@ -699,8 +699,11 @@ def test_maps_route_accepts_legacy_and_canonical_actions():
     canonical_payload = asyncio.run(
         post_maps(MapRequest(action="build_tomogram", name="demo"))
     )
+    occupancy_payload = asyncio.run(
+        post_maps(MapRequest(action="build_occupancy", name="demo"))
+    )
 
-    for payload in (use_payload, build_payload, canonical_payload):
+    for payload in (use_payload, build_payload, canonical_payload, occupancy_payload):
         model = MapLifecycleResponse.model_validate(payload)
         assert model.schema_version == 1
         assert model.ok is True
@@ -710,6 +713,7 @@ def test_maps_route_accepts_legacy_and_canonical_actions():
         {"action": "set_active", "name": "demo"},
         {"action": "build_tomogram", "name": "demo"},
         {"action": "build_tomogram", "name": "demo"},
+        {"action": "build_occupancy", "name": "demo"},
     ]
 
 

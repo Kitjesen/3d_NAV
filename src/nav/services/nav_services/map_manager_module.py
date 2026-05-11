@@ -158,6 +158,8 @@ class MapManagerModule(Module, layer=6):
                 resp = self._map_set_active(cmd.get("name", ""))
             elif action == "build_tomogram":
                 resp = self._build_tomogram(cmd.get("name", ""))
+            elif action in ("build_occupancy", "build_occupancy_snapshot"):
+                resp = self._build_occupancy_snapshot(cmd.get("name", ""))
             elif action == "poi_set":
                 resp = self._poi_set(cmd)
             elif action == "poi_delete":
