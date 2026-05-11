@@ -38,6 +38,7 @@ const requiredLinks = [
   'slam_status',
   'slam_switch',
   'slam_relocalize',
+  'routecheck_latest',
 ]
 
 async function request(path, { json = true } = {}) {
@@ -83,6 +84,13 @@ try {
   const health = await request('/api/v1/health')
   ensure(health.status === 200, failures, `GET /api/v1/health expected 200, got ${health.status}`)
 
+  const routecheckPath = links.routecheck_latest || '/api/v1/diagnostics/routecheck/latest'
+  const routecheck = await request(routecheckPath)
+  ensure(routecheck.status === 200, failures, `GET ${routecheckPath} expected 200, got ${routecheck.status}`)
+  ensure(typeof routecheck.body?.ok === 'boolean', failures, 'routecheck_latest missing boolean ok')
+  ensure(typeof routecheck.body?.count === 'number', failures, 'routecheck_latest missing numeric count')
+  ensure(typeof routecheck.body?.artifacts_root === 'string', failures, 'routecheck_latest missing artifacts_root')
+
   const ready = await request('/ready', { json: false })
   if (!allowDegradedReady) {
     ensure(ready.status === 200, failures, `GET /ready expected 200, got ${ready.status}`)
@@ -102,6 +110,8 @@ try {
     localization_state: localization.state ?? null,
     localization_backend: session.localization_backend ?? session.slam_profile ?? null,
     navigation_ready: navigation.can_accept_goal ?? navigation.readiness?.can_accept_goal ?? null,
+    routecheck_ok: typeof routecheck.body?.ok === 'boolean' ? routecheck.body.ok : null,
+    routecheck_count: typeof routecheck.body?.count === 'number' ? routecheck.body.count : null,
     link_count: Object.keys(links).length,
   }
 

@@ -51,6 +51,7 @@ Important current links include:
 | `goal`, `stop` | navigation goal and stop command |
 | `maps`, `map_activate`, `map_save`, `map_points` | map list, active map, save, PCD points |
 | `slam_status`, `slam_switch`, `slam_relocalize`, `slam_auto_relocalize` | SLAM mode and relocalization |
+| `routecheck_latest` | latest no-motion route preflight evidence for readiness diagnostics |
 
 ## Safety Classes
 
