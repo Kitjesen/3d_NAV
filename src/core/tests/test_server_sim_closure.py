@@ -468,6 +468,10 @@ def test_server_sim_closure_accepts_complete_report_set(tmp_path: Path):
     assert summary["cmd_vel_sent_to_hardware"] is False
     assert summary["missing_or_failed"] == []
     assert all(summary["verified"].values())
+    routecheck_gate = summary["gates"]["routecheck_preflight"]
+    assert routecheck_gate["path"] == str(routecheck)
+    assert routecheck_gate["report_mtime"] >= routecheck.stat().st_mtime - 0.001
+    assert routecheck_gate["report_age_s"] >= 0.0
 
 
 def test_server_sim_closure_rejects_weak_multifloor_exploration_report(tmp_path: Path):
@@ -561,6 +565,9 @@ def test_server_sim_closure_reports_remaining_gaps(tmp_path: Path):
     assert "fastlio2_live" in summary["missing_or_failed"]
     assert any("collision is true" in gap for gap in summary["remaining_gaps"])
     assert any("missing_fastlio.json" in gap for gap in summary["remaining_gaps"])
+    assert summary["gates"]["fastlio2_live"]["exists"] is False
+    assert summary["gates"]["fastlio2_live"]["status"] == "missing"
+    assert "report_age_s" not in summary["gates"]["fastlio2_live"]
 
 
 def test_server_sim_closure_separates_optional_gaps(tmp_path: Path, monkeypatch):

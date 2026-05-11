@@ -717,6 +717,7 @@ def _best_match(spec: GateSpec) -> Path | None:
 
 def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[str, Any]:
     gates: dict[str, Any] = {}
+    generated_at = time.time()
     for spec in GATES:
         path = report_overrides.get(spec.name) or _best_match(spec)
         if path is None:
@@ -730,6 +731,19 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
                 "command": spec.command,
             }
             continue
+        if not path.exists():
+            gates[spec.name] = {
+                "description": spec.description,
+                "exists": False,
+                "ok": False,
+                "status": "missing",
+                "blockers": [f"report missing: {path}"],
+                "path": str(path),
+                "command": spec.command,
+            }
+            continue
+        report_mtime = path.stat().st_mtime
+        report_age_s = max(0.0, generated_at - report_mtime)
         try:
             report = _load_json(path)
             ok, blockers, evidence = spec.evaluator(report)
@@ -740,6 +754,8 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
                 "status": "passed" if ok else "failed",
                 "blockers": blockers,
                 "path": str(path),
+                "report_mtime": report_mtime,
+                "report_age_s": round(report_age_s, 3),
                 "command": spec.command,
                 "evidence": evidence,
             }
@@ -751,6 +767,8 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
                 "status": "invalid",
                 "blockers": [str(exc)],
                 "path": str(path),
+                "report_mtime": report_mtime,
+                "report_age_s": round(report_age_s, 3),
                 "command": spec.command,
             }
 
@@ -772,7 +790,7 @@ def summarize(*, report_overrides: dict[str, Path], required: set[str]) -> dict[
         "simulation_only": True,
         "real_robot_motion": False,
         "cmd_vel_sent_to_hardware": False,
-        "generated_at": time.time(),
+        "generated_at": generated_at,
         "required": sorted(required_names),
         "verified": verified,
         "missing_or_failed": missing_or_failed,
