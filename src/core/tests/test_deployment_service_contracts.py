@@ -1541,6 +1541,15 @@ def test_lingtu_routecheck_blocks_plan_and_captures_failed_rollback(tmp_path):
     assert "plan:" not in calls
     assert "goal:" not in calls
     assert (artifact / "failed_rollback" / "localization.json").exists()
+    summary = json.loads((artifact / "summary.json").read_text(encoding="utf-8"))
+    assert summary["mode"] == "routecheck_non_motion"
+    assert summary["outcome"] == "fail"
+    assert summary["exit_status"] != 0
+    assert summary["non_motion"] is True
+    assert summary["map"] == "demo"
+    assert summary["goal"] == {"x": 1.0, "y": 2.0, "yaw": 0.0}
+    assert summary["phases"]["baseline"] == {}
+    assert summary["artifacts"]["failed_rollback"].endswith("failed_rollback")
 
 
 def test_lingtu_routecompare_requires_allow_motion_before_gateway_calls(tmp_path):

@@ -2813,6 +2813,16 @@ lingtu_routecheck_cleanup() {
             | python3 -m json.tool 2>/dev/null || true
         if [ "$status" -ne 0 ] && [ -n "${LINGTU_ROUTECHECK_ARTIFACT_DIR:-}" ]; then
             routecheck_capture_phase "failed_rollback" "$LINGTU_ROUTECHECK_ARTIFACT_DIR/failed_rollback" || true
+            if [ -n "${LINGTU_ROUTECHECK_MAP_NAME:-}" ] && [ -n "${LINGTU_ROUTECHECK_GOAL_X:-}" ] && [ -n "${LINGTU_ROUTECHECK_GOAL_Y:-}" ]; then
+                routecheck_write_summary \
+                    "$LINGTU_ROUTECHECK_ARTIFACT_DIR" \
+                    "fail" \
+                    "$LINGTU_ROUTECHECK_MAP_NAME" \
+                    "$LINGTU_ROUTECHECK_GOAL_X" \
+                    "$LINGTU_ROUTECHECK_GOAL_Y" \
+                    "${LINGTU_ROUTECHECK_GOAL_YAW:-0}" \
+                    "$status"
+            fi
         fi
     fi
     return "$status"
@@ -2929,15 +2939,15 @@ PY
 }
 
 routecheck_write_summary() {
-    local artifact_dir="$1" outcome="$2" map_name="$3" goal_x="$4" goal_y="$5" goal_yaw="$6"
+    local artifact_dir="$1" outcome="$2" map_name="$3" goal_x="$4" goal_y="$5" goal_yaw="$6" exit_status="${7:-0}"
     [ -n "$artifact_dir" ] || return 0
-    python3 - "$artifact_dir" "$outcome" "$map_name" "$goal_x" "$goal_y" "$goal_yaw" <<'PY' || true
+    python3 - "$artifact_dir" "$outcome" "$map_name" "$goal_x" "$goal_y" "$goal_yaw" "$exit_status" <<'PY' || true
 import json
 import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
-outcome, map_name, goal_x, goal_y, goal_yaw = sys.argv[2:7]
+outcome, map_name, goal_x, goal_y, goal_yaw, exit_status = sys.argv[2:8]
 
 def load(rel):
     path = root / rel
@@ -2950,6 +2960,7 @@ summary = {
     "schema_version": 1,
     "mode": "routecheck_non_motion",
     "outcome": outcome,
+    "exit_status": int(exit_status),
     "non_motion": True,
     "map": map_name,
     "goal": {"x": float(goal_x), "y": float(goal_y), "yaw": float(goal_yaw)},
@@ -2962,6 +2973,7 @@ summary = {
         "baseline": str(root / "baseline"),
         "candidate": str(root / "candidate"),
         "after_rollback": str(root / "after_rollback"),
+        "failed_rollback": str(root / "failed_rollback"),
     },
 }
 (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -3071,6 +3083,10 @@ cmd_routecheck() {
 
     LINGTU_ROUTECHECK_ROLLBACK=1
     LINGTU_ROUTECHECK_ARTIFACT_DIR="$artifact_dir"
+    LINGTU_ROUTECHECK_MAP_NAME="$map_name"
+    LINGTU_ROUTECHECK_GOAL_X="$goal_x"
+    LINGTU_ROUTECHECK_GOAL_Y="$goal_y"
+    LINGTU_ROUTECHECK_GOAL_YAW="$goal_yaw"
     trap lingtu_routecheck_cleanup EXIT
     routecheck_capture_phase "before" "$artifact_dir/before"
     routecheck_require_no_active_command_source "routecheck before SLAM switching" || return 1
@@ -3124,12 +3140,16 @@ cmd_routecheck() {
     LINGTU_ROUTECHECK_ROLLBACK=0
     slamcompare_wait_ready "localizer" || return 1
     routecheck_capture_phase "after_rollback" "$artifact_dir/after_rollback"
-    routecheck_write_summary "$artifact_dir" "pass" "$map_name" "$goal_x" "$goal_y" "$goal_yaw"
+    routecheck_write_summary "$artifact_dir" "pass" "$map_name" "$goal_x" "$goal_y" "$goal_yaw" 0
     trap - EXIT
 
     echo -e "${G}PASS${N}: route validation preflight completed without motion"
     echo "Artifact dir: $artifact_dir"
     LINGTU_ROUTECHECK_ARTIFACT_DIR=""
+    LINGTU_ROUTECHECK_MAP_NAME=""
+    LINGTU_ROUTECHECK_GOAL_X=""
+    LINGTU_ROUTECHECK_GOAL_Y=""
+    LINGTU_ROUTECHECK_GOAL_YAW=""
 }
 
 # -- Subcommand: routecompare --
