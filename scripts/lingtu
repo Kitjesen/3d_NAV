@@ -179,7 +179,7 @@ PY
 
 nav_goal_precheck() {
     local payload="$1"
-    local NAVJ CAN BLOCKERS ADVISORIES STATE PLANJ FEASIBLE COUNT PLANNER REASONS
+    local NAVJ CAN BLOCKERS ADVISORIES STATE PLANJ FEASIBLE COUNT PLANNER REASONS POLICY SAFETY_OK FALLBACK REJECTED
     NAVJ=$(curl -s --max-time 3 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
     CAN=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; print(str(r.get("can_accept_goal", d.get("can_accept_goal", False))).lower())')
     BLOCKERS=$(pjson "$NAVJ" 'r=d.get("readiness") or {}; b=r.get("blockers") or []; print(",".join(map(str,b)) if isinstance(b,list) else str(b or ""))')
@@ -195,14 +195,19 @@ nav_goal_precheck() {
         -d "$payload" "$GW/api/v1/navigation/plan" 2>/dev/null || echo '{}')
     FEASIBLE=$(pjson "$PLANJ" 'print(str(bool(d.get("feasible"))).lower())')
     COUNT=$(pjson "$PLANJ" 'print(d.get("count","-"))')
-    PLANNER=$(pjson "$PLANJ" 'print(d.get("planner") or "-")')
+    PLANNER=$(pjson "$PLANJ" 'print(d.get("selected_planner") or d.get("planner") or "-")')
+    POLICY=$(pjson "$PLANJ" 'print(d.get("plan_safety_policy") or "-")')
+    SAFETY_OK=$(pjson "$PLANJ" 's=d.get("path_safety") if isinstance(d.get("path_safety"),dict) else {}; v=s.get("ok","-"); print(str(v).lower() if isinstance(v,bool) else v)')
+    FALLBACK=$(pjson "$PLANJ" 'print(d.get("fallback_reason") or "-")')
+    REJECTED=$(pjson "$PLANJ" 'r=d.get("rejected_plans") or []; print(len(r) if isinstance(r,list) else 0)')
     REASONS=$(pjson "$PLANJ" 'r=d.get("reasons") or []; print(",".join(map(str,r)) if isinstance(r,list) else str(r or ""))')
     if [ "$FEASIBLE" != "true" ]; then
-        printf "${R}FAIL${N}: navigation plan preview is not feasible (points=%s planner=%s reasons=%s)\n" \
-            "$COUNT" "$PLANNER" "${REASONS:-unknown}"
+        printf "${R}FAIL${N}: navigation plan preview is not feasible (points=%s planner=%s policy=%s safety=%s fallback=%s rejected=%s reasons=%s)\n" \
+            "$COUNT" "$PLANNER" "$POLICY" "$SAFETY_OK" "$FALLBACK" "$REJECTED" "${REASONS:-unknown}"
         return 1
     fi
-    printf "${D}plan preview feasible: points=%s planner=%s${N}\n" "$COUNT" "$PLANNER"
+    printf "${D}plan preview feasible: points=%s planner=%s policy=%s safety=%s fallback=%s rejected=%s${N}\n" \
+        "$COUNT" "$PLANNER" "$POLICY" "$SAFETY_OK" "$FALLBACK" "$REJECTED"
     return 0
 }
 

@@ -453,9 +453,9 @@ def _make_slamcheck_harness(tmp_path: Path) -> dict[str, Path | str]:
             */api/v1/navigation/plan)
                 echo "plan:$data" >> "${FAKE_ROOT}/calls.log"
                 if [ "${FAKE_PLAN_FEASIBLE:-1}" = "0" ]; then
-                    printf '{"schema_version":1,"ok":true,"feasible":false,"count":0,"planner":"pct","reasons":["blocked_by_costmap"]}\n'
+                    printf '{"schema_version":1,"ok":true,"feasible":false,"count":0,"planner":"pct","selected_planner":"pct","plan_safety_policy":"reject","path_safety":{"ok":false,"blocked_sample_count":2},"fallback_reason":"pct path_safety failed","rejected_plans":[{"planner":"pct","reason":"unsafe"}],"reasons":["blocked_by_costmap"]}\n'
                 else
-                    printf '{"schema_version":1,"ok":true,"feasible":true,"count":3,"planner":"pct","reasons":[]}\n'
+                    printf '{"schema_version":1,"ok":true,"feasible":true,"count":3,"planner":"pct","selected_planner":"pct","plan_safety_policy":"fallback_astar","path_safety":{"ok":true},"fallback_reason":"","rejected_plans":[],"reasons":[]}\n'
                 fi
                 ;;
             */api/v1/goal)
@@ -1223,6 +1223,7 @@ def test_lingtu_nav_goal_prechecks_readiness_and_plan_preview(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "plan preview feasible: points=3 planner=pct" in result.stdout
+    assert "policy=fallback_astar safety=true" in result.stdout
     calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
     assert 'plan:{"x":1.0,"y":2.0,"z":0.0,"yaw":0.0}' in calls
     assert 'goal:{"x":1.0,"y":2.0,"z":0.0,"yaw":0.0}' in calls
@@ -1268,6 +1269,8 @@ def test_lingtu_nav_goal_rejects_infeasible_plan_preview_before_goal(tmp_path):
     assert result.returncode != 0
     assert "navigation plan preview is not feasible" in result.stdout
     assert "blocked_by_costmap" in result.stdout
+    assert "policy=reject safety=false" in result.stdout
+    assert "fallback=pct path_safety failed rejected=1" in result.stdout
     calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
     assert "plan:" in calls
     assert "goal:" not in calls
