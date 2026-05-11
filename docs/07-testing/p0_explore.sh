@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P0-05: autonomous exploration start -> observe -> stop.
+# P0-06: autonomous exploration start -> observe -> stop.
 #
 # Pre-condition: LingTu is running with the explore or tare_explore profile in
 # a safe open test area, localization is healthy, and an operator is ready to
@@ -14,7 +14,7 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_p0_explore.log"
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=== P0-05 Explore - $(date) - duration=${DURATION}s ==="
+echo "=== P0-06 Explore - $(date) - duration=${DURATION}s ==="
 
 json_field() {
   local field="$1"

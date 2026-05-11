@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P0-03: point goal -> arrival.
+# P0-04: point goal -> arrival.
 #
 # Pre-condition: localizer profile running + active map already loaded + robot
 # facing roughly along +X. Goal is sent through /api/v1/goal and the script

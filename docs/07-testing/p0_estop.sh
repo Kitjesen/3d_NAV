@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# P0-04: emergency stop reflex.
+# P0-05: emergency stop reflex.
 #
 # Verifies the Gateway stop command is accepted and that the robot-reported
 # navigation speed settles to zero after the stop. This script uses current

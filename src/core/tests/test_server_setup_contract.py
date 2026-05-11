@@ -136,6 +136,9 @@ def test_p0_field_runbook_matches_script_contracts():
     assert "/api/v1/state" in readme
     assert "/api/v1/explore/status" in readme
     assert "LINGTU_P0_RUN_EXPLORE=1" in readme
+    assert "four scripts" not in readme
+    assert "P0-03 no-motion route safety preview" in readme
+    assert "P0-06 exploration start/stop" in readme
     assert "CmdVelMux` outputs `Twist.zero()`" not in readme
     assert "watchdog log entry" not in readme
     assert "pause_for_profile" in p0_all

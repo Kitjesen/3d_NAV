@@ -13,7 +13,7 @@ the touched subsystem.
 | L1 pre-commit hook | `git commit` | `pytest src/core/tests/ -q` must pass | ~90 s | Yes |
 | L2 pre-push hook | `git push` | L1 plus `stub` profile build/start smoke | ~30 s extra | Yes |
 | L2.5 server simulation closure | Before field claims or navigation demos | `server_sim_closure.py` strict summary over the relevant simulation gates | Host-dependent | Yes for simulation-backed navigation claims |
-| L3 S100P weekly | Friday afternoon, manual | Run `p0_*.sh` four scripts and capture video | ~30 min | Yes |
+| L3 S100P weekly | Friday afternoon, manual | Run the P0 field scripts and capture video | ~30 min | Yes |
 
 ---
 
@@ -189,9 +189,11 @@ The detailed runbook is in `sim/README.md`.
 - `install_hooks.sh` - install L1 / L2 git hooks.
 - `p0_cold_boot.sh` - P0-01 cold start.
 - `p0_mapping.sh` - P0-02 mapping.
-- `p0_goto.sh` - P0-03 navigate to a point.
-- `p0_estop.sh` - P0-04 emergency stop.
-- `p0_all.sh` - chain P0-01 through P0-04.
+- `p0_route_safety.sh` - P0-03 no-motion route safety preview.
+- `p0_goto.sh` - P0-04 navigate to a point.
+- `p0_estop.sh` - P0-05 emergency stop.
+- `p0_explore.sh` - P0-06 exploration start/stop, opt-in for aggregate runs.
+- `p0_all.sh` - chain P0-01 through P0-05, with optional P0-06.
 - `p1_tare_explore.sh` - P1-01 TARE exploration (TBD).
 - `p1_gnss_fusion.sh` - P1-02 GNSS fusion (TBD).
 - `p1_follow_person.sh` - P1-04 OSNet person follow (TBD).
