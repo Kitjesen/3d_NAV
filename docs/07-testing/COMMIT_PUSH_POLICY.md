@@ -84,6 +84,9 @@ simulation evidence rather than an older passing artifact.
 
 For setup-only validation, `scripts/deploy/setup_server_ros_pct.sh` writes the
 setup-safe subset summary to `artifacts/server_sim_closure_summary_setup.json`.
+When Gateway is running, `/api/v1/diagnostics/routecheck/latest` also exposes
+the latest routecheck `report_age_s`, no-motion flags, and `published` counters
+for operator review.
 
 ## Bypass Rule
 

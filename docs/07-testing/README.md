@@ -88,6 +88,17 @@ closure summary unless those are the only changed surfaces. The setup summary
 uses `--required-only` plus `--max-report-age-s`, defaulting to 21600 seconds;
 override with `LINGTU_SETUP_CLOSURE_MAX_REPORT_AGE_S` when needed.
 
+Operators can also inspect the latest routecheck artifact through Gateway:
+
+```bash
+curl -s http://127.0.0.1:5050/api/v1/diagnostics/routecheck/latest | jq .
+```
+
+The response exposes `report_mtime`, `report_age_s`, `non_motion`,
+`simulation_only`, `real_robot_motion`, `cmd_vel_sent_to_hardware`, and the
+`published` counters at the top level so stale or motion-producing evidence is
+visible without parsing the nested summary.
+
 ---
 
 ## L3 P0 scripts on the robot
