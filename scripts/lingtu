@@ -387,9 +387,9 @@ cmd_map() {
         save)
             local name="${2:-}"
             [ -z "$name" ] && { echo "Usage: lingtu map save <name>"; exit 1; }
-            echo -e "${D}Saving & cleaning dynamic obstacles (15-60s)...${N}"
-            curl -s -X POST -H "Content-Type: application/json" -d "{\"name\":\"$name\"}" \
-                "$GW/api/v1/map/save" | python3 -m json.tool ;;
+            echo -e "${D}Saving MapManager artifacts (PGO + DUFOMap + tomogram + occupancy)...${N}"
+            curl -s -X POST -H "Content-Type: application/json" -d "{\"action\":\"save\",\"name\":\"$name\"}" \
+                "$GW/api/v1/maps" | python3 -m json.tool ;;
         end|stop)
             curl -s -X POST "$GW/api/v1/session/end" | python3 -m json.tool ;;
         list|ls)

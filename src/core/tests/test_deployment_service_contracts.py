@@ -1113,6 +1113,16 @@ def test_lingtu_slamcheck_writes_float_relocation_initial_pose():
     assert "initial pose must be numeric X Y YAW" in text
 
 
+def test_lingtu_map_save_uses_map_manager_lifecycle():
+    text = _read("scripts/lingtu")
+    cmd_map = text.split("cmd_map() {", 1)[1].split("cmd_nav() {", 1)[0]
+
+    assert "Saving MapManager artifacts" in cmd_map
+    assert '\\"action\\":\\"save\\"' in cmd_map
+    assert '"$GW/api/v1/maps"' in cmd_map
+    assert '"$GW/api/v1/map/save"' not in cmd_map
+
+
 def test_lingtu_slamcheck_sets_active_map_symlink_and_runtime_env():
     text = _read("scripts/lingtu")
 
