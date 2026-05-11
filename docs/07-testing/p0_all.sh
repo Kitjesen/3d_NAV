@@ -43,6 +43,8 @@ pause_for_profile() {
 }
 
 run_one "P0-01 cold boot"   p0_cold_boot.sh
+pause_for_profile "mapping/fastlio2" \
+  "Switch LingTu to the map or fastlio2 profile before walking the robot for map capture."
 run_one "P0-02 mapping"     p0_mapping.sh
 pause_for_profile "navigation/localizer" \
   "Switch LingTu to the nav/localizer profile using the saved active map."
