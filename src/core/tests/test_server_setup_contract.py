@@ -65,6 +65,25 @@ def test_p0_scripts_use_current_gateway_contracts():
     assert "data/inovxio/data/maps" not in mapping
 
 
+def test_l2_hook_runs_stub_build_and_offline_start_smoke():
+    hook = (REPO_ROOT / "docs/07-testing/install_hooks.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "running stub blueprint smoke" in hook
+    assert "stub profile build OK" in hook
+    assert "stub profile start OK" in hook
+    assert "runtime.start()" in hook
+    assert "runtime.stop()" in hook
+    assert "failed_modules" in hook
+    assert "enable_native=False" in hook
+    assert "enable_gateway=False" in hook
+    assert "enable_map_modules=False" in hook
+    assert "run_startup_checks=False" in hook
+    assert "profile='stub'" not in hook
+    assert 'profile="stub"' not in hook
+
+
 def test_p0_field_runbook_matches_script_contracts():
     readme = (REPO_ROOT / "docs/07-testing/README.md").read_text(
         encoding="utf-8"

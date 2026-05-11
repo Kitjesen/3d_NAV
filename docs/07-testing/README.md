@@ -11,7 +11,7 @@ the touched subsystem.
 | Layer | Trigger | Content | Time | Required |
 |---|---|---|---|---|
 | L1 pre-commit hook | `git commit` | `pytest src/core/tests/ -q` must pass | ~90 s | Yes |
-| L2 pre-push hook | `git push` | L1 plus `stub` profile smoke build | ~30 s extra | Yes |
+| L2 pre-push hook | `git push` | L1 plus `stub` profile build/start smoke | ~30 s extra | Yes |
 | L2.5 server simulation closure | Before field claims or navigation demos | `server_sim_closure.py` strict summary over the relevant simulation gates | Host-dependent | Yes for simulation-backed navigation claims |
 | L3 S100P weekly | Friday afternoon, manual | Run `p0_*.sh` four scripts and capture video | ~30 min | Yes |
 
@@ -26,7 +26,7 @@ bash docs/07-testing/install_hooks.sh
 
 After install:
 - `git commit` runs `pytest src/core/tests/ -q`; the commit aborts on failure.
-- `git push` runs pytest plus a `full_stack_blueprint(profile="stub").build().start()` smoke check.
+- `git push` runs pytest plus a stub `full_stack_blueprint(...).build()` graph smoke and a minimal offline stub `build().start()` lifecycle smoke.
 
 Bypass (emergencies only):
 

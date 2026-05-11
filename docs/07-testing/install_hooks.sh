@@ -28,12 +28,12 @@ HOOK
 # pre-push: pytest + stub blueprint smoke
 cat > "$HOOK_DIR/pre-push" <<'HOOK'
 #!/usr/bin/env bash
-# LingTu L2 - block push if L1 or stub build fails.
+# LingTu L2 - block push if L1 or stub smoke fails.
 set -e
 cd "$(git rev-parse --show-toplevel)"
 echo "[L2 pre-push] running pytest src/core/tests/ ..."
 PYTHONIOENCODING=utf-8 python -m pytest src/core/tests/ -q --tb=no 2>&1 | tail -6
-echo "[L2 pre-push] running stub blueprint smoke build ..."
+echo "[L2 pre-push] running stub blueprint smoke ..."
 PYTHONIOENCODING=utf-8 python -c "
 import sys
 sys.path.insert(0, 'src')
@@ -50,6 +50,28 @@ bp = full_stack_blueprint(
 )
 system = bp.build()
 print('[L2] stub profile build OK - %d modules' % len(system._modules))
+
+# Start a tighter offline runtime graph as the lifecycle smoke.  Gateway and
+# map services are covered by the build above; keeping them out of this start
+# avoids local port conflicts and filesystem side effects in a push hook.
+runtime_bp = full_stack_blueprint(
+    robot='stub',
+    slam_profile='none',
+    enable_native=False,
+    enable_semantic=False,
+    enable_gateway=False,
+    enable_map_modules=False,
+    run_startup_checks=False,
+)
+runtime = runtime_bp.build()
+try:
+    runtime.start()
+    failed = runtime.health().get('failed_modules') or {}
+    if failed:
+        raise SystemExit('[L2] stub profile start failed modules: %s' % failed)
+    print('[L2] stub profile start OK - %d modules' % len(runtime._modules))
+finally:
+    runtime.stop()
 "
 echo "[L2 pre-push] OK"
 HOOK
