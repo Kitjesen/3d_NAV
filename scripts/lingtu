@@ -2848,7 +2848,7 @@ routecheck_capture_phase() {
 
 routecheck_plan_preview() {
     local phase="$1" payload="$2" dir="$3"
-    local NAVJ PLANJ CAN BLOCKERS ADVISORIES STATE FEASIBLE COUNT PLANNER REASONS SOURCE SOURCE_L
+    local NAVJ PLANJ CAN BLOCKERS ADVISORIES STATE FEASIBLE COUNT PLANNER POLICY SAFETY_OK FALLBACK REJECTED REASONS SOURCE SOURCE_L
     mkdir -p "$dir"
     NAVJ=$(curl -s --max-time 4 "$GW/api/v1/navigation/status" 2>/dev/null || echo '{}')
     printf '%s\n' "$NAVJ" > "$dir/navigation.pre_plan.json"
@@ -2876,16 +2876,96 @@ routecheck_plan_preview() {
     printf '%s\n' "$PLANJ" | python3 -m json.tool > "$dir/plan.pretty.json" 2>/dev/null || true
     FEASIBLE=$(pjson "$PLANJ" 'print(str(bool(d.get("feasible"))).lower())')
     COUNT=$(pjson "$PLANJ" 'print(d.get("count","-"))')
-    PLANNER=$(pjson "$PLANJ" 'print(d.get("planner") or "-")')
+    PLANNER=$(pjson "$PLANJ" 'print(d.get("selected_planner") or d.get("planner") or "-")')
+    POLICY=$(pjson "$PLANJ" 'print(d.get("plan_safety_policy") or "-")')
+    SAFETY_OK=$(pjson "$PLANJ" 's=d.get("path_safety") if isinstance(d.get("path_safety"),dict) else {}; v=s.get("ok","-"); print(str(v).lower() if isinstance(v,bool) else v)')
+    FALLBACK=$(pjson "$PLANJ" 'print(d.get("fallback_reason") or "-")')
+    REJECTED=$(pjson "$PLANJ" 'r=d.get("rejected_plans") or []; print(len(r) if isinstance(r,list) else 0)')
     REASONS=$(pjson "$PLANJ" 'r=d.get("reasons") or []; print(",".join(map(str,r)) if isinstance(r,list) else str(r or ""))')
+    python3 - "$phase" "$SOURCE" "$NAVJ" "$PLANJ" > "$dir/plan_summary.json" <<'PY' || true
+import json
+import sys
+
+phase, source, nav_raw, plan_raw = sys.argv[1:5]
+try:
+    nav = json.loads(nav_raw)
+except Exception:
+    nav = {}
+try:
+    plan = json.loads(plan_raw)
+except Exception:
+    plan = {}
+readiness = nav.get("readiness") if isinstance(nav.get("readiness"), dict) else {}
+path_safety = plan.get("path_safety") if isinstance(plan.get("path_safety"), dict) else {}
+rejected = plan.get("rejected_plans") if isinstance(plan.get("rejected_plans"), list) else []
+payload = {
+    "schema_version": 1,
+    "phase": phase,
+    "non_motion": True,
+    "navigation_state": nav.get("state"),
+    "can_accept_goal": bool(readiness.get("can_accept_goal", nav.get("can_accept_goal", False))),
+    "active_cmd_source_before": source or "none",
+    "feasible": bool(plan.get("feasible")),
+    "count": plan.get("count"),
+    "planner": plan.get("planner"),
+    "selected_planner": plan.get("selected_planner") or plan.get("planner"),
+    "plan_safety_policy": plan.get("plan_safety_policy"),
+    "path_safety_ok": path_safety.get("ok"),
+    "fallback_reason": plan.get("fallback_reason") or "",
+    "rejected_plan_count": len(rejected),
+    "reasons": plan.get("reasons") if isinstance(plan.get("reasons"), list) else [],
+}
+json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+print()
+PY
     if [ "$FEASIBLE" != "true" ]; then
-        printf "${R}FAIL${N}: %s route plan preview is not feasible (points=%s planner=%s reasons=%s)\n" \
-            "$phase" "$COUNT" "$PLANNER" "${REASONS:-unknown}"
+        printf "${R}FAIL${N}: %s route plan preview is not feasible (points=%s planner=%s policy=%s safety=%s fallback=%s rejected=%s reasons=%s)\n" \
+            "$phase" "$COUNT" "$PLANNER" "$POLICY" "$SAFETY_OK" "$FALLBACK" "$REJECTED" "${REASONS:-unknown}"
         return 1
     fi
-    printf "${G}PASS${N}: %s route plan preview feasible (points=%s planner=%s)\n" \
-        "$phase" "$COUNT" "$PLANNER"
+    printf "${G}PASS${N}: %s route plan preview feasible (points=%s planner=%s policy=%s safety=%s fallback=%s rejected=%s)\n" \
+        "$phase" "$COUNT" "$PLANNER" "$POLICY" "$SAFETY_OK" "$FALLBACK" "$REJECTED"
     return 0
+}
+
+routecheck_write_summary() {
+    local artifact_dir="$1" outcome="$2" map_name="$3" goal_x="$4" goal_y="$5" goal_yaw="$6"
+    [ -n "$artifact_dir" ] || return 0
+    python3 - "$artifact_dir" "$outcome" "$map_name" "$goal_x" "$goal_y" "$goal_yaw" <<'PY' || true
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+outcome, map_name, goal_x, goal_y, goal_yaw = sys.argv[2:7]
+
+def load(rel):
+    path = root / rel
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+summary = {
+    "schema_version": 1,
+    "mode": "routecheck_non_motion",
+    "outcome": outcome,
+    "non_motion": True,
+    "map": map_name,
+    "goal": {"x": float(goal_x), "y": float(goal_y), "yaw": float(goal_yaw)},
+    "phases": {
+        "baseline": load("baseline/plan_summary.json"),
+        "candidate": load("candidate/plan_summary.json"),
+    },
+    "artifacts": {
+        "before": str(root / "before"),
+        "baseline": str(root / "baseline"),
+        "candidate": str(root / "candidate"),
+        "after_rollback": str(root / "after_rollback"),
+    },
+}
+(root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+PY
 }
 
 cmd_routecheck() {
@@ -3044,6 +3124,7 @@ cmd_routecheck() {
     LINGTU_ROUTECHECK_ROLLBACK=0
     slamcompare_wait_ready "localizer" || return 1
     routecheck_capture_phase "after_rollback" "$artifact_dir/after_rollback"
+    routecheck_write_summary "$artifact_dir" "pass" "$map_name" "$goal_x" "$goal_y" "$goal_yaw"
     trap - EXIT
 
     echo -e "${G}PASS${N}: route validation preflight completed without motion"

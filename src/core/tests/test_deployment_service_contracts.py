@@ -1176,6 +1176,11 @@ def test_lingtu_routecheck_is_non_motion_route_preflight():
     assert "No motion commands are sent" in impl
     assert "routecheck_require_no_active_command_source" in impl
     assert "active_cmd_source" in impl
+    assert "routecheck_write_summary" in impl
+    assert "plan_summary.json" in impl
+    assert "selected_planner" in impl
+    assert "fallback_reason" in impl
+    assert "rejected_plan_count" in impl
     assert "/api/v1/goal" not in impl
     assert "/api/v1/cmd_vel" not in impl
     assert "cmd_nav" not in impl
@@ -1484,6 +1489,8 @@ def test_lingtu_routecheck_previews_baseline_candidate_and_rolls_back(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS: route validation preflight completed without motion" in result.stdout
+    assert "baseline route plan preview feasible (points=3 planner=pct policy=fallback_astar safety=true fallback=- rejected=0)" in result.stdout
+    assert "candidate route plan preview feasible (points=3 planner=pct policy=fallback_astar safety=true fallback=- rejected=0)" in result.stdout
     calls = (harness["root"] / "calls.log").read_text(encoding="utf-8")
     assert "switch:localizer" in calls
     assert "switch:super_lio_relocation" in calls
@@ -1493,6 +1500,20 @@ def test_lingtu_routecheck_previews_baseline_candidate_and_rolls_back(tmp_path):
     assert "goal:" not in calls
     assert (artifact / "baseline" / "plan.json").exists()
     assert (artifact / "candidate" / "plan.json").exists()
+    baseline = json.loads((artifact / "baseline" / "plan_summary.json").read_text(encoding="utf-8"))
+    candidate = json.loads((artifact / "candidate" / "plan_summary.json").read_text(encoding="utf-8"))
+    summary = json.loads((artifact / "summary.json").read_text(encoding="utf-8"))
+    assert baseline["selected_planner"] == "pct"
+    assert baseline["plan_safety_policy"] == "fallback_astar"
+    assert baseline["path_safety_ok"] is True
+    assert baseline["active_cmd_source_before"] == "none"
+    assert baseline["rejected_plan_count"] == 0
+    assert candidate["selected_planner"] == "pct"
+    assert candidate["plan_safety_policy"] == "fallback_astar"
+    assert summary["mode"] == "routecheck_non_motion"
+    assert summary["non_motion"] is True
+    assert summary["outcome"] == "pass"
+    assert summary["phases"]["baseline"]["selected_planner"] == "pct"
     assert (artifact / "after_rollback" / "localization.json").exists()
 
 
