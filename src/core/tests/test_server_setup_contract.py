@@ -49,6 +49,9 @@ def test_p0_scripts_use_current_gateway_contracts():
     mapping = (REPO_ROOT / "docs/07-testing/p0_mapping.sh").read_text(
         encoding="utf-8"
     )
+    route_safety = (
+        REPO_ROOT / "docs/07-testing/p0_route_safety.sh"
+    ).read_text(encoding="utf-8")
     explore = (REPO_ROOT / "docs/07-testing/p0_explore.sh").read_text(
         encoding="utf-8"
     )
@@ -73,6 +76,13 @@ def test_p0_scripts_use_current_gateway_contracts():
     assert "NAV_MAP_DIR" in mapping
     assert "~/data/nova/maps" in mapping
     assert "data/inovxio/data/maps" not in mapping
+
+    assert "/api/v1/navigation/plan" in route_safety
+    assert "p0_route_safety" in route_safety
+    assert "path_safety" in route_safety
+    assert "active_cmd_source" in route_safety
+    assert "/api/v1/goal" not in route_safety
+    assert "/api/v1/cmd_vel" not in route_safety
 
     assert "/api/v1/explore/status" in explore
     assert "/api/v1/explore/start" in explore
@@ -111,9 +121,12 @@ def test_p0_field_runbook_matches_script_contracts():
         REPO_ROOT / "docs/07-testing/p0_explore.sh",
         REPO_ROOT / "docs/07-testing/p0_goto.sh",
         REPO_ROOT / "docs/07-testing/p0_mapping.sh",
+        REPO_ROOT / "docs/07-testing/p0_route_safety.sh",
     ]
 
     assert "/api/v1/navigation/status" in readme
+    assert "/api/v1/navigation/plan" in readme
+    assert "path_safety.ok=true" in readme
     assert "POST /api/v1/stop" in readme
     assert "/api/v1/state" in readme
     assert "/api/v1/explore/status" in readme

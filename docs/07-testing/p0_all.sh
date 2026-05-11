@@ -34,13 +34,14 @@ run_one() {
 
 run_one "P0-01 cold boot"   p0_cold_boot.sh
 run_one "P0-02 mapping"     p0_mapping.sh
-run_one "P0-03 goto"        p0_goto.sh 2.0 0.0 60
-run_one "P0-04 estop"       p0_estop.sh
+run_one "P0-03 route safety" p0_route_safety.sh 2.0 0.0
+run_one "P0-04 goto"        p0_goto.sh 2.0 0.0 60
+run_one "P0-05 estop"       p0_estop.sh
 if [[ "${LINGTU_P0_RUN_EXPLORE:-0}" == "1" ]]; then
-  run_one "P0-05 explore"   p0_explore.sh "${LINGTU_P0_EXPLORE_DURATION:-30}"
+  run_one "P0-06 explore"   p0_explore.sh "${LINGTU_P0_EXPLORE_DURATION:-30}"
 else
   echo ""
-  echo "[SUMMARY] P0-05 explore SKIP (set LINGTU_P0_RUN_EXPLORE=1 in a safe explore/tare_explore session)"
+  echo "[SUMMARY] P0-06 explore SKIP (set LINGTU_P0_RUN_EXPLORE=1 in a safe explore/tare_explore session)"
 fi
 
 echo ""
