@@ -383,6 +383,7 @@ PY
     log "server simulation closure summary for setup-generated gates"
     python3 sim/scripts/server_sim_closure.py \
       --required "$(join_by_comma "${closure_required[@]}")" \
+      --required-only \
       --max-report-age-s "${SETUP_CLOSURE_MAX_REPORT_AGE_S}" \
       --json-out artifacts/server_sim_closure_summary_setup.json \
       --strict

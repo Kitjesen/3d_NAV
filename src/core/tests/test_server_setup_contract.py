@@ -25,6 +25,7 @@ def test_server_setup_runs_multifloor_closure_without_robot_motion():
     assert "sim/scripts/server_sim_closure.py" in script
     assert "artifacts/server_sim_closure_summary_setup.json" in script
     assert "--max-report-age-s" in script
+    assert "--required-only" in script
     assert '"${SETUP_CLOSURE_MAX_REPORT_AGE_S}"' in script
     assert "--route matrix" in script
     assert "--frontier-loop" in script

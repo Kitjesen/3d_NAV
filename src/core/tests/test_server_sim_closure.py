@@ -608,6 +608,38 @@ def test_server_sim_closure_separates_optional_gaps(tmp_path: Path, monkeypatch)
     assert any("routecheck_preflight" in gap for gap in summary["optional_gaps"])
 
 
+def test_server_sim_closure_can_summarize_required_only(tmp_path: Path, monkeypatch):
+    large = _write_json(
+        tmp_path / "large.json",
+        {
+            "ok": True,
+            "simulation_only": True,
+            "real_robot_motion": False,
+            "cmd_vel_sent_to_hardware": False,
+            "cases": [
+                {
+                    "route": "terrain_long",
+                    "path_safety": {"ok": True},
+                    "planning": [{"planner": "pct", "native_backend_used": True}],
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(server_sim_closure, "ROOT", tmp_path)
+
+    summary = server_sim_closure.summarize(
+        report_overrides={"large_terrain": large},
+        required={"large_terrain"},
+        include_optional=False,
+    )
+
+    assert summary["ok"] is True
+    assert summary["include_optional"] is False
+    assert set(summary["gates"]) == {"large_terrain"}
+    assert summary["optional_missing_or_failed"] == []
+    assert summary["optional_gaps"] == []
+
+
 def test_server_sim_closure_can_require_fresh_reports(tmp_path: Path):
     large = _write_json(
         tmp_path / "large.json",

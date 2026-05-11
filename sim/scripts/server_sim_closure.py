@@ -720,10 +720,17 @@ def summarize(
     report_overrides: dict[str, Path],
     required: set[str],
     max_report_age_s: float | None = None,
+    include_optional: bool = True,
 ) -> dict[str, Any]:
     gates: dict[str, Any] = {}
     generated_at = time.time()
-    for spec in GATES:
+    required_names = required or {spec.name for spec in GATES}
+    selected_specs = (
+        GATES
+        if include_optional
+        else tuple(spec for spec in GATES if spec.name in required_names)
+    )
+    for spec in selected_specs:
         path = report_overrides.get(spec.name) or _best_match(spec)
         if path is None:
             gates[spec.name] = {
@@ -784,7 +791,6 @@ def summarize(
                 "command": spec.command,
             }
 
-    required_names = required or {spec.name for spec in GATES}
     missing_or_failed = [
         name
         for name in sorted(required_names)
@@ -803,6 +809,7 @@ def summarize(
         "real_robot_motion": False,
         "cmd_vel_sent_to_hardware": False,
         "generated_at": generated_at,
+        "include_optional": include_optional,
         "max_report_age_s": max_report_age_s,
         "required": sorted(required_names),
         "verified": verified,
@@ -842,6 +849,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional maximum age in seconds for accepted report artifacts.",
     )
+    parser.add_argument(
+        "--required-only",
+        action="store_true",
+        help="Evaluate only gates listed by --required; useful for setup-safe subset summaries.",
+    )
     parser.add_argument("--json-out", type=Path, default=ROOT / "artifacts/server_sim_closure_summary.json")
     parser.add_argument("--strict", action="store_true")
     return parser
@@ -870,6 +882,7 @@ def main() -> int:
         report_overrides={key: value for key, value in overrides.items() if value is not None},
         required=required,
         max_report_age_s=args.max_report_age_s,
+        include_optional=not args.required_only,
     )
     text = json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True)
     print(text)
